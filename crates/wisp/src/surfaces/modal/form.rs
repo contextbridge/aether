@@ -1,5 +1,6 @@
-use acp_utils::{
-    ConstTitle, ElicitationSchema, EnumSchema, MultiSelectEnumSchema, PrimitiveSchemaDefinition, SingleSelectEnumSchema,
+use agent_client_protocol::schema::v1::{
+    ElicitationContentValue, ElicitationPropertySchema, ElicitationSchema, EnumOption, MultiSelectItems,
+    MultiSelectPropertySchema, StringPropertySchema,
 };
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
@@ -7,13 +8,13 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
-use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 use unicode_width::UnicodeWidthStr;
 
 use crate::surfaces::input::is_composed_char;
+use crate::theme::Theme;
 use crate::view::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::view::selection::{Direction, scroll_into_view, step_clamped};
-use crate::theme::Theme;
 use crate::view::widgets::{KeyHint, RowsView, render_vertical_scrollbar, rows_and_track, visible_window};
 use crate::view::wrap::{as_u16, fit_line, wrap_line};
 
@@ -72,6 +73,7 @@ pub(super) struct FormField {
 
 pub(super) enum FormFieldKind {
     Text(EditBuffer),
+    Integer(EditBuffer),
     Number(EditBuffer),
     Boolean(bool),
     Single { options: Vec<SelectOption>, selected: usize },
@@ -89,7 +91,7 @@ pub(super) struct SelectOption {
 pub(super) enum FormAction {
     None,
     Cancel,
-    Accept(Value),
+    Accept(BTreeMap<String, ElicitationContentValue>),
 }
 
 /// The rows of one page, with everything a click or the terminal cursor needs
@@ -129,11 +131,22 @@ impl PageRows {
 }
 
 impl FormModal {
-    pub(super) fn new(server_name: String, message: String, schema: &ElicitationSchema) -> Self {
+    pub(super) fn new(server_name: String, message: String, schema: &ElicitationSchema) -> Option<Self> {
         let required: Vec<&str> = schema.required.as_deref().unwrap_or(&[]).iter().map(String::as_str).collect();
-        let fields: Vec<FormField> =
-            schema.properties.iter().map(|(name, prop)| FormField::from_primitive(name, prop, &required)).collect();
-        Self { server_name, message, fields, page: 0, confirming_cancel: false, validation_error: None, body: BodyView::default() }
+        let fields = schema
+            .properties
+            .iter()
+            .map(|(name, prop)| FormField::from_schema(name, prop, &required))
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self {
+            server_name,
+            message,
+            fields,
+            page: 0,
+            confirming_cancel: false,
+            validation_error: None,
+            body: BodyView::default(),
+        })
     }
 
     pub(super) fn server_name(&self) -> &str {
@@ -186,7 +199,7 @@ impl FormModal {
 
     fn text_buffer(&mut self) -> Option<&mut EditBuffer> {
         match self.focused_kind()? {
-            FormFieldKind::Text(buffer) | FormFieldKind::Number(buffer) => Some(buffer),
+            FormFieldKind::Text(buffer) | FormFieldKind::Integer(buffer) | FormFieldKind::Number(buffer) => Some(buffer),
             _ => None,
         }
     }
@@ -348,22 +361,21 @@ impl FormModal {
     }
 
     fn submit(&mut self) -> FormAction {
-        let mut content = Map::new();
+        let mut content = BTreeMap::new();
         let mut first_error = None;
         for (index, field) in self.fields.iter().enumerate() {
             match field.value() {
-                Ok(value) => {
-                    if !value.is_null() {
-                        content.insert(field.name.clone(), value);
-                    }
+                Ok(Some(value)) => {
+                    content.insert(field.name.clone(), value);
                 }
+                Ok(None) => {}
                 Err(error) => {
                     first_error.get_or_insert((index, error));
                 }
             }
         }
         match first_error {
-            None => FormAction::Accept(Value::Object(content)),
+            None => FormAction::Accept(content),
             Some((index, error)) => {
                 // Send the user to the first thing standing between them and
                 // submitting, with the complaint right beside it.
@@ -411,10 +423,8 @@ impl FormModal {
         let mut rows = PageRows::default();
 
         if !self.message.is_empty() {
-            let headline = Line::styled(
-                self.message.clone(),
-                Style::new().fg(theme.heading).add_modifier(Modifier::BOLD),
-            );
+            let headline =
+                Line::styled(self.message.clone(), Style::new().fg(theme.heading).add_modifier(Modifier::BOLD));
             for line in wrap_line(headline, width) {
                 rows.row(line);
             }
@@ -457,28 +467,22 @@ impl FormModal {
 
     fn review_rows(&self, theme: &Theme, width: u16, rows: &mut PageRows) {
         rows.blank();
-        let headline = Line::styled("Review your answers", Style::new().fg(theme.text_primary).add_modifier(Modifier::BOLD));
+        let headline =
+            Line::styled("Review your answers", Style::new().fg(theme.text_primary).add_modifier(Modifier::BOLD));
         for line in wrap_line(headline, width) {
             rows.row(line);
         }
         rows.blank();
 
-        let label_width = self
-            .fields
-            .iter()
-            .map(|field| field.label.width())
-            .max()
-            .unwrap_or(0)
-            .min(usize::from(width) * 2 / 5);
+        let label_width =
+            self.fields.iter().map(|field| field.label.width()).max().unwrap_or(0).min(usize::from(width) * 2 / 5);
         for (index, field) in self.fields.iter().enumerate() {
             let value = field.display_value();
             let value = if value.is_empty() { "—".to_string() } else { value };
-            let style = if field.value().is_err() {
-                Style::new().fg(theme.error)
-            } else {
-                Style::new().fg(theme.text_primary)
-            };
-            let prefix = vec![Span::styled(format!("{:<label_width$}  ", field.label), Style::new().fg(theme.text_secondary))];
+            let style =
+                if field.value().is_err() { Style::new().fg(theme.error) } else { Style::new().fg(theme.text_primary) };
+            let prefix =
+                vec![Span::styled(format!("{:<label_width$}  ", field.label), Style::new().fg(theme.text_secondary))];
             for line in wrapped_row(&prefix, &value, style, width) {
                 rows.site(line, RowSite::Review { field: index });
             }
@@ -586,7 +590,8 @@ impl FormModal {
 
     pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) -> Option<Position> {
         let (rows_area, track_area) = rows_and_track(area, true);
-        let rows_area = Rect { x: rows_area.x.saturating_add(1), width: rows_area.width.saturating_sub(1), ..rows_area };
+        let rows_area =
+            Rect { x: rows_area.x.saturating_add(1), width: rows_area.width.saturating_sub(1), ..rows_area };
 
         let page = self.page_rows(theme, rows_area.width);
         let height = usize::from(rows_area.height);
@@ -734,7 +739,9 @@ fn question_rows(field: &FormField, theme: &Theme, width: u16, rows: &mut PageRo
         FormFieldKind::Boolean(value) => {
             option_rows(&boolean_options(), boolean_index(*value), None, theme, width, rows);
         }
-        FormFieldKind::Text(buffer) | FormFieldKind::Number(buffer) => input_rows(buffer, theme, width, rows),
+        FormFieldKind::Text(buffer) | FormFieldKind::Integer(buffer) | FormFieldKind::Number(buffer) => {
+            input_rows(buffer, theme, width, rows);
+        }
     }
 }
 
@@ -783,7 +790,11 @@ fn input_rows(buffer: &EditBuffer, theme: &Theme, width: u16, rows: &mut PageRow
     rows.blank();
     let border = Style::new().fg(theme.muted);
     let rule = "─".repeat(usize::from(width.saturating_sub(2)));
-    rows.row(Line::from(vec![Span::styled("╭", border), Span::styled(rule.clone(), border), Span::styled("╮", border)]));
+    rows.row(Line::from(vec![
+        Span::styled("╭", border),
+        Span::styled(rule.clone(), border),
+        Span::styled("╮", border),
+    ]));
 
     let content = usize::from(width.saturating_sub(4));
     let (visible, cursor_column) = visible_window(buffer, content.max(1));
@@ -831,70 +842,101 @@ fn boolean_index(value: bool) -> usize {
 }
 
 impl FormField {
-    fn from_primitive(name: &str, prop: &PrimitiveSchemaDefinition, required: &[&str]) -> Self {
-        use FormFieldKind::{Boolean, Number, Text};
+    fn from_schema(name: &str, prop: &ElicitationPropertySchema, required: &[&str]) -> Option<Self> {
+        use FormFieldKind::{Boolean, Integer, Number};
         let (labelling, kind) = match prop {
-            PrimitiveSchemaDefinition::Boolean(b) => {
-                (labelling(b.title.as_deref(), b.description.as_deref(), name), Boolean(b.default.unwrap_or(false)))
+            ElicitationPropertySchema::Boolean(value) => (
+                labelling(value.title.as_deref(), value.description.as_deref(), name),
+                Boolean(value.default.unwrap_or(false)),
+            ),
+            ElicitationPropertySchema::Integer(value) => (
+                labelling(value.title.as_deref(), value.description.as_deref(), name),
+                Integer(stringified_default(value.default).into()),
+            ),
+            ElicitationPropertySchema::Number(value) => (
+                labelling(value.title.as_deref(), value.description.as_deref(), name),
+                Number(stringified_default(value.default).into()),
+            ),
+            ElicitationPropertySchema::String(value) => {
+                (labelling(value.title.as_deref(), value.description.as_deref(), name), string_kind(value))
             }
-            PrimitiveSchemaDefinition::Integer(i) => (
-                labelling(i.title.as_deref(), i.description.as_deref(), name),
-                Number(stringified_default(i.default).into()),
-            ),
-            PrimitiveSchemaDefinition::Number(n) => (
-                labelling(n.title.as_deref(), n.description.as_deref(), name),
-                Number(stringified_default(n.default).into()),
-            ),
-            PrimitiveSchemaDefinition::String(s) => (
-                labelling(s.title.as_deref(), s.description.as_deref(), name),
-                Text(s.default.clone().unwrap_or_default().into()),
-            ),
-            PrimitiveSchemaDefinition::Enum(e) => (enum_labelling(e, name), parse_enum_kind(e)),
-            _ => unreachable!("unsupported primitive elicitation schema"),
+            ElicitationPropertySchema::Array(value) => {
+                (labelling(value.title.as_deref(), value.description.as_deref(), name), multi_kind(value)?)
+            }
+            _ => return None,
         };
         let (label, description) = labelling;
-        Self { name: name.to_string(), label, description, required: required.contains(&name), touched: false, kind }
+        Some(Self {
+            name: name.to_string(),
+            label,
+            description,
+            required: required.contains(&name),
+            touched: false,
+            kind,
+        })
     }
 
-    fn value(&self) -> Result<Value, String> {
+    fn value(&self) -> Result<Option<ElicitationContentValue>, String> {
         let missing = || format!("{} is required", self.label);
         match &self.kind {
             FormFieldKind::Text(value) => {
                 if self.required && value.is_empty() {
                     Err(missing())
                 } else {
-                    Ok(if value.is_empty() { Value::Null } else { Value::String(value.text().to_string()) })
+                    Ok((!value.is_empty()).then(|| ElicitationContentValue::String(value.text().to_string())))
                 }
+            }
+            FormFieldKind::Integer(value) => {
+                if value.is_empty() {
+                    return if self.required { Err(missing()) } else { Ok(None) };
+                }
+                let invalid = || format!("{} must be an integer", self.label);
+                value
+                    .text()
+                    .parse::<i64>()
+                    .map(ElicitationContentValue::Integer)
+                    .map(Some)
+                    .map_err(|_| invalid())
             }
             FormFieldKind::Number(value) => {
                 if value.is_empty() {
-                    return if self.required { Err(missing()) } else { Ok(Value::Null) };
+                    return if self.required { Err(missing()) } else { Ok(None) };
                 }
-                serde_json::from_str(value.text()).map_err(|_| format!("{} must be a number", self.label))
+                let invalid = || format!("{} must be a number", self.label);
+                value
+                    .text()
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|number| number.is_finite())
+                    .map(ElicitationContentValue::Number)
+                    .map(Some)
+                    .ok_or_else(invalid)
             }
-            FormFieldKind::Boolean(value) => Ok(Value::Bool(*value)),
+            FormFieldKind::Boolean(value) => Ok(Some(ElicitationContentValue::Boolean(*value))),
             FormFieldKind::Single { options, selected } => {
-                let value = options.get(*selected).map(|o| o.value.clone());
+                let value = options.get(*selected).map(|option| option.value.clone());
                 if self.required && value.is_none() {
                     Err(missing())
                 } else {
-                    Ok(value.map_or(Value::Null, Value::String))
+                    Ok(value.map(ElicitationContentValue::String))
                 }
             }
-            FormFieldKind::Multi { options, selected, .. } => Ok(Value::Array(
+            FormFieldKind::Multi { options, selected, .. } => Ok(Some(ElicitationContentValue::StringArray(
                 options
                     .iter()
                     .zip(selected)
                     .filter(|(_, selected)| **selected)
-                    .map(|(opt, _)| Value::String(opt.value.clone()))
+                    .map(|(option, _)| option.value.clone())
                     .collect(),
-            )),
+            ))),
         }
     }
 
     fn display_value(&self) -> String {
         match &self.kind {
-            FormFieldKind::Text(value) | FormFieldKind::Number(value) => value.text().to_string(),
+            FormFieldKind::Text(value) | FormFieldKind::Integer(value) | FormFieldKind::Number(value) => {
+                value.text().to_string()
+            }
             FormFieldKind::Boolean(value) => if *value { "Yes" } else { "No" }.to_string(),
             FormFieldKind::Single { options, selected } => {
                 options.get(*selected).map(|o| o.title.clone()).unwrap_or_default()
@@ -916,34 +958,23 @@ fn labelling(title: Option<&str>, description: Option<&str>, name: &str) -> Labe
     (title.unwrap_or(name).to_string(), description.map(str::to_string))
 }
 
-/// Every enum variant carries its title and description in the same two fields,
-/// just at a different depth.
-fn enum_labelling(e: &EnumSchema, name: &str) -> Labelling {
-    let (title, description) = match e {
-        EnumSchema::Single(SingleSelectEnumSchema::Untitled(s)) => (s.title.as_deref(), s.description.as_deref()),
-        EnumSchema::Single(SingleSelectEnumSchema::Titled(s)) => (s.title.as_deref(), s.description.as_deref()),
-        EnumSchema::Multi(MultiSelectEnumSchema::Untitled(m)) => (m.title.as_deref(), m.description.as_deref()),
-        EnumSchema::Multi(MultiSelectEnumSchema::Titled(m)) => (m.title.as_deref(), m.description.as_deref()),
-        EnumSchema::Legacy(l) => (l.title.as_deref(), l.description.as_deref()),
-        _ => (None, None),
-    };
-    labelling(title, description, name)
+fn string_kind(schema: &StringPropertySchema) -> FormFieldKind {
+    if let Some(options) = &schema.one_of {
+        single(options_from_enum_options(options), schema.default.as_deref())
+    } else if let Some(options) = &schema.enum_values {
+        single(options_from_strings(options), schema.default.as_deref())
+    } else {
+        FormFieldKind::Text(schema.default.clone().unwrap_or_default().into())
+    }
 }
 
-fn parse_enum_kind(e: &EnumSchema) -> FormFieldKind {
-    match e {
-        EnumSchema::Single(SingleSelectEnumSchema::Untitled(s)) => {
-            single(options_from_strings(&s.enum_), s.default.as_deref())
-        }
-        EnumSchema::Single(SingleSelectEnumSchema::Titled(s)) => {
-            single(options_from_const_titles(&s.one_of), s.default.as_deref())
-        }
-        EnumSchema::Legacy(l) => single(options_from_strings(&l.enum_), None),
-        EnumSchema::Multi(MultiSelectEnumSchema::Untitled(m)) => {
-            multi(options_from_strings(&m.items.enum_), m.default.as_deref())
-        }
-        _ => single(Vec::new(), None),
-    }
+fn multi_kind(schema: &MultiSelectPropertySchema) -> Option<FormFieldKind> {
+    let options = match &schema.items {
+        MultiSelectItems::String(items) => options_from_strings(&items.values),
+        MultiSelectItems::Titled(items) => options_from_enum_options(&items.options),
+        _ => return None,
+    };
+    Some(multi(options, schema.default.as_deref()))
 }
 
 /// A single-select focused on `default`, or on the first option when the
@@ -963,8 +994,8 @@ fn options_from_strings(values: &[String]) -> Vec<SelectOption> {
     values.iter().map(|s| SelectOption { value: s.clone(), title: s.clone() }).collect()
 }
 
-fn options_from_const_titles(items: &[ConstTitle]) -> Vec<SelectOption> {
-    items.iter().map(|ct| SelectOption { value: ct.const_.clone(), title: ct.title.clone() }).collect()
+fn options_from_enum_options(items: &[EnumOption]) -> Vec<SelectOption> {
+    items.iter().map(|item| SelectOption { value: item.value.clone(), title: item.title.clone() }).collect()
 }
 
 fn stringified_default<T: std::fmt::Display>(default: Option<T>) -> String {
@@ -972,53 +1003,52 @@ fn stringified_default<T: std::fmt::Display>(default: Option<T>) -> String {
 }
 
 #[cfg(test)]
+pub(super) fn permission_like_schema() -> ElicitationSchema {
+    ElicitationSchema::new().property(
+        "decision",
+        StringPropertySchema::new().enum_values(vec!["allow".into(), "deny".into()]).default_value("deny"),
+        true,
+    )
+}
+
+#[cfg(test)]
 #[allow(clippy::absolute_paths, clippy::similar_names)]
 mod tests {
     use super::*;
     use crate::testing::{buffer_text, row_containing};
+    use agent_client_protocol::schema::v1::{BooleanPropertySchema, IntegerPropertySchema, NumberPropertySchema};
     use crossterm::event::KeyModifiers;
+    use serde_json::Value;
 
     const WIDTH: u16 = 64;
     const HEIGHT: u16 = 24;
 
-    fn permission_like_schema() -> ElicitationSchema {
-        ElicitationSchema::builder()
-            .required_enum_schema(
-                "decision",
-                EnumSchema::builder(vec!["allow".into(), "deny".into()])
-                    .untitled()
-                    .with_default(String::from("deny"))
-                    .unwrap()
-                    .build(),
-            )
-            .build()
-            .unwrap()
+    fn test_modal(server_name: String, message: String, schema: &ElicitationSchema) -> FormModal {
+        FormModal::new(server_name, message, schema).unwrap()
+    }
+
+    fn required(name: &str, property: impl Into<ElicitationPropertySchema>) -> ElicitationSchema {
+        ElicitationSchema::new().property(name, property, true)
+    }
+
+    fn optional(name: &str, property: impl Into<ElicitationPropertySchema>) -> ElicitationSchema {
+        ElicitationSchema::new().property(name, property, false)
     }
 
     fn multi_schema() -> ElicitationSchema {
-        ElicitationSchema::builder()
-            .required_enum_schema(
-                "tags",
-                EnumSchema::builder(vec!["fast".into(), "reliable".into(), "cheap".into()]).multiselect().build(),
-            )
-            .build()
-            .unwrap()
+        required("tags", MultiSelectPropertySchema::new(vec!["fast".into(), "reliable".into(), "cheap".into()]))
     }
 
     fn survey_schema() -> ElicitationSchema {
-        ElicitationSchema::builder()
-            .required_string_with("team", |field| field.title("Team"))
-            .optional_enum_schema(
+        ElicitationSchema::new()
+            .property("team", StringPropertySchema::new().title("Team"), true)
+            .property(
                 "urgency",
-                EnumSchema::builder(vec!["low".into(), "high".into()])
-                    .untitled()
-                    .enum_titles(vec!["Low".into(), "High".into()])
-                    .unwrap()
-                    .build(),
+                StringPropertySchema::new()
+                    .one_of(vec![EnumOption::new("low", "Low"), EnumOption::new("high", "High")]),
+                false,
             )
-            .optional_bool("notify", false)
-            .build()
-            .unwrap()
+            .property("notify", BooleanPropertySchema::new().default_value(false), false)
     }
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -1047,12 +1077,10 @@ mod tests {
         panic!("{needle:?} should be on screen");
     }
 
-    /// Submits with the keys a user would press: `Enter` walks to the review
-    /// page and submits from there.
     fn submitted(form: &mut FormModal) -> Value {
         for _ in 0..16 {
-            if let FormAction::Accept(value) = form.on_key(key(KeyCode::Enter)) {
-                return value;
+            if let FormAction::Accept(content) = form.on_key(key(KeyCode::Enter)) {
+                return serde_json::to_value(content).expect("elicitation content serializes");
             }
         }
         panic!("Enter never submitted the form");
@@ -1060,11 +1088,9 @@ mod tests {
 
     #[test]
     fn parses_string_field_with_title_and_description() {
-        let schema = ElicitationSchema::builder()
-            .required_string_with("name", |s| s.title("Your Name").description("Enter your full name"))
-            .build()
-            .unwrap();
-        let form = FormModal::new("test".into(), String::new(), &schema);
+        let schema =
+            required("name", StringPropertySchema::new().title("Your Name").description("Enter your full name"));
+        let form = test_modal("test".into(), String::new(), &schema);
         assert_eq!(form.fields.len(), 1);
         assert_eq!(form.fields[0].label, "Your Name");
         assert_eq!(form.fields[0].description.as_deref(), Some("Enter your full name"));
@@ -1074,45 +1100,37 @@ mod tests {
 
     #[test]
     fn parses_boolean_field_with_default() {
-        let schema = ElicitationSchema::builder().optional_bool("approved", true).build().unwrap();
-        let form = FormModal::new("test".into(), String::new(), &schema);
+        let schema = optional("approved", BooleanPropertySchema::new().default_value(true));
+        let form = test_modal("test".into(), String::new(), &schema);
         assert_eq!(form.fields.len(), 1);
         assert!(matches!(form.fields[0].kind, FormFieldKind::Boolean(true)));
     }
 
     #[test]
     fn parses_integer_and_number_fields() {
-        let schema = ElicitationSchema::builder()
-            .required_integer("age", 0, 150)
-            .required_number("rating", 0.0, 5.0)
-            .build()
-            .unwrap();
-        let form = FormModal::new("test".into(), String::new(), &schema);
+        let schema = ElicitationSchema::new()
+            .property("age", IntegerPropertySchema::new().minimum(0).maximum(150), true)
+            .property("rating", NumberPropertySchema::new().minimum(0.0).maximum(5.0), true);
+        let form = test_modal("test".into(), String::new(), &schema);
         assert_eq!(form.fields.len(), 2);
-        assert!(matches!(form.fields[0].kind, FormFieldKind::Number(_)));
+        assert!(matches!(form.fields[0].kind, FormFieldKind::Integer(_)));
         assert!(matches!(form.fields[1].kind, FormFieldKind::Number(_)));
     }
 
     #[test]
     fn integer_field_respects_default() {
-        let schema = ElicitationSchema::builder()
-            .required_integer_with("count", |i| i.range(0, 100).with_default(42))
-            .build()
-            .unwrap();
-        let form = FormModal::new("test".into(), String::new(), &schema);
+        let schema = required("count", IntegerPropertySchema::new().minimum(0).maximum(100).default_value(42));
+        let form = test_modal("test".into(), String::new(), &schema);
         match &form.fields[0].kind {
-            FormFieldKind::Number(value) => assert_eq!(value, "42"),
-            _ => panic!("expected Number"),
+            FormFieldKind::Integer(value) => assert_eq!(value, "42"),
+            _ => panic!("expected Integer"),
         }
     }
 
     #[test]
     fn number_field_respects_default() {
-        let schema = ElicitationSchema::builder()
-            .required_number_with("score", |n| n.range(0.0, 100.0).with_default(2.5))
-            .build()
-            .unwrap();
-        let form = FormModal::new("test".into(), String::new(), &schema);
+        let schema = required("score", NumberPropertySchema::new().minimum(0.0).maximum(100.0).default_value(2.5));
+        let form = test_modal("test".into(), String::new(), &schema);
         match &form.fields[0].kind {
             FormFieldKind::Number(value) => {
                 let parsed: f64 = value.parse().unwrap();
@@ -1124,9 +1142,8 @@ mod tests {
 
     #[test]
     fn string_field_respects_default() {
-        let schema =
-            ElicitationSchema::builder().required_string_with("greeting", |s| s.with_default("hello")).build().unwrap();
-        let form = FormModal::new("test".into(), String::new(), &schema);
+        let schema = required("greeting", StringPropertySchema::new().default_value("hello"));
+        let form = test_modal("test".into(), String::new(), &schema);
         match &form.fields[0].kind {
             FormFieldKind::Text(value) => assert_eq!(value, "hello"),
             _ => panic!("expected Text"),
@@ -1135,14 +1152,11 @@ mod tests {
 
     #[test]
     fn parses_single_select_enum_from_schema() {
-        let schema = ElicitationSchema::builder()
-            .required_enum_schema(
-                "color",
-                EnumSchema::builder(vec!["red".into(), "green".into(), "blue".into()]).untitled().build(),
-            )
-            .build()
-            .unwrap();
-        let form = FormModal::new("test".into(), String::new(), &schema);
+        let schema = required(
+            "color",
+            StringPropertySchema::new().enum_values(vec!["red".into(), "green".into(), "blue".into()]),
+        );
+        let form = test_modal("test".into(), String::new(), &schema);
         match &form.fields[0].kind {
             FormFieldKind::Single { options, selected } => {
                 assert_eq!(options.len(), 3);
@@ -1155,18 +1169,11 @@ mod tests {
 
     #[test]
     fn parses_single_select_with_default() {
-        let schema = ElicitationSchema::builder()
-            .required_enum_schema(
-                "color",
-                EnumSchema::builder(vec!["red".into(), "green".into()])
-                    .untitled()
-                    .with_default("green".to_string())
-                    .unwrap()
-                    .build(),
-            )
-            .build()
-            .unwrap();
-        let form = FormModal::new("test".into(), String::new(), &schema);
+        let schema = required(
+            "color",
+            StringPropertySchema::new().enum_values(vec!["red".into(), "green".into()]).default_value("green"),
+        );
+        let form = test_modal("test".into(), String::new(), &schema);
         match &form.fields[0].kind {
             FormFieldKind::Single { options, selected } => {
                 assert_eq!(*selected, 1);
@@ -1178,17 +1185,15 @@ mod tests {
 
     #[test]
     fn parses_titled_single_select_with_const_titles() {
-        let schema = ElicitationSchema::builder()
-            .required_enum_schema(
-                "size",
-                EnumSchema::builder(vec!["s".into(), "m".into(), "l".into()])
-                    .enum_titles(vec!["Small".into(), "Medium".into(), "Large".into()])
-                    .unwrap()
-                    .build(),
-            )
-            .build()
-            .unwrap();
-        let form = FormModal::new("test".into(), String::new(), &schema);
+        let schema = required(
+            "size",
+            StringPropertySchema::new().one_of(vec![
+                EnumOption::new("s", "Small"),
+                EnumOption::new("m", "Medium"),
+                EnumOption::new("l", "Large"),
+            ]),
+        );
+        let form = test_modal("test".into(), String::new(), &schema);
         match &form.fields[0].kind {
             FormFieldKind::Single { options, .. } => {
                 assert_eq!(options.len(), 3);
@@ -1202,7 +1207,7 @@ mod tests {
     #[test]
     fn parses_multi_select_enum() {
         let schema = multi_schema();
-        let form = FormModal::new("test".into(), String::new(), &schema);
+        let form = test_modal("test".into(), String::new(), &schema);
         match &form.fields[0].kind {
             FormFieldKind::Multi { options, selected, cursor } => {
                 assert_eq!(options.len(), 3);
@@ -1216,18 +1221,12 @@ mod tests {
 
     #[test]
     fn parses_multi_select_with_defaults() {
-        let schema = ElicitationSchema::builder()
-            .required_enum_schema(
-                "tags",
-                EnumSchema::builder(vec!["fast".into(), "reliable".into(), "cheap".into()])
-                    .multiselect()
-                    .with_default(vec!["reliable".to_string()])
-                    .unwrap()
-                    .build(),
-            )
-            .build()
-            .unwrap();
-        let form = FormModal::new("test".into(), String::new(), &schema);
+        let schema = required(
+            "tags",
+            MultiSelectPropertySchema::new(vec!["fast".into(), "reliable".into(), "cheap".into()])
+                .default_value(vec!["reliable".to_string()]),
+        );
+        let form = test_modal("test".into(), String::new(), &schema);
         match &form.fields[0].kind {
             FormFieldKind::Multi { selected, .. } => {
                 assert!(!selected[0]);
@@ -1240,80 +1239,60 @@ mod tests {
 
     #[test]
     fn empty_schema_produces_no_fields() {
-        let schema = ElicitationSchema::builder().build().unwrap();
-        let form = FormModal::new("test".into(), String::new(), &schema);
+        let schema = ElicitationSchema::new();
+        let form = test_modal("test".into(), String::new(), &schema);
         assert!(form.fields.is_empty());
     }
 
     #[test]
     fn text_field_default_submits_as_a_string() {
-        let schema =
-            ElicitationSchema::builder().optional_string_with("greeting", |s| s.with_default("hello")).build().unwrap();
-        let mut form = FormModal::new("test".into(), String::new(), &schema);
+        let schema = optional("greeting", StringPropertySchema::new().default_value("hello"));
+        let mut form = test_modal("test".into(), String::new(), &schema);
         assert_eq!(submitted(&mut form), serde_json::json!({"greeting": "hello"}));
     }
 
     #[test]
     fn number_field_default_submits_as_a_parsed_number() {
-        let schema = ElicitationSchema::builder()
-            .optional_integer_with("count", |i| i.range(0, 100).with_default(42))
-            .build()
-            .unwrap();
-        let mut form = FormModal::new("test".into(), String::new(), &schema);
+        let schema = optional("count", IntegerPropertySchema::new().minimum(0).maximum(100).default_value(42));
+        let mut form = test_modal("test".into(), String::new(), &schema);
         assert_eq!(submitted(&mut form), serde_json::json!({"count": 42}));
     }
 
     #[test]
     fn boolean_and_single_select_defaults_submit_as_typed_values() {
-        let schema = ElicitationSchema::builder()
-            .optional_bool("approved", true)
-            .optional_enum_schema(
+        let schema = ElicitationSchema::new()
+            .property("approved", BooleanPropertySchema::new().default_value(true), false)
+            .property(
                 "color",
-                EnumSchema::builder(vec!["red".into(), "green".into()])
-                    .untitled()
-                    .with_default("green".to_string())
-                    .unwrap()
-                    .build(),
-            )
-            .build()
-            .unwrap();
-        let mut form = FormModal::new("test".into(), String::new(), &schema);
+                StringPropertySchema::new().enum_values(vec!["red".into(), "green".into()]).default_value("green"),
+                false,
+            );
+        let mut form = test_modal("test".into(), String::new(), &schema);
         assert_eq!(submitted(&mut form), serde_json::json!({"approved": true, "color": "green"}));
     }
 
     #[test]
     fn multi_select_defaults_submit_as_the_selected_array() {
-        let schema = ElicitationSchema::builder()
-            .required_enum_schema(
-                "tags",
-                EnumSchema::builder(vec!["fast".into(), "reliable".into(), "cheap".into()])
-                    .multiselect()
-                    .with_default(vec!["reliable".to_string()])
-                    .unwrap()
-                    .build(),
-            )
-            .build()
-            .unwrap();
-        let mut form = FormModal::new("test".into(), String::new(), &schema);
+        let schema = required(
+            "tags",
+            MultiSelectPropertySchema::new(vec!["fast".into(), "reliable".into(), "cheap".into()])
+                .default_value(vec!["reliable".to_string()]),
+        );
+        let mut form = test_modal("test".into(), String::new(), &schema);
         assert_eq!(submitted(&mut form), serde_json::json!({"tags": ["reliable"]}));
     }
 
     #[test]
     fn accept_produces_correct_json() {
-        let schema = ElicitationSchema::builder()
-            .optional_string_with("name", |s| s.title("Name"))
-            .optional_bool("approved", true)
-            .optional_enum_schema(
+        let schema = ElicitationSchema::new()
+            .property("name", StringPropertySchema::new().title("Name"), false)
+            .property("approved", BooleanPropertySchema::new().default_value(true), false)
+            .property(
                 "color",
-                EnumSchema::builder(vec!["red".into(), "green".into()])
-                    .untitled()
-                    .with_default("green".to_string())
-                    .unwrap()
-                    .build(),
-            )
-            .build()
-            .unwrap();
-        let mut form = FormModal::new("test".into(), "Test".into(), &schema);
+                StringPropertySchema::new().enum_values(vec!["red".into(), "green".into()]).default_value("green"),
+                false,
+            );
+        let mut form = test_modal("test".into(), "Test".into(), &schema);
         let value = submitted(&mut form);
         let object = value.as_object().unwrap();
         assert!(!object.contains_key("name"), "empty optional text should be omitted");
@@ -1323,35 +1302,47 @@ mod tests {
 
     #[test]
     fn submit_rejects_required_field() {
-        let schema = ElicitationSchema::builder().required_string("name").build().unwrap();
-        let mut form = FormModal::new("test".into(), String::new(), &schema);
+        let schema = required("name", StringPropertySchema::new());
+        let mut form = test_modal("test".into(), String::new(), &schema);
         assert!(matches!(form.on_key(key(KeyCode::Enter)), FormAction::None));
     }
 
     #[test]
     fn permission_like_form_submit_returns_default_deny() {
         let schema = permission_like_schema();
-        let mut form = FormModal::new("coding".into(), "Allow bash: rm -rf /tmp?".into(), &schema);
+        let mut form = test_modal("coding".into(), "Allow bash: rm -rf /tmp?".into(), &schema);
         assert_eq!(submitted(&mut form)["decision"], "deny");
     }
 
     #[test]
-    fn number_field_rejects_non_numeric_input() {
-        let schema = ElicitationSchema::builder().optional_number("score", 0.0, 5.0).build().unwrap();
-        let mut form = FormModal::new("test".into(), String::new(), &schema);
+    fn integer_field_rejects_fractional_input() {
+        let schema = optional("count", IntegerPropertySchema::new());
+        let mut form = test_modal("test".into(), String::new(), &schema);
+
+        form.on_key(key(KeyCode::Char('1')));
+        form.on_key(key(KeyCode::Char('.')));
+        form.on_key(key(KeyCode::Char('5')));
+
+        assert!(matches!(form.on_key(key(KeyCode::Enter)), FormAction::None));
+    }
+
+    #[test]
+    fn number_field_rejects_non_numeric_input_and_preserves_number_type() {
+        let schema = optional("score", NumberPropertySchema::new().minimum(0.0).maximum(5.0));
+        let mut form = test_modal("test".into(), String::new(), &schema);
 
         form.on_key(key(KeyCode::Char('4')));
         form.on_key(key(KeyCode::Char('a')));
         assert!(matches!(form.on_key(key(KeyCode::Enter)), FormAction::None), "letters block submit");
 
         form.on_key(key(KeyCode::Backspace));
-        assert_eq!(submitted(&mut form), serde_json::json!({"score": 4}));
+        assert_eq!(submitted(&mut form), serde_json::json!({"score": 4.0}));
     }
 
     #[test]
     fn single_field_form_submits_directly_on_enter() {
         let schema = permission_like_schema();
-        let mut form = FormModal::new("coding".into(), "Allow bash?".into(), &schema);
+        let mut form = test_modal("coding".into(), "Allow bash?".into(), &schema);
         assert!(matches!(form.on_key(key(KeyCode::Enter)), FormAction::Accept(_)));
     }
 
@@ -1360,7 +1351,7 @@ mod tests {
         let schema = survey_schema();
         // `properties` arrives as a sorted map, so the pages run notify, team,
         // urgency — alphabetical by name.
-        let mut form = FormModal::new("survey".into(), "Help us route this".into(), &schema);
+        let mut form = test_modal("survey".into(), "Help us route this".into(), &schema);
 
         form.on_key(key(KeyCode::Down));
         assert!(matches!(form.on_key(key(KeyCode::Enter)), FormAction::None), "the notify page advances");
@@ -1374,9 +1365,10 @@ mod tests {
         assert!(matches!(form.on_key(key(KeyCode::Enter)), FormAction::None), "the last question advances to review");
         assert!(draw(&mut form).contains("Review your answers"), "the review page");
 
-        let FormAction::Accept(value) = form.on_key(key(KeyCode::Enter)) else {
+        let FormAction::Accept(content) = form.on_key(key(KeyCode::Enter)) else {
             panic!("a complete form submits from review")
         };
+        let value = serde_json::to_value(content).unwrap();
         assert_eq!(value["notify"], true);
         assert_eq!(value["team"], "team");
         assert_eq!(value["urgency"], "high");
@@ -1385,7 +1377,7 @@ mod tests {
     #[test]
     fn tab_and_backtab_walk_pages_without_wraparound() {
         let schema = survey_schema();
-        let mut form = FormModal::new("survey".into(), String::new(), &schema);
+        let mut form = test_modal("survey".into(), String::new(), &schema);
 
         form.on_key(key(KeyCode::BackTab));
         assert!(draw(&mut form).contains("1  Yes"), "BackTab stops at the first page");
@@ -1399,12 +1391,12 @@ mod tests {
 
     #[test]
     fn submit_failure_jumps_to_the_first_invalid_field() {
-        let schema = ElicitationSchema::builder()
-            .required_string("first")
-            .required_string("second")
-            .build()
-            .unwrap();
-        let mut form = FormModal::new("test".into(), String::new(), &schema);
+        let schema = ElicitationSchema::new().property("first", StringPropertySchema::new(), true).property(
+            "second",
+            StringPropertySchema::new(),
+            true,
+        );
+        let mut form = test_modal("test".into(), String::new(), &schema);
         form.on_key(key(KeyCode::Tab));
         form.on_key(key(KeyCode::Tab));
         assert!(matches!(form.on_key(key(KeyCode::Enter)), FormAction::None));
@@ -1415,19 +1407,15 @@ mod tests {
 
     #[test]
     fn arrows_answer_choice_pages_immediately() {
-        let schema = ElicitationSchema::builder()
-            .optional_enum_schema(
+        let schema = ElicitationSchema::new()
+            .property(
                 "urgency",
-                EnumSchema::builder(vec!["low".into(), "high".into()])
-                    .untitled()
-                    .enum_titles(vec!["Low".into(), "High".into()])
-                    .unwrap()
-                    .build(),
+                StringPropertySchema::new()
+                    .one_of(vec![EnumOption::new("low", "Low"), EnumOption::new("high", "High")]),
+                false,
             )
-            .optional_bool("notify", false)
-            .build()
-            .unwrap();
-        let mut form = FormModal::new("survey".into(), String::new(), &schema);
+            .property("notify", BooleanPropertySchema::new().default_value(false), false);
+        let mut form = test_modal("survey".into(), String::new(), &schema);
         form.on_key(key(KeyCode::Tab));
         assert!(draw(&mut form).contains("1  Low"), "the urgency question is a choice page");
 
@@ -1435,7 +1423,7 @@ mod tests {
         assert!(draw(&mut form).contains("1 / 2"), "answering marks the page answered");
         assert_eq!(submitted(&mut form)["urgency"], "high", "Down answers High");
 
-        let mut form = FormModal::new("survey".into(), String::new(), &schema);
+        let mut form = test_modal("survey".into(), String::new(), &schema);
         form.on_key(key(KeyCode::Tab));
         form.on_key(key(KeyCode::Down));
         form.on_key(key(KeyCode::Up));
@@ -1444,8 +1432,8 @@ mod tests {
 
     #[test]
     fn boolean_page_answers_through_its_two_options() {
-        let schema = ElicitationSchema::builder().optional_bool("notify", false).build().unwrap();
-        let mut form = FormModal::new("test".into(), String::new(), &schema);
+        let schema = optional("notify", BooleanPropertySchema::new().default_value(false));
+        let mut form = test_modal("test".into(), String::new(), &schema);
         form.on_key(key(KeyCode::Down));
         assert_eq!(submitted(&mut form)["notify"], true, "Down selects Yes");
         form.on_key(key(KeyCode::Char('2')));
@@ -1456,18 +1444,14 @@ mod tests {
 
     #[test]
     fn digit_keys_pick_single_and_toggle_multi_options() {
-        let schema = ElicitationSchema::builder()
-            .optional_enum_schema(
+        let schema = ElicitationSchema::new()
+            .property(
                 "color",
-                EnumSchema::builder(vec!["red".into(), "green".into(), "blue".into()]).untitled().build(),
+                StringPropertySchema::new().enum_values(vec!["red".into(), "green".into(), "blue".into()]),
+                false,
             )
-            .required_enum_schema(
-                "tags",
-                EnumSchema::builder(vec!["fast".into(), "reliable".into()]).multiselect().build(),
-            )
-            .build()
-            .unwrap();
-        let mut form = FormModal::new("test".into(), String::new(), &schema);
+            .property("tags", MultiSelectPropertySchema::new(vec!["fast".into(), "reliable".into()]), true);
+        let mut form = test_modal("test".into(), String::new(), &schema);
 
         form.on_key(key(KeyCode::Char('3')));
         form.on_key(key(KeyCode::Tab));
@@ -1478,15 +1462,14 @@ mod tests {
     }
     #[test]
     fn multi_select_cursor_moves_without_answering() {
-        let schema = ElicitationSchema::builder()
-            .required_enum_schema(
+        let schema = ElicitationSchema::new()
+            .property(
                 "tags",
-                EnumSchema::builder(vec!["fast".into(), "reliable".into(), "cheap".into()]).multiselect().build(),
+                MultiSelectPropertySchema::new(vec!["fast".into(), "reliable".into(), "cheap".into()]),
+                true,
             )
-            .optional_bool("verify", false)
-            .build()
-            .unwrap();
-        let mut form = FormModal::new("test".into(), String::new(), &schema);
+            .property("verify", BooleanPropertySchema::new().default_value(false), false);
+        let mut form = test_modal("test".into(), String::new(), &schema);
 
         form.on_key(key(KeyCode::Down));
         assert!(draw(&mut form).contains("0 / 2"), "moving the cursor is not an answer");
@@ -1500,7 +1483,7 @@ mod tests {
     #[test]
     fn multi_select_space_toggles_the_focused_option() {
         let schema = multi_schema();
-        let mut form = FormModal::new("test".into(), String::new(), &schema);
+        let mut form = test_modal("test".into(), String::new(), &schema);
         form.on_key(key(KeyCode::Char(' ')));
         assert_eq!(submitted(&mut form)["tags"], serde_json::json!(["fast"]));
     }
@@ -1508,7 +1491,7 @@ mod tests {
     #[test]
     fn multi_select_up_saturates_at_zero() {
         let schema = multi_schema();
-        let mut form = FormModal::new("test".into(), String::new(), &schema);
+        let mut form = test_modal("test".into(), String::new(), &schema);
         form.on_key(key(KeyCode::Up));
         form.on_key(key(KeyCode::Char(' ')));
         assert_eq!(submitted(&mut form)["tags"], serde_json::json!(["fast"]));
@@ -1517,7 +1500,7 @@ mod tests {
     #[test]
     fn select_all_flips_every_checkbox() {
         let schema = multi_schema();
-        let mut form = FormModal::new("test".into(), String::new(), &schema);
+        let mut form = test_modal("test".into(), String::new(), &schema);
         form.on_key(key(KeyCode::Char('a')));
         assert_eq!(submitted(&mut form)["tags"], serde_json::json!(["fast", "reliable", "cheap"]));
         form.on_key(key(KeyCode::Char('a')));
@@ -1526,8 +1509,8 @@ mod tests {
 
     #[test]
     fn digits_still_type_into_text_fields() {
-        let schema = ElicitationSchema::builder().optional_string("name").build().unwrap();
-        let mut form = FormModal::new("test".into(), String::new(), &schema);
+        let schema = optional("name", StringPropertySchema::new());
+        let mut form = test_modal("test".into(), String::new(), &schema);
         form.on_key(key(KeyCode::Char('4')));
         form.on_key(key(KeyCode::Char('2')));
         assert_eq!(submitted(&mut form)["name"], "42");
@@ -1536,7 +1519,7 @@ mod tests {
     #[test]
     fn esc_confirms_when_more_than_one_answer_would_be_lost() {
         let schema = survey_schema();
-        let mut form = FormModal::new("survey".into(), String::new(), &schema);
+        let mut form = test_modal("survey".into(), String::new(), &schema);
         form.on_key(key(KeyCode::Down));
         form.on_key(key(KeyCode::Tab));
         form.on_key(key(KeyCode::Char('t')));
@@ -1556,7 +1539,7 @@ mod tests {
     #[test]
     fn esc_cancels_immediately_when_barely_anything_was_answered() {
         let schema = survey_schema();
-        let mut form = FormModal::new("survey".into(), String::new(), &schema);
+        let mut form = test_modal("survey".into(), String::new(), &schema);
         form.on_key(key(KeyCode::Down));
         assert!(matches!(form.on_key(key(KeyCode::Esc)), FormAction::Cancel), "one answer needs no ceremony");
     }
@@ -1564,7 +1547,7 @@ mod tests {
     #[test]
     fn wizard_pages_show_a_tab_strip_and_progress_counter() {
         let schema = survey_schema();
-        let mut form = FormModal::new("survey".into(), "Help us route this".into(), &schema);
+        let mut form = test_modal("survey".into(), "Help us route this".into(), &schema);
 
         let screen = draw(&mut form);
         assert!(screen.contains("notify"), "the first question is the page headline: {screen}");
@@ -1581,7 +1564,7 @@ mod tests {
     #[test]
     fn single_question_forms_skip_the_tab_strip() {
         let schema = permission_like_schema();
-        let mut form = FormModal::new("coding".into(), "Allow bash: rm -rf /tmp?".into(), &schema);
+        let mut form = test_modal("coding".into(), "Allow bash: rm -rf /tmp?".into(), &schema);
         let screen = draw(&mut form);
         assert!(!screen.contains("/ 1"), "no progress counter for one question: {screen}");
         assert!(screen.contains("Allow bash: rm -rf /tmp?"));
@@ -1591,7 +1574,7 @@ mod tests {
     #[test]
     fn choice_pages_list_every_option_with_its_ordinal() {
         let schema = survey_schema();
-        let mut form = FormModal::new("survey".into(), String::new(), &schema);
+        let mut form = test_modal("survey".into(), String::new(), &schema);
         form.on_key(key(KeyCode::Tab));
         form.on_key(key(KeyCode::Tab));
         let screen = draw(&mut form);
@@ -1602,7 +1585,7 @@ mod tests {
     #[test]
     fn text_pages_draw_an_input_and_place_the_terminal_cursor() {
         let schema = survey_schema();
-        let mut form = FormModal::new("survey".into(), String::new(), &schema);
+        let mut form = test_modal("survey".into(), String::new(), &schema);
         form.on_key(key(KeyCode::Tab));
         form.on_key(key(KeyCode::Char('a')));
         form.on_key(key(KeyCode::Char('b')));
@@ -1618,7 +1601,7 @@ mod tests {
     #[test]
     fn review_page_lists_every_answer_and_marks_missing_ones() {
         let schema = survey_schema();
-        let mut form = FormModal::new("survey".into(), String::new(), &schema);
+        let mut form = test_modal("survey".into(), String::new(), &schema);
         for _ in 0..3 {
             form.on_key(key(KeyCode::Tab));
         }
@@ -1630,12 +1613,10 @@ mod tests {
 
     #[test]
     fn clicking_an_option_answers_the_field_under_the_pointer() {
-        let schema = ElicitationSchema::builder()
-            .optional_bool("alpha", false)
-            .optional_bool("bravo", false)
-            .build()
-            .unwrap();
-        let mut form = FormModal::new("test".into(), String::new(), &schema);
+        let schema = ElicitationSchema::new()
+            .property("alpha", BooleanPropertySchema::new().default_value(false), false)
+            .property("bravo", BooleanPropertySchema::new().default_value(false), false);
+        let mut form = test_modal("test".into(), String::new(), &schema);
 
         let (column, yes) = cell_of(&mut form, "1  Yes");
         form.click(column, yes);
@@ -1651,7 +1632,7 @@ mod tests {
     #[test]
     fn clicking_a_tab_or_a_review_row_jumps_to_its_page() {
         let schema = survey_schema();
-        let mut form = FormModal::new("survey".into(), String::new(), &schema);
+        let mut form = test_modal("survey".into(), String::new(), &schema);
 
         let (column, row) = cell_of(&mut form, "✓");
         form.click(column, row);
@@ -1664,12 +1645,11 @@ mod tests {
 
     #[test]
     fn long_forms_window_the_tab_strip_around_the_current_page() {
-        let mut builder = ElicitationSchema::builder();
+        let mut schema = ElicitationSchema::new();
         for index in 0..40 {
-            builder = builder.optional_bool(format!("field_{index:02}"), false);
+            schema = schema.property(format!("field_{index:02}"), BooleanPropertySchema::new(), false);
         }
-        let schema = builder.build().unwrap();
-        let mut form = FormModal::new("survey".into(), String::new(), &schema);
+        let mut form = test_modal("survey".into(), String::new(), &schema);
 
         for _ in 0..20 {
             form.on_key(key(KeyCode::Tab));
@@ -1687,7 +1667,7 @@ mod tests {
     #[test]
     fn scrolling_answers_on_choice_pages_and_walks_pages_elsewhere() {
         let schema = survey_schema();
-        let mut form = FormModal::new("survey".into(), String::new(), &schema);
+        let mut form = test_modal("survey".into(), String::new(), &schema);
 
         form.vertical(Direction::Forward);
         assert!(draw(&mut form).contains("1  Yes"), "vertical motion on a choice page answers instead of paging");
@@ -1704,7 +1684,7 @@ mod tests {
     #[test]
     fn hints_follow_the_page_in_focus() {
         let schema = survey_schema();
-        let mut form = FormModal::new("survey".into(), String::new(), &schema);
+        let mut form = test_modal("survey".into(), String::new(), &schema);
 
         let hints = |form: &FormModal| form.hints().iter().map(|(key, _)| *key).collect::<Vec<_>>();
         assert_eq!(hints(&form), vec!["↑↓", "1-9", "Tab", "Enter", "Esc"], "a choice page picks");
@@ -1715,4 +1695,3 @@ mod tests {
         assert_eq!(hints(&form), vec!["Enter", "Esc"], "the review page submits");
     }
 }
-

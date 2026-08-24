@@ -1,6 +1,6 @@
 use acp_utils::notifications::{
-    ContextClearedParams, ContextCompactionParams, ContextUsageParams, SubAgentEvent, SubAgentProgressParams,
-    SubAgentToolCallUpdate, SubAgentToolError, SubAgentToolRequest, SubAgentToolResult,
+    ContextClearedParams, ContextCompactionParams, SubAgentEvent, SubAgentProgressParams, SubAgentToolCallUpdate,
+    SubAgentToolError, SubAgentToolRequest, SubAgentToolResult,
 };
 use aether_core::events::{
     AgentEvent, ContextEvent, MessageEvent, ModelEvent, SubAgentProgressPayload, ToolEvent, TurnEvent, TurnOutcome,
@@ -9,7 +9,7 @@ use aether_core::events::{
 use agent_client_protocol::schema::v1::{
     self as acp, Content, ContentBlock, ContentChunk, Diff, MessageId, PlanEntry, PlanEntryPriority, PlanEntryStatus,
     SessionId, SessionNotification, SessionUpdate, TextContent, ToolCall, ToolCallContent, ToolCallId, ToolCallStatus,
-    ToolCallUpdate, ToolCallUpdateFields,
+    ToolCallUpdate, ToolCallUpdateFields, UsageUpdate,
 };
 use agent_client_protocol::{JsonRpcMessage, UntypedMessage};
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
@@ -24,16 +24,14 @@ pub fn map_agent_event_to_session_notification(session_id: SessionId, msg: &Agen
 /// to the client. Each variant serializes to its own `_aether/*` wire method
 /// and is sent via [`ConnectionTo<Client>::send_notification`].
 pub enum AgentExtNotification {
-    ContextUsage(ContextUsageParams),
     ContextCompaction(ContextCompactionParams),
     ContextCleared(ContextClearedParams),
-    SubAgentProgress(SubAgentProgressParams),
+    SubAgentProgress(Box<SubAgentProgressParams>),
 }
 
 impl AgentExtNotification {
     pub fn method(&self) -> &str {
         match self {
-            Self::ContextUsage(params) => params.method(),
             Self::ContextCompaction(params) => params.method(),
             Self::ContextCleared(params) => params.method(),
             Self::SubAgentProgress(params) => params.method(),
@@ -42,7 +40,6 @@ impl AgentExtNotification {
 
     pub fn to_untyped(&self) -> Result<UntypedMessage, agent_client_protocol::Error> {
         match self {
-            Self::ContextUsage(params) => params.to_untyped_message(),
             Self::ContextCompaction(params) => params.to_untyped_message(),
             Self::ContextCleared(params) => params.to_untyped_message(),
             Self::SubAgentProgress(params) => params.to_untyped_message(),
@@ -52,9 +49,6 @@ impl AgentExtNotification {
 
 pub fn try_into_agent_notification(msg: &AgentEvent) -> Option<AgentExtNotification> {
     match msg {
-        AgentEvent::Context(ContextEvent::UsageUpdated { usage }) => {
-            Some(AgentExtNotification::ContextUsage(ContextUsageParams { usage: usage.clone() }))
-        }
         AgentEvent::Context(ContextEvent::CompactionStarted { .. }) => {
             Some(AgentExtNotification::ContextCompaction(ContextCompactionParams { active: true }))
         }
@@ -65,7 +59,7 @@ pub fn try_into_agent_notification(msg: &AgentEvent) -> Option<AgentExtNotificat
         AgentEvent::Tool(ToolEvent::Progress { request, message, .. }) => {
             let msg_str = message.as_ref()?;
             let params = try_parse_sub_agent_progress(msg_str, request)?;
-            Some(AgentExtNotification::SubAgentProgress(params))
+            Some(AgentExtNotification::SubAgentProgress(Box::new(params)))
         }
         AgentEvent::Context(ContextEvent::Cleared) => {
             Some(AgentExtNotification::ContextCleared(ContextClearedParams::default()))
@@ -100,6 +94,13 @@ pub(crate) fn map_agent_event_to_notification(
     mode: NotificationMode,
 ) -> Option<SessionNotification> {
     match msg {
+        AgentEvent::Context(ContextEvent::UsageUpdated { usage }) => usage.context_limit.map(|context_limit| {
+            SessionNotification::new(
+                session_id,
+                SessionUpdate::UsageUpdate(UsageUpdate::new(usage.input_tokens.into(), context_limit.into())),
+            )
+        }),
+
         AgentEvent::Message(MessageEvent::Text { message_id, chunk, is_complete, .. }) => map_chunk_to_notification(
             session_id,
             chunk,
@@ -182,8 +183,7 @@ pub(crate) fn map_agent_event_to_notification(
         }
 
         AgentEvent::Context(
-            ContextEvent::UsageUpdated { .. }
-            | ContextEvent::Cleared
+            ContextEvent::Cleared
             | ContextEvent::CompactionStarted { .. }
             | ContextEvent::CompactionEnded { .. }
             | ContextEvent::CompactionResult { .. },
@@ -403,8 +403,9 @@ fn to_sub_agent_event(event: &AgentEvent) -> SubAgentEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acp_utils::notifications::{ContextUsage, SubAgentEvent};
+    use acp_utils::notifications::SubAgentEvent;
     use aether_core::events::CompactionOutcome;
+    use aether_core::events::ContextUsage;
     use llm::ToolCallRequest;
 
     #[test]
@@ -451,24 +452,36 @@ mod tests {
     }
 
     #[test]
+    fn context_usage_maps_to_native_acp_usage_update() {
+        let event = AgentEvent::Context(ContextEvent::UsageUpdated {
+            usage: ContextUsage { input_tokens: 75_000, context_limit: Some(100_000), ..ContextUsage::default() },
+        });
+
+        let notification = map_agent_event_to_session_notification(SessionId::new("session"), &event)
+            .expect("context usage notification");
+        let SessionUpdate::UsageUpdate(update) = notification.update else {
+            panic!("expected usage update");
+        };
+
+        assert_eq!(update.used, 75_000);
+        assert_eq!(update.size, 100_000);
+    }
+
+    #[test]
     fn extension_notifications_report_and_serialize_their_wire_methods() {
         let cases = [
-            (
-                AgentExtNotification::ContextUsage(ContextUsageParams { usage: ContextUsage::default() }),
-                "_aether/context_usage",
-            ),
             (
                 AgentExtNotification::ContextCompaction(ContextCompactionParams { active: true }),
                 "_aether/context_compaction",
             ),
             (AgentExtNotification::ContextCleared(ContextClearedParams::default()), "_aether/context_cleared"),
             (
-                AgentExtNotification::SubAgentProgress(SubAgentProgressParams {
+                AgentExtNotification::SubAgentProgress(Box::new(SubAgentProgressParams {
                     parent_tool_id: "parent".into(),
                     task_id: "task".into(),
                     agent_name: "agent".into(),
                     event: SubAgentEvent::Other,
-                }),
+                })),
                 "_aether/sub_agent_progress",
             ),
         ];

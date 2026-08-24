@@ -2,15 +2,16 @@ use super::error::AcpClientError;
 use super::event::AcpEvent;
 use super::prompt_handle::{AcpPromptHandle, PromptCommand};
 use crate::notifications::{
-    AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, ContextUsageParams, ElicitationParams,
-    McpNotification, McpRequest, SubAgentProgressParams,
+    AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, McpNotification, McpRequest,
+    SubAgentProgressParams,
 };
 use agent_client_protocol::schema::v1::{
-    AuthMethod, AuthenticateRequest, CancelNotification, ConfigOptionUpdate, ContentBlock, InitializeRequest,
-    InitializeResponse, ListSessionsRequest, LoadSessionRequest, NewSessionRequest, NewSessionResponse,
-    PermissionOptionId, PermissionOptionKind, PromptCapabilities, PromptRequest, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionCapabilities,
-    SessionConfigOption, SessionId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, TextContent,
+    AuthMethod, AuthenticateRequest, CancelNotification, ConfigOptionUpdate, ContentBlock, CreateElicitationRequest,
+    InitializeRequest, InitializeResponse, ListSessionsRequest, LoadSessionRequest, NewSessionRequest,
+    NewSessionResponse, PermissionOptionId, PermissionOptionKind, PromptCapabilities, PromptRequest,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
+    SessionCapabilities, SessionConfigOption, SessionId, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, TextContent,
 };
 use agent_client_protocol::{self as acp, Client, ConnectTo, ConnectionTo, JsonRpcRequest};
 use tokio::sync::mpsc;
@@ -31,10 +32,6 @@ pub struct AcpSession {
 }
 
 /// Spawn an ACP agent and establish an ACP session.
-///
-/// The connection auto-approves permissions, forwards session notifications as
-/// [`AcpEvent`]s, and tunnels elicitation requests through the `_aether/elicitation`
-/// extension method.
 pub async fn spawn_acp_session(
     agent: impl ConnectTo<Client> + 'static,
     init_request: InitializeRequest,
@@ -89,8 +86,10 @@ async fn run_client_connection(
         .on_receive_request(
             {
                 let event_tx = event_tx.clone();
-                async move |params: ElicitationParams, responder, _cx| {
-                    if let Err(send_err) = event_tx.send(AcpEvent::ElicitationRequest { params, responder }) {
+                async move |params: CreateElicitationRequest, responder, _cx| {
+                    if let Err(send_err) =
+                        event_tx.send(AcpEvent::ElicitationRequest { params: Box::new(params), responder })
+                    {
                         // Recover the responder and reply with an error so the remote caller doesn't hang.
                         if let AcpEvent::ElicitationRequest { responder, .. } = send_err.0 {
                             return responder.respond_with_error(acp::Error::internal_error());
@@ -106,16 +105,6 @@ async fn run_client_connection(
                 let event_tx = event_tx.clone();
                 async move |SessionNotification { session_id, update, .. }: SessionNotification, _cx| {
                     let _ = event_tx.send(AcpEvent::SessionUpdate { session_id, update: Box::new(update) });
-                    Ok(())
-                }
-            },
-            acp::on_receive_notification!(),
-        )
-        .on_receive_notification(
-            {
-                let event_tx = event_tx.clone();
-                async move |params: ContextUsageParams, _cx| {
-                    let _ = event_tx.send(AcpEvent::ContextUsage(params));
                     Ok(())
                 }
             },

@@ -2,10 +2,10 @@ use crate::client::{RuntimeMcpServer, RuntimeMcpTransport, ToolExposure};
 use rmcp::{
     ErrorData as McpError, Peer, RoleServer, ServerHandler,
     model::{
-        CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ContentBlock,
-        CreateTaskResult, DetailedTask, GetTaskParams, GetTaskResult, Implementation, ListToolsResult,
-        PaginatedRequestParams, ProgressNotificationParam, ProtocolVersion, ResultType, ServerCapabilities, ServerInfo,
-        Tool, UpdateTaskParams,
+        CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ClientCapabilities,
+        ContentBlock, CreateTaskResult, DetailedTask, DiscoverResult, GetTaskParams, GetTaskResult, Implementation,
+        ListToolsResult, PaginatedRequestParams, ProgressNotificationParam, ProtocolVersion, ResultType,
+        ServerCapabilities, ServerInfo, Tool, UpdateTaskParams,
     },
     service::{DynService, RequestContext},
 };
@@ -106,6 +106,10 @@ impl FakeMcpState {
 
     pub fn task_cancel_ids(&self) -> Vec<String> {
         self.lock().task_cancel_ids.clone()
+    }
+
+    pub fn client_capabilities(&self) -> Option<ClientCapabilities> {
+        self.lock().client_capabilities.clone()
     }
 
     pub fn script_task(&self, task_id: impl Into<String>, states: impl IntoIterator<Item = DetailedTask>) {
@@ -284,6 +288,17 @@ impl Default for FakeMcpServer {
 }
 
 impl ServerHandler for FakeMcpServer {
+    fn discover(
+        &self,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<DiscoverResult, McpError>> + Send + '_ {
+        self.state.lock().client_capabilities = context.meta.client_capabilities();
+        std::future::ready(Ok(DiscoverResult::from_server_info(
+            ServerHandler::supported_protocol_versions(self).into_owned(),
+            ServerHandler::get_info(self),
+        )))
+    }
+
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().enable_tasks().build())
             .with_server_info(
@@ -402,6 +417,7 @@ type ToolHandler = Arc<dyn Fn(&CallToolRequestParams) -> FakeToolResponse + Send
 struct FakeMcpStateInner {
     tools: BTreeMap<String, FakeTool>,
     calls: Vec<CapturedToolCall>,
+    client_capabilities: Option<ClientCapabilities>,
     tasks: HashMap<String, VecDeque<DetailedTask>>,
     task_get_ids: Vec<String>,
     task_updates: Vec<CapturedTaskUpdate>,

@@ -11,7 +11,7 @@ use crate::surfaces::session_picker::SessionPicker;
 use crate::surfaces::workspace_picker::WorkspacePicker;
 use acp_utils::client::AcpEvent;
 use acp_utils::notifications::McpNotification;
-use agent_client_protocol::schema::v1::{self as acp, SessionId};
+use agent_client_protocol::schema::v1::{self as acp, CreateElicitationRequest, ElicitationMode, SessionId};
 use std::time::Instant;
 
 impl App {
@@ -42,14 +42,6 @@ impl App {
                 self.finish_prompt(&ToolStatus::Error(format!("failed: {error}")));
                 self.notify(&format!("Prompt failed: {error}"));
             }
-            AcpEvent::ContextUsage(params) => {
-                self.conversation.turn_mut().set_context_usage(
-                    params.usage.context_limit.map(|limit| ContextUsageDisplay {
-                        used_tokens: params.usage.input_tokens,
-                        limit_tokens: limit,
-                    }),
-                );
-            }
             AcpEvent::ContextCompaction(params) => {
                 self.conversation.turn_mut().set_compaction_active(params.active);
             }
@@ -57,6 +49,7 @@ impl App {
                 self.reset_conversation();
             }
             AcpEvent::ElicitationRequest { params, responder } => {
+                let params = *params;
                 self.close_elicitation_owner();
                 if let Some(meta) = plan_review_meta(&params) {
                     self.open_route(Route::PlanReview(Box::new(PlanReviewScreen::new(meta, responder))));
@@ -73,12 +66,14 @@ impl App {
                     );
                     return;
                 }
-                self.open_overlay(Overlay::Elicitation(ElicitationModal::with_url_handlers(
+                if let Some(modal) = ElicitationModal::with_url_handlers(
                     params,
                     responder,
                     self.browser_opener.clone(),
                     self.clipboard_writer.clone(),
-                )));
+                ) {
+                    self.open_overlay(Overlay::Elicitation(modal));
+                }
             }
             AcpEvent::McpNotification(notification) => self.on_mcp_notification(&notification),
             AcpEvent::AuthMethodsUpdated(params) => {
@@ -284,6 +279,12 @@ impl App {
                 self.conversation.plan_tracker_mut().replace(plan.entries.clone(), Instant::now());
                 self.conversation.finish_current_block();
             }
+            acp::SessionUpdate::UsageUpdate(usage) => {
+                self.conversation.turn_mut().set_context_usage(Some(ContextUsageDisplay {
+                    used_tokens: u32::try_from(usage.used).unwrap_or(u32::MAX),
+                    limit_tokens: u32::try_from(usage.size).unwrap_or(u32::MAX),
+                }));
+            }
             _ => {
                 self.conversation.finish_current_block();
             }
@@ -303,12 +304,10 @@ impl App {
 }
 
 pub(super) fn plan_review_meta(
-    params: &acp_utils::notifications::ElicitationParams,
+    params: &CreateElicitationRequest,
 ) -> Option<utils::plan_review::PlanReviewElicitationMeta> {
-    match &params.request {
-        acp_utils::notifications::ElicitRequestParams::FormElicitationParams { meta, .. } => {
-            utils::plan_review::PlanReviewElicitationMeta::parse(meta.as_ref().map(|meta| &**meta).map(|meta| &**meta))
-        }
-        _ => None,
+    if !matches!(params.mode, ElicitationMode::Form(_)) {
+        return None;
     }
+    utils::plan_review::PlanReviewElicitationMeta::parse(params.meta.as_ref())
 }

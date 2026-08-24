@@ -3,8 +3,8 @@ use aether_core::mcp::mcp;
 use aether_core::testing::{FakeMcpServer, fake_mcp};
 use futures::future::BoxFuture;
 use mcp_utils::client::{
-    DeferredToolRules, McpClientEvent, McpManager, OAuthHandlerFactory, RuntimeMcpServer, RuntimeMcpTransport,
-    ToolExposure,
+    DeferredToolRules, ElicitingOAuthHandler, McpClientEvent, McpManager, OAuthHandlerContext, OAuthHandlerFactory,
+    RuntimeMcpServer, RuntimeMcpTransport, ToolExposure,
 };
 use mcp_utils::status::{McpServerAuthCapability, McpServerStatus};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
@@ -109,6 +109,45 @@ async fn cancelling_handler_returns_user_cancelled() {
     let handler = CancellingOAuthHandler;
     let result = handler.authorize("https://example.com/auth").await;
     assert!(matches!(result, Err(OAuthError::UserCancelled)));
+}
+
+#[tokio::test]
+async fn eliciting_oauth_handler_emits_completion_after_callback() {
+    let (event_tx, mut event_rx) = mpsc::channel(4);
+    let handler = Arc::new(
+        ElicitingOAuthHandler::new(OAuthHandlerContext {
+            server_name: "linear".to_string(),
+            callback_port: None,
+            tx: event_tx,
+        })
+        .unwrap(),
+    );
+    let callback_url = handler.redirect_uri().to_string();
+    let authorize = {
+        let handler = handler.clone();
+        tokio::spawn(async move { handler.authorize("https://linear.app/oauth").await })
+    };
+
+    let McpClientEvent::Elicitation(request) = event_rx.recv().await.unwrap() else {
+        panic!("expected OAuth elicitation");
+    };
+    request.response_sender.send(rmcp::model::ElicitResult::new(rmcp::model::ElicitationAction::Accept)).unwrap();
+    let port = callback_url
+        .strip_prefix("http://localhost:")
+        .and_then(|value| value.strip_suffix('/'))
+        .unwrap()
+        .parse::<u16>()
+        .unwrap();
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    stream.write_all(b"GET /?code=test-code&state=test-state HTTP/1.1\r\nHost: localhost\r\n\r\n").await.unwrap();
+    authorize.await.unwrap().unwrap();
+
+    let completion = event_rx.try_recv().expect("OAuth callback should complete the URL elicitation");
+    assert!(matches!(
+        completion,
+        McpClientEvent::ElicitationComplete { server_name, elicitation_id }
+            if server_name == "linear" && elicitation_id == "aether-oauth"
+    ));
 }
 
 #[tokio::test]

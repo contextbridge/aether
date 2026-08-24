@@ -3,8 +3,9 @@ use rmcp::{
     ClientHandler, RoleClient,
     handler::client::progress::ProgressDispatcher,
     model::{
-        ClientCapabilities, ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction, ErrorData,
-        FormElicitationCapability, ProgressNotificationParam, UrlElicitationCapability,
+        ClientCapabilities, ClientInfo, CustomNotification, ElicitRequestParams, ElicitResult, ElicitationAction,
+        ElicitationCapability, ErrorData, FormElicitationCapability, ProgressNotificationParam,
+        UrlElicitationCapability,
     },
     service::{NotificationContext, RequestContext},
 };
@@ -69,10 +70,16 @@ pub fn cancel_result() -> ElicitResult {
 }
 
 pub fn client_capabilities() -> ClientCapabilities {
-    let mut capabilities = ClientCapabilities::builder().enable_elicitation().enable_tasks().build();
-    if let Some(elicitation) = capabilities.elicitation.as_mut() {
-        elicitation.form = Some(FormElicitationCapability::default());
-        elicitation.url = Some(UrlElicitationCapability::default());
+    client_capabilities_for(true, true)
+}
+
+pub fn client_capabilities_for(form: bool, url: bool) -> ClientCapabilities {
+    let mut capabilities = ClientCapabilities::builder().enable_tasks().build();
+    if form || url {
+        let mut elicitation = ElicitationCapability::new();
+        elicitation.form = form.then(FormElicitationCapability::default);
+        elicitation.url = url.then(UrlElicitationCapability::default);
+        capabilities.elicitation = Some(elicitation);
     }
     capabilities
 }
@@ -94,6 +101,29 @@ impl ClientHandler for McpClient {
         Ok(self.dispatch_elicitation(request).await)
     }
 
+    async fn on_custom_notification(
+        &self,
+        notification: CustomNotification,
+        _context: NotificationContext<RoleClient>,
+    ) {
+        if notification.method != "notifications/elicitation/complete" {
+            return;
+        }
+        let params: Option<ElicitationCompleteParams> =
+            notification.params.and_then(|params| serde_json::from_value(params).ok());
+        let Some(params) = params else {
+            tracing::warn!("Ignoring malformed MCP elicitation completion notification");
+            return;
+        };
+        let _ = self
+            .event_sender
+            .send(McpClientEvent::ElicitationComplete {
+                server_name: self.server_name.clone(),
+                elicitation_id: params.elicitation_id,
+            })
+            .await;
+    }
+
     async fn on_tool_list_changed(&self, context: NotificationContext<RoleClient>) {
         let Some(sender) = &self.tool_refresh_sender else {
             return;
@@ -103,6 +133,12 @@ impl ClientHandler for McpClient {
             tracing::debug!(server = %self.server_name, "MCP tool refresh receiver closed");
         }
     }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ElicitationCompleteParams {
+    elicitation_id: String,
 }
 
 #[cfg(test)]

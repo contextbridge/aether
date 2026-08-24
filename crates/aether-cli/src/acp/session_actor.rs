@@ -1,4 +1,5 @@
-use acp_utils::notifications::{ElicitationParams, McpNotification};
+use acp_utils::elicitation;
+use acp_utils::notifications::McpNotification;
 use acp_utils::server::AcpServerError;
 use aether_auth::OAuthCredentialStorage;
 use aether_core::context::ext::conversation_messages_from_events;
@@ -10,7 +11,6 @@ use llm::catalog::LlmModel;
 use llm::parser::ModelProviderParser;
 use llm::{ChatMessage, ContentBlock, ProviderConnectionOverrides, ReasoningEffort};
 use mcp_utils::client::{ElicitationRequest, McpClientEvent, McpServerStatusEntry, cancel_result};
-use rmcp::model::{ElicitRequestParams, ElicitResult};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
@@ -469,7 +469,7 @@ async fn on_runtime_event(actor: &mut SessionActor, io: &SessionIo, event: Runti
         }
         RuntimeEvent::Mcp { event, .. } => {
             let refresh_commands = matches!(event, McpClientEvent::ConnectionReady(_));
-            on_mcp_client_event(&io.connection, event);
+            on_mcp_client_event(&io.connection, &io.session_id, event);
             if refresh_commands {
                 match actor.list_available_commands().await {
                     Ok(commands) => send_available_commands(&io.connection, io.session_id.clone(), commands),
@@ -550,10 +550,20 @@ fn send_agent_notification(
     connection.send_notification(untyped).map_err(|error| AcpServerError::protocol(method, error))
 }
 
-fn on_mcp_client_event(connection: &ConnectionTo<Client>, event: McpClientEvent) {
+fn on_mcp_client_event(connection: &ConnectionTo<Client>, session_id: &SessionId, event: McpClientEvent) {
     match event {
-        McpClientEvent::Elicitation(elicitation) => {
-            spawn_elicitation_request(connection, *elicitation);
+        McpClientEvent::Elicitation(elicitation) => spawn_elicitation_request(connection, session_id, *elicitation),
+        McpClientEvent::ElicitationComplete { server_name, elicitation_id } => {
+            if let Err(error) = connection
+                .send_notification(elicitation::build_acp_elicitation_completion_notification(
+                    session_id,
+                    &server_name,
+                    &elicitation_id,
+                ))
+                .map_err(|error| AcpServerError::protocol("elicitation/complete", error))
+            {
+                error!("Failed to send elicitation completion: {error:?}");
+            }
         }
         McpClientEvent::ServerStatusesChanged(servers) => send_mcp_server_status(connection, servers),
         McpClientEvent::ConnectionReady(snapshot) => send_mcp_server_status(connection, snapshot.server_statuses()),
@@ -563,43 +573,42 @@ fn on_mcp_client_event(connection: &ConnectionTo<Client>, event: McpClientEvent)
     }
 }
 
-async fn on_elicitation_request(connection: &ConnectionTo<Client>, elicitation: ElicitationRequest) {
-    let params = build_elicitation_params(&elicitation.server_name, &elicitation.request);
+async fn on_elicitation_request(
+    connection: &ConnectionTo<Client>,
+    session_id: &SessionId,
+    elicitation: ElicitationRequest,
+) {
+    let result = async {
+        let request =
+            elicitation::map_mcp_elicitation_request_to_acp(&elicitation.server_name, session_id, &elicitation.request)
+                .map_err(|error| error.to_string())?;
+        let response = connection.send_request(request).block_task().await.map_err(|error| format!("{error:?}"))?;
+        elicitation::map_acp_elicitation_response_to_mcp(response).map_err(|error| error.to_string())
+    }
+    .await
+    .unwrap_or_else(|error| {
+        error!("ACP elicitation failed: {error}");
+        cancel_result()
+    });
 
-    let mcp_result = match connection
-        .send_request(params)
-        .block_task()
-        .await
-        .map_err(|e| AcpServerError::protocol("_aether/elicitation", e))
-    {
-        Ok(response) => {
-            let mut result = ElicitResult::new(response.action);
-            result.content = response.content;
-            result
-        }
-        Err(e) => {
-            error!("Failed to send elicitation request: {:?}", e);
-            cancel_result()
-        }
-    };
-
-    if elicitation.response_sender.send(mcp_result).is_err() {
+    if elicitation.response_sender.send(result).is_err() {
         error!("Failed to send elicitation response: receiver dropped");
     }
 }
 
-fn spawn_elicitation_request(connection: &ConnectionTo<Client>, elicitation: ElicitationRequest) {
+fn spawn_elicitation_request(
+    connection: &ConnectionTo<Client>,
+    session_id: &SessionId,
+    elicitation: ElicitationRequest,
+) {
     let connection = connection.clone();
+    let session_id = session_id.clone();
     if let Err(e) = connection.clone().spawn(async move {
-        on_elicitation_request(&connection, elicitation).await;
+        on_elicitation_request(&connection, &session_id, elicitation).await;
         Ok(())
     }) {
         error!("Failed to spawn elicitation request handler: {e:?}");
     }
-}
-
-fn build_elicitation_params(server_name: &str, request: &ElicitRequestParams) -> ElicitationParams {
-    ElicitationParams { server_name: server_name.to_string(), request: request.clone() }
 }
 
 #[cfg(test)]
@@ -766,54 +775,17 @@ mod tests {
         assert_eq!(s.effective_model(&validated_modes()), DEEPSEEK);
     }
 
-    #[test]
-    fn test_build_elicitation_params_from_form() {
-        let elicitation = ElicitRequestParams::FormElicitationParams {
-            meta: None,
-            message: "Pick a color".to_string(),
-            requested_schema: rmcp::model::ElicitationSchema::builder().required_bool("approved").build().unwrap(),
-        };
-
-        let params = build_elicitation_params("test-server", &elicitation);
-        assert_eq!(params.server_name, "test-server");
-        match &params.request {
-            ElicitRequestParams::FormElicitationParams { message, requested_schema, .. } => {
-                assert_eq!(message, "Pick a color");
-                assert_eq!(requested_schema.properties.len(), 1);
-                assert!(requested_schema.properties.contains_key("approved"));
-            }
-            ElicitRequestParams::UrlElicitationParams { .. } => panic!("Expected Form, got Url"),
-            _ => panic!("Expected Form elicitation"),
-        }
-    }
-
-    #[test]
-    fn test_build_elicitation_params_from_url() {
-        let elicitation = ElicitRequestParams::UrlElicitationParams {
-            meta: None,
-            message: "Authorize GitHub".to_string(),
-            url: "https://github.com/login/oauth".to_string(),
-            elicitation_id: "el-123".to_string(),
-        };
-
-        let params = build_elicitation_params("github", &elicitation);
-        assert_eq!(params.server_name, "github");
-        match &params.request {
-            ElicitRequestParams::UrlElicitationParams { message, url, elicitation_id, .. } => {
-                assert_eq!(message, "Authorize GitHub");
-                assert_eq!(url, "https://github.com/login/oauth");
-                assert_eq!(elicitation_id, "el-123");
-            }
-            ElicitRequestParams::FormElicitationParams { .. } => panic!("Expected Url, got Form"),
-            _ => panic!("Expected URL elicitation"),
-        }
-    }
-
     mod connection_tests {
         use super::*;
+        use acp_utils::elicitation::source_mcp_server_name;
         use acp_utils::testing::test_connection;
+        use rmcp::model::ElicitRequestParams;
         use tokio::sync::oneshot;
         use tokio::task::LocalSet;
+
+        fn dispatch_event(connection: &ConnectionTo<Client>, event: McpClientEvent) {
+            on_mcp_client_event(connection, &SessionId::new("session-1"), event);
+        }
 
         #[tokio::test(flavor = "current_thread")]
         async fn server_status_change_forwards_status_notification() {
@@ -825,7 +797,7 @@ mod tests {
                         mcp_utils::client::McpServerStatus::Connected { tool_count: 1 },
                     )];
 
-                    on_mcp_client_event(&cx, McpClientEvent::ServerStatusesChanged(servers));
+                    dispatch_event(&cx, McpClientEvent::ServerStatusesChanged(servers));
 
                     let received = peer.next_mcp_notification().await;
                     assert!(matches!(received, McpNotification::ServerStatus { .. }));
@@ -845,8 +817,8 @@ mod tests {
                         },
                     )];
 
-                    on_mcp_client_event(&cx, McpClientEvent::ServerStatusesChanged(servers));
-                    on_mcp_client_event(
+                    dispatch_event(&cx, McpClientEvent::ServerStatusesChanged(servers));
+                    dispatch_event(
                         &cx,
                         McpClientEvent::AuthenticationFailed {
                             server: "github".to_string(),
@@ -865,7 +837,7 @@ mod tests {
                 .run_until(async {
                     let (cx, mut peer) = test_connection().await;
 
-                    on_mcp_client_event(&cx, McpClientEvent::ServerStatusesChanged(vec![]));
+                    dispatch_event(&cx, McpClientEvent::ServerStatusesChanged(vec![]));
 
                     let McpNotification::ServerStatus { servers } = peer.next_mcp_notification().await;
                     assert!(servers.is_empty());
@@ -882,10 +854,30 @@ mod tests {
                         "github",
                         mcp_utils::client::McpServerStatus::Connected { tool_count: 1 },
                     )];
-                    on_mcp_client_event(&cx, McpClientEvent::ServerStatusesChanged(servers));
+                    dispatch_event(&cx, McpClientEvent::ServerStatusesChanged(servers));
 
                     let McpNotification::ServerStatus { servers } = peer.next_mcp_notification().await;
                     assert_eq!(servers[0].name, "github");
+                })
+                .await;
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn elicitation_completion_forwards_native_acp_notification() {
+            LocalSet::new()
+                .run_until(async {
+                    let (cx, mut peer) = test_connection().await;
+
+                    dispatch_event(
+                        &cx,
+                        McpClientEvent::ElicitationComplete {
+                            server_name: "github".to_string(),
+                            elicitation_id: "el-1".to_string(),
+                        },
+                    );
+
+                    let completion = peer.next_elicitation_completion().await;
+                    assert_eq!(&*completion.elicitation_id.0, r#"["session-1","github","el-1"]"#);
                 })
                 .await;
         }
@@ -895,10 +887,13 @@ mod tests {
             LocalSet::new()
                 .run_until(async {
                     let (cx, mut peer) = test_connection().await;
-                    peer.queue_elicitation_response(acp_utils::notifications::ElicitationResponse {
-                        action: rmcp::model::ElicitationAction::Accept,
-                        content: Some(serde_json::json!({ "color": "red" })),
-                    });
+                    peer.queue_elicitation_response(
+                        serde_json::from_value(serde_json::json!({
+                            "action": "accept",
+                            "content": { "color": "red" }
+                        }))
+                        .unwrap(),
+                    );
 
                     let (tx, rx) = oneshot::channel();
                     let elicitation = ElicitationRequest {
@@ -914,48 +909,17 @@ mod tests {
                         response_sender: tx,
                     };
 
-                    on_elicitation_request(&cx, elicitation).await;
+                    on_elicitation_request(&cx, &SessionId::new("session-1"), elicitation).await;
 
                     let result = rx.await.expect("response forwarded");
                     assert_eq!(result.action, rmcp::model::ElicitationAction::Accept);
                     assert_eq!(result.content, Some(serde_json::json!({ "color": "red" })));
 
                     let received = peer.next_elicitation_request().await;
-                    assert_eq!(received.server_name, "test-server");
-                })
-                .await;
-        }
-
-        #[tokio::test(flavor = "current_thread")]
-        async fn form_elicitation_request_does_not_block_the_caller() {
-            LocalSet::new()
-                .run_until(async {
-                    let (cx, peer) = test_connection().await;
-                    let responder_rx = peer.capture_next_elicitation();
-                    let (tx, rx) = oneshot::channel();
-                    let elicitation = ElicitationRequest {
-                        server_name: "test-server".to_string(),
-                        request: ElicitRequestParams::FormElicitationParams {
-                            meta: None,
-                            message: "Pick a color".to_string(),
-                            requested_schema: rmcp::model::ElicitationSchema::builder()
-                                .required_bool("approved")
-                                .build()
-                                .unwrap(),
-                        },
-                        response_sender: tx,
-                    };
-
-                    on_mcp_client_event(&cx, McpClientEvent::Elicitation(Box::new(elicitation)));
-
-                    let responder = responder_rx.await.expect("form elicitation request should reach peer");
-                    let _ = responder.respond(acp_utils::notifications::ElicitationResponse {
-                        action: rmcp::model::ElicitationAction::Accept,
-                        content: Some(serde_json::json!({ "approved": true })),
-                    });
-
-                    let result = rx.await.expect("spawned form request should forward response");
-                    assert_eq!(result.action, rmcp::model::ElicitationAction::Accept);
+                    assert_eq!(source_mcp_server_name(received.meta.as_ref()), Some("test-server"));
+                    let acp::ElicitationMode::Form(form) = received.mode else { panic!("expected form") };
+                    let acp::ElicitationScope::Session(scope) = form.scope else { panic!("expected session scope") };
+                    assert_eq!(&*scope.session_id.0, "session-1");
                 })
                 .await;
         }
@@ -977,7 +941,7 @@ mod tests {
                         response_sender: tx,
                     };
 
-                    on_elicitation_request(&cx, elicitation).await;
+                    on_elicitation_request(&cx, &SessionId::new("session-1"), elicitation).await;
 
                     let result = rx.await.expect("response forwarded");
                     assert_eq!(result.action, rmcp::model::ElicitationAction::Cancel);

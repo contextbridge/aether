@@ -118,12 +118,10 @@ impl McpServerConnection {
     }
 
     pub(super) async fn list_tools(&self) -> Result<Vec<RmcpTool>> {
-        let response = self
-            .client
-            .list_tools(None)
+        self.client
+            .list_all_tools()
             .await
-            .map_err(|e| McpError::ToolDiscoveryFailed(format!("Failed to list tools: {e}")))?;
-        Ok(response.tools)
+            .map_err(|e| McpError::ToolDiscoveryFailed(format!("Failed to list tools: {e}")))
     }
 
     fn from_parts(

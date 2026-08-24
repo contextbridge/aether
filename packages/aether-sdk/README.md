@@ -60,18 +60,18 @@ yourself in a `finally` block.
 
 `AetherSessionOptions` lets you pick the initial agent or model:
 
-| Option               | Notes                                                                                                                         |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `agent`              | Mode name from `.aether/settings.json` (e.g. `planner`).                                                                      |
-| `model`              | Direct model id (e.g. `anthropic:claude-sonnet-4-5`).                                                                         |
-| `reasoningEffort`    | `"low"`, `"medium"`, `"high"`, `"xhigh"`.                                                                                     |
-| `settings`           | Inline Aether settings object using the `.aether/settings.json` shape. SDK-hosted tools live here under `mcps`.                                  |
-| `settingsFile`       | Path to an alternate settings JSON file.                                                                                      |
-| `cwd`                | Working directory for the spawned `aether acp` process.                                                                       |
-| `binaryPath`         | Override the bundled `@aether-agent/cli` binary (absolute path or name on `PATH`).                                            |
-| `providers`          | Provider connection overrides, keyed by provider (for example `{ bedrock: { url: "http://127.0.0.1:8787", auth: "none" } }`). |
-| `traceContext`       | A remote W3C `traceparent` with optional `tracestate`, or a standalone `traceId` for root spans without a parent.                 |
-| `abortSignal`        | Cancel the active session and tear the subprocess down.                                                                       |
+| Option            | Notes                                                                                                                         |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `agent`           | Mode name from `.aether/settings.json` (e.g. `planner`).                                                                      |
+| `model`           | Direct model id (e.g. `anthropic:claude-sonnet-4-5`).                                                                         |
+| `reasoningEffort` | `"low"`, `"medium"`, `"high"`, `"xhigh"`.                                                                                     |
+| `settings`        | Inline Aether settings object using the `.aether/settings.json` shape. SDK-hosted tools live here under `mcps`.               |
+| `settingsFile`    | Path to an alternate settings JSON file.                                                                                      |
+| `cwd`             | Working directory for the spawned `aether acp` process.                                                                       |
+| `binaryPath`      | Override the bundled `@aether-agent/cli` binary (absolute path or name on `PATH`).                                            |
+| `providers`       | Provider connection overrides, keyed by provider (for example `{ bedrock: { url: "http://127.0.0.1:8787", auth: "none" } }`). |
+| `traceContext`    | A remote W3C `traceparent` with optional `tracestate`, or a standalone `traceId` for root spans without a parent.             |
+| `abortSignal`     | Cancel the active session and tear the subprocess down.                                                                       |
 
 `agent` and `model` are mutually exclusive. `settings` and `settingsFile` are
 mutually exclusive. These are forwarded to the spawned `aether acp` process as
@@ -109,8 +109,7 @@ await AetherSession.start({
 ```ts
 await using continuedSession = await AetherSession.start({
   traceContext: {
-    traceparent:
-      "00-00112233445566778899aabbccddeeff-0123456789abcdef-01",
+    traceparent: "00-00112233445566778899aabbccddeeff-0123456789abcdef-01",
     tracestate: "vendor=value",
   },
 });
@@ -136,7 +135,7 @@ for await (const m of session.prompt("Follow-up")) console.log(m);
 
 `mcp()` creates a TypeScript MCP server. Tools run **in the calling Node process**, so closures, in-memory state, file handles, and database connections all work as you'd expect.
 
-The returned handle implements `Symbol.asyncDispose`, so `await using` tears the server down on scope exit. 
+The returned handle implements `Symbol.asyncDispose`, so `await using` tears the server down on scope exit.
 
 ```ts
 import { AetherSession, mcp, tool } from "@aether-agent/sdk";
@@ -183,7 +182,7 @@ console.log(submit.getResult());
 ### Per-agent tools
 
 A spec on the top-level `mcps` is available to every agent. Put it on a single
-agent's `mcps` instead to scope those tools to that agent. 
+agent's `mcps` instead to scope those tools to that agent.
 
 ```ts
 await using planner = await mcp({ name: "planner-tools", tools: [plan] });
@@ -256,8 +255,7 @@ await AetherSession.start({
 });
 ```
 
-`onElicitation` handles Aether's `_aether/elicitation` extension request.
-
-```
-
-See the [`@aether-agent/evals` README](../aether-evals/README.md) for usage.
+`onElicitation` handles native ACP `elicitation/create` requests in form or URL
+mode. It returns an ACP accept, decline, or cancel response. Without a handler,
+the SDK does not advertise elicitation support. URL completion notifications
+appear in the prompt stream as `elicitation_complete` messages.

@@ -226,7 +226,7 @@ async fn call_tool(
 async fn list_tools(
     client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
 ) -> Result<Vec<Tool>, McpCommandError> {
-    timed(DISCOVERY_TIMEOUT, client.list_tools(None)).await.map(|result| result.tools)
+    timed(DISCOVERY_TIMEOUT, client.list_all_tools()).await
 }
 
 async fn timed<T, U: Display>(

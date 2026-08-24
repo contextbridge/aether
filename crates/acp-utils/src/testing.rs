@@ -5,18 +5,15 @@
 //! need to exercise the full serialize/dispatch path (so wire-format
 //! regressions like extension method-name typos surface in tests).
 //!
-//! When a test needs to pass a real [`Responder<ElicitationResponse>`] into a
-//! component under test (e.g. an elicitation UI) and observe what that
-//! component eventually sends, call [`TestPeer::fake_elicitation`]: it kicks
-//! off a placeholder elicitation request, hands back the captured responder,
-//! and returns a receiver that resolves when the responder is consumed.
 
-use crate::notifications::{ElicitationParams, ElicitationResponse, McpNotification};
-use agent_client_protocol::schema::v1::SessionNotification;
+use crate::notifications::McpNotification;
+use agent_client_protocol::schema::v1::{
+    CompleteElicitationNotification, CreateElicitationRequest, CreateElicitationResponse, ElicitationFormMode,
+    ElicitationSchema, ElicitationSessionScope, SessionNotification,
+};
 use agent_client_protocol::{
     self as acp, Agent, Builder, ByteStreams, Client, ConnectionTo, HandleDispatchFrom, NullRun, Responder,
 };
-use rmcp::model::{ElicitRequestParams, ElicitationSchema};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tokio::io::DuplexStream;
@@ -29,22 +26,21 @@ pub type DuplexByteStreams = ByteStreams<Compat<DuplexStream>, Compat<DuplexStre
 pub struct TestPeer {
     session_notifications: mpsc::UnboundedReceiver<SessionNotification>,
     mcp_notifications: mpsc::UnboundedReceiver<McpNotification>,
-    elicitation_requests: mpsc::UnboundedReceiver<ElicitationParams>,
-    elicitation_responses: Arc<Mutex<VecDeque<ElicitationResponse>>>,
-    responder_capture: Arc<Mutex<Option<oneshot::Sender<Responder<ElicitationResponse>>>>>,
+    elicitation_requests: mpsc::UnboundedReceiver<CreateElicitationRequest>,
+    elicitation_completions: mpsc::UnboundedReceiver<CompleteElicitationNotification>,
+    elicitation_responses: Arc<Mutex<VecDeque<CreateElicitationResponse>>>,
+    responder_capture: Arc<Mutex<Option<oneshot::Sender<Responder<CreateElicitationResponse>>>>>,
 }
 
 impl TestPeer {
-    /// Build a `TestPeer` plus a pre-wired `Client.builder()` whose
-    /// notification handlers route session/mcp/elicitation traffic into the
-    /// peer. The caller decides whether to run the builder via `connect_to`
-    /// (drop the agent-side cx) or `connect_with` (capture the agent-side cx).
     pub fn new() -> (Self, Builder<Client, impl HandleDispatchFrom<Agent>, NullRun>) {
         let (sn_tx, sn_rx) = mpsc::unbounded_channel::<SessionNotification>();
         let (mcp_tx, mcp_rx) = mpsc::unbounded_channel::<McpNotification>();
-        let (el_tx, el_rx) = mpsc::unbounded_channel::<ElicitationParams>();
-        let elicitation_responses: Arc<Mutex<VecDeque<ElicitationResponse>>> = Arc::new(Mutex::new(VecDeque::new()));
-        let responder_capture: Arc<Mutex<Option<oneshot::Sender<Responder<ElicitationResponse>>>>> =
+        let (el_tx, el_rx) = mpsc::unbounded_channel::<CreateElicitationRequest>();
+        let (complete_tx, complete_rx) = mpsc::unbounded_channel::<CompleteElicitationNotification>();
+        let elicitation_responses: Arc<Mutex<VecDeque<CreateElicitationResponse>>> =
+            Arc::new(Mutex::new(VecDeque::new()));
+        let responder_capture: Arc<Mutex<Option<oneshot::Sender<Responder<CreateElicitationResponse>>>>> =
             Arc::new(Mutex::new(None));
 
         let builder = Client
@@ -69,12 +65,22 @@ impl TestPeer {
                 },
                 acp::on_receive_notification!(),
             )
+            .on_receive_notification(
+                {
+                    let tx = complete_tx;
+                    async move |notification: CompleteElicitationNotification, _cx| {
+                        let _ = tx.send(notification);
+                        Ok(())
+                    }
+                },
+                acp::on_receive_notification!(),
+            )
             .on_receive_request(
                 {
                     let tx = el_tx;
                     let responses = elicitation_responses.clone();
                     let capture = responder_capture.clone();
-                    async move |req: ElicitationParams, responder: Responder<ElicitationResponse>, _cx| {
+                    async move |req: CreateElicitationRequest, responder: Responder<CreateElicitationResponse>, _cx| {
                         if let Some(capture_tx) = capture.lock().unwrap().take() {
                             return match capture_tx.send(responder) {
                                 Ok(()) => Ok(()),
@@ -96,6 +102,7 @@ impl TestPeer {
             session_notifications: sn_rx,
             mcp_notifications: mcp_rx,
             elicitation_requests: el_rx,
+            elicitation_completions: complete_rx,
             elicitation_responses,
             responder_capture,
         };
@@ -110,40 +117,26 @@ impl TestPeer {
         self.mcp_notifications.recv().await.expect("peer channel closed")
     }
 
-    pub async fn next_elicitation_request(&mut self) -> ElicitationParams {
+    pub async fn next_elicitation_request(&mut self) -> CreateElicitationRequest {
         self.elicitation_requests.recv().await.expect("peer channel closed")
     }
 
-    /// Queue a response the peer will hand back for the next incoming
-    /// elicitation request. If the queue is empty when a request arrives, the
-    /// peer responds with a protocol error, which exercises the
-    /// `cancel_result()` fallback path in the caller.
-    pub fn queue_elicitation_response(&self, response: ElicitationResponse) {
+    pub async fn next_elicitation_completion(&mut self) -> CompleteElicitationNotification {
+        self.elicitation_completions.recv().await.expect("peer channel closed")
+    }
+
+    pub fn queue_elicitation_response(&self, response: CreateElicitationResponse) {
         self.elicitation_responses.lock().unwrap().push_back(response);
     }
 
-    pub fn capture_next_elicitation(&self) -> oneshot::Receiver<Responder<ElicitationResponse>> {
-        let (responder_tx, responder_rx) = oneshot::channel::<Responder<ElicitationResponse>>();
-        *self.responder_capture.lock().unwrap() = Some(responder_tx);
-        responder_rx
-    }
-
-    /// Kick off a placeholder elicitation request from the agent side of `cx`,
-    /// hand back the [`Responder<ElicitationResponse>`] captured on the client
-    /// side, and return a receiver that resolves when the responder is
-    /// consumed.
-    ///
-    /// Use in tests that pass a `Responder<ElicitationResponse>` into code
-    /// under test and want to observe the response without driving a full ACP
-    /// round-trip themselves.
     pub async fn fake_elicitation(
         &mut self,
         cx: &ConnectionTo<Client>,
-    ) -> (Responder<ElicitationResponse>, oneshot::Receiver<ElicitationResponse>) {
-        let (responder_tx, responder_rx) = oneshot::channel::<Responder<ElicitationResponse>>();
+    ) -> (Responder<CreateElicitationResponse>, oneshot::Receiver<CreateElicitationResponse>) {
+        let (responder_tx, responder_rx) = oneshot::channel::<Responder<CreateElicitationResponse>>();
         *self.responder_capture.lock().unwrap() = Some(responder_tx);
 
-        let (response_tx, response_rx) = oneshot::channel::<ElicitationResponse>();
+        let (response_tx, response_rx) = oneshot::channel::<CreateElicitationResponse>();
         let cx = cx.clone();
         spawn_local(async move {
             if let Ok(resp) = cx.send_request(placeholder_params()).block_task().await {
@@ -193,13 +186,9 @@ pub async fn test_connection() -> (ConnectionTo<Client>, TestPeer) {
     (cx, peer)
 }
 
-fn placeholder_params() -> ElicitationParams {
-    ElicitationParams {
-        server_name: String::new(),
-        request: ElicitRequestParams::FormElicitationParams {
-            meta: None,
-            message: String::new(),
-            requested_schema: ElicitationSchema::builder().build().expect("empty schema is valid"),
-        },
-    }
+fn placeholder_params() -> CreateElicitationRequest {
+    CreateElicitationRequest::new(
+        ElicitationFormMode::new(ElicitationSessionScope::new("test-session"), ElicitationSchema::new()),
+        String::new(),
+    )
 }

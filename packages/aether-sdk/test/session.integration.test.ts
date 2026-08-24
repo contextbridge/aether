@@ -143,9 +143,15 @@ describe("AetherSession with a fake ACP agent", () => {
     }
   });
 
-  it("starts an explicit session and streams a final result", async () => {
+  it("starts a session and handles native ACP elicitation", async () => {
+    const requests: unknown[] = [];
     const session = await AetherSession.start({
       binaryPath: FAKE_AETHER,
+      env: { PATH: process.env.PATH, FAKE_AETHER_REQUEST_ELICITATION: "1" },
+      onElicitation: async (request) => {
+        requests.push(request);
+        return { action: "accept", content: { name: "Ada" } };
+      },
     });
 
     const messages: AetherMessage[] = [];
@@ -159,7 +165,14 @@ describe("AetherSession with a fake ACP agent", () => {
 
     expect(session.sessionId).toMatch(/^fake-session-/);
     const types = messages.map((m) => m.type);
-    expect(types).toEqual(["session_update", "result"]);
+    expect(types.slice(0, -1).sort()).toEqual([
+      "elicitation_complete",
+      "session_update",
+    ]);
+    expect(types.at(-1)).toBe("result");
+    expect(requests).toMatchObject([
+      { mode: "form", message: "What is your name?" },
+    ]);
     const result = messages.find((m) => m.type === "result");
     if (result?.type === "result") {
       expect(result.stopReason).toBe("end_turn");

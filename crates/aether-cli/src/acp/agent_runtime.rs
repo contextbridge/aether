@@ -149,10 +149,12 @@ impl RuntimeFactory for ProductionRuntimeFactory {
     ) -> Result<AgentRuntime, SessionError> {
         let extra_servers = self.mcp_servers.clone();
 
-        let builder = RuntimeBuilder::from_spec(self.cwd.clone(), spec.clone())
+        let mut builder = RuntimeBuilder::from_spec(self.cwd.clone(), spec.clone())
             .extra_servers(extra_servers)
-            .oauth_handler_factory(mcp_oauth_handler_factory())
             .agent_deps(self.agent_deps.clone());
+        if self.agent_deps.supports_mcp_url_elicitation() {
+            builder = builder.oauth_handler_factory(mcp_oauth_handler_factory());
+        }
 
         let runtime = builder.build(None, Some(initial_messages)).await?;
 

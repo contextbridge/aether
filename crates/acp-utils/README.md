@@ -16,7 +16,7 @@ Utilities for the [Agent Client Protocol](https://agentclientprotocol.com/) (ACP
 
 ## Key Types
 
-- **`ElicitationParams` / `ElicitationResponse`** -- Schema-driven user prompts and responses
+- **`elicitation`** -- Typed conversion between MCP elicitation and native ACP `elicitation/create` messages
 - **`ContextUsageParams`** -- Token usage tracking notifications
 - **`McpNotification` / `McpRequest`** -- MCP message tunneling over ACP
 - **`TokioAcpAgent`** -- Tokio-native ACP transport

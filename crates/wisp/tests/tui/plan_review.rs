@@ -1,4 +1,3 @@
-use acp_utils::notifications::{ElicitationAction, ElicitationResponse};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::TerminalOptions;
 use ratatui::backend::TestBackend;
@@ -18,18 +17,18 @@ use wisp::view::generation::Generation;
 use wisp::view::syntax::SyntaxHighlighter;
 
 use super::support::{
-    ElicitRequestParams, ElicitationParams, ElicitationSchema, assert_ctrl_c_exits, block_on_local, make_app,
-    with_elicitation,
+    CreateElicitationResponse, ElicitationAction, ElicitationSchema, accepted_content, assert_ctrl_c_exits,
+    block_on_local, form_elicitation, make_app, with_elicitation,
 };
 
 fn make_meta(markdown: &str) -> PlanReviewElicitationMeta {
     PlanReviewElicitationMeta::new(&PathBuf::from("/tmp/plan.md"), markdown)
 }
 
-fn make_screen(markdown: &str) -> (PlanReviewScreen, oneshot::Receiver<ElicitationResponse>) {
+fn make_screen(markdown: &str) -> (PlanReviewScreen, oneshot::Receiver<CreateElicitationResponse>) {
     let meta = make_meta(markdown);
     let (tx, rx) = oneshot::channel();
-    let responder = ElicitationResponder::from_fn(move |response: ElicitationResponse| {
+    let responder = ElicitationResponder::from_fn(move |response: CreateElicitationResponse| {
         let _ = tx.send(response);
     });
     (PlanReviewScreen::new(meta, responder), rx)
@@ -136,7 +135,7 @@ fn comment_submit_at_first_line() {
     // Request changes - should include the comment
     assert!(closes(&mut screen, key(KeyCode::Char('r'))));
     let response = rx.try_recv().expect("responder should have been called");
-    let content = response.content.expect("content should be present");
+    let content = accepted_content(&response);
     assert!(content["feedback"].as_str().unwrap().contains("needs work"));
 }
 
@@ -157,8 +156,7 @@ fn comment_cancel_with_escape() {
     // Submit request-changes — canceled draft must not leak
     assert!(closes(&mut screen, key(KeyCode::Char('r'))));
     let response = rx.try_recv().expect("responder should have been called");
-    assert_eq!(response.action, ElicitationAction::Accept);
-    let content = response.content.expect("content should be present");
+    let content = accepted_content(&response);
     let feedback = content["feedback"].as_str().unwrap();
     assert!(!feedback.contains("should be discarded"), "canceled draft must not leak into feedback: {feedback}");
     assert!(feedback.contains("no inline comments"), "should return no-inline-comments fallback: {feedback}");
@@ -288,8 +286,7 @@ fn approve_sends_correct_payload() {
     assert!(closes(&mut screen, key(KeyCode::Char('a'))));
 
     let response = rx.try_recv().expect("responder should have been called");
-    assert_eq!(response.action, ElicitationAction::Accept);
-    let content = response.content.expect("content should be present");
+    let content = accepted_content(&response);
     assert_eq!(content["decision"].as_str().unwrap(), "approve");
 }
 
@@ -308,8 +305,7 @@ fn request_changes_sends_feedback_in_payload() {
     assert!(closes(&mut screen, key(KeyCode::Char('r'))));
 
     let response = rx.try_recv().expect("responder should have been called");
-    assert_eq!(response.action, ElicitationAction::Accept);
-    let content = response.content.expect("content should be present");
+    let content = accepted_content(&response);
     assert_eq!(content["decision"].as_str().unwrap(), "deny");
     assert!(content["feedback"].as_str().unwrap().contains("this is wrong"));
 }
@@ -322,7 +318,7 @@ fn cancel_sends_correct_payload() {
     assert!(closes(&mut screen, key(KeyCode::Esc)));
 
     let response = rx.try_recv().expect("responder should have been called");
-    assert_eq!(response.action, ElicitationAction::Cancel);
+    assert!(matches!(&response.action, ElicitationAction::Cancel));
 }
 
 #[test]
@@ -378,8 +374,7 @@ fn modified_chars_do_not_approve_or_reject_the_plan() {
 
     assert!(closes(&mut screen, key(KeyCode::Char('a'))));
     let response = rx.try_recv().expect("plain 'a' should approve");
-    assert_eq!(response.action, ElicitationAction::Accept);
-    assert_eq!(response.content.unwrap()["decision"], "approve");
+    assert_eq!(accepted_content(&response)["decision"], "approve");
 }
 
 #[test]
@@ -401,24 +396,9 @@ fn double_ctrl_c_exits_over_plan_review() {
     block_on_local(async {
         let mut app = make_app();
 
-        // Build the plan-review elicitation meta without a direct rmcp dependency:
-        // round-trip the metadata through serde into the field's `Meta` type.
-        let meta = serde_json::from_value(serde_json::Value::Object(
-            PlanReviewElicitationMeta::new(&PathBuf::from("/tmp/plan.md"), "# Plan\nbody").to_json().unwrap(),
-        ))
-        .unwrap();
-        with_elicitation(
-            &mut app,
-            ElicitationParams {
-                server_name: "plan".to_string(),
-                request: ElicitRequestParams::FormElicitationParams {
-                    meta: Some(meta),
-                    message: "Approve plan?".to_string(),
-                    requested_schema: ElicitationSchema::builder().build().unwrap(),
-                },
-            },
-        )
-        .await;
+        let meta = PlanReviewElicitationMeta::new(&PathBuf::from("/tmp/plan.md"), "# Plan\nbody").to_json().unwrap();
+        with_elicitation(&mut app, form_elicitation("plan", "Approve plan?", ElicitationSchema::new()).meta(meta))
+            .await;
         assert!(app.app().full_screen_active());
         assert_ctrl_c_exits(&mut app);
     });

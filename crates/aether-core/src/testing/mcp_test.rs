@@ -126,12 +126,11 @@ impl McpTestBuilder {
     }
 
     pub async fn build(self) -> McpTest {
+        let builder = mcp("/workspace").with_servers(self.servers);
         let builder = self
             .factories
             .into_iter()
-            .fold(mcp("/workspace").with_servers(self.servers), |builder, (name, factory)| {
-                builder.register_in_memory_server(name, factory)
-            });
+            .fold(builder, |builder, (name, factory)| builder.register_in_memory_server(name, factory));
         let mut spawn = builder.spawn().await.expect("MCP test manager spawns");
         let snapshot = spawn.block_until_ready().await.expect("MCP test manager becomes ready");
         let (runtime, event_rx) = spawn.split();

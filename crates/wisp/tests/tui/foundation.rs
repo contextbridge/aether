@@ -670,13 +670,7 @@ fn status_line_is_never_inserted_into_scrollback() {
 #[test]
 fn scrollback_insertion_does_not_duplicate_status_line() {
     let mut ui = TestUi::with_backend(RecordingBackend::new(120, 15));
-    ui.acp_event(AcpEvent::ContextUsage(acp_utils::notifications::ContextUsageParams {
-        usage: acp_utils::notifications::ContextUsage {
-            input_tokens: 20_000,
-            context_limit: Some(200_000),
-            ..Default::default()
-        },
-    }));
+    ui.acp_event(session_update(acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(20_000, 200_000))));
     ui.draw();
 
     let mut response = String::new();
@@ -686,13 +680,7 @@ fn scrollback_insertion_does_not_duplicate_status_line() {
     ui.submit("hello");
     ui.acp_event(text_chunk(&response));
     ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
-    ui.acp_event(AcpEvent::ContextUsage(acp_utils::notifications::ContextUsageParams {
-        usage: acp_utils::notifications::ContextUsage {
-            input_tokens: 40_000,
-            context_limit: Some(200_000),
-            ..Default::default()
-        },
-    }));
+    ui.acp_event(session_update(acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(40_000, 200_000))));
 
     ui.draw();
 

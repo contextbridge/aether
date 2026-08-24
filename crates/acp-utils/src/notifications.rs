@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use agent_client_protocol::schema::v1::{AuthMethod, Meta};
 use agent_client_protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 pub use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
-pub use rmcp::model::ElicitRequestParams;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 pub use mcp_utils::status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
@@ -63,14 +62,6 @@ impl ContextUsage {
     }
 }
 
-/// Parameters for `_aether/context_usage` notifications.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonRpcNotification)]
-#[notification(method = "_aether/context_usage")]
-pub struct ContextUsageParams {
-    #[serde(flatten)]
-    pub usage: ContextUsage,
-}
-
 /// Parameters for `_aether/context_compaction` notifications.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcNotification)]
 #[notification(method = "_aether/context_compaction")]
@@ -89,20 +80,6 @@ pub struct ContextClearedParams {}
 pub struct AuthMethodsUpdatedParams {
     pub auth_methods: Vec<AuthMethod>,
 }
-
-/// Request parameters for the `_aether/elicitation` ext method.
-///
-/// Carries the full RMCP elicitation request plus the originating server name
-/// so the client can distinguish form vs URL mode and display which server is
-/// requesting.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonRpcRequest)]
-#[request(method = "_aether/elicitation", response = ElicitationResponse)]
-pub struct ElicitationParams {
-    pub server_name: String,
-    pub request: ElicitRequestParams,
-}
-
-pub use rmcp::model::ElicitationAction;
 
 /// Parameters for the `_aether/prompt_search` request.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcRequest)]
@@ -280,14 +257,6 @@ fn from_aether_meta<T: DeserializeOwned + Default>(meta: Option<&Meta>) -> T {
         .unwrap_or_default()
 }
 
-/// Response returned from the client for an elicitation request.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonRpcResponse)]
-pub struct ElicitationResponse {
-    pub action: ElicitationAction,
-    /// Structured form data when action is "accept".
-    pub content: Option<serde_json::Value>,
-}
-
 /// Server→client MCP extension notifications (relay → wisp).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcNotification)]
 #[notification(method = "_aether/mcp_event")]
@@ -379,48 +348,6 @@ mod tests {
     }
 
     #[test]
-    fn context_usage_params_roundtrip() {
-        let params = ContextUsageParams {
-            usage: ContextUsage {
-                usage_ratio: Some(0.75),
-                context_limit: Some(100_000),
-                input_tokens: 75_000,
-                output_tokens: 1_200,
-                cache_read_tokens: Some(40_000),
-                cache_creation_tokens: Some(2_000),
-                reasoning_tokens: Some(500),
-                total_input_tokens: 200_000,
-                total_output_tokens: 8_000,
-                total_cache_read_tokens: 90_000,
-                total_cache_creation_tokens: 5_000,
-                total_reasoning_tokens: 1_500,
-            },
-        };
-
-        let untyped = params.to_untyped_message().expect("serializable");
-        assert_eq!(untyped.method(), "_aether/context_usage");
-        let parsed = ContextUsageParams::parse_message(untyped.method(), untyped.params()).expect("roundtrip");
-        assert_eq!(parsed, params);
-    }
-
-    #[test]
-    fn context_usage_params_omits_unset_optional_token_fields() {
-        let params = ContextUsageParams {
-            usage: ContextUsage {
-                usage_ratio: Some(0.1),
-                context_limit: Some(1_000),
-                input_tokens: 100,
-                ..ContextUsage::default()
-            },
-        };
-
-        let raw = serde_json::to_string(&params).unwrap();
-        assert!(!raw.contains("\"cache_read_tokens\""));
-        assert!(!raw.contains("\"cache_creation_tokens\""));
-        assert!(!raw.contains("\"reasoning_tokens\""));
-    }
-
-    #[test]
     fn context_compaction_params_roundtrip() {
         for active in [true, false] {
             let params = ContextCompactionParams { active };
@@ -496,48 +423,6 @@ mod tests {
 
         let untyped = params.to_untyped_message().expect("serializable");
         assert_eq!(untyped.method(), "_aether/sub_agent_progress");
-    }
-
-    #[test]
-    fn elicitation_params_roundtrip() {
-        use rmcp::model::{ElicitationSchema, EnumSchema};
-
-        let params = ElicitationParams {
-            server_name: "github".to_string(),
-            request: ElicitRequestParams::FormElicitationParams {
-                meta: None,
-                message: "Pick a color".to_string(),
-                requested_schema: ElicitationSchema::builder()
-                    .required_enum_schema(
-                        "color",
-                        EnumSchema::builder(vec!["red".into(), "green".into(), "blue".into()]).untitled().build(),
-                    )
-                    .build()
-                    .unwrap(),
-            },
-        };
-
-        let untyped = params.to_untyped_message().expect("serializable");
-        assert_eq!(untyped.method(), "_aether/elicitation");
-        let parsed = ElicitationParams::parse_message(untyped.method(), untyped.params()).expect("roundtrip");
-        assert_eq!(parsed, params);
-    }
-
-    #[test]
-    fn elicitation_params_url_variant_has_mode_field() {
-        let params = ElicitationParams {
-            server_name: "github".to_string(),
-            request: ElicitRequestParams::UrlElicitationParams {
-                meta: None,
-                message: "Authorize GitHub".to_string(),
-                url: "https://github.com/login/oauth".to_string(),
-                elicitation_id: "el-123".to_string(),
-            },
-        };
-
-        let json = serde_json::to_string(&params).unwrap();
-        assert!(json.contains("\"mode\":\"url\""));
-        assert!(json.contains("\"server_name\":\"github\""));
     }
 
     #[test]

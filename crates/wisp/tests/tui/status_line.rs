@@ -1,5 +1,5 @@
 use acp_utils::client::AcpEvent;
-use acp_utils::notifications::{ContextUsage, ContextUsageParams, McpServerStatus, McpServerStatusEntry};
+use acp_utils::notifications::{McpServerStatus, McpServerStatusEntry};
 use agent_client_protocol::schema::v1::{self as acp, SessionId};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::time::{Duration, Instant};
@@ -55,10 +55,8 @@ fn type_and_submit(ui: &mut TestUi, text: &str) {
     ui.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 }
 
-fn context_usage(used: u32, limit: u32) -> AcpEvent {
-    AcpEvent::ContextUsage(ContextUsageParams {
-        usage: ContextUsage { input_tokens: used, context_limit: Some(limit), ..ContextUsage::default() },
-    })
+fn context_usage(used: u64, limit: u64) -> AcpEvent {
+    session_update(acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(used, limit)))
 }
 
 #[test]

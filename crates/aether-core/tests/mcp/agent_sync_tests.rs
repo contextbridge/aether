@@ -1,11 +1,14 @@
 use aether_core::{
+    core::AgentDeps,
     events::{AgentCommand, Command},
     mcp::{ServerFactory, mcp},
     testing::{FakeMcpServer, FakeTool},
 };
 use futures::FutureExt;
 use mcp_utils::client::{InMemoryServerSpec, McpClientEvent, McpServer, McpTransport};
-use rmcp::{RoleServer, service::DynService};
+use rmcp::RoleServer;
+use rmcp::model::{ClientCapabilities, UrlElicitationCapability};
+use rmcp::service::DynService;
 use tokio::sync::mpsc;
 
 #[tokio::test]
@@ -20,6 +23,40 @@ async fn session_synchronization_does_not_keep_agent_input_open() {
     drop(agent_tx);
     assert_eq!(agent_rx.sender_strong_count(), 0);
     drop(runtime);
+}
+
+#[tokio::test]
+async fn spawned_mcp_client_advertises_the_configured_elicitation_support() {
+    let server = FakeMcpServer::new();
+    let state = server.state();
+    let factory_server = server.clone();
+    let factory: ServerFactory = Box::new(move |_, _| {
+        let server = factory_server.clone();
+        async move { Box::new(server) as Box<dyn DynService<RoleServer>> }.boxed()
+    });
+    let configured = McpServer::new(
+        "capability-capture",
+        McpTransport::InMemory {
+            spec: InMemoryServerSpec { factory: "capability-factory".to_string(), args: Vec::new(), input: None },
+        },
+        mcp_utils::client::ToolExposure::ModelVisible,
+    );
+    let mut url_only = ClientCapabilities::builder().enable_elicitation().build();
+    url_only.elicitation.as_mut().unwrap().url = Some(UrlElicitationCapability::default());
+    let mut session = mcp("/workspace")
+        .register_in_memory_server("capability-factory", factory)
+        .with_servers(vec![configured])
+        .with_agent_deps(AgentDeps::default().with_mcp_client_capabilities(url_only))
+        .spawn()
+        .await
+        .unwrap();
+
+    session.block_until_ready().await.expect("MCP bootstrap completes");
+
+    let capabilities = state.client_capabilities().expect("client capabilities were discovered");
+    let elicitation = capabilities.elicitation.expect("elicitation is advertised");
+    assert!(elicitation.form.is_none());
+    assert!(elicitation.url.is_some());
 }
 
 #[tokio::test]
@@ -67,7 +104,9 @@ async fn session_synchronizes_agent_while_forwarding_host_events() {
         match host_events.recv().await.expect("host event stream remains connected") {
             McpClientEvent::ServerStatusesChanged(_) => received_status = true,
             McpClientEvent::ConnectionReady(_) => break,
-            McpClientEvent::Elicitation(_) | McpClientEvent::AuthenticationFailed { .. } => {}
+            McpClientEvent::Elicitation(_)
+            | McpClientEvent::ElicitationComplete { .. }
+            | McpClientEvent::AuthenticationFailed { .. } => {}
         }
     }
     assert!(received_status);

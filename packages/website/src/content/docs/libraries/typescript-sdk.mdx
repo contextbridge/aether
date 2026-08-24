@@ -55,22 +55,22 @@ await AetherSession.start({
 
 ## Session options
 
-| Option                | Description                                                                           |
-| --------------------- | ------------------------------------------------------------------------------------- |
-| `cwd`                 | Working directory for the spawned `aether acp` process. Defaults to `process.cwd()`.  |
-| `agent`               | Agent name from `.aether/settings.json`.                                              |
-| `model`               | Direct model id, such as `anthropic:claude-sonnet-4-5`.                               |
-| `reasoningEffort`     | `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, or `"max"` when using a direct model. |
-| `settings`            | Inline Aether settings object using the `.aether/settings.json` shape. SDK-hosted and external MCP servers live here under `mcps`. |
-| `settingsFile`        | Path to an alternate settings JSON file.                                              |
-| `binaryPath`          | Override the bundled CLI binary with an absolute path or command available on `PATH`. |
-| `env`                 | Environment variables for the spawned `aether acp` process.                            |
-| `logDir`              | Custom directory for ACP logs.                                                         |
-| `providers`           | Provider connection overrides, such as custom Bedrock endpoints or auth behavior.     |
+| Option                | Description                                                                                                                                                                                                                |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cwd`                 | Working directory for the spawned `aether acp` process. Defaults to `process.cwd()`.                                                                                                                                       |
+| `agent`               | Agent name from `.aether/settings.json`.                                                                                                                                                                                   |
+| `model`               | Direct model id, such as `anthropic:claude-sonnet-4-5`.                                                                                                                                                                    |
+| `reasoningEffort`     | `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, or `"max"` when using a direct model.                                                                                                                               |
+| `settings`            | Inline Aether settings object using the `.aether/settings.json` shape. SDK-hosted and external MCP servers live here under `mcps`.                                                                                         |
+| `settingsFile`        | Path to an alternate settings JSON file.                                                                                                                                                                                   |
+| `binaryPath`          | Override the bundled CLI binary with an absolute path or command available on `PATH`.                                                                                                                                      |
+| `env`                 | Environment variables for the spawned `aether acp` process.                                                                                                                                                                |
+| `logDir`              | Custom directory for ACP logs.                                                                                                                                                                                             |
+| `providers`           | Provider connection overrides, such as custom Bedrock endpoints or auth behavior.                                                                                                                                          |
 | `traceContext`        | A remote W3C `traceparent` with optional `tracestate`, or a standalone `traceId` for root spans without a parent. See [Telemetry](/aether/settings/telemetry/#correlating-sdk-runs) for validation and sampling semantics. |
-| `abortSignal`         | Cancel the active session and tear down the subprocess.                               |
-| `onPermissionRequest` | Custom policy for ACP permission requests. Defaults to `autoApprovePermissions`.      |
-| `onElicitation`       | Handler for Aether's `_aether/elicitation` extension request.                         |
+| `abortSignal`         | Cancel the active session and tear down the subprocess.                                                                                                                                                                    |
+| `onPermissionRequest` | Custom policy for ACP permission requests. Defaults to `autoApprovePermissions`.                                                                                                                                           |
+| `onElicitation`       | Handler for native ACP `elicitation/create` requests (form or URL mode).                                                                                                                                                   |
 
 `settings` and `settingsFile` are mutually exclusive.
 
@@ -112,12 +112,12 @@ console.log(result.stdout);
 
 `runHeadless()` resolves to an `AetherHeadlessResult`:
 
-| Field       | Type                  | Description                                                                 |
-| ----------- | --------------------- | --------------------------------------------------------------------------- |
-| `stdout`    | `string`              | Captured stdout from the `aether headless` process.                         |
-| `stderr`    | `string`              | Captured stderr (diagnostics/tracing).                                      |
-| `exitCode`  | `number`              | Process exit code. `0` on success; non-zero when the turn ends with a failed outcome. |
-| `signal`    | `NodeJS.Signals \| null` | Termination signal, if the process was killed instead of exiting normally. |
+| Field      | Type                     | Description                                                                           |
+| ---------- | ------------------------ | ------------------------------------------------------------------------------------- |
+| `stdout`   | `string`                 | Captured stdout from the `aether headless` process.                                   |
+| `stderr`   | `string`                 | Captured stderr (diagnostics/tracing).                                                |
+| `exitCode` | `number`                 | Process exit code. `0` on success; non-zero when the turn ends with a failed outcome. |
+| `signal`   | `NodeJS.Signals \| null` | Termination signal, if the process was killed instead of exiting normally.            |
 
 Because `aether headless` exits non-zero on a failed turn, `runHeadless()` **rejects** with an `AetherSdkError` (`code: "process_exited"`) in that case instead of resolving. Wrap the call in `try`/`catch` (or read the error's details) when a failed turn is an expected outcome.
 
@@ -125,25 +125,25 @@ Because `aether headless` exits non-zero on a failed turn, `runHeadless()` **rej
 
 `AetherHeadlessOptions` mirrors the [headless CLI flags](/aether/running/headless/#flags) plus SDK process controls:
 
-| Option          | Description                                                                                          |
-| --------------- | ---------------------------------------------------------------------------------------------------- |
-| `prompt`        | Required. Prompt text to run.                                                                        |
-| `agent`         | Named agent from `.aether/settings.json`. Mutually exclusive with `model`.                           |
-| `model`         | Direct model id, such as `anthropic:claude-sonnet-4-5`. Mutually exclusive with `agent`.             |
-| `cwd`           | Working directory. Defaults to `process.cwd()`.                                                      |
-| `settings`      | Inline Aether settings object. Mutually exclusive with `settingsFile`.                               |
-| `settingsFile`  | Path to an alternate settings JSON file.                                                             |
-| `systemPrompt`  | Additional system prompt text.                                                                       |
-| `output`        | `"text"`, `"pretty"`, or `"json"`. Defaults to `"text"`. See [output formats](/aether/running/headless/#output-formats). |
-| `events`        | Event kinds to emit (applies to any output format). See [event filtering](/aether/running/headless/#event-filtering).   |
-| `verbose`       | Verbose diagnostic logging to stderr.                                                                |
-| `providers`     | Provider connection overrides, such as custom Bedrock endpoints or auth behavior.                    |
-| `traceContext`  | A remote W3C `traceparent` with optional `tracestate`, or a standalone `traceId`. See [Telemetry](/aether/settings/telemetry/#correlating-sdk-runs). |
-| `binaryPath`    | Override the bundled CLI binary with an absolute path or command available on `PATH`.                |
-| `env`           | Environment variables for the spawned `aether headless` process.                                     |
-| `stdout`        | `"pipe"` (capture, the default) or `"inherit"` (write directly to the parent stdio).                 |
-| `stderr`        | `"pipe"` (the default) or `"inherit"`.                                                                |
-| `abortSignal`   | Cancel the run and tear down the subprocess.                                                         |
+| Option         | Description                                                                                                                                          |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `prompt`       | Required. Prompt text to run.                                                                                                                        |
+| `agent`        | Named agent from `.aether/settings.json`. Mutually exclusive with `model`.                                                                           |
+| `model`        | Direct model id, such as `anthropic:claude-sonnet-4-5`. Mutually exclusive with `agent`.                                                             |
+| `cwd`          | Working directory. Defaults to `process.cwd()`.                                                                                                      |
+| `settings`     | Inline Aether settings object. Mutually exclusive with `settingsFile`.                                                                               |
+| `settingsFile` | Path to an alternate settings JSON file.                                                                                                             |
+| `systemPrompt` | Additional system prompt text.                                                                                                                       |
+| `output`       | `"text"`, `"pretty"`, or `"json"`. Defaults to `"text"`. See [output formats](/aether/running/headless/#output-formats).                             |
+| `events`       | Event kinds to emit (applies to any output format). See [event filtering](/aether/running/headless/#event-filtering).                                |
+| `verbose`      | Verbose diagnostic logging to stderr.                                                                                                                |
+| `providers`    | Provider connection overrides, such as custom Bedrock endpoints or auth behavior.                                                                    |
+| `traceContext` | A remote W3C `traceparent` with optional `tracestate`, or a standalone `traceId`. See [Telemetry](/aether/settings/telemetry/#correlating-sdk-runs). |
+| `binaryPath`   | Override the bundled CLI binary with an absolute path or command available on `PATH`.                                                                |
+| `env`          | Environment variables for the spawned `aether headless` process.                                                                                     |
+| `stdout`       | `"pipe"` (capture, the default) or `"inherit"` (write directly to the parent stdio).                                                                 |
+| `stderr`       | `"pipe"` (the default) or `"inherit"`.                                                                                                               |
+| `abortSignal`  | Cancel the run and tear down the subprocess.                                                                                                         |
 
 Unlike `AetherSession.start()`, headless runs are non-interactive, so there are no permission or elicitation handlers.
 
@@ -151,12 +151,13 @@ Unlike `AetherSession.start()`, headless runs are non-interactive, so there are 
 
 `session.prompt()` yields `AetherMessage` objects. Each has a `type` discriminator:
 
-| Type                | Description                                                                                     |
-| ------------------- | -------------------------------------------------------------------------------------------- |
-| `session_update`    | An ACP session update (agent text, tool calls, tool results, progress, etc.). Access `.update`. |
-| `ext_notification`  | A custom extension notification (e.g. plan or task updates). Access `.method` and `.params`.  |
-| `result`            | The prompt finished. `.stopReason` describes why (e.g. `end_turn`, `cancelled`).              |
-| `error`             | An unrecoverable error occurred. Access `.error`.                                             |
+| Type                   | Description                                                                                     |
+| ---------------------- | ----------------------------------------------------------------------------------------------- |
+| `session_update`       | An ACP session update (agent text, tool calls, tool results, progress, etc.). Access `.update`. |
+| `ext_notification`     | A custom extension notification (e.g. plan or task updates). Access `.method` and `.params`.    |
+| `elicitation_complete` | A URL-mode elicitation finished. Access `.elicitationId`.                                       |
+| `result`               | The prompt finished. `.stopReason` describes why (e.g. `end_turn`, `cancelled`).                |
+| `error`                | An unrecoverable error occurred. Access `.error`.                                               |
 
 A `result` message is always emitted last (unless the stream errors), so it is a reliable place to stop consuming the iterator.
 
@@ -200,8 +201,6 @@ for await (const _message of session.prompt(
 
 console.log(submitted);
 ```
-
-
 
 The handle implements `Symbol.asyncDispose`, so `await using` stops the server on
 scope exit.
@@ -283,11 +282,16 @@ await AetherSession.start({
       : { outcome: { outcome: "cancelled" } };
   },
   onElicitation: async (request) => {
-    console.log(request.params);
+    // Native ACP request: `mode` is "form" or "url".
+    console.log(request.mode, request.message);
     return { action: "cancel" };
   },
 });
 ```
+
+The hook receives native ACP form or URL elicitation requests and returns an
+ACP accept, decline, or cancel response. Without the hook, the SDK does not
+advertise elicitation support.
 
 ## Provider overrides
 
@@ -306,5 +310,3 @@ await AetherSession.start({
 ```
 
 Set `auth: "none"` only when a trusted proxy injects or signs provider authentication.
-
-The `onElicitation` response `action` may be `"accept"` (with optional `content`), `"decline"`, or `"cancel"`. When `onElicitation` is omitted, the SDK cancels by default.

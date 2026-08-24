@@ -28,8 +28,6 @@ export { mcp } from "./mcp/index.js";
 export type { McpHandle, InlineMcpSource } from "./mcp/index.js";
 export { AetherSdkError } from "./errors.js";
 export type {
-  AetherElicitationRequest,
-  AetherElicitationResponse,
   AgentSelection,
   AetherMessage,
   SdkMcpToolDefinition,

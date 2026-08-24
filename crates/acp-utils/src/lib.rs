@@ -7,6 +7,7 @@ pub const AETHER_TOOL_NAME_META_KEY: &str = "aetherToolName";
 pub mod config_meta;
 pub mod config_option_id;
 pub mod content;
+pub mod elicitation;
 pub mod notifications;
 pub mod settings;
 
@@ -18,10 +19,3 @@ pub mod server;
 
 #[cfg(feature = "testing")]
 pub mod testing;
-
-// Re-export rmcp elicitation schema types so downstream crates (e.g. wisp)
-// don't need a direct rmcp dependency.
-pub use rmcp::model::{
-    ConstTitle, ElicitRequestParams, ElicitationSchema, EnumSchema, MultiSelectEnumSchema, PrimitiveSchemaDefinition,
-    SingleSelectEnumSchema,
-};

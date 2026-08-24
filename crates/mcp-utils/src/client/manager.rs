@@ -16,10 +16,9 @@ use aether_auth::{OAuthCredentialStorage, OAuthHandler};
 use futures::future::join_all;
 use rmcp::{
     Peer, RoleClient, RoleServer,
-    model::{ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction, Implementation, Tool as RmcpTool},
+    model::{ClientCapabilities, ClientInfo, ElicitRequestParams, ElicitResult, Implementation, Tool as RmcpTool},
     service::DynService,
 };
-use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::num::NonZeroU16;
@@ -52,9 +51,8 @@ impl ToolListChangedRequest {
     pub async fn refresh(self) -> ToolListRefresh {
         let result = self
             .peer
-            .list_tools(None)
+            .list_all_tools()
             .await
-            .map(|response| response.tools)
             .map_err(|error| McpError::ToolDiscoveryFailed(format!("Failed to refresh tools: {error}")));
         ToolListRefresh { server: self.server, generation: self.generation, result }
     }
@@ -99,18 +97,13 @@ pub struct ElicitationRequest {
     pub response_sender: oneshot::Sender<ElicitResult>,
 }
 
-#[derive(Debug, Clone)]
-pub struct ElicitationResponse {
-    pub action: ElicitationAction,
-    pub content: Option<Value>,
-}
-
 /// Events emitted by MCP clients that require attention from the host
 /// (e.g. the relay or TUI). Flows through a single channel from `McpManager`
 /// to the consumer.
 #[derive(Debug)]
 pub enum McpClientEvent {
     Elicitation(Box<ElicitationRequest>),
+    ElicitationComplete { server_name: String, elicitation_id: String },
     ServerStatusesChanged(Vec<McpServerStatusEntry>),
     AuthenticationFailed { server: String, error: String },
     ConnectionReady(McpConnectionDetails),
@@ -157,6 +150,11 @@ impl McpManager {
 
     pub fn take_tool_refresh_receiver(&mut self) -> mpsc::Receiver<ToolListChangedRequest> {
         self.tool_refresh_receiver.take().expect("tool refresh receiver can only be taken once")
+    }
+
+    pub fn with_client_capabilities(mut self, capabilities: ClientCapabilities) -> Self {
+        self.client_info.capabilities = capabilities;
+        self
     }
 
     pub fn with_progressive_discovery_instructions(mut self, instructions: impl Into<String>) -> Self {
@@ -318,12 +316,11 @@ impl McpManager {
                 let server_name = server_name.clone();
                 let client = conn.client.clone();
                 Some(async move {
-                    let prompts_response = client.list_prompts(None).await.map_err(|e| {
+                    let prompts = client.list_all_prompts().await.map_err(|e| {
                         McpError::PromptListFailed(format!("Failed to list prompts for {server_name}: {e}"))
                     })?;
 
-                    let namespaced_prompts: Vec<rmcp::model::Prompt> = prompts_response
-                        .prompts
+                    let namespaced_prompts: Vec<rmcp::model::Prompt> = prompts
                         .into_iter()
                         .map(|prompt| {
                             let namespaced_name = create_namespaced_tool_name(&server_name, &prompt.name);
