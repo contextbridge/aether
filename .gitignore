@@ -6,6 +6,7 @@ gen/
 eval-results/
 crates/llm/src/catalog/generated.rs
 packages/aether-sdk/src/generated/
+packages/desktop-app/src/generated/
 packages/website/src/data/aether-settings.schema.json
 packages/website/src/data/aether-eval.schema.json
 .aether-tasks/

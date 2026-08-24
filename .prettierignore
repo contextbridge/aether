@@ -5,3 +5,4 @@ coverage/
 
 # Generated from the AetherSettings Rust struct by `just gen-schema`
 packages/website/src/data/aether-settings.schema.json
+packages/desktop-app/src/generated/
