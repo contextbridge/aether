@@ -5,20 +5,15 @@ import type {
 } from "@agentclientprotocol/sdk";
 import { BotIcon, CpuIcon } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
-import { useShallow } from "zustand/shallow";
 import {
   ModelSelector,
   type ModelOption,
 } from "@/components/assistant-ui/model-selector";
-import { useChatStore } from "@/acp-store";
+import { useAppActions, useChatStore } from "@/app-provider";
 
 export function SessionControls() {
-  const { configOptions, setConfigOption } = useChatStore(
-    useShallow((state) => ({
-      configOptions: state.configOptions,
-      setConfigOption: state.setConfigOption,
-    })),
-  );
+  const configOptions = useChatStore((state) => state.configOptions);
+  const { setConfigOption } = useAppActions();
 
   const mode = findSelect(configOptions, "mode", "mode");
   const model = findSelect(configOptions, "model", "model");

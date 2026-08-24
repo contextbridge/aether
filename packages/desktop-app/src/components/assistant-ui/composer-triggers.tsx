@@ -1,7 +1,7 @@
 "use client";
 
 import { ComposerTriggerPopover } from "@/components/assistant-ui/composer-trigger-popover";
-import { useChatStore } from "@/acp-store";
+import { useChatStore } from "@/app-provider";
 import {
   ComposerPrimitive,
   unstable_defaultDirectiveFormatter,

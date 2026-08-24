@@ -1,7 +1,6 @@
 "use client";
 
 import { type ComponentPropsWithRef, forwardRef } from "react";
-
 import {
   Tooltip,
   TooltipContent,
@@ -29,16 +28,13 @@ export const TooltipIconButton = forwardRef<
               variant="ghost"
               size="icon"
               {...rest}
-              className={cn(
-                "aui-button-icon size-6 p-1 active:scale-90",
-                className,
-              )}
+              className={cn("size-6 p-1 active:scale-90", className)}
               ref={ref}
             />
           }
         >
           {children}
-          <span className="aui-sr-only sr-only">{tooltip}</span>
+          <span className="sr-only">{tooltip}</span>
         </TooltipTrigger>
         <TooltipContent side={side}>{tooltip}</TooltipContent>
       </Tooltip>

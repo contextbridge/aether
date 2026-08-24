@@ -5,6 +5,7 @@ import type { DataMessagePartComponent } from "@assistant-ui/react";
 import type { PlanEntry, PlanEntryStatus } from "@agentclientprotocol/sdk";
 import type { LucideIcon } from "lucide-react";
 import { CheckIcon, CircleIcon, LoaderIcon } from "lucide-react";
+import { Surface } from "@/components/ui/surface";
 import { cn } from "@/lib/utils";
 
 const statusIcon: Record<PlanEntryStatus, LucideIcon> = {
@@ -16,7 +17,7 @@ const statusIcon: Record<PlanEntryStatus, LucideIcon> = {
 const statusClass: Record<PlanEntryStatus, string> = {
   pending: "text-muted-foreground",
   in_progress: "animate-spin text-primary",
-  completed: "text-emerald-500",
+  completed: "text-success",
 };
 
 const priorityLabel: Record<PlanEntry["priority"], string> = {
@@ -31,7 +32,11 @@ const PlanRenderer: DataMessagePartComponent<PlanEntry[]> = ({
   data: PlanEntry[];
 }) => {
   return (
-    <div className="aui-plan-root mb-4 w-full rounded-lg border px-3 py-2">
+    <Surface
+      variant="default"
+      padding="sm"
+      className="aui-plan-root mb-4 w-full"
+    >
       <p className="text-muted-foreground text-sm font-medium">Plan</p>
       <ol className="mt-2 flex flex-col gap-1.5">
         {data.map((entry, index) => {
@@ -52,7 +57,7 @@ const PlanRenderer: DataMessagePartComponent<PlanEntry[]> = ({
           );
         })}
       </ol>
-    </div>
+    </Surface>
   );
 };
 
