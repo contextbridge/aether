@@ -50,7 +50,7 @@ fn export_bindings() {
         .export(
             Typescript::default()
                 .header("import type { SessionConfigOption, SessionUpdate } from \"@agentclientprotocol/sdk\";"),
-            "../src/bindings.ts",
+            "../src/generated/bindings.ts",
         )
         .expect("failed to export TypeScript bindings");
 }
