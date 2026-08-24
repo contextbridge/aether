@@ -1,6 +1,11 @@
 "use client";
 
 import { memo, type FC } from "react";
+import {
+  unstable_defaultDirectiveFormatter,
+  useAui,
+  useAuiState,
+} from "@assistant-ui/react";
 import { cva, type VariantProps } from "class-variance-authority";
 import {
   FileIcon,
@@ -10,6 +15,7 @@ import {
   VideoIcon,
   BracesIcon,
   DownloadIcon,
+  XIcon,
 } from "lucide-react";
 import type { FileMessagePartComponent } from "@assistant-ui/react";
 import { cn } from "@/lib/utils";
@@ -91,6 +97,58 @@ function formatFileSize(bytes: number): string {
 
 export type FileRootProps = React.ComponentProps<"div"> &
   VariantProps<typeof fileVariants>;
+
+type MentionedFile = {
+  id: string;
+  label: string;
+  directive: string;
+};
+
+const mimeTypeForFilename = (filename: string): string => {
+  const extension = filename.split(".").pop()?.toLowerCase();
+  const mimeTypes: Record<string, string> = {
+    css: "text/css",
+    html: "text/html",
+    js: "text/javascript",
+    json: "application/json",
+    md: "text/markdown",
+    py: "text/x-python",
+    rs: "text/x-rust",
+    ts: "text/typescript",
+    tsx: "text/typescript",
+    txt: "text/plain",
+    yaml: "application/yaml",
+    yml: "application/yaml",
+  };
+  return mimeTypes[extension ?? ""] ?? "application/octet-stream";
+};
+
+const mentionedFilesInText = (text: string): MentionedFile[] =>
+  unstable_defaultDirectiveFormatter.parse(text).flatMap((segment) =>
+    segment.kind === "mention" && segment.type === "file"
+      ? [
+          {
+            id: segment.id,
+            label: segment.label,
+            directive: `:file[${segment.label}]{name=${segment.id}}`,
+          },
+        ]
+      : [],
+  );
+
+const removeMentionedFile = (text: string, directive: string): string => {
+  const index = text.indexOf(directive);
+  if (index === -1) return text;
+
+  const before = text.slice(0, index);
+  const after = text.slice(index + directive.length);
+  if (before.endsWith(" ") && after.startsWith(" ")) {
+    return before + after.slice(1);
+  }
+  if (before.length === 0 && after.startsWith(" ")) return after.slice(1);
+  if (after.length === 0 && before.endsWith(" ")) return before.slice(0, -1);
+  return before + after;
+};
 
 function FileRoot({
   className,
@@ -205,6 +263,41 @@ function FileDownload({
     </a>
   );
 }
+
+export const ComposerMentionedFiles: FC = () => {
+  const aui = useAui();
+  const text = useAuiState((state) => state.composer.text);
+  const files = mentionedFilesInText(text);
+
+  if (files.length === 0) return null;
+
+  return (
+    <div className="aui-composer-mentioned-files flex w-full flex-row flex-wrap items-center gap-2">
+      {files.map((file, index) => (
+        <File.Root
+          key={`${file.id}-${index}`}
+          variant="muted"
+          size="sm"
+          className="max-w-full"
+          aria-label={`Included file: ${file.label}`}
+        >
+          <File.Icon mimeType={mimeTypeForFilename(file.id)} />
+          <File.Name>{file.label}</File.Name>
+          <button
+            type="button"
+            aria-label={`Remove included file: ${file.label}`}
+            className="text-muted-foreground hover:bg-accent hover:text-accent-foreground -me-1 shrink-0 rounded-md p-1 transition-colors"
+            onClick={() =>
+              aui.composer.setText(removeMentionedFile(text, file.directive))
+            }
+          >
+            <XIcon className="size-3.5" />
+          </button>
+        </File.Root>
+      ))}
+    </div>
+  );
+};
 
 const FileImpl: FileMessagePartComponent = ({
   filename,

@@ -10,7 +10,7 @@ import {
   ComposerTriggerRoot,
 } from "@/components/assistant-ui/composer-triggers";
 import { DirectiveText } from "@/components/assistant-ui/directive-text";
-import { File } from "@/components/assistant-ui/file";
+import { ComposerMentionedFiles, File } from "@/components/assistant-ui/file";
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/follow-up-suggestions";
 import { Image } from "@/components/assistant-ui/image";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
@@ -281,6 +281,7 @@ const Composer: FC = () => {
             />
           }
         >
+          <ComposerMentionedFiles />
           <ComposerAttachments />
           <ComposerPrimitive.Input
             placeholder="Send a message..."
