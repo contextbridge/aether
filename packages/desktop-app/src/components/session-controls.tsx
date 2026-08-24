@@ -22,9 +22,14 @@ export function SessionControls() {
     "thought_level",
     "reasoning_effort",
   );
-
-  const reasoningOptions = useMemo(
-    () => reasoning && flattenValues(reasoning.options),
+  const fallbackEfforts = useMemo(
+    () =>
+      reasoning
+        ? flattenValues(reasoning.options).map((option) => ({
+            id: option.value,
+            name: modelDisplayName(option.name, option.group),
+          }))
+        : [],
     [reasoning],
   );
 
@@ -44,7 +49,8 @@ export function SessionControls() {
           icon={<CpuIcon />}
           searchable
           effort={reasoning?.currentValue}
-          effortOptions={reasoningOptions}
+          multiSelect={readConfigMeta(model).multiSelect}
+          fallbackEfforts={fallbackEfforts}
           onChange={(value) => void setConfigOption(model.id, value)}
           onEffortChange={
             reasoning
@@ -75,7 +81,8 @@ function ConfigSelector({
   icon,
   searchable,
   effort,
-  effortOptions,
+  multiSelect,
+  fallbackEfforts,
   onChange,
   onEffortChange,
 }: {
@@ -83,11 +90,15 @@ function ConfigSelector({
   icon?: ReactNode;
   searchable: boolean;
   effort?: string;
-  effortOptions?: ConfigValue[];
+  multiSelect?: boolean;
+  fallbackEfforts?: ModelOption["efforts"];
   onChange: (value: string) => void;
   onEffortChange?: (value: string) => void;
 }) {
   const values = useMemo(() => flattenValues(config.options), [config.options]);
+  const hasPerModelEfforts = values.some((option) =>
+    Object.hasOwn(option._meta ?? {}, "reasoning_levels"),
+  );
   const models = useMemo<ModelOption[]>(
     () =>
       values.map((option) => ({
@@ -99,18 +110,21 @@ function ConfigSelector({
           option.description?.startsWith("Unavailable:") === true,
         keywords: option.group ? [option.group] : undefined,
         icon,
-        efforts: effortOptions?.map((level) => ({
-          id: level.value,
-          name: level.name,
-        })),
+        efforts: hasPerModelEfforts
+          ? readReasoningLevels(option).map((level) => ({
+              id: level,
+              name: capitalize(level),
+            }))
+          : fallbackEfforts,
       })),
-    [effortOptions, icon, values],
+    [fallbackEfforts, hasPerModelEfforts, icon, values],
   );
 
   return (
     <ModelSelector.Root
       models={models}
       value={config.currentValue}
+      multiSelect={multiSelect}
       onValueChange={onChange}
       effort={effort}
       onEffortChange={onEffortChange}
@@ -119,7 +133,11 @@ function ConfigSelector({
         variant="ghost"
         size="sm"
         aria-label={config.category === "mode" ? "Agent mode" : config.name}
-        className="max-w-52 text-muted-foreground hover:text-foreground"
+        className={
+          config.category === "model"
+            ? "min-w-52 max-w-80 text-muted-foreground hover:text-foreground"
+            : "max-w-52 text-muted-foreground hover:text-foreground"
+        }
       />
       <ModelSelector.Content side="top" searchable={searchable}>
         {searchable && <ModelSelector.Search />}
@@ -155,7 +173,7 @@ function flattenValues(options: SelectConfig["options"]): ConfigValue[] {
   return options.flatMap((option) =>
     isGroup(option)
       ? option.options.map((value) => ({ ...value, group: option.name }))
-      : [option],
+      : [{ ...option, group: providerName(option.value) }],
   );
 }
 
@@ -163,6 +181,32 @@ function isGroup(
   option: SessionConfigSelectOption | SessionConfigSelectGroup,
 ): option is SessionConfigSelectGroup {
   return "options" in option;
+}
+
+function readConfigMeta(config: SelectConfig): { multiSelect: boolean } {
+  return { multiSelect: config._meta?.multi_select === true };
+}
+
+function readReasoningLevels(option: ConfigValue): string[] {
+  const levels = option._meta?.reasoning_levels;
+  return Array.isArray(levels)
+    ? levels.filter((level): level is string => typeof level === "string")
+    : [];
+}
+
+function capitalize(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function providerName(value: string): string {
+  const provider = value.split(":", 1)[0] ?? value;
+  return provider.split(/[-_]/).map(capitalize).join(" ");
+}
+
+function modelDisplayName(name: string, group: string | undefined): string {
+  if (!group) return name;
+  const prefix = `${group}:`;
+  return name.startsWith(prefix) ? name.slice(prefix.length).trim() : name;
 }
 
 function groupModels(models: ModelOption[], values: ConfigValue[]) {

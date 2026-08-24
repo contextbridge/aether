@@ -8,34 +8,22 @@ import { useAppActions, useChatStore } from "../app-provider";
 export function SessionLauncher() {
   const [cwd, setCwd] = useState(".");
   const connection = useChatStore((state) => state.connection);
+  const activeCwd = useChatStore((state) => state.cwd);
   const error = useChatStore((state) => state.error);
-  const { start, close } = useAppActions();
+  const { start, closeAll } = useAppActions();
 
   useEffect(
     () => () => {
-      void close();
+      void closeAll();
     },
-    [close],
+    [closeAll],
   );
 
-  if (connection.status === "connected") {
-    return (
-      <header className="flex min-h-14 items-center justify-between border-b bg-surface px-4">
-        <div className="flex items-baseline gap-3">
-          <strong>{connection.agentName}</strong>
-          <span className="text-sm text-muted-foreground">{cwd}</span>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="secondary" onClick={() => void start(cwd)}>
-            New session
-          </Button>
-          <Button variant="outline" onClick={() => void close()}>
-            End session
-          </Button>
-        </div>
-      </header>
-    );
-  }
+  useEffect(() => {
+    if (connection.status === "connected") setCwd(activeCwd);
+  }, [activeCwd, connection.status]);
+
+  if (connection.status === "connected") return null;
 
   return (
     <Surface
