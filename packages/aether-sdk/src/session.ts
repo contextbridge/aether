@@ -191,8 +191,10 @@ export class AetherSession {
     let completed = false;
     const promptPromise = this.connection
       .prompt({ sessionId: this.sessionId, prompt })
-      .then((response) => {
+      .then(async (response) => {
         completed = true;
+        // ACP routes session responses and connection notifications independently.
+        await new Promise<void>((resolve) => setImmediate(resolve));
         this.events.push({
           type: "result",
           sessionId: this.sessionId,

@@ -165,7 +165,11 @@ describe("AetherSession with a fake ACP agent", () => {
 
     expect(session.sessionId).toMatch(/^fake-session-/);
     const types = messages.map((m) => m.type);
-    expect(types).toEqual(["elicitation_complete", "session_update", "result"]);
+    expect(types.slice(0, -1).sort()).toEqual([
+      "elicitation_complete",
+      "session_update",
+    ]);
+    expect(types.at(-1)).toBe("result");
     expect(requests).toMatchObject([
       { mode: "form", message: "What is your name?" },
     ]);
