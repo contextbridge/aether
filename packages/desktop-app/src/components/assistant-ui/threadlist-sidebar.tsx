@@ -9,7 +9,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
-  SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { ThreadList } from "@/components/assistant-ui/thread-list";
 
@@ -19,8 +18,8 @@ export function ThreadListSidebar({
   return (
     <Sidebar {...props}>
       <SidebarHeader className="aui-sidebar-header mb-2 border-b">
-        <div className="aui-sidebar-header-content flex items-center justify-between group-data-[collapsible=icon]:justify-center">
-          <SidebarMenu className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
+        <div className="aui-sidebar-header-content flex items-center justify-between">
+          <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton size="lg">
                 <div className="aui-sidebar-header-icon-wrapper bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-8 items-center justify-center rounded-lg">
@@ -37,7 +36,6 @@ export function ThreadListSidebar({
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
-          <SidebarTrigger className="shrink-0" />
         </div>
       </SidebarHeader>
       <SidebarContent className="aui-sidebar-content px-2">
