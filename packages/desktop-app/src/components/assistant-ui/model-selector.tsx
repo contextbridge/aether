@@ -44,6 +44,8 @@ export const DEFAULT_EFFORT_OPTIONS: readonly ModelSelectorEffortOption[] = [
   { id: "high", name: "High" },
 ];
 
+const NONE_EFFORT: ModelSelectorEffortOption = { id: "none", name: "None" };
+
 export type ModelOption = {
   id: string;
   name: string;
@@ -60,19 +62,67 @@ export type ModelOption = {
   efforts?: boolean | readonly ModelSelectorEffortOption[];
 };
 
-function getModelEfforts(
-  model: ModelOption | undefined,
-): readonly ModelSelectorEffortOption[] | undefined {
-  if (!model?.efforts) return undefined;
-  return model.efforts === true ? DEFAULT_EFFORT_OPTIONS : model.efforts;
-}
-
 function resolveEffort(
   efforts: readonly ModelSelectorEffortOption[] | undefined,
   effort: string | undefined,
 ): string | undefined {
   if (effort === undefined) return undefined;
   return efforts?.some((e) => e.id === effort) ? effort : undefined;
+}
+
+export function modelSelectorFilter(
+  value: string,
+  search: string,
+  keywords?: readonly string[],
+): number {
+  const query = search.trim().toLocaleLowerCase();
+  if (!query) return 1;
+  return [value, ...(keywords ?? [])].some((text) =>
+    text.toLocaleLowerCase().includes(query),
+  )
+    ? 1
+    : 0;
+}
+
+function parseSelectedValues(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function getEffortOptions(
+  model: ModelOption | undefined,
+): readonly ModelSelectorEffortOption[] {
+  if (!model?.efforts) return [];
+  return model.efforts === true ? DEFAULT_EFFORT_OPTIONS : model.efforts;
+}
+
+function getSelectedEffortOptions(
+  models: readonly ModelOption[],
+  selectedValues: readonly string[],
+): {
+  options: readonly ModelSelectorEffortOption[];
+  valid: readonly ModelSelectorEffortOption[];
+} {
+  const selected = models.filter((model) => selectedValues.includes(model.id));
+  const optionMap = new Map<string, ModelSelectorEffortOption>();
+  selected.forEach((model) =>
+    getEffortOptions(model).forEach((option) =>
+      optionMap.set(option.id, option),
+    ),
+  );
+  const options = [NONE_EFFORT, ...optionMap.values()];
+  const valid = selected.length
+    ? options.filter(
+        (option) =>
+          option.id === NONE_EFFORT.id ||
+          selected.every((model) =>
+            getEffortOptions(model).some((effort) => effort.id === option.id),
+          ),
+      )
+    : [];
+  return { options, valid };
 }
 
 /**
@@ -86,7 +136,7 @@ export function resolveModelEffort(
   effort: string | undefined,
 ): string | undefined {
   return resolveEffort(
-    getModelEfforts(models.find((m) => m.id === modelId)),
+    getEffortOptions(models.find((m) => m.id === modelId)),
     effort,
   );
 }
@@ -123,10 +173,14 @@ type ModelSelectorContextValue = {
   models: readonly ModelOption[];
   value: string | undefined;
   setValue: (value: string) => void;
+  selectedValues: readonly string[];
+  multiSelect: boolean;
   /** The model matching `value`, derived once for all sub-components. */
   selectedModel: ModelOption | undefined;
-  /** The selected model's effort levels, undefined when not configurable. */
-  efforts: readonly ModelSelectorEffortOption[] | undefined;
+  /** Union of effort levels across selected models. */
+  efforts: readonly ModelSelectorEffortOption[];
+  /** Effort levels supported by every selected model. */
+  validEfforts: readonly ModelSelectorEffortOption[];
   /** Effort resolved against the selected model's supported levels. */
   effort: string | undefined;
   setEffort: (effort: string) => void;
@@ -151,21 +205,24 @@ function useModelSelectorContext() {
  * The selected model's effort levels and the active selection. Use it to build
  * a custom effort UI inside ModelSelector.Content (e.g. a slider or a shadcn
  * DropdownMenu) when the built-in ModelSelector.Effort layout doesn't fit.
- * `efforts` is undefined for models without configurable reasoning.
+ * `validEfforts` is the subset that all selected models support.
  */
 export function useModelSelectorEfforts(): {
-  efforts: readonly ModelSelectorEffortOption[] | undefined;
+  efforts: readonly ModelSelectorEffortOption[];
+  validEfforts: readonly ModelSelectorEffortOption[];
   effort: string | undefined;
   setEffort: (effort: string) => void;
 } {
-  const { efforts, effort, setEffort } = useModelSelectorContext();
-  return { efforts, effort, setEffort };
+  const { efforts, validEfforts, effort, setEffort } =
+    useModelSelectorContext();
+  return { efforts, validEfforts, effort, setEffort };
 }
 
 export type ModelSelectorRootProps = {
   models: readonly ModelOption[];
   value?: string;
   defaultValue?: string;
+  multiSelect?: boolean;
   onValueChange?: (value: string) => void;
   effort?: string;
   defaultEffort?: string;
@@ -180,6 +237,7 @@ function ModelSelectorRoot({
   models,
   value: valueProp,
   defaultValue,
+  multiSelect = false,
   onValueChange,
   effort: effortProp,
   defaultEffort,
@@ -205,16 +263,28 @@ function ModelSelectorRoot({
     onChange: onOpenChange,
   });
 
-  const selectedModel = models.find((m) => m.id === value);
-  const efforts = getModelEfforts(selectedModel);
-  const activeEffort = resolveEffort(efforts, effort);
+  const selectedValues = parseSelectedValues(value);
+  const selectedModel = models.find((m) => m.id === selectedValues[0]);
+  const { options: efforts, valid: validEfforts } = getSelectedEffortOptions(
+    models,
+    selectedValues,
+  );
+  const activeEffort = resolveEffort(validEfforts, effort);
+  useEffect(() => {
+    if (effort !== undefined && activeEffort !== effort) {
+      setEffort(activeEffort ?? NONE_EFFORT.id);
+    }
+  }, [activeEffort, effort, setEffort]);
   const contextValue = useMemo(
     () => ({
       models,
       value,
       setValue,
+      selectedValues,
+      multiSelect,
       selectedModel,
       efforts,
+      validEfforts,
       effort: activeEffort,
       setEffort,
       setOpen,
@@ -223,8 +293,11 @@ function ModelSelectorRoot({
       models,
       value,
       setValue,
+      selectedValues,
+      multiSelect,
       selectedModel,
       efforts,
+      validEfforts,
       activeEffort,
       setEffort,
       setOpen,
@@ -335,7 +408,8 @@ function ModelSelectorValue({
   showEffort = true,
   className,
 }: ModelSelectorValueProps) {
-  const { selectedModel, efforts, effort } = useModelSelectorContext();
+  const { selectedModel, selectedValues, efforts, effort } =
+    useModelSelectorContext();
 
   if (!selectedModel) {
     return (
@@ -358,8 +432,16 @@ function ModelSelectorValue({
       data-slot="model-selector-value"
       className={cn("flex min-w-0 items-center gap-2", className)}
     >
-      {selectedModel.icon && <ModelIcon>{selectedModel.icon}</ModelIcon>}
-      <span className="truncate font-medium">{selectedModel.name}</span>
+      {selectedValues.length > 1 ? (
+        <span className="truncate font-medium">
+          {selectedValues.length} models selected
+        </span>
+      ) : (
+        <>
+          {selectedModel.icon && <ModelIcon>{selectedModel.icon}</ModelIcon>}
+          <span className="truncate font-medium">{selectedModel.name}</span>
+        </>
+      )}
       {effortName && (
         <span className="text-muted-foreground min-w-7.5 truncate text-center">
           {effortName}
@@ -450,13 +532,14 @@ function ModelSelectorContent({
       side={renderedSide ?? side ?? "bottom"}
       sideOffset={sideOffset}
       className={cn(
-        "bg-popover w-72 min-w-(--anchor-width) overflow-hidden rounded-xl p-0",
+        "bg-popover w-[min(24rem,calc(100vw-1rem))] max-w-[calc(100vw-1rem)] min-w-(--anchor-width) overflow-x-auto overflow-y-auto rounded-xl p-0",
         className,
       )}
       {...props}
     >
       <Command
         className="bg-transparent"
+        filter={modelSelectorFilter}
         shouldFilter={!unfiltered}
         {...(value !== undefined ? { defaultValue: value } : {})}
       >
@@ -566,8 +649,9 @@ function ModelSelectorItem({
   onSelect,
   ...props
 }: ModelSelectorItemProps) {
-  const { value, setValue, setOpen } = useModelSelectorContext();
-  const isSelected = value === model.id;
+  const { setValue, setOpen, selectedValues, multiSelect } =
+    useModelSelectorContext();
+  const isSelected = selectedValues.includes(model.id);
 
   return (
     <CommandItem
@@ -576,8 +660,16 @@ function ModelSelectorItem({
       keywords={[model.name, ...(model.keywords ?? [])]}
       {...(model.disabled ? { disabled: true } : undefined)}
       onSelect={(selectedValue) => {
-        setValue(model.id);
-        setOpen(false);
+        if (multiSelect) {
+          if (isSelected && selectedValues.length === 1) return;
+          const nextValues = isSelected
+            ? selectedValues.filter((value) => value !== model.id)
+            : [...selectedValues, model.id];
+          setValue(nextValues.join(","));
+        } else {
+          setValue(model.id);
+          setOpen(false);
+        }
         onSelect?.(selectedValue);
       }}
       className={cn(
@@ -588,6 +680,18 @@ function ModelSelectorItem({
     >
       {children ?? (
         <>
+          {multiSelect && (
+            <span
+              aria-hidden="true"
+              className={cn(
+                "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-sm border",
+                isSelected &&
+                  "bg-primary text-primary-foreground border-primary",
+              )}
+            >
+              {isSelected && <CheckIcon className="size-3" />}
+            </span>
+          )}
           {model.icon && (
             <ModelIcon className="mt-[3px]">{model.icon}</ModelIcon>
           )}
@@ -601,7 +705,7 @@ function ModelSelectorItem({
           </span>
         </>
       )}
-      {isSelected && (
+      {isSelected && !multiSelect && (
         <span className="absolute end-3 top-2.5 flex size-4 items-center justify-center">
           <CheckIcon className="size-4" />
         </span>
@@ -621,15 +725,16 @@ function ModelSelectorEffort({
   onKeyDownCapture,
   ...props
 }: ModelSelectorEffortProps) {
-  const { efforts, effort, setEffort } = useModelSelectorEfforts();
+  const { efforts, validEfforts, effort, setEffort } =
+    useModelSelectorEfforts();
 
-  if (!efforts?.length) return null;
+  if (!efforts.length) return null;
 
   return (
     <div
       data-slot="model-selector-effort"
       className={cn(
-        "flex cursor-default items-center justify-between gap-3 border-t px-3 py-2",
+        "flex shrink-0 cursor-default items-center justify-between gap-3 border-t px-3 py-2",
         className,
       )}
       onKeyDownCapture={(e) => {
@@ -671,17 +776,20 @@ function ModelSelectorEffort({
       }}
       {...props}
     >
-      <span className="text-muted-foreground text-xs">{label}</span>
+      <span className="text-muted-foreground shrink-0 text-xs whitespace-nowrap">
+        {label}
+      </span>
       <RadioGroup
         value={effort ?? ""}
         onValueChange={setEffort}
         aria-label={typeof label === "string" ? label : "Reasoning effort"}
-        className="flex items-center gap-0.5"
+        className="flex shrink-0 items-center gap-0.5 whitespace-nowrap"
       >
         {efforts.map((option) => (
           <Radio.Root
             key={option.id}
             value={option.id}
+            disabled={!validEfforts.some((valid) => valid.id === option.id)}
             className={cn(
               "focus-visible:ring-ring/50 text-muted-foreground hover:text-foreground rounded-md px-2 py-1 text-xs transition-colors outline-none focus-visible:ring-1",
               "data-checked:bg-accent data-checked:text-accent-foreground data-checked:font-medium",
