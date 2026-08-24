@@ -29,10 +29,10 @@ Headless mode has two ways to choose what runs:
 
 | Option                     | Behavior                                             |
 | -------------------------- | ---------------------------------------------------- |
-| `--agent <name>`           | Resolve a named `userInvocable` agent from settings. |
+| `--agent <name>`           | Resolve a named agent from settings.                 |
 | `--model <provider:model>` | Create an ad-hoc default agent using that model.     |
 
-`--agent` and `--model` are mutually exclusive. If neither is provided, Aether resolves the first user-invocable agent from settings. If there are no configured agents, it falls back to Aether's built-in default agent spec.
+`--agent` and `--model` are mutually exclusive. If neither is provided, Aether launches the agent named by the top-level `agent` setting (when set), otherwise the first user-invocable agent from settings. If there are no configured agents, it falls back to Aether's built-in default agent spec.
 
 ```bash
 aether headless --agent Researcher "Find the API route definitions"
@@ -65,13 +65,13 @@ aether headless --model bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0 \
 | Flag                | Type                     | Description                                                                                       |
 | ------------------- | ------------------------ | ------------------------------------------------------------------------------------------------- |
 | `[PROMPT]...`       | positional               | Prompt text. Reads stdin if omitted and stdin is not a TTY.                                       |
-| `-a, --agent`       | `string`                 | Named agent from settings. Defaults to first user-invocable agent.                                |
+| `-a, --agent`       | `string`                 | Named agent from settings. Defaults to the top-level `agent` setting if set, else the first user-invocable agent. |
 | `-m, --model`       | `string`                 | Ad-hoc model spec. Mutually exclusive with `--agent`.                                             |
 | `-C, --cwd`         | `path`                   | Working directory. Defaults to `.`.                                                               |
 | `--settings-json`   | `string`                 | Inline settings JSON.                                                                             |
 | `--settings-file`   | `path`                   | Settings JSON file.                                                                               |
-| `--mcp-config`      | `path`                   | Additional MCP config file. Repeatable.                                                           |
-| `--mcp-config-json` | `string`                 | Additional inline MCP config JSON. Repeatable.                                                    |
+| `--mcp-config`      | `path`                   | MCP config file. Repeatable. Replaces the agent's MCP source list for the run.                     |
+| `--mcp-config-json` | `string`                 | Inline MCP config JSON. Repeatable. Replaces the agent's MCP source list for the run.             |
 | `--system-prompt`   | `string`                 | Additional system prompt text.                                                                    |
 | `--output`          | `text \| pretty \| json` | Output format. Defaults to `text`.                                                                |
 | `-v, --verbose`     | flag                     | Verbose diagnostic logging to stderr.                                                             |
@@ -170,7 +170,7 @@ The process exits non-zero when the turn ends with a failed outcome, regardless 
 
 Headless mode resolves normal Aether settings from global and project settings unless you provide `--settings-file` or `--settings-json`.
 
-Additional MCP configs provided with `--mcp-config` or `--mcp-config-json` override the agent's MCP source list for that run.
+MCP configs provided with `--mcp-config` or `--mcp-config-json` replace the agent's MCP source list for that run (they are not merged with the agent's configured sources).
 
 ```bash
 aether headless \
