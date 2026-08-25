@@ -4,7 +4,7 @@ use acp_utils::notifications::{
     SessionPreviewTurn,
 };
 use aether_core::events::{AgentEvent, MessageEvent, ToolEvent};
-use aether_core::session::{SessionEvent, SessionLog, SessionLogEntry, SessionLogError, SessionMeta, UserEvent};
+use aether_sessions::{SessionEvent, SessionLog, SessionLogEntry, SessionLogError, SessionMeta, UserEvent};
 use serde::Serialize;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -286,7 +286,7 @@ fn extract_title(content: &[llm::ContentBlock]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aether_core::session::SessionControlEvent;
+    use aether_sessions::SessionControlEvent;
 
     fn meta(id: &str, created_at: &str, mode: Option<&str>) -> SessionMeta {
         SessionMeta {
