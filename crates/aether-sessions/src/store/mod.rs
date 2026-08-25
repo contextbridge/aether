@@ -162,7 +162,9 @@ impl SessionStore {
         let mut summaries: Vec<SessionSummary> =
             files.into_iter().filter_map(|file| read_session_summary(&file.path).ok()).collect();
 
-        summaries.sort_by(|a, b| b.meta.created_at.cmp(&a.meta.created_at));
+        summaries.sort_by(|a, b| {
+            b.meta.created_at.cmp(&a.meta.created_at).then_with(|| b.meta.session_id.cmp(&a.meta.session_id))
+        });
         summaries
     }
 

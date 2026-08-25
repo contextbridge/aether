@@ -19,6 +19,10 @@ impl SessionRegistry {
         }
     }
 
+    pub(crate) async fn remove(&self, session_id: &str) -> Option<SessionHandle> {
+        self.sessions.lock().await.remove(session_id)
+    }
+
     pub(crate) async fn lookup(&self, session_id: &str) -> Option<(mpsc::Sender<SessionCommand>, ConfigSnapshot)> {
         let sessions = self.sessions.lock().await;
         let handle = sessions.get(session_id)?;

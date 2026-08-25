@@ -9,10 +9,11 @@ use aether_telemetry::TelemetryRuntime;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     self as acp, AgentCapabilities, AuthMethod, AuthenticateRequest, AuthenticateResponse, CancelNotification,
-    ConfigOptionUpdate, Implementation, InitializeRequest, InitializeResponse, ListSessionsRequest,
-    ListSessionsResponse, LoadSessionRequest, LoadSessionResponse, McpCapabilities, NewSessionRequest,
-    NewSessionResponse, PromptCapabilities, PromptRequest, PromptResponse, SessionId, SessionNotification,
-    SessionUpdate, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
+    CloseSessionRequest, CloseSessionResponse, ConfigOptionUpdate, Implementation, InitializeRequest,
+    InitializeResponse, ListSessionsRequest, ListSessionsResponse, LoadSessionRequest, LoadSessionResponse,
+    McpCapabilities, NewSessionRequest, NewSessionResponse, PromptCapabilities, PromptRequest, PromptResponse,
+    ResumeSessionRequest, ResumeSessionResponse, SessionId, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
 };
 use agent_client_protocol::{Client, ConnectionTo, Responder};
 use llm::catalog::{LlmModel, ModelSpec, get_local_models};
@@ -27,11 +28,11 @@ use tracing::{error, info};
 
 use super::protocol::content::map_acp_to_content_blocks;
 use super::protocol::replay::replay_to_client;
-use super::session::SessionRegistry;
 use super::session::actor::{SessionCommand, SessionHandle};
 use super::session::config_setting::ConfigSetting;
 use super::session::factory::SessionFactory;
 use super::session::model::supports_prompt_audio;
+use super::session::{SessionRegistry, paginate_summaries};
 use crate::resolve::InitialSessionSelection;
 use crate::settings_args::SettingsSourceArgs;
 use crate::workspace::{WorkspaceError, WorkspaceManager};
@@ -92,6 +93,8 @@ impl AcpState {
             AetherCapabilities { prompt_search: true, session_preview: true, workspace_move: true };
         let session_capabilities = acp::SessionCapabilities::new()
             .list(acp::SessionListCapabilities::new())
+            .resume(acp::SessionResumeCapabilities::new())
+            .close(acp::SessionCloseCapabilities::new())
             .meta(Some(aether_capabilities.to_meta()));
 
         Ok(InitializeResponse::new(ProtocolVersion::V1)
@@ -159,14 +162,39 @@ impl AcpState {
         Ok(response)
     }
 
-    pub(crate) fn list_sessions(&self, args: &ListSessionsRequest) -> ListSessionsResponse {
-        info!("Listing sessions, cwd filter: {:?}", args.cwd);
+    pub(crate) async fn resume_session(
+        &self,
+        req: ResumeSessionRequest,
+        cx: &ConnectionTo<Client>,
+    ) -> Result<ResumeSessionResponse, acp::Error> {
+        let mcp_capabilities = self.mcp_capabilities.lock().await.clone();
+        let created = self.factory.resume(req, cx, mcp_capabilities).await?;
+        let response = ResumeSessionResponse::new().config_options(created.config_options);
+        self.register_session(&created.session_id, created.handle).await;
+        Ok(response)
+    }
+
+    pub(crate) async fn close_session(&self, req: CloseSessionRequest) -> Result<CloseSessionResponse, acp::Error> {
+        let session_id = req.session_id.0.to_string();
+        let Some(handle) = self.registry.remove(&session_id).await else {
+            error!("Session not found for close: {session_id}");
+            return Err(invalid_params_error(format!("unknown session: {session_id}")));
+        };
+
+        handle.cancel();
+        handle.join().await;
+        Ok(CloseSessionResponse::new())
+    }
+
+    pub(crate) fn list_sessions(&self, args: &ListSessionsRequest) -> Result<ListSessionsResponse, acp::Error> {
+        info!("Listing sessions, cwd filter: {:?}, cursor: {:?}", args.cwd, args.cursor);
         let mut summaries = self.session_store.list();
 
         if let Some(cwd) = args.cwd.as_ref() {
             summaries.retain(|s| s.meta.cwd == *cwd);
         }
 
+        let (summaries, next_cursor) = paginate_summaries(summaries, args.cursor.as_deref())?;
         let sessions: Vec<acp::SessionInfo> = summaries
             .into_iter()
             .map(|s| {
@@ -178,7 +206,7 @@ impl AcpState {
             .collect();
 
         info!("Found {} sessions", sessions.len());
-        ListSessionsResponse::new(sessions)
+        Ok(ListSessionsResponse::new(sessions).next_cursor(next_cursor))
     }
 
     pub(crate) fn search_prompts(&self, params: &PromptSearchParams) -> Result<PromptSearchResponse, acp::Error> {
@@ -518,12 +546,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn initialize_always_advertises_load_session_support() {
+    async fn initialize_advertises_session_lifecycle_support() {
         let state = test_state();
         let response =
             state.initialize(InitializeRequest::new(ProtocolVersion::V1)).await.expect("initialize succeeds");
         let json = serde_json::to_string(&response).expect("response serializes");
         assert!(json.contains("\"loadSession\":true"));
+        assert!(json.contains("\"resume\":{}"));
+        assert!(json.contains("\"close\":{}"));
     }
 
     #[tokio::test]

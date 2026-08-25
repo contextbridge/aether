@@ -4,7 +4,9 @@ use aether_core::core::AgentDeps;
 use aether_core::events::DynObserverFactory;
 use aether_project::AgentCatalog;
 use aether_sessions::model::{SessionEvent, SessionMeta, last_agent_from_events};
-use agent_client_protocol::schema::v1::{self as acp, LoadSessionRequest, NewSessionRequest, SessionId};
+use agent_client_protocol::schema::v1::{
+    self as acp, LoadSessionRequest, NewSessionRequest, ResumeSessionRequest, SessionId,
+};
 use agent_client_protocol::{Client, ConnectionTo};
 use llm::catalog::{LlmModel, get_local_models};
 use llm::types::IsoString;
@@ -42,6 +44,11 @@ pub(crate) struct CreatedSession {
     pub handle: SessionHandle,
     pub config_options: Vec<acp::SessionConfigOption>,
     pub replay_events: Vec<SessionEvent>,
+}
+
+struct SessionTranscript {
+    events: Vec<SessionEvent>,
+    replay: bool,
 }
 
 impl SessionFactory {
@@ -100,7 +107,15 @@ impl SessionFactory {
 
         let runtime_factory =
             self.production_runtime_factory(args.cwd, args.mcp_servers, mode_catalog.specs.catalog(), mcp_capabilities);
-        self.build_session(SessionId::new(session_id), runtime_factory, mode_catalog, resolved, Vec::new(), cx).await
+        self.build_session(
+            SessionId::new(session_id),
+            runtime_factory,
+            mode_catalog,
+            resolved,
+            SessionTranscript { events: Vec::new(), replay: false },
+            cx,
+        )
+        .await
     }
 
     pub(crate) async fn load(
@@ -112,17 +127,48 @@ impl SessionFactory {
         let session_id = args.session_id.0.to_string();
         info!("Loading session: {session_id}");
 
-        let (meta, events) = self.session_store.load(&session_id).ok_or_else(|| {
-            error!("Session not found: {session_id}");
+        self.restore(args.session_id, args.cwd, args.mcp_servers, cx, mcp_capabilities, true).await
+    }
+
+    pub(crate) async fn resume(
+        &self,
+        args: ResumeSessionRequest,
+        cx: &ConnectionTo<Client>,
+        mcp_capabilities: ClientCapabilities,
+    ) -> Result<CreatedSession, acp::Error> {
+        self.restore(args.session_id, args.cwd, args.mcp_servers, cx, mcp_capabilities, false).await
+    }
+
+    async fn restore(
+        &self,
+        session_id: SessionId,
+        cwd: PathBuf,
+        mcp_servers: Vec<acp::McpServer>,
+        cx: &ConnectionTo<Client>,
+        mcp_capabilities: ClientCapabilities,
+        replay: bool,
+    ) -> Result<CreatedSession, acp::Error> {
+        let session_id_string = session_id.0.to_string();
+        info!("Restoring session: {session_id_string}");
+
+        let (meta, events) = self.session_store.load(&session_id_string).ok_or_else(|| {
+            error!("Session not found: {session_id_string}");
             acp::Error::invalid_params()
         })?;
 
-        let mut mode_catalog = self.load_mode_catalog(&args.cwd).await?;
+        let mut mode_catalog = self.load_mode_catalog(&cwd).await?;
         let resolved = resolve_loaded_session(&mut mode_catalog, &meta, &events)?;
-
         let runtime_factory =
-            self.production_runtime_factory(args.cwd, args.mcp_servers, mode_catalog.specs.catalog(), mcp_capabilities);
-        self.build_session(SessionId::new(session_id), runtime_factory, mode_catalog, resolved, events, cx).await
+            self.production_runtime_factory(cwd, mcp_servers, mode_catalog.specs.catalog(), mcp_capabilities);
+        self.build_session(
+            session_id,
+            runtime_factory,
+            mode_catalog,
+            resolved,
+            SessionTranscript { events, replay },
+            cx,
+        )
+        .await
     }
 
     fn production_runtime_factory(
@@ -144,7 +190,7 @@ impl SessionFactory {
         runtime_factory: Arc<dyn RuntimeFactory>,
         mode_catalog: SessionModeCatalog,
         resolved: ResolvedSession,
-        transcript: Vec<SessionEvent>,
+        transcript: SessionTranscript,
         cx: &ConnectionTo<Client>,
     ) -> Result<CreatedSession, acp::Error> {
         let handle = SessionActor::spawn(SessionActorInit {
@@ -155,7 +201,7 @@ impl SessionFactory {
             active_agent: resolved.active_agent,
             specs: mode_catalog.specs,
             runtime_factory,
-            transcript: transcript.clone(),
+            transcript: transcript.events.clone(),
             modes: mode_catalog.modes,
             config: resolved.config,
         })
@@ -169,7 +215,8 @@ impl SessionFactory {
             handle.config_snapshot().config_options(&mode_catalog.available, self.oauth_credential_store.as_ref());
 
         info!("Session {} ready", session_id.0);
-        Ok(CreatedSession { session_id, handle, config_options, replay_events: transcript })
+        let replay_events = if transcript.replay { transcript.events } else { Vec::new() };
+        Ok(CreatedSession { session_id, handle, config_options, replay_events })
     }
 
     fn resolve_new_session(

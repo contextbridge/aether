@@ -3,8 +3,8 @@ use acp_utils::notifications::{
     McpRequest, PromptSearchParams, SessionPreviewParams, WorkspaceListParams, WorkspaceMoveParams,
 };
 use agent_client_protocol::schema::v1::{
-    AuthenticateRequest, CancelNotification, InitializeRequest, ListSessionsRequest, LoadSessionRequest,
-    NewSessionRequest, PromptRequest, SetSessionConfigOptionRequest,
+    AuthenticateRequest, CancelNotification, CloseSessionRequest, InitializeRequest, ListSessionsRequest,
+    LoadSessionRequest, NewSessionRequest, PromptRequest, ResumeSessionRequest, SetSessionConfigOptionRequest,
 };
 use agent_client_protocol::{
     self as acp, Agent, Builder, Client, ConnectionTo, HandleDispatchFrom, JsonRpcResponse, NullRun, Responder,
@@ -53,7 +53,7 @@ pub(crate) fn acp_agent_builder(state: Arc<AcpState>) -> Builder<Agent, impl Han
                 let state = state.clone();
                 async move |req: ListSessionsRequest, responder, cx| {
                     let state = state.clone();
-                    spawn_response(&cx, responder, async move { Ok(state.list_sessions(&req)) })
+                    spawn_response(&cx, responder, async move { state.list_sessions(&req) })
                 }
             },
             acp::on_receive_request!(),
@@ -65,6 +65,27 @@ pub(crate) fn acp_agent_builder(state: Arc<AcpState>) -> Builder<Agent, impl Han
                     let state = state.clone();
                     let cx_for_call = cx.clone();
                     spawn_response(&cx, responder, async move { state.load_session(req, &cx_for_call).await })
+                }
+            },
+            acp::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let state = state.clone();
+                async move |req: ResumeSessionRequest, responder, cx| {
+                    let state = state.clone();
+                    let cx_for_call = cx.clone();
+                    spawn_response(&cx, responder, async move { state.resume_session(req, &cx_for_call).await })
+                }
+            },
+            acp::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let state = state.clone();
+                async move |req: CloseSessionRequest, responder, cx| {
+                    let state = state.clone();
+                    spawn_response(&cx, responder, async move { state.close_session(req).await })
                 }
             },
             acp::on_receive_request!(),
