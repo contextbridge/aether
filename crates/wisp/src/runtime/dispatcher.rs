@@ -1,24 +1,24 @@
 use crate::command::{Command, CommandResult, FailedCommand, FilesystemCommand, GitCommand, TerminalCommand};
 use crate::runtime::{agent, files, git};
-use acp_utils::client::AcpPromptHandle;
+use acp_utils::client::AcpClientHandle;
 use crossterm::{execute, style::Print};
 use std::io;
 
 use super::tasks::{ReadTask, TaskSupervisor};
 
 pub struct CommandDispatcher {
-    prompt_handle: AcpPromptHandle,
+    client_handle: AcpClientHandle,
     tasks: TaskSupervisor,
 }
 
 impl CommandDispatcher {
-    pub fn new(prompt_handle: AcpPromptHandle) -> Self {
-        Self { prompt_handle, tasks: TaskSupervisor::default() }
+    pub fn new(client_handle: impl Into<AcpClientHandle>) -> Self {
+        Self { client_handle: client_handle.into(), tasks: TaskSupervisor::default() }
     }
 
     pub fn dispatch(&mut self, command: Command) -> Option<CommandResult> {
         match command {
-            Command::Agent(command) => agent::execute(&self.prompt_handle, command),
+            Command::Agent(command) => agent::execute(&self.client_handle, command, &mut self.tasks),
             Command::Filesystem(command) => {
                 let key = match &command {
                     FilesystemCommand::IndexFiles { .. } => Some(ReadTask::FileIndex),

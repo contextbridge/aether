@@ -1,13 +1,12 @@
 pub(crate) mod platform;
 pub mod session_config_view;
-pub(crate) mod session_loading_buffer;
 pub(crate) mod session_model;
 pub mod terminal;
 pub mod workspace_status;
 
 use crate::error::AppError;
 use crate::session::workspace_status::WorkspaceStatus;
-use acp_utils::client::{AcpClientError, AcpEvent, AcpPromptHandle, TokioAcpAgent, spawn_acp_session};
+use acp_utils::client::{AcpClientError, AcpClientHandle, AcpEvent, TokioAcpAgent, connect_acp_client};
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     AuthMethod, ClientCapabilities, ElicitationCapabilities, ElicitationFormCapabilities, ElicitationUrlCapabilities,
@@ -27,7 +26,7 @@ pub struct Session {
     pub config_options: Vec<SessionConfigOption>,
     pub auth_methods: Vec<AuthMethod>,
     pub event_rx: mpsc::UnboundedReceiver<AcpEvent>,
-    pub prompt_handle: AcpPromptHandle,
+    pub client_handle: AcpClientHandle,
     pub working_dir: PathBuf,
     pub workspace_status: WorkspaceStatus,
 }
@@ -40,17 +39,19 @@ impl Session {
         let init_request = InitializeRequest::new(ProtocolVersion::LATEST)
             .client_capabilities(client_capabilities())
             .client_info(Implementation::new("wisp", env!("CARGO_PKG_VERSION")));
-        let acp_session = spawn_acp_session(agent, init_request, NewSessionRequest::new(working_dir.clone())).await?;
+        let client = connect_acp_client(agent, init_request).await?;
+        let session_response = client.new_session(NewSessionRequest::new(working_dir.clone())).await?;
+        let client_handle = client.handle();
 
         Ok(Self {
-            session_id: acp_session.session_id,
-            agent_name: acp_session.agent_name,
-            prompt_capabilities: acp_session.prompt_capabilities,
-            session_capabilities: acp_session.session_capabilities,
-            config_options: acp_session.config_options,
-            auth_methods: acp_session.auth_methods,
-            event_rx: acp_session.event_rx,
-            prompt_handle: acp_session.prompt_handle,
+            session_id: session_response.session_id,
+            agent_name: client.agent_name,
+            prompt_capabilities: client.prompt_capabilities,
+            session_capabilities: client.session_capabilities,
+            config_options: session_response.config_options.unwrap_or_default(),
+            auth_methods: client.auth_methods,
+            event_rx: client.event_rx,
+            client_handle,
             working_dir,
             workspace_status,
         })

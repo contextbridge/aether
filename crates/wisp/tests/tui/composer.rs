@@ -332,7 +332,7 @@ fn clear_replaces_the_conversation_once() {
     app.key(key(KeyCode::Tab));
     let _ = app.next_agent_command().unwrap();
 
-    app.acp_event(new_session_created("new-session", vec![select_option("model", "sonnet")]));
+    app.deliver_result(new_session_created("new-session", vec![select_option("model", "sonnet")]));
 
     assert_ne!(app.app().conversation_id(), old_conversation);
     assert_eq!(

@@ -180,7 +180,6 @@ impl App {
     }
 
     fn load_session(&mut self, session_id: &SessionId, cwd: &std::path::Path) {
-        self.session.begin_load(session_id.clone());
         self.queue(Command::Agent(AgentCommand::LoadSession {
             session_id: session_id.clone(),
             cwd: cwd.to_path_buf(),
@@ -195,7 +194,6 @@ impl App {
         self.reset_conversation();
         self.notify(&format!("Moved to {}", home_relative_path(&new_cwd)));
         self.session.begin_workspace_load();
-        self.session.begin_load(self.session.session_id().clone());
         let session_id = self.session.session_id().clone();
         self.queue(Command::Agent(AgentCommand::LoadSession { session_id, cwd: new_cwd.clone() }));
         self.session.set_working_dir(new_cwd);

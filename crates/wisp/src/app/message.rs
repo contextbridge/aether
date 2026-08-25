@@ -6,6 +6,6 @@ use std::time::Instant;
 pub enum Message {
     Terminal(Event),
     Agent(Box<AcpEvent>),
-    CommandFinished(CommandResult),
+    CommandFinished(Box<CommandResult>),
     Tick(Instant),
 }

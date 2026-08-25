@@ -49,7 +49,7 @@ fn clear_command_replaces_conversation_without_purging_native_scrollback() {
     assert_command(&mut ui, |c| matches!(c, AgentCommand::NewSession { .. }), "/clear");
     ui.assert_history_contains("overflow-line-0");
 
-    ui.acp_event(new_session_created("fresh-session", Vec::new()));
+    ui.deliver_result(new_session_created("fresh-session", Vec::new()));
 
     ui.assert_history_contains("overflow-line-0");
 }
@@ -63,13 +63,13 @@ fn session_switch_preserves_native_scrollback_without_purging() {
     ui.type_text("/resume");
     ui.key(key(KeyCode::Tab));
     assert_command(&mut ui, |c| matches!(c, AgentCommand::ListSessions), "/resume");
-    ui.acp_event(sessions_listed(vec![session_info("other", "/tmp/elsewhere", "Other", "2025-01-01T00:00:00Z")]));
+    ui.deliver_result(sessions_listed(vec![session_info("other", "/tmp/elsewhere", "Other", "2025-01-01T00:00:00Z")]));
     ui.key(key(KeyCode::Enter));
     assert_command(&mut ui, |c| matches!(c, AgentCommand::LoadSession { .. }), "resume");
 
     ui.assert_history_contains("overflow-line-0");
 
-    ui.acp_event(session_loaded("other", Vec::new()));
+    ui.deliver_result(session_loaded("other", Vec::new()));
 
     ui.assert_history_contains("overflow-line-0");
 }
@@ -83,13 +83,13 @@ fn successful_workspace_move_does_not_purge_native_scrollback() {
     ui.type_text("/move");
     ui.key(key(KeyCode::Tab));
     assert_command(&mut ui, |c| matches!(c, AgentCommand::ListWorkspaces { .. }), "/move");
-    ui.acp_event(workspaces_listed(vec![
+    ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
         workspace_entry("/home/user/code/other", false),
     ]));
     ui.key(key(KeyCode::Enter));
     assert_command(&mut ui, |c| matches!(c, AgentCommand::MoveWorkspace { .. }), "move");
-    ui.acp_event(workspace_moved("/home/user/code/other"));
+    ui.deliver_result(workspace_moved("/home/user/code/other"));
 
     ui.assert_history_contains("overflow-line-0");
 }
@@ -123,7 +123,7 @@ fn a_workspace_listing_failure_does_not_purge() {
     app.key(key(KeyCode::Tab));
     assert!(matches!(app.next_agent_command(), Some(AgentCommand::ListWorkspaces { .. })));
 
-    app.acp_event(workspace_list_failed("network error"));
+    app.deliver_result(workspace_list_failed("network error"));
 
     drain_commands(&mut app);
 }
@@ -135,14 +135,14 @@ fn a_workspace_move_failure_does_not_purge() {
     app.type_text("/move");
     app.key(key(KeyCode::Tab));
     assert!(matches!(app.next_agent_command(), Some(AgentCommand::ListWorkspaces { .. })));
-    app.acp_event(workspaces_listed(vec![
+    app.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
         workspace_entry("/home/user/code/other", false),
     ]));
     app.key(key(KeyCode::Enter));
     assert!(matches!(app.next_agent_command(), Some(AgentCommand::MoveWorkspace { .. })));
 
-    app.acp_event(workspace_move_failed("permission denied"));
+    app.deliver_result(workspace_move_failed("permission denied"));
 
     drain_commands(&mut app);
 }
