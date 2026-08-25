@@ -46,19 +46,20 @@ impl ProviderFactory for OpenRouterProvider {
         Self::from_env_with_connection(ProviderConnectionConfig::default()).await
     }
 
-    async fn from_env_with_connection(connection: ProviderConnectionConfig) -> Result<Self> {
+    fn from_env_with_connection(connection: ProviderConnectionConfig) -> impl Future<Output = Result<Self>> + Send {
         let api_key = match connection.auth_mode {
-            ProviderAuthMode::Default => Some(
-                std::env::var("OPENROUTER_API_KEY")
-                    .map_err(|_| LlmError::MissingApiKey("OPENROUTER_API_KEY".to_string()))?,
-            ),
-            ProviderAuthMode::None => None,
+            ProviderAuthMode::Default => std::env::var("OPENROUTER_API_KEY")
+                .map(Some)
+                .map_err(|_| LlmError::MissingApiKey("OPENROUTER_API_KEY".to_string())),
+            ProviderAuthMode::None => Ok(None),
         };
-        let config = openai_config(api_key, connection);
 
-        let client = Client::with_config(config);
+        std::future::ready(api_key.map(|api_key| {
+            let config = openai_config(api_key, connection);
+            let client = Client::with_config(config);
 
-        Ok(Self { client, model: String::new() })
+            Self { client, model: String::new() }
+        }))
     }
 
     fn with_model(mut self, model: &str) -> Self {

@@ -26,9 +26,9 @@ impl ProviderFactory for LlamaCppProvider {
         Self::from_env_with_connection(ProviderConnectionConfig::default()).await
     }
 
-    async fn from_env_with_connection(connection: ProviderConnectionConfig) -> Result<Self> {
+    fn from_env_with_connection(connection: ProviderConnectionConfig) -> impl Future<Output = Result<Self>> + Send {
         let base_url = connection.base_url.as_deref().unwrap_or("http://localhost:8080/v1");
-        Ok(Self { client: Client::with_config(get_local_config(base_url)) })
+        std::future::ready(Ok(Self { client: Client::with_config(get_local_config(base_url)) }))
     }
 
     fn with_model(self, _model: &str) -> Self {

@@ -25,9 +25,9 @@ impl ProviderFactory for OllamaProvider {
         Self::from_env_with_connection(ProviderConnectionConfig::default()).await
     }
 
-    async fn from_env_with_connection(connection: ProviderConnectionConfig) -> Result<Self> {
+    fn from_env_with_connection(connection: ProviderConnectionConfig) -> impl Future<Output = Result<Self>> + Send {
         let base_url = connection.base_url.as_deref().unwrap_or("http://localhost:11434/v1");
-        Ok(Self { model: String::new(), client: Client::with_config(get_local_config(base_url)) })
+        std::future::ready(Ok(Self { model: String::new(), client: Client::with_config(get_local_config(base_url)) }))
     }
 
     fn with_model(mut self, model: &str) -> Self {

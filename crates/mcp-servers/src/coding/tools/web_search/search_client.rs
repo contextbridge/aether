@@ -220,7 +220,10 @@ impl FakeSearchClient {
 
 #[cfg(test)]
 impl SearchClient for FakeSearchClient {
-    async fn search(&self, params: SearchParams) -> Result<Vec<RawSearchResult>, WebSearchError> {
+    fn search(
+        &self,
+        params: SearchParams,
+    ) -> impl std::future::Future<Output = Result<Vec<RawSearchResult>, WebSearchError>> + Send {
         let call_index = {
             let mut history = self.search_history.lock().unwrap();
             let index = history.len();
@@ -229,19 +232,19 @@ impl SearchClient for FakeSearchClient {
         };
 
         if let Some(ref sequential) = self.sequential_responses {
-            return sequential.lock().unwrap().get(call_index).cloned().unwrap_or_else(|| {
+            return std::future::ready(sequential.lock().unwrap().get(call_index).cloned().unwrap_or_else(|| {
                 Err(WebSearchError::ApiError(format!("No sequential response at index {call_index}")))
-            });
+            }));
         }
 
         let responses = self.responses.lock().unwrap();
-        if let Some(results) = responses.get(&params.query) {
+        std::future::ready(if let Some(results) = responses.get(&params.query) {
             Ok(results.clone())
         } else if let Some(ref default) = self.default_response {
             Ok(default.clone())
         } else {
             Err(WebSearchError::ApiError(format!("No fake response configured for query: {}", params.query)))
-        }
+        })
     }
 }
 

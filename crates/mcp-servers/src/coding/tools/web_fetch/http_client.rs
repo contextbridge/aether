@@ -157,16 +157,20 @@ impl FakeHttpClient {
 
 #[cfg(test)]
 impl HttpClient for FakeHttpClient {
-    async fn fetch(&self, url: &str, _timeout: Duration) -> Result<HttpResponse, WebFetchError> {
+    fn fetch(
+        &self,
+        url: &str,
+        _timeout: Duration,
+    ) -> impl std::future::Future<Output = Result<HttpResponse, WebFetchError>> + Send {
         self.fetch_history.lock().unwrap().push(url.to_string());
 
         let responses = self.responses.lock().unwrap();
-        if let Some(response) = responses.get(url) {
+        std::future::ready(if let Some(response) = responses.get(url) {
             Ok(response.clone())
         } else if let Some(ref default) = self.default_response {
             Ok(default.clone())
         } else {
             Err(WebFetchError::RequestFailed(format!("No fake response configured for URL: {url}")))
-        }
+        })
     }
 }

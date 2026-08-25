@@ -120,6 +120,7 @@ impl TasksMcp {
     }
 }
 
+#[allow(clippy::unused_async_trait_impl)]
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for TasksMcp {
     fn get_info(&self) -> ServerInfo {

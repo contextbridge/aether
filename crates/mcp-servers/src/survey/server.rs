@@ -107,6 +107,7 @@ impl SurveyMcp {
     }
 }
 
+#[allow(clippy::unused_async_trait_impl)]
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for SurveyMcp {
     fn get_info(&self) -> ServerInfo {
