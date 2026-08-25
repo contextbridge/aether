@@ -8,6 +8,7 @@ use crate::{
     StreamingModelProvider,
 };
 use async_openai::{Client, config::OpenAIConfig};
+use std::future::ready;
 
 pub struct OpenRouterProvider {
     client: Client<AetherOpenAiConfig>,
@@ -47,19 +48,7 @@ impl ProviderFactory for OpenRouterProvider {
     }
 
     fn from_env_with_connection(connection: ProviderConnectionConfig) -> impl Future<Output = Result<Self>> + Send {
-        let api_key = match connection.auth_mode {
-            ProviderAuthMode::Default => std::env::var("OPENROUTER_API_KEY")
-                .map(Some)
-                .map_err(|_| LlmError::MissingApiKey("OPENROUTER_API_KEY".to_string())),
-            ProviderAuthMode::None => Ok(None),
-        };
-
-        std::future::ready(api_key.map(|api_key| {
-            let config = openai_config(api_key, connection);
-            let client = Client::with_config(config);
-
-            Self { client, model: String::new() }
-        }))
+        ready(provider_from_connection(connection))
     }
 
     fn with_model(mut self, model: &str) -> Self {
@@ -96,4 +85,18 @@ impl StreamingModelProvider for OpenRouterProvider {
     fn display_name(&self) -> String {
         format!("OpenRouter ({})", self.model)
     }
+}
+
+fn provider_from_connection(connection: ProviderConnectionConfig) -> Result<OpenRouterProvider> {
+    let api_key = match connection.auth_mode {
+        ProviderAuthMode::Default => Some(
+            std::env::var("OPENROUTER_API_KEY")
+                .map_err(|_| LlmError::MissingApiKey("OPENROUTER_API_KEY".to_string()))?,
+        ),
+        ProviderAuthMode::None => None,
+    };
+    let config = openai_config(api_key, connection);
+    let client = Client::with_config(config);
+
+    Ok(OpenRouterProvider { client, model: String::new() })
 }

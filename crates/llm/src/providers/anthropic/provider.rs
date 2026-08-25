@@ -9,6 +9,7 @@ use futures::StreamExt;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use reqwest::{Client, header};
 use std::env;
+use std::future::ready;
 use std::time::Duration;
 use tracing::debug;
 
@@ -169,11 +170,11 @@ impl AnthropicProvider {
 
 impl ProviderFactory for AnthropicProvider {
     fn from_env() -> impl Future<Output = Result<Self>> + Send {
-        std::future::ready(Self::new(None))
+        ready(Self::new(None))
     }
 
     fn from_env_with_connection(connection: ProviderConnectionConfig) -> impl Future<Output = Result<Self>> + Send {
-        std::future::ready(Self::new(None).map(|provider| provider.with_connection(connection)))
+        ready(Self::new(None).map(|provider| provider.with_connection(connection)))
     }
 
     fn with_model(self, model: &str) -> Self {
