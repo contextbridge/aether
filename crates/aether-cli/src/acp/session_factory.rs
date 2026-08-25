@@ -21,9 +21,9 @@ use super::protocol::mcp::map_acp_mcp_servers;
 use super::session_actor::{SessionActor, SessionActorInit, SessionHandle};
 use super::session_agents::SessionAgents;
 use super::session_config_state::SessionConfigState;
-use super::session_store::SessionStore;
 use crate::resolve::{InitialSessionSelection, resolve_agent_from_catalog};
 use crate::settings_args::SettingsSourceArgs;
+use aether_sessions::SessionStore;
 
 /// Builds the per-session actor for both new and loaded sessions, resolving
 /// settings, agent catalog, model discovery, and the runtime factory.

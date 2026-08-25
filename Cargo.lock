@@ -387,11 +387,15 @@ dependencies = [
 name = "aether-sessions"
 version = "0.1.0"
 dependencies = [
+ "aether-acp-utils",
  "aether-agent-core",
  "aether-llm",
+ "aether-utils",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.20",
+ "tracing",
 ]
 
 [[package]]

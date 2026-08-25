@@ -13,8 +13,14 @@ categories = ["development-tools"]
 workspace = true
 
 [dependencies]
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", default-features = false, version = "0.3.40" }
 aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.34" }
 llm = { package = "aether-llm", path = "../llm", version = "0.7.29" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.13" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

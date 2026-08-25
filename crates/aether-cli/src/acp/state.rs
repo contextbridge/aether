@@ -19,7 +19,6 @@ use llm::catalog::{LlmModel, ModelSpec, get_local_models};
 use llm::{ContentBlock, ProviderConnectionOverrides};
 use mcp_utils::client::{client_capabilities, client_capabilities_for};
 use std::collections::{HashMap, HashSet};
-use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
@@ -32,10 +31,10 @@ use super::protocol::content::map_acp_to_content_blocks;
 use super::protocol::replay::replay_to_client;
 use super::session_actor::{ConfigSnapshot, SessionCommand, SessionHandle};
 use super::session_factory::SessionFactory;
-use super::session_store::SessionStore;
 use crate::resolve::InitialSessionSelection;
 use crate::settings_args::SettingsSourceArgs;
 use crate::workspace::{WorkspaceError, WorkspaceManager};
+use aether_sessions::{SessionStore, SessionStoreError};
 
 /// Global, connection-scoped ACP server state: the live session map plus the
 /// dependencies needed to create sessions and answer global requests. There is
@@ -191,8 +190,10 @@ impl AcpState {
     pub(crate) fn session_preview(&self, params: &SessionPreviewParams) -> Result<SessionPreviewResponse, acp::Error> {
         self.session_store.preview(params).map_err(|e| {
             error!("Session preview failed: {e}");
-            match e.kind() {
-                std::io::ErrorKind::NotFound => acp::Error::invalid_params(),
+            match e {
+                SessionStoreError::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    acp::Error::invalid_params()
+                }
                 _ => acp::Error::internal_error(),
             }
         })
@@ -402,7 +403,7 @@ fn respond_err<T: agent_client_protocol::JsonRpcResponse>(responder: Responder<T
 enum WorkspaceRequestError {
     UnknownSession(String),
     Workspace(WorkspaceError),
-    Relocate(io::Error),
+    Relocate(SessionStoreError),
 }
 
 fn workspace_request_error(e: WorkspaceRequestError) -> acp::Error {
@@ -505,7 +506,7 @@ fn validate_prompt_support(model_value: &str, content: &[ContentBlock]) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::acp::session_store::SessionStore;
+    use aether_sessions::SessionStore;
 
     const SONNET: &str = "anthropic:claude-sonnet-4-5";
     const DEEPSEEK: &str = "deepseek:deepseek-chat";
