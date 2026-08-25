@@ -14,7 +14,7 @@ use crate::screens::annotation::{
 use crate::screens::plan_review::{
     PlanDocument, ReviewComment, SourceMarkdownLine, compile_feedback, render_markdown_source_lines,
 };
-use crate::screens::review::{DocumentPane, MOUSE_SCROLL_LINES, Pane, body_and_footer, focused_border, focused_title};
+use crate::screens::review::{DocumentPane, Pane, body_and_footer, focused_border, focused_title};
 use crate::surfaces::elicitation::ElicitationResponder;
 use crate::surfaces::input::{MouseAction, PlanReviewOutput, ReviewOutcome, UiEvent, is_composed_char, is_press};
 use crate::view::list_view::ListView;
@@ -68,14 +68,11 @@ impl PlanReviewScreen {
         self.source_line_count().saturating_sub(1)
     }
 
-    /// Scrolls the plan by rendered rows, or moves the outline when it has
-    /// focus instead.
     fn scroll(&mut self, direction: Direction) {
-        if self.focus == Pane::Nav {
-            self.move_outline(direction);
-            return;
+        match self.focus {
+            Pane::Document => self.move_cursor(direction),
+            Pane::Nav => self.move_outline(direction),
         }
-        self.plan.scroll_by(direction, MOUSE_SCROLL_LINES);
     }
 
     fn move_cursor(&mut self, direction: Direction) {
