@@ -10,7 +10,7 @@ import {
     LinkCard,
 } from "@astrojs/starlight/components";
 
-Agents get tools from MCP (Model Context Protocol) servers. Settings can reference MCP sources from either user settings (`$HOME/.aether/settings.json`) or project settings (`.aether/settings.json`) via `mcps`, and the default project source is usually `.aether/mcp.json`.
+Agents get tools from MCP (Model Context Protocol) servers. MCP sources are declared via the `mcps` field in either user settings (`$HOME/.aether/settings.json`) or project settings (`.aether/settings.json`). A common convention is to keep server definitions in a dedicated `mcp.json` file and reference it from `mcps`.
 
 ## MCP config files
 

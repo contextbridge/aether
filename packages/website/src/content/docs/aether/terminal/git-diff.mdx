@@ -3,7 +3,7 @@ title: Git Diff View
 description: Review changes, stage, commit, and add inline comments with the two-pane diff viewer.
 ---
 
-Press `Ctrl+G` to open or close the git diff view. It shows changed files on the left and the diff on the right. By default the diff shows all changes relative to `HEAD` (both staged and unstaged); press `t` to cycle the scope between **Both**, **Unstaged**, and **Staged**. You can navigate hunks, stage and unstage files, create commits, discard changes, queue inline comments, and submit those comments back to the agent as a structured prompt.
+Press `Ctrl+G` to open or close the git diff view. It shows changed files on the left and the diff on the right. By default the diff shows all changes relative to `HEAD` (both staged and unstaged); press `t` or `Tab` to cycle the scope between **Both**, **Unstaged**, and **Staged**. You can navigate hunks, stage and unstage files, create commits, discard changes, queue inline comments, and submit those comments back to the agent as a structured prompt.
 
 ## Layout
 
@@ -29,22 +29,19 @@ The file-list header shows the active scope: `Git Diff · Both`, `Git Diff · Un
 
 | Key | Action |
 | --- | --- |
-| `Tab` / `Shift+Tab` | Move focus between the file list and diff pane |
-| `h` / `←` | In the diff pane, focus the file list; in the file list, collapse or move to parent |
+| `h` / `←` | In the diff pane, focus the file list; in the file list, collapse the selected directory |
 | `l` / `→` or `Enter` | In the file list, expand/open the selected entry and focus the diff |
 | `j` / `↓` | Move down |
 | `k` / `↑` | Move up |
-| `g` | Jump to top of the diff pane |
-| `G` | Jump to bottom of the diff pane |
 | `PageDown` / `PageUp` | Page through the diff pane |
 | `o` | Toggle between the hunk-diff view and the full-file view (in the diff pane) |
 | `<` / `>` | Resize the split panes |
 | `r` | Refresh the diff |
-| `Esc` | Close git diff view |
+| `Esc` / `Ctrl+G` | Close git diff view |
 
 ## Diff scope
 
-Press `t` to cycle what the diff shows:
+Press `t` or `Tab` to cycle what the diff shows:
 
 | Scope | Comparison | Includes untracked files |
 | --- | --- | --- |
@@ -64,6 +61,8 @@ The active scope is shown in the file-list header.
 | `C` | Commit staged changes |
 
 `C` opens a commit-message composer at the bottom of the screen. Type a message and press `Enter` to create the commit, or `Esc` to cancel. You can only commit when at least one file is staged.
+
+When queued review comments exist, actions that would clear them — switching scope, refreshing, staging or unstaging, committing, and discarding — ask you to press the same key again to confirm.
 
 ## Discarding changes
 

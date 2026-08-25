@@ -56,7 +56,9 @@ Permission modes:
 
 | Tool                   | Description                                                                                     |
 | ---------------------- | ----------------------------------------------------------------------------------------------- |
-| `bash`                 | Execute a shell command. Pass `run_in_background` to run it as a background MCP task that returns its complete output at completion. |
+| `bash`                 | Execute a shell command. Pass `timeout` to cap execution time (max 600000 ms), or `run_in_background` to run it as a background MCP task that returns its complete output at completion. |
+
+Because `bash` spawns real subprocesses, it composes with [deferred (proxied) tools](/aether/settings/mcp-servers/#merging-and-deferred-tool-behavior) from other MCP servers via the `aether mcp` CLI — pipelines, redirects, and command substitution all work.
 
 ## Web
 

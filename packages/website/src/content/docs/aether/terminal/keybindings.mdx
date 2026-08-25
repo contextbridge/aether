@@ -52,7 +52,11 @@ Selected files are read and sent to the agent as content blocks alongside your m
 - Text files are embedded as ACP resources; text over 1 MB is truncated
 - Image and audio files can be sent as media content blocks when the agent advertises support
 - Media attachments are limited to 10 MB
-- Non-UTF-8 text or unsupported/binary files are skipped with a warning
+- Binary files that cannot be decoded as UTF-8 are skipped with a warning
 - Truncated files include a warning
 
 You can attach multiple files to a single message by using `@` multiple times before sending.
+
+### Pasting file paths
+
+Pasting one or more file paths into the prompt (plain absolute paths, `file://` URIs, or shell-escaped paths) attaches the referenced files as media attachments, subject to the same image/audio and size rules above.
