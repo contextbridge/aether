@@ -76,6 +76,7 @@ dependencies = [
  "aether-mcp-servers",
  "aether-mcp-utils",
  "aether-project",
+ "aether-sessions",
  "aether-telemetry",
  "aether-utils",
  "aether-wisp",
@@ -369,6 +370,7 @@ version = "0.1.0"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
+ "aether-sessions",
  "aether-utils",
  "chrono",
  "clap",
@@ -379,6 +381,17 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+]
+
+[[package]]
+name = "aether-sessions"
+version = "0.1.0"
+dependencies = [
+ "aether-agent-core",
+ "aether-llm",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
