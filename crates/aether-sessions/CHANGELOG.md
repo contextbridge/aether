@@ -11,3 +11,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Persisted session models, JSONL log parsing, and transcript reconstruction helpers.
 - Session storage, bounded previews, relocation, and derived prompt search.
+- Optional SQLite analytics ingest, querying, pruning, and schema documentation.

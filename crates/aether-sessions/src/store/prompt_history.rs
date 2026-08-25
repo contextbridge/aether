@@ -69,10 +69,6 @@ impl PromptHistoryIndex {
         Ok(PromptSearchResponse { results, truncated, ..response })
     }
 
-    pub(super) fn is_index_path(&self, path: &Path) -> bool {
-        path == self.path
-    }
-
     fn lock_state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }

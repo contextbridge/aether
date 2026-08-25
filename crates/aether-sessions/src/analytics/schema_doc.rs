@@ -8,9 +8,9 @@ pub struct SchemaDoc {
 
 #[cfg(test)]
 mod tests {
+    use super::super::db::Db;
+    use super::super::query::{QueryOptions, run_query};
     use super::*;
-    use crate::db::Db;
-    use crate::query::{QueryOptions, run_query};
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -40,7 +40,7 @@ pub struct Example {
 }
 
 pub fn schema_doc() -> SchemaDoc {
-    SchemaDoc { schema_sql: include_str!("../migrations/001_session_index.sql"), examples: examples() }
+    SchemaDoc { schema_sql: include_str!("../../migrations/001_session_index.sql"), examples: examples() }
 }
 
 pub fn render_schema_text(schema: &SchemaDoc) -> String {

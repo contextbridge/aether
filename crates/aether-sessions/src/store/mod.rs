@@ -9,6 +9,7 @@ use serde::Serialize;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 use tracing::warn;
 use utils::settings::aether_home;
 
@@ -20,6 +21,29 @@ use prompt_history::PromptHistoryIndex;
 const PROMPT_HISTORY_FILE: &str = "prompt-history.jsonl";
 const PREVIEW_TRANSCRIPT_TURNS: usize = 8;
 const MAX_TITLE_LEN: usize = 80;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct FileFingerprint {
+    pub file_size: i64,
+    pub file_mtime_ns: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DiscoveredSessionFile {
+    pub path: PathBuf,
+    pub fingerprint: FileFingerprint,
+}
+
+impl FileFingerprint {
+    pub fn read(path: impl AsRef<Path>) -> std::io::Result<Self> {
+        let metadata = fs::metadata(path)?;
+        let modified = metadata.modified()?.duration_since(UNIX_EPOCH).unwrap_or_default();
+        Ok(Self {
+            file_size: metadata.len().try_into().unwrap_or(i64::MAX),
+            file_mtime_ns: modified.as_nanos().try_into().unwrap_or(i64::MAX),
+        })
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionSummary {
@@ -37,6 +61,23 @@ impl ScanLimits {
     pub const SUMMARY: Self = Self { max_lines: 64, max_bytes: 64 * 1024 };
     pub const PREVIEW: Self = Self { max_lines: 200, max_bytes: 128 * 1024 };
     pub const UNBOUNDED: Self = Self { max_lines: usize::MAX, max_bytes: usize::MAX };
+}
+
+pub fn discover_session_files(sessions_dir: impl AsRef<Path>) -> std::io::Result<Vec<DiscoveredSessionFile>> {
+    let mut files = Vec::new();
+    for entry in fs::read_dir(sessions_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() || path.file_name().and_then(|name| name.to_str()) == Some(PROMPT_HISTORY_FILE) {
+            continue;
+        }
+        if path.extension().and_then(|extension| extension.to_str()) == Some("jsonl") {
+            let path = path.canonicalize()?;
+            files.push(DiscoveredSessionFile { path: path.clone(), fingerprint: FileFingerprint::read(&path)? });
+        }
+    }
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(files)
 }
 
 pub struct SessionStore {
@@ -114,21 +155,12 @@ impl SessionStore {
     }
 
     pub fn list(&self) -> Vec<SessionSummary> {
-        let Ok(entries) = fs::read_dir(&self.dir) else {
+        let Ok(files) = discover_session_files(&self.dir) else {
             return Vec::new();
         };
 
-        let mut summaries: Vec<SessionSummary> = entries
-            .filter_map(|entry| {
-                let path = entry.ok()?.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("jsonl")
-                    || self.prompt_history.is_index_path(&path)
-                {
-                    return None;
-                }
-                read_session_summary(&path).ok()
-            })
-            .collect();
+        let mut summaries: Vec<SessionSummary> =
+            files.into_iter().filter_map(|file| read_session_summary(&file.path).ok()).collect();
 
         summaries.sort_by(|a, b| b.meta.created_at.cmp(&a.meta.created_at));
         summaries

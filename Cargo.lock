@@ -368,18 +368,10 @@ dependencies = [
 name = "aether-session-index"
 version = "0.1.0"
 dependencies = [
- "aether-agent-core",
- "aether-llm",
  "aether-sessions",
  "aether-utils",
- "chrono",
  "clap",
- "futures",
- "serde",
  "serde_json",
- "sqlx",
- "tempfile",
- "thiserror 2.0.20",
  "tokio",
 ]
 
@@ -391,10 +383,14 @@ dependencies = [
  "aether-agent-core",
  "aether-llm",
  "aether-utils",
+ "chrono",
+ "futures",
  "serde",
  "serde_json",
+ "sqlx",
  "tempfile",
  "thiserror 2.0.20",
+ "tokio",
  "tracing",
 ]
 

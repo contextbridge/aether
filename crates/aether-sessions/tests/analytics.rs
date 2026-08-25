@@ -1,10 +1,28 @@
 use aether_core::events::{AgentEvent, ContextEvent, ContextUsage, LlmCallPurpose, ModelEvent, TurnEvent, TurnOutcome};
-use aether_session_index::{IngestOptions, QueryOptions, SessionIndexError, ingest_sessions, run_query};
+use aether_sessions::analytics::{IngestOptions, QueryOptions, SessionIndexError, ingest_sessions, run_query};
 use aether_sessions::{SessionEvent, UserEvent};
 use serde_json::json;
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
+
+#[test]
+fn shared_discovery_filters_and_sorts_session_files_with_fingerprints() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("b.jsonl"), "b").unwrap();
+    fs::write(temp.path().join("a.jsonl"), "aa").unwrap();
+    fs::write(temp.path().join("prompt-history.jsonl"), "history").unwrap();
+    fs::write(temp.path().join("notes.txt"), "notes").unwrap();
+
+    let files = aether_sessions::discover_session_files(temp.path()).unwrap();
+
+    assert_eq!(
+        files.iter().map(|file| file.path.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>(),
+        ["a.jsonl", "b.jsonl"],
+    );
+    assert_eq!(files[0].fingerprint.file_size, 2);
+    assert_eq!(files[1].fingerprint.file_size, 1);
+}
 
 #[tokio::test]
 async fn typed_event_contract_populates_every_documented_view() {
@@ -282,11 +300,11 @@ impl Fixture {
         self.write_session(name, &serialized);
     }
 
-    async fn ingest(&self) -> aether_session_index::IngestSummary {
+    async fn ingest(&self) -> aether_sessions::analytics::IngestSummary {
         ingest_sessions(self.ingest_options()).await.unwrap()
     }
 
-    async fn query(&self, sql: &str) -> aether_session_index::QueryOutput {
+    async fn query(&self, sql: &str) -> aether_sessions::analytics::QueryOutput {
         run_query(&self.query_options(sql)).await.unwrap()
     }
 

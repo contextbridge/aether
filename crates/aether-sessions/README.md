@@ -33,3 +33,17 @@ directory. The JSONL session files remain the source of truth; the index is
 rewritten atomically when it reaches its 100-entry retention limit or when a
 session is relocated. Search uses smart-case matching and reports UTF-8 byte
 offsets into the original prompt.
+
+## Analytics
+
+The optional `analytics` feature owns the `SQLite` projection of persisted
+session files. JSONL remains the source of truth; the `SQLite` database is a
+derived cache that supports concurrent ingest, replacement and pruning, safe
+read-only queries, and documented schema examples.
+
+```bash
+cargo run -p aether-session-index --features aether-sessions/analytics -- ingest
+cargo sqlx prepare --check -- --features analytics
+```
+
+The unpublished `aether-session-index` crate is a thin CLI over this feature.
