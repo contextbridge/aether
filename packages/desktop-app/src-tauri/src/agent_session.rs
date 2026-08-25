@@ -1,9 +1,9 @@
 use crate::{AppEvent, bridge_event};
-use acp_utils::client::{AcpEvent, AcpPromptHandle, TokioAcpAgent, spawn_acp_session};
-use acp_utils::notifications::{ElicitationAction, ElicitationResponse};
+use acp_utils::client::{AcpClientHandle, AcpEvent, TokioAcpAgent, connect_acp_client};
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    Implementation, InitializeRequest, NewSessionRequest, SessionConfigOption, SessionId,
+    CreateElicitationResponse, ElicitationAction, Implementation, InitializeRequest, LoadSessionRequest,
+    NewSessionRequest, SessionConfigOption, SessionId,
 };
 use std::path::PathBuf;
 use tauri::ipc::Channel;
@@ -16,7 +16,7 @@ pub(crate) struct AgentSession {
     pub(crate) session_id: SessionId,
     pub(crate) agent_name: String,
     pub(crate) config_options: Vec<SessionConfigOption>,
-    pub(crate) prompt_handle: AcpPromptHandle,
+    pub(crate) client_handle: AcpClientHandle,
     pub(crate) cwd: PathBuf,
     pub(crate) event_task: JoinHandle<()>,
 }
@@ -32,25 +32,70 @@ impl AgentSession {
         let init = InitializeRequest::new(ProtocolVersion::LATEST)
             .client_info(Implementation::new("aether-desktop", env!("CARGO_PKG_VERSION")));
 
-        let acp_session = spawn_acp_session(agent, init, NewSessionRequest::new(cwd.clone()))
-            .await
-            .map_err(|error| error.to_string())?;
+        let client = connect_acp_client(agent, init).await.map_err(|error| error.to_string())?;
+        let new_session =
+            client.handle.new_session(NewSessionRequest::new(cwd.clone())).await.map_err(|error| error.to_string())?;
 
         let connection_id = Uuid::new_v4().to_string();
-        let session_id = acp_session.session_id.clone();
+        let session_id = new_session.session_id.clone();
         let event_connection_id = connection_id.clone();
         let event_session_id = session_id.clone();
         let (ended_tx, ended_rx) = watch::channel(false);
-        let event_task =
-            spawn_event_task(acp_session.event_rx, event_session_id, event_connection_id, events, ended_tx);
+        let agent_name = client.agent_name();
+        let client_handle = client.handle;
+        let event_rx = client.event_rx;
+        let event_task = spawn_event_task(event_rx, event_session_id, event_connection_id, events, ended_tx, None);
 
         Ok((
             Self {
                 connection_id,
                 session_id,
-                agent_name: acp_session.agent_name,
-                config_options: acp_session.config_options,
-                prompt_handle: acp_session.prompt_handle,
+                agent_name,
+                config_options: new_session.config_options.unwrap_or_default(),
+                client_handle,
+                cwd,
+                event_task,
+            },
+            ended_rx,
+        ))
+    }
+
+    pub(crate) async fn spawn_loaded(
+        program: String,
+        args: Vec<String>,
+        session_id: SessionId,
+        cwd: PathBuf,
+        events: Channel<AppEvent>,
+    ) -> Result<(Self, watch::Receiver<bool>), String> {
+        let agent = TokioAcpAgent::from_command(program, args);
+        let init = InitializeRequest::new(ProtocolVersion::LATEST)
+            .client_info(Implementation::new("aether-desktop", env!("CARGO_PKG_VERSION")));
+        let client = connect_acp_client(agent, init).await.map_err(|error| error.to_string())?;
+        let request = LoadSessionRequest::new(session_id, cwd.clone());
+        let loaded = client.handle.load_session(request).await.map_err(|error| error.to_string())?;
+
+        let connection_id = Uuid::new_v4().to_string();
+        let session_id = loaded.session_id.clone();
+        let (ended_tx, ended_rx) = watch::channel(false);
+        let agent_name = client.agent_name();
+        let client_handle = client.handle;
+        let event_rx = client.event_rx;
+        let event_task = spawn_event_task(
+            event_rx,
+            session_id.clone(),
+            connection_id.clone(),
+            events,
+            ended_tx,
+            Some(loaded.replay),
+        );
+
+        Ok((
+            Self {
+                connection_id,
+                session_id,
+                agent_name,
+                config_options: loaded.response.config_options.unwrap_or_default(),
+                client_handle,
                 cwd,
                 event_task,
             },
@@ -71,8 +116,34 @@ fn spawn_event_task(
     connection_id: String,
     events: Channel<AppEvent>,
     ended_tx: watch::Sender<bool>,
+    replay: Option<Vec<agent_client_protocol::schema::v1::SessionNotification>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        if let Some(replay) = replay {
+            for notification in replay {
+                let event = AcpEvent::SessionUpdate {
+                    session_id: notification.session_id,
+                    update: Box::new(notification.update),
+                };
+                if let Some(output) = bridge_event(session_id.0.to_string(), connection_id.clone(), event)
+                    && events.send(output).is_err()
+                {
+                    let _ = ended_tx.send(true);
+                    return;
+                }
+            }
+            if events
+                .send(AppEvent::HistoryLoaded {
+                    session_id: session_id.0.to_string(),
+                    connection_id: connection_id.clone(),
+                })
+                .is_err()
+            {
+                let _ = ended_tx.send(true);
+                return;
+            }
+        }
+
         loop {
             let Some(event) = event_rx.recv().await else {
                 break;
@@ -87,7 +158,7 @@ fn spawn_event_task(
                     break;
                 }
                 AcpEvent::ElicitationRequest { responder, .. } => {
-                    let _ = responder.respond(ElicitationResponse { action: ElicitationAction::Cancel, content: None });
+                    let _ = responder.respond(CreateElicitationResponse::new(ElicitationAction::Cancel));
                 }
                 event => {
                     if let Some(output) = bridge_event(session_id.0.to_string(), connection_id.clone(), event)

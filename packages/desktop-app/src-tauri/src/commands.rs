@@ -1,8 +1,11 @@
 use crate::AppEvent;
+use crate::app_event::PersistedSessionSummary;
 use crate::app_state::AppState;
 use crate::files::{FileEntry, collect_workspace_files};
 use crate::git::{DiffFileContents, DiffScope, FileStatus, GitRepository, GitSnapshot};
-use agent_client_protocol::schema::v1::SessionConfigOption;
+use acp_utils::client::{TokioAcpAgent, discover_acp_sessions};
+use agent_client_protocol::schema::ProtocolVersion;
+use agent_client_protocol::schema::v1::{Implementation, InitializeRequest, SessionConfigOption};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::path::Path;
@@ -29,6 +32,13 @@ pub(crate) struct SessionInfo {
     pub(crate) config_options: Vec<SessionConfigOption>,
 }
 
+#[derive(Debug, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WorkspaceInfo {
+    pub(crate) path: String,
+    pub(crate) name: String,
+}
+
 struct AcpSessionConfigOptionType;
 
 impl Type for AcpSessionConfigOptionType {
@@ -52,6 +62,63 @@ pub(crate) async fn start_session(
         agent_name: session.agent_name,
         config_options: session.config_options,
     })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn discover_sessions(request: StartSessionRequest) -> Result<Vec<PersistedSessionSummary>, String> {
+    let agent = TokioAcpAgent::from_command(request.program, request.args);
+    let init = InitializeRequest::new(ProtocolVersion::LATEST)
+        .client_info(Implementation::new("aether-desktop", env!("CARGO_PKG_VERSION")));
+    let sessions = discover_acp_sessions(agent, init).await.map_err(|error| error.to_string())?;
+    Ok(sessions
+        .into_iter()
+        .filter(|session| session.cwd == Path::new(&request.cwd))
+        .map(|session| PersistedSessionSummary {
+            session_id: session.session_id.0.to_string(),
+            cwd: session.cwd,
+            title: session.title,
+            updated_at: session.updated_at,
+        })
+        .collect())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn load_session(
+    request: StartSessionRequest,
+    session_id: String,
+    events: Channel<AppEvent>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<SessionInfo, String> {
+    let session = state.inner().load_session(request.program, request.args, session_id, request.cwd, events).await?;
+    Ok(SessionInfo {
+        connection_id: session.connection_id,
+        session_id: session.session_id.0.to_string(),
+        agent_name: session.agent_name,
+        config_options: session.config_options,
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn list_sessions(session_id: String, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.list_sessions(&session_id)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn canonicalize_workspace(path: String) -> Result<WorkspaceInfo, String> {
+    let canonical = std::fs::canonicalize(&path).map_err(|error| format!("cannot open workspace {path}: {error}"))?;
+    if !canonical.is_dir() {
+        return Err(format!("workspace is not a directory: {}", canonical.display()));
+    }
+    let name = canonical
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| canonical.to_string_lossy().into_owned());
+    Ok(WorkspaceInfo { path: canonical.to_string_lossy().into_owned(), name })
 }
 
 #[tauri::command]

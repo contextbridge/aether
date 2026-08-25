@@ -9,7 +9,7 @@ mod app_state;
 mod commands;
 mod files;
 pub mod git;
-use app_event::AppEvent;
+use app_event::{AppEvent, PersistedSessionSummary};
 use app_state::AppState;
 #[cfg(test)]
 use files::build_file_content_blocks;
@@ -27,6 +27,18 @@ fn bridge_event(session_id: String, connection_id: String, event: AcpEvent) -> O
         AcpEvent::PromptError(error) => {
             Some(AppEvent::PromptError { session_id, connection_id, error: error.to_string() })
         }
+        AcpEvent::SessionsListed { sessions } => Some(AppEvent::SessionsListed {
+            connection_id,
+            sessions: sessions
+                .into_iter()
+                .map(|session| PersistedSessionSummary {
+                    session_id: session.session_id.0.to_string(),
+                    cwd: session.cwd,
+                    title: session.title,
+                    updated_at: session.updated_at,
+                })
+                .collect(),
+        }),
         _ => None,
     }
 }
@@ -36,6 +48,10 @@ fn specta_builder() -> Builder<tauri::Wry> {
         .error_handling(ErrorHandlingMode::Throw)
         .commands(collect_commands![
             commands::start_session,
+            commands::load_session,
+            commands::discover_sessions,
+            commands::list_sessions,
+            commands::canonicalize_workspace,
             commands::set_session_config_option,
             commands::send_prompt,
             commands::index_workspace_files,
@@ -75,6 +91,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(state)
         .on_page_load(move |_webview, _payload| page_state.close_all_sessions())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(bindings.invoke_handler())
         .run(tauri::generate_context!())
@@ -239,8 +256,17 @@ mod tests {
     }
 
     #[test]
-    fn ignores_unrelated_events() {
-        let event = AcpEvent::SessionsListed { sessions: Vec::new() };
-        assert_eq!(bridge_event("s1".to_string(), connection_id(), event), None);
+    fn forwards_listed_sessions() {
+        let event = AcpEvent::SessionsListed {
+            sessions: vec![
+                agent_client_protocol::schema::v1::SessionInfo::new(SessionId::new("saved-1"), "/workspace")
+                    .title(Some("Saved thread".to_string()))
+                    .updated_at(Some("2026-08-24T12:00:00Z".to_string())),
+            ],
+        };
+        let bridge = bridge_event("s1".to_string(), connection_id(), event).expect("sessions should forward");
+        let AppEvent::SessionsListed { sessions, .. } = bridge else { panic!("expected SessionsListed") };
+        assert_eq!(sessions[0].session_id, "saved-1");
+        assert_eq!(sessions[0].cwd, std::path::PathBuf::from("/workspace"));
     }
 }

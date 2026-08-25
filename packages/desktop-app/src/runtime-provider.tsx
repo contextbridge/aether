@@ -9,38 +9,60 @@ import { useMemo, type PropsWithChildren } from "react";
 import { useAppActions, useChatStore } from "./app-provider";
 
 export function RuntimeProvider({ children }: PropsWithChildren) {
-  const { messages, isRunning, cwd, activeSessionId, sessions } = useChatStore(
+  const {
+    messages,
+    isRunning,
+    activeSessionId,
+    sessions,
+    threads,
+    threadsLoading,
+    loadingThreadId,
+    selectedWorkspaceId,
+  } = useChatStore(
     useShallow((state) => ({
       messages: state.messages,
       isRunning: state.isRunning,
-      cwd: state.cwd,
       activeSessionId: state.activeSessionId,
       sessions: state.sessions,
+      threads: state.threads,
+      threadsLoading: state.threadsLoading,
+      loadingThreadId: state.loadingThreadId,
+      selectedWorkspaceId: state.selectedWorkspaceId,
     })),
   );
-  const { send, cancel, start, switchToThread, closeSession, renameSession } =
+  const { send, cancel, start, switchToThread, deleteThread, renameSession } =
     useAppActions();
 
   const threadList = useMemo(
     () => ({
       threadId: activeSessionId ?? undefined,
-      isLoading: false,
-      threads: Object.values(sessions).map(threadData),
+      isLoading: threadsLoading,
+      threads: Object.values(threads).map((thread) =>
+        threadData(
+          thread,
+          sessions[thread.id]?.isRunning ?? loadingThreadId === thread.id,
+        ),
+      ),
       archivedThreads: [] as ExternalStoreThreadData<"archived">[],
-      onSwitchToNewThread: () => start(cwd),
+      onSwitchToNewThread: () => {
+        if (selectedWorkspaceId) return start(selectedWorkspaceId);
+      },
       onSwitchToThread: (threadId: string) => switchToThread(threadId),
       onRename: (threadId: string, title: string) =>
         renameSession(threadId, title),
-      onArchive: (threadId: string) => closeSession(threadId),
-      onDelete: (threadId: string) => closeSession(threadId),
+      onArchive: (threadId: string) => deleteThread(threadId),
+      onDelete: (threadId: string) => deleteThread(threadId),
     }),
     [
       activeSessionId,
-      closeSession,
-      cwd,
+      deleteThread,
       renameSession,
       sessions,
+      selectedWorkspaceId,
       start,
+      threads,
+      threadsLoading,
+      loadingThreadId,
       switchToThread,
     ],
   );
@@ -70,11 +92,14 @@ export function RuntimeProvider({ children }: PropsWithChildren) {
   );
 }
 
-const threadData = (session: {
-  connection: { sessionId: string };
-  title: string;
-}): ExternalStoreThreadData<"regular"> => ({
-  id: session.connection.sessionId,
-  status: "regular",
-  title: session.title,
-});
+const threadData = (
+  thread: { id: string; title: string; updatedAt?: Date },
+  isRunning: boolean,
+): ExternalStoreThreadData<"regular"> =>
+  ({
+    id: thread.id,
+    status: "regular",
+    title: thread.title,
+    lastMessageAt: thread.updatedAt,
+    isRunning,
+  }) as ExternalStoreThreadData<"regular"> & { lastMessageAt?: Date };

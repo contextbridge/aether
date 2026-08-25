@@ -338,6 +338,55 @@ describe("turn lifecycle", () => {
     });
   });
 
+  it("reconstructs user turns replayed by load_session", () => {
+    actions.handleEvent(
+      event({
+        sessionUpdate: "user_message_chunk",
+        content: { type: "text", text: "Restore this prompt" },
+        messageId: "user-1",
+      }),
+    );
+
+    expect(store.getState().messages).toEqual([
+      { id: "user-1", role: "user", content: "Restore this prompt" },
+    ]);
+  });
+
+  it("catalogs persisted sessions under their workspaces", () => {
+    store.setState({
+      workspaces: {
+        "/workspace/project": {
+          id: "/workspace/project",
+          path: "/workspace/project",
+          name: "project",
+          collapsed: false,
+        },
+      },
+    });
+    actions.handleEvent({
+      kind: "sessionsListed",
+      connectionId: CONNECTION_ID,
+      sessions: [
+        {
+          sessionId: "saved-1",
+          cwd: "/workspace/project",
+          title: "Saved thread",
+          updatedAt: "2026-08-24T12:00:00Z",
+        },
+      ],
+    });
+
+    const state = store.getState();
+    expect(state.threads["saved-1"]).toMatchObject({
+      cwd: "/workspace/project",
+      title: "Saved thread",
+    });
+    expect(state.workspaces["/workspace/project"]).toMatchObject({
+      name: "project",
+      path: "/workspace/project",
+    });
+  });
+
   it("ignores events from a stale connection", () => {
     actions.handleEvent({
       kind: "sessionUpdate",

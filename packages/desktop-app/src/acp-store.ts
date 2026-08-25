@@ -28,6 +28,20 @@ export type ConnectedSession = Extract<
   { status: "connected" }
 >;
 
+export type Workspace = {
+  id: string;
+  path: string;
+  name: string;
+  collapsed: boolean;
+};
+
+export type ThreadSummary = {
+  id: string;
+  cwd: string;
+  title: string;
+  updatedAt?: Date;
+};
+
 export type ChatSession = {
   connection: ConnectedSession;
   cwd: string;
@@ -57,6 +71,11 @@ export type ChatState = {
   openMessageSeeded: boolean;
   activeSessionId: string | null;
   sessions: Record<string, ChatSession>;
+  workspaces: Record<string, Workspace>;
+  selectedWorkspaceId: string | null;
+  threads: Record<string, ThreadSummary>;
+  threadsLoading: boolean;
+  loadingThreadId: string | null;
   gitReview: GitReviewState;
 };
 
@@ -73,6 +92,11 @@ export const initialChatState: ChatState = {
   openMessageSeeded: false,
   activeSessionId: null,
   sessions: {},
+  workspaces: {},
+  selectedWorkspaceId: null,
+  threads: {},
+  threadsLoading: false,
+  loadingThreadId: null,
   gitReview: createGitReviewState(),
 };
 
@@ -96,7 +120,16 @@ export const chatSessionFromState = (
 
 export const chatStateFromSession = (
   session: ChatSession,
-): Omit<ChatState, "sessions" | "activeSessionId"> => ({
+): Omit<
+  ChatState,
+  | "sessions"
+  | "activeSessionId"
+  | "workspaces"
+  | "selectedWorkspaceId"
+  | "threads"
+  | "threadsLoading"
+  | "loadingThreadId"
+> => ({
   connection: session.connection,
   cwd: session.cwd,
   configOptions: session.configOptions,
@@ -111,6 +144,30 @@ export const chatStateFromSession = (
 });
 
 export const createChatStore = () =>
-  createStore<ChatState>()(() => ({ ...initialChatState }));
+  createStore<ChatState>()(() => {
+    const workspaces = readSavedWorkspaces();
+    return {
+      ...initialChatState,
+      workspaces,
+      selectedWorkspaceId: Object.keys(workspaces)[0] ?? null,
+    };
+  });
+
+const WORKSPACES_KEY = "aether.desktop.workspaces.v1";
+
+const readSavedWorkspaces = (): Record<string, Workspace> => {
+  if (typeof localStorage === "undefined") return {};
+  try {
+    const value = JSON.parse(localStorage.getItem(WORKSPACES_KEY) ?? "{}");
+    return value && typeof value === "object" ? value : {};
+  } catch {
+    return {};
+  }
+};
+
+export const saveWorkspaces = (workspaces: Record<string, Workspace>): void => {
+  if (typeof localStorage === "undefined") return;
+  localStorage.setItem(WORKSPACES_KEY, JSON.stringify(workspaces));
+};
 
 export type ChatStore = ReturnType<typeof createChatStore>;

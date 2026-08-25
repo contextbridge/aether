@@ -7,12 +7,12 @@ use crate::notifications::{
 };
 use agent_client_protocol::schema::v1::{
     AuthMethod, AuthenticateRequest, AuthenticateResponse, CancelNotification, CloseSessionRequest,
-    CloseSessionResponse, CreateElicitationRequest, InitializeRequest, InitializeResponse, ListSessionsRequest,
-    ListSessionsResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
-    PermissionOptionId, PermissionOptionKind, PromptCapabilities, PromptRequest, PromptResponse,
+    CloseSessionResponse, ConfigOptionUpdate, CreateElicitationRequest, InitializeRequest, InitializeResponse,
+    ListSessionsRequest, ListSessionsResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest,
+    NewSessionResponse, PermissionOptionId, PermissionOptionKind, PromptCapabilities, PromptRequest, PromptResponse,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
     ResumeSessionResponse, SelectedPermissionOutcome, SessionCapabilities, SessionId, SessionNotification,
-    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
+    SessionUpdate, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
 };
 use agent_client_protocol::{self as acp, Client, ConnectTo, ConnectionTo, JsonRpcNotification, JsonRpcRequest};
 use std::sync::{Arc, Mutex};
@@ -113,7 +113,24 @@ impl AcpClientHandle {
     }
 
     pub async fn list_sessions(&self, request: ListSessionsRequest) -> Result<ListSessionsResponse, AcpClientError> {
-        self.request(request, false).await
+        self.list_sessions_internal(request, false).await
+    }
+
+    pub async fn list_sessions_with_event(
+        &self,
+        request: ListSessionsRequest,
+    ) -> Result<ListSessionsResponse, AcpClientError> {
+        self.list_sessions_internal(request, true).await
+    }
+
+    async fn list_sessions_internal(
+        &self,
+        request: ListSessionsRequest,
+        emit_event: bool,
+    ) -> Result<ListSessionsResponse, AcpClientError> {
+        let (response, receiver) = oneshot::channel();
+        self.send(ClientCommand::ListSessions { request, response, emit_event })?;
+        await_response(receiver).await
     }
 
     /// Resume a session without collecting or replaying its prior notifications.
@@ -152,7 +169,9 @@ impl AcpClientHandle {
         &self,
         request: SetSessionConfigOptionRequest,
     ) -> Result<SetSessionConfigOptionResponse, AcpClientError> {
-        self.request(request, true).await
+        let (response, receiver) = oneshot::channel();
+        self.send(ClientCommand::SetConfigOption { request, response })?;
+        await_response(receiver).await
     }
 
     pub async fn authenticate(&self, request: AuthenticateRequest) -> Result<AuthenticateResponse, AcpClientError> {
@@ -213,6 +232,8 @@ type RequestFn = Box<dyn FnOnce(Result<&ConnectionTo<acp::Agent>, AcpClientError
 enum ClientCommand {
     Prompt { request: PromptRequest, response: Response<PromptResponse> },
     LoadSession { request: LoadSessionRequest, response: Response<LoadedSession> },
+    ListSessions { request: ListSessionsRequest, response: Response<ListSessionsResponse>, emit_event: bool },
+    SetConfigOption { request: SetSessionConfigOptionRequest, response: Response<SetSessionConfigOptionResponse> },
     Request { allow_during_prompt: bool, run: RequestFn },
 }
 
@@ -223,6 +244,15 @@ struct ReplayState {
 
 async fn await_response<T>(receiver: oneshot::Receiver<Result<T, AcpClientError>>) -> Result<T, AcpClientError> {
     receiver.await.map_err(|_| AcpClientError::AgentCrashed("ACP task ended before responding".to_string()))?
+}
+
+/// Initialize an ACP agent, list its persisted sessions, and disconnect.
+pub async fn discover_acp_sessions(
+    agent: impl ConnectTo<Client> + 'static,
+    init_request: InitializeRequest,
+) -> Result<Vec<agent_client_protocol::schema::v1::SessionInfo>, AcpClientError> {
+    let client = connect_acp_client(agent, init_request).await?;
+    Ok(client.handle.list_sessions(ListSessionsRequest::new()).await?.sessions)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -394,7 +424,8 @@ async fn run_prompt(
                         let _ = response.send(Ok(prompt_response));
                     }
                     Err(error) => {
-                        let _ = response.send(Err(AcpClientError::Protocol(error)));
+                        let _ = event_tx.send(AcpEvent::PromptError(error.clone()));
+                          let _ = response.send(Err(AcpClientError::Protocol(error)));
                     }
                 }
                 break;
@@ -449,6 +480,20 @@ async fn handle_command(
                 .map_or_else(Vec::new, |state| state.notifications);
             let _ = response.send(result.map(|response| LoadedSession { session_id, response, replay }));
         }
+        ClientCommand::ListSessions { request, response, emit_event } => {
+            if state == ClientState::Prompting {
+                let _ = response.send(Err(AcpClientError::Busy));
+                return;
+            }
+            let result = cx.send_request(request).block_task().await.map_err(AcpClientError::Protocol);
+            if emit_event && let Ok(list) = &result {
+                let _ = event_tx.send(AcpEvent::SessionsListed { sessions: list.sessions.clone() });
+            }
+            let _ = response.send(result);
+        }
+        ClientCommand::SetConfigOption { request, response } => {
+            send_config_option_response(cx, event_tx, request, response);
+        }
         ClientCommand::Request { allow_during_prompt, run } => {
             if state == ClientState::Prompting && !allow_during_prompt {
                 run(Err(AcpClientError::Busy));
@@ -456,6 +501,31 @@ async fn handle_command(
                 run(Ok(cx));
             }
         }
+    }
+}
+
+fn send_config_option_response(
+    cx: &ConnectionTo<acp::Agent>,
+    event_tx: &mpsc::UnboundedSender<AcpEvent>,
+    request: SetSessionConfigOptionRequest,
+    response: Response<SetSessionConfigOptionResponse>,
+) {
+    let session_id = request.session_id.clone();
+    let event_tx = event_tx.clone();
+    let request = cx.send_request(request).block_task();
+    if let Err(error) = cx.spawn(async move {
+        let result = request.await.map_err(AcpClientError::Protocol);
+        if let Ok(response) = &result {
+            let update = ConfigOptionUpdate::new(response.config_options.clone());
+            let _ = event_tx.send(AcpEvent::SessionUpdate {
+                session_id,
+                update: Box::new(SessionUpdate::ConfigOptionUpdate(update)),
+            });
+        }
+        let _ = response.send(result);
+        Ok(())
+    }) {
+        tracing::warn!("failed to spawn config option request: {error:?}");
     }
 }
 

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { useAppActions, useChatStore } from "@/app-provider";
 import {
   AuiIf,
   ThreadListItemMorePrimitive,
@@ -14,6 +15,9 @@ import {
 } from "@assistant-ui/react";
 import {
   ArchiveIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  FolderOpenIcon,
   Loader2Icon,
   MoreHorizontalIcon,
   PencilIcon,
@@ -21,9 +25,9 @@ import {
   SearchIcon,
   TrashIcon,
 } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 import {
   forwardRef,
-  Fragment,
   useEffect,
   useMemo,
   useRef,
@@ -38,7 +42,7 @@ export const ThreadList: FC = () => {
 
   return (
     <ThreadListRoot>
-      <ThreadListNew />
+      <OpenWorkspace />
       {hasThreads && (
         <ThreadListSearch value={search} onValueChange={setSearch} />
       )}
@@ -97,115 +101,144 @@ export const ThreadListItems: FC<
       className={cn("flex flex-col gap-0.5", className)}
       {...props}
     >
-      <AuiIf condition={(s) => s.threads.isLoading}>
+      <AuiIf
+        condition={(s) =>
+          s.threads.isLoading && s.threads.threadIds.length === 0
+        }
+      >
         <ThreadListSkeleton />
       </AuiIf>
-      <AuiIf condition={(s) => !s.threads.isLoading}>
+      <AuiIf
+        condition={(s) =>
+          !s.threads.isLoading || s.threads.threadIds.length > 0
+        }
+      >
         <ThreadListItemGroups searchQuery={searchQuery} />
       </AuiIf>
     </div>
   );
 };
 
-const DAY_IN_MS = 86_400_000;
-
-const dateGroupLabel = (
-  date: Date | undefined,
-  startOfToday: number,
-): string => {
-  if (!date || date.getTime() >= startOfToday) return "Today";
-  if (date.getTime() >= startOfToday - DAY_IN_MS) return "Yesterday";
-  return "Earlier";
-};
-
-type ThreadListGroup = { label: string; indices: number[] };
-
 const ThreadListItemGroups: FC<{ searchQuery?: string }> = ({
   searchQuery = "",
 }) => {
   const threadIds = useAuiState((s) => s.threads.threadIds);
   const threadItems = useAuiState((s) => s.threads.threadItems);
-
+  const { workspaces, threads, selectedWorkspaceId } = useChatStore(
+    useShallow((state) => ({
+      workspaces: state.workspaces,
+      threads: state.threads,
+      selectedWorkspaceId: state.selectedWorkspaceId,
+    })),
+  );
+  const { start, selectWorkspace, toggleWorkspace } = useAppActions();
   const query = searchQuery.trim().toLowerCase();
+  const itemsById = useMemo(
+    () => new Map(threadItems.map((item) => [item.id, item])),
+    [threadItems],
+  );
+  const indexById = useMemo(
+    () => new Map(threadIds.map((id, index) => [id, index])),
+    [threadIds],
+  );
 
-  const { filteredIndices, groups } = useMemo(() => {
-    const itemsById = new Map(threadItems.map((item) => [item.id, item]));
-    const dates = threadIds.map((id) => itemsById.get(id)?.lastMessageAt);
-    const filteredIndices = threadIds
-      .map((id, index) => ({ id, index }))
+  const groups = Object.values(workspaces).map((workspace) => {
+    const ids = threadIds
+      .filter((id) => threads[id]?.cwd === workspace.path)
       .filter(
-        ({ id }) =>
+        (id) =>
           !query ||
           (itemsById.get(id)?.title || "New Chat")
             .toLowerCase()
             .includes(query),
       )
-      .map(({ index }) => index);
-    if (!filteredIndices.some((index) => dates[index])) {
-      return { filteredIndices, groups: null };
-    }
+      .sort((a, b) => {
+        const aTime = itemsById.get(a)?.lastMessageAt?.getTime() ?? 0;
+        const bTime = itemsById.get(b)?.lastMessageAt?.getTime() ?? 0;
+        return bTime - aTime;
+      });
+    return { workspace, ids };
+  });
 
-    const now = new Date();
-    const startOfToday = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate(),
-    ).getTime();
-    const time = (index: number) =>
-      dates[index]?.getTime() ?? Number.MAX_SAFE_INTEGER;
-    const sorted = [...filteredIndices].sort((a, b) => time(b) - time(a));
-
-    const result: ThreadListGroup[] = [];
-    for (const index of sorted) {
-      const label = dateGroupLabel(dates[index], startOfToday);
-      const lastGroup = result[result.length - 1];
-      if (lastGroup?.label === label) {
-        lastGroup.indices.push(index);
-      } else {
-        result.push({ label, indices: [index] });
-      }
-    }
-    return { filteredIndices, groups: result };
-  }, [threadIds, threadItems, query]);
-
-  if (query && filteredIndices.length === 0) {
+  if (query && groups.every((group) => group.ids.length === 0)) {
     return (
-      <div
-        data-slot="aui_thread-list-empty"
-        className="text-muted-foreground px-2.5 py-4 text-sm"
-      >
+      <div className="text-muted-foreground px-2.5 py-4 text-sm">
         No threads found
       </div>
     );
   }
 
-  if (!groups) {
-    return filteredIndices.map((index) => (
-      <ThreadListPrimitive.ItemByIndex
-        key={threadIds[index]}
-        index={index}
-        components={{ ThreadListItem }}
-      />
-    ));
-  }
-
-  return groups.map((group) => (
-    <Fragment key={group.label}>
+  return groups.map(({ workspace, ids }) => (
+    <div key={workspace.id} className="pt-1">
       <div
-        data-slot="aui_thread-list-group-label"
-        className="text-muted-foreground px-2.5 pt-3 pb-1 text-xs font-medium"
+        className={cn(
+          "group/workspace flex h-8 items-center rounded-md",
+          selectedWorkspaceId === workspace.id && "bg-muted/60",
+        )}
       >
-        {group.label}
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-1.5 px-2 text-left text-sm font-medium"
+          onClick={() => {
+            selectWorkspace(workspace.id);
+            toggleWorkspace(workspace.id);
+          }}
+          title={workspace.path}
+        >
+          {workspace.collapsed ? (
+            <ChevronRightIcon className="size-3.5 shrink-0" />
+          ) : (
+            <ChevronDownIcon className="size-3.5 shrink-0" />
+          )}
+          <span className="truncate">{workspace.name}</span>
+        </button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="mr-1 size-7"
+          aria-label={`New thread in ${workspace.name}`}
+          onClick={() => {
+            selectWorkspace(workspace.id);
+            void start(workspace.path);
+          }}
+        >
+          <PlusIcon className="size-3.5" />
+        </Button>
       </div>
-      {group.indices.map((index) => (
-        <ThreadListPrimitive.ItemByIndex
-          key={threadIds[index]}
-          index={index}
-          components={{ ThreadListItem }}
-        />
-      ))}
-    </Fragment>
+      {!workspace.collapsed &&
+        ids.map((id) => {
+          const index = indexById.get(id);
+          return index === undefined ? null : (
+            <div key={id} className="pl-3">
+              <ThreadListPrimitive.ItemByIndex
+                index={index}
+                components={{ ThreadListItem }}
+              />
+            </div>
+          );
+        })}
+      {!workspace.collapsed && ids.length === 0 && !query && (
+        <p className="text-muted-foreground px-6 py-1 text-xs">No threads yet</p>
+      )}
+    </div>
   ));
+};
+
+const OpenWorkspace: FC = () => {
+  const { pickAndOpenWorkspace } = useAppActions();
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      className="h-8 justify-start gap-2 px-2.5 text-sm font-normal"
+      onClick={() => void pickAndOpenWorkspace()}
+    >
+      <FolderOpenIcon className="size-4" />
+      Open workspace…
+    </Button>
+  );
 };
 
 export const ThreadListNew = forwardRef<

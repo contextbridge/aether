@@ -29,6 +29,8 @@ impl App {
                 };
                 self.finish_prompt(&status);
             }
+            AcpEvent::PromptError(error) => self.finish_prompt(&ToolStatus::Error(error.to_string())),
+            AcpEvent::SessionsListed { .. } => {}
             AcpEvent::ContextCompaction(params) => {
                 self.conversation.turn_mut().set_compaction_active(params.active);
             }

@@ -12,6 +12,9 @@ import App from "./App";
 
 let channelCallback: ((event: AppEvent) => void) | null = null;
 let services: AppServices;
+const { openDialog } = vi.hoisted(() => ({ openDialog: vi.fn() }));
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: openDialog }));
 
 vi.mock("@tauri-apps/api/core", () => ({
   Channel: class {
@@ -111,6 +114,37 @@ const feed = (update: Record<string, unknown>) => {
 };
 
 describe("end-to-end rendering", () => {
+  it("uses the native directory picker to open a workspace", async () => {
+    openDialog.mockResolvedValue(null);
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <AppProvider services={services}>
+          <App />
+        </AppProvider>,
+      );
+    });
+
+    expect(container.querySelector('[aria-label="Workspace directory"]')).toBeNull();
+    const button = Array.from(container.querySelectorAll("button")).find(
+      (candidate) => candidate.textContent?.trim() === "Choose workspace…",
+    );
+    expect(button).toBeDefined();
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(openDialog).toHaveBeenCalledWith({
+      directory: true,
+      multiple: false,
+      title: "Open workspace",
+    });
+    root.unmount();
+  });
+
   it("renders the streamed assistant response", async () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
@@ -128,6 +162,7 @@ describe("end-to-end rendering", () => {
     await act(async () => {
       await services.actions.start(".");
     });
+    expect(services.store.getState().threadsLoading).toBe(false);
 
     feed({
       sessionUpdate: "agent_thought_chunk",

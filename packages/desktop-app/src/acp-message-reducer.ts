@@ -67,6 +67,34 @@ export const applySessionUpdate = (
   nextAssistantMessageId: () => string,
 ): MessageResult => {
   switch (update.sessionUpdate) {
+    case "user_message_chunk": {
+      if (update.content.type !== "text" || !update.content.text) {
+        return { messages, cursor };
+      }
+      const closed = finalizeOpenMessage(messages, cursor.openMessageId);
+      const id = update.messageId ?? `user-${closed.length + 1}`;
+      const last = closed[closed.length - 1];
+      if (last?.role === "user" && last.id === id) {
+        const text =
+          typeof last.content === "string"
+            ? last.content + update.content.text
+            : [
+                ...last.content,
+                { type: "text" as const, text: update.content.text },
+              ];
+        return {
+          messages: [...closed.slice(0, -1), { ...last, content: text }],
+          cursor: { openMessageId: null, seeded: false },
+        };
+      }
+      return {
+        messages: [
+          ...closed,
+          { id, role: "user", content: update.content.text },
+        ],
+        cursor: { openMessageId: null, seeded: false },
+      };
+    }
     case "agent_message_chunk":
     case "agent_thought_chunk": {
       if (update.content.type !== "text" || !update.content.text) {
