@@ -77,9 +77,25 @@ async fn cancel_reaches_the_agent_while_a_config_response_is_outstanding() {
             .await
             .expect("session establishes");
 
-            session.prompt_handle.prompt(&session.session_id, "hi", None).expect("prompt queues");
-            session.prompt_handle.set_config_option(&session.session_id, "mode", "Plan").expect("config queues");
-            session.prompt_handle.cancel(&session.session_id).expect("cancel queues");
+            let prompt_task_handle = session.client_handle.clone();
+            let session_id = session.session_id.clone();
+            spawn_local(async move {
+                let _ = prompt_task_handle
+                    .prompt(PromptRequest::new(session_id, vec![ContentBlock::Text(TextContent::new("hi"))]))
+                    .await;
+            });
+            let config_handle = session.client_handle.clone();
+            let config_session_id = session.session_id.clone();
+            spawn_local(async move {
+                let _ = config_handle
+                    .set_config_option(SetSessionConfigOptionRequest::new(config_session_id, "mode", "Plan"))
+                    .await;
+            });
+            session
+                .client_handle
+                .cancel(CancelNotification::new(session.session_id.clone()))
+                .await
+                .expect("cancel queues");
 
             cancelled.notified().await;
         })
