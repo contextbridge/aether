@@ -14,13 +14,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
+use super::actor::{SessionActor, SessionActorInit, SessionHandle};
 use super::agent_key::AgentKey;
-use super::agent_runtime::{ProductionRuntimeFactory, RuntimeFactory};
-use super::model_config::{Modes, pick_default_model};
-use super::protocol::mcp::map_acp_mcp_servers;
-use super::session_actor::{SessionActor, SessionActorInit, SessionHandle};
-use super::session_agents::SessionAgents;
-use super::session_config_state::SessionConfigState;
+use super::agents::SessionAgents;
+use super::config::SessionConfigState;
+use super::model::{Modes, pick_default_model};
+use super::runtime::{ProductionRuntimeFactory, RuntimeFactory};
+use crate::acp::protocol::mcp::map_acp_mcp_servers;
 use crate::resolve::{InitialSessionSelection, resolve_agent_from_catalog};
 use crate::settings_args::SettingsSourceArgs;
 use aether_sessions::SessionStore;
@@ -36,7 +36,7 @@ pub(crate) struct SessionFactory {
     observer_factory: Option<DynObserverFactory>,
 }
 
-/// The fully-built session ready to be registered with [`AcpState`](super::state::AcpState).
+/// The fully-built session ready to be registered with [`AcpState`](crate::acp::state::AcpState).
 pub(crate) struct CreatedSession {
     pub session_id: SessionId,
     pub handle: SessionHandle,

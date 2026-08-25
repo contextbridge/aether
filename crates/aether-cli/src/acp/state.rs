@@ -18,30 +18,31 @@ use agent_client_protocol::{Client, ConnectionTo, Responder};
 use llm::catalog::{LlmModel, ModelSpec, get_local_models};
 use llm::{ContentBlock, ProviderConnectionOverrides};
 use mcp_utils::client::{client_capabilities, client_capabilities_for};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::Mutex;
 use tokio::task::spawn_blocking;
 use tracing::{error, info};
 
-use super::config_setting::ConfigSetting;
-use super::model_config::supports_prompt_audio;
 use super::protocol::content::map_acp_to_content_blocks;
 use super::protocol::replay::replay_to_client;
-use super::session_actor::{ConfigSnapshot, SessionCommand, SessionHandle};
-use super::session_factory::SessionFactory;
+use super::session::SessionRegistry;
+use super::session::actor::{SessionCommand, SessionHandle};
+use super::session::config_setting::ConfigSetting;
+use super::session::factory::SessionFactory;
+use super::session::model::supports_prompt_audio;
 use crate::resolve::InitialSessionSelection;
 use crate::settings_args::SettingsSourceArgs;
 use crate::workspace::{WorkspaceError, WorkspaceManager};
 use aether_sessions::{SessionStore, SessionStoreError};
 
-/// Global, connection-scoped ACP server state: the live session map plus the
-/// dependencies needed to create sessions and answer global requests. There is
+/// Global, connection-scoped ACP server state: the live session registry plus
+/// the dependencies needed to create sessions and answer global requests. There is
 /// exactly one owner of mutable per-session state — the session actor behind
 /// each [`SessionHandle`].
 pub(crate) struct AcpState {
-    sessions: Mutex<HashMap<String, SessionHandle>>,
+    registry: SessionRegistry,
     session_store: Arc<SessionStore>,
     workspace_manager: Arc<WorkspaceManager>,
     oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
@@ -71,7 +72,7 @@ impl AcpState {
             config.telemetry.as_ref().map(|runtime| runtime.observer_factory()),
         );
         Self {
-            sessions: Mutex::new(HashMap::new()),
+            registry: SessionRegistry::new(),
             session_store: config.session_store,
             workspace_manager: config.workspace_manager,
             oauth_credential_store: config.oauth_credential_store,
@@ -259,7 +260,7 @@ impl AcpState {
         let session_id = args.session_id.0.to_string();
         let content = map_acp_to_content_blocks(args.prompt);
 
-        let Some((sender, snapshot)) = self.lookup(&session_id).await else {
+        let Some((sender, snapshot)) = self.registry.lookup(&session_id).await else {
             error!("Session not found: {session_id}");
             respond_err(responder, acp::Error::invalid_params());
             return;
@@ -281,7 +282,7 @@ impl AcpState {
     pub(crate) async fn cancel(&self, args: CancelNotification) -> Result<(), acp::Error> {
         info!("Received cancel for session: {:?}", args.session_id);
         let session_id = args.session_id.0.to_string();
-        let Some((sender, _)) = self.lookup(&session_id).await else {
+        let Some((sender, _)) = self.registry.lookup(&session_id).await else {
             error!("Session not found for cancel: {session_id}");
             return Err(acp::Error::invalid_params());
         };
@@ -319,7 +320,7 @@ impl AcpState {
             }
         };
 
-        let Some((sender, _)) = self.lookup(&session_id).await else {
+        let Some((sender, _)) = self.registry.lookup(&session_id).await else {
             error!("Session not found: {session_id}");
             respond_err(responder, acp::Error::invalid_params());
             return;
@@ -338,7 +339,7 @@ impl AcpState {
         info!("Received MCP ext request: {:?}", request);
         match request {
             McpRequest::Authenticate { session_id, server_name } => {
-                let Some((sender, _)) = self.lookup(&session_id).await else {
+                let Some((sender, _)) = self.registry.lookup(&session_id).await else {
                     error!("Session not found for authenticate_mcp_server: {session_id}");
                     return Err(acp::Error::invalid_params());
                 };
@@ -354,34 +355,19 @@ impl AcpState {
     /// Drain every session and stop its actor task. Fans out cancellation before
     /// awaiting any join so shutdowns run concurrently.
     pub(crate) async fn shutdown_all(&self) {
-        let handles: Vec<SessionHandle> = self.sessions.lock().await.drain().map(|(_, handle)| handle).collect();
-        for handle in &handles {
-            handle.cancel();
-        }
-        futures::future::join_all(handles.into_iter().map(SessionHandle::join)).await;
+        self.registry.shutdown_all().await;
         if let Some(telemetry) = &self.telemetry {
             telemetry.shutdown_or_log();
         }
     }
 
     pub(crate) async fn register_session(&self, session_id: &SessionId, handle: SessionHandle) {
-        if let Some(old) = self.sessions.lock().await.insert(session_id.0.to_string(), handle) {
-            old.cancel();
-        }
-    }
-
-    async fn lookup(&self, session_id: &str) -> Option<(mpsc::Sender<SessionCommand>, ConfigSnapshot)> {
-        let sessions = self.sessions.lock().await;
-        let handle = sessions.get(session_id)?;
-        Some((handle.command_sender(), handle.config_snapshot()))
+        self.registry.register(session_id, handle).await;
     }
 
     async fn broadcast_config_options(&self, cx: &ConnectionTo<Client>) {
         let available = get_local_models().await;
-        let snapshots: Vec<(String, ConfigSnapshot)> = {
-            let sessions = self.sessions.lock().await;
-            sessions.iter().map(|(id, handle)| (id.clone(), handle.config_snapshot())).collect()
-        };
+        let snapshots = self.registry.config_snapshots().await;
 
         for (id, snapshot) in snapshots {
             let options = snapshot.config_options(&available, self.oauth_credential_store.as_ref());

@@ -1,16 +1,7 @@
 pub(crate) mod agent;
-pub(crate) mod agent_key;
-pub(crate) mod agent_runtime;
-pub(crate) mod config_setting;
-pub(crate) mod error;
 pub(crate) mod fake_prompt_mcp;
-pub(crate) mod model_config;
 pub(crate) mod protocol;
-pub(crate) mod session_actor;
-pub(crate) mod session_agents;
-pub(crate) mod session_config_state;
-pub(crate) mod session_factory;
-pub(crate) mod slash_commands;
+pub(crate) mod session;
 pub(crate) mod state;
 pub(crate) mod stdio;
 pub mod testing;
