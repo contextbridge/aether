@@ -1,6 +1,6 @@
 use crate::row::{EventRow, event_row};
 use crate::{SessionIndexError, clamp_i64};
-use aether_core::session::{SessionEvent, SessionLog, SessionLogEntry, SessionLogError, SessionMeta, UserEvent};
+use aether_sessions::{SessionEvent, SessionLog, SessionLogEntry, SessionLogError, SessionMeta, UserEvent};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};

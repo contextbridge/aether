@@ -1,6 +1,6 @@
 use crate::clamp_i64;
 use aether_core::events::{AgentEvent, ContextEvent, MessageEvent, ModelEvent, ToolEvent, TurnEvent, TurnOutcome};
-use aether_core::session::{SessionControlEvent, SessionEvent, UserEvent};
+use aether_sessions::{SessionControlEvent, SessionEvent, UserEvent};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct EventRow {

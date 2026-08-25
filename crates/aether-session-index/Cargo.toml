@@ -29,6 +29,7 @@ tokio = { workspace = true }
 futures = { workspace = true }
 utils = { package = "aether-utils", path = "../utils" }
 aether-core = { package = "aether-agent-core", path = "../aether-core" }
+aether-sessions = { workspace = true }
 llm = { package = "aether-llm", path = "../llm" }
 
 [dev-dependencies]

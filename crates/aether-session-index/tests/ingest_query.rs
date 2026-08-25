@@ -1,6 +1,6 @@
 use aether_core::events::{AgentEvent, ContextEvent, ContextUsage, LlmCallPurpose, ModelEvent, TurnEvent, TurnOutcome};
-use aether_core::session::{SessionEvent, UserEvent};
 use aether_session_index::{IngestOptions, QueryOptions, SessionIndexError, ingest_sessions, run_query};
+use aether_sessions::{SessionEvent, UserEvent};
 use serde_json::json;
 use std::fs;
 use std::path::Path;
