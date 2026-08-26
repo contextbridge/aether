@@ -174,6 +174,7 @@ pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
         settings_source: config.settings_source,
         provider_connections: config.provider_connections,
         telemetry,
+        runtime_factory: None,
     }));
 
     let connect_result = acp_agent_builder(state.clone()).connect_to(Stdio::new()).await;

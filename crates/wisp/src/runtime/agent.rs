@@ -17,7 +17,7 @@ pub(super) fn execute(
     match command {
         AgentCommand::Prompt { session_id, text, content } => {
             let handle = handle.clone();
-            tasks.spawn_mutation(async move {
+            tasks.spawn_network(async move {
                 let mut prompt = vec![ContentBlock::Text(TextContent::new(text))];
                 if let Some(content) = content {
                     prompt.extend(content);
@@ -31,7 +31,7 @@ pub(super) fn execute(
         }
         AgentCommand::Cancel { session_id } => {
             let handle = handle.clone();
-            tasks.spawn_mutation(async move {
+            tasks.spawn_network(async move {
                 handle
                     .cancel(CancelNotification::new(session_id))
                     .await
@@ -41,7 +41,7 @@ pub(super) fn execute(
         }
         AgentCommand::SetConfigOption { session_id, config_id, value } => {
             let handle = handle.clone();
-            tasks.spawn_mutation(async move {
+            tasks.spawn_network(async move {
                 handle
                     .set_config_option(SetSessionConfigOptionRequest::new(session_id, config_id, value.as_str()))
                     .await
@@ -53,7 +53,7 @@ pub(super) fn execute(
         }
         AgentCommand::AuthenticateMcpServer { session_id, server_name } => {
             let handle = handle.clone();
-            tasks.spawn_mutation(async move {
+            tasks.spawn_network(async move {
                 let request = McpRequest::Authenticate { session_id: session_id.0.to_string(), server_name };
                 handle
                     .authenticate_mcp_server(request)
@@ -64,7 +64,7 @@ pub(super) fn execute(
         }
         AgentCommand::Authenticate { method_id } => {
             let handle = handle.clone();
-            tasks.spawn_mutation(async move {
+            tasks.spawn_network(async move {
                 let failed_method_id = method_id.clone();
                 handle
                     .authenticate(AuthenticateRequest::new(method_id.clone()))
@@ -78,7 +78,7 @@ pub(super) fn execute(
         }
         AgentCommand::ListSessions => {
             let handle = handle.clone();
-            tasks.spawn_mutation(async move {
+            tasks.spawn_network(async move {
                 handle
                     .list_sessions(ListSessionsRequest::new())
                     .await
@@ -88,7 +88,7 @@ pub(super) fn execute(
         }
         AgentCommand::LoadSession { session_id, cwd } => {
             let handle = handle.clone();
-            tasks.spawn_mutation(async move {
+            tasks.spawn_network(async move {
                 handle
                     .load_session(LoadSessionRequest::new(session_id, cwd))
                     .await
@@ -98,7 +98,7 @@ pub(super) fn execute(
         }
         AgentCommand::NewSession { cwd } => {
             let handle = handle.clone();
-            tasks.spawn_mutation(async move {
+            tasks.spawn_network(async move {
                 handle
                     .new_session(NewSessionRequest::new(cwd))
                     .await
@@ -109,7 +109,7 @@ pub(super) fn execute(
         AgentCommand::SearchPrompts(params) => {
             let query = params.query.clone();
             let handle = handle.clone();
-            tasks.spawn_mutation(async move {
+            tasks.spawn_network(async move {
                 match handle.search_prompts(params).await {
                     Ok(response) => CommandResult::PromptSearchResults(response),
                     Err(error) => CommandResult::PromptSearchFailed { query, error: error.to_string() },
@@ -120,7 +120,7 @@ pub(super) fn execute(
         AgentCommand::SessionPreview { session_id } => {
             let failed_id = session_id.clone();
             let handle = handle.clone();
-            tasks.spawn_mutation(async move {
+            tasks.spawn_network(async move {
                 handle
                     .preview_session(SessionPreviewParams { session_id })
                     .await
@@ -133,7 +133,7 @@ pub(super) fn execute(
         }
         AgentCommand::ListWorkspaces { session_id } => {
             let handle = handle.clone();
-            tasks.spawn_mutation(async move {
+            tasks.spawn_network(async move {
                 handle
                     .list_workspaces(WorkspaceListParams { session_id })
                     .await
@@ -146,7 +146,7 @@ pub(super) fn execute(
         }
         AgentCommand::MoveWorkspace { session_id, target } => {
             let handle = handle.clone();
-            tasks.spawn_mutation(async move {
+            tasks.spawn_network(async move {
                 handle
                     .move_workspace(WorkspaceMoveParams { session_id, target })
                     .await
@@ -159,7 +159,6 @@ pub(super) fn execute(
         }
     }
 }
-
 
 fn failed(failure: crate::command::FailedCommand, error: &AcpClientError) -> CommandResult {
     CommandResult::Failed { command: failure, error: error.to_string() }

@@ -1,6 +1,6 @@
 use acp_utils::notifications::SessionPreviewRole;
 use aether_core::events::{AgentEvent, MessageEvent, ToolEvent};
-use aether_sessions::{SessionEvent, SessionMeta, SessionStore, SessionStoreError, UserEvent};
+use aether_sessions::{ScanLimits, SessionEvent, SessionMeta, SessionStore, SessionStoreError, UserEvent};
 use llm::ContentBlock;
 use std::fs::File;
 use std::io::Write;
@@ -226,6 +226,35 @@ fn list_uses_media_prompt_and_truncates_long_titles() -> TestResult {
     let title = sessions[0].title.as_deref().expect("title");
     assert!(title.ends_with('…'));
     assert!(title.len() <= 84);
+    Ok(())
+}
+
+#[test]
+fn committed_event_survives_a_derived_index_failure_and_can_be_rebuilt() -> TestResult {
+    let (directory, store) = temp_store();
+    store.append_meta("session-1", &meta("session-1", "2026-01-01T00:00:00Z"))?;
+    std::fs::create_dir(directory.path().join("prompt-history.jsonl"))?;
+
+    store.append_event("session-1", &user_message("repair me"))?;
+    assert_eq!(store.load("session-1")?.1, vec![user_message("repair me")]);
+
+    std::fs::remove_dir(directory.path().join("prompt-history.jsonl"))?;
+    store.rebuild_prompt_history()?;
+    assert_eq!(store.search_prompts("repair me", None)?.results.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn blank_runs_and_oversized_lines_consume_preview_budget() -> TestResult {
+    let (directory, store) = temp_store();
+    store.append_meta("session-1", &meta("session-1", "2026-01-01T00:00:00Z"))?;
+    let mut file = std::fs::OpenOptions::new().append(true).open(directory.path().join("session-1.jsonl"))?;
+    write!(file, "{}", "\n".repeat(ScanLimits::PREVIEW.max_bytes + 1))?;
+    writeln!(file, "{}", serde_json::to_string(&user_message("must not deserialize"))?)?;
+
+    let preview = store.preview("session-1")?;
+    assert!(preview.truncated);
+    assert!(preview.transcript.is_empty());
     Ok(())
 }
 

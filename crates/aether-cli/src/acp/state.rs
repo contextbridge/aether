@@ -60,6 +60,7 @@ pub(crate) struct AcpStateConfig {
     pub(crate) settings_source: SettingsSourceArgs,
     pub(crate) provider_connections: ProviderConnectionOverrides,
     pub(crate) telemetry: Option<Arc<TelemetryRuntime>>,
+    pub(crate) runtime_factory: Option<Arc<dyn super::session::runtime::RuntimeFactory>>,
 }
 
 impl AcpState {
@@ -71,6 +72,7 @@ impl AcpState {
             Arc::clone(&config.session_store),
             config.initial_selection,
             config.telemetry.as_ref().map(|runtime| runtime.observer_factory()),
+            config.runtime_factory,
         );
         Self {
             registry: SessionRegistry::new(),
@@ -542,6 +544,7 @@ mod tests {
             settings_source: SettingsSourceArgs::default(),
             provider_connections: ProviderConnectionOverrides::default(),
             telemetry: None,
+            runtime_factory: None,
         })
     }
 

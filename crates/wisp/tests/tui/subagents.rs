@@ -69,10 +69,8 @@ fn sub_agent_progress_event_is_handled() {
     let mut app = make_app();
     app.acp_event(tool_call("parent-1", "spawn_subagent"));
 
-    // Send a sub-agent ToolCall event - should not crash
     app.acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", r#"{"pattern":"test"}"#));
 
-    // Parent with running sub-agent is still running
     assert!(app.app().is_agent_busy());
 }
 

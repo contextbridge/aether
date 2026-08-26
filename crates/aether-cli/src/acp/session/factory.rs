@@ -36,6 +36,7 @@ pub(crate) struct SessionFactory {
     session_store: Arc<SessionStore>,
     initial_selection: InitialSessionSelection,
     observer_factory: Option<DynObserverFactory>,
+    runtime_factory: Option<Arc<dyn RuntimeFactory>>,
 }
 
 /// The fully-built session ready to be registered with [`AcpState`](crate::acp::state::AcpState).
@@ -59,6 +60,7 @@ impl SessionFactory {
         session_store: Arc<SessionStore>,
         initial_selection: InitialSessionSelection,
         observer_factory: Option<DynObserverFactory>,
+        runtime_factory: Option<Arc<dyn RuntimeFactory>>,
     ) -> Self {
         Self {
             settings_source,
@@ -67,6 +69,7 @@ impl SessionFactory {
             session_store,
             initial_selection,
             observer_factory,
+            runtime_factory,
         }
     }
 
@@ -161,8 +164,9 @@ impl SessionFactory {
 
         let mut mode_catalog = self.load_mode_catalog(&cwd).await?;
         let resolved = resolve_loaded_session(&mut mode_catalog, &meta, &events)?;
-        let runtime_factory =
-            self.production_runtime_factory(cwd, mcp_servers, mode_catalog.specs.catalog(), mcp_capabilities);
+        let runtime_factory = self.runtime_factory.clone().unwrap_or_else(|| {
+            self.production_runtime_factory(cwd, mcp_servers, mode_catalog.specs.catalog(), mcp_capabilities)
+        });
         self.build_session(
             session_id,
             runtime_factory,

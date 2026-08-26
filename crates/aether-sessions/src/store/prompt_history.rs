@@ -36,6 +36,23 @@ impl PromptHistoryIndex {
         }
     }
 
+    pub(super) fn rebuild<I: IntoIterator<Item = (SessionMeta, String)>>(&self, entries: I) -> io::Result<()> {
+        let mut state = self.lock_state();
+        let entries: VecDeque<_> =
+            entries.into_iter().map(|(meta, prompt)| PromptHistoryEntry::new(&meta, prompt)).collect();
+        let entries = entries
+            .into_iter()
+            .rev()
+            .take(PROMPT_HISTORY_MAX_ENTRIES)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<VecDeque<_>>();
+        self.rewrite_file(entries.iter())?;
+        *state = State::Loaded(entries);
+        Ok(())
+    }
+
     pub(super) fn relocate_session(&self, session_id: &str, new_cwd: &Path) -> io::Result<()> {
         let mut state = self.lock_state();
         let entries = self.ensure_loaded(&mut state)?;

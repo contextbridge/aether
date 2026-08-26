@@ -20,6 +20,14 @@ pub enum SessionLogEntry {
 }
 
 impl SessionLogEntry {
+    pub fn parse(line: SessionLine) -> Self {
+        match serde_json::from_str::<SessionEvent>(&line.raw) {
+            Ok(event) if event.is_persisted() => Self::Persisted { line, event: Box::new(event) },
+            Ok(_) => Self::Transient { line },
+            Err(error) => Self::Malformed { line, error },
+        }
+    }
+
     pub fn line(&self) -> &SessionLine {
         match self {
             Self::Persisted { line, .. } | Self::Transient { line } | Self::Malformed { line, .. } => line,
@@ -31,6 +39,8 @@ pub struct SessionLog<T: BufRead> {
     reader: T,
     pub meta: SessionMeta,
     line_number: usize,
+    bytes_read: usize,
+    metadata_bytes: usize,
 }
 
 impl SessionLog<BufReader<File>> {
@@ -55,22 +65,26 @@ impl<T: BufRead> SessionLog<T> {
         }
         let meta = serde_json::from_str(line.trim())
             .map_err(|source| SessionLogError::InvalidMetadata { line_number, source })?;
-        Ok(Self { reader, meta, line_number })
+        Ok(Self { reader, meta, line_number, bytes_read: line.len(), metadata_bytes: line.len() })
+    }
+
+    pub fn bytes_read(&self) -> usize {
+        self.bytes_read
+    }
+
+    pub fn meta_line_bytes(&self) -> usize {
+        self.metadata_bytes
     }
 
     pub fn next_entry(&mut self) -> std::io::Result<Option<SessionLogEntry>> {
         let Some(line) = self.next_line()? else {
             return Ok(None);
         };
-        let entry = match serde_json::from_str::<SessionEvent>(&line.raw) {
-            Ok(event) if event.is_persisted() => SessionLogEntry::Persisted { line, event: Box::new(event) },
-            Ok(_) => SessionLogEntry::Transient { line },
-            Err(error) => SessionLogEntry::Malformed { line, error },
-        };
+        let entry = SessionLogEntry::parse(line);
         Ok(Some(entry))
     }
 
-    fn next_line(&mut self) -> std::io::Result<Option<SessionLine>> {
+    pub fn next_line(&mut self) -> std::io::Result<Option<SessionLine>> {
         let mut line = String::new();
         loop {
             line.clear();
@@ -79,6 +93,7 @@ impl<T: BufRead> SessionLog<T> {
                 return Ok(None);
             }
             self.line_number += 1;
+            self.bytes_read = self.bytes_read.saturating_add(bytes_read);
             let trimmed = line.trim();
             if !trimmed.is_empty() {
                 return Ok(Some(SessionLine { line_number: self.line_number, bytes_read, raw: trimmed.to_string() }));

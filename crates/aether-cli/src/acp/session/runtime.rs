@@ -19,8 +19,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
 /// Capacity of the channel that fans runtime events from every spawned agent
-/// into the single relay loop. Both ends (`session_manager` and the test
-/// harness) must agree, so the value lives here.
+/// into the session actor relay loop.
 pub(crate) const RUNTIME_EVENT_CHANNEL_CAPACITY: usize = 50;
 
 pub(crate) struct AgentRuntime {

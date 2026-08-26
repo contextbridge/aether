@@ -2,9 +2,11 @@ use aether_cli::acp::testing::AcpTestHarness;
 use aether_core::core::agent;
 use agent_client_protocol::Error;
 use agent_client_protocol::schema::v1::{
-    CloseSessionRequest, CloseSessionResponse, ContentBlock, ListSessionsRequest, ListSessionsResponse, PromptRequest,
-    ResumeSessionRequest, SessionId, SessionUpdate, StopReason, TextContent,
+    CloseSessionRequest, CloseSessionResponse, ContentBlock, ListSessionsRequest, ListSessionsResponse,
+    LoadSessionRequest, PromptRequest, ResumeSessionRequest, SessionId, SessionUpdate, StopReason, TextContent,
 };
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use llm::LlmResponse;
 use llm::testing::FakeLlmProvider;
 use std::future::Future;
@@ -29,6 +31,45 @@ async fn list_sessions_paginates_sorted_results() {
         assert_eq!(second.sessions.len(), 1);
         assert_eq!(second.sessions[0].session_id.0.as_ref(), "session-00");
         assert!(second.next_cursor.is_none());
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn malformed_and_stale_list_cursors_are_rejected() {
+    with_harness(|harness| async move {
+        let malformed =
+            harness.client_cx.send_request(ListSessionsRequest::new().cursor("not-base64")).block_task().await;
+        assert!(malformed.is_err());
+
+        harness.append_stored_session("present", "2026-05-01T00:00:00Z");
+        let stale = URL_SAFE_NO_PAD.encode(
+            serde_json::json!({
+                "created_at": "2026-05-01T00:00:00Z",
+                "session_id": "deleted"
+            })
+            .to_string(),
+        );
+        let result = harness.client_cx.send_request(ListSessionsRequest::new().cursor(stale)).block_task().await;
+        assert!(result.is_err());
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn terminal_list_cursor_returns_an_empty_page() {
+    with_harness(|harness| async move {
+        harness.append_stored_session("last", "2026-05-01T00:00:00Z");
+        let cursor = URL_SAFE_NO_PAD.encode(
+            serde_json::json!({
+                "created_at": "2026-05-01T00:00:00Z",
+                "session_id": "last"
+            })
+            .to_string(),
+        );
+        let response = list(&harness, ListSessionsRequest::new().cursor(cursor)).await;
+        assert!(response.sessions.is_empty());
+        assert!(response.next_cursor.is_none());
     })
     .await;
 }
@@ -101,6 +142,63 @@ async fn close_cancels_prompt_before_returning() {
         let (prompt, close) = tokio::join!(&mut prompt, &mut close);
         assert_eq!(prompt.expect("prompt succeeds").stop_reason, StopReason::Cancelled);
         close.expect("close succeeds");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn load_session_replays_persisted_transcript_over_the_server_connection() {
+    with_harness(|mut harness| async move {
+        let session_id = "load-session";
+        harness.append_stored_session(session_id, "2026-05-01T00:00:00Z");
+        harness.append_stored_prompt(session_id, "prior user");
+        harness.append_stored_agent_turn(session_id, "prior assistant");
+
+        harness
+            .client_cx
+            .send_request(LoadSessionRequest::new(session_id, "/tmp"))
+            .block_task()
+            .await
+            .expect("load succeeds");
+
+        let first = harness.peer.next_session_notification().await;
+        let second = harness.peer.next_session_notification().await;
+        assert!(matches!(first.update, SessionUpdate::UserMessageChunk(_)));
+        assert!(matches!(second.update, SessionUpdate::AgentMessageChunk(_)));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn resume_restores_transcript_without_replay_and_replaces_active_session() {
+    with_harness(|mut harness| async move {
+        let active = harness.insert_agent_switching_session().await;
+        let session_id = active.session_id().clone();
+        harness.append_stored_session(session_id.0.as_ref(), "2026-05-01T00:00:00Z");
+        harness.append_stored_prompt(session_id.0.as_ref(), "prior user");
+        harness.append_stored_agent_turn(session_id.0.as_ref(), "prior assistant");
+        harness.expect_available_commands(&["plan"], &[]).await;
+
+        let resume = harness.client_cx.send_request(ResumeSessionRequest::new(session_id.clone(), "/tmp")).block_task();
+        tokio::pin!(resume);
+        tokio::select! {
+            response = &mut resume => {
+                response.expect("resume succeeds");
+            }
+            notification = harness.peer.next_session_notification() => {
+                panic!("resume replayed historical notification: {notification:?}");
+            }
+        }
+
+        let prompt = harness
+            .client_cx
+            .send_request(PromptRequest::new(session_id, vec![ContentBlock::Text(TextContent::new("next prompt"))]))
+            .block_task()
+            .await
+            .expect("prompt on resumed session succeeds");
+        assert_eq!(prompt.stop_reason, StopReason::EndTurn);
+        harness.resume_agent().assert_saw(&["prior user", "prior assistant", "next prompt"]);
+        active.planner().assert_never_ran();
     })
     .await;
 }

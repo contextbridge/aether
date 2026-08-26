@@ -8,6 +8,16 @@ pub enum SessionLogError {
     InvalidMetadata { line_number: usize, source: serde_json::Error },
 }
 
+impl From<SessionLogError> for SessionStoreError {
+    fn from(error: SessionLogError) -> Self {
+        match error {
+            SessionLogError::Io(error) => Self::Io(error),
+            SessionLogError::MissingMetadata => Self::MissingMetadata,
+            SessionLogError::InvalidMetadata { line_number, source } => Self::InvalidMetadata { line_number, source },
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum SessionStoreError {
     #[error(transparent)]

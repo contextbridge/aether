@@ -89,6 +89,7 @@ impl AcpClient {
 }
 
 impl AcpClientHandle {
+    #[cfg(feature = "testing")]
     pub fn detached() -> Self {
         let (cmd_tx, _) = mpsc::unbounded_channel();
         Self { cmd_tx }

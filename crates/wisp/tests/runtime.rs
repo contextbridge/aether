@@ -32,6 +32,7 @@ async fn closed_agent_connection_becomes_a_reducer_visible_failure() {
         dispatcher.next_result().await,
         Some(CommandResult::Failed { command: FailedCommand::Other("cancel"), .. })
     ));
+    dispatcher.shutdown().await;
 }
 
 #[tokio::test]

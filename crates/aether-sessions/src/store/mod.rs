@@ -10,7 +10,7 @@ use std::time::UNIX_EPOCH;
 use tracing::warn;
 use utils::settings::aether_home;
 
-use crate::error::{SessionLogError, SessionStoreError};
+use crate::error::SessionStoreError;
 use crate::{SessionEvent, SessionLog, SessionLogEntry, SessionMeta, UserEvent};
 use llm::ContentBlock;
 use prompt_history::PromptHistoryIndex;
@@ -63,14 +63,15 @@ impl ScanLimits {
 pub fn discover_session_files(sessions_dir: impl AsRef<Path>) -> std::io::Result<Vec<DiscoveredSessionFile>> {
     let mut files = Vec::new();
     for entry in fs::read_dir(sessions_dir)? {
-        let entry = entry?;
+        let Ok(entry) = entry else { continue };
         let path = entry.path();
         if !path.is_file() || path.file_name().and_then(|name| name.to_str()) == Some(PROMPT_HISTORY_FILE) {
             continue;
         }
         if path.extension().and_then(|extension| extension.to_str()) == Some("jsonl") {
-            let path = path.canonicalize()?;
-            files.push(DiscoveredSessionFile { path: path.clone(), fingerprint: FileFingerprint::read(&path)? });
+            let Ok(path) = path.canonicalize() else { continue };
+            let Ok(fingerprint) = FileFingerprint::read(&path) else { continue };
+            files.push(DiscoveredSessionFile { path, fingerprint });
         }
     }
     files.sort_by(|left, right| left.path.cmp(&right.path));
@@ -105,7 +106,7 @@ impl SessionStore {
         if let Some(prompt) = event.user_content()
             && let Some(meta) = self.session_meta(session_id)
         {
-            self.prompt_history.append_prompt(&meta, prompt).map_err(SessionStoreError::PromptHistory)?;
+            let _ = self.prompt_history.append_prompt(&meta, prompt);
         }
 
         Ok(())
@@ -144,7 +145,15 @@ impl SessionStore {
         }
         fs::rename(tmp_path, &path)?;
 
-        self.prompt_history.relocate_session(session_id, new_cwd).map_err(SessionStoreError::PromptHistory)
+        let _ = self.prompt_history.relocate_session(session_id, new_cwd);
+        Ok(())
+    }
+
+    pub fn rebuild_prompt_history(&self) -> Result<(), SessionStoreError> {
+        let files = discover_session_files(&self.dir)?;
+        self.prompt_history
+            .rebuild(files.into_iter().filter_map(|file| read_all_prompts(&file.path).ok()).flatten())?;
+        Ok(())
     }
 
     pub fn list(&self) -> Vec<SessionSummary> {
@@ -243,21 +252,20 @@ fn read_session_preview(path: &Path, limits: ScanLimits) -> Result<SessionPrevie
 }
 
 fn read_bounded_session(path: &Path, limits: ScanLimits) -> Result<SessionLogScan, SessionStoreError> {
-    let mut log = SessionLog::open(path).map_err(session_log_error)?;
+    let mut log = SessionLog::open(path)?;
     let meta = log.meta.clone();
     let mut events = Vec::new();
     let mut truncated = false;
     let mut lines_since_meta = 0_usize;
-    let mut bytes_since_meta = 0_usize;
 
-    while let Some(entry) = log.next_entry().map_err(SessionStoreError::Io)? {
-        let line = entry.line();
-        if lines_since_meta >= limits.max_lines || bytes_since_meta.saturating_add(line.bytes_read) > limits.max_bytes {
+    while let Some(line) = log.next_line()? {
+        lines_since_meta = lines_since_meta.saturating_add(1);
+        let bytes_since_meta = log.bytes_read().saturating_sub(log.meta_line_bytes());
+        if lines_since_meta > limits.max_lines || bytes_since_meta > limits.max_bytes {
             truncated = true;
             break;
         }
-        lines_since_meta += 1;
-        bytes_since_meta = bytes_since_meta.saturating_add(line.bytes_read);
+        let entry = SessionLogEntry::parse(line);
         match entry {
             SessionLogEntry::Persisted { event, .. } => events.push(*event),
             SessionLogEntry::Transient { .. } => {}
@@ -268,14 +276,9 @@ fn read_bounded_session(path: &Path, limits: ScanLimits) -> Result<SessionLogSca
     Ok(SessionLogScan { meta, events, truncated })
 }
 
-fn session_log_error(error: SessionLogError) -> SessionStoreError {
-    match error {
-        SessionLogError::Io(error) => SessionStoreError::Io(error),
-        SessionLogError::MissingMetadata => SessionStoreError::MissingMetadata,
-        SessionLogError::InvalidMetadata { line_number, source } => {
-            SessionStoreError::InvalidMetadata { line_number, source }
-        }
-    }
+fn read_all_prompts(path: &Path) -> Result<Vec<(SessionMeta, String)>, SessionStoreError> {
+    let (meta, events) = read_bounded_session(path, ScanLimits::UNBOUNDED).map(|scan| (scan.meta, scan.events))?;
+    Ok(events.into_iter().filter_map(|event| event.user_content().map(|prompt| (meta.clone(), prompt))).collect())
 }
 
 fn push_preview_turn(transcript: &mut Vec<SessionPreviewTurn>, role: SessionPreviewRole, text: &str) -> bool {
