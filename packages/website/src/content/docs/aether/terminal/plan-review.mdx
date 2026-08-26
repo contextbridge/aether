@@ -1,0 +1,70 @@
+---
+title: Plan Review
+description: Review, comment on, approve, or request changes to an agent's plan.
+---
+
+When an agent submits a plan with the [`submit_plan`](/aether/built-in-servers/plan/#submit_plan) tool, the terminal UI opens a plan review screen instead of a plain approval prompt. It renders the plan's markdown next to an outline of its headings, and lets you approve it, request changes, or attach line-level comments that are compiled into structured feedback.
+
+## Layout
+
+When the terminal is wide enough and the plan has headings, the screen splits into an outline pane on the left and the rendered plan on the right. On narrow terminals only the plan is shown.
+
+```
+┌────────────────┬─────────────────────────────────────┐
+│ Outline        │  Plan document                      │
+│                │                                     │
+│  > Overview    │  ## Overview                        │
+│    Steps       │  Refactor auth into its own module. │
+│    Testing     │                                     │
+│                │  ## Steps                           │
+│                │  1. Extract middleware              │
+│                │  2. Migrate call sites              │
+├────────────────┴─────────────────────────────────────┤
+│ a approve · r request changes · c comment            │
+└──────────────────────────────────────────────────────┘
+```
+
+## Decisions
+
+| Key     | Action                                                                              |
+| ------- | ----------------------------------------------------------------------------------- |
+| `a`     | Approve the plan                                                                    |
+| `r`     | Request changes and send all queued comments as feedback                             |
+| `Esc`   | Cancel the review without deciding                                                  |
+
+Decision keys are available from either pane. Pressing `r` compiles every queued comment into the feedback the agent receives; `r` with no comments still requests changes, just without line-level detail.
+
+## Navigating the plan
+
+| Key             | Action                                            |
+| --------------- | ------------------------------------------------- |
+| `j` / `↓`       | Move down                                         |
+| `k` / `↑`       | Move up                                           |
+| `n` / `p`       | Jump to the next / previous heading                |
+| `g` / `G`       | Jump to the start / end of the plan                |
+| `h` / `←`       | Focus the outline pane                             |
+| `l` / `→`       | Focus the plan pane                                |
+
+## Outline pane
+
+| Key             | Action                                            |
+| --------------- | ------------------------------------------------- |
+| `j` / `↓`, `k` / `↑` | Move between headings                         |
+| `Enter`         | Jump to the selected heading and focus the plan    |
+| `g` / `G`       | Jump to the first / last heading                   |
+| `l` / `→`       | Return focus to the plan pane                      |
+
+## Comments
+
+| Key      | Action                                |
+| -------- | ------------------------------------- |
+| `c`      | Add a comment at the current line     |
+| `Enter`  | Queue the comment you are typing      |
+| `Esc`    | Discard the comment you are typing    |
+| `u`      | Undo the last queued comment          |
+
+Comments are anchored to plan lines and rendered inline. Queued comments are sent to the agent when you request changes with `r`.
+
+## Mouse
+
+Click to focus either pane or to move the cursor to a line, and scroll to move through the plan or the outline.

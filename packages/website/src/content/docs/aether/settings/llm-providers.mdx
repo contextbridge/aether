@@ -99,7 +99,7 @@ Fireworks uses `https://api.fireworks.ai/inference/v1` by default. Serverless ca
       "requestModel": "accounts/acme/deployments/coding-prod"
     }
   },
-  "agents": [{ "model": "fireworks:accounts/fireworks/models/glm-5p1", "userInvocable": true }]
+  "agents": [{ "model": "fireworks:accounts/fireworks/models/glm-5p2", "userInvocable": true }]
 }
 ```
 
@@ -288,7 +288,7 @@ Some providers support extended thinking. Set `reasoningEffort` on an agent to r
 }
 ```
 
-Providers that do not support the requested effort ignore it or map it to their closest available setting.
+`reasoningEffort` is validated against the selected model's supported efforts when settings load: an unsupported value fails with an error listing the supported levels. For an alloyed model, the effort must be supported by every model in the alloy. Changing the model at runtime — for example from the terminal UI — clamps the current effort to the nearest level the new model supports.
 
 ## Alloying
 

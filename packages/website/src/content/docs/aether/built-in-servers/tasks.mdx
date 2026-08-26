@@ -128,6 +128,17 @@ Complete a task and attach handoff context:
 | `filesRead` | Files examined.                         |
 | `resources` | External resources referenced.          |
 
+## Update output
+
+`task_update` returns the updated `task`, a `message`, and two fields that make updates easier to act on:
+
+| Field         | Description                                                                       |
+| ------------- | --------------------------------------------------------------------------------- |
+| `changes`     | Names of the fields that were actually updated.                                   |
+| `newlyReady`  | Tasks that became ready to start because this completion unblocked them.          |
+
+`newlyReady` is only populated when a task is marked `completed` and other tasks depended on it.
+
 ## Input names
 
 The canonical MCP wire format is camelCase: `parentId`, `treeId`, `readyOnly`, `nextSteps`, and `filesRead`. The server also accepts snake_case aliases for several inputs, including `parent_id`, `tree_id`, `ready_only`, `next_steps`, and `files_read`.

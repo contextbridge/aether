@@ -65,6 +65,20 @@ Each `left` and `right` entry is a segment. Shorthand names are strings; segment
 
 Global bindings accept strings such as `"ctrl+g"`, `"shift+backtab"`, or `"esc"`. Supported keys are `exit`, `cancel`, `submit`, `openCommandPicker`, `openFilePicker`, `toggleGitDiff`, `cycleReasoning`, `cycleMode`, and `openPromptSearch`. Omitted bindings retain their defaults, and invalid bindings are ignored.
 
+| Key                 | Default            |
+| ------------------- | ------------------ |
+| `exit`              | `ctrl+c`           |
+| `cancel`            | `esc`              |
+| `submit`            | `enter`            |
+| `openCommandPicker` | `/`                |
+| `openFilePicker`    | `@`                |
+| `toggleGitDiff`     | `ctrl+g`           |
+| `cycleReasoning`    | `tab`              |
+| `cycleMode`         | `shift+backtab`    |
+| `openPromptSearch`  | `ctrl+r`           |
+
+The example settings file above overrides `toggleGitDiff` and `openPromptSearch`; everything else keeps the defaults listed here.
+
 ## Themes
 
 Themes are TextMate `.tmTheme` files. Place them in `~/.wisp/themes/` and reference by filename in settings.

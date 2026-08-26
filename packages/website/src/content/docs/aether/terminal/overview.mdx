@@ -3,7 +3,7 @@ title: Terminal UI
 description: Run Aether interactively in the terminal.
 ---
 
-The default way to use Aether is its terminal UI: a full-screen ACP client for chatting with project-local agents, reviewing tool progress, attaching files, changing settings, and resuming sessions.
+The default way to use Aether is its terminal UI: a terminal ACP client for chatting with project-local agents, reviewing tool progress, attaching files, changing settings, and resuming sessions. It renders in an inline viewport, so your terminal's native scrollback is preserved above the interface.
 
 ```bash
 aether
@@ -17,6 +17,7 @@ If no agents are configured in your user or project settings, Aether starts onbo
 - **Tool tracking** — Follow running tool calls and sub-agent progress.
 - **Plan visualization** — View task/plan status updates emitted by tools.
 - **Inline diffs** — Review file changes in a two-pane [diff viewer](/aether/terminal/git-diff/).
+- **Plan review** — Approve a submitted plan or request line-level changes in a dedicated [review screen](/aether/terminal/plan-review/).
 - **Slash commands** — Trigger built-in commands and user-invocable MCP prompts with `/name`.
 - **File attachments** — Attach files to prompts with the `@` picker.
 - **Settings overlay** — Configure model, mode, reasoning, theme, and MCP server auth/status.
