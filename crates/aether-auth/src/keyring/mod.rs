@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use keyring_core::{CredentialStore as KeyringCredentialStore, Entry, Error as KeyringError};
 use serde_json::Value;
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, Mutex, PoisonError};
 use tokio::task;
 
 use crate::{OAuthCredentialStorage, OAuthError};
@@ -14,17 +14,17 @@ const KEYCHAIN_SERVICE: &str = "aether-oauth-v1";
 /// Credential Manager on Windows, Secret Service over D-Bus on Linux/FreeBSD).
 #[derive(Clone)]
 pub struct OsKeyringStore {
-    inner: Arc<LazyLock<Result<Arc<KeyringCredentialStore>, OAuthError>, BackendFactory>>,
+    inner: Arc<KeyringBackend>,
 }
 
 impl OsKeyringStore {
     pub fn new(keyring_store: Arc<KeyringCredentialStore>) -> Self {
-        Self::from_factory(Box::new(move || Ok(keyring_store)))
+        Self::from_factory(Arc::new(move || Ok(Arc::clone(&keyring_store))))
     }
 
     /// Build a store backed by the platform's native keychain.
     pub fn with_platform_store() -> Self {
-        Self::from_factory(Box::new(create_platform_keyring_store))
+        Self::from_factory(Arc::new(create_platform_keyring_store))
     }
 
     /// Build a store backed by an in-memory mock keyring (for tests that exercise
@@ -34,13 +34,24 @@ impl OsKeyringStore {
     }
 
     fn from_factory(factory: BackendFactory) -> Self {
-        Self { inner: Arc::new(LazyLock::new(factory)) }
+        Self { inner: Arc::new(KeyringBackend { factory, store: Mutex::new(None) }) }
     }
 
     fn resolve_store(&self) -> Result<Arc<KeyringCredentialStore>, OAuthError> {
-        match &**self.inner {
-            Ok(store) => Ok(Arc::clone(store)),
-            Err(e) => Err(e.clone()),
+        let mut store = self.inner.store.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(store) = store.as_ref() {
+            return Ok(Arc::clone(store));
+        }
+
+        let created = (self.inner.factory)()?;
+        *store = Some(Arc::clone(&created));
+        Ok(created)
+    }
+
+    fn invalidate_store(&self, failed: &Arc<KeyringCredentialStore>) {
+        let mut store = self.inner.store.lock().unwrap_or_else(PoisonError::into_inner);
+        if store.as_ref().is_some_and(|current| Arc::ptr_eq(current, failed)) {
+            *store = None;
         }
     }
 }
@@ -70,47 +81,68 @@ impl OAuthCredentialStorage for OsKeyringStore {
     }
 }
 
-type BackendFactory = Box<dyn FnOnce() -> Result<Arc<KeyringCredentialStore>, OAuthError> + Send + Sync>;
-
-fn try_contains(store: &OsKeyringStore, key: &str) -> Result<bool, OAuthError> {
-    let entry = credential_entry(store, key)?;
-    match entry.get_credential() {
-        Ok(_) => Ok(true),
-        Err(KeyringError::NoEntry) => Ok(false),
-        Err(err) => Err(map_keyring_err(err)),
-    }
+struct KeyringBackend {
+    factory: BackendFactory,
+    store: Mutex<Option<Arc<KeyringCredentialStore>>>,
 }
 
-fn credential_entry(store: &OsKeyringStore, key: &str) -> Result<Entry, OAuthError> {
-    let backend = store.resolve_store()?;
-    build_keyring_entry(backend.as_ref(), key)
+type BackendFactory = Arc<dyn Fn() -> Result<Arc<KeyringCredentialStore>, OAuthError> + Send + Sync>;
+
+fn try_contains(store: &OsKeyringStore, key: &str) -> Result<bool, OAuthError> {
+    with_keyring_entry(store, key, |entry| match entry.get_credential() {
+        Ok(_) => Ok(true),
+        Err(KeyringError::NoEntry) => Ok(false),
+        Err(err) => Err(err),
+    })
 }
 
 fn load_from_keyring(store: &OsKeyringStore, key: &str) -> Result<Option<Value>, OAuthError> {
-    let entry = credential_entry(store, key)?;
-    match entry.get_secret() {
-        Ok(blob) => serde_json::from_slice(&blob)
-            .map(Some)
-            .map_err(|e| OAuthError::CredentialStore(format!("invalid credential: {e}"))),
+    let blob = with_keyring_entry(store, key, |entry| match entry.get_secret() {
+        Ok(blob) => Ok(Some(blob)),
         Err(KeyringError::NoEntry) => Ok(None),
-        Err(err) => Err(map_keyring_err(err)),
-    }
+        Err(err) => Err(err),
+    })?;
+    blob.map(|blob| {
+        serde_json::from_slice(&blob).map_err(|e| OAuthError::CredentialStore(format!("invalid credential: {e}")))
+    })
+    .transpose()
 }
 
 fn save_to_keyring(store: &OsKeyringStore, key: &str, value: &Value) -> Result<(), OAuthError> {
-    let entry = credential_entry(store, key)?;
     let blob = serde_json::to_vec(value)
         .map_err(|e| OAuthError::CredentialStore(format!("failed to serialize credential: {e}")))?;
-    entry.set_secret(&blob).map_err(map_keyring_err)?;
-    Ok(())
+    with_keyring_entry(store, key, |entry| entry.set_secret(&blob))
 }
 
 fn delete_from_keyring(store: &OsKeyringStore, key: &str) -> Result<(), OAuthError> {
-    let entry = credential_entry(store, key)?;
-    match entry.delete_credential() {
+    with_keyring_entry(store, key, |entry| match entry.delete_credential() {
         Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
-        Err(err) => Err(map_keyring_err(err)),
+        Err(err) => Err(err),
+    })
+}
+
+fn with_keyring_entry<T>(
+    store: &OsKeyringStore,
+    key: &str,
+    operation: impl Fn(&Entry) -> Result<T, KeyringError>,
+) -> Result<T, OAuthError> {
+    let mut retried = false;
+    loop {
+        let backend = store.resolve_store()?;
+        let result = build_keyring_entry(backend.as_ref(), key).and_then(|entry| operation(&entry));
+        match result {
+            Ok(value) => return Ok(value),
+            Err(err) if !retried && is_reconnectable(&err) => {
+                store.invalidate_store(&backend);
+                retried = true;
+            }
+            Err(err) => return Err(map_keyring_err(err)),
+        }
     }
+}
+
+fn is_reconnectable(error: &KeyringError) -> bool {
+    matches!(error, KeyringError::PlatformFailure(_))
 }
 
 #[cfg(target_os = "macos")]
@@ -139,19 +171,19 @@ fn create_platform_keyring_store() -> Result<Arc<KeyringCredentialStore>, OAuthE
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
-fn build_keyring_entry(store: &KeyringCredentialStore, key: &str) -> Result<Entry, OAuthError> {
-    store.build(KEYCHAIN_SERVICE, key, None).map_err(map_keyring_err)
+fn build_keyring_entry(store: &KeyringCredentialStore, key: &str) -> Result<Entry, KeyringError> {
+    store.build(KEYCHAIN_SERVICE, key, None)
 }
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-fn build_keyring_entry(store: &KeyringCredentialStore, key: &str) -> Result<Entry, OAuthError> {
+fn build_keyring_entry(store: &KeyringCredentialStore, key: &str) -> Result<Entry, KeyringError> {
     if store.as_any().is::<keyring_core::mock::Store>() {
-        return store.build(KEYCHAIN_SERVICE, key, None).map_err(map_keyring_err);
+        return store.build(KEYCHAIN_SERVICE, key, None);
     }
 
     let label = format!("Aether OAuth: {key}");
     let modifiers = std::collections::HashMap::from([("label", label.as_str())]);
-    store.build(KEYCHAIN_SERVICE, key, Some(&modifiers)).map_err(map_keyring_err)
+    store.build(KEYCHAIN_SERVICE, key, Some(&modifiers))
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -230,7 +262,7 @@ mod tests {
 
     #[tokio::test]
     async fn operations_return_error_when_backend_construction_fails() {
-        let store = OsKeyringStore::from_factory(Box::new(|| Err(OAuthError::CredentialStore("no dbus".to_string()))));
+        let store = OsKeyringStore::from_factory(Arc::new(|| Err(OAuthError::CredentialStore("no dbus".to_string()))));
 
         let load_err = store.load_credential("k").await.unwrap_err();
         assert!(matches!(load_err, OAuthError::CredentialStore(m) if m.contains("no dbus")));
@@ -245,10 +277,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn backend_construction_failure_is_cached() {
+    async fn backend_construction_failure_is_retried() {
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_clone = Arc::clone(&counter);
-        let store = OsKeyringStore::from_factory(Box::new(move || {
+        let store = OsKeyringStore::from_factory(Arc::new(move || {
             counter_clone.fetch_add(1, Ordering::SeqCst);
             Err(OAuthError::CredentialStore("no dbus".to_string()))
         }));
@@ -256,6 +288,82 @@ mod tests {
         let _ = store.load_credential("k").await;
         let _ = store.load_credential("k").await;
 
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        assert_eq!(counter.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn platform_failure_reconnects_and_retries_the_operation() {
+        use keyring_core::api::{CredentialApi, CredentialStoreApi};
+        use std::any::Any;
+        use std::collections::HashMap;
+
+        struct FailingStore;
+        struct FailingCredential;
+
+        impl CredentialStoreApi for FailingStore {
+            fn vendor(&self) -> String {
+                "failing".to_string()
+            }
+
+            fn id(&self) -> String {
+                "failing".to_string()
+            }
+
+            fn build(&self, _: &str, _: &str, _: Option<&HashMap<&str, &str>>) -> keyring_core::Result<Entry> {
+                Ok(Entry::new_with_credential(Arc::new(FailingCredential)))
+            }
+
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+        }
+
+        impl CredentialApi for FailingCredential {
+            fn set_secret(&self, _: &[u8]) -> keyring_core::Result<()> {
+                Err(platform_failure())
+            }
+
+            fn get_secret(&self) -> keyring_core::Result<Vec<u8>> {
+                Err(platform_failure())
+            }
+
+            fn delete_credential(&self) -> keyring_core::Result<()> {
+                Err(platform_failure())
+            }
+
+            fn get_credential(&self) -> keyring_core::Result<Option<Arc<keyring_core::Credential>>> {
+                Err(platform_failure())
+            }
+
+            fn get_specifiers(&self) -> Option<(String, String)> {
+                Some((KEYCHAIN_SERVICE.to_string(), "server".to_string()))
+            }
+
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+        }
+
+        fn platform_failure() -> KeyringError {
+            KeyringError::PlatformFailure(Box::new(std::io::Error::other("The session does not exist")))
+        }
+
+        let healthy = keyring_core::mock::Store::new().unwrap();
+        let entry = healthy.build(KEYCHAIN_SERVICE, "server", None).unwrap();
+        entry.set_secret(&serde_json::to_vec(&credential()).unwrap()).unwrap();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let factory_attempts = Arc::clone(&attempts);
+        let store = OsKeyringStore::from_factory(Arc::new(move || {
+            if factory_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                Ok(Arc::new(FailingStore))
+            } else {
+                Ok(healthy.clone())
+            }
+        }));
+
+        let loaded = store.load_credential("server").await.unwrap();
+
+        assert_eq!(loaded.unwrap().access_token, "access");
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
 }
