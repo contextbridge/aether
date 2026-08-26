@@ -29,12 +29,6 @@ impl App {
                 };
                 self.finish_prompt(&status);
             }
-            AcpEvent::PromptError(error) => {
-                tracing::error!("Prompt error: {error}");
-                self.session.abandon_workspace_load();
-                self.finish_prompt(&ToolStatus::Error(format!("failed: {error}")));
-                self.notify(&format!("Prompt failed: {error}"));
-            }
             AcpEvent::ContextCompaction(params) => {
                 self.conversation.turn_mut().set_compaction_active(params.active);
             }
@@ -228,7 +222,7 @@ impl App {
         }
     }
 
-    fn finish_prompt(&mut self, terminal_status: &ToolStatus) {
+    pub(super) fn finish_prompt(&mut self, terminal_status: &ToolStatus) {
         let was_in_flight = self.waiting_for_response();
         self.conversation.turn_mut().set_prompt_in_flight(false);
         self.conversation.turn_mut().set_compaction_active(false);

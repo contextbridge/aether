@@ -1,4 +1,4 @@
-use acp_utils::client::{AcpEvent, connect_acp_client, spawn_acp_session};
+use acp_utils::client::{AcpEvent, connect_acp_client};
 use acp_utils::notifications::{
     PromptSearchParams, PromptSearchResponse, SessionPreviewParams, SessionPreviewResponse,
 };
@@ -69,33 +69,32 @@ async fn cancel_reaches_the_agent_while_a_config_response_is_outstanding() {
                 let _ = agent_builder.connect_to(agent_transport).await;
             });
 
-            let session = spawn_acp_session(
-                client_transport,
-                InitializeRequest::new(ProtocolVersion::V1),
-                NewSessionRequest::new(PathBuf::from("/tmp")),
-            )
-            .await
-            .expect("session establishes");
+            let client = connect_acp_client(client_transport, InitializeRequest::new(ProtocolVersion::V1))
+                .await
+                .expect("initialization succeeds");
 
-            let prompt_task_handle = session.client_handle.clone();
-            let session_id = session.session_id.clone();
+            let created = client
+                .handle
+                .new_session(NewSessionRequest::new(PathBuf::from("/tmp")))
+                .await
+                .expect("session establishes");
+
+            let session_id = created.session_id;
+            let prompt_task_handle = client.handle.clone();
+            let prompt_session_id = session_id.clone();
             spawn_local(async move {
                 let _ = prompt_task_handle
-                    .prompt(PromptRequest::new(session_id, vec![ContentBlock::Text(TextContent::new("hi"))]))
+                    .prompt(PromptRequest::new(prompt_session_id, vec![ContentBlock::Text(TextContent::new("hi"))]))
                     .await;
             });
-            let config_handle = session.client_handle.clone();
-            let config_session_id = session.session_id.clone();
+            let config_handle = client.handle.clone();
+            let config_session_id = session_id.clone();
             spawn_local(async move {
                 let _ = config_handle
                     .set_config_option(SetSessionConfigOptionRequest::new(config_session_id, "mode", "Plan"))
                     .await;
             });
-            session
-                .client_handle
-                .cancel(CancelNotification::new(session.session_id.clone()))
-                .await
-                .expect("cancel queues");
+            client.handle.cancel(CancelNotification::new(session_id)).await.expect("cancel queues");
 
             cancelled.notified().await;
         })
@@ -194,18 +193,22 @@ async fn initialized_client_manages_typed_sessions_and_collects_replay() {
             let mut client = connect_acp_client(client_transport, InitializeRequest::new(ProtocolVersion::V1))
                 .await
                 .expect("initialization succeeds");
-            assert_eq!(client.agent_name, "Typed Fake");
+            assert_eq!(client.agent_name(), "Typed Fake");
             assert!(client.initialize_response.agent_info.is_some());
 
-            let created = client.new_session(NewSessionRequest::new("/tmp/project")).await.expect("create succeeds");
+            let created =
+                client.handle.new_session(NewSessionRequest::new("/tmp/project")).await.expect("create succeeds");
             assert_eq!(created.session_id, SessionId::new("created"));
 
-            let listed = client.list_sessions(ListSessionsRequest::new()).await.expect("list succeeds");
+            let listed = client.handle.list_sessions(ListSessionsRequest::new()).await.expect("list succeeds");
             assert_eq!(listed.sessions.len(), 1);
             assert_eq!(listed.sessions[0].session_id, SessionId::new("listed"));
 
-            let loaded =
-                client.load_session(LoadSessionRequest::new("listed", "/tmp/project")).await.expect("load succeeds");
+            let loaded = client
+                .handle
+                .load_session(LoadSessionRequest::new("listed", "/tmp/project"))
+                .await
+                .expect("load succeeds");
             assert_eq!(loaded.replay.len(), 1);
             assert_eq!(loaded.replay[0].session_id, SessionId::new("listed"));
             let event = client.event_rx.try_recv().expect("other session remains on the event stream");
@@ -213,18 +216,24 @@ async fn initialized_client_manages_typed_sessions_and_collects_replay() {
                 matches!(event, AcpEvent::SessionUpdate { session_id, .. } if session_id == SessionId::new("other"))
             );
 
-            client.resume_session(ResumeSessionRequest::new("listed", "/tmp/project")).await.expect("resume succeeds");
+            client
+                .handle
+                .resume_session(ResumeSessionRequest::new("listed", "/tmp/project"))
+                .await
+                .expect("resume succeeds");
             let search = client
+                .handle
                 .search_prompts(PromptSearchParams { query: "hello".to_string(), limit: Some(10) })
                 .await
                 .expect("search succeeds");
             assert_eq!(search.query, "hello");
             let preview = client
+                .handle
                 .preview_session(SessionPreviewParams { session_id: "listed".to_string() })
                 .await
                 .expect("preview succeeds");
             assert_eq!(preview.session_id, "listed");
-            client.close_session(CloseSessionRequest::new("listed")).await.expect("close succeeds");
+            client.handle.close_session(CloseSessionRequest::new("listed")).await.expect("close succeeds");
         })
         .await;
 }

@@ -210,14 +210,14 @@ impl AcpState {
     }
 
     pub(crate) fn search_prompts(&self, params: &PromptSearchParams) -> Result<PromptSearchResponse, acp::Error> {
-        self.session_store.search_prompts(params).map_err(|e| {
+        self.session_store.search_prompts(&params.query, params.limit).map_err(|e| {
             error!("Prompt search failed: {e}");
             acp::Error::internal_error()
         })
     }
 
     pub(crate) fn session_preview(&self, params: &SessionPreviewParams) -> Result<SessionPreviewResponse, acp::Error> {
-        self.session_store.preview(params).map_err(|e| {
+        self.session_store.preview(&params.session_id).map_err(|e| {
             error!("Session preview failed: {e}");
             match e {
                 SessionStoreError::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {

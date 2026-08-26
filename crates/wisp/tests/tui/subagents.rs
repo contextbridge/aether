@@ -234,8 +234,8 @@ fn sub_agent_prompt_error_finalizes_sub_agents() {
     app.acp_event(tool_call("parent-1", "spawn_subagent"));
     app.acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", "{}"));
 
-    // PromptError should finalize sub-agents
-    app.acp_event(AcpEvent::PromptError(agent_client_protocol::Error::internal_error()));
+    // A failed prompt should finalize sub-agents
+    app.deliver_result(prompt_failed("internal error"));
 
     assert!(!app.app().wants_tick());
 }

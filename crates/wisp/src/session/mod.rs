@@ -40,18 +40,17 @@ impl Session {
             .client_capabilities(client_capabilities())
             .client_info(Implementation::new("wisp", env!("CARGO_PKG_VERSION")));
         let client = connect_acp_client(agent, init_request).await?;
-        let session_response = client.new_session(NewSessionRequest::new(working_dir.clone())).await?;
-        let client_handle = client.handle();
+        let session_response = client.handle.new_session(NewSessionRequest::new(working_dir.clone())).await?;
 
         Ok(Self {
             session_id: session_response.session_id,
-            agent_name: client.agent_name,
-            prompt_capabilities: client.prompt_capabilities,
-            session_capabilities: client.session_capabilities,
+            agent_name: client.agent_name(),
+            prompt_capabilities: client.prompt_capabilities().clone(),
+            session_capabilities: client.session_capabilities().clone(),
             config_options: session_response.config_options.unwrap_or_default(),
-            auth_methods: client.auth_methods,
+            auth_methods: client.auth_methods().to_vec(),
             event_rx: client.event_rx,
-            client_handle,
+            client_handle: client.handle,
             working_dir,
             workspace_status,
         })

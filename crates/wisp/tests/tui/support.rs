@@ -283,3 +283,11 @@ pub(crate) fn workspace_moved(new_cwd: &str) -> CommandResult {
 pub(crate) fn workspace_move_failed(error: &str) -> CommandResult {
     CommandResult::WorkspaceMoveFailed { error: error.to_string() }
 }
+
+pub(crate) fn prompt_failed(error: &str) -> CommandResult {
+    CommandResult::Failed { command: FailedCommand::Prompt, error: error.to_string() }
+}
+
+pub(crate) fn session_load_failed(error: &str) -> CommandResult {
+    CommandResult::Failed { command: FailedCommand::LoadSession, error: error.to_string() }
+}

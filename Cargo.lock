@@ -82,6 +82,7 @@ dependencies = [
  "aether-wisp",
  "agent-client-protocol",
  "async-trait",
+ "base64 0.23.1",
  "clap",
  "crossterm",
  "dirs",

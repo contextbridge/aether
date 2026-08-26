@@ -11,17 +11,13 @@ use agent_client_protocol::schema::v1::{
     ListSessionsResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
     PermissionOptionId, PermissionOptionKind, PromptCapabilities, PromptRequest, PromptResponse,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
-    ResumeSessionResponse, SelectedPermissionOutcome, SessionCapabilities, SessionConfigOption, SessionId,
-    SessionNotification, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
+    ResumeSessionResponse, SelectedPermissionOutcome, SessionCapabilities, SessionId, SessionNotification,
+    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
 };
-use agent_client_protocol::{self as acp, Client, ConnectTo, ConnectionTo, JsonRpcRequest};
+use agent_client_protocol::{self as acp, Client, ConnectTo, ConnectionTo, JsonRpcNotification, JsonRpcRequest};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot};
 use tracing::info;
-
-type InitializeResult = Result<InitializeResponse, AcpClientError>;
-type InitializeSender = Arc<Mutex<Option<oneshot::Sender<InitializeResult>>>>;
-type Response<T> = oneshot::Sender<Result<T, AcpClientError>>;
 
 /// A cloneable handle for issuing typed lifecycle requests and prompt commands.
 #[derive(Clone)]
@@ -32,12 +28,8 @@ pub struct AcpClientHandle {
 /// An initialized ACP connection that can create and manage multiple sessions.
 pub struct AcpClient {
     pub initialize_response: InitializeResponse,
-    pub agent_name: String,
-    pub prompt_capabilities: PromptCapabilities,
-    pub session_capabilities: SessionCapabilities,
-    pub auth_methods: Vec<AuthMethod>,
     pub event_rx: mpsc::UnboundedReceiver<AcpEvent>,
-    handle: AcpClientHandle,
+    pub handle: AcpClientHandle,
 }
 
 /// The result of loading an ACP session, including notifications sent before the response.
@@ -45,18 +37,6 @@ pub struct LoadedSession {
     pub session_id: SessionId,
     pub response: LoadSessionResponse,
     pub replay: Vec<SessionNotification>,
-}
-
-/// ACP session with all handles needed by the caller.
-pub struct AcpSession {
-    pub session_id: SessionId,
-    pub agent_name: String,
-    pub prompt_capabilities: PromptCapabilities,
-    pub session_capabilities: SessionCapabilities,
-    pub config_options: Vec<SessionConfigOption>,
-    pub auth_methods: Vec<AuthMethod>,
-    pub event_rx: mpsc::UnboundedReceiver<AcpEvent>,
-    pub client_handle: AcpClientHandle,
 }
 
 /// Connect to an ACP agent and complete initialization without creating a session.
@@ -79,61 +59,74 @@ pub async fn connect_acp_client(
         Arc::clone(&replay_state),
     ));
 
-    let init_resp = init_rx
+    let initialize_response = init_rx
         .await
         .map_err(|_| AcpClientError::AgentCrashed("ACP task died during initialization".to_string()))??;
-    let agent_name = init_resp
-        .agent_info
-        .as_ref()
-        .map_or_else(|| "agent".to_string(), |info| info.title.as_deref().unwrap_or(&info.name).to_string());
 
-    let handle = AcpClientHandle { cmd_tx };
-
-    Ok(AcpClient {
-        prompt_capabilities: init_resp.agent_capabilities.prompt_capabilities.clone(),
-        session_capabilities: init_resp.agent_capabilities.session_capabilities.clone(),
-        auth_methods: init_resp.auth_methods.clone(),
-        initialize_response: init_resp,
-        agent_name,
-        event_rx,
-        handle,
-    })
+    Ok(AcpClient { initialize_response, event_rx, handle: AcpClientHandle { cmd_tx } })
 }
 
 impl AcpClient {
-    /// Return a cloneable handle for session lifecycle operations.
-    pub fn handle(&self) -> AcpClientHandle {
-        self.handle.clone()
+    /// The agent's display title, falling back to its implementation name.
+    pub fn agent_name(&self) -> String {
+        self.initialize_response
+            .agent_info
+            .as_ref()
+            .map_or_else(|| "agent".to_string(), |info| info.title.as_deref().unwrap_or(&info.name).to_string())
     }
 
-    /// Create a new session on this initialized connection.
-    pub async fn new_session(&self, request: NewSessionRequest) -> Result<NewSessionResponse, AcpClientError> {
-        self.handle.new_session(request).await
+    pub fn prompt_capabilities(&self) -> &PromptCapabilities {
+        &self.initialize_response.agent_capabilities.prompt_capabilities
     }
 
-    /// List sessions using the official ACP pagination request and response types.
-    pub async fn list_sessions(&self, request: ListSessionsRequest) -> Result<ListSessionsResponse, AcpClientError> {
-        self.handle.list_sessions(request).await
+    pub fn session_capabilities(&self) -> &SessionCapabilities {
+        &self.initialize_response.agent_capabilities.session_capabilities
+    }
+
+    pub fn auth_methods(&self) -> &[AuthMethod] {
+        &self.initialize_response.auth_methods
+    }
+}
+
+impl AcpClientHandle {
+    pub fn detached() -> Self {
+        let (cmd_tx, _) = mpsc::unbounded_channel();
+        Self { cmd_tx }
+    }
+
+    pub async fn prompt(&self, request: PromptRequest) -> Result<PromptResponse, AcpClientError> {
+        let (response, receiver) = oneshot::channel();
+        self.send(ClientCommand::Prompt { request, response })?;
+        await_response(receiver).await
     }
 
     /// Load a session and collect its replay notifications in wire order.
     pub async fn load_session(&self, request: LoadSessionRequest) -> Result<LoadedSession, AcpClientError> {
-        self.handle.load_session(request).await
+        let (response, receiver) = oneshot::channel();
+        self.send(ClientCommand::LoadSession { request, response })?;
+        await_response(receiver).await
+    }
+
+    pub async fn new_session(&self, request: NewSessionRequest) -> Result<NewSessionResponse, AcpClientError> {
+        self.request(request, false).await
+    }
+
+    pub async fn list_sessions(&self, request: ListSessionsRequest) -> Result<ListSessionsResponse, AcpClientError> {
+        self.request(request, false).await
     }
 
     /// Resume a session without collecting or replaying its prior notifications.
     pub async fn resume_session(&self, request: ResumeSessionRequest) -> Result<ResumeSessionResponse, AcpClientError> {
-        self.handle.resume_session(request).await
+        self.request(request, false).await
     }
 
-    /// Close an active session.
     pub async fn close_session(&self, request: CloseSessionRequest) -> Result<CloseSessionResponse, AcpClientError> {
-        self.handle.close_session(request).await
+        self.request(request, false).await
     }
 
     /// Search the agent's prompt history through Aether's ACP extension.
     pub async fn search_prompts(&self, params: PromptSearchParams) -> Result<PromptSearchResponse, AcpClientError> {
-        self.handle.search_prompts(params).await
+        self.request(params, false).await
     }
 
     /// Load a session preview through Aether's ACP extension.
@@ -141,183 +134,85 @@ impl AcpClient {
         &self,
         params: SessionPreviewParams,
     ) -> Result<SessionPreviewResponse, AcpClientError> {
-        self.handle.preview_session(params).await
+        self.request(params, false).await
     }
 
     /// List workspaces through Aether's ACP extension.
     pub async fn list_workspaces(&self, params: WorkspaceListParams) -> Result<WorkspaceListResponse, AcpClientError> {
-        self.handle.list_workspaces(params).await
+        self.request(params, false).await
     }
 
     /// Move a session through Aether's ACP extension.
     pub async fn move_workspace(&self, params: WorkspaceMoveParams) -> Result<WorkspaceMoveResponse, AcpClientError> {
-        self.handle.move_workspace(params).await
-    }
-
-    pub async fn prompt(&self, request: PromptRequest) -> Result<PromptResponse, AcpClientError> {
-        self.handle.prompt(request).await
-    }
-
-    pub async fn cancel(&self, request: CancelNotification) -> Result<(), AcpClientError> {
-        self.handle.cancel(request).await
+        self.request(params, false).await
     }
 
     pub async fn set_config_option(
         &self,
         request: SetSessionConfigOptionRequest,
     ) -> Result<SetSessionConfigOptionResponse, AcpClientError> {
-        self.handle.set_config_option(request).await
-    }
-
-    pub async fn authenticate_mcp_server(
-        &self,
-        request: crate::notifications::McpRequest,
-    ) -> Result<(), AcpClientError> {
-        self.handle.authenticate_mcp_server(request).await
+        self.request(request, true).await
     }
 
     pub async fn authenticate(&self, request: AuthenticateRequest) -> Result<AuthenticateResponse, AcpClientError> {
-        self.handle.authenticate(request).await
-    }
-}
-
-impl AcpClientHandle {
-    pub async fn new_session(&self, request: NewSessionRequest) -> Result<NewSessionResponse, AcpClientError> {
-        self.request(|response| ClientCommand::NewSession { request, response }).await
-    }
-
-    pub async fn list_sessions(&self, request: ListSessionsRequest) -> Result<ListSessionsResponse, AcpClientError> {
-        self.request(|response| ClientCommand::ListSessions { request, response }).await
-    }
-
-    pub async fn load_session(&self, request: LoadSessionRequest) -> Result<LoadedSession, AcpClientError> {
-        self.request(|response| ClientCommand::LoadSession { request, response }).await
-    }
-
-    pub async fn resume_session(&self, request: ResumeSessionRequest) -> Result<ResumeSessionResponse, AcpClientError> {
-        self.request(|response| ClientCommand::ResumeSession { request, response }).await
-    }
-
-    pub async fn close_session(&self, request: CloseSessionRequest) -> Result<CloseSessionResponse, AcpClientError> {
-        self.request(|response| ClientCommand::CloseSession { request, response }).await
-    }
-
-    pub async fn search_prompts(&self, params: PromptSearchParams) -> Result<PromptSearchResponse, AcpClientError> {
-        self.request(|response| ClientCommand::SearchPrompts { params, response }).await
-    }
-
-    pub async fn preview_session(
-        &self,
-        params: SessionPreviewParams,
-    ) -> Result<SessionPreviewResponse, AcpClientError> {
-        self.request(|response| ClientCommand::PreviewSession { params, response }).await
-    }
-
-    pub async fn list_workspaces(&self, params: WorkspaceListParams) -> Result<WorkspaceListResponse, AcpClientError> {
-        self.request(|response| ClientCommand::ListWorkspaces { params, response }).await
-    }
-
-    pub async fn move_workspace(&self, params: WorkspaceMoveParams) -> Result<WorkspaceMoveResponse, AcpClientError> {
-        self.request(|response| ClientCommand::MoveWorkspace { params, response }).await
-    }
-
-    pub async fn prompt(&self, request: PromptRequest) -> Result<PromptResponse, AcpClientError> {
-        self.request(|response| ClientCommand::Prompt { request, response }).await
+        self.request(request, true).await
     }
 
     pub async fn cancel(&self, request: CancelNotification) -> Result<(), AcpClientError> {
-        self.request(|response| ClientCommand::Cancel { request, response }).await
+        self.notify(request).await
     }
 
-    pub async fn set_config_option(
-        &self,
-        request: SetSessionConfigOptionRequest,
-    ) -> Result<SetSessionConfigOptionResponse, AcpClientError> {
-        self.request(|response| ClientCommand::SetConfigOption { request, response }).await
+    pub async fn authenticate_mcp_server(&self, request: McpRequest) -> Result<(), AcpClientError> {
+        self.notify(request).await
     }
 
-    pub async fn authenticate_mcp_server(
-        &self,
-        request: crate::notifications::McpRequest,
-    ) -> Result<(), AcpClientError> {
-        self.request(|response| ClientCommand::AuthenticateMcpServer { request, response }).await
-    }
-
-    pub async fn authenticate(&self, request: AuthenticateRequest) -> Result<AuthenticateResponse, AcpClientError> {
-        self.request(|response| ClientCommand::Authenticate { request, response }).await
-    }
-
-    async fn request<T>(&self, make_command: impl FnOnce(Response<T>) -> ClientCommand) -> Result<T, AcpClientError> {
+    async fn request<T>(&self, request: T, allow_during_prompt: bool) -> Result<T::Response, AcpClientError>
+    where
+        T: JsonRpcRequest + Send + 'static,
+        T::Response: Send,
+    {
         let (response, receiver) = oneshot::channel();
-        self.cmd_tx
-            .send(make_command(response))
-            .map_err(|_| AcpClientError::AgentCrashed("ACP task is no longer running".to_string()))?;
-        receiver.await.map_err(|_| AcpClientError::AgentCrashed("ACP task ended before responding".to_string()))?
+        self.send(ClientCommand::Request {
+            allow_during_prompt,
+            run: Box::new(move |cx| match cx {
+                Ok(cx) => send_typed_response(cx, request, response),
+                Err(error) => {
+                    let _ = response.send(Err(error));
+                }
+            }),
+        })?;
+        await_response(receiver).await
+    }
+
+    async fn notify<T>(&self, notification: T) -> Result<(), AcpClientError>
+    where
+        T: JsonRpcNotification + Send + 'static,
+    {
+        let (response, receiver) = oneshot::channel();
+        self.send(ClientCommand::Request {
+            allow_during_prompt: true,
+            run: Box::new(move |cx| {
+                let result = cx.and_then(|cx| cx.send_notification(notification).map_err(AcpClientError::Protocol));
+                let _ = response.send(result);
+            }),
+        })?;
+        await_response(receiver).await
+    }
+
+    fn send(&self, command: ClientCommand) -> Result<(), AcpClientError> {
+        self.cmd_tx.send(command).map_err(|_| AcpClientError::AgentCrashed("ACP task is no longer running".to_string()))
     }
 }
 
-/// Connect to an ACP agent, create one session, and retain the older session-shaped API.
-pub async fn spawn_acp_session(
-    agent: impl ConnectTo<Client> + 'static,
-    init_request: InitializeRequest,
-    new_session_request: NewSessionRequest,
-) -> Result<AcpSession, AcpClientError> {
-    let client = connect_acp_client(agent, init_request).await?;
-    let session_resp = client.new_session(new_session_request).await?;
-    let session_id = session_resp.session_id;
-    let config_options = session_resp.config_options.unwrap_or_default();
-
-    let AcpClient { agent_name, prompt_capabilities, session_capabilities, auth_methods, event_rx, handle, .. } =
-        client;
-
-    Ok(AcpSession {
-        session_id,
-        agent_name,
-        prompt_capabilities,
-        session_capabilities,
-        config_options,
-        auth_methods,
-        event_rx,
-        client_handle: handle,
-    })
-}
-
-/// Connect, initialize, and load a session through the shared client implementation.
-pub async fn spawn_loaded_acp_session(
-    agent: impl ConnectTo<Client> + 'static,
-    init_request: InitializeRequest,
-    load_request: LoadSessionRequest,
-) -> Result<(AcpClient, LoadedSession), AcpClientError> {
-    let client = connect_acp_client(agent, init_request).await?;
-    let loaded = client.load_session(load_request).await?;
-    Ok((client, loaded))
-}
-
-/// Connect, initialize, and discover sessions without creating or loading one.
-pub async fn discover_acp_sessions(
-    agent: impl ConnectTo<Client> + 'static,
-    init_request: InitializeRequest,
-) -> Result<(AcpClient, ListSessionsResponse), AcpClientError> {
-    let client = connect_acp_client(agent, init_request).await?;
-    let sessions = client.list_sessions(ListSessionsRequest::new()).await?;
-    Ok((client, sessions))
-}
+type InitializeResult = Result<InitializeResponse, AcpClientError>;
+type InitializeSender = Arc<Mutex<Option<oneshot::Sender<InitializeResult>>>>;
+type Response<T> = oneshot::Sender<Result<T, AcpClientError>>;
+type RequestFn = Box<dyn FnOnce(Result<&ConnectionTo<acp::Agent>, AcpClientError>) + Send>;
 
 enum ClientCommand {
     Prompt { request: PromptRequest, response: Response<PromptResponse> },
-    Cancel { request: CancelNotification, response: Response<()> },
-    SetConfigOption { request: SetSessionConfigOptionRequest, response: Response<SetSessionConfigOptionResponse> },
-    AuthenticateMcpServer { request: McpRequest, response: Response<()> },
-    Authenticate { request: AuthenticateRequest, response: Response<AuthenticateResponse> },
-    NewSession { request: NewSessionRequest, response: Response<NewSessionResponse> },
-    ListSessions { request: ListSessionsRequest, response: Response<ListSessionsResponse> },
     LoadSession { request: LoadSessionRequest, response: Response<LoadedSession> },
-    ResumeSession { request: ResumeSessionRequest, response: Response<ResumeSessionResponse> },
-    CloseSession { request: CloseSessionRequest, response: Response<CloseSessionResponse> },
-    SearchPrompts { params: PromptSearchParams, response: Response<PromptSearchResponse> },
-    PreviewSession { params: SessionPreviewParams, response: Response<SessionPreviewResponse> },
-    ListWorkspaces { params: WorkspaceListParams, response: Response<WorkspaceListResponse> },
-    MoveWorkspace { params: WorkspaceMoveParams, response: Response<WorkspaceMoveResponse> },
+    Request { allow_during_prompt: bool, run: RequestFn },
 }
 
 struct ReplayState {
@@ -325,7 +220,11 @@ struct ReplayState {
     notifications: Vec<SessionNotification>,
 }
 
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+async fn await_response<T>(receiver: oneshot::Receiver<Result<T, AcpClientError>>) -> Result<T, AcpClientError> {
+    receiver.await.map_err(|_| AcpClientError::AgentCrashed("ACP task ended before responding".to_string()))?
+}
+
+#[allow(clippy::too_many_lines)]
 async fn run_client_connection(
     agent: impl ConnectTo<Client> + 'static,
     event_tx: mpsc::UnboundedSender<AcpEvent>,
@@ -364,21 +263,17 @@ async fn run_client_connection(
                 let event_tx = event_tx.clone();
                 let replay_state = Arc::clone(&replay_state);
                 async move |notification: SessionNotification, _cx| {
-                    let should_buffer = replay_state
-                        .lock()
-                        .expect("replay state lock poisoned")
-                        .as_ref()
-                        .is_some_and(|state| state.session_id == notification.session_id);
-                    if should_buffer {
-                        replay_state
-                            .lock()
-                            .expect("replay state lock poisoned")
-                            .as_mut()
-                            .expect("replay state disappeared")
-                            .notifications
-                            .push(notification);
-                    } else {
-                        let SessionNotification { session_id, update, .. } = notification;
+                    let passthrough = {
+                        let mut replay = replay_state.lock().expect("replay state lock poisoned");
+                        match replay.as_mut() {
+                            Some(state) if state.session_id == notification.session_id => {
+                                state.notifications.push(notification);
+                                None
+                            }
+                            _ => Some(notification),
+                        }
+                    };
+                    if let Some(SessionNotification { session_id, update, .. }) = passthrough {
                         let _ = event_tx.send(AcpEvent::SessionUpdate { session_id, update: Box::new(update) });
                     }
                     Ok(())
@@ -449,13 +344,10 @@ async fn run_client_connection(
     if let Err(e) = connection_result {
         tracing::warn!("ACP connection exited with error: {e:?}");
         send_initialization(&init_tx, Err(AcpClientError::ConnectFailed(e)));
-        let _ = event_tx.send(AcpEvent::ConnectionClosed);
-    } else {
-        let _ = event_tx.send(AcpEvent::ConnectionClosed);
     }
+    let _ = event_tx.send(AcpEvent::ConnectionClosed);
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run_main(
     cx: ConnectionTo<acp::Agent>,
     event_tx: mpsc::UnboundedSender<AcpEvent>,
@@ -501,7 +393,6 @@ async fn run_prompt(
                         let _ = response.send(Ok(prompt_response));
                     }
                     Err(error) => {
-                        let _ = event_tx.send(AcpEvent::PromptError(error.clone()));
                         let _ = response.send(Err(AcpClientError::Protocol(error)));
                     }
                 }
@@ -541,26 +432,6 @@ async fn handle_command(
                 Box::pin(run_prompt(cx, event_tx, cmd_rx, replay_state, request, response)).await;
             }
         }
-        ClientCommand::Cancel { request, response } => {
-            let result = cx.send_notification(request).map_err(AcpClientError::Protocol);
-            let _ = response.send(result);
-        }
-        ClientCommand::SetConfigOption { request, response } => {
-            send_typed_response(cx, request, response, state, true);
-        }
-        ClientCommand::AuthenticateMcpServer { request, response } => {
-            let result = cx.send_notification(request).map_err(AcpClientError::Protocol);
-            let _ = response.send(result);
-        }
-        ClientCommand::Authenticate { request, response } => {
-            send_typed_response(cx, request, response, state, true);
-        }
-        ClientCommand::NewSession { request, response } => {
-            send_typed_response(cx, request, response, state, false);
-        }
-        ClientCommand::ListSessions { request, response } => {
-            send_typed_response(cx, request, response, state, false);
-        }
         ClientCommand::LoadSession { request, response } => {
             if state == ClientState::Prompting {
                 let _ = response.send(Err(AcpClientError::Busy));
@@ -575,26 +446,14 @@ async fn handle_command(
                 .expect("replay state lock poisoned")
                 .take()
                 .map_or_else(Vec::new, |state| state.notifications);
-            let result = result.map(|response| LoadedSession { session_id, response, replay });
-            let _ = response.send(result);
+            let _ = response.send(result.map(|response| LoadedSession { session_id, response, replay }));
         }
-        ClientCommand::ResumeSession { request, response } => {
-            send_typed_response(cx, request, response, state, false);
-        }
-        ClientCommand::CloseSession { request, response } => {
-            send_typed_response(cx, request, response, state, false);
-        }
-        ClientCommand::SearchPrompts { params, response } => {
-            send_typed_response(cx, params, response, state, false);
-        }
-        ClientCommand::PreviewSession { params, response } => {
-            send_typed_response(cx, params, response, state, false);
-        }
-        ClientCommand::ListWorkspaces { params, response } => {
-            send_typed_response(cx, params, response, state, false);
-        }
-        ClientCommand::MoveWorkspace { params, response } => {
-            send_typed_response(cx, params, response, state, false);
+        ClientCommand::Request { allow_during_prompt, run } => {
+            if state == ClientState::Prompting && !allow_during_prompt {
+                run(Err(AcpClientError::Busy));
+            } else {
+                run(Ok(cx));
+            }
         }
     }
 }
@@ -603,13 +462,7 @@ fn send_typed_response<T: JsonRpcRequest + 'static>(
     cx: &ConnectionTo<acp::Agent>,
     request: T,
     response: Response<T::Response>,
-    state: ClientState,
-    allow_during_prompt: bool,
 ) {
-    if state == ClientState::Prompting && !allow_during_prompt {
-        let _ = response.send(Err(AcpClientError::Busy));
-        return;
-    }
     let request = cx.send_request(request).block_task();
     if let Err(error) = cx.spawn(async move {
         let result = request.await.map_err(AcpClientError::Protocol);

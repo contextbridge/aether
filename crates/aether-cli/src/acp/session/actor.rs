@@ -502,7 +502,7 @@ fn persist_event(actor: &mut SessionActor, io: &SessionIo, event: SessionEvent) 
         return;
     }
 
-    if let Err(e) = io.repository.append_recorded_event(&io.session_id.0, &event) {
+    if let Err(e) = io.repository.append_event(&io.session_id.0, &event) {
         warn!("Failed to append session log entry: {e}");
     }
 

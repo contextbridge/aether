@@ -4,6 +4,7 @@ use crate::app::message::Message;
 use crate::conversation::items::{Conversation, ConversationItem};
 use crate::conversation::progress_indicator::{ProgressIndicator, ProgressPhase};
 use crate::conversation::status_line::StatusLineModel;
+use crate::conversation::tool_calls::ToolStatus;
 use crate::session::platform::{
     BrowserOpener, ClipboardWriter, default_browser_opener, default_clipboard_writer,
 };
@@ -271,8 +272,7 @@ impl App {
     fn on_command_failed(&mut self, command: FailedCommand, error: &str) {
         match command {
             FailedCommand::Prompt => {
-                self.conversation.turn_mut().set_prompt_in_flight(false);
-                self.conversation.progress_indicator_mut().prompt_finished();
+                self.finish_prompt(&ToolStatus::Error(format!("failed: {error}")));
                 self.submission.reset();
             }
             FailedCommand::LoadSession | FailedCommand::ListWorkspaces | FailedCommand::MoveWorkspace => {

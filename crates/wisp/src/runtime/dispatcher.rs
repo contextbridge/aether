@@ -12,8 +12,8 @@ pub struct CommandDispatcher {
 }
 
 impl CommandDispatcher {
-    pub fn new(client_handle: impl Into<AcpClientHandle>) -> Self {
-        Self { client_handle: client_handle.into(), tasks: TaskSupervisor::default() }
+    pub fn new(client_handle: AcpClientHandle) -> Self {
+        Self { client_handle, tasks: TaskSupervisor::default() }
     }
 
     pub fn dispatch(&mut self, command: Command) -> Option<CommandResult> {

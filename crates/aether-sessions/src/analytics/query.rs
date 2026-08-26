@@ -5,12 +5,6 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::time::Duration;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OutputFormat {
-    Json,
-    Tsv,
-}
-
 #[derive(Debug, Clone)]
 pub struct QueryOptions {
     pub db_path: PathBuf,

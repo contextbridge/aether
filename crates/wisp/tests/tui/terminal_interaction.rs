@@ -8,7 +8,7 @@ use wisp::command::{AgentCommand, Command, CommandResult, GitCommand, TerminalCo
 
 use super::support::{
     BooleanPropertySchema, ElicitationSchema, StringPropertySchema, TestUi, TestUiBuilder, accepted_content, acp,
-    block_on_local, buffer_text, form_elicitation, with_elicitation,
+    block_on_local, buffer_text, form_elicitation, prompt_failed, with_elicitation,
 };
 
 /// Whether the app asked the terminal to ring the bell, draining whatever else
@@ -275,7 +275,7 @@ mod bell {
         let mut app = make_app();
 
         app.submit("hello");
-        app.acp_event(AcpEvent::PromptError(agent_client_protocol::Error::internal_error()));
+        app.deliver_result(prompt_failed("internal error"));
 
         assert!(!rang_bell(&mut app));
     }

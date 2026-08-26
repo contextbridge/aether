@@ -125,13 +125,6 @@ impl SessionModel {
         }
     }
 
-    /// Stops waiting on a workspace-move session load that will never land.
-    pub fn abandon_workspace_load(&mut self) {
-        if self.workspace_move_state == WorkspaceMoveState::LoadingSession {
-            self.workspace_move_state = WorkspaceMoveState::Idle;
-        }
-    }
-
     pub fn server_statuses(&self) -> &[McpServerStatusEntry] {
         &self.server_statuses
     }

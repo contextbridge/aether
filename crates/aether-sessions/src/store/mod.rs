@@ -1,9 +1,6 @@
 mod prompt_history;
 
-use acp_utils::notifications::{
-    PromptSearchParams, PromptSearchResponse, SessionPreviewParams, SessionPreviewResponse, SessionPreviewRole,
-    SessionPreviewTurn,
-};
+use acp_utils::notifications::{PromptSearchResponse, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn};
 use aether_core::events::{AgentEvent, MessageEvent, ToolEvent};
 use serde::Serialize;
 use std::fs::{self, File, OpenOptions};
@@ -104,10 +101,6 @@ impl SessionStore {
         if !event.is_persisted() {
             return Ok(());
         }
-        self.append_recorded_event(session_id, event)
-    }
-
-    pub fn append_recorded_event(&self, session_id: &str, event: &SessionEvent) -> Result<(), SessionStoreError> {
         self.append_line(session_id, event)?;
         if let Some(prompt) = event.user_content()
             && let Some(meta) = self.session_meta(session_id)
@@ -118,9 +111,9 @@ impl SessionStore {
         Ok(())
     }
 
-    pub fn load(&self, session_id: &str) -> Option<(SessionMeta, Vec<SessionEvent>)> {
-        let scan = read_bounded_session(&self.session_path(session_id), ScanLimits::UNBOUNDED).ok()?;
-        Some((scan.meta, scan.events))
+    pub fn load(&self, session_id: &str) -> Result<(SessionMeta, Vec<SessionEvent>), SessionStoreError> {
+        let scan = read_bounded_session(&self.session_path(session_id), ScanLimits::UNBOUNDED)?;
+        Ok((scan.meta, scan.events))
     }
 
     pub fn session_cwd(&self, session_id: &str) -> Option<PathBuf> {
@@ -168,12 +161,12 @@ impl SessionStore {
         summaries
     }
 
-    pub fn preview(&self, params: &SessionPreviewParams) -> Result<SessionPreviewResponse, SessionStoreError> {
-        read_session_preview(&self.session_path(&params.session_id), ScanLimits::PREVIEW)
+    pub fn preview(&self, session_id: &str) -> Result<SessionPreviewResponse, SessionStoreError> {
+        read_session_preview(&self.session_path(session_id), ScanLimits::PREVIEW)
     }
 
-    pub fn search_prompts(&self, params: &PromptSearchParams) -> Result<PromptSearchResponse, SessionStoreError> {
-        self.prompt_history.search(params).map_err(SessionStoreError::PromptHistory)
+    pub fn search_prompts(&self, query: &str, limit: Option<usize>) -> Result<PromptSearchResponse, SessionStoreError> {
+        self.prompt_history.search(query, limit).map_err(SessionStoreError::PromptHistory)
     }
 
     fn session_meta(&self, session_id: &str) -> Option<SessionMeta> {
@@ -309,10 +302,5 @@ fn truncate_for_preview(text: &str) -> String {
 fn extract_title(content: &[ContentBlock]) -> String {
     let first_line =
         ContentBlock::first_text(content).and_then(|text| text.lines().next()).unwrap_or("Media prompt").trim();
-    if first_line.len() > MAX_TITLE_LEN {
-        let end = first_line.floor_char_boundary(MAX_TITLE_LEN);
-        format!("{}…", &first_line[..end])
-    } else {
-        first_line.to_string()
-    }
+    truncate_for_preview(first_line)
 }

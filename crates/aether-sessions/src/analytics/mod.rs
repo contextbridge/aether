@@ -8,7 +8,7 @@ mod session;
 
 pub use error::SessionIndexError;
 pub use ingest::{IngestOptions, IngestSummary, default_parse_concurrency, ingest_sessions};
-pub use query::{OutputFormat, QueryOptions, QueryOutput, render_tsv, run_query};
+pub use query::{QueryOptions, QueryOutput, render_tsv, run_query};
 pub use schema_doc::{Example, SchemaDoc, render_schema_text, schema_doc};
 
 fn clamp_i64<T: TryInto<i64>>(value: T) -> i64 {

@@ -1,4 +1,4 @@
-use acp_utils::notifications::{PromptSearchParams, SessionPreviewParams, SessionPreviewRole};
+use acp_utils::notifications::SessionPreviewRole;
 use aether_core::events::{AgentEvent, MessageEvent, ToolEvent};
 use aether_sessions::{SessionEvent, SessionMeta, SessionStore, SessionStoreError, UserEvent};
 use llm::ContentBlock;
@@ -118,14 +118,14 @@ fn prompt_search_is_smart_case_unicode_safe_and_retains_recent_entries() -> Test
     store.append_event("session-1", &user_message("HELLO world"))?;
     store.append_event("session-1", &user_message("café"))?;
 
-    let old = store.search_prompts(&PromptSearchParams { query: "prompt 0".to_string(), limit: None })?;
+    let old = store.search_prompts("prompt 0", None)?;
     assert!(old.results.is_empty());
 
-    let lower = store.search_prompts(&PromptSearchParams { query: "hello".to_string(), limit: None })?;
+    let lower = store.search_prompts("hello", None)?;
     assert_eq!(lower.results.len(), 1);
-    let upper = store.search_prompts(&PromptSearchParams { query: "Hello".to_string(), limit: None })?;
+    let upper = store.search_prompts("Hello", None)?;
     assert!(upper.results.is_empty());
-    let unicode = store.search_prompts(&PromptSearchParams { query: "fé".to_string(), limit: None })?;
+    let unicode = store.search_prompts("fé", None)?;
     let hit = &unicode.results[0];
     assert_eq!(&hit.prompt[hit.match_start..hit.match_end], "fé");
     Ok(())
@@ -140,7 +140,7 @@ fn relocating_updates_metadata_and_derived_prompt_entries() -> TestResult {
     store.relocate("session-1", Path::new("/tmp/new-project"))?;
 
     assert_eq!(store.session_cwd("session-1"), Some(PathBuf::from("/tmp/new-project")));
-    let response = store.search_prompts(&PromptSearchParams { query: "move me".to_string(), limit: None })?;
+    let response = store.search_prompts("move me", None)?;
     assert_eq!(response.results[0].cwd, PathBuf::from("/tmp/new-project"));
     Ok(())
 }
@@ -163,7 +163,7 @@ fn preview_returns_metadata_media_and_tool_counts() -> TestResult {
         })),
     )?;
 
-    let preview = store.preview(&SessionPreviewParams { session_id: "session-1".to_string() })?;
+    let preview = store.preview("session-1")?;
     assert_eq!(preview.session_id, "session-1");
     assert_eq!(preview.tool_call_count, 1);
     assert_eq!(preview.transcript[0].role, SessionPreviewRole::User);
@@ -174,7 +174,7 @@ fn preview_returns_metadata_media_and_tool_counts() -> TestResult {
 #[test]
 fn preview_unknown_session_returns_not_found_store_error() {
     let (_directory, store) = temp_store();
-    let error = store.preview(&SessionPreviewParams { session_id: "missing".to_string() }).unwrap_err();
+    let error = store.preview("missing").unwrap_err();
     assert!(matches!(error, SessionStoreError::Io(error) if error.kind() == std::io::ErrorKind::NotFound));
 }
 
@@ -186,7 +186,7 @@ fn prompt_search_applies_result_limit_and_reports_truncation() -> TestResult {
         store.append_event("session-1", &user_message(&format!("matching prompt {index}")))?;
     }
 
-    let response = store.search_prompts(&PromptSearchParams { query: "matching".to_string(), limit: Some(2) })?;
+    let response = store.search_prompts("matching", Some(2))?;
     assert_eq!(response.results.len(), 2);
     assert!(response.truncated);
     Ok(())
@@ -200,7 +200,7 @@ fn preview_marks_transcript_and_scan_limits_as_truncated() -> TestResult {
         store.append_event("session-1", &user_message(&format!("prompt {index}")))?;
     }
 
-    let preview = store.preview(&SessionPreviewParams { session_id: "session-1".to_string() })?;
+    let preview = store.preview("session-1")?;
     assert_eq!(preview.transcript.len(), 8);
     assert!(preview.truncated);
     Ok(())
@@ -233,8 +233,9 @@ fn list_uses_media_prompt_and_truncates_long_titles() -> TestResult {
 fn empty_and_missing_stores_have_no_sessions_or_prompts() -> TestResult {
     let (directory, store) = temp_store();
     assert!(store.list().is_empty());
-    assert!(store.load("missing").is_none());
-    let empty = store.search_prompts(&PromptSearchParams { query: " ".to_string(), limit: None })?;
+    let missing_session = store.load("missing").unwrap_err();
+    assert!(matches!(missing_session, SessionStoreError::Io(error) if error.kind() == std::io::ErrorKind::NotFound));
+    let empty = store.search_prompts(" ", None)?;
     assert!(empty.results.is_empty());
 
     let missing = SessionStore::from_path(directory.path().join("missing"));

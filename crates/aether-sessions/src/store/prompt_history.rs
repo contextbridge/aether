@@ -1,5 +1,5 @@
 use crate::SessionMeta;
-use acp_utils::notifications::{PromptSearchParams, PromptSearchResponse, PromptSearchResult};
+use acp_utils::notifications::{PromptSearchResponse, PromptSearchResult};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
@@ -49,9 +49,9 @@ impl PromptHistoryIndex {
         if changed { self.rewrite_file(entries.iter()) } else { Ok(()) }
     }
 
-    pub(super) fn search(&self, params: &PromptSearchParams) -> io::Result<PromptSearchResponse> {
-        let query = params.query.trim();
-        let limit = prompt_search_limit(params.limit);
+    pub(super) fn search(&self, query: &str, limit: Option<usize>) -> io::Result<PromptSearchResponse> {
+        let query = query.trim();
+        let limit = prompt_search_limit(limit);
         let mut state = self.lock_state();
         let entries = self.ensure_loaded(&mut state)?;
 

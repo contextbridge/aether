@@ -444,7 +444,7 @@ fn workspace_move_server_side_load_failure_recovers() {
     let _ = ui.next_agent_command().unwrap();
     assert_eq!(ui.app().workspace_move_state(), WorkspaceMoveState::LoadingSession);
 
-    ui.acp_event(AcpEvent::PromptError(agent_client_protocol::Error::internal_error()));
+    ui.deliver_result(session_load_failed("internal error"));
     assert_eq!(
         ui.app().workspace_move_state(),
         WorkspaceMoveState::Idle,
@@ -456,7 +456,7 @@ fn workspace_move_server_side_load_failure_recovers() {
     let viewport = ui.viewport_text();
     assert!(
         viewport.lines().any(|l| l.contains("after the failure")),
-        "updates should stop being buffered once the load fails:\n{viewport}"
+        "updates for the current session should still render after the load fails:\n{viewport}"
     );
 }
 

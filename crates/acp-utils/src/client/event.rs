@@ -1,4 +1,3 @@
-use acp::Error;
 use acp::Responder;
 use acp::schema::v1::{SessionUpdate, StopReason};
 use agent_client_protocol as acp;
@@ -18,6 +17,5 @@ pub enum AcpEvent {
     McpNotification(McpNotification),
     ElicitationRequest { params: Box<CreateElicitationRequest>, responder: Responder<CreateElicitationResponse> },
     PromptDone(StopReason),
-    PromptError(Error),
     ConnectionClosed,
 }
