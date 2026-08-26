@@ -183,7 +183,7 @@ export const runHeadlessCode = `$ aether headless "refactor auth"`;
 export const runAcpCode = `$ aether acp`;
 export const rustLibraryCode = `use aether_core::core::{Prompt, agent};
 use aether_core::events::{AgentEvent, Command, MessageEvent, TurnEvent};
-use llm::{ProviderFactory, providers::AnthropicProvider};
+use llm::{ProviderFactory, providers::anthropic::AnthropicProvider};
 
 let provider = AnthropicProvider::from_env()
 .await?

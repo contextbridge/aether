@@ -603,6 +603,47 @@ fn mouse_click_after_resize_uses_correct_pane_rects() {
     assert!(text.contains("Section One"), "plan should render: {text}");
 }
 
+#[test]
+fn mouse_wheel_moves_the_plan_cursor_like_an_arrow_key() {
+    let markdown = "one\ntwo\nthree\nfour\nfive";
+    let (mut arrow_screen, mut arrow_rx) = make_screen(markdown);
+    let (mut wheel_screen, mut wheel_rx) = make_screen(markdown);
+
+    render_screen(&mut arrow_screen, 50, 10);
+    render_screen(&mut wheel_screen, 50, 10);
+    arrow_screen.on_key(key(KeyCode::Down));
+    wheel_screen.on_mouse(MouseAction::ScrollDown, 2, 20);
+
+    for screen in [&mut arrow_screen, &mut wheel_screen] {
+        screen.on_key(key(KeyCode::Char('c')));
+        type_text(screen, "selected");
+        screen.on_key(key(KeyCode::Enter));
+        screen.on_key(key(KeyCode::Char('r')));
+    }
+
+    let arrow_response = arrow_rx.try_recv().expect("arrow review should submit");
+    let wheel_response = wheel_rx.try_recv().expect("wheel review should submit");
+    assert_eq!(accepted_content(&wheel_response)["feedback"], accepted_content(&arrow_response)["feedback"]);
+    assert!(accepted_content(&wheel_response)["feedback"].as_str().unwrap().contains("Line 2"));
+}
+
+#[test]
+fn mouse_wheel_moves_past_a_wrapped_source_line() {
+    let markdown = format!("{}\nnext line", "wrapped ".repeat(20));
+    let (mut screen, mut rx) = make_screen(&markdown);
+
+    render_screen(&mut screen, 30, 10);
+    screen.on_mouse(MouseAction::ScrollDown, 2, 15);
+    screen.on_key(key(KeyCode::Char('c')));
+    type_text(&mut screen, "selected");
+    screen.on_key(key(KeyCode::Enter));
+    screen.on_key(key(KeyCode::Char('r')));
+
+    let response = rx.try_recv().expect("review should submit");
+    let feedback = accepted_content(&response)["feedback"].as_str().unwrap().to_string();
+    assert!(feedback.contains("Line 2"), "wheel should move past the wrapped first line: {feedback}");
+}
+
 fn type_text(screen: &mut PlanReviewScreen, text: &str) {
     for c in text.chars() {
         if c == ' ' {

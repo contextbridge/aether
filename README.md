@@ -110,7 +110,7 @@ Use `aether-agent-core` as a Rust library to build your own agent in ~25 lines. 
 1. **Add dependencies**
 
    ```bash
-   cargo add aether-agent-core tokio
+   cargo add aether-agent-core aether-llm tokio
    ```
 
 2. **Write your agent**
@@ -135,7 +135,7 @@ Use `aether-agent-core` as a Rust library to build your own agent in ~25 lines. 
 
        // 3. Build and spawn the agent
        let (tx, mut rx, _handle) = agent(llm)
-           .system_prompt(Prompt::from_globs(vec!["AGENTS.md".into()], ".".into()))
+           .system_prompt(Prompt::file("AGENTS.md", "."))
            .tools(mcp_runtime.handle().clone(), snapshot.tool_definitions())
            .spawn()
            .await?;
@@ -163,12 +163,12 @@ Use `aether-agent-core` as a Rust library to build your own agent in ~25 lines. 
 
 | Crate | Description |
 |---------|-------------|
-| [`aether-agent-core`](crates/aether-core) | Core agent library — LLM + prompt + tools in a loop ([docs](https://aether-agent.io/libraries/aether-core/agent-builder/)) |
-| [`llm`](crates/llm) | Multi-provider LLM abstraction ([docs](https://aether-agent.io/libraries/llm/provider-interface/)) |
+| [`aether-agent-core`](crates/aether-core) | Core agent library — LLM + prompt + tools in a loop ([docs](https://docs.rs/aether-agent-core)) |
+| [`llm`](crates/llm) | Multi-provider LLM abstraction ([docs](https://docs.rs/aether-llm)) |
 | [`wisp`](crates/wisp) | Terminal UI for AI agents, built on ACP ([docs](https://aether-agent.io/aether/terminal/overview/)) |
 | [`aether-agent-cli`](crates/aether-cli) | Headless CLI and ACP server for editor integration ([docs](https://aether-agent.io/aether/running/headless/)) |
 | [`mcp-servers`](crates/mcp-servers) | Pre-built MCP tool servers (coding, LSP, skills, tasks, sub-agents, survey) ([docs](https://aether-agent.io/aether/built-in-servers/coding/)) |
-| [`aether-evals`](crates/aether-evals) | Automated testing (evals) for LLM agents ([docs](https://aether-agent.io/libraries/aether-evals/evals/)) |
+| [`aether-evals`](crates/aether-evals) | Automated testing (evals) for LLM agents ([docs](https://docs.rs/aether-evals)) |
 | [`aether-lspd`](crates/aether-lspd) | LSP daemon — shares language servers across agents |
 | [`aether-project`](crates/aether-project) | Project configuration and agent catalog from `.aether/settings.json` |
 
