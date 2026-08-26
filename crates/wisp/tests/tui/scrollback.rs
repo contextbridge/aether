@@ -24,7 +24,7 @@ fn commit_overflowing_reply(ui: &mut TestUi) {
         "precondition: a prior reply must have been committed to scrollback"
     );
     // Complete the turn so the app is idle and later commands (e.g. /move) are not blocked.
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
 }
 
 #[test]

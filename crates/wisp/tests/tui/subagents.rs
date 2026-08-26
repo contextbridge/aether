@@ -82,7 +82,7 @@ fn sub_agent_parent_stays_live_while_child_running() {
 
     // parent completed, no sub-agents → should drain
     app.acp_event(text_chunk("Done"));
-    app.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    app.complete_prompt(acp::StopReason::EndTurn);
     assert!(
         app.app().conversation_items().iter().any(|item| {
             matches!(item.content(), ConversationContent::Tool(tool) if tool.title == "spawn_subagent")
@@ -123,7 +123,7 @@ fn sub_agent_wants_tick_while_running() {
     assert!(app.app().wants_tick());
 
     app.acp_event(sub_agent_done("parent-1", "task-a", "explorer"));
-    app.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    app.complete_prompt(acp::StopReason::EndTurn);
 
     // after finalization, sub-agent tools are finalized
     assert!(!app.app().wants_tick());
@@ -210,7 +210,7 @@ fn sub_agent_drain_includes_sub_agents_in_history_items() {
 
     // End prompt to finalize everything
     app.acp_event(text_chunk("Done"));
-    app.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    app.complete_prompt(acp::StopReason::EndTurn);
 
     let tool_item = app.app().conversation_items().iter().find_map(|item| match item.content() {
         ConversationContent::Tool(tool) if tool.title == "spawn_subagent" => Some(tool),
@@ -244,7 +244,7 @@ fn sub_agent_prompt_cancelled_finalizes_sub_agents() {
     app.acp_event(tool_call("parent-1", "spawn_subagent"));
     app.acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", "{}"));
 
-    app.acp_event(AcpEvent::PromptDone(acp::StopReason::Cancelled));
+    app.complete_prompt(acp::StopReason::Cancelled);
 
     assert!(!app.app().wants_tick());
 }
@@ -301,11 +301,11 @@ mod progress_indicator_tests {
     }
 
     #[test]
-    fn prompt_done_hides_progress() {
+    fn completed_prompt_hides_progress() {
         let mut ui = TestUi::new();
         ui.submit("hello");
         ui.acp_event(text_chunk("response"));
-        ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+        ui.complete_prompt(acp::StopReason::EndTurn);
         ui.draw();
         let full = ui.viewport_text();
         assert!(!full.contains("esc to interrupt"), "{full}");
@@ -463,7 +463,7 @@ mod progress_indicator_tests {
         let mut app = make_app();
         app.submit("hello");
         app.acp_event(text_chunk("done"));
-        app.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+        app.complete_prompt(acp::StopReason::EndTurn);
         assert!(!app.app().wants_tick(), "wants_tick should be false after prompt completes and no other activity");
     }
 
@@ -498,7 +498,7 @@ mod progress_indicator_tests {
 
         // Complete the prompt
         ui.acp_event(text_chunk("response"));
-        ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+        ui.complete_prompt(acp::StopReason::EndTurn);
         // Tick while idle — should not change
         ui.tick(now);
         ui.resize(120, 30);
@@ -517,7 +517,7 @@ mod progress_indicator_tests {
             writeln!(response, "line-{i}").unwrap();
         }
         ui.acp_event(text_chunk(&response));
-        ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+        ui.complete_prompt(acp::StopReason::EndTurn);
 
         // Submit another prompt so we can see progress indicator
         ui.submit("another");

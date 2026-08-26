@@ -7,9 +7,9 @@ use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     CancelNotification, CloseSessionRequest, CloseSessionResponse, ContentBlock, ContentChunk, Implementation,
     InitializeRequest, InitializeResponse, ListSessionsRequest, ListSessionsResponse, LoadSessionRequest,
-    LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest, ResumeSessionRequest,
+    LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse, ResumeSessionRequest,
     ResumeSessionResponse, SessionId, SessionInfo, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
-    TextContent,
+    StopReason, TextContent,
 };
 use agent_client_protocol::{self as acp, Agent};
 use std::path::PathBuf;
@@ -97,6 +97,50 @@ async fn cancel_reaches_the_agent_while_a_config_response_is_outstanding() {
             client.handle.cancel(CancelNotification::new(session_id)).await.expect("cancel queues");
 
             cancelled.notified().await;
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn prompt_completion_follows_session_updates_on_the_event_stream() {
+    LocalSet::new()
+        .run_until(async {
+            let (agent_transport, client_transport) = duplex_pair();
+            let agent_builder = Agent
+                .builder()
+                .on_receive_request(
+                    async |_request: InitializeRequest, responder, _cx| {
+                        responder.respond(InitializeResponse::new(ProtocolVersion::V1))
+                    },
+                    acp::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async |request: PromptRequest, responder, cx| {
+                        cx.send_notification(SessionNotification::new(
+                            request.session_id,
+                            SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(
+                                "final answer",
+                            )))),
+                        ))?;
+                        responder.respond(PromptResponse::new(StopReason::EndTurn))
+                    },
+                    acp::on_receive_request!(),
+                );
+            spawn_local(async move {
+                let _ = agent_builder.connect_to(agent_transport).await;
+            });
+
+            let mut client = connect_acp_client(client_transport, InitializeRequest::new(ProtocolVersion::V1))
+                .await
+                .expect("initialization succeeds");
+            client
+                .handle
+                .prompt(PromptRequest::new("session", vec![ContentBlock::Text(TextContent::new("hello"))]))
+                .await
+                .expect("prompt succeeds");
+
+            assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::SessionUpdate { .. })));
+            assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::PromptCompleted(StopReason::EndTurn))));
         })
         .await;
 }

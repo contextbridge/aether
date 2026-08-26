@@ -255,7 +255,7 @@ mod bell {
         app.submit("hello");
         assert!(app.app().waiting_for_response());
 
-        app.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+        app.complete_prompt(acp::StopReason::EndTurn);
 
         assert!(rang_bell(&mut app));
     }
@@ -265,7 +265,7 @@ mod bell {
         let mut app = make_app();
 
         app.submit("hello");
-        app.acp_event(AcpEvent::PromptDone(acp::StopReason::Cancelled));
+        app.complete_prompt(acp::StopReason::Cancelled);
 
         assert!(!rang_bell(&mut app));
     }
@@ -291,11 +291,10 @@ mod bell {
     }
 
     #[test]
-    fn no_bell_on_unsolicited_prompt_done() {
+    fn no_bell_on_unsolicited_prompt_completion() {
         let mut app = make_app();
 
-        // No prompt in flight — PromptDone is unsolicited
-        app.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+        app.complete_prompt(acp::StopReason::EndTurn);
 
         assert!(!rang_bell(&mut app));
     }
@@ -305,7 +304,7 @@ mod bell {
         let mut app = make_app();
 
         app.submit("first");
-        app.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+        app.complete_prompt(acp::StopReason::EndTurn);
 
         assert!(rang_bell(&mut app));
         assert!(!rang_bell(&mut app));

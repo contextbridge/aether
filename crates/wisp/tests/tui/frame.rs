@@ -34,7 +34,7 @@ fn resize_growth_preserves_native_history_without_duplication() {
         reply.push('\n');
     }
     ui.acp_event(text_chunk(&reply));
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
     assert!(
         ui.app()
@@ -110,7 +110,7 @@ fn completed_turn_settles_into_a_stable_viewport() {
     let mut ui = TestUi::with_dimensions(40, 15);
     ui.submit("hi");
     ui.acp_event(text_chunk("final answer"));
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
     ui.draw();
 
@@ -168,7 +168,7 @@ fn resize_growth_keeps_canonical_history_visible() {
         reply.push('\n');
     }
     ui.acp_event(text_chunk(&reply));
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
 
     ui.assert_history_contains("queued-line-0");

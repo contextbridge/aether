@@ -1,4 +1,4 @@
-use crate::command::{Command, CommandResult, FailedCommand};
+use crate::command::{AgentCommand, Command, CommandResult, FailedCommand};
 use crate::app::keybindings::Keybindings;
 use crate::app::message::Message;
 use crate::conversation::items::{Conversation, ConversationItem};
@@ -281,6 +281,16 @@ impl App {
             FailedCommand::Other(_) => {}
         }
         self.notify(&format!("Failed to {}: {error}", command.describe()));
+    }
+
+    fn start_prompt(&mut self, text: String, content: Option<Vec<acp::ContentBlock>>) {
+        self.conversation.turn_mut().set_prompt_in_flight(true);
+        self.conversation.progress_indicator_mut().prompt_started();
+        self.queue(Command::Agent(AgentCommand::Prompt {
+            session_id: self.session.session_id().clone(),
+            text,
+            content,
+        }));
     }
 
     fn queue(&mut self, command: Command) {

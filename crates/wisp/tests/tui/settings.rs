@@ -853,7 +853,7 @@ fn settings_overlay_uses_borderless_modal_chrome_and_padded_highlights() {
 fn settings_overlay_clears_conversation_content_behind_it() {
     let mut ui = TestUiBuilder::new().config_options(vec![select_option("model", "gpt-4o")]).build();
     ui.submit("CHAT_CONTENT_MUST_NOT_SHOW_THROUGH_SETTINGS");
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
 
     ui.draw();
 
@@ -879,7 +879,7 @@ fn settings_overlay_still_valid_after_scrollback() {
     for i in 0..30 {
         ui.acp_event(text_chunk(&format!("line {i}")));
     }
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
 
     ui.draw();
     ui.draw();
