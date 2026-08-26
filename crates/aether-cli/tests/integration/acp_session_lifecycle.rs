@@ -1,8 +1,9 @@
 use aether_cli::acp::testing::AcpTestHarness;
 use aether_core::core::agent;
+use agent_client_protocol::Error;
 use agent_client_protocol::schema::v1::{
-    CloseSessionRequest, ContentBlock, ListSessionsRequest, PromptRequest, ResumeSessionRequest, SessionId,
-    SessionUpdate, StopReason, TextContent,
+    CloseSessionRequest, CloseSessionResponse, ContentBlock, ListSessionsRequest, ListSessionsResponse, PromptRequest,
+    ResumeSessionRequest, SessionId, SessionUpdate, StopReason, TextContent,
 };
 use llm::LlmResponse;
 use llm::testing::FakeLlmProvider;
@@ -129,16 +130,10 @@ where
         .await;
 }
 
-async fn list(
-    harness: &AcpTestHarness,
-    request: ListSessionsRequest,
-) -> agent_client_protocol::schema::v1::ListSessionsResponse {
+async fn list(harness: &AcpTestHarness, request: ListSessionsRequest) -> ListSessionsResponse {
     harness.client_cx.send_request(request).block_task().await.expect("list succeeds")
 }
 
-async fn close(
-    harness: &AcpTestHarness,
-    request: CloseSessionRequest,
-) -> Result<agent_client_protocol::schema::v1::CloseSessionResponse, agent_client_protocol::Error> {
+async fn close(harness: &AcpTestHarness, request: CloseSessionRequest) -> Result<CloseSessionResponse, Error> {
     harness.client_cx.send_request(request).block_task().await
 }
