@@ -1,5 +1,5 @@
 use acp_utils::server::AcpServerError;
-use aether_core::session::{SessionEvent, UserEvent};
+use aether_sessions::{SessionEvent, UserEvent};
 use agent_client_protocol::schema::v1::{ContentChunk, SessionId, SessionNotification, SessionUpdate};
 use agent_client_protocol::{Client, ConnectionTo};
 
@@ -82,7 +82,7 @@ mod tests {
 
     #[test]
     fn replay_ignores_control_events() {
-        use aether_core::session::SessionControlEvent;
+        use aether_sessions::SessionControlEvent;
 
         let session_id = acp::SessionId::new("test-session");
         let events = vec![SessionEvent::Control(SessionControlEvent::AgentSwitched {

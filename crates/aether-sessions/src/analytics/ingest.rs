@@ -1,5 +1,7 @@
-use crate::session::{AetherSession, DiscoveredSessionFile, FileFingerprint};
-use crate::{SessionIndexError, db::Db};
+use super::SessionIndexError;
+use super::db::Db;
+use super::session::AetherSession;
+use crate::{DiscoveredSessionFile, FileFingerprint, discover_session_files};
 use futures::StreamExt;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -30,7 +32,7 @@ pub async fn ingest_sessions(options: IngestOptions) -> Result<IngestSummary, Se
     let sessions_dir = options.sessions_dir.canonicalize()?;
     let db_path = options.db_path;
     let mut db = Db::open_writable(&db_path).await?;
-    let files = AetherSession::discover_sessions(&sessions_dir)?;
+    let files = discover_session_files(&sessions_dir)?;
     let mut summary = IngestSummary {
         sessions_dir: sessions_dir.clone(),
         db_path: db_path.clone(),

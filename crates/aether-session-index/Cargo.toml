@@ -20,16 +20,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
-thiserror = { workspace = true }
-chrono = { workspace = true }
-sqlx = { workspace = true }
 tokio = { workspace = true }
-futures = { workspace = true }
 utils = { package = "aether-utils", path = "../utils" }
-aether-core = { package = "aether-agent-core", path = "../aether-core" }
-llm = { package = "aether-llm", path = "../llm" }
-
-[dev-dependencies]
-tempfile = { workspace = true }
+aether-sessions = { workspace = true, features = ["analytics"] }

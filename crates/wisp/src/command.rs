@@ -5,8 +5,14 @@ use crate::request::RequestId;
 use crate::session::workspace_status::WorkspaceStatus;
 use crate::settings::UiSettings;
 use crate::theme::Theme;
-use acp_utils::notifications::{PromptSearchParams, WorkspaceMoveTarget};
-use agent_client_protocol::schema::v1::{ContentBlock, SessionId};
+use acp_utils::client::LoadedSession;
+use acp_utils::notifications::{
+    PromptSearchParams, PromptSearchResponse, SessionPreviewResponse, WorkspaceListResponse, WorkspaceMoveTarget,
+    WorkspaceMoveResponse,
+};
+use agent_client_protocol::schema::v1::{
+    ContentBlock, ListSessionsResponse, NewSessionResponse, SessionConfigOption, SessionId,
+};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
@@ -100,7 +106,22 @@ pub enum TerminalCommand {
 }
 
 pub enum CommandResult {
+    AgentCommandAccepted,
+    ConfigOptionsUpdated(Vec<SessionConfigOption>),
+    ConfigOptionUpdateFailed { error: String },
+    AuthenticationCompleted { method_id: String },
+    AuthenticationFailed { method_id: String },
+    SessionsListed(ListSessionsResponse),
+    SessionLoaded(LoadedSession),
+    NewSessionCreated(NewSessionResponse),
+    PromptSearchResults(PromptSearchResponse),
     PromptSearchFailed { query: String, error: String },
+    SessionPreviewLoaded(SessionPreviewResponse),
+    SessionPreviewFailed { session_id: String, error: String },
+    WorkspacesListed(WorkspaceListResponse),
+    WorkspaceListFailed { error: String },
+    WorkspaceMoved(WorkspaceMoveResponse),
+    WorkspaceMoveFailed { error: String },
     FilesIndexed { request_id: RequestId, files: Vec<FileEntry> },
     GitDiff(GitDiffEvent),
     SubmissionPrepared(AttachmentOutcome),

@@ -4,6 +4,7 @@ use crate::app::message::Message;
 use crate::conversation::items::{Conversation, ConversationItem};
 use crate::conversation::progress_indicator::{ProgressIndicator, ProgressPhase};
 use crate::conversation::status_line::StatusLineModel;
+use crate::conversation::tool_calls::ToolStatus;
 use crate::session::platform::{
     BrowserOpener, ClipboardWriter, default_browser_opener, default_clipboard_writer,
 };
@@ -15,6 +16,7 @@ use crate::settings::{
 };
 use crate::surfaces::composer::Composer;
 use crate::surfaces::input::RootOutput;
+use crate::surfaces::workspace_picker::WorkspacePicker;
 use crate::surfaces::picker::CommandEntry;
 use crate::view::generation::Generation;
 use crate::theme::Theme;
@@ -110,7 +112,7 @@ impl App {
     pub(crate) fn from_session(
         session: crate::session::Session,
         settings: UiSettings,
-    ) -> (Self, mpsc::UnboundedReceiver<AcpEvent>, acp_utils::client::AcpPromptHandle) {
+    ) -> (Self, mpsc::UnboundedReceiver<AcpEvent>, acp_utils::client::AcpClientHandle) {
         let crate::session::Session {
             session_id,
             agent_name,
@@ -119,7 +121,7 @@ impl App {
             config_options,
             auth_methods,
             event_rx,
-            prompt_handle,
+            client_handle,
             working_dir,
             workspace_status,
         } = session;
@@ -137,7 +139,7 @@ impl App {
             clipboard_writer: default_clipboard_writer(),
         });
         app.queue(Command::ResolveWorkspace { cwd: app.session.working_dir().to_path_buf() });
-        (app, event_rx, prompt_handle)
+        (app, event_rx, client_handle)
     }
 
     pub fn new(config: AppConfig) -> Self {
@@ -176,7 +178,7 @@ impl App {
         match message {
             Message::Terminal(event) => self.on_terminal_event(event),
             Message::Agent(event) => self.on_acp_event(*event),
-            Message::CommandFinished(result) => self.on_command_result(result),
+            Message::CommandFinished(result) => self.on_command_result(*result),
             Message::Tick(now) => self.on_tick(now),
         }
 
@@ -190,6 +192,28 @@ impl App {
 
     pub fn on_command_result(&mut self, result: CommandResult) {
         match result {
+            CommandResult::AgentCommandAccepted => {}
+            CommandResult::ConfigOptionsUpdated(options) => {
+                self.session.update_config_options(options);
+                if let Some(Overlay::Settings(overlay)) = self.overlay.as_mut() {
+                    overlay.update_config_options(self.session.config_options());
+                }
+            }
+            CommandResult::ConfigOptionUpdateFailed { error } => {
+                tracing::warn!("set_session_config_option failed: {error}");
+                self.notify(&format!("Failed to update setting: {error}"));
+            }
+            CommandResult::AuthenticationCompleted { method_id } => {
+                if let Some(Overlay::Settings(overlay)) = self.overlay.as_mut() {
+                    overlay.on_authenticate_complete(&method_id);
+                }
+            }
+            CommandResult::AuthenticationFailed { method_id } => {
+                tracing::warn!("Provider authentication failed for {method_id}");
+                if let Some(Overlay::Settings(overlay)) = self.overlay.as_mut() {
+                    overlay.on_authenticate_failed(&method_id);
+                }
+            }
             CommandResult::FilesIndexed { request_id, files } => self.composer.on_files_indexed(request_id, files),
             CommandResult::GitDiff(event) => {
                 let Route::GitReview(screen) = &mut self.route else { return };
@@ -209,10 +233,37 @@ impl App {
                     self.session.set_workspace_status(status);
                 }
             }
+            CommandResult::SessionsListed(response) => self.open_session_picker(response.sessions),
+            CommandResult::SessionLoaded(loaded) => self.on_loaded_session(loaded),
+            CommandResult::NewSessionCreated(response) => {
+                self.on_new_session(response.session_id, response.config_options.unwrap_or_default());
+            }
+            CommandResult::PromptSearchResults(response) => self.composer.prompt_search_on_results(response),
             CommandResult::PromptSearchFailed { query, error } => {
                 if let Some(picker) = self.composer.prompt_search_mut() {
                     picker.on_failed(&query, error);
                 }
+            }
+            CommandResult::SessionPreviewLoaded(preview) => {
+                if let Some(Overlay::Sessions(picker)) = self.overlay.as_mut() {
+                    picker.on_preview_loaded(preview);
+                }
+            }
+            CommandResult::SessionPreviewFailed { session_id, error } => {
+                if let Some(Overlay::Sessions(picker)) = self.overlay.as_mut() {
+                    picker.on_preview_failed(&session_id, error);
+                }
+            }
+            CommandResult::WorkspacesListed(response) => {
+                self.open_overlay(Overlay::Workspaces(WorkspacePicker::new(response.workspaces)));
+                self.session.begin_workspace_picking();
+            }
+            CommandResult::WorkspaceListFailed { error } => {
+                self.abandon_workspace_move(&format!("Failed to list workspaces: {error}"));
+            }
+            CommandResult::WorkspaceMoved(response) => self.on_workspace_moved(response.new_cwd),
+            CommandResult::WorkspaceMoveFailed { error } => {
+                self.abandon_workspace_move(&format!("Workspace move failed: {error}"));
             }
             CommandResult::Failed { command, error } => self.on_command_failed(command, &error),
         }
@@ -221,15 +272,10 @@ impl App {
     fn on_command_failed(&mut self, command: FailedCommand, error: &str) {
         match command {
             FailedCommand::Prompt => {
-                self.conversation.turn_mut().set_prompt_in_flight(false);
-                self.conversation.progress_indicator_mut().prompt_finished();
+                self.finish_prompt(&ToolStatus::Error(format!("failed: {error}")));
                 self.submission.reset();
             }
-            FailedCommand::LoadSession => {
-                self.session.clear_loads();
-                self.session.end_workspace_move();
-            }
-            FailedCommand::ListWorkspaces | FailedCommand::MoveWorkspace => {
+            FailedCommand::LoadSession | FailedCommand::ListWorkspaces | FailedCommand::MoveWorkspace => {
                 self.session.end_workspace_move();
             }
             FailedCommand::Other(_) => {}

@@ -13,6 +13,8 @@ pub_underscore_fields = "allow"
 absolute_paths = "warn"
 
 [workspace.dependencies]
+aether-sessions = { path = "crates/aether-sessions", version = "0.1.0" }
+
 # AWS SDK
 aws-config = { version = "1.8.18", features = ["behavior-version-latest"] }
 aws-sdk-bedrockruntime = "1.133.0"

@@ -4,7 +4,7 @@ use agent_client_protocol::{Client, ConnectionTo};
 use llm::ContentBlock;
 use tracing::{error, info};
 
-use super::agent_runtime::AgentRuntime;
+use super::runtime::AgentRuntime;
 use crate::slash_commands::{expand_slash_command, parse_slash_command};
 
 pub(crate) async fn expand_slash_command_in_content(

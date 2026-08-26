@@ -30,7 +30,9 @@ path = "src/main.rs"
 
 [dependencies]
 aether-auth = { path = "../aether-auth", version = "0.1.12", features = ["keyring"] }
+base64 = { workspace = true }
 aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.34" }
+aether-sessions = { workspace = true }
 aether-project = { path = "../aether-project", version = "0.5.35" }
 aether-telemetry = { path = "../aether-telemetry", version = "0.1.15" }
 llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.7.29" }

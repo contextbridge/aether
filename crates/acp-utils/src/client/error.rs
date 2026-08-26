@@ -17,4 +17,8 @@ pub enum AcpClientError {
     /// `prompt`, etc.).
     #[error("ACP protocol error: {0}")]
     Protocol(#[source] agent_client_protocol::Error),
+
+    /// The requested lifecycle operation cannot run while a prompt is active.
+    #[error("ACP client is busy with an in-flight prompt")]
+    Busy,
 }

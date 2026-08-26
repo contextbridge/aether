@@ -1,14 +1,13 @@
 use super::agent::acp_agent_builder;
-use super::agent_key::AgentKey;
-use super::agent_runtime::{AgentRuntime, RuntimeEvent, RuntimeFactory};
-use super::error::SessionError;
 use super::fake_prompt_mcp::FakePromptMcp;
-use super::model_config::{Modes, ValidatedMode};
-use super::session_actor::{SessionActor, SessionActorInit};
-use super::session_agents::SessionAgents;
-use super::session_config_state::SessionConfigState;
+use super::session::actor::{SessionActor, SessionActorInit};
+use super::session::agent_key::AgentKey;
+use super::session::agents::SessionAgents;
+use super::session::config::SessionConfigState;
+use super::session::error::SessionError;
+use super::session::model::{Modes, ValidatedMode};
+use super::session::runtime::{AgentRuntime, RuntimeEvent, RuntimeFactory};
 use super::state::{AcpState, AcpStateConfig};
-use crate::acp::session_store::SessionStore;
 use crate::error::CliError;
 use crate::resolve::InitialSessionSelection;
 use crate::settings_args::SettingsSourceArgs;
@@ -19,10 +18,11 @@ use acp_utils::testing::{TestPeer, duplex_pair};
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
 use aether_core::core::{AgentBuilder, AgentHandle, Prompt};
-use aether_core::events::{AgentEvent, Command, MessageEvent};
+use aether_core::events::{AgentEvent, Command, MessageEvent, TurnEvent, TurnOutcome};
 use aether_core::mcp::{ServerFactory, mcp};
-use aether_core::session::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent, last_agent_from_events};
 use aether_project::AgentCatalog;
+use aether_sessions::SessionStore;
+use aether_sessions::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent, last_agent_from_events};
 use agent_client_protocol::schema::v1::{SessionId, SessionUpdate};
 use agent_client_protocol::{Agent, Client, ConnectionTo};
 use futures::FutureExt;
@@ -47,6 +47,7 @@ const CODER_REPLY: &str = "coder reply";
 pub struct AcpTestHarness {
     pub client_cx: ConnectionTo<Agent>,
     pub peer: TestPeer,
+    resume_agent: FakeAcpAgent,
     agent_cx: ConnectionTo<Client>,
     state: Arc<AcpState>,
     session_store: Arc<SessionStore>,
@@ -73,6 +74,10 @@ impl AcpTestHarness {
             tmp.path().join("workspaces.json"),
             Arc::new(StdCopyCloner),
         ));
+        let (resume_def, resume_agent) = fake_agent("Resume", "resume-mcp", "resume", "resumed reply");
+        let mut resume_agents = HashMap::new();
+        resume_agents.insert(resume_def.spec.name.clone(), resume_def);
+        let runtime_factory = Arc::new(FakeRuntimeFactory { cwd: PathBuf::from("/tmp"), agents: resume_agents });
         let state = Arc::new(AcpState::new(AcpStateConfig {
             session_store: session_store.clone(),
             workspace_manager,
@@ -81,6 +86,7 @@ impl AcpTestHarness {
             settings_source: SettingsSourceArgs::default(),
             provider_connections: ProviderConnectionOverrides::default(),
             telemetry: None,
+            runtime_factory: Some(runtime_factory),
         }));
 
         let (peer, client_builder) = TestPeer::new();
@@ -111,7 +117,11 @@ impl AcpTestHarness {
 
         let agent_cx = agent_cx_rx.await.expect("agent side connect_with produced a ConnectionTo");
         let client_cx = client_cx_rx.await.expect("client side connect_with produced a ConnectionTo");
-        Self { client_cx, peer, agent_cx, state, session_store, _tmp: tmp }
+        Self { client_cx, peer, resume_agent, agent_cx, state, session_store, _tmp: tmp }
+    }
+
+    pub fn resume_agent(&self) -> &FakeAcpAgent {
+        &self.resume_agent
     }
 
     pub async fn insert_agent_switching_session(&self) -> FakeAgentSwitchingSession {
@@ -214,7 +224,7 @@ impl AcpTestHarness {
         let meta = SessionMeta {
             session_id: session_id.to_string(),
             cwd: cwd.to_path_buf(),
-            model: "test-model".to_string(),
+            model: "anthropic:claude-sonnet-4-5".to_string(),
             selected_mode: None,
             created_at: created_at.to_string(),
         };
@@ -231,6 +241,14 @@ impl AcpTestHarness {
 
     pub fn append_stored_user_blocks(&self, session_id: &str, blocks: Vec<llm::ContentBlock>) {
         self.append_stored_event(session_id, &SessionEvent::User(UserEvent::Message { content: blocks }));
+    }
+
+    pub fn append_stored_agent_turn(&self, session_id: &str, text: &str) {
+        self.append_stored_agent_text(session_id, text);
+        self.append_stored_event(
+            session_id,
+            &SessionEvent::Agent(AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Completed })),
+        );
     }
 
     pub fn append_stored_agent_text(&self, session_id: &str, text: &str) {
@@ -372,7 +390,11 @@ impl RuntimeFactory for FakeRuntimeFactory {
         initial_messages: Vec<ChatMessage>,
         runtime_event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Result<AgentRuntime, SessionError> {
-        let def = self.agents.get(&spec.name).ok_or_else(|| SessionError::AgentNotFound(spec.name.clone()))?;
+        let def = self
+            .agents
+            .get(&spec.name)
+            .or_else(|| self.agents.values().next())
+            .ok_or_else(|| SessionError::AgentNotFound(spec.name.clone()))?;
         let provider = def
             .provider
             .lock()

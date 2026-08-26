@@ -2,9 +2,9 @@ use acp_utils::elicitation;
 use acp_utils::notifications::McpNotification;
 use acp_utils::server::AcpServerError;
 use aether_auth::OAuthCredentialStorage;
-use aether_core::context::ext::conversation_messages_from_events;
 use aether_core::events::{AgentCommand, AgentEvent, Command, ToolEvent, TurnOutcome};
-use aether_core::session::{SessionControlEvent, SessionEvent, UserEvent};
+use aether_sessions::model::{SessionControlEvent, SessionEvent, UserEvent};
+use aether_sessions::transcript::conversation_messages_from_events;
 use agent_client_protocol::schema::v1::{self as acp, PromptResponse, SessionId, SetSessionConfigOptionResponse};
 use agent_client_protocol::{Client, ConnectionTo, Responder};
 use llm::catalog::LlmModel;
@@ -19,20 +19,20 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use super::agent_key::AgentKey;
-use super::agent_runtime::{AgentRuntime, RUNTIME_EVENT_CHANNEL_CAPACITY, RuntimeEvent, RuntimeFactory};
+use super::agents::SessionAgents;
+use super::config::{SessionConfigState, Switch};
 use super::config_setting::ConfigSetting;
 use super::error::SessionError;
-use super::model_config::{Modes, get_all_models};
-use super::protocol::commands::map_mcp_prompt_to_available_command;
-use super::protocol::events::{
+use super::model::{Modes, get_all_models};
+use super::runtime::{AgentRuntime, RUNTIME_EVENT_CHANNEL_CAPACITY, RuntimeEvent, RuntimeFactory};
+use super::slash_commands::{expand_slash_command_in_content, send_available_commands};
+use crate::acp::protocol::commands::map_mcp_prompt_to_available_command;
+use crate::acp::protocol::events::{
     AgentExtNotification, map_agent_event_to_session_notification, try_extract_plan_notification,
     try_into_agent_notification,
 };
-use super::session_agents::SessionAgents;
-use super::session_config_state::{SessionConfigState, Switch};
-use super::session_store::SessionStore;
-use super::slash_commands::{expand_slash_command_in_content, send_available_commands};
 use crate::slash_commands::dedupe_commands_by_name;
+use aether_sessions::SessionStore;
 
 /// Capacity of the per-session command channel feeding the actor loop.
 const SESSION_COMMAND_CHANNEL_CAPACITY: usize = 50;
@@ -46,9 +46,9 @@ pub(crate) enum SessionCommand {
     AuthenticateMcp { server_name: String },
 }
 
-/// Handle the global [`AcpState`](super::state::AcpState) keeps for each live
-/// session: a command channel into the actor plus a lock-free snapshot of the
-/// session's config for broadcast fanout.
+/// Handle the [`SessionRegistry`](crate::acp::session::registry::SessionRegistry) keeps
+/// for each live session: a command channel into the actor plus a lock-free snapshot
+/// of the session's config for broadcast fanout.
 pub(crate) struct SessionHandle {
     cmd_tx: mpsc::Sender<SessionCommand>,
     snapshot_rx: watch::Receiver<ConfigSnapshot>,
@@ -502,7 +502,7 @@ fn persist_event(actor: &mut SessionActor, io: &SessionIo, event: SessionEvent) 
         return;
     }
 
-    if let Err(e) = io.repository.append_recorded_event(&io.session_id.0, &event) {
+    if let Err(e) = io.repository.append_event(&io.session_id.0, &event) {
         warn!("Failed to append session log entry: {e}");
     }
 
@@ -614,8 +614,8 @@ fn spawn_elicitation_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::acp::model_config::ValidatedMode;
-    use crate::acp::session_config_state::Pending;
+    use crate::acp::session::config::Pending;
+    use crate::acp::session::model::ValidatedMode;
     use ReasoningEffort as RE;
 
     const SONNET: &str = "anthropic:claude-sonnet-4-5";

@@ -99,7 +99,7 @@ fn workspace_list_failed_event_resets_state() {
     assert_eq!(ui.app().workspace_move_state(), WorkspaceMoveState::Listing);
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(workspace_list_failed("network error"));
+    ui.deliver_result(workspace_list_failed("network error"));
     assert_eq!(ui.app().workspace_move_state(), WorkspaceMoveState::Idle);
 
     ui.draw();
@@ -119,7 +119,7 @@ fn workspace_picker_opens_with_existing_workspaces() {
     assert_eq!(ui.app().workspace_move_state(), WorkspaceMoveState::Listing);
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(workspaces_listed(vec![
+    ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
         workspace_entry("/home/user/code/other", false),
         workspace_entry("/tmp/sandbox", false),
@@ -141,7 +141,7 @@ fn double_ctrl_c_exits_over_workspace_picker() {
     ui.type_text("/move");
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
-    ui.acp_event(workspaces_listed(vec![workspace_entry("/tmp/sandbox", false)]));
+    ui.deliver_result(workspaces_listed(vec![workspace_entry("/tmp/sandbox", false)]));
     assert!(ui.app().has_modal());
     assert_ctrl_c_exits(&mut ui);
 }
@@ -154,7 +154,7 @@ fn workspace_picker_shows_empty_state_when_no_workspaces() {
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
+    ui.deliver_result(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
     assert_eq!(ui.app().workspace_move_state(), WorkspaceMoveState::Picking);
     assert!(ui.app().has_modal());
 
@@ -171,7 +171,7 @@ fn workspace_picker_esc_closes_and_resets_state() {
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(workspaces_listed(vec![
+    ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
         workspace_entry("/home/user/code/other", false),
     ]));
@@ -191,7 +191,7 @@ fn workspace_picker_enter_selects_existing_workspace() {
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(workspaces_listed(vec![
+    ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
         workspace_entry("/home/user/code/other", false),
     ]));
@@ -225,7 +225,7 @@ fn workspace_picker_enter_selects_create_new_and_shows_naming_mode() {
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
+    ui.deliver_result(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
 
     ui.draw();
     let viewport = ui.viewport_text();
@@ -245,7 +245,7 @@ fn workspace_naming_new_esc_returns_to_list_mode() {
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
+    ui.deliver_result(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
 
     ui.key(key(KeyCode::Enter));
     ui.draw();
@@ -267,7 +267,7 @@ fn workspace_naming_new_enter_with_name_emits_move_target() {
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
+    ui.deliver_result(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
 
     ui.key(key(KeyCode::Enter));
     ui.paste("my-new-workspace");
@@ -302,7 +302,7 @@ fn workspace_picker_filtering_hides_non_matching() {
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(workspaces_listed(vec![
+    ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
         workspace_entry("/home/user/code/project-a", false),
         workspace_entry("/tmp/test", false),
@@ -330,7 +330,7 @@ fn workspace_move_success_updates_cwd_and_reloads_session() {
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(workspaces_listed(vec![
+    ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
         workspace_entry("/home/user/code/other", false),
     ]));
@@ -341,7 +341,7 @@ fn workspace_move_success_updates_cwd_and_reloads_session() {
     let cmd = ui.next_agent_command().unwrap();
     assert!(matches!(cmd, AgentCommand::MoveWorkspace { .. }));
 
-    ui.acp_event(workspace_moved("/home/user/code/other"));
+    ui.deliver_result(workspace_moved("/home/user/code/other"));
     assert_eq!(ui.app().workspace_move_state(), WorkspaceMoveState::LoadingSession);
 
     let load_cmd = ui.next_agent_command().unwrap();
@@ -353,19 +353,19 @@ fn workspace_move_success_updates_cwd_and_reloads_session() {
         other => panic!("expected LoadSession, got {other:?}"),
     }
 
-    ui.acp_event(session_loaded("test-session", Vec::new()));
+    ui.deliver_result(session_loaded("test-session", Vec::new()));
     assert_eq!(ui.app().workspace_move_state(), WorkspaceMoveState::Idle);
 }
 
 #[test]
-fn workspace_move_success_buffers_and_replays_session_updates() {
+fn workspace_move_success_replays_loaded_session_updates() {
     let mut ui = make_ui_with_workspace_move();
 
     ui.type_text("/move");
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(workspaces_listed(vec![
+    ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
         workspace_entry("/home/user/code/other", false),
     ]));
@@ -373,12 +373,17 @@ fn workspace_move_success_buffers_and_replays_session_updates() {
     ui.key(key(KeyCode::Enter));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(workspace_moved("/home/user/code/other"));
+    ui.deliver_result(workspace_moved("/home/user/code/other"));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(session_update_for("test-session", user_message_chunk("buffered-message")));
-
-    ui.acp_event(session_loaded("test-session", Vec::new()));
+    ui.deliver_result(CommandResult::SessionLoaded(LoadedSession {
+        session_id: SessionId::new("test-session"),
+        response: acp::LoadSessionResponse::new(),
+        replay: vec![acp::SessionNotification::new(
+            SessionId::new("test-session"),
+            user_message_chunk("buffered-message"),
+        )],
+    }));
     assert_eq!(ui.app().workspace_move_state(), WorkspaceMoveState::Idle);
 
     ui.draw();
@@ -398,7 +403,7 @@ fn workspace_move_load_session_failure_recovers() {
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(workspaces_listed(vec![
+    ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
         workspace_entry("/home/user/code/other", false),
     ]));
@@ -406,7 +411,7 @@ fn workspace_move_load_session_failure_recovers() {
     ui.key(key(KeyCode::Enter));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(workspace_moved("/home/user/code/other"));
+    ui.deliver_result(workspace_moved("/home/user/code/other"));
     assert_eq!(ui.app().workspace_move_state(), WorkspaceMoveState::LoadingSession);
     let _ = ui.next_agent_command().unwrap();
 
@@ -427,7 +432,7 @@ fn workspace_move_server_side_load_failure_recovers() {
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(workspaces_listed(vec![
+    ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
         workspace_entry("/home/user/code/other", false),
     ]));
@@ -435,11 +440,11 @@ fn workspace_move_server_side_load_failure_recovers() {
     ui.key(key(KeyCode::Enter));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(workspace_moved("/home/user/code/other"));
+    ui.deliver_result(workspace_moved("/home/user/code/other"));
     let _ = ui.next_agent_command().unwrap();
     assert_eq!(ui.app().workspace_move_state(), WorkspaceMoveState::LoadingSession);
 
-    ui.acp_event(AcpEvent::PromptError(agent_client_protocol::Error::internal_error()));
+    ui.deliver_result(session_load_failed("internal error"));
     assert_eq!(
         ui.app().workspace_move_state(),
         WorkspaceMoveState::Idle,
@@ -451,7 +456,7 @@ fn workspace_move_server_side_load_failure_recovers() {
     let viewport = ui.viewport_text();
     assert!(
         viewport.lines().any(|l| l.contains("after the failure")),
-        "updates should stop being buffered once the load fails:\n{viewport}"
+        "updates for the current session should still render after the load fails:\n{viewport}"
     );
 }
 
@@ -463,7 +468,7 @@ fn workspace_move_failed_event_resets_state() {
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(workspaces_listed(vec![
+    ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
         workspace_entry("/home/user/code/other", false),
     ]));
@@ -472,7 +477,7 @@ fn workspace_move_failed_event_resets_state() {
     let _ = ui.next_agent_command().unwrap();
     assert_eq!(ui.app().workspace_move_state(), WorkspaceMoveState::Moving);
 
-    ui.acp_event(workspace_move_failed("permission denied"));
+    ui.deliver_result(workspace_move_failed("permission denied"));
     assert_eq!(ui.app().workspace_move_state(), WorkspaceMoveState::Idle);
 
     ui.draw();
@@ -489,7 +494,7 @@ fn workspace_move_send_failure_resets_state() {
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(workspaces_listed(vec![
+    ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
         workspace_entry("/home/user/code/other", false),
     ]));
@@ -518,7 +523,7 @@ fn workspace_picker_renders_on_narrow_terminal() {
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(workspaces_listed(vec![
+    ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
         workspace_entry("/home/user/code/project-a", false),
     ]));
@@ -536,7 +541,7 @@ fn workspace_move_picker_closes_when_connection_closes() {
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(workspaces_listed(vec![
+    ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
         workspace_entry("/home/user/code/other", false),
     ]));

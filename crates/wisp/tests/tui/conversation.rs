@@ -76,7 +76,7 @@ fn double_ctrl_c_exits_over_session_picker() {
     app.type_text("/resume");
     app.key(key(KeyCode::Tab));
     let _ = app.next_agent_command().unwrap();
-    app.acp_event(sessions_listed(vec![session_info("other", "/tmp/elsewhere", "Other", "2025-01-01T00:00:00Z")]));
+    app.deliver_result(sessions_listed(vec![session_info("other", "/tmp/elsewhere", "Other", "2025-01-01T00:00:00Z")]));
     assert_ctrl_c_exits(&mut app);
 }
 
