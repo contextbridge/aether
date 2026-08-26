@@ -1,6 +1,6 @@
 #![cfg(feature = "testing")]
 
-use acp_utils::client::AcpPromptHandle;
+use acp_utils::client::AcpClientHandle;
 use agent_client_protocol::schema::v1::SessionId;
 use tempfile::TempDir;
 use wisp::command::{AgentCommand, Command, CommandResult, FailedCommand, GitCommand};
@@ -20,35 +20,24 @@ fn file_index_limit_counts_only_indexed_files() {
     assert_eq!(files[0].display_name, "file.rs");
 }
 
-#[test]
-fn agent_commands_use_the_existing_acp_actor() {
-    let (handle, mut commands) = AcpPromptHandle::recording();
-    let mut dispatcher = CommandDispatcher::new(handle);
-    let session_id = SessionId::new("session");
-
-    assert!(dispatcher.dispatch(Command::Agent(AgentCommand::Cancel { session_id: session_id.clone() })).is_none());
-
-    assert!(matches!(
-        commands.try_recv().unwrap(),
-        acp_utils::client::PromptCommand::Cancel { session_id: actual } if actual == session_id
-    ));
-}
-
-#[test]
-fn closed_agent_actor_becomes_a_reducer_visible_failure() {
-    let (handle, commands) = AcpPromptHandle::recording();
-    drop(commands);
-    let mut dispatcher = CommandDispatcher::new(handle);
+#[tokio::test]
+async fn closed_agent_connection_becomes_a_reducer_visible_failure() {
+    let mut dispatcher = CommandDispatcher::new(AcpClientHandle::detached());
 
     let result = dispatcher.dispatch(Command::Agent(AgentCommand::Cancel { session_id: SessionId::new("session") }));
 
-    assert!(matches!(result, Some(CommandResult::Failed { command: FailedCommand::Other("cancel"), .. })));
+    assert!(result.is_none());
+    assert!(dispatcher.has_pending_tasks());
+    assert!(matches!(
+        dispatcher.next_result().await,
+        Some(CommandResult::Failed { command: FailedCommand::Other("cancel"), .. })
+    ));
+    dispatcher.shutdown().await;
 }
 
 #[tokio::test]
 async fn supervised_git_reads_report_completion() {
-    let (handle, _commands) = AcpPromptHandle::recording();
-    let mut dispatcher = CommandDispatcher::new(handle);
+    let mut dispatcher = CommandDispatcher::new(AcpClientHandle::detached());
     let outside_repository = TempDir::new().unwrap();
     let request_id = RequestId::from(7);
 
@@ -76,8 +65,7 @@ async fn supervised_git_reads_report_completion() {
 
 #[tokio::test]
 async fn superseded_workspace_reads_are_cancelled() {
-    let (handle, _commands) = AcpPromptHandle::recording();
-    let mut dispatcher = CommandDispatcher::new(handle);
+    let mut dispatcher = CommandDispatcher::new(AcpClientHandle::detached());
     let first = TempDir::new().unwrap();
     let second = TempDir::new().unwrap();
     let second_path = second.path().to_path_buf();

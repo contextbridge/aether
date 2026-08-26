@@ -4,7 +4,7 @@ use llm::catalog::{LlmModel, validate_reasoning_effort};
 use tracing::error;
 
 use super::config_setting::ConfigSetting;
-use super::model_config::{Modes, parse_available_spec};
+use super::model::{Modes, parse_available_spec};
 
 #[derive(Debug)]
 pub(crate) enum Switch {

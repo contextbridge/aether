@@ -69,10 +69,8 @@ fn sub_agent_progress_event_is_handled() {
     let mut app = make_app();
     app.acp_event(tool_call("parent-1", "spawn_subagent"));
 
-    // Send a sub-agent ToolCall event - should not crash
     app.acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", r#"{"pattern":"test"}"#));
 
-    // Parent with running sub-agent is still running
     assert!(app.app().is_agent_busy());
 }
 
@@ -234,8 +232,8 @@ fn sub_agent_prompt_error_finalizes_sub_agents() {
     app.acp_event(tool_call("parent-1", "spawn_subagent"));
     app.acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", "{}"));
 
-    // PromptError should finalize sub-agents
-    app.acp_event(AcpEvent::PromptError(agent_client_protocol::Error::internal_error()));
+    // A failed prompt should finalize sub-agents
+    app.deliver_result(prompt_failed("internal error"));
 
     assert!(!app.app().wants_tick());
 }
@@ -351,7 +349,7 @@ mod progress_indicator_tests {
         ui.type_text("/move");
         ui.key(key(KeyCode::Tab));
         let _ = ui.next_agent_command().unwrap();
-        ui.acp_event(workspaces_listed(vec![
+        ui.deliver_result(workspaces_listed(vec![
             workspace_entry("/home/user/code/current", true),
             workspace_entry("/home/user/code/other", false),
         ]));
@@ -370,13 +368,13 @@ mod progress_indicator_tests {
         ui.type_text("/move");
         ui.key(key(KeyCode::Tab));
         let _ = ui.next_agent_command().unwrap();
-        ui.acp_event(workspaces_listed(vec![
+        ui.deliver_result(workspaces_listed(vec![
             workspace_entry("/home/user/code/current", true),
             workspace_entry("/home/user/code/other", false),
         ]));
         ui.key(key(KeyCode::Enter));
         let _ = ui.next_agent_command().unwrap();
-        ui.acp_event(workspace_moved("/home/user/code/other"));
+        ui.deliver_result(workspace_moved("/home/user/code/other"));
         ui.draw();
         let viewport = ui.viewport_text();
         assert!(viewport.contains("Loading session in new workspace"), "{viewport}");
@@ -388,13 +386,13 @@ mod progress_indicator_tests {
         ui.type_text("/move");
         ui.key(key(KeyCode::Tab));
         let _ = ui.next_agent_command().unwrap();
-        ui.acp_event(workspaces_listed(vec![
+        ui.deliver_result(workspaces_listed(vec![
             workspace_entry("/home/user/code/current", true),
             workspace_entry("/home/user/code/other", false),
         ]));
         ui.key(key(KeyCode::Enter));
         let _ = ui.next_agent_command().unwrap();
-        ui.acp_event(workspace_move_failed("permission denied"));
+        ui.deliver_result(workspace_move_failed("permission denied"));
         ui.draw();
         let viewport = ui.viewport_text();
         assert!(!viewport.contains("Moving workspace"), "{viewport}");
@@ -407,7 +405,7 @@ mod progress_indicator_tests {
         ui.type_text("/move");
         ui.key(key(KeyCode::Tab));
         let _ = ui.next_agent_command().unwrap();
-        ui.acp_event(workspaces_listed(vec![
+        ui.deliver_result(workspaces_listed(vec![
             workspace_entry("/home/user/code/current", true),
             workspace_entry("/home/user/code/other", false),
         ]));
@@ -451,7 +449,7 @@ mod progress_indicator_tests {
         app.type_text("/move");
         app.key(key(KeyCode::Tab));
         let _ = app.next_agent_command().unwrap();
-        app.acp_event(workspaces_listed(vec![
+        app.deliver_result(workspaces_listed(vec![
             workspace_entry("/home/user/code/current", true),
             workspace_entry("/home/user/code/other", false),
         ]));
@@ -551,10 +549,7 @@ mod progress_indicator_tests {
         let mut ui = TestUi::new();
         ui.submit("hello");
         ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
-        ui.acp_event(AcpEvent::NewSessionCreated {
-            session_id: SessionId::new("new-session"),
-            config_options: Vec::new(),
-        });
+        ui.deliver_result(new_session_created("new-session", Vec::new()));
 
         ui.draw();
         let viewport = ui.viewport_text();
@@ -567,10 +562,7 @@ mod progress_indicator_tests {
         let mut ui = TestUi::new();
         ui.submit("hello");
         ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
-        ui.acp_event(AcpEvent::SessionLoaded {
-            session_id: SessionId::new("loaded-session"),
-            config_options: Vec::new(),
-        });
+        ui.deliver_result(session_loaded("loaded-session", Vec::new()));
 
         ui.draw();
         let viewport = ui.viewport_text();
@@ -583,7 +575,7 @@ mod progress_indicator_tests {
         ui.type_text("/move");
         ui.key(key(KeyCode::Tab));
         let _ = ui.next_agent_command().unwrap();
-        ui.acp_event(workspace_list_failed("network error"));
+        ui.deliver_result(workspace_list_failed("network error"));
 
         ui.draw();
         let viewport = ui.viewport_text();

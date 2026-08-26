@@ -76,11 +76,13 @@ dependencies = [
  "aether-mcp-servers",
  "aether-mcp-utils",
  "aether-project",
+ "aether-sessions",
  "aether-telemetry",
  "aether-utils",
  "aether-wisp",
  "agent-client-protocol",
  "async-trait",
+ "base64 0.23.1",
  "clap",
  "crossterm",
  "dirs",
@@ -367,11 +369,22 @@ dependencies = [
 name = "aether-session-index"
 version = "0.1.0"
 dependencies = [
+ "aether-sessions",
+ "aether-utils",
+ "clap",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "aether-sessions"
+version = "0.1.0"
+dependencies = [
+ "aether-acp-utils",
  "aether-agent-core",
  "aether-llm",
  "aether-utils",
  "chrono",
- "clap",
  "futures",
  "serde",
  "serde_json",
@@ -379,6 +392,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

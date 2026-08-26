@@ -1,10 +1,7 @@
-use crate::row::{EventRow, event_row};
-use crate::{SessionIndexError, clamp_i64};
-use aether_core::session::{SessionEvent, SessionLog, SessionLogEntry, SessionLogError, SessionMeta, UserEvent};
-use serde::Serialize;
-use std::fs;
+use super::row::{EventRow, event_row};
+use super::{SessionIndexError, clamp_i64};
+use crate::{FileFingerprint, SessionEvent, SessionLog, SessionLogEntry, SessionLogError, SessionMeta, UserEvent};
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
 
 #[derive(Debug, Clone)]
 pub(crate) struct AetherSession {
@@ -13,18 +10,6 @@ pub(crate) struct AetherSession {
     pub meta: SessionMeta,
     pub events: Vec<EventRow>,
     pub parse_errors: Vec<SessionParseError>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub(crate) struct FileFingerprint {
-    pub file_size: i64,
-    pub file_mtime_ns: i64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct DiscoveredSessionFile {
-    pub path: PathBuf,
-    pub fingerprint: FileFingerprint,
 }
 
 #[derive(Debug, Clone)]
@@ -41,34 +26,6 @@ impl AetherSession {
         let path = path.as_ref();
         let fingerprint = FileFingerprint::read(path)?;
         parse_session_file(path, fingerprint)
-    }
-
-    pub(crate) fn discover_sessions(
-        sessions_dir: impl AsRef<Path>,
-    ) -> Result<Vec<DiscoveredSessionFile>, SessionIndexError> {
-        let mut files = Vec::new();
-        for entry in fs::read_dir(sessions_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if !path.is_file() || path.file_name().and_then(|name| name.to_str()) == Some("prompt-history.jsonl") {
-                continue;
-            }
-            if path.extension().and_then(|extension| extension.to_str()) == Some("jsonl") {
-                let path = path.canonicalize()?;
-                let fingerprint = FileFingerprint::read(&path)?;
-                files.push(DiscoveredSessionFile { path, fingerprint });
-            }
-        }
-        files.sort_by(|left, right| left.path.cmp(&right.path));
-        Ok(files)
-    }
-}
-
-impl FileFingerprint {
-    pub(crate) fn read(path: impl AsRef<Path>) -> Result<Self, SessionIndexError> {
-        let metadata = fs::metadata(path)?;
-        let modified = metadata.modified()?.duration_since(UNIX_EPOCH).unwrap_or_default();
-        Ok(Self { file_size: clamp_i64(metadata.len()), file_mtime_ns: clamp_i64(modified.as_nanos()) })
     }
 }
 
@@ -127,6 +84,7 @@ fn parse_session_file(path: &Path, fingerprint: FileFingerprint) -> Result<Aethe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::fs::File;
     use std::io::Write;
     use tempfile::TempDir;
@@ -138,7 +96,7 @@ mod tests {
         fs::write(temp.path().join("a.jsonl"), "").unwrap();
         fs::write(temp.path().join("prompt-history.jsonl"), "").unwrap();
         fs::write(temp.path().join("notes.txt"), "").unwrap();
-        let files = AetherSession::discover_sessions(temp.path()).unwrap();
+        let files = crate::discover_session_files(temp.path()).unwrap();
         assert_eq!(files.len(), 2);
         assert!(files[0].path.ends_with("a.jsonl"));
         assert!(files[1].path.ends_with("b.jsonl"));

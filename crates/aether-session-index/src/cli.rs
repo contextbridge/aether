@@ -1,8 +1,8 @@
-use crate::SessionIndexError;
-use crate::ingest::{IngestOptions, default_parse_concurrency, ingest_sessions};
 use crate::paths::{default_db_path, default_sessions_dir};
-use crate::query::{OutputFormat, QueryOptions, render_tsv, run_query};
-use crate::schema_doc::{render_schema_text, schema_doc};
+use aether_sessions::analytics::{
+    IngestOptions, QueryOptions, SessionIndexError, default_parse_concurrency, ingest_sessions, render_schema_text,
+    render_tsv, run_query, schema_doc,
+};
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -38,7 +38,7 @@ pub struct QueryArgs {
     #[arg(long)]
     pub db: Option<PathBuf>,
     #[arg(long, value_enum, default_value = "json")]
-    pub format: OutputFormat,
+    pub format: QueryFormat,
     #[arg(long, default_value_t = 100)]
     pub max_rows: usize,
     #[arg(long, default_value_t = 1000)]
@@ -53,6 +53,12 @@ pub struct QueryArgs {
 pub struct SchemaArgs {
     #[arg(long, value_enum, default_value = "text")]
     pub format: SchemaFormat,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum QueryFormat {
+    Json,
+    Tsv,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -93,8 +99,8 @@ async fn query(args: QueryArgs) -> Result<(), SessionIndexError> {
     .await?;
 
     match args.format {
-        OutputFormat::Json => println!("{}", serde_json::to_string(&output)?),
-        OutputFormat::Tsv => println!("{}", render_tsv(&output)),
+        QueryFormat::Json => println!("{}", serde_json::to_string(&output)?),
+        QueryFormat::Tsv => println!("{}", render_tsv(&output)),
     }
     Ok(())
 }

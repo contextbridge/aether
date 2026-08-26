@@ -171,7 +171,7 @@ fn failed_config_update_shows_error_and_does_not_corrupt_state() {
     app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     let _ = app.next_agent_command().unwrap();
 
-    app.acp_event(AcpEvent::ConfigOptionUpdateFailed { error: "server error".to_string() });
+    app.deliver_result(CommandResult::ConfigOptionUpdateFailed { error: "server error".to_string() });
 
     let messages: Vec<_> = message_texts(&app).collect();
     let has_error = messages.iter().any(|message| message.contains("Failed to update"));

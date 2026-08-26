@@ -16,6 +16,7 @@ pub(super) enum ReadTask {
 pub(super) struct TaskSupervisor {
     tasks: JoinSet<TaskCompletion>,
     reads: HashMap<ReadTask, AbortHandle>,
+    network: Vec<AbortHandle>,
 }
 
 impl TaskSupervisor {
@@ -34,6 +35,11 @@ impl TaskSupervisor {
         self.tasks.spawn(async move { TaskCompletion::Mutation(work.await) });
     }
 
+    pub(super) fn spawn_network(&mut self, work: impl Future<Output = CommandResult> + Send + 'static) {
+        let handle = self.tasks.spawn(async move { TaskCompletion::Network(work.await) });
+        self.network.push(handle);
+    }
+
     pub(super) fn is_empty(&self) -> bool {
         self.tasks.is_empty()
     }
@@ -48,7 +54,7 @@ impl TaskSupervisor {
                         return Some(result);
                     }
                 }
-                Ok((_, TaskCompletion::Mutation(result))) => return Some(result),
+                Ok((_, TaskCompletion::Mutation(result) | TaskCompletion::Network(result))) => return Some(result),
                 Err(error) if error.is_cancelled() => {}
                 Err(error) => {
                     return Some(CommandResult::Failed {
@@ -65,6 +71,9 @@ impl TaskSupervisor {
             handle.abort();
         }
         self.reads.clear();
+        for handle in self.network.drain(..) {
+            handle.abort();
+        }
         while let Some(result) = self.tasks.join_next().await {
             log_join_error(result);
         }
@@ -74,6 +83,7 @@ impl TaskSupervisor {
 enum TaskCompletion {
     Read(ReadTask, CommandResult),
     Mutation(CommandResult),
+    Network(CommandResult),
 }
 
 fn log_join_error(result: Result<TaskCompletion, JoinError>) {

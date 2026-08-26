@@ -777,7 +777,7 @@ where
     }
 
     pub fn deliver_result(&mut self, result: CommandResult) {
-        self.deliver(Message::CommandFinished(result));
+        self.deliver(Message::CommandFinished(Box::new(result)));
     }
 
     /// Commands emitted by the public application boundary, in order.
@@ -1000,7 +1000,7 @@ where
             }
             for command in pending {
                 if let Some(result) = self.executor.complete(command) {
-                    self.deliver(Message::CommandFinished(result));
+                    self.deliver(Message::CommandFinished(Box::new(result)));
                 }
             }
             initial_batch = false;

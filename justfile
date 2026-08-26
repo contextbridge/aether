@@ -45,11 +45,11 @@ lint *PKGS:
 sqlx-check:
     #!/usr/bin/env bash
     set -euo pipefail
-    db="$(mktemp /tmp/aether-session-index.XXXXXX)"
+    db="$(mktemp /tmp/aether-sessions.XXXXXX)"
     trap 'rm -f "$db" "$db-wal" "$db-shm"' EXIT
-    cd crates/aether-session-index
+    cd crates/aether-sessions
     DATABASE_URL="sqlite://$db" cargo sqlx migrate run
-    DATABASE_URL="sqlite://$db" cargo sqlx prepare --check
+    DATABASE_URL="sqlite://$db" cargo sqlx prepare --check -- --features analytics
 
 # Check documentation builds without warnings
 doc-check *PKGS:

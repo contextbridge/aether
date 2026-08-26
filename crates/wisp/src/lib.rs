@@ -61,8 +61,8 @@ pub async fn run_tui(agent_command: &str, settings: UiSettings, log_dir: Option<
 
 /// Run the TUI from an already-initialized ACP session.
 pub async fn run_with_session(session: Session, settings: UiSettings) -> Result<(), AppError> {
-    let (app, event_rx, prompt_handle) = App::from_session(session, settings);
-    runtime::run(app, Renderer::new(), event_rx, prompt_handle).await
+    let (app, event_rx, client_handle) = App::from_session(session, settings);
+    runtime::run(app, Renderer::new(), event_rx, client_handle).await
 }
 
 fn setup_logging(log_dir: Option<&str>) {

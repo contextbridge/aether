@@ -1,15 +1,9 @@
-use crate::SessionIndexError;
-use crate::db::{Db, QueryLimits};
+use super::SessionIndexError;
+use super::db::{Db, QueryLimits};
 use serde::Serialize;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::time::Duration;
-
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
-pub enum OutputFormat {
-    Json,
-    Tsv,
-}
 
 #[derive(Debug, Clone)]
 pub struct QueryOptions {

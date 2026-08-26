@@ -8,8 +8,7 @@ use crate::screens::plan_review::PlanReviewScreen;
 use crate::surfaces::modal::ElicitationModal;
 use crate::surfaces::picker::CommandEntry;
 use crate::surfaces::session_picker::SessionPicker;
-use crate::surfaces::workspace_picker::WorkspacePicker;
-use acp_utils::client::AcpEvent;
+use acp_utils::client::{AcpEvent, LoadedSession};
 use acp_utils::notifications::McpNotification;
 use agent_client_protocol::schema::v1::{self as acp, CreateElicitationRequest, ElicitationMode, SessionId};
 use std::time::Instant;
@@ -19,13 +18,8 @@ impl App {
     pub fn on_acp_event(&mut self, event: AcpEvent) {
         match event {
             AcpEvent::SessionUpdate { session_id, update } => {
-                // An update that is neither buffered for a pending load nor
-                // addressed to the session on screen belongs to one the user
-                // has already moved on from.
-                if let Some(passthrough) = self.session.buffer_update(&session_id, *update)
-                    && &session_id == self.session.session_id()
-                {
-                    self.on_session_update(&passthrough);
+                if &session_id == self.session.session_id() {
+                    self.on_session_update(&update);
                 }
             }
             AcpEvent::PromptDone(stop_reason) => {
@@ -34,13 +28,6 @@ impl App {
                     _ => ToolStatus::Success,
                 };
                 self.finish_prompt(&status);
-            }
-            AcpEvent::PromptError(error) => {
-                tracing::error!("Prompt error: {error}");
-                self.session.clear_loads();
-                self.session.abandon_workspace_load();
-                self.finish_prompt(&ToolStatus::Error(format!("failed: {error}")));
-                self.notify(&format!("Prompt failed: {error}"));
             }
             AcpEvent::ContextCompaction(params) => {
                 self.conversation.turn_mut().set_compaction_active(params.active);
@@ -82,58 +69,7 @@ impl App {
                     overlay.update_auth_methods(&params.auth_methods);
                 }
             }
-            AcpEvent::AuthenticateComplete { method_id } => {
-                if let Some(Overlay::Settings(overlay)) = self.overlay.as_mut() {
-                    overlay.on_authenticate_complete(&method_id);
-                }
-            }
-            AcpEvent::AuthenticateFailed { method_id, error } => {
-                tracing::warn!("Provider authentication failed for {method_id}: {error}");
-                if let Some(Overlay::Settings(overlay)) = self.overlay.as_mut() {
-                    overlay.on_authenticate_failed(&method_id);
-                }
-            }
             AcpEvent::ConnectionClosed => self.on_connection_closed(),
-            AcpEvent::ConfigOptionUpdateFailed { error } => {
-                tracing::warn!("set_session_config_option failed: {error}");
-                self.notify(&format!("Failed to update setting: {error}"));
-            }
-            AcpEvent::SessionsListed { sessions } => self.open_session_picker(sessions),
-            AcpEvent::SessionLoaded { session_id, config_options } => {
-                self.on_session_loaded(session_id, config_options);
-            }
-            AcpEvent::NewSessionCreated { session_id, config_options } => {
-                self.on_new_session(session_id, config_options);
-            }
-            AcpEvent::SessionPreviewLoaded(preview) => {
-                if let Some(Overlay::Sessions(picker)) = self.overlay.as_mut() {
-                    picker.on_preview_loaded(preview);
-                }
-            }
-            AcpEvent::SessionPreviewFailed { session_id, error } => {
-                if let Some(Overlay::Sessions(picker)) = self.overlay.as_mut() {
-                    picker.on_preview_failed(&session_id, error);
-                }
-            }
-            AcpEvent::PromptSearchResults(response) => {
-                self.composer.prompt_search_on_results(response);
-            }
-            AcpEvent::PromptSearchFailed { query, error } => {
-                if let Some(picker) = self.composer.prompt_search_mut() {
-                    picker.on_failed(&query, error);
-                }
-            }
-            AcpEvent::WorkspacesListed(response) => {
-                self.open_overlay(Overlay::Workspaces(WorkspacePicker::new(response.workspaces)));
-                self.session.begin_workspace_picking();
-            }
-            AcpEvent::WorkspaceMoved(response) => self.on_workspace_moved(response.new_cwd),
-            AcpEvent::WorkspaceListFailed { error } => {
-                self.abandon_workspace_move(&format!("Failed to list workspaces: {error}"));
-            }
-            AcpEvent::WorkspaceMoveFailed { error } => {
-                self.abandon_workspace_move(&format!("Workspace move failed: {error}"));
-            }
             AcpEvent::SubAgentProgress(progress) => {
                 self.conversation.on_sub_agent_progress(&progress);
             }
@@ -141,12 +77,12 @@ impl App {
     }
 
     /// Reports why a workspace move could not proceed and leaves move mode.
-    fn abandon_workspace_move(&mut self, message: &str) {
+    pub(super) fn abandon_workspace_move(&mut self, message: &str) {
         self.notify(message);
         self.session.end_workspace_move();
     }
 
-    fn open_session_picker(&mut self, sessions: Vec<acp::SessionInfo>) {
+    pub(super) fn open_session_picker(&mut self, sessions: Vec<acp::SessionInfo>) {
         let current_id = self.session.session_id().clone();
         let others = sessions.into_iter().filter(|session| session.session_id != current_id).collect();
         let picker = SessionPicker::new(others, self.session.capabilities().session_preview);
@@ -156,22 +92,18 @@ impl App {
         self.open_overlay(Overlay::Sessions(picker));
     }
 
-    /// A requested session has arrived: replay the updates that were buffered
-    /// while it loaded. The conversation was cleared when the load was requested,
-    /// so only per-turn state is reset here.
-    fn on_session_loaded(&mut self, session_id: SessionId, config_options: Vec<acp::SessionConfigOption>) {
-        let updates = self.session.take_buffered_updates(&session_id);
-        self.session.set_session(session_id, config_options);
+    pub(super) fn on_loaded_session(&mut self, loaded: LoadedSession) {
+        let LoadedSession { session_id, response, replay } = loaded;
         self.reset_turn_state();
-        for update in updates {
-            self.on_session_update(&update);
+        for notification in replay {
+            self.on_session_update(&notification.update);
         }
+        self.session.set_session(session_id, response.config_options.unwrap_or_default());
         self.return_to_conversation();
         self.session.end_workspace_move();
     }
 
-    fn on_new_session(&mut self, session_id: SessionId, config_options: Vec<acp::SessionConfigOption>) {
-        self.session.clear_loads();
+    pub(super) fn on_new_session(&mut self, session_id: SessionId, config_options: Vec<acp::SessionConfigOption>) {
         self.close_elicitation_owner();
         self.return_to_conversation();
         let previous_selections: Vec<(String, String)> = self
@@ -201,7 +133,6 @@ impl App {
         self.close_elicitation_owner();
         self.return_to_conversation();
         self.session.end_workspace_move();
-        self.session.clear_loads();
         self.commands.retain(|command| !matches!(command, Command::Terminal(TerminalCommand::RingBell)));
         self.exit_state = ExitState::Exiting;
     }
@@ -291,7 +222,7 @@ impl App {
         }
     }
 
-    fn finish_prompt(&mut self, terminal_status: &ToolStatus) {
+    pub(super) fn finish_prompt(&mut self, terminal_status: &ToolStatus) {
         let was_in_flight = self.waiting_for_response();
         self.conversation.turn_mut().set_prompt_in_flight(false);
         self.conversation.turn_mut().set_compaction_active(false);
