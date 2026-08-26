@@ -22,7 +22,7 @@ impl App {
                     self.on_session_update(&update);
                 }
             }
-            AcpEvent::PromptDone(stop_reason) => {
+            AcpEvent::PromptCompleted(stop_reason) => {
                 let status = match stop_reason {
                     acp::StopReason::Cancelled => ToolStatus::Error("cancelled".to_string()),
                     _ => ToolStatus::Success,
@@ -30,7 +30,9 @@ impl App {
                 self.finish_prompt(&status);
             }
             AcpEvent::ContextCompaction(params) => {
-                self.conversation.turn_mut().set_compaction_active(params.active);
+                if self.conversation.progress_indicator().accepts_activity() {
+                    self.conversation.turn_mut().set_compaction_active(params.active);
+                }
             }
             AcpEvent::ContextCleared(_) => {
                 self.reset_conversation();
@@ -71,7 +73,9 @@ impl App {
             }
             AcpEvent::ConnectionClosed => self.on_connection_closed(),
             AcpEvent::SubAgentProgress(progress) => {
-                self.conversation.on_sub_agent_progress(&progress);
+                if self.conversation.progress_indicator().accepts_activity() {
+                    self.conversation.on_sub_agent_progress(&progress);
+                }
             }
         }
     }
@@ -148,6 +152,9 @@ impl App {
     }
 
     fn on_session_update(&mut self, update: &acp::SessionUpdate) {
+        if is_agent_activity(update) && !self.conversation.progress_indicator().accepts_activity() {
+            return;
+        }
         match update {
             acp::SessionUpdate::UserMessageChunk(chunk) => {
                 if let Some(text) = match &chunk.content {
@@ -232,6 +239,16 @@ impl App {
             self.queue(Command::Terminal(TerminalCommand::RingBell));
         }
     }
+}
+
+fn is_agent_activity(update: &acp::SessionUpdate) -> bool {
+    matches!(
+        update,
+        acp::SessionUpdate::AgentMessageChunk(_)
+            | acp::SessionUpdate::AgentThoughtChunk(_)
+            | acp::SessionUpdate::ToolCall(_)
+            | acp::SessionUpdate::ToolCallUpdate(_)
+    )
 }
 
 pub(super) fn plan_review_meta(

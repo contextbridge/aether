@@ -49,6 +49,7 @@ pub struct ProgressIndicator {
     phase: ProgressPhase,
     agent_phase: ProgressPhase,
     interruptible: bool,
+    accepts_activity: bool,
     now: Instant,
     phase_started_at: Instant,
     thought: String,
@@ -61,6 +62,7 @@ impl Default for ProgressIndicator {
             phase: ProgressPhase::Idle,
             agent_phase: ProgressPhase::Idle,
             interruptible: false,
+            accepts_activity: true,
             now,
             phase_started_at: now,
             thought: String::new(),
@@ -69,8 +71,13 @@ impl Default for ProgressIndicator {
 }
 
 impl ProgressIndicator {
+    pub(crate) fn accepts_activity(&self) -> bool {
+        self.accepts_activity
+    }
+
     pub(crate) fn prompt_started(&mut self) {
         self.thought.clear();
+        self.accepts_activity = true;
         self.set_agent_phase(ProgressPhase::Thinking);
     }
 
@@ -85,6 +92,7 @@ impl ProgressIndicator {
     pub(crate) fn prompt_finished(&mut self) {
         self.thought.clear();
         self.set_agent_phase(ProgressPhase::Idle);
+        self.accepts_activity = false;
     }
 
     pub(crate) fn refresh(&mut self, override_phase: Option<ProgressPhase>, interruptible: bool) {
@@ -97,6 +105,9 @@ impl ProgressIndicator {
     }
 
     pub(crate) fn record_thought(&mut self, chunk: &str) {
+        if !self.accepts_activity {
+            return;
+        }
         self.set_agent_phase(ProgressPhase::Thinking);
         for character in chunk.chars() {
             if character.is_whitespace() {
@@ -119,6 +130,9 @@ impl ProgressIndicator {
     }
 
     fn set_agent_phase(&mut self, phase: ProgressPhase) {
+        if phase != ProgressPhase::Idle && !self.accepts_activity {
+            return;
+        }
         if self.agent_phase == ProgressPhase::Thinking && phase != ProgressPhase::Thinking {
             self.thought.clear();
         }

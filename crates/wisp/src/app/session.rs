@@ -204,13 +204,8 @@ impl App {
         if self.waiting_for_response() {
             return;
         }
-        self.conversation.turn_mut().set_prompt_in_flight(true);
         self.conversation.append_notice(format!("[wisp] Submitted review of working tree diff.\n{prompt}"));
-        self.queue(Command::Agent(AgentCommand::Prompt {
-            session_id: self.session.session_id().clone(),
-            text: prompt.to_string(),
-            content: None,
-        }));
+        self.start_prompt(prompt.to_string(), None);
         self.close_active();
     }
 
