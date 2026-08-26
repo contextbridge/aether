@@ -148,7 +148,7 @@ fn plan_not_in_scrollback() {
 
     ui.submit("hello");
     ui.acp_event(text_chunk("response text"));
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
 
     ui.draw();
     let scrollback = ui.history_text();

@@ -203,7 +203,7 @@ fn overflowing_single_paragraph_stream_enters_scrollback_before_completion() {
     ui.draw();
     assert_eq!(ui.history_text().matches("stream-line-0").count(), 1, "unchanged redraw duplicated history");
 
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
     let completed_conversation = ui.conversation_text();
     assert_eq!(
@@ -246,7 +246,7 @@ fn stream_after_a_completed_tool_commits_incrementally() {
     ui.assert_viewport_not_contains("after-tool-line-0");
     ui.assert_viewport_contains("after-tool-line-29");
 
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
     let conversation = ui.conversation_text();
     assert_eq!(conversation.matches("after-tool-line-0").count(), 1, "completed conversation:\n{conversation}");
@@ -317,7 +317,7 @@ fn resizing_a_partially_committed_stream_keeps_new_content_visible() {
 
     ui.assert_viewport_contains("after-resize");
 
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
     let conversation = ui.conversation_text();
     assert_eq!(conversation.matches("resize-line-0").count(), 1, "completed conversation:\n{conversation}");
@@ -336,7 +336,7 @@ fn completed_streaming_text_remains_adjacent_to_the_composer_once() {
     ui.assert_viewport_contains("streamed answer");
     ui.assert_history_not_contains("streamed answer");
 
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
     ui.draw();
 
@@ -353,7 +353,7 @@ fn streamed_markdown_blocks_keep_blank_separators() {
     for chunk in ["### Root\n", "\n", "Keep this paragraph separate.\n", "\n", "- first item\n"] {
         ui.acp_event(text_chunk(chunk));
     }
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
 
     let conversation = ui.conversation();
@@ -379,7 +379,7 @@ fn running_tool_holds_later_content_out_of_committed_history() {
     assert!(!ui.history_text().contains("Reading main.rs"));
 
     ui.acp_event(tool_completed("tool-1"));
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
 
     let conversation = ui.conversation_text();
@@ -394,7 +394,7 @@ fn cancelled_prompt_marks_running_tool_as_error() {
     app.submit("run a tool");
     app.acp_event(tool_call("tool-1", "Slow tool"));
 
-    app.acp_event(AcpEvent::PromptDone(acp::StopReason::Cancelled));
+    app.complete_prompt(acp::StopReason::Cancelled);
 
     let cancelled = app.app().conversation_items().iter().any(|item| {
         matches!(item.content(), ConversationContent::Tool(tool) if tool.status == ToolStatus::Error("cancelled".to_string()))
@@ -687,7 +687,7 @@ fn truncation_preserved_in_scrollback() {
     let long = "x".repeat(300);
     ui.acp_event(tool_call_with_raw("tool-1", "Long arg", serde_json::Value::String(long)));
     ui.acp_event(tool_completed_status("tool-1"));
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
 
     ui.draw();
     ui.draw();
@@ -703,7 +703,7 @@ fn tool_arguments_preserved_in_scrollback_exactly_once() {
     ui.submit("run tool");
     ui.acp_event(tool_call_with_raw("tool-1", "Read file", raw));
     ui.acp_event(tool_completed_status("tool-1"));
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
 
     ui.draw();
     ui.draw();
@@ -749,7 +749,7 @@ fn diff_not_rendered_after_failed_status() {
             .status(acp::ToolCallStatus::Failed),
     );
     ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(update)));
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
 
     ui.draw();
     ui.draw();

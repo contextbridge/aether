@@ -16,6 +16,6 @@ pub enum AcpEvent {
     AuthMethodsUpdated(AuthMethodsUpdatedParams),
     McpNotification(McpNotification),
     ElicitationRequest { params: Box<CreateElicitationRequest>, responder: Responder<CreateElicitationResponse> },
-    PromptDone(StopReason),
+    PromptCompleted(StopReason),
     ConnectionClosed,
 }

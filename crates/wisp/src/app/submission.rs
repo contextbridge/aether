@@ -66,14 +66,8 @@ impl App {
             return;
         }
 
-        self.conversation.turn_mut().set_prompt_in_flight(true);
-        self.conversation.progress_indicator_mut().prompt_started();
         let content = (!outcome.blocks.is_empty()).then_some(outcome.blocks);
-        self.queue(Command::Agent(AgentCommand::Prompt {
-            session_id: self.session.session_id().clone(),
-            text,
-            content,
-        }));
+        self.start_prompt(text, content);
     }
     fn media_support_error(&self, blocks: &[acp::ContentBlock]) -> Option<String> {
         let requires_image = blocks.iter().any(|block| matches!(block, acp::ContentBlock::Image(_)));

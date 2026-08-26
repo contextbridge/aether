@@ -33,7 +33,7 @@ fn activity_row(ui: &mut TestUi, label: &str) -> String {
 }
 
 #[test]
-fn keeps_status_segments_visible_until_prompt_done() {
+fn keeps_status_segments_visible_until_prompt_completes() {
     let (mut ui, _) = progress_ui();
     ui.acp_event(context_usage(100_000, 200_000));
 
@@ -42,10 +42,41 @@ fn keeps_status_segments_visible_until_prompt_done() {
         assert!(text.contains(expected), "missing {expected:?}:\n{text}");
     }
 
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     let text = ui.viewport_text();
     assert!(!text.contains("esc to interrupt"), "{text}");
     assert!(text.contains("Claude Sonnet"), "{text}");
+}
+
+#[test]
+fn prompt_completion_event_clears_responding_state() {
+    let (mut ui, _) = progress_ui();
+    ui.acp_event(text_chunk("final answer"));
+    ui.assert_viewport_contains("Responding…");
+
+    ui.acp_event(AcpEvent::PromptCompleted(acp::StopReason::EndTurn));
+
+    assert!(!ui.app().waiting_for_response());
+    assert!(!ui.app().is_agent_busy());
+    ui.assert_viewport_not_contains("Responding…");
+}
+
+#[test]
+fn activity_after_prompt_completion_is_ignored() {
+    let (mut ui, _) = progress_ui();
+    ui.acp_event(text_chunk("final answer"));
+    ui.complete_prompt(acp::StopReason::EndTurn);
+
+    ui.acp_event(text_chunk("late chunk"));
+    ui.acp_event(thought_chunk("late thought"));
+    ui.acp_event(tool_call("late-tool", "Late tool"));
+    ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+
+    ui.assert_viewport_not_contains("late chunk");
+    ui.assert_viewport_not_contains("late thought");
+    ui.assert_viewport_not_contains("Late tool");
+    ui.assert_viewport_not_contains("Responding…");
+    assert!(!ui.app().wants_tick());
 }
 
 #[test]
@@ -84,7 +115,7 @@ fn reasoning_is_ephemeral_and_scoped_to_thinking() {
     ui.assert_viewport_contains("fresh reasoning");
     ui.assert_viewport_not_contains("first thought");
 
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.submit("again");
     ui.tick(t0 + Duration::from_millis(300));
     ui.assert_viewport_not_contains("fresh reasoning");

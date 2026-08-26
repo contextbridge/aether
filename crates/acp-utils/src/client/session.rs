@@ -390,7 +390,7 @@ async fn run_prompt(
             result = &mut prompt_fut => {
                 match result {
                     Ok(prompt_response) => {
-                        let _ = event_tx.send(AcpEvent::PromptDone(prompt_response.stop_reason));
+                        let _ = event_tx.send(AcpEvent::PromptCompleted(prompt_response.stop_reason));
                         let _ = response.send(Ok(prompt_response));
                     }
                     Err(error) => {
