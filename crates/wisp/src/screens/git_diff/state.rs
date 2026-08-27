@@ -33,6 +33,7 @@ pub struct GitDiffScreen {
     pub(super) full_file: FullFileView,
     pub(super) patch: PatchView,
     pub(super) review: Review,
+    pub(super) shortcuts_open: bool,
     pub(super) request: Request,
 }
 
@@ -85,6 +86,7 @@ pub(super) enum PendingAction {
     Stage,
     Commit,
     Discard,
+    Close,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -133,6 +135,7 @@ impl GitDiffScreen {
             full_file: FullFileView::default(),
             patch: PatchView::default(),
             review: Review::default(),
+            shortcuts_open: false,
             request: Request::default(),
         };
         let task = screen.begin_load();

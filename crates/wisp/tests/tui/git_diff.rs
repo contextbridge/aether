@@ -26,6 +26,40 @@ fn open_patch(ui: &mut TestUi) {
 }
 
 #[test]
+fn git_diff_footer_prioritizes_contextual_actions() {
+    let mut ui = open_diff(changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n"), 120);
+    let drawer_footer = ui.viewport_text();
+    assert!(drawer_footer.contains("[Enter] open"), "{drawer_footer}");
+    assert!(drawer_footer.contains("[Space] stage"), "{drawer_footer}");
+    assert!(drawer_footer.contains("[?] shortcuts"), "{drawer_footer}");
+    assert!(!drawer_footer.contains("full file"), "secondary actions belong in shortcut help: {drawer_footer}");
+
+    open_patch(&mut ui);
+    let patch_footer = ui.viewport_text();
+    assert!(patch_footer.contains("[c] comment"), "{patch_footer}");
+    assert!(patch_footer.contains("[s] submit"), "{patch_footer}");
+    assert!(patch_footer.contains("[h] files"), "{patch_footer}");
+}
+
+#[test]
+fn git_diff_shortcut_help_opens_and_closes_without_leaving_review() {
+    let mut ui = open_diff(changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n"), 120);
+
+    ui.key(key(KeyCode::Char('?')));
+    ui.draw();
+    let help = ui.viewport_text();
+    assert!(help.contains("Review shortcuts"), "{help}");
+    assert!(help.contains("Navigation"), "{help}");
+    assert!(help.contains("Git"), "{help}");
+    assert!(help.contains("Commit"), "{help}");
+
+    ui.key(key(KeyCode::Esc));
+    ui.draw();
+    assert!(ui.viewport_text().contains("Git Diff"));
+    assert!(!ui.viewport_text().contains("Review shortcuts"));
+}
+
+#[test]
 fn ctrl_g_opens_and_esc_closes_git_diff() {
     let mut ui = open_diff(FakeGit::new("/workspace"), 80);
     assert!(ui.viewport_text().contains("Git Diff"));
@@ -207,6 +241,26 @@ fn git_diff_owns_the_cursor_and_styles_comment_drafts() {
 }
 
 #[test]
+fn escape_cancels_comment_draft_before_closing_git_diff() {
+    let mut ui = open_diff(changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n"), 160);
+    open_patch(&mut ui);
+    ui.key(key(KeyCode::Char('c')));
+    ui.type_text("discard me");
+    ui.draw();
+    assert!(ui.viewport_text().contains("discard me"));
+    assert!(ui.viewport_text().contains("[Esc] cancel"));
+
+    ui.key(key(KeyCode::Esc));
+    ui.draw();
+    assert!(ui.viewport_text().contains("Git Diff"));
+    assert!(!ui.viewport_text().contains("discard me"));
+
+    ui.key(key(KeyCode::Esc));
+    ui.draw();
+    assert!(!ui.viewport_text().contains("Git Diff"));
+}
+
+#[test]
 fn comments_are_stateful_and_submit_as_a_review_prompt() {
     let mut ui = open_diff(changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n"), 160);
     open_patch(&mut ui);
@@ -243,6 +297,51 @@ fn comment_confirmation_preserves_comments_until_an_action_is_confirmed() {
     ui.key(key(KeyCode::Esc));
     ui.draw();
     assert!(ui.viewport_text().contains("keep me"));
+}
+
+#[test]
+fn closing_git_diff_with_queued_comments_requires_confirmation() {
+    let mut ui = open_diff(changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n"), 160);
+    open_patch(&mut ui);
+    ui.key(key(KeyCode::Char('c')));
+    ui.type_text("keep me");
+    ui.key(key(KeyCode::Enter));
+
+    ui.key(key(KeyCode::Esc));
+    ui.draw();
+    assert!(ui.viewport_text().contains("Git Diff"));
+    assert!(ui.viewport_text().contains("will clear 1 review comment"));
+
+    ui.key(key(KeyCode::Esc));
+    ui.draw();
+    assert!(!ui.viewport_text().contains("Git Diff"));
+}
+
+#[test]
+fn close_confirmation_matches_ctrl_g_without_accepting_plain_g() {
+    let mut ui = open_diff(changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n"), 160);
+    open_patch(&mut ui);
+    ui.key(key(KeyCode::Char('c')));
+    ui.type_text("keep me");
+    ui.key(key(KeyCode::Enter));
+
+    ui.key(key(KeyCode::Esc));
+    ui.key(key(KeyCode::Char('g')));
+    ui.draw();
+    let cancelled = ui.viewport_text();
+    assert!(cancelled.contains("Git Diff"), "{cancelled}");
+    assert!(cancelled.contains("keep me"), "{cancelled}");
+    assert!(!cancelled.contains("will clear"), "{cancelled}");
+
+    ui.key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+    ui.draw();
+    let armed = ui.viewport_text();
+    assert!(armed.contains("Git Diff"), "{armed}");
+    assert!(armed.contains("will clear 1 review comment"), "{armed}");
+
+    ui.key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+    ui.draw();
+    assert!(!ui.viewport_text().contains("Git Diff"));
 }
 
 #[test]

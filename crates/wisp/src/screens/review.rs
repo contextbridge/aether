@@ -7,13 +7,17 @@
 //! decides only what its rows say and which keys it answers.
 
 use crate::screens::annotation::{AnnotatedRows, AnnotatedRowsView};
-use crate::view::selection::{Direction, scroll_into_view, step_clamped};
+use crate::surfaces::modal::frame::ModalFrame;
 use crate::theme::Theme;
+use crate::view::selection::{Direction, scroll_into_view, step_clamped};
+use crate::view::widgets::key_hints;
 use crate::view::wrap::as_u16;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::widgets::Widget;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Paragraph, Widget};
+use unicode_width::UnicodeWidthStr;
 
 /// Rendered rows a mouse wheel notch moves the focused pane.
 pub(crate) const MOUSE_SCROLL_LINES: usize = 3;
@@ -27,10 +31,129 @@ pub(crate) enum Pane {
     Document,
 }
 
+pub(crate) struct ShortcutGroup {
+    pub(crate) title: &'static str,
+    pub(crate) hints: &'static [(&'static str, &'static str)],
+}
+
+pub(crate) fn render_command_bar(
+    area: Rect,
+    buf: &mut Buffer,
+    theme: &Theme,
+    actions: &[(&str, &str)],
+    status: Option<&str>,
+    show_help: bool,
+) {
+    let right = command_bar_right(status, show_help, theme);
+    let right_width = as_u16(right.width()).min(area.width);
+    let [left_area, right_area] =
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(right_width)]).areas(area);
+    let background = Style::new().bg(theme.sidebar_bg);
+    Paragraph::new(command_bar_actions(actions, usize::from(left_area.width), theme))
+        .style(background)
+        .render(left_area, buf);
+    Paragraph::new(right).style(background).right_aligned().render(right_area, buf);
+}
+
+pub(crate) fn render_shortcut_help(
+    area: Rect,
+    buf: &mut Buffer,
+    theme: &Theme,
+    groups: &[ShortcutGroup],
+) {
+    let width = area.width.saturating_sub(4).min(72);
+    let split = groups.len().div_ceil(2);
+    let (left_groups, right_groups) = if width >= 64 { groups.split_at(split) } else { (groups, &[][..]) };
+    let rows = shortcut_column_rows(left_groups).max(shortcut_column_rows(right_groups));
+    let height = area.height.saturating_sub(2).min(as_u16(rows + 4));
+    let frame = ModalFrame::new(
+        "Review shortcuts",
+        Some(key_hints(&[("?/Esc", "close")], theme)),
+        Constraint::Length(width),
+        Constraint::Length(height),
+        theme,
+    );
+    let inner = frame.inner(area);
+    (&frame).render(area, buf);
+
+    if right_groups.is_empty() {
+        Paragraph::new(shortcut_lines(left_groups, theme)).render(inner, buf);
+        return;
+    }
+
+    let [left, _gap, right] = Layout::horizontal([
+        Constraint::Percentage(50),
+        Constraint::Length(2),
+        Constraint::Percentage(50),
+    ])
+    .areas(inner);
+    Paragraph::new(shortcut_lines(left_groups, theme)).render(left, buf);
+    Paragraph::new(shortcut_lines(right_groups, theme)).render(right, buf);
+}
+
 /// Splits a screen into its body and the one-row footer beneath it.
 pub(crate) fn body_and_footer(area: Rect) -> (Rect, Rect) {
     let [body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
     (body, footer)
+}
+
+fn shortcut_column_rows(groups: &[ShortcutGroup]) -> usize {
+    groups.iter().map(|group| group.hints.len() + 1).sum::<usize>() + groups.len().saturating_sub(1)
+}
+
+fn shortcut_lines(groups: &[ShortcutGroup], theme: &Theme) -> Vec<Line<'static>> {
+    let mut lines = Vec::with_capacity(shortcut_column_rows(groups));
+    for (index, group) in groups.iter().enumerate() {
+        if index > 0 {
+            lines.push(Line::default());
+        }
+        lines.push(Line::styled(group.title, Style::new().fg(theme.accent).add_modifier(Modifier::BOLD)));
+        lines.extend(group.hints.iter().map(|(key, description)| {
+            Line::from(vec![
+                Span::styled(format!("  {key:<12}"), Style::new().fg(theme.text_primary).add_modifier(Modifier::BOLD)),
+                Span::styled(*description, Style::new().fg(theme.muted)),
+            ])
+        }));
+    }
+    lines
+}
+
+fn command_bar_actions(actions: &[(&str, &str)], width: usize, theme: &Theme) -> Line<'static> {
+    let mut line = Line::from(Span::raw(" "));
+    let mut used = 1;
+    for (index, (key, description)) in actions.iter().enumerate() {
+        let gap = usize::from(index > 0) * 3;
+        let item_width = key.width() + description.width() + 3;
+        if used + gap + item_width > width {
+            break;
+        }
+        if gap > 0 {
+            line.push_span(Span::raw("   "));
+        }
+        line.push_span(Span::styled(
+            format!("[{key}]"),
+            Style::new().fg(theme.accent).bg(theme.code_bg).add_modifier(Modifier::BOLD),
+        ));
+        line.push_span(Span::styled(format!(" {description}"), Style::new().fg(theme.text_secondary)));
+        used += gap + item_width;
+    }
+    line
+}
+
+fn command_bar_right(status: Option<&str>, show_help: bool, theme: &Theme) -> Line<'static> {
+    let mut line = Line::default();
+    if let Some(status) = status {
+        line.push_span(Span::styled(status.to_string(), Style::new().fg(theme.info)));
+        if show_help {
+            line.push_span(Span::raw("   "));
+        }
+    }
+    if show_help {
+        line.push_span(Span::styled("[?]", Style::new().fg(theme.accent).bg(theme.code_bg).add_modifier(Modifier::BOLD)));
+        line.push_span(Span::styled(" shortcuts", Style::new().fg(theme.text_secondary)));
+    }
+    line.push_span(Span::raw(" "));
+    line
 }
 
 /// A pane title, brightened while that pane has focus.

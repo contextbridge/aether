@@ -440,15 +440,56 @@ fn narrow_screen_falls_back_to_single_pane() {
 }
 
 #[test]
-fn footer_shows_context_sensitive_hints() {
+fn footer_shows_only_primary_contextual_actions() {
     let markdown = "# Plan\ntext";
     let (mut screen, _rx) = make_screen(markdown);
 
     let buffer = render_screen(&mut screen, 80, 24);
     let text = buffer_text(&buffer);
-    assert!(text.contains("approve"), "footer should show approve hint");
-    assert!(text.contains("cancel"), "footer should show cancel hint");
-    assert!(text.contains("comment"), "footer should show comment hint in plan mode");
+    assert!(text.contains("[a] approve"), "{text}");
+    assert!(text.contains("[r] changes"), "{text}");
+    assert!(text.contains("[c] comment"), "{text}");
+    assert!(text.contains("[?] shortcuts"), "{text}");
+    assert!(!text.contains("heading"), "secondary navigation belongs in shortcut help: {text}");
+}
+
+#[test]
+fn plan_review_shortcut_help_opens_and_closes_before_the_review() {
+    let markdown = "# Plan\ntext";
+    let (mut screen, _rx) = make_screen(markdown);
+
+    assert!(!closes(&mut screen, key(KeyCode::Char('?'))));
+    let help = buffer_text(&render_screen(&mut screen, 80, 24));
+    assert!(help.contains("Review shortcuts"), "{help}");
+    assert!(help.contains("Navigation"), "{help}");
+    assert!(help.contains("Decision"), "{help}");
+    assert!(help.contains("next heading"), "{help}");
+
+    assert!(!closes(&mut screen, key(KeyCode::Esc)));
+    let review = buffer_text(&render_screen(&mut screen, 80, 24));
+    assert!(!review.contains("Review shortcuts"));
+    assert!(review.contains("Plan"));
+}
+
+#[test]
+fn plan_review_shortcut_help_uses_one_readable_column_when_narrow() {
+    let (mut screen, _rx) = make_screen("# Plan\ntext");
+
+    assert!(!closes(&mut screen, key(KeyCode::Char('?'))));
+    let help = buffer_text(&render_screen(&mut screen, 40, 24));
+
+    assert!(help.contains("previous heading"), "{help}");
+    assert!(help.contains("request changes"), "{help}");
+}
+
+#[test]
+fn plan_without_an_outline_advertises_the_working_top_shortcut() {
+    let (mut screen, _rx) = make_screen("plain text");
+
+    let footer = buffer_text(&render_screen(&mut screen, 80, 24));
+
+    assert!(footer.contains("[g] top"), "{footer}");
+    assert!(!footer.contains("[h] top"), "{footer}");
 }
 
 #[test]
