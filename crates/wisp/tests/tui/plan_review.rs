@@ -18,7 +18,7 @@ use wisp::view::syntax::SyntaxHighlighter;
 
 use super::support::{
     CreateElicitationResponse, ElicitationAction, ElicitationSchema, accepted_content, assert_ctrl_c_exits,
-    block_on_local, form_elicitation, make_app, with_elicitation,
+    block_on_local, form_elicitation, make_app, row_containing, row_text, with_elicitation,
 };
 
 fn make_meta(markdown: &str) -> PlanReviewElicitationMeta {
@@ -449,6 +449,33 @@ fn footer_shows_context_sensitive_hints() {
     assert!(text.contains("approve"), "footer should show approve hint");
     assert!(text.contains("cancel"), "footer should show cancel hint");
     assert!(text.contains("comment"), "footer should show comment hint in plan mode");
+}
+
+#[test]
+fn plan_review_keeps_a_bottom_draft_and_its_cursor_visible() {
+    block_on_local(async {
+        let markdown = (1..=30).map(|line| format!("line {line}")).collect::<Vec<_>>().join("\n");
+        let mut ui = make_app();
+        let meta = PlanReviewElicitationMeta::new(&PathBuf::from("/tmp/plan.md"), &markdown).to_json().unwrap();
+        let _response =
+            with_elicitation(&mut ui, form_elicitation("plan", "Approve plan?", ElicitationSchema::new()).meta(meta))
+                .await;
+        ui.draw();
+
+        assert!(!ui.backend().cursor_visible(), "the hidden composer must not own the cursor");
+
+        ui.key(key(KeyCode::Char('G')));
+        ui.key(key(KeyCode::Char('c')));
+        ui.type_text(&format!("{}END", "x".repeat(80)));
+        ui.draw();
+
+        let buffer = ui.backend().buffer();
+        let row = row_containing(buffer, "END").expect("wrapped draft tail should scroll into view");
+        let text = row_text(buffer, row);
+        let end = u16::try_from(text.chars().position(|character| character == 'D').unwrap() + 1).unwrap();
+        assert!(ui.backend().cursor_visible());
+        assert_eq!(ui.backend().cursor_position(), ratatui::layout::Position::new(end, row));
+    });
 }
 
 #[test]

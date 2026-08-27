@@ -1,3 +1,5 @@
+use unicode_width::UnicodeWidthStr;
+
 use super::support::*;
 
 fn changed_git(path: &str, old: &str, new: &str) -> FakeGit {
@@ -170,6 +172,38 @@ fn full_file_mode_reads_fake_content_and_binary_files_have_a_label() {
     binary.write_file("data.bin", b"\x00\x01\x02");
     let mut binary_ui = open_diff(binary, 120);
     assert!(binary_ui.viewport_text().contains("Binary file"));
+}
+
+#[test]
+fn git_diff_owns_the_cursor_and_styles_comment_drafts() {
+    let mut ui = open_diff(changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n"), 160);
+    open_patch(&mut ui);
+    assert!(!ui.backend().cursor_visible(), "the hidden composer must not own the cursor");
+
+    ui.key(key(KeyCode::Char('c')));
+    ui.draw();
+    let buffer = ui.backend().buffer();
+    let row = row_containing(buffer, "│ > ").expect("empty draft body");
+    let text = row_text(buffer, row);
+    let prefix_column = u16::try_from(text[..text.find("│ > ").unwrap()].width()).unwrap();
+    assert!(!text.contains('█'));
+    assert_eq!(ui.backend().cursor_position(), Position::new(prefix_column + 4, row));
+
+    ui.type_text("a界");
+    ui.draw();
+
+    let buffer = ui.backend().buffer();
+    let row = row_containing(buffer, "│ > a界").expect("draft body");
+    let text = row_text(buffer, row);
+    let text_column = u16::try_from(text[..text.find("a界").unwrap()].width()).unwrap();
+    assert!(ui.backend().cursor_visible());
+    assert_eq!(ui.backend().cursor_position(), Position::new(text_column + 3, row));
+
+    let theme = Theme::default();
+    for y in [row - 1, row, row + 1] {
+        assert_eq!(buffer[(text_column, y)].bg, theme.sidebar_bg);
+        assert_eq!(buffer[(text_column + 8, y)].bg, theme.sidebar_bg);
+    }
 }
 
 #[test]

@@ -82,7 +82,9 @@ impl<A: Copy + Default + PartialEq> DocumentPane<A> {
         self.rows = rows;
         self.area = area;
         let cursor = self.rows.row_of(self.cursor);
-        self.scroll = cursor.map_or(self.scroll, |row| scroll_into_view(self.scroll, row, usize::from(area.height)));
+        let focused_row = self.rows.draft_cursor().map(|(row, _)| row).or(cursor);
+        self.scroll =
+            focused_row.map_or(self.scroll, |row| scroll_into_view(self.scroll, row, usize::from(area.height)));
         AnnotatedRowsView::new(&self.rows, self.scroll, mark_cursor.then_some(cursor).flatten(), theme)
             .render(area, buf);
     }
