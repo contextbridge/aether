@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.35](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.34...aether-mcp-utils-v0.5.35) - 2026-08-27
+
+### Other
+
+- *(deps)* bump rust-toolchain from 1.97 to 1.98 in the rust-toolchain-minor-patch group ([#379](https://github.com/contextbridge/aether/pull/379))
+- Use new acp type for context usage, use rmcp's list_all methods and use acp native elicitation ([#376](https://github.com/contextbridge/aether/pull/376))
+
 ## [0.5.34](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.33...aether-mcp-utils-v0.5.34) - 2026-08-22
 
 ### Other

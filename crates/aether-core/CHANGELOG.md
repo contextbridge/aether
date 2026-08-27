@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.35](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.34...aether-agent-core-v0.6.35) - 2026-08-27
+
+### Other
+
+- *(deps)* bump rust-toolchain from 1.97 to 1.98 in the rust-toolchain-minor-patch group ([#379](https://github.com/contextbridge/aether/pull/379))
+- ACP sessions ([#382](https://github.com/contextbridge/aether/pull/382))
+- Use new acp type for context usage, use rmcp's list_all methods and use acp native elicitation ([#376](https://github.com/contextbridge/aether/pull/376))
+
 ### Other
 
 - Move persisted session models, log parsing, and transcript reconstruction to `aether-sessions`.

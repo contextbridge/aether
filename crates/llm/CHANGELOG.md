@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.30](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.29...aether-llm-v0.7.30) - 2026-08-27
+
+### Other
+
+- *(deps)* bump rust-toolchain from 1.97 to 1.98 in the rust-toolchain-minor-patch group ([#379](https://github.com/contextbridge/aether/pull/379))
+- Update models ([#377](https://github.com/contextbridge/aether/pull/377))
+
 ## [0.7.29](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.28...aether-llm-v0.7.29) - 2026-08-22
 
 ### Other

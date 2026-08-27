@@ -1,6 +1,6 @@
 [package]
 name = "aether-agent-cli"
-version = "0.7.38"
+version = "0.7.39"
 edition = "2024"
 description = "CLI and ACP server for the Aether AI coding agent"
 license = "MIT"
@@ -29,18 +29,18 @@ name = "aether"
 path = "src/main.rs"
 
 [dependencies]
-aether-auth = { path = "../aether-auth", version = "0.1.12", features = ["keyring"] }
+aether-auth = { path = "../aether-auth", version = "0.1.13", features = ["keyring"] }
 base64 = { workspace = true }
-aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.34" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.35" }
 aether-sessions = { workspace = true }
-aether-project = { path = "../aether-project", version = "0.5.35" }
-aether-telemetry = { path = "../aether-telemetry", version = "0.1.15" }
-llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.7.29" }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.34" }
-mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.4.41" }
-wisp = { package = "aether-wisp", path = "../wisp", version = "0.5.0" }
+aether-project = { path = "../aether-project", version = "0.5.36" }
+aether-telemetry = { path = "../aether-telemetry", version = "0.1.16" }
+llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.7.30" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.35" }
+mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.4.42" }
+wisp = { package = "aether-wisp", path = "../wisp", version = "0.5.1" }
 ratatui = { workspace = true }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["server", "testing"], version = "0.3.40" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["server", "testing"], version = "0.3.41" }
 agent-client-protocol = { workspace = true }
 aether-lspd = { path = "../aether-lspd", version = "0.1.33" }
 rmcp = { workspace = true, features = ["client", "elicitation", "server", "transport-streamable-http-client-reqwest"] }
@@ -58,7 +58,7 @@ tracing-appender = { workspace = true }
 futures = { workspace = true }
 dirs = { workspace = true }
 uuid = { workspace = true }
-utils = { package = "aether-utils", path = "../utils", version = "0.2.13" }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.14" }
 tempfile = { workspace = true }
 crossterm = { workspace = true }
 url = { workspace = true }
@@ -67,4 +67,4 @@ url = { workspace = true }
 libc = { workspace = true }
 
 [dev-dependencies]
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"], version = "0.3.40" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"], version = "0.3.41" }

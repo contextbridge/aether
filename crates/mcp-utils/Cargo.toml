@@ -1,6 +1,6 @@
 [package]
 name = "aether-mcp-utils"
-version = "0.5.34"
+version = "0.5.35"
 edition = "2024"
 description = "MCP client and server utilities for the Aether AI agent framework"
 license = "MIT"
@@ -44,13 +44,13 @@ tokio = { workspace = true, features = ["rt", "macros", "sync", "net", "time"] }
 tokio-util = { workspace = true }
 rmcp = { workspace = true, features = ["client", "elicitation", "server", "transport-async-rw"] }
 tracing = { workspace = true }
-utils = { package = "aether-utils", path = "../utils", version = "0.2.13" }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.14" }
 schemars = { workspace = true }
 
 # client-only deps
-aether-auth = { path = "../aether-auth", version = "0.1.12", optional = true }
+aether-auth = { path = "../aether-auth", version = "0.1.13", optional = true }
 async-stream = { workspace = true, optional = true }
-llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.7.29" }
+llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.7.30" }
 serde_json = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, optional = true }

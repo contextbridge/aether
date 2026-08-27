@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.14](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.13...aether-utils-v0.2.14) - 2026-08-27
+
+### Other
+
+- Use new acp type for context usage, use rmcp's list_all methods and use acp native elicitation ([#376](https://github.com/contextbridge/aether/pull/376))
+
 ## [0.2.13](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.12...aether-utils-v0.2.13) - 2026-08-22
 
 ### Added

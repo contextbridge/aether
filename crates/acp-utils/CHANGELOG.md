@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.41](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.40...aether-acp-utils-v0.3.41) - 2026-08-27
+
+### Fixed
+
+- *(wisp)* preserve prompt completion ordering ([#384](https://github.com/contextbridge/aether/pull/384))
+
+### Other
+
+- ACP sessions ([#382](https://github.com/contextbridge/aether/pull/382))
+- Use new acp type for context usage, use rmcp's list_all methods and use acp native elicitation ([#376](https://github.com/contextbridge/aether/pull/376))
+
 ## [0.3.40](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.39...aether-acp-utils-v0.3.40) - 2026-08-22
 
 ### Other
