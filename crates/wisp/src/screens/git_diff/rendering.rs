@@ -8,19 +8,56 @@ use std::collections::HashSet;
 use crate::renderer::DrawContext;
 use crate::screens::annotation::{AnnotatedRows, Row, comment_body_width, comment_box, draft_body};
 use crate::git_review::{FileDiff, FileStatus, GitDiffEvent, PatchAnchor, PatchLineKind, StageState};
-use crate::screens::review::{Pane, body_and_footer, focused_title};
+use crate::screens::review::{
+    Pane, ShortcutGroup, body_and_footer, focused_title, render_command_bar, render_shortcut_help,
+};
 use crate::surfaces::input::{GitReviewOutput, MouseAction, UiEvent, is_press};
 use crate::view::diff::{DiffRowKind, DiffTone, diff_line, diff_rows};
 use crate::view::list_view::ListView;
 use crate::view::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
-use crate::view::widgets::{TextInput, key_hints};
+use crate::view::widgets::TextInput;
 use crate::view::wrap::{fit_line, wrap_text_char};
 
 use super::GitDiffScreen;
 use super::state::{BottomBar, DrawerEntry, FullFileView, GitDiffLoadState, PatchCursor, PatchRow};
 
 pub(super) const DRAWER_MIN_WIDTH: u16 = 72;
+
+const GIT_SHORTCUTS: &[ShortcutGroup] = &[
+    ShortcutGroup {
+        title: "Navigation",
+        hints: &[
+            ("j / k", "move or scroll"),
+            ("h / l", "change pane"),
+            ("Enter", "open file"),
+            ("PgUp / PgDn", "scroll a page"),
+        ],
+    },
+    ShortcutGroup {
+        title: "Review",
+        hints: &[("c", "add comment"), ("s", "submit review"), ("u", "undo comment")],
+    },
+    ShortcutGroup {
+        title: "Git",
+        hints: &[
+            ("Space", "stage file"),
+            ("a / A", "stage / unstage all"),
+            ("C", "Commit"),
+            ("d", "discard file"),
+        ],
+    },
+    ShortcutGroup {
+        title: "View",
+        hints: &[
+            ("t", "change scope"),
+            ("o", "show full file"),
+            ("r", "refresh"),
+            ("< / >", "resize file list"),
+            ("Esc / Ctrl-G", "close review"),
+        ],
+    },
+];
 
 /// Narrowest the drawer can be resized to before it stops being a usable file list.
 const DRAWER_MIN_COLUMNS: u16 = 16;
@@ -55,7 +92,13 @@ impl GitDiffScreen {
             GitDiffLoadState::Ready(_) => self.render_document(body, buf, cx),
         };
 
-        self.render_footer(footer, buf, theme).or(cursor)
+        let footer_cursor = self.render_footer(footer, buf, theme);
+        if self.shortcuts_open {
+            render_shortcut_help(area, buf, theme, GIT_SHORTCUTS);
+            None
+        } else {
+            footer_cursor.or(cursor)
+        }
     }
 
     fn render_document(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
@@ -275,36 +318,26 @@ impl GitDiffScreen {
                 None
             }
             BottomBar::Help => {
-                let mut hints = if self.focus == Pane::Nav {
-                    vec![("j/k", "move"), ("h/l", "pane"), ("space", "stage"), ("a/A", "all"), ("t", "scope")]
-                } else {
-                    vec![
-                        ("j/k", "scroll"),
-                        ("c", "comment"),
-                        ("s", "submit"),
-                        ("u", "undo"),
-                        ("h/l", "pane"),
-                        ("space", "stage"),
-                    ]
-                };
-                hints.extend([
-                    ("C", "commit"),
-                    ("d", "discard"),
-                    ("o", "full file"),
-                    ("r", "refresh"),
-                    ("</>", "width"),
-                ]);
-                hints.push(("Ctrl-G/Esc", "close"));
-
-                let mut line = key_hints(&hints, theme);
-                let queued = self.review.queue.len();
-                if queued > 0 {
-                    line.push_span(Span::styled(
-                        format!("  ({})", plural(queued, "comment")),
-                        Style::new().fg(theme.info),
-                    ));
+                if self.review.draft.is_some() {
+                    render_command_bar(
+                        area,
+                        buf,
+                        theme,
+                        &[("Enter", "add comment"), ("Esc", "cancel")],
+                        None,
+                        false,
+                    );
+                    return None;
                 }
-                Paragraph::new(line).render(area, buf);
+
+                let actions = if self.focus == Pane::Nav {
+                    &[("Enter", "open"), ("Space", "stage"), ("l", "diff")][..]
+                } else {
+                    &[("c", "comment"), ("s", "submit"), ("h", "files")][..]
+                };
+                let queued = self.review.queue.len();
+                let status = (queued > 0).then(|| plural(queued, "comment"));
+                render_command_bar(area, buf, theme, actions, status.as_deref(), true);
                 None
             }
         }

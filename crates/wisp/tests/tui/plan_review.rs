@@ -18,7 +18,7 @@ use wisp::view::syntax::SyntaxHighlighter;
 
 use super::support::{
     CreateElicitationResponse, ElicitationAction, ElicitationSchema, accepted_content, assert_ctrl_c_exits,
-    block_on_local, form_elicitation, make_app, with_elicitation,
+    block_on_local, form_elicitation, make_app, row_containing, row_text, with_elicitation,
 };
 
 fn make_meta(markdown: &str) -> PlanReviewElicitationMeta {
@@ -440,15 +440,83 @@ fn narrow_screen_falls_back_to_single_pane() {
 }
 
 #[test]
-fn footer_shows_context_sensitive_hints() {
+fn footer_shows_only_primary_contextual_actions() {
     let markdown = "# Plan\ntext";
     let (mut screen, _rx) = make_screen(markdown);
 
     let buffer = render_screen(&mut screen, 80, 24);
     let text = buffer_text(&buffer);
-    assert!(text.contains("approve"), "footer should show approve hint");
-    assert!(text.contains("cancel"), "footer should show cancel hint");
-    assert!(text.contains("comment"), "footer should show comment hint in plan mode");
+    assert!(text.contains("[a] approve"), "{text}");
+    assert!(text.contains("[r] changes"), "{text}");
+    assert!(text.contains("[c] comment"), "{text}");
+    assert!(text.contains("[?] shortcuts"), "{text}");
+    assert!(!text.contains("heading"), "secondary navigation belongs in shortcut help: {text}");
+}
+
+#[test]
+fn plan_review_shortcut_help_opens_and_closes_before_the_review() {
+    let markdown = "# Plan\ntext";
+    let (mut screen, _rx) = make_screen(markdown);
+
+    assert!(!closes(&mut screen, key(KeyCode::Char('?'))));
+    let help = buffer_text(&render_screen(&mut screen, 80, 24));
+    assert!(help.contains("Review shortcuts"), "{help}");
+    assert!(help.contains("Navigation"), "{help}");
+    assert!(help.contains("Decision"), "{help}");
+    assert!(help.contains("next heading"), "{help}");
+
+    assert!(!closes(&mut screen, key(KeyCode::Esc)));
+    let review = buffer_text(&render_screen(&mut screen, 80, 24));
+    assert!(!review.contains("Review shortcuts"));
+    assert!(review.contains("Plan"));
+}
+
+#[test]
+fn plan_review_shortcut_help_uses_one_readable_column_when_narrow() {
+    let (mut screen, _rx) = make_screen("# Plan\ntext");
+
+    assert!(!closes(&mut screen, key(KeyCode::Char('?'))));
+    let help = buffer_text(&render_screen(&mut screen, 40, 24));
+
+    assert!(help.contains("previous heading"), "{help}");
+    assert!(help.contains("request changes"), "{help}");
+}
+
+#[test]
+fn plan_without_an_outline_advertises_the_working_top_shortcut() {
+    let (mut screen, _rx) = make_screen("plain text");
+
+    let footer = buffer_text(&render_screen(&mut screen, 80, 24));
+
+    assert!(footer.contains("[g] top"), "{footer}");
+    assert!(!footer.contains("[h] top"), "{footer}");
+}
+
+#[test]
+fn plan_review_keeps_a_bottom_draft_and_its_cursor_visible() {
+    block_on_local(async {
+        let markdown = (1..=30).map(|line| format!("line {line}")).collect::<Vec<_>>().join("\n");
+        let mut ui = make_app();
+        let meta = PlanReviewElicitationMeta::new(&PathBuf::from("/tmp/plan.md"), &markdown).to_json().unwrap();
+        let _response =
+            with_elicitation(&mut ui, form_elicitation("plan", "Approve plan?", ElicitationSchema::new()).meta(meta))
+                .await;
+        ui.draw();
+
+        assert!(!ui.backend().cursor_visible(), "the hidden composer must not own the cursor");
+
+        ui.key(key(KeyCode::Char('G')));
+        ui.key(key(KeyCode::Char('c')));
+        ui.type_text(&format!("{}END", "x".repeat(80)));
+        ui.draw();
+
+        let buffer = ui.backend().buffer();
+        let row = row_containing(buffer, "END").expect("wrapped draft tail should scroll into view");
+        let text = row_text(buffer, row);
+        let end = u16::try_from(text.chars().position(|character| character == 'D').unwrap() + 1).unwrap();
+        assert!(ui.backend().cursor_visible());
+        assert_eq!(ui.backend().cursor_position(), ratatui::layout::Position::new(end, row));
+    });
 }
 
 #[test]

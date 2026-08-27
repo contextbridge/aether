@@ -25,22 +25,22 @@ pub(super) fn draw_frame(
     let buf = frame.buffer_mut();
 
     PlanView::new(&layout.plan_entries, theme).render(layout.indent(plan_area), buf);
-    draw_transcript(
-        layout,
-        live,
-        transcript_area,
-        buf,
-        app.progress_indicator(),
-        theme,
-        app.spinner_tick(),
-    );
+    draw_transcript(layout, live, transcript_area, buf, app.progress_indicator(), theme, app.spinner_tick());
 
     let cursor = render_composer(layout, app, composer_area, buf, theme);
     layout.status_line.render(status_area, buf);
 
     let route_cursor = app.render_route(frame.area(), frame.buffer_mut(), &mut renderer.context());
     let overlay_cursor = app.render_overlay(frame.area(), frame.buffer_mut(), &mut renderer.context());
-    if let Some(cursor) = overlay_cursor.or(route_cursor).or(cursor) {
+    let cursor = if app.has_modal() {
+        overlay_cursor
+    } else if app.full_screen_active() {
+        route_cursor
+    } else {
+        cursor
+    };
+
+    if let Some(cursor) = cursor {
         frame.set_cursor_position(cursor);
     }
 }

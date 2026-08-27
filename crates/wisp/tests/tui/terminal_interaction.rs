@@ -843,10 +843,9 @@ mod screen_mouse {
         // Click at x=20 (left side, well within drawer)
         screen.on_mouse(MouseAction::Click, 3, 20);
 
-        // With focus on Drawer, footer shows "h/l pane"
         let buffer = render_git_diff(&mut screen, 120, 40);
         let text = buffer_text(&buffer);
-        assert!(text.contains("h/l pane"), "drawer focus footer: {text}");
+        assert!(text.contains("[Enter] open"), "drawer focus footer: {text}");
     }
 
     #[test]
@@ -859,11 +858,9 @@ mod screen_mouse {
         // Click at x=60 (right side, patch area)
         screen.on_mouse(MouseAction::Click, 3, 60);
 
-        // Focus should now be Patch. Footer shows "c comment" for Patch focus.
         let buffer = render_git_diff(&mut screen, 120, 40);
         let text = buffer_text(&buffer);
-        // Should show a draft comment box
-        assert!(text.contains("c comment"), "patch focus footer: {text}");
+        assert!(text.contains("[c] comment"), "patch focus footer: {text}");
     }
 
     #[test]
@@ -876,10 +873,9 @@ mod screen_mouse {
         // Even clicking on the left side should focus Patch
         screen.on_mouse(MouseAction::Click, 3, 2);
 
-        // Footer shows "c comment" for Patch focus
         let buffer = render_git_diff(&mut screen, 60, 40);
         let text = buffer_text(&buffer);
-        assert!(text.contains("c comment"), "narrow layout should focus patch: {text}");
+        assert!(text.contains("[c] comment"), "narrow layout should focus patch: {text}");
     }
 
     #[test]
@@ -912,10 +908,9 @@ mod screen_mouse {
         // Click at x=50 should still be in patch area
         screen.on_mouse(MouseAction::Click, 3, 50);
 
-        // Footer shows "c comment" for Patch focus
         let buffer = render_git_diff(&mut screen, 200, 40);
         let text = buffer_text(&buffer);
-        assert!(text.contains("c comment"), "patch should be focused: {text}");
+        assert!(text.contains("[c] comment"), "patch should be focused: {text}");
     }
 }
 

@@ -2,8 +2,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Position;
 
 use super::GitDiffScreen;
-use crate::screens::annotation::{apply_draft_key, paste_into_draft};
 use crate::git_review::{CommentContext, GitDiffEvent, PatchAnchor, QueuedComment};
+use crate::screens::annotation::{apply_draft_key, paste_into_draft};
 use crate::surfaces::input::{GitReviewOutput, MouseAction, ReviewOutcome, is_composed_char};
 use crate::view::edit_buffer::apply_edit_key;
 
@@ -22,7 +22,7 @@ const DRAWER_RESIZE_STEP: i16 = 4;
 
 impl GitDiffScreen {
     pub(super) fn handle_mouse(&mut self, action: MouseAction, row: u16, column: u16) {
-        if self.request.in_flight {
+        if self.shortcuts_open || self.request.in_flight {
             return;
         }
         match action {
@@ -60,18 +60,31 @@ impl GitDiffScreen {
     }
 
     pub(super) fn handle_key(&mut self, key: KeyEvent) -> Vec<GitReviewOutput> {
-        if key.code == KeyCode::Esc || key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            return self.dismiss();
+        if self.shortcuts_open {
+            if matches!(key.code, KeyCode::Esc | KeyCode::Char('?')) {
+                self.shortcuts_open = false;
+            }
+            return Vec::new();
         }
-
+        if key.code == KeyCode::Esc && self.review.draft.is_some() {
+            return self.on_draft_key(key);
+        }
         // A destructive action that would drop queued comments asks for the same
         // key twice; anything else cancels the confirmation.
         if let Some(action) = self.request.pending {
             self.bottom_bar = BottomBar::Help;
-            if is_composed_char(key) || !action.confirm_keys().contains(&key.code) {
+            if !action.confirms(key) {
                 self.request.pending = None;
                 return Vec::new();
             }
+            if action == PendingAction::Close {
+                self.request.pending = None;
+                return vec![GitReviewOutput::Outcome(ReviewOutcome::Cancelled)];
+            }
+        }
+
+        if key.code == KeyCode::Esc || key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            return self.dismiss();
         }
 
         match &self.bottom_bar {
@@ -96,6 +109,9 @@ impl GitDiffScreen {
     }
 
     pub(super) fn handle_paste(&mut self, text: &str) {
+        if self.shortcuts_open {
+            return;
+        }
         match &mut self.bottom_bar {
             BottomBar::CommitEditor { buffer } => buffer.insert_paste(text),
             _ => paste_into_draft(&mut self.review.draft, text),
@@ -139,15 +155,12 @@ impl GitDiffScreen {
         }
     }
 
-    /// Esc and Ctrl-G back out one level: a confirmation, then a bottom-bar
-    /// mode, then the screen itself.
     fn dismiss(&mut self) -> Vec<GitReviewOutput> {
-        if self.request.pending.take().is_some() {
-            self.bottom_bar = BottomBar::Help;
-            return Vec::new();
-        }
         match std::mem::replace(&mut self.bottom_bar, BottomBar::Help) {
             BottomBar::CommitEditor { .. } | BottomBar::DiscardConfirmation { .. } => Vec::new(),
+            BottomBar::Error(_) | BottomBar::Help if self.needs_comment_confirmation(PendingAction::Close) => {
+                Vec::new()
+            }
             BottomBar::Error(_) | BottomBar::Help => vec![GitReviewOutput::Outcome(ReviewOutcome::Cancelled)],
         }
     }
@@ -179,6 +192,10 @@ impl GitDiffScreen {
             KeyCode::Char('u') if self.focus == Pane::Document => self.undo_last_comment(),
             KeyCode::Char('s') if self.focus == Pane::Document => self.submit_review(),
             KeyCode::Char('o') if self.focus == Pane::Document => self.toggle_full_file(),
+            KeyCode::Char('?') => {
+                self.shortcuts_open = true;
+                Vec::new()
+            }
             KeyCode::Left | KeyCode::Char('h') => {
                 if self.focus == Pane::Document {
                     self.focus = Pane::Nav;
@@ -329,7 +346,16 @@ impl PendingAction {
             Self::Stage => "Staging/unstaging",
             Self::Commit => "Committing",
             Self::Discard => "Discarding",
+            Self::Close => "Closing",
         }
+    }
+
+    fn confirms(self, key: KeyEvent) -> bool {
+        if self == Self::Close {
+            return key.code == KeyCode::Esc
+                || key.code == KeyCode::Char('g') && key.modifiers == KeyModifiers::CONTROL;
+        }
+        !is_composed_char(key) && self.confirm_keys().contains(&key.code)
     }
 
     /// The keys that confirm this action. The first is the one the prompt names.
@@ -340,10 +366,14 @@ impl PendingAction {
             Self::Stage => &[KeyCode::Char(' '), KeyCode::Char('a'), KeyCode::Char('A')],
             Self::Commit => &[KeyCode::Char('C')],
             Self::Discard => &[KeyCode::Char('d')],
+            Self::Close => &[KeyCode::Esc],
         }
     }
 
     fn key_hint(self) -> String {
+        if self == Self::Close {
+            return "Esc/Ctrl-G".to_string();
+        }
         self.confirm_keys()
             .iter()
             .copied()
