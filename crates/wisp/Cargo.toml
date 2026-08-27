@@ -14,6 +14,12 @@ dist = false
 
 [features]
 testing = []
+desktop = ["dep:gpui"]
+
+[[bin]]
+name = "aether-diff"
+path = "src/bin/aether_diff.rs"
+required-features = ["desktop"]
 
 [lib]
 name = "wisp"
@@ -70,6 +76,7 @@ base64 = { workspace = true }
 mime_guess = { workspace = true }
 url = { workspace = true }
 unicode-width = { workspace = true }
+gpui = { version = "0.2.2", optional = true, features = ["runtime_shaders"] }
 
 [dev-dependencies]
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "testing"], version = "0.3.40" }

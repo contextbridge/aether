@@ -5,6 +5,10 @@ default:
 run:
     cargo run -p aether-wisp -- -a 'cargo run -p aether-agent-cli acp'
 
+# Open the native split diff prototype
+run-diff PATH=".":
+    cargo run -p aether-wisp --features desktop --bin aether-diff -- {{PATH}}
+
 # Build the workspace
 build:
     cargo build

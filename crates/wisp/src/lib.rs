@@ -4,6 +4,7 @@
 
 pub mod cli;
 pub mod error;
+pub mod git_review;
 pub mod settings;
 
 // The crate's public API is the entry points above plus [`Session`]. The
@@ -31,7 +32,6 @@ internal_modules!(
     conversation,
     command,
     file_index,
-    git_review,
     renderer,
     request,
     runtime,
