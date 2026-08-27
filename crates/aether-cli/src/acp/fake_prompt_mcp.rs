@@ -27,24 +27,26 @@ impl ServerHandler for FakePromptMcp {
             .with_instructions("Fake MCP server exposing a single prompt for tests")
     }
 
-    async fn list_prompts(
+    fn list_prompts(
         &self,
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ListPromptsResult, McpError> {
+    ) -> impl std::future::Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
         let prompt = McpPrompt::new(&self.prompt_name, Some(format!("{} command", self.prompt_name)), None);
-        Ok(ListPromptsResult::with_all_items(vec![prompt]))
+        std::future::ready(Ok(ListPromptsResult::with_all_items(vec![prompt])))
     }
 
-    async fn get_prompt(
+    fn get_prompt(
         &self,
         request: GetPromptRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<GetPromptResponse, McpError> {
-        if request.name.as_str() != self.prompt_name {
-            return Err(McpError::invalid_params(format!("Prompt '{}' not found", request.name), None));
-        }
-        let messages = vec![PromptMessage::new_text(Role::User, format!("expanded {}", self.prompt_name))];
-        Ok(rmcp::model::GetPromptResult::new(messages).into())
+    ) -> impl std::future::Future<Output = Result<GetPromptResponse, McpError>> + Send + '_ {
+        let result = if request.name.as_str() == self.prompt_name {
+            let messages = vec![PromptMessage::new_text(Role::User, format!("expanded {}", self.prompt_name))];
+            Ok(rmcp::model::GetPromptResult::new(messages).into())
+        } else {
+            Err(McpError::invalid_params(format!("Prompt '{}' not found", request.name), None))
+        };
+        std::future::ready(result)
     }
 }

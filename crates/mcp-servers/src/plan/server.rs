@@ -222,6 +222,7 @@ impl PlanMcp {
     }
 }
 
+#[allow(clippy::unused_async_trait_impl)]
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for PlanMcp {
     fn get_info(&self) -> ServerInfo {
@@ -230,11 +231,11 @@ impl ServerHandler for PlanMcp {
             .with_instructions("MCP Server for Plan mode")
     }
 
-    async fn list_prompts(
+    fn list_prompts(
         &self,
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ListPromptsResult, McpError> {
+    ) -> impl std::future::Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
         let prompt = Prompt::new(
             PROMPT_NAME,
             Some("Generate an implementation plan for a task.".to_string()),
@@ -245,7 +246,7 @@ impl ServerHandler for PlanMcp {
             ]),
         );
 
-        Ok(ListPromptsResult::with_all_items(vec![prompt]))
+        std::future::ready(Ok(ListPromptsResult::with_all_items(vec![prompt])))
     }
 
     async fn get_prompt(

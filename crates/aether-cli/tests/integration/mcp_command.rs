@@ -20,23 +20,23 @@ impl ServerHandler for FakeGateway {
             .with_server_info(Implementation::new("fake-gateway", "1.0.0"))
     }
 
-    async fn list_tools(
+    fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ListToolsResult, ErrorData> {
+    ) -> impl std::future::Future<Output = Result<ListToolsResult, ErrorData>> + Send + '_ {
         let schema = json!({
             "type": "object",
             "properties": { "message": { "type": "string", "description": "Text to echo" } },
             "required": ["message"]
         });
-        Ok(ListToolsResult::with_all_items(vec![
+        std::future::ready(Ok(ListToolsResult::with_all_items(vec![
             Tool::new("_aether_list_servers", "List deferred servers", Arc::new(Map::new())),
             Tool::new("demo__echo", "Echo a message", Arc::new(schema.as_object().unwrap().clone())),
             Tool::new("demo__fail", "Return a tool error", Arc::new(Map::new())),
             Tool::new("demo__slow", "Wait for cancellation", Arc::new(Map::new())),
             Tool::new("demo__text", "Return content blocks", Arc::new(Map::new())),
-        ]))
+        ])))
     }
 
     async fn call_tool(

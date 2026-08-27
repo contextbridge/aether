@@ -73,12 +73,12 @@ impl ServerHandler for GatewayService {
             .with_server_info(Implementation::new("aether-deferred-tool-gateway", env!("CARGO_PKG_VERSION")))
     }
 
-    async fn list_tools(
+    fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(self.tools()))
+    ) -> impl std::future::Future<Output = Result<ListToolsResult, ErrorData>> + Send + '_ {
+        std::future::ready(Ok(ListToolsResult::with_all_items(self.tools())))
     }
 
     async fn call_tool(

@@ -144,6 +144,7 @@ fn build_rule_catalog(configured_rules_dirs: &[PathBuf]) -> aether_project::Prom
     PromptCatalog::from_dirs(configured_rules_dirs)
 }
 
+#[allow(clippy::unused_async_trait_impl)]
 #[tool_handler(router = self.tool_router)]
 impl<T: CodingTools + 'static> ServerHandler for CodingMcp<T> {
     fn get_info(&self) -> ServerInfo {
@@ -196,30 +197,28 @@ impl<T: CodingTools + 'static> ServerHandler for CodingMcp<T> {
         self.tool_router.call(ToolCallContext::new(self, request, context)).await
     }
 
-    async fn get_task(
+    fn get_task(
         &self,
         request: GetTaskParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<GetTaskResult, ErrorData> {
-        Ok(GetTaskResult::new(self.task_manager.get_task(&request.task_id)?))
+    ) -> impl std::future::Future<Output = Result<GetTaskResult, ErrorData>> + Send + '_ {
+        std::future::ready(self.task_manager.get_task(&request.task_id).map(GetTaskResult::new))
     }
 
-    async fn update_task(
+    fn update_task(
         &self,
         request: UpdateTaskParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<(), ErrorData> {
-        self.task_manager.update_task(&request.task_id, request.input_responses)?;
-        Ok(())
+    ) -> impl std::future::Future<Output = Result<(), ErrorData>> + Send + '_ {
+        std::future::ready(self.task_manager.update_task(&request.task_id, request.input_responses))
     }
 
-    async fn cancel_task(
+    fn cancel_task(
         &self,
         request: CancelTaskParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<(), ErrorData> {
-        self.task_manager.cancel_task(&request.task_id)?;
-        Ok(())
+    ) -> impl std::future::Future<Output = Result<(), ErrorData>> + Send + '_ {
+        std::future::ready(self.task_manager.cancel_task(&request.task_id))
     }
 }
 

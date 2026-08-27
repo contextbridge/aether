@@ -1,6 +1,7 @@
 use async_openai::Client;
 use async_openai::config::OpenAIConfig;
 use serde_json::Value;
+use std::future::ready;
 use tokio_stream::StreamExt;
 use tracing::debug;
 
@@ -23,21 +24,8 @@ impl ProviderFactory for OpenAiProvider {
         Self::from_env_with_connection(ProviderConnectionConfig::default()).await
     }
 
-    async fn from_env_with_connection(connection: ProviderConnectionConfig) -> Result<Self> {
-        let api_key = match connection.auth_mode {
-            ProviderAuthMode::Default => {
-                std::env::var("OPENAI_API_KEY").map_err(|_| LlmError::MissingApiKey("OPENAI_API_KEY".to_string()))?
-            }
-            ProviderAuthMode::None => String::new(),
-        };
-
-        let mut config = OpenAIConfig::new().with_api_key(api_key);
-        if let Some(base_url) = connection.base_url {
-            config = config.with_api_base(base_url);
-        }
-        let config = AetherOpenAiConfig::new(config, connection.auth_mode);
-
-        Ok(Self { client: Client::with_config(config), model: "gpt-4.1".to_string() })
+    fn from_env_with_connection(connection: ProviderConnectionConfig) -> impl Future<Output = Result<Self>> + Send {
+        ready(provider_from_connection(connection))
     }
 
     fn with_model(mut self, model: &str) -> Self {
@@ -85,6 +73,23 @@ impl StreamingModelProvider for OpenAiProvider {
     fn model(&self) -> Option<LlmModel> {
         format!("openai:{}", self.model).parse().ok()
     }
+}
+
+fn provider_from_connection(connection: ProviderConnectionConfig) -> Result<OpenAiProvider> {
+    let api_key = match connection.auth_mode {
+        ProviderAuthMode::Default => {
+            std::env::var("OPENAI_API_KEY").map_err(|_| LlmError::MissingApiKey("OPENAI_API_KEY".to_string()))?
+        }
+        ProviderAuthMode::None => String::new(),
+    };
+
+    let mut config = OpenAIConfig::new().with_api_key(api_key);
+    if let Some(base_url) = connection.base_url {
+        config = config.with_api_base(base_url);
+    }
+    let config = AetherOpenAiConfig::new(config, connection.auth_mode);
+
+    Ok(OpenAiProvider { client: Client::with_config(config), model: "gpt-4.1".to_string() })
 }
 
 #[cfg(test)]

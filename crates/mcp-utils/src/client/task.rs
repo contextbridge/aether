@@ -209,7 +209,11 @@ impl<'a> TaskDriver<'a> {
     }
 
     fn error(&self, task_id: &str, reason: TaskErrorReason) -> CallToolError {
-        CallToolError::Task { server: self.server_name.to_string(), task_id: task_id.to_string(), reason }
+        CallToolError::Task {
+            server: self.server_name.to_string(),
+            task_id: task_id.to_string(),
+            reason: Box::new(reason),
+        }
     }
 }
 
@@ -419,9 +423,9 @@ mod tests {
         assert!(matches!(
             result.events.last(),
             Some(ToolCallEvent::TaskComplete {
-                result: Err(CallToolError::Task { reason: TaskErrorReason::TimedOut { .. }, .. }),
+                result: Err(CallToolError::Task { reason, .. }),
                 ..
-            })
+            }) if matches!(reason.as_ref(), TaskErrorReason::TimedOut { .. })
         ));
         assert_eq!(result.state.task_cancel_ids(), ["task-1"]);
     }

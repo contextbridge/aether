@@ -58,8 +58,8 @@ impl<R: ServiceRole> Transport<R> for InMemoryTransport<R> {
         }
     }
 
-    async fn close(&mut self) -> Result<(), Self::Error> {
+    fn close(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
         // Channels will be closed when dropped
-        Ok(())
+        std::future::ready(Ok(()))
     }
 }
