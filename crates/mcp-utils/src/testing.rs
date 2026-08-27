@@ -34,8 +34,8 @@ where
             serve_client_with_lifecycle(client, client_transport, client_lifecycle_mode())
         );
 
-        let server = server_result.map_err(ConnectError::ServerInit)?;
-        let client = client_result.map_err(ConnectError::ClientInit)?;
+        let server = server_result.map_err(|error| ConnectError::ServerInit(Box::new(error)))?;
+        let client = client_result.map_err(|error| ConnectError::ClientInit(Box::new(error)))?;
 
         Ok((server, client))
     })
@@ -44,9 +44,9 @@ where
 #[derive(Debug, thiserror::Error)]
 pub enum ConnectError {
     #[error("Server initialization failed: {0}")]
-    ServerInit(ServerInitializeError),
+    ServerInit(Box<ServerInitializeError>),
     #[error("Client initialization failed: {0}")]
-    ClientInit(ClientInitializeError),
+    ClientInit(Box<ClientInitializeError>),
 }
 
 #[cfg(feature = "client")]

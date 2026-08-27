@@ -14,13 +14,15 @@ use crate::screens::annotation::{
 use crate::screens::plan_review::{
     PlanDocument, ReviewComment, SourceMarkdownLine, compile_feedback, render_markdown_source_lines,
 };
-use crate::screens::review::{DocumentPane, MOUSE_SCROLL_LINES, Pane, body_and_footer, focused_border, focused_title};
+use crate::screens::review::{
+    DocumentPane, Pane, ShortcutGroup, body_and_footer, focused_border, focused_title, render_command_bar,
+    render_shortcut_help,
+};
 use crate::surfaces::elicitation::ElicitationResponder;
 use crate::surfaces::input::{MouseAction, PlanReviewOutput, ReviewOutcome, UiEvent, is_composed_char, is_press};
 use crate::view::list_view::ListView;
 use crate::view::selection::{Direction, SelectionState, step_clamped};
 use crate::theme::Theme;
-use crate::view::widgets::key_hints;
 use crate::view::wrap::{as_u16, wrap_line, wrap_text_char};
 
 const MIN_SPLIT_WIDTH: u16 = 60;
@@ -28,6 +30,28 @@ const MIN_SPLIT_WIDTH: u16 = 60;
 const GUTTER_SEPARATOR_WIDTH: usize = 3;
 const OUTLINE_FRACTION: u32 = 1;
 const OUTLINE_TOTAL: u32 = 4;
+
+const PLAN_SHORTCUTS: &[ShortcutGroup] = &[
+    ShortcutGroup {
+        title: "Navigation",
+        hints: &[
+            ("j / k", "move"),
+            ("h / l", "change pane"),
+            ("g / G", "top / end"),
+            ("n", "next heading"),
+            ("p", "previous heading"),
+            ("Enter", "jump to section"),
+        ],
+    },
+    ShortcutGroup {
+        title: "Review",
+        hints: &[("c", "add comment"), ("u", "undo comment")],
+    },
+    ShortcutGroup {
+        title: "Decision",
+        hints: &[("a", "approve plan"), ("r", "request changes"), ("Esc", "cancel review")],
+    },
+];
 
 pub struct PlanReviewScreen {
     title: String,
@@ -37,6 +61,7 @@ pub struct PlanReviewScreen {
     outline_selection: SelectionState,
     draft: Option<Draft<usize>>,
     focus: Pane,
+    shortcuts_open: bool,
     responder: ElicitationResponder,
 }
 
@@ -56,6 +81,7 @@ impl PlanReviewScreen {
             outline_selection,
             draft: None,
             focus: Pane::Document,
+            shortcuts_open: false,
             responder,
         }
     }
@@ -68,14 +94,11 @@ impl PlanReviewScreen {
         self.source_line_count().saturating_sub(1)
     }
 
-    /// Scrolls the plan by rendered rows, or moves the outline when it has
-    /// focus instead.
     fn scroll(&mut self, direction: Direction) {
-        if self.focus == Pane::Nav {
-            self.move_outline(direction);
-            return;
+        match self.focus {
+            Pane::Document => self.move_cursor(direction),
+            Pane::Nav => self.move_outline(direction),
         }
-        self.plan.scroll_by(direction, MOUSE_SCROLL_LINES);
     }
 
     fn move_cursor(&mut self, direction: Direction) {
@@ -103,6 +126,12 @@ impl PlanReviewScreen {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Vec<PlanReviewOutput> {
+        if self.shortcuts_open {
+            if matches!(key.code, KeyCode::Esc | KeyCode::Char('?')) {
+                self.shortcuts_open = false;
+            }
+            return Vec::new();
+        }
         if self.responder.is_answered() {
             return vec![PlanReviewOutput::Outcome(ReviewOutcome::Cancelled)];
         }
@@ -112,6 +141,10 @@ impl PlanReviewScreen {
         }
         // Draft editing chords remain available; all following bindings are plain keys.
         if is_composed_char(key) {
+            return Vec::new();
+        }
+        if key.code == KeyCode::Char('?') {
+            self.shortcuts_open = true;
             return Vec::new();
         }
         if let Some(outcome) = self.decision_key(key) {
@@ -234,7 +267,12 @@ impl PlanReviewScreen {
         };
 
         self.render_footer(footer_area, buf, theme, use_split);
-        cursor
+        if self.shortcuts_open {
+            render_shortcut_help(area, buf, theme, PLAN_SHORTCUTS);
+            None
+        } else {
+            cursor
+        }
     }
 
     fn render_outline(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
@@ -355,19 +393,26 @@ impl PlanReviewScreen {
     }
 
     fn render_footer(&self, area: Rect, buf: &mut Buffer, theme: &Theme, has_outline: bool) {
-        let mut hints = vec![("j/k", "move")];
-        if self.focus == Pane::Document {
-            hints.push(("n/p", "heading"));
-            if has_outline {
-                hints.push(("h", "outline"));
-            }
-            hints.push(("c", "comment"));
-        } else {
-            hints.extend([("g/G", "top/end"), ("enter", "jump"), ("l", "plan")]);
+        if self.draft.is_some() {
+            render_command_bar(
+                area,
+                buf,
+                theme,
+                &[("Enter", "add comment"), ("Esc", "cancel")],
+                None,
+                false,
+            );
+            return;
         }
-        hints.extend([("u", "undo"), ("a", "approve"), ("r", "changes"), ("Esc", "cancel")]);
 
-        Paragraph::new(key_hints(&hints, theme)).style(Style::new().bg(theme.sidebar_bg)).render(area, buf);
+        let actions = if self.focus == Pane::Document {
+            let navigation = if has_outline { ("h", "outline") } else { ("g", "top") };
+            [("c", "comment"), ("a", "approve"), ("r", "changes"), navigation]
+        } else {
+            [("Enter", "jump"), ("l", "plan"), ("a", "approve"), ("r", "changes")]
+        };
+        let status = (!self.comments.is_empty()).then(|| format!("{} comment{}", self.comments.len(), if self.comments.len() == 1 { "" } else { "s" }));
+        render_command_bar(area, buf, theme, &actions, status.as_deref(), true);
     }
 }
 
@@ -389,6 +434,9 @@ impl PlanReviewScreen {
     }
 
     pub fn on_mouse(&mut self, action: MouseAction, row: u16, column: u16) -> Vec<PlanReviewOutput> {
+        if self.shortcuts_open {
+            return Vec::new();
+        }
         match action {
             MouseAction::ScrollUp => self.scroll(Direction::Backward),
             MouseAction::ScrollDown => self.scroll(Direction::Forward),

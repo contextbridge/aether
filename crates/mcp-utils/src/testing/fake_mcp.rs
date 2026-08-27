@@ -11,6 +11,7 @@ use rmcp::{
 };
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -307,64 +308,67 @@ impl ServerHandler for FakeMcpServer {
             .with_instructions("A fake MCP server for testing")
     }
 
-    async fn get_task(
+    fn get_task(
         &self,
         request: GetTaskParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<GetTaskResult, McpError> {
-        let task = match self.state.task_for(&request.task_id) {
-            Ok(Some(task)) => task,
-            Ok(None) => return Err(McpError::invalid_params(format!("unknown task: {}", request.task_id), None)),
-            Err(()) => return Err(McpError::internal_error("scripted tasks/get failure", None)),
+    ) -> impl Future<Output = Result<GetTaskResult, McpError>> + Send + '_ {
+        let result = match self.state.task_for(&request.task_id) {
+            Ok(Some(task)) => Ok(GetTaskResult::new(task)),
+            Ok(None) => Err(McpError::invalid_params(format!("unknown task: {}", request.task_id), None)),
+            Err(()) => Err(McpError::internal_error("scripted tasks/get failure", None)),
         };
-        Ok(GetTaskResult::new(task))
+        std::future::ready(result)
     }
 
-    async fn update_task(
+    fn update_task(
         &self,
         request: UpdateTaskParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<(), McpError> {
-        if !self.state.record_task_update(request) {
-            return Err(McpError::internal_error("scripted tasks/update failure", None));
-        }
-        Ok(())
+    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+        std::future::ready(
+            self.state
+                .record_task_update(request)
+                .then_some(())
+                .ok_or_else(|| McpError::internal_error("scripted tasks/update failure", None)),
+        )
     }
-    async fn cancel_task(
+
+    fn cancel_task(
         &self,
         request: CancelTaskParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<(), McpError> {
+    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
         self.state.record_task_cancel(request);
-        Ok(())
+        std::future::ready(Ok(()))
     }
 
-    async fn list_tools(
+    fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
-    ) -> Result<ListToolsResult, McpError> {
+    ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
         let supports_cache_hints =
             context.protocol_version().is_some_and(|version| version >= ProtocolVersion::V_2026_07_28);
         let tools = {
             let mut inner = self.state.lock();
             if inner.tool_list_failures > 0 {
                 inner.tool_list_failures -= 1;
-                return Err(McpError::internal_error("scripted tools/list failure", None));
+                return std::future::ready(Err(McpError::internal_error("scripted tools/list failure", None)));
             }
             if inner.peers.is_empty() {
                 inner.peers.push(context.peer);
             }
             inner.tools.values().map(|tool| tool.definition.clone()).collect()
         };
-        Ok(ListToolsResult {
+        std::future::ready(Ok(ListToolsResult {
             result_type: Some(ResultType::COMPLETE),
             tools,
             meta: None,
             next_cursor: None,
             ttl_ms: supports_cache_hints.then_some(0),
             cache_scope: supports_cache_hints.then_some(CacheScope::Public),
-        })
+        }))
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {

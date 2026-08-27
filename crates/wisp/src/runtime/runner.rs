@@ -4,7 +4,7 @@ use crate::command::Command;
 use crate::error::AppError;
 use crate::renderer::Renderer;
 use crate::session::terminal::{TerminalSession, inline_viewport_height};
-use acp_utils::client::{AcpEvent, AcpPromptHandle};
+use acp_utils::client::{AcpClientHandle, AcpEvent};
 use crossterm::event::{Event, EventStream};
 use crossterm::terminal::size;
 use futures::StreamExt;
@@ -24,12 +24,12 @@ pub async fn run(
     mut app: App,
     mut renderer: Renderer,
     mut event_rx: mpsc::UnboundedReceiver<AcpEvent>,
-    prompt_handle: AcpPromptHandle,
+    client_handle: AcpClientHandle,
 ) -> Result<(), AppError> {
     let (_, terminal_height) = size()?;
     let viewport = Viewport::Inline(inline_viewport_height(terminal_height));
     let mut session = TerminalSession::enter(viewport)?;
-    let mut dispatcher = CommandDispatcher::new(prompt_handle);
+    let mut dispatcher = CommandDispatcher::new(client_handle);
 
     let initial_commands = app.take_commands();
     dispatch_commands(&mut dispatcher, &mut app, initial_commands);
@@ -90,7 +90,7 @@ async fn run_event_loop(
 
             result = dispatcher.next_result(), if has_pending_tasks => {
                 if let Some(result) = result {
-                    let commands = app.update(Message::CommandFinished(result));
+                    let commands = app.update(Message::CommandFinished(Box::new(result)));
                     dispatch_commands(dispatcher, app, commands);
                 }
             }
@@ -114,6 +114,6 @@ fn dispatch_commands(dispatcher: &mut CommandDispatcher, app: &mut App, commands
     let mut pending = VecDeque::from(commands);
     while let Some(command) = pending.pop_front() {
         let Some(result) = dispatcher.dispatch(command) else { continue };
-        pending.extend(app.update(Message::CommandFinished(result)));
+        pending.extend(app.update(Message::CommandFinished(Box::new(result))));
     }
 }

@@ -1,18 +1,7 @@
 pub(crate) mod agent;
-pub(crate) mod agent_key;
-pub(crate) mod agent_runtime;
-pub(crate) mod config_setting;
-pub(crate) mod error;
 pub(crate) mod fake_prompt_mcp;
-pub(crate) mod model_config;
-pub(crate) mod prompt_history_index;
 pub(crate) mod protocol;
-pub(crate) mod session_actor;
-pub(crate) mod session_agents;
-pub(crate) mod session_config_state;
-pub(crate) mod session_factory;
-pub(crate) mod session_store;
-pub(crate) mod slash_commands;
+pub(crate) mod session;
 pub(crate) mod state;
 pub(crate) mod stdio;
 pub mod testing;
@@ -48,7 +37,7 @@ use crate::telemetry::build_telemetry_runtime;
 use crate::workspace::WorkspaceManager;
 use aether_auth::OAuthError;
 use aether_project::SettingsError;
-use session_store::SessionStore;
+use aether_sessions::SessionStore;
 
 #[derive(clap::Args, Debug)]
 pub struct AcpArgs {
@@ -128,7 +117,7 @@ pub enum AcpRunError {
     CredentialStore(#[from] OAuthError),
 
     #[error("Failed to initialize session store: {0}")]
-    SessionStore(#[source] io::Error),
+    SessionStore(#[source] aether_sessions::SessionStoreError),
 
     #[error("Failed to initialize workspace manager: {0}")]
     WorkspaceManager(#[source] io::Error),
@@ -185,6 +174,7 @@ pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
         settings_source: config.settings_source,
         provider_connections: config.provider_connections,
         telemetry,
+        runtime_factory: None,
     }));
 
     let connect_result = acp_agent_builder(state.clone()).connect_to(Stdio::new()).await;

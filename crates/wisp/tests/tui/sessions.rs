@@ -27,7 +27,7 @@ fn clear_creates_new_session_and_resets_state() {
     let _ = ui.next_agent_command().unwrap();
 
     let old_conversation = ui.app().conversation_id();
-    ui.acp_event(new_session_created("new-session", vec![select_option("model", "sonnet")]));
+    ui.deliver_result(new_session_created("new-session", vec![select_option("model", "sonnet")]));
 
     assert_ne!(ui.app().conversation_id(), old_conversation);
     assert!(!ui.app().conversation_items().iter().any(|item| {
@@ -47,7 +47,7 @@ fn clear_restores_compatible_config_selections() {
     app.key(key(KeyCode::Tab));
     let _ = app.next_agent_command().unwrap();
 
-    app.acp_event(new_session_created(
+    app.deliver_result(new_session_created(
         "new-session",
         vec![select_option("model", "haiku"), mode_option("ask", &["code", "plan", "ask"])],
     ));
@@ -81,7 +81,7 @@ fn session_list_excludes_active_session() {
     app.key(key(KeyCode::Tab));
     let _ = app.next_agent_command().unwrap();
 
-    app.acp_event(sessions_listed(vec![
+    app.deliver_result(sessions_listed(vec![
         session_info("test-session", "/tmp/current", "Current", "2025-01-01T00:00:00Z"),
         session_info("other-session", "/tmp/other", "Other", "2025-01-02T00:00:00Z"),
     ]));
@@ -97,7 +97,7 @@ fn resume_loads_selected_session() {
     app.key(key(KeyCode::Tab));
     let _ = app.next_agent_command().unwrap();
 
-    app.acp_event(sessions_listed(vec![session_info("old", "/tmp/old", "Old Session", "2025-01-01T00:00:00Z")]));
+    app.deliver_result(sessions_listed(vec![session_info("old", "/tmp/old", "Old Session", "2025-01-01T00:00:00Z")]));
 
     app.key(key(KeyCode::Enter));
 
@@ -116,7 +116,7 @@ fn empty_session_list_shows_no_sessions() {
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(sessions_listed(vec![]));
+    ui.deliver_result(sessions_listed(vec![]));
 
     assert!(ui.app().has_session_picker());
     ui.draw();
@@ -132,7 +132,7 @@ fn esc_closes_session_picker() {
     app.key(key(KeyCode::Tab));
     let _ = app.next_agent_command().unwrap();
 
-    app.acp_event(sessions_listed(vec![session_info("old", "/tmp/old", "Old", "2025-01-01T00:00:00Z")]));
+    app.deliver_result(sessions_listed(vec![session_info("old", "/tmp/old", "Old", "2025-01-01T00:00:00Z")]));
     assert!(app.app().has_session_picker());
 
     app.key(key(KeyCode::Esc));
@@ -185,7 +185,7 @@ fn load_session_send_failure_cleans_up_buffer_and_shows_error() {
     app.key(key(KeyCode::Tab));
     let _ = app.next_agent_command().unwrap();
 
-    app.acp_event(sessions_listed(vec![session_info("old", "/tmp/old", "Old Session", "2025-01-01T00:00:00Z")]));
+    app.deliver_result(sessions_listed(vec![session_info("old", "/tmp/old", "Old Session", "2025-01-01T00:00:00Z")]));
     assert!(app.app().has_session_picker());
 
     app.key(key(KeyCode::Enter));
@@ -207,7 +207,7 @@ fn session_preview_loaded_for_selected_session() {
     app.key(key(KeyCode::Tab));
     let _ = app.next_agent_command().unwrap();
 
-    app.acp_event(sessions_listed(vec![
+    app.deliver_result(sessions_listed(vec![
         session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z"),
         session_info("sess-2", "/tmp/two", "Session Two", "2025-01-02T00:00:00Z"),
     ]));
@@ -227,7 +227,7 @@ fn session_preview_updated_when_selection_changes() {
     app.key(key(KeyCode::Tab));
     let _ = app.next_agent_command().unwrap();
 
-    app.acp_event(sessions_listed(vec![
+    app.deliver_result(sessions_listed(vec![
         session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z"),
         session_info("sess-2", "/tmp/two", "Session Two", "2025-01-02T00:00:00Z"),
     ]));
@@ -250,7 +250,7 @@ fn stale_preview_does_not_replace_current() {
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(sessions_listed(vec![
+    ui.deliver_result(sessions_listed(vec![
         session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z"),
         session_info("sess-2", "/tmp/two", "Session Two", "2025-01-02T00:00:00Z"),
     ]));
@@ -259,7 +259,7 @@ fn stale_preview_does_not_replace_current() {
     ui.key(key(KeyCode::Down));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(AcpEvent::SessionPreviewLoaded(session_preview_response("sess-1")));
+    ui.deliver_result(CommandResult::SessionPreviewLoaded(session_preview_response("sess-1")));
 
     ui.draw();
     let viewport = ui.viewport_text();
@@ -274,10 +274,10 @@ fn session_preview_failure_shows_error() {
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(sessions_listed(vec![session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z")]));
+    ui.deliver_result(sessions_listed(vec![session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z")]));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(AcpEvent::SessionPreviewFailed {
+    ui.deliver_result(CommandResult::SessionPreviewFailed {
         session_id: "sess-1".to_string(),
         error: "server unreachable".to_string(),
     });
@@ -288,31 +288,35 @@ fn session_preview_failure_shows_error() {
 }
 
 #[test]
-fn session_loading_buffer_queues_updates_then_replays() {
+fn loaded_session_replays_typed_notifications_in_order() {
     let mut ui = TestUi::new();
 
     ui.type_text("/resume");
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(sessions_listed(vec![session_info("loaded", "/tmp/loaded", "Loaded", "2025-01-01T00:00:00Z")]));
+    ui.deliver_result(sessions_listed(vec![session_info("loaded", "/tmp/loaded", "Loaded", "2025-01-01T00:00:00Z")]));
     ui.key(key(KeyCode::Enter));
     let _ = ui.next_agent_command().unwrap();
-
-    ui.acp_event(session_update_for("loaded", user_message_chunk("buffered message")));
-    ui.acp_event(session_update_for(
-        "loaded",
-        acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new(
-            "buffered agent",
-        )))),
-    ));
 
     ui.draw();
     let viewport = ui.viewport_text();
     assert!(!viewport.contains("buffered message"), "buffered updates should not render yet:\n{viewport}");
     assert!(!viewport.contains("buffered agent"), "buffered updates should not render yet:\n{viewport}");
 
-    ui.acp_event(session_loaded("loaded", vec![select_option("model", "sonnet")]));
+    ui.deliver_result(CommandResult::SessionLoaded(LoadedSession {
+        session_id: SessionId::new("loaded"),
+        response: acp::LoadSessionResponse::new().config_options(vec![select_option("model", "sonnet")]),
+        replay: vec![
+            acp::SessionNotification::new(SessionId::new("loaded"), user_message_chunk("buffered message")),
+            acp::SessionNotification::new(
+                SessionId::new("loaded"),
+                acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
+                    acp::TextContent::new("buffered agent"),
+                ))),
+            ),
+        ],
+    }));
 
     ui.draw();
     let viewport = ui.viewport_text();
@@ -328,10 +332,10 @@ fn updates_from_the_abandoned_session_do_not_reach_the_loaded_one() {
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(sessions_listed(vec![session_info("loaded", "/tmp/loaded", "Loaded", "2025-01-01T00:00:00Z")]));
+    ui.deliver_result(sessions_listed(vec![session_info("loaded", "/tmp/loaded", "Loaded", "2025-01-01T00:00:00Z")]));
     ui.key(key(KeyCode::Enter));
     let _ = ui.next_agent_command().unwrap();
-    ui.acp_event(session_loaded("loaded", Vec::new()));
+    ui.deliver_result(session_loaded("loaded", Vec::new()));
 
     ui.acp_event(session_update_for("test-session", user_message_chunk("late message from the old session")));
 
@@ -352,11 +356,11 @@ fn loaded_session_uses_server_config_values() {
     app.key(key(KeyCode::Tab));
     let _ = app.next_agent_command().unwrap();
 
-    app.acp_event(sessions_listed(vec![session_info("loaded", "/tmp/loaded", "Loaded", "2025-01-01T00:00:00Z")]));
+    app.deliver_result(sessions_listed(vec![session_info("loaded", "/tmp/loaded", "Loaded", "2025-01-01T00:00:00Z")]));
     app.key(key(KeyCode::Enter));
     let _ = app.next_agent_command().unwrap();
 
-    app.acp_event(session_loaded(
+    app.deliver_result(session_loaded(
         "loaded",
         vec![select_option("model", "sonnet"), mode_option("code", &["code", "plan", "ask"])],
     ));
@@ -374,7 +378,7 @@ fn connection_closed_cancels_session_picker() {
     app.key(key(KeyCode::Tab));
     let _ = app.next_agent_command().unwrap();
 
-    app.acp_event(sessions_listed(vec![session_info("old", "/tmp/old", "Old", "2025-01-01T00:00:00Z")]));
+    app.deliver_result(sessions_listed(vec![session_info("old", "/tmp/old", "Old", "2025-01-01T00:00:00Z")]));
     assert!(app.app().has_session_picker());
 
     app.acp_event(AcpEvent::ConnectionClosed);
@@ -389,7 +393,7 @@ fn session_list_error_shows_in_transcript() {
     app.type_text("/resume");
     app.key(key(KeyCode::Tab));
 
-    app.acp_event(AcpEvent::ConfigOptionUpdateFailed { error: "list sessions failed".to_string() });
+    app.deliver_result(CommandResult::ConfigOptionUpdateFailed { error: "list sessions failed".to_string() });
 
     let messages: Vec<_> = message_texts(&app).collect();
     let has_error = messages.iter().any(|message| message.contains("list sessions failed"));
@@ -417,7 +421,7 @@ fn narrow_terminal_renders_session_picker_without_preview_pane() {
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(sessions_listed(vec![session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z")]));
+    ui.deliver_result(sessions_listed(vec![session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z")]));
 
     ui.draw();
     let viewport = ui.viewport_text();
@@ -432,7 +436,7 @@ fn composed_chars_do_not_filter_the_session_picker() {
     ui.type_text("/resume");
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
-    ui.acp_event(sessions_listed(vec![
+    ui.deliver_result(sessions_listed(vec![
         session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z"),
         session_info("sess-2", "/tmp/two", "Session Two", "2025-01-02T00:00:00Z"),
     ]));
@@ -463,7 +467,7 @@ fn new_modal_replaces_session_picker() {
     app.key(key(KeyCode::Tab));
     let _ = app.next_agent_command().unwrap();
 
-    app.acp_event(sessions_listed(vec![session_info("old", "/tmp/old", "Old", "2025-01-01T00:00:00Z")]));
+    app.deliver_result(sessions_listed(vec![session_info("old", "/tmp/old", "Old", "2025-01-01T00:00:00Z")]));
     assert!(app.app().has_session_picker());
 
     block_on_local(async {

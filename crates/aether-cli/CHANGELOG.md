@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Other
+
+- Use the shared `aether-sessions` crate for persisted session types and transcript helpers.
+
 ## [0.7.38](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.37...aether-agent-cli-v0.7.38) - 2026-08-22
 
 ### Added

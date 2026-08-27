@@ -1,14 +1,10 @@
-use acp::Error;
 use acp::Responder;
 use acp::schema::v1::{SessionUpdate, StopReason};
 use agent_client_protocol as acp;
-use agent_client_protocol::schema::v1::{
-    CreateElicitationRequest, CreateElicitationResponse, SessionConfigOption, SessionId, SessionInfo,
-};
+use agent_client_protocol::schema::v1::{CreateElicitationRequest, CreateElicitationResponse, SessionId};
 
 use crate::notifications::{
-    AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, McpNotification, PromptSearchResponse,
-    SessionPreviewResponse, SubAgentProgressParams, WorkspaceListResponse, WorkspaceMoveResponse,
+    AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, McpNotification, SubAgentProgressParams,
 };
 
 /// Events forwarded from the ACP connection to the main event loop.
@@ -20,21 +16,6 @@ pub enum AcpEvent {
     AuthMethodsUpdated(AuthMethodsUpdatedParams),
     McpNotification(McpNotification),
     ElicitationRequest { params: Box<CreateElicitationRequest>, responder: Responder<CreateElicitationResponse> },
-    PromptDone(StopReason),
-    PromptError(Error),
-    AuthenticateComplete { method_id: String },
-    AuthenticateFailed { method_id: String, error: String },
-    ConfigOptionUpdateFailed { error: String },
-    SessionsListed { sessions: Vec<SessionInfo> },
-    SessionLoaded { session_id: SessionId, config_options: Vec<SessionConfigOption> },
-    NewSessionCreated { session_id: SessionId, config_options: Vec<SessionConfigOption> },
-    PromptSearchResults(PromptSearchResponse),
-    PromptSearchFailed { query: String, error: String },
-    SessionPreviewLoaded(SessionPreviewResponse),
-    SessionPreviewFailed { session_id: String, error: String },
-    WorkspacesListed(WorkspaceListResponse),
-    WorkspaceListFailed { error: String },
-    WorkspaceMoved(WorkspaceMoveResponse),
-    WorkspaceMoveFailed { error: String },
+    PromptCompleted(StopReason),
     ConnectionClosed,
 }

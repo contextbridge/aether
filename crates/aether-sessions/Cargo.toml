@@ -1,0 +1,34 @@
+[package]
+name = "aether-sessions"
+version = "0.1.0"
+edition = "2024"
+description = "Persisted session logs and transcript reconstruction for Aether"
+license = "MIT"
+repository = "https://github.com/contextbridge/aether"
+readme = "README.md"
+keywords = ["aether", "sessions", "transcripts"]
+categories = ["development-tools"]
+
+[lints]
+workspace = true
+
+[features]
+default = []
+analytics = ["dep:chrono", "dep:futures", "dep:sqlx", "dep:tokio"]
+
+[dependencies]
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", default-features = false, version = "0.3.40" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.34" }
+llm = { package = "aether-llm", path = "../llm", version = "0.7.29" }
+chrono = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true, optional = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, optional = true, features = ["macros", "rt-multi-thread", "time"] }
+tracing = { workspace = true }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.13" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

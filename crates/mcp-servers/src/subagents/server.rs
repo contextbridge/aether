@@ -164,6 +164,7 @@ impl SubAgentsMcp {
     }
 }
 
+#[allow(clippy::unused_async_trait_impl)]
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for SubAgentsMcp {
     fn get_info(&self) -> ServerInfo {
@@ -172,30 +173,28 @@ impl ServerHandler for SubAgentsMcp {
             .with_instructions(self.build_instructions())
     }
 
-    async fn get_task(
+    fn get_task(
         &self,
         request: GetTaskParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<GetTaskResult, ErrorData> {
-        Ok(GetTaskResult::new(self.task_manager.get_task(&request.task_id)?))
+    ) -> impl std::future::Future<Output = Result<GetTaskResult, ErrorData>> + Send + '_ {
+        std::future::ready(self.task_manager.get_task(&request.task_id).map(GetTaskResult::new))
     }
 
-    async fn update_task(
+    fn update_task(
         &self,
         request: UpdateTaskParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<(), ErrorData> {
-        self.task_manager.update_task(&request.task_id, request.input_responses)?;
-        Ok(())
+    ) -> impl std::future::Future<Output = Result<(), ErrorData>> + Send + '_ {
+        std::future::ready(self.task_manager.update_task(&request.task_id, request.input_responses))
     }
 
-    async fn cancel_task(
+    fn cancel_task(
         &self,
         request: CancelTaskParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<(), ErrorData> {
-        self.task_manager.cancel_task(&request.task_id)?;
-        Ok(())
+    ) -> impl std::future::Future<Output = Result<(), ErrorData>> + Send + '_ {
+        std::future::ready(self.task_manager.cancel_task(&request.task_id))
     }
 }
 

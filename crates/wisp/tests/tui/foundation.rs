@@ -202,7 +202,7 @@ fn markdown_styles_stream_live_and_finalize_once() {
     assert!(has_cell(&conversation, "b", |cell| cell.modifier.contains(Modifier::BOLD)));
     assert!(has_cell(&conversation, "i", |cell| cell.modifier.contains(Modifier::ITALIC)));
 
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
     ui.draw();
 
@@ -217,7 +217,7 @@ fn fenced_code_info_string_is_syntax_highlighted_with_token_colors() {
     let code_background = ui.app().theme().code_bg;
     ui.submit("show code");
     ui.acp_event(text_chunk("```rust title=\"example.rs\"\nfn highlighted() {}\n```"));
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
 
     ui.draw();
 
@@ -254,7 +254,7 @@ fn fenced_code_streamed_across_chunks_is_syntax_highlighted() {
     assert!(has_cell(&ui.viewport(), "f", |cell| cell.bg == code_background));
 
     ui.acp_event(text_chunk("```\n"));
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
     ui.draw();
 
@@ -276,7 +276,7 @@ fn fenced_code_line_comment_does_not_consume_following_code() {
     let code_background = ui.app().theme().code_bg;
     ui.submit("show documented code");
     ui.acp_event(text_chunk("```python\n# Documentation\nif condition:\n    pass\n```"));
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
 
     ui.draw();
 
@@ -347,7 +347,7 @@ fn markdown_blockquote_prefixes_inline_code_first_content() {
     let code_background = ui.app().theme().code_bg;
     ui.submit("quote this");
     ui.acp_event(text_chunk("> `quoted`"));
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
 
     let conversation = ui.conversation();
@@ -364,7 +364,7 @@ fn markdown_horizontal_rule_uses_available_width() {
     let mut ui = TestUi::with_dimensions(24, 15);
     ui.submit("add a rule");
     ui.acp_event(text_chunk("---"));
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
 
     let conversation = ui.conversation();
@@ -377,7 +377,7 @@ fn transcript_markdown_wraps_at_word_boundaries() {
     let mut ui = TestUi::with_dimensions(13, 15);
     ui.submit("wrap words");
     ui.acp_event(text_chunk("alpha beta gamma"));
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
 
     let conversation = ui.conversation();
@@ -394,7 +394,7 @@ fn transcript_markdown_separates_a_heading_from_its_paragraph() {
     let mut ui = TestUi::with_dimensions(44, 15);
     ui.submit("heading test");
     ui.acp_event(text_chunk("# Heading\n\nParagraph text."));
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
 
     let conversation = ui.conversation();
@@ -410,7 +410,7 @@ fn transcript_wrapping_expands_tabs() {
     let mut ui = TestUi::with_dimensions(8, 15);
     ui.submit("hello");
     ui.acp_event(text_chunk("a\tb"));
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
 
     let conversation = ui.conversation();
@@ -425,7 +425,7 @@ fn transcript_wrapping_never_exceeds_a_one_column_allocation() {
     let mut ui = TestUi::with_dimensions(5, 15);
     ui.submit("x");
     ui.acp_event(text_chunk("界"));
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
 
     let conversation = ui.conversation();
@@ -454,7 +454,7 @@ fn markdown_renders_lists_strikethrough_and_tables() {
     let markdown = "- first\n- second\n\n~~removed~~\n\n| Name | Value |\n| --- | --- |\n| alpha | beta |";
     ui.submit("render table");
     ui.acp_event(text_chunk(markdown));
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
 
     let conversation = ui.conversation();
@@ -491,7 +491,7 @@ fn streaming_markdown_reuses_unchanged_renders_and_finalizes_once() {
     ui.draw();
     assert_eq!(ui.viewport_text(), before);
 
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
     ui.draw();
 
@@ -536,7 +536,7 @@ fn markdown_rendering_preserves_semantic_content_and_styles() {
     let mut ui = TestUi::new();
     ui.submit("markdown rendering");
     ui.acp_event(text_chunk("# Heading\n\n**bold** and `code`"));
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
 
     ui.draw();
 
@@ -589,7 +589,7 @@ fn large_markdown_history_preserves_order_across_scrollback_and_viewport() {
     }
     ui.submit("long response");
     ui.acp_event(text_chunk(&markdown));
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
 
     ui.draw();
 
@@ -639,7 +639,7 @@ fn history_is_inserted_before_the_live_viewport_is_drawn() {
     }
     ui.submit("hello");
     ui.acp_event(text_chunk(&response));
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
 
     let events: Vec<BackendEvent> = ui.backend().events().to_vec();
@@ -679,7 +679,7 @@ fn scrollback_insertion_does_not_duplicate_status_line() {
     }
     ui.submit("hello");
     ui.acp_event(text_chunk(&response));
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.acp_event(session_update(acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(40_000, 200_000))));
 
     ui.draw();

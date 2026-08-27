@@ -7,6 +7,7 @@ use crate::{
 use async_stream::stream;
 use futures::StreamExt;
 use std::env::var;
+use std::future::ready;
 
 pub const GEMINI_API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/openai/";
 
@@ -54,12 +55,12 @@ impl GeminiProvider {
 }
 
 impl ProviderFactory for GeminiProvider {
-    async fn from_env() -> Result<Self> {
-        Ok(Self::new(None))
+    fn from_env() -> impl Future<Output = Result<Self>> + Send {
+        ready(Ok(Self::new(None)))
     }
 
-    async fn from_env_with_connection(connection: ProviderConnectionConfig) -> Result<Self> {
-        Ok(Self::new(None).with_connection(connection))
+    fn from_env_with_connection(connection: ProviderConnectionConfig) -> impl Future<Output = Result<Self>> + Send {
+        ready(Ok(Self::new(None).with_connection(connection)))
     }
 
     fn with_model(mut self, model: &str) -> Self {

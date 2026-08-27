@@ -1,13 +1,14 @@
+use acp_utils::client::AcpEvent;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::TerminalOptions;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use wisp::app::WorkspaceMoveState;
-use wisp::command::{AgentCommand, Command, GitCommand, TerminalCommand};
+use wisp::command::{AgentCommand, Command, CommandResult, GitCommand, TerminalCommand};
 
 use super::support::{
-    BooleanPropertySchema, ElicitationSchema, StringPropertySchema, TestUi, TestUiBuilder, accepted_content,
-    block_on_local, buffer_text, form_elicitation, with_elicitation,
+    BooleanPropertySchema, ElicitationSchema, StringPropertySchema, TestUi, TestUiBuilder, accepted_content, acp,
+    block_on_local, buffer_text, form_elicitation, prompt_failed, with_elicitation,
 };
 
 /// Whether the app asked the terminal to ring the bell, draining whatever else
@@ -51,7 +52,6 @@ fn click(column: u16, row: u16) -> crossterm::event::Event {
 
 mod picker_click {
     use super::*;
-    use acp_utils::client::AcpEvent;
     use agent_client_protocol::schema::v1::SessionInfo;
 
     #[test]
@@ -64,7 +64,7 @@ mod picker_click {
             SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("s2"), "/tmp"),
             SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("s3"), "/tmp"),
         ];
-        ui.acp_event(AcpEvent::SessionsListed { sessions });
+        ui.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(sessions)));
         assert!(ui.app().has_session_picker());
 
         ui.draw();
@@ -82,7 +82,7 @@ mod picker_click {
             SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("s1"), "/tmp"),
             SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("s2"), "/tmp"),
         ];
-        ui.acp_event(AcpEvent::SessionsListed { sessions });
+        ui.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(sessions)));
         assert!(ui.app().has_session_picker());
 
         ui.draw();
@@ -104,7 +104,9 @@ mod picker_click {
         let mut session_c = SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("ccc"), "/tmp");
         session_c.title = Some("Alpha Config".to_string());
 
-        ui.acp_event(AcpEvent::SessionsListed { sessions: vec![session_a, session_b, session_c] });
+        ui.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(vec![
+            session_a, session_b, session_c,
+        ])));
         assert!(ui.app().has_session_picker());
 
         // Type filter: "Alpha"
@@ -132,7 +134,7 @@ mod picker_click {
             WorkspaceEntry { path: std::path::PathBuf::from("/tmp/ws3"), is_current: false },
         ];
         let mut ui = make_ui();
-        ui.acp_event(AcpEvent::WorkspacesListed(WorkspaceListResponse { workspaces }));
+        ui.deliver_result(CommandResult::WorkspacesListed(WorkspaceListResponse { workspaces }));
 
         ui.draw();
         let rect = navigation_rect(&mut ui);
@@ -146,7 +148,7 @@ mod picker_click {
 
         let workspaces = vec![WorkspaceEntry { path: std::path::PathBuf::from("/tmp/ws1"), is_current: false }];
         let mut ui = make_ui();
-        ui.acp_event(AcpEvent::WorkspacesListed(WorkspaceListResponse { workspaces }));
+        ui.deliver_result(CommandResult::WorkspacesListed(WorkspaceListResponse { workspaces }));
 
         ui.draw();
 
@@ -165,7 +167,7 @@ mod picker_click {
             WorkspaceEntry { path: std::path::PathBuf::from("/tmp/other"), is_current: false },
         ];
         let mut ui = make_ui();
-        ui.acp_event(AcpEvent::WorkspacesListed(WorkspaceListResponse { workspaces }));
+        ui.deliver_result(CommandResult::WorkspacesListed(WorkspaceListResponse { workspaces }));
 
         // Type filter: "beta"
         ui.key(key(KeyCode::Char('b')));
@@ -183,7 +185,6 @@ mod picker_click {
 
 mod mouse_capture {
     use super::*;
-    use acp_utils::client::AcpEvent;
     use agent_client_protocol::schema::v1::SessionInfo;
 
     #[test]
@@ -197,7 +198,7 @@ mod mouse_capture {
         let mut app = make_app();
         let current_id = agent_client_protocol::schema::v1::SessionId::new("test-session");
         let other = SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("other"), "/tmp");
-        app.acp_event(AcpEvent::SessionsListed { sessions: vec![other] });
+        app.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(vec![other])));
         std::mem::drop(current_id);
 
         assert!(app.app().has_session_picker());
@@ -234,7 +235,7 @@ mod mouse_capture {
     fn capture_disabled_after_connection_closed() {
         let mut app = make_app();
         let other = SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("other"), "/tmp");
-        app.acp_event(AcpEvent::SessionsListed { sessions: vec![other] });
+        app.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(vec![other])));
         assert!(app.app().needs_mouse_capture());
 
         app.acp_event(AcpEvent::ConnectionClosed);
@@ -244,7 +245,6 @@ mod mouse_capture {
 
 mod bell {
     use super::*;
-    use acp_utils::client::AcpEvent;
     use agent_client_protocol::schema::v1 as acp;
 
     #[test]
@@ -255,7 +255,7 @@ mod bell {
         app.submit("hello");
         assert!(app.app().waiting_for_response());
 
-        app.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+        app.complete_prompt(acp::StopReason::EndTurn);
 
         assert!(rang_bell(&mut app));
     }
@@ -265,7 +265,7 @@ mod bell {
         let mut app = make_app();
 
         app.submit("hello");
-        app.acp_event(AcpEvent::PromptDone(acp::StopReason::Cancelled));
+        app.complete_prompt(acp::StopReason::Cancelled);
 
         assert!(!rang_bell(&mut app));
     }
@@ -275,7 +275,7 @@ mod bell {
         let mut app = make_app();
 
         app.submit("hello");
-        app.acp_event(AcpEvent::PromptError(agent_client_protocol::Error::internal_error()));
+        app.deliver_result(prompt_failed("internal error"));
 
         assert!(!rang_bell(&mut app));
     }
@@ -291,11 +291,10 @@ mod bell {
     }
 
     #[test]
-    fn no_bell_on_unsolicited_prompt_done() {
+    fn no_bell_on_unsolicited_prompt_completion() {
         let mut app = make_app();
 
-        // No prompt in flight — PromptDone is unsolicited
-        app.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+        app.complete_prompt(acp::StopReason::EndTurn);
 
         assert!(!rang_bell(&mut app));
     }
@@ -305,7 +304,7 @@ mod bell {
         let mut app = make_app();
 
         app.submit("first");
-        app.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+        app.complete_prompt(acp::StopReason::EndTurn);
 
         assert!(rang_bell(&mut app));
         assert!(!rang_bell(&mut app));
@@ -342,16 +341,16 @@ mod resize {
 
 mod event_routing {
     use super::*;
-    use acp_utils::client::AcpEvent;
     use agent_client_protocol::schema::v1::SessionInfo;
 
     #[test]
     fn mouse_click_outside_surface_is_ignored() {
         let mut app = make_app();
 
-        app.acp_event(AcpEvent::SessionsListed {
-            sessions: vec![SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("other"), "/tmp")],
-        });
+        app.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(vec![SessionInfo::new(
+            agent_client_protocol::schema::v1::SessionId::new("other"),
+            "/tmp",
+        )])));
         assert!(app.app().has_session_picker());
 
         // Click at (0, 0) — outside the picker rect (no surface rect is set without render)
@@ -447,7 +446,6 @@ mod event_routing {
 
     #[test]
     fn mouse_activation_uses_shared_settings_actions() {
-        use acp_utils::client::AcpEvent;
         use acp_utils::notifications::{
             McpNotification, McpServerAuthCapability, McpServerStatus, McpServerStatusEntry,
         };
@@ -519,7 +517,7 @@ mod event_routing {
             SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("b"), "/tmp/b"),
             SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("c"), "/tmp/c"),
         ];
-        ui.acp_event(AcpEvent::SessionsListed { sessions });
+        ui.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(sessions)));
         std::mem::drop(current);
         assert!(ui.app().has_session_picker());
 
@@ -574,7 +572,7 @@ mod event_routing {
             WorkspaceEntry { path: PathBuf::from("/tmp/b"), is_current: false },
             WorkspaceEntry { path: PathBuf::from("/tmp/c"), is_current: false },
         ];
-        ui.acp_event(AcpEvent::WorkspacesListed(WorkspaceListResponse { workspaces }));
+        ui.deliver_result(CommandResult::WorkspacesListed(WorkspaceListResponse { workspaces }));
         assert!(matches!(ui.app().workspace_move_state(), WorkspaceMoveState::Picking));
 
         ui.draw();
@@ -845,10 +843,9 @@ mod screen_mouse {
         // Click at x=20 (left side, well within drawer)
         screen.on_mouse(MouseAction::Click, 3, 20);
 
-        // With focus on Drawer, footer shows "h/l pane"
         let buffer = render_git_diff(&mut screen, 120, 40);
         let text = buffer_text(&buffer);
-        assert!(text.contains("h/l pane"), "drawer focus footer: {text}");
+        assert!(text.contains("[Enter] open"), "drawer focus footer: {text}");
     }
 
     #[test]
@@ -861,11 +858,9 @@ mod screen_mouse {
         // Click at x=60 (right side, patch area)
         screen.on_mouse(MouseAction::Click, 3, 60);
 
-        // Focus should now be Patch. Footer shows "c comment" for Patch focus.
         let buffer = render_git_diff(&mut screen, 120, 40);
         let text = buffer_text(&buffer);
-        // Should show a draft comment box
-        assert!(text.contains("c comment"), "patch focus footer: {text}");
+        assert!(text.contains("[c] comment"), "patch focus footer: {text}");
     }
 
     #[test]
@@ -878,10 +873,9 @@ mod screen_mouse {
         // Even clicking on the left side should focus Patch
         screen.on_mouse(MouseAction::Click, 3, 2);
 
-        // Footer shows "c comment" for Patch focus
         let buffer = render_git_diff(&mut screen, 60, 40);
         let text = buffer_text(&buffer);
-        assert!(text.contains("c comment"), "narrow layout should focus patch: {text}");
+        assert!(text.contains("[c] comment"), "narrow layout should focus patch: {text}");
     }
 
     #[test]
@@ -914,16 +908,14 @@ mod screen_mouse {
         // Click at x=50 should still be in patch area
         screen.on_mouse(MouseAction::Click, 3, 50);
 
-        // Footer shows "c comment" for Patch focus
         let buffer = render_git_diff(&mut screen, 200, 40);
         let text = buffer_text(&buffer);
-        assert!(text.contains("c comment"), "patch should be focused: {text}");
+        assert!(text.contains("[c] comment"), "patch should be focused: {text}");
     }
 }
 
 mod mouse_owning_surfaces {
     use super::*;
-    use acp_utils::client::AcpEvent;
 
     #[test]
     fn settings_overlay_sets_surface_rect() {
@@ -953,12 +945,12 @@ mod mouse_owning_surfaces {
     fn session_picker_sets_surface_rect() {
         let mut ui = make_ui();
         let current = agent_client_protocol::schema::v1::SessionId::new("test-session");
-        ui.acp_event(AcpEvent::SessionsListed {
-            sessions: vec![agent_client_protocol::schema::v1::SessionInfo::new(
+        ui.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(vec![
+            agent_client_protocol::schema::v1::SessionInfo::new(
                 agent_client_protocol::schema::v1::SessionId::new("other"),
                 std::path::PathBuf::from("/tmp"),
-            )],
-        });
+            ),
+        ])));
         std::mem::drop(current);
 
         ui.draw();

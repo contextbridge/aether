@@ -16,6 +16,10 @@ use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::Widget;
 use std::rc::Rc;
+use unicode_width::UnicodeWidthStr;
+
+const COMMENT_BODY_PREFIX: &str = "│ > ";
+const COMMENT_RIGHT_PADDING: usize = 3;
 
 /// A comment being typed, anchored to wherever `A` points.
 pub struct Draft<A> {
@@ -35,7 +39,10 @@ pub fn wrapped_with_cursor(buffer: &EditBuffer, width: usize) -> (Vec<String>, (
 /// Columns of a `width`-column comment box left for the body text, after the
 /// border and the `"│ > "` prefix.
 pub fn comment_body_width(width: u16) -> usize {
-    usize::from(width).saturating_sub(4).max(10).saturating_sub(3)
+    usize::from(width)
+        .saturating_sub(COMMENT_BODY_PREFIX.width())
+        .saturating_sub(COMMENT_RIGHT_PADDING)
+        .max(1)
 }
 
 /// Draws a boxed annotation beneath a document line, used for both submitted
@@ -47,16 +54,17 @@ pub fn comment_box(
     width: u16,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
-    let border = Style::new().fg(border_color);
-    let body_style = Style::new().fg(theme.text_primary);
+    let surface = Style::new().bg(theme.sidebar_bg);
+    let border = surface.fg(border_color);
+    let body_style = surface.fg(theme.text_primary);
     let width = usize::from(width);
 
     let mut lines = vec![fit_line(Line::styled(title.to_string(), border), width, border)];
     lines.extend(body.iter().map(|text| {
         fit_line(
-            Line::styled(format!("│ > {text}"), body_style),
+            Line::styled(format!("{COMMENT_BODY_PREFIX}{text}"), body_style),
             width,
-            body_style.patch(Style::new().bg(theme.background)),
+            body_style,
         )
     }));
     lines.push(fit_line(Line::styled("└", border), width, border));
@@ -66,11 +74,8 @@ pub fn comment_box(
 /// The draft's wrapped body and the terminal-cursor position within the
 /// comment box [`comment_box`] draws it into.
 pub fn draft_body<A>(draft: &Draft<A>, body_width: usize) -> (Vec<String>, (usize, u16)) {
-    if draft.buffer.is_empty() {
-        return (vec!["█".to_string()], (1, 3));
-    }
     let (lines, (row, column)) = wrapped_with_cursor(&draft.buffer, body_width);
-    (lines, (1 + row, 3 + column))
+    (lines, (1 + row, u16::try_from(COMMENT_BODY_PREFIX.width()).unwrap_or(u16::MAX).saturating_add(column)))
 }
 
 /// A document laid out as rendered rows, with review annotations woven in

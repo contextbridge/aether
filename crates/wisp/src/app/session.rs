@@ -180,7 +180,6 @@ impl App {
     }
 
     fn load_session(&mut self, session_id: &SessionId, cwd: &std::path::Path) {
-        self.session.begin_load(session_id.clone());
         self.queue(Command::Agent(AgentCommand::LoadSession {
             session_id: session_id.clone(),
             cwd: cwd.to_path_buf(),
@@ -195,7 +194,6 @@ impl App {
         self.reset_conversation();
         self.notify(&format!("Moved to {}", home_relative_path(&new_cwd)));
         self.session.begin_workspace_load();
-        self.session.begin_load(self.session.session_id().clone());
         let session_id = self.session.session_id().clone();
         self.queue(Command::Agent(AgentCommand::LoadSession { session_id, cwd: new_cwd.clone() }));
         self.session.set_working_dir(new_cwd);
@@ -206,13 +204,8 @@ impl App {
         if self.waiting_for_response() {
             return;
         }
-        self.conversation.turn_mut().set_prompt_in_flight(true);
         self.conversation.append_notice(format!("[wisp] Submitted review of working tree diff.\n{prompt}"));
-        self.queue(Command::Agent(AgentCommand::Prompt {
-            session_id: self.session.session_id().clone(),
-            text: prompt.to_string(),
-            content: None,
-        }));
+        self.start_prompt(prompt.to_string(), None);
         self.close_active();
     }
 

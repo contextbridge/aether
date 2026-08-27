@@ -1,4 +1,4 @@
-use crate::SessionIndexError;
+use aether_sessions::analytics::SessionIndexError;
 use std::path::PathBuf;
 
 pub(crate) fn default_sessions_dir() -> Result<PathBuf, SessionIndexError> {

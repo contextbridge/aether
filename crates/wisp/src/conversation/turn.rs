@@ -6,7 +6,7 @@ pub struct ContextUsageDisplay {
 }
 
 impl ContextUsageDisplay {
-    pub fn used_ratio(&self) -> f64 {
+    pub fn used_ratio(self) -> f64 {
         if self.limit_tokens == 0 {
             return 0.0;
         }

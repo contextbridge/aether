@@ -24,17 +24,9 @@ cargo run -p aether-session-index -- schema
 
 ## SQLx query metadata
 
-Fixed internal queries use SQLx compile-time checking. If the schema or checked queries change, refresh the offline metadata:
+The analytics implementation and its checked queries live in `aether-sessions`.
+Use the workspace recipe to verify or refresh the metadata:
 
 ```bash
-tmpdb=$(mktemp /tmp/aether-session-index.XXXXXX)
-cd crates/aether-session-index
-DATABASE_URL="sqlite://$tmpdb" cargo sqlx migrate run
-DATABASE_URL="sqlite://$tmpdb" cargo sqlx prepare
-```
-
-Check metadata with:
-
-```bash
-DATABASE_URL="sqlite://$tmpdb" cargo sqlx prepare --check
+just sqlx-check
 ```

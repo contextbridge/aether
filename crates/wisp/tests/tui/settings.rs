@@ -13,12 +13,12 @@ fn mcp_notification(servers: Vec<McpServerStatusEntry>) -> AcpEvent {
     AcpEvent::McpNotification(McpNotification::ServerStatus { servers })
 }
 
-fn auth_complete(method_id: &str) -> AcpEvent {
-    AcpEvent::AuthenticateComplete { method_id: method_id.to_string() }
+fn auth_complete(method_id: &str) -> CommandResult {
+    CommandResult::AuthenticationCompleted { method_id: method_id.to_string() }
 }
 
-fn auth_failed(method_id: &str) -> AcpEvent {
-    AcpEvent::AuthenticateFailed { method_id: method_id.to_string(), error: "simulated failure".to_string() }
+fn auth_failed(method_id: &str) -> CommandResult {
+    CommandResult::AuthenticationFailed { method_id: method_id.to_string() }
 }
 
 fn auth_method(id: &str, name: &str, description: Option<&str>) -> acp::AuthMethod {
@@ -234,7 +234,7 @@ fn authenticate_complete_updates_correct_entry() {
     ui.key(key(KeyCode::Enter));
     ui.key(key(KeyCode::Enter));
 
-    ui.acp_event(auth_complete("a"));
+    ui.deliver_result(auth_complete("a"));
 
     ui.draw();
     let viewport = ui.viewport_text();
@@ -252,7 +252,7 @@ fn authenticate_failed_resets_to_needs_login() {
     ui.key(key(KeyCode::Enter));
     ui.key(key(KeyCode::Enter));
 
-    ui.acp_event(auth_failed("x"));
+    ui.deliver_result(auth_failed("x"));
 
     ui.draw();
     let viewport = ui.viewport_text();
@@ -670,7 +670,7 @@ fn new_session_created_cancels_settings_elicitation() {
         let response_rx =
             with_elicitation(&mut ui, url_elicitation("test", "https://example.com", "el-new-session")).await;
 
-        ui.acp_event(AcpEvent::NewSessionCreated { session_id: SessionId::new("new"), config_options: vec![] });
+        ui.deliver_result(new_session_created("new", vec![]));
 
         let response = response_rx.await.unwrap();
         assert!(matches!(&response.action, ElicitationAction::Cancel));
@@ -853,7 +853,7 @@ fn settings_overlay_uses_borderless_modal_chrome_and_padded_highlights() {
 fn settings_overlay_clears_conversation_content_behind_it() {
     let mut ui = TestUiBuilder::new().config_options(vec![select_option("model", "gpt-4o")]).build();
     ui.submit("CHAT_CONTENT_MUST_NOT_SHOW_THROUGH_SETTINGS");
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
 
     ui.draw();
 
@@ -879,7 +879,7 @@ fn settings_overlay_still_valid_after_scrollback() {
     for i in 0..30 {
         ui.acp_event(text_chunk(&format!("line {i}")));
     }
-    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.complete_prompt(acp::StopReason::EndTurn);
 
     ui.draw();
     ui.draw();
@@ -1084,7 +1084,7 @@ fn config_option_update_failed_shows_in_transcript() {
     ui.key(key(KeyCode::Tab));
     assert!(ui.app().has_modal());
 
-    ui.acp_event(AcpEvent::ConfigOptionUpdateFailed { error: "invalid model".to_string() });
+    ui.deliver_result(CommandResult::ConfigOptionUpdateFailed { error: "invalid model".to_string() });
 
     // Overlay should still be open
     assert!(ui.app().has_modal());
@@ -1117,7 +1117,7 @@ fn new_session_clears_settings_overlay() {
     assert!(ui.app().has_modal());
 
     // New session created should close settings overlay
-    ui.acp_event(new_session_created("new-id", Vec::new()));
+    ui.deliver_result(new_session_created("new-id", Vec::new()));
     assert!(!ui.app().has_modal());
 
     // Should have consumed the new session event

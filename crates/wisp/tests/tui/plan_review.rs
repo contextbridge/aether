@@ -18,7 +18,7 @@ use wisp::view::syntax::SyntaxHighlighter;
 
 use super::support::{
     CreateElicitationResponse, ElicitationAction, ElicitationSchema, accepted_content, assert_ctrl_c_exits,
-    block_on_local, form_elicitation, make_app, with_elicitation,
+    block_on_local, form_elicitation, make_app, row_containing, row_text, with_elicitation,
 };
 
 fn make_meta(markdown: &str) -> PlanReviewElicitationMeta {
@@ -440,15 +440,83 @@ fn narrow_screen_falls_back_to_single_pane() {
 }
 
 #[test]
-fn footer_shows_context_sensitive_hints() {
+fn footer_shows_only_primary_contextual_actions() {
     let markdown = "# Plan\ntext";
     let (mut screen, _rx) = make_screen(markdown);
 
     let buffer = render_screen(&mut screen, 80, 24);
     let text = buffer_text(&buffer);
-    assert!(text.contains("approve"), "footer should show approve hint");
-    assert!(text.contains("cancel"), "footer should show cancel hint");
-    assert!(text.contains("comment"), "footer should show comment hint in plan mode");
+    assert!(text.contains("[a] approve"), "{text}");
+    assert!(text.contains("[r] changes"), "{text}");
+    assert!(text.contains("[c] comment"), "{text}");
+    assert!(text.contains("[?] shortcuts"), "{text}");
+    assert!(!text.contains("heading"), "secondary navigation belongs in shortcut help: {text}");
+}
+
+#[test]
+fn plan_review_shortcut_help_opens_and_closes_before_the_review() {
+    let markdown = "# Plan\ntext";
+    let (mut screen, _rx) = make_screen(markdown);
+
+    assert!(!closes(&mut screen, key(KeyCode::Char('?'))));
+    let help = buffer_text(&render_screen(&mut screen, 80, 24));
+    assert!(help.contains("Review shortcuts"), "{help}");
+    assert!(help.contains("Navigation"), "{help}");
+    assert!(help.contains("Decision"), "{help}");
+    assert!(help.contains("next heading"), "{help}");
+
+    assert!(!closes(&mut screen, key(KeyCode::Esc)));
+    let review = buffer_text(&render_screen(&mut screen, 80, 24));
+    assert!(!review.contains("Review shortcuts"));
+    assert!(review.contains("Plan"));
+}
+
+#[test]
+fn plan_review_shortcut_help_uses_one_readable_column_when_narrow() {
+    let (mut screen, _rx) = make_screen("# Plan\ntext");
+
+    assert!(!closes(&mut screen, key(KeyCode::Char('?'))));
+    let help = buffer_text(&render_screen(&mut screen, 40, 24));
+
+    assert!(help.contains("previous heading"), "{help}");
+    assert!(help.contains("request changes"), "{help}");
+}
+
+#[test]
+fn plan_without_an_outline_advertises_the_working_top_shortcut() {
+    let (mut screen, _rx) = make_screen("plain text");
+
+    let footer = buffer_text(&render_screen(&mut screen, 80, 24));
+
+    assert!(footer.contains("[g] top"), "{footer}");
+    assert!(!footer.contains("[h] top"), "{footer}");
+}
+
+#[test]
+fn plan_review_keeps_a_bottom_draft_and_its_cursor_visible() {
+    block_on_local(async {
+        let markdown = (1..=30).map(|line| format!("line {line}")).collect::<Vec<_>>().join("\n");
+        let mut ui = make_app();
+        let meta = PlanReviewElicitationMeta::new(&PathBuf::from("/tmp/plan.md"), &markdown).to_json().unwrap();
+        let _response =
+            with_elicitation(&mut ui, form_elicitation("plan", "Approve plan?", ElicitationSchema::new()).meta(meta))
+                .await;
+        ui.draw();
+
+        assert!(!ui.backend().cursor_visible(), "the hidden composer must not own the cursor");
+
+        ui.key(key(KeyCode::Char('G')));
+        ui.key(key(KeyCode::Char('c')));
+        ui.type_text(&format!("{}END", "x".repeat(80)));
+        ui.draw();
+
+        let buffer = ui.backend().buffer();
+        let row = row_containing(buffer, "END").expect("wrapped draft tail should scroll into view");
+        let text = row_text(buffer, row);
+        let end = u16::try_from(text.chars().position(|character| character == 'D').unwrap() + 1).unwrap();
+        assert!(ui.backend().cursor_visible());
+        assert_eq!(ui.backend().cursor_position(), ratatui::layout::Position::new(end, row));
+    });
 }
 
 #[test]
@@ -601,6 +669,47 @@ fn mouse_click_after_resize_uses_correct_pane_rects() {
     let buffer = render_screen(&mut screen, 120, 30);
     let text = buffer_text(&buffer);
     assert!(text.contains("Section One"), "plan should render: {text}");
+}
+
+#[test]
+fn mouse_wheel_moves_the_plan_cursor_like_an_arrow_key() {
+    let markdown = "one\ntwo\nthree\nfour\nfive";
+    let (mut arrow_screen, mut arrow_rx) = make_screen(markdown);
+    let (mut wheel_screen, mut wheel_rx) = make_screen(markdown);
+
+    render_screen(&mut arrow_screen, 50, 10);
+    render_screen(&mut wheel_screen, 50, 10);
+    arrow_screen.on_key(key(KeyCode::Down));
+    wheel_screen.on_mouse(MouseAction::ScrollDown, 2, 20);
+
+    for screen in [&mut arrow_screen, &mut wheel_screen] {
+        screen.on_key(key(KeyCode::Char('c')));
+        type_text(screen, "selected");
+        screen.on_key(key(KeyCode::Enter));
+        screen.on_key(key(KeyCode::Char('r')));
+    }
+
+    let arrow_response = arrow_rx.try_recv().expect("arrow review should submit");
+    let wheel_response = wheel_rx.try_recv().expect("wheel review should submit");
+    assert_eq!(accepted_content(&wheel_response)["feedback"], accepted_content(&arrow_response)["feedback"]);
+    assert!(accepted_content(&wheel_response)["feedback"].as_str().unwrap().contains("Line 2"));
+}
+
+#[test]
+fn mouse_wheel_moves_past_a_wrapped_source_line() {
+    let markdown = format!("{}\nnext line", "wrapped ".repeat(20));
+    let (mut screen, mut rx) = make_screen(&markdown);
+
+    render_screen(&mut screen, 30, 10);
+    screen.on_mouse(MouseAction::ScrollDown, 2, 15);
+    screen.on_key(key(KeyCode::Char('c')));
+    type_text(&mut screen, "selected");
+    screen.on_key(key(KeyCode::Enter));
+    screen.on_key(key(KeyCode::Char('r')));
+
+    let response = rx.try_recv().expect("review should submit");
+    let feedback = accepted_content(&response)["feedback"].as_str().unwrap().to_string();
+    assert!(feedback.contains("Line 2"), "wheel should move past the wrapped first line: {feedback}");
 }
 
 fn type_text(screen: &mut PlanReviewScreen, text: &str) {

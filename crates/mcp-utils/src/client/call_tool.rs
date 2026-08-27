@@ -57,7 +57,7 @@ pub enum CallToolError {
         server: String,
         task_id: String,
         #[source]
-        reason: TaskErrorReason,
+        reason: Box<TaskErrorReason>,
     },
     #[error("Server '{server}' returned a tool call response kind this client does not support")]
     UnsupportedResponse { server: String },

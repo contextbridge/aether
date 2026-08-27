@@ -1,8 +1,7 @@
 use crate::session::session_config_view::{LocalConfigKind, LocalConfigOption};
-use crate::session::session_loading_buffer::SessionLoadingBuffer;
 use crate::session::workspace_status::WorkspaceStatus;
 use acp_utils::notifications::{AetherCapabilities, McpServerStatus, McpServerStatusEntry};
-use agent_client_protocol::schema::v1::{self as acp, SessionId, SessionUpdate};
+use agent_client_protocol::schema::v1::{self as acp, SessionId};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,7 +28,6 @@ pub struct SessionModel {
     capabilities: AetherCapabilities,
     config_options: Vec<LocalConfigOption>,
     auth_methods: Vec<acp::AuthMethod>,
-    loading_buffer: SessionLoadingBuffer,
     workspace_move_state: WorkspaceMoveState,
     server_statuses: Vec<McpServerStatusEntry>,
 }
@@ -55,7 +53,6 @@ impl SessionModel {
             capabilities,
             config_options: config_options.into_iter().map(LocalConfigOption::from_acp).collect(),
             auth_methods,
-            loading_buffer: SessionLoadingBuffer::default(),
             workspace_move_state: WorkspaceMoveState::Idle,
             server_statuses: Vec::new(),
         }
@@ -128,13 +125,6 @@ impl SessionModel {
         }
     }
 
-    /// Stops waiting on a workspace-move session load that will never land.
-    pub fn abandon_workspace_load(&mut self) {
-        if self.workspace_move_state == WorkspaceMoveState::LoadingSession {
-            self.workspace_move_state = WorkspaceMoveState::Idle;
-        }
-    }
-
     pub fn server_statuses(&self) -> &[McpServerStatusEntry] {
         &self.server_statuses
     }
@@ -168,21 +158,6 @@ impl SessionModel {
         }
     }
 
-    pub fn begin_load(&mut self, session_id: SessionId) {
-        self.loading_buffer.begin_load(session_id);
-    }
-
-    pub fn buffer_update(&mut self, session_id: &SessionId, update: SessionUpdate) -> Option<SessionUpdate> {
-        self.loading_buffer.push(session_id, update)
-    }
-
-    pub fn take_buffered_updates(&mut self, session_id: &SessionId) -> Vec<SessionUpdate> {
-        self.loading_buffer.take(session_id)
-    }
-
-    pub fn clear_loads(&mut self) {
-        self.loading_buffer.clear();
-    }
 
     pub fn set_session(&mut self, session_id: SessionId, config_options: Vec<acp::SessionConfigOption>) {
         self.session_id = session_id;

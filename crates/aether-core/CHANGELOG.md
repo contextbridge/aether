@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Other
+
+- Move persisted session models, log parsing, and transcript reconstruction to `aether-sessions`.
+
 ## [0.6.34](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.33...aether-agent-core-v0.6.34) - 2026-08-22
 
 ### Other

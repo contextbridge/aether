@@ -777,7 +777,7 @@ where
     }
 
     pub fn deliver_result(&mut self, result: CommandResult) {
-        self.deliver(Message::CommandFinished(result));
+        self.deliver(Message::CommandFinished(Box::new(result)));
     }
 
     /// Commands emitted by the public application boundary, in order.
@@ -869,7 +869,7 @@ where
                 self.seed_sub_agent_tree(turn);
             }
             self.acp_event(text_chunk(SEED_CLOSING));
-            self.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+            self.complete_prompt(acp::StopReason::EndTurn);
             self.draw();
         }
     }
@@ -932,7 +932,7 @@ where
     /// Finishes the in-flight turn and advances synthetic time past every
     /// grace period, leaving a session that owes the event loop nothing.
     pub fn settle(&mut self) {
-        self.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+        self.complete_prompt(acp::StopReason::EndTurn);
         let mut now = Instant::now();
         // The plan tracker's grace period (3s) is the longest deadline a
         // settled session can still be waiting on.
@@ -977,6 +977,10 @@ where
         self.deliver(Message::Agent(Box::new(event)));
     }
 
+    pub fn complete_prompt(&mut self, stop_reason: acp::StopReason) {
+        self.acp_event(AcpEvent::PromptCompleted(stop_reason));
+    }
+
     pub fn tick(&mut self, now: Instant) {
         self.deliver(Message::Tick(now));
     }
@@ -1000,7 +1004,7 @@ where
             }
             for command in pending {
                 if let Some(result) = self.executor.complete(command) {
-                    self.deliver(Message::CommandFinished(result));
+                    self.deliver(Message::CommandFinished(Box::new(result)));
                 }
             }
             initial_batch = false;

@@ -9,40 +9,41 @@ use aether_telemetry::TelemetryRuntime;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     self as acp, AgentCapabilities, AuthMethod, AuthenticateRequest, AuthenticateResponse, CancelNotification,
-    ConfigOptionUpdate, Implementation, InitializeRequest, InitializeResponse, ListSessionsRequest,
-    ListSessionsResponse, LoadSessionRequest, LoadSessionResponse, McpCapabilities, NewSessionRequest,
-    NewSessionResponse, PromptCapabilities, PromptRequest, PromptResponse, SessionId, SessionNotification,
-    SessionUpdate, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
+    CloseSessionRequest, CloseSessionResponse, ConfigOptionUpdate, Implementation, InitializeRequest,
+    InitializeResponse, ListSessionsRequest, ListSessionsResponse, LoadSessionRequest, LoadSessionResponse,
+    McpCapabilities, NewSessionRequest, NewSessionResponse, PromptCapabilities, PromptRequest, PromptResponse,
+    ResumeSessionRequest, ResumeSessionResponse, SessionId, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
 };
 use agent_client_protocol::{Client, ConnectionTo, Responder};
 use llm::catalog::{LlmModel, ModelSpec, get_local_models};
 use llm::{ContentBlock, ProviderConnectionOverrides};
 use mcp_utils::client::{client_capabilities, client_capabilities_for};
-use std::collections::{HashMap, HashSet};
-use std::io;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::Mutex;
 use tokio::task::spawn_blocking;
 use tracing::{error, info};
 
-use super::config_setting::ConfigSetting;
-use super::model_config::supports_prompt_audio;
 use super::protocol::content::map_acp_to_content_blocks;
 use super::protocol::replay::replay_to_client;
-use super::session_actor::{ConfigSnapshot, SessionCommand, SessionHandle};
-use super::session_factory::SessionFactory;
-use super::session_store::SessionStore;
+use super::session::actor::{SessionCommand, SessionHandle};
+use super::session::config_setting::ConfigSetting;
+use super::session::factory::SessionFactory;
+use super::session::model::supports_prompt_audio;
+use super::session::{SessionRegistry, paginate_summaries};
 use crate::resolve::InitialSessionSelection;
 use crate::settings_args::SettingsSourceArgs;
 use crate::workspace::{WorkspaceError, WorkspaceManager};
+use aether_sessions::{SessionStore, SessionStoreError};
 
-/// Global, connection-scoped ACP server state: the live session map plus the
-/// dependencies needed to create sessions and answer global requests. There is
+/// Global, connection-scoped ACP server state: the live session registry plus
+/// the dependencies needed to create sessions and answer global requests. There is
 /// exactly one owner of mutable per-session state — the session actor behind
 /// each [`SessionHandle`].
 pub(crate) struct AcpState {
-    sessions: Mutex<HashMap<String, SessionHandle>>,
+    registry: SessionRegistry,
     session_store: Arc<SessionStore>,
     workspace_manager: Arc<WorkspaceManager>,
     oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
@@ -59,6 +60,7 @@ pub(crate) struct AcpStateConfig {
     pub(crate) settings_source: SettingsSourceArgs,
     pub(crate) provider_connections: ProviderConnectionOverrides,
     pub(crate) telemetry: Option<Arc<TelemetryRuntime>>,
+    pub(crate) runtime_factory: Option<Arc<dyn super::session::runtime::RuntimeFactory>>,
 }
 
 impl AcpState {
@@ -70,9 +72,10 @@ impl AcpState {
             Arc::clone(&config.session_store),
             config.initial_selection,
             config.telemetry.as_ref().map(|runtime| runtime.observer_factory()),
+            config.runtime_factory,
         );
         Self {
-            sessions: Mutex::new(HashMap::new()),
+            registry: SessionRegistry::new(),
             session_store: config.session_store,
             workspace_manager: config.workspace_manager,
             oauth_credential_store: config.oauth_credential_store,
@@ -92,6 +95,8 @@ impl AcpState {
             AetherCapabilities { prompt_search: true, session_preview: true, workspace_move: true };
         let session_capabilities = acp::SessionCapabilities::new()
             .list(acp::SessionListCapabilities::new())
+            .resume(acp::SessionResumeCapabilities::new())
+            .close(acp::SessionCloseCapabilities::new())
             .meta(Some(aether_capabilities.to_meta()));
 
         Ok(InitializeResponse::new(ProtocolVersion::V1)
@@ -159,14 +164,39 @@ impl AcpState {
         Ok(response)
     }
 
-    pub(crate) fn list_sessions(&self, args: &ListSessionsRequest) -> ListSessionsResponse {
-        info!("Listing sessions, cwd filter: {:?}", args.cwd);
+    pub(crate) async fn resume_session(
+        &self,
+        req: ResumeSessionRequest,
+        cx: &ConnectionTo<Client>,
+    ) -> Result<ResumeSessionResponse, acp::Error> {
+        let mcp_capabilities = self.mcp_capabilities.lock().await.clone();
+        let created = self.factory.resume(req, cx, mcp_capabilities).await?;
+        let response = ResumeSessionResponse::new().config_options(created.config_options);
+        self.register_session(&created.session_id, created.handle).await;
+        Ok(response)
+    }
+
+    pub(crate) async fn close_session(&self, req: CloseSessionRequest) -> Result<CloseSessionResponse, acp::Error> {
+        let session_id = req.session_id.0.to_string();
+        let Some(handle) = self.registry.remove(&session_id).await else {
+            error!("Session not found for close: {session_id}");
+            return Err(invalid_params_error(format!("unknown session: {session_id}")));
+        };
+
+        handle.cancel();
+        handle.join().await;
+        Ok(CloseSessionResponse::new())
+    }
+
+    pub(crate) fn list_sessions(&self, args: &ListSessionsRequest) -> Result<ListSessionsResponse, acp::Error> {
+        info!("Listing sessions, cwd filter: {:?}, cursor: {:?}", args.cwd, args.cursor);
         let mut summaries = self.session_store.list();
 
         if let Some(cwd) = args.cwd.as_ref() {
             summaries.retain(|s| s.meta.cwd == *cwd);
         }
 
+        let (summaries, next_cursor) = paginate_summaries(summaries, args.cursor.as_deref())?;
         let sessions: Vec<acp::SessionInfo> = summaries
             .into_iter()
             .map(|s| {
@@ -178,21 +208,23 @@ impl AcpState {
             .collect();
 
         info!("Found {} sessions", sessions.len());
-        ListSessionsResponse::new(sessions)
+        Ok(ListSessionsResponse::new(sessions).next_cursor(next_cursor))
     }
 
     pub(crate) fn search_prompts(&self, params: &PromptSearchParams) -> Result<PromptSearchResponse, acp::Error> {
-        self.session_store.search_prompts(params).map_err(|e| {
+        self.session_store.search_prompts(&params.query, params.limit).map_err(|e| {
             error!("Prompt search failed: {e}");
             acp::Error::internal_error()
         })
     }
 
     pub(crate) fn session_preview(&self, params: &SessionPreviewParams) -> Result<SessionPreviewResponse, acp::Error> {
-        self.session_store.preview(params).map_err(|e| {
+        self.session_store.preview(&params.session_id).map_err(|e| {
             error!("Session preview failed: {e}");
-            match e.kind() {
-                std::io::ErrorKind::NotFound => acp::Error::invalid_params(),
+            match e {
+                SessionStoreError::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    acp::Error::invalid_params()
+                }
                 _ => acp::Error::internal_error(),
             }
         })
@@ -258,7 +290,7 @@ impl AcpState {
         let session_id = args.session_id.0.to_string();
         let content = map_acp_to_content_blocks(args.prompt);
 
-        let Some((sender, snapshot)) = self.lookup(&session_id).await else {
+        let Some((sender, snapshot)) = self.registry.lookup(&session_id).await else {
             error!("Session not found: {session_id}");
             respond_err(responder, acp::Error::invalid_params());
             return;
@@ -280,7 +312,7 @@ impl AcpState {
     pub(crate) async fn cancel(&self, args: CancelNotification) -> Result<(), acp::Error> {
         info!("Received cancel for session: {:?}", args.session_id);
         let session_id = args.session_id.0.to_string();
-        let Some((sender, _)) = self.lookup(&session_id).await else {
+        let Some((sender, _)) = self.registry.lookup(&session_id).await else {
             error!("Session not found for cancel: {session_id}");
             return Err(acp::Error::invalid_params());
         };
@@ -318,7 +350,7 @@ impl AcpState {
             }
         };
 
-        let Some((sender, _)) = self.lookup(&session_id).await else {
+        let Some((sender, _)) = self.registry.lookup(&session_id).await else {
             error!("Session not found: {session_id}");
             respond_err(responder, acp::Error::invalid_params());
             return;
@@ -337,7 +369,7 @@ impl AcpState {
         info!("Received MCP ext request: {:?}", request);
         match request {
             McpRequest::Authenticate { session_id, server_name } => {
-                let Some((sender, _)) = self.lookup(&session_id).await else {
+                let Some((sender, _)) = self.registry.lookup(&session_id).await else {
                     error!("Session not found for authenticate_mcp_server: {session_id}");
                     return Err(acp::Error::invalid_params());
                 };
@@ -353,34 +385,19 @@ impl AcpState {
     /// Drain every session and stop its actor task. Fans out cancellation before
     /// awaiting any join so shutdowns run concurrently.
     pub(crate) async fn shutdown_all(&self) {
-        let handles: Vec<SessionHandle> = self.sessions.lock().await.drain().map(|(_, handle)| handle).collect();
-        for handle in &handles {
-            handle.cancel();
-        }
-        futures::future::join_all(handles.into_iter().map(SessionHandle::join)).await;
+        self.registry.shutdown_all().await;
         if let Some(telemetry) = &self.telemetry {
             telemetry.shutdown_or_log();
         }
     }
 
     pub(crate) async fn register_session(&self, session_id: &SessionId, handle: SessionHandle) {
-        if let Some(old) = self.sessions.lock().await.insert(session_id.0.to_string(), handle) {
-            old.cancel();
-        }
-    }
-
-    async fn lookup(&self, session_id: &str) -> Option<(mpsc::Sender<SessionCommand>, ConfigSnapshot)> {
-        let sessions = self.sessions.lock().await;
-        let handle = sessions.get(session_id)?;
-        Some((handle.command_sender(), handle.config_snapshot()))
+        self.registry.register(session_id, handle).await;
     }
 
     async fn broadcast_config_options(&self, cx: &ConnectionTo<Client>) {
         let available = get_local_models().await;
-        let snapshots: Vec<(String, ConfigSnapshot)> = {
-            let sessions = self.sessions.lock().await;
-            sessions.iter().map(|(id, handle)| (id.clone(), handle.config_snapshot())).collect()
-        };
+        let snapshots = self.registry.config_snapshots().await;
 
         for (id, snapshot) in snapshots {
             let options = snapshot.config_options(&available, self.oauth_credential_store.as_ref());
@@ -402,7 +419,7 @@ fn respond_err<T: agent_client_protocol::JsonRpcResponse>(responder: Responder<T
 enum WorkspaceRequestError {
     UnknownSession(String),
     Workspace(WorkspaceError),
-    Relocate(io::Error),
+    Relocate(SessionStoreError),
 }
 
 fn workspace_request_error(e: WorkspaceRequestError) -> acp::Error {
@@ -505,7 +522,7 @@ fn validate_prompt_support(model_value: &str, content: &[ContentBlock]) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::acp::session_store::SessionStore;
+    use aether_sessions::SessionStore;
 
     const SONNET: &str = "anthropic:claude-sonnet-4-5";
     const DEEPSEEK: &str = "deepseek:deepseek-chat";
@@ -527,16 +544,19 @@ mod tests {
             settings_source: SettingsSourceArgs::default(),
             provider_connections: ProviderConnectionOverrides::default(),
             telemetry: None,
+            runtime_factory: None,
         })
     }
 
     #[tokio::test]
-    async fn initialize_always_advertises_load_session_support() {
+    async fn initialize_advertises_session_lifecycle_support() {
         let state = test_state();
         let response =
             state.initialize(InitializeRequest::new(ProtocolVersion::V1)).await.expect("initialize succeeds");
         let json = serde_json::to_string(&response).expect("response serializes");
         assert!(json.contains("\"loadSession\":true"));
+        assert!(json.contains("\"resume\":{}"));
+        assert!(json.contains("\"close\":{}"));
     }
 
     #[tokio::test]

@@ -1,5 +1,5 @@
-use acp_utils::notifications::{PromptSearchParams, PromptSearchResponse, PromptSearchResult};
-use aether_core::session::SessionMeta;
+use crate::SessionMeta;
+use acp_utils::notifications::{PromptSearchResponse, PromptSearchResult};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
@@ -36,6 +36,23 @@ impl PromptHistoryIndex {
         }
     }
 
+    pub(super) fn rebuild<I: IntoIterator<Item = (SessionMeta, String)>>(&self, entries: I) -> io::Result<()> {
+        let mut state = self.lock_state();
+        let entries: VecDeque<_> =
+            entries.into_iter().map(|(meta, prompt)| PromptHistoryEntry::new(&meta, prompt)).collect();
+        let entries = entries
+            .into_iter()
+            .rev()
+            .take(PROMPT_HISTORY_MAX_ENTRIES)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<VecDeque<_>>();
+        self.rewrite_file(entries.iter())?;
+        *state = State::Loaded(entries);
+        Ok(())
+    }
+
     pub(super) fn relocate_session(&self, session_id: &str, new_cwd: &Path) -> io::Result<()> {
         let mut state = self.lock_state();
         let entries = self.ensure_loaded(&mut state)?;
@@ -49,9 +66,9 @@ impl PromptHistoryIndex {
         if changed { self.rewrite_file(entries.iter()) } else { Ok(()) }
     }
 
-    pub(super) fn search(&self, params: &PromptSearchParams) -> io::Result<PromptSearchResponse> {
-        let query = params.query.trim();
-        let limit = prompt_search_limit(params.limit);
+    pub(super) fn search(&self, query: &str, limit: Option<usize>) -> io::Result<PromptSearchResponse> {
+        let query = query.trim();
+        let limit = prompt_search_limit(limit);
         let mut state = self.lock_state();
         let entries = self.ensure_loaded(&mut state)?;
 
@@ -67,10 +84,6 @@ impl PromptHistoryIndex {
             results.truncate(limit);
         }
         Ok(PromptSearchResponse { results, truncated, ..response })
-    }
-
-    pub(super) fn is_index_path(&self, path: &Path) -> bool {
-        path == self.path
     }
 
     fn lock_state(&self) -> MutexGuard<'_, State> {
@@ -93,8 +106,8 @@ impl PromptHistoryIndex {
     fn load_history(&self) -> io::Result<(VecDeque<PromptHistoryEntry>, bool)> {
         let file = match File::open(&self.path) {
             Ok(file) => file,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok((VecDeque::new(), false)),
-            Err(e) => return Err(e),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok((VecDeque::new(), false)),
+            Err(error) => return Err(error),
         };
 
         let parsed: Vec<_> = BufReader::new(file)
@@ -114,7 +127,7 @@ impl PromptHistoryIndex {
         }
         let mut file = OpenOptions::new().create(true).append(true).open(&self.path)?;
         let line = serde_json::to_string(entry)
-            .map_err(|e| io::Error::other(format!("Failed to serialize prompt history entry: {e}")))?;
+            .map_err(|error| io::Error::other(format!("failed to serialize prompt history entry: {error}")))?;
         writeln!(file, "{line}")
     }
 
@@ -127,7 +140,7 @@ impl PromptHistoryIndex {
             let mut file = File::create(&tmp_path)?;
             for entry in entries {
                 let line = serde_json::to_string(entry)
-                    .map_err(|e| io::Error::other(format!("Failed to serialize prompt history entry: {e}")))?;
+                    .map_err(|error| io::Error::other(format!("failed to serialize prompt history entry: {error}")))?;
                 writeln!(file, "{line}")?;
             }
         }
@@ -182,16 +195,14 @@ fn parse_prompt_history_line(line: &str) -> Option<PromptHistoryEntry> {
     }
     match serde_json::from_str(line) {
         Ok(entry) => Some(entry),
-        Err(e) => {
-            warn!("Skipping malformed prompt history line: {e}");
+        Err(error) => {
+            warn!("Skipping malformed prompt history line: {error}");
             None
         }
     }
 }
 
 fn find_prompt_match(prompt: &str, query: &str) -> Option<(usize, usize)> {
-    // Smart case: a query with any uppercase char triggers an exact-substring
-    // match; otherwise the comparison is case-insensitive.
     if query.chars().any(char::is_uppercase) {
         prompt.find(query).map(|start| (start, start + query.len()))
     } else {
@@ -199,10 +210,6 @@ fn find_prompt_match(prompt: &str, query: &str) -> Option<(usize, usize)> {
     }
 }
 
-/// Case-insensitive substring search that returns byte offsets into the
-/// **original** `prompt`. Lowercasing can change byte length (e.g. 'İ' → "i̇"),
-/// so we walk the original and lowercased strings in parallel to translate
-/// the match position back.
 fn find_case_insensitive(prompt: &str, query: &str) -> Option<(usize, usize)> {
     let lower_query = query.to_lowercase();
     let lower_prompt = prompt.to_lowercase();
@@ -216,9 +223,9 @@ fn find_case_insensitive(prompt: &str, query: &str) -> Option<(usize, usize)> {
             orig_start = Some(orig_idx);
         }
         if lower_offset >= lower_match_end {
-            return orig_start.map(|s| (s, orig_idx));
+            return orig_start.map(|start| (start, orig_idx));
         }
         lower_offset += ch.to_lowercase().map(char::len_utf8).sum::<usize>();
     }
-    orig_start.map(|s| (s, prompt.len()))
+    orig_start.map(|start| (start, prompt.len()))
 }

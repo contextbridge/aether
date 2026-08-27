@@ -1,4 +1,4 @@
-pub(crate) use acp_utils::client::AcpEvent;
+pub(crate) use acp_utils::client::{AcpEvent, LoadedSession};
 pub(crate) use acp_utils::config_meta::SelectOptionMeta;
 pub(crate) use acp_utils::config_option_id::ConfigOptionId;
 pub(crate) use acp_utils::notifications::{
@@ -214,16 +214,22 @@ pub(crate) fn session_info(id: &str, cwd: &str, title: &str, updated_at: &str) -
         .updated_at(Some(updated_at.to_string()))
 }
 
-pub(crate) fn sessions_listed(sessions: Vec<acp::SessionInfo>) -> AcpEvent {
-    AcpEvent::SessionsListed { sessions }
+pub(crate) fn sessions_listed(sessions: Vec<acp::SessionInfo>) -> CommandResult {
+    CommandResult::SessionsListed(acp::ListSessionsResponse::new(sessions))
 }
 
-pub(crate) fn session_loaded(session_id: &str, config_options: Vec<acp::SessionConfigOption>) -> AcpEvent {
-    AcpEvent::SessionLoaded { session_id: SessionId::new(session_id), config_options }
+pub(crate) fn session_loaded(session_id: &str, config_options: Vec<acp::SessionConfigOption>) -> CommandResult {
+    CommandResult::SessionLoaded(LoadedSession {
+        session_id: SessionId::new(session_id),
+        response: acp::LoadSessionResponse::new().config_options(config_options),
+        replay: Vec::new(),
+    })
 }
 
-pub(crate) fn new_session_created(session_id: &str, config_options: Vec<acp::SessionConfigOption>) -> AcpEvent {
-    AcpEvent::NewSessionCreated { session_id: SessionId::new(session_id), config_options }
+pub(crate) fn new_session_created(session_id: &str, config_options: Vec<acp::SessionConfigOption>) -> CommandResult {
+    CommandResult::NewSessionCreated(
+        acp::NewSessionResponse::new(SessionId::new(session_id)).config_options(config_options),
+    )
 }
 
 pub(crate) fn session_preview_response(session_id: &str) -> SessionPreviewResponse {
@@ -262,18 +268,26 @@ pub(crate) fn workspace_entry(path: &str, is_current: bool) -> WorkspaceEntry {
     WorkspaceEntry { path: std::path::PathBuf::from(path), is_current }
 }
 
-pub(crate) fn workspaces_listed(workspaces: Vec<WorkspaceEntry>) -> AcpEvent {
-    AcpEvent::WorkspacesListed(WorkspaceListResponse { workspaces })
+pub(crate) fn workspaces_listed(workspaces: Vec<WorkspaceEntry>) -> CommandResult {
+    CommandResult::WorkspacesListed(WorkspaceListResponse { workspaces })
 }
 
-pub(crate) fn workspace_list_failed(error: &str) -> AcpEvent {
-    AcpEvent::WorkspaceListFailed { error: error.to_string() }
+pub(crate) fn workspace_list_failed(error: &str) -> CommandResult {
+    CommandResult::WorkspaceListFailed { error: error.to_string() }
 }
 
-pub(crate) fn workspace_moved(new_cwd: &str) -> AcpEvent {
-    AcpEvent::WorkspaceMoved(WorkspaceMoveResponse { new_cwd: std::path::PathBuf::from(new_cwd) })
+pub(crate) fn workspace_moved(new_cwd: &str) -> CommandResult {
+    CommandResult::WorkspaceMoved(WorkspaceMoveResponse { new_cwd: std::path::PathBuf::from(new_cwd) })
 }
 
-pub(crate) fn workspace_move_failed(error: &str) -> AcpEvent {
-    AcpEvent::WorkspaceMoveFailed { error: error.to_string() }
+pub(crate) fn workspace_move_failed(error: &str) -> CommandResult {
+    CommandResult::WorkspaceMoveFailed { error: error.to_string() }
+}
+
+pub(crate) fn prompt_failed(error: &str) -> CommandResult {
+    CommandResult::Failed { command: FailedCommand::Prompt, error: error.to_string() }
+}
+
+pub(crate) fn session_load_failed(error: &str) -> CommandResult {
+    CommandResult::Failed { command: FailedCommand::LoadSession, error: error.to_string() }
 }

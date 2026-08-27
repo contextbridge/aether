@@ -38,13 +38,17 @@ impl FakeHttpClient {
 }
 
 impl HttpClient for FakeHttpClient {
-    async fn fetch(&self, url: &str, _timeout: Duration) -> Result<HttpResponse, WebFetchError> {
-        match self.responses.lock().unwrap().get(url).cloned() {
+    fn fetch(
+        &self,
+        url: &str,
+        _timeout: Duration,
+    ) -> impl std::future::Future<Output = Result<HttpResponse, WebFetchError>> + Send {
+        std::future::ready(match self.responses.lock().unwrap().get(url).cloned() {
             Some(FakeHttpResult::Ok(response)) => Ok(response),
             Some(FakeHttpResult::Timeout(timeout_ms)) => Err(WebFetchError::Timeout(timeout_ms)),
             Some(FakeHttpResult::RequestFailed(message)) => Err(WebFetchError::RequestFailed(message)),
             None => Err(WebFetchError::RequestFailed(format!("No test response configured for URL: {url}"))),
-        }
+        })
     }
 }
 
