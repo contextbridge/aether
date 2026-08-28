@@ -52,6 +52,9 @@ sha2 = { workspace = true }
 # LSP types shared across Aether packages
 lsp-types = { workspace = true }
 
+# file:// URI construction and parsing
+url = { workspace = true }
+
 # File watching
 notify = { workspace = true }
 globset = { workspace = true }

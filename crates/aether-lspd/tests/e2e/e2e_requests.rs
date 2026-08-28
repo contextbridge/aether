@@ -1,6 +1,7 @@
 use crate::common::{CargoProject, DaemonHarness, TestProject, hover_text, use_fake_rust_server};
 use aether_lspd::LanguageId;
 use lsp_types::{DocumentSymbolResponse, GotoDefinitionResponse};
+use std::path::PathBuf;
 
 #[tokio::test]
 async fn request_helpers_round_trip_through_fake_server() {
@@ -88,6 +89,34 @@ fn main() {
     harness.kill().await.expect("Failed to kill daemon");
 }
 
+#[tokio::test]
+async fn documents_in_paths_with_spaces_round_trip_through_the_daemon() {
+    use_fake_rust_server();
+
+    let project = CargoProject::new("request_spaces").expect("Failed to create project");
+    project.add_file("src/my mod.rs", "fn main() { let error = 1; }\n").expect("Failed to add file");
+
+    let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
+    let client = harness.connect().await.expect("Failed to connect");
+    let uri = project.file_uri("src/my mod.rs");
+
+    assert!(uri.as_str().contains("my%20mod.rs"), "URI must be percent-encoded: {}", uri.as_str());
+
+    client.queue_diagnostic_refresh(uri.clone()).await.expect("Queue diagnostic refresh failed");
+
+    let diagnostics = client.get_diagnostics(None).await.expect("Get diagnostics failed");
+    let ours = diagnostics
+        .iter()
+        .find(|entry| entry.uri == uri)
+        .unwrap_or_else(|| panic!("no diagnostics for {} in {diagnostics:?}", uri.as_str()));
+    assert_eq!(ours.diagnostics.len(), 1);
+    assert_eq!(ours.diagnostics[0].message, "error token");
+
+    let on_disk = std::fs::canonicalize(project.root().join("src/my mod.rs")).expect("File should exist");
+    assert_eq!(PathBuf::from(aether_lspd::uri_to_path(&uri)), on_disk);
+
+    harness.kill().await.expect("Failed to kill daemon");
+}
 #[tokio::test]
 async fn diagnostic_helpers_round_trip_through_fake_server() {
     use_fake_rust_server();
