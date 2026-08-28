@@ -19,7 +19,7 @@ The default in-memory server is session-scoped: tasks are stored in a temporary 
 }
 ```
 
-For persistent task storage, pass `--dir`. Aether stores JSONL task files under `<dir>/.aether-tasks/`.
+For persistent task storage, pass `--dir`. Aether stores each root task tree as a JSONL file under `<dir>/.aether-tasks/active/`; when a tree is completed it is moved to `<dir>/.aether-tasks/completed/`.
 
 ```json title=".aether/mcp.json"
 {
@@ -46,7 +46,7 @@ For persistent task storage, pass `--dir`. Aether stores JSONL task files under 
 - Root tasks: `at-a1b2c3d4`
 - Subtasks: `at-a1b2c3d4.1`, `at-a1b2c3d4.2`, etc.
 
-Each root task tree is stored in one JSONL file when persistent storage is enabled.
+Each root task tree is stored in one JSONL file when persistent storage is enabled. Archiving a completed tree moves its file from `active/` to `completed/`.
 
 ## Status values
 
@@ -127,6 +127,8 @@ Complete a task and attach handoff context:
 | `blockers`  | Unresolved blockers.                    |
 | `filesRead` | Files examined.                         |
 | `resources` | External resources referenced.          |
+
+`task_update` returns the updated task, a `message`, the list of field names in `changes`, and `newlyReady` — the tasks that became ready to start because their dependencies were completed.
 
 ## Input names
 

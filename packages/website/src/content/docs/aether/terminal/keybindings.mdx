@@ -30,11 +30,15 @@ Type `/` to open the command picker. It supports fuzzy search — just start typ
 | `/clear`    | Start a new [session](/aether/terminal/sessions/)       |
 | `/settings` | Open the [settings overlay](/aether/terminal/settings/) |
 | `/resume`   | Resume a previous [session](/aether/terminal/sessions/) |
-| `/move`     | Move changes to another workspace (when supported by the agent) |
+| `/move`     | Move uncommitted changes to another clone of the repository (when supported by the agent) |
 
 ### Agent-provided commands
 
 Agents can register additional slash commands. These appear in the picker alongside built-in commands. Each command has a name, description, and optional argument hint.
+
+### `/move` workspaces
+
+`/move` opens a picker listing the other known clones of the current repository, plus a `Create new workspace…` entry. Selecting an existing clone moves your uncommitted changes there; selecting the create entry prompts for a name and clones a fresh sibling directory to move into. The session then continues in the target directory.
 
 ## File picker
 

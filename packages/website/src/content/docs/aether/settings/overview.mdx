@@ -126,6 +126,8 @@ Set your agent's system prompt via the `prompts` field, which is specified as an
 
 Prompt sources are concatenated in the order provided.
 
+Every agent must resolve to at least one prompt source — an agent with no `prompts` of its own and no top-level `prompts` to inherit is rejected when settings load, as is an agent whose sources are all `optional` and all missing.
+
 ```json {9-14} title=".aether/settings.json"
 {
   "agent": "Build",

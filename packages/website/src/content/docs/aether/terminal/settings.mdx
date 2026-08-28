@@ -35,6 +35,8 @@ Stored in `~/.wisp/settings.json`:
 }
 ```
 
+The `keybindings` entries above rebind the defaults (`ctrl+g` and `ctrl+r`) — see [Keybindings & Commands](/aether/terminal/keybindings/) for the full default table.
+
 The top-level fields are `theme`, `statusLine`, `contentPadding`, and `keybindings`. `contentPadding` sets the number of blank columns of padding around the conversation content (default `2`, minimum `2`). Status line segments are described below.
 
 Override the home directory with `WISP_HOME`:
@@ -50,7 +52,7 @@ Each `left` and `right` entry is a segment. Shorthand names are strings; segment
 | Segment     | Form                              | Description                                            |
 | ----------- | --------------------------------- | ------------------------------------------------------ |
 | `cwd`       | `"cwd"` or `{ "type": "cwd", "maxWidth": 40 }` | Current working directory (truncatable). |
-| `gitRef`    | `"gitRef"`                        | Active git branch or tag.                              |
+| `gitRef`    | `"gitRef"`                        | Active git branch, or the short commit hash when detached. |
 | `agent`     | `"agent"`                         | Active agent name.                                     |
 | `mode`      | `"mode"`                          | Active mode (user-invocable agent profile).            |
 | `model`     | `"model"` or `{ "type": "model", "maxWidth": 32 }` | Active model (truncatable).              |

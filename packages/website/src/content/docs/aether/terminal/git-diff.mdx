@@ -30,13 +30,14 @@ The file-list header shows the active scope: `Git Diff · Both`, `Git Diff · Un
 | Key | Action |
 | --- | --- |
 | `h` / `←` | In the diff pane, focus the file list; in the file list, collapse the selected directory |
-| `l` / `→` or `Enter` | In the file list, expand/open the selected entry and focus the diff |
+| `l` / `→` or `Enter` | In the file list, expand the selected directory, or open the selected file and focus the diff |
 | `j` / `↓` | Move down |
 | `k` / `↑` | Move up |
 | `PageDown` / `PageUp` | Page through the diff pane |
 | `o` | Toggle between the hunk-diff view and the full-file view (in the diff pane) |
 | `<` / `>` | Resize the split panes |
 | `r` | Refresh the diff |
+| `?` | Open the shortcuts help overlay (close it with `?` or `Esc`) |
 | `Esc` / `Ctrl+G` | Close git diff view |
 
 ## Diff scope
@@ -62,7 +63,7 @@ The active scope is shown in the file-list header.
 
 `C` opens a commit-message composer at the bottom of the screen. Type a message and press `Enter` to create the commit, or `Esc` to cancel. You can only commit when at least one file is staged.
 
-When queued review comments exist, actions that would clear them — switching scope, refreshing, staging or unstaging, committing, and discarding — ask you to press the same key again to confirm.
+When queued review comments exist, actions that would clear them — switching scope, refreshing, staging or unstaging, committing, discarding, and closing the view — ask you to press the same key again to confirm.
 
 ## Discarding changes
 

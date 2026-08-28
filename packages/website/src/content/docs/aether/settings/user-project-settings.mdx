@@ -95,7 +95,7 @@ Here `AGENTS.md` resolves to `<workspace-root>/AGENTS.md`.
 | ---- | ----------- |
 | `--user` / `--project` | Required. Choose the settings scope. |
 | `--path <dir>` | Project directory to initialize (defaults to `.`). Only with `--project`. |
-| `--provider <name>` | Provider to use, e.g. `anthropic`, `codex`, or `bedrock`. Skips the provider prompt. |
+| `--provider <name>` | Provider to use, skipping the provider prompt. Supported: `anthropic`, `bedrock`, `codex`, `openai`, `openrouter`, and `zai` — the providers that ship curated model presets. Other providers are chosen interactively in the wizard. |
 | `--preset <name>` | `minimal` (a single agent with bash and skills tools) or `batteries-included` (Plan, Build, and Explore agents wired to the built-in MCP servers). Skips the preset prompt. |
 | `--harness <name>` | Harness conventions to auto-load with `batteries-included`. Repeatable: `claude`, `agents`. |
 | `--force` | Overwrite an existing settings file at the selected target. |
@@ -145,7 +145,7 @@ In this example:
 
 ## Inline settings
 
-Settings can be passed directly via the `--settings-json` CLI flag. This bypasses file loading and uses the same schema:
+Settings can be passed directly to the CLI. `--settings-json` takes a JSON document inline, and `--settings-file` takes a path to one. Both use the same schema and bypass file loading:
 
 ```bash
 aether headless \
