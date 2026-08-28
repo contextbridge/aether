@@ -1,6 +1,6 @@
 [package]
 name = "aether-wisp"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 description = "A terminal UI for AI coding agents via the Agent Client Protocol (ACP)"
 license = "MIT"
@@ -46,8 +46,8 @@ rustdoc-args = ["--cfg", "docsrs"]
 workspace = true
 
 [dependencies]
-utils = { package = "aether-utils", path = "../utils", version = "0.2.13" }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client"], version = "0.3.40" }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.14" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client"], version = "0.3.41" }
 agent-client-protocol = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
@@ -72,6 +72,6 @@ url = { workspace = true }
 unicode-width = { workspace = true }
 
 [dev-dependencies]
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "testing"], version = "0.3.40" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "testing"], version = "0.3.41" }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.13](https://github.com/contextbridge/aether/compare/aether-auth-v0.1.12...aether-auth-v0.1.13) - 2026-08-27
+
+### Fixed
+
+- *(auth)* reconnect stale keyring sessions ([#385](https://github.com/contextbridge/aether/pull/385))
+
 ## [0.1.12](https://github.com/contextbridge/aether/compare/aether-auth-v0.1.11...aether-auth-v0.1.12) - 2026-08-19
 
 ### Added

@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.1](https://github.com/contextbridge/aether/compare/aether-wisp-v0.5.0...aether-wisp-v0.5.1) - 2026-08-27
+
+### Fixed
+
+- *(wisp)* preserve prompt completion ordering ([#384](https://github.com/contextbridge/aether/pull/384))
+- *(wisp)* align plan review mouse scrolling with cursor ([#381](https://github.com/contextbridge/aether/pull/381))
+
+### Other
+
+- MIsc Wisp Improvments  ([#388](https://github.com/contextbridge/aether/pull/388))
+- *(deps)* bump rust-toolchain from 1.97 to 1.98 in the rust-toolchain-minor-patch group ([#379](https://github.com/contextbridge/aether/pull/379))
+- ACP sessions ([#382](https://github.com/contextbridge/aether/pull/382))
+- Use new acp type for context usage, use rmcp's list_all methods and use acp native elicitation ([#376](https://github.com/contextbridge/aether/pull/376))
+- release ([#370](https://github.com/contextbridge/aether/pull/370))
+
 ## [0.5.0](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.41...aether-wisp-v0.5.0) - 2026-08-22
 
 ### Changed
