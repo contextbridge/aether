@@ -273,69 +273,10 @@ impl FileDiff {
             (false, true) => FileStatus::Deleted,
             _ => FileStatus::Modified,
         };
-        let old_lines: Vec<&str> = old.lines().collect();
-        let new_lines: Vec<&str> = new.lines().collect();
-        let mut patch_lines = Vec::new();
-        let mut old_number = 0;
-        let mut new_number = 0;
 
-        for operation in similar::TextDiff::from_lines(old, new).ops() {
-            match *operation {
-                similar::DiffOp::Equal { old_index, new_index: _, len } => {
-                    for offset in 0..len {
-                        old_number += 1;
-                        new_number += 1;
-                        patch_lines.push(PatchLine::context(
-                            source_line(&old_lines, old_index + offset),
-                            old_number,
-                            new_number,
-                        ));
-                    }
-                }
-                similar::DiffOp::Delete { old_index, old_len, .. } => {
-                    for offset in 0..old_len {
-                        old_number += 1;
-                        patch_lines.push(PatchLine::removed(source_line(&old_lines, old_index + offset), old_number));
-                    }
-                }
-                similar::DiffOp::Insert { new_index, new_len, .. } => {
-                    for offset in 0..new_len {
-                        new_number += 1;
-                        patch_lines.push(PatchLine::added(source_line(&new_lines, new_index + offset), new_number));
-                    }
-                }
-                similar::DiffOp::Replace { old_index, old_len, new_index, new_len } => {
-                    for offset in 0..old_len {
-                        old_number += 1;
-                        patch_lines.push(PatchLine::removed(source_line(&old_lines, old_index + offset), old_number));
-                    }
-                    for offset in 0..new_len {
-                        new_number += 1;
-                        patch_lines.push(PatchLine::added(source_line(&new_lines, new_index + offset), new_number));
-                    }
-                }
-            }
-        }
-
-        trim_patch_context(&mut patch_lines);
-        let hunks = if patch_lines.is_empty() {
-            Vec::new()
-        } else {
-            let old_start = patch_lines.iter().find_map(|line| line.old_line_no).unwrap_or(0);
-            let new_start = patch_lines.iter().find_map(|line| line.new_line_no).unwrap_or(0);
-            let old_count = patch_lines.iter().filter(|line| line.old_line_no.is_some()).count();
-            let new_count = patch_lines.iter().filter(|line| line.new_line_no.is_some()).count();
-            let header = format!("@@ -{old_start},{old_count} +{new_start},{new_count} @@");
-            let mut lines = Vec::with_capacity(patch_lines.len() + 1);
-            lines.push(PatchLine {
-                kind: PatchLineKind::HunkHeader,
-                text: header.clone(),
-                old_line_no: None,
-                new_line_no: None,
-            });
-            lines.extend(patch_lines);
-            vec![Hunk { header, old_start, old_count, new_start, new_count, lines }]
-        };
+        let diff = similar::TextDiff::from_lines(old, new);
+        let formatter = diff.unified_diff();
+        let hunks = formatter.iter_hunks().map(|hunk| unified_hunk(&hunk)).collect();
 
         Self {
             old_path: (status != FileStatus::Added).then(|| path.clone()),
@@ -545,21 +486,44 @@ fn parse_diff_header(line: &str) -> Result<(String, String), GitDiffError> {
     }
 }
 
-fn source_line<'a>(lines: &[&'a str], index: usize) -> &'a str {
-    lines.get(index).copied().unwrap_or("")
+fn unified_hunk(hunk: &similar::udiff::UnifiedDiffHunk<'_, '_, '_, str>) -> Hunk {
+    let ops = hunk.ops();
+    let old = unified_range(ops[0].old_range().start, ops[ops.len() - 1].old_range().end);
+    let new = unified_range(ops[0].new_range().start, ops[ops.len() - 1].new_range().end);
+    let header = hunk.header().to_string();
+    let mut lines = vec![PatchLine {
+        kind: PatchLineKind::HunkHeader,
+        text: header.clone(),
+        old_line_no: None,
+        new_line_no: None,
+    }];
+    lines.extend(hunk.iter_changes().map(unified_change));
+
+    Hunk { header, old_start: old.0, old_count: old.1, new_start: new.0, new_count: new.1, lines }
 }
 
-fn trim_patch_context(lines: &mut Vec<PatchLine>) {
-    const CONTEXT: usize = 3;
-    let Some(first_change) = lines.iter().position(|line| line.kind != PatchLineKind::Context) else {
-        lines.clear();
-        return;
-    };
-    let last_change = lines.iter().rposition(|line| line.kind != PatchLineKind::Context).unwrap_or(first_change);
-    let start = first_change.saturating_sub(CONTEXT);
-    let end = (last_change + CONTEXT + 1).min(lines.len());
-    lines.drain(end..);
-    lines.drain(..start);
+fn unified_change(change: similar::Change<&str>) -> PatchLine {
+    let text = || line_without_terminator(change.value()).to_string();
+    match change.tag() {
+        similar::ChangeTag::Equal => {
+            PatchLine::context(text(), change.old_index().unwrap_or(0) + 1, change.new_index().unwrap_or(0) + 1)
+        }
+        similar::ChangeTag::Delete => PatchLine::removed(text(), change.old_index().unwrap_or(0) + 1),
+        similar::ChangeTag::Insert => PatchLine::added(text(), change.new_index().unwrap_or(0) + 1),
+    }
+}
+
+/// Converts similar's 0-based op range into the 1-based `(start, count)` pair a unified
+/// diff header encodes, so `Hunk` stays consistent with its own header.
+fn unified_range(start: usize, end: usize) -> (usize, usize) {
+    let count = end - start;
+    let start = if count == 0 { start } else { start + 1 };
+    (start, count)
+}
+
+fn line_without_terminator(line: &str) -> &str {
+    let without_lf = line.strip_suffix('\n').unwrap_or(line);
+    without_lf.strip_suffix('\r').unwrap_or(without_lf)
 }
 
 fn parse_hunk(lines: &[&str]) -> Result<(Hunk, usize), GitDiffError> {

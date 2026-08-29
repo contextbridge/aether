@@ -23,6 +23,49 @@ fn acp_texts_normalize_into_canonical_numbered_lines() {
 }
 
 #[test]
+fn acp_texts_cover_added_and_deleted_files() {
+    let added = FileDiff::from_texts("src/new.rs", "", "a\nb\n");
+    assert_eq!(added.status, FileStatus::Added);
+    assert_eq!(added.old_path, None);
+    assert_eq!(added.hunks.len(), 1);
+    assert_eq!(added.hunks[0].header, "@@ -0,0 +1,2 @@");
+    assert_eq!(added.hunks[0].lines.iter().filter(|line| line.kind == PatchLineKind::Added).count(), 2);
+
+    let deleted = FileDiff::from_texts("src/gone.rs", "a\nb\n", "");
+    assert_eq!(deleted.status, FileStatus::Deleted);
+    assert_eq!(deleted.hunks.len(), 1);
+    assert_eq!(deleted.hunks[0].header, "@@ -1,2 +0,0 @@");
+    assert_eq!(deleted.hunks[0].old_count, 2);
+    assert_eq!(deleted.hunks[0].new_count, 0);
+
+    let unchanged = FileDiff::from_texts("src/same.rs", "a\nb\n", "a\nb\n");
+    assert_eq!(unchanged.status, FileStatus::Modified);
+    assert!(unchanged.hunks.is_empty());
+}
+
+#[test]
+fn acp_texts_split_distant_changes_into_separate_hunks() {
+    let old = (1..=20).map(|n| n.to_string()).collect::<Vec<_>>().join("\n");
+    let new = old
+        .lines()
+        .enumerate()
+        .map(|(index, line)| if index == 1 || index == 18 { format!("{line} changed") } else { line.to_string() })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let file = FileDiff::from_texts("src/lib.rs", &old, &new);
+
+    assert_eq!(file.hunks.len(), 2, "distant changes must not be merged into one hunk");
+    for hunk in &file.hunks {
+        let context = hunk.lines.iter().filter(|line| line.kind == PatchLineKind::Context).count();
+        assert!(context <= 6, "each hunk carries at most 3 context lines per side, got {context}");
+        assert!(hunk.lines.first().is_some_and(|line| line.kind == PatchLineKind::HunkHeader));
+    }
+    assert_eq!(file.hunks[0].old_start, 1);
+    assert_eq!(file.hunks[1].old_start, 16);
+}
+
+#[test]
 fn git_output_normalizes_rename_binary_and_untracked_files() {
     let diff = concat!(
         "diff --git a/old.txt b/new.txt\n",
