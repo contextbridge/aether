@@ -244,7 +244,6 @@ mod tests {
     #[tokio::test]
     async fn dropping_server_cancels_in_flight_connections() {
         use rmcp::model::CallToolRequestParams;
-        use std::time::Duration;
         use tokio::sync::watch;
 
         #[derive(Clone)]
@@ -258,7 +257,7 @@ mod tests {
             #[tool(description = "Blocks until the connection is aborted")]
             async fn slow(&self) -> String {
                 let _ = self.started.send(true);
-                tokio::time::sleep(Duration::from_mins(10)).await;
+                std::future::pending::<()>().await;
                 "done".to_string()
             }
         }

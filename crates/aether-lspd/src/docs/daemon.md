@@ -13,6 +13,7 @@ use std::time::Duration;
 let daemon = LspDaemon::new(
     PathBuf::from("/tmp/aether-lspd-1000/lsp-rust-abc123.sock"),
     Some(Duration::from_secs(300)),
+    Duration::from_secs(120),
 );
 daemon.run().await?;
 # Ok(())
