@@ -59,7 +59,7 @@ impl AgentBuilder {
             initial_messages: Vec::new(),
             mcp: None,
             channel_capacity: 1000,
-            tool_timeout: Duration::from_mins(20),
+            tool_timeout: Duration::from_mins(60),
             compaction_config: Some(CompactionConfig::default()),
             max_auto_continues: 3,
             retry_config: RetryConfig::default(),
@@ -118,7 +118,7 @@ impl AgentBuilder {
     /// If a tool does not return a result within this duration, it will be marked as failed
     /// and the agent will continue processing.
     ///
-    /// Default: 20 minutes
+    /// Default: 60 minutes
     pub fn tool_timeout(mut self, timeout: Duration) -> Self {
         self.tool_timeout = timeout;
         self
