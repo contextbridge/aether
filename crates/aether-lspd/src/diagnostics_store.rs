@@ -110,7 +110,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn wait_for_uri_fresh_waits_for_settle_window() {
         let store = DiagnosticsStore::new();
         let uri: Uri = "file:///test.rs".parse().unwrap();
@@ -133,7 +133,7 @@ mod tests {
         assert_eq!(diags[0].diagnostics[0].message, "second");
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn wait_for_uri_fresh_ignores_unrelated_publishes() {
         let store = DiagnosticsStore::new();
         let target: Uri = "file:///target.rs".parse().unwrap();

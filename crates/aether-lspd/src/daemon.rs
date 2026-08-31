@@ -193,7 +193,7 @@ mod tests {
     use super::*;
     use tokio::time::timeout;
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn idle_timeout_none_never_completes() {
         let client_count = Arc::new(AtomicUsize::new(0));
         let last_activity = Arc::new(RwLock::new(Instant::now()));
@@ -207,7 +207,7 @@ mod tests {
         assert!(result.is_err(), "None timeout should not complete");
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn idle_timeout_completes_when_idle_elapsed() {
         let client_count = Arc::new(AtomicUsize::new(0));
         let stale_activity = Instant::now()

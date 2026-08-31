@@ -55,7 +55,7 @@ impl ServerHandler for FakeGateway {
             .into()),
             "demo__fail" => Ok(CallToolResult::error(vec![]).into()),
             "demo__slow" => {
-                tokio::time::sleep(std::time::Duration::from_mins(1)).await;
+                std::future::pending::<()>().await;
                 Ok(CallToolResult::structured(json!({"done": true})).into())
             }
             "demo__text" => Ok(CallToolResult::success(vec![ContentBlock::text("plain")]).into()),
