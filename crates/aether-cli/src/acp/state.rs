@@ -525,7 +525,7 @@ mod tests {
     use aether_sessions::SessionStore;
 
     const SONNET: &str = "anthropic:claude-sonnet-4-5";
-    const DEEPSEEK: &str = "deepseek:deepseek-chat";
+    const DEEPSEEK: &str = "deepseek:deepseek-v4-flash";
     const AUDIO_ONLY: &str = "bedrock:mistral.voxtral-small-24b-2507";
 
     fn fake_oauth_store() -> Arc<dyn OAuthCredentialStorage> {

@@ -509,7 +509,7 @@ fn switching_modes() -> Modes {
         },
         ValidatedMode {
             name: "Coder".to_string(),
-            model: "deepseek:deepseek-chat".to_string(),
+            model: "deepseek:deepseek-v4-flash".to_string(),
             reasoning_effort: None,
         },
     ])

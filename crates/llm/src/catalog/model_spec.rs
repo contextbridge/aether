@@ -189,7 +189,7 @@ mod tests {
         assert_eq!(opus.clamp_reasoning_effort(Some(ReasoningEffort::Max)), Some(ReasoningEffort::Max));
         assert_eq!(opus.clamp_reasoning_effort(None), None);
 
-        let non_reasoning: ModelSpec = "deepseek:deepseek-chat".parse().unwrap();
+        let non_reasoning: ModelSpec = "openai:gpt-4o-mini".parse().unwrap();
         assert_eq!(non_reasoning.clamp_reasoning_effort(Some(ReasoningEffort::High)), None);
     }
 }

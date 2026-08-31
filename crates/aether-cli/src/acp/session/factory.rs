@@ -354,7 +354,7 @@ mod tests {
     use super::*;
 
     const SONNET: &str = "anthropic:claude-sonnet-4-5";
-    const DEEPSEEK: &str = "deepseek:deepseek-chat";
+    const DEEPSEEK: &str = "deepseek:deepseek-v4-flash";
     const BEDROCK_ARN_AS_MODEL_REJECTED: &str =
         "bedrock:arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000";
 

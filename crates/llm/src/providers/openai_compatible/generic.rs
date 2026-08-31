@@ -26,7 +26,7 @@ pub struct ProviderConfig {
 pub const DEEPSEEK: ProviderConfig = ProviderConfig {
     api_base: Some("https://api.deepseek.com"),
     env_var: "DEEPSEEK_API_KEY",
-    default_model: "deepseek-chat",
+    default_model: "deepseek-v4-flash",
     prefix: "deepseek",
     display_name: "DeepSeek",
     tool_schema_transform: None,
