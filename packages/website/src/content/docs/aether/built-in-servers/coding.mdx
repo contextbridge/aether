@@ -60,6 +60,8 @@ Permission modes:
 
 Because `bash` spawns real subprocesses, it composes with [deferred (proxied) tools](/aether/settings/mcp-servers/#merging-and-deferred-tool-behavior) from other MCP servers via the `aether mcp` CLI — pipelines, redirects, and command substitution all work.
 
+A bare `rm` (no arguments) is rejected; deleting files requires an explicit path.
+
 ## Web
 
 | Tool         | Description                                                            |

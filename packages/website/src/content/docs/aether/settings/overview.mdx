@@ -47,6 +47,8 @@ Agents (LLM + model + tools) are defined in an `agents` array.
 
 ### Creating your 1st Agent
 
+Every agent requires a `name`, a `description`, a `model`, and an invocation surface: `userInvocable: true` (selectable by users), `agentInvocable: true` (spawnable by other agents), or both. Agents also need at least one resolved prompt source — the top-level `prompts` list is used when an agent declares none of its own. The snippets below build up an agent piece by piece.
+
 #### Name
 
 Start with a `name`, and short `description`.

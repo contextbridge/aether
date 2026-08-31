@@ -17,10 +17,10 @@ aether headless "Explain the settings loader in this project"
 aether headless [OPTIONS] [PROMPT]...
 ```
 
-If prompt words are provided, Aether joins them with spaces. If no prompt is provided and stdin is not a TTY, Aether reads stdin, trims it, and uses that as the prompt.
+If prompt words are provided, Aether joins them with spaces (piped stdin is ignored). If no prompt is provided and stdin is not a TTY, Aether reads stdin, trims it, and uses that as the prompt.
 
 ```bash
-git diff --staged | aether headless "Review these changes"
+git diff --staged | aether headless
 ```
 
 ## Agent selection
@@ -64,7 +64,7 @@ aether headless --model bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0 \
 
 | Flag                | Type                     | Description                                                                                       |
 | ------------------- | ------------------------ | ------------------------------------------------------------------------------------------------- |
-| `[PROMPT]...`       | positional               | Prompt text. Reads stdin if omitted and stdin is not a TTY.                                       |
+| `[PROMPT]...`       | positional               | Prompt text. Reads stdin if omitted and stdin is not a TTY; a provided prompt takes precedence over stdin.                                       |
 | `-a, --agent`       | `string`                 | Named agent from settings. Defaults to the top-level `agent` setting if set, else the first user-invocable agent. |
 | `-m, --model`       | `string`                 | Ad-hoc model spec. Mutually exclusive with `--agent`.                                             |
 | `-C, --cwd`         | `path`                   | Working directory. Defaults to `.`.                                                               |

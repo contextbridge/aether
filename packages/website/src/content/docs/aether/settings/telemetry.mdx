@@ -75,7 +75,7 @@ Content capture is disabled by default. Unless you set `captureContent` to `true
 
 ## What Aether exports
 
-Each agent turn produces an `invoke_agent` root span. Its child spans describe LLM calls (`chat <model>`) and tool executions (`execute_tool <name>`), including retries and terminal errors or cancellations.
+Each agent turn produces an `invoke_agent` root span (named `invoke_agent <agent>` when the agent has a name). Its child spans describe LLM calls (`chat <model>`) and tool executions (`execute_tool <name>`), including retries and terminal errors or cancellations.
 
 When enabled, Aether also exports these GenAI histograms:
 

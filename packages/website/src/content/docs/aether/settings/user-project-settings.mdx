@@ -87,6 +87,15 @@ Plain relative paths in project settings resolve from the **workspace root** (th
 
 Here `AGENTS.md` resolves to `<workspace-root>/AGENTS.md`.
 
+## Merging
+
+Project settings are merged over user settings:
+
+- The top-level `agent` and `credentialsStore` from project settings win when set.
+- A non-empty top-level `prompts` or `mcps` array in project settings replaces the user-level list.
+- `providers` overrides merge per provider: fields set in project settings win, unset fields keep the user-level values.
+- An agent defined in project settings with the same `name` as a user-level agent **replaces it entirely** — agents are never merged field-by-field. Agents without a name collision are combined.
+
 ## Initialization options
 
 `aether settings init` runs an interactive wizard by default. Pass flags to answer the prompts non-interactively, which is useful for scripts and CI:
