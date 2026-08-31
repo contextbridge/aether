@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.37](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.36...aether-agent-core-v0.6.37) - 2026-08-31
+
+### Fixed
+
+- extend foreground sub-agent timeout ([#394](https://github.com/contextbridge/aether/pull/394))
+
 ## [0.6.36](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.35...aether-agent-core-v0.6.36) - 2026-08-31
 
 ### Other
