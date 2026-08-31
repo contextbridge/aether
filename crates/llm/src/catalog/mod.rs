@@ -166,7 +166,7 @@ mod tests {
         let cases = [
             ("anthropic:claude-opus-4-6", Some("ANTHROPIC_API_KEY")),
             ("openai:gpt-5.5", Some("OPENAI_API_KEY")),
-            ("deepseek:deepseek-chat", Some("DEEPSEEK_API_KEY")),
+            ("deepseek:deepseek-v4-flash", Some("DEEPSEEK_API_KEY")),
             ("gemini:gemini-2.5-pro", Some("GEMINI_API_KEY")),
             ("openrouter:anthropic/claude-opus-4.6", Some("OPENROUTER_API_KEY")),
             ("zai:glm-4.5", Some("ZAI_API_KEY")),

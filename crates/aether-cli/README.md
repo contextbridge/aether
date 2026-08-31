@@ -222,7 +222,7 @@ Define agents with specific model, prompts, and tool configurations:
     {
       "name": "coder",
       "description": "Fast coding agent",
-      "model": "deepseek:deepseek-chat",
+      "model": "deepseek:deepseek-v4-flash",
       "userInvocable": true,
       "agentInvocable": false,
       "prompts": [".aether/prompts/coder.md"]
