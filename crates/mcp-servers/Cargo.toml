@@ -1,6 +1,6 @@
 [package]
 name = "aether-mcp-servers"
-version = "0.4.43"
+version = "0.4.44"
 edition = "2024"
 description = "Built-in MCP tool servers for the Aether AI agent framework"
 license = "MIT"
@@ -109,8 +109,8 @@ tempfile = { workspace = true, optional = true }
 
 # subagents feature
 aether-auth = { path = "../aether-auth", optional = true, version = "0.1.13", features = ["keyring"] }
-aether-core = { package = "aether-agent-core", path = "../aether-core", optional = true, version = "0.6.36" }
-aether-project = { path = "../aether-project", optional = true, version = "0.5.37" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", optional = true, version = "0.6.37" }
+aether-project = { path = "../aether-project", optional = true, version = "0.5.38" }
 llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.7.31" }
 
 [dev-dependencies]

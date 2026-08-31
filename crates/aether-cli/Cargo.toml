@@ -1,6 +1,6 @@
 [package]
 name = "aether-agent-cli"
-version = "0.7.40"
+version = "0.7.41"
 edition = "2024"
 description = "CLI and ACP server for the Aether AI coding agent"
 license = "MIT"
@@ -31,13 +31,13 @@ path = "src/main.rs"
 [dependencies]
 aether-auth = { path = "../aether-auth", version = "0.1.13", features = ["keyring"] }
 base64 = { workspace = true }
-aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.36" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.37" }
 aether-sessions = { workspace = true }
-aether-project = { path = "../aether-project", version = "0.5.37" }
-aether-telemetry = { path = "../aether-telemetry", version = "0.1.17" }
+aether-project = { path = "../aether-project", version = "0.5.38" }
+aether-telemetry = { path = "../aether-telemetry", version = "0.1.18" }
 llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.7.31" }
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.36" }
-mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.4.43" }
+mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.4.44" }
 wisp = { package = "aether-wisp", path = "../wisp", version = "0.5.2" }
 ratatui = { workspace = true }
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["server", "testing"], version = "0.3.42" }
