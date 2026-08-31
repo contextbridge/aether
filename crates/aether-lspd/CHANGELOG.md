@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.34](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.33...aether-lspd-v0.1.34) - 2026-08-31
+
+### Other
+
+- scheduled code-cleanup ([#393](https://github.com/contextbridge/aether/pull/393))
+- scheduled code-cleanup ([#387](https://github.com/contextbridge/aether/pull/387))
+
 ## [0.1.33](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.32...aether-lspd-v0.1.33) - 2026-08-22
 
 ### Added

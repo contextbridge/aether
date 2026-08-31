@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.40](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.39...aether-agent-cli-v0.7.40) - 2026-08-31
+
+### Other
+
+- Update models ([#392](https://github.com/contextbridge/aether/pull/392))
+- scheduled code-cleanup ([#393](https://github.com/contextbridge/aether/pull/393))
+
 ## [0.7.39](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.38...aether-agent-cli-v0.7.39) - 2026-08-27
 
 ### Other
