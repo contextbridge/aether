@@ -260,7 +260,7 @@ mod tests {
         vec![
             LlmModel::Anthropic(AnthropicModel::ClaudeSonnet45),
             LlmModel::Anthropic(AnthropicModel::ClaudeOpus46),
-            LlmModel::DeepSeek(DeepSeekModel::DeepseekChat),
+            LlmModel::DeepSeek(DeepSeekModel::DeepseekV4Flash),
             LlmModel::Bedrock(BedrockModel::Foundation(BedrockFoundationModel::AnthropicClaudeSonnet4520250929V10)),
             LlmModel::Gemini(GeminiModel::Gemini25Pro),
         ]
@@ -285,7 +285,7 @@ mod tests {
     fn test_specs_with_modes() -> Vec<AgentSpec> {
         vec![
             spec("Planner", "anthropic:claude-sonnet-4-5", Some(ReasoningEffort::High)),
-            spec("Coder", "deepseek:deepseek-chat", None),
+            spec("Coder", "deepseek:deepseek-v4-flash", None),
         ]
     }
 
@@ -363,15 +363,15 @@ mod tests {
         let opts = Modes::default().config_options(
             &test_models(),
             None,
-            "deepseek:deepseek-chat",
+            "deepseek:deepseek-v4-flash",
             None,
             LlmModel::all(),
             &fake_store(),
         );
-        assert_eq!(opts.len(), 1);
+        assert_eq!(opts.len(), 2);
 
         let model_opt = find_option(&opts, "model");
-        assert_eq!(select_current(model_opt), "deepseek:deepseek-chat");
+        assert_eq!(select_current(model_opt), "deepseek:deepseek-v4-flash");
 
         let options = select_options(model_opt);
         for prefix in ["anthropic:", "deepseek:"] {
@@ -384,10 +384,10 @@ mod tests {
         let models = test_models();
         for (input, expected) in [
             ("anthropic:claude-sonnet-4-5", true),
-            ("deepseek:deepseek-chat", true),
+            ("deepseek:deepseek-v4-flash", true),
             ("anthropic:not-real", false),
             ("mystery:some-model", false),
-            ("anthropic:claude-sonnet-4-5,deepseek:deepseek-chat", true),
+            ("anthropic:claude-sonnet-4-5,deepseek:deepseek-v4-flash", true),
             ("anthropic:claude-sonnet-4-5,mystery:nope", false),
         ] {
             assert_eq!(parse_available_spec(&models, input).is_some(), expected, "parse_available_spec({input})");
@@ -433,8 +433,8 @@ mod tests {
         assert!(has_option_id(&with, "reasoning_effort"), "should be present for opus");
         assert_eq!(select_current(find_option(&with, "reasoning_effort")), "high");
 
-        let without = config_opts("deepseek:deepseek-chat", None);
-        assert!(!has_option_id(&without, "reasoning_effort"), "should be absent for deepseek");
+        let deepseek = config_opts("deepseek:deepseek-v4-flash", None);
+        assert!(has_option_id(&deepseek, "reasoning_effort"), "should be present for reasoning-capable deepseek");
     }
 
     #[test]

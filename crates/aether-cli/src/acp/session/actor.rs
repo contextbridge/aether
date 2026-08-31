@@ -619,7 +619,7 @@ mod tests {
     use ReasoningEffort as RE;
 
     const SONNET: &str = "anthropic:claude-sonnet-4-5";
-    const DEEPSEEK: &str = "deepseek:deepseek-chat";
+    const DEEPSEEK: &str = "deepseek:deepseek-v4-flash";
 
     fn available_models() -> Vec<LlmModel> {
         [SONNET, "anthropic:claude-opus-4-6", DEEPSEEK].into_iter().map(|s| s.parse().expect("valid model")).collect()
@@ -654,11 +654,11 @@ mod tests {
     }
 
     #[test]
-    fn model_change_clears_reasoning_effort_for_non_reasoning_model() {
+    fn model_change_preserves_reasoning_effort_for_reasoning_model() {
         let (result, state) = apply(SONNET, Some(RE::High), None, &ConfigSetting::Model(DEEPSEEK.into()));
 
         assert!(result.is_ok());
-        assert_eq!(state.reasoning_effort, None);
+        assert_eq!(state.reasoning_effort, Some(RE::High));
     }
 
     #[test]
