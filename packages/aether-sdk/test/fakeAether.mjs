@@ -137,7 +137,7 @@ const agent = {
     }
 
     if (process.env.FAKE_AETHER_REQUEST_ELICITATION) {
-      const response = await conn.unstable_createElicitation({
+      const response = await conn.createElicitation({
         mode: "form",
         sessionId: params.sessionId,
         requestedSchema: {
@@ -147,7 +147,7 @@ const agent = {
         message: "What is your name?",
       });
       chunkText = JSON.stringify(response);
-      await conn.unstable_completeElicitation({ elicitationId: "elicit-1" });
+      await conn.completeElicitation({ elicitationId: "elicit-1" });
     }
 
     await conn.sessionUpdate({
