@@ -52,8 +52,8 @@ async fn test_openrouter_negative_token_handling() {
         })
         .expect("usage event");
 
-    assert_eq!(usage.input_tokens, 0, "Negative input tokens should be clamped to 0");
-    assert_eq!(usage.output_tokens, 10, "Output tokens should be 10");
+    assert_eq!(usage.input_tokens.get(), 0, "Negative input tokens should be clamped to 0");
+    assert_eq!(usage.output_tokens.get(), 10, "Output tokens should be 10");
 }
 
 /// Verify usage data is captured when sent in a separate chunk after `finish_reason`,
@@ -134,8 +134,8 @@ async fn test_openrouter_usage_in_separate_final_chunk() {
             _ => None,
         })
         .expect("usage event");
-    assert_eq!(usage.input_tokens, 15);
-    assert_eq!(usage.output_tokens, 25);
+    assert_eq!(usage.input_tokens.get(), 15);
+    assert_eq!(usage.output_tokens.get(), 25);
 
     let text_events: Vec<_> = events
         .iter()

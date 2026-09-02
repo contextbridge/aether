@@ -68,8 +68,8 @@ pub fn find_usage(events: &[LlmResponse]) -> Option<TokenUsage> {
 /// Assert the basic invariants every captured response should satisfy:
 /// non-zero input tokens and non-zero output tokens.
 pub fn assert_minimal_usage(usage: &TokenUsage, scenario: &str) {
-    assert!(usage.input_tokens > 0, "{scenario}: input_tokens should be > 0");
-    assert!(usage.output_tokens > 0, "{scenario}: output_tokens should be > 0");
+    assert!(!usage.input_tokens.is_zero(), "{scenario}: input_tokens should be > 0");
+    assert!(!usage.output_tokens.is_zero(), "{scenario}: output_tokens should be > 0");
 }
 
 /// Read an environment variable, panicking with a clear instruction if missing.

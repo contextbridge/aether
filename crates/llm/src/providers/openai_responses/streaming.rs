@@ -28,12 +28,11 @@ impl<'de> Deserialize<'de> for ResponsesUsage {
 impl From<ResponsesUsage> for TokenUsage {
     fn from(usage: ResponsesUsage) -> Self {
         TokenUsage {
-            input_tokens: usage.usage.input_tokens,
-            output_tokens: usage.usage.output_tokens,
-            cache_read_tokens: Some(usage.usage.input_tokens_details.cached_tokens),
-            cache_creation_tokens: usage.cache_write_tokens,
-            cache_reporting_exclusive: Some(false),
-            reasoning_tokens: Some(usage.usage.output_tokens_details.reasoning_tokens),
+            input_tokens: usage.usage.input_tokens.into(),
+            output_tokens: usage.usage.output_tokens.into(),
+            cache_read_tokens: Some(usage.usage.input_tokens_details.cached_tokens.into()),
+            cache_creation_tokens: usage.cache_write_tokens.map(Into::into),
+            reasoning_tokens: Some(usage.usage.output_tokens_details.reasoning_tokens.into()),
             ..TokenUsage::default()
         }
     }
@@ -315,7 +314,7 @@ mod tests {
         assert!(matches!(responses[2], LlmResponse::Text { ref chunk } if chunk == " world"));
         assert!(matches!(
             responses[3],
-            LlmResponse::Usage { tokens: TokenUsage { input_tokens: 10, output_tokens: 5, .. } }
+            LlmResponse::Usage { tokens } if tokens.input_tokens.get() == 10 && tokens.output_tokens.get() == 5
         ));
         assert!(matches!(responses[4], LlmResponse::Done { stop_reason: Some(StopReason::EndTurn) }));
     }
@@ -464,8 +463,8 @@ mod tests {
 
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
         let usage = fixture_usage(&responses).expect("fixture should report usage");
-        assert!(usage.input_tokens > 0, "input_tokens should be > 0: {usage:?}");
-        assert!(usage.output_tokens > 0, "output_tokens should be > 0: {usage:?}");
+        assert!(!usage.input_tokens.is_zero(), "input_tokens should be > 0: {usage:?}");
+        assert!(!usage.output_tokens.is_zero(), "output_tokens should be > 0: {usage:?}");
         assert!(matches!(responses.last(), Some(Ok(LlmResponse::Done { stop_reason: Some(StopReason::EndTurn) }))));
     }
 
@@ -476,9 +475,9 @@ mod tests {
 
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
         let usage = fixture_usage(&responses).expect("fixture should report usage");
-        assert!(usage.input_tokens > 0, "input_tokens should be > 0: {usage:?}");
-        assert!(usage.output_tokens > 0, "output_tokens should be > 0: {usage:?}");
-        assert!(usage.reasoning_tokens.is_some_and(|tokens| tokens > 0), "{usage:?}");
+        assert!(!usage.input_tokens.is_zero(), "input_tokens should be > 0: {usage:?}");
+        assert!(!usage.output_tokens.is_zero(), "output_tokens should be > 0: {usage:?}");
+        assert!(usage.reasoning_tokens.is_some_and(|tokens| !tokens.is_zero()), "{usage:?}");
     }
 
     #[tokio::test]
@@ -488,7 +487,7 @@ mod tests {
 
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
         let usage = fixture_usage(&responses).expect("fixture should report usage");
-        assert_eq!(usage.cache_creation_tokens, Some(1024));
+        assert_eq!(usage.cache_creation_tokens.map(crate::Tokens::get), Some(1024));
     }
 
     /// Decode a captured SSE body and run it through the shared processor.
@@ -538,11 +537,10 @@ mod tests {
         assert_eq!(
             usage,
             Some(TokenUsage {
-                input_tokens: 120,
-                output_tokens: 80,
-                cache_read_tokens: Some(50),
-                cache_reporting_exclusive: Some(false),
-                reasoning_tokens: Some(30),
+                input_tokens: 120.into(),
+                output_tokens: 80.into(),
+                cache_read_tokens: Some(50.into()),
+                reasoning_tokens: Some(30.into()),
                 ..TokenUsage::default()
             })
         );
@@ -571,8 +569,10 @@ mod tests {
         assert!(matches!(
             responses.iter().find(|response| matches!(response, LlmResponse::Usage { .. })),
             Some(LlmResponse::Usage {
-                tokens: TokenUsage { input_tokens: 100, output_tokens: 20, reasoning_tokens: Some(10), .. }
-            })
+                tokens
+            }) if tokens.input_tokens.get() == 100
+                && tokens.output_tokens.get() == 20
+                && tokens.reasoning_tokens.is_some_and(|tokens| tokens.get() == 10)
         ));
         assert!(matches!(responses.last().unwrap(), LlmResponse::Done { stop_reason: Some(StopReason::EndTurn) }));
     }
