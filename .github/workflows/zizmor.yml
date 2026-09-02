@@ -1,0 +1,57 @@
+name: zizmor
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: zizmor-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read # zizmor reads workflow run metadata for online audits
+      security-events: write # upload SARIF to GitHub code scanning
+    steps:
+      # paths-filter needs a git checkout — it runs `git branch --show-current`
+      # before any API fallback, and fails outside a working tree.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Audit only when something zizmor cares about changed. Keeps the job a
+      # required check that always reports a status, while skipping the
+      # API-heavy audit (and SARIF upload) on unrelated PRs.
+      - name: Detect workflow changes
+        id: changes
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          filters: |
+            github:
+              - '.github/**'
+
+      - name: Install uv
+        if: steps.changes.outputs.github == 'true'
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+
+      - name: Run zizmor
+        if: steps.changes.outputs.github == 'true'
+        run: uvx zizmor --format=sarif .github/ > zizmor.sarif
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload zizmor SARIF to code scanning
+        if: steps.changes.outputs.github == 'true'
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: zizmor.sarif
+          category: zizmor

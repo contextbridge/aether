@@ -6,8 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   discover-prompts:
@@ -17,7 +16,9 @@ jobs:
       matrix: ${{ steps.prompts.outputs.matrix }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Build prompt matrix
         id: prompts
@@ -63,15 +64,17 @@ jobs:
     steps:
       - name: Generate ContextBridge app token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ secrets.CB_PR_AUTOMATION_APP_ID }}
           private-key: ${{ secrets.CB_PR_AUTOMATION_APP_PRIVATE_KEY }}
           owner: contextbridge
           repositories: aether
+          permission-contents: write
+          permission-pull-requests: write
 
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -80,9 +83,9 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
 
-      - uses: jdx/mise-action@v4.3.0
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
@@ -102,6 +105,7 @@ jobs:
         env:
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          PROMPT_PATH: ${{ matrix.prompt.path }}
         run: |
           set -euo pipefail
           aether headless \
@@ -109,11 +113,11 @@ jobs:
             --cwd "$GITHUB_WORKSPACE" \
             --output json \
             --events text,tool_call,tool_result,tool_error,turn_ended \
-            < "${{ matrix.prompt.path }}" \
+            < "$PROMPT_PATH" \
             | tee "$RUNNER_TEMP/aether-headless.jsonl"
 
       - name: Create or update pull request
-        uses: peter-evans/create-pull-request@v8
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           token: ${{ steps.app-token.outputs.token }}
           branch: automation/aether/${{ matrix.prompt.id }}
