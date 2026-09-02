@@ -1,7 +1,8 @@
 use super::{AgentRunResult, RunError};
 use crate::EvalRunError;
-use aether_core::events::{AgentEvent, ContextEvent, ContextUsage, ToolEvent};
+use aether_core::events::{AgentEvent, ToolEvent};
 use futures::{Stream, StreamExt};
+use llm::SessionUsageTotals;
 use std::fmt::Debug;
 use thiserror::Error;
 
@@ -73,14 +74,14 @@ impl Transcript {
         self.tool_calls(name).count()
     }
 
-    /// Returns the aggregated usage from the final `ContextUsageUpdate`, or a
-    /// zeroed summary if no usage was recorded.
-    pub fn usage(&self) -> ContextUsage {
+    /// Session-wide token totals and estimated cost from the last usage event,
+    /// or zeroed totals if no usage was recorded.
+    pub fn usage(&self) -> SessionUsageTotals {
         self.events
             .iter()
             .rev()
             .find_map(|event| match event {
-                AgentEvent::Context(ContextEvent::UsageUpdated { usage }) => Some(usage.clone()),
+                AgentEvent::SessionUsage(usage) => Some(usage.totals.clone()),
                 _ => None,
             })
             .unwrap_or_default()
@@ -138,7 +139,8 @@ mod tests {
     use super::*;
     use crate::{Agent, FakeAgent, Task};
     use aether_core::events::TurnEvent;
-    use llm::{ToolCallRequest, ToolCallResult};
+    use llm::testing::session_usage_event;
+    use llm::{TokenUsage, ToolCallRequest, ToolCallResult};
 
     #[tokio::test]
     async fn transcript_from_stream() {
@@ -176,57 +178,27 @@ mod tests {
     }
 
     #[test]
-    fn usage_returns_zeroed_summary_when_no_context_usage() {
+    fn usage_returns_zeroed_totals_when_no_usage_was_recorded() {
         let transcript = transcript_with_events(vec![tool_call("bash")]);
-        let usage = transcript.usage();
-        assert_eq!(usage, ContextUsage::default());
+        assert_eq!(transcript.usage(), SessionUsageTotals::default());
     }
 
     #[test]
-    fn usage_extracts_final_cumulative_totals() {
+    fn usage_extracts_the_final_session_totals() {
+        let mut last = session_usage_event(2, TokenUsage::new(2000, 500));
+        last.totals.tokens = TokenUsage::new(3000, 600);
+        last.totals.unpriced_calls = 2;
         let transcript = transcript_with_events(vec![
-            context_usage(100, 10, 1000, 100, 0, 0),
-            context_usage(200, 20, 3000, 600, 50, 0),
+            AgentEvent::SessionUsage(session_usage_event(1, TokenUsage::new(1000, 100))),
+            AgentEvent::SessionUsage(last),
         ]);
 
         let usage = transcript.usage();
-        assert_eq!(usage.input_tokens, 200);
-        assert_eq!(usage.output_tokens, 20);
-        assert_eq!(usage.cache_read_tokens, Some(50));
-        assert_eq!(usage.total_input_tokens, 3000);
-        assert_eq!(usage.total_output_tokens, 600);
-        assert_eq!(usage.usage_ratio, Some(0.5));
-        assert_eq!(usage.context_limit, Some(200_000));
-    }
-
-    #[test]
-    fn total_tokens_sums_input_and_output() {
-        let transcript = transcript_with_events(vec![context_usage(0, 0, 3000, 600, 0, 0)]);
-
-        assert_eq!(transcript.usage().total_tokens(), 3600);
-    }
-
-    fn context_usage(
-        input_tokens: u32,
-        output_tokens: u32,
-        total_input: u64,
-        total_output: u64,
-        cache_read: u32,
-        reasoning: u32,
-    ) -> AgentEvent {
-        AgentEvent::Context(ContextEvent::UsageUpdated {
-            usage: ContextUsage {
-                usage_ratio: Some(0.5),
-                context_limit: Some(200_000),
-                input_tokens,
-                output_tokens,
-                cache_read_tokens: Some(cache_read),
-                reasoning_tokens: Some(reasoning),
-                total_input_tokens: total_input,
-                total_output_tokens: total_output,
-                ..Default::default()
-            },
-        })
+        assert_eq!(usage.tokens.input_tokens.get(), 3000);
+        assert_eq!(usage.tokens.output_tokens.get(), 600);
+        assert_eq!(usage.tokens.total_tokens().get(), 3600);
+        assert_eq!(usage.unpriced_calls, 2);
+        assert!(!usage.is_fully_priced());
     }
 
     fn transcript_with_events(events: Vec<AgentEvent>) -> Transcript {

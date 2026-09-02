@@ -3,15 +3,13 @@ use std::error::Error;
 use std::time::Duration;
 
 use aether_core::core::RetryConfig;
-use aether_core::events::{
-    AgentEvent, AgentObserver, LlmCallOutcome, LlmCallPurpose, StreamState, ToolEvent, TurnEvent, TurnOutcome,
-};
+use aether_core::events::{AgentEvent, AgentObserver, LlmCallOutcome, StreamState, ToolEvent, TurnEvent, TurnOutcome};
 use aether_core::testing::{AgentTrace, TestScenario, test_agent};
 use aether_telemetry::{
     GENAI_SEMCONV_SCHEMA_URL, GenAiMetrics, OtelInstrumentation, OtelObserver, genai_instrumentation_scope,
 };
 use llm::testing::llm_response;
-use llm::{LlmError, LlmResponse, ModelPricing, StopReason, TokenUsage};
+use llm::{LlmCallPurpose, LlmError, LlmResponse, ModelIdentity, ModelPricing, StopReason, TokenUsage};
 use opentelemetry::metrics::MeterProvider as _;
 use opentelemetry::trace::{SpanKind, Status, TracerProvider as _};
 use opentelemetry::{Array, Value};
@@ -206,25 +204,26 @@ async fn completed_llm_calls_capture_finish_reasons() -> Result<(), Box<dyn Erro
 #[tokio::test]
 async fn completed_llm_calls_emit_posthog_custom_pricing_and_token_properties() -> Result<(), Box<dyn Error>> {
     let usage = TokenUsage {
-        cache_read_tokens: Some(40),
-        cache_creation_tokens: Some(10),
-        cache_reporting_exclusive: Some(true),
-        reasoning_tokens: Some(7),
+        cache_read_tokens: Some(40.into()),
+        cache_creation_tokens: Some(10.into()),
+        reasoning_tokens: Some(7.into()),
         ..TokenUsage::new(100, 20)
     };
     let events = AgentTrace::from_events(vec![
         AgentEvent::Turn(TurnEvent::Started { content: vec![] }),
         AgentEvent::Turn(TurnEvent::LlmCallStarted {
             purpose: LlmCallPurpose::Chat,
-            provider: Some("anthropic".to_string()),
-            model: Some("priced-model".to_string()),
+            model: ModelIdentity {
+                provider: Some("anthropic".to_string()),
+                model_id: Some("priced-model".to_string()),
+                pricing: Some(ModelPricing {
+                    input_per_million: 3.0,
+                    output_per_million: 15.0,
+                    cache_read_per_million: Some(0.3),
+                    cache_write_per_million: Some(3.75),
+                }),
+            },
             display_name: "priced-model".to_string(),
-            pricing: Some(ModelPricing {
-                input_per_million: 3.0,
-                output_per_million: 15.0,
-                cache_read_per_million: Some(0.3),
-                cache_write_per_million: Some(3.75),
-            }),
             attempt: 0,
             max_attempts: 1,
         }),
@@ -241,7 +240,6 @@ async fn completed_llm_calls_emit_posthog_custom_pricing_and_token_properties() 
     chat.assert_attr("$ai_output_token_price", 0.000_015);
     chat.assert_attr("$ai_cache_read_token_price", 0.000_000_3);
     chat.assert_attr("$ai_cache_write_token_price", 0.000_003_75);
-    chat.assert_attr("$ai_cache_reporting_exclusive", true);
     chat.assert_attr("$ai_reasoning_tokens", 7);
     // PostHog derives these from the semconv cache token attributes; duplicating
     // them would be redundant.
@@ -253,9 +251,9 @@ async fn completed_llm_calls_emit_posthog_custom_pricing_and_token_properties() 
 #[tokio::test]
 async fn completed_llm_calls_capture_token_usage_breakdown() -> Result<(), Box<dyn Error>> {
     let usage = TokenUsage {
-        cache_read_tokens: Some(40),
-        cache_creation_tokens: Some(10),
-        reasoning_tokens: Some(7),
+        cache_read_tokens: Some(40.into()),
+        cache_creation_tokens: Some(10.into()),
+        reasoning_tokens: Some(7.into()),
         ..TokenUsage::new(100, 20)
     };
     let mut events = vec![AgentEvent::Turn(TurnEvent::Started { content: vec![] })];
@@ -440,10 +438,12 @@ fn chat_call(provider: &str, model: &str, outcome: LlmCallOutcome) -> [AgentEven
     [
         AgentEvent::Turn(TurnEvent::LlmCallStarted {
             purpose: LlmCallPurpose::Chat,
-            provider: Some(provider.to_string()),
-            model: Some(model.to_string()),
+            model: ModelIdentity {
+                provider: Some(provider.to_string()),
+                model_id: Some(model.to_string()),
+                pricing: None,
+            },
             display_name: model.to_string(),
-            pricing: None,
             attempt: 0,
             max_attempts: 1,
         }),

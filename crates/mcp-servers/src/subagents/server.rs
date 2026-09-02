@@ -1,5 +1,5 @@
 use aether_core::core::AgentDeps;
-use aether_core::events::{AgentEvent, McpRequestInstrumentation, SubAgentProgressPayload, TraceContext};
+use aether_core::events::{McpRequestInstrumentation, TraceContext};
 use aether_project::{AetherSettings, AgentCatalog};
 use clap::Parser;
 use mcp_utils::server::tasks::{BACKGROUND_TASK_TTL_MS, require_tasks_capability};
@@ -9,20 +9,18 @@ use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{
         CallToolResponse, CancelTaskParams, CreateTaskResult, GetTaskParams, GetTaskResult, Implementation,
-        ProgressNotificationParam, ServerCapabilities, ServerInfo, UpdateTaskParams,
+        ServerCapabilities, ServerInfo, UpdateTaskParams,
     },
     service::RequestContext,
     task_manager::{TaskContext, TaskExit, TaskManager, TaskOptions},
     tool, tool_handler, tool_router,
 };
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
+use super::progress::SubAgentProgressSink;
 use super::tools::{AgentExecutor, SpawnSubAgentsInput, SpawnSubAgentsOutput};
 use crate::error::ServerInitError;
 use crate::workspace_paths::resolve_path;
-
-type ProgressCallback = Box<dyn Fn(&str, &str, &AgentEvent) + Send + Sync>;
 
 const SPAWN_SUBAGENT_TOOL: &str = "spawn_subagent";
 
@@ -108,8 +106,11 @@ impl SubAgentsMcp {
 
     fn executor(&self, context: &RequestContext<RoleServer>, child_parent: Option<TraceContext>) -> AgentExecutor {
         let deps = self.agent_deps.clone().with_parent_trace_context(child_parent);
-        let callback = progress_callback(context.meta.get_progress_token(), context.peer.clone());
-        AgentExecutor::new(self.project_root.clone(), deps).with_progress_callback(callback)
+        let executor = AgentExecutor::new(self.project_root.clone(), deps);
+        match context.meta.get_progress_token() {
+            Some(token) => executor.with_progress(SubAgentProgressSink::new(context.peer.clone(), token)),
+            None => executor,
+        }
     }
 
     fn validate(&self, args: &SpawnSubAgentsInput, context: &RequestContext<RoleServer>) -> Result<(), ErrorData> {
@@ -263,30 +264,4 @@ fn output_result(output: SpawnSubAgentsOutput) -> Result<CallToolResult, ErrorDa
     serde_json::to_value(output)
         .map(CallToolResult::structured)
         .map_err(|error| ErrorData::internal_error(error.to_string(), None))
-}
-
-fn progress_callback(
-    progress_token: Option<rmcp::model::ProgressToken>,
-    peer: rmcp::Peer<RoleServer>,
-) -> ProgressCallback {
-    let Some(token) = progress_token else {
-        return Box::new(|_, _, _| {});
-    };
-    let message_counter = AtomicU64::new(0);
-    Box::new(move |task_id: &str, agent_name: &str, message: &AgentEvent| {
-        let counter = message_counter.fetch_add(1, Ordering::Relaxed);
-        let payload = SubAgentProgressPayload {
-            task_id: task_id.to_string(),
-            agent_name: agent_name.to_string(),
-            event: message.clone(),
-        };
-        let peer = peer.clone();
-        let token = token.clone();
-        let message = serde_json::to_string(&payload).unwrap_or_default();
-        tokio::spawn(async move {
-            #[allow(clippy::cast_precision_loss)]
-            let progress = counter as f64;
-            let _ = peer.notify_progress(ProgressNotificationParam::new(token, progress).with_message(message)).await;
-        });
-    })
 }

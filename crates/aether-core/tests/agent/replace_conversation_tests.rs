@@ -65,6 +65,6 @@ async fn replace_conversation_preserves_token_usage() {
             _ => None,
         })
         .expect("expected context usage update after conversation replacement");
-    assert_eq!(usage.input_tokens, 800);
+    assert_eq!(usage.input_tokens.get(), 800);
     assert_eq!(usage.usage_ratio, Some(0.8));
 }

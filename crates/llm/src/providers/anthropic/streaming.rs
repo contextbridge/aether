@@ -237,7 +237,7 @@ mod tests {
         assert!(matches!(responses[2], LlmResponse::Text { ref chunk } if chunk == " world"));
         assert!(matches!(
             responses[3],
-            LlmResponse::Usage { tokens: TokenUsage { input_tokens: 10, output_tokens: 25, .. } }
+            LlmResponse::Usage { tokens } if tokens.input_tokens.get() == 10 && tokens.output_tokens.get() == 25
         ));
         assert!(matches!(responses[4], LlmResponse::Done { stop_reason: Some(StopReason::EndTurn) }));
     }
@@ -270,7 +270,7 @@ mod tests {
         );
         assert!(matches!(
             responses[3],
-            LlmResponse::Usage { tokens: TokenUsage { input_tokens: 10, output_tokens: 15, .. } }
+            LlmResponse::Usage { tokens } if tokens.input_tokens.get() == 10 && tokens.output_tokens.get() == 15
         ));
         assert!(matches!(responses[4], LlmResponse::Done { stop_reason: Some(StopReason::ToolCalls) }));
     }
@@ -340,7 +340,7 @@ mod tests {
         assert!(matches!(responses[3], LlmResponse::Text { ref chunk } if chunk == "Here is my answer"));
         assert!(matches!(
             responses[4],
-            LlmResponse::Usage { tokens: TokenUsage { input_tokens: 10, output_tokens: 50, .. } }
+            LlmResponse::Usage { tokens } if tokens.input_tokens.get() == 10 && tokens.output_tokens.get() == 50
         ));
         assert!(matches!(responses[5], LlmResponse::Done { stop_reason: Some(StopReason::EndTurn) }));
     }
@@ -372,13 +372,13 @@ mod tests {
         assert_eq!(
             usage,
             Some(TokenUsage {
-                input_tokens: 100,
-                output_tokens: 25,
-                cache_read_tokens: Some(60),
-                cache_creation_tokens: Some(40),
-                cache_reporting_exclusive: Some(true),
+                input_tokens: 200.into(),
+                output_tokens: 25.into(),
+                cache_read_tokens: Some(60.into()),
+                cache_creation_tokens: Some(40.into()),
                 ..TokenUsage::default()
-            })
+            }),
+            "cached tokens count toward the prompt"
         );
     }
 

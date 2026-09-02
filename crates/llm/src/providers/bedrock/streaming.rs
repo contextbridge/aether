@@ -10,16 +10,19 @@ use futures::Stream;
 use std::collections::HashMap;
 use tracing::{debug, error, info, warn};
 
-use crate::{LlmError, LlmResponse, StopReason, TokenUsage, ToolCallRequest};
+use crate::{LlmError, LlmResponse, StopReason, TokenUsage, Tokens, ToolCallRequest};
 
 impl From<&BedrockTokenUsage> for TokenUsage {
     fn from(usage: &BedrockTokenUsage) -> Self {
+        let cache_read = usage.cache_read_input_tokens().and_then(|v| u32::try_from(v).ok()).map(Tokens::from);
+        let cache_creation = usage.cache_write_input_tokens().and_then(|v| u32::try_from(v).ok()).map(Tokens::from);
+        // Bedrock's input_tokens excludes cached tokens; TokenUsage counts the whole prompt.
+        let cached = cache_read.unwrap_or_default() + cache_creation.unwrap_or_default();
         TokenUsage {
-            input_tokens: u32::try_from(usage.input_tokens).unwrap_or(0),
-            output_tokens: u32::try_from(usage.output_tokens).unwrap_or(0),
-            cache_read_tokens: usage.cache_read_input_tokens().and_then(|v| u32::try_from(v).ok()),
-            cache_creation_tokens: usage.cache_write_input_tokens().and_then(|v| u32::try_from(v).ok()),
-            cache_reporting_exclusive: Some(true),
+            input_tokens: Tokens::from(u32::try_from(usage.input_tokens).unwrap_or(0)) + cached,
+            output_tokens: u32::try_from(usage.output_tokens).unwrap_or(0).into(),
+            cache_read_tokens: cache_read,
+            cache_creation_tokens: cache_creation,
             ..TokenUsage::default()
         }
     }
@@ -365,11 +368,10 @@ mod tests {
 
         match result {
             StreamEvent::Emit(LlmResponse::Usage { tokens: sample }) => {
-                assert_eq!(sample.input_tokens, 100);
-                assert_eq!(sample.output_tokens, 50);
-                assert_eq!(sample.cache_read_tokens, Some(40));
-                assert_eq!(sample.cache_creation_tokens, Some(20));
-                assert_eq!(sample.cache_reporting_exclusive, Some(true));
+                assert_eq!(sample.input_tokens.get(), 160, "cached tokens count toward the prompt");
+                assert_eq!(sample.output_tokens.get(), 50);
+                assert_eq!(sample.cache_read_tokens.map(crate::Tokens::get), Some(40));
+                assert_eq!(sample.cache_creation_tokens.map(crate::Tokens::get), Some(20));
             }
             _ => panic!("expected Emit(Usage{{..}})"),
         }

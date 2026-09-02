@@ -62,7 +62,7 @@ async fn test_switch_model_unknown_context_limit_resets_context_meter() -> Resul
                     matches!(
                         event,
                         AgentEvent::Context(ContextEvent::UsageUpdated { usage })
-                            if usage.usage_ratio.is_none() && usage.context_limit.is_none() && usage.input_tokens == 0
+                            if usage.usage_ratio.is_none() && usage.context_limit.is_none() && usage.input_tokens.is_zero()
                     )
                 },
             ),
@@ -79,7 +79,7 @@ async fn test_switch_model_unknown_context_limit_resets_context_meter() -> Resul
             matches!(
                 m,
                 AgentEvent::Context(ContextEvent::UsageUpdated { usage })
-                    if usage.usage_ratio.is_none() && usage.context_limit.is_none() && usage.input_tokens == 0
+                    if usage.usage_ratio.is_none() && usage.context_limit.is_none() && usage.input_tokens.is_zero()
             )
         }),
         "Expected context usage reset for unknown context limit, got: {events:?}"

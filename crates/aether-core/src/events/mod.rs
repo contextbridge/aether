@@ -18,12 +18,12 @@ mod user_message;
 
 pub use acp::{aether_tool_name_meta, humanize_tool_name, mcp_tool_name, parse_tool_call_chunk};
 pub use agent_event::AgentEvent;
-pub use context_event::{CompactionOutcome, ContextEvent, ContextUsage};
+pub use context_event::{CompactionOutcome, ContextEvent};
 pub use message_event::{MessageEvent, StreamState};
 pub use model_event::ModelEvent;
 pub use observer::{AgentObserver, DynObserverFactory, McpRequestInstrumentation, ObserverFactory};
 pub use sub_agent_progress::SubAgentProgressPayload;
 pub use tool_event::{TaskOutcome, TaskOutcomeState, ToolEvent, task_created_result};
 pub use trace_context::{TRACEPARENT_KEY, TRACESTATE_KEY, TraceContext};
-pub use turn_event::{LlmCallOutcome, LlmCallPurpose, RetryInfo, TurnEvent, TurnOutcome};
+pub use turn_event::{LlmCallOutcome, RetryInfo, TurnEvent, TurnOutcome};
 pub use user_message::{AgentCommand, Command, UserCommand};

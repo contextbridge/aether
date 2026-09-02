@@ -33,7 +33,7 @@ impl LlmResponseBuilder {
         self
     }
 
-    pub fn usage(mut self, input_tokens: u32, output_tokens: u32) -> Self {
+    pub fn usage(mut self, input_tokens: u64, output_tokens: u64) -> Self {
         self.chunks.push(LlmResponse::usage(input_tokens, output_tokens));
         self
     }

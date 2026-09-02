@@ -1,7 +1,9 @@
-use crate::events::{TaskOutcome, TaskOutcomeState, ToolEvent, task_created_result};
+use crate::events::{SubAgentProgressPayload, TaskOutcome, TaskOutcomeState, ToolEvent, task_created_result};
 use crate::mcp::tool_bridge::{convert_tool_result, map_task_result_to_outcome};
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
 use mcp_utils::client::{CancellationToken, ToolCallEvent};
+use mcp_utils::display_meta::ToolResultMeta;
+use rmcp::model::ProgressNotificationParam;
 use std::collections::HashMap;
 
 #[derive(Default)]
@@ -68,12 +70,7 @@ impl ToolExecutions {
                 }) else {
                     return ToolExecutionUpdate::Ignored;
                 };
-                ToolExecutionUpdate::Event(ToolEvent::Progress {
-                    request: execution.request.clone(),
-                    progress: progress.progress,
-                    total: progress.total,
-                    message: progress.message,
-                })
+                ToolExecutionUpdate::Event(progress_event(execution.request.clone(), progress))
             }
             ToolCallEvent::TaskCreated(task) => {
                 let Some(execution) = self.executions.get_mut(tool_id) else {
@@ -203,6 +200,22 @@ impl ToolExecutions {
 }
 
 const UNASSIGNED_TASK_ID: &str = "pending";
+
+/// Tools smuggle structured updates through the progress message string. Decode
+/// them once here so every downstream consumer sees typed events.
+fn progress_event(request: ToolCallRequest, progress: ProgressNotificationParam) -> ToolEvent {
+    let ProgressNotificationParam { progress, total, message, .. } = progress;
+    let Some(message) = message else {
+        return ToolEvent::Progress { request, progress, total, message: None };
+    };
+    if let Ok(payload) = serde_json::from_str::<SubAgentProgressPayload>(&message) {
+        return ToolEvent::SubAgentProgress { request, payload: Box::new(payload) };
+    }
+    if let Ok(meta) = serde_json::from_str::<ToolResultMeta>(&message) {
+        return ToolEvent::DisplayUpdate { request, meta };
+    }
+    ToolEvent::Progress { request, progress, total, message: Some(message) }
+}
 
 fn task_status_name(status: rmcp::model::TaskStatus) -> String {
     use rmcp::model::TaskStatus;

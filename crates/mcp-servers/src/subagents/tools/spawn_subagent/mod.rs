@@ -1,8 +1,9 @@
 use crate::setup::McpBuilderExt;
+use crate::subagents::SubAgentProgressSink;
 use aether_core::{
     agent_spec::McpConfigSource,
     core::{AgentBuilder, AgentDeps, AgentHandle},
-    events::{AgentEvent, Command, MessageEvent, TurnEvent, TurnOutcome, UserCommand},
+    events::{AgentEvent, Command, MessageEvent, SubAgentProgressPayload, TurnEvent, TurnOutcome, UserCommand},
     mcp::{McpRuntime, McpSession, mcp},
 };
 use futures::FutureExt;
@@ -11,7 +12,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
@@ -151,13 +151,10 @@ pub fn extract_json_from_markdown(text: &str) -> Option<String> {
     Some(json_content.to_string())
 }
 
-/// Callback for receiving progress updates during agent execution
-pub type ProgressCallback = Box<dyn Fn(&str, &str, &AgentEvent) + Send + Sync>;
-
 /// Executor for spawning and running sub-agents
 #[derive(Clone)]
 pub struct AgentExecutor {
-    progress_callback: Option<Arc<ProgressCallback>>,
+    progress: Option<SubAgentProgressSink>,
     project_root: PathBuf,
     deps: AgentDeps,
 }
@@ -166,12 +163,12 @@ impl AgentExecutor {
     /// Create a new `AgentExecutor` rooted at `project_root`. The agents it may
     /// spawn come from `deps`, so nested delegation sees the same catalog.
     pub fn new(project_root: PathBuf, deps: AgentDeps) -> Self {
-        Self { progress_callback: None, project_root, deps }
+        Self { progress: None, project_root, deps }
     }
 
-    /// Set a callback for receiving progress updates during agent execution
-    pub fn with_progress_callback(mut self, callback: ProgressCallback) -> Self {
-        self.progress_callback = Some(Arc::new(callback));
+    /// Relay every sub-agent event to `sink` while tasks run.
+    pub fn with_progress(mut self, sink: SubAgentProgressSink) -> Self {
+        self.progress = Some(sink);
         self
     }
 
@@ -249,16 +246,12 @@ impl AgentExecutor {
                 .await
                 .map_err(|e| format!("Failed to send message to agent: {e}"))?;
 
-            if let Some(ref callback) = self.progress_callback {
-                callback(&task_id, &agent_name, &AgentEvent::Turn(TurnEvent::Started { content: vec![] }));
-            }
+            self.report(&task_id, &agent_name, AgentEvent::Turn(TurnEvent::Started { content: vec![] })).await;
 
             let mut final_output = String::new();
 
             while let Some(message) = agent_rx.recv().await {
-                if let Some(ref callback) = self.progress_callback {
-                    callback(&task_id, &agent_name, &message);
-                }
+                self.report(&task_id, &agent_name, message.clone()).await;
 
                 match &message {
                     AgentEvent::Message(MessageEvent::Text { chunk, is_complete, .. }) if *is_complete => {
@@ -290,6 +283,14 @@ impl AgentExecutor {
             Err(error) => {
                 SubAgentResult { task_id, agent_name, status: SubAgentStatus::Error, output: None, error: Some(error) }
             }
+        }
+    }
+
+    async fn report(&self, task_id: &str, agent_name: &str, event: AgentEvent) {
+        if let Some(sink) = &self.progress {
+            let payload =
+                SubAgentProgressPayload { task_id: task_id.to_string(), agent_name: agent_name.to_string(), event };
+            sink.send(payload).await;
         }
     }
 

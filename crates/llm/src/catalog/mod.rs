@@ -4,12 +4,11 @@ use crate::providers::local::discovery::discover_local_models;
 
 mod bedrock;
 mod model_spec;
-mod pricing;
 pub mod transport;
 
+pub use crate::usage::ModelPricing;
 pub use bedrock::BedrockModel;
 pub use model_spec::{ModelSpec, ModelSpecError, ReasoningEffortError, validate_reasoning_effort};
-pub use pricing::ModelPricing;
 pub use transport::{ModelTransport, TemplateError, expand_api_template};
 
 include!(concat!(env!("OUT_DIR"), "/generated.rs"));

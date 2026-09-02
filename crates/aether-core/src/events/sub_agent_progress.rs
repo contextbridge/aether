@@ -1,14 +1,14 @@
 use super::AgentEvent;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Payload for sub-agent progress updates emitted by MCP tools.
+/// A sub-agent's event, tagged with the task and agent it came from.
 ///
-/// This is the internal payload embedded in MCP progress messages between
-/// `mcp-subagents` and the ACP relay (in `aether-cli`). It uses `AgentEvent`
-/// for the event (the full fat type). The relay converts this to
-/// `SubAgentProgressParams` (which uses the lightweight `SubAgentEvent`)
-/// before sending to clients.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// `mcp-subagents` serializes this into MCP progress notification messages.
+/// The parent agent parses it once at the tool-execution boundary into
+/// `ToolEvent::SubAgentProgress`, so every consumer downstream sees a typed
+/// event instead of JSON in a string.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct SubAgentProgressPayload {
     pub task_id: String,
     pub agent_name: String,

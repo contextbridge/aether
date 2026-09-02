@@ -267,10 +267,9 @@ mod tests {
         assert_eq!(
             tokens,
             TokenUsage {
-                input_tokens: 100,
-                output_tokens: 50,
-                cache_read_tokens: Some(30),
-                cache_reporting_exclusive: Some(false),
+                input_tokens: 100.into(),
+                output_tokens: 50.into(),
+                cache_read_tokens: Some(30.into()),
                 ..TokenUsage::default()
             }
         );
@@ -301,17 +300,16 @@ mod tests {
         assert_eq!(
             tokens,
             TokenUsage {
-                input_tokens: 1000,
-                output_tokens: 500,
-                cache_read_tokens: Some(100),
-                cache_creation_tokens: Some(50),
-                cache_reporting_exclusive: Some(false),
-                input_audio_tokens: Some(10),
-                input_video_tokens: Some(5),
-                reasoning_tokens: Some(300),
-                output_audio_tokens: Some(8),
-                accepted_prediction_tokens: Some(2),
-                rejected_prediction_tokens: Some(1),
+                input_tokens: 1000.into(),
+                output_tokens: 500.into(),
+                cache_read_tokens: Some(100.into()),
+                cache_creation_tokens: Some(50.into()),
+                input_audio_tokens: Some(10.into()),
+                input_video_tokens: Some(5.into()),
+                reasoning_tokens: Some(300.into()),
+                output_audio_tokens: Some(8.into()),
+                accepted_prediction_tokens: Some(2.into()),
+                rejected_prediction_tokens: Some(1.into()),
             }
         );
     }
@@ -336,11 +334,11 @@ mod tests {
         .await
         .expect("usage event");
 
-        assert_eq!(tokens.cache_read_tokens, Some(80));
+        assert_eq!(tokens.cache_read_tokens.map(crate::Tokens::get), Some(80));
         assert_eq!(tokens.cache_creation_tokens, None);
-        assert_eq!(tokens.input_audio_tokens, Some(12));
-        assert_eq!(tokens.reasoning_tokens, Some(40));
-        assert_eq!(tokens.accepted_prediction_tokens, Some(5));
+        assert_eq!(tokens.input_audio_tokens.map(crate::Tokens::get), Some(12));
+        assert_eq!(tokens.reasoning_tokens.map(crate::Tokens::get), Some(40));
+        assert_eq!(tokens.accepted_prediction_tokens.map(crate::Tokens::get), Some(5));
     }
 
     #[tokio::test]

@@ -48,6 +48,7 @@ name = "aether-acp-utils"
 version = "0.3.42"
 dependencies = [
  "aether-acp-utils",
+ "aether-llm",
  "aether-mcp-utils",
  "aether-utils",
  "agent-client-protocol",
@@ -360,6 +361,7 @@ dependencies = [
  "aether-agent-cli",
  "aether-agent-core",
  "aether-evals",
+ "aether-llm",
  "aether-project",
  "aether-utils",
  "schemars 1.2.2",

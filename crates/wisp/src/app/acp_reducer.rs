@@ -72,6 +72,7 @@ impl App {
                 }
             }
             AcpEvent::ConnectionClosed => self.on_connection_closed(),
+            AcpEvent::SessionUsage(_) => {},
             AcpEvent::SubAgentProgress(progress) => {
                 if self.conversation.progress_indicator().accepts_activity() {
                     self.conversation.on_sub_agent_progress(&progress);

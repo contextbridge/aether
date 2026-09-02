@@ -62,7 +62,7 @@ async fn anthropic_cache_write_reports_cache_creation() {
     let usage = find_usage(&events).expect("usage event should be present");
     assert_minimal_usage(&usage, "03_cache_write");
     assert!(
-        usage.cache_creation_tokens.unwrap_or(0) > 0,
+        usage.cache_creation_tokens.is_some_and(|tokens| !tokens.is_zero()),
         "03_cache_write should report cache_creation_tokens > 0, got {:?}",
         usage.cache_creation_tokens
     );
@@ -74,7 +74,7 @@ async fn anthropic_cache_read_reports_cache_read() {
     let usage = find_usage(&events).expect("usage event should be present");
     assert_minimal_usage(&usage, "04_cache_read");
     assert!(
-        usage.cache_read_tokens.unwrap_or(0) > 0,
+        usage.cache_read_tokens.is_some_and(|tokens| !tokens.is_zero()),
         "04_cache_read should report cache_read_tokens > 0, got {:?}",
         usage.cache_read_tokens
     );

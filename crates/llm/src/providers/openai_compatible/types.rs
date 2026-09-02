@@ -262,17 +262,16 @@ impl From<Usage> for TokenUsage {
         let prompt = usage.prompt_tokens_details.unwrap_or_default();
         let completion = usage.completion_tokens_details.unwrap_or_default();
         TokenUsage {
-            input_tokens: u32::try_from(usage.prompt_tokens.max(0)).unwrap_or(0),
-            output_tokens: u32::try_from(usage.completion_tokens.max(0)).unwrap_or(0),
-            cache_read_tokens: prompt.cached_tokens,
-            cache_creation_tokens: prompt.cache_write_tokens,
-            cache_reporting_exclusive: Some(false),
-            input_audio_tokens: prompt.audio_tokens,
-            input_video_tokens: prompt.video_tokens,
-            reasoning_tokens: completion.reasoning_tokens,
-            output_audio_tokens: completion.audio_tokens,
-            accepted_prediction_tokens: completion.accepted_prediction_tokens,
-            rejected_prediction_tokens: completion.rejected_prediction_tokens,
+            input_tokens: u32::try_from(usage.prompt_tokens.max(0)).unwrap_or(0).into(),
+            output_tokens: u32::try_from(usage.completion_tokens.max(0)).unwrap_or(0).into(),
+            cache_read_tokens: prompt.cached_tokens.map(Into::into),
+            cache_creation_tokens: prompt.cache_write_tokens.map(Into::into),
+            input_audio_tokens: prompt.audio_tokens.map(Into::into),
+            input_video_tokens: prompt.video_tokens.map(Into::into),
+            reasoning_tokens: completion.reasoning_tokens.map(Into::into),
+            output_audio_tokens: completion.audio_tokens.map(Into::into),
+            accepted_prediction_tokens: completion.accepted_prediction_tokens.map(Into::into),
+            rejected_prediction_tokens: completion.rejected_prediction_tokens.map(Into::into),
         }
     }
 }

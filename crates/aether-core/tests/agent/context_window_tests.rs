@@ -1,5 +1,6 @@
-use aether_core::events::{AgentEvent, ContextEvent, ContextUsage};
+use aether_core::events::{AgentEvent, ContextEvent};
 use aether_core::testing::{TestScenario, test_agent};
+use llm::ContextUsage;
 use llm::ModelSettings;
 use llm::testing::{FakeLlmProvider, llm_response};
 
@@ -26,9 +27,9 @@ async fn context_window_override_supplies_unknown_provider_limit() {
         .unwrap();
 
     let usage = context_usage(&events);
-    assert_eq!(usage.context_limit, Some(200_000));
+    assert_eq!(usage.context_limit.map(llm::Tokens::get), Some(200_000));
     assert_eq!(usage.usage_ratio, Some(0.5));
-    assert_eq!(usage.input_tokens, 100_000);
+    assert_eq!(usage.input_tokens.get(), 100_000);
 }
 
 #[tokio::test]
@@ -44,7 +45,7 @@ async fn context_window_override_beats_provider_limit() {
         .unwrap();
 
     let usage = context_usage(&events);
-    assert_eq!(usage.context_limit, Some(200_000));
+    assert_eq!(usage.context_limit.map(llm::Tokens::get), Some(200_000));
     assert_eq!(usage.usage_ratio, Some(0.5));
 }
 
@@ -67,7 +68,7 @@ async fn context_window_override_survives_model_switch() {
         .unwrap();
 
     let usage = context_usage(&events);
-    assert_eq!(usage.context_limit, Some(200_000));
+    assert_eq!(usage.context_limit.map(llm::Tokens::get), Some(200_000));
     assert_eq!(usage.usage_ratio, Some(0.0));
 }
 

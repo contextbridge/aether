@@ -1,7 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub use acp_utils::notifications::ContextUsage;
+use llm::ContextUsage;
 
 /// Terminal result of a context compaction operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

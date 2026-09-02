@@ -17,13 +17,14 @@ pub mod testing;
 mod tool_schema;
 mod tools;
 pub mod types;
+pub mod usage;
 
-pub use catalog::{LlmModel, ModelPricing};
+pub use catalog::LlmModel;
 pub use chat_message::{AssistantReasoning, ChatMessage, ContentBlock, EncryptedReasoningContent};
 pub use context::Context;
 pub use credential::ProviderCredential;
 pub use error::{ContextOverflowError, LlmError, Result};
-pub use llm_response::{LlmResponse, StopReason, TokenUsage};
+pub use llm_response::{LlmResponse, StopReason};
 pub use model_settings::ModelSettings;
 pub use provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider};
 pub use provider_connection::{
@@ -31,6 +32,10 @@ pub use provider_connection::{
 };
 pub use reasoning::ReasoningEffort;
 pub use tools::*;
+pub use usage::{
+    ContextUsage, LlmCallPurpose, ModelIdentity, ModelPricing, SessionUsageEvent, SessionUsageTotals, TokenUsage,
+    Tokens, UsageCost, UsageSource, Usd,
+};
 
 #[cfg(feature = "codex")]
 pub use providers::codex::{CodexProvider, perform_codex_oauth_flow};

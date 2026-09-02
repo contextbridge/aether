@@ -1,16 +1,14 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use aether_core::events::{
-    AgentEvent, LlmCallOutcome, LlmCallPurpose, ToolEvent, TraceContext, TurnEvent, TurnOutcome,
-};
+use aether_core::events::{AgentEvent, LlmCallOutcome, ToolEvent, TraceContext, TurnEvent, TurnOutcome};
 use aether_telemetry::{AgentTraceContext, TelemetryConfig, TelemetryRuntime};
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
-use llm::{ModelPricing, TokenUsage};
+use llm::{LlmCallPurpose, ModelIdentity, ModelPricing, TokenUsage};
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::trace::v1::Span;
@@ -249,7 +247,6 @@ async fn runtime_exports_genai_spans_and_metrics_to_an_otlp_collector() {
         "$ai_output_token_price",
         "$ai_cache_read_token_price",
         "$ai_cache_write_token_price",
-        "$ai_cache_reporting_exclusive",
         "$ai_reasoning_tokens",
     ] {
         assert!(attribute_keys.contains(&expected), "OTLP attribute {expected} missing from {attribute_keys:?}");
@@ -332,15 +329,17 @@ fn events() -> Vec<AgentEvent> {
         AgentEvent::Turn(TurnEvent::Started { content: vec![] }),
         AgentEvent::Turn(TurnEvent::LlmCallStarted {
             purpose: LlmCallPurpose::Chat,
-            provider: Some("anthropic".to_string()),
-            model: Some("test-model".to_string()),
+            model: ModelIdentity {
+                provider: Some("anthropic".to_string()),
+                model_id: Some("test-model".to_string()),
+                pricing: Some(ModelPricing {
+                    input_per_million: 3.0,
+                    output_per_million: 15.0,
+                    cache_read_per_million: Some(0.3),
+                    cache_write_per_million: Some(3.75),
+                }),
+            },
             display_name: "test-model".to_string(),
-            pricing: Some(ModelPricing {
-                input_per_million: 3.0,
-                output_per_million: 15.0,
-                cache_read_per_million: Some(0.3),
-                cache_write_per_million: Some(3.75),
-            }),
             attempt: 0,
             max_attempts: 1,
         }),
@@ -349,10 +348,9 @@ fn events() -> Vec<AgentEvent> {
             outcome: LlmCallOutcome::Completed {
                 stop_reason: None,
                 usage: Some(TokenUsage {
-                    cache_read_tokens: Some(4),
-                    cache_creation_tokens: Some(2),
-                    cache_reporting_exclusive: Some(true),
-                    reasoning_tokens: Some(3),
+                    cache_read_tokens: Some(4.into()),
+                    cache_creation_tokens: Some(2.into()),
+                    reasoning_tokens: Some(3.into()),
                     ..TokenUsage::new(10, 5)
                 }),
             },

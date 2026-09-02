@@ -40,7 +40,14 @@ pub struct Example {
 }
 
 pub fn schema_doc() -> SchemaDoc {
-    SchemaDoc { schema_sql: include_str!("../../migrations/001_session_index.sql"), examples: examples() }
+    SchemaDoc {
+        schema_sql: concat!(
+            include_str!("../../migrations/001_session_index.sql"),
+            "\n",
+            include_str!("../../migrations/002_session_usage.sql")
+        ),
+        examples: examples(),
+    }
 }
 
 pub fn render_schema_text(schema: &SchemaDoc) -> String {
@@ -73,6 +80,14 @@ fn examples() -> Vec<Example> {
         Example {
             name: "Sessions with high context usage",
             sql: "select s.session_id, s.cwd, max(e.usage_ratio) as max_usage_ratio from context_usage e join sessions s using (session_id) group by s.session_id, s.cwd having max_usage_ratio > 0.8 order by max_usage_ratio desc",
+        },
+        Example {
+            name: "Estimated cost per session",
+            sql: "select s.session_id, s.cwd, max(e.total_estimated_cost_usd) as estimated_cost_usd, max(e.unpriced_calls) as unpriced_calls, max(e.total_input_tokens) + max(e.total_output_tokens) as total_tokens from session_usage e join sessions s using (session_id) group by s.session_id, s.cwd order by estimated_cost_usd desc limit 20",
+        },
+        Example {
+            name: "Estimated cost by agent",
+            sql: "select agent_name, call_purpose, count(*) as calls, sum(input_tokens) as input_tokens, sum(output_tokens) as output_tokens, sum(estimated_cost_usd) as estimated_cost_usd from session_usage group by agent_name, call_purpose order by estimated_cost_usd desc",
         },
         Example {
             name: "Malformed event lines",

@@ -39,6 +39,7 @@ pub enum CliEventKind {
     ContextCompactionEnded,
     ContextCompactionResult,
     ContextUsage,
+    SessionUsage,
     ContextCleared,
     TurnStarted,
     TurnEnded,

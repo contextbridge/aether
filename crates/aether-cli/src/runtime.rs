@@ -5,7 +5,7 @@ use aether_core::events::{AgentEvent, Command};
 use aether_core::mcp::McpBuilder;
 use aether_core::mcp::mcp;
 use aether_core::mcp::{McpHandle, McpRuntime, McpSession};
-use llm::{ChatMessage, ToolDefinition};
+use llm::{ChatMessage, SessionUsageEvent, ToolDefinition};
 use mcp_servers::McpBuilderExt;
 use mcp_utils::client::{McpClientEvent, McpConnectionDetails, McpServer, OAuthHandlerFactory};
 use std::path::PathBuf;
@@ -19,6 +19,7 @@ pub struct RuntimeBuilder {
     extra_mcp_servers: Vec<McpServer>,
     oauth_applicator: Option<Box<dyn FnOnce(McpBuilder) -> McpBuilder + Send>>,
     agent_deps: AgentDeps,
+    usage_seed: Option<SessionUsageEvent>,
 }
 
 pub struct Runtime {
@@ -43,11 +44,18 @@ impl RuntimeBuilder {
             extra_mcp_servers: Vec::new(),
             oauth_applicator: None,
             agent_deps: AgentDeps::default(),
+            usage_seed: None,
         }
     }
 
     pub fn agent_deps(mut self, deps: AgentDeps) -> Self {
         self.agent_deps = deps;
+        self
+    }
+
+    /// Continue session usage totals from the last persisted usage event.
+    pub fn resume_usage(mut self, last: SessionUsageEvent) -> Self {
+        self.usage_seed = Some(last);
         self
     }
 
@@ -74,10 +82,14 @@ impl RuntimeBuilder {
         messages: Option<Vec<ChatMessage>>,
     ) -> Result<Runtime, CliError> {
         let deps = self.agent_deps.clone();
+        let usage_seed = self.usage_seed.clone();
         let (spec, session) = self.spawn_mcp().await?;
         let mcp = session.handle().clone();
 
         let (agent_tx, agent_rx, agent_handle) = spawn_agent(&spec, &deps, mcp, Vec::new(), |mut agent_builder| {
+            if let Some(last) = &usage_seed {
+                agent_builder = agent_builder.resume_usage(last);
+            }
             if let Some(prompt) = custom_prompt {
                 agent_builder = agent_builder.system_prompt(prompt);
             }
@@ -99,6 +111,7 @@ impl RuntimeBuilder {
     /// its first turn.
     pub async fn build_ready(self, messages: Vec<ChatMessage>) -> Result<(Runtime, McpConnectionDetails), CliError> {
         let deps = self.agent_deps.clone();
+        let usage_seed = self.usage_seed.clone();
         let (spec, mut session) = self.spawn_mcp().await?;
         let snapshot = session
             .block_until_ready()
@@ -106,8 +119,13 @@ impl RuntimeBuilder {
             .ok_or_else(|| CliError::McpError("MCP bootstrap aborted before completion".to_string()))?;
         let mcp = session.handle().clone();
 
-        let (agent_tx, agent_rx, agent_handle) =
-            spawn_agent(&spec, &deps, mcp, Vec::new(), |agent_builder| agent_builder.messages(messages)).await?;
+        let (agent_tx, agent_rx, agent_handle) = spawn_agent(&spec, &deps, mcp, Vec::new(), |mut agent_builder| {
+            if let Some(last) = &usage_seed {
+                agent_builder = agent_builder.resume_usage(last);
+            }
+            agent_builder.messages(messages)
+        })
+        .await?;
         let (mcp_runtime, event_rx) = session.connect_agent(agent_tx.clone()).await.split();
 
         Ok((Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime }, snapshot))

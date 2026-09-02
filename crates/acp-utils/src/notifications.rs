@@ -11,55 +11,11 @@ pub use mcp_utils::status::{McpServerAuthCapability, McpServerStatus, McpServerS
 
 pub const AETHER_META_NAMESPACE: &str = "contextbridge/aether";
 
-/// Context/token usage reported after an LLM call.
-///
-/// Per-call fields (`input_tokens`, `output_tokens`, `cache_read_tokens`,
-/// `cache_creation_tokens`, `reasoning_tokens`) come from the most recent
-/// API response. The `total_*` fields are cumulative across the agent's
-/// lifetime. The optional fields are `None` when the provider doesn't
-/// expose that dimension; this is semantically distinct from `Some(0)`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct ContextUsage {
-    /// Current usage ratio (0.0 - 1.0), if context window is known.
-    pub usage_ratio: Option<f64>,
-    /// Maximum context limit, if known.
-    pub context_limit: Option<u32>,
-    /// Input tokens on the most recent API call (the current context size).
-    pub input_tokens: u32,
-    /// Output tokens on the most recent API call.
-    #[serde(default)]
-    pub output_tokens: u32,
-    /// Prompt tokens served from cache on the most recent API call.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_read_tokens: Option<u32>,
-    /// Prompt tokens written to cache on the most recent API call.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_creation_tokens: Option<u32>,
-    /// Reasoning tokens spent on the most recent API call.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning_tokens: Option<u32>,
-    /// Cumulative input tokens since the agent started.
-    #[serde(default)]
-    pub total_input_tokens: u64,
-    /// Cumulative output tokens since the agent started.
-    #[serde(default)]
-    pub total_output_tokens: u64,
-    /// Cumulative cache-read tokens since the agent started.
-    #[serde(default)]
-    pub total_cache_read_tokens: u64,
-    /// Cumulative cache-creation tokens since the agent started.
-    #[serde(default)]
-    pub total_cache_creation_tokens: u64,
-    /// Cumulative reasoning tokens since the agent started.
-    #[serde(default)]
-    pub total_reasoning_tokens: u64,
-}
-
-impl ContextUsage {
-    /// Sum of cumulative input + output tokens.
-    pub fn total_tokens(&self) -> u64 {
-        self.total_input_tokens + self.total_output_tokens
-    }
+/// Parameters for `_aether/session_usage` notifications.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonRpcNotification)]
+#[notification(method = "_aether/session_usage")]
+pub struct SessionUsageParams {
+    pub usage: llm::SessionUsageEvent,
 }
 
 /// Parameters for `_aether/context_compaction` notifications.

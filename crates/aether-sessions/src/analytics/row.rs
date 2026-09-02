@@ -31,6 +31,16 @@ pub(crate) struct EventRow {
     pub total_cache_read_tokens: Option<i64>,
     pub total_cache_creation_tokens: Option<i64>,
     pub total_reasoning_tokens: Option<i64>,
+    pub usage_sequence: Option<i64>,
+    pub agent_id: Option<String>,
+    pub parent_agent_id: Option<String>,
+    pub task_id: Option<String>,
+    pub agent_name: Option<String>,
+    pub call_purpose: Option<String>,
+    pub provider: Option<String>,
+    pub estimated_cost_usd: Option<f64>,
+    pub total_estimated_cost_usd: Option<f64>,
+    pub unpriced_calls: Option<i64>,
 }
 
 pub(crate) fn event_row(
@@ -73,6 +83,16 @@ pub(crate) fn event_row(
         total_cache_read_tokens: projection.total_cache_read_tokens,
         total_cache_creation_tokens: projection.total_cache_creation_tokens,
         total_reasoning_tokens: projection.total_reasoning_tokens,
+        usage_sequence: projection.usage_sequence,
+        agent_id: projection.agent_id,
+        parent_agent_id: projection.parent_agent_id,
+        task_id: projection.task_id,
+        agent_name: projection.agent_name,
+        call_purpose: projection.call_purpose,
+        provider: projection.provider,
+        estimated_cost_usd: projection.estimated_cost_usd,
+        total_estimated_cost_usd: projection.total_estimated_cost_usd,
+        unpriced_calls: projection.unpriced_calls,
     }
 }
 
@@ -98,6 +118,16 @@ struct EventProjection {
     total_cache_read_tokens: Option<i64>,
     total_cache_creation_tokens: Option<i64>,
     total_reasoning_tokens: Option<i64>,
+    usage_sequence: Option<i64>,
+    agent_id: Option<String>,
+    parent_agent_id: Option<String>,
+    task_id: Option<String>,
+    agent_name: Option<String>,
+    call_purpose: Option<String>,
+    provider: Option<String>,
+    estimated_cost_usd: Option<f64>,
+    total_estimated_cost_usd: Option<f64>,
+    unpriced_calls: Option<i64>,
 }
 
 impl From<&SessionEvent> for EventProjection {
@@ -126,6 +156,7 @@ impl From<&AgentEvent> for EventProjection {
             AgentEvent::Model(ModelEvent::Switched { new, .. }) => {
                 Self { model_name: Some(new.clone()), ..Self::new("agent", "model_switched") }
             }
+            AgentEvent::SessionUsage(usage) => Self::from_session_usage(usage),
         }
     }
 }
@@ -165,6 +196,8 @@ impl EventProjection {
             ToolEvent::CallUpdate { .. } => Self::new("agent", "tool_call_update"),
             ToolEvent::ExecutionStarted { .. } => Self::new("agent", "tool_execution_started"),
             ToolEvent::Progress { .. } => Self::new("agent", "tool_progress"),
+            ToolEvent::SubAgentProgress { .. } => Self::new("agent", "sub_agent_progress"),
+            ToolEvent::DisplayUpdate { .. } => Self::new("agent", "tool_display_update"),
             ToolEvent::DefinitionsUpdated { .. } => Self::new("agent", "tool_definitions_updated"),
         }
     }
@@ -174,7 +207,7 @@ impl EventProjection {
             TurnEvent::Started { .. } => Self::new("agent", "turn_started"),
             TurnEvent::RetryScheduled { .. } => Self::new("agent", "retry_scheduled"),
             TurnEvent::LlmCallStarted { model, display_name, .. } => Self {
-                model_name: model.clone().or_else(|| Some(display_name.clone())),
+                model_name: model.model_id.clone().or_else(|| Some(display_name.clone())),
                 ..Self::new("agent", "llm_call_started")
             },
             TurnEvent::LlmCallEnded { outcome, .. } => Self {
@@ -197,6 +230,34 @@ impl EventProjection {
         }
     }
 
+    fn from_session_usage(usage: &llm::SessionUsageEvent) -> Self {
+        let totals = &usage.totals;
+        Self {
+            usage_sequence: Some(clamp_i64(usage.sequence)),
+            agent_id: Some(usage.source.agent_id.clone()),
+            parent_agent_id: usage.source.parent_agent_id.clone(),
+            task_id: usage.source.task_id.clone(),
+            agent_name: Some(usage.source.agent_name.clone()),
+            call_purpose: Some(usage.purpose.as_str().to_string()),
+            provider: usage.model.provider.clone(),
+            model_name: usage.model.model_id.clone(),
+            input_tokens: Some(clamp_i64(usage.tokens.input_tokens)),
+            output_tokens: Some(clamp_i64(usage.tokens.output_tokens)),
+            cache_read_tokens: usage.tokens.cache_read_tokens.map(clamp_i64),
+            cache_creation_tokens: usage.tokens.cache_creation_tokens.map(clamp_i64),
+            reasoning_tokens: usage.tokens.reasoning_tokens.map(clamp_i64),
+            total_input_tokens: Some(clamp_i64(totals.tokens.input_tokens)),
+            total_output_tokens: Some(clamp_i64(totals.tokens.output_tokens)),
+            total_cache_read_tokens: totals.tokens.cache_read_tokens.map(clamp_i64),
+            total_cache_creation_tokens: totals.tokens.cache_creation_tokens.map(clamp_i64),
+            total_reasoning_tokens: totals.tokens.reasoning_tokens.map(clamp_i64),
+            estimated_cost_usd: usage.estimated_cost.map(|cost| cost.total_usd.get()),
+            total_estimated_cost_usd: Some(totals.estimated_usd.get()),
+            unpriced_calls: Some(clamp_i64(totals.unpriced_calls)),
+            ..Self::new("agent", "session_usage")
+        }
+    }
+
     fn from_context(event: &ContextEvent) -> Self {
         match event {
             ContextEvent::CompactionStarted { .. } => Self::new("agent", "context_compaction_started"),
@@ -213,15 +274,6 @@ impl EventProjection {
                 usage_ratio: usage.usage_ratio,
                 context_limit: usage.context_limit.map(clamp_i64),
                 input_tokens: Some(clamp_i64(usage.input_tokens)),
-                output_tokens: Some(clamp_i64(usage.output_tokens)),
-                cache_read_tokens: usage.cache_read_tokens.map(clamp_i64),
-                cache_creation_tokens: usage.cache_creation_tokens.map(clamp_i64),
-                reasoning_tokens: usage.reasoning_tokens.map(clamp_i64),
-                total_input_tokens: Some(clamp_i64(usage.total_input_tokens)),
-                total_output_tokens: Some(clamp_i64(usage.total_output_tokens)),
-                total_cache_read_tokens: Some(clamp_i64(usage.total_cache_read_tokens)),
-                total_cache_creation_tokens: Some(clamp_i64(usage.total_cache_creation_tokens)),
-                total_reasoning_tokens: Some(clamp_i64(usage.total_reasoning_tokens)),
                 ..Self::new("agent", "context_usage")
             },
             ContextEvent::Cleared => Self::new("agent", "context_cleared"),
@@ -246,7 +298,7 @@ impl EventProjection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aether_core::events::{ContextUsage, LlmCallPurpose};
+    use llm::{ContextUsage, LlmCallPurpose};
 
     #[test]
     fn typed_projection_covers_retry_cancellation_model_and_usage() {

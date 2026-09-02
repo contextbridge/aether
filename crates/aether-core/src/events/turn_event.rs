@@ -1,4 +1,4 @@
-use llm::{ContentBlock, ModelPricing, StopReason, TokenUsage};
+use llm::{ContentBlock, LlmCallPurpose, ModelIdentity, StopReason, TokenUsage};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -18,14 +18,6 @@ pub enum LlmCallOutcome {
     Completed { stop_reason: Option<StopReason>, usage: Option<TokenUsage> },
     Failed { error: String, will_retry: bool },
     Cancelled,
-}
-
-/// What an LLM call was issued for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum LlmCallPurpose {
-    Chat,
-    Compaction,
 }
 
 /// A retry of a failed LLM call.
@@ -58,10 +50,8 @@ pub enum TurnEvent {
     /// An LLM request was issued.
     LlmCallStarted {
         purpose: LlmCallPurpose,
-        provider: Option<String>,
-        model: Option<String>,
+        model: ModelIdentity,
         display_name: String,
-        pricing: Option<ModelPricing>,
         /// 0 for the initial call, incrementing per retry.
         attempt: u32,
         max_attempts: u32,

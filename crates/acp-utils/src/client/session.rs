@@ -2,8 +2,8 @@ use super::error::AcpClientError;
 use super::event::AcpEvent;
 use crate::notifications::{
     AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, McpNotification, McpRequest,
-    PromptSearchParams, PromptSearchResponse, SessionPreviewParams, SessionPreviewResponse, SubAgentProgressParams,
-    WorkspaceListParams, WorkspaceListResponse, WorkspaceMoveParams, WorkspaceMoveResponse,
+    PromptSearchParams, PromptSearchResponse, SessionPreviewParams, SessionPreviewResponse, SessionUsageParams,
+    SubAgentProgressParams, WorkspaceListParams, WorkspaceListResponse, WorkspaceMoveParams, WorkspaceMoveResponse,
 };
 use agent_client_protocol::schema::v1::{
     AuthMethod, AuthenticateRequest, AuthenticateResponse, CancelNotification, CloseSessionRequest,
@@ -307,6 +307,16 @@ async fn run_client_connection(
                 let event_tx = event_tx.clone();
                 async move |params: SubAgentProgressParams, _cx| {
                     let _ = event_tx.send(AcpEvent::SubAgentProgress(params));
+                    Ok(())
+                }
+            },
+            acp::on_receive_notification!(),
+        )
+        .on_receive_notification(
+            {
+                let event_tx = event_tx.clone();
+                async move |params: SessionUsageParams, _cx| {
+                    let _ = event_tx.send(AcpEvent::SessionUsage(Box::new(params)));
                     Ok(())
                 }
             },

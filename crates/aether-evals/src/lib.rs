@@ -6,7 +6,6 @@ mod evals;
 mod git_repo;
 mod judge;
 
-pub use aether_core::events::ContextUsage;
 pub use agents::{
     AETHER_EVAL_CWD_ENV, AETHER_EVAL_TASK_PROMPT_ENV, AETHER_EVAL_WORKSPACE_ROOT_ENV, Agent, AgentRunResult,
     CONTAINER_AETHER_HOME, DockerAgent, FakeAgent, RunError, default_eval_env_vars,

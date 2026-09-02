@@ -1,7 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::ToolCallRequest;
+use super::{TokenUsage, ToolCallRequest};
 
 #[doc = include_str!("docs/stop_reason.md")]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -13,40 +13,6 @@ pub enum StopReason {
     ContentFilter,
     FunctionCall,
     Unknown(String),
-}
-
-/// Token usage reported by a single LLM API response. Providers fill in only
-/// the dimensions they expose; the rest stay `None`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct TokenUsage {
-    pub input_tokens: u32,
-    pub output_tokens: u32,
-    #[serde(default)]
-    pub cache_read_tokens: Option<u32>,
-    #[serde(default)]
-    pub cache_creation_tokens: Option<u32>,
-    /// Whether cache token counts are separate from, rather than included in, `input_tokens`.
-    #[serde(default)]
-    pub cache_reporting_exclusive: Option<bool>,
-    #[serde(default)]
-    pub input_audio_tokens: Option<u32>,
-    #[serde(default)]
-    pub input_video_tokens: Option<u32>,
-    #[serde(default)]
-    pub reasoning_tokens: Option<u32>,
-    #[serde(default)]
-    pub output_audio_tokens: Option<u32>,
-    #[serde(default)]
-    pub accepted_prediction_tokens: Option<u32>,
-    #[serde(default)]
-    pub rejected_prediction_tokens: Option<u32>,
-}
-
-impl TokenUsage {
-    /// Build a `TokenUsage` with only the input/output token counts populated.
-    pub fn new(input_tokens: u32, output_tokens: u32) -> Self {
-        Self { input_tokens, output_tokens, ..Self::default() }
-    }
 }
 
 #[doc = include_str!("docs/llm_response.md")]
@@ -120,7 +86,7 @@ impl LlmResponse {
         }
     }
 
-    pub fn usage(input_tokens: u32, output_tokens: u32) -> Self {
+    pub fn usage(input_tokens: u64, output_tokens: u64) -> Self {
         Self::Usage { tokens: TokenUsage::new(input_tokens, output_tokens) }
     }
 

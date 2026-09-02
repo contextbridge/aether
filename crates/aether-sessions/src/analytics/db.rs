@@ -201,7 +201,7 @@ async fn insert_indexed_file(
 async fn insert_events(tx: &mut Transaction<'_, Sqlite>, session: &AetherSession) -> Result<(), SessionIndexError> {
     for chunk in session.events.chunks(30) {
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "insert into events (session_id, event_index, line_number, turn_index, content, content_len, raw_json, kind, event_type, outcome, tool_call_id, tool_name, tool_arguments, model_name, message_id, usage_ratio, context_limit, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, reasoning_tokens, total_input_tokens, total_output_tokens, total_cache_read_tokens, total_cache_creation_tokens, total_reasoning_tokens) ",
+            "insert into events (session_id, event_index, line_number, turn_index, content, content_len, raw_json, kind, event_type, outcome, tool_call_id, tool_name, tool_arguments, model_name, message_id, usage_ratio, context_limit, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, reasoning_tokens, total_input_tokens, total_output_tokens, total_cache_read_tokens, total_cache_creation_tokens, total_reasoning_tokens, usage_sequence, agent_id, parent_agent_id, task_id, agent_name, call_purpose, provider, estimated_cost_usd, total_estimated_cost_usd, unpriced_calls) ",
         );
         builder.push_values(chunk, |mut b, event| {
             b.push_bind(&event.session_id)
@@ -230,7 +230,17 @@ async fn insert_events(tx: &mut Transaction<'_, Sqlite>, session: &AetherSession
                 .push_bind(event.total_output_tokens)
                 .push_bind(event.total_cache_read_tokens)
                 .push_bind(event.total_cache_creation_tokens)
-                .push_bind(event.total_reasoning_tokens);
+                .push_bind(event.total_reasoning_tokens)
+                .push_bind(event.usage_sequence)
+                .push_bind(&event.agent_id)
+                .push_bind(&event.parent_agent_id)
+                .push_bind(&event.task_id)
+                .push_bind(&event.agent_name)
+                .push_bind(&event.call_purpose)
+                .push_bind(&event.provider)
+                .push_bind(event.estimated_cost_usd)
+                .push_bind(event.total_estimated_cost_usd)
+                .push_bind(event.unpriced_calls);
         });
         builder.build().execute(&mut **tx).await?;
     }

@@ -41,8 +41,8 @@ async fn test_llm_call_lifecycle_reports_model_and_usage() -> Result<(), Box<dyn
     let started = events
         .iter()
         .find_map(|event| match event {
-            AgentEvent::Turn(TurnEvent::LlmCallStarted { provider, model, attempt, .. }) => {
-                Some((provider.clone(), model.clone(), *attempt))
+            AgentEvent::Turn(TurnEvent::LlmCallStarted { model: identity, attempt, .. }) => {
+                Some((identity.provider.clone(), identity.model_id.clone(), *attempt))
             }
             _ => None,
         })
@@ -60,8 +60,8 @@ async fn test_llm_call_lifecycle_reports_model_and_usage() -> Result<(), Box<dyn
             _ => None,
         })
         .expect("completed LLM call should carry usage");
-    assert_eq!(usage.input_tokens, 120);
-    assert_eq!(usage.output_tokens, 7);
+    assert_eq!(usage.input_tokens.get(), 120);
+    assert_eq!(usage.output_tokens.get(), 7);
 
     Ok(())
 }

@@ -68,7 +68,7 @@ async fn openai_reasoning_reports_reasoning_tokens() {
     let usage = find_usage(&events).expect("usage event should be present");
     assert_minimal_usage(&usage, "03_reasoning");
     assert!(
-        usage.reasoning_tokens.unwrap_or(0) > 0,
+        usage.reasoning_tokens.is_some_and(|tokens| !tokens.is_zero()),
         "03_reasoning should report reasoning_tokens > 0, got {:?}",
         usage.reasoning_tokens
     );
