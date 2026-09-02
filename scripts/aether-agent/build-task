@@ -7,16 +7,36 @@ task_file="$workspace/.git/aether-task.json"
 
 case "$TASK_KIND" in
     issue)
-        jq --arg planFile "$PLAN_FILE" '{
-            kind: "issue",
-            issue: (.issue | {
-                number,
-                title,
+        issue_comments_file="$workspace/.git/aether-issue-comments.json"
+        gh api --paginate --slurp \
+            "/repos/$GITHUB_REPOSITORY/issues/$NUMBER/comments" \
+            | jq 'add // [] | map({
+                id,
+                author: .user.login,
+                authorAssociation: .author_association,
+                createdAt: .created_at,
+                updatedAt: .updated_at,
                 body,
-                labels: [.labels[].name]
-            }),
-            planFile: $planFile
-        }' "$GITHUB_EVENT_PATH" > "$task_file"
+                url: .html_url
+            })' > "$issue_comments_file"
+        issue_comment_count=$(jq length "$issue_comments_file")
+
+        jq \
+            --arg planFile "$PLAN_FILE" \
+            --arg issueCommentsFile "$issue_comments_file" \
+            --argjson issueCommentCount "$issue_comment_count" \
+            '{
+                kind: "issue",
+                issue: (.issue | {
+                    number,
+                    title,
+                    body,
+                    labels: [.labels[].name]
+                }),
+                issueCommentsFile: $issueCommentsFile,
+                issueCommentCount: $issueCommentCount,
+                planFile: $planFile
+            }' "$GITHUB_EVENT_PATH" > "$task_file"
         ;;
     implement_plan|pull_request_feedback)
         pull_request=$(gh pr view "$NUMBER" --repo "$GITHUB_REPOSITORY" \
