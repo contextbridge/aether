@@ -1,0 +1,28 @@
+name: Configure AWS credentials
+description: Assumes an IAM role with GitHub OIDC and exports temporary AWS credentials
+
+inputs:
+  aws-region:
+    description: AWS region for the session
+    required: false
+    default: us-west-2
+  role-to-assume:
+    description: IAM role ARN to assume
+    required: true
+  role-duration-seconds:
+    description: Duration of the assumed role session
+    required: false
+    default: "3600"
+
+runs:
+  using: composite
+  steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+      with:
+        role-to-assume: ${{ inputs.role-to-assume }}
+        aws-region: ${{ inputs.aws-region }}
+        role-duration-seconds: ${{ inputs.role-duration-seconds }}
+        role-session-name: github-actions-${{ github.run_id }}
+        mask-aws-account-id: true
+        output-env-credentials: true
