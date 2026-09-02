@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
 
+permissions: {}
+
 jobs:
   release-plz-release:
     name: Release-plz release
@@ -16,23 +18,25 @@ jobs:
     steps:
       - name: Generate ContextBridge app token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ secrets.CB_PR_AUTOMATION_APP_ID }}
           private-key: ${{ secrets.CB_PR_AUTOMATION_APP_PRIVATE_KEY }}
           owner: contextbridge
           repositories: aether
+          permission-contents: write
+          permission-pull-requests: read
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
           token: ${{ steps.app-token.outputs.token }}
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Run release-plz
-        uses: release-plz/action@v0.5.131
+        uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9 # v0.5.131
         with:
           command: release
         env:
@@ -51,23 +55,25 @@ jobs:
     steps:
       - name: Generate ContextBridge app token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ secrets.CB_PR_AUTOMATION_APP_ID }}
           private-key: ${{ secrets.CB_PR_AUTOMATION_APP_PRIVATE_KEY }}
           owner: contextbridge
           repositories: aether
+          permission-contents: write
+          permission-pull-requests: write
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
           token: ${{ steps.app-token.outputs.token }}
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Run release-plz
-        uses: release-plz/action@v0.5.131
+        uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9 # v0.5.131
         with:
           command: release-pr
         env:

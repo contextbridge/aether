@@ -18,7 +18,7 @@ runs:
   using: 'composite'
   steps:
     - name: Configure AWS Credentials
-      uses: aws-actions/configure-aws-credentials@v6.2.3
+      uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
       with:
         role-to-assume: ${{ inputs.role-to-assume }}
         aws-region: ${{ inputs.aws-region }}
@@ -28,7 +28,7 @@ runs:
       run: |
         set -euo pipefail
 
-        PARAM_PATH="${{ inputs.parameter-path }}"
+        PARAM_PATH="$PARAMETER_PATH"
 
         PARAMS=$(aws ssm get-parameters-by-path \
           --path "$PARAM_PATH" \
@@ -55,3 +55,5 @@ runs:
 
           echo "Exported: $env_var"
         done <<< "$PARAMS"
+      env:
+        PARAMETER_PATH: ${{ inputs.parameter-path }}

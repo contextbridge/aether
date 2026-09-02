@@ -6,6 +6,9 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
 env:
   CARGO_INCREMENTAL: "0"
 
@@ -16,8 +19,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
-      - uses: jdx/mise-action@v4.3.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
       - name: Check formatting
         run: just fmt-check
 
@@ -29,11 +34,13 @@ jobs:
       RUSTFLAGS: "-Clink-arg=-fuse-ld=mold"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev mold
-      - uses: jdx/mise-action@v4.3.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # Six jobs each saving a cache per push put the repo permanently over
           # GitHub's 10 GiB limit, so every run raced eviction. PRs restore only.
@@ -51,11 +58,13 @@ jobs:
       RUSTFLAGS: "-Clink-arg=-fuse-ld=mold"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev mold
-      - uses: jdx/mise-action@v4.3.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build aether-lspd
@@ -71,11 +80,13 @@ jobs:
       RUSTFLAGS: "-Clink-arg=-fuse-ld=mold"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev mold
-      - uses: jdx/mise-action@v4.3.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install dependencies
@@ -105,11 +116,13 @@ jobs:
       RUSTFLAGS: "-Clink-arg=-fuse-ld=mold"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev mold
-      - uses: jdx/mise-action@v4.3.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build aether-lspd
@@ -123,8 +136,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
-      - uses: jdx/mise-action@v4.3.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Check formatting
