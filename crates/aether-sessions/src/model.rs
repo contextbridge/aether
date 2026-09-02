@@ -83,11 +83,14 @@ impl SessionEvent {
                     | ContextEvent::UsageUpdated { .. }
                     | ContextEvent::Cleared,
                 )
-                | AgentEvent::Model(ModelEvent::Switched { .. }) => true,
+                | AgentEvent::Model(ModelEvent::Switched { .. })
+                | AgentEvent::SessionUsage(_) => true,
                 AgentEvent::Tool(
                     ToolEvent::CallUpdate { .. }
                     | ToolEvent::ExecutionStarted { .. }
                     | ToolEvent::Progress { .. }
+                    | ToolEvent::DisplayUpdate { .. }
+                    | ToolEvent::SubAgentProgress { .. }
                     | ToolEvent::TaskStatus { .. }
                     | ToolEvent::DefinitionsUpdated { .. },
                 )
@@ -102,6 +105,14 @@ impl SessionEvent {
             },
         }
     }
+}
+
+/// The most recent session-usage event, whose totals a resumed session continues from.
+pub fn last_session_usage(events: &[SessionEvent]) -> Option<&llm::SessionUsageEvent> {
+    events.iter().rev().find_map(|event| match event {
+        SessionEvent::Agent(AgentEvent::SessionUsage(usage)) => Some(usage),
+        _ => None,
+    })
 }
 
 pub fn last_agent_from_events(initial: Option<String>, events: &[SessionEvent]) -> Option<String> {

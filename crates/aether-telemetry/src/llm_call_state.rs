@@ -2,15 +2,15 @@ use crate::content_capture::{ContentBuffer, ContentCapture};
 use crate::content_json::output_messages_json;
 use crate::gen_ai_metrics::GenAiMetrics;
 use crate::genai_constants::{
-    AI_CACHE_REPORTING_EXCLUSIVE, AI_REASONING_TOKENS, ERROR_TYPE, GEN_AI_OUTPUT_MESSAGES,
-    GEN_AI_RESPONSE_FINISH_REASONS, GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK, GEN_AI_TOKEN_TYPE,
-    GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS, GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS, GEN_AI_USAGE_INPUT_TOKENS,
-    GEN_AI_USAGE_OUTPUT_TOKENS, GEN_AI_USAGE_REASONING_OUTPUT_TOKENS, GENAI_RESPONSE_START_EVENT,
-    GENAI_TOOL_CALL_START_EVENT, MESSAGE_ID, TOOL_CALL_ID, TOOL_CALL_NAME,
+    AI_REASONING_TOKENS, ERROR_TYPE, GEN_AI_OUTPUT_MESSAGES, GEN_AI_RESPONSE_FINISH_REASONS,
+    GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK, GEN_AI_TOKEN_TYPE, GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
+    GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS, GEN_AI_USAGE_INPUT_TOKENS, GEN_AI_USAGE_OUTPUT_TOKENS,
+    GEN_AI_USAGE_REASONING_OUTPUT_TOKENS, GENAI_RESPONSE_START_EVENT, GENAI_TOOL_CALL_START_EVENT, MESSAGE_ID,
+    TOOL_CALL_ID, TOOL_CALL_NAME,
 };
 use crate::span_guard::{ErrorKind, SpanGuard};
-use aether_core::events::{LlmCallOutcome, LlmCallPurpose};
-use llm::{StopReason, TokenUsage, ToolCallRequest};
+use aether_core::events::LlmCallOutcome;
+use llm::{LlmCallPurpose, StopReason, TokenUsage, Tokens, ToolCallRequest};
 use opentelemetry::{Array, Context, KeyValue, Value};
 use std::time::Instant;
 
@@ -114,20 +114,21 @@ impl LlmCallState {
                     ));
                 }
                 if let Some(usage) = usage {
-                    self.span.set_attribute(KeyValue::new(GEN_AI_USAGE_INPUT_TOKENS, i64::from(usage.input_tokens)));
-                    self.span.set_attribute(KeyValue::new(GEN_AI_USAGE_OUTPUT_TOKENS, i64::from(usage.output_tokens)));
+                    self.span.set_attribute(KeyValue::new(GEN_AI_USAGE_INPUT_TOKENS, attr_tokens(usage.input_tokens)));
+                    self.span
+                        .set_attribute(KeyValue::new(GEN_AI_USAGE_OUTPUT_TOKENS, attr_tokens(usage.output_tokens)));
                     if let Some(tokens) = usage.cache_read_tokens {
-                        self.span.set_attribute(KeyValue::new(GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS, i64::from(tokens)));
+                        self.span
+                            .set_attribute(KeyValue::new(GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS, attr_tokens(tokens)));
                     }
                     if let Some(tokens) = usage.cache_creation_tokens {
-                        self.span
-                            .set_attribute(KeyValue::new(GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS, i64::from(tokens)));
-                    }
-                    if let Some(exclusive) = usage.cache_reporting_exclusive {
-                        self.span.set_attribute(KeyValue::new(AI_CACHE_REPORTING_EXCLUSIVE, exclusive));
+                        self.span.set_attribute(KeyValue::new(
+                            GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
+                            attr_tokens(tokens),
+                        ));
                     }
                     if let Some(tokens) = usage.reasoning_tokens {
-                        let tokens = i64::from(tokens);
+                        let tokens = attr_tokens(tokens);
                         self.span.set_attribute(KeyValue::new(GEN_AI_USAGE_REASONING_OUTPUT_TOKENS, tokens));
                         self.span.set_attribute(KeyValue::new(AI_REASONING_TOKENS, tokens));
                     }
@@ -217,4 +218,8 @@ impl ChunkTiming {
             LlmCallPurpose::Compaction => Self::Disabled,
         }
     }
+}
+
+fn attr_tokens(tokens: Tokens) -> i64 {
+    i64::try_from(tokens).unwrap_or(i64::MAX)
 }

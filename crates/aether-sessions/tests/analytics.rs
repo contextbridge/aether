@@ -1,6 +1,11 @@
-use aether_core::events::{AgentEvent, ContextEvent, ContextUsage, LlmCallPurpose, ModelEvent, TurnEvent, TurnOutcome};
+use aether_core::events::{AgentEvent, ContextEvent, ModelEvent, TurnEvent, TurnOutcome};
 use aether_sessions::analytics::{IngestOptions, QueryOptions, SessionIndexError, ingest_sessions, run_query};
 use aether_sessions::{SessionEvent, UserEvent};
+use llm::testing::session_usage_event;
+use llm::{
+    ContextUsage, LlmCallPurpose, ModelIdentity, SessionUsageEvent, SessionUsageTotals, TokenUsage, UsageCost,
+    UsageSource, Usd,
+};
 use serde_json::json;
 use std::fs;
 use std::path::Path;
@@ -45,11 +50,13 @@ async fn typed_event_contract_populates_every_documented_view() {
             SessionEvent::Agent(AgentEvent::Context(ContextEvent::UsageUpdated {
                 usage: ContextUsage { usage_ratio: Some(0.9), ..ContextUsage::default() },
             })),
+            SessionEvent::Agent(AgentEvent::SessionUsage(root_usage(&UsageSource::new("root")))),
         ],
     );
 
     fixture.ingest().await;
 
+    assert_eq!(fixture.query("select count(*) from session_usage").await.rows, vec![vec![json!(1)]]);
     assert_eq!(fixture.query("select count(*) from user_messages").await.rows, vec![vec![json!(1)]]);
     assert_eq!(fixture.query("select count(*) from retries").await.rows, vec![vec![json!(1)]]);
     assert_eq!(fixture.query("select count(*) from cancellations").await.rows, vec![vec![json!(1)]]);
@@ -98,11 +105,79 @@ async fn typed_projection_exposes_event_fields() {
     fixture.write_session("s1.jsonl", &[user_message("s1", "hello"), tool_call("read"), context_usage(0.9)]);
     fixture.ingest().await;
 
-    let usage = fixture.query("select usage_ratio, input_tokens, total_input_tokens from context_usage").await;
-    assert_eq!(usage.rows, vec![vec![json!(0.9), json!(1), json!(10)]]);
+    let usage = fixture.query("select usage_ratio, input_tokens from context_usage").await;
+    assert_eq!(usage.rows, vec![vec![json!(0.9), json!(1)]]);
 
     let model = fixture.query("select model_name from tool_calls").await;
     assert_eq!(model.rows, vec![vec![serde_json::Value::Null]]);
+}
+
+#[tokio::test]
+async fn session_usage_columns_are_projected_for_root_and_sub_agent_samples() {
+    let fixture = Fixture::new();
+    let root = UsageSource::new("root");
+    let mut child = UsageSource::new("explorer");
+    child.parent_agent_id = Some(root.agent_id.clone());
+    child.task_id = Some("task_0".to_string());
+    let child_usage = SessionUsageEvent {
+        source: child,
+        purpose: LlmCallPurpose::Compaction,
+        totals: SessionUsageTotals {
+            tokens: TokenUsage { cache_read_tokens: Some(3.into()), ..TokenUsage::new(14, 7) },
+            estimated_usd: Usd::new(0.25),
+            unpriced_calls: 1,
+        },
+        ..session_usage_event(2, TokenUsage::new(4, 2))
+    };
+    fixture.write_typed_session(
+        "s1.jsonl",
+        &[
+            SessionEvent::Agent(AgentEvent::SessionUsage(root_usage(&root))),
+            SessionEvent::Agent(AgentEvent::SessionUsage(child_usage)),
+        ],
+    );
+    fixture.ingest().await;
+
+    let rows = fixture
+        .query(
+            "select usage_sequence, agent_name, parent_agent_id, task_id, call_purpose, provider, model_name, input_tokens, cache_read_tokens, total_input_tokens, estimated_cost_usd, total_estimated_cost_usd, unpriced_calls from session_usage order by usage_sequence",
+        )
+        .await;
+    assert_eq!(
+        rows.rows,
+        vec![
+            vec![
+                json!(1),
+                json!("root"),
+                serde_json::Value::Null,
+                serde_json::Value::Null,
+                json!("chat"),
+                json!("anthropic"),
+                json!("claude"),
+                json!(10),
+                json!(3),
+                json!(10),
+                json!(0.25),
+                json!(0.25),
+                json!(0),
+            ],
+            vec![
+                json!(2),
+                json!("explorer"),
+                json!(root.agent_id),
+                json!("task_0"),
+                json!("compaction"),
+                serde_json::Value::Null,
+                serde_json::Value::Null,
+                json!(4),
+                serde_json::Value::Null,
+                json!(14),
+                serde_json::Value::Null,
+                json!(0.25),
+                json!(1),
+            ],
+        ]
+    );
 }
 
 #[tokio::test]
@@ -328,6 +403,17 @@ impl Fixture {
     }
 }
 
+fn root_usage(source: &UsageSource) -> SessionUsageEvent {
+    let tokens = TokenUsage { cache_read_tokens: Some(3.into()), ..TokenUsage::new(10, 5) };
+    SessionUsageEvent {
+        source: source.clone(),
+        model: ModelIdentity { provider: Some("anthropic".into()), model_id: Some("claude".into()), pricing: None },
+        estimated_cost: Some(UsageCost { total_usd: Usd::new(0.25), ..UsageCost::default() }),
+        totals: SessionUsageTotals { tokens, estimated_usd: Usd::new(0.25), unpriced_calls: 0 },
+        ..session_usage_event(1, tokens)
+    }
+}
+
 fn metadata(session_id: &str) -> String {
     json!({"sessionId":session_id,"cwd":"/repo","model":"m","selectedMode":"Coder","createdAt":"2026-01-01T00:00:00Z"})
         .to_string()
@@ -355,13 +441,7 @@ fn context_usage(ratio: f64) -> String {
         "usage":{
             "usage_ratio":ratio,
             "context_limit":100,
-            "input_tokens":1,
-            "output_tokens":2,
-            "total_input_tokens":10,
-            "total_output_tokens":20,
-            "total_cache_read_tokens":0,
-            "total_cache_creation_tokens":0,
-            "total_reasoning_tokens":0
+            "input_tokens":1
         }
     }}})
     .to_string()

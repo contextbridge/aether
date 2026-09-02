@@ -6,11 +6,10 @@ use crate::llm_call_state::LlmCallState;
 use crate::span_guard::{ErrorKind, SpanGuard};
 use crate::trace_context::inject_trace_context;
 use aether_core::events::{
-    AgentEvent, AgentObserver, LlmCallPurpose, MessageEvent, ToolEvent, TraceContext, TurnEvent, TurnOutcome,
-    mcp_tool_name,
+    AgentEvent, AgentObserver, MessageEvent, ToolEvent, TraceContext, TurnEvent, TurnOutcome, mcp_tool_name,
 };
 use llm::catalog::Provider;
-use llm::{ContentBlock, ModelPricing, ToolCallError, ToolCallRequest, ToolCallResult, ToolDefinition};
+use llm::{ContentBlock, LlmCallPurpose, ModelPricing, ToolCallError, ToolCallRequest, ToolCallResult, ToolDefinition};
 use opentelemetry::trace::{SpanBuilder, SpanKind, TraceContextExt, Tracer as _};
 use opentelemetry::{Context, KeyValue};
 use opentelemetry_sdk::trace::SdkTracer;
@@ -141,22 +140,14 @@ impl TurnState {
 
     fn on_event(&mut self, message: &AgentEvent, instrumentation: &OtelInstrumentation, tools: &[ToolDefinition]) {
         match message {
-            AgentEvent::Turn(TurnEvent::LlmCallStarted {
-                purpose,
-                provider,
-                model,
-                display_name,
-                pricing,
-                attempt,
-                ..
-            }) => {
+            AgentEvent::Turn(TurnEvent::LlmCallStarted { purpose, model, display_name, attempt, .. }) => {
                 self.start_llm_call(
                     LlmCallStart {
                         purpose: *purpose,
-                        provider: provider.as_deref(),
-                        model: model.as_deref(),
+                        provider: model.provider.as_deref(),
+                        model: model.model_id.as_deref(),
                         display_name,
-                        pricing: *pricing,
+                        pricing: model.pricing,
                         attempt: *attempt,
                     },
                     instrumentation,
