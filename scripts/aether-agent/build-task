@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+workspace=${GITHUB_WORKSPACE:-$PWD}
+task_file="$workspace/.git/aether-task.json"
+
+case "$TASK_KIND" in
+    issue)
+        jq --arg planFile "$PLAN_FILE" '{
+            kind: "issue",
+            issue: (.issue | {
+                number,
+                title,
+                body,
+                labels: [.labels[].name]
+            }),
+            planFile: $planFile
+        }' "$GITHUB_EVENT_PATH" > "$task_file"
+        ;;
+    implement_plan|pull_request_feedback)
+        pull_request=$(gh pr view "$NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json number,title,body,headRefName,baseRefName,isCrossRepository)
+        issue_comments=$(gh api --paginate --slurp \
+            "/repos/$GITHUB_REPOSITORY/issues/$NUMBER/comments" | jq add)
+        review_comments=$(gh api --paginate --slurp \
+            "/repos/$GITHUB_REPOSITORY/pulls/$NUMBER/comments" | jq add)
+        reviews=$(gh api --paginate --slurp \
+            "/repos/$GITHUB_REPOSITORY/pulls/$NUMBER/reviews" | jq add)
+        triggering_comment=$(jq '{
+            author: .comment.user.login,
+            body: .comment.body,
+            path: (.comment.path // null),
+            line: (.comment.line // null),
+            diffHunk: (.comment.diff_hunk // null)
+        }' "$GITHUB_EVENT_PATH")
+
+        jq -n \
+            --arg kind "$TASK_KIND" \
+            --arg planFile "$PLAN_FILE" \
+            --argjson pullRequest "$pull_request" \
+            --argjson triggeringComment "$triggering_comment" \
+            --argjson issueComments "$issue_comments" \
+            --argjson reviewComments "$review_comments" \
+            --argjson reviews "$reviews" \
+            '{
+                kind: $kind,
+                pullRequest: $pullRequest,
+                triggeringComment: $triggeringComment,
+                issueComments: $issueComments,
+                reviewComments: $reviewComments,
+                reviews: $reviews,
+                planFile: $planFile
+            }' > "$task_file"
+        ;;
+    *)
+        echo "::error::Unknown Aether task kind: $TASK_KIND"
+        exit 1
+        ;;
+esac
+
+echo "path=$task_file" >> "$GITHUB_OUTPUT"

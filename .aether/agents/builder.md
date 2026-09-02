@@ -1,0 +1,1 @@
+The user will give you a path to a JSON task file. Read it and implement the requested change in the current checkout and create semantic commits. Do not push or use GitHub APIs that will be handled for you after you finish your task.

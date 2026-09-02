@@ -23,8 +23,12 @@ jobs:
     name: Aether agent
     if: >-
       (github.event_name == 'issues'
-       && contains(fromJSON('["aether:plan", "aether:implement"]'), github.event.label.name)) ||
-      (github.event_name != 'issues'
+       && github.event.label.name == 'assign-agent') ||
+      (github.event_name == 'issue_comment'
+       && github.event.issue.pull_request != null
+       && startsWith(github.event.comment.body, '/aether')
+       && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)) ||
+      (github.event_name == 'pull_request_review_comment'
        && startsWith(github.event.comment.body, '/aether')
        && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ubuntu-latest
@@ -70,6 +74,12 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           persist-credentials: false
 
+      - name: Stage trusted automation scripts
+        run: |
+          mkdir -p "$RUNNER_TEMP/aether-agent"
+          cp scripts/aether-agent/{resolve-target,build-task,commit-and-push,open-pull-request,report-back} \
+            "$RUNNER_TEMP/aether-agent/"
+
       - name: Resolve target
         id: target
         env:
@@ -81,7 +91,7 @@ jobs:
           REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
           IS_PULL_REQUEST: ${{ github.event.issue.pull_request != null }}
           LABEL_NAME: ${{ github.event.label.name }}
-        run: ./scripts/aether-agent/resolve-target
+        run: "$RUNNER_TEMP/aether-agent/resolve-target"
 
       - name: Prepare branch
         id: branch
@@ -126,37 +136,30 @@ jobs:
           echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
           "$CARGO_HOME/bin/aether" --version
 
-      - name: Build prompt
-        id: prompt
+      - name: Build task
+        id: task
         env:
-          MODE: ${{ steps.target.outputs.mode }}
+          TASK_KIND: ${{ steps.target.outputs.task_kind }}
           NUMBER: ${{ steps.target.outputs.number }}
-          BASE: ${{ steps.target.outputs.base }}
-          ISSUE_TITLE: ${{ github.event.issue.title }}
-          ISSUE_BODY: ${{ github.event.issue.body }}
-          COMMENT_BODY: ${{ github.event.comment.body }}
-          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
-          COMMENT_PATH: ${{ github.event.comment.path }}
-          COMMENT_LINE: ${{ github.event.comment.line }}
-          COMMENT_DIFF_HUNK: ${{ github.event.comment.diff_hunk }}
-          COMMIT_MESSAGE_FILE: ${{ runner.temp }}/commit-message.txt
           PLAN_FILE: ${{ steps.target.outputs.plan_file }}
-        run: ./scripts/aether-agent/build-prompt
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: "$RUNNER_TEMP/aether-agent/build-task"
 
       - name: Run Aether
         env:
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          PROMPT_PATH: ${{ steps.prompt.outputs.path }}
+          AGENT: ${{ steps.target.outputs.agent }}
+          TASK_PATH: ${{ steps.task.outputs.path }}
         run: |
           set -euo pipefail
-          aether headless \
-            --agent Cheap \
+          env -u GH_TOKEN -u GITHUB_TOKEN aether headless \
+            --agent "$AGENT" \
             --cwd "$GITHUB_WORKSPACE" \
             --mcp-config .aether/github-agent/mcp.json \
             --output json \
             --events text,tool_call,tool_result,tool_error,turn_ended \
-            < "$PROMPT_PATH" \
+            "$TASK_PATH" \
             | tee "$RUNNER_TEMP/aether-headless.jsonl"
 
       - name: Commit and push
@@ -167,8 +170,9 @@ jobs:
           BRANCH: ${{ steps.target.outputs.branch }}
           NUMBER: ${{ steps.target.outputs.number }}
           MODE: ${{ steps.target.outputs.mode }}
+          PLAN_FILE: ${{ steps.target.outputs.plan_file }}
           START_SHA: ${{ steps.branch.outputs.sha }}
-        run: ./scripts/aether-agent/commit-and-push
+        run: "$RUNNER_TEMP/aether-agent/commit-and-push"
 
       - name: Open pull request
         id: pr
@@ -183,7 +187,7 @@ jobs:
           NUMBER: ${{ steps.target.outputs.number }}
           SUBJECT: ${{ steps.push.outputs.subject }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: ./scripts/aether-agent/open-pull-request
+        run: "$RUNNER_TEMP/aether-agent/open-pull-request"
 
       - name: Mark pull request ready
         if: steps.push.outputs.implemented == 'true'
@@ -205,4 +209,4 @@ jobs:
           PUSHED: ${{ steps.push.outputs.pushed }}
           FAILED: ${{ contains(fromJSON('["failure", "cancelled"]'), job.status) }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: ./scripts/aether-agent/report-back
+        run: "$RUNNER_TEMP/aether-agent/report-back"

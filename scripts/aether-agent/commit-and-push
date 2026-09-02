@@ -7,18 +7,23 @@ if [[ ! -s "$message_file" ]]; then
     printf 'chore: apply Aether changes for #%s\n' "$NUMBER" > "$message_file"
 fi
 
-# A plan run may only produce a plan, so stage it and discard whatever else the agent touched. `plans/`
-# is gitignored at every depth, hence the force; once tracked, later revisions stage through `git add --all`.
 if [[ "$MODE" == "plan" ]]; then
-    if [[ -d "$PLANS_DIR" ]]; then
-        git add --force "$PLANS_DIR"
+    saved_plan="$RUNNER_TEMP/$(basename "$PLAN_FILE")"
+    if [[ -f "$PLAN_FILE" ]]; then
+        cp "$PLAN_FILE" "$saved_plan"
     fi
-    git checkout -- .
-    git clean --force --quiet -d
-fi
 
-# The agent is free to commit its own work, so only commit what it left behind.
-git add --all
+    git reset --hard "$START_SHA"
+    git clean --force --quiet -d
+
+    if [[ -f "$saved_plan" ]]; then
+        mkdir -p "$(dirname "$PLAN_FILE")"
+        cp "$saved_plan" "$PLAN_FILE"
+        git add --force "$PLAN_FILE"
+    fi
+else
+    git add --all
+fi
 if ! git diff --cached --quiet; then
     git commit --file "$message_file"
 fi
