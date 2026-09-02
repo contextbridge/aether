@@ -28,7 +28,7 @@ use agent_client_protocol::{Agent, Client, ConnectionTo};
 use futures::FutureExt;
 use llm::ProviderConnectionOverrides;
 use llm::testing::FakeLlmProvider;
-use llm::{ChatMessage, Context, LlmResponse, StreamingModelProvider};
+use llm::{ChatMessage, Context, LlmResponse, SessionUsageEvent, StreamingModelProvider};
 use mcp_utils::client::{InMemoryServerSpec, McpServer, McpTransport, ToolExposure};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -388,6 +388,7 @@ impl RuntimeFactory for FakeRuntimeFactory {
         agent: AgentKey,
         spec: &AgentSpec,
         initial_messages: Vec<ChatMessage>,
+        usage_seed: Option<SessionUsageEvent>,
         runtime_event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Result<AgentRuntime, SessionError> {
         let def = self
@@ -428,6 +429,9 @@ impl RuntimeFactory for FakeRuntimeFactory {
             .ok_or_else(|| SessionError::McpOperation("fake MCP bootstrap aborted".to_string()))?;
         let mcp_handle = spawn.handle().clone();
         let mut builder = AgentBuilder::new(provider).max_auto_continues(0);
+        if let Some(last) = &usage_seed {
+            builder = builder.resume_usage(last);
+        }
         for prompt in &spec.prompts {
             builder = builder.system_prompt(prompt.clone());
         }
@@ -461,6 +465,7 @@ impl RuntimeFactory for StubRuntimeFactory {
         agent: AgentKey,
         _spec: &AgentSpec,
         _initial_messages: Vec<ChatMessage>,
+        _usage_seed: Option<SessionUsageEvent>,
         runtime_event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Result<AgentRuntime, SessionError> {
         let parts = self

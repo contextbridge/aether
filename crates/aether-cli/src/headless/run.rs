@@ -132,11 +132,17 @@ fn event_kind(msg: &AgentEvent) -> Option<CliEventKind> {
         }
         AgentEvent::Turn(TurnEvent::AutoContinue { .. }) => Some(CliEventKind::AutoContinue),
         AgentEvent::Model(ModelEvent::Switched { .. }) => Some(CliEventKind::ModelSwitched),
-        AgentEvent::Tool(ToolEvent::Progress { .. } | ToolEvent::TaskStatus { .. }) => Some(CliEventKind::ToolProgress),
+        AgentEvent::Tool(
+            ToolEvent::Progress { .. }
+            | ToolEvent::DisplayUpdate { .. }
+            | ToolEvent::SubAgentProgress { .. }
+            | ToolEvent::TaskStatus { .. },
+        ) => Some(CliEventKind::ToolProgress),
         AgentEvent::Context(ContextEvent::CompactionStarted { .. }) => Some(CliEventKind::ContextCompactionStarted),
         AgentEvent::Context(ContextEvent::CompactionEnded { .. }) => Some(CliEventKind::ContextCompactionEnded),
         AgentEvent::Context(ContextEvent::CompactionResult { .. }) => Some(CliEventKind::ContextCompactionResult),
         AgentEvent::Context(ContextEvent::UsageUpdated { .. }) => Some(CliEventKind::ContextUsage),
+        AgentEvent::SessionUsage(_) => Some(CliEventKind::SessionUsage),
         AgentEvent::Context(ContextEvent::Cleared) => Some(CliEventKind::ContextCleared),
         AgentEvent::Turn(TurnEvent::Started { .. }) => Some(CliEventKind::TurnStarted),
         AgentEvent::Turn(TurnEvent::Ended { .. }) => Some(CliEventKind::TurnEnded),
@@ -223,6 +229,17 @@ fn format_text(msg: &AgentEvent) -> Option<String> {
             Some(format!("Tool progress [{}]: {bar}{suffix}", request.name))
         }
 
+        AgentEvent::Tool(ToolEvent::DisplayUpdate { request, meta }) => {
+            Some(format!("Tool progress [{}]: {} - {}", request.name, meta.display.title, meta.display.value))
+        }
+
+        AgentEvent::Tool(ToolEvent::SubAgentProgress { payload, .. }) => match &payload.event {
+            AgentEvent::SessionUsage(_) => None,
+            event => {
+                format_text(event).map(|text| format!("Sub-agent {} [{}]: {text}", payload.agent_name, payload.task_id))
+            }
+        },
+
         AgentEvent::Context(ContextEvent::CompactionStarted { message_count }) => {
             Some(format!("Context compaction started ({message_count} messages)"))
         }
@@ -237,12 +254,11 @@ fn format_text(msg: &AgentEvent) -> Option<String> {
             Some(format!("Context compacted: {messages_removed} messages removed. {summary}"))
         }
 
-        AgentEvent::Context(ContextEvent::UsageUpdated { usage }) => Some(format!(
-            "Tokens: {} in, {} out (total: {} in, {} out)",
-            usage.input_tokens, usage.output_tokens, usage.total_input_tokens, usage.total_output_tokens
-        )),
+        AgentEvent::Context(ContextEvent::UsageUpdated { usage }) => Some(format_context_usage(usage)),
 
         AgentEvent::Context(ContextEvent::Cleared) => Some("Context cleared".to_string()),
+
+        AgentEvent::SessionUsage(usage) => Some(format_session_usage(usage)),
 
         AgentEvent::Turn(
             TurnEvent::Started { .. }
@@ -262,6 +278,36 @@ fn format_text(msg: &AgentEvent) -> Option<String> {
     }
 }
 
+fn format_context_usage(usage: &llm::ContextUsage) -> String {
+    match (usage.context_limit, usage.usage_ratio) {
+        (Some(limit), Some(ratio)) => {
+            format!("Context: {} / {limit} tokens ({:.1}%)", usage.input_tokens, ratio * 100.0)
+        }
+        _ => format!("Context: {} tokens", usage.input_tokens),
+    }
+}
+
+fn format_session_usage(usage: &llm::SessionUsageEvent) -> String {
+    let call_cost =
+        usage.estimated_cost.map_or_else(|| "unknown".to_string(), |cost| format!("${:.6}", cost.total_usd));
+    let totals = &usage.totals;
+    let cumulative_cost = if totals.is_fully_priced() {
+        format!("estimated total: ${:.6}", totals.estimated_usd)
+    } else {
+        format!("known subtotal: ${:.6}, {} unpriced calls", totals.estimated_usd, totals.unpriced_calls)
+    };
+    format!(
+        "Session usage #{} [{}]: {} in, {} out (call cost: {}, cumulative: {} tokens, {})",
+        usage.sequence,
+        usage.source.agent_name,
+        usage.tokens.input_tokens,
+        usage.tokens.output_tokens,
+        call_cost,
+        totals.tokens.total_tokens(),
+        cumulative_cost,
+    )
+}
+
 fn setup_tracing(verbose: bool) {
     use tracing_subscriber::Layer;
     use tracing_subscriber::filter::EnvFilter;
@@ -277,9 +323,10 @@ fn setup_tracing(verbose: bool) {
 
 #[cfg(test)]
 mod tests {
-    use aether_core::events::{ContextUsage, StreamState};
+    use aether_core::events::StreamState;
 
     use super::*;
+    use llm::ContextUsage;
 
     #[test]
     fn format_text_formats_complete_text() {
@@ -365,7 +412,7 @@ mod tests {
     #[test]
     fn format_text_formats_llm_call_failure_that_will_retry() {
         let msg = AgentEvent::Turn(TurnEvent::LlmCallEnded {
-            purpose: aether_core::events::LlmCallPurpose::Chat,
+            purpose: llm::LlmCallPurpose::Chat,
             outcome: LlmCallOutcome::Failed { error: "overloaded".to_string(), will_retry: true },
         });
         assert_eq!(format_text(&msg), Some("LLM call failed (will retry): overloaded".to_string()));
@@ -374,7 +421,7 @@ mod tests {
     #[test]
     fn format_text_skips_terminal_llm_call_failure() {
         let msg = AgentEvent::Turn(TurnEvent::LlmCallEnded {
-            purpose: aether_core::events::LlmCallPurpose::Chat,
+            purpose: llm::LlmCallPurpose::Chat,
             outcome: LlmCallOutcome::Failed { error: "boom".to_string(), will_retry: false },
         });
         assert_eq!(format_text(&msg), None);
@@ -432,10 +479,7 @@ mod tests {
 
     #[test]
     fn format_text_formats_context_usage_update() {
-        assert_eq!(
-            format_text(&usage_update()),
-            Some("Tokens: 1500 in, 250 out (total: 5000 in, 800 out)".to_string())
-        );
+        assert_eq!(format_text(&usage_update()), Some("Context: 100000 / 200000 tokens (50.0%)".to_string()));
     }
 
     #[test]
@@ -538,6 +582,10 @@ mod tests {
                 CliEventKind::ContextCompactionResult,
             ),
             (usage_update(), CliEventKind::ContextUsage),
+            (
+                AgentEvent::SessionUsage(llm::testing::session_usage_event(1, llm::TokenUsage::new(1, 1))),
+                CliEventKind::SessionUsage,
+            ),
             (AgentEvent::Context(ContextEvent::Cleared), CliEventKind::ContextCleared),
             (AgentEvent::Turn(TurnEvent::Started { content: vec![] }), CliEventKind::TurnStarted),
             (AgentEvent::turn_ended(TurnOutcome::Completed), CliEventKind::TurnEnded),
@@ -545,7 +593,7 @@ mod tests {
             (llm_call_started(0), CliEventKind::LlmCallStarted),
             (
                 AgentEvent::Turn(TurnEvent::LlmCallEnded {
-                    purpose: aether_core::events::LlmCallPurpose::Chat,
+                    purpose: llm::LlmCallPurpose::Chat,
                     outcome: aether_core::events::LlmCallOutcome::Cancelled,
                 }),
                 CliEventKind::LlmCallEnded,
@@ -623,7 +671,7 @@ mod tests {
 
     fn retry_scheduled(attempt: u32, delay_ms: u64) -> AgentEvent {
         AgentEvent::Turn(TurnEvent::RetryScheduled {
-            purpose: aether_core::events::LlmCallPurpose::Chat,
+            purpose: llm::LlmCallPurpose::Chat,
             attempt,
             max_attempts: 3,
             delay_ms,
@@ -632,11 +680,9 @@ mod tests {
 
     fn llm_call_started(attempt: u32) -> AgentEvent {
         AgentEvent::Turn(TurnEvent::LlmCallStarted {
-            purpose: aether_core::events::LlmCallPurpose::Chat,
-            provider: None,
-            model: None,
+            purpose: llm::LlmCallPurpose::Chat,
+            model: llm::ModelIdentity::default(),
             display_name: "test".to_string(),
-            pricing: None,
             attempt,
             max_attempts: 3,
         })
@@ -645,11 +691,9 @@ mod tests {
     fn usage_update() -> AgentEvent {
         AgentEvent::Context(ContextEvent::UsageUpdated {
             usage: ContextUsage {
-                input_tokens: 1500,
-                output_tokens: 250,
-                total_input_tokens: 5000,
-                total_output_tokens: 800,
-                ..Default::default()
+                input_tokens: 100_000.into(),
+                context_limit: Some(200_000.into()),
+                usage_ratio: Some(0.5),
             },
         })
     }

@@ -1,10 +1,10 @@
 use acp_utils::notifications::{
-    ContextClearedParams, ContextCompactionParams, SubAgentEvent, SubAgentProgressParams, SubAgentToolCallUpdate,
-    SubAgentToolError, SubAgentToolRequest, SubAgentToolResult,
+    ContextClearedParams, ContextCompactionParams, SessionUsageParams, SubAgentEvent, SubAgentProgressParams,
+    SubAgentToolCallUpdate, SubAgentToolError, SubAgentToolRequest, SubAgentToolResult,
 };
 use aether_core::events::{
-    AgentEvent, ContextEvent, MessageEvent, ModelEvent, SubAgentProgressPayload, ToolEvent, TurnEvent, TurnOutcome,
-    aether_tool_name_meta, humanize_tool_name, parse_tool_call_chunk,
+    AgentEvent, ContextEvent, MessageEvent, ModelEvent, ToolEvent, TurnEvent, TurnOutcome, aether_tool_name_meta,
+    humanize_tool_name, parse_tool_call_chunk,
 };
 use agent_client_protocol::schema::v1::{
     self as acp, Content, ContentBlock, ContentChunk, Diff, MessageId, PlanEntry, PlanEntryPriority, PlanEntryStatus,
@@ -27,6 +27,7 @@ pub enum AgentExtNotification {
     ContextCompaction(ContextCompactionParams),
     ContextCleared(ContextClearedParams),
     SubAgentProgress(Box<SubAgentProgressParams>),
+    SessionUsage(Box<SessionUsageParams>),
 }
 
 impl AgentExtNotification {
@@ -35,6 +36,7 @@ impl AgentExtNotification {
             Self::ContextCompaction(params) => params.method(),
             Self::ContextCleared(params) => params.method(),
             Self::SubAgentProgress(params) => params.method(),
+            Self::SessionUsage(params) => params.method(),
         }
     }
 
@@ -43,6 +45,7 @@ impl AgentExtNotification {
             Self::ContextCompaction(params) => params.to_untyped_message(),
             Self::ContextCleared(params) => params.to_untyped_message(),
             Self::SubAgentProgress(params) => params.to_untyped_message(),
+            Self::SessionUsage(params) => params.to_untyped_message(),
         }
     }
 }
@@ -56,13 +59,19 @@ pub fn try_into_agent_notification(msg: &AgentEvent) -> Option<AgentExtNotificat
             Some(AgentExtNotification::ContextCompaction(ContextCompactionParams { active: false }))
         }
 
-        AgentEvent::Tool(ToolEvent::Progress { request, message, .. }) => {
-            let msg_str = message.as_ref()?;
-            let params = try_parse_sub_agent_progress(msg_str, request)?;
-            Some(AgentExtNotification::SubAgentProgress(Box::new(params)))
+        AgentEvent::Tool(ToolEvent::SubAgentProgress { request, payload }) => {
+            Some(AgentExtNotification::SubAgentProgress(Box::new(SubAgentProgressParams {
+                parent_tool_id: request.id.clone(),
+                task_id: payload.task_id.clone(),
+                agent_name: payload.agent_name.clone(),
+                event: to_sub_agent_event(&payload.event),
+            })))
         }
         AgentEvent::Context(ContextEvent::Cleared) => {
             Some(AgentExtNotification::ContextCleared(ContextClearedParams::default()))
+        }
+        AgentEvent::SessionUsage(usage) => {
+            Some(AgentExtNotification::SessionUsage(Box::new(SessionUsageParams { usage: usage.clone() })))
         }
         _ => None,
     }
@@ -94,12 +103,9 @@ pub(crate) fn map_agent_event_to_notification(
     mode: NotificationMode,
 ) -> Option<SessionNotification> {
     match msg {
-        AgentEvent::Context(ContextEvent::UsageUpdated { usage }) => usage.context_limit.map(|context_limit| {
-            SessionNotification::new(
-                session_id,
-                SessionUpdate::UsageUpdate(UsageUpdate::new(usage.input_tokens.into(), context_limit.into())),
-            )
-        }),
+        AgentEvent::Context(ContextEvent::UsageUpdated { usage }) => {
+            map_context_usage_to_notification(session_id, usage)
+        }
 
         AgentEvent::Message(MessageEvent::Text { message_id, chunk, is_complete, .. }) => map_chunk_to_notification(
             session_id,
@@ -170,7 +176,11 @@ pub(crate) fn map_agent_event_to_notification(
         }
 
         AgentEvent::Tool(ToolEvent::Progress { request, progress, total, message }) => {
-            map_tool_progress_to_notification(session_id, request, *progress, *total, message.as_ref())
+            Some(map_tool_progress_to_notification(session_id, request, *progress, *total, message.as_deref()))
+        }
+
+        AgentEvent::Tool(ToolEvent::DisplayUpdate { request, meta }) => {
+            Some(map_display_update_to_notification(session_id, request, meta))
         }
 
         AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Failed { error } }) => {
@@ -196,8 +206,13 @@ pub(crate) fn map_agent_event_to_notification(
             | TurnEvent::LlmCallEnded { .. }
             | TurnEvent::AutoContinue { .. },
         )
-        | AgentEvent::Tool(ToolEvent::ExecutionStarted { .. } | ToolEvent::DefinitionsUpdated { .. })
-        | AgentEvent::Model(ModelEvent::Switched { .. }) => None,
+        | AgentEvent::Tool(
+            ToolEvent::ExecutionStarted { .. }
+            | ToolEvent::DefinitionsUpdated { .. }
+            | ToolEvent::SubAgentProgress { .. },
+        )
+        | AgentEvent::Model(ModelEvent::Switched { .. })
+        | AgentEvent::SessionUsage(_) => None,
     }
 }
 
@@ -314,38 +329,29 @@ fn map_tool_error_to_notification(session_id: SessionId, error: &ToolCallError) 
     )
 }
 
+fn map_context_usage_to_notification(session_id: SessionId, usage: &llm::ContextUsage) -> Option<SessionNotification> {
+    usage.context_limit.map(|context_limit| {
+        SessionNotification::new(
+            session_id,
+            SessionUpdate::UsageUpdate(UsageUpdate::new(usage.input_tokens.into(), context_limit.into())),
+        )
+    })
+}
+
 fn map_tool_progress_to_notification(
     session_id: SessionId,
     request: &ToolCallRequest,
     progress: f64,
     total: Option<f64>,
-    message: Option<&String>,
-) -> Option<SessionNotification> {
+    message: Option<&str>,
+) -> SessionNotification {
     tracing::debug!("Tool progress: {message:?}");
-
-    if message.and_then(|msg_str| try_parse_sub_agent_progress(msg_str, request)).is_some() {
-        return None;
-    }
-
-    if let Some(result_meta) = message.and_then(|m| try_parse_display_meta(m)) {
-        let fields = ToolCallUpdateFields::new().status(ToolCallStatus::InProgress).title(&result_meta.display.title);
-
-        let mut update = ToolCallUpdate::new(ToolCallId::new(request.id.clone()), fields);
-
-        if !result_meta.display.value.is_empty() {
-            let mut meta_map = serde_json::Map::new();
-            meta_map.insert("display_value".into(), result_meta.display.value.into());
-            update = update.meta(meta_map);
-        }
-
-        return Some(SessionNotification::new(session_id, SessionUpdate::ToolCallUpdate(update)));
-    }
 
     let total_str = total.map_or_else(|| "?".to_string(), |t| t.to_string());
     let progress_text = message
         .map_or_else(|| format!("Progress: {progress}/{total_str}"), |msg| format!("{msg} ({progress}/{total_str})"));
 
-    Some(SessionNotification::new(
+    SessionNotification::new(
         session_id,
         SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
             ToolCallId::new(request.id.clone()),
@@ -353,23 +359,24 @@ fn map_tool_progress_to_notification(
                 Content::new(ContentBlock::Text(TextContent::new(progress_text))),
             )]),
         )),
-    ))
+    )
 }
 
-fn try_parse_display_meta(message: &str) -> Option<ToolResultMeta> {
-    serde_json::from_str::<ToolResultMeta>(message).ok()
-}
+fn map_display_update_to_notification(
+    session_id: SessionId,
+    request: &ToolCallRequest,
+    meta: &ToolResultMeta,
+) -> SessionNotification {
+    let fields = ToolCallUpdateFields::new().status(ToolCallStatus::InProgress).title(&meta.display.title);
+    let mut update = ToolCallUpdate::new(ToolCallId::new(request.id.clone()), fields);
 
-/// Attempt to parse a tool progress message as sub-agent progress.
-fn try_parse_sub_agent_progress(message: &str, request: &llm::ToolCallRequest) -> Option<SubAgentProgressParams> {
-    let payload: SubAgentProgressPayload = serde_json::from_str(message).ok()?;
+    if !meta.display.value.is_empty() {
+        let mut meta_map = serde_json::Map::new();
+        meta_map.insert("display_value".into(), meta.display.value.clone().into());
+        update = update.meta(meta_map);
+    }
 
-    Some(SubAgentProgressParams {
-        parent_tool_id: request.id.clone(),
-        task_id: payload.task_id,
-        agent_name: payload.agent_name,
-        event: to_sub_agent_event(&payload.event),
-    })
+    SessionNotification::new(session_id, SessionUpdate::ToolCallUpdate(update))
 }
 
 /// Project the full agent event down to the lightweight sub-agent wire type.
@@ -405,7 +412,8 @@ mod tests {
     use super::*;
     use acp_utils::notifications::SubAgentEvent;
     use aether_core::events::CompactionOutcome;
-    use aether_core::events::ContextUsage;
+    use aether_core::events::SubAgentProgressPayload;
+    use llm::ContextUsage;
     use llm::ToolCallRequest;
 
     #[test]
@@ -454,7 +462,11 @@ mod tests {
     #[test]
     fn context_usage_maps_to_native_acp_usage_update() {
         let event = AgentEvent::Context(ContextEvent::UsageUpdated {
-            usage: ContextUsage { input_tokens: 75_000, context_limit: Some(100_000), ..ContextUsage::default() },
+            usage: ContextUsage {
+                input_tokens: 75_000.into(),
+                context_limit: Some(100_000.into()),
+                ..ContextUsage::default()
+            },
         });
 
         let notification = map_agent_event_to_session_notification(SessionId::new("session"), &event)
@@ -536,7 +548,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_progress_emits_ext_notification() -> Result<(), String> {
+    fn test_sub_agent_progress_emits_ext_notification() -> Result<(), String> {
         let session_id = acp::SessionId::new("test-session");
 
         let payload = SubAgentProgressPayload {
@@ -548,17 +560,14 @@ mod tests {
                 is_complete: false,
             }),
         };
-        let serialized_msg = serde_json::to_string(&payload).unwrap();
 
-        let tool_progress = AgentEvent::Tool(ToolEvent::Progress {
+        let tool_progress = AgentEvent::Tool(ToolEvent::SubAgentProgress {
             request: ToolCallRequest {
                 id: "call_123".to_string(),
                 name: "plugins__spawn_subagent".to_string(),
                 arguments: "{}".to_string(),
             },
-            progress: 42.0,
-            total: Some(100.0),
-            message: Some(serialized_msg.clone()),
+            payload: Box::new(payload),
         });
 
         assert!(map_agent_event_to_session_notification(session_id.clone(), &tool_progress).is_none());
@@ -890,12 +899,11 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_progress_with_display_meta_emits_meta_update() -> Result<(), String> {
+    fn test_display_update_emits_meta_update() -> Result<(), String> {
         use mcp_utils::display_meta::ToolDisplayMeta;
 
         let session_id = acp::SessionId::new("test-session");
         let meta = ToolResultMeta::from(ToolDisplayMeta::new("Read file", "main.rs"));
-        let serialized = serde_json::to_string(&meta).unwrap();
 
         let request = ToolCallRequest {
             id: "call_789".to_string(),
@@ -903,8 +911,9 @@ mod tests {
             arguments: "{}".to_string(),
         };
 
-        let notification = map_tool_progress_to_notification(session_id, &request, 0.0, None, Some(&serialized))
-            .ok_or("should produce notification")?;
+        let event = AgentEvent::Tool(ToolEvent::DisplayUpdate { request, meta });
+        let notification = map_agent_event_to_session_notification(session_id, &event)
+            .ok_or("display update should produce a notification")?;
 
         let update = match notification.update {
             acp::SessionUpdate::ToolCallUpdate(update) => update,

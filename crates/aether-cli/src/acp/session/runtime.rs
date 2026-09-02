@@ -7,7 +7,7 @@ use aether_core::agent_spec::AgentSpec;
 use aether_core::core::{AgentDeps, AgentHandle};
 use aether_core::events::{AgentCommand, AgentEvent, Command};
 use aether_core::mcp::{McpHandle, McpRuntime};
-use llm::ChatMessage;
+use llm::{ChatMessage, SessionUsageEvent};
 use mcp_utils::client::{
     ElicitingOAuthHandler, McpClientEvent, McpConnectionDetails, McpError, McpServer, McpServerStatusEntry,
     OAuthHandlerFactory,
@@ -121,6 +121,7 @@ pub(crate) trait RuntimeFactory: Send + Sync {
         agent: AgentKey,
         spec: &AgentSpec,
         initial_messages: Vec<ChatMessage>,
+        usage_seed: Option<SessionUsageEvent>,
         runtime_event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Result<AgentRuntime, SessionError>;
 }
@@ -144,6 +145,7 @@ impl RuntimeFactory for ProductionRuntimeFactory {
         agent: AgentKey,
         spec: &AgentSpec,
         initial_messages: Vec<ChatMessage>,
+        usage_seed: Option<SessionUsageEvent>,
         runtime_event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Result<AgentRuntime, SessionError> {
         let extra_servers = self.mcp_servers.clone();
@@ -151,6 +153,9 @@ impl RuntimeFactory for ProductionRuntimeFactory {
         let mut builder = RuntimeBuilder::from_spec(self.cwd.clone(), spec.clone())
             .extra_servers(extra_servers)
             .agent_deps(self.agent_deps.clone());
+        if let Some(last) = usage_seed {
+            builder = builder.resume_usage(last);
+        }
         if self.agent_deps.supports_mcp_url_elicitation() {
             builder = builder.oauth_handler_factory(mcp_oauth_handler_factory());
         }

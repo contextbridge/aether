@@ -3,7 +3,7 @@ use acp_utils::notifications::McpNotification;
 use acp_utils::server::AcpServerError;
 use aether_auth::OAuthCredentialStorage;
 use aether_core::events::{AgentCommand, AgentEvent, Command, ToolEvent, TurnOutcome};
-use aether_sessions::model::{SessionControlEvent, SessionEvent, UserEvent};
+use aether_sessions::model::{SessionControlEvent, SessionEvent, UserEvent, last_session_usage};
 use aether_sessions::transcript::conversation_messages_from_events;
 use agent_client_protocol::schema::v1::{self as acp, PromptResponse, SessionId, SetSessionConfigOptionResponse};
 use agent_client_protocol::{Client, ConnectionTo, Responder};
@@ -271,7 +271,11 @@ impl SessionActor {
         }
 
         let spec = self.specs.get(target).ok_or_else(|| SessionError::AgentNotFound(target.display_name()))?;
-        let runtime = self.runtime_factory.spawn(target.clone(), spec, messages, self.runtime_event_tx.clone()).await?;
+        let usage_seed = last_session_usage(&self.transcript).cloned();
+        let runtime = self
+            .runtime_factory
+            .spawn(target.clone(), spec, messages, usage_seed, self.runtime_event_tx.clone())
+            .await?;
         self.runtimes.insert(target.clone(), runtime);
         Ok(())
     }
