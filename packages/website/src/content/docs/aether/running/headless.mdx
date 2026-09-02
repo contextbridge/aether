@@ -217,4 +217,15 @@ cat schema.json | aether generate --model zai:glm-5.1 --prompt-file -
 | `--reasoning-effort` | `minimal \| low \| medium \| high \| xhigh \| max` | Reasoning effort for models that support extended thinking.              |
 | `--output`           | `text \| pretty \| json`                      | Output format. `text` prints the raw response; `json`/`pretty` wrap it as `{ "text": "<response>", "model": "<model>" }`. Defaults to `text`. |
 
+### `mcp`
+
+Discover and invoke MCP tools from the shell. This is how agents — and you — call deferred (proxied) tools directly:
+
+```bash
+aether mcp --help
+aether mcp <server> <tool> --json '{"state":"open"}'
+```
+
+See [Tools](/aether/settings/mcp-servers/#merging-and-deferred-tool-behavior) for the `--json`, stdin, and `--timeout` details.
+
 See [Getting Started](/getting-started/overview/) and [Settings](/aether/settings/overview/#agents) for project scaffolding details.

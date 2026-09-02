@@ -62,7 +62,7 @@ Any trailing args after plan flags are treated as an external submit command. Wh
 }
 ```
 
-Without a submit command, `submit_plan` uses MCP elicitation and the client displays a plan review UI.
+Without a submit command, `submit_plan` uses MCP elicitation and the client displays a plan review UI. Aether's terminal UI renders it as a dedicated [plan review screen](/aether/terminal/plan-review/); other ACP clients show their own form.
 
 ## Tools
 
@@ -78,8 +78,8 @@ Without a submit command, `submit_plan` uses MCP elicitation and the client disp
 
 | Field      | Type     | Description                                                              |
 | ---------- | -------- | ------------------------------------------------------------------------ |
-| `planName` | `string` | Stable plan identifier using only letters, numbers, dashes, underscores. |
-| `content`  | `string` | Markdown plan body.                                                      |
+| `planName` | `string` | Stable plan identifier using only letters, numbers, dashes, underscores. It cannot start or end with a dash or underscore. |
+| `content`  | `string` | Markdown plan body. Must not be empty.                                    |
 
 ### Output
 

@@ -41,6 +41,8 @@ The built-in survey server does not read any args.
 | `accepted` | `boolean`        | `true` when the user accepted/submitted the form. |
 | `data`     | `object \| null` | Structured response data when accepted.           |
 
+If the connected client does not support elicitation, `ask_user` returns an `ELICITATION_UNSUPPORTED` tool error instead of hanging.
+
 ## Examples
 
 Confirm a destructive operation:

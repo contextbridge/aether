@@ -28,9 +28,9 @@ Type `/` to open the command picker. It supports fuzzy search — just start typ
 | Command     | Description                                             |
 | ----------- | ------------------------------------------------------- |
 | `/clear`    | Start a new [session](/aether/terminal/sessions/)       |
-| `/settings` | Open the [settings overlay](/aether/terminal/settings/) |
 | `/resume`   | Resume a previous [session](/aether/terminal/sessions/) |
-| `/move`     | Move changes to another workspace (when supported by the agent) |
+| `/settings` | Open the [settings overlay](/aether/terminal/settings/) |
+| `/move`     | Move changes to another workspace — pick an existing one or create a new workspace by name (when supported by the agent) |
 
 ### Agent-provided commands
 
@@ -50,7 +50,7 @@ Type `@` to open the file picker. It indexes files in the working directory (res
 Selected files are read and sent to the agent as content blocks alongside your message:
 
 - Text files are embedded as ACP resources; text over 1 MB is truncated
-- Image and audio files can be sent as media content blocks when the agent advertises support
+- Image and audio files can be sent as media content blocks when both the agent and the selected model support them
 - Media attachments are limited to 10 MB
 - Binary files that cannot be decoded as UTF-8 are skipped with a warning
 - Truncated files include a warning

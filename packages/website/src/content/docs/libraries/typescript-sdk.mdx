@@ -123,7 +123,7 @@ Because `aether headless` exits non-zero on a failed turn, `runHeadless()` **rej
 
 ### Options
 
-`AetherHeadlessOptions` mirrors the [headless CLI flags](/aether/running/headless/#flags) plus SDK process controls:
+`AetherHeadlessOptions` mirrors the [headless CLI flags](/aether/running/headless/#flags) plus SDK process controls. It does not expose the CLI's `--mcp-config` / `--mcp-config-json` overrides — configure MCP sources through an inline `settings` object instead.
 
 | Option         | Description                                                                                                                                          |
 | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |

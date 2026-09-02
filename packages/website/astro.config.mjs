@@ -122,6 +122,10 @@ export default defineConfig({
             },
             { label: "Git Diff View", slug: "aether/terminal/git-diff" },
             {
+              label: "Plan Review",
+              slug: "aether/terminal/plan-review",
+            },
+            {
               label: "Settings & Themes",
               slug: "aether/terminal/settings",
             },

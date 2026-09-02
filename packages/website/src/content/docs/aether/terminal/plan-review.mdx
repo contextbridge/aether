@@ -1,0 +1,67 @@
+---
+title: Plan Review
+description: Approve or request changes to a submitted plan in a dedicated review screen.
+---
+
+When an agent submits a plan through the [plan server](/aether/built-in-servers/plan/), Aether opens a full-screen review interface instead of a plain form. You read the rendered plan, queue inline comments on specific lines, and then approve the plan or send the comments back as feedback.
+
+## Layout
+
+```text
+┌───────────────────┬────────────────────────────────┐
+│ Outline           │  Plan markdown                 │
+│                   │                                │
+│  # Overview       │  ## Phase 1                   │
+│  # Phase 1        │  Set up the project scaffolding│
+│ > # Phase 2       │                                │
+│  # Testing        │                                │
+├───────────────────┴────────────────────────────────┤
+│ j/k move · c comment · a approve · r request changes│
+└────────────────────────────────────────────────────┘
+```
+
+The outline pane lists the plan's section headings. On narrow terminals (below 60 columns) or for plans without headings, only the plan pane is shown.
+
+## Navigation
+
+| Key | Action |
+| --- | --- |
+| `j` / `↓` | Move down |
+| `k` / `↑` | Move up |
+| `g` / `G` | Jump to the top / end |
+| `n` / `p` | Jump to the next / previous section heading |
+| `h` / `←` | Focus the outline pane |
+| `l` / `→` | Focus the plan pane |
+| `Enter` | From the outline, jump to that section in the plan |
+| `?` | Toggle the shortcuts help overlay |
+
+Mouse clicks focus and select in either pane.
+
+## Comments
+
+| Key | Action |
+| --- | --- |
+| `c` | Add a comment at the current plan line |
+| `Enter` | Queue the comment while editing it |
+| `u` | Undo the last queued comment |
+
+Comments are attached to a plan line number. They are held locally until you make a decision — nothing is sent while you keep reading.
+
+## Decisions
+
+| Key | Action |
+| --- | --- |
+| `a` | Approve the plan |
+| `r` | Request changes and send your comments back |
+| `Esc` | Cancel the review without answering |
+
+- **Approve** submits the decision immediately; queued comments are discarded.
+- **Request changes** compiles every queued comment into structured feedback, grouped by plan section with the line number, the plan line, and your comment text, and returns it to the agent so it can revise the plan with `edit_plan` and submit again.
+- **Cancel** declines the elicitation; the agent sees the review as cancelled rather than approved.
+
+## Typical flow
+
+1. The agent writes a plan with `write_plan` and submits it with `submit_plan`.
+2. The review screen opens with the plan's markdown and outline.
+3. You read the plan, queue line comments with `c` as needed, and remove mistakes with `u`.
+4. Press `r` to request changes — the agent revises the plan and submits again — or `a` to approve.

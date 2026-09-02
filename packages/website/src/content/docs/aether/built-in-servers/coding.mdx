@@ -44,6 +44,14 @@ Permission modes:
 | `edit_file`  | Exact string replacement within a file.              |
 | `list_files` | List directory contents with metadata.               |
 
+### Read-before-edit safety checks
+
+`edit_file` fails unless the file has been read with `read_file` in the same session, and `write_file` refuses to overwrite an existing file it has not read. The errors tell the agent to read the file first, which keeps edits anchored to the actual file contents instead of stale assumptions.
+
+### Read-triggered rules
+
+When `--rules-dir` is configured, rules whose `triggers.read` globs match a read file are appended to that `read_file` result as `<system-reminder>` blocks. Each rule fires once per session — later reads of files matching the same rule don't repeat it. See [Skills, Rules & Commands](/aether/built-in-servers/skills-commands/) for authoring rules.
+
 ## Search
 
 | Tool   | Description                                                                                |
@@ -56,7 +64,7 @@ Permission modes:
 
 | Tool                   | Description                                                                                     |
 | ---------------------- | ----------------------------------------------------------------------------------------------- |
-| `bash`                 | Execute a shell command. Pass `timeout` to cap execution time (max 600000 ms), or `run_in_background` to run it as a background MCP task that returns its complete output at completion. |
+| `bash`                 | Execute a shell command. Pass `timeout` to cap execution time (max 600000 ms), or `run_in_background` to run it as a background MCP task that returns its complete output at completion. `description` briefly states what the command does. |
 
 Because `bash` spawns real subprocesses, it composes with [deferred (proxied) tools](/aether/settings/mcp-servers/#merging-and-deferred-tool-behavior) from other MCP servers via the `aether mcp` CLI — pipelines, redirects, and command substitution all work.
 
@@ -66,6 +74,8 @@ Because `bash` spawns real subprocesses, it composes with [deferred (proxied) to
 | ------------ | ---------------------------------------------------------------------- |
 | `web_fetch`  | Fetch a URL, extract main article content, and convert it to Markdown. |
 | `web_search` | Search the web via Brave Search API. Requires `BRAVE_SEARCH_API_KEY`.  |
+
+`web_fetch` accepts an optional `prompt` describing what to extract and a `timeout` in milliseconds (default 30000, max 60000); fetched content is truncated at 50 KB. `web_search` retries rate-limited requests up to 3 times, honoring the provider's `retry-after`. Both tools accept domain filters (`allowedDomains` / `blockedDomains` for search).
 
 ## LSP tools inside `coding`
 

@@ -17,9 +17,11 @@ If no agents are configured in your user or project settings, Aether starts onbo
 - **Tool tracking** — Follow running tool calls and sub-agent progress.
 - **Plan visualization** — View task/plan status updates emitted by tools.
 - **Inline diffs** — Review file changes in a two-pane [diff viewer](/aether/terminal/git-diff/).
+- **Plan review** — Approve or request changes to submitted plans in a dedicated [review screen](/aether/terminal/plan-review/).
+- **Elicitation forms** — Answer structured questions and confirmations the agent asks mid-run.
 - **Slash commands** — Trigger built-in commands and user-invocable MCP prompts with `/name`.
 - **File attachments** — Attach files to prompts with the `@` picker.
-- **Settings overlay** — Configure model, mode, reasoning, theme, and MCP server auth/status.
+- **Settings overlay** — Configure model, mode, theme, and MCP server auth/status.
 - **Session resume** — Resume previous ACP sessions.
 - **Mouse support** — Click to focus and select, scroll to navigate diffs and lists.
 
@@ -49,3 +51,7 @@ When launched through `aether`, the terminal UI writes Wisp logs under `/tmp/wis
 ```bash
 RUST_LOG=debug aether
 ```
+
+## Notifications
+
+When a prompt you sent finishes successfully, the terminal bell rings so you can switch back to Aether while long runs complete in another window.

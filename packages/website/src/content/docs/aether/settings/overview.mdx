@@ -263,6 +263,8 @@ If `tools` is omitted, the agent can use every tool from its configured MCP serv
 
 Use `agentInvocable` instead of, or in addition to, `userInvocable` when another agent should be able to spawn this one through the [subagents server](/aether/built-in-servers/subagents/).
 
+Every agent must set at least one of `userInvocable` or `agentInvocable` — an entry that sets neither fails settings validation, because it could never be reached.
+
 ## For full schema
 
 See the [field reference](/aether/settings/reference/#agentconfig).

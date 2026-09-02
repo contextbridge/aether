@@ -99,7 +99,7 @@ Fireworks uses `https://api.fireworks.ai/inference/v1` by default. Serverless ca
       "requestModel": "accounts/acme/deployments/coding-prod"
     }
   },
-  "agents": [{ "model": "fireworks:accounts/fireworks/models/glm-5p1", "userInvocable": true }]
+  "agents": [{ "model": "fireworks:accounts/fireworks/models/glm-5p2", "userInvocable": true }]
 }
 ```
 
@@ -241,8 +241,8 @@ The top-level `providers` object (or per-agent `providers`) overrides how Aether
 | --------------------- | --------------------------------------------------------------------------- |
 | `url`                 | Base URL for API requests. Used by OpenAI-compatible, Foundry, and local providers. |
 | `auth`                | Authentication mode: `default` (provider default) or `none` (skip auth). Use `none` only behind a trusted proxy that injects credentials. |
-| `requestModel`        | Overrides the model id sent in requests without changing the catalog identity used for capabilities, context window, and display. |
-| `inferenceProfileArn` | Bedrock application inference profile ARN to route requests through.       |
+| `requestModel`        | Overrides the model id sent in requests without changing the catalog identity used for capabilities, context window, and display. Honored by the OpenAI-compatible providers (DeepSeek, Fireworks AI, Microsoft Foundry, Moonshot, ZAI). |
+| `inferenceProfileArn` | Bedrock application inference profile ARN to route requests through. Bedrock ignores `requestModel` when this is set.       |
 
 ```json title=".aether/settings.json"
 {
