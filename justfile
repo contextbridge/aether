@@ -75,8 +75,13 @@ sdk-e2e *ARGS:
     pnpm sdk:build
     pnpm sdk:e2e {{ARGS}}
 
+# Validate the GitHub-hosted Aether agent automation
+automation-check:
+    jq empty .aether/settings.json .aether/github-agent/mcp.json
+    bash -n scripts/aether-agent/*
+
 # Run all CI checks
-ci: fmt-check lint test-ci doc-check sqlx-check
+ci: fmt-check lint test-ci doc-check sqlx-check automation-check
     pnpm fmt-check
     pnpm sdk:typecheck
     pnpm sdk:test

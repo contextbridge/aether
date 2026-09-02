@@ -2,34 +2,51 @@
 
 set -euo pipefail
 
+agent=Orchestrator
 if [[ "$EVENT_NAME" == "pull_request_review_comment" ]]; then
-    mode="pr"
-    number="$REVIEW_PR_NUMBER"
+    mode=pr
+    task_kind=pull_request_feedback
+    agent="Simple Builder"
+    number=$REVIEW_PR_NUMBER
 elif [[ "$IS_PULL_REQUEST" == "true" ]]; then
-    mode="pr"
-    number="$ISSUE_NUMBER"
-elif [[ "$LABEL_NAME" == "aether:plan" ]]; then
-    mode="plan"
-    number="$ISSUE_NUMBER"
+    mode=pr
+    number=$ISSUE_NUMBER
+    if [[ $(jq -r '.comment.body' "$GITHUB_EVENT_PATH") == "/aether implement-plan" ]]; then
+        task_kind=implement_plan
+    else
+        task_kind=pull_request_feedback
+        agent="Simple Builder"
+    fi
 else
-    mode="implement"
-    number="$ISSUE_NUMBER"
+    task_kind=issue
+    number=$ISSUE_NUMBER
+    mapfile -t sizes < <(jq -r '.issue.labels[].name | select(startswith("size:"))' "$GITHUB_EVENT_PATH")
+    if (( ${#sizes[@]} > 1 )); then
+        echo "::error::Issue #$number has conflicting size labels."
+        exit 1
+    fi
+    case ${sizes[0]:-} in
+        size:L) mode=plan ;;
+        size:M|size:S|"") mode=implement ;;
+        *)
+            echo "::error::Issue #$number has an unsupported size label: ${sizes[0]}."
+            exit 1
+            ;;
+    esac
 fi
 
 if [[ "$mode" == "pr" ]]; then
-    pr="$(gh pr view "$number" --json headRefName,baseRefName,isCrossRepository)"
-    if [[ "$(jq -r '.isCrossRepository' <<<"$pr")" == "true" ]]; then
+    pr=$(gh pr view "$number" --json headRefName,baseRefName,isCrossRepository)
+    if [[ $(jq -r '.isCrossRepository' <<< "$pr") == true ]]; then
         echo "::error::Aether cannot push to pull request #$number because it comes from a fork."
         exit 1
     fi
-    branch="$(jq -r '.headRefName' <<<"$pr")"
-    base="$(jq -r '.baseRefName' <<<"$pr")"
+    branch=$(jq -r '.headRefName' <<< "$pr")
+    base=$(jq -r '.baseRefName' <<< "$pr")
 else
     branch="aether/issue-$number"
-    base="$DEFAULT_BRANCH"
-    open_pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // ""')"
-    # An earlier run's branch survives its pull request being merged or closed. Reusing it would
-    # stack new work on stale commits, so branch off the base again instead.
+    base=$DEFAULT_BRANCH
+    open_pr=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // ""')
     if [[ -z "$open_pr" ]] && gh api "/repos/$GH_REPO/git/ref/heads/$branch" > /dev/null 2>&1; then
         branch="$branch-$GITHUB_RUN_NUMBER"
     fi
@@ -37,6 +54,8 @@ fi
 
 {
     echo "mode=$mode"
+    echo "task_kind=$task_kind"
+    echo "agent=$agent"
     echo "number=$number"
     echo "branch=$branch"
     echo "base=$base"
