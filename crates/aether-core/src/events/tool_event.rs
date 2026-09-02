@@ -1,3 +1,4 @@
+use super::SubAgentProgressPayload;
 use llm::types::IsoString;
 use llm::{ChatMessage, ContentBlock, ToolCallError, ToolCallRequest, ToolCallResult, ToolDefinition};
 use mcp_utils::display_meta::ToolResultMeta;
@@ -16,6 +17,10 @@ pub enum ToolEvent {
     ExecutionStarted { tool_id: String, tool_name: String },
     /// Progress reported by an executing tool.
     Progress { request: ToolCallRequest, progress: f64, total: Option<f64>, message: Option<String> },
+    /// Progress from a sub-agent spawned by this tool call, carrying the child's own event.
+    SubAgentProgress { request: ToolCallRequest, payload: Box<SubAgentProgressPayload> },
+    /// An executing tool refreshed how it should be displayed.
+    DisplayUpdate { request: ToolCallRequest, meta: ToolResultMeta },
     /// A background task was created by a tool call response.
     TaskCreated { request: ToolCallRequest, task_id: String, status_message: Option<String> },
     /// The background task reported a new status.

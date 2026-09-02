@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
 use aether_core::context::CompactionConfig;
-use aether_core::events::{
-    AgentEvent, CompactionOutcome, ContextEvent, LlmCallOutcome, LlmCallPurpose, TurnEvent, TurnOutcome,
-};
+use aether_core::events::{AgentEvent, CompactionOutcome, ContextEvent, LlmCallOutcome, TurnEvent, TurnOutcome};
 use aether_core::testing::{TestScenario, test_agent};
+use llm::LlmCallPurpose;
 use llm::testing::llm_response;
 use llm::{ChatMessage, ContentBlock};
 use tokio::sync::Notify;

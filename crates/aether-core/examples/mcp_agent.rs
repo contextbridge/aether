@@ -109,11 +109,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ToolEvent::CallUpdate { .. }
                     | ToolEvent::ExecutionStarted { .. }
                     | ToolEvent::DefinitionsUpdated { .. }
+                    | ToolEvent::SubAgentProgress { .. }
+                    | ToolEvent::DisplayUpdate { .. }
                     | ToolEvent::TaskCreated { .. },
                 )
                 | AgentEvent::Turn(
                     TurnEvent::Started { .. } | TurnEvent::LlmCallStarted { .. } | TurnEvent::LlmCallEnded { .. },
-                ),
+                )
+                | AgentEvent::SessionUsage(_),
             ) => {}
             Some(AgentEvent::Model(ModelEvent::Switched { previous, new })) => {
                 println!("Model switched: {previous} -> {new}");

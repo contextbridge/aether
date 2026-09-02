@@ -3,8 +3,9 @@ use std::error::Error;
 use std::time::Duration;
 
 use aether_core::core::RetryConfig;
-use aether_core::events::{AgentEvent, LlmCallOutcome, LlmCallPurpose, TurnOutcome};
+use aether_core::events::{AgentEvent, LlmCallOutcome, TurnOutcome};
 use aether_core::testing::{TestScenario, test_agent};
+use llm::LlmCallPurpose;
 use llm::testing::llm_response;
 use llm::{LlmError, LlmResponse, StopReason};
 
@@ -180,10 +181,10 @@ async fn usage_triggered_compaction_runs_before_the_next_chat_call() -> Result<(
     ]);
 
     let compaction_usage = trace.call_usage(LlmCallPurpose::Compaction).expect("compaction usage traced");
-    assert_eq!(compaction_usage.input_tokens, 50);
+    assert_eq!(compaction_usage.input_tokens.get(), 50);
     let chat_usage = trace.call_usage(LlmCallPurpose::Chat).expect("chat usage traced");
-    assert_eq!(chat_usage.input_tokens, 90_000);
-    assert_eq!(chat_usage.output_tokens, 10);
+    assert_eq!(chat_usage.input_tokens.get(), 90_000);
+    assert_eq!(chat_usage.output_tokens.get(), 10);
 
     Ok(())
 }

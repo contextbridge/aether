@@ -13,6 +13,7 @@ pub enum AgentEvent {
     Turn(TurnEvent),
     Context(ContextEvent),
     Model(ModelEvent),
+    SessionUsage(llm::SessionUsageEvent),
 }
 
 impl AgentEvent {
@@ -71,7 +72,8 @@ impl AgentEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{CompactionOutcome, ContextUsage, LlmCallOutcome, LlmCallPurpose};
+    use crate::events::{CompactionOutcome, LlmCallOutcome};
+    use llm::{ContextUsage, LlmCallPurpose};
 
     #[test]
     fn serializes_nested_event_contract() {
@@ -94,6 +96,19 @@ mod tests {
             AgentEvent::Context(ContextEvent::UsageUpdated { usage: ContextUsage::default() }),
             AgentEvent::Context(ContextEvent::CompactionEnded { outcome: CompactionOutcome::Completed }),
             AgentEvent::Model(ModelEvent::Switched { previous: "a".into(), new: "b".into() }),
+            AgentEvent::SessionUsage(llm::testing::session_usage_event(1, llm::TokenUsage::new(1, 2))),
+            AgentEvent::Tool(ToolEvent::DisplayUpdate {
+                request: llm::ToolCallRequest { id: "call".into(), name: "read".into(), arguments: "{}".into() },
+                meta: mcp_utils::display_meta::ToolDisplayMeta::new("Read file", "main.rs").into(),
+            }),
+            AgentEvent::Tool(ToolEvent::SubAgentProgress {
+                request: llm::ToolCallRequest { id: "call".into(), name: "spawn".into(), arguments: "{}".into() },
+                payload: Box::new(crate::events::SubAgentProgressPayload {
+                    task_id: "task_0".into(),
+                    agent_name: "explorer".into(),
+                    event: AgentEvent::turn_ended(TurnOutcome::Completed),
+                }),
+            }),
         ];
         for event in events {
             let json = serde_json::to_string(&event).unwrap();

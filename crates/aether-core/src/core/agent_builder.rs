@@ -1,12 +1,12 @@
 use super::agent::{AgentConfig, AutoContinue, RetryConfig};
 use crate::agent_spec::AgentSpec;
-use crate::context::CompactionConfig;
+use crate::context::{CompactionConfig, SessionUsageTracker};
 use crate::core::{Agent, AgentDeps, Prompt, PromptCache, Result};
 use crate::events::{AgentEvent, AgentObserver, Command};
 use crate::mcp::McpHandle;
 use llm::parser::ModelProviderParser;
 use llm::types::IsoString;
-use llm::{ChatMessage, Context, ModelSettings, StreamingModelProvider, ToolDefinition};
+use llm::{ChatMessage, Context, ModelSettings, SessionUsageEvent, StreamingModelProvider, ToolDefinition};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -48,6 +48,7 @@ pub struct AgentBuilder {
     context_window: Option<u32>,
     model_settings: ModelSettings,
     observers: Vec<Box<dyn AgentObserver>>,
+    session_usage: SessionUsageTracker,
 }
 
 impl AgentBuilder {
@@ -66,6 +67,7 @@ impl AgentBuilder {
             context_window: None,
             model_settings: ModelSettings::default(),
             observers: Vec::new(),
+            session_usage: SessionUsageTracker::new("agent"),
         }
     }
 
@@ -82,7 +84,8 @@ impl AgentBuilder {
         let (provider, _) = parser.parse(&spec.model).await?;
         let mut builder = Self::new(Arc::from(provider))
             .context_window(spec.context_window)
-            .model_settings(spec.model_settings.clone());
+            .model_settings(spec.model_settings.clone())
+            .session_usage(SessionUsageTracker::new(&spec.name));
 
         if let Some(observer) = deps.observer(&spec.name) {
             builder = builder.observer(observer);
@@ -214,6 +217,19 @@ impl AgentBuilder {
         self
     }
 
+    /// Record usage under `tracker`, which names this agent in usage events.
+    pub fn session_usage(mut self, tracker: SessionUsageTracker) -> Self {
+        self.session_usage = tracker;
+        self
+    }
+
+    /// Continue session totals from the last persisted usage event, e.g. when
+    /// resuming a session.
+    pub fn resume_usage(mut self, last: &SessionUsageEvent) -> Self {
+        self.session_usage.resume_from(last);
+        self
+    }
+
     pub async fn spawn(self) -> Result<(Sender<Command>, Receiver<AgentEvent>, AgentHandle)> {
         let mut prompt_cache = PromptCache::new(self.prompts);
         let system_content = prompt_cache.render().await?;
@@ -240,6 +256,7 @@ impl AgentBuilder {
             context_window: self.context_window,
             prompt_cache,
             observers: self.observers,
+            session_usage: self.session_usage,
         };
 
         let agent = Agent::new(config, command_rx, message_tx);

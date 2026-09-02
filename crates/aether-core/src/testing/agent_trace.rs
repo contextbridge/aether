@@ -1,7 +1,8 @@
 use crate::events::{ToolEvent, TurnEvent};
 use std::sync::{Arc, Mutex};
 
-use crate::events::{AgentEvent, LlmCallOutcome, LlmCallPurpose, TurnOutcome};
+use crate::events::{AgentEvent, LlmCallOutcome, TurnOutcome};
+use llm::LlmCallPurpose;
 
 /// A recorded agent event stream (as seen by an
 /// [`AgentObserver`](crate::events::AgentObserver)), with assertion helpers

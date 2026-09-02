@@ -1,19 +1,22 @@
-use crate::context::{CompactionConfig, CompactionError, CompactionResult, Compactor, TokenTracker};
+use crate::context::{
+    CompactionConfig, CompactionError, CompactionResult, Compactor, SessionUsageTracker, TokenTracker,
+};
 use crate::core::PromptCache;
 use crate::core::prompt_cache_key::derive_prompt_cache_key;
 use crate::core::queued_input::QueuedInput;
 pub use crate::core::retry_config::RetryConfig;
 use crate::core::tool_execution::{ToolAbortPolicy, ToolExecutionUpdate, ToolExecutions};
 use crate::events::{
-    AgentCommand, AgentEvent, AgentObserver, Command, CompactionOutcome, ContextEvent, ContextUsage, LlmCallOutcome,
-    LlmCallPurpose, ModelEvent, StreamState, TaskOutcome, ToolEvent, TraceContext, TurnEvent, TurnOutcome, UserCommand,
+    AgentCommand, AgentEvent, AgentObserver, Command, CompactionOutcome, ContextEvent, LlmCallOutcome, ModelEvent,
+    StreamState, TaskOutcome, ToolEvent, TraceContext, TurnEvent, TurnOutcome, UserCommand,
 };
 use crate::mcp::McpHandle;
 use futures::Stream;
 use llm::types::IsoString;
 use llm::{
-    AssistantReasoning, ChatMessage, Context, EncryptedReasoningContent, LlmError, LlmResponse, StopReason,
-    StreamingModelProvider, TokenUsage, ToolCallError, ToolCallRequest, ToolCallResult,
+    AssistantReasoning, ChatMessage, Context, EncryptedReasoningContent, LlmCallPurpose, LlmError, LlmModel,
+    LlmResponse, ModelIdentity, StopReason, StreamingModelProvider, TokenUsage, ToolCallError, ToolCallRequest,
+    ToolCallResult,
 };
 use mcp_utils::client::{CallToolError, CallToolOptions, ToolCallEvent};
 use std::collections::VecDeque;
@@ -61,6 +64,7 @@ pub(crate) struct AgentConfig {
     pub context_window: Option<u32>,
     pub prompt_cache: PromptCache,
     pub observers: Vec<Box<dyn AgentObserver>>,
+    pub session_usage: SessionUsageTracker,
 }
 
 pub struct Agent {
@@ -82,6 +86,8 @@ pub struct Agent {
     prompt_cache: PromptCache,
     turn_active: bool,
     llm_call_active: bool,
+    active_model: Option<LlmModel>,
+    session_usage: SessionUsageTracker,
 }
 
 impl Agent {
@@ -117,6 +123,8 @@ impl Agent {
             prompt_cache: config.prompt_cache,
             turn_active: false,
             llm_call_active: false,
+            active_model: None,
+            session_usage: config.session_usage,
         }
     }
 
@@ -486,7 +494,7 @@ impl Agent {
             }
 
             EncryptedReasoning { id, content } => {
-                if let Some(model) = self.llm.model() {
+                if let Some(model) = self.active_model.clone() {
                     state.encrypted_reasoning = Some(EncryptedReasoningContent { id, model, content });
                 }
             }
@@ -573,10 +581,17 @@ impl Agent {
         tracing::debug!(?sample, ?ratio_pct, ?remaining, "Token usage");
 
         self.emit(self.context_usage_message()).await;
+        self.emit_session_usage(LlmCallPurpose::Chat, sample).await;
+    }
+
+    async fn emit_session_usage(&mut self, purpose: LlmCallPurpose, tokens: TokenUsage) {
+        let model = ModelIdentity::of(self.active_model.as_ref());
+        let event = self.session_usage.record(purpose, model, tokens);
+        self.emit(AgentEvent::SessionUsage(event)).await;
     }
 
     fn context_usage_message(&self) -> AgentEvent {
-        AgentEvent::Context(ContextEvent::UsageUpdated { usage: ContextUsage::from(&self.token_tracker) })
+        AgentEvent::Context(ContextEvent::UsageUpdated { usage: self.token_tracker.snapshot().clone() })
     }
 
     fn compaction_needed(&self) -> bool {
@@ -589,7 +604,8 @@ impl Agent {
         tracing::info!("Starting context compaction - {} messages", self.context.message_count());
         self.emit(AgentEvent::Context(ContextEvent::CompactionStarted { message_count: self.context.message_count() }))
             .await;
-        self.emit(self.llm_call_started(LlmCallPurpose::Compaction, 0)).await;
+        let started = self.begin_llm_call(LlmCallPurpose::Compaction, 0);
+        self.emit(started).await;
 
         let compactor = Compactor::new(self.llm.clone());
         let context = self.context.clone();
@@ -599,6 +615,11 @@ impl Agent {
     }
 
     async fn on_compaction_complete(&mut self, result: Result<CompactionResult, CompactionError>) {
+        if let Ok(result) = &result
+            && let Some(usage) = result.usage
+        {
+            self.emit_session_usage(LlmCallPurpose::Compaction, usage).await;
+        }
         let outcome = match &result {
             Ok(result) => LlmCallOutcome::Completed { stop_reason: None, usage: result.usage },
             Err(e) => LlmCallOutcome::Failed { error: e.to_string(), will_retry: false },
@@ -633,6 +654,12 @@ impl Agent {
     async fn on_tool_execution_event(&mut self, tool_id: String, event: ToolCallEvent, state: &mut IterationState) {
         match self.tool_executions.on_event(&tool_id, event) {
             ToolExecutionUpdate::Event(event) => {
+                if let ToolEvent::SubAgentProgress { payload, .. } = &event
+                    && let AgentEvent::SessionUsage(child) = &payload.event
+                {
+                    let folded = self.session_usage.record_child(&payload.task_id, child.clone());
+                    self.emit(AgentEvent::SessionUsage(folded)).await;
+                }
                 self.emit(AgentEvent::Tool(event)).await;
             }
             ToolExecutionUpdate::Completed { result, event } => {
@@ -727,7 +754,8 @@ impl Agent {
 
     async fn begin_chat_call(&mut self, attempt: u32) {
         self.llm_call_active = true;
-        self.emit(self.llm_call_started(LlmCallPurpose::Chat, attempt)).await;
+        let started = self.begin_llm_call(LlmCallPurpose::Chat, attempt);
+        self.emit(started).await;
     }
 
     async fn finish_chat_call(&mut self, outcome: LlmCallOutcome) {
@@ -736,13 +764,11 @@ impl Agent {
         }
     }
 
-    fn llm_call_started(&self, purpose: LlmCallPurpose, attempt: u32) -> AgentEvent {
-        let model = self.llm.model();
+    fn begin_llm_call(&mut self, purpose: LlmCallPurpose, attempt: u32) -> AgentEvent {
+        self.active_model = self.llm.model();
         AgentEvent::Turn(TurnEvent::LlmCallStarted {
             purpose,
-            provider: model.as_ref().map(|m| m.provider().to_string()),
-            model: model.as_ref().map(|m| m.model_id().into_owned()),
-            pricing: model.and_then(|m| m.pricing()),
+            model: ModelIdentity::of(self.active_model.as_ref()),
             display_name: self.llm.display_name(),
             attempt,
             max_attempts: self.retry_config.max_attempts,

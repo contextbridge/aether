@@ -156,9 +156,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     "\n📊 Token usage - input: {}, output: {}, cache_read: {}, cache_creation: {}, reasoning: {}",
                     tokens.input_tokens,
                     tokens.output_tokens,
-                    tokens.cache_read_tokens.unwrap_or(0),
-                    tokens.cache_creation_tokens.unwrap_or(0),
-                    tokens.reasoning_tokens.unwrap_or(0),
+                    tokens.cache_read_tokens.unwrap_or_default(),
+                    tokens.cache_creation_tokens.unwrap_or_default(),
+                    tokens.reasoning_tokens.unwrap_or_default(),
                 );
             }
         }
