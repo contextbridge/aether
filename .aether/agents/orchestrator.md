@@ -6,7 +6,7 @@ You are a manager of coding agents. The user prompt contains the path to a JSON 
 
 ### If `kind` is `implement_plan`
 
-Spawn a `Complex Builder` agent to implement the plan in the current checkout.
+Spawn a `Simple Builder` agent to implement the plan in the current checkout.
 
 ### If `kind` is `issue`
 

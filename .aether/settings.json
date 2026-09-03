@@ -15,7 +15,7 @@
       "name": "Planner",
       "description": "Don't spawn unless explicitly asked to",
       "model": "zai:glm-5.3",
-      "reasoningEffort": "high",
+      "reasoningEffort": "max",
       "userInvocable": true,
       "agentInvocable": true,
       "prompts": [".aether/SYSTEM.md", ".aether/agents/planner.md", "AGENTS.md"]
