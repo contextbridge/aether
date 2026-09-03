@@ -72,6 +72,13 @@ impl Context {
         }
     }
 
+    pub fn system_content(&self) -> Option<&str> {
+        match self.messages.first() {
+            Some(ChatMessage::System { content, .. }) if !content.is_empty() => Some(content),
+            _ => None,
+        }
+    }
+
     pub fn messages(&self) -> &Vec<ChatMessage> {
         &self.messages
     }
