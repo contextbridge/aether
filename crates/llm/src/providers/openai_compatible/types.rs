@@ -48,26 +48,26 @@ fn default_object() -> String {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
-pub enum UserContent {
+pub(crate) enum UserContent {
     Text(String),
     Parts(Vec<UserContentPart>),
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum UserContentPart {
+pub(crate) enum UserContentPart {
     Text { text: String },
     ImageUrl { image_url: ImageUrlContent },
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ImageUrlContent {
+pub(crate) struct ImageUrlContent {
     pub url: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "role", rename_all = "lowercase")]
-pub enum CompatibleChatMessage {
+pub(crate) enum CompatibleChatMessage {
     System {
         content: String,
     },
@@ -88,7 +88,7 @@ pub enum CompatibleChatMessage {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct CompatibleChatRequest {
+pub(crate) struct CompatibleChatRequest {
     pub model: String,
     pub messages: Vec<CompatibleChatMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -108,12 +108,9 @@ pub struct CompatibleChatRequest {
     /// OpenAI-style prompt-cache affinity. Only set for providers that document support.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
-    /// Session-affinity identifier. Only set for providers that route on `user`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user: Option<String>,
 }
 
-pub fn map_messages(messages: &[ChatMessage]) -> crate::Result<Vec<CompatibleChatMessage>> {
+pub(crate) fn map_messages(messages: &[ChatMessage]) -> crate::Result<Vec<CompatibleChatMessage>> {
     let mut result = Vec::new();
 
     for message in messages {

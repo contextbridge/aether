@@ -25,7 +25,6 @@ impl<T: OpenAiChatProvider + Send + Sync> StreamingModelProvider for T {
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
         let client = self.client().clone();
         let model = self.model().to_string();
-        let prompt_cache_key = context.prompt_cache_key().map(String::from);
         let messages = match map_messages(context.messages()) {
             Ok(messages) => messages,
             Err(e) => return error_stream(e),
@@ -48,7 +47,6 @@ impl<T: OpenAiChatProvider + Send + Sync> StreamingModelProvider for T {
                 messages,
                 tools,
                 stream: Some(true),
-                prompt_cache_key,
                 ..Default::default()
             };
 
@@ -99,5 +97,34 @@ impl<T: OpenAiChatProvider + Send + Sync> StreamingModelProvider for T {
     fn display_name(&self) -> String {
         let model = self.model();
         if model.is_empty() { self.provider_name().to_string() } else { format!("{} ({model})", self.provider_name()) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::StreamExt;
+
+    use super::*;
+    use crate::providers::local::ollama::OllamaProvider;
+    use crate::providers::test_capture_server::CaptureServer;
+    use crate::{ChatMessage, LlmResponse, Result};
+
+    #[tokio::test]
+    async fn local_chat_providers_omit_cache_metadata() {
+        let mut server = CaptureServer::start_chat_completions().await;
+        let provider = OllamaProvider::new("test-model", &server.base_url);
+        let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
+        context.set_prompt_cache_key(Some("prefix-abc".to_string()));
+        context.set_session_affinity_key(Some("conversation-abc".to_string()));
+
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        let captured = server.captured().await;
+
+        assert!(responses.iter().all(Result::is_ok), "{responses:?}");
+        assert!(responses.iter().any(|response| matches!(response, Ok(LlmResponse::Done { .. }))));
+        assert_eq!(captured.path, "/v1/chat/completions");
+        assert!(captured.body.get("prompt_cache_key").is_none());
+        assert!(captured.body.get("session_id").is_none());
+        assert!(captured.body.get("user").is_none());
     }
 }

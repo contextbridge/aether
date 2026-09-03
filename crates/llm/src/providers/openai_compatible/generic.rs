@@ -1,6 +1,7 @@
 use async_openai::{Client, config::OpenAIConfig};
 use schemars::Schema;
 
+use crate::catalog::Provider;
 use crate::provider::{error_stream, get_context_window};
 use crate::tool_schema::normalize_for_moonshot;
 use crate::{
@@ -8,85 +9,61 @@ use crate::{
     StreamingModelProvider,
 };
 
-use super::{AetherOpenAiConfig, build_chat_request, create_custom_stream_generic};
+use super::{AetherOpenAiConfig, PromptCacheKeySource, build_chat_request, create_custom_stream_generic};
 
 /// Configuration for an OpenAI-compatible provider.
 ///
 /// Each provider that uses the standard `build_chat_request → create_custom_stream_generic`
 /// flow differs only in these constants.
 pub struct ProviderConfig {
+    pub provider: Provider,
     pub api_base: Option<&'static str>,
-    pub env_var: &'static str,
     pub default_model: &'static str,
-    pub prefix: &'static str,
-    pub display_name: &'static str,
     pub tool_schema_transform: Option<fn(&mut Schema)>,
-    pub cache_affinity: CacheAffinity,
-}
-
-/// The request field a provider documents for steering requests to a warm prompt cache.
-///
-/// Only providers that document a field get one; the rest cache prefixes automatically
-/// and must not receive unsupported parameters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CacheAffinity {
-    /// The provider caches prefixes automatically; no affinity field is sent.
-    Automatic,
-    /// The provider reads the `OpenAI` `prompt_cache_key` request field.
-    PromptCacheKey,
-    /// The provider routes on the `OpenAI` `user` request field.
-    User,
+    pub prompt_cache_key: PromptCacheKeySource,
 }
 
 pub const DEEPSEEK: ProviderConfig = ProviderConfig {
+    provider: Provider::DeepSeek,
     api_base: Some("https://api.deepseek.com"),
-    env_var: "DEEPSEEK_API_KEY",
     default_model: "deepseek-v4-flash",
-    prefix: "deepseek",
-    display_name: "DeepSeek",
     tool_schema_transform: None,
-    cache_affinity: CacheAffinity::Automatic,
+    prompt_cache_key: PromptCacheKeySource::Omit,
 };
 
 pub const MOONSHOT: ProviderConfig = ProviderConfig {
+    provider: Provider::Moonshot,
     api_base: Some("https://api.moonshot.ai/v1"),
-    env_var: "MOONSHOT_API_KEY",
     default_model: "moonshot-v1-8k",
-    prefix: "moonshot",
-    display_name: "Moonshot",
     tool_schema_transform: Some(normalize_for_moonshot),
-    cache_affinity: CacheAffinity::Automatic,
+    prompt_cache_key: PromptCacheKeySource::Omit,
 };
 
 pub const ZAI: ProviderConfig = ProviderConfig {
+    provider: Provider::ZAi,
     api_base: Some("https://api.z.ai/api/coding/paas/v4"),
-    env_var: "ZAI_API_KEY",
     default_model: "GLM-4.6",
-    prefix: "zai",
-    display_name: "Z.ai",
     tool_schema_transform: None,
-    cache_affinity: CacheAffinity::Automatic,
+    prompt_cache_key: PromptCacheKeySource::Omit,
 };
 
 pub const AZURE_FOUNDRY: ProviderConfig = ProviderConfig {
+    provider: Provider::AzureFoundry,
     api_base: None,
-    env_var: "AZURE_OPENAI_API_KEY",
     default_model: "gpt-5.5",
-    prefix: "azure-foundry",
-    display_name: "Microsoft Foundry",
     tool_schema_transform: None,
-    cache_affinity: CacheAffinity::PromptCacheKey,
+    prompt_cache_key: PromptCacheKeySource::Prefix,
 };
 
 pub const FIREWORKS: ProviderConfig = ProviderConfig {
+    provider: Provider::Fireworks,
     api_base: Some("https://api.fireworks.ai/inference/v1"),
-    env_var: "FIREWORKS_API_KEY",
     default_model: "accounts/fireworks/models/glm-5p1",
-    prefix: "fireworks",
-    display_name: "Fireworks AI",
     tool_schema_transform: None,
-    cache_affinity: CacheAffinity::User,
+    prompt_cache_key: PromptCacheKeySource::SessionAffinity,
 };
+
+pub(crate) const BUILT_INS: &[&ProviderConfig] = &[&DEEPSEEK, &MOONSHOT, &ZAI, &AZURE_FOUNDRY, &FIREWORKS];
 
 /// A generic provider for APIs that are fully OpenAI-compatible.
 pub struct GenericOpenAiProvider {
@@ -107,7 +84,8 @@ impl GenericOpenAiProvider {
     ) -> Result<Self> {
         let api_key = match connection.auth_mode {
             ProviderAuthMode::Default => {
-                std::env::var(config.env_var).map_err(|_| LlmError::MissingApiKey(config.env_var.to_string()))?
+                let env_var = config.provider.required_env_var().expect("generic providers require an API key");
+                std::env::var(env_var).map_err(|_| LlmError::MissingApiKey(env_var.to_string()))?
             }
             ProviderAuthMode::None => String::new(),
         };
@@ -126,7 +104,7 @@ impl GenericOpenAiProvider {
         let api_base = connection
             .base_url
             .or_else(|| config.api_base.map(str::to_string))
-            .ok_or_else(|| LlmError::MissingProviderUrl { provider: config.prefix.to_string() })?
+            .ok_or_else(|| LlmError::MissingProviderUrl { provider: config.provider.parser_name().to_string() })?
             .trim_end_matches('/')
             .to_string();
         let openai_config = OpenAIConfig::new().with_api_key(api_key).with_api_base(api_base);
@@ -148,11 +126,11 @@ impl GenericOpenAiProvider {
 
 impl StreamingModelProvider for GenericOpenAiProvider {
     fn model(&self) -> Option<LlmModel> {
-        format!("{}:{}", self.config.prefix, self.model).parse().ok()
+        format!("{}:{}", self.config.provider.parser_name(), self.model).parse().ok()
     }
 
     fn context_window(&self) -> Option<u32> {
-        get_context_window(self.config.prefix, &self.model)
+        get_context_window(self.config.provider.parser_name(), &self.model)
     }
 
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
@@ -164,20 +142,12 @@ impl StreamingModelProvider for GenericOpenAiProvider {
             Ok(req) => req,
             Err(e) => return error_stream(e),
         };
-        match self.config.cache_affinity {
-            CacheAffinity::Automatic => {}
-            CacheAffinity::PromptCacheKey => {
-                request.prompt_cache_key = context.prompt_cache_key().map(String::from);
-            }
-            CacheAffinity::User => {
-                request.user = context.prompt_cache_key().map(String::from);
-            }
-        }
+        request.prompt_cache_key = self.config.prompt_cache_key.resolve(context).map(String::from);
         create_custom_stream_generic(&self.client, request)
     }
 
     fn display_name(&self) -> String {
-        format!("{} ({})", self.config.display_name, self.model)
+        format!("{} ({})", self.config.provider.display_name(), self.model)
     }
 }
 
@@ -200,7 +170,7 @@ mod tests {
 
     #[tokio::test]
     async fn request_model_routes_the_request_without_changing_catalog_identity() {
-        let mut server = CaptureServer::start().await;
+        let mut server = CaptureServer::start_chat_completions().await;
         let provider = GenericOpenAiProvider::new_with_connection(
             "key".to_string(),
             &AZURE_FOUNDRY,
@@ -218,7 +188,7 @@ mod tests {
         let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
         let captured = server.captured().await;
 
-        assert!(!responses.is_empty());
+        assert_successful_stream(&responses);
         assert_eq!(captured.path, "/chat/completions");
         assert_eq!(captured.body["model"], "production-coding");
         assert_eq!(captured.body["stream"], true);
@@ -229,47 +199,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn foundry_requests_carry_prompt_cache_key() {
-        let mut server = CaptureServer::start().await;
-        let provider = capture_backed_provider(&server, &AZURE_FOUNDRY);
-        let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
-        context.set_prompt_cache_key(Some("session-abc".to_string()));
+    async fn providers_apply_their_declared_prompt_cache_policy() {
+        for (config, expected_key) in [
+            (&AZURE_FOUNDRY, Some("prefix-abc")),
+            (&FIREWORKS, Some("conversation-abc")),
+            (&DEEPSEEK, None),
+            (&MOONSHOT, None),
+            (&ZAI, None),
+        ] {
+            let mut server = CaptureServer::start_chat_completions().await;
+            let provider = capture_backed_provider(&server, config);
+            let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
+            context.set_prompt_cache_key(Some("prefix-abc".to_string()));
+            context.set_session_affinity_key(Some("conversation-abc".to_string()));
 
-        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-        let captured = server.captured().await;
+            let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+            let captured = server.captured().await;
 
-        assert!(!responses.is_empty());
-        assert_eq!(captured.body["prompt_cache_key"], "session-abc");
+            assert_successful_stream(&responses);
+            assert_eq!(captured.body.get("prompt_cache_key").and_then(serde_json::Value::as_str), expected_key);
+            assert!(captured.body.get("user").is_none());
+            assert!(captured.body.get("session_id").is_none());
+        }
     }
 
     #[tokio::test]
-    async fn fireworks_requests_carry_session_affinity_in_the_user_field() {
-        let mut server = CaptureServer::start().await;
-        let provider = capture_backed_provider(&server, &FIREWORKS);
-        let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
-        context.set_prompt_cache_key(Some("session-abc".to_string()));
+    async fn providers_omit_unset_context_keys() {
+        for config in [&AZURE_FOUNDRY, &FIREWORKS] {
+            let mut server = CaptureServer::start_chat_completions().await;
+            let provider = capture_backed_provider(&server, config);
+            let context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
 
-        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-        let captured = server.captured().await;
+            let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+            let captured = server.captured().await;
 
-        assert!(!responses.is_empty());
-        assert_eq!(captured.body["user"], "session-abc");
-        assert!(captured.body.get("prompt_cache_key").is_none());
+            assert_successful_stream(&responses);
+            assert!(captured.body.get("prompt_cache_key").is_none());
+            assert!(captured.body.get("session_id").is_none());
+        }
     }
 
-    #[tokio::test]
-    async fn automatic_caching_providers_receive_no_affinity_fields() {
-        let mut server = CaptureServer::start().await;
-        let provider = capture_backed_provider(&server, &DEEPSEEK);
-        let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
-        context.set_prompt_cache_key(Some("session-abc".to_string()));
-
-        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-        let captured = server.captured().await;
-
-        assert!(!responses.is_empty());
-        assert!(captured.body.get("prompt_cache_key").is_none());
-        assert!(captured.body.get("user").is_none());
+    fn assert_successful_stream(responses: &[Result<crate::LlmResponse>]) {
+        assert!(responses.iter().all(Result::is_ok), "{responses:?}");
+        assert!(responses.iter().any(|response| matches!(response, Ok(crate::LlmResponse::Done { .. }))));
     }
 
     fn capture_backed_provider(server: &CaptureServer, config: &'static ProviderConfig) -> GenericOpenAiProvider {

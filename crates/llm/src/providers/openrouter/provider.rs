@@ -67,18 +67,12 @@ impl StreamingModelProvider for OpenRouterProvider {
     }
 
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
-        // Build base request and convert to OpenRouter-specific format
-        // The From trait automatically adds usage tracking parameters
-        // See: https://openrouter.ai/docs/use-cases/usage-accounting
-        let mut request: OpenRouterChatRequest = match build_chat_request(&self.model, context, None) {
-            Ok(req) => req.into(),
+        let mut request = match build_chat_request(&self.model, context, None) {
+            Ok(request) => request,
             Err(e) => return error_stream(e),
         };
         request.prompt_cache_key = context.prompt_cache_key().map(String::from);
-
-        if let Some(effort) = context.reasoning_effort() {
-            request.reasoning_effort = Some(effort);
-        }
+        let request = OpenRouterChatRequest::from_compatible(request, context.session_affinity_key());
 
         create_custom_stream_generic(&self.client, request)
     }
@@ -112,7 +106,7 @@ mod tests {
 
     #[tokio::test]
     async fn stream_response_propagates_prompt_cache_key_and_keeps_cache_control() {
-        let mut server = CaptureServer::start().await;
+        let mut server = CaptureServer::start_openrouter().await;
         let provider = OpenRouterProvider::from_env_with_connection(ProviderConnectionConfig {
             base_url: Some(server.base_url.clone()),
             auth_mode: ProviderAuthMode::None,
@@ -122,14 +116,20 @@ mod tests {
         .unwrap()
         .with_model("anthropic/claude-haiku-4.5");
         let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
-        context.set_prompt_cache_key(Some("session-abc".to_string()));
+        context.set_prompt_cache_key(Some("prefix-abc".to_string()));
+        context.set_session_affinity_key(Some("conversation-abc".to_string()));
+        context.set_reasoning_effort(Some(crate::ReasoningEffort::High));
 
         let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
         let captured = server.captured().await;
 
-        assert!(!responses.is_empty());
+        assert!(responses.iter().all(Result::is_ok), "{responses:?}");
+        assert!(responses.iter().any(|response| matches!(response, Ok(crate::LlmResponse::Done { .. }))));
         assert_eq!(captured.path, "/chat/completions");
-        assert_eq!(captured.body["prompt_cache_key"], "session-abc");
+        assert_eq!(captured.body["prompt_cache_key"], "prefix-abc");
+        assert_eq!(captured.body["session_id"], "conversation-abc");
+        assert_eq!(captured.body["reasoning_effort"], "high");
         assert_eq!(captured.body["cache_control"]["type"], "ephemeral");
+        assert_eq!(captured.body["usage"]["include"], true);
     }
 }

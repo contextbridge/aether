@@ -399,7 +399,7 @@ mod tests {
 
     #[tokio::test]
     async fn responses_shape_models_are_sent_to_the_responses_endpoint() {
-        let mut server = CaptureServer::start().await;
+        let mut server = CaptureServer::start_responses().await;
         let provider = mantle_provider(&server).await;
         let mut context = hello_context();
         context.set_reasoning_effort(Some(crate::ReasoningEffort::Xhigh));
@@ -438,7 +438,7 @@ mod tests {
 
     #[tokio::test]
     async fn responses_transport_drops_encrypted_reasoning_from_another_model() {
-        let mut server = CaptureServer::start().await;
+        let mut server = CaptureServer::start_responses().await;
         let provider = mantle_provider(&server).await;
         let context = Context::new(
             vec![ChatMessage::Assistant {
@@ -486,7 +486,7 @@ mod tests {
 
     #[tokio::test]
     async fn bearer_token_authenticates_responses_requests() {
-        let mut server = CaptureServer::start().await;
+        let mut server = CaptureServer::start_responses().await;
         let provider = BedrockProvider::from_config(
             None,
             Some("us-west-2"),
@@ -503,7 +503,7 @@ mod tests {
 
     #[tokio::test]
     async fn credential_chain_sigv4_signs_responses_requests() {
-        let mut server = CaptureServer::start().await;
+        let mut server = CaptureServer::start_responses().await;
         let provider = BedrockProvider::from_config(
             Some(static_credentials()),
             Some("us-west-2"),

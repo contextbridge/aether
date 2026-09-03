@@ -100,7 +100,7 @@ mod tests {
 
     #[tokio::test]
     async fn stream_response_sends_max_effort_on_the_wire() {
-        let mut server = CaptureServer::start().await;
+        let mut server = CaptureServer::start_responses().await;
         let connection = ProviderConnectionConfig {
             base_url: Some(server.base_url.clone()),
             auth_mode: ProviderAuthMode::None,

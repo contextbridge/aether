@@ -24,8 +24,8 @@ fn main() {
     let mut combined = String::from(
         "`OpenAI`-compatible LLM providers.\n\nShared infrastructure for providers whose APIs are compatible with the `OpenAI` chat completions format.\n\n",
     );
-    for key in ["azure-foundry", "deepseek", "fireworks", "moonshotai", "zai"] {
-        if let Some(doc) = output.provider_docs.get(key) {
+    for key in &output.openai_compatible_provider_ids {
+        if let Some(doc) = output.provider_docs.get(*key) {
             combined.push_str(doc);
             combined.push('\n');
         }
