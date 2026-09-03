@@ -50,6 +50,9 @@ jobs:
   run-prompt:
     name: Run ${{ matrix.prompt.id }}
     needs: discover-prompts
+    permissions:
+      contents: read
+      id-token: write
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: ci
@@ -79,6 +82,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           token: ${{ steps.app-token.outputs.token }}
+
+      - name: Configure Bedrock credentials
+        uses: $/.github/actions/configure-aws-credentials
+        with:
+          role-to-assume: arn:aws:iam::212467111133:role/GitHubActionsBedrockInference-aether
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev

@@ -42,7 +42,7 @@ updates:
     ignore:
       - dependency-name: actions/upload-artifact
       - dependency-name: actions/download-artifact
-    directory: /.github/actions/fetch-release-secrets
+    directory: /.github/actions/configure-aws-credentials
     cooldown:
       default-days: 7
     groups:
