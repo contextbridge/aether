@@ -1,4 +1,5 @@
 use crate::AgentTraceContext;
+use crate::content_capture::ContentCaptureSettings;
 use crate::error::{TelemetryInitError, TelemetryShutdownError};
 use crate::gen_ai_metrics::GenAiMetrics;
 use crate::genai_constants;
@@ -51,7 +52,7 @@ pub struct TelemetryConfig {
     pub service_name: String,
     pub service_version: String,
     pub sample_ratio: f64,
-    pub capture_content: bool,
+    pub content: ContentCaptureSettings,
     pub trace_context: Option<AgentTraceContext>,
     pub traces_enabled: bool,
     pub metrics_enabled: bool,
@@ -76,7 +77,7 @@ impl TelemetryRuntime {
         let instrumentation = OtelInstrumentation {
             tracer: tracer_provider.tracer_with_scope(scope.clone()),
             metrics: GenAiMetrics::new(&meter_provider.meter_with_scope(scope)),
-            capture_content: config.capture_content,
+            content: config.content,
             root_parent: trace_root.parent,
             agent_name: None,
         };

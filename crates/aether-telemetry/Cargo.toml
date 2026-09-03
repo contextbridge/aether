@@ -26,6 +26,8 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.14" }
 tracing = { workspace = true }
+sha2 = { workspace = true }
+base16ct = { workspace = true }
 
 [dev-dependencies]
 aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.37", features = ["testing"] }

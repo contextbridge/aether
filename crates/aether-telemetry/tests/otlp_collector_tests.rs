@@ -2,7 +2,13 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use aether_core::events::{AgentEvent, LlmCallOutcome, ToolEvent, TraceContext, TurnEvent, TurnOutcome};
-use aether_telemetry::{AgentTraceContext, TelemetryConfig, TelemetryRuntime};
+use aether_telemetry::{
+    AETHER_SYSTEM_INSTRUCTIONS_SHA256, AgentTraceContext, ContentCaptureSettings, GEN_AI_SYSTEM_INSTRUCTIONS,
+    TelemetryConfig, TelemetryRuntime,
+};
+use common::{SYSTEM_INSTRUCTIONS_JSON, SYSTEM_PROMPT, SYSTEM_PROMPT_SHA256, all_content};
+
+mod common;
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::State;
@@ -25,7 +31,7 @@ async fn runtime_exports_metrics_to_a_signal_specific_endpoint() {
         ..collector_config(&collector)
     })
     .expect("runtime initializes against a signal-specific endpoint");
-    observe_a_turn(&runtime, None);
+    observe_a_turn(&runtime, None, None, None);
 
     runtime.shutdown().expect("runtime flushes metrics");
     let exports = collector.exports();
@@ -45,7 +51,7 @@ async fn runtime_exports_traces_to_a_signal_specific_endpoint() {
         ..collector_config(&collector)
     })
     .expect("runtime initializes against a signal-specific endpoint");
-    observe_a_turn(&runtime, None);
+    observe_a_turn(&runtime, None, None, None);
 
     runtime.shutdown().expect("runtime flushes traces");
     let exports = collector.exports();
@@ -73,7 +79,7 @@ async fn runtime_parents_every_turn_to_the_supplied_trace_context() {
     .expect("runtime initializes against collector");
 
     for _ in 0..2 {
-        observe_a_turn(&runtime, None);
+        observe_a_turn(&runtime, None, None, None);
     }
 
     runtime.shutdown().expect("runtime flushes traces");
@@ -97,7 +103,7 @@ async fn observer_factory_prefers_a_dynamic_parent_context() {
         ..collector_config(&collector)
     })
     .expect("runtime initializes against collector");
-    observe_a_turn(&runtime, Some(&parent));
+    observe_a_turn(&runtime, Some(&parent), None, None);
 
     runtime.shutdown().expect("runtime flushes traces");
     let exports = collector.exports();
@@ -197,7 +203,7 @@ async fn runtime_starts_root_spans_with_the_supplied_trace_id() {
     .expect("runtime initializes against collector");
 
     for _ in 0..2 {
-        observe_a_turn(&runtime, None);
+        observe_a_turn(&runtime, None, None, None);
     }
 
     runtime.shutdown().expect("runtime flushes traces");
@@ -219,10 +225,10 @@ async fn runtime_exports_genai_spans_and_metrics_to_an_otlp_collector() {
     let collector = FakeOtlpCollector::start().await;
     let runtime = TelemetryRuntime::new(&TelemetryConfig {
         headers: test_headers("collector-test"),
-        ..collector_config(&collector)
+        ..capturing_collector_config(&collector)
     })
     .expect("runtime initializes against collector");
-    observe_a_turn(&runtime, None);
+    observe_a_turn(&runtime, None, Some("PatchWaveFix"), Some(SYSTEM_PROMPT));
 
     runtime.shutdown().expect("runtime flushes both signals");
     let exports = collector.exports();
@@ -238,8 +244,9 @@ async fn runtime_exports_genai_spans_and_metrics_to_an_otlp_collector() {
         .map(|metric| metric.name.as_str())
         .collect::<Vec<_>>();
 
-    assert!(span_names.contains(&"invoke_agent"));
+    assert!(span_names.contains(&"invoke_agent PatchWaveFix"));
     assert!(span_names.contains(&"chat test-model"));
+    let turn = spans.iter().find(|span| span.name == "invoke_agent PatchWaveFix").expect("turn span exported");
     let chat = spans.iter().find(|span| span.name == "chat test-model").expect("chat span exported");
     let attribute_keys = chat.attributes.iter().map(|attribute| attribute.key.as_str()).collect::<Vec<_>>();
     for expected in [
@@ -255,6 +262,10 @@ async fn runtime_exports_genai_spans_and_metrics_to_an_otlp_collector() {
     assert!(metric_names.contains(&"gen_ai.client.operation.duration"));
     assert!(metric_names.contains(&"gen_ai.client.token.usage"));
 
+    assert_eq!(string_attribute(turn, "gen_ai.agent.name"), Some("PatchWaveFix"));
+    assert_eq!(chat.parent_span_id, turn.span_id);
+    assert_eq!(string_attribute(chat, GEN_AI_SYSTEM_INSTRUCTIONS), Some(SYSTEM_INSTRUCTIONS_JSON));
+    assert_eq!(string_attribute(chat, AETHER_SYSTEM_INSTRUCTIONS_SHA256), Some(SYSTEM_PROMPT_SHA256));
     assert_eq!(exports.trace_headers, vec!["collector-test"]);
     assert_eq!(exports.metric_headers, vec!["collector-test"]);
 }
@@ -268,11 +279,15 @@ fn collector_config(collector: &FakeOtlpCollector) -> TelemetryConfig {
         service_name: "aether-test".to_string(),
         service_version: "test".to_string(),
         sample_ratio: 1.0,
-        capture_content: false,
+        content: ContentCaptureSettings::default(),
         trace_context: None,
         traces_enabled: true,
         metrics_enabled: true,
     }
+}
+
+fn capturing_collector_config(collector: &FakeOtlpCollector) -> TelemetryConfig {
+    TelemetryConfig { content: all_content(), ..collector_config(collector) }
 }
 
 fn test_headers(value: &str) -> HashMap<String, String> {
@@ -317,8 +332,16 @@ fn assert_propagated_hierarchy(spans: &[&Span], expected_trace_id: &[u8], expect
 
 /// Feeds one complete turn through a fresh observer, whose spans the runtime
 /// exports once the observer is dropped.
-fn observe_a_turn(runtime: &TelemetryRuntime, parent: Option<&TraceContext>) {
-    let mut observer = runtime.observer_factory().agent(None, parent);
+fn observe_a_turn(
+    runtime: &TelemetryRuntime,
+    parent: Option<&TraceContext>,
+    agent_name: Option<&str>,
+    system_prompt: Option<&str>,
+) {
+    let mut observer = runtime.observer_factory().agent(agent_name, parent);
+    if let Some(prompt) = system_prompt {
+        observer.on_system_prompt(prompt);
+    }
     for event in events() {
         observer.on_event(&event);
     }
