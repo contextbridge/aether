@@ -16,6 +16,7 @@ pub struct AgentDeps {
     pub parent_trace_context: Option<TraceContext>,
     pub agent_registry: AgentRegistry,
     pub mcp_client_capabilities: Option<ClientCapabilities>,
+    pub session_affinity_key: Option<String>,
 }
 
 impl AgentDeps {
@@ -39,6 +40,11 @@ impl AgentDeps {
 
     pub fn with_mcp_client_capabilities(mut self, capabilities: ClientCapabilities) -> Self {
         self.mcp_client_capabilities = Some(capabilities);
+        self
+    }
+
+    pub fn with_session_affinity_key(mut self, key: impl Into<String>) -> Self {
+        self.session_affinity_key = Some(key.into());
         self
     }
 
