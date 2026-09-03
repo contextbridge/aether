@@ -116,17 +116,17 @@ pub struct TelemetrySettings {
     /// Trace sampling ratio between 0.0 and 1.0. Defaults to 1.0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sample_ratio: Option<f64>,
-    /// Whether prompt, response, reasoning, and tool argument content is
-    /// exported. Defaults to `false`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub capture_content: Option<bool>,
+    /// Per-attribute content capture, mapping 1:1 onto the opt-in `GenAI`
+    /// content attributes. All default to `false`.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub content: TelemetryContentSettings,
     /// Trace signal toggle. Enabled by default.
-    #[serde(default, skip_serializing_if = "TelemetrySignalSettings::is_unset")]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub traces: TelemetrySignalSettings,
     /// Metric signal toggle. Enabled by default.
-    #[serde(default, skip_serializing_if = "TelemetrySignalSettings::is_unset")]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub metrics: TelemetrySignalSettings,
-    #[serde(default, skip_serializing_if = "OtlpTelemetrySettings::is_unset")]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub otlp: OtlpTelemetrySettings,
 }
 
@@ -135,6 +135,26 @@ pub struct TelemetrySettings {
 pub struct TelemetrySignalSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TelemetryContentSettings {
+    /// Set `gen_ai.system_instructions` on chat spans.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_instructions: Option<bool>,
+    /// Set `gen_ai.input.messages` on turn and chat spans.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_messages: Option<bool>,
+    /// Set `gen_ai.output.messages` on turn and chat spans.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_messages: Option<bool>,
+    /// Set `gen_ai.tool.definitions` on chat spans.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_definitions: Option<bool>,
+    /// Set `gen_ai.tool.call.arguments` / `gen_ai.tool.call.result` on tool spans.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -169,10 +189,6 @@ impl TelemetrySettings {
         self.sample_ratio.unwrap_or(1.0)
     }
 
-    pub fn capture_content(&self) -> bool {
-        self.capture_content.unwrap_or(false)
-    }
-
     pub fn traces_enabled(&self) -> bool {
         self.traces.enabled.unwrap_or(true)
     }
@@ -184,7 +200,7 @@ impl TelemetrySettings {
     fn merge(&mut self, next: Self) {
         merge_field(&mut self.service_name, next.service_name);
         merge_field(&mut self.sample_ratio, next.sample_ratio);
-        merge_field(&mut self.capture_content, next.capture_content);
+        self.content.merge(&next.content);
         merge_field(&mut self.traces.enabled, next.traces.enabled);
         merge_field(&mut self.metrics.enabled, next.metrics.enabled);
         merge_field(&mut self.otlp.endpoint, next.otlp.endpoint);
@@ -194,9 +210,33 @@ impl TelemetrySettings {
     }
 }
 
-impl TelemetrySignalSettings {
-    fn is_unset(&self) -> bool {
-        self.enabled.is_none()
+impl TelemetryContentSettings {
+    pub fn system_instructions(&self) -> bool {
+        self.system_instructions.unwrap_or(false)
+    }
+
+    pub fn input_messages(&self) -> bool {
+        self.input_messages.unwrap_or(false)
+    }
+
+    pub fn output_messages(&self) -> bool {
+        self.output_messages.unwrap_or(false)
+    }
+
+    pub fn tool_definitions(&self) -> bool {
+        self.tool_definitions.unwrap_or(false)
+    }
+
+    pub fn tool_calls(&self) -> bool {
+        self.tool_calls.unwrap_or(false)
+    }
+
+    fn merge(&mut self, next: &Self) {
+        merge_field(&mut self.system_instructions, next.system_instructions);
+        merge_field(&mut self.input_messages, next.input_messages);
+        merge_field(&mut self.output_messages, next.output_messages);
+        merge_field(&mut self.tool_definitions, next.tool_definitions);
+        merge_field(&mut self.tool_calls, next.tool_calls);
     }
 }
 
@@ -204,13 +244,10 @@ impl OtlpTelemetrySettings {
     pub fn resolved_headers(&self, vars: &Vars) -> Result<BTreeMap<String, String>, VarError> {
         self.headers.iter().map(|(name, value)| Ok((name.clone(), vars.expand(value)?))).collect()
     }
+}
 
-    fn is_unset(&self) -> bool {
-        self.endpoint.is_none()
-            && self.traces_endpoint.is_none()
-            && self.metrics_endpoint.is_none()
-            && self.headers.is_empty()
-    }
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    value == &T::default()
 }
 
 fn merge_field<T>(current: &mut Option<T>, next: Option<T>) {
@@ -481,7 +518,13 @@ mod tests {
                 "telemetry": {
                     "serviceName": "aether-test",
                     "sampleRatio": 0.5,
-                    "captureContent": true,
+                    "content": {
+                        "systemInstructions": true,
+                        "inputMessages": true,
+                        "outputMessages": false,
+                        "toolDefinitions": true,
+                        "toolCalls": true
+                    },
                     "traces": { "enabled": true },
                     "metrics": { "enabled": false },
                     "otlp": {
@@ -497,7 +540,12 @@ mod tests {
         let telemetry = config.telemetry.as_ref().unwrap();
         assert_eq!(telemetry.service_name(), "aether-test");
         assert_eq!(telemetry.sample_ratio(), 0.5);
-        assert!(telemetry.capture_content());
+        let content = &telemetry.content;
+        assert_eq!(content.system_instructions, Some(true));
+        assert_eq!(content.input_messages, Some(true));
+        assert_eq!(content.output_messages, Some(false));
+        assert_eq!(content.tool_definitions, Some(true));
+        assert_eq!(content.tool_calls, Some(true));
         assert!(telemetry.traces_enabled());
         assert!(!telemetry.metrics_enabled());
         assert_eq!(telemetry.otlp.headers.get("authorization").map(String::as_str), Some("Bearer token"));
@@ -524,7 +572,7 @@ mod tests {
                 AetherSettingsSource::Json(
                     r#"{
                         "telemetry": {
-                            "captureContent": true,
+                            "content": { "systemInstructions": true, "inputMessages": true },
                             "traces": { "enabled": true },
                             "metrics": { "enabled": true },
                             "otlp": {
@@ -540,7 +588,7 @@ mod tests {
                 AetherSettingsSource::Json(
                     r#"{
                         "telemetry": {
-                            "captureContent": false,
+                            "content": { "systemInstructions": false },
                             "metrics": { "enabled": false }
                         },
                         "agents": []
@@ -552,7 +600,10 @@ mod tests {
         .unwrap();
 
         let telemetry = config.telemetry.unwrap();
-        assert!(!telemetry.capture_content(), "explicit default false remains distinguishable from omission");
+        let content = &telemetry.content;
+        assert_eq!(content.system_instructions, Some(false), "explicit false remains distinguishable from omission");
+        assert_eq!(content.input_messages, Some(true), "omitted nested fields remain inherited");
+        assert!(!content.tool_calls.unwrap_or_default());
         assert!(telemetry.traces_enabled(), "omitted nested fields remain inherited");
         assert!(!telemetry.metrics_enabled(), "nested overrides merge independently");
         assert_eq!(telemetry.otlp.endpoint.as_deref(), Some("http://localhost:4318"));
@@ -613,13 +664,15 @@ mod tests {
                     }"#
                     .to_string(),
                 ),
-                AetherSettingsSource::Json(r#"{ "telemetry": { "captureContent": true }, "agents": [] }"#.to_string()),
+                AetherSettingsSource::Json(
+                    r#"{ "telemetry": { "content": { "toolCalls": true } }, "agents": [] }"#.to_string(),
+                ),
             ],
         )
         .unwrap();
 
         let telemetry = config.telemetry.unwrap();
-        assert!(telemetry.capture_content());
+        assert_eq!(telemetry.content.tool_calls, Some(true));
         assert!((telemetry.sample_ratio() - 0.25).abs() < f64::EPSILON);
         assert_eq!(telemetry.otlp.endpoint.as_deref(), Some("http://localhost:4318"));
     }
