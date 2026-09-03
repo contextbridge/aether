@@ -202,9 +202,7 @@ async fn document_symbol_fallback(
     client: &Arc<LspClient>,
     extensions: &[&'static str],
 ) -> Result<Vec<WorkspaceSymbolResult>, LspError> {
-    let candidates = find_files_containing(root.to_path_buf(), query.to_string(), extensions.to_vec(), 100)
-        .await
-        .map_err(LspError::Search)?;
+    let candidates = find_files_containing(root.to_path_buf(), query.to_string(), extensions.to_vec(), 100).await?;
     let mut results = Vec::new();
     for path in candidates {
         let path_text = path.to_string_lossy().to_string();

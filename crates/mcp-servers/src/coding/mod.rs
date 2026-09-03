@@ -31,6 +31,7 @@ pub mod tools_trait;
 pub use default_tools::DefaultCodingTools;
 pub use tools_trait::CodingTools;
 
+use crate::coding::error::CodingError;
 use crate::lsp::tools::check_errors::{LspDiagnosticsOutput, LspDiagnosticsRequest, execute_lsp_diagnostics};
 use crate::lsp::tools::symbol_lookup::{LspSymbolInput, LspSymbolOutput, execute_lsp_symbol};
 use crate::lsp::tools::workspace_search::{
@@ -60,17 +61,6 @@ use tools::web_fetch::{WebFetchInput, WebFetchOutput, WebFetcher};
 use tools::web_search::search_client::BraveSearchClient;
 use tools::web_search::{WebSearchInput, WebSearchOutput, WebSearcher};
 use tools::write_file::{WriteFileArgs, WriteFileResponse, write_file_contents};
-
-/// Extension trait for converting tool results to MCP format
-trait IntoMcpResult<T> {
-    fn into_mcp(self) -> Result<Json<T>, String>;
-}
-
-impl<T, E: std::fmt::Display> IntoMcpResult<T> for Result<T, E> {
-    fn into_mcp(self) -> Result<Json<T>, String> {
-        self.map(Json).map_err(|e| e.to_string())
-    }
-}
 
 #[doc = include_str!("../docs/permission_mode.md")]
 #[derive(Debug, Clone, Default, PartialEq, clap::ValueEnum)]
@@ -458,15 +448,16 @@ When using tools that take file paths, always use absolute paths from:
 
     /// Resolves a required file-path argument against the root directory,
     /// returning the normalized absolute path as a string.
-    fn resolve_file_arg(&self, raw: &str) -> Result<String, String> {
-        Ok(self.workspace_paths().resolve_file(raw).map_err(|e| e.to_string())?.to_string_lossy().to_string())
+    fn resolve_file_arg(&self, raw: &str) -> Result<String, CodingError> {
+        let path = self.workspace_paths().resolve_file(raw)?;
+        Ok(path.to_string_lossy().to_string())
     }
 
     /// Reads `args.file_path` (already resolved against the root directory),
     /// records it in the read set, and appends any matching read-rule reminders.
-    async fn read_and_track(&self, args: ReadFileArgs) -> Result<Json<ReadFileResult>, String> {
+    async fn read_and_track(&self, args: ReadFileArgs) -> Result<Json<ReadFileResult>, CodingError> {
         let file_path = args.file_path.clone();
-        let mut result = self.tools.read_file(args).await.map_err(|e| e.to_string())?;
+        let mut result = self.tools.read_file(args).await?;
         self.files_read.write().await.insert(file_path.clone());
 
         let total_lines = result.total_lines;
@@ -487,23 +478,20 @@ When using tools that take file paths, always use absolute paths from:
 
     /// Read-before-overwrite safety check: an existing file must have been read
     /// first, preventing accidental data loss.
-    async fn ensure_read_before_overwrite(&self, file_path: &str) -> Result<(), String> {
-        if try_exists(file_path).await.map_err(|e| format!("Failed to check existence of {file_path}: {e}"))?
-            && !self.files_read.read().await.contains(file_path)
-        {
-            return Err(format!(
-                "Safety check failed: File '{file_path}' already exists. You must use read_file on it before overwriting. This prevents accidental data loss."
-            ));
+    async fn ensure_read_before_overwrite(&self, file_path: &str) -> Result<(), CodingError> {
+        let exists = try_exists(file_path)
+            .await
+            .map_err(|source| CodingError::ExistsCheckFailed { path: file_path.to_string(), source })?;
+        if exists && !self.files_read.read().await.contains(file_path) {
+            return Err(CodingError::NotReadBeforeOverwrite(file_path.to_string()));
         }
         Ok(())
     }
 
     /// Read-before-edit safety check: a file must have been read before editing.
-    async fn ensure_read_before_edit(&self, file_path: &str) -> Result<(), String> {
+    async fn ensure_read_before_edit(&self, file_path: &str) -> Result<(), CodingError> {
         if !self.files_read.read().await.contains(file_path) {
-            return Err(format!(
-                "Safety check failed: You must use read_file on '{file_path}' before editing it. This ensures you understand the current file contents before making changes."
-            ));
+            return Err(CodingError::NotReadBeforeEdit(file_path.to_string()));
         }
         Ok(())
     }
@@ -514,12 +502,12 @@ When using tools that take file paths, always use absolute paths from:
         &self,
         request: Parameters<GrepInput>,
         context: RequestContext<RoleServer>,
-    ) -> Result<Json<GrepOutput>, String> {
+    ) -> Result<Json<GrepOutput>, CodingError> {
         let Parameters(mut args) = request;
         let normalized_path = self.workspace_paths().resolve_dir(args.path.as_deref());
         args.path = Some(normalized_path.to_string_lossy().to_string());
         notify_preview(&context, ToolDisplayMeta::new("Grep", format!("'{}'", args.pattern))).await;
-        self.tools.grep(args).await.into_mcp()
+        self.tools.grep(args).await.map(Json)
     }
 
     #[doc = include_str!("tools/ast_grep/description.md")]
@@ -528,12 +516,12 @@ When using tools that take file paths, always use absolute paths from:
         &self,
         request: Parameters<AstGrepInput>,
         context: RequestContext<RoleServer>,
-    ) -> Result<Json<AstGrepOutput>, String> {
+    ) -> Result<Json<AstGrepOutput>, CodingError> {
         let Parameters(mut args) = request;
         let normalized_path = self.workspace_paths().resolve_dir(args.path.as_deref());
         args.path = Some(normalized_path.to_string_lossy().to_string());
         notify_preview(&context, ToolDisplayMeta::new("AST grep", format!("'{}'", args.pattern))).await;
-        self.tools.ast_grep(args).await.into_mcp()
+        self.tools.ast_grep(args).await.map(Json)
     }
 
     #[doc = include_str!("tools/find/description.md")]
@@ -542,12 +530,12 @@ When using tools that take file paths, always use absolute paths from:
         &self,
         request: Parameters<FindInput>,
         context: RequestContext<RoleServer>,
-    ) -> Result<Json<FindOutput>, String> {
+    ) -> Result<Json<FindOutput>, CodingError> {
         let Parameters(mut args) = request;
         let normalized_path = self.workspace_paths().resolve_dir(args.path.as_deref());
         args.path = Some(normalized_path.to_string_lossy().to_string());
         notify_preview(&context, ToolDisplayMeta::new("Find", format!("'{}'", args.pattern))).await;
-        self.tools.find(args).await.into_mcp()
+        self.tools.find(args).await.map(Json)
     }
 
     #[doc = include_str!("tools/read_file/description.md")]
@@ -556,7 +544,7 @@ When using tools that take file paths, always use absolute paths from:
         &self,
         request: Parameters<ReadFileArgs>,
         context: RequestContext<RoleServer>,
-    ) -> Result<Json<ReadFileResult>, String> {
+    ) -> Result<Json<ReadFileResult>, CodingError> {
         let Parameters(mut args) = request;
         args.file_path = self.resolve_file_arg(&args.file_path)?;
         notify_preview(&context, ToolDisplayMeta::new("Read file", basename(&args.file_path))).await;
@@ -574,14 +562,14 @@ When using tools that take file paths, always use absolute paths from:
         &self,
         request: Parameters<WriteFileArgs>,
         context: RequestContext<RoleServer>,
-    ) -> Result<Json<WriteFileResponse>, String> {
+    ) -> Result<Json<WriteFileResponse>, CodingError> {
         let Parameters(mut args) = request;
         args.file_path = self.resolve_file_arg(&args.file_path)?;
         notify_preview(&context, ToolDisplayMeta::new("Write file", basename(&args.file_path))).await;
 
         self.ensure_read_before_overwrite(&args.file_path).await?;
 
-        let response = self.tools.write_file(args).await.map_err(|e| e.to_string())?;
+        let response = self.tools.write_file(args).await?;
 
         self.spawn_diagnostic_refresh(&response.file_path);
 
@@ -599,14 +587,14 @@ When using tools that take file paths, always use absolute paths from:
         &self,
         request: Parameters<EditFileArgs>,
         context: RequestContext<RoleServer>,
-    ) -> Result<Json<EditFileResponse>, String> {
+    ) -> Result<Json<EditFileResponse>, CodingError> {
         let Parameters(mut args) = request;
         args.file_path = self.resolve_file_arg(&args.file_path)?;
         notify_preview(&context, ToolDisplayMeta::new("Edit file", basename(&args.file_path))).await;
 
         self.ensure_read_before_edit(&args.file_path).await?;
 
-        let response = self.tools.edit_file(args).await.map_err(|e| e.to_string())?;
+        let response = self.tools.edit_file(args).await?;
 
         self.spawn_diagnostic_refresh(&response.file_path);
 
@@ -619,13 +607,13 @@ When using tools that take file paths, always use absolute paths from:
         &self,
         request: Parameters<ListFilesArgs>,
         context: RequestContext<RoleServer>,
-    ) -> Result<Json<ListFilesResult>, String> {
+    ) -> Result<Json<ListFilesResult>, CodingError> {
         let Parameters(mut args) = request;
         let normalized_path = self.workspace_paths().resolve_dir(args.path.as_deref());
         let preview_value = basename(&normalized_path.to_string_lossy());
         args.path = Some(normalized_path.to_string_lossy().to_string());
         notify_preview(&context, ToolDisplayMeta::new("List files", preview_value)).await;
-        self.tools.list_files(args).await.into_mcp()
+        self.tools.list_files(args).await.map(Json)
     }
 
     #[doc = include_str!("tools/bash/description.md")]
@@ -639,12 +627,12 @@ When using tools that take file paths, always use absolute paths from:
         &self,
         request: Parameters<BashInput>,
         context: RequestContext<RoleServer>,
-    ) -> Result<Json<BashOutput>, String> {
+    ) -> Result<Json<BashOutput>, CodingError> {
         let Parameters(args) = request;
         notify_preview(&context, ToolDisplayMeta::new("Run command", truncate(&args.command, 40))).await;
 
         let cwd = self.root_dir.clone();
-        let result = self.tools.bash(args, Some(cwd)).await.map_err(|e| e.to_string())?;
+        let result = self.tools.bash(args, Some(cwd)).await?;
         Ok(Json(result))
     }
 
@@ -654,10 +642,10 @@ When using tools that take file paths, always use absolute paths from:
         &self,
         request: Parameters<WebFetchInput>,
         context: RequestContext<RoleServer>,
-    ) -> Result<Json<WebFetchOutput>, String> {
+    ) -> Result<Json<WebFetchOutput>, CodingError> {
         let Parameters(args) = request;
         notify_preview(&context, ToolDisplayMeta::new("Fetch URL", truncate(&args.url, 60))).await;
-        self.web_fetcher.fetch(args).await.into_mcp()
+        self.web_fetcher.fetch(args).await.map(Json).map_err(CodingError::from)
     }
 
     #[doc = include_str!("tools/web_search/description.md")]
@@ -666,14 +654,16 @@ When using tools that take file paths, always use absolute paths from:
         &self,
         request: Parameters<WebSearchInput>,
         context: RequestContext<RoleServer>,
-    ) -> Result<Json<WebSearchOutput>, String> {
+    ) -> Result<Json<WebSearchOutput>, CodingError> {
         let Parameters(args) = request;
         notify_preview(&context, ToolDisplayMeta::new("Web search", format!("'{}'", args.query))).await;
 
         let searcher = self.web_searcher.as_ref().ok_or_else(|| {
-            "Web search not available: BRAVE_SEARCH_API_KEY environment variable not set. \
+            CodingError::NotConfigured(
+                "Web search not available: BRAVE_SEARCH_API_KEY environment variable not set. \
                  Get a free API key from https://api.search.brave.com/app/keys"
-                .to_string()
+                    .to_string(),
+            )
         })?;
 
         let peer = context.peer.clone();
@@ -692,8 +682,8 @@ When using tools that take file paths, always use absolute paths from:
                 }
             })
             .await
-            .map_err(|e| e.to_string())
             .map(Json)
+            .map_err(CodingError::from)
     }
 
     #[doc = include_str!("../lsp/tools/symbol_lookup/description.md")]
@@ -702,11 +692,11 @@ When using tools that take file paths, always use absolute paths from:
         &self,
         request: Parameters<LspSymbolInput>,
         context: RequestContext<RoleServer>,
-    ) -> Result<Json<LspSymbolOutput>, String> {
+    ) -> Result<Json<LspSymbolOutput>, CodingError> {
         let Parameters(input) = request;
         notify_preview(&context, ToolDisplayMeta::new("LSP symbol", &input.symbol)).await;
-        let lsp = self.lsp.as_ref().ok_or("LSP not configured")?;
-        execute_lsp_symbol(input, lsp.as_ref()).await.map(Json).map_err(|e| e.to_string())
+        let lsp = self.lsp.as_ref().ok_or_else(|| CodingError::NotConfigured("LSP not configured".to_string()))?;
+        execute_lsp_symbol(input, lsp.as_ref()).await.map(Json).map_err(CodingError::from)
     }
 
     #[doc = include_str!("../lsp/tools/workspace_search/description.md")]
@@ -715,11 +705,11 @@ When using tools that take file paths, always use absolute paths from:
         &self,
         request: Parameters<LspWorkspaceSearchInput>,
         context: RequestContext<RoleServer>,
-    ) -> Result<Json<LspWorkspaceSearchOutput>, String> {
+    ) -> Result<Json<LspWorkspaceSearchOutput>, CodingError> {
         let Parameters(input) = request;
         notify_preview(&context, ToolDisplayMeta::new("LSP search", format!("'{}'", input.query))).await;
-        let lsp = self.lsp.as_ref().ok_or("LSP not configured")?;
-        execute_lsp_workspace_search(input, lsp.as_ref()).await.map(Json).map_err(|e| e.to_string())
+        let lsp = self.lsp.as_ref().ok_or_else(|| CodingError::NotConfigured("LSP not configured".to_string()))?;
+        execute_lsp_workspace_search(input, lsp.as_ref()).await.map(Json).map_err(CodingError::from)
     }
 
     #[doc = include_str!("../lsp/tools/document_info/description.md")]
@@ -728,11 +718,11 @@ When using tools that take file paths, always use absolute paths from:
         &self,
         request: Parameters<LspDocumentInput>,
         context: RequestContext<RoleServer>,
-    ) -> Result<Json<LspDocumentOutput>, String> {
+    ) -> Result<Json<LspDocumentOutput>, CodingError> {
         let Parameters(input) = request;
         notify_preview(&context, ToolDisplayMeta::new("LSP document", basename(&input.file_path))).await;
-        let lsp = self.lsp.as_ref().ok_or("LSP not configured")?;
-        execute_lsp_document(input, lsp.as_ref()).await.map(Json).map_err(|e| e.to_string())
+        let lsp = self.lsp.as_ref().ok_or_else(|| CodingError::NotConfigured("LSP not configured".to_string()))?;
+        execute_lsp_document(input, lsp.as_ref()).await.map(Json).map_err(CodingError::from)
     }
 
     #[doc = include_str!("../lsp/tools/check_errors/description.md")]
@@ -741,12 +731,12 @@ When using tools that take file paths, always use absolute paths from:
         &self,
         request: Parameters<LspDiagnosticsRequest>,
         context: RequestContext<RoleServer>,
-    ) -> Result<Json<LspDiagnosticsOutput>, String> {
+    ) -> Result<Json<LspDiagnosticsOutput>, CodingError> {
         let Parameters(request) = request;
         let preview_value = request.file_path.as_ref().map_or_else(|| "workspace".to_string(), |path| basename(path));
         notify_preview(&context, ToolDisplayMeta::new("LSP errors", preview_value)).await;
-        let lsp = self.lsp.as_ref().ok_or("LSP not configured")?;
-        execute_lsp_diagnostics(request, lsp.as_ref()).await.map(Json).map_err(|e| e.to_string())
+        let lsp = self.lsp.as_ref().ok_or_else(|| CodingError::NotConfigured("LSP not configured".to_string()))?;
+        execute_lsp_diagnostics(request, lsp.as_ref()).await.map(Json).map_err(CodingError::from)
     }
 
     #[doc = include_str!("../lsp/tools/rename/description.md")]
@@ -760,11 +750,11 @@ When using tools that take file paths, always use absolute paths from:
         &self,
         request: Parameters<LspRenameInput>,
         context: RequestContext<RoleServer>,
-    ) -> Result<Json<LspRenameOutput>, String> {
+    ) -> Result<Json<LspRenameOutput>, CodingError> {
         let Parameters(input) = request;
         notify_preview(&context, ToolDisplayMeta::new("LSP rename", &input.symbol)).await;
-        let lsp = self.lsp.as_ref().ok_or("LSP not configured")?;
-        execute_lsp_rename(input, lsp.as_ref()).await.map(Json).map_err(|e| e.to_string())
+        let lsp = self.lsp.as_ref().ok_or_else(|| CodingError::NotConfigured("LSP not configured".to_string()))?;
+        execute_lsp_rename(input, lsp.as_ref()).await.map(Json).map_err(CodingError::from)
     }
 }
 
@@ -850,23 +840,23 @@ impl Default for CodingMcp<DefaultCodingTools> {
 #[cfg(feature = "test-helpers")]
 impl<T: CodingTools + 'static> CodingMcp<T> {
     /// Read a file and track it in the read set (test helper, no MCP context needed).
-    pub async fn test_read_file(&self, mut args: ReadFileArgs) -> Result<Json<ReadFileResult>, String> {
+    pub async fn test_read_file(&self, mut args: ReadFileArgs) -> Result<Json<ReadFileResult>, CodingError> {
         args.file_path = self.resolve_file_arg(&args.file_path)?;
         self.read_and_track(args).await
     }
 
     /// Write a file with read-before-write safety check (test helper, no MCP context needed).
-    pub async fn test_write_file(&self, mut args: WriteFileArgs) -> Result<Json<WriteFileResponse>, String> {
+    pub async fn test_write_file(&self, mut args: WriteFileArgs) -> Result<Json<WriteFileResponse>, CodingError> {
         args.file_path = self.resolve_file_arg(&args.file_path)?;
         self.ensure_read_before_overwrite(&args.file_path).await?;
-        self.tools.write_file(args).await.map(Json).map_err(|e| e.to_string())
+        self.tools.write_file(args).await.map(Json)
     }
 
     /// Edit a file with read-before-edit safety check (test helper, no MCP context needed).
-    pub async fn test_edit_file(&self, mut args: EditFileArgs) -> Result<Json<EditFileResponse>, String> {
+    pub async fn test_edit_file(&self, mut args: EditFileArgs) -> Result<Json<EditFileResponse>, CodingError> {
         args.file_path = self.resolve_file_arg(&args.file_path)?;
         self.ensure_read_before_edit(&args.file_path).await?;
-        self.tools.edit_file(args).await.map(Json).map_err(|e| e.to_string())
+        self.tools.edit_file(args).await.map(Json)
     }
 }
 

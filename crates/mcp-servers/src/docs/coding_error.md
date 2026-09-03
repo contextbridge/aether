@@ -12,7 +12,11 @@ Error types for all coding tool operations.
 - **`ListFiles`** -- Directory listing failures ([`ListFilesError`]).
 - **`WebFetch`** -- URL fetch failures ([`WebFetchError`]).
 - **`WebSearch`** -- Web search API failures ([`WebSearchError`]).
+- **`Lsp`** -- LSP code-intelligence tool failures ([`LspError`]).
 - **`NotConfigured`** -- A tool was called that requires configuration not present (e.g. web search without a Brave API key).
+- **`EmptyFilePath`** -- A required file-path argument was empty.
+- **`NotReadBeforeOverwrite`** / **`NotReadBeforeEdit`** -- Read-before-overwrite/edit safety checks failed.
+- **`ExistsCheckFailed`** -- Failed to check whether the target file exists.
 
 # Sub-error types
 

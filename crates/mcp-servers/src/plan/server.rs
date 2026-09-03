@@ -140,9 +140,9 @@ impl PlanMcp {
         idempotent_hint = false,
         open_world_hint = false
     ))]
-    pub async fn write_plan(&self, request: Parameters<WritePlanInput>) -> Result<Json<WritePlanOutput>, String> {
+    pub async fn write_plan(&self, request: Parameters<WritePlanInput>) -> Result<Json<WritePlanOutput>, PlanError> {
         let Parameters(input) = request;
-        write_plan_file(&self.plans_dir, input).await.map(Json).map_err(|e| e.to_string())
+        write_plan_file(&self.plans_dir, input).await.map(Json)
     }
 
     #[doc = include_str!("./edit_plan_description.md")]
@@ -152,9 +152,9 @@ impl PlanMcp {
         idempotent_hint = false,
         open_world_hint = false
     ))]
-    pub async fn edit_plan(&self, request: Parameters<EditPlanInput>) -> Result<Json<EditPlanOutput>, String> {
+    pub async fn edit_plan(&self, request: Parameters<EditPlanInput>) -> Result<Json<EditPlanOutput>, PlanError> {
         let Parameters(input) = request;
-        edit_plan_file(&self.plans_dir, input).await.map(Json).map_err(|e| e.to_string())
+        edit_plan_file(&self.plans_dir, input).await.map(Json)
     }
 
     #[doc = include_str!("./submit_plan_description.md")]
@@ -183,7 +183,7 @@ impl PlanMcp {
         }
 
         let Some(responses) = responses.0 else {
-            let params = Self::build_elicitation_form(&plan).map_err(|e| McpError::internal_error(e, None))?;
+            let params = Self::build_elicitation_form(&plan)?;
             let requests =
                 InputRequests::from([("review".to_string(), InputRequest::Elicitation(ElicitRequest::new(params)))]);
             if !input_requests_supported(context.client_capabilities().as_ref(), &requests) {
@@ -196,18 +196,18 @@ impl PlanMcp {
         Json(review_decision(&result)).into_call_tool_result()
     }
 
-    fn build_elicitation_form(plan: &Plan) -> Result<ElicitRequestParams, String> {
+    fn build_elicitation_form(plan: &Plan) -> Result<ElicitRequestParams, McpError> {
         let meta = PlanReviewElicitationMeta::new(&plan.path, &plan.content)
             .to_json()
             .map(RequestMetaObject::from)
-            .map_err(|e| format!("failed to serialize plan review metadata: {e}"))?;
+            .map_err(|e| McpError::internal_error(format!("failed to serialize plan review metadata: {e}"), None))?;
 
         let approve = PlanReviewDecision::Approve.as_str();
         let deny = PlanReviewDecision::Deny.as_str();
         let decision_schema = EnumSchema::builder(vec![approve.into(), deny.into()])
             .untitled()
             .with_default(deny)
-            .map_err(|e| format!("failed to build decision schema: {e}"))?
+            .map_err(|e| McpError::internal_error(format!("failed to build decision schema: {e}"), None))?
             .build();
 
         Ok(ElicitRequestParams::FormElicitationParams {
@@ -217,7 +217,7 @@ impl PlanMcp {
                 .required_enum_schema(DECISION, decision_schema)
                 .optional_string(FEEDBACK)
                 .build()
-                .map_err(|e| format!("failed to build schema: {e}"))?,
+                .map_err(|e| McpError::internal_error(format!("failed to build schema: {e}"), None))?,
         })
     }
 }
@@ -351,6 +351,13 @@ pub enum PlanError {
 
     #[error("Submit command `{program}` exited with {status}{}", stderr_suffix(.stderr))]
     SubmitCommandFailed { program: String, status: std::process::ExitStatus, stderr: String },
+}
+
+/// Renders the error as the text content of an errored MCP tool result.
+impl rmcp::model::IntoContents for PlanError {
+    fn into_contents(self) -> Vec<rmcp::model::ContentBlock> {
+        vec![rmcp::model::ContentBlock::text(self.to_string())]
+    }
 }
 
 struct PlanName(String);

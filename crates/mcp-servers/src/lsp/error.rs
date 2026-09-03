@@ -3,6 +3,8 @@
 use aether_lspd::{ClientError, UriError};
 use thiserror::Error;
 
+use crate::search::SearchError;
+
 #[doc = include_str!("../docs/lsp_error.md")]
 #[derive(Debug, Error)]
 pub enum LspError {
@@ -44,7 +46,7 @@ pub enum LspError {
 
     /// A backing file search failed.
     #[error("Search error: {0}")]
-    Search(String),
+    Search(#[from] SearchError),
 
     #[error("Transport error: {0}")]
     Transport(String),

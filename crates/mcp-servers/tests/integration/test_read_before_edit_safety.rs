@@ -1,4 +1,5 @@
 use mcp_servers::coding::CodingMcp;
+use mcp_servers::coding::error::CodingError;
 use mcp_servers::coding::tools::edit_file::EditFileArgs;
 use mcp_servers::coding::tools::read_file::ReadFileArgs;
 use mcp_servers::coding::tools::write_file::WriteFileArgs;
@@ -25,11 +26,10 @@ async fn test_edit_file_without_read_fails() {
 
     let result = mcp.test_edit_file(edit_args).await;
 
-    assert!(result.is_err());
-    if let Err(err) = result {
-        assert!(err.contains("Safety check failed"));
-        assert!(err.contains("must use read_file"));
-    }
+    let Err(CodingError::NotReadBeforeEdit(path)) = result else {
+        panic!("edit_file without a prior read_file should fail the safety check");
+    };
+    assert_eq!(path, test_file.to_string_lossy().to_string());
 }
 
 /// Test that editing a file after reading it succeeds
@@ -73,11 +73,10 @@ async fn test_write_existing_file_without_read_fails() {
 
     let result = mcp.test_write_file(write_args).await;
 
-    assert!(result.is_err());
-    if let Err(err) = result {
-        assert!(err.contains("Safety check failed"));
-        assert!(err.contains("already exists"));
-    }
+    let Err(CodingError::NotReadBeforeOverwrite(path)) = result else {
+        panic!("write_file to an unread existing file should fail the safety check");
+    };
+    assert_eq!(path, test_file.to_string_lossy().to_string());
 }
 
 /// Test that writing to an existing file after reading it succeeds
