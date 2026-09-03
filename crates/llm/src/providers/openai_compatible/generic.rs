@@ -21,6 +21,21 @@ pub struct ProviderConfig {
     pub prefix: &'static str,
     pub display_name: &'static str,
     pub tool_schema_transform: Option<fn(&mut Schema)>,
+    pub cache_affinity: CacheAffinity,
+}
+
+/// The request field a provider documents for steering requests to a warm prompt cache.
+///
+/// Only providers that document a field get one; the rest cache prefixes automatically
+/// and must not receive unsupported parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheAffinity {
+    /// The provider caches prefixes automatically; no affinity field is sent.
+    Automatic,
+    /// The provider reads the `OpenAI` `prompt_cache_key` request field.
+    PromptCacheKey,
+    /// The provider routes on the `OpenAI` `user` request field.
+    User,
 }
 
 pub const DEEPSEEK: ProviderConfig = ProviderConfig {
@@ -30,6 +45,7 @@ pub const DEEPSEEK: ProviderConfig = ProviderConfig {
     prefix: "deepseek",
     display_name: "DeepSeek",
     tool_schema_transform: None,
+    cache_affinity: CacheAffinity::Automatic,
 };
 
 pub const MOONSHOT: ProviderConfig = ProviderConfig {
@@ -39,6 +55,7 @@ pub const MOONSHOT: ProviderConfig = ProviderConfig {
     prefix: "moonshot",
     display_name: "Moonshot",
     tool_schema_transform: Some(normalize_for_moonshot),
+    cache_affinity: CacheAffinity::Automatic,
 };
 
 pub const ZAI: ProviderConfig = ProviderConfig {
@@ -48,6 +65,7 @@ pub const ZAI: ProviderConfig = ProviderConfig {
     prefix: "zai",
     display_name: "Z.ai",
     tool_schema_transform: None,
+    cache_affinity: CacheAffinity::Automatic,
 };
 
 pub const AZURE_FOUNDRY: ProviderConfig = ProviderConfig {
@@ -57,6 +75,7 @@ pub const AZURE_FOUNDRY: ProviderConfig = ProviderConfig {
     prefix: "azure-foundry",
     display_name: "Microsoft Foundry",
     tool_schema_transform: None,
+    cache_affinity: CacheAffinity::PromptCacheKey,
 };
 
 pub const FIREWORKS: ProviderConfig = ProviderConfig {
@@ -66,6 +85,7 @@ pub const FIREWORKS: ProviderConfig = ProviderConfig {
     prefix: "fireworks",
     display_name: "Fireworks AI",
     tool_schema_transform: None,
+    cache_affinity: CacheAffinity::User,
 };
 
 /// A generic provider for APIs that are fully OpenAI-compatible.
@@ -136,7 +156,7 @@ impl StreamingModelProvider for GenericOpenAiProvider {
     }
 
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
-        let request = match build_chat_request(
+        let mut request = match build_chat_request(
             self.request_model.as_deref().unwrap_or(&self.model),
             context,
             self.config.tool_schema_transform,
@@ -144,6 +164,15 @@ impl StreamingModelProvider for GenericOpenAiProvider {
             Ok(req) => req,
             Err(e) => return error_stream(e),
         };
+        match self.config.cache_affinity {
+            CacheAffinity::Automatic => {}
+            CacheAffinity::PromptCacheKey => {
+                request.prompt_cache_key = context.prompt_cache_key().map(String::from);
+            }
+            CacheAffinity::User => {
+                request.user = context.prompt_cache_key().map(String::from);
+            }
+        }
         create_custom_stream_generic(&self.client, request)
     }
 
@@ -197,5 +226,62 @@ mod tests {
         assert!(captured.headers.get("authorization").is_none());
         assert_eq!(provider.model().unwrap().to_string(), "azure-foundry:gpt-5.5");
         assert_eq!(provider.display_name(), "Microsoft Foundry (gpt-5.5)");
+    }
+
+    #[tokio::test]
+    async fn foundry_requests_carry_prompt_cache_key() {
+        let mut server = CaptureServer::start().await;
+        let provider = capture_backed_provider(&server, &AZURE_FOUNDRY);
+        let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
+        context.set_prompt_cache_key(Some("session-abc".to_string()));
+
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        let captured = server.captured().await;
+
+        assert!(!responses.is_empty());
+        assert_eq!(captured.body["prompt_cache_key"], "session-abc");
+    }
+
+    #[tokio::test]
+    async fn fireworks_requests_carry_session_affinity_in_the_user_field() {
+        let mut server = CaptureServer::start().await;
+        let provider = capture_backed_provider(&server, &FIREWORKS);
+        let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
+        context.set_prompt_cache_key(Some("session-abc".to_string()));
+
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        let captured = server.captured().await;
+
+        assert!(!responses.is_empty());
+        assert_eq!(captured.body["user"], "session-abc");
+        assert!(captured.body.get("prompt_cache_key").is_none());
+    }
+
+    #[tokio::test]
+    async fn automatic_caching_providers_receive_no_affinity_fields() {
+        let mut server = CaptureServer::start().await;
+        let provider = capture_backed_provider(&server, &DEEPSEEK);
+        let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
+        context.set_prompt_cache_key(Some("session-abc".to_string()));
+
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        let captured = server.captured().await;
+
+        assert!(!responses.is_empty());
+        assert!(captured.body.get("prompt_cache_key").is_none());
+        assert!(captured.body.get("user").is_none());
+    }
+
+    fn capture_backed_provider(server: &CaptureServer, config: &'static ProviderConfig) -> GenericOpenAiProvider {
+        GenericOpenAiProvider::new_with_connection(
+            "key".to_string(),
+            config,
+            ProviderConnectionConfig {
+                base_url: Some(server.base_url.clone()),
+                auth_mode: ProviderAuthMode::None,
+                ..Default::default()
+            },
+        )
+        .unwrap()
     }
 }

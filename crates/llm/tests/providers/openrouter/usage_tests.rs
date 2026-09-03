@@ -171,6 +171,7 @@ fn test_openrouter_request_serialization() {
         response_format: None,
         reasoning_effort: None,
         cache_control: Some(CacheControl::ephemeral()),
+        prompt_cache_key: None,
     };
 
     let json = serde_json::to_value(&request).unwrap();
@@ -219,6 +220,8 @@ fn test_openrouter_from_compatible_request_includes_cache_control() {
         temperature: None,
         top_p: None,
         max_tokens: None,
+        prompt_cache_key: None,
+        user: None,
     };
 
     let openrouter: OpenRouterChatRequest = compatible.into();

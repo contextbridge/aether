@@ -39,5 +39,9 @@ pub fn build_chat_request(
         temperature: settings.temperature,
         top_p: settings.top_p,
         max_tokens: settings.max_tokens,
+        // Affinity fields stay unset here; each provider opts in via its own
+        // documented field so unsupported parameters are never sent upstream.
+        prompt_cache_key: None,
+        user: None,
     })
 }

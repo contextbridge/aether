@@ -64,6 +64,11 @@ pub struct OpenRouterChatRequest {
     pub reasoning_effort: Option<crate::ReasoningEffort>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_control: Option<CacheControl>,
+    /// Sticky-routing key `OpenRouter` uses (falling back from `session_id`) to
+    /// keep requests on the replica with a warm prompt cache.
+    /// See: <https://openrouter.ai/docs/guides/best-practices/prompt-caching>
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_key: Option<String>,
 }
 
 impl From<CompatibleChatRequest> for OpenRouterChatRequest {
@@ -85,6 +90,7 @@ impl From<CompatibleChatRequest> for OpenRouterChatRequest {
             response_format: None,
             reasoning_effort: None,
             cache_control: Some(CacheControl::ephemeral()),
+            prompt_cache_key: request.prompt_cache_key,
         }
     }
 }

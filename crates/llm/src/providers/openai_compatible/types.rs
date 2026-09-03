@@ -105,6 +105,12 @@ pub struct CompatibleChatRequest {
     pub top_p: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    /// OpenAI-style prompt-cache affinity. Only set for providers that document support.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_key: Option<String>,
+    /// Session-affinity identifier. Only set for providers that route on `user`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
 }
 
 pub fn map_messages(messages: &[ChatMessage]) -> crate::Result<Vec<CompatibleChatMessage>> {

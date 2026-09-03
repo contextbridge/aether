@@ -74,6 +74,7 @@ impl StreamingModelProvider for OpenRouterProvider {
             Ok(req) => req.into(),
             Err(e) => return error_stream(e),
         };
+        request.prompt_cache_key = context.prompt_cache_key().map(String::from);
 
         if let Some(effort) = context.reasoning_effort() {
             request.reasoning_effort = Some(effort);
@@ -99,4 +100,36 @@ fn provider_from_connection(connection: ProviderConnectionConfig) -> Result<Open
     let client = Client::with_config(config);
 
     Ok(OpenRouterProvider { client, model: String::new() })
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::StreamExt;
+
+    use super::*;
+    use crate::ChatMessage;
+    use crate::providers::test_capture_server::CaptureServer;
+
+    #[tokio::test]
+    async fn stream_response_propagates_prompt_cache_key_and_keeps_cache_control() {
+        let mut server = CaptureServer::start().await;
+        let provider = OpenRouterProvider::from_env_with_connection(ProviderConnectionConfig {
+            base_url: Some(server.base_url.clone()),
+            auth_mode: ProviderAuthMode::None,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .with_model("anthropic/claude-haiku-4.5");
+        let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
+        context.set_prompt_cache_key(Some("session-abc".to_string()));
+
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        let captured = server.captured().await;
+
+        assert!(!responses.is_empty());
+        assert_eq!(captured.path, "/chat/completions");
+        assert_eq!(captured.body["prompt_cache_key"], "session-abc");
+        assert_eq!(captured.body["cache_control"]["type"], "ephemeral");
+    }
 }
