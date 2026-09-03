@@ -71,6 +71,45 @@ async fn cache_key_changes_with_model() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[tokio::test]
+async fn separate_agents_receive_distinct_session_affinity_keys() -> Result<(), Box<dyn Error>> {
+    let first = capture_session_affinity_key().await?;
+    let second = capture_session_affinity_key().await?;
+
+    assert_ne!(first, second);
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_affinity_is_stable_across_turns_and_distinct_from_the_prefix_key() -> Result<(), Box<dyn Error>> {
+    let llm = fake_llm("codex:gpt-5.6-sol", 2)?;
+    let captured = llm.captured_contexts();
+    let (tx, mut rx, _handle) = agent(llm)
+        .system_prompt(Prompt::text("system prompt"))
+        .session_affinity_key("conversation-123")
+        .spawn()
+        .await?;
+
+    send_prompt(&tx, &mut rx, "first question").await?;
+    send_prompt(&tx, &mut rx, "second question").await?;
+
+    let contexts = captured.lock().unwrap();
+    assert!(contexts.iter().all(|context| context.session_affinity_key() == Some("conversation-123")));
+    assert!(contexts.iter().all(|context| context.prompt_cache_key() != context.session_affinity_key()));
+    Ok(())
+}
+
+async fn capture_session_affinity_key() -> Result<String, Box<dyn Error>> {
+    let llm = fake_llm("codex:gpt-5.6-sol", 1)?;
+    let captured = llm.captured_contexts();
+    let (tx, mut rx, _handle) = agent(llm).spawn().await?;
+
+    send_prompt(&tx, &mut rx, "question").await?;
+
+    let contexts = captured.lock().unwrap();
+    Ok(contexts[0].session_affinity_key().expect("agent should set a session affinity key").to_string())
+}
+
 async fn capture_cache_key(
     system_prompt: &str,
     tools: Vec<ToolDefinition>,

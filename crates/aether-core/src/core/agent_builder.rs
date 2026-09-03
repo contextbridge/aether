@@ -49,6 +49,7 @@ pub struct AgentBuilder {
     model_settings: ModelSettings,
     observers: Vec<Box<dyn AgentObserver>>,
     session_usage: SessionUsageTracker,
+    session_affinity_key: String,
 }
 
 impl AgentBuilder {
@@ -68,6 +69,7 @@ impl AgentBuilder {
             model_settings: ModelSettings::default(),
             observers: Vec::new(),
             session_usage: SessionUsageTracker::new("agent"),
+            session_affinity_key: uuid::Uuid::new_v4().to_string(),
         }
     }
 
@@ -87,6 +89,9 @@ impl AgentBuilder {
             .model_settings(spec.model_settings.clone())
             .session_usage(SessionUsageTracker::new(&spec.name));
 
+        if let Some(key) = &deps.session_affinity_key {
+            builder = builder.session_affinity_key(key.clone());
+        }
         if let Some(observer) = deps.observer(&spec.name) {
             builder = builder.observer(observer);
         }
@@ -203,6 +208,11 @@ impl AgentBuilder {
         self
     }
 
+    pub fn session_affinity_key(mut self, key: impl Into<String>) -> Self {
+        self.session_affinity_key = key.into();
+        self
+    }
+
     /// Pre-populate the context with conversation history (e.g. from a restored session).
     ///
     /// These messages are inserted after the system prompt.
@@ -244,6 +254,7 @@ impl AgentBuilder {
         let (message_tx, agent_event_rx) = mpsc::channel::<AgentEvent>(self.channel_capacity);
         let mut context = Context::new(messages, self.tool_definitions);
         context.set_model_settings(self.model_settings);
+        context.set_session_affinity_key(Some(self.session_affinity_key));
 
         let config = AgentConfig {
             llm: self.llm,
@@ -318,10 +329,12 @@ mod tests {
             tools: ToolFilter::default(),
         };
 
-        let builder = AgentBuilder::from_spec(&spec, vec![], &AgentDeps::default()).await.unwrap();
+        let dependencies = AgentDeps::default().with_session_affinity_key("conversation-123");
+        let builder = AgentBuilder::from_spec(&spec, vec![], &dependencies).await.unwrap();
 
         assert_eq!(builder.context_window, Some(200_000));
         assert_eq!(builder.model_settings, settings);
+        assert_eq!(builder.session_affinity_key, "conversation-123");
     }
 
     #[tokio::test]

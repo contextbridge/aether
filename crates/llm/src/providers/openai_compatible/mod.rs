@@ -10,16 +10,38 @@ use schemars::Schema;
 
 use crate::providers::openai::mappers::map_tools;
 use crate::{Context, LlmError};
+use types::CompatibleChatRequest;
 
 pub use config::AetherOpenAiConfig;
 pub use streaming::{create_custom_stream_generic, process_compatible_stream};
-pub use types::{ChatCompletionStreamResponse, CompatibleChatRequest};
+pub use types::ChatCompletionStreamResponse;
+
+/// Selects what `prompt_cache_key` is sent to a LLM provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptCacheKeySource {
+    /// Do not send a prompt cache key.
+    Omit,
+    /// Use a hash of the prompt prefix.
+    Prefix,
+    /// Use a stable session identifier.
+    SessionAffinity,
+}
+
+impl PromptCacheKeySource {
+    pub(crate) fn resolve(self, context: &Context) -> Option<&str> {
+        match self {
+            Self::Omit => None,
+            Self::Prefix => context.prompt_cache_key(),
+            Self::SessionAffinity => context.session_affinity_key(),
+        }
+    }
+}
 
 /// Build a chat completion request from a context
 ///
 /// This is shared logic for OpenAI-compatible providers like `OpenRouter` and Z.ai.
 /// Uses `CompatibleChatRequest` which preserves `reasoning_content` on assistant messages.
-pub fn build_chat_request(
+pub(crate) fn build_chat_request(
     model: &str,
     context: &Context,
     tool_schema_transform: Option<fn(&mut Schema)>,
@@ -39,5 +61,6 @@ pub fn build_chat_request(
         temperature: settings.temperature,
         top_p: settings.top_p,
         max_tokens: settings.max_tokens,
+        prompt_cache_key: None,
     })
 }

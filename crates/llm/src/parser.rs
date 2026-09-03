@@ -39,21 +39,22 @@ impl ModelProviderParser {
 impl Default for ModelProviderParser {
     /// Create a parser with all built-in providers registered
     fn default() -> Self {
-        let parser = Self::new(HashMap::new())
+        let mut parser = Self::new(HashMap::new())
             .with_provider::<AnthropicProvider>("anthropic")
             .with_provider::<GeminiProvider>("gemini")
             .with_provider::<OpenRouterProvider>("openrouter")
             .with_provider::<OllamaProvider>("ollama")
             .with_provider::<LlamaCppProvider>("llamacpp")
-            .with_provider::<OpenAiProvider>("openai")
-            .with_openai_provider("deepseek", &generic::DEEPSEEK)
-            .with_openai_provider("moonshot", &generic::MOONSHOT)
-            .with_openai_provider("zai", &generic::ZAI)
-            .with_openai_provider("azure-foundry", &generic::AZURE_FOUNDRY)
-            .with_openai_provider("fireworks", &generic::FIREWORKS);
+            .with_provider::<OpenAiProvider>("openai");
+
+        for config in generic::BUILT_INS {
+            parser = parser.with_openai_provider(config);
+        }
 
         #[cfg(feature = "bedrock")]
-        let parser = parser.with_provider::<BedrockProvider>("bedrock");
+        {
+            parser = parser.with_provider::<BedrockProvider>("bedrock");
+        }
 
         parser
     }
@@ -96,9 +97,9 @@ impl ModelProviderParser {
         self
     }
 
-    pub fn with_openai_provider(mut self, name: impl Into<String>, config: &'static generic::ProviderConfig) -> Self {
+    pub fn with_openai_provider(mut self, config: &'static generic::ProviderConfig) -> Self {
         self.factories.insert(
-            name.into(),
+            config.provider.parser_name().to_string(),
             Box::new(move |model: &str, connection: ProviderConnectionConfig| {
                 let model = model.to_string();
                 Box::pin(async move {

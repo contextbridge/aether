@@ -156,7 +156,7 @@ mod tests {
 
     #[tokio::test]
     async fn stream_response_sends_supported_protocol_version_for_gpt_5_6_luna() {
-        let mut server = CaptureServer::start().await;
+        let mut server = CaptureServer::start_responses().await;
         let provider = server_backed_provider(&server).with_model("gpt-5.6-luna");
         let mut context = Context::new(
             vec![ChatMessage::system("You are helpful"), ChatMessage::user("Think harder")],
@@ -192,7 +192,7 @@ mod tests {
 
     #[tokio::test]
     async fn stream_response_defaults_to_medium_effort_on_the_wire() {
-        let mut server = CaptureServer::start().await;
+        let mut server = CaptureServer::start_responses().await;
         let provider = server_backed_provider(&server);
         let context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
 

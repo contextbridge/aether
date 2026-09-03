@@ -108,8 +108,13 @@ impl SessionFactory {
             error!("Failed to write session meta: {e}");
         }
 
-        let runtime_factory =
-            self.production_runtime_factory(args.cwd, args.mcp_servers, mode_catalog.specs.catalog(), mcp_capabilities);
+        let runtime_factory = self.production_runtime_factory(
+            args.cwd,
+            args.mcp_servers,
+            mode_catalog.specs.catalog(),
+            mcp_capabilities,
+            &session_id,
+        );
         self.build_session(
             SessionId::new(session_id),
             runtime_factory,
@@ -165,7 +170,13 @@ impl SessionFactory {
         let mut mode_catalog = self.load_mode_catalog(&cwd).await?;
         let resolved = resolve_loaded_session(&mut mode_catalog, &meta, &events)?;
         let runtime_factory = self.runtime_factory.clone().unwrap_or_else(|| {
-            self.production_runtime_factory(cwd, mcp_servers, mode_catalog.specs.catalog(), mcp_capabilities)
+            self.production_runtime_factory(
+                cwd,
+                mcp_servers,
+                mode_catalog.specs.catalog(),
+                mcp_capabilities,
+                session_id.0.as_ref(),
+            )
         });
         self.build_session(
             session_id,
@@ -184,10 +195,12 @@ impl SessionFactory {
         mcp_servers: Vec<acp::McpServer>,
         catalog: &AgentCatalog,
         mcp_capabilities: ClientCapabilities,
+        session_affinity_key: &str,
     ) -> Arc<dyn RuntimeFactory> {
         let deps = AgentDeps::new(Arc::clone(&self.oauth_credential_store), self.observer_factory.clone())
             .with_agent_registry(catalog.registry().clone())
-            .with_mcp_client_capabilities(mcp_capabilities);
+            .with_mcp_client_capabilities(mcp_capabilities)
+            .with_session_affinity_key(session_affinity_key);
         Arc::new(ProductionRuntimeFactory::new(cwd, map_acp_mcp_servers(mcp_servers), deps))
     }
 

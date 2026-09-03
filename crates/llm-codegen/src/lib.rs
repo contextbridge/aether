@@ -124,6 +124,8 @@ struct ProviderConfig {
     /// per-model transport override. Off elsewhere because most providers publish
     /// unrelated data (npm package names) under the same key.
     use_model_transport: bool,
+    /// When true, the provider uses the shared OpenAI-compatible chat transport.
+    uses_openai_compatible_api: bool,
     /// When true, the inner catalog enum is named `{Enum}FoundationModel` and
     /// `LlmModel::{Enum}` carries a hand-written `{Enum}Model` wrapper (defined
     /// outside of codegen) that adds a `Profile(String)` fall-through plus any
@@ -160,8 +162,21 @@ impl ProviderConfig {
             oauth_provider_id: None,
             fallback_reasoning_levels: &["low", "medium", "high"],
             use_model_transport: false,
+            uses_openai_compatible_api: false,
             is_hybrid_dynamic: false,
         }
+    }
+
+    const fn openai_compatible(
+        dev_id: &'static str,
+        enum_name: &'static str,
+        parser_name: &'static str,
+        display_name: &'static str,
+        env_var: &'static str,
+    ) -> Self {
+        let mut config = Self::standard(dev_id, enum_name, parser_name, display_name, Some(env_var));
+        config.uses_openai_compatible_api = true;
+        config
     }
 
     fn explicit_model(&self, model_id: &str) -> Option<&'static ExplicitModel> {
@@ -207,12 +222,12 @@ const PROVIDERS: &[ProviderConfig] = &[
     ProviderConfig {
         source_dev_id: Some("azure"),
         genai_provider_name: "azure.ai.openai",
-        ..ProviderConfig::standard(
+        ..ProviderConfig::openai_compatible(
             "azure-foundry",
             "AzureFoundry",
             "azure-foundry",
             "Microsoft Foundry",
-            Some("AZURE_OPENAI_API_KEY"),
+            "AZURE_OPENAI_API_KEY",
         )
     },
     ProviderConfig {
@@ -228,12 +243,13 @@ const PROVIDERS: &[ProviderConfig] = &[
         oauth_provider_id: Some("codex"),
         fallback_reasoning_levels: &["low", "medium", "high", "xhigh"],
         use_model_transport: false,
+        uses_openai_compatible_api: false,
         is_hybrid_dynamic: false,
     },
-    ProviderConfig::standard("deepseek", "DeepSeek", "deepseek", "DeepSeek", Some("DEEPSEEK_API_KEY")),
+    ProviderConfig::openai_compatible("deepseek", "DeepSeek", "deepseek", "DeepSeek", "DEEPSEEK_API_KEY"),
     ProviderConfig {
         source_dev_id: Some("fireworks-ai"),
-        ..ProviderConfig::standard("fireworks", "Fireworks", "fireworks", "Fireworks AI", Some("FIREWORKS_API_KEY"))
+        ..ProviderConfig::openai_compatible("fireworks", "Fireworks", "fireworks", "Fireworks AI", "FIREWORKS_API_KEY")
     },
     ProviderConfig {
         genai_provider_name: "gcp.gemini",
@@ -241,13 +257,13 @@ const PROVIDERS: &[ProviderConfig] = &[
     },
     ProviderConfig {
         genai_provider_name: "moonshot_ai",
-        ..ProviderConfig::standard("moonshotai", "Moonshot", "moonshot", "Moonshot", Some("MOONSHOT_API_KEY"))
+        ..ProviderConfig::openai_compatible("moonshotai", "Moonshot", "moonshot", "Moonshot", "MOONSHOT_API_KEY")
     },
     ProviderConfig::standard("openai", "Openai", "openai", "OpenAI", Some("OPENAI_API_KEY")),
     ProviderConfig::standard("openrouter", "OpenRouter", "openrouter", "OpenRouter", Some("OPENROUTER_API_KEY")),
     ProviderConfig {
         extra_source_ids: &["zai-coding-plan"],
-        ..ProviderConfig::standard("zai", "ZAi", "zai", "ZAI", Some("ZAI_API_KEY"))
+        ..ProviderConfig::openai_compatible("zai", "ZAi", "zai", "ZAI", "ZAI_API_KEY")
     },
     ProviderConfig {
         genai_provider_name: "aws.bedrock",
@@ -312,6 +328,8 @@ struct CodegenCtx {
 pub struct GeneratedOutput {
     /// The generated Rust source (for `generated.rs`).
     pub rust_source: String,
+    /// Provider documentation keys for the shared OpenAI-compatible module.
+    pub openai_compatible_provider_ids: Vec<&'static str>,
     /// Per-provider markdown documentation keyed by provider identifier.
     ///
     /// Keys are provider `dev_ids` (e.g. `"anthropic"`, `"ollama"`) and values
@@ -348,7 +366,13 @@ pub fn generate(models_json_path: &Path) -> Result<GeneratedOutput, CodegenError
 
     let provider_models = build_provider_models(&data)?;
     let ctx = CodegenCtx { provider_models };
-    Ok(GeneratedOutput { rust_source: emit_generated_source(&ctx), provider_docs: emit_provider_docs(&ctx) })
+    let openai_compatible_provider_ids =
+        PROVIDERS.iter().filter(|config| config.uses_openai_compatible_api).map(|config| config.dev_id).collect();
+    Ok(GeneratedOutput {
+        rust_source: emit_generated_source(&ctx),
+        openai_compatible_provider_ids,
+        provider_docs: emit_provider_docs(&ctx),
+    })
 }
 
 fn build_provider_models(data: &ModelsDevData) -> Result<ProviderModels, CodegenError> {
@@ -583,7 +607,6 @@ fn emit_provider_enum_impl() -> TokenStream {
 
     let is_local_true = provider_or_pats(|_| false, |_| true);
     let is_local_false = provider_or_pats(|_| true, |_| false);
-
     let all_variants = PROVIDERS
         .iter()
         .map(|cfg| format_ident!("{}", cfg.enum_name))

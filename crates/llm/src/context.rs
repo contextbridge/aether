@@ -19,6 +19,8 @@ pub struct Context {
     model_settings: ModelSettings,
     #[serde(skip)]
     prompt_cache_key: Option<String>,
+    #[serde(skip)]
+    session_affinity_key: Option<String>,
 }
 
 impl Context {
@@ -29,6 +31,7 @@ impl Context {
             reasoning_effort: None,
             model_settings: ModelSettings::default(),
             prompt_cache_key: None,
+            session_affinity_key: None,
         }
     }
 
@@ -38,6 +41,14 @@ impl Context {
 
     pub fn set_prompt_cache_key(&mut self, key: Option<String>) {
         self.prompt_cache_key = key;
+    }
+
+    pub fn session_affinity_key(&self) -> Option<&str> {
+        self.session_affinity_key.as_deref()
+    }
+
+    pub fn set_session_affinity_key(&mut self, key: Option<String>) {
+        self.session_affinity_key = key;
     }
 
     pub fn reasoning_effort(&self) -> Option<ReasoningEffort> {
@@ -361,6 +372,19 @@ mod tests {
         ctx.set_prompt_cache_key(Some("session-xyz".to_string()));
         let projected = ctx.filter_encrypted_reasoning(Some(&model));
         assert_eq!(projected.prompt_cache_key(), Some("session-xyz"));
+    }
+
+    #[test]
+    fn session_affinity_key_is_runtime_metadata_preserved_by_context_projections() {
+        let model: LlmModel = "anthropic:claude-opus-4-6".parse().unwrap();
+        let mut context = create_test_context();
+        assert_eq!(context.session_affinity_key(), None);
+
+        context.set_session_affinity_key(Some("conversation-123".to_string()));
+
+        assert_eq!(context.session_affinity_key(), Some("conversation-123"));
+        assert_eq!(context.with_compacted_summary("Summary").session_affinity_key(), Some("conversation-123"));
+        assert_eq!(context.filter_encrypted_reasoning(Some(&model)).session_affinity_key(), Some("conversation-123"));
     }
 
     #[test]
