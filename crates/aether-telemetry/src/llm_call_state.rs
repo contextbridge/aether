@@ -1,4 +1,4 @@
-use crate::content_capture::{ContentBuffer, ContentCapture};
+use crate::content_capture::ContentBuffer;
 use crate::content_json::output_messages_json;
 use crate::gen_ai_metrics::GenAiMetrics;
 use crate::genai_constants::{
@@ -32,7 +32,7 @@ impl LlmCallState {
         context: Context,
         metrics: GenAiMetrics,
         purpose: LlmCallPurpose,
-        capture: ContentCapture,
+        capture_output: bool,
         metric_attributes: Vec<KeyValue>,
     ) -> Self {
         Self {
@@ -41,8 +41,8 @@ impl LlmCallState {
             start: Instant::now(),
             chunk_timing: ChunkTiming::for_purpose(purpose),
             response_started: false,
-            output: capture.buffer(),
-            tool_calls: capture.collect(),
+            output: ContentBuffer::new(capture_output),
+            tool_calls: capture_output.then(Vec::new),
             metric_attributes,
         }
     }

@@ -5,9 +5,15 @@ use std::time::Duration;
 use aether_core::core::RetryConfig;
 use aether_core::events::{AgentEvent, AgentObserver, LlmCallOutcome, StreamState, ToolEvent, TurnEvent, TurnOutcome};
 use aether_core::testing::{AgentTrace, TestScenario, test_agent};
+use aether_telemetry::ContentCaptureSettings;
 use aether_telemetry::{
+    AETHER_INPUT_MESSAGES_SHA256, AETHER_SYSTEM_INSTRUCTIONS_SHA256, GEN_AI_INPUT_MESSAGES, GEN_AI_OUTPUT_MESSAGES,
+    GEN_AI_SYSTEM_INSTRUCTIONS, GEN_AI_TOOL_CALL_ARGUMENTS, GEN_AI_TOOL_CALL_RESULT, GEN_AI_TOOL_DEFINITIONS,
     GENAI_SEMCONV_SCHEMA_URL, GenAiMetrics, OtelInstrumentation, OtelObserver, genai_instrumentation_scope,
 };
+use common::{SYSTEM_INSTRUCTIONS_JSON, SYSTEM_PROMPT, SYSTEM_PROMPT_SHA256, all_content};
+
+mod common;
 use llm::testing::llm_response;
 use llm::{LlmCallPurpose, LlmError, LlmResponse, ModelIdentity, ModelPricing, StopReason, TokenUsage};
 use opentelemetry::metrics::MeterProvider as _;
@@ -105,24 +111,26 @@ async fn failed_and_cancelled_calls_carry_error_attributes() -> Result<(), Box<d
 }
 
 #[tokio::test]
-async fn capture_content_gates_input_output_and_tool_payloads() -> Result<(), Box<dyn Error>> {
+async fn content_flags_gate_each_gen_ai_attribute() -> Result<(), Box<dyn Error>> {
     let trace = happy_tool_trace().await?;
-
     let input_messages = r#"[{"parts":[{"content":"3+5 = ?","type":"text"}],"role":"user"}]"#;
-    let spans = otel_test().capturing().observe_trace(&trace).spans();
+    let input_sha256 = "8d12ba59cd9df85123ca624d81a9a7c2f1015d3fb52318c2348227c5ac1ad8a7";
+
+    let spans = otel_test().capturing().observe_trace_with_system_prompt(&trace).spans();
     let turn = spans.named("invoke_agent");
-    turn.assert_attr("gen_ai.input.messages", input_messages);
+    turn.assert_attr(GEN_AI_INPUT_MESSAGES, input_messages);
     turn.assert_attr(
-        "gen_ai.output.messages",
+        GEN_AI_OUTPUT_MESSAGES,
         r#"[{"parts":[{"content":"hello The sum is 8","type":"text"}],"role":"assistant"}]"#,
     );
     let chat = spans.named("chat claude-sonnet-4-5");
-    chat.assert_attr("gen_ai.input.messages", input_messages);
+    chat.assert_attr(GEN_AI_INPUT_MESSAGES, input_messages);
+    chat.assert_attr(AETHER_INPUT_MESSAGES_SHA256, input_sha256);
     chat.assert_attr(
-        "gen_ai.output.messages",
+        GEN_AI_OUTPUT_MESSAGES,
         r#"[{"parts":[{"content":"hello ","type":"text"},{"arguments":{"a":3,"b":5},"id":"call_1","name":"test__add_numbers","type":"tool_call"}],"role":"assistant"}]"#,
     );
-    let tool_definitions = chat.attr_string("gen_ai.tool.definitions").expect("tool definitions captured");
+    let tool_definitions = chat.attr_string(GEN_AI_TOOL_DEFINITIONS).expect("tool definitions captured");
     let tool_definitions: JsonValue = serde_json::from_str(&tool_definitions)?;
     assert!(
         tool_definitions.as_array().is_some_and(|tools| tools.iter().any(|tool| {
@@ -134,21 +142,39 @@ async fn capture_content_gates_input_output_and_tool_payloads() -> Result<(), Bo
     );
     assert!(chat.attr("gen_ai.response.time_to_first_chunk").is_some());
     let tool = spans.named("execute_tool test__add_numbers");
-    tool.assert_attr("gen_ai.tool.call.arguments", r#"{"a":3,"b":5}"#);
-    tool.assert_attr("gen_ai.tool.call.result", "sum: 8");
+    tool.assert_attr(GEN_AI_TOOL_CALL_ARGUMENTS, r#"{"a":3,"b":5}"#);
+    tool.assert_attr(GEN_AI_TOOL_CALL_RESULT, "sum: 8");
 
-    let spans = otel_test().redacting().observe_trace(&trace).spans();
-    let turn = spans.named("invoke_agent");
-    turn.assert_no_attr("gen_ai.input.messages");
-    turn.assert_no_attr("gen_ai.output.messages");
-    for chat in spans.prefixed("chat claude-sonnet-4-5") {
-        chat.assert_no_attr("gen_ai.input.messages");
-        chat.assert_no_attr("gen_ai.output.messages");
-        chat.assert_no_attr("gen_ai.tool.definitions");
+    chat.assert_attr(GEN_AI_SYSTEM_INSTRUCTIONS, SYSTEM_INSTRUCTIONS_JSON);
+    chat.assert_attr(AETHER_SYSTEM_INSTRUCTIONS_SHA256, SYSTEM_PROMPT_SHA256);
+
+    let cases = [
+        (ContentCaptureSettings::default(), &[][..]),
+        (
+            ContentCaptureSettings { system_instructions: true, ..Default::default() },
+            &[GEN_AI_SYSTEM_INSTRUCTIONS, AETHER_SYSTEM_INSTRUCTIONS_SHA256],
+        ),
+        (
+            ContentCaptureSettings { input_messages: true, ..ContentCaptureSettings::default() },
+            &[GEN_AI_INPUT_MESSAGES, AETHER_INPUT_MESSAGES_SHA256],
+        ),
+        (
+            ContentCaptureSettings { output_messages: true, ..ContentCaptureSettings::default() },
+            &[GEN_AI_OUTPUT_MESSAGES],
+        ),
+        (
+            ContentCaptureSettings { tool_definitions: true, ..ContentCaptureSettings::default() },
+            &[GEN_AI_TOOL_DEFINITIONS],
+        ),
+        (
+            ContentCaptureSettings { tool_calls: true, ..ContentCaptureSettings::default() },
+            &[GEN_AI_TOOL_CALL_ARGUMENTS, GEN_AI_TOOL_CALL_RESULT],
+        ),
+    ];
+    for (content, expected) in cases {
+        let spans = otel_test().content(content).observe_trace_with_system_prompt(&trace).spans();
+        assert_eq!(content_attribute_keys(&spans), expected.iter().copied().collect());
     }
-    let tool = spans.named("execute_tool test__add_numbers");
-    tool.assert_no_attr("gen_ai.tool.call.arguments");
-    tool.assert_no_attr("gen_ai.tool.call.result");
     Ok(())
 }
 
@@ -167,7 +193,7 @@ async fn tool_only_llm_call_captures_generation_output() -> Result<(), Box<dyn E
 
     let chat = spans.prefixed("chat")[0];
     chat.assert_attr(
-        "gen_ai.output.messages",
+        GEN_AI_OUTPUT_MESSAGES,
         r#"[{"finish_reason":"tool_call","parts":[{"arguments":{"a":3,"b":5},"id":"call_1","name":"test__add_numbers","type":"tool_call"}],"role":"assistant"}]"#,
     );
     chat.assert_attr("gen_ai.response.finish_reasons", finish_reasons("tool_call"));
@@ -289,7 +315,7 @@ async fn completed_message_sets_turn_output_without_streamed_chunks() -> Result<
 
     let spans = otel_test().capturing().observe_trace(&trace).spans();
     spans.named("invoke_agent").assert_attr(
-        "gen_ai.output.messages",
+        GEN_AI_OUTPUT_MESSAGES,
         r#"[{"parts":[{"content":"complete response","type":"text"}],"role":"assistant"}]"#,
     );
     Ok(())
@@ -335,14 +361,14 @@ async fn compaction_call_is_tagged_and_parented_to_the_turn() -> Result<(), Box<
         .expect("compaction span tagged");
     assert_eq!(compaction.parent_span_id, turn.span_context.span_id());
     compaction.assert_attr("gen_ai.usage.input_tokens", 50);
-    compaction.assert_no_attr("gen_ai.input.messages");
-    compaction.assert_no_attr("gen_ai.tool.definitions");
+    compaction.assert_no_attr(GEN_AI_INPUT_MESSAGES);
+    compaction.assert_no_attr(GEN_AI_TOOL_DEFINITIONS);
 
     let chats: Vec<_> =
         spans.prefixed("chat").into_iter().filter(|span| span.attr("aether.llm.purpose").is_none()).collect();
     assert_eq!(chats.len(), 2, "each chat call gets its own span");
     assert!(
-        chats.iter().all(|chat| chat.attr("gen_ai.input.messages").is_some()),
+        chats.iter().all(|chat| chat.attr(GEN_AI_INPUT_MESSAGES).is_some()),
         "the turn input belongs to the chat calls, not the compaction call"
     );
     Ok(())
@@ -428,10 +454,30 @@ async fn happy_tool_trace() -> Result<AgentTrace, Box<dyn Error>> {
     ];
     Ok(test_agent()
         .model("anthropic:claude-sonnet-4-5".parse()?)
+        .system_prompt(aether_core::core::Prompt::Text(SYSTEM_PROMPT.to_string()))
         .llm_responses(&responses)
         .user_text("3+5 = ?")
         .run_trace()
         .await?)
+}
+
+const CONTENT_AND_HASH_ATTRIBUTES: [&str; 8] = [
+    GEN_AI_SYSTEM_INSTRUCTIONS,
+    GEN_AI_INPUT_MESSAGES,
+    GEN_AI_OUTPUT_MESSAGES,
+    GEN_AI_TOOL_DEFINITIONS,
+    GEN_AI_TOOL_CALL_ARGUMENTS,
+    GEN_AI_TOOL_CALL_RESULT,
+    AETHER_SYSTEM_INSTRUCTIONS_SHA256,
+    AETHER_INPUT_MESSAGES_SHA256,
+];
+
+fn content_attribute_keys(spans: &Spans) -> BTreeSet<&str> {
+    spans
+        .iter()
+        .flat_map(|span| span.attributes.iter().map(|attribute| attribute.key.as_str()))
+        .filter(|key| CONTENT_AND_HASH_ATTRIBUTES.contains(key))
+        .collect()
 }
 
 fn chat_call(provider: &str, model: &str, outcome: LlmCallOutcome) -> [AgentEvent; 2] {
@@ -461,7 +507,7 @@ fn otel_test() -> OtelTestBuilder {
 
 #[derive(Default)]
 struct OtelTestBuilder {
-    capture_content: bool,
+    content: ContentCaptureSettings,
 }
 
 struct OtelHarness {
@@ -473,13 +519,16 @@ struct OtelHarness {
 }
 
 impl OtelTestBuilder {
-    fn capturing(mut self) -> Self {
-        self.capture_content = true;
-        self
+    fn capturing(self) -> Self {
+        self.content(all_content())
     }
 
-    fn redacting(mut self) -> Self {
-        self.capture_content = false;
+    fn redacting(self) -> Self {
+        self.content(ContentCaptureSettings::default())
+    }
+
+    fn content(mut self, content: ContentCaptureSettings) -> Self {
+        self.content = content;
         self
     }
 
@@ -489,13 +538,20 @@ impl OtelTestBuilder {
         harness
     }
 
+    fn observe_trace_with_system_prompt(self, trace: &AgentTrace) -> OtelHarness {
+        let mut harness = self.build();
+        harness.observer.as_mut().expect("observer still alive").on_system_prompt(SYSTEM_PROMPT);
+        harness.feed(trace.events());
+        harness
+    }
+
     fn build(self) -> OtelHarness {
-        OtelHarness::new(self.capture_content)
+        OtelHarness::new(self.content)
     }
 }
 
 impl OtelHarness {
-    fn new(capture_content: bool) -> Self {
+    fn new(content: ContentCaptureSettings) -> Self {
         let span_exporter = InMemorySpanExporter::default();
         let scope = genai_instrumentation_scope("test");
         let tracer_provider = SdkTracerProvider::builder().with_simple_exporter(span_exporter.clone()).build();
@@ -505,7 +561,7 @@ impl OtelHarness {
         let observer = OtelObserver::new(OtelInstrumentation {
             tracer: tracer_provider.tracer_with_scope(scope),
             metrics,
-            capture_content,
+            content,
             root_parent: None,
             agent_name: None,
         });

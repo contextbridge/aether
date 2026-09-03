@@ -1,7 +1,8 @@
-use crate::content_capture::{ContentBuffer, ContentCapture};
-use crate::content_json::{input_messages_json, output_messages_json, tool_definitions_json};
+use crate::content_capture::{ContentBuffer, ContentCaptureSettings};
+use crate::content_json::{input_messages_json, output_messages_json, system_instructions_json, tool_definitions_json};
 use crate::gen_ai_metrics::GenAiMetrics;
 use crate::genai_constants as semconv;
+use crate::hash::sha256_hex;
 use crate::llm_call_state::LlmCallState;
 use crate::span_guard::{ErrorKind, SpanGuard};
 use crate::trace_context::inject_trace_context;
@@ -20,6 +21,7 @@ use std::collections::HashMap;
 pub struct OtelObserver {
     turn: Option<TurnState>,
     tool_definitions: Vec<ToolDefinition>,
+    system_prompt: Option<String>,
     otel: OtelInstrumentation,
 }
 
@@ -29,14 +31,14 @@ pub struct OtelObserver {
 pub struct OtelInstrumentation {
     pub tracer: SdkTracer,
     pub metrics: GenAiMetrics,
-    pub capture_content: bool,
+    pub content: ContentCaptureSettings,
     pub root_parent: Option<Context>,
     pub agent_name: Option<String>,
 }
 
 impl OtelObserver {
     pub fn new(otel: OtelInstrumentation) -> Self {
-        Self { turn: None, tool_definitions: Vec::new(), otel }
+        Self { turn: None, tool_definitions: Vec::new(), system_prompt: None, otel }
     }
 }
 
@@ -54,10 +56,14 @@ impl AgentObserver for OtelObserver {
             }
             message => {
                 if let Some(turn) = &mut self.turn {
-                    turn.on_event(message, &self.otel, &self.tool_definitions);
+                    turn.on_event(message, &self.otel, &self.tool_definitions, self.system_prompt.as_deref());
                 }
             }
         }
+    }
+
+    fn on_system_prompt(&mut self, prompt: &str) {
+        self.system_prompt = Some(prompt.to_string());
     }
 
     fn tool_trace_context(&self, tool_id: &str) -> Option<TraceContext> {
@@ -72,8 +78,9 @@ impl OtelObserver {
         // starting the new span, so the stale turn can't become its parent.
         self.turn = None;
 
-        let mut input = self.otel.capture().buffer();
-        input.set(&ContentBlock::join_text(content));
+        let input_text = ContentBlock::join_text(content);
+        let mut input = ContentBuffer::new(self.otel.content.input_messages);
+        input.set(&input_text);
         let operation_name = "invoke_agent";
         let mut attributes = vec![KeyValue::new(semconv::GEN_AI_OPERATION_NAME, operation_name)];
         let span_name = match &self.otel.agent_name {
@@ -84,20 +91,21 @@ impl OtelObserver {
             None => operation_name.to_string(),
         };
         if let Some(text) = input.get() {
-            attributes.push(KeyValue::new(semconv::GEN_AI_INPUT_MESSAGES, input_messages_json(text)));
+            attributes.extend(hashed_content(
+                semconv::GEN_AI_INPUT_MESSAGES,
+                semconv::AETHER_INPUT_MESSAGES_SHA256,
+                input_messages_json(text),
+                text,
+            ));
         }
         let builder = SpanBuilder::from_name(span_name).with_kind(SpanKind::Internal).with_attributes(attributes);
         let span_context = self.otel.start_span(builder, self.otel.root_parent.as_ref());
         let span = SpanGuard::new(span_context, TURN_CANCEL_MESSAGE);
-        self.turn = Some(TurnState::new(span, input, self.otel.capture()));
+        self.turn = Some(TurnState::new(span, input, self.otel.content.output_messages));
     }
 }
 
 impl OtelInstrumentation {
-    fn capture(&self) -> ContentCapture {
-        ContentCapture::from_enabled(self.capture_content)
-    }
-
     /// Starts a span under `parent`. Providers for disabled tracing use an
     /// always-off sampler, so callers never need to branch.
     pub(crate) fn start_span(&self, builder: SpanBuilder, parent: Option<&Context>) -> Context {
@@ -126,11 +134,11 @@ struct TurnState {
 }
 
 impl TurnState {
-    fn new(span: SpanGuard, input: ContentBuffer, capture: ContentCapture) -> Self {
+    fn new(span: SpanGuard, input: ContentBuffer, capture_output: bool) -> Self {
         Self {
             span,
             input,
-            output: capture.buffer(),
+            output: ContentBuffer::new(capture_output),
             chat_call: None,
             compaction_call: None,
             streamed_arguments: HashMap::new(),
@@ -138,7 +146,13 @@ impl TurnState {
         }
     }
 
-    fn on_event(&mut self, message: &AgentEvent, instrumentation: &OtelInstrumentation, tools: &[ToolDefinition]) {
+    fn on_event(
+        &mut self,
+        message: &AgentEvent,
+        instrumentation: &OtelInstrumentation,
+        tools: &[ToolDefinition],
+        system_prompt: Option<&str>,
+    ) {
         match message {
             AgentEvent::Turn(TurnEvent::LlmCallStarted { purpose, model, display_name, attempt, .. }) => {
                 self.start_llm_call(
@@ -152,6 +166,7 @@ impl TurnState {
                     },
                     instrumentation,
                     tools,
+                    system_prompt,
                 );
             }
             AgentEvent::Turn(TurnEvent::LlmCallEnded { purpose, outcome }) => {
@@ -206,6 +221,7 @@ impl TurnState {
         call: LlmCallStart<'_>,
         instrumentation: &OtelInstrumentation,
         tools: &[ToolDefinition],
+        system_prompt: Option<&str>,
     ) {
         let model_name = call.model.unwrap_or(call.display_name).to_string();
 
@@ -234,10 +250,25 @@ impl TurnState {
         // compaction call's actual input is the internal summarization prompt.
         if call.purpose == LlmCallPurpose::Chat {
             if let Some(input) = self.input.get() {
-                attributes.push(KeyValue::new(semconv::GEN_AI_INPUT_MESSAGES, input_messages_json(input)));
+                attributes.extend(hashed_content(
+                    semconv::GEN_AI_INPUT_MESSAGES,
+                    semconv::AETHER_INPUT_MESSAGES_SHA256,
+                    input_messages_json(input),
+                    input,
+                ));
             }
-            if instrumentation.capture_content && !tools.is_empty() {
+            if instrumentation.content.tool_definitions && !tools.is_empty() {
                 attributes.push(KeyValue::new(semconv::GEN_AI_TOOL_DEFINITIONS, tool_definitions_json(tools)));
+            }
+            if instrumentation.content.system_instructions
+                && let Some(prompt) = system_prompt
+            {
+                attributes.extend(hashed_content(
+                    semconv::GEN_AI_SYSTEM_INSTRUCTIONS,
+                    semconv::AETHER_SYSTEM_INSTRUCTIONS_SHA256,
+                    system_instructions_json(prompt),
+                    prompt,
+                ));
             }
         }
 
@@ -248,7 +279,7 @@ impl TurnState {
             context,
             instrumentation.metrics.clone(),
             call.purpose,
-            instrumentation.capture(),
+            instrumentation.content.output_messages,
             metric_attributes,
         );
         *self.llm_call_slot(call.purpose) = Some(state);
@@ -258,7 +289,7 @@ impl TurnState {
         if let Some(chat) = &mut self.chat_call {
             chat.record_tool_call_start(request);
         }
-        let mut arguments = instrumentation.capture().buffer();
+        let mut arguments = ContentBuffer::new(instrumentation.content.tool_calls);
         arguments.set(&request.arguments);
         self.streamed_arguments.insert(request.id.clone(), arguments);
     }
@@ -299,8 +330,8 @@ impl TurnState {
         self.streamed_arguments.remove(&result.id);
         let Some(mut span) = self.executing_tools.remove(&result.id) else { return };
 
-        if let Some(content) = instrumentation.capture().content(&result.result) {
-            span.set_attribute(KeyValue::new(semconv::GEN_AI_TOOL_CALL_RESULT, content.to_string()));
+        if instrumentation.content.tool_calls {
+            span.set_attribute(KeyValue::new(semconv::GEN_AI_TOOL_CALL_RESULT, result.result.clone()));
         }
 
         span.end_ok();
@@ -337,6 +368,10 @@ struct LlmCallStart<'a> {
     display_name: &'a str,
     pricing: Option<ModelPricing>,
     attempt: u32,
+}
+
+fn hashed_content(content_key: &'static str, hash_key: &'static str, content: String, text: &str) -> [KeyValue; 2] {
+    [KeyValue::new(content_key, content), KeyValue::new(hash_key, sha256_hex(text))]
 }
 
 fn pricing_attributes(pricing: ModelPricing) -> Vec<KeyValue> {

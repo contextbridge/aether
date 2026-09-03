@@ -1,8 +1,13 @@
 //! JSON encodings for the content-carrying `GenAI` span attributes
-//! (`gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.tool.definitions`).
+//! (`gen_ai.system_instructions`, `gen_ai.input.messages`,
+//! `gen_ai.output.messages`, `gen_ai.tool.definitions`).
 
 use llm::{ToolCallRequest, ToolDefinition};
 use serde_json::{Value, from_str, json};
+
+pub(crate) fn system_instructions_json(content: &str) -> String {
+    json!([{ "type": "text", "content": content }]).to_string()
+}
 
 pub(crate) fn input_messages_json(content: &str) -> String {
     json!([

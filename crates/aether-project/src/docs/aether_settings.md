@@ -64,15 +64,22 @@ An encrypted file credential store using a passphrase from the environment:
 ## OpenTelemetry
 
 OpenTelemetry is enabled by adding a `telemetry` section to
-settings. User-level telemetry settings merge with project-level, with project-level taking priority. 
-Prompt, response, reasoning, and tool argument content is not exported unless `captureContent` is explicitly set to `true`.
+settings. User-level telemetry settings merge with project-level, with project-level taking priority.
+Prompt, response, reasoning, and tool content is not exported unless the matching `telemetry.content`
+flag is explicitly set to `true`.
 
 ```json
 {
   "telemetry": {
     "serviceName": "aether",
     "sampleRatio": 1.0,
-    "captureContent": false,
+    "content": {
+      "systemInstructions": false,
+      "inputMessages": false,
+      "outputMessages": false,
+      "toolDefinitions": false,
+      "toolCalls": false
+    },
     "traces": { "enabled": true },
     "metrics": { "enabled": true },
     "otlp": {
@@ -89,5 +96,9 @@ Prompt, response, reasoning, and tool argument content is not exported unless `c
   ]
 }
 ```
+
+All `content` flags default to `false`; enable only the content attributes appropriate for
+your collector and its access controls. See the website telemetry reference for the complete
+attribute mapping.
 
 For an OTLP backend with exact signal URLs, set `otlp.tracesEndpoint` and `otlp.metricsEndpoint`. Aether sends each configured signal to its matching URL unchanged; an unconfigured signal uses the `/v1/traces` or `/v1/metrics` URL derived from `otlp.endpoint`.

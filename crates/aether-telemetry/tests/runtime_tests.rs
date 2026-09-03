@@ -1,4 +1,6 @@
-use aether_telemetry::{AgentTraceContext, TelemetryConfig, TelemetryInitError, TelemetryRuntime};
+use aether_telemetry::{
+    AgentTraceContext, ContentCaptureSettings, TelemetryConfig, TelemetryInitError, TelemetryRuntime,
+};
 use std::collections::HashMap;
 
 #[test]
@@ -143,7 +145,7 @@ fn test_config() -> TelemetryConfig {
         service_name: "aether".to_string(),
         service_version: "test".to_string(),
         sample_ratio: 1.0,
-        capture_content: false,
+        content: ContentCaptureSettings::default(),
         trace_context: None,
         traces_enabled: true,
         metrics_enabled: true,
