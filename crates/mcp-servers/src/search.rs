@@ -7,6 +7,17 @@ use grep::{
     searcher::{Searcher, Sink, SinkMatch},
 };
 use ignore::WalkBuilder;
+use thiserror::Error;
+
+/// Errors that can occur while searching project source files
+#[derive(Debug, Error)]
+pub enum SearchError {
+    #[error("Failed to build search matcher: {0}")]
+    InvalidMatcher(#[source] grep::regex::Error),
+
+    #[error("Search task failed: {0}")]
+    TaskFailed(#[source] tokio::task::JoinError),
+}
 
 /// Node package installation directory.
 pub const NODE_MODULES: &str = "node_modules";
@@ -21,10 +32,10 @@ pub async fn find_files_containing(
     literal: String,
     extensions: Vec<&'static str>,
     max_files: usize,
-) -> Result<Vec<PathBuf>, String> {
+) -> Result<Vec<PathBuf>, SearchError> {
     tokio::task::spawn_blocking(move || find_files_containing_sync(&root, &literal, &extensions, max_files))
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(SearchError::TaskFailed)?
 }
 
 fn find_files_containing_sync(
@@ -32,14 +43,14 @@ fn find_files_containing_sync(
     literal: &str,
     extensions: &[&str],
     max_files: usize,
-) -> Result<Vec<PathBuf>, String> {
+) -> Result<Vec<PathBuf>, SearchError> {
     if max_files == 0 {
         return Ok(Vec::new());
     }
     let matcher = RegexMatcherBuilder::new()
         .case_insensitive(true)
         .build(&regex::escape(literal))
-        .map_err(|error| error.to_string())?;
+        .map_err(SearchError::InvalidMatcher)?;
     let mut walker = WalkBuilder::new(root);
     walker.hidden(false).git_ignore(true).filter_entry(|entry| {
         entry.depth() == 0

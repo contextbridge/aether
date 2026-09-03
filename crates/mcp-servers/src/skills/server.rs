@@ -319,7 +319,7 @@ impl ServerHandler for SkillsMcp {
 impl SkillsMcp {
     #[doc = include_str!("tools/list_skills/description.md")]
     #[tool(annotations(read_only_hint = true, open_world_hint = false))]
-    pub async fn list_skills(&self, request: Parameters<ListSkillsInput>) -> Result<Json<ListSkillsOutput>, String> {
+    pub async fn list_skills(&self, request: Parameters<ListSkillsInput>) -> Json<ListSkillsOutput> {
         let Parameters(_input) = request;
         let catalog = self.catalog.read().await;
         let mut skills: Vec<_> = catalog
@@ -333,18 +333,18 @@ impl SkillsMcp {
         skills.sort_by(|a, b| a.name.cmp(&b.name));
         let count = skills.len();
 
-        Ok(Json(ListSkillsOutput {
+        Json(ListSkillsOutput {
             status: "success".to_string(),
             skills,
             count,
             message: format!("Found {count} skills"),
             meta: Some(ToolDisplayMeta::new("Skills", format!("{count} skills")).into()),
-        }))
+        })
     }
 
     #[doc = include_str!("tools/get_skills/description.md")]
     #[tool(annotations(read_only_hint = true, open_world_hint = false))]
-    pub async fn get_skills(&self, request: Parameters<LoadSkillsInput>) -> Result<Json<LoadSkillsOutput>, String> {
+    pub async fn get_skills(&self, request: Parameters<LoadSkillsInput>) -> Json<LoadSkillsOutput> {
         let Parameters(args) = request;
         let expander = ShellExpander::new();
         let mut files = Vec::with_capacity(args.requests.len());
@@ -352,7 +352,7 @@ impl SkillsMcp {
             files.push(self.load_skill_file(&req, &expander).await);
         }
 
-        Ok(Json(LoadSkillsOutput { files }))
+        Json(LoadSkillsOutput { files })
     }
 }
 
@@ -458,7 +458,7 @@ mod tests {
         );
 
         let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
-        let Json(output) = server.list_skills(Parameters(ListSkillsInput::default())).await.unwrap();
+        let Json(output) = server.list_skills(Parameters(ListSkillsInput::default())).await;
 
         assert_eq!(output.status, "success");
         assert_eq!(output.count, 2);

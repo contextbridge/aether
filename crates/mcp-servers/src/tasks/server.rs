@@ -16,7 +16,7 @@ use crate::error::ServerInitError;
 use crate::{
     tasks::{
         TaskCreateInput, TaskCreateOutput, TaskGetInput, TaskGetOutput, TaskListInput, TaskListOutput, TaskStore,
-        TaskUpdateInput, TaskUpdateOutput, execute_task_create, execute_task_get, execute_task_list,
+        TaskStoreError, TaskUpdateInput, TaskUpdateOutput, execute_task_create, execute_task_get, execute_task_list,
         execute_task_update,
     },
     workspace_paths::resolve_path,
@@ -139,11 +139,14 @@ impl TasksMcp {
         idempotent_hint = false,
         open_world_hint = false
     ))]
-    pub async fn task_create(&self, request: Parameters<TaskCreateInput>) -> Result<Json<TaskCreateOutput>, String> {
+    pub async fn task_create(
+        &self,
+        request: Parameters<TaskCreateInput>,
+    ) -> Result<Json<TaskCreateOutput>, TaskStoreError> {
         let Parameters(input) = request;
         let mut store = self.task_store.lock().await;
-        store.init().map_err(|e| e.to_string())?;
-        execute_task_create(&input, &mut store).map(Json).map_err(|e| e.to_string())
+        store.init()?;
+        execute_task_create(&input, &mut store).map(Json)
     }
 
     #[doc = include_str!("./tools/update/description.md")]
@@ -153,29 +156,32 @@ impl TasksMcp {
         idempotent_hint = false,
         open_world_hint = false
     ))]
-    pub async fn task_update(&self, request: Parameters<TaskUpdateInput>) -> Result<Json<TaskUpdateOutput>, String> {
+    pub async fn task_update(
+        &self,
+        request: Parameters<TaskUpdateInput>,
+    ) -> Result<Json<TaskUpdateOutput>, TaskStoreError> {
         let Parameters(input) = request;
         let mut store = self.task_store.lock().await;
-        store.init().map_err(|e| e.to_string())?;
-        execute_task_update(input, &mut store).map(Json).map_err(|e| e.to_string())
+        store.init()?;
+        execute_task_update(input, &mut store).map(Json)
     }
 
     #[doc = include_str!("./tools/list/description.md")]
     #[tool(annotations(read_only_hint = true, open_world_hint = false))]
-    pub async fn task_list(&self, request: Parameters<TaskListInput>) -> Result<Json<TaskListOutput>, String> {
+    pub async fn task_list(&self, request: Parameters<TaskListInput>) -> Result<Json<TaskListOutput>, TaskStoreError> {
         let Parameters(input) = request;
         let mut store = self.task_store.lock().await;
-        store.init().map_err(|e| e.to_string())?;
+        store.init()?;
         Ok(Json(execute_task_list(&input, &store)))
     }
 
     #[doc = include_str!("./tools/get/description.md")]
     #[tool(annotations(read_only_hint = true, open_world_hint = false))]
-    pub async fn task_get(&self, request: Parameters<TaskGetInput>) -> Result<Json<TaskGetOutput>, String> {
+    pub async fn task_get(&self, request: Parameters<TaskGetInput>) -> Result<Json<TaskGetOutput>, TaskStoreError> {
         let Parameters(input) = request;
         let mut store = self.task_store.lock().await;
-        store.init().map_err(|e| e.to_string())?;
-        execute_task_get(input, &store).map(Json).map_err(|e| e.to_string())
+        store.init()?;
+        execute_task_get(input, &store).map(Json)
     }
 }
 

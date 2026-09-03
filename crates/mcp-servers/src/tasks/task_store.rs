@@ -36,6 +36,13 @@ pub enum TaskStoreError {
     Json(#[from] serde_json::Error),
 }
 
+/// Renders the error as the text content of an errored MCP tool result.
+impl rmcp::model::IntoContents for TaskStoreError {
+    fn into_contents(self) -> Vec<rmcp::model::ContentBlock> {
+        vec![rmcp::model::ContentBlock::text(self.to_string())]
+    }
+}
+
 /// Task store backed by JSONL files
 #[derive(Debug)]
 pub struct TaskStore {

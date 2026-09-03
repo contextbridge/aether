@@ -6,6 +6,9 @@
 use std::io;
 use thiserror::Error;
 
+use crate::lsp::error::LspError;
+use crate::workspace_paths::EmptyFilePathError;
+
 pub use crate::file_ops::FileError;
 
 #[doc = include_str!("../docs/coding_error.md")]
@@ -43,9 +46,40 @@ pub enum CodingError {
     #[error(transparent)]
     WebSearch(#[from] WebSearchError),
 
+    /// LSP tool errors
+    #[error(transparent)]
+    Lsp(#[from] LspError),
+
     /// Tool not configured/available
     #[error("{0}")]
     NotConfigured(String),
+
+    /// A required file-path argument was empty
+    #[error(transparent)]
+    EmptyFilePath(#[from] EmptyFilePathError),
+
+    /// An existing file must be read before it may be overwritten
+    #[error(
+        "Safety check failed: File '{0}' already exists. You must use read_file on it before overwriting. This prevents accidental data loss."
+    )]
+    NotReadBeforeOverwrite(String),
+
+    /// A file must be read before it may be edited
+    #[error(
+        "Safety check failed: You must use read_file on '{0}' before editing it. This ensures you understand the current file contents before making changes."
+    )]
+    NotReadBeforeEdit(String),
+
+    /// Failed to check whether the target file exists
+    #[error("Failed to check existence of {path}: {source}")]
+    ExistsCheckFailed { path: String, source: io::Error },
+}
+
+/// Renders the error as the text content of an errored MCP tool result.
+impl rmcp::model::IntoContents for CodingError {
+    fn into_contents(self) -> Vec<rmcp::model::ContentBlock> {
+        vec![rmcp::model::ContentBlock::text(self.to_string())]
+    }
 }
 
 /// Errors related to bash command execution
