@@ -8,6 +8,9 @@ use std::sync::Arc;
 pub trait AgentObserver: Send {
     fn on_event(&mut self, message: &AgentEvent);
 
+    /// Called with the rendered system prompt for the next chat request
+    fn on_system_prompt(&mut self, _prompt: &str) {}
+
     /// Trace context to propagate to whatever executes `tool_id`, available once
     /// the observer has seen that tool's
     /// [`ExecutionStarted`](crate::events::ToolEvent::ExecutionStarted).

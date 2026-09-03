@@ -755,6 +755,11 @@ impl Agent {
     async fn begin_chat_call(&mut self, attempt: u32) {
         self.llm_call_active = true;
         let started = self.begin_llm_call(LlmCallPurpose::Chat, attempt);
+        if let Some(system_prompt) = self.context.system_content() {
+            for observer in &mut self.observers {
+                observer.on_system_prompt(system_prompt);
+            }
+        }
         self.emit(started).await;
     }
 

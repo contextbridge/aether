@@ -1,10 +1,11 @@
+use aether_core::core::Prompt;
 use aether_core::events::{ToolEvent, TurnEvent};
+use aether_core::testing::{FakeAgentObserver, TestScenario, test_agent};
 use std::error::Error;
 use std::time::Duration;
 
 use aether_core::core::RetryConfig;
 use aether_core::events::{AgentEvent, LlmCallOutcome, TurnOutcome};
-use aether_core::testing::{TestScenario, test_agent};
 use llm::LlmCallPurpose;
 use llm::testing::llm_response;
 use llm::{LlmError, LlmResponse, StopReason};
@@ -71,6 +72,24 @@ async fn tool_call_turn_emits_full_trace() -> Result<(), Box<dyn Error>> {
     assert!(tool_result < call_starts[1]);
     assert!(call_ends[1] < turn_ended);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn observers_receive_the_rendered_prompt_for_each_llm_request() -> Result<(), Box<dyn Error>> {
+    let observer = FakeAgentObserver::new();
+    let system_prompts = observer.system_prompts();
+    let responses = [llm_response("m1").text(&["hi"]).build()];
+
+    test_agent()
+        .system_prompt(Prompt::Text("You are the test agent.".to_string()))
+        .llm_responses(&responses)
+        .observer(Box::new(observer))
+        .user_text("hello")
+        .run()
+        .await?;
+
+    assert_eq!(*system_prompts.lock().unwrap(), vec!["You are the test agent."]);
     Ok(())
 }
 
