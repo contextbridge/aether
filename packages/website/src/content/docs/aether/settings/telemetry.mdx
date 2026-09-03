@@ -10,7 +10,13 @@ Aether supports exporting [OpenTelemetry](https://opentelemetry.io/) GenAI trace
   "telemetry": {
     "serviceName": "aether-production",
     "sampleRatio": 1.0,
-    "captureContent": false,
+    "content": {
+      "systemInstructions": false,
+      "inputMessages": false,
+      "outputMessages": false,
+      "toolDefinitions": false,
+      "toolCalls": false
+    },
     "traces": { "enabled": true },
     "metrics": { "enabled": true },
     "otlp": {
@@ -33,7 +39,11 @@ Aether sends OTLP over HTTP/Protobuf. Set `otlp.endpoint` to the collector's bas
 | --- | --- | --- |
 | `serviceName` | `"aether"` | The OpenTelemetry `service.name` resource attribute. |
 | `sampleRatio` | `1.0` | Fraction of traces to sample, from `0.0` through `1.0`. Metrics are unaffected. |
-| `captureContent` | `false` | Whether to export prompt, response, reasoning, tool-definition, and tool-argument content. |
+| `content.systemInstructions` | `false` | Export the rendered system prompt as `gen_ai.system_instructions` on chat spans, with its `aether.llm.system_instructions.sha256` hash. |
+| `content.inputMessages` | `false` | Export user input as `gen_ai.input.messages` on turn and chat spans, with its `aether.llm.input_messages.sha256` hash. |
+| `content.outputMessages` | `false` | Export model responses and reasoning as `gen_ai.output.messages` on turn and chat spans. |
+| `content.toolDefinitions` | `false` | Export tool definitions as `gen_ai.tool.definitions` on chat spans. |
+| `content.toolCalls` | `false` | Export tool arguments and results as `gen_ai.tool.call.arguments` and `gen_ai.tool.call.result` on tool spans. |
 | `traces.enabled` | `true` | Export trace spans. |
 | `metrics.enabled` | `true` | Export metrics. |
 | `otlp.endpoint` | — | Base URL for the OTLP/HTTP collector. Required when traces or metrics are enabled (unless a signal-specific override is set). |
@@ -71,11 +81,13 @@ Values are validated when telemetry starts. `traceparent` must follow the W3C Tr
 
 ## Privacy
 
-Content capture is disabled by default. Unless you set `captureContent` to `true`, Aether redacts prompts, model responses, reasoning, tool definitions, and tool arguments from telemetry. Enable it only when your collector and its access controls are appropriate for that data.
+Content capture is disabled by default. Unless you enable a `content` flag, Aether redacts the rendered system prompt (`gen_ai.system_instructions`), user input, model responses, reasoning, tool definitions, and tool arguments from telemetry. Hash attributes such as `aether.llm.system_instructions.sha256` are only exported if the corresponding content field is enabled.
 
 ## What Aether exports
 
-Each agent turn produces an `invoke_agent` root span. Its child spans describe LLM calls (`chat <model>`) and tool executions (`execute_tool <name>`), including retries and terminal errors or cancellations.
+Each agent turn produces an `invoke_agent` root span carrying `gen_ai.agent.name`, so every LLM call beneath it is attributable to the agent that made it. Its child spans describe LLM calls (`chat <model>`) and tool executions (`execute_tool <name>`), including retries and terminal errors or cancellations.
+
+With `content.systemInstructions` enabled, each `chat <model>` span carries the final rendered system prompt as `gen_ai.system_instructions` plus its `aether.llm.system_instructions.sha256` hash, so you can compare traces across prompt changes without reading the prompt itself. With `content.inputMessages` enabled, turn and chat spans also carry `aether.llm.input_messages.sha256` next to `gen_ai.input.messages`. Backends such as PostHog surface these attributes in the raw tracing tab.
 
 When enabled, Aether also exports these GenAI histograms:
 
