@@ -1,5 +1,7 @@
 use aether_project::TelemetrySettings;
-use aether_telemetry::{AgentTraceContext, TelemetryConfig, TelemetryInitError, TelemetryRuntime};
+use aether_telemetry::{
+    AgentTraceContext, ContentCaptureSettings, TelemetryConfig, TelemetryInitError, TelemetryRuntime,
+};
 use std::sync::Arc;
 use utils::variables::Vars;
 
@@ -23,7 +25,13 @@ pub(crate) fn build_telemetry_runtime(
         service_name: settings.service_name().to_string(),
         service_version: env!("CARGO_PKG_VERSION").to_string(),
         sample_ratio: settings.sample_ratio(),
-        capture_content: settings.capture_content(),
+        content: ContentCaptureSettings {
+            system_instructions: settings.content.system_instructions(),
+            input_messages: settings.content.input_messages(),
+            output_messages: settings.content.output_messages(),
+            tool_definitions: settings.content.tool_definitions(),
+            tool_calls: settings.content.tool_calls(),
+        },
         trace_context,
         traces_enabled: settings.traces_enabled(),
         metrics_enabled: settings.metrics_enabled(),
