@@ -1,6 +1,6 @@
 [package]
 name = "aether-agent-cli"
-version = "0.7.41"
+version = "0.8.0"
 edition = "2024"
 description = "CLI and ACP server for the Aether AI coding agent"
 license = "MIT"
@@ -31,16 +31,16 @@ path = "src/main.rs"
 [dependencies]
 aether-auth = { path = "../aether-auth", version = "0.1.13", features = ["keyring"] }
 base64 = { workspace = true }
-aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.37" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.7.0" }
 aether-sessions = { workspace = true }
-aether-project = { path = "../aether-project", version = "0.5.38" }
-aether-telemetry = { path = "../aether-telemetry", version = "0.1.18" }
-llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.7.31" }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.36" }
-mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.4.44" }
-wisp = { package = "aether-wisp", path = "../wisp", version = "0.5.2" }
+aether-project = { path = "../aether-project", version = "0.5.39" }
+aether-telemetry = { path = "../aether-telemetry", version = "0.2.0" }
+llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.8.0" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.6.0" }
+mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.5.0" }
+wisp = { package = "aether-wisp", path = "../wisp", version = "0.6.0" }
 ratatui = { workspace = true }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["server", "testing"], version = "0.3.42" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["server", "testing"], version = "0.4.0" }
 agent-client-protocol = { workspace = true }
 aether-lspd = { path = "../aether-lspd", version = "0.1.34" }
 rmcp = { workspace = true, features = ["client", "elicitation", "server", "transport-streamable-http-client-reqwest"] }
@@ -67,4 +67,4 @@ url = { workspace = true }
 libc = { workspace = true }
 
 [dev-dependencies]
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"], version = "0.3.42" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"], version = "0.4.0" }

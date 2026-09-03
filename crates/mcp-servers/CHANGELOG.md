@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.44...aether-mcp-servers-v0.5.0) - 2026-09-03
+
+### Added
+
+- *(aether-cli)* [**breaking**] add session usage and cost tracking ([#405](https://github.com/contextbridge/aether/pull/405))
+
+### Other
+
+- scheduled code-cleanup ([#416](https://github.com/contextbridge/aether/pull/416))
+
 ## [0.4.44](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.43...aether-mcp-servers-v0.4.44) - 2026-08-31
 
 ### Other

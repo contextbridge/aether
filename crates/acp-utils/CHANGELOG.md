@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.42...aether-acp-utils-v0.4.0) - 2026-09-03
+
+### Added
+
+- *(aether-cli)* [**breaking**] add session usage and cost tracking ([#405](https://github.com/contextbridge/aether/pull/405))
+
 ## [0.3.42](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.41...aether-acp-utils-v0.3.42) - 2026-08-31
 
 ### Other

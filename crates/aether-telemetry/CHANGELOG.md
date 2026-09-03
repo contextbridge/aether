@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.1.18...aether-telemetry-v0.2.0) - 2026-09-03
+
+### Added
+
+- *(aether-cli)* [**breaking**] add session usage and cost tracking ([#405](https://github.com/contextbridge/aether/pull/405))
+
+### Other
+
+- Include prompt and agent identity in traces ([#411](https://github.com/contextbridge/aether/pull/411))
+
 ## [0.1.18](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.1.17...aether-telemetry-v0.1.18) - 2026-08-31
 
 ### Other

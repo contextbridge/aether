@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.41...aether-agent-cli-v0.8.0) - 2026-09-03
+
+### Added
+
+- *(aether-cli)* [**breaking**] add session usage and cost tracking ([#405](https://github.com/contextbridge/aether/pull/405))
+
+### Fixed
+
+- *(llm)* propagate prompt cache affinity to supported providers ([#414](https://github.com/contextbridge/aether/pull/414))
+
+### Other
+
+- Include prompt and agent identity in traces ([#411](https://github.com/contextbridge/aether/pull/411))
+
 ## [0.7.41](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.40...aether-agent-cli-v0.7.41) - 2026-08-31
 
 ### Other
