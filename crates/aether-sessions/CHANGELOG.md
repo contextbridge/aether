@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/contextbridge/aether/compare/aether-sessions-v0.1.3...aether-sessions-v0.2.0) - 2026-09-03
+
+### Added
+
+- *(aether-cli)* [**breaking**] add session usage and cost tracking ([#405](https://github.com/contextbridge/aether/pull/405))
+
 ## [0.1.3](https://github.com/contextbridge/aether/compare/aether-sessions-v0.1.2...aether-sessions-v0.1.3) - 2026-08-31
 
 ### Other

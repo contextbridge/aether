@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.22](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.21...aether-llm-codegen-v0.2.22) - 2026-09-03
+
+### Fixed
+
+- *(llm)* propagate prompt cache affinity to supported providers ([#414](https://github.com/contextbridge/aether/pull/414))
+
 ## [0.2.21](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.20...aether-llm-codegen-v0.2.21) - 2026-08-27
 
 ### Other

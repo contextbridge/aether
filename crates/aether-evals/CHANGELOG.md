@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0](https://github.com/contextbridge/aether/compare/aether-evals-v0.2.30...aether-evals-v0.3.0) - 2026-09-03
+
+### Added
+
+- *(aether-cli)* [**breaking**] add session usage and cost tracking ([#405](https://github.com/contextbridge/aether/pull/405))
+
 ## [0.2.30](https://github.com/contextbridge/aether/compare/aether-evals-v0.2.29...aether-evals-v0.2.30) - 2026-08-31
 
 ### Other

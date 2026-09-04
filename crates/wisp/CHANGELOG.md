@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0](https://github.com/contextbridge/aether/compare/aether-wisp-v0.5.2...aether-wisp-v0.6.0) - 2026-09-03
+
+### Added
+
+- *(aether-cli)* [**breaking**] add session usage and cost tracking ([#405](https://github.com/contextbridge/aether/pull/405))
+
 ## [0.5.2](https://github.com/contextbridge/aether/compare/aether-wisp-v0.5.1...aether-wisp-v0.5.2) - 2026-08-31
 
 ### Other

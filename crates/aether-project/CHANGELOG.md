@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.39](https://github.com/contextbridge/aether/compare/aether-project-v0.5.38...aether-project-v0.5.39) - 2026-09-03
+
+### Other
+
+- Include prompt and agent identity in traces ([#411](https://github.com/contextbridge/aether/pull/411))
+
 ## [0.5.38](https://github.com/contextbridge/aether/compare/aether-project-v0.5.37...aether-project-v0.5.38) - 2026-08-31
 
 ### Other
