@@ -167,11 +167,29 @@ jobs:
             --agent "$AGENT" \
             --cwd "$GITHUB_WORKSPACE" \
             --settings-file .aether/github.settings.json \
-            --mcp-config .aether/github-agent/mcp.json \
             --output json \
             --events text,tool_call,tool_result,tool_error,turn_ended \
-            < "$TASK_PATH" \
+            "$TASK_PATH" \
             | tee "$RUNNER_TEMP/aether-headless.jsonl"
+
+      - name: Review implementation
+        if: steps.target.outputs.mode != 'plan'
+        env:
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          START_SHA: ${{ steps.branch.outputs.sha }}
+          TASK_PATH: ${{ steps.task.outputs.path }}
+        run: |
+          set -euo pipefail
+          env -u GH_TOKEN -u GITHUB_TOKEN aether headless \
+            --agent Reviewer \
+            --cwd "$GITHUB_WORKSPACE" \
+            --settings-file .aether/github.settings.json \
+            --output json \
+            --events text,tool_call,tool_result,tool_error,turn_ended \
+            "$TASK_PATH" \
+            | tee -a "$RUNNER_TEMP/aether-headless.jsonl"
 
       - name: Commit and push
         id: push

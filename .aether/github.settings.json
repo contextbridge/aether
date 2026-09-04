@@ -3,46 +3,49 @@
   "mcps": [".aether/github-agent/mcp.json"],
   "agents": [
     {
-      "name": "Orchestrator",
-      "description": "Routes GitHub issues to sub-agents based on task complexity",
-      "model": "zai:glm-5.3",
-      "reasoningEffort": "high",
-      "userInvocable": true,
-      "agentInvocable": false,
-      "prompts": [".aether/agents/orchestrator.md", "AGENTS.md"]
-    },
-    {
       "name": "Planner",
       "description": "Don't spawn unless explicitly asked to",
       "model": "openrouter:meta/muse-spark-1.3",
-      "reasoningEffort": "xhigh",
+      "reasoningEffort": "high",
       "userInvocable": true,
-      "agentInvocable": true,
+      "agentInvocable": false,
       "prompts": [".aether/SYSTEM.md", ".aether/agents/planner.md", "AGENTS.md"]
     },
     {
       "name": "Complex Builder",
       "description": "Don't spawn unless explicitly asked to",
-      "model": "openrouter:meta/muse-spark-1.3",
-      "reasoningEffort": "xhigh",
+      "model": "zai:glm-5.3-flash",
+      "reasoningEffort": "max",
       "userInvocable": true,
-      "agentInvocable": true,
-      "prompts": [".aether/agents/builder.md", "AGENTS.md"]
+      "agentInvocable": false,
+      "prompts": [".aether/SYSTEM.md", ".aether/agents/builder.md", "AGENTS.md"]
     },
     {
       "name": "Simple Builder",
       "description": "Don't spawn unless explicitly asked to",
-      "model": "openrouter:meta/muse-spark-1.3",
+      "model": "zai:glm-5.3-flash",
       "reasoningEffort": "high",
       "userInvocable": true,
-      "agentInvocable": true,
-      "prompts": [".aether/agents/builder.md", "AGENTS.md"],
-      "mcps": [".aether/github-agent/mcp.json"]
+      "agentInvocable": false,
+      "prompts": [".aether/SYSTEM.md", ".aether/agents/builder.md", "AGENTS.md"]
+    },
+    {
+      "name": "Reviewer",
+      "description": "Reviews and improves CI agent implementations",
+      "model": "zai:glm-5.3",
+      "reasoningEffort": "high",
+      "userInvocable": true,
+      "agentInvocable": false,
+      "prompts": [
+        ".aether/SYSTEM.md",
+        ".aether/agents/reviewer.md",
+        "AGENTS.md"
+      ]
     },
     {
       "name": "Cheap",
       "description": "ZAI GLM-5 with high reasoning",
-      "model": "zai:glm-5.3",
+      "model": "zai:glm-5.3-flash",
       "reasoningEffort": "high",
       "userInvocable": true,
       "prompts": [".aether/SYSTEM.md", "AGENTS.md"],
