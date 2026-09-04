@@ -173,7 +173,7 @@ jobs:
             | tee "$RUNNER_TEMP/aether-headless.jsonl"
 
       - name: Review implementation
-        if: steps.target.outputs.mode != 'plan'
+        if: steps.target.outputs.mode != 'plan' && steps.target.outputs.task_kind != 'pull_request_feedback'
         env:
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
