@@ -22,7 +22,19 @@ describe("buildAetherAcpCommand()", () => {
   it("adds ACP options JSON for settings, model, reasoning effort, providers, and log dir", () => {
     const command = buildAetherAcpCommand({
       binaryPath: FAKE_AETHER,
-      settings: { credentialsStore: { type: "memory" }, agents: [] },
+      settings: {
+        credentialsStore: { type: "memory" },
+        telemetry: {
+          content: {
+            systemInstructions: true,
+            inputMessages: true,
+            outputMessages: true,
+            toolDefinitions: true,
+            toolCalls: true,
+          },
+        },
+        agents: [],
+      },
       model: "anthropic:claude-sonnet-4-5",
       reasoningEffort: "high",
       traceContext: TRACE_CONTEXT,
@@ -50,6 +62,15 @@ describe("buildAetherAcpCommand()", () => {
       },
       settings: {
         credentialsStore: { type: "memory" },
+        telemetry: {
+          content: {
+            systemInstructions: true,
+            inputMessages: true,
+            outputMessages: true,
+            toolDefinitions: true,
+            toolCalls: true,
+          },
+        },
         agents: [],
       },
       model: "anthropic:claude-sonnet-4-5",
