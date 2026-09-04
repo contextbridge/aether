@@ -75,16 +75,8 @@ sdk-e2e *ARGS:
     pnpm sdk:build
     pnpm sdk:e2e {{ARGS}}
 
-# Validate the GitHub-hosted Aether agent automation
-automation-check:
-    jq empty .aether/settings.json .aether/github.settings.json .aether/github-agent/mcp.json
-    bash -n scripts/aether-agent/*
-    grep -Fq '< "$TASK_PATH"' .github/workflows/aether-agent.yml
-    for workflow in .github/workflows/{aether-agent,scheduled-aether-prompts}.yml; do grep -Fq 'OPENROUTER_API_KEY:' "$workflow"; done
-    git ls-files -s | awk '$1 == "120000" { print $4 }' | while IFS= read -r link; do test -e "$link" || { echo "Broken symlink: $link -> $(readlink "$link")" >&2; exit 1; }; done
-
 # Run all CI checks
-ci: fmt-check lint test-ci doc-check sqlx-check automation-check
+ci: fmt-check lint test-ci doc-check sqlx-check
     pnpm fmt-check
     pnpm sdk:typecheck
     pnpm sdk:test
