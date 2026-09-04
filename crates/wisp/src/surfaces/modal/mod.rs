@@ -14,7 +14,7 @@ use ratatui::text::Text;
 use ratatui::widgets::{Paragraph, Widget};
 
 use self::form::{FormAction, FormModal};
-use self::frame::{MODAL_HORIZONTAL_PADDING, MODAL_VERTICAL_PADDING, ModalFrame};
+use self::frame::{MODAL_HORIZONTAL_PADDING, MODAL_VERTICAL_CHROME, ModalFrame};
 use self::url::UrlModal;
 use crate::session::platform::{BrowserOpener, ClipboardWriter};
 use crate::surfaces::input::{ElicitationOutput, UiEvent, is_press};
@@ -189,7 +189,7 @@ impl ElicitationModal {
                 ("Authorization", key_hints(&url::HINTS, cx.theme), url.body_lines(cx.theme, content_width).len())
             }
         };
-        let height = as_u16(body_rows + 2 + usize::from(MODAL_VERTICAL_PADDING) * 2)
+        let height = as_u16(body_rows + usize::from(MODAL_VERTICAL_CHROME))
             .min(area.height.saturating_mul(70) / 100)
             .clamp(3.min(area.height), area.height);
         let server_name = match &self.kind {
