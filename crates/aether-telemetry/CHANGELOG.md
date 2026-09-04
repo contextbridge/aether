@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.2.0...aether-telemetry-v0.2.1) - 2026-09-04
+
+### Other
+
+- Bedrock Responses response.failed events with server errors are not retried ([#410](https://github.com/contextbridge/aether/pull/410))
+
 ## [0.2.0](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.1.18...aether-telemetry-v0.2.0) - 2026-09-03
 
 ### Added

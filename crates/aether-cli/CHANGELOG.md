@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.8.1](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.8.0...aether-agent-cli-v0.8.1) - 2026-09-04
+
+### Other
+
+- Bedrock Responses response.failed events with server errors are not retried ([#410](https://github.com/contextbridge/aether/pull/410))
+
 ## [0.8.0](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.41...aether-agent-cli-v0.8.0) - 2026-09-03
 
 ### Added
