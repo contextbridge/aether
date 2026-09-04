@@ -10,7 +10,7 @@ use futures::Stream;
 use std::collections::HashMap;
 use tracing::{debug, error, info, warn};
 
-use crate::{LlmError, LlmResponse, StopReason, TokenUsage, Tokens, ToolCallRequest};
+use crate::{LlmError, LlmResponse, ProviderError, StopReason, TokenUsage, Tokens, ToolCallRequest};
 
 impl From<&BedrockTokenUsage> for TokenUsage {
     fn from(usage: &BedrockTokenUsage) -> Self {
@@ -66,7 +66,7 @@ pub fn process_bedrock_stream(
                 Err(e) => {
                     error!("Bedrock stream recv error: {e}");
                     yield Err(LlmError::from(e));
-                    break;
+                    return;
                 }
             }
         }
@@ -194,22 +194,23 @@ fn handle_content_block_stop(index: i32, active_tool_calls: &mut HashMap<i32, Pe
 impl From<SdkError<ConverseStreamOutputError, RawMessage>> for LlmError {
     fn from(e: SdkError<ConverseStreamOutputError, RawMessage>) -> Self {
         let message = format!("Bedrock stream error: {e}");
-        match e {
+        let provider = match e {
             SdkError::ServiceError(svc) => {
                 let inner = svc.err();
                 if inner.is_throttling_exception() {
-                    LlmError::RateLimited(message)
+                    ProviderError::rate_limit(message)
                 } else if inner.is_service_unavailable_exception()
                     || inner.is_internal_server_exception()
                     || inner.is_model_stream_error_exception()
                 {
-                    LlmError::StreamInterrupted(message)
+                    ProviderError::stream_interrupted(message)
                 } else {
-                    LlmError::ApiError(message)
+                    ProviderError::api(message)
                 }
             }
-            _ => LlmError::StreamInterrupted(message),
-        }
+            _ => ProviderError::stream_interrupted(message),
+        };
+        Self::from(provider)
     }
 }
 

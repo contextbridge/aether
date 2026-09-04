@@ -1,10 +1,9 @@
-use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderValue};
-use tracing::{debug, error};
+use tracing::debug;
 
 use super::auth::MantleAuth;
 use crate::catalog::transport::{ModelTransport, expand_api_template};
 use crate::providers::openai_responses::mappers::{ResponsesRequestPolicy, build_wire_request};
-use crate::providers::openai_responses::transport::{ResponsesEventStream, decode_response_sse};
+use crate::providers::openai_responses::transport::{ResponsesConnection, send};
 use crate::{Context, LlmError, Result};
 
 /// Transport for Bedrock models that serve the `OpenAI` Responses API rather than
@@ -51,38 +50,20 @@ impl MantleClient {
         Ok(format!("{}/responses", base.trim_end_matches('/')))
     }
 
-    pub async fn stream(
+    pub(crate) async fn stream(
         &self,
         model: &str,
         transport: &ModelTransport,
         context: &Context,
-    ) -> Result<ResponsesEventStream> {
+    ) -> Result<ResponsesConnection> {
         let url = self.endpoint(transport)?;
-        let body = serde_json::to_vec(&build_wire_request(model, context, &ResponsesRequestPolicy::mantle())?)?;
+        let body = build_wire_request(model, context, &ResponsesRequestPolicy::mantle())?;
 
         debug!(model, url, auth = %self.auth, "Sending Bedrock Mantle responses request");
 
-        let mut headers = self.auth.headers("POST", &url, &body).await?;
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
-
-        let response = self.http.post(&url).headers(headers).body(body).send().await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            let message = format!("Bedrock Mantle request failed with status {status}: {error_text}");
-            error!(model, %status, "Bedrock Mantle API error");
-
-            return Err(match status.as_u16() {
-                401 | 403 => LlmError::InvalidApiKey(message),
-                429 => LlmError::RateLimited(message),
-                s if (500..600).contains(&s) => LlmError::ServerError { status: Some(s), message },
-                _ => LlmError::ApiError(message),
-            });
-        }
-
-        Ok(decode_response_sse(response))
+        let encoded = serde_json::to_vec(&body)?;
+        let headers = self.auth.headers("POST", &url, &encoded).await?;
+        send(&self.http, &url, headers, body).await
     }
 
     /// Resolve a catalog endpoint template. The region this client was built for

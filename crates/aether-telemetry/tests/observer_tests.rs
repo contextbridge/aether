@@ -15,7 +15,7 @@ use common::{SYSTEM_INSTRUCTIONS_JSON, SYSTEM_PROMPT, SYSTEM_PROMPT_SHA256, all_
 
 mod common;
 use llm::testing::llm_response;
-use llm::{LlmCallPurpose, LlmError, LlmResponse, ModelIdentity, ModelPricing, StopReason, TokenUsage};
+use llm::{LlmCallPurpose, LlmError, LlmResponse, ModelIdentity, ModelPricing, ProviderError, StopReason, TokenUsage};
 use opentelemetry::metrics::MeterProvider as _;
 use opentelemetry::trace::{SpanKind, Status, TracerProvider as _};
 use opentelemetry::{Array, Value};
@@ -80,7 +80,7 @@ async fn spans_form_a_turn_rooted_hierarchy() -> Result<(), Box<dyn Error>> {
 #[tokio::test(start_paused = true)]
 async fn failed_and_cancelled_calls_carry_error_attributes() -> Result<(), Box<dyn Error>> {
     let attempts: Vec<Vec<Result<LlmResponse, LlmError>>> = vec![
-        vec![Err(LlmError::ServerError { status: Some(503), message: "boom".into() })],
+        vec![Err(LlmError::from(ProviderError::server("boom".to_string()).with_http_status(503)))],
         vec![Ok(LlmResponse::start("m2")), Ok(LlmResponse::text("never seen")), Ok(LlmResponse::done())],
     ];
     let retry = RetryConfig { max_attempts: 5, base_delay: Duration::from_mins(1), max_delay: Duration::from_mins(1) };

@@ -133,7 +133,6 @@ fn test_deserialize_zai_network_error_finish_reason() {
 
 #[test]
 fn test_zai_network_error_yields_retryable_server_error() {
-    use llm::LlmError;
     use llm::providers::openai_compatible::process_compatible_stream;
 
     let json = r#"{
@@ -166,7 +165,7 @@ fn test_zai_network_error_yields_retryable_server_error() {
 
         let last = events.last().expect("stream must yield at least one event");
         let err = last.as_ref().expect_err("network_error finish reason must surface as Err");
-        assert!(matches!(err, LlmError::ServerError { status: None, .. }), "got {err:?}");
+        assert_eq!(err.provider().map(|provider| provider.kind), Some(llm::ProviderErrorKind::Server), "got {err:?}");
         assert!(err.is_retryable(), "network_error must be retryable so the agent recovers without user input");
     });
 }

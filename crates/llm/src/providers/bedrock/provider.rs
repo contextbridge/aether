@@ -3,8 +3,8 @@ use super::mappers::{default_cache_point, map_messages, map_tools};
 use super::streaming::process_bedrock_stream;
 use crate::catalog::transport::ModelTransport;
 use crate::provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider, get_context_window, stream_from};
-use crate::providers::openai_responses::streaming::process_response_stream;
-use crate::{Context, LlmError, ProviderAuthMode, ProviderConnectionConfig, Result};
+use crate::providers::openai_responses::transport::process_connection;
+use crate::{Context, LlmError, ProviderAuthMode, ProviderConnectionConfig, ProviderError, Result};
 use aws_config::Region;
 use aws_credential_types::provider::SharedCredentialsProvider;
 use aws_sdk_bedrockruntime::config::{BehaviorVersion, Credentials};
@@ -204,7 +204,7 @@ impl StreamingModelProvider for BedrockProvider {
 
         stream_from(
             async move { provider.mantle.stream(&provider.model, &transport, &context).await },
-            process_response_stream,
+            process_connection,
         )
     }
 
@@ -216,25 +216,29 @@ impl StreamingModelProvider for BedrockProvider {
 impl From<SdkError<ConverseStreamError>> for LlmError {
     fn from(e: SdkError<ConverseStreamError>) -> Self {
         let message = format!("Bedrock API error: {e}");
-        match e {
-            SdkError::TimeoutError(_) => LlmError::Timeout(message),
-            SdkError::DispatchFailure(_) => LlmError::Network(message),
-            SdkError::ResponseError(_) => LlmError::ServerError { status: None, message },
+        let status = e.raw_response().map(|r| r.status().as_u16());
+        let request_id = e.raw_response().and_then(|r| r.headers().get("x-amzn-requestid")).map(str::to_string);
+        let mut provider = match &e {
+            SdkError::TimeoutError(_) => ProviderError::timeout(message),
+            SdkError::DispatchFailure(_) => ProviderError::network(message),
+            SdkError::ResponseError(_) => ProviderError::server(message),
             SdkError::ServiceError(svc) => {
                 let inner = svc.err();
                 if inner.is_throttling_exception() {
-                    LlmError::RateLimited(message)
+                    ProviderError::rate_limit(message)
                 } else if inner.is_service_unavailable_exception()
                     || inner.is_internal_server_exception()
                     || inner.is_model_stream_error_exception()
                 {
-                    LlmError::ServerError { status: None, message }
+                    ProviderError::server(message)
                 } else {
-                    LlmError::ApiError(message)
+                    ProviderError::api(message)
                 }
             }
-            _ => LlmError::ApiError(message),
-        }
+            _ => ProviderError::api(message),
+        };
+        provider = provider.with_http_metadata(status, request_id);
+        Self::from(provider)
     }
 }
 
@@ -420,6 +424,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn http_200_failed_server_error_is_retryable_with_diagnostics() {
+        use crate::providers::test_capture_server::ResponseSpec;
+        let spec = ResponseSpec::sse(include_str!("../../../tests/fixtures/openai_responses/04_failed_server.sse"))
+            .with_header("x-amzn-requestid", "amzn-req-123");
+        let mut server = CaptureServer::start_with_spec(spec).await;
+        let provider = mantle_provider(&server).await;
+
+        let responses = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
+        let _ = server.captured().await;
+
+        assert!(!responses.iter().any(|r| matches!(r, Ok(crate::LlmResponse::Done { .. }))));
+        let err = responses.iter().find_map(|r| r.as_ref().err()).expect("expected a failure");
+        assert!(err.is_retryable(), "server_error must be retryable: {err:?}");
+        let provider_error = err.provider().expect("expected provider error");
+        assert_eq!(provider_error.kind, crate::ProviderErrorKind::Server);
+        assert_eq!(provider_error.code.as_deref(), Some("server_error"));
+        assert_eq!(provider_error.http_status, Some(200));
+        assert_eq!(provider_error.request_id.as_deref(), Some("amzn-req-123"));
+    }
+
+    #[tokio::test]
+    async fn failed_event_with_unknown_code_is_terminal_without_done() {
+        let body = "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"r1\"}}\n\nevent: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"invalid_prompt\",\"message\":\"bad prompt\"}}}\n\n";
+        let mut server = CaptureServer::start_with_response(body).await;
+        let provider = mantle_provider(&server).await;
+
+        let responses = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
+        let _ = server.captured().await;
+
+        assert!(!responses.iter().any(|r| matches!(r, Ok(crate::LlmResponse::Done { .. }))));
+        let err = responses.iter().find_map(|r| r.as_ref().err()).expect("expected a failure");
+        assert!(!err.is_retryable(), "invalid_prompt must be terminal: {err:?}");
+    }
+
+    #[tokio::test]
     async fn responses_transport_rejects_malformed_and_truncated_streams() {
         for response in [
             "data: {not-json}\n\n",
@@ -431,7 +470,10 @@ mod tests {
             let responses = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
             let _ = server.captured().await;
 
-            assert!(responses.iter().any(|response| matches!(response, Err(LlmError::StreamInterrupted(_)))));
+            assert!(responses.iter().any(|response| {
+                response.as_ref().err().and_then(LlmError::provider).map(|provider| provider.kind)
+                    == Some(crate::ProviderErrorKind::StreamInterrupted)
+            }));
             assert!(!responses.iter().any(|response| matches!(response, Ok(crate::LlmResponse::Done { .. }))));
         }
     }

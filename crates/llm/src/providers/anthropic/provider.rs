@@ -2,7 +2,8 @@ use super::mappers::{map_messages, map_tools};
 use super::streaming::process_anthropic_stream;
 use super::types::{Request, Thinking};
 use crate::provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider, get_context_window};
-use crate::{Context, LlmError, ProviderAuthMode, ProviderConnectionConfig, ReasoningEffort, Result};
+use crate::providers::http::{anthropic_code, rejected};
+use crate::{Context, LlmError, ProviderAuthMode, ProviderConnectionConfig, ProviderError, ReasoningEffort, Result};
 use async_stream;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
@@ -143,14 +144,7 @@ impl AnthropicProvider {
         let response = self.client.post(&url).headers(headers).json(&request).send().await?;
 
         if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            let message = format!("Anthropic API request failed with status {status}: {error_text}");
-            return Err(match status.as_u16() {
-                429 => LlmError::RateLimited(message),
-                s if (500..600).contains(&s) => LlmError::ServerError { status: Some(s), message },
-                _ => LlmError::ApiError(message),
-            });
+            return Err(rejected("Anthropic API", response, anthropic_code).await);
         }
 
         let event_stream = response.bytes_stream().eventsource();
@@ -160,7 +154,7 @@ impl AnthropicProvider {
                     let data = event.data;
                     if data == "[DONE]" { None } else { Some(Ok(data)) }
                 }
-                Err(e) => Some(Err(LlmError::StreamInterrupted(e.to_string()))),
+                Err(e) => Some(Err(ProviderError::stream_interrupted(e.to_string()).into())),
             })
         });
 

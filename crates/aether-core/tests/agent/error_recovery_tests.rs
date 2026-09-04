@@ -2,14 +2,14 @@ use aether_core::events::{MessageEvent, TurnEvent};
 use std::error::Error;
 
 use aether_core::{events::AgentEvent, testing::test_agent};
-use llm::{ChatMessage, LlmError, LlmResponse};
+use llm::{ChatMessage, LlmError, LlmResponse, ProviderError};
 
 #[tokio::test]
 async fn test_api_error_mid_stream_does_not_add_empty_assistant_message() -> Result<(), Box<dyn Error>> {
     // First call: Start → Err → Done (simulates HTTP 522 mid-stream)
     let error_response: Vec<Result<LlmResponse, LlmError>> = vec![
         Ok(LlmResponse::start("msg_1")),
-        Err(LlmError::ApiError("HTTP 522: connection timed out".into())),
+        Err(LlmError::from(ProviderError::api("HTTP 522: connection timed out".to_string()))),
         Ok(LlmResponse::done()),
     ];
 

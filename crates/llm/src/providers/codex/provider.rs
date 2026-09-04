@@ -1,11 +1,10 @@
 use super::oauth::CodexTokenManager;
 use crate::provider::{LlmResponseStream, StreamingModelProvider, get_context_window, stream_from};
 use crate::providers::openai_responses::mappers::{ResponsesRequestPolicy, build_wire_request};
-use crate::providers::openai_responses::streaming::process_response_stream;
-use crate::providers::openai_responses::transport::{ResponsesEventStream, decode_response_sse};
+use crate::providers::openai_responses::transport::{ResponsesConnection, process_connection, send};
 use crate::{Context, LlmError, Result};
 use aether_auth::OAuthCredentialStorage;
-use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use std::sync::Arc;
 use tracing::debug;
 
@@ -54,13 +53,12 @@ impl CodexProvider {
         headers.insert(
             AUTHORIZATION,
             HeaderValue::from_str(&format!("Bearer {access_token}"))
-                .map_err(|e| LlmError::InvalidApiKey(e.to_string()))?,
+                .map_err(|e| LlmError::ProviderRequest(e.to_string()))?,
         );
         headers.insert(
             "chatgpt-account-id",
-            HeaderValue::from_str(&account_id).map_err(|e| LlmError::InvalidApiKey(e.to_string()))?,
+            HeaderValue::from_str(&account_id).map_err(|e| LlmError::ProviderRequest(e.to_string()))?,
         );
-        headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
         headers.insert("originator", HeaderValue::from_static("codex_cli_rs"));
         headers.insert("version", HeaderValue::from_static(CODEX_CLIENT_VERSION));
 
@@ -72,7 +70,7 @@ impl CodexProvider {
     /// Uses manual SSE parsing because the Codex API does not return a
     /// `Content-Type: text/event-stream` header, which `reqwest_eventsource`
     /// (used by `async-openai`'s `create_stream`) requires.
-    async fn send_request(&self, request: serde_json::Value, headers: HeaderMap) -> Result<ResponsesEventStream> {
+    async fn send_request(&self, request: serde_json::Value, headers: HeaderMap) -> Result<ResponsesConnection> {
         let url = format!("{}/responses", self.base_url);
 
         debug!("Sending request to Codex API: {url}");
@@ -81,25 +79,15 @@ impl CodexProvider {
             serde_json::to_string(&request).unwrap_or_else(|_| "<failed to serialize>".to_string())
         );
 
-        let response = self.client.post(&url).headers(headers).json(&request).send().await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-
-            if matches!(status.as_u16(), 401 | 403) {
-                self.token_manager.clear_cache().await;
+        match send(&self.client, &url, headers, request).await {
+            Ok(connection) => Ok(connection),
+            Err(error) => {
+                if error.provider().map(|provider| provider.kind) == Some(crate::ProviderErrorKind::Authentication) {
+                    self.token_manager.clear_cache().await;
+                }
+                Err(error)
             }
-
-            let message = format!("Codex API request failed with status {status}: {error_text}");
-            return Err(match status.as_u16() {
-                429 => LlmError::RateLimited(message),
-                s if (500..600).contains(&s) => LlmError::ServerError { status: Some(s), message },
-                _ => LlmError::ApiError(message),
-            });
         }
-
-        Ok(decode_response_sse(response))
     }
 }
 
@@ -122,7 +110,7 @@ impl StreamingModelProvider for CodexProvider {
                 let request = provider.build_wire_request(&context)?;
                 provider.send_request(request, headers).await
             },
-            process_response_stream,
+            process_connection,
         )
     }
 

@@ -5,7 +5,8 @@ use aether_core::testing::{FakeMcpServer, FakeTool, FakeToolResponse, TestScenar
 use llm::alloyed::AlloyedModelProvider;
 use llm::testing::{FakeLlmProvider, llm_response, priced_model, session_usage_event};
 use llm::{
-    ChatMessage, LlmCallPurpose, LlmError, LlmModel, LlmResponse, SessionUsageEvent, TokenUsage, UsageSource, Usd,
+    ChatMessage, LlmCallPurpose, LlmError, LlmModel, LlmResponse, ProviderError, SessionUsageEvent, TokenUsage,
+    UsageSource, Usd,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -64,7 +65,7 @@ async fn usage_received_before_a_stream_error_survives_the_failed_turn() {
         .llm_result_responses(&[vec![
             Ok(LlmResponse::start("msg")),
             Ok(LlmResponse::Usage { tokens: TokenUsage::new(9, 1) }),
-            Err(LlmError::ApiError("HTTP 500".into())),
+            Err(LlmError::from(ProviderError::api("HTTP 500".to_string()))),
             Ok(LlmResponse::done()),
         ]])
         .without_mcp()
@@ -110,7 +111,7 @@ async fn usage_received_before_cancellation_survives_the_cancelled_turn() {
 #[tokio::test]
 async fn retried_attempts_without_usage_add_nothing() {
     let mut interrupted = vec![Ok(LlmResponse::start("msg_1"))];
-    interrupted.push(Err(LlmError::StreamInterrupted("retry".into())));
+    interrupted.push(Err(LlmError::from(ProviderError::stream_interrupted("retry".to_string()))));
     let recovered = llm_response("msg_2").usage(3, 2).text(&["ok"]).build().into_iter().map(Ok).collect::<Vec<_>>();
 
     let events = test_agent()

@@ -212,7 +212,7 @@ fn format_text(msg: &AgentEvent) -> Option<String> {
             .map(|retry| format!("Retrying ({}/{}) in {}ms", retry.attempt, retry.max_attempts, retry.delay_ms)),
 
         AgentEvent::Turn(TurnEvent::LlmCallEnded {
-            outcome: LlmCallOutcome::Failed { error, will_retry: true },
+            outcome: LlmCallOutcome::Failed { error, will_retry: true, .. },
             ..
         }) => Some(format!("LLM call failed (will retry): {error}")),
 
@@ -413,7 +413,7 @@ mod tests {
     fn format_text_formats_llm_call_failure_that_will_retry() {
         let msg = AgentEvent::Turn(TurnEvent::LlmCallEnded {
             purpose: llm::LlmCallPurpose::Chat,
-            outcome: LlmCallOutcome::Failed { error: "overloaded".to_string(), will_retry: true },
+            outcome: LlmCallOutcome::failed("overloaded", true),
         });
         assert_eq!(format_text(&msg), Some("LLM call failed (will retry): overloaded".to_string()));
     }
@@ -422,7 +422,7 @@ mod tests {
     fn format_text_skips_terminal_llm_call_failure() {
         let msg = AgentEvent::Turn(TurnEvent::LlmCallEnded {
             purpose: llm::LlmCallPurpose::Chat,
-            outcome: LlmCallOutcome::Failed { error: "boom".to_string(), will_retry: false },
+            outcome: LlmCallOutcome::failed("boom", false),
         });
         assert_eq!(format_text(&msg), None);
     }

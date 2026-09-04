@@ -1,17 +1,13 @@
 Errors that can occur when interacting with LLM providers.
 
-# Variants
+# Other variants
 
 ## Authentication
 - **`MissingApiKey`** -- A required environment variable (e.g. `ANTHROPIC_API_KEY`) is not set.
-- **`InvalidApiKey`** -- The API key format is invalid or was rejected by the provider.
 - **`OAuthError`** -- OAuth authentication failed (when the `oauth` feature is enabled).
 
 ## Request/Response
 - **`HttpClientCreation`** -- Failed to create the HTTP client (e.g. TLS configuration error).
-- **`ApiRequest`** -- The HTTP request to the provider failed (network error, timeout).
-- **`ApiError`** -- The provider returned an error response (rate limit, server error).
-- **`ContextOverflow`** -- The prompt exceeded the model's context window. Contains a [`ContextOverflowError`] with provider, model, and token details.
 
 ## Parsing
 - **`JsonParsing`** -- Failed to parse or serialize JSON (response body, tool arguments).
@@ -27,12 +23,9 @@ Errors that can occur when interacting with LLM providers.
 - **`DuplicateProvider`** -- A single-model-only config field was reused across multiple models of the same provider within one alloy spec (e.g. bedrock `inferenceProfileArn` or openai-compatible `requestModel`).
 - **`InvalidModelSpec`** -- A `provider:model` identity could not be parsed.
 - **`MissingProviderUrl`** -- Provider endpoint URL has not been configured.
-- **`ProviderRequest`** -- A provider request body could not be constructed (e.g. an SDK builder rejected the input or contained malformed data).
+- **`ProviderRequest`** -- A provider request, header, or signature could not be constructed (e.g. an SDK builder rejected the input or contained malformed data).
 - **`InvalidArgument`** -- An upstream client library rejected an argument as invalid.
 
-# `From` implementations
-
-`LlmError` converts automatically from common error types: `reqwest::Error`, `serde_json::Error`, `std::io::Error`, `reqwest::header::InvalidHeaderValue`, `async_openai::error::OpenAIError`, and `OAuthError` (with the `oauth` feature).
 
 # Type alias
 

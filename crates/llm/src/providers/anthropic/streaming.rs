@@ -1,5 +1,5 @@
 use super::types::{ContentBlockDeltaData, ContentBlockStartData, StreamEvent};
-use crate::{LlmError, LlmResponse, Result, StopReason, ToolCallRequest};
+use crate::{LlmError, LlmResponse, ProviderError, Result, StopReason, ToolCallRequest};
 use async_stream;
 use futures::Stream;
 use std::collections::HashMap;
@@ -40,13 +40,13 @@ pub fn process_anthropic_stream<T: Stream<Item = Result<String>> + Send + Sync +
                         }
                         Err(e) => {
                             yield Err(e);
-                            break;
+                            return;
                         }
                     }
                 }
                 Err(e) => {
                     yield Err(e);
-                    break;
+                    return;
                 }
             }
         }
@@ -83,14 +83,14 @@ fn process_stream_event(
 }
 
 fn map_anthropic_stream_error(error_type: &str, message: &str) -> LlmError {
-    let formatted = format!("Anthropic API error: {error_type} - {message}");
-    match error_type {
-        "rate_limit_error" => LlmError::RateLimited(formatted),
-        "overloaded_error" | "internal_server_error" | "api_error" => {
-            LlmError::ServerError { status: None, message: formatted }
-        }
-        _ => LlmError::ApiError(formatted),
-    }
+    let kind = match error_type {
+        "rate_limit_error" => crate::ProviderErrorKind::RateLimit,
+        "overloaded_error" | "internal_server_error" | "api_error" => crate::ProviderErrorKind::Server,
+        _ => crate::ProviderErrorKind::Api,
+    };
+    ProviderError::new(kind, format!("Anthropic API error: {error_type} - {message}"))
+        .with_code(Some(error_type.to_string()))
+        .into()
 }
 
 fn map_anthropic_stop_reason(reason: &str) -> StopReason {

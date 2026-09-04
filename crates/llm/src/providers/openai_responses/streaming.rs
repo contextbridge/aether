@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer, de::Error as _};
 use tokio_stream::StreamExt;
 
 use crate::providers::tool_call_collector::ToolCallCollector;
-use crate::{LlmError, LlmResponse, Result, StopReason, TokenUsage};
+use crate::{LlmResponse, ProviderError, ProviderErrorKind, Result, StopReason, TokenUsage};
 
 #[derive(Debug)]
 pub struct ResponsesUsage {
@@ -135,7 +135,19 @@ pub struct ResponsesCompleted {
 
 #[derive(Debug, Deserialize)]
 pub struct ResponsesErrorEvent {
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
     pub message: String,
+}
+
+fn map_responses_error(code: Option<String>, message: String, fallback: ProviderErrorKind) -> ProviderError {
+    let kind = match code.as_deref() {
+        Some("server_error") => ProviderErrorKind::Server,
+        Some("rate_limit_exceeded") => ProviderErrorKind::RateLimit,
+        _ => fallback,
+    };
+    ProviderError::new(kind, message).with_code(code)
 }
 
 /// Process an `OpenAI` Responses event stream into `LlmResponse` items.
@@ -149,26 +161,23 @@ where
         let mut last_stop_reason: Option<StopReason> = None;
         let mut started = false;
         let mut terminal = false;
-        let mut failed = false;
 
         while let Some(result) = stream.next().await {
             let event = match result {
                 Ok(event) => event,
                 Err(e) => {
-                    yield Err(LlmError::StreamInterrupted(e.to_string()));
-                    failed = true;
-                    break;
+                    yield Err(ProviderError::stream_interrupted(e.to_string()).into());
+                    return;
                 }
             };
 
             if matches!(event, ResponsesStreamEvent::Created(_)) {
                 started = true;
             } else if !started && !event.may_precede_creation() {
-                yield Err(LlmError::StreamInterrupted(
+                yield Err(ProviderError::stream_interrupted(
                     "Responses stream emitted data before response.created".to_string(),
-                ));
-                failed = true;
-                break;
+                ).into());
+                return;
             }
 
             terminal = matches!(event, ResponsesStreamEvent::Completed(_) | ResponsesStreamEvent::Incomplete(_));
@@ -177,24 +186,24 @@ where
             for response in responses {
                 yield response;
             }
-            if event_failed || terminal {
-                failed = event_failed;
+            if event_failed {
+                return;
+            }
+            if terminal {
                 break;
             }
         }
 
-        if !failed {
-            for tc in tool_collector.complete_all() {
-                yield Ok(LlmResponse::ToolRequestComplete { tool_call: tc });
-            }
+        for tool_call in tool_collector.complete_all() {
+            yield Ok(LlmResponse::ToolRequestComplete { tool_call });
+        }
 
-            if terminal {
-                yield Ok(LlmResponse::Done { stop_reason: last_stop_reason });
-            } else {
-                yield Err(LlmError::StreamInterrupted(
-                    "Responses stream ended before a terminal response event".to_string(),
-                ));
-            }
+        if terminal {
+            yield Ok(LlmResponse::Done { stop_reason: last_stop_reason });
+        } else {
+            yield Err(ProviderError::stream_interrupted(
+                "Responses stream ended before a terminal response event".to_string(),
+            ).into());
         }
     }
 }
@@ -266,14 +275,15 @@ fn process_event(
             }
         }
         ResponsesStreamEvent::Failed(e) => {
-            let message = e.response.error.map_or_else(|| "Unknown Responses API failure".to_string(), |e| e.message);
-            responses.push(Err(LlmError::ApiError(message)));
+            let error = e.response.error.map_or_else(
+                || ProviderError::new(ProviderErrorKind::Api, "Unknown Responses API failure"),
+                |e| map_responses_error(e.code, e.message, ProviderErrorKind::Api),
+            );
+            responses.push(Err(error.into()));
         }
         ResponsesStreamEvent::Error(e) => {
-            responses.push(Err(LlmError::ServerError {
-                status: None,
-                message: format!("Responses API error: {}", e.message),
-            }));
+            let message = format!("Responses API error: {}", e.message);
+            responses.push(Err(map_responses_error(e.code, message, ProviderErrorKind::Unknown).into()));
         }
         ResponsesStreamEvent::Ignored
         | ResponsesStreamEvent::OutputTextDelta(_)
@@ -286,7 +296,7 @@ fn process_event(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TokenUsage;
+    use crate::{LlmError, ProviderErrorKind, TokenUsage};
     use async_openai::types::responses::{FunctionToolCall, ReasoningItem};
     use serde_json::json;
 
@@ -359,8 +369,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_error_event_is_retryable_server_error() {
+    async fn error_event_without_code_stays_retryable() {
         let stream = make_stream(vec![ResponsesStreamEvent::Error(ResponsesErrorEvent {
+            code: None,
             message: "Rate limit exceeded".to_string(),
         })]);
         let mut response_stream = Box::pin(process_response_stream(stream));
@@ -372,8 +383,92 @@ mod tests {
 
         assert!(responses[0].is_ok());
         let err = responses[1].as_ref().expect_err("expected error event to surface as Err");
-        assert!(matches!(err, LlmError::ServerError { status: None, .. }), "got {err:?}");
-        assert!(err.is_retryable(), "ResponseError must be retryable so the agent can recover");
+        assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::Unknown), "got {err:?}");
+        assert!(err.is_retryable(), "an uncoded top-level error event must stay retryable so the agent can recover");
+    }
+
+    #[tokio::test]
+    async fn error_event_with_unknown_code_stays_retryable() {
+        let events = vec![Ok(ResponsesStreamEvent::Error(ResponsesErrorEvent {
+            code: Some("bogus".to_string()),
+            message: "boom".to_string(),
+        }))];
+        let responses = process_response_stream(tokio_stream::iter(events)).collect::<Vec<_>>().await;
+        let err = responses[0].as_ref().expect_err("expected error to surface as Err");
+        assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::Unknown), "got {err:?}");
+        assert!(err.is_retryable());
+    }
+
+    #[tokio::test]
+    async fn error_event_with_rate_limit_code_is_rate_limited() {
+        let events = vec![Ok(ResponsesStreamEvent::Error(ResponsesErrorEvent {
+            code: Some("rate_limit_exceeded".to_string()),
+            message: "slow down".to_string(),
+        }))];
+        let responses = process_response_stream(tokio_stream::iter(events)).collect::<Vec<_>>().await;
+        let err = responses[0].as_ref().expect_err("expected error to surface as Err");
+        assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::RateLimit), "got {err:?}");
+        assert!(err.is_retryable());
+    }
+
+    #[tokio::test]
+    async fn failed_event_with_server_error_code_is_retryable() {
+        let responses = failed_events([ResponsesFailedEvent {
+            response: ResponsesFailed {
+                error: Some(ResponsesErrorEvent {
+                    code: Some("server_error".to_string()),
+                    message: "The server had an error".to_string(),
+                }),
+            },
+        }])
+        .await;
+        let err = responses[0].as_ref().expect_err("expected failure to surface as Err");
+        assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::Server), "got {err:?}");
+        assert!(err.is_retryable());
+        assert_eq!(err.provider().and_then(|provider| provider.code.as_deref()), Some("server_error"));
+    }
+
+    #[tokio::test]
+    async fn failed_event_with_rate_limit_code_is_retryable() {
+        let responses = failed_events([ResponsesFailedEvent {
+            response: ResponsesFailed {
+                error: Some(ResponsesErrorEvent {
+                    code: Some("rate_limit_exceeded".to_string()),
+                    message: "slow down".to_string(),
+                }),
+            },
+        }])
+        .await;
+        let err = responses[0].as_ref().expect_err("expected failure to surface as Err");
+        assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::RateLimit), "got {err:?}");
+        assert!(err.is_retryable());
+    }
+
+    #[tokio::test]
+    async fn failed_event_with_unknown_code_is_terminal() {
+        for code in [Some("invalid_prompt".to_string()), Some("bogus".to_string()), None] {
+            let responses = failed_events([ResponsesFailedEvent {
+                response: ResponsesFailed {
+                    error: Some(ResponsesErrorEvent { code: code.clone(), message: "bad".to_string() }),
+                },
+            }])
+            .await;
+            let err = responses[0].as_ref().expect_err("expected failure to surface as Err");
+            assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::Api), "got {err:?}");
+            assert!(!err.is_retryable(), "unknown/failed codes must be terminal: {err:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn error_event_with_server_error_code_is_retryable() {
+        let events = vec![Ok(ResponsesStreamEvent::Error(ResponsesErrorEvent {
+            code: Some("server_error".to_string()),
+            message: "boom".to_string(),
+        }))];
+        let responses = process_response_stream(tokio_stream::iter(events)).collect::<Vec<_>>().await;
+        let err = responses[0].as_ref().expect_err("expected error to surface as Err");
+        assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::Server), "got {err:?}");
+        assert!(err.is_retryable());
     }
 
     #[tokio::test]
@@ -399,7 +494,7 @@ mod tests {
     #[tokio::test]
     async fn test_stream_error_propagation_is_retryable() {
         let events: Vec<Result<ResponsesStreamEvent>> =
-            vec![Err(LlmError::StreamInterrupted("connection lost".to_string()))];
+            vec![Err(ProviderError::stream_interrupted("connection lost").into())];
 
         let stream = tokio_stream::iter(events);
         let mut response_stream = Box::pin(process_response_stream(stream));
@@ -410,31 +505,39 @@ mod tests {
         }
 
         let err = responses[0].as_ref().expect_err("expected upstream Err to surface as Err");
-        assert!(matches!(err, LlmError::StreamInterrupted(_)), "got {err:?}");
+        assert_eq!(
+            err.provider().map(|provider| provider.kind),
+            Some(ProviderErrorKind::StreamInterrupted),
+            "got {err:?}"
+        );
         assert_eq!(responses.len(), 1);
         assert!(err.is_retryable(), "mid-stream interrupts must be retryable");
     }
 
     #[tokio::test]
     async fn error_event_before_creation_keeps_the_servers_message() {
-        let events =
-            vec![Ok(ResponsesStreamEvent::Error(ResponsesErrorEvent { message: "Rate limit exceeded".to_string() }))];
+        let events = vec![Ok(ResponsesStreamEvent::Error(ResponsesErrorEvent {
+            code: None,
+            message: "Rate limit exceeded".to_string(),
+        }))];
         let responses = process_response_stream(tokio_stream::iter(events)).collect::<Vec<_>>().await;
 
         let err = responses[0].as_ref().expect_err("expected the error event to surface as Err");
-        assert!(matches!(err, LlmError::ServerError { .. }), "got {err:?}");
+        assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::Unknown), "got {err:?}");
         assert!(err.to_string().contains("Rate limit exceeded"), "server message was dropped: {err}");
     }
 
     #[tokio::test]
     async fn failure_event_before_creation_keeps_the_servers_message() {
         let events = vec![Ok(ResponsesStreamEvent::Failed(ResponsesFailedEvent {
-            response: ResponsesFailed { error: Some(ResponsesErrorEvent { message: "model overloaded".to_string() }) },
+            response: ResponsesFailed {
+                error: Some(ResponsesErrorEvent { code: None, message: "model overloaded".to_string() }),
+            },
         }))];
         let responses = process_response_stream(tokio_stream::iter(events)).collect::<Vec<_>>().await;
 
         let err = responses[0].as_ref().expect_err("expected the failure event to surface as Err");
-        assert!(matches!(err, LlmError::ApiError(_)), "got {err:?}");
+        assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::Api), "got {err:?}");
         assert!(err.to_string().contains("model overloaded"), "server message was dropped: {err}");
     }
 
@@ -443,7 +546,11 @@ mod tests {
         let events = vec![Ok(text_delta("leaked"))];
         let responses = process_response_stream(tokio_stream::iter(events)).collect::<Vec<_>>().await;
 
-        assert!(matches!(responses[0], Err(LlmError::StreamInterrupted(_))), "{responses:?}");
+        assert_eq!(
+            responses[0].as_ref().err().and_then(LlmError::provider).map(|provider| provider.kind),
+            Some(ProviderErrorKind::StreamInterrupted),
+            "{responses:?}"
+        );
     }
 
     #[tokio::test]
@@ -453,7 +560,10 @@ mod tests {
 
         assert!(matches!(responses[0], Ok(LlmResponse::Start { .. })));
         assert!(matches!(responses[1], Ok(LlmResponse::Text { .. })));
-        assert!(matches!(responses[2], Err(LlmError::StreamInterrupted(_))));
+        assert_eq!(
+            responses[2].as_ref().err().and_then(LlmError::provider).map(|provider| provider.kind),
+            Some(ProviderErrorKind::StreamInterrupted)
+        );
         assert!(!responses.iter().any(|response| matches!(response, Ok(LlmResponse::Done { .. }))));
     }
 
@@ -491,6 +601,11 @@ mod tests {
     }
 
     /// Decode a captured SSE body and run it through the shared processor.
+    async fn failed_events<const N: usize>(events: [ResponsesFailedEvent; N]) -> Vec<Result<LlmResponse>> {
+        let events = events.into_iter().map(ResponsesStreamEvent::Failed).map(Ok);
+        process_response_stream(tokio_stream::iter(events)).collect().await
+    }
+
     async fn process_fixture(sse: &str) -> Vec<Result<LlmResponse>> {
         let events = sse
             .lines()

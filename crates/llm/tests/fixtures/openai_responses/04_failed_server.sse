@@ -1,0 +1,6 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_failed_1","object":"response","created_at":1775538878,"status":"in_progress","model":"gpt-5-mini"},"sequence_number":0}
+
+event: response.failed
+data: {"type":"response.failed","response":{"id":"resp_failed_1","object":"response","status":"failed","error":{"code":"server_error","message":"The server had an error while processing your request.","param":null,"type":"server_error"}},"sequence_number":1}
+

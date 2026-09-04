@@ -1,24 +1,41 @@
 use axum::extract::State;
-use axum::http::HeaderMap;
 use axum::http::header::CONTENT_TYPE;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::{Json, Router};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
-/// A local HTTP server that captures OpenAI-compatible POST requests and replies
-/// with a protocol-specific SSE fixture, letting provider tests assert the exact wire request.
 pub(crate) struct CaptureServer {
     pub(crate) base_url: String,
     receiver: mpsc::UnboundedReceiver<CapturedRequest>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ResponseSpec {
+    pub(crate) status: u16,
+    pub(crate) body: String,
+    pub(crate) headers: HashMap<String, String>,
+}
+
+impl ResponseSpec {
+    pub(crate) fn sse(body: &str) -> Self {
+        Self { status: 200, body: body.to_string(), headers: HashMap::new() }
+    }
+
+    pub(crate) fn with_header(mut self, name: &str, value: &str) -> Self {
+        self.headers.insert(name.to_string(), value.to_string());
+        self
+    }
+}
+
 struct CaptureState {
     sender: mpsc::UnboundedSender<CapturedRequest>,
-    response: &'static str,
+    response: ResponseSpec,
 }
 
 pub(crate) struct CapturedRequest {
@@ -41,12 +58,16 @@ impl CaptureServer {
     }
 
     pub(crate) async fn start_with_response(response: &'static str) -> Self {
+        Self::start_with_spec(ResponseSpec::sse(response)).await
+    }
+
+    pub(crate) async fn start_with_spec(spec: ResponseSpec) -> Self {
         let (sender, receiver) = mpsc::unbounded_channel();
         let app = Router::new()
             .route("/responses", post(capture))
             .route("/chat/completions", post(capture))
             .route("/v1/chat/completions", post(capture))
-            .with_state(Arc::new(CaptureState { sender, response }));
+            .with_state(Arc::new(CaptureState { sender, response: spec }));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -69,5 +90,13 @@ async fn capture(
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
     state.sender.send(CapturedRequest { path: uri.path().to_string(), headers, body }).ok();
-    ([(CONTENT_TYPE, "text/event-stream")], state.response)
+    let status = StatusCode::from_u16(state.response.status).unwrap_or(StatusCode::OK);
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(CONTENT_TYPE, "text/event-stream".parse().unwrap());
+    for (name, value) in &state.response.headers {
+        if let (Ok(name), Ok(value)) = (name.parse::<axum::http::HeaderName>(), value.parse()) {
+            response_headers.insert(name, value);
+        }
+    }
+    (status, response_headers, state.response.body.clone())
 }
