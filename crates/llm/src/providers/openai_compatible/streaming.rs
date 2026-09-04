@@ -1,7 +1,7 @@
 use super::types::ChatCompletionStreamResponse;
 use super::types::FinishReason;
 use crate::providers::tool_call_collector::ToolCallCollector;
-use crate::{LlmError, LlmResponse, LlmResponseStream, Result, StopReason};
+use crate::{LlmError, LlmResponse, LlmResponseStream, ProviderError, Result, StopReason};
 use async_openai::{Client, config::Config};
 use async_stream;
 use serde::Serialize;
@@ -30,15 +30,14 @@ where
             }
         };
 
-        // Once the SSE stream has started (HTTP 200), any error from async-openai
-        // is a mid-stream interruption — the upstream library discards HTTP status
-        // codes when wrapping non-2xx responses, so trying to reclassify by type
-        // is unreliable. Treat all post-handshake errors as retryable.
+        // Once the SSE stream has started (HTTP 200), any failure is a fault of
+        // the active stream rather than a rejected request, regardless of the
+        // error's concrete type. Treat all post-handshake errors as retryable.
         let stream = stream.map(|result| {
             if let Err(ref e) = result {
                 warn!("Stream error from API: {e}");
             }
-            result.map_err(|e| LlmError::StreamInterrupted(e.to_string()))
+            result.map_err(|e| LlmError::from(ProviderError::stream_interrupted(e.to_string())))
         });
 
         for await item in process_compatible_stream(stream) {
@@ -143,7 +142,7 @@ pub fn process_compatible_stream<E: Into<LlmError> + Send>(
 
         if chunk_count == 0 {
             warn!("Stream completed with zero chunks — provider returned an empty stream");
-            yield Err(LlmError::StreamInterrupted("provider returned an empty stream".into()));
+            yield Err(ProviderError::stream_interrupted("provider returned an empty stream").into());
             return;
         }
 
@@ -163,7 +162,7 @@ fn map_finish_reason(reason: FinishReason) -> Result<StopReason> {
         FinishReason::ContentFilter => Ok(StopReason::ContentFilter),
         FinishReason::FunctionCall => Ok(StopReason::FunctionCall),
         FinishReason::Error | FinishReason::NetworkError => {
-            Err(LlmError::ServerError { status: None, message: format!("Provider reported {reason:?} finish reason") })
+            Err(ProviderError::server(format!("Provider reported {reason:?} finish reason")).into())
         }
     }
 }
@@ -183,7 +182,7 @@ mod tests {
         let events = run(vec![finish_chunk(FinishReason::Error)]).await;
         let last = events.last().expect("expected at least one event");
         let err = last.as_ref().expect_err("FinishReason::Error must surface as Err");
-        assert!(matches!(err, LlmError::ServerError { status: None, .. }), "got {err:?}");
+        assert_eq!(err.provider().map(|provider| provider.kind), Some(crate::ProviderErrorKind::Server), "got {err:?}");
         assert!(err.is_retryable(), "FinishReason::Error must be retryable so the agent recovers");
         assert!(!events.iter().any(|e| matches!(e, Ok(LlmResponse::Done { .. }))), "must not emit Done after error");
     }
@@ -193,7 +192,7 @@ mod tests {
         let events = run(vec![finish_chunk(FinishReason::NetworkError)]).await;
         let last = events.last().expect("expected at least one event");
         let err = last.as_ref().expect_err("FinishReason::NetworkError must surface as Err");
-        assert!(matches!(err, LlmError::ServerError { status: None, .. }), "got {err:?}");
+        assert_eq!(err.provider().map(|provider| provider.kind), Some(crate::ProviderErrorKind::Server), "got {err:?}");
         assert!(err.is_retryable(), "FinishReason::NetworkError must be retryable");
     }
 
@@ -204,7 +203,8 @@ mod tests {
         assert!(matches!(events.first(), Some(Ok(LlmResponse::Start { .. }))), "expected leading Start event");
         let last = events.last().expect("stream must yield at least one event");
         assert!(
-            matches!(last, Err(LlmError::StreamInterrupted(_))),
+            last.as_ref().err().and_then(LlmError::provider).map(|provider| provider.kind)
+                == Some(crate::ProviderErrorKind::StreamInterrupted),
             "empty stream must terminate with StreamInterrupted (retryable), got {last:?}"
         );
         assert!(last.as_ref().err().unwrap().is_retryable(), "StreamInterrupted must be retryable");

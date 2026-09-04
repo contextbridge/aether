@@ -9,7 +9,7 @@ use super::{
     streaming::process_completion_stream,
 };
 use crate::provider::error_stream;
-use crate::{Context, LlmError, LlmResponseStream, StreamingModelProvider};
+use crate::{Context, LlmError, LlmResponseStream, ProviderError, StreamingModelProvider};
 
 /// A Provider that's compatible with `OpenAI`'s chat completion API
 /// Other providers (e.g. Ollama, Llama.cpp etc) that are "`OpenAI` compatible" should implement this trait
@@ -74,13 +74,13 @@ impl<T: OpenAiChatProvider + Send + Sync> StreamingModelProvider for T {
                         }
                     }
 
-                    yield Err(LlmError::ApiRequest(e.to_string()));
+                    yield Err(LlmError::from(e));
                     return;
                 }
             };
 
             let stream = stream.map(|result| {
-                result.map_err(|e| LlmError::ApiError(e.to_string()))
+                result.map_err(|e| LlmError::from(ProviderError::stream_interrupted(e.to_string())))
             });
 
             let mut shared_stream = Box::pin(process_completion_stream(stream));

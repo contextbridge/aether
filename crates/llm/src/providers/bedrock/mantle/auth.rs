@@ -36,7 +36,7 @@ impl MantleAuth {
             Self::BearerToken(token) => {
                 let mut headers = HeaderMap::new();
                 let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
-                    .map_err(|e| LlmError::InvalidApiKey(e.to_string()))?;
+                    .map_err(|e| LlmError::ProviderRequest(e.to_string()))?;
                 value.set_sensitive(true);
                 headers.insert(AUTHORIZATION, value);
                 Ok(headers)
@@ -67,7 +67,7 @@ async fn sigv4_headers(
     let credentials = credentials
         .provide_credentials()
         .await
-        .map_err(|e| LlmError::InvalidApiKey(format!("Could not resolve AWS credentials: {e}")))?;
+        .map_err(|e| LlmError::ProviderRequest(format!("Could not resolve AWS credentials: {e}")))?;
     let identity = Identity::from(credentials);
 
     let params = v4::SigningParams::builder()
@@ -77,14 +77,14 @@ async fn sigv4_headers(
         .time(SystemTime::now())
         .settings(SigningSettings::default())
         .build()
-        .map_err(|e| LlmError::InvalidApiKey(format!("Could not build SigV4 signing params: {e}")))?
+        .map_err(|e| LlmError::ProviderRequest(format!("Could not build SigV4 signing params: {e}")))?
         .into();
 
     let signable = SignableRequest::new(method, url, std::iter::empty(), SignableBody::Bytes(body))
         .map_err(|e| LlmError::ProviderRequest(format!("Could not build signable request: {e}")))?;
 
     let (instructions, _signature) = sign(signable, &params)
-        .map_err(|e| LlmError::InvalidApiKey(format!("SigV4 signing failed: {e}")))?
+        .map_err(|e| LlmError::ProviderRequest(format!("SigV4 signing failed: {e}")))?
         .into_parts();
 
     let mut headers = HeaderMap::new();
