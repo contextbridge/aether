@@ -9,13 +9,8 @@ use crate::theme::Theme;
 pub(crate) const MODAL_HORIZONTAL_PADDING: u16 = 2;
 pub(crate) const MODAL_VERTICAL_PADDING: u16 = 1;
 
-/// The header and footer take the same padding as the content on every side,
-/// so all three sit equally far inside the modal instead of the title and key
-/// hints hugging the frame's edges.
 const HEADER_FOOTER_VERTICAL_PADDING: u16 = MODAL_VERTICAL_PADDING;
 
-/// Rows the frame takes besides its content: the header and footer rows, the
-/// blank rows padding them vertically, and the content's own vertical padding.
 pub(crate) const MODAL_VERTICAL_CHROME: u16 = 2 + 2 * HEADER_FOOTER_VERTICAL_PADDING + 2 * MODAL_VERTICAL_PADDING;
 
 pub(crate) struct ModalFrame<'a> {
@@ -86,17 +81,11 @@ impl Widget for &ModalFrame<'_> {
     fn render(self, outer: Rect, buf: &mut Buffer) {
         let area = self.area(outer);
         Clear.render(area, buf);
-        // Clear leaves the terminal's own background; the modal paints its own
-        // over every row, including the blank rows above the header and below
-        // the footer that the chrome skips.
         buf.set_style(area, Style::new().bg(self.theme.background));
         self.block().render(chrome_area(area), buf);
     }
 }
 
-/// The modal with the header and footer inset by their vertical padding. A
-/// modal too short to keep a content row past the inset keeps its chrome on
-/// the edges instead, so a tiny terminal still shows content.
 fn chrome_area(area: Rect) -> Rect {
     if area.height <= MODAL_VERTICAL_CHROME {
         return area;
