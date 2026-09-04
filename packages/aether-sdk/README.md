@@ -149,6 +149,26 @@ await using rootSession = await AetherSession.start({
 
 `traceContext` is also accepted by `runHeadless` and the lower-level ACP process options. A `traceparent` makes every turn a child of the propagated span. A standalone `traceId` instead creates root turn spans with that trace ID and no parent span. Telemetry must still be enabled in Aether settings.
 
+## Tracking token usage and cost
+
+Each provider call emits a typed `usage` message with per-call usage and the
+cumulative session totals:
+
+```ts
+for await (const message of session.prompt("Implement the feature")) {
+  if (message.type === "usage") {
+    console.log(message.usage.tokens);
+    console.log(message.usage.estimated_cost?.total_usd);
+    console.log(message.usage.totals.estimated_usd);
+  }
+}
+```
+
+Costs are catalog-based USD estimates. `totals.estimated_usd` excludes calls
+whose model pricing is unknown; `totals.unpriced_calls` reports how many were
+excluded. Sub-agent usage includes agent and task identity in
+`message.usage.source`.
+
 ## Multi-turn usage
 
 ```ts

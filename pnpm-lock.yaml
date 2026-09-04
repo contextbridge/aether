@@ -43,8 +43,8 @@ importers:
   packages/aether-sdk:
     dependencies:
       '@aether-agent/cli':
-        specifier: ^0.7.35
-        version: 0.7.35
+        specifier: ^0.8.0
+        version: 0.8.0
       '@agentclientprotocol/sdk':
         specifier: ^1.3.0
         version: 1.3.0(zod@4.4.3)
@@ -64,6 +64,9 @@ importers:
       '@types/node':
         specifier: ^26.4.0
         version: 26.4.0
+      fishery:
+        specifier: ^2.4.0
+        version: 2.4.0
       json-schema-to-typescript:
         specifier: ^15.0.4
         version: 15.0.4
@@ -153,6 +156,11 @@ packages:
 
   '@aether-agent/cli@0.7.35':
     resolution: {integrity: sha512-Xme2xrRU46zPrgXzC1HAv1LKSB2A7j35xNuMT/cLQZ+rD3Bf+fgZ7fnVQP46wWfgnuLOpmEKJNjmidVcCK6RcQ==}
+    engines: {node: '>=14', npm: '>=6'}
+    hasBin: true
+
+  '@aether-agent/cli@0.8.0':
+    resolution: {integrity: sha512-WQklT8QDdUSaJHMIoJcEY06Q5GXiJNaBx3fkFp8M3PYWk8w45AbJ8xRAk7Gl0+LxDdTO/2NZ+VG9+HzfO7hMiA==}
     engines: {node: '>=14', npm: '>=6'}
     hasBin: true
 
@@ -2673,6 +2681,9 @@ packages:
     resolution: {integrity: sha512-SrQDx3QhlmHM90iqn9rdjCQcw/T+WlpOkHFsjoRgB+zTpDfltNA1VSNYeYELwhUTJy12UFxqjWhmhOrJc+o4sA==}
     hasBin: true
 
+  fishery@2.4.0:
+    resolution: {integrity: sha512-QgeTlvgNhVGuMztrfAhlSIBs3rD3l9RMjl9I15yb/lnrx3njrOhvegr2L3LWdqvXwYfQjdQGpglyAfHH2J8DRA==}
+
   flattie@1.1.1:
     resolution: {integrity: sha512-9UbaD6XdAL97+k/n+N7JwX46K/M6Zc6KcFYskrYL8wbBV/Uyk0CTAMY0VT+qiK5PM7AIc9aTWYtq65U7T+aCNQ==}
     engines: {node: '>=8'}
@@ -3185,6 +3196,9 @@ packages:
 
   lodash.camelcase@4.3.0:
     resolution: {integrity: sha512-TwuEnCnxbc3rAvhf/LbG7tJUDzhqXyFnv3dtzLOPgCG/hODL7WFnsbwktkD7yUV0RrreP/l1PALq/YSg6VvjlA==}
+
+  lodash.mergewith@4.6.2:
+    resolution: {integrity: sha512-GK3g5RPZWTRSeLSpgP8Xhra+pnjBC56q9FZYe1d5RN3TJ35dbkGy3YqBSMbyCrlbi+CM9Z3Jk5yTL7RCsqboyQ==}
 
   lodash@4.18.1:
     resolution: {integrity: sha512-dMInicTPVE8d1e5otfwmmjlxkZoUpiVLwyeTdUsi/Caj/gfzzblBcCE5sRHV/AsjuCmxWrte2TNGSYuCeCq+0Q==}
@@ -4668,6 +4682,17 @@ snapshots:
       - supports-color
 
   '@aether-agent/cli@0.7.35':
+    dependencies:
+      axios: 1.19.0
+      axios-proxy-builder: 0.1.2
+      console.table: 0.10.0
+      detect-libc: 2.1.2
+      rimraf: 6.1.3
+    transitivePeerDependencies:
+      - debug
+      - supports-color
+
+  '@aether-agent/cli@0.8.0':
     dependencies:
       axios: 1.19.0
       axios-proxy-builder: 0.1.2
@@ -7247,6 +7272,10 @@ snapshots:
       commander: 14.0.3
       loglevel: 1.9.2
 
+  fishery@2.4.0:
+    dependencies:
+      lodash.mergewith: 4.6.2
+
   flattie@1.1.1: {}
 
   follow-redirects@1.16.0: {}
@@ -7813,6 +7842,8 @@ snapshots:
   lodash-es@4.18.1: {}
 
   lodash.camelcase@4.3.0: {}
+
+  lodash.mergewith@4.6.2: {}
 
   lodash@4.18.1: {}
 

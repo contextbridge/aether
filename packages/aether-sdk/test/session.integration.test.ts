@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { AetherSession, mcp, type AetherMessage, tool } from "../src/index.js";
+import { sessionUsageFactory } from "./factories/sessionUsage.js";
 import { TRACE_CONTEXT } from "./traceContext.js";
 
 const FAKE_AETHER = path.resolve(
@@ -176,6 +177,89 @@ describe("AetherSession with a fake ACP agent", () => {
     const result = messages.find((m) => m.type === "result");
     if (result?.type === "result") {
       expect(result.stopReason).toBe("end_turn");
+    }
+  });
+
+  it("exposes session usage", async () => {
+    const session = await AetherSession.start({
+      binaryPath: FAKE_AETHER,
+      env: {
+        PATH: process.env.PATH,
+        FAKE_AETHER_EXT_NOTIFICATION: JSON.stringify({
+          method: "_aether/session_usage",
+          params: { usage: sessionUsageFactory.build() },
+        }),
+      },
+    });
+
+    try {
+      const messages: AetherMessage[] = [];
+      for await (const message of session.prompt("test prompt")) {
+        messages.push(message);
+      }
+
+      expect(messages.map((message) => message.type)).toEqual([
+        "session_update",
+        "usage",
+        "result",
+      ]);
+
+      expect(messages.find((message) => message.type === "usage")).toEqual({
+        type: "usage",
+        usage: sessionUsageFactory.build(),
+      });
+    } finally {
+      await session.close();
+    }
+  });
+
+  it("ignores unknown ACP extension notifications", async () => {
+    const notification = {
+      method: "example.com/status",
+      params: { status: "ready" },
+    };
+    const session = await AetherSession.start({
+      binaryPath: FAKE_AETHER,
+      env: {
+        PATH: process.env.PATH,
+        FAKE_AETHER_EXT_NOTIFICATION: JSON.stringify(notification),
+      },
+    });
+
+    try {
+      const messages: AetherMessage[] = [];
+      for await (const message of session.prompt("test prompt")) {
+        messages.push(message);
+      }
+      expect(messages.map((message) => message.type)).toEqual([
+        "session_update",
+        "result",
+      ]);
+    } finally {
+      await session.close();
+    }
+  });
+
+  it("rejects malformed session usage notifications", async () => {
+    const session = await AetherSession.start({
+      binaryPath: FAKE_AETHER,
+      env: {
+        PATH: process.env.PATH,
+        FAKE_AETHER_EXT_NOTIFICATION: JSON.stringify({
+          method: "_aether/session_usage",
+          params: {},
+        }),
+      },
+    });
+
+    try {
+      await expect(async () => {
+        for await (const _message of session.prompt("test prompt")) {
+          void _message;
+        }
+      }).rejects.toMatchObject({ code: "invalid_protocol_message" });
+    } finally {
+      await session.close();
     }
   });
 

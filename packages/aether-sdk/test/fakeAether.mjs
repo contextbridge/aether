@@ -169,6 +169,11 @@ const agent = {
       });
     }
 
+    if (process.env.FAKE_AETHER_EXT_NOTIFICATION) {
+      const notification = JSON.parse(process.env.FAKE_AETHER_EXT_NOTIFICATION);
+      await conn.extNotification(notification.method, notification.params);
+    }
+
     const callName = process.env.FAKE_AETHER_CALL_MCP_SERVER;
     if (callName) {
       const server = inlineServers.get(callName);
