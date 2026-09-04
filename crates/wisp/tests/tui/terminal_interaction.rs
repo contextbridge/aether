@@ -445,7 +445,7 @@ mod event_routing {
     }
 
     #[test]
-    fn mouse_activation_uses_shared_settings_actions() {
+    fn mouse_activation_uses_shared_settings_actions() -> Result<(), Box<dyn std::error::Error>> {
         use acp_utils::notifications::{
             McpNotification, McpServerAuthCapability, McpServerStatus, McpServerStatusEntry,
         };
@@ -477,10 +477,10 @@ mod event_routing {
         )];
         let mut ui = settings_app(options, vec![], vec![]);
         open_settings(&mut ui);
-        let model_row = ui.viewport_row("Model:").expect("Model row in the settings menu");
+        let model_row = ui.viewport_row("Model:").ok_or("Model row in the settings menu")?;
         ui.terminal_event(click(10, model_row));
         ui.draw();
-        let beta_row = ui.viewport_row("Beta").expect("Beta row in the model picker");
+        let beta_row = ui.viewport_row("Beta").ok_or("Beta row in the model picker")?;
         ui.terminal_event(click(10, beta_row));
         assert!(matches!(
             ui.next_agent_command(),
@@ -491,10 +491,10 @@ mod event_routing {
             .with_auth_capability(McpServerAuthCapability::OAuth);
         let mut ui = settings_app(vec![], vec![server], vec![]);
         open_settings(&mut ui);
-        let servers_row = ui.viewport_row("MCP Servers:").expect("MCP Servers row in the settings menu");
+        let servers_row = ui.viewport_row("MCP Servers:").ok_or("MCP Servers row in the settings menu")?;
         ui.terminal_event(click(10, servers_row));
         ui.draw();
-        let linear_row = ui.viewport_row("linear").expect("linear row in the servers pane");
+        let linear_row = ui.viewport_row("linear").ok_or("linear row in the servers pane")?;
         ui.terminal_event(click(10, linear_row));
         assert!(matches!(
             ui.next_agent_command(),
@@ -504,15 +504,16 @@ mod event_routing {
         let methods = vec![AuthMethod::Agent(AuthMethodAgent::new("codex", "Codex"))];
         let mut ui = settings_app(vec![], vec![], methods);
         open_settings(&mut ui);
-        let providers_row = ui.viewport_row("Provider Logins:").expect("Provider Logins row in the settings menu");
+        let providers_row = ui.viewport_row("Provider Logins:").ok_or("Provider Logins row in the settings menu")?;
         ui.terminal_event(click(10, providers_row));
         ui.draw();
-        let codex_row = ui.viewport_row("Codex").expect("Codex row in the provider pane");
+        let codex_row = ui.viewport_row("Codex").ok_or("Codex row in the provider pane")?;
         ui.terminal_event(click(10, codex_row));
         assert!(matches!(
             ui.next_agent_command(),
             Some(AgentCommand::Authenticate { method_id }) if method_id == "codex"
         ));
+        Ok(())
     }
     #[test]
     fn session_picker_scroll_changes_selection() {

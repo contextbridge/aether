@@ -41,7 +41,7 @@ fn authenticate_selected_oauth_server(ui: &mut TestUi) {
 }
 
 #[test]
-fn settings_modal_header_and_footer_match_the_content_padding() {
+fn settings_modal_header_and_footer_match_the_content_padding() -> Result<(), Box<dyn std::error::Error>> {
     let mut ui = TestUi::new();
     ui.type_text("/settings");
     ui.key(key(KeyCode::Tab));
@@ -52,23 +52,16 @@ fn settings_modal_header_and_footer_match_the_content_padding() {
     let modal_rows: Vec<u16> = (0..buffer.area.height)
         .filter(|&y| (0..buffer.area.width).any(|x| buffer.cell((x, y)).is_some_and(|cell| cell.bg == background)))
         .collect();
-    let modal_top = modal_rows.first().copied().expect("the settings modal should paint its background");
-    let modal_bottom = modal_rows.last().copied().expect("the settings modal should paint its background");
-    let header_row = row_containing(&buffer, "Configuration").expect("settings header");
-    let first_content_row = row_containing(&buffer, "Theme:").expect("first settings row");
-    let footer_row = row_containing(&buffer, "Esc close").expect("settings footer");
+    let modal_top = modal_rows.first().copied().ok_or("the settings modal should paint its background")?;
+    let modal_bottom = modal_rows.last().copied().ok_or("the settings modal should paint its background")?;
+    let header_row = row_containing(&buffer, "Configuration").ok_or("settings header")?;
+    let first_content_row = row_containing(&buffer, "Theme:").ok_or("first settings row")?;
+    let footer_row = row_containing(&buffer, "Esc close").ok_or("settings footer")?;
 
-    assert_eq!(
-        header_row,
-        modal_top + 1,
-        "header sits one row inside the modal's top edge, matching the content's vertical padding"
-    );
-    assert_eq!(first_content_row, header_row + 2, "the content keeps its own row of padding below the header");
-    assert_eq!(
-        footer_row,
-        modal_bottom - 1,
-        "footer sits one row inside the modal's bottom edge, matching the content's vertical padding"
-    );
+    assert_eq!(header_row, modal_top + 1);
+    assert_eq!(first_content_row, header_row + 2);
+    assert_eq!(footer_row, modal_bottom - 1);
+    Ok(())
 }
 
 #[test]
