@@ -60,12 +60,7 @@ impl<'a> ModalFrame<'a> {
                 format!("{horizontal_padding}{}{horizontal_padding}", self.title),
                 Style::new().fg(self.theme.accent).add_modifier(Modifier::BOLD),
             ))
-            .padding(Padding::new(
-                MODAL_HORIZONTAL_PADDING,
-                MODAL_HORIZONTAL_PADDING,
-                MODAL_VERTICAL_PADDING,
-                MODAL_VERTICAL_PADDING,
-            ))
+            .padding(Padding::symmetric(MODAL_HORIZONTAL_PADDING, MODAL_VERTICAL_PADDING))
             .style(Style::new().bg(self.theme.background));
 
         if let Some(name) = self.title_right {
@@ -103,10 +98,12 @@ impl Widget for &ModalFrame<'_> {
 /// modal too short to keep a content row past the inset keeps its chrome on
 /// the edges instead, so a tiny terminal still shows content.
 fn chrome_area(area: Rect) -> Rect {
-    let padding = HEADER_FOOTER_VERTICAL_PADDING;
-    let rows_around_content = 2 * padding + 2 + 2 * MODAL_VERTICAL_PADDING;
-    if area.height < rows_around_content + 1 {
+    if area.height <= MODAL_VERTICAL_CHROME {
         return area;
     }
-    Rect { y: area.y.saturating_add(padding), height: area.height - 2 * padding, ..area }
+    Rect {
+        y: area.y.saturating_add(HEADER_FOOTER_VERTICAL_PADDING),
+        height: area.height - 2 * HEADER_FOOTER_VERTICAL_PADDING,
+        ..area
+    }
 }

@@ -52,7 +52,8 @@ fn settings_modal_header_and_footer_match_the_content_padding() {
     let modal_rows: Vec<u16> = (0..buffer.area.height)
         .filter(|&y| (0..buffer.area.width).any(|x| buffer.cell((x, y)).is_some_and(|cell| cell.bg == background)))
         .collect();
-    let (modal_top, modal_bottom) = (modal_rows[0], modal_rows[modal_rows.len() - 1]);
+    let modal_top = modal_rows.first().copied().expect("the settings modal should paint its background");
+    let modal_bottom = modal_rows.last().copied().expect("the settings modal should paint its background");
     let header_row = row_containing(&buffer, "Configuration").expect("settings header");
     let first_content_row = row_containing(&buffer, "Theme:").expect("first settings row");
     let footer_row = row_containing(&buffer, "Esc close").expect("settings footer");
