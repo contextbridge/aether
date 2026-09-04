@@ -19,6 +19,11 @@ store-failure-output = true
 
 [test-groups]
 evals = { max-threads = 5 }
+typescript-lsp = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'package(aether-mcp-servers) and test(/lsp_ts_/)'
+test-group = 'typescript-lsp'
 
 [[profile.default.overrides]]
 filter = 'package(internal-evals) and test(/_eval$/)'

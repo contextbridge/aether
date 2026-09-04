@@ -252,7 +252,15 @@ impl NodeProject {
     }
 
     fn install_typescript(&self) -> Result<(), TestProjectError> {
-        let args = ["install", "--save-dev", TYPESCRIPT_PACKAGE, TYPESCRIPT_LANGUAGE_SERVER_PACKAGE];
+        let args = [
+            "install",
+            "--save-dev",
+            "--no-audit",
+            "--no-fund",
+            "--prefer-offline",
+            TYPESCRIPT_PACKAGE,
+            TYPESCRIPT_LANGUAGE_SERVER_PACKAGE,
+        ];
         let output = Command::new("npm").args(args).current_dir(self.root()).output()?;
 
         if !output.status.success() {
