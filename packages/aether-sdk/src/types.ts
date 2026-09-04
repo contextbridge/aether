@@ -5,6 +5,7 @@ import type {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { z } from "zod";
 import type { ReasoningEffort } from "./generated/aether-settings.js";
+import type { SessionUsageEvent } from "./generated/eval-types.js";
 
 export type AgentSelection =
   | { agent: string; model?: never; reasoningEffort?: never }
@@ -26,11 +27,7 @@ export type AetherMessage =
       update: acp.SessionUpdate;
       raw: acp.SessionNotification;
     }
-  | {
-      type: "ext_notification";
-      method: string;
-      params: Record<string, unknown>;
-    }
+  | { type: "usage"; usage: SessionUsageEvent }
   | { type: "elicitation_complete"; elicitationId: string }
   | { type: "result"; sessionId: string; stopReason: acp.StopReason }
   | { type: "error"; error: unknown };

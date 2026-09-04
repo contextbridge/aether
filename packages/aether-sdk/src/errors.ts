@@ -6,6 +6,7 @@ export type AetherSdkErrorCode =
   | "session_not_started"
   | "prompt_in_progress"
   | "invalid_options"
+  | "invalid_protocol_message"
   | "execution_failed"
   | "generate_command_failed"
   | "aborted";

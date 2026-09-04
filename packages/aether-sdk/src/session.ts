@@ -1,5 +1,7 @@
 import type { AetherAcpOptions } from "./generated/aether-acp-options.js";
+import type { SessionUsageEvent } from "./generated/eval-types.js";
 import { addAbortListener } from "node:events";
+import { createRequire } from "node:module";
 import path from "node:path";
 import * as acp from "@agentclientprotocol/sdk";
 import { AsyncQueue } from "./asyncQueue.js";
@@ -11,7 +13,9 @@ import {
 import { AetherSdkError, throwIfAborted } from "./errors.js";
 import type { AetherMessage, AgentSelection } from "./types.js";
 
-const SDK_VERSION = "0.3.6";
+const { version: SDK_VERSION } = createRequire(import.meta.url)(
+  "../package.json",
+) as { version: string };
 
 export type PermissionRequestHandler = (
   request: acp.RequestPermissionRequest,
@@ -281,9 +285,31 @@ function createAcpClient(
       method: string,
       params: Record<string, unknown>,
     ): Promise<void> {
-      events.push({ type: "ext_notification", method, params });
+      try {
+        const usage = parseUsageNotification(method, params);
+        if (usage) events.push({ type: "usage", usage });
+      } catch (error) {
+        events.fail(error);
+      }
     },
   } satisfies acp.Client;
+}
+
+function parseUsageNotification(
+  method: string,
+  params: Record<string, unknown>,
+): SessionUsageEvent | undefined {
+  if (method !== "_aether/session_usage") return undefined;
+
+  const usage = params.usage;
+  if (!usage || typeof usage !== "object") {
+    throw new AetherSdkError(
+      "invalid_protocol_message",
+      "Aether CLI sent an invalid session usage update",
+    );
+  }
+
+  return usage as SessionUsageEvent;
 }
 
 function normalizePrompt(
