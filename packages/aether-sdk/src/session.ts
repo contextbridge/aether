@@ -261,14 +261,14 @@ function createAcpClient(
       return onPermissionRequest(request);
     },
 
-    async unstable_createElicitation(
+    async createElicitation(
       request: acp.CreateElicitationRequest,
     ): Promise<acp.CreateElicitationResponse> {
       if (!onElicitation) return { action: "cancel" };
       return onElicitation(request);
     },
 
-    async unstable_completeElicitation(
+    async completeElicitation(
       notification: acp.CompleteElicitationNotification,
     ): Promise<void> {
       events.push({
