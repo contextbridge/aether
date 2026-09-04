@@ -1,7 +1,6 @@
 import type { AetherAcpOptions } from "./generated/aether-acp-options.js";
 import type { SessionUsageEvent } from "./generated/eval-types.js";
 import { addAbortListener } from "node:events";
-import { createRequire } from "node:module";
 import path from "node:path";
 import * as acp from "@agentclientprotocol/sdk";
 import { AsyncQueue } from "./asyncQueue.js";
@@ -11,11 +10,8 @@ import {
   type SettingsSelection,
 } from "./agentProcess.js";
 import { AetherSdkError, throwIfAborted } from "./errors.js";
+import { SDK_VERSION } from "./generated/sdk-version.js";
 import type { AetherMessage, AgentSelection } from "./types.js";
-
-const { version: SDK_VERSION } = createRequire(import.meta.url)(
-  "../package.json",
-) as { version: string };
 
 export type PermissionRequestHandler = (
   request: acp.RequestPermissionRequest,
