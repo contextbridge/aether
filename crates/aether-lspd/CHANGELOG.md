@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.35](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.34...aether-lspd-v0.1.35) - 2026-09-04
+
+### Other
+
+- *(aether-lspd)* Serialize TS lsp tests to avoid flaky tests
+
 ## [0.1.34](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.33...aether-lspd-v0.1.34) - 2026-08-31
 
 ### Other

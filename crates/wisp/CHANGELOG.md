@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.1](https://github.com/contextbridge/aether/compare/aether-wisp-v0.6.0...aether-wisp-v0.6.1) - 2026-09-04
+
+### Fixed
+
+- *(wisp)* TUI modals use consistent padding ([#421](https://github.com/contextbridge/aether/pull/421))
+
 ## [0.6.0](https://github.com/contextbridge/aether/compare/aether-wisp-v0.5.2...aether-wisp-v0.6.0) - 2026-09-03
 
 ### Added

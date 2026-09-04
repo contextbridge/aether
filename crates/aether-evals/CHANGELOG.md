@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1](https://github.com/contextbridge/aether/compare/aether-evals-v0.3.0...aether-evals-v0.3.1) - 2026-09-04
+
+### Other
+
+- Bedrock Responses response.failed events with server errors are not retried ([#410](https://github.com/contextbridge/aether/pull/410))
+
 ## [0.3.0](https://github.com/contextbridge/aether/compare/aether-evals-v0.2.30...aether-evals-v0.3.0) - 2026-09-03
 
 ### Added

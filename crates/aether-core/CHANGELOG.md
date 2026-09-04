@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.7.0...aether-agent-core-v0.7.1) - 2026-09-04
+
+### Other
+
+- Bedrock Responses response.failed events with server errors are not retried ([#410](https://github.com/contextbridge/aether/pull/410))
+
 ## [0.7.0](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.37...aether-agent-core-v0.7.0) - 2026-09-03
 
 ### Added
