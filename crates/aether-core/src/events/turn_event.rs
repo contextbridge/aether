@@ -1,4 +1,4 @@
-use llm::{ContentBlock, LlmCallPurpose, ModelIdentity, StopReason, TokenUsage};
+use llm::{ContentBlock, LlmCallPurpose, LlmError, ModelIdentity, StopReason, TokenUsage};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -15,9 +15,46 @@ pub enum TurnOutcome {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum LlmCallOutcome {
-    Completed { stop_reason: Option<StopReason>, usage: Option<TokenUsage> },
-    Failed { error: String, will_retry: bool },
+    Completed {
+        stop_reason: Option<StopReason>,
+        usage: Option<TokenUsage>,
+    },
+    Failed {
+        error: String,
+        will_retry: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        http_status: Option<u16>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_request_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_error_code: Option<String>,
+    },
     Cancelled,
+}
+
+impl LlmCallOutcome {
+    pub fn failed(error: impl Into<String>, will_retry: bool) -> Self {
+        Self::Failed {
+            error: error.into(),
+            will_retry,
+            http_status: None,
+            provider_request_id: None,
+            provider_error_code: None,
+        }
+    }
+
+    pub fn from_llm_error(error: &LlmError, will_retry: bool) -> Self {
+        let Some(provider) = error.provider() else {
+            return Self::failed(error.to_string(), will_retry);
+        };
+        Self::Failed {
+            error: provider.to_string(),
+            will_retry,
+            http_status: provider.http_status,
+            provider_request_id: provider.request_id.clone(),
+            provider_error_code: provider.code.clone(),
+        }
+    }
 }
 
 /// A retry of a failed LLM call.

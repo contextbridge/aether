@@ -394,8 +394,9 @@ impl Agent {
 
     async fn on_llm_error(&mut self, error: LlmError, state: &mut IterationState) {
         let will_retry = error.is_retryable() && state.retry_attempt < self.retry_config.max_attempts;
+        let outcome = LlmCallOutcome::from_llm_error(&error, will_retry);
         let error_message = error.to_string();
-        self.finish_chat_call(LlmCallOutcome::Failed { error: error_message.clone(), will_retry }).await;
+        self.finish_chat_call(outcome).await;
 
         if !will_retry {
             self.finish_turn(TurnOutcome::Failed { error: error_message }).await;
@@ -523,7 +524,7 @@ impl Agent {
             }
 
             Error { message } => {
-                self.finish_chat_call(LlmCallOutcome::Failed { error: message.clone(), will_retry: false }).await;
+                self.finish_chat_call(LlmCallOutcome::failed(message.clone(), false)).await;
                 self.finish_turn(TurnOutcome::Failed { error: message }).await;
             }
 
@@ -622,7 +623,7 @@ impl Agent {
         }
         let outcome = match &result {
             Ok(result) => LlmCallOutcome::Completed { stop_reason: None, usage: result.usage },
-            Err(e) => LlmCallOutcome::Failed { error: e.to_string(), will_retry: false },
+            Err(e) => LlmCallOutcome::failed(e.to_string(), false),
         };
         self.emit(AgentEvent::Turn(TurnEvent::LlmCallEnded { purpose: LlmCallPurpose::Compaction, outcome })).await;
 

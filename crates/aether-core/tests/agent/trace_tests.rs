@@ -8,7 +8,7 @@ use aether_core::core::RetryConfig;
 use aether_core::events::{AgentEvent, LlmCallOutcome, TurnOutcome};
 use llm::LlmCallPurpose;
 use llm::testing::llm_response;
-use llm::{LlmError, LlmResponse, StopReason};
+use llm::{LlmError, LlmResponse, ProviderError, StopReason};
 
 #[tokio::test]
 async fn tool_call_turn_emits_full_trace() -> Result<(), Box<dyn Error>> {
@@ -96,7 +96,7 @@ async fn observers_receive_the_rendered_prompt_for_each_llm_request() -> Result<
 #[tokio::test(start_paused = true)]
 async fn retried_call_traces_each_attempt() -> Result<(), Box<dyn Error>> {
     let attempts: Vec<Vec<Result<LlmResponse, LlmError>>> = vec![
-        vec![Err(LlmError::ServerError { status: Some(503), message: "boom".into() })],
+        vec![Err(LlmError::from(ProviderError::server("boom".to_string()).with_http_status(503)))],
         vec![Ok(LlmResponse::start("m2")), Ok(LlmResponse::text("ok")), Ok(LlmResponse::done())],
     ];
 
@@ -129,8 +129,9 @@ async fn retried_call_traces_each_attempt() -> Result<(), Box<dyn Error>> {
 
 #[tokio::test(start_paused = true)]
 async fn exhausted_retries_fail_the_turn() -> Result<(), Box<dyn Error>> {
-    let attempts: Vec<Vec<Result<LlmResponse, LlmError>>> =
-        (0..3).map(|i| vec![Err(LlmError::ServerError { status: Some(503), message: format!("boom {i}") })]).collect();
+    let attempts: Vec<Vec<Result<LlmResponse, LlmError>>> = (0..3)
+        .map(|i| vec![Err(LlmError::from(ProviderError::server(format!("boom {i}")).with_http_status(503)))])
+        .collect();
 
     let trace =
         test_agent().retry_config(fast_retry(1)).llm_result_responses(&attempts).user_text("go").run_trace().await?;
@@ -152,7 +153,7 @@ async fn exhausted_retries_fail_the_turn() -> Result<(), Box<dyn Error>> {
 #[tokio::test(start_paused = true)]
 async fn cancel_during_retry_wait_traces_cancelled_turn_without_starting_call() -> Result<(), Box<dyn Error>> {
     let attempts: Vec<Vec<Result<LlmResponse, LlmError>>> = vec![
-        vec![Err(LlmError::ServerError { status: Some(503), message: "boom".into() })],
+        vec![Err(LlmError::from(ProviderError::server("boom".to_string()).with_http_status(503)))],
         vec![Ok(LlmResponse::start("m2")), Ok(LlmResponse::text("never seen")), Ok(LlmResponse::done())],
     ];
     let retry = RetryConfig { max_attempts: 5, base_delay: Duration::from_mins(1), max_delay: Duration::from_mins(1) };
