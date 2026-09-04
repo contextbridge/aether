@@ -84,7 +84,7 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
 
       - name: Configure Bedrock credentials
-        uses: $/.github/actions/configure-aws-credentials
+        uses: ./.github/actions/configure-aws-credentials
         with:
           role-to-assume: arn:aws:iam::212467111133:role/GitHubActionsBedrockInference-aether
 

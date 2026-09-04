@@ -18,7 +18,7 @@ runs:
   using: "composite"
   steps:
     - name: Configure AWS credentials
-      uses: $/.github/actions/configure-aws-credentials
+      uses: ./.github/actions/configure-aws-credentials
       with:
         role-to-assume: ${{ inputs.role-to-assume }}
         aws-region: ${{ inputs.aws-region }}
