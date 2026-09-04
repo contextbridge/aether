@@ -55,8 +55,7 @@ impl<'a> ModalFrame<'a> {
                 format!("{horizontal_padding}{}{horizontal_padding}", self.title),
                 Style::new().fg(self.theme.accent).add_modifier(Modifier::BOLD),
             ))
-            .padding(Padding::symmetric(MODAL_HORIZONTAL_PADDING, MODAL_VERTICAL_PADDING))
-            .style(Style::new().bg(self.theme.background));
+            .padding(Padding::symmetric(MODAL_HORIZONTAL_PADDING, MODAL_VERTICAL_PADDING));
 
         if let Some(name) = self.title_right {
             block = block.title_top(
