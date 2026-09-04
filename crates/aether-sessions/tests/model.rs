@@ -1,6 +1,6 @@
 use aether_core::events::{
-    AgentEvent, CompactionOutcome, ContextEvent, StreamState, SubAgentProgressPayload, ToolEvent, TurnEvent,
-    TurnOutcome,
+    AgentEvent, CompactionOutcome, ContextEvent, LlmCallOutcome, StreamState, SubAgentProgressPayload, ToolEvent,
+    TurnEvent, TurnOutcome,
 };
 use aether_sessions::model::last_session_usage;
 use aether_sessions::{SessionControlEvent, SessionEvent, UserEvent, last_agent_from_events};
@@ -77,6 +77,27 @@ fn event_json_tags_remain_compatible() {
     assert_eq!(json["kind"], "user");
     assert_eq!(json["data"]["type"], "message");
     assert_eq!(json["data"]["content"][0]["type"], "text");
+    assert_eq!(serde_json::from_value::<SessionEvent>(json).unwrap(), event);
+}
+
+#[test]
+fn failed_call_diagnostics_survive_session_json_round_trip() {
+    let event = SessionEvent::Agent(AgentEvent::Turn(TurnEvent::LlmCallEnded {
+        purpose: LlmCallPurpose::Chat,
+        outcome: LlmCallOutcome::Failed {
+            error: "Server error: boom (status 200, code server_error, request_id req-1)".into(),
+            will_retry: true,
+            http_status: Some(200),
+            provider_request_id: Some("req-1".into()),
+            provider_error_code: Some("server_error".into()),
+        },
+    }));
+
+    let json = serde_json::to_value(&event).unwrap();
+    let outcome = &json["data"]["event"]["outcome"];
+    assert_eq!(outcome["http_status"], 200);
+    assert_eq!(outcome["provider_request_id"], "req-1");
+    assert_eq!(outcome["provider_error_code"], "server_error");
     assert_eq!(serde_json::from_value::<SessionEvent>(json).unwrap(), event);
 }
 
