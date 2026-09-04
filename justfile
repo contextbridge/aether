@@ -79,6 +79,8 @@ sdk-e2e *ARGS:
 automation-check:
     jq empty .aether/settings.json .aether/github.settings.json .aether/github-agent/mcp.json
     bash -n scripts/aether-agent/*
+    grep -Fq '< "$TASK_PATH"' .github/workflows/aether-agent.yml
+    for workflow in .github/workflows/{aether-agent,scheduled-aether-prompts}.yml; do grep -Fq 'OPENROUTER_API_KEY:' "$workflow"; done
     git ls-files -s | awk '$1 == "120000" { print $4 }' | while IFS= read -r link; do test -e "$link" || { echo "Broken symlink: $link -> $(readlink "$link")" >&2; exit 1; }; done
 
 # Run all CI checks
