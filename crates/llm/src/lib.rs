@@ -23,7 +23,7 @@ pub use catalog::LlmModel;
 pub use chat_message::{AssistantReasoning, ChatMessage, ContentBlock, EncryptedReasoningContent};
 pub use context::Context;
 pub use credential::ProviderCredential;
-pub use error::{ContextOverflowError, LlmError, Result};
+pub use error::{LlmError, ProviderError, ProviderErrorKind, Result};
 pub use llm_response::{LlmResponse, StopReason};
 pub use model_settings::ModelSettings;
 pub use provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider};
