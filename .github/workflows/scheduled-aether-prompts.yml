@@ -119,6 +119,7 @@ jobs:
           aether headless \
             --agent Cheap \
             --cwd "$GITHUB_WORKSPACE" \
+            --settings-file .aether/github.settings.json \
             --output json \
             --events text,tool_call,tool_result,tool_error,turn_ended \
             < "$PROMPT_PATH" \

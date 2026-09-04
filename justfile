@@ -77,8 +77,9 @@ sdk-e2e *ARGS:
 
 # Validate the GitHub-hosted Aether agent automation
 automation-check:
-    jq empty .aether/settings.json .aether/github-agent/mcp.json
+    jq empty .aether/settings.json .aether/github.settings.json .aether/github-agent/mcp.json
     bash -n scripts/aether-agent/*
+    git ls-files -s | awk '$1 == "120000" { print $4 }' | while IFS= read -r link; do test -e "$link" || { echo "Broken symlink: $link -> $(readlink "$link")" >&2; exit 1; }; done
 
 # Run all CI checks
 ci: fmt-check lint test-ci doc-check sqlx-check automation-check

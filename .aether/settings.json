@@ -1,44 +1,5 @@
 {
-  "agent": "Cheap",
-  "mcps": [".aether/github-agent/mcp.json"],
   "agents": [
-    {
-      "name": "Orchestrator",
-      "description": "Routes GitHub issues to sub-agents based on task complexity",
-      "model": "zai:glm-5.3",
-      "reasoningEffort": "high",
-      "userInvocable": true,
-      "agentInvocable": false,
-      "prompts": [".aether/agents/orchestrator.md", "AGENTS.md"]
-    },
-    {
-      "name": "Planner",
-      "description": "Don't spawn unless explicitly asked to",
-      "model": "openrouter:meta/muse-spark-1.3",
-      "reasoningEffort": "xhigh",
-      "userInvocable": true,
-      "agentInvocable": true,
-      "prompts": [".aether/SYSTEM.md", ".aether/agents/planner.md", "AGENTS.md"]
-    },
-    {
-      "name": "Complex Builder",
-      "description": "Don't spawn unless explicitly asked to",
-      "model": "openrouter:meta/muse-spark-1.3",
-      "reasoningEffort": "xhigh",
-      "userInvocable": true,
-      "agentInvocable": true,
-      "prompts": [".aether/agents/builder.md", "AGENTS.md"]
-    },
-    {
-      "name": "Simple Builder",
-      "description": "Don't spawn unless explicitly asked to",
-      "model": "openrouter:meta/muse-spark-1.3",
-      "reasoningEffort": "high",
-      "userInvocable": true,
-      "agentInvocable": true,
-      "prompts": [".aether/agents/builder.md", "AGENTS.md"],
-      "mcps": [".aether/github-agent/mcp.json"]
-    },
     {
       "name": "Cheap",
       "description": "ZAI GLM-5 with high reasoning",

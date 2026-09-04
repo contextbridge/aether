@@ -165,6 +165,7 @@ jobs:
           env -u GH_TOKEN -u GITHUB_TOKEN aether headless \
             --agent "$AGENT" \
             --cwd "$GITHUB_WORKSPACE" \
+            --settings-file .aether/github.settings.json \
             --mcp-config .aether/github-agent/mcp.json \
             --output json \
             --events text,tool_call,tool_result,tool_error,turn_ended \
