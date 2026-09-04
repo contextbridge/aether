@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { compile } from "json-schema-to-typescript";
 
@@ -24,6 +24,7 @@ await generateEvalTypes(document);
 await generateSettingsTypes(document.AetherSettings);
 await generateAcpOptionsTypes(document.AcpOptions);
 await generateHeadlessOptionsTypes(document.HeadlessOptions);
+generateSdkVersion();
 
 async function generateEvalTypes(document) {
   const canonicalSchemaPath = resolve(
@@ -107,6 +108,18 @@ async function generateHeadlessOptionsTypes(schema) {
 
   writeGenerated(
     resolve(import.meta.dirname, "../src/generated/aether-headless-options.ts"),
+    content,
+  );
+}
+
+function generateSdkVersion() {
+  const packageJson = JSON.parse(
+    readFileSync(resolve(import.meta.dirname, "../package.json"), "utf8"),
+  );
+  const content = `// @generated ${GENERATED_NOTICE}\n// Source: packages/aether-sdk/package.json.\n\nexport const SDK_VERSION = ${JSON.stringify(packageJson.version)};\n`;
+
+  writeGenerated(
+    resolve(import.meta.dirname, "../src/generated/sdk-version.ts"),
     content,
   );
 }
