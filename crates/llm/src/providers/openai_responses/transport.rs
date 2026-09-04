@@ -40,7 +40,7 @@ pub(crate) fn process_connection(
     let ResponsesConnection { events, metadata } = connection;
     Box::pin(process_response_stream(events).map(move |result| {
         result.map_err(|error| match error.provider().cloned() {
-            Some(provider) => provider.with_request_id(metadata.request_id.clone()).into(),
+            Some(provider) => provider.with_http_metadata(Some(metadata.status), metadata.request_id.clone()).into(),
             None => error,
         })
     }))

@@ -65,11 +65,15 @@ pub enum ProviderErrorKind {
     Timeout,
     Network,
     StreamInterrupted,
+    Unknown,
 }
 
 impl ProviderErrorKind {
     pub fn is_retryable(&self) -> bool {
-        matches!(self, Self::RateLimit | Self::Server | Self::Timeout | Self::Network | Self::StreamInterrupted)
+        matches!(
+            self,
+            Self::RateLimit | Self::Server | Self::Timeout | Self::Network | Self::StreamInterrupted | Self::Unknown
+        )
     }
 }
 
@@ -162,6 +166,7 @@ impl fmt::Display for ProviderError {
             ProviderErrorKind::Timeout => "Request timed out",
             ProviderErrorKind::Network => "Network error",
             ProviderErrorKind::StreamInterrupted => "Stream interrupted",
+            ProviderErrorKind::Unknown => "Provider error",
         };
         write!(f, "{prefix}: {}", self.message)?;
         let mut diagnostics = Vec::new();
@@ -270,6 +275,7 @@ mod tests {
         assert!(ProviderErrorKind::Timeout.is_retryable());
         assert!(ProviderErrorKind::Network.is_retryable());
         assert!(ProviderErrorKind::StreamInterrupted.is_retryable());
+        assert!(ProviderErrorKind::Unknown.is_retryable());
     }
 
     #[test]

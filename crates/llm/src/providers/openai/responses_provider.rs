@@ -143,7 +143,7 @@ mod tests {
         assert!(err.is_retryable(), "server_error must be retryable: {err:?}");
         let provider_error = err.provider().expect("expected provider error");
         assert_eq!(provider_error.kind, crate::ProviderErrorKind::Server);
-        assert_eq!(provider_error.http_status, None);
+        assert_eq!(provider_error.http_status, Some(200));
         assert_eq!(provider_error.request_id.as_deref(), Some("req-openai-1"));
         assert_eq!(provider_error.code.as_deref(), Some("server_error"));
     }
