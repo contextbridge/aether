@@ -41,6 +41,36 @@ fn authenticate_selected_oauth_server(ui: &mut TestUi) {
 }
 
 #[test]
+fn settings_modal_header_and_footer_match_the_content_padding() {
+    let mut ui = TestUi::new();
+    ui.type_text("/settings");
+    ui.key(key(KeyCode::Tab));
+    ui.draw();
+
+    let buffer = ui.viewport();
+    let background = Theme::default().background;
+    let modal_rows: Vec<u16> = (0..buffer.area.height)
+        .filter(|&y| (0..buffer.area.width).any(|x| buffer.cell((x, y)).is_some_and(|cell| cell.bg == background)))
+        .collect();
+    let (modal_top, modal_bottom) = (modal_rows[0], modal_rows[modal_rows.len() - 1]);
+    let header_row = row_containing(&buffer, "Configuration").expect("settings header");
+    let first_content_row = row_containing(&buffer, "Theme:").expect("first settings row");
+    let footer_row = row_containing(&buffer, "Esc close").expect("settings footer");
+
+    assert_eq!(
+        header_row,
+        modal_top + 1,
+        "header sits one row inside the modal's top edge, matching the content's vertical padding"
+    );
+    assert_eq!(first_content_row, header_row + 2, "the content keeps its own row of padding below the header");
+    assert_eq!(
+        footer_row,
+        modal_bottom - 1,
+        "footer sits one row inside the modal's bottom edge, matching the content's vertical padding"
+    );
+}
+
+#[test]
 fn server_status_unhealthy_count_updates_status_line() {
     let mut ui = TestUi::new();
     assert_eq!(ui.app().status_line_model().unhealthy_servers, 0);
@@ -508,7 +538,7 @@ fn deferred_oauth_server(name: &str, status: McpServerStatus) -> McpServerStatus
 
 #[test]
 fn server_status_pane_groups_model_visible_and_deferred_with_headers() {
-    let mut ui = TestUi::new();
+    let mut ui = TestUiBuilder::new().dimensions(40, 17).build();
 
     ui.acp_event(mcp_notification(vec![
         server_status_entry("github", McpServerStatus::Connected { tool_count: 5 }),
@@ -834,11 +864,11 @@ fn settings_overlay_uses_borderless_modal_chrome_and_padded_highlights() {
     );
     assert_eq!(buffer.cell((modal.right(), modal.y + 1)).unwrap().symbol(), "X");
     let title_column = (modal.x..modal.right())
-        .find(|&x| buffer.cell((x, modal.y)).is_some_and(|cell| cell.symbol() == "C"))
+        .find(|&x| buffer.cell((x, modal.y + 1)).is_some_and(|cell| cell.symbol() == "C"))
         .expect("the modal title should be rendered");
     assert_eq!(title_column, modal.x + 2);
     let footer_column = (modal.x..modal.right())
-        .find(|&x| buffer.cell((x, modal.bottom() - 1)).is_some_and(|cell| cell.symbol() == "E"))
+        .find(|&x| buffer.cell((x, modal.bottom() - 2)).is_some_and(|cell| cell.symbol() == "E"))
         .expect("the modal footer should be rendered");
     assert_eq!(footer_column, modal.x + 2);
 
@@ -1283,6 +1313,7 @@ fn theme_selection_keeps_overlay_open_and_refreshes_display() {
 #[test]
 fn model_selector_provider_heading_does_not_skip_rows() {
     let mut ui = TestUiBuilder::new()
+        .dimensions(40, 20)
         .config_options(vec![{
             let mut opt = acp::SessionConfigOption::select(
                 "model",

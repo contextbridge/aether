@@ -7,7 +7,7 @@
 //! decides only what its rows say and which keys it answers.
 
 use crate::screens::annotation::{AnnotatedRows, AnnotatedRowsView};
-use crate::surfaces::modal::frame::ModalFrame;
+use crate::surfaces::modal::frame::{MODAL_VERTICAL_CHROME, ModalFrame};
 use crate::theme::Theme;
 use crate::view::selection::{Direction, scroll_into_view, step_clamped};
 use crate::view::widgets::key_hints;
@@ -65,7 +65,7 @@ pub(crate) fn render_shortcut_help(
     let split = groups.len().div_ceil(2);
     let (left_groups, right_groups) = if width >= 64 { groups.split_at(split) } else { (groups, &[][..]) };
     let rows = shortcut_column_rows(left_groups).max(shortcut_column_rows(right_groups));
-    let height = area.height.saturating_sub(2).min(as_u16(rows + 4));
+    let height = area.height.saturating_sub(2).min(as_u16(rows + usize::from(MODAL_VERTICAL_CHROME)));
     let frame = ModalFrame::new(
         "Review shortcuts",
         Some(key_hints(&[("?/Esc", "close")], theme)),
