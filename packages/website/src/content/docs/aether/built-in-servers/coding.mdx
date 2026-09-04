@@ -35,6 +35,8 @@ Permission modes:
 | `auto`         | File writes auto-execute; destructive bash commands ask for approval.                |
 | `always-ask`   | Every destructive tool — `write_file`, `edit_file`, `bash`, and `lsp_rename` — asks for approval; read-only tools are ungated. |
 
+Approval requests use MCP elicitation: the first call returns an input-required result, and the command executes only after the client resubmits it with an allow decision. Clients without elicitation support get a tool error instead, and declined operations report `Operation declined by user`.
+
 ## File operations
 
 | Tool         | Description                                          |
@@ -43,6 +45,8 @@ Permission modes:
 | `write_file` | Write content to a file, creating or overwriting it. |
 | `edit_file`  | Exact string replacement within a file.              |
 | `list_files` | List directory contents with metadata.               |
+
+Read-before-write safety: `edit_file` — and `write_file` when the target file already exists — fail unless that file has been read in the current session. This prevents blind edits and accidental data loss.
 
 ## Search
 
@@ -56,7 +60,7 @@ Permission modes:
 
 | Tool                   | Description                                                                                     |
 | ---------------------- | ----------------------------------------------------------------------------------------------- |
-| `bash`                 | Execute a shell command. Pass `timeout` to cap execution time (max 600000 ms), or `run_in_background` to run it as a background MCP task that returns its complete output at completion. |
+| `bash`                 | Execute a shell command. Pass `timeout` to cap execution time (max 600000 ms), or `run_in_background` to run it as a background MCP task that returns its complete output at completion. Background runs require the client to support MCP Tasks. |
 
 Because `bash` spawns real subprocesses, it composes with [deferred (proxied) tools](/aether/settings/mcp-servers/#merging-and-deferred-tool-behavior) from other MCP servers via the `aether mcp` CLI — pipelines, redirects, and command substitution all work.
 

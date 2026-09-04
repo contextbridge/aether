@@ -99,7 +99,7 @@ Fireworks uses `https://api.fireworks.ai/inference/v1` by default. Serverless ca
       "requestModel": "accounts/acme/deployments/coding-prod"
     }
   },
-  "agents": [{ "model": "fireworks:accounts/fireworks/models/glm-5p1", "userInvocable": true }]
+  "agents": [{ "model": "fireworks:accounts/fireworks/models/glm-5p3", "userInvocable": true }]
 }
 ```
 
@@ -160,7 +160,7 @@ Some Bedrock models are not available through the Converse API. Aether routes th
 }
 ```
 
-Catalog IDs that use the Responses transport include the `openai.gpt-5.6-*`, `openai.gpt-5.5`, `openai.gpt-5.4`, `xai.grok-4.3`, and `openai.gpt-oss-*` families (for example, `bedrock:openai.gpt-5.5` or `bedrock:openai.gpt-oss-120b`). All other Bedrock models use the Converse API described above.
+Catalog IDs that use the Responses transport include `openai.gpt-5.6-luna`, `openai.gpt-5.6-sol`, `openai.gpt-5.6-terra`, `openai.gpt-5.5`, `openai.gpt-5.4`, `xai.grok-4.3`, `xai.grok-4.6`, `openai.gpt-oss-120b`, and `openai.gpt-oss-20b`. All other Bedrock models — including the dated `openai.gpt-oss-*-1:0` variants, `openai.gpt-oss-safeguard-*`, and region-prefixed IDs such as `global.openai.gpt-5.6-luna` — use the Converse API described above.
 
 Responses-transport requests authenticate with the first available scheme:
 
@@ -288,7 +288,17 @@ Some providers support extended thinking. Set `reasoningEffort` on an agent to r
 }
 ```
 
-Providers that do not support the requested effort ignore it or map it to their closest available setting.
+Aether validates `reasoningEffort` against the model when settings load: an effort the model does not support fails with an error listing the supported levels. When you switch models interactively (terminal UI or ACP), Aether snaps the current effort to the nearest supported level.
+
+## Prompt caching
+
+Aether automatically attaches cache routing keys to requests so consecutive turns reuse provider prompt caches:
+
+- **OpenAI, Codex, and Bedrock Mantle** (Responses API transports) send a `prompt_cache_key` derived from the model, system prompt, and tool definitions — requests with the same prefix hash to the same key, so the provider routes them where the cache is already warm.
+- **Microsoft Foundry** sends the same prefix-derived cache key.
+- **Fireworks AI** sends a per-session affinity key so a conversation sticks to one cache location.
+
+Cache keys are managed automatically; there is nothing to configure.
 
 ## Alloying
 

@@ -85,7 +85,7 @@ Content capture is disabled by default. Unless you enable a `content` flag, Aeth
 
 ## What Aether exports
 
-Each agent turn produces an `invoke_agent` root span carrying `gen_ai.agent.name`, so every LLM call beneath it is attributable to the agent that made it. Its child spans describe LLM calls (`chat <model>`) and tool executions (`execute_tool <name>`), including retries and terminal errors or cancellations.
+Each agent turn produces an `invoke_agent` root span — named `invoke_agent <agent>` and carrying `gen_ai.agent.name` when the agent is known — so every LLM call beneath it is attributable to the agent that made it. Its child spans describe LLM calls (`chat <model>`) and tool executions (`execute_tool <name>`), including retries and terminal errors or cancellations.
 
 With `content.systemInstructions` enabled, each `chat <model>` span carries the final rendered system prompt as `gen_ai.system_instructions` plus its `aether.llm.system_instructions.sha256` hash, so you can compare traces across prompt changes without reading the prompt itself. With `content.inputMessages` enabled, turn and chat spans also carry `aether.llm.input_messages.sha256` next to `gen_ai.input.messages`. Backends such as PostHog surface these attributes in the raw tracing tab.
 

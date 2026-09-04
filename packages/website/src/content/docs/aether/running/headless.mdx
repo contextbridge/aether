@@ -84,7 +84,7 @@ aether headless --model bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0 \
 
 <Tabs>
   <TabItem label="text">
-    Human-readable lines. Final text is printed as plain text; tool calls, tool results, errors, context usage, and other selected events are formatted as simple lines. Background MCP tasks get their own lines as they start and finish (`Tool deferred ...`, `Background task completed ...`, `Background task failed ...`, `Background task cancelled ...`).
+    Human-readable lines. Final text is printed as plain text; tool calls, tool results, errors, context usage, and other selected events are formatted as simple lines. After each LLM call, a session usage line reports tokens and estimated cost, e.g. `Session usage #1 [Build]: 1200 in, 340 out (call cost: $0.029000, cumulative: 1540 tokens, estimated total: $0.029000)`. Background MCP tasks get their own lines as they start and finish (`Tool deferred ...`, `Background task completed ...`, `Background task failed ...`, `Background task cancelled ...`).
 
     ```bash
     aether headless --output text "What does this project do?"
@@ -100,7 +100,7 @@ aether headless --model bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0 \
 
   </TabItem>
   <TabItem label="json">
-    Newline-delimited `AgentEvent` JSON. Each stdout line has a top-level `category` discriminator and a nested event with a `type` discriminator.
+    Newline-delimited `AgentEvent` JSON. Each stdout line has a top-level `category` discriminator and a nested event with a `type` discriminator — except `session_usage` lines, which wrap a plain usage object (see below).
 
     ```bash
     aether headless --output json --events text,tool_call,tool_result,turn_ended \
@@ -123,6 +123,7 @@ Example lines:
 ```json
 {"category":"tool","event":{"type":"call","request":{"id":"tc1","name":"bash","arguments":"{}"}}}
 {"category":"message","event":{"type":"text","message_id":"msg1","chunk":"done","is_complete":true}}
+{"category":"session_usage","event":{"sequence":1,"source":{"agent_id":"a17bc51f-ab44-472a-90fb-b605d5f7dfcd","parent_agent_id":null,"task_id":null,"agent_name":"Build"},"purpose":"chat","model":{"provider":"anthropic","model_id":"claude-fable-5","pricing":{"input_per_million":10.0,"output_per_million":50.0,"cache_read_per_million":1.0,"cache_write_per_million":12.5}},"tokens":{"input_tokens":1200,"output_tokens":340,"cache_read_tokens":null,"cache_creation_tokens":null,"input_audio_tokens":null,"input_video_tokens":null,"reasoning_tokens":null,"output_audio_tokens":null,"accepted_prediction_tokens":null,"rejected_prediction_tokens":null},"estimated_cost":{"input_usd":0.012,"output_usd":0.017,"cache_read_usd":0.0,"cache_creation_usd":0.0,"total_usd":0.029},"totals":{"tokens":{"input_tokens":1200,"output_tokens":340,"cache_read_tokens":null,"cache_creation_tokens":null,"input_audio_tokens":null,"input_video_tokens":null,"reasoning_tokens":null,"output_audio_tokens":null,"accepted_prediction_tokens":null,"rejected_prediction_tokens":null},"estimated_usd":0.029,"unpriced_calls":0}}}
 {"category":"turn","event":{"type":"ended","outcome":{"status":"completed"}}}
 ```
 
@@ -153,6 +154,7 @@ Available event kinds:
 | `context_compaction_ended`   | Context compaction finished (completed, failed, or cancelled). |
 | `context_compaction_result`  | Context compaction completed.                                  |
 | `context_usage`              | Token usage update.                                            |
+| `session_usage`              | Per-call token usage with estimated cost and cumulative session totals. |
 | `context_cleared`            | Context was cleared.                                           |
 | `turn_started`               | Turn processing began.                                         |
 | `turn_ended`                 | Turn completed, failed, or was cancelled.                      |

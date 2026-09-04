@@ -50,7 +50,7 @@ Each `left` and `right` entry is a segment. Shorthand names are strings; segment
 | Segment     | Form                              | Description                                            |
 | ----------- | --------------------------------- | ------------------------------------------------------ |
 | `cwd`       | `"cwd"` or `{ "type": "cwd", "maxWidth": 40 }` | Current working directory (truncatable). |
-| `gitRef`    | `"gitRef"`                        | Active git branch or tag.                              |
+| `gitRef`    | `"gitRef"`                        | Active git branch, or the short commit SHA when detached. |
 | `agent`     | `"agent"`                         | Active agent name.                                     |
 | `mode`      | `"mode"`                          | Active mode (user-invocable agent profile).            |
 | `model`     | `"model"` or `{ "type": "model", "maxWidth": 32 }` | Active model (truncatable).              |
@@ -86,7 +86,7 @@ The theme colors the entire UI: conversation text, syntax highlighting, diff ren
 
 Open with `/settings`. The overlay shows all configurable options:
 
-- **Model** — Override the model used by the currently active agent runtime. Reasoning effort is adjusted from within the model pane, cycling it with `Tab` / `Shift+Tab` (also cyclable from anywhere with the global `Tab` binding)
+- **Model** — Override the model used by the currently active agent runtime. Reasoning effort is adjusted from within the model pane, cycling it with `Tab` / `Shift+Tab` (also cyclable with the global `Tab` binding while the prompt input is focused)
 - **Mode** — Switch to a different user-invocable agent profile, including its prompts, MCP servers, tools, model, and provider settings (also cyclable with `Shift+Tab`)
 - **MCP servers** — View connected servers and their status
 - **Provider logins** — Authenticate with providers that require it
@@ -102,7 +102,7 @@ The terminal UI doesn't know about models or reasoning levels directly. Instead:
 3. When you change a value, the selection is sent back to the agent
 4. The agent applies the change
 
-The `Tab` (reasoning) and `Shift+Tab` (mode) shortcuts cycle through the most common agent-provided options. In Aether-backed sessions, mode changes are applied at the next safe prompt boundary. The current turn completes or is cancelled normally, and the next prompt uses the selected agent profile. Model changes remain scoped to the currently active agent runtime.
+The `Tab` (reasoning) and `Shift+Tab` (mode) shortcuts cycle through the most common agent-provided options while the prompt input is focused; open overlays handle those keys themselves. In Aether-backed sessions, mode changes are applied at the next safe prompt boundary. The current turn completes or is cancelled normally, and the next prompt uses the selected agent profile. Model changes remain scoped to the currently active agent runtime.
 
 ## Authentication
 

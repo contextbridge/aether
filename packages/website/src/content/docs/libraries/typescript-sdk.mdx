@@ -64,7 +64,7 @@ await AetherSession.start({
 | `settings`            | Inline Aether settings object using the `.aether/settings.json` shape. SDK-hosted and external MCP servers live here under `mcps`.                                                                                         |
 | `settingsFile`        | Path to an alternate settings JSON file.                                                                                                                                                                                   |
 | `binaryPath`          | Override the bundled CLI binary with an absolute path or command available on `PATH`.                                                                                                                                      |
-| `env`                 | Environment variables for the spawned `aether acp` process.                                                                                                                                                                |
+| `env`                 | Environment variables for the spawned `aether acp` process. When set, it replaces the inherited environment wholesale rather than merging with `process.env`.                          |
 | `logDir`              | Custom directory for ACP logs.                                                                                                                                                                                             |
 | `providers`           | Provider connection overrides, such as custom Bedrock endpoints or auth behavior.                                                                                                                                          |
 | `traceContext`        | A remote W3C `traceparent` with optional `tracestate`, or a standalone `traceId` for root spans without a parent. See [Telemetry](/aether/settings/telemetry/#correlating-sdk-runs) for validation and sampling semantics. |
@@ -92,6 +92,23 @@ for await (const message of session.prompt("Now list likely refactors")) {
 
 Only one prompt can be in progress per session.
 
+## Session lifecycle
+
+`AetherSession` exposes `sessionId`, `cancel()` (stop the in-flight prompt), and `close()` (tear down the session and subprocess). `await using` calls `close()` on scope exit via `Symbol.asyncDispose`.
+
+`prompt()` also accepts an array of ACP content blocks instead of a plain string, so you can send images and other structured blocks:
+
+```ts
+await using session = await AetherSession.start({ cwd: process.cwd() });
+
+for await (const message of session.prompt([
+  { type: "text", text: "What is in this screenshot?" },
+  { type: "image", data: base64Png, mimeType: "image/png" },
+])) {
+  if (message.type === "result") break;
+}
+```
+
 ## Run a single headless prompt
 
 `runHeadless()` is the programmatic equivalent of [`aether headless`](/aether/running/headless/). It runs one prompt to completion (with no streaming iterator), captures the process output, and resolves with a result. Use it for scripts, CI jobs, and batch workflows where you want the final output rather than streamed updates.
@@ -117,9 +134,9 @@ console.log(result.stdout);
 | `stdout`   | `string`                 | Captured stdout from the `aether headless` process.                                   |
 | `stderr`   | `string`                 | Captured stderr (diagnostics/tracing).                                                |
 | `exitCode` | `number`                 | Process exit code. `0` on success; non-zero when the turn ends with a failed outcome. |
-| `signal`   | `NodeJS.Signals \| null` | Termination signal, if the process was killed instead of exiting normally.            |
+| `signal`   | `NodeJS.Signals \| null` | Termination signal. Always `null` on a resolved result — a killed process rejects with the same `process_exited` error as a non-zero exit. |
 
-Because `aether headless` exits non-zero on a failed turn, `runHeadless()` **rejects** with an `AetherSdkError` (`code: "process_exited"`) in that case instead of resolving. Wrap the call in `try`/`catch` (or read the error's details) when a failed turn is an expected outcome.
+Because `aether headless` exits non-zero on a failed turn (and any signal-terminated process is treated the same way), `runHeadless()` **rejects** with an `AetherSdkError` (`code: "process_exited"`) in that case instead of resolving. Wrap the call in `try`/`catch` (or read the error's details) when a failed turn is an expected outcome.
 
 ### Options
 
@@ -140,7 +157,7 @@ Because `aether headless` exits non-zero on a failed turn, `runHeadless()` **rej
 | `providers`    | Provider connection overrides, such as custom Bedrock endpoints or auth behavior.                                                                    |
 | `traceContext` | A remote W3C `traceparent` with optional `tracestate`, or a standalone `traceId`. See [Telemetry](/aether/settings/telemetry/#correlating-sdk-runs). |
 | `binaryPath`   | Override the bundled CLI binary with an absolute path or command available on `PATH`.                                                                |
-| `env`          | Environment variables for the spawned `aether headless` process.                                                                                     |
+| `env`          | Environment variables for the spawned `aether headless` process. When set, it replaces the inherited environment wholesale rather than merging with `process.env`.                                  |
 | `stdout`       | `"pipe"` (capture, the default) or `"inherit"` (write directly to the parent stdio).                                                                 |
 | `stderr`       | `"pipe"` (the default) or `"inherit"`.                                                                                                               |
 | `abortSignal`  | Cancel the run and tear down the subprocess.                                                                                                         |
