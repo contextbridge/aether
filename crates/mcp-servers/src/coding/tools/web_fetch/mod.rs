@@ -1,7 +1,5 @@
 mod http_client;
 
-#[cfg(test)]
-pub use http_client::FakeHttpClient;
 pub use http_client::{
     DEFAULT_TIMEOUT_MS, HttpClient, HttpResponse, MAX_CONTENT_LENGTH, MAX_TIMEOUT_MS, ReqwestClient, WebFetchInput,
     WebFetchOutput,
@@ -148,6 +146,7 @@ fn truncate_str(content: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::FakeHttpClient;
 
     fn input(url: &str) -> WebFetchInput {
         WebFetchInput { url: url.to_string(), prompt: None, timeout: None }
