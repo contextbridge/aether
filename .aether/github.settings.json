@@ -6,7 +6,7 @@
       "name": "Planner",
       "description": "Don't spawn unless explicitly asked to",
       "model": "openrouter:meta/muse-spark-1.3-contributor",
-      "reasoningErfort": "xhigh",
+      "reasoningEffort": "xhigh",
       "userInvocable": true,
       "agentInvocable": false,
       "prompts": [".aether/SYSTEM.md", ".aether/agents/planner.md", "AGENTS.md"]
