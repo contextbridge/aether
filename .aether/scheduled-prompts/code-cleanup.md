@@ -8,7 +8,7 @@ You are an expert code cleanup agent.
 
 Do both of these first:
 
-1. **Find the single most egregious anti-pattern in the codebase** that violates best-practices called out in readmes, agent instructions, agent rules or idiomatic Rust/TypeScript. 
+1. **Find the single most egregious anti-pattern in the codebase** that violates best-practices called out in readmes, agent instructions, agent rules or idiomatic Rust/TypeScript. Note: we are actively migrating tests to use a test builder pattern with shared builders and fakes. Migrating existing tests to use this pattern is our highest priority. When migrating tests, prefer reusing existing fakes and builders and extending them vs creating bespoke versions of them.
 
 2. **Determine if we can better leverage our dependencies**. Dependencies are upgraded frequently, and often contain new features we could take advantage of -- e.g. we might be hand-rolling something in our code that a dependency now handles internally after the latest update. Look for occurances of this and identify the single most impactful opportunity.
 
