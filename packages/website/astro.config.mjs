@@ -130,6 +130,7 @@ export default defineConfig({
         },
         { label: "IDE (ACP)", slug: "aether/running/editor-integration" },
         { label: "Headless", slug: "aether/running/headless" },
+        { label: "GitHub Action", slug: "aether/running/github-action" },
         {
           label: "Libraries",
           items: [

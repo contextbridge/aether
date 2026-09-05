@@ -11,9 +11,6 @@ on:
 permissions:
   contents: read
 
-env:
-  PLANS_DIR: docs/aether/plans
-
 concurrency:
   group: aether-agent-${{ github.event.issue.number || github.event.pull_request.number }}
   cancel-in-progress: false
@@ -38,91 +35,16 @@ jobs:
     timeout-minutes: 120
     environment: ci
     steps:
-      - name: Generate ContextBridge app token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ secrets.CB_PR_AUTOMATION_APP_ID }}
-          private-key: ${{ secrets.CB_PR_AUTOMATION_APP_PRIVATE_KEY }}
-          owner: contextbridge
-          repositories: aether
-          permission-contents: write
-          permission-pull-requests: write
-          permission-issues: write
-          permission-workflows: write
-
-      - name: Acknowledge the request
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          REPO: ${{ github.repository }}
-          EVENT_NAME: ${{ github.event_name }}
-          COMMENT_ID: ${{ github.event.comment.id }}
-        run: |
-          set -euo pipefail
-
-          case "$EVENT_NAME" in
-            issue_comment) path="/repos/$REPO/issues/comments/$COMMENT_ID/reactions" ;;
-            pull_request_review_comment) path="/repos/$REPO/pulls/comments/$COMMENT_ID/reactions" ;;
-            *) exit 0 ;;
-          esac
-
-          gh api --silent --method POST "$path" -f content=eyes
-
+      # Toolchain setup is caller-owned: the reusable action only installs
+      # the aether CLI. The action checks out the default branch again with
+      # full history and without cleaning, so this shallow checkout exists to
+      # give the steps below the repo files they read (mise.toml, lockfiles)
+      # while the artifacts they produce (node_modules, target) survive into
+      # the agent's workspace.
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
-          ref: ${{ github.event.repository.default_branch }}
-          token: ${{ steps.app-token.outputs.token }}
           persist-credentials: false
-
-      - name: Configure Bedrock credentials
-        uses: $/.github/actions/configure-aws-credentials
-        with:
-          role-to-assume: arn:aws:iam::212467111133:role/GitHubActionsBedrockInference-aether
-          role-duration-seconds: "7200"
-
-      - name: Stage trusted automation scripts
-        run: |
-          mkdir -p "$RUNNER_TEMP/aether-agent"
-          cp scripts/aether-agent/{resolve-target,build-task,commit-and-push,open-pull-request,report-back} \
-            "$RUNNER_TEMP/aether-agent/"
-
-      - name: Resolve target
-        id: target
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          GH_REPO: ${{ github.repository }}
-          EVENT_NAME: ${{ github.event_name }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
-          IS_PULL_REQUEST: ${{ github.event.issue.pull_request != null }}
-          LABEL_NAME: ${{ github.event.label.name }}
-        run: "$RUNNER_TEMP/aether-agent/resolve-target"
-
-      - name: Prepare branch
-        id: branch
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
-          BRANCH: ${{ steps.target.outputs.branch }}
-          BASE: ${{ steps.target.outputs.base }}
-        run: |
-          set -euo pipefail
-
-          user_id="$(gh api "/users/$APP_SLUG%5Bbot%5D" --jq '.id')"
-          git config user.name "$APP_SLUG[bot]"
-          git config user.email "$user_id+$APP_SLUG[bot]@users.noreply.github.com"
-
-          if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
-            git switch "$BRANCH"
-          else
-            git switch --create "$BRANCH" "origin/$BASE"
-          fi
-
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
@@ -134,108 +56,12 @@ jobs:
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Install latest released Aether
-        shell: bash
-        run: |
-          set -euo pipefail
-          export CARGO_HOME="$RUNNER_TEMP/aether-cargo"
-          curl --proto '=https' --tlsv1.2 -LsSf \
-            https://github.com/contextbridge/aether/releases/latest/download/aether-agent-cli-installer.sh \
-            | sh -s -- --no-modify-path
-          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
-          "$CARGO_HOME/bin/aether" --version
-
-      - name: Build task
-        id: task
-        env:
-          TASK_KIND: ${{ steps.target.outputs.task_kind }}
-          NUMBER: ${{ steps.target.outputs.number }}
-          PLAN_FILE: ${{ steps.target.outputs.plan_file }}
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: "$RUNNER_TEMP/aether-agent/build-task"
-
-      - name: Run Aether
-        env:
-          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          AGENT: ${{ steps.target.outputs.agent }}
-          TASK_PATH: ${{ steps.task.outputs.path }}
-        run: |
-          set -euo pipefail
-          env -u GH_TOKEN -u GITHUB_TOKEN aether headless \
-            --agent "$AGENT" \
-            --cwd "$GITHUB_WORKSPACE" \
-            --settings-file .aether/github.settings.json \
-            --output json \
-            --events text,tool_call,tool_result,tool_error,turn_ended \
-            "$TASK_PATH" \
-            | tee "$RUNNER_TEMP/aether-headless.jsonl"
-
-      - name: Review implementation
-        if: steps.target.outputs.mode != 'plan' && steps.target.outputs.task_kind != 'pull_request_feedback'
-        env:
-          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          START_SHA: ${{ steps.branch.outputs.sha }}
-          TASK_PATH: ${{ steps.task.outputs.path }}
-        run: |
-          set -euo pipefail
-          env -u GH_TOKEN -u GITHUB_TOKEN aether headless \
-            --agent Reviewer \
-            --cwd "$GITHUB_WORKSPACE" \
-            --settings-file .aether/github.settings.json \
-            --output json \
-            --events text,tool_call,tool_result,tool_error,turn_ended \
-            "$TASK_PATH" \
-            | tee -a "$RUNNER_TEMP/aether-headless.jsonl"
-
-      - name: Commit and push
-        id: push
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          GH_REPO: ${{ github.repository }}
-          BRANCH: ${{ steps.target.outputs.branch }}
-          NUMBER: ${{ steps.target.outputs.number }}
-          MODE: ${{ steps.target.outputs.mode }}
-          PLAN_FILE: ${{ steps.target.outputs.plan_file }}
-          START_SHA: ${{ steps.branch.outputs.sha }}
-        run: "$RUNNER_TEMP/aether-agent/commit-and-push"
-
-      - name: Open pull request
-        id: pr
-        if: steps.target.outputs.mode != 'pr' && steps.push.outputs.pushed == 'true'
-        env:
-          MODE: ${{ steps.target.outputs.mode }}
-          ISSUE_TITLE: ${{ github.event.issue.title }}
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          GH_REPO: ${{ github.repository }}
-          BRANCH: ${{ steps.target.outputs.branch }}
-          BASE: ${{ steps.target.outputs.base }}
-          NUMBER: ${{ steps.target.outputs.number }}
-          SUBJECT: ${{ steps.push.outputs.subject }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: "$RUNNER_TEMP/aether-agent/open-pull-request"
-
-      - name: Mark pull request ready
-        if: steps.push.outputs.implemented == 'true'
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          GH_REPO: ${{ github.repository }}
-          NUMBER: ${{ steps.target.outputs.number }}
-        run: gh pr ready "$NUMBER"
-
-      - name: Report back
-        if: always() && steps.target.outputs.number != ''
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          GH_REPO: ${{ github.repository }}
-          MODE: ${{ steps.target.outputs.mode }}
-          NUMBER: ${{ steps.target.outputs.number }}
-          BRANCH: ${{ steps.target.outputs.branch }}
-          PUSHED: ${{ steps.push.outputs.pushed }}
-          FAILED: ${{ contains(fromJSON('["failure", "cancelled"]'), job.status) }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: "$RUNNER_TEMP/aether-agent/report-back"
+      - name: Run Aether agent
+        uses: $/.github/actions/aether-agent
+        with:
+          app-id: ${{ secrets.CB_PR_AUTOMATION_APP_ID }}
+          app-private-key: ${{ secrets.CB_PR_AUTOMATION_APP_PRIVATE_KEY }}
+          aws-role-to-assume: arn:aws:iam::212467111133:role/GitHubActionsBedrockInference-aether
+          zai-api-key: ${{ secrets.ZAI_API_KEY }}
+          deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}

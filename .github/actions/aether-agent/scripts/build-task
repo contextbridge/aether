@@ -3,7 +3,11 @@
 set -euo pipefail
 
 workspace=${GITHUB_WORKSPACE:-$PWD}
-task_file="$workspace/.git/aether-task.json"
+task_file=${TASK_FILE:-.git/aether-task.json}
+case $task_file in
+    /*) ;;
+    *) task_file="$workspace/$task_file" ;;
+esac
 
 case "$TASK_KIND" in
     issue)

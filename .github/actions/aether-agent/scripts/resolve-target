@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+for var in EVENT_NAME DEFAULT_BRANCH ISSUE_LABEL COMMENT_PREFIX IMPLEMENT_PLAN_COMMAND \
+    LABEL_AGENT_MAP BRANCH_PREFIX PLANS_DIR; do
+    : "${!var:?must be set}"
+done
+
+skip() {
+    echo "::notice::$1"
+    exit 0
+}
+
+map_entry() {
+    jq -r --arg key "$1" '.[$key] // empty' <<< "$LABEL_AGENT_MAP"
+}
+
+# Comments on pull requests have no label, so they always run the agent that
+# the map's "" fallback entry names.
+agent_for_default_entry() {
+    local agent
+    agent=$(jq -r '."".agent // empty' <<< "$LABEL_AGENT_MAP")
+    if [[ -z "$agent" ]]; then
+        echo "::error::The label-agent map needs a \"\" entry with an \"agent\" for pull request comments." >&2
+        exit 1
+    fi
+    printf '%s' "$agent"
+}
+
+if [[ "$EVENT_NAME" == "pull_request_review_comment" ]]; then
+    body=$(jq -r '.comment.body // ""' "$GITHUB_EVENT_PATH")
+    if [[ "$body" != "$COMMENT_PREFIX"* ]]; then
+        skip "Comment does not use the '$COMMENT_PREFIX' prefix; skipping."
+    fi
+    mode="pr"
+    task_kind=pull_request_feedback
+    agent=$(agent_for_default_entry)
+    number=$REVIEW_PR_NUMBER
+elif [[ "$IS_PULL_REQUEST" == "true" ]]; then
+    body=$(jq -r '.comment.body // ""' "$GITHUB_EVENT_PATH")
+    if [[ "$body" == "$IMPLEMENT_PLAN_COMMAND" ]]; then
+        task_kind=implement_plan
+    elif [[ "$body" == "$COMMENT_PREFIX"* ]]; then
+        task_kind=pull_request_feedback
+    else
+        skip "Comment does not use the '$COMMENT_PREFIX' prefix; skipping."
+    fi
+    mode="pr"
+    agent=$(agent_for_default_entry)
+    number=$ISSUE_NUMBER
+else
+    if [[ "$EVENT_NAME" == "issues" && "$LABEL_NAME" != "$ISSUE_LABEL" ]]; then
+        skip "Label '$LABEL_NAME' is not the trigger label '$ISSUE_LABEL'; skipping."
+    fi
+    task_kind=issue
+    number=$ISSUE_NUMBER
+    labels=$(jq -c '[.issue.labels[].name]' "$GITHUB_EVENT_PATH")
+    mapped=$(jq -nc --argjson labels "$labels" --argjson map "$LABEL_AGENT_MAP" \
+        '[$labels[] | . as $label | select($map | has($label))]')
+    if (( $(jq length <<< "$mapped") > 1 )); then
+        echo "::error::Issue #$number has conflicting agent labels: $(jq -r 'join(", ")' <<< "$mapped")."
+        exit 1
+    fi
+    key=$(jq -r '.[0] // ""' <<< "$mapped")
+    entry=$(map_entry "$key")
+    if [[ -z "$entry" ]]; then
+        echo "::error::Issue #$number has no agent mapping: no issue label matches the" \
+            "label-agent map and no \"\" fallback is configured."
+        exit 1
+    fi
+    mode=$(jq -r '.mode // empty' <<< "$entry")
+    agent=$(jq -r '.agent // empty' <<< "$entry")
+    if [[ -z "$mode" || -z "$agent" ]]; then
+        echo "::error::The label-agent map entry for '${key:-no label}' needs \"agent\" and \"mode\" fields."
+        exit 1
+    fi
+fi
+
+if [[ "$mode" == "pr" ]]; then
+    pr=$(gh pr view "$number" --json headRefName,baseRefName,isCrossRepository)
+    if [[ $(jq -r '.isCrossRepository' <<< "$pr") == true ]]; then
+        echo "::error::Aether cannot push to pull request #$number because it comes from a fork."
+        exit 1
+    fi
+    branch=$(jq -r '.headRefName' <<< "$pr")
+    base=$(jq -r '.baseRefName' <<< "$pr")
+else
+    branch="$BRANCH_PREFIX$number"
+    base=$DEFAULT_BRANCH
+    open_pr=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // ""')
+    if [[ -z "$open_pr" ]] && gh api "/repos/$GH_REPO/git/ref/heads/$branch" > /dev/null 2>&1; then
+        branch="$branch-$GITHUB_RUN_NUMBER"
+    fi
+fi
+
+{
+    echo "mode=$mode"
+    echo "task_kind=$task_kind"
+    echo "agent=$agent"
+    echo "number=$number"
+    echo "branch=$branch"
+    echo "base=$base"
+    echo "plan_file=$PLANS_DIR/issue-$number-plan.md"
+} >> "$GITHUB_OUTPUT"

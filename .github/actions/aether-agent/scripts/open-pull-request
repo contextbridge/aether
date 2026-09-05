@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // ""')" ]]; then
+    exit 0
+fi
+
+body="$RUNNER_TEMP/pr-body.md"
+printf 'Closes #%s\n\n' "$NUMBER" > "$body"
+
+draft=()
+if [[ "$MODE" == "plan" ]]; then
+    title="plan: $ISSUE_TITLE"
+    draft=(--draft)
+    printf 'Aether planned issue #%s. Review the plan inline, start a reply with `%s` to revise it,\n' \
+        "$NUMBER" "$COMMENT_PREFIX" >> "$body"
+    printf 'and comment `%s` to build it on this branch.\n\n' "$IMPLEMENT_PLAN_COMMAND" >> "$body"
+else
+    title="$SUBJECT"
+    printf 'Opened by Aether from issue #%s.\n\n' "$NUMBER" >> "$body"
+fi
+printf 'Run: %s\n' "$RUN_URL" >> "$body"
+
+label_args=()
+while IFS= read -r label; do
+    label="${label#"${label%%[![:space:]]*}"}"
+    label="${label%"${label##*[![:space:]]}"}"
+    if [[ -n "$label" ]]; then
+        label_args+=(--label "$label")
+    fi
+done < <(tr ',' '\n' <<< "$PR_LABELS")
+
+pr_url="$(gh pr create \
+    --base "$BASE" \
+    --head "$BRANCH" \
+    --title "$title" \
+    --body-file "$body" \
+    "${label_args[@]}" \
+    "${draft[@]}")"
+
+echo "pr_number=${pr_url##*/}" >> "$GITHUB_OUTPUT"
