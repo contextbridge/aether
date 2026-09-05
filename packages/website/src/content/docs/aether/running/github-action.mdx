@@ -4,9 +4,10 @@ description: Run Aether agents on issue labels and pull request comments in any 
 ---
 
 The reusable `aether-agent` action turns GitHub activity into agent work. Applying a
-configured label to an issue makes Aether plan or implement it; a `/aether` comment on a
-pull request asks for feedback or plan implementation. The agent works on its own branch,
-opens a pull request, and reports back with a comment.
+configured label to an issue makes Aether plan or implement it; a `/aether` comment on an
+issue runs that issue's mapped agent, and on a pull request asks for feedback or plan
+implementation. The agent works on its own branch, opens a pull request, and reports back
+with a comment.
 
 The action ships with [Aether](https://github.com/contextbridge/aether) and works in any
 repository: you bring a settings file with your own agents and models, and decide which
@@ -79,7 +80,7 @@ minimal settings file lives next to the action in
 The action runs agents by name with
 [`aether headless --agent <name>`](/aether/running/headless/#agent-selection), so the
 `label-agent-map` must name agents defined in your settings file. A minimal
-`.aether/github.settings.json` with one planning and one building agent:
+`.aether/github.settings.json` with one planning, one building, and one reviewing agent:
 
 ```json
 {
@@ -97,10 +98,20 @@ The action runs agents by name with
       "reasoningEffort": "high",
       "userInvocable": true,
       "agentInvocable": false
+    },
+    {
+      "name": "Reviewer",
+      "model": "deepseek:deepseek-chat",
+      "reasoningEffort": "high",
+      "userInvocable": true,
+      "agentInvocable": false
     }
   ]
 }
 ```
+
+The reviewer pass is on by default and runs the agent named `Reviewer` over every
+implementation; define one as above or set `enable-reviewer: false`.
 
 See [settings](/aether/settings/overview/) for the full schema, and
 [LLM providers](/aether/settings/llm-providers/) for the `model` format. API keys reach the
@@ -167,7 +178,7 @@ empty otherwise.
 | `branch-prefix` | `aether/issue-` | Prefix for branches created from issues. |
 | `aether-version` | `latest` | Aether release to install, or a tag such as `aether-agent-cli-v0.8.1`. |
 | `pull-request-labels` | `aether,automated` | Labels added to pull requests the agent opens. |
-| `enable-reviewer` | `true` | Run the Reviewer agent over implementations. |
+| `enable-reviewer` | `true` | Run the `Reviewer` agent over implementations; needs a `Reviewer` in the settings file. |
 | `zai-api-key` | `""` | Exposed to the agent as `ZAI_API_KEY`. |
 | `deepseek-api-key` | `""` | Exposed to the agent as `DEEPSEEK_API_KEY`. |
 | `openrouter-api-key` | `""` | Exposed to the agent as `OPENROUTER_API_KEY`. |

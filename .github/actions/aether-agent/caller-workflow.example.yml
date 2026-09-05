@@ -8,7 +8,8 @@
 #
 # 2. Check in the settings file named by `settings-file` (default
 #    .aether/github.settings.json) defining the agents that `label-agent-map`
-#    references. A minimal two-agent file:
+#    references, plus a "Reviewer" agent that reviews implementations (or set
+#    `enable-reviewer: false` and drop it). A minimal three-agent file:
 #
 #        {
 #          "agents": [
@@ -21,6 +22,13 @@
 #            },
 #            {
 #              "name": "Builder",
+#              "model": "deepseek:deepseek-chat",
+#              "reasoningEffort": "high",
+#              "userInvocable": true,
+#              "agentInvocable": false
+#            },
+#            {
+#              "name": "Reviewer",
 #              "model": "deepseek:deepseek-chat",
 #              "reasoningEffort": "high",
 #              "userInvocable": true,
