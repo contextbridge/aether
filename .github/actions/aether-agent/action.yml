@@ -145,33 +145,33 @@ runs:
       id: token
       shell: bash
       env:
-        APP_ID: ${{ inputs.app-id }}
-        GH_TOKEN: ${{ inputs.github-token }}
+        GH_TOKEN: ${{ steps.app-token.outputs.token || inputs.github-token }}
         APP_TOKEN: ${{ steps.app-token.outputs.token }}
         APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
       run: |
         set -euo pipefail
 
         if [[ -n "$APP_TOKEN" ]]; then
-          user_id="$(gh api "/users/$APP_SLUG%5Bbot%5D" --jq '.id')"
-          {
-            echo "token=$APP_TOKEN"
-            echo "git-name=$APP_SLUG[bot]"
-            echo "git-email=$user_id+$APP_SLUG[bot]@users.noreply.github.com"
-          } >> "$GITHUB_OUTPUT"
+          login="$APP_SLUG[bot]"
         else
           if [[ -z "$GH_TOKEN" ]]; then
             echo "::error::Provide either 'app-id' with 'app-private-key', or 'github-token'."
             exit 1
           fi
-          user_id="$(gh api /user --jq '.id')"
-          login="$(gh api /user --jq '.login')"
-          {
-            echo "token=$GH_TOKEN"
-            echo "git-name=$login"
-            echo "git-email=$user_id+$login@users.noreply.github.com"
-          } >> "$GITHUB_OUTPUT"
+          # Installation tokens such as secrets.GITHUB_TOKEN cannot call
+          # GET /user, so attribute their commits to github-actions[bot].
+          login="$(gh api /user --jq '.login' 2>/dev/null)" || login="github-actions[bot]"
         fi
+
+        encoded=${login//'['/'%5B'}
+        encoded=${encoded//']'/'%5D'}
+        user_id="$(gh api "/users/$encoded" --jq '.id')"
+
+        {
+          echo "token=$GH_TOKEN"
+          echo "git-name=$login"
+          echo "git-email=$user_id+$login@users.noreply.github.com"
+        } >> "$GITHUB_OUTPUT"
 
     - name: Acknowledge the request
       continue-on-error: true
