@@ -74,9 +74,10 @@ jobs:
       # Optional: install the toolchains your agent needs to build and test
       # this repository. Toolchain steps are caller-owned — the action only
       # installs the aether CLI. These run before the action checks out the
-      # default branch, so add your own shallow checkout first if you need
-      # repo files (mise.toml, lockfiles) here. Pin any third-party actions
-      # you add to a full commit SHA.
+      # default branch (without cleaning), so add your own shallow checkout
+      # first if you need repo files (mise.toml, lockfiles) here; artifacts
+      # these steps produce (node_modules, target) survive into the agent's
+      # workspace. Pin any third-party actions you add to a full commit SHA.
       #
       # - name: Checkout repository
       #   uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

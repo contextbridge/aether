@@ -35,11 +35,12 @@ jobs:
     timeout-minutes: 120
     environment: ci
     steps:
-      # Everything the agent needs to build, lint, and test this repository is
-      # caller-owned toolchain setup; the reusable action only installs the
-      # aether CLI. The action checks out the default branch again with full
-      # history, so this shallow checkout just provides mise.toml and the
-      # lockfiles the toolchain steps below read.
+      # Toolchain setup is caller-owned: the reusable action only installs
+      # the aether CLI. The action checks out the default branch again with
+      # full history and without cleaning, so this shallow checkout exists to
+      # give the steps below the repo files they read (mise.toml, lockfiles)
+      # while the artifacts they produce (node_modules, target) survive into
+      # the agent's workspace.
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

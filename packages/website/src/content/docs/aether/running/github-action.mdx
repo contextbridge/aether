@@ -191,6 +191,8 @@ action refuses it with an error instead of pushing to the fork.
 The action only installs the Aether CLI. If your agents need to build or test the
 repository (compilers, package managers, system libraries), install them in steps before
 the action and add a shallow checkout first — the action re-checks out the default branch
-with full history before creating the agent's branch. Aether's own
+with full history before creating the agent's branch, without cleaning the workspace, so
+artifacts your steps produce (`node_modules`, `target`, virtual environments) are still
+there when the agent runs. Aether's own
 [`aether-agent.yml`](https://github.com/contextbridge/aether/blob/main/.github/workflows/aether-agent.yml)
 is a worked example.
