@@ -1,0 +1,196 @@
+---
+title: GitHub Action
+description: Run Aether agents on issue labels and pull request comments in any repository.
+---
+
+The reusable `aether-agent` action turns GitHub activity into agent work. Applying a
+configured label to an issue makes Aether plan or implement it; a `/aether` comment on a
+pull request asks for feedback or plan implementation. The agent works on its own branch,
+opens a pull request, and reports back with a comment.
+
+The action ships with [Aether](https://github.com/contextbridge/aether) and works in any
+repository: you bring a settings file with your own agents and models, and decide which
+labels trigger which agent.
+
+## What the action does
+
+1. Authenticates as a GitHub App or with a token.
+2. Resolves the trigger into a task: plan, implement, or pull request feedback.
+3. Creates or reuses a branch (fork pull requests are refused rather than pushed to).
+4. Installs the Aether CLI and runs the mapped agent with `aether headless`.
+5. Optionally runs a reviewer pass over implementations.
+6. Commits, pushes, opens a pull request, and comments on the trigger.
+
+Everything else — installing your repository's toolchains (Node, Rust, pnpm, system
+libraries) — stays in your workflow around the action.
+
+## Quick start
+
+Add a caller workflow, check in a settings file, and add the secrets you reference.
+
+```yaml
+# .github/workflows/aether-agent.yml
+name: Aether agent
+
+on:
+  issues:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aether-agent-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+      pull-requests: write
+    if: >-
+      github.event_name == 'issues' ||
+      (github.event.comment.body != null
+       && startsWith(github.event.comment.body, '/aether')
+       && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
+    steps:
+      - name: Run Aether
+        uses: contextbridge/aether/.github/actions/aether-agent@main
+        with:
+          app-id: ${{ secrets.AETHER_APP_ID }}
+          app-private-key: ${{ secrets.AETHER_APP_PRIVATE_KEY }}
+          zai-api-key: ${{ secrets.ZAI_API_KEY }}
+```
+
+Pin `@main` to a commit SHA for production use. A complete annotated template with a
+minimal settings file lives next to the action in
+[`.github/actions/aether-agent/caller-workflow.example.yml`](https://github.com/contextbridge/aether/blob/main/.github/actions/aether-agent/caller-workflow.example.yml).
+
+## Agents and settings
+
+The action runs agents by name with
+[`aether headless --agent <name>`](/aether/running/headless/#agent-selection), so the
+`label-agent-map` must name agents defined in your settings file. A minimal
+`.aether/github.settings.json` with one planning and one building agent:
+
+```json
+{
+  "agents": [
+    {
+      "name": "Planner",
+      "model": "openrouter:vendor/model",
+      "reasoningEffort": "high",
+      "userInvocable": true,
+      "agentInvocable": false
+    },
+    {
+      "name": "Builder",
+      "model": "deepseek:deepseek-chat",
+      "reasoningEffort": "high",
+      "userInvocable": true,
+      "agentInvocable": false
+    }
+  ]
+}
+```
+
+See [settings](/aether/settings/overview/) for the full schema, and
+[LLM providers](/aether/settings/llm-providers/) for the `model` format. API keys reach the
+agent as environment variables (`ZAI_API_KEY`, `DEEPSEEK_API_KEY`,
+`OPENROUTER_API_KEY`), so only the providers you use need secrets.
+
+## Mapping labels to agents
+
+`label-agent-map` is a JSON object from an issue label to the agent and mode that handles
+it. An issue with no matching label uses the `""` entry, which is also the agent for pull
+request comments. The default reproduces Aether's own size-label convention:
+
+```yaml
+label-agent-map: >-
+  {"size:L":{"agent":"Planner","mode":"plan"},
+   "size:M":{"agent":"Complex Builder","mode":"implement"},
+   "size:S":{"agent":"Simple Builder","mode":"implement"},
+   "":{"agent":"Simple Builder","mode":"implement"}}
+```
+
+A repository with a different budget can rewire triggers without forking anything:
+
+```yaml
+label-agent-map: >-
+  {"aether-docs":{"agent":"Docs Writer","mode":"implement"},
+   "size:L":{"agent":"Planner","mode":"plan"},
+   "":{"agent":"Builder","mode":"implement"}}
+```
+
+A `mode` of `plan` writes a plan document into `plans-dir` and opens a draft pull request;
+`implement` builds and pushes the change itself.
+
+## Authentication
+
+Two mutually exclusive options:
+
+- **GitHub App (recommended).** Pass `app-id` and `app-private-key`; the action mints a
+  short-lived installation token scoped to the invoking repository and commits as the App
+  identity. `app-owner` defaults to the repository owner.
+- **Token.** Pass `github-token` with `contents`, `issues`, and `pull-requests` write
+  permission.
+
+`aws-role-to-assume` is independent of both: set it when your settings file uses Bedrock
+models so the action assumes the role via OIDC (`id-token: write` required), and leave it
+empty otherwise.
+
+## Reference
+
+| Input | Default | Description |
+| --- | --- | --- |
+| `github-token` | `""` | Token used when `app-id` is empty. |
+| `app-id` | `""` | GitHub App client id; enables App token minting. |
+| `app-private-key` | `""` | GitHub App private key. |
+| `app-owner` | repository owner | Owner the App token is minted for. |
+| `aws-role-to-assume` | `""` | IAM role ARN for Bedrock via OIDC; empty skips AWS. |
+| `aws-region` | `us-west-2` | Region for the assumed role. |
+| `role-duration-seconds` | `7200` | Assumed role session duration. |
+| `settings-file` | `.aether/github.settings.json` | Settings file defining the agents. |
+| `plans-dir` | `docs/aether/plans` | Directory plans are written to and read from. |
+| `issue-label` | `assign-agent` | Label that triggers the agent on issues. |
+| `comment-prefix` | `/aether` | Prefix that triggers the agent on PR comments. |
+| `implement-plan-command` | `/aether implement-plan` | Comment that implements an existing plan. |
+| `label-agent-map` | size labels (above) | JSON label to `{ agent, mode }` mapping. |
+| `branch-prefix` | `aether/issue-` | Prefix for branches created from issues. |
+| `aether-version` | `latest` | Aether release to install, or a tag such as `v1.2.3`. |
+| `pull-request-labels` | `aether,automated` | Labels added to pull requests the agent opens. |
+| `enable-reviewer` | `true` | Run the Reviewer agent over implementations. |
+| `zai-api-key` | `""` | Exposed to the agent as `ZAI_API_KEY`. |
+| `deepseek-api-key` | `""` | Exposed to the agent as `DEEPSEEK_API_KEY`. |
+| `openrouter-api-key` | `""` | Exposed to the agent as `OPENROUTER_API_KEY`. |
+
+| Output | Description |
+| --- | --- |
+| `mode` | Resolved mode (`plan`, `implement`, or `pr`); empty when the trigger was skipped. |
+| `branch` | Branch the agent ran on. |
+| `pr-number` | Pull request the agent opened, when one was opened. |
+| `pushed` | `true` when the agent pushed commits. |
+
+## Fork safety
+
+Label triggers only affect issues in your repository, so they are safe by default. Comment
+triggers gate on `author_association` (`OWNER`, `MEMBER`, `COLLABORATOR`) in the workflow
+`if:` shown above — keep that guard. When a comment targets a pull request from a fork, the
+action refuses it with an error instead of pushing to the fork.
+
+## Caller-owned toolchains
+
+The action only installs the Aether CLI. If your agents need to build or test the
+repository (compilers, package managers, system libraries), install them in steps before
+the action and add a shallow checkout first — the action re-checks out the default branch
+with full history before creating the agent's branch. Aether's own
+[`aether-agent.yml`](https://github.com/contextbridge/aether/blob/main/.github/workflows/aether-agent.yml)
+is a worked example.
