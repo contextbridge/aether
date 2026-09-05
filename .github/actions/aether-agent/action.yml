@@ -1,0 +1,396 @@
+name: Aether agent
+description: >-
+  Runs the Aether agent on issue labels and comment triggers: resolves the
+  request, prepares a branch, plans or implements, reviews, pushes, opens a
+  pull request, and reports back.
+
+inputs:
+  github-token:
+    description: >-
+      GitHub token with contents, issues, and pull-requests write access. Used
+      for authentication when app-id is empty; ignored otherwise.
+    required: false
+    default: ""
+  app-id:
+    description: >-
+      GitHub App client id. When set (with app-private-key), the action mints
+      an installation token instead of using github-token.
+    required: false
+    default: ""
+  app-private-key:
+    description: GitHub App private key.
+    required: false
+    default: ""
+  app-owner:
+    description: >-
+      Owner the GitHub App token is minted for. Defaults to the repository
+      owner of the invoking workflow.
+    required: false
+    default: ""
+  aws-role-to-assume:
+    description: >-
+      IAM role ARN assumed via OIDC so Bedrock-backed models can run. Leave
+      empty when your settings file does not use Bedrock models.
+    required: false
+    default: ""
+  aws-region:
+    description: AWS region for the assumed role.
+    required: false
+    default: us-west-2
+  role-duration-seconds:
+    description: Duration of the assumed AWS role session in seconds.
+    required: false
+    default: "7200"
+  settings-file:
+    description: >-
+      Path relative to the repository root of the Aether settings file that
+      defines the agents the label-agent-map names.
+    required: false
+    default: .aether/github.settings.json
+  plans-dir:
+    description: Directory plans are written to and read from.
+    required: false
+    default: docs/aether/plans
+  issue-label:
+    description: Label that triggers the agent when applied to an issue.
+    required: false
+    default: assign-agent
+  comment-prefix:
+    description: Prefix that triggers the agent on pull request comments.
+    required: false
+    default: /aether
+  implement-plan-command:
+    description: Comment that implements an existing plan instead of leaving feedback.
+    required: false
+    default: /aether implement-plan
+  label-agent-map:
+    description: >-
+      JSON mapping a triggering issue label (or "" for issues without a
+      matching label) to the agent and mode ("plan" or "implement") that
+      handles it. Pull request comments always run the "" entry's agent.
+    required: false
+    default: >-
+      {"size:L":{"agent":"Planner","mode":"plan"},
+      "size:M":{"agent":"Complex Builder","mode":"implement"},
+      "size:S":{"agent":"Simple Builder","mode":"implement"},
+      "":{"agent":"Simple Builder","mode":"implement"}}
+  branch-prefix:
+    description: Prefix for branches created from issues.
+    required: false
+    default: aether/issue-
+  aether-version:
+    description: Aether release to install, "latest" or a release tag such as "v1.2.3".
+    required: false
+    default: latest
+  pull-request-labels:
+    description: Comma-separated labels added to pull requests the agent opens.
+    required: false
+    default: aether,automated
+  enable-reviewer:
+    description: >-
+      Run the Reviewer agent over implementations before they are pushed.
+      Skipped for plan and pull request feedback tasks regardless.
+    required: false
+    default: "true"
+  zai-api-key:
+    description: ZAI API key, exposed to the agent as ZAI_API_KEY. Leave empty to unset.
+    required: false
+    default: ""
+  deepseek-api-key:
+    description: DeepSeek API key, exposed to the agent as DEEPSEEK_API_KEY. Leave empty to unset.
+    required: false
+    default: ""
+  openrouter-api-key:
+    description: OpenRouter API key, exposed to the agent as OPENROUTER_API_KEY. Leave empty to unset.
+    required: false
+    default: ""
+
+outputs:
+  mode:
+    description: Resolved mode (plan, implement, or pr). Empty when the trigger was skipped.
+    value: ${{ steps.target.outputs.mode }}
+  branch:
+    description: Branch the agent ran on.
+    value: ${{ steps.target.outputs.branch }}
+  pr-number:
+    description: Pull request the agent opened, when one was opened.
+    value: ${{ steps.pr.outputs.pr_number }}
+  pushed:
+    description: Set to "true" when the agent pushed commits.
+    value: ${{ steps.push.outputs.pushed }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve repository name
+      id: repo
+      shell: bash
+      run: echo "name=${GITHUB_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+
+    - name: Mint GitHub App token
+      id: app-token
+      if: inputs.app-id != ''
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+      with:
+        client-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        owner: ${{ inputs.app-owner || github.repository_owner }}
+        repositories: ${{ steps.repo.outputs.name }}
+        permission-contents: write
+        permission-pull-requests: write
+        permission-issues: write
+        permission-workflows: write
+
+    - name: Resolve credentials
+      id: token
+      shell: bash
+      env:
+        APP_ID: ${{ inputs.app-id }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+      run: |
+        set -euo pipefail
+
+        if [[ -n "$APP_TOKEN" ]]; then
+          user_id="$(gh api "/users/$APP_SLUG%5Bbot%5D" --jq '.id')"
+          {
+            echo "token=$APP_TOKEN"
+            echo "git-name=$APP_SLUG[bot]"
+            echo "git-email=$user_id+$APP_SLUG[bot]@users.noreply.github.com"
+          } >> "$GITHUB_OUTPUT"
+        else
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "::error::Provide either 'app-id' with 'app-private-key', or 'github-token'."
+            exit 1
+          fi
+          user_id="$(gh api /user --jq '.id')"
+          login="$(gh api /user --jq '.login')"
+          {
+            echo "token=$GH_TOKEN"
+            echo "git-name=$login"
+            echo "git-email=$user_id+$login@users.noreply.github.com"
+          } >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Acknowledge the request
+      continue-on-error: true
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        REPO: ${{ github.repository }}
+        EVENT_NAME: ${{ github.event_name }}
+        COMMENT_ID: ${{ github.event.comment.id }}
+      run: |
+        set -euo pipefail
+
+        case "$EVENT_NAME" in
+          issue_comment) path="/repos/$REPO/issues/comments/$COMMENT_ID/reactions" ;;
+          pull_request_review_comment) path="/repos/$REPO/pulls/comments/$COMMENT_ID/reactions" ;;
+          *) exit 0 ;;
+        esac
+
+        gh api --silent --method POST "$path" -f content=eyes
+
+    - name: Resolve target
+      id: target
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        GH_REPO: ${{ github.repository }}
+        EVENT_NAME: ${{ github.event_name }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        ISSUE_NUMBER: ${{ github.event.issue.number }}
+        REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
+        IS_PULL_REQUEST: ${{ github.event.issue.pull_request != null }}
+        LABEL_NAME: ${{ github.event.label.name }}
+        ISSUE_LABEL: ${{ inputs.issue-label }}
+        COMMENT_PREFIX: ${{ inputs.comment-prefix }}
+        IMPLEMENT_PLAN_COMMAND: ${{ inputs.implement-plan-command }}
+        LABEL_AGENT_MAP: ${{ inputs.label-agent-map }}
+        BRANCH_PREFIX: ${{ inputs.branch-prefix }}
+        PLANS_DIR: ${{ inputs.plans-dir }}
+      run: ${{ github.action_path }}/scripts/resolve-target
+
+    - name: Checkout repository
+      if: steps.target.outputs.mode != ''
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        fetch-depth: 0
+        ref: ${{ github.event.repository.default_branch }}
+        token: ${{ steps.token.outputs.token }}
+        persist-credentials: false
+
+    - name: Configure AWS credentials
+      if: inputs.aws-role-to-assume != '' && steps.target.outputs.mode != ''
+      uses: $/.github/actions/configure-aws-credentials
+      with:
+        role-to-assume: ${{ inputs.aws-role-to-assume }}
+        aws-region: ${{ inputs.aws-region }}
+        role-duration-seconds: ${{ inputs.role-duration-seconds }}
+
+    - name: Prepare branch
+      id: branch
+      if: steps.target.outputs.mode != ''
+      shell: bash
+      env:
+        GIT_NAME: ${{ steps.token.outputs.git-name }}
+        GIT_EMAIL: ${{ steps.token.outputs.git-email }}
+        BRANCH: ${{ steps.target.outputs.branch }}
+        BASE: ${{ steps.target.outputs.base }}
+      run: |
+        set -euo pipefail
+
+        git config user.name "$GIT_NAME"
+        git config user.email "$GIT_EMAIL"
+
+        if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+          git switch "$BRANCH"
+        else
+          git switch --create "$BRANCH" "origin/$BASE"
+        fi
+
+        echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+    - name: Install Aether
+      id: aether
+      if: steps.target.outputs.mode != ''
+      shell: bash
+      env:
+        AETHER_VERSION: ${{ inputs.aether-version }}
+      run: |
+        set -euo pipefail
+
+        case "$AETHER_VERSION" in
+          latest | "")
+            url="https://github.com/contextbridge/aether/releases/latest/download/aether-agent-cli-installer.sh"
+            ;;
+          *)
+            url="https://github.com/contextbridge/aether/releases/$AETHER_VERSION/download/aether-agent-cli-installer.sh"
+            ;;
+        esac
+
+        export CARGO_HOME="$RUNNER_TEMP/aether-cargo"
+        curl --proto '=https' --tlsv1.2 -LsSf "$url" | sh -s -- --no-modify-path
+        "$CARGO_HOME/bin/aether" --version
+        echo "bin=$CARGO_HOME/bin/aether" >> "$GITHUB_OUTPUT"
+
+    - name: Build task
+      id: task
+      if: steps.target.outputs.mode != ''
+      shell: bash
+      env:
+        TASK_KIND: ${{ steps.target.outputs.task_kind }}
+        NUMBER: ${{ steps.target.outputs.number }}
+        PLAN_FILE: ${{ steps.target.outputs.plan_file }}
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+      run: ${{ github.action_path }}/scripts/build-task
+
+    - name: Run Aether
+      shell: bash
+      if: steps.target.outputs.mode != ''
+      env:
+        AETHER_BIN: ${{ steps.aether.outputs.bin }}
+        ZAI_API_KEY: ${{ inputs.zai-api-key }}
+        DEEPSEEK_API_KEY: ${{ inputs.deepseek-api-key }}
+        OPENROUTER_API_KEY: ${{ inputs.openrouter-api-key }}
+        AGENT: ${{ steps.target.outputs.agent }}
+        TASK_PATH: ${{ steps.task.outputs.path }}
+        SETTINGS_FILE: ${{ inputs.settings-file }}
+      run: |
+        set -euo pipefail
+        env -u GH_TOKEN -u GITHUB_TOKEN "$AETHER_BIN" headless \
+          --agent "$AGENT" \
+          --cwd "$GITHUB_WORKSPACE" \
+          --settings-file "$SETTINGS_FILE" \
+          --output json \
+          --events text,tool_call,tool_result,tool_error,turn_ended \
+          "$TASK_PATH" \
+          | tee "$RUNNER_TEMP/aether-headless.jsonl"
+
+    - name: Review implementation
+      if: >-
+        inputs.enable-reviewer == 'true'
+        && steps.target.outputs.mode != ''
+        && steps.target.outputs.mode != 'plan'
+        && steps.target.outputs.task_kind != 'pull_request_feedback'
+      env:
+        AETHER_BIN: ${{ steps.aether.outputs.bin }}
+        ZAI_API_KEY: ${{ inputs.zai-api-key }}
+        DEEPSEEK_API_KEY: ${{ inputs.deepseek-api-key }}
+        OPENROUTER_API_KEY: ${{ inputs.openrouter-api-key }}
+        START_SHA: ${{ steps.branch.outputs.sha }}
+        TASK_PATH: ${{ steps.task.outputs.path }}
+        SETTINGS_FILE: ${{ inputs.settings-file }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        env -u GH_TOKEN -u GITHUB_TOKEN "$AETHER_BIN" headless \
+          --agent Reviewer \
+          --cwd "$GITHUB_WORKSPACE" \
+          --settings-file "$SETTINGS_FILE" \
+          --output json \
+          --events text,tool_call,tool_result,tool_error,turn_ended \
+          "$TASK_PATH" \
+          | tee -a "$RUNNER_TEMP/aether-headless.jsonl"
+
+    - name: Commit and push
+      id: push
+      if: steps.target.outputs.mode != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        GH_REPO: ${{ github.repository }}
+        BRANCH: ${{ steps.target.outputs.branch }}
+        NUMBER: ${{ steps.target.outputs.number }}
+        MODE: ${{ steps.target.outputs.mode }}
+        PLANS_DIR: ${{ inputs.plans-dir }}
+        PLAN_FILE: ${{ steps.target.outputs.plan_file }}
+        START_SHA: ${{ steps.branch.outputs.sha }}
+      run: ${{ github.action_path }}/scripts/commit-and-push
+
+    - name: Open pull request
+      id: pr
+      if: >-
+        steps.target.outputs.mode != ''
+        && steps.target.outputs.mode != 'pr'
+        && steps.push.outputs.pushed == 'true'
+      shell: bash
+      env:
+        MODE: ${{ steps.target.outputs.mode }}
+        ISSUE_TITLE: ${{ github.event.issue.title }}
+        COMMENT_PREFIX: ${{ inputs.comment-prefix }}
+        IMPLEMENT_PLAN_COMMAND: ${{ inputs.implement-plan-command }}
+        PR_LABELS: ${{ inputs.pull-request-labels }}
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        GH_REPO: ${{ github.repository }}
+        BRANCH: ${{ steps.target.outputs.branch }}
+        BASE: ${{ steps.target.outputs.base }}
+        NUMBER: ${{ steps.target.outputs.number }}
+        SUBJECT: ${{ steps.push.outputs.subject }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: ${{ github.action_path }}/scripts/open-pull-request
+
+    - name: Mark pull request ready
+      if: steps.push.outputs.implemented == 'true'
+      continue-on-error: true
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        GH_REPO: ${{ github.repository }}
+        NUMBER: ${{ steps.target.outputs.number }}
+      run: gh pr ready "$NUMBER"
+
+    - name: Report back
+      if: always() && steps.target.outputs.number != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        GH_REPO: ${{ github.repository }}
+        MODE: ${{ steps.target.outputs.mode }}
+        NUMBER: ${{ steps.target.outputs.number }}
+        BRANCH: ${{ steps.target.outputs.branch }}
+        PUSHED: ${{ steps.push.outputs.pushed }}
+        FAILED: ${{ contains(fromJSON('["failure", "cancelled"]'), job.status) }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: ${{ github.action_path }}/scripts/report-back
