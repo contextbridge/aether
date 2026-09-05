@@ -79,7 +79,9 @@ inputs:
     required: false
     default: aether/issue-
   aether-version:
-    description: Aether release to install, "latest" or a release tag such as "v1.2.3".
+    description: >-
+      Aether release to install: "latest" or a release tag such as
+      "aether-agent-cli-v0.8.1".
     required: false
     default: latest
   pull-request-labels:
@@ -266,7 +268,7 @@ runs:
             url="https://github.com/contextbridge/aether/releases/latest/download/aether-agent-cli-installer.sh"
             ;;
           *)
-            url="https://github.com/contextbridge/aether/releases/$AETHER_VERSION/download/aether-agent-cli-installer.sh"
+            url="https://github.com/contextbridge/aether/releases/download/$AETHER_VERSION/aether-agent-cli-installer.sh"
             ;;
         esac
 
