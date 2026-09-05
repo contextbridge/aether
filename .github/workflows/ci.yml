@@ -112,6 +112,29 @@ jobs:
       - name: Test evals
         run: pnpm evals:test
 
+  actions:
+    name: Actions lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: ShellCheck automation scripts
+        run: shellcheck --severity=warning .github/actions/aether-agent/scripts/*
+      - name: Parse workflow and action YAML
+        run: |
+          find .github -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 |
+            xargs -0 python3 -c '
+              import sys, yaml
+
+              for path in sorted(sys.argv[1:]):
+                  with open(path) as fh:
+                      yaml.safe_load(fh)
+                  print(f"ok: {path}")
+          '
+
   docs:
     name: Docs
     runs-on: ubuntu-latest
