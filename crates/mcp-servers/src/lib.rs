@@ -7,6 +7,9 @@ pub(crate) mod search;
 
 pub mod workspace_paths;
 
+#[cfg(any(test, feature = "test-helpers"))]
+pub mod testing;
+
 #[cfg(any(feature = "all", feature = "subagents"))]
 pub mod setup;
 #[cfg(any(feature = "all", feature = "subagents"))]

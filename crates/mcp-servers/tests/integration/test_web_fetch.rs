@@ -1,56 +1,6 @@
 use mcp_servers::coding::error::WebFetchError;
-use mcp_servers::coding::tools::web_fetch::{HttpClient, HttpResponse, WebFetchInput, WebFetcher};
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-
-#[derive(Clone)]
-enum FakeHttpResult {
-    Ok(HttpResponse),
-    Timeout(u64),
-    RequestFailed(String),
-}
-
-#[derive(Clone, Default)]
-struct FakeHttpClient {
-    responses: Arc<Mutex<HashMap<String, FakeHttpResult>>>,
-}
-
-impl FakeHttpClient {
-    fn with_html(self, url: &str, body: &str) -> Self {
-        self.with_response(url, HttpResponse { final_url: url.to_string(), status_code: 200, body: body.to_string() })
-    }
-
-    fn with_response(self, url: &str, response: HttpResponse) -> Self {
-        self.responses.lock().unwrap().insert(url.to_string(), FakeHttpResult::Ok(response));
-        self
-    }
-
-    fn with_timeout(self, url: &str, timeout_ms: u64) -> Self {
-        self.responses.lock().unwrap().insert(url.to_string(), FakeHttpResult::Timeout(timeout_ms));
-        self
-    }
-
-    fn with_request_failed(self, url: &str, message: &str) -> Self {
-        self.responses.lock().unwrap().insert(url.to_string(), FakeHttpResult::RequestFailed(message.to_string()));
-        self
-    }
-}
-
-impl HttpClient for FakeHttpClient {
-    fn fetch(
-        &self,
-        url: &str,
-        _timeout: Duration,
-    ) -> impl std::future::Future<Output = Result<HttpResponse, WebFetchError>> + Send {
-        std::future::ready(match self.responses.lock().unwrap().get(url).cloned() {
-            Some(FakeHttpResult::Ok(response)) => Ok(response),
-            Some(FakeHttpResult::Timeout(timeout_ms)) => Err(WebFetchError::Timeout(timeout_ms)),
-            Some(FakeHttpResult::RequestFailed(message)) => Err(WebFetchError::RequestFailed(message)),
-            None => Err(WebFetchError::RequestFailed(format!("No test response configured for URL: {url}"))),
-        })
-    }
-}
+use mcp_servers::coding::tools::web_fetch::{HttpResponse, WebFetchInput, WebFetcher};
+use mcp_servers::testing::FakeHttpClient;
 
 fn html_page(title: &str, body: &str) -> String {
     format!("<html><head><title>{title}</title></head><body>{body}</body></html>")
@@ -58,7 +8,7 @@ fn html_page(title: &str, body: &str) -> String {
 
 #[tokio::test]
 async fn test_fetch_real_page() {
-    let fetcher = WebFetcher::with_client(FakeHttpClient::default().with_html(
+    let fetcher = WebFetcher::with_client(FakeHttpClient::new().with_html(
         "https://example.com/html",
         &html_page("Herman Melville", "<h1>Moby-Dick</h1><p>By Herman Melville</p>"),
     ));
@@ -75,7 +25,7 @@ async fn test_fetch_real_page() {
 
 #[tokio::test]
 async fn test_fetch_with_redirect() {
-    let fetcher = WebFetcher::with_client(FakeHttpClient::default().with_response(
+    let fetcher = WebFetcher::with_client(FakeHttpClient::new().with_response(
         "https://example.com/redirect",
         HttpResponse {
             final_url: "https://example.com/html".to_string(),
@@ -95,7 +45,7 @@ async fn test_fetch_with_redirect() {
 #[tokio::test]
 async fn test_fetch_http_upgrades_to_https() {
     let fetcher = WebFetcher::with_client(
-        FakeHttpClient::default().with_html("https://example.com/html", &html_page("Upgraded", "<h1>HTTPS</h1>")),
+        FakeHttpClient::new().with_html("https://example.com/html", &html_page("Upgraded", "<h1>HTTPS</h1>")),
     );
     let result = fetcher
         .fetch(WebFetchInput { url: "http://example.com/html".to_string(), prompt: None, timeout: Some(10_000) })
@@ -107,7 +57,7 @@ async fn test_fetch_http_upgrades_to_https() {
 
 #[tokio::test]
 async fn test_fetch_timeout() {
-    let fetcher = WebFetcher::with_client(FakeHttpClient::default().with_timeout("https://example.com/delay", 1000));
+    let fetcher = WebFetcher::with_client(FakeHttpClient::new().with_timeout("https://example.com/delay", 1000));
     let result = fetcher
         .fetch(WebFetchInput { url: "https://example.com/delay".to_string(), prompt: None, timeout: Some(1000) })
         .await;
@@ -130,7 +80,7 @@ async fn test_fetch_invalid_url() {
 #[tokio::test]
 async fn test_fetch_with_prompt() {
     let fetcher = WebFetcher::with_client(
-        FakeHttpClient::default().with_html("https://example.com/html", &html_page("Prompt", "<h1>Main heading</h1>")),
+        FakeHttpClient::new().with_html("https://example.com/html", &html_page("Prompt", "<h1>Main heading</h1>")),
     );
     // The prompt is currently just for documentation, but we should handle it gracefully
     let result = fetcher
@@ -149,7 +99,7 @@ async fn test_fetch_with_prompt() {
 #[tokio::test]
 async fn test_fetch_non_existent_host() {
     let fetcher = WebFetcher::with_client(
-        FakeHttpClient::default()
+        FakeHttpClient::new()
             .with_request_failed("https://this-domain-definitely-does-not-exist-12345.com/", "dns error"),
     );
     let result = fetcher
@@ -167,7 +117,7 @@ async fn test_fetch_non_existent_host() {
 #[tokio::test]
 async fn test_fetcher_reusable() {
     // Test that a single WebFetcher can be reused for multiple requests without relying on an external service.
-    let client = FakeHttpClient::default()
+    let client = FakeHttpClient::new()
         .with_html("https://example.com/page1", "<html><body><h1>Page 1</h1></body></html>")
         .with_html("https://example.com/page2", "<html><body><h1>Page 2</h1></body></html>");
     let fetcher = WebFetcher::with_client(client);
