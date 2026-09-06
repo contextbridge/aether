@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.23](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.22...aether-llm-codegen-v0.2.23) - 2026-09-06
+
+### Other
+
+- *(llm)* Add astra to codex provider and update context window sizes
+
 ## [0.2.22](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.21...aether-llm-codegen-v0.2.22) - 2026-09-03
 
 ### Fixed

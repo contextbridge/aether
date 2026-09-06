@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.2](https://github.com/contextbridge/aether/compare/aether-wisp-v0.6.1...aether-wisp-v0.6.2) - 2026-09-06
+
+### Fixed
+
+- *(wisp)* render finished bash tool previews as completed actions ([#433](https://github.com/contextbridge/aether/pull/433))
+
 ## [0.6.1](https://github.com/contextbridge/aether/compare/aether-wisp-v0.6.0...aether-wisp-v0.6.1) - 2026-09-04
 
 ### Fixed
