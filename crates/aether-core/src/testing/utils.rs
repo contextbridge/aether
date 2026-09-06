@@ -207,6 +207,7 @@ struct AgentTestConfig {
     mcp_server: Option<(String, FakeMcpServer)>,
     initial_messages: Vec<ChatMessage>,
     system_prompt: Option<Prompt>,
+    session_affinity_key: Option<String>,
     compaction: Option<CompactionConfig>,
     model_settings: Option<ModelSettings>,
 }
@@ -241,6 +242,7 @@ impl TestAgentBuilder {
                 mcp_server: Some(("test".to_string(), FakeMcpServer::new())),
                 initial_messages: Vec::new(),
                 system_prompt: None,
+                session_affinity_key: None,
                 compaction: None,
                 model_settings: None,
             },
@@ -324,6 +326,13 @@ impl TestAgentBuilder {
         self
     }
 
+    /// Set the session affinity key attached to every LLM call; defaults to a
+    /// fresh random key per agent.
+    pub fn session_affinity_key(mut self, key: impl Into<String>) -> Self {
+        self.agent.session_affinity_key = Some(key.into());
+        self
+    }
+
     /// Configure context compaction settings.
     pub fn compaction_config(mut self, config: CompactionConfig) -> Self {
         self.agent.compaction = Some(config);
@@ -403,6 +412,9 @@ impl TestAgentBuilder {
         }
         if let Some(prompt) = config.system_prompt {
             builder = builder.system_prompt(prompt);
+        }
+        if let Some(key) = config.session_affinity_key {
+            builder = builder.session_affinity_key(key);
         }
         if let Some(compaction) = config.compaction {
             builder = builder.compaction(compaction);
