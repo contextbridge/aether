@@ -3,7 +3,7 @@ title: Prompts
 description: Control agent behavior with prompt sources.
 ---
 
-Aether assembles each agent's system prompt from user-supplied prompt sources and MCP servers specified in an agent's `prompts` field. There is no built-in system prompt, so you control every token in context.
+Aether assembles each agent's system prompt from the prompt sources in the agent's `prompts` field, followed by instructions from its configured MCP servers (`mcps`). There is no built-in system prompt, so you control every token in context.
 
 ## Prompt sources
 
@@ -71,7 +71,7 @@ In this user-level example, `PLANNER.md` is loaded from the Aether home, while `
 
 ## Agent prompt files
 
-The onboarding wizard writes a single base prompt file, `SYSTEM.md`, that is shared by every agent it creates:
+The onboarding wizard writes a single base prompt file, `SYSTEM.md`, that agents inherit by default:
 
 ```markdown title="SYSTEM.md"
 # System Instructions

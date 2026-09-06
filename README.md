@@ -1,6 +1,6 @@
 # Aether
 
-**[Website](https://aether-agent.io)** | **[Quickstart Docs](https://aether-agent.io/getting-started/overview/#getting-started)**
+**[Website](https://aether-agent.io)** | **[Quickstart Docs](https://aether-agent.io/getting-started/overview/)**
 
 [![CI](https://github.com/contextbridge/aether/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/contextbridge/aether/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -38,7 +38,7 @@ Aether takes a different approach. Agents begin as blank slates with _no_ system
 
 - **Your Prompt**: System prompts are just arrays of markdown files. Edit and compose instructions however you wish. It doesn't matter if you name your files `CLAUDE.md`, `AGENTS.md`, or `THE_FUTURE.md`.
 - **Your Tools**: Aether agents get tools _exclusively_ via [MCP](https://modelcontextprotocol.io/) servers. Extend capabilities using _any_ language you like. Local and remote servers are supported (including OAuth). And Aether ships with 1st-party MCPs for file system operations, lsp integration, sub-agents, skills and more. Connect as many MCPs as you'd like without blowing out your context window as progressive discovery is built into the harness.
-- **Your Model**: Anthropic, OpenAI, OpenRouter, DeepSeek, Fireworks AI, Gemini, Microsoft Foundry, Moonshot, ZAI, Llama.cpp, and Ollama are [supported out of the box](https://aether-agent.io/aether/configuration/llm-providers/). Bring your own provider via the `StreamingModelProvider` trait, or [alloy models together](https://aether-agent.io/aether/configuration/llm-providers/#alloying) to combine their strengths.
+- **Your Model**: Anthropic, OpenAI, OpenRouter, DeepSeek, Fireworks AI, Gemini, Microsoft Foundry, Moonshot, ZAI, Llama.cpp, and Ollama are [supported out of the box](https://aether-agent.io/aether/settings/llm-providers/). Bring your own provider via the `StreamingModelProvider` trait, or [alloy models together](https://aether-agent.io/aether/settings/llm-providers/#alloying) to combine their strengths.
 - **Your Interface**: 
   - **TUI**: Aether's TUI supports syntax highlighting, PR-style comments on git diffs to give feedback to your agent, custom themes and more.
   - **IDE/Editor**: Aether is an [ACP](https://agentclientprotocol.com/get-started/introduction) agent, so you can use it with any client that supports ACP (e.g. Zed).

@@ -70,6 +70,8 @@ Each root task tree is stored in one JSONL file when persistent storage is enabl
 | `treeId`    | `string`  | Only return tasks in one tree, identified by its root task ID.                       |
 | `readyOnly` | `boolean` | Only return tasks that are ready to start (pending with all dependencies completed).  |
 
+Filters are mutually exclusive: when several are provided, only one is applied, in the order `readyOnly`, `treeId`, `assignee`, `status`. With no filters, all tasks are returned.
+
 ## Examples
 
 Create a root task:

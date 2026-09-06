@@ -163,8 +163,9 @@ A `result` message is always emitted last (unless the stream errors), so it is a
 
 ### Token usage and estimated cost
 
-Aether exposes accounting as a domain-level `usage` message rather than an ACP
-extension notification:
+Aether exposes accounting as a domain-level `usage` message in the prompt
+stream (delivered over a private `_aether/session_usage` ACP extension
+notification):
 
 ```ts
 for await (const message of session.prompt("Implement the feature")) {
@@ -331,3 +332,5 @@ await AetherSession.start({
 ```
 
 Set `auth: "none"` only when a trusted proxy injects or signs provider authentication.
+
+Overrides also accept `requestModel` (send a different model id in requests while keeping the catalog identity) and `inferenceProfileArn` (route Bedrock requests through an application inference profile). See [Provider overrides](/aether/settings/llm-providers/#provider-overrides) for details.

@@ -23,7 +23,7 @@ This tells the agent to create a fresh session. The conversation history is clea
 /resume
 ```
 
-This asks the agent for a list of previous sessions. A picker appears listing available sessions — type to fuzzy-search by title or path. When the terminal is wide enough, a preview panel shows each session's path, last-updated time, model, mode, tool-call count, and recent messages. Select one to restore it — the conversation history and configuration for that saved session are loaded from the agent.
+This asks the agent for a list of previous sessions. A picker appears listing available sessions — type to fuzzy-search by title or path. When the terminal is wide enough, a preview panel shows each session's path, model, mode, tool-call count, and recent messages. Select one to restore it — the conversation history and configuration for that saved session are loaded from the agent.
 
 ## Session state
 
@@ -32,7 +32,7 @@ Each session tracks:
 | State                | Description                              |
 | -------------------- | ---------------------------------------- |
 | Session ID           | Unique identifier                        |
-| Title                | Agent-generated summary                  |
+| Title                | First line of the session's first user prompt (truncated) |
 | Working directory    | The directory the session was started in |
 | Config selections    | Model, reasoning effort, mode, etc.      |
 | Conversation history | Full message history (stored by agent)   |

@@ -153,6 +153,7 @@ Available event kinds:
 | `context_compaction_ended`   | Context compaction finished (completed, failed, or cancelled). |
 | `context_compaction_result`  | Context compaction completed.                                  |
 | `context_usage`              | Token usage update.                                            |
+| `session_usage`              | Per-call token usage and estimated cost, plus session totals.  |
 | `context_cleared`            | Context was cleared.                                           |
 | `turn_started`               | Turn processing began.                                         |
 | `turn_ended`                 | Turn completed, failed, or was cancelled.                      |
@@ -217,4 +218,4 @@ cat schema.json | aether generate --model zai:glm-5.1 --prompt-file -
 | `--reasoning-effort` | `minimal \| low \| medium \| high \| xhigh \| max` | Reasoning effort for models that support extended thinking.              |
 | `--output`           | `text \| pretty \| json`                      | Output format. `text` prints the raw response; `json`/`pretty` wrap it as `{ "text": "<response>", "model": "<model>" }`. Defaults to `text`. |
 
-See [Getting Started](/getting-started/overview/) and [Settings](/aether/settings/overview/#agents) for project scaffolding details.
+See [Getting Started](/getting-started/overview/) and [Settings](/aether/settings/overview/#how-do-i-define-an-agent) for project scaffolding details.

@@ -9,7 +9,7 @@ The default way to use Aether is its terminal UI: a full-screen ACP client for c
 aether
 ```
 
-If no agents are configured in your user or project settings, Aether starts onboarding first. After onboarding, the terminal UI launches against the same `aether acp` server used by editor integrations.
+If no agents are configured in your user or project settings, Aether starts onboarding first. After onboarding, the terminal UI launches against the same `aether acp` server used by editor integrations. If you cancel onboarding — or the chosen provider's credentials still aren't set when it finishes — Aether exits instead of launching the terminal UI.
 
 ## Features
 
@@ -36,11 +36,31 @@ If no agents are configured in your user or project settings, Aether starts onbo
 ├──────────────────────────────────────────┤
 │  Prompt input          [@file] [/command]│
 ├──────────────────────────────────────────┤
-│  agent · mode · model   ░░░░ · 45%      │
+│  mode · model · reasoning  ░░░░ · 45%   │
 └──────────────────────────────────────────┘
 ```
 
 The status line shows the active mode, model, reasoning effort, MCP state, and context usage. Segments are configurable in Wisp settings — see [Settings & Themes](/aether/terminal/settings/).
+
+## Plan review screen
+
+When an agent submits a plan for review, Wisp opens a full-screen review view with a heading outline on the left and the plan document on the right.
+
+| Key | Action |
+| --- | --- |
+| `j` / `k`, `↑` / `↓` | Move the cursor through the plan or outline |
+| `g` / `G` | Jump to the start or end |
+| `n` / `p` | Jump to the next / previous heading |
+| `h` / `l` | Focus the outline / document pane |
+| `Enter` | In the outline, jump to the selected heading |
+| `c` | Draft a comment at the cursor |
+| `u` | Remove the last queued comment |
+| `a` | Approve the plan |
+| `r` | Request changes, sending queued comments as feedback |
+| `Esc` | Close the review without a decision |
+| `?` | Toggle the shortcut overlay |
+
+Approving or requesting changes resolves the plan review and returns the decision — plus any comments — to the agent.
 
 ## Logs
 
