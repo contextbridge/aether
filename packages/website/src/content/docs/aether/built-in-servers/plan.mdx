@@ -49,7 +49,7 @@ The server advertises one MCP prompt named `plan`. It accepts one required `ARGU
 
 ## Submit command override
 
-Any trailing args after plan flags are treated as an external submit command. When `submit_plan` is called, Aether appends the resolved absolute plan path as the final command argument and returns the command's stdout as feedback.
+Any trailing args after plan flags are treated as an external submit command. When `submit_plan` is called, Aether appends the resolved absolute plan path as the final command argument and returns the command's stdout as feedback. The external-command path always resolves to `approved: false` with the stdout as `feedback`; a non-zero exit from the command is returned as an error.
 
 ```json title=".aether/mcp.json"
 {
@@ -78,7 +78,7 @@ Without a submit command, `submit_plan` uses MCP elicitation and the client disp
 
 | Field      | Type     | Description                                                              |
 | ---------- | -------- | ------------------------------------------------------------------------ |
-| `planName` | `string` | Stable plan identifier using only letters, numbers, dashes, underscores. |
+| `planName` | `string` | Stable plan identifier using only letters, numbers, dashes, underscores. It must be non-empty and cannot start or end with a dash or underscore. |
 | `content`  | `string` | Markdown plan body.                                                      |
 
 ### Output

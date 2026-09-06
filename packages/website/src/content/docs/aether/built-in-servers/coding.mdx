@@ -39,9 +39,9 @@ Permission modes:
 
 | Tool         | Description                                          |
 | ------------ | ---------------------------------------------------- |
-| `read_file`  | Read a file with optional line range.                |
-| `write_file` | Write content to a file, creating or overwriting it. |
-| `edit_file`  | Exact string replacement within a file.              |
+| `read_file`  | Read a file with an optional line range (defaults to 2000 lines). |
+| `write_file` | Write content to a file. Overwriting an existing file requires reading it with `read_file` first. |
+| `edit_file`  | Exact string replacement, applied as an atomic batch (if one edit fails, no edits are applied). Requires reading the file with `read_file` first. |
 | `list_files` | List directory contents with metadata.               |
 
 ## Search
@@ -56,7 +56,7 @@ Permission modes:
 
 | Tool                   | Description                                                                                     |
 | ---------------------- | ----------------------------------------------------------------------------------------------- |
-| `bash`                 | Execute a shell command. Pass `timeout` to cap execution time (max 600000 ms), or `run_in_background` to run it as a background MCP task that returns its complete output at completion. |
+| `bash`                 | Execute a shell command. Pass `timeout` to cap execution time (max 600000 ms), or `run_in_background` to run it as a background MCP task that returns its complete output at completion. Background mode requires the client to support MCP Tasks. |
 
 Because `bash` spawns real subprocesses, it composes with [deferred (proxied) tools](/aether/settings/mcp-servers/#merging-and-deferred-tool-behavior) from other MCP servers via the `aether mcp` CLI — pipelines, redirects, and command substitution all work.
 
