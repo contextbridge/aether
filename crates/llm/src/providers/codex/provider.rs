@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tracing::debug;
 
 const CODEX_API_BASE: &str = "https://chatgpt.com/backend-api/codex";
-const CODEX_CLIENT_VERSION: &str = "0.144.0";
+const CODEX_CLIENT_VERSION: &str = "0.153.4";
 
 #[derive(Clone)]
 pub struct CodexProvider {
@@ -172,7 +172,7 @@ mod tests {
         assert_eq!(captured.body["store"], false);
         assert_eq!(captured.body["stream"], true);
         assert_eq!(captured.headers["chatgpt-account-id"], "account-1");
-        assert_eq!(captured.headers["version"], "0.144.0");
+        assert_eq!(captured.headers["version"], "0.153.4");
         assert_eq!(captured.headers["accept"], "text/event-stream");
         assert!(captured.headers.get("x-openai-internal-codex-responses-lite").is_none());
         assert!(captured.headers.get("OpenAI-Beta").is_none());
