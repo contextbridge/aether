@@ -118,7 +118,7 @@ pub async fn execute_command(
                     process_group.kill();
                     let _ = tokio::time::timeout(Duration::from_secs(5), &mut child_task).await;
                     let display_meta = ToolDisplayMeta::new(
-                        "Run command",
+                        "Ran",
                         format!("{} (exit -1, timed out)", truncate(&args.command, 40)),
                     );
                     return Ok(BashOutput {
@@ -145,8 +145,7 @@ pub async fn execute_command(
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let exit_code = output.status.code().unwrap_or(-1);
-    let display_meta =
-        ToolDisplayMeta::new("Run command", format!("{} (exit {exit_code})", truncate(&args.command, 40)));
+    let display_meta = ToolDisplayMeta::new("Ran", format!("{} (exit {exit_code})", truncate(&args.command, 40)));
 
     Ok(BashOutput { output: format!("{stdout}{stderr}"), exit_code, killed: false, meta: Some(display_meta.into()) })
 }

@@ -179,12 +179,12 @@ fn completed_sub_agent_bash_tool_renders_a_highlighted_command() {
     assert!(text.contains(&format!("bash {command}")), "command should share the tool row: {text:?}");
     let command_start = u16::try_from(text[..text.find(command).expect("command position")].width()).unwrap();
     let gap = conversation.cell((conversation.area.left() + command_start - 1, row)).expect("gap before command");
-    assert_eq!(gap.bg, ui.app().theme().background, "the gap should use the normal background");
+    assert_eq!(gap.bg, Color::Reset, "the gap should not set a background");
     let cells = (command_start..command_start + u16::try_from(command.width()).unwrap())
         .filter_map(|offset| conversation.cell((conversation.area.left() + offset, row)))
         .filter(|cell| cell.symbol() != " ")
         .collect::<Vec<_>>();
-    assert!(cells.iter().all(|cell| cell.bg == ui.app().theme().code_bg), "command should use the code background");
+    assert!(cells.iter().all(|cell| cell.bg == Color::Reset), "command should sit on the terminal background");
     let keyword = cells.iter().find(|cell| cell.symbol() == "i").expect("if keyword");
     let variable = cells.iter().find(|cell| cell.symbol() == "$").expect("shell variable");
     assert_ne!(keyword.fg, variable.fg, "shell keywords and variables should use distinct token colors");

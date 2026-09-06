@@ -164,7 +164,7 @@ fn tool_line(
     if let Some(command_lines) = &command_lines
         && let Some(first) = command_lines.first()
     {
-        line.push_span(Span::styled(" ", Style::new().bg(theme.background)));
+        line.push_span(Span::raw(" "));
         line.spans.extend(styled_code_line(first.clone(), theme).spans);
     }
     line.spans.extend(suffix);
@@ -186,9 +186,6 @@ fn tool_line(
 }
 
 fn styled_code_line(mut line: Line<'static>, theme: &Theme) -> Line<'static> {
-    line.style = line.style.patch(Style::new().fg(theme.code_fg).bg(theme.code_bg));
-    for span in &mut line.spans {
-        span.style = span.style.patch(Style::new().bg(theme.code_bg));
-    }
+    line.style = line.style.patch(Style::new().fg(theme.code_fg));
     line
 }
