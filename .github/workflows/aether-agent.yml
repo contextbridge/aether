@@ -194,10 +194,25 @@ jobs:
             "$TASK_PATH" \
             | tee -a "$RUNNER_TEMP/aether-headless.jsonl"
 
+      # Installation tokens expire after one hour; agent work can take up to two.
+      - name: Refresh ContextBridge app token
+        id: publish-token
+        if: always() && steps.target.outputs.number != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.CB_PR_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.CB_PR_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: contextbridge
+          repositories: aether
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+          permission-workflows: write
+
       - name: Commit and push
         id: push
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.publish-token.outputs.token }}
           GH_REPO: ${{ github.repository }}
           BRANCH: ${{ steps.target.outputs.branch }}
           NUMBER: ${{ steps.target.outputs.number }}
@@ -212,7 +227,7 @@ jobs:
         env:
           MODE: ${{ steps.target.outputs.mode }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.publish-token.outputs.token }}
           GH_REPO: ${{ github.repository }}
           BRANCH: ${{ steps.target.outputs.branch }}
           BASE: ${{ steps.target.outputs.base }}
@@ -225,7 +240,7 @@ jobs:
         if: steps.push.outputs.implemented == 'true'
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.publish-token.outputs.token }}
           GH_REPO: ${{ github.repository }}
           NUMBER: ${{ steps.target.outputs.number }}
         run: gh pr ready "$NUMBER"
@@ -233,7 +248,7 @@ jobs:
       - name: Report back
         if: always() && steps.target.outputs.number != ''
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.publish-token.outputs.token }}
           GH_REPO: ${{ github.repository }}
           MODE: ${{ steps.target.outputs.mode }}
           NUMBER: ${{ steps.target.outputs.number }}
