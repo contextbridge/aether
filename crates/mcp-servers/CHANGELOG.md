@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.2](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.5.1...aether-mcp-servers-v0.5.2) - 2026-09-06
+
+### Fixed
+
+- *(wisp)* render finished bash tool previews as completed actions ([#433](https://github.com/contextbridge/aether/pull/433))
+
+### Other
+
+- scheduled code-cleanup ([#428](https://github.com/contextbridge/aether/pull/428))
+
 ## [0.5.1](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.5.0...aether-mcp-servers-v0.5.1) - 2026-09-04
 
 ### Other
