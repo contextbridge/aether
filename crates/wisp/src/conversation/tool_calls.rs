@@ -18,6 +18,10 @@ pub struct SubAgentToolCall {
 }
 
 impl SubAgentToolCall {
+    pub(crate) fn is_bash(&self) -> bool {
+        self.kind == ToolKind::Bash
+    }
+
     pub fn bash_command(&self) -> Option<String> {
         bash_command(self.kind, &self.raw_input)
     }
@@ -184,6 +188,10 @@ impl ToolCall {
                 }
             }
         }
+    }
+
+    pub(crate) fn is_bash(&self) -> bool {
+        self.kind == ToolKind::Bash
     }
 
     pub fn bash_command(&self) -> Option<String> {
