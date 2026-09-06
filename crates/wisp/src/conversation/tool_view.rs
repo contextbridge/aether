@@ -185,8 +185,6 @@ fn tool_line(
     lines
 }
 
-/// Token colors only: the command sits directly on the terminal's own
-/// background rather than a code block behind it.
 fn styled_code_line(mut line: Line<'static>, theme: &Theme) -> Line<'static> {
     line.style = line.style.patch(Style::new().fg(theme.code_fg));
     line

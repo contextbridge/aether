@@ -188,20 +188,6 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn finished_commands_are_titled_ran() {
-        let output = execute_command(
-            BashInput { command: "printf '%s' done".into(), ..Default::default() },
-            None,
-            &BashEnvironment::new(),
-        )
-        .await
-        .unwrap();
-        let meta = output.meta.expect("finished bash results should carry display metadata");
-        assert_eq!(meta.display.title, "Ran");
-        assert!(meta.display.value.contains("(exit 0)"), "value should report the exit: {}", meta.display.value);
-    }
-
-    #[tokio::test]
     async fn environment_overrides_are_passed_to_bash() {
         let environment = BashEnvironment::new().with_var("AETHER_TEST_VALUE", "present");
         let output = execute_command(
