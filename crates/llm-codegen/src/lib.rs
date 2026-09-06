@@ -291,9 +291,10 @@ const DYNAMIC_PROVIDERS: &[DynamicProviderConfig] = &[
 const CODEX_SUBSCRIPTION_CONTEXT_WINDOW: u32 = 272_000;
 
 const CODEX_SUBSCRIPTION_MODELS: &[ExplicitModel] = &[
-    ExplicitModel { id: "gpt-5.6-sol", context_window: 372_000 },
-    ExplicitModel { id: "gpt-5.6-terra", context_window: 372_000 },
-    ExplicitModel { id: "gpt-5.6-luna", context_window: 372_000 },
+    ExplicitModel { id: "gpt-6-astra", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW },
+    ExplicitModel { id: "gpt-5.6-sol", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW },
+    ExplicitModel { id: "gpt-5.6-terra", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW },
+    ExplicitModel { id: "gpt-5.6-luna", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW },
     ExplicitModel { id: "gpt-5.5", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW },
     ExplicitModel { id: "gpt-5.4", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW },
     ExplicitModel { id: "gpt-5.4-mini", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW },
@@ -1569,11 +1570,17 @@ mod tests {
 
         let models = build_from_value(&data);
         let window = |id: &str| models["codex"].iter().find(|model| model.model_id == id).unwrap().context_window;
-        for model_id in ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.2"] {
+        for model_id in [
+            "gpt-6-astra",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.5",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.2",
+        ] {
             assert_eq!(window(model_id), 272_000);
-        }
-        for model_id in ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] {
-            assert_eq!(window(model_id), 372_000);
         }
     }
 
@@ -1932,9 +1939,9 @@ mod tests {
         let codex_doc = &output.provider_docs["codex"];
         assert!(!codex_doc.contains("`gpt-5.6`"));
         assert!(!codex_doc.contains("`gpt-5.1-codex`"));
-        assert!(codex_doc.contains("| `gpt-5.6-sol` | `GPT-5.6 Sol` | `372k` |"));
-        assert!(codex_doc.contains("| `gpt-5.6-terra` | `GPT-5.6 Terra` | `372k` |"));
-        assert!(codex_doc.contains("| `gpt-5.6-luna` | `GPT-5.6 Luna` | `372k` |"));
+        assert!(codex_doc.contains("| `gpt-5.6-sol` | `GPT-5.6 Sol` | `272k` |"));
+        assert!(codex_doc.contains("| `gpt-5.6-terra` | `GPT-5.6 Terra` | `272k` |"));
+        assert!(codex_doc.contains("| `gpt-5.6-luna` | `GPT-5.6 Luna` | `272k` |"));
 
         let openai_doc = &output.provider_docs["openai"];
         assert!(openai_doc.contains("`gpt-5.6`"));

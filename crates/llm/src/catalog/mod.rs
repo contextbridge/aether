@@ -91,13 +91,22 @@ mod tests {
         for id in ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] {
             let model: LlmModel = format!("codex:{id}").parse().unwrap();
             assert_eq!(model.model_id(), id);
-            assert_eq!(model.context_window(), Some(372_000));
+            assert_eq!(model.context_window(), Some(272_000));
             assert_eq!(model.reasoning_levels(), expected_levels);
         }
 
         assert!("codex:gpt-5.6".parse::<LlmModel>().is_err());
         assert!("codex:gpt-5.1-codex".parse::<LlmModel>().is_err());
         assert!("openai:gpt-5.6".parse::<LlmModel>().is_ok());
+    }
+
+    #[test]
+    fn codex_astra_is_available_with_subscription_context_window() {
+        let model: LlmModel = "codex:gpt-6-astra".parse().unwrap();
+
+        assert_eq!(model.model_id(), "gpt-6-astra");
+        assert_eq!(model.context_window(), Some(272_000));
+        assert_eq!(model.oauth_provider_id(), Some("codex"));
     }
 
     #[test]
