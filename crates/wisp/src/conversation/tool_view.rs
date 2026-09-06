@@ -31,10 +31,7 @@ pub(crate) fn tool_lines(
         Span::raw(" ".repeat(padding)),
         status_glyph(&tool.status, spinner_tick, theme),
         Span::raw(" "),
-        Span::styled(
-            display_title(&tool.title, tool.is_bash(), &tool.status).to_owned(),
-            Style::new().fg(theme.text_primary),
-        ),
+        Span::styled(tool.title.clone(), Style::new().fg(theme.text_primary)),
     ]);
     let suffix = tool_suffix(detail, &tool.status, theme);
     let mut lines = tool_line(prefix, suffix, bash_command, content_width, padding + 2, theme, highlighter);
@@ -94,7 +91,7 @@ fn sub_agent_tree_lines(
             let prefix = Line::from(vec![
                 Span::raw(format!("{pad}{branch}")),
                 status_glyph(&tool.status, spinner_tick, theme),
-                Span::raw(format!(" {}", display_title(&tool.name, tool.is_bash(), &tool.status))),
+                Span::raw(format!(" {}", tool.name)),
             ]);
             let suffix = tool_suffix(detail, &tool.status, theme);
             lines.extend(tool_line(prefix, suffix, bash_command, content_width, padding + 6, theme, highlighter));
@@ -141,16 +138,6 @@ fn bash_tool_detail(command: &str, display_value: Option<&str>, status: &ToolSta
         return String::new();
     };
     value.rfind(" (exit ").map_or_else(|| format!(" ({value})"), |index| format!(" {}", &value[index + 1..]))
-}
-
-/// A finished bash call reads as a completed action: the agent's "Run command"
-/// title renders as "Ran" once the command is no longer running.
-fn display_title<'a>(title: &'a str, is_bash: bool, status: &ToolStatus) -> &'a str {
-    if is_bash && !matches!(status, ToolStatus::Running) && title == "Run command" {
-        "Ran"
-    } else {
-        title
-    }
 }
 
 /// The muted detail and, on failure, the error cause that trail a tool line.

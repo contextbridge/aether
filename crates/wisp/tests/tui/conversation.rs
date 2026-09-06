@@ -500,7 +500,7 @@ fn bash_tool_keeps_highlighting_after_title_and_display_metadata_updates() {
     ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(
         acp::ToolCallUpdate::new(
             "bash-1".to_string(),
-            acp::ToolCallUpdateFields::new().title("Run command").status(acp::ToolCallStatus::Completed),
+            acp::ToolCallUpdateFields::new().title("Ran").status(acp::ToolCallStatus::Completed),
         )
         .meta(update_meta),
     )));
@@ -514,33 +514,6 @@ fn bash_tool_keeps_highlighting_after_title_and_display_metadata_updates() {
     );
     assert_eq!(viewport.matches(command).count(), 1, "the command should render exactly once: {viewport}");
     assert!(!has_cell(&ui.conversation(), "c", |cell| cell.bg == ui.app().theme().code_bg));
-}
-
-#[test]
-fn running_bash_tool_keeps_the_run_command_title() {
-    let mut ui = TestUi::with_dimensions(100, 15);
-    ui.submit("run shell command");
-    let mut tool_meta = serde_json::Map::new();
-    tool_meta.insert(acp_utils::AETHER_TOOL_NAME_META_KEY.to_string(), "coding__bash".into());
-    let command = "cargo test";
-    let tool = acp::ToolCall::new("bash-1".to_string(), "Bash")
-        .raw_input(serde_json::json!({"command": command}))
-        .meta(tool_meta);
-    ui.acp_event(session_update(acp::SessionUpdate::ToolCall(tool)));
-    let mut update_meta = serde_json::Map::new();
-    update_meta.insert("display_value".to_string(), format!("{command} (running)").into());
-    ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(
-        acp::ToolCallUpdate::new(
-            "bash-1".to_string(),
-            acp::ToolCallUpdateFields::new().title("Run command").status(acp::ToolCallStatus::InProgress),
-        )
-        .meta(update_meta),
-    )));
-
-    ui.draw();
-
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("Run command cargo test"), "a running bash call should keep its title: {viewport}");
 }
 
 #[test]
