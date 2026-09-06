@@ -26,10 +26,10 @@ Reference client: <https://github.com/openai/codex>.
 
 ### Success criteria / acceptance conditions
 
-1. `OpenAiProvider` and `CodexProvider` can optionally communicate over a
-   persistent WebSocket instead of per-turn HTTP/SSE, selected by an opt-in
-   `websocket` flag on the provider connection override. Default behavior
-   (flag absent/false) is byte-for-byte today's HTTP/SSE path.
+1. `OpenAiProvider` and `CodexProvider` communicate over a persistent WebSocket
+   instead of per-turn HTTP/SSE on every turn, unconditionally — no opt-in
+   flag or new configuration surface. The HTTP/SSE transport code remains for
+   Bedrock Mantle (and for Codex if the Step 1 spike finds no WS endpoint).
 2. The WebSocket path reuses the existing event pipeline unchanged:
    `ResponsesStreamEvent` deserialization and `process_response_stream`
    (`crates/llm/src/providers/openai_responses/streaming.rs`) map server events
@@ -67,22 +67,21 @@ Reference client: <https://github.com/openai/codex>.
    connection pooling, `response.create` envelope construction, incremental
    input diffing, WS-frame → `ResponsesStreamEvent` demultiplexing, and error
    mapping. `OpenAiProvider::stream_response` and
-   `CodexProvider::stream_response` each gain a branch: if
-   `connection.websocket` is set, delegate to the shared session; else run
-   today's `send()`/`process_connection()` path untouched.
+   `CodexProvider::stream_response` delegate to the shared session
+   unconditionally — no transport branch and no config knob — and their
+   SSE-calling plumbing is retired (`transport.rs` itself stays: Bedrock
+   Mantle still streams over HTTP/SSE).
 2. **Keep `StreamingModelProvider` unchanged.** It is object-safe and
    transport-agnostic by design (`stream_response(&Context) -> LlmResponseStream`).
    The WS session's per-turn future resolves to a `ResponsesEventStream`
    (`Pin<Box<dyn Stream<Item = Result<ResponsesStreamEvent>> + Send>>`, same
    alias as `transport.rs:12`), which feeds the existing
    `process_response_stream`. No trait changes, no downstream churn.
-3. **Opt-in flag, default off.** Add `websocket: bool` (serde camelCase
-   `websocket`, default false) to `ProviderConnectionOverride` and
-   `ProviderConnectionConfig` (`crates/llm/src/provider_connection.rs`), plumbed
-   through `from_override`/`merge`/constructors, the CLI `--provider` parser,
-   and the settings JSON schema. This preserves backwards compatibility
-   (including `deny_unknown_fields` consumers) and lets operators trial WS per
-   provider (`{"openai": {"websocket": true}}`).
+3. **Always-on WebSocket, no option to expose.** Per review feedback, we
+   simply turn WS on for both providers rather than adding a `websocket`
+   flag. This removes the whole config ripple from the plan —
+   `provider_connection.rs`, the CLI `--provider` parser, and settings JSON
+   schemas stay untouched — which is simpler to implement and review.
 4. **One new workspace dependency: `tokio-tungstenite`.** No WS crate exists in
    the tree today (zero `tungstenite` hits in `Cargo.lock`). Add it to
    `[workspace.dependencies]` and reference `workspace = true` from
@@ -96,8 +95,8 @@ Reference client: <https://github.com/openai/codex>.
    (`https://chatgpt.com/backend-api/codex`) is a reverse-proxied,
    header-sensitive API that may not expose WS at all. Step 1 below verifies
    reachability/handshake for both before building the session module; if Codex
-   has no WS endpoint, wire WS for OpenAI only and keep Codex on HTTP behind the
-   same flag (documented), rather than guessing a URL.
+   has no WS endpoint, wire WS for OpenAI only and keep Codex on its existing
+   HTTP path (documented), rather than guessing a URL.
 
 ### Protocol mechanics (from OpenAI docs; verified 2026-09-06)
 
@@ -164,22 +163,35 @@ Reference client: <https://github.com/openai/codex>.
 
 ### Connection pooling and concurrency
 
-- Pool keyed by `(provider_id, base_url_ws, auth_fingerprint, model)`, stored in
-  a process-wide `tokio::sync::Mutex<HashMap<PoolKey, Arc<WsSession>>>`
-  (or `OnceLock`). Each `WsSession` owns the write half (`SplitSink`) behind a
-  `Mutex` and spawns one background reader task that routes incoming
-  `message` frames to per-turn channels keyed by `stream_id` (default lane =
-  empty key) and completes them at terminal events.
-- `stream_response` flow: acquire/create session → compute
+- Pool keyed by `(provider_id, base_url_ws, auth_fingerprint, model)`.
+  Locking is per-`PoolKey`, never global: a `std::sync::Mutex` guards only
+  `HashMap<PoolKey, PoolEntry>` lookups/inserts and is never held across
+  `.await`; each `PoolEntry` carries its own `Arc<tokio::sync::Mutex<()>>`
+  connect lock (singleflight) and its `Option<Arc<WsSession>>`. Two turns
+  with different `PoolKey`s only ever contend on the momentary map lock —
+  never on each other's handshakes — and same-key callers serialize on that
+  key's connect lock alone. No `dashmap` or other new dependency needed.
+- Get-or-connect: lock the map → take the entry's connect lock → re-check
+  the map (another waiter may have inserted while we awaited) → connect if
+  still absent → insert → release. Every `await` happens holding only the
+  single key's connect lock, so one slow handshake cannot stall unrelated
+  providers, models, or credentials.
+- Each `WsSession` owns the write half (`SplitSink`) behind a `Mutex` held only
+  for the duration of one frame send, and spawns one background reader task
+  that routes incoming `message` frames to per-turn channels keyed by
+  `stream_id` (default lane = empty key) and completes them at terminal events.
+- `stream_response` flow: get-or-connect the session for the request's
+  `PoolKey` → compute
   full-vs-incremental envelope → send text frame → await routed events,
   converting each inner `message` JSON to `ResponsesStreamEvent` (reuse the
   serde enum; unknown types already decode to `Ignored`) → feed
   `process_response_stream` → return its `LlmResponse` stream. A turn ends at
   `response.completed`/`incomplete` (capture response ID for the lane) or at an
   `error`/transport failure (map and yield as `Err`, evict lane state).
-- Reconnect: on transport failure or 60-minute expiry, drop the session from
-  the pool, open a fresh connection, and retry the in-flight turn once as a
-  full resend. Cap retries (open + one retry) and never loop silently.
+- Reconnect: on transport failure or 60-minute expiry, remove the entry under
+  the short map lock (never across `.await`), re-run the get-or-connect path,
+  and retry the in-flight turn once as a full resend. Cap retries (open + one
+  retry) and never loop silently.
 
 ### Error mapping (reuse `ProviderErrorKind`)
 
@@ -220,11 +232,7 @@ metadata (`status`, `request_id` when present) to surfaced `ProviderError`s.
   (`codex/provider.rs:68-72`). WS may need the same headers at handshake time
   (`tokio-tungstenite::connect_async` with a `Request` builder carrying them)
   and may not exist at all — hence the mandatory spike (Step 1) with a go/no-go
-  for the Codex wiring (Step 7).
-- **Schema ripple:** `ProviderConnectionOverride` derives `JsonSchema` and feeds
-  `aether-project` settings (`aether_settings.rs`, `agent_config.rs`) plus the
-  CLI parser. A new field requires updating all three surfaces plus generated
-  schemas/docs, or `deny_unknown_fields` and help text drift.
+  for the Codex wiring (Step 6).
 
 ---
 
@@ -242,9 +250,9 @@ metadata (`status`, `request_id` when present) to surfaced `ProviderError`s.
   3. The exact server envelope shapes (`message` vs `error` frames,
      `stream_id` presence on default-lane events, terminal event coverage).
 - Record findings (URLs, headers, envelope samples) in the PR description.
-- **Go/no-go:** if Codex has no WS endpoint, implement Steps 2–6 + OpenAI
-  wiring only (Step 7 becomes: keep Codex on HTTP, document why), and note it
-  in `docs/websocket.md`.
+- **Go/no-go:** if Codex has no WS endpoint, implement Steps 2–5 + OpenAI
+  wiring only (Step 6 becomes: leave Codex on its existing HTTP path, document
+  why), and note it in `docs/websocket.md`.
 
 ### Step 2 — Add the `tokio-tungstenite` dependency
 
@@ -254,38 +262,13 @@ metadata (`status`, `request_id` when present) to surfaced `ProviderError`s.
   match the workspace `reqwest` rustls stack — verify with `cargo tree` that
   only one rustls version is unified).
 - `crates/llm/Cargo.toml` `[dependencies]`: add
-  `tokio-tungstenite = { workspace = true }`. No feature gate (WS is a
-  runtime-selected transport, not a provider feature like `codex`/`bedrock`).
+  `tokio-tungstenite = { workspace = true }`. No feature gate (WS is
+  unconditionally the transport for these providers, not a feature like
+  `codex`/`bedrock`).
 - Confirm `cargo check -p aether-llm --all-features` passes with no other
   changes.
 
-### Step 3 — Add the opt-in `websocket` connection flag
-
-- `crates/llm/src/provider_connection.rs`:
-  - Add `pub websocket: bool` to `ProviderConnectionConfig` (default false) and
-    `pub websocket: Option<bool>`-style opt-in field to
-    `ProviderConnectionOverride` with
-    `#[serde(default, skip_serializing_if = "Option::is_none")]` (camelCase
-    name `websocket`, so JSON is `{"openai": {"websocket": true}}`).
-  - Wire `from_override` (map `Some(true)` → true), `merge` (override wins when
-    `Some`), and add a `pub fn websocket(bool)` constructor alongside
-    `url`/`auth`/`request_model`.
-  - Unit tests: deserialize `{"websocket": true}`, default-off, merge
-    precedence, `config_for` propagation.
-- `crates/llm/src/docs/provider_connection_override.md`: document the flag with
-  a JSON example and a one-line note that it selects WebSocket mode for
-  providers that support it (OpenAI, Codex if available), default off.
-- `crates/aether-cli/src/provider_connection_args.rs`: accept
-  `PROVIDER.websocket=true|false` (parse `"true"/"1"` → true,
-  `"false"/"0"` → false, reject others), update the `value_name` help string
-  and the field-must-be error message, add tests mirroring the existing
-  `parses_provider_*` cases.
-- Regenerate or update any checked-in settings JSON schemas that embed
-  `ProviderConnectionOverride` (check `aether-project` schema outputs; the
-  website `src/data/*.schema.json` files are gitignored build artifacts —
-  regenerate via the repo's schema-gen step rather than hand-editing).
-
-### Step 4 — Create the shared WebSocket session module
+### Step 3 — Create the shared WebSocket session module
 
 Create `crates/llm/src/providers/openai_responses/websocket.rs` and register
 `pub(crate) mod websocket;` in `openai_responses/mod.rs`. Contents (public
@@ -293,7 +276,8 @@ items at top, private helpers at bottom, per repo style):
 
 ```rust
 // Top: public surface used by the two providers.
-pub(crate) struct WsSessionPool { /* Mutex<HashMap<PoolKey, Arc<WsSession>>> */ }
+pub(crate) struct WsSessionPool { /* std::sync::Mutex<HashMap<PoolKey, PoolEntry>> */
+/* PoolEntry { connect: Arc<tokio::sync::Mutex<()>>, session: Option<Arc<WsSession>> } */ }
 pub(crate) struct WsRequestParams { pub ws_url: String, pub headers: HeaderMap, pub provider: Provider, pub policy: &'static ResponsesRequestPolicy /* or owned fields */ }
 pub(crate) async fn stream_via_websocket(params: WsRequestParams, model: &str, context: &Context) -> LlmResponseStream;
 
@@ -344,25 +328,25 @@ Private machinery:
   timeouts → `Timeout`, connection/IO → `Network`, protocol →
   `StreamInterrupted`. Keep the error-type discipline (no `anyhow`).
 
-### Step 5 — Wire the OpenAI provider
+### Step 4 — Wire the OpenAI provider
 
 - `crates/llm/src/providers/openai/responses_provider.rs`:
-  - Store the connection flag: add `websocket: bool` field to `OpenAiProvider`,
-    set from `ProviderConnectionConfig` in `provider_from_connection`.
-  - In `stream_response`, after building URL/headers/model/request as today,
-    branch: if `self.websocket`, derive the WS URL from the same base
-    (`config.url("/responses")` → `derive_ws_url`), reuse `config.headers()`
-    for the handshake, and call
+  - In `stream_response`, after building URL/headers/model as today, derive
+    the WS URL from the same base (`config.url("/responses")` →
+    `derive_ws_url`), reuse `config.headers()` for the handshake, and call
     `stream_via_websocket(params, &model, context)` with
-    `ResponsesRequestPolicy::openai()`; else the existing
-    `send()`/`process_connection()` path unchanged.
-  - Tests (in-file + integration): WS mode sends `response.create` without
+    `ResponsesRequestPolicy::openai()` — unconditionally, with no
+    `websocket` field on the provider and no SSE branch left.
+  - Remove the provider's now-unused `send()`/`process_connection()` plumbing
+    (`transport.rs` stays for Bedrock Mantle).
+  - Tests (in-file + integration): the sent `response.create` carries no
     `stream`/`background`, includes `stream_id` when `session_affinity_key` is
     set, omits it otherwise; second turn with appended tool output sends only
-    the suffix + `previous_response_id`; HTTP mode unchanged (existing tests
-    keep passing unmodified).
+    the suffix + `previous_response_id`; existing provider fixture tests are
+    re-scripted over the fake WS server (same fixture events wrapped in
+    `message` frames) and assert identical `LlmResponse` sequences.
 
-### Step 6 — Extend the fake test server with WebSocket support
+### Step 5 — Extend the fake test server with WebSocket support
 
 - `crates/llm/src/providers/test_capture_server.rs` (test-only):
   - Add a WS route (axum `WebSocketUpgrade`, already available via the
@@ -374,17 +358,19 @@ Private machinery:
     scripted `error` frames for `previous_response_not_found`).
   - Expose captured envelopes (`captured_ws()` returning `Vec<Value>` in order)
     so tests can assert incremental `input` + `previous_response_id`.
-- This is the integration backbone for Steps 5/7: prefer asserting against
-  captured state (received envelopes, response IDs chained) over counting mock
-  calls, per repo testing guidance. Implement `Fake`-style in-memory behavior,
-  no timeouts in tests (drive completion via terminal test frames).
+- This is the integration backbone for Steps 4/6 and the landing spot for the
+  existing OpenAI/Codex provider fixture tests: same
+  `tests/fixtures/openai_responses/*.sse` events re-wrapped in `message`
+  frames, while the `/responses` SSE route stays for Bedrock Mantle. Prefer
+  asserting against captured state (received envelopes, response IDs chained)
+  over counting mock calls, per repo testing guidance. Implement `Fake`-style
+  in-memory behavior, no timeouts in tests (drive completion via terminal test
+  frames).
 
-### Step 7 — Wire the Codex provider (pending Step 1 go/no-go)
+### Step 6 — Wire the Codex provider (pending Step 1 go/no-go)
 
 - `crates/llm/src/providers/codex/provider.rs`:
-  - Add `websocket: bool` via `with_connection` (reads
-    `ProviderConnectionConfig::websocket`).
-  - In `stream_response`, branch like OpenAI but with
+  - In `stream_response`, route like OpenAI but with
     `ResponsesRequestPolicy::codex()` and Codex handshake headers from
     `build_headers()` (Bearer + `chatgpt-account-id` + `originator` +
     `version`) passed to `connect_async` as WS handshake headers. On 401-class
@@ -393,21 +379,18 @@ Private machinery:
   - Codex-specific tests: handshake headers observed by the fake WS server;
     `reasoning.effort: medium` default preserved in the WS envelope;
     `store: false` present; no `stream` field.
-- If the Step 1 spike shows no Codex WS endpoint: skip the Codex branch (flag
-  accepted but documented as OpenAI-only for now), and record the finding in
-  `docs/websocket.md` + the PR.
+- If the Step 1 spike shows no Codex WS endpoint: leave Codex on its existing
+  HTTP path unchanged, and record the finding in `docs/websocket.md` + the PR.
 
-### Step 8 — Docs, schemas, and changelog
+### Step 7 — Docs and changelog
 
 - New `crates/llm/src/docs/websocket.md` (embedded via `include_str!` from the
-  module docs of `websocket.rs` or `openai_responses/mod.rs`): when to enable
-  it, the `previous_response_id` + incremental-input model, lane semantics,
-  fallback cases, limits (16/32/60-min), and the Codex status from Step 1.
+  module docs of `websocket.rs` or `openai_responses/mod.rs`): that WS is
+  always on for OpenAI/Codex, the `previous_response_id` + incremental-input
+  model, lane semantics, fallback cases, limits (16/32/60-min), and the Codex
+  status from Step 1.
 - Update `crates/llm/src/docs/providers.md` provider table notes if it lists
-  transports, and the `provider_connection_override.md` (Step 3).
-- Check website settings docs under `packages/website/src/content/docs/` for a
-  providers/connection-override page that enumerates override fields; add
-  `websocket` there if such a page exists.
+  transports.
 - Add a `CHANGELOG.md` entry in `crates/llm/` per repo convention (check
   `release-plz` behavior — do not hand-edit generated release sections).
 
@@ -432,8 +415,6 @@ Private machinery:
   per the error table, incl. `previous_response_not_found`,
   `invalid_stream_id`, `websocket_stream_limit_reached`,
   `websocket_connection_limit_reached`.
-- `ProviderConnectionOverride`: `websocket` serde round-trip, default-off,
-  merge precedence (`#[test]`s next to the existing override tests).
 - `From<tungstenite::Error>` mapping kinds.
 
 ### Integration tests (fake WS server, `tests/` + `test_capture_server.rs`)
@@ -454,8 +435,9 @@ Private machinery:
 - **Codex handshake:** fake server asserts `authorization`, `chatgpt-account-id`,
   `originator`, `version` headers on the WS upgrade; Codex 401 clears the token
   cache (reuse the existing `FakeOAuthCredentialStore` pattern).
-- **Default-off:** without the flag, providers never attempt a WS upgrade
-  (existing HTTP tests cover this; add an assertion that no WS route was hit).
+- **Bedrock Mantle regression guard:** Mantle's HTTP/SSE fixtures pass
+  unmodified against the unchanged `/responses` route; add an assertion that
+  the WS route is never hit by Mantle tests.
 
 ### Edge cases to verify
 
@@ -466,9 +448,9 @@ Private machinery:
 - 32-`stream_id` / 16 in-flight limits: excess lanes surface the server's
   `error` frame as non-retryable `Api` rather than hanging.
 - 60-minute expiry: treated as reconnect + full-resend, not a fatal error.
-- HTTP/SSE behavior unchanged: all existing fixture tests
-  (`tests/providers/**`, `tests/fixtures/openai_responses/*.sse`) pass
-  unmodified.
+- Fixture parity: existing OpenAI/Codex fixture tests re-scripted onto the
+  fake WS server assert the same `LlmResponse` sequences as before; Mantle's
+  fixtures run unmodified over SSE.
 
 ---
 
@@ -478,36 +460,31 @@ Private machinery:
 |---|---|---|
 | `Cargo.toml` (workspace) | Add `tokio-tungstenite` to `[workspace.dependencies]` with a rustls feature matching the `reqwest` stack | Modify |
 | `crates/llm/Cargo.toml` | Reference `tokio-tungstenite = { workspace = true }`; add `From<tungstenite::Error>`-compatible features as needed | Modify |
-| `crates/llm/src/provider_connection.rs` | Add `websocket` flag to `ProviderConnectionOverride` + `ProviderConnectionConfig`; `from_override`, `merge`, `websocket()` constructor; unit tests | Modify |
-| `crates/llm/src/docs/provider_connection_override.md` | Document `{"websocket": true}` with example | Modify |
 | `crates/llm/src/providers/openai_responses/websocket.rs` | **New** shared session module: pool, URL derivation, lane keys, envelope builder + prefix-diff, frame routing, error mapping, `stream_via_websocket`; unit tests | Add |
 | `crates/llm/src/providers/openai_responses/mod.rs` | Register `pub(crate) mod websocket;`, update module docs | Modify |
 | `crates/llm/src/error.rs` | Add `From<tungstenite::Error> for LlmError` mapping; tests | Modify |
-| `crates/llm/src/providers/openai/responses_provider.rs` | Store `websocket` flag; branch `stream_response` to WS path; tests | Modify |
-| `crates/llm/src/providers/codex/provider.rs` | Store `websocket` flag via `with_connection`; branch `stream_response` with Codex headers/policy; 401 cache-clear on handshake; tests (gated on Step 1 spike) | Modify |
-| `crates/llm/src/providers/test_capture_server.rs` | Add WS upgrade route, envelope capture, scripted frame replay (`captured_ws()`) | Modify |
-| `crates/llm/src/docs/websocket.md` | **New** rustdoc page: usage, lanes, fallbacks, limits, Codex status | Add |
-| `crates/aether-cli/src/provider_connection_args.rs` | Parse `PROVIDER.websocket=true\|false`; help text; tests | Modify |
-| `packages/website/src/content/docs/**` settings page (if it enumerates override fields) | Document `websocket` | Modify (if applicable) |
-| `crates/llm/tests/providers/openai/*` and codex-adjacent integration tests | **New** WS integration tests (incremental, compaction, error-recovery, reconnect, headers) | Add |
+| `crates/llm/src/providers/openai/responses_provider.rs` | Route `stream_response` unconditionally through the WS session; retire the SSE branch; fixture tests re-scripted onto fake WS | Modify |
+| `crates/llm/src/providers/codex/provider.rs` | Route `stream_response` through the WS session with Codex headers/policy; 401 cache-clear on handshake; tests (gated on Step 1 spike) | Modify |
+| `crates/llm/src/providers/test_capture_server.rs` | Add WS upgrade route, envelope capture, scripted frame replay (`captured_ws()`); re-script existing OpenAI/Codex SSE fixtures over the WS route | Modify |
+| `crates/llm/src/docs/websocket.md` | **New** rustdoc page: always-on WS behavior, lanes, fallbacks, limits, Codex status | Add |
+| `crates/llm/tests/providers/openai/*` and codex-adjacent integration tests | **New** WS integration tests (incremental, compaction, error-recovery, reconnect, headers); existing provider fixtures re-scripted onto the fake WS server | Add / Modify |
 | `crates/llm/CHANGELOG.md` | Entry for WS support (follow repo release conventions) | Modify |
 
 ---
 
 ## Additional Notes
 
-- **Documentation updates needed:** `provider_connection_override.md`,
-  new `docs/websocket.md`, CLI `--provider` help string, website settings page
-  if it lists override fields, regenerated JSON schemas for
-  `ProviderConnectionOverride` (do not hand-edit gitignored generated schema
-  artifacts — run the repo's schema-gen).
-- **No trait or public-API breaks:** `StreamingModelProvider`,
-  `ProviderFactory`, `LlmResponse`, and `Context` are untouched (only read via
-  existing getters). The flag defaults keep every existing config valid.
+- **Documentation updates needed:** new `docs/websocket.md`, plus
+  `providers.md` transport notes if that page enumerates transports.
+- **No trait, config, or public-API surface changes:** `StreamingModelProvider`,
+  `ProviderFactory`, `LlmResponse`, `Context`, and
+  `ProviderConnectionOverride`/`Config` are untouched; only provider internals
+  change transport.
 - **Follow-up tasks that may be spawned:**
-  1. Step 1 spike findings review (Codex go/no-go) — blocks Step 7.
-  2. Evaluate enabling WS-by-default for OpenAI after soak-testing latency and
-     `previous_response_not_found` rates in production-like agent runs.
+  1. Step 1 spike findings review (Codex go/no-go) — blocks Step 6.
+  2. If soak testing shows WS reliability issues (`previous_response_not_found`
+     rates, reconnect storms), evaluate an HTTP/SSE fallback or escape hatch
+     then.
   3. Server-side compaction (`context_management`) support if the product ever
      opts into it (protocol already accommodates it; client just keeps chaining
      the latest ID).
