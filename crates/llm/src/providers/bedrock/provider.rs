@@ -421,6 +421,7 @@ mod tests {
         assert_eq!(captured.body["input"][0]["content"][0]["type"], "input_text");
         assert_eq!(captured.body["input"][0]["content"][0]["text"], "Hello");
         assert!(captured.headers.get("authorization").is_none(), "{:?}", captured.headers);
+        assert!(server.try_captured_ws().is_none(), "Mantle must keep using the HTTP/SSE route, not WebSocket");
     }
 
     #[tokio::test]

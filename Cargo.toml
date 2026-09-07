@@ -32,6 +32,9 @@ tokio-util = "^0.7.18"
 futures = "^0.3.32"
 async-stream = "^0.3.6"
 eventsource-stream = "^0.2"
+# WebSocket transport for the OpenAI Responses API; the rustls feature must keep
+# unifying with reqwest's rustls stack (verify via `cargo tree -i rustls`).
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 
 # Serialization
 serde = { version = "1.0.228", features = ["derive"] }

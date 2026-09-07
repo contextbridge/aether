@@ -9,6 +9,7 @@ use crate::catalog::Provider;
 use crate::{ChatMessage, ContentBlock, Context, LlmError, LlmModel, ReasoningEffort, Result, ToolDefinition};
 
 /// The per-provider decisions that shape an otherwise identical Responses request.
+#[derive(Clone)]
 pub(crate) struct ResponsesRequestPolicy {
     /// Provider that owns the model — decides whose encrypted reasoning may be
     /// replayed from earlier turns.

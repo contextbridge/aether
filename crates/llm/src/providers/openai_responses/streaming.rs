@@ -166,7 +166,13 @@ where
             let event = match result {
                 Ok(event) => event,
                 Err(e) => {
-                    yield Err(ProviderError::stream_interrupted(e.to_string()).into());
+                    // Decode and transport failures arrive unclassified; typed
+                    // provider errors keep their kind, status, and code.
+                    if e.provider().is_some() {
+                        yield Err(e);
+                    } else {
+                        yield Err(ProviderError::stream_interrupted(e.to_string()).into());
+                    }
                     return;
                 }
             };

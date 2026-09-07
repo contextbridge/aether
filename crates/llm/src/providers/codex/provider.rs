@@ -1,12 +1,14 @@
 use super::oauth::CodexTokenManager;
-use crate::provider::{LlmResponseStream, StreamingModelProvider, get_context_window, stream_from};
-use crate::providers::openai_responses::mappers::{ResponsesRequestPolicy, build_wire_request};
-use crate::providers::openai_responses::transport::{ResponsesConnection, process_connection, send};
+use crate::provider::{LlmResponseStream, StreamingModelProvider, get_context_window};
+use crate::providers::openai_responses::mappers::ResponsesRequestPolicy;
+use crate::providers::openai_responses::websocket::{
+    AuthenticationFailureHook, WsRequestParams, derive_ws_url, stream_via_websocket,
+};
 use crate::{Context, LlmError, Result};
 use aether_auth::OAuthCredentialStorage;
+use futures::StreamExt;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use std::sync::Arc;
-use tracing::debug;
 
 const CODEX_API_BASE: &str = "https://chatgpt.com/backend-api/codex";
 const CODEX_CLIENT_VERSION: &str = "0.153.4";
@@ -14,7 +16,6 @@ const CODEX_CLIENT_VERSION: &str = "0.153.4";
 #[derive(Clone)]
 pub struct CodexProvider {
     base_url: String,
-    client: reqwest::Client,
     model: String,
     token_manager: Arc<CodexTokenManager>,
 }
@@ -24,7 +25,6 @@ impl CodexProvider {
         let token_manager = CodexTokenManager::new(store, super::PROVIDER_ID);
         Self {
             base_url: CODEX_API_BASE.to_string(),
-            client: reqwest::Client::new(),
             model: "gpt-5.5".to_string(),
             token_manager: Arc::new(token_manager),
         }
@@ -40,10 +40,6 @@ impl CodexProvider {
     pub fn with_model(mut self, model: &str) -> Self {
         self.model = model.to_string();
         self
-    }
-
-    fn build_wire_request(&self, context: &Context) -> Result<serde_json::Value> {
-        build_wire_request(&self.model, context, &ResponsesRequestPolicy::codex())
     }
 
     async fn build_headers(&self) -> Result<HeaderMap> {
@@ -65,29 +61,24 @@ impl CodexProvider {
         Ok(headers)
     }
 
-    /// Send the request and return a stream of SSE lines parsed into typed events.
-    ///
-    /// Uses manual SSE parsing because the Codex API does not return a
-    /// `Content-Type: text/event-stream` header, which `reqwest_eventsource`
-    /// (used by `async-openai`'s `create_stream`) requires.
-    async fn send_request(&self, request: serde_json::Value, headers: HeaderMap) -> Result<ResponsesConnection> {
-        let url = format!("{}/responses", self.base_url);
-
-        debug!("Sending request to Codex API: {url}");
-        debug!(
-            "Codex request body: {}",
-            serde_json::to_string(&request).unwrap_or_else(|_| "<failed to serialize>".to_string())
-        );
-
-        match send(&self.client, &url, headers, request).await {
-            Ok(connection) => Ok(connection),
-            Err(error) => {
-                if error.provider().map(|provider| provider.kind) == Some(crate::ProviderErrorKind::Authentication) {
-                    self.token_manager.clear_cache().await;
-                }
-                Err(error)
-            }
-        }
+    /// Route a turn over the persistent WebSocket: same credentials and
+    /// headers the HTTP path used, carried on the `wss://` handshake. An
+    /// authentication failure at handshake drops the cached token so the
+    /// next turn re-authenticates from storage.
+    async fn websocket_params(&self) -> Result<WsRequestParams> {
+        let handshake_headers = self.build_headers().await?;
+        let ws_url = derive_ws_url(&format!("{}/responses", self.base_url))?;
+        let token_manager = Arc::clone(&self.token_manager);
+        let on_authentication_failure: AuthenticationFailureHook = Arc::new(move || {
+            let token_manager = Arc::clone(&token_manager);
+            Box::pin(async move { token_manager.clear_cache().await })
+        });
+        Ok(WsRequestParams {
+            ws_url,
+            handshake_headers,
+            policy: ResponsesRequestPolicy::codex(),
+            on_authentication_failure: Some(on_authentication_failure),
+        })
     }
 }
 
@@ -104,14 +95,19 @@ impl StreamingModelProvider for CodexProvider {
         let provider = self.clone();
         let context = context.clone();
 
-        stream_from(
-            async move {
-                let headers = provider.build_headers().await?;
-                let request = provider.build_wire_request(&context)?;
-                provider.send_request(request, headers).await
-            },
-            process_connection,
-        )
+        Box::pin(async_stream::stream! {
+            let params = match provider.websocket_params().await {
+                Ok(params) => params,
+                Err(error) => {
+                    yield Err(error);
+                    return;
+                }
+            };
+            let mut turn = stream_via_websocket(params, provider.model.clone(), context);
+            while let Some(item) = turn.next().await {
+                yield item;
+            }
+        })
     }
 
     fn display_name(&self) -> String {
@@ -158,9 +154,10 @@ mod tests {
         context.set_prompt_cache_key(Some("session-abc".to_string()));
 
         let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-        let captured = server.captured().await;
+        let captured = server.captured_ws().await;
 
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
+        assert_eq!(captured.body["type"], "response.create");
         assert_eq!(captured.body["reasoning"]["effort"], "max");
         assert!(captured.body["reasoning"].get("context").is_none());
         assert_eq!(captured.body["model"], "gpt-5.6-luna");
@@ -170,12 +167,12 @@ mod tests {
         assert_eq!(captured.body["input"][0]["role"], "user");
         assert_eq!(captured.body["prompt_cache_key"], "session-abc");
         assert_eq!(captured.body["store"], false);
-        assert_eq!(captured.body["stream"], true);
+        assert!(captured.body.get("stream").is_none(), "WebSocket envelopes must not carry `stream`");
+        let authorization = captured.headers["authorization"].to_str().unwrap();
+        assert!(authorization.starts_with("Bearer "), "{authorization}");
         assert_eq!(captured.headers["chatgpt-account-id"], "account-1");
+        assert_eq!(captured.headers["originator"], "codex_cli_rs");
         assert_eq!(captured.headers["version"], "0.153.4");
-        assert_eq!(captured.headers["accept"], "text/event-stream");
-        assert!(captured.headers.get("x-openai-internal-codex-responses-lite").is_none());
-        assert!(captured.headers.get("OpenAI-Beta").is_none());
     }
 
     #[tokio::test]
@@ -185,10 +182,56 @@ mod tests {
         let context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
 
         let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-        let captured = server.captured().await;
+        let captured = server.captured_ws().await;
 
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
         assert_eq!(captured.body["reasoning"]["effort"], "medium");
+    }
+
+    #[tokio::test]
+    async fn unauthorized_handshakes_clear_the_cached_token() {
+        let mut server = CaptureServer::start_responses().await;
+        server.reject_ws_handshake();
+        let credential = OAuthCredential {
+            client_id: "test".to_string(),
+            access_token: test_jwt("account-1"),
+            refresh_token: None,
+            expires_at: Some(u64::MAX),
+        };
+        let store: Arc<dyn OAuthCredentialStorage> =
+            Arc::new(FakeOAuthCredentialStore::new().with_credential("codex", credential));
+        let provider = CodexProvider::new(store.clone()).with_connection(crate::ProviderConnectionConfig {
+            base_url: Some(server.base_url.clone()),
+            ..Default::default()
+        });
+        let context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
+
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        let error = responses.iter().find_map(|r| r.as_ref().err()).expect("expected a failure");
+        assert_eq!(error.provider().expect("expected provider error").kind, crate::ProviderErrorKind::Authentication);
+
+        // Rotate the stored credential: the next handshake must present the
+        // new token, proving the stale cached token was dropped.
+        store
+            .save_credential(
+                "codex",
+                OAuthCredential {
+                    client_id: "test".to_string(),
+                    access_token: test_jwt("account-2"),
+                    refresh_token: None,
+                    expires_at: Some(u64::MAX),
+                },
+            )
+            .await
+            .unwrap();
+        server.allow_ws_handshake();
+
+        let retried = provider.stream_response(&context).collect::<Vec<_>>().await;
+        assert!(retried.iter().all(Result::is_ok), "{retried:?}");
+        let captured = server.captured_ws().await;
+        let authorization = captured.headers["authorization"].to_str().unwrap();
+        assert_eq!(captured.headers["chatgpt-account-id"], "account-2");
+        assert!(!authorization.contains(&test_jwt("account-1")));
     }
 
     fn server_backed_provider(server: &CaptureServer) -> CodexProvider {
