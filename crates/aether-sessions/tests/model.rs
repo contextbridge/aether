@@ -3,7 +3,8 @@ use aether_core::events::{
     TurnEvent, TurnOutcome,
 };
 use aether_sessions::model::last_session_usage;
-use aether_sessions::{SessionControlEvent, SessionEvent, UserEvent, last_agent_from_events};
+use aether_sessions::testing::{agent_switched, user_message};
+use aether_sessions::{SessionEvent, UserEvent, last_agent_from_events};
 use llm::testing::session_usage_event;
 use llm::{LlmCallPurpose, SessionUsageEvent, TokenUsage};
 
@@ -62,7 +63,7 @@ fn session_usage(sequence: u64, total_input_tokens: u64) -> SessionUsageEvent {
 
 #[test]
 fn content_helpers_extract_user_text_only() {
-    let message = SessionEvent::User(UserEvent::Message { content: vec![llm::ContentBlock::text("Hello")] });
+    let message = user_message("Hello");
 
     assert_eq!(message.user_content().as_deref(), Some("Hello"));
     assert_eq!(message.content().as_deref(), Some("Hello"));
@@ -71,7 +72,7 @@ fn content_helpers_extract_user_text_only() {
 
 #[test]
 fn event_json_tags_remain_compatible() {
-    let event = SessionEvent::User(UserEvent::Message { content: vec![llm::ContentBlock::text("Hello")] });
+    let event = user_message("Hello");
     let json = serde_json::to_value(&event).unwrap();
 
     assert_eq!(json["kind"], "user");
@@ -103,13 +104,7 @@ fn failed_call_diagnostics_survive_session_json_round_trip() {
 
 #[test]
 fn last_agent_uses_the_last_switch() {
-    let events = [
-        SessionEvent::Control(SessionControlEvent::AgentSwitched { from: None, to: Some("planner".into()) }),
-        SessionEvent::Control(SessionControlEvent::AgentSwitched {
-            from: Some("planner".into()),
-            to: Some("coder".into()),
-        }),
-    ];
+    let events = [agent_switched(None, Some("planner")), agent_switched(Some("planner"), Some("coder"))];
 
     assert_eq!(last_agent_from_events(Some("default".into()), &events), Some("coder".into()));
     assert_eq!(last_agent_from_events(Some("default".into()), &[]), Some("default".into()));

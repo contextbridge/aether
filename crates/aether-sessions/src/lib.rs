@@ -6,6 +6,7 @@ pub mod error;
 pub mod log;
 pub mod model;
 pub mod store;
+pub mod testing;
 pub mod transcript;
 
 pub use error::{SessionLogError, SessionStoreError};

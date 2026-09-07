@@ -1,6 +1,7 @@
 use aether_core::events::{AgentEvent, ContextEvent, ModelEvent, TurnEvent, TurnOutcome};
+use aether_sessions::SessionEvent;
 use aether_sessions::analytics::{IngestOptions, QueryOptions, SessionIndexError, ingest_sessions, run_query};
-use aether_sessions::{SessionEvent, UserEvent};
+use aether_sessions::testing::{context_usage, session_meta, tool_call, tool_error, tool_result, user_message};
 use llm::testing::session_usage_event;
 use llm::{
     ContextUsage, LlmCallPurpose, ModelIdentity, SessionUsageEvent, SessionUsageTotals, TokenUsage, UsageCost,
@@ -32,10 +33,10 @@ fn shared_discovery_filters_and_sorts_session_files_with_fingerprints() {
 #[tokio::test]
 async fn typed_event_contract_populates_every_documented_view() {
     let fixture = Fixture::new();
-    fixture.write_typed_session(
+    fixture.write_session(
         "s1.jsonl",
         &[
-            SessionEvent::User(UserEvent::Message { content: vec![llm::ContentBlock::text("hello")] }),
+            user_message("hello"),
             SessionEvent::Agent(AgentEvent::Turn(TurnEvent::RetryScheduled {
                 purpose: LlmCallPurpose::Chat,
                 attempt: 1,
@@ -70,9 +71,9 @@ async fn typed_event_contract_populates_every_documented_view() {
 #[tokio::test]
 async fn one_database_failure_does_not_abort_other_files() {
     let fixture = Fixture::new();
-    fixture.write_session_with_id("a.jsonl", "duplicate", &[user_message("duplicate", "first")]);
-    fixture.write_session_with_id("b.jsonl", "duplicate", &[user_message("duplicate", "second")]);
-    fixture.write_session("c.jsonl", &[user_message("c", "third")]);
+    fixture.write_session_with_id("a.jsonl", "duplicate", &[user_message("first")]);
+    fixture.write_session_with_id("b.jsonl", "duplicate", &[user_message("second")]);
+    fixture.write_session("c.jsonl", &[user_message("third")]);
 
     let summary = fixture.ingest().await;
 
@@ -87,7 +88,12 @@ async fn end_to_end_ingest_query() {
     let fixture = Fixture::new();
     fixture.write_session(
         "s1.jsonl",
-        &[user_message("s1", "hello"), tool_call("read"), tool_error("read"), context_usage(0.9)],
+        &[
+            user_message("hello"),
+            tool_call("call-read", "read"),
+            tool_error("call-read", "read", "failed"),
+            context_usage(0.9),
+        ],
     );
 
     let summary = fixture.ingest().await;
@@ -102,7 +108,7 @@ async fn end_to_end_ingest_query() {
 #[tokio::test]
 async fn typed_projection_exposes_event_fields() {
     let fixture = Fixture::new();
-    fixture.write_session("s1.jsonl", &[user_message("s1", "hello"), tool_call("read"), context_usage(0.9)]);
+    fixture.write_session("s1.jsonl", &[user_message("hello"), tool_call("call-read", "read"), context_usage(0.9)]);
     fixture.ingest().await;
 
     let usage = fixture.query("select usage_ratio, input_tokens from context_usage").await;
@@ -129,7 +135,7 @@ async fn session_usage_columns_are_projected_for_root_and_sub_agent_samples() {
         },
         ..session_usage_event(2, TokenUsage::new(4, 2))
     };
-    fixture.write_typed_session(
+    fixture.write_session(
         "s1.jsonl",
         &[
             SessionEvent::Agent(AgentEvent::SessionUsage(root_usage(&root))),
@@ -185,7 +191,12 @@ async fn tool_columns_are_projected_from_typed_events() {
     let fixture = Fixture::new();
     fixture.write_session(
         "s1.jsonl",
-        &[user_message("s1", "hello"), tool_call("read"), tool_result("read"), tool_error("write")],
+        &[
+            user_message("hello"),
+            tool_call("call-read", "read"),
+            tool_result("call-read", "read", "ok"),
+            tool_error("call-write", "write", "failed"),
+        ],
     );
     fixture.ingest().await;
 
@@ -212,8 +223,8 @@ async fn tool_columns_are_projected_from_typed_events() {
 #[tokio::test]
 async fn concurrent_ingest_indexes_multiple_changed_files_deterministically() {
     let fixture = Fixture::new();
-    fixture.write_session("b.jsonl", &[user_message("b", "second")]);
-    fixture.write_session("a.jsonl", &[user_message("a", "first")]);
+    fixture.write_session("b.jsonl", &[user_message("second")]);
+    fixture.write_session("a.jsonl", &[user_message("first")]);
 
     let summary = fixture.ingest().await;
 
@@ -226,7 +237,7 @@ async fn concurrent_ingest_indexes_multiple_changed_files_deterministically() {
 #[tokio::test]
 async fn idempotent_rerun_skips_unchanged_files() {
     let fixture = Fixture::new();
-    fixture.write_session("s1.jsonl", &[user_message("s1", "hello"), tool_error("read")]);
+    fixture.write_session("s1.jsonl", &[user_message("hello"), tool_error("call-read", "read", "failed")]);
 
     fixture.ingest().await;
     let second = fixture.ingest().await;
@@ -239,9 +250,9 @@ async fn idempotent_rerun_skips_unchanged_files() {
 #[tokio::test]
 async fn changed_file_replaces_old_rows() {
     let fixture = Fixture::new();
-    fixture.write_session("s1.jsonl", &[user_message("s1", "hello")]);
+    fixture.write_session("s1.jsonl", &[user_message("hello")]);
     fixture.ingest().await;
-    fixture.write_session("s1.jsonl", &[user_message("s1", "hello"), tool_error("read")]);
+    fixture.write_session("s1.jsonl", &[user_message("hello"), tool_error("call-read", "read", "failed")]);
 
     fixture.ingest().await;
 
@@ -252,7 +263,7 @@ async fn changed_file_replaces_old_rows() {
 #[tokio::test]
 async fn deleted_file_pruning_removes_rows() {
     let fixture = Fixture::new();
-    fixture.write_session("s1.jsonl", &[user_message("s1", "hello"), tool_error("read")]);
+    fixture.write_session("s1.jsonl", &[user_message("hello"), tool_error("call-read", "read", "failed")]);
     fixture.ingest().await;
     fs::remove_file(fixture.sessions_dir.join("s1.jsonl")).unwrap();
 
@@ -267,8 +278,10 @@ async fn deleted_file_pruning_removes_rows() {
 async fn malformed_event_line_is_recorded() {
     let fixture = Fixture::new();
     let path = fixture.sessions_dir.join("s1.jsonl");
-    fs::write(path, format!("{}\n{}\nnot-json\n{}\n", metadata("s1"), user_message("s1", "hello"), tool_error("read")))
-        .unwrap();
+    let meta = serde_json::to_string(&session_meta("s1").build()).unwrap();
+    let user = serde_json::to_string(&user_message("hello")).unwrap();
+    let tool = serde_json::to_string(&tool_error("call-read", "read", "failed")).unwrap();
+    fs::write(path, format!("{meta}\n{user}\nnot-json\n{tool}\n")).unwrap();
 
     let summary = fixture.ingest().await;
 
@@ -298,7 +311,7 @@ async fn valid_file_replaces_previous_metadata_failure() {
     let first = fixture.ingest().await;
     assert_eq!(first.files_failed, 1);
 
-    fixture.write_session("s1.jsonl", &[user_message("s1", "hello")]);
+    fixture.write_session("s1.jsonl", &[user_message("hello")]);
     let second = fixture.ingest().await;
 
     assert_eq!(second.files_indexed, 1);
@@ -323,7 +336,7 @@ async fn metadata_failure_can_be_recorded_repeatedly() {
 #[tokio::test]
 async fn read_only_query_safety_keeps_rows() {
     let fixture = Fixture::new();
-    fixture.write_session("s1.jsonl", &[user_message("s1", "hello")]);
+    fixture.write_session("s1.jsonl", &[user_message("hello")]);
     fixture.ingest().await;
 
     let result = run_query(&QueryOptions {
@@ -355,24 +368,19 @@ impl Fixture {
         Self { _temp: temp, sessions_dir, db_path }
     }
 
-    fn write_session(&self, name: &str, events: &[String]) {
+    fn write_session(&self, name: &str, events: &[SessionEvent]) {
         let session_id = Path::new(name).file_stem().unwrap().to_string_lossy();
         self.write_session_with_id(name, &session_id, events);
     }
 
-    fn write_session_with_id(&self, name: &str, session_id: &str, events: &[String]) {
-        let mut content = metadata(session_id);
+    fn write_session_with_id(&self, name: &str, session_id: &str, events: &[SessionEvent]) {
+        let mut content = serde_json::to_string(&session_meta(session_id).build()).unwrap();
         content.push('\n');
         for event in events {
-            content.push_str(event);
+            content.push_str(&serde_json::to_string(event).unwrap());
             content.push('\n');
         }
         fs::write(self.sessions_dir.join(name), content).unwrap();
-    }
-
-    fn write_typed_session(&self, name: &str, events: &[SessionEvent]) {
-        let serialized = events.iter().map(|event| serde_json::to_string(event).unwrap()).collect::<Vec<_>>();
-        self.write_session(name, &serialized);
     }
 
     async fn ingest(&self) -> aether_sessions::analytics::IngestSummary {
@@ -412,37 +420,4 @@ fn root_usage(source: &UsageSource) -> SessionUsageEvent {
         totals: SessionUsageTotals { tokens, estimated_usd: Usd::new(0.25), unpriced_calls: 0 },
         ..session_usage_event(1, tokens)
     }
-}
-
-fn metadata(session_id: &str) -> String {
-    json!({"sessionId":session_id,"cwd":"/repo","model":"m","selectedMode":"Coder","createdAt":"2026-01-01T00:00:00Z"})
-        .to_string()
-}
-
-fn user_message(_session_id: &str, text: &str) -> String {
-    json!({"kind":"user","data":{"type":"message","content":[{"type":"text","text":text}]}}).to_string()
-}
-
-fn tool_call(tool_name: &str) -> String {
-    json!({"kind":"agent","data":{"category":"tool","event":{"type":"call","request":{"id":format!("call-{tool_name}"),"name":tool_name,"arguments":"{}"}}}}).to_string()
-}
-
-fn tool_result(tool_name: &str) -> String {
-    json!({"kind":"agent","data":{"category":"tool","event":{"type":"result","result":{"id":format!("call-{tool_name}"),"name":tool_name,"arguments":"{}","result":"ok"},"result_meta":null}}}).to_string()
-}
-
-fn tool_error(tool_name: &str) -> String {
-    json!({"kind":"agent","data":{"category":"tool","event":{"type":"error","error":{"id":format!("call-{tool_name}"),"name":tool_name,"arguments":"{}","error":"failed"}}}}).to_string()
-}
-
-fn context_usage(ratio: f64) -> String {
-    json!({"kind":"agent","data":{"category":"context","event":{
-        "type":"usage_updated",
-        "usage":{
-            "usage_ratio":ratio,
-            "context_limit":100,
-            "input_tokens":1
-        }
-    }}})
-    .to_string()
 }

@@ -1,34 +1,14 @@
 use acp_utils::notifications::SessionPreviewRole;
-use aether_core::events::{AgentEvent, MessageEvent, ToolEvent};
-use aether_sessions::{ScanLimits, SessionEvent, SessionMeta, SessionStore, SessionStoreError, UserEvent};
+use aether_sessions::testing::{
+    agent_switched, assistant_chunk, assistant_text, session_meta, tool_call, user_message,
+};
+use aether_sessions::{ScanLimits, SessionEvent, SessionStore, SessionStoreError, UserEvent};
 use llm::ContentBlock;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
-
-fn meta(id: &str, created_at: &str) -> SessionMeta {
-    SessionMeta {
-        session_id: id.to_string(),
-        cwd: PathBuf::from("/tmp/project"),
-        model: "test-model".to_string(),
-        selected_mode: Some("planner".to_string()),
-        created_at: created_at.to_string(),
-    }
-}
-
-fn user_message(text: &str) -> SessionEvent {
-    SessionEvent::User(UserEvent::Message { content: vec![ContentBlock::text(text)] })
-}
-
-fn assistant_message(text: &str) -> SessionEvent {
-    SessionEvent::Agent(AgentEvent::Message(MessageEvent::Text {
-        message_id: "message-1".to_string(),
-        chunk: text.to_string(),
-        is_complete: true,
-    }))
-}
 
 fn temp_store() -> (tempfile::TempDir, SessionStore) {
     let directory = tempfile::tempdir().expect("temporary session directory");
@@ -39,22 +19,18 @@ fn temp_store() -> (tempfile::TempDir, SessionStore) {
 #[test]
 fn append_and_load_roundtrip_preserves_metadata_and_persisted_events() -> TestResult {
     let (_directory, store) = temp_store();
-    let session_meta = meta("session-1", "2026-01-01T00:00:00Z");
+    let meta = session_meta("session-1").build();
     let user = user_message("Hello");
-    let assistant = assistant_message("Hi there");
-    let transient = SessionEvent::Agent(AgentEvent::Message(MessageEvent::Text {
-        message_id: "message-1".to_string(),
-        chunk: "partial".to_string(),
-        is_complete: false,
-    }));
+    let assistant = assistant_text("message-1", "Hi there");
+    let transient = assistant_chunk("message-1", "partial");
 
-    store.append_meta("session-1", &session_meta)?;
+    store.append_meta("session-1", &meta)?;
     store.append_event("session-1", &user)?;
     store.append_event("session-1", &transient)?;
     store.append_event("session-1", &assistant)?;
 
     let (loaded_meta, events) = store.load("session-1").expect("session exists");
-    assert_eq!(loaded_meta, session_meta);
+    assert_eq!(loaded_meta, meta);
     assert_eq!(events, vec![user, assistant]);
     Ok(())
 }
@@ -62,9 +38,8 @@ fn append_and_load_roundtrip_preserves_metadata_and_persisted_events() -> TestRe
 #[test]
 fn load_ignores_malformed_trailing_event_lines() -> TestResult {
     let (directory, store) = temp_store();
-    let session_meta = meta("session-1", "2026-01-01T00:00:00Z");
     let mut file = File::create(directory.path().join("session-1.jsonl"))?;
-    writeln!(file, "{}", serde_json::to_string(&session_meta)?)?;
+    writeln!(file, "{}", serde_json::to_string(&session_meta("session-1").build())?)?;
     writeln!(file, "{}", serde_json::to_string(&user_message("valid"))?)?;
     writeln!(file, "{{partial json")?;
 
@@ -76,16 +51,10 @@ fn load_ignores_malformed_trailing_event_lines() -> TestResult {
 #[test]
 fn list_sorts_sessions_and_extracts_first_user_title() -> TestResult {
     let (_directory, store) = temp_store();
-    store.append_meta("old", &meta("old", "2026-01-01T00:00:00Z"))?;
+    store.append_meta("old", &session_meta("old").created_at("2026-01-01T00:00:00Z").build())?;
     store.append_event("old", &user_message("old title"))?;
-    store.append_meta("new", &meta("new", "2026-02-01T00:00:00Z"))?;
-    store.append_event(
-        "new",
-        &SessionEvent::Control(aether_sessions::SessionControlEvent::AgentSwitched {
-            from: None,
-            to: Some("coder".to_string()),
-        }),
-    )?;
+    store.append_meta("new", &session_meta("new").created_at("2026-02-01T00:00:00Z").build())?;
+    store.append_event("new", &agent_switched(None, Some("coder")))?;
     store.append_event("new", &user_message("new title\nsecond line"))?;
 
     let sessions = store.list();
@@ -97,7 +66,7 @@ fn list_sorts_sessions_and_extracts_first_user_title() -> TestResult {
 #[test]
 fn list_skips_non_session_jsonl_files_and_malformed_metadata() -> TestResult {
     let (directory, store) = temp_store();
-    store.append_meta("valid", &meta("valid", "2026-01-01T00:00:00Z"))?;
+    store.append_meta("valid", &session_meta("valid").build())?;
     std::fs::write(directory.path().join("prompt-history.jsonl"), "not a session")?;
     std::fs::write(directory.path().join("malformed.jsonl"), "not metadata\n")?;
     std::fs::write(directory.path().join("notes.txt"), "ignored")?;
@@ -111,7 +80,7 @@ fn list_skips_non_session_jsonl_files_and_malformed_metadata() -> TestResult {
 #[test]
 fn prompt_search_is_smart_case_unicode_safe_and_retains_recent_entries() -> TestResult {
     let (_directory, store) = temp_store();
-    store.append_meta("session-1", &meta("session-1", "2026-01-01T00:00:00Z"))?;
+    store.append_meta("session-1", &session_meta("session-1").build())?;
     for index in 0..105 {
         store.append_event("session-1", &user_message(&format!("prompt {index}")))?;
     }
@@ -134,7 +103,7 @@ fn prompt_search_is_smart_case_unicode_safe_and_retains_recent_entries() -> Test
 #[test]
 fn relocating_updates_metadata_and_derived_prompt_entries() -> TestResult {
     let (_directory, store) = temp_store();
-    store.append_meta("session-1", &meta("session-1", "2026-01-01T00:00:00Z"))?;
+    store.append_meta("session-1", &session_meta("session-1").build())?;
     store.append_event("session-1", &user_message("move me"))?;
 
     store.relocate("session-1", Path::new("/tmp/new-project"))?;
@@ -148,20 +117,11 @@ fn relocating_updates_metadata_and_derived_prompt_entries() -> TestResult {
 #[test]
 fn preview_returns_metadata_media_and_tool_counts() -> TestResult {
     let (_directory, store) = temp_store();
-    let session_meta = meta("session-1", "2026-01-01T00:00:00Z");
-    store.append_meta("session-1", &session_meta)?;
+    let meta = session_meta("session-1").build();
+    store.append_meta("session-1", &meta)?;
     store.append_event("session-1", &user_message("preview me"))?;
-    store.append_event("session-1", &assistant_message("assistant reply"))?;
-    store.append_event(
-        "session-1",
-        &SessionEvent::Agent(AgentEvent::Tool(ToolEvent::Call {
-            request: llm::ToolCallRequest {
-                id: "tool-1".to_string(),
-                name: "read".to_string(),
-                arguments: "{}".to_string(),
-            },
-        })),
-    )?;
+    store.append_event("session-1", &assistant_text("message-1", "assistant reply"))?;
+    store.append_event("session-1", &tool_call("tool-1", "read"))?;
 
     let preview = store.preview("session-1")?;
     assert_eq!(preview.session_id, "session-1");
@@ -181,7 +141,7 @@ fn preview_unknown_session_returns_not_found_store_error() {
 #[test]
 fn prompt_search_applies_result_limit_and_reports_truncation() -> TestResult {
     let (_directory, store) = temp_store();
-    store.append_meta("session-1", &meta("session-1", "2026-01-01T00:00:00Z"))?;
+    store.append_meta("session-1", &session_meta("session-1").build())?;
     for index in 0..5 {
         store.append_event("session-1", &user_message(&format!("matching prompt {index}")))?;
     }
@@ -195,7 +155,7 @@ fn prompt_search_applies_result_limit_and_reports_truncation() -> TestResult {
 #[test]
 fn preview_marks_transcript_and_scan_limits_as_truncated() -> TestResult {
     let (_directory, store) = temp_store();
-    store.append_meta("session-1", &meta("session-1", "2026-01-01T00:00:00Z"))?;
+    store.append_meta("session-1", &session_meta("session-1").build())?;
     for index in 0..205 {
         store.append_event("session-1", &user_message(&format!("prompt {index}")))?;
     }
@@ -209,7 +169,7 @@ fn preview_marks_transcript_and_scan_limits_as_truncated() -> TestResult {
 #[test]
 fn list_uses_media_prompt_and_truncates_long_titles() -> TestResult {
     let (_directory, store) = temp_store();
-    store.append_meta("session-1", &meta("session-1", "2026-01-01T00:00:00Z"))?;
+    store.append_meta("session-1", &session_meta("session-1").build())?;
     store.append_event(
         "session-1",
         &SessionEvent::User(UserEvent::Message {
@@ -220,7 +180,7 @@ fn list_uses_media_prompt_and_truncates_long_titles() -> TestResult {
     assert_eq!(media_title.as_deref(), Some("Media prompt"));
 
     let (_directory, store) = temp_store();
-    store.append_meta("session-1", &meta("session-1", "2026-01-01T00:00:00Z"))?;
+    store.append_meta("session-1", &session_meta("session-1").build())?;
     store.append_event("session-1", &user_message(&"a".repeat(120)))?;
     let sessions = store.list();
     let title = sessions[0].title.as_deref().expect("title");
@@ -232,7 +192,7 @@ fn list_uses_media_prompt_and_truncates_long_titles() -> TestResult {
 #[test]
 fn committed_event_survives_a_derived_index_failure_and_can_be_rebuilt() -> TestResult {
     let (directory, store) = temp_store();
-    store.append_meta("session-1", &meta("session-1", "2026-01-01T00:00:00Z"))?;
+    store.append_meta("session-1", &session_meta("session-1").build())?;
     std::fs::create_dir(directory.path().join("prompt-history.jsonl"))?;
 
     store.append_event("session-1", &user_message("repair me"))?;
@@ -247,7 +207,7 @@ fn committed_event_survives_a_derived_index_failure_and_can_be_rebuilt() -> Test
 #[test]
 fn blank_runs_and_oversized_lines_consume_preview_budget() -> TestResult {
     let (directory, store) = temp_store();
-    store.append_meta("session-1", &meta("session-1", "2026-01-01T00:00:00Z"))?;
+    store.append_meta("session-1", &session_meta("session-1").build())?;
     let mut file = std::fs::OpenOptions::new().append(true).open(directory.path().join("session-1.jsonl"))?;
     write!(file, "{}", "\n".repeat(ScanLimits::PREVIEW.max_bytes + 1))?;
     writeln!(file, "{}", serde_json::to_string(&user_message("must not deserialize"))?)?;
