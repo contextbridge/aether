@@ -28,6 +28,7 @@ use tokio::time::sleep;
 use tokio_stream::StreamExt;
 use tokio_stream::StreamMap;
 use tokio_stream::wrappers::ReceiverStream;
+use uuid::Uuid;
 
 /// Internal event type for merging LLM and tool result streams
 #[derive(Debug)]
@@ -326,6 +327,7 @@ impl Agent {
         *state = IterationState::default();
         self.auto_continue.reset();
         self.turn_active = true;
+        self.context.set_turn_id(Some(Uuid::new_v4().to_string()));
         let content = input.content_blocks();
         self.emit(AgentEvent::Turn(TurnEvent::Started { content })).await;
         self.queued_inputs.push_back(input);
@@ -748,6 +750,7 @@ impl Agent {
     }
 
     async fn finish_turn(&mut self, outcome: TurnOutcome) {
+        self.context.set_turn_id(None);
         if std::mem::take(&mut self.turn_active) {
             self.emit(AgentEvent::turn_ended(outcome)).await;
         }

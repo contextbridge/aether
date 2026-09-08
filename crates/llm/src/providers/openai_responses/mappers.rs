@@ -58,7 +58,7 @@ impl ResponsesRequestPolicy {
     }
 
     /// Effort to send, if any — an explicit request beats the provider default.
-    fn effort(&self, context: &Context) -> Option<ReasoningEffort> {
+    pub(crate) fn effort(&self, context: &Context) -> Option<ReasoningEffort> {
         context.reasoning_effort().or(self.default_effort)
     }
 }

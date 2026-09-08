@@ -18,6 +18,12 @@ endpoint. Used by `tests/providers/*/fixture_tests.rs` to verify that the real
 `process_*_stream` parsers extract `TokenUsage` correctly from on-the-wire
 responses.
 
+The `codex_websocket/` directory is different: it holds synthetic JSON event
+arrays, not captured SSE. The in-memory fake Responses server sends each element
+as a WebSocket text message and maintains per-connection response lineage so
+tests can compare continuation requests against full-context replay. These tests
+need no credentials and do not demonstrate live backend interoperability.
+
 ## Why these exist
 
 Hand-written tests check our *mapping* (e.g. `cached_tokens` → `cache_read_tokens`)

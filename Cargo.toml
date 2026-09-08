@@ -52,6 +52,7 @@ agent-client-protocol = { version = "2.0.0", features = ["unstable_elicitation"]
 rmcp = { version = "^3.1.1", default-features = false }
 async-openai = { version = "^0.41.0", features = ["byot", "chat-completion", "responses"] }
 reqwest = { version = "^0.13.4", default-features = false, features = ["json", "query", "rustls", "http2", "stream"] }
+reqwest-websocket = { version = "0.6", default-features = false }
 oauth2 = "5.0"
 keyring-core = "1.0.0"
 apple-native-keyring-store = { version = "1.0.0", features = ["keychain"] }
