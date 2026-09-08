@@ -1,35 +1,32 @@
 use aether_core::core::Prompt;
-use aether_core::events::TurnEvent;
-use aether_core::events::{AgentEvent, Command, UserCommand};
-use aether_core::mcp::mcp;
-use aether_core::testing::{FakeMcpServer, McpBuilderTestExt, mcp_instructions as instructions};
-use llm::testing::FakeLlmProvider;
+use aether_core::testing::{FakeMcpServer, McpTestBuilder, mcp_instructions as instructions, test_agent};
+use llm::ChatMessage;
+use llm::testing::llm_response;
+use std::error::Error;
 
 #[tokio::test]
 async fn test_fake_mcp_server_has_instructions() {
-    // FakeMcpServer has instructions set to "A fake MCP server for testing"
-    let mut spawn = mcp("/workspace").with_fake_mcp("test", FakeMcpServer::new()).spawn().await.unwrap();
-    let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
+    let mcp_test = McpTestBuilder::new().server("test", FakeMcpServer::new()).build().await;
+    let instructions = mcp_test.snapshot().model_instructions();
 
     // FakeMcpServer does provide instructions, so we should get them
-    assert_eq!(snapshot.model_instructions().len(), 1);
-    assert!(snapshot.model_instructions().get("test").unwrap().contains("A fake MCP server for testing"));
+    assert_eq!(instructions.len(), 1);
+    assert!(instructions.get("test").unwrap().contains("A fake MCP server for testing"));
 }
 
 #[tokio::test]
 async fn test_multiple_servers_with_instructions() {
-    let mut spawn = mcp("/workspace")
-        .with_fake_mcp("server1", FakeMcpServer::new())
-        .with_fake_mcp("server2", FakeMcpServer::new())
-        .spawn()
-        .await
-        .unwrap();
-    let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
+    let mcp_test = McpTestBuilder::new()
+        .server("server1", FakeMcpServer::new())
+        .server("server2", FakeMcpServer::new())
+        .build()
+        .await;
+    let instructions = mcp_test.snapshot().model_instructions();
 
     // Both servers should have instructions
-    assert_eq!(snapshot.model_instructions().len(), 2);
-    assert!(snapshot.model_instructions().get("server1").unwrap().contains("A fake MCP server for testing"));
-    assert!(snapshot.model_instructions().get("server2").unwrap().contains("A fake MCP server for testing"));
+    assert_eq!(instructions.len(), 2);
+    assert!(instructions.get("server1").unwrap().contains("A fake MCP server for testing"));
+    assert!(instructions.get("server2").unwrap().contains("A fake MCP server for testing"));
 }
 
 #[tokio::test]
@@ -69,81 +66,40 @@ async fn test_format_mcp_instructions_is_deterministically_ordered() {
 }
 
 #[tokio::test]
-async fn test_agent_builder_includes_mcp_instructions_in_system_prompt() {
-    use aether_core::core::agent;
-
-    let llm = FakeLlmProvider::new(vec![]);
-    let captured_contexts = llm.captured_contexts();
-
-    let mut spawn = mcp("/workspace").with_fake_mcp("test", FakeMcpServer::new()).spawn().await.unwrap();
-    let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
-
-    let (tx, mut rx, _handle) = agent(llm)
+async fn test_agent_builder_includes_mcp_instructions_in_system_prompt() -> Result<(), Box<dyn Error>> {
+    let result = test_agent()
+        .llm_responses(&[llm_response("message_1").text(&["done"]).build()])
         .system_prompt(Prompt::text("You are a test agent"))
         .system_prompt(Prompt::McpInstructions(instructions(&[("test-server", "Test instructions")])))
-        .tools(spawn.handle().clone(), snapshot.tool_definitions())
-        .spawn()
-        .await
-        .unwrap();
+        .user_text("test")
+        .run_with_context()
+        .await?;
 
-    // Send a simple message to trigger context capture
-    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("test")] })).await.unwrap();
-    drop(tx);
-
-    // Wait for the agent to process
-    while let Some(msg) = rx.recv().await {
-        if matches!(msg, AgentEvent::Turn(TurnEvent::Ended { .. })) {
-            break;
-        }
-    }
-
-    // Check that the captured context includes our MCP instructions
-    let contexts = captured_contexts.lock().unwrap();
-    assert!(!contexts.is_empty());
-
-    // The system message should contain our MCP instructions
-    if let Some(first_msg) = contexts[0].messages().first() {
-        if let llm::ChatMessage::System { content, .. } = first_msg {
-            assert!(content.contains("<mcp-server name=\"test-server\">"));
-            assert!(content.contains("Test instructions"));
-        } else {
-            panic!("Expected system message, got: {first_msg:?}");
-        }
-    } else {
-        panic!("Expected at least one message");
-    }
+    let contexts = result.captured_contexts.lock().unwrap();
+    let first_message = contexts[0].messages().first().expect("expected at least one message");
+    let ChatMessage::System { content, .. } = first_message else {
+        panic!("Expected system message, got: {first_message:?}");
+    };
+    assert!(content.contains("<mcp-server name=\"test-server\">"));
+    assert!(content.contains("Test instructions"));
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_agent_builder_works_without_mcp_instructions() {
-    use aether_core::core::agent;
-
-    let llm = FakeLlmProvider::new(vec![]);
-    let captured_contexts = llm.captured_contexts();
-
-    let mut spawn = mcp("/workspace").with_fake_mcp("test", FakeMcpServer::new()).spawn().await.unwrap();
-    let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
-
-    // No mcp_instructions provided - should still work
-    let (tx, mut rx, _handle) = agent(llm)
+async fn test_agent_builder_works_without_mcp_instructions() -> Result<(), Box<dyn Error>> {
+    let result = test_agent()
+        .llm_responses(&[llm_response("message_1").text(&["done"]).build()])
         .system_prompt(Prompt::text("You are a test agent"))
-        .tools(spawn.handle().clone(), snapshot.tool_definitions())
-        .spawn()
-        .await
-        .unwrap();
+        .user_text("test")
+        .run_with_context()
+        .await?;
 
-    // Send a simple message
-    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("test")] })).await.unwrap();
-    drop(tx);
-
-    // Wait for the agent to process
-    while let Some(msg) = rx.recv().await {
-        if matches!(msg, AgentEvent::Turn(TurnEvent::Ended { .. })) {
-            break;
-        }
-    }
-
-    // Should have captured context without any MCP instructions section
-    let contexts = captured_contexts.lock().unwrap();
-    assert!(!contexts.is_empty());
+    let contexts = result.captured_contexts.lock().unwrap();
+    let first_message = contexts[0].messages().first().expect("expected at least one message");
+    let ChatMessage::System { content, .. } = first_message else {
+        panic!("Expected system message, got: {first_message:?}");
+    };
+    assert!(content.contains("You are a test agent"));
+    assert!(!content.contains("<mcp-server"), "no MCP instructions section should be added: {content}");
+    Ok(())
 }

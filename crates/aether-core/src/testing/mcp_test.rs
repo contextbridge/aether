@@ -4,13 +4,14 @@ use crate::mcp::{McpHandle, McpRuntime, ServerFactory, ToolCallStream, mcp};
 use futures::{FutureExt, StreamExt};
 use mcp_utils::client::{
     CallToolOptions, CancellationToken, InMemoryServerSpec, McpConnectionDetails, McpServer, McpTransport,
-    ToolCallEvent, ToolExposure,
+    ToolCallEvent, ToolExposure, ToolFilter,
 };
 use mcp_utils::testing::ElicitationScript;
 use rmcp::model::{CreateTaskResult, ElicitResult, ProgressNotificationParam};
 use rmcp::{RoleServer, ServerHandler, service::DynService};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
+use std::path::Path;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -27,6 +28,7 @@ pub struct McpTestBuilder {
     elicitation_responses: Vec<ElicitResult>,
     trace_context: Option<TraceContext>,
     tool_timeout: Duration,
+    tool_filter: ToolFilter,
 }
 
 fn task_outcome(outcome: crate::events::TaskOutcome) -> TaskOutcome {
@@ -42,7 +44,7 @@ fn task_outcome(outcome: crate::events::TaskOutcome) -> TaskOutcome {
 
 pub struct McpTest {
     mcp: McpHandle,
-    _runtime: McpRuntime,
+    runtime: McpRuntime,
     snapshot: McpConnectionDetails,
     elicitations: ElicitationScript,
     deferred_tools: tokio::sync::Mutex<VecDeque<DeferredTool>>,
@@ -125,8 +127,14 @@ impl McpTestBuilder {
         self
     }
 
+    /// Filter which tools the servers expose and the gateway serves.
+    pub fn tool_filter(mut self, filter: ToolFilter) -> Self {
+        self.tool_filter = filter;
+        self
+    }
+
     pub async fn build(self) -> McpTest {
-        let builder = mcp("/workspace").with_servers(self.servers);
+        let builder = mcp("/workspace").with_servers(self.servers).with_tool_filter(self.tool_filter);
         let builder = self
             .factories
             .into_iter()
@@ -137,7 +145,7 @@ impl McpTestBuilder {
 
         McpTest {
             mcp: runtime.handle().clone(),
-            _runtime: runtime,
+            runtime,
             snapshot,
             elicitations: ElicitationScript::spawn(event_rx, self.elicitation_responses),
             deferred_tools: tokio::sync::Mutex::new(VecDeque::new()),
@@ -240,6 +248,11 @@ impl McpTest {
 
     pub fn snapshot(&self) -> &McpConnectionDetails {
         &self.snapshot
+    }
+
+    /// The Unix socket path of the deferred-tool gateway, if one was started.
+    pub fn gateway_endpoint(&self) -> Option<&Path> {
+        self.runtime.gateway_endpoint()
     }
 
     pub fn subscribe(&self) -> watch::Receiver<McpConnectionDetails> {
