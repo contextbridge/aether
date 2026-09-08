@@ -237,7 +237,8 @@ fn process_event(
         }
         ResponsesStreamEvent::OutputItemAdded(e) => {
             if let OutputItem::FunctionCall(call) = e.item {
-                let tool_responses = tool_collector.handle_delta(e.output_index, call.id, Some(call.name), None);
+                let tool_responses =
+                    tool_collector.handle_delta(e.output_index, Some(call.call_id), Some(call.name), None);
                 responses.extend(tool_responses.into_iter().map(Ok));
             }
         }
@@ -354,15 +355,15 @@ mod tests {
 
         assert!(matches!(responses[0], LlmResponse::Start { .. }));
         assert!(
-            matches!(&responses[1], LlmResponse::ToolRequestStart { id, name } if id == "fc_1" && name == "read_file")
+            matches!(&responses[1], LlmResponse::ToolRequestStart { id, name } if id == "call_1" && name == "read_file")
         );
-        assert!(matches!(responses[2], LlmResponse::ToolRequestArg { .. }));
-        assert!(matches!(responses[3], LlmResponse::ToolRequestArg { .. }));
+        assert!(matches!(&responses[2], LlmResponse::ToolRequestArg { id, .. } if id == "call_1"));
+        assert!(matches!(&responses[3], LlmResponse::ToolRequestArg { id, .. } if id == "call_1"));
 
         let tc = responses.iter().find(|r| matches!(r, LlmResponse::ToolRequestComplete { .. }));
         assert!(tc.is_some());
         if let LlmResponse::ToolRequestComplete { tool_call } = tc.unwrap() {
-            assert_eq!(tool_call.id, "fc_1");
+            assert_eq!(tool_call.id, "call_1");
             assert_eq!(tool_call.name, "read_file");
             assert_eq!(tool_call.arguments, r#"{"path":"foo.rs"}"#);
         }
