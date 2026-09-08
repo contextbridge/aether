@@ -6,7 +6,7 @@ use tokio_stream::StreamExt;
 use crate::providers::tool_call_collector::ToolCallCollector;
 use crate::{LlmResponse, ProviderError, ProviderErrorKind, Result, StopReason, TokenUsage};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ResponsesUsage {
     usage: ResponseUsage,
     cache_write_tokens: Option<u32>,
@@ -63,17 +63,34 @@ pub enum ResponsesStreamEvent {
     Failed(ResponsesFailedEvent),
     #[serde(rename = "error")]
     Error(ResponsesErrorEvent),
+    /// Transport metadata carrying routing headers but no response content.
+    #[serde(rename = "response.metadata", alias = "codex.response.metadata")]
+    Metadata(ResponsesMetadataEvent),
     #[serde(other)]
     Ignored,
 }
 
 impl ResponsesStreamEvent {
+    /// Whether this event ends the response, successfully or not.
+    pub fn ends_response(&self) -> bool {
+        matches!(self, Self::Completed(_) | Self::Incomplete(_) | Self::Failed(_) | Self::Error(_))
+    }
+
+    /// Split a failure the server reported as an event out of the stream.
+    pub fn into_result(self) -> std::result::Result<Self, ProviderError> {
+        match self {
+            Self::Failed(event) => Err(event.into()),
+            Self::Error(event) => Err(event.into()),
+            event => Ok(event),
+        }
+    }
+
     /// Whether this event may legitimately arrive before `response.created`:
     /// event types we ignore, and failures the endpoint reports *instead of*
     /// opening a response. Rejecting those would replace the server's own
     /// message with a generic interrupt.
     fn may_precede_creation(&self) -> bool {
-        matches!(self, Self::Ignored | Self::Error(_) | Self::Failed(_))
+        matches!(self, Self::Ignored | Self::Metadata(_) | Self::Error(_) | Self::Failed(_))
     }
 }
 
@@ -87,15 +104,78 @@ pub struct ResponsesCreated {
     pub id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 pub struct ResponsesFailedEvent {
     pub response: ResponsesFailed,
+    #[serde(default)]
+    pub status: Option<u16>,
+    #[serde(default)]
+    pub headers: ResponsesHeaders,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct ResponsesFailed {
+    #[serde(default)]
+    pub error: Option<ResponsesError>,
+}
+
+/// A top-level `error` event. `OpenAI` sends the error fields inline; the Codex
+/// WebSocket wraps them in an `error` object beside the HTTP status and headers.
+#[derive(Debug, Deserialize, Default)]
+pub struct ResponsesErrorEvent {
+    #[serde(default)]
+    pub error: Option<ResponsesError>,
+    #[serde(flatten)]
+    pub inline: ResponsesError,
+    #[serde(default)]
+    pub status: Option<u16>,
+    #[serde(default)]
+    pub headers: ResponsesHeaders,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct ResponsesError {
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default, rename = "type")]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ResponsesFailed {
+pub struct ResponsesMetadataEvent {
     #[serde(default)]
-    pub error: Option<ResponsesErrorEvent>,
+    pub headers: ResponsesHeaders,
+}
+
+/// Response headers echoed inside an event frame.
+#[derive(Debug, Deserialize, Default)]
+pub struct ResponsesHeaders(serde_json::Value);
+
+impl ResponsesHeaders {
+    /// Case-insensitive lookup that unwraps nested single-element arrays.
+    pub fn get(&self, name: &str) -> Option<&str> {
+        let (_, mut value) = self.0.as_object()?.iter().find(|(key, _)| key.eq_ignore_ascii_case(name))?;
+        while let serde_json::Value::Array(values) = value {
+            value = values.first()?;
+        }
+        value.as_str()
+    }
+}
+
+impl From<ResponsesErrorEvent> for ProviderError {
+    fn from(event: ResponsesErrorEvent) -> Self {
+        let error = event.error.unwrap_or(event.inline);
+        map_responses_error(error, event.status, &event.headers, ProviderErrorKind::Unknown)
+    }
+}
+
+impl From<ResponsesFailedEvent> for ProviderError {
+    fn from(event: ResponsesFailedEvent) -> Self {
+        let error = event.response.error.unwrap_or_default();
+        map_responses_error(error, event.status, &event.headers, ProviderErrorKind::Api)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,29 +205,16 @@ pub struct ResponsesCompletedEvent {
     pub response: ResponsesCompleted,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ResponsesCompleted {
+    #[serde(default)]
+    pub id: Option<String>,
     #[serde(default)]
     pub usage: Option<ResponsesUsage>,
     #[serde(default)]
     pub status: Option<Status>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ResponsesErrorEvent {
-    #[serde(default)]
-    pub code: Option<String>,
-    #[serde(default)]
-    pub message: String,
-}
-
-fn map_responses_error(code: Option<String>, message: String, fallback: ProviderErrorKind) -> ProviderError {
-    let kind = match code.as_deref() {
-        Some("server_error") => ProviderErrorKind::Server,
-        Some("rate_limit_exceeded") => ProviderErrorKind::RateLimit,
-        _ => fallback,
-    };
-    ProviderError::new(kind, message).with_code(code)
+    #[serde(default, deserialize_with = "deserialize_completed_output")]
+    pub output: Option<Vec<OutputItem>>,
 }
 
 /// Process an `OpenAI` Responses event stream into `LlmResponse` items.
@@ -166,7 +233,10 @@ where
             let event = match result {
                 Ok(event) => event,
                 Err(e) => {
-                    yield Err(ProviderError::stream_interrupted(e.to_string()).into());
+                    yield Err(match e {
+                        crate::LlmError::Provider(_) => e,
+                        other => ProviderError::stream_interrupted(other.to_string()).into(),
+                    });
                     return;
                 }
             };
@@ -220,6 +290,45 @@ struct ResponsesInputTokenDetailsExtension {
     cache_write_tokens: Option<u32>,
 }
 
+fn deserialize_completed_output<'de, D>(deserializer: D) -> std::result::Result<Option<Vec<OutputItem>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let output = Option::<Vec<serde_json::Value>>::deserialize(deserializer)?;
+    // Unsupported replay metadata or malformed items disable continuation, not response delivery.
+    Ok(output.and_then(|items| {
+        items
+            .into_iter()
+            .map(|item| {
+                if ["phase", "namespace"].iter().any(|key| !item[*key].is_null()) {
+                    return None;
+                }
+                serde_json::from_value(item).ok()
+            })
+            .collect()
+    }))
+}
+
+fn map_responses_error(
+    error: ResponsesError,
+    status: Option<u16>,
+    headers: &ResponsesHeaders,
+    fallback: ProviderErrorKind,
+) -> ProviderError {
+    let kind = status
+        .map(ProviderErrorKind::from_http_status)
+        .or_else(|| error.code.as_deref().and_then(ProviderErrorKind::from_code))
+        .unwrap_or(if error.kind.as_deref() == Some("invalid_request_error") {
+            ProviderErrorKind::Api
+        } else {
+            fallback
+        });
+    let message = error.message.unwrap_or_else(|| "Responses API request failed".into());
+    ProviderError::new(kind, message)
+        .with_code(error.code)
+        .with_http_metadata(status, headers.get("x-request-id").map(str::to_owned))
+}
+
 fn process_event(
     event: ResponsesStreamEvent,
     tool_collector: &mut ToolCallCollector<u32>,
@@ -237,7 +346,8 @@ fn process_event(
         }
         ResponsesStreamEvent::OutputItemAdded(e) => {
             if let OutputItem::FunctionCall(call) = e.item {
-                let tool_responses = tool_collector.handle_delta(e.output_index, call.id, Some(call.name), None);
+                let tool_responses =
+                    tool_collector.handle_delta(e.output_index, Some(call.call_id), Some(call.name), None);
                 responses.extend(tool_responses.into_iter().map(Ok));
             }
         }
@@ -274,18 +384,10 @@ fn process_event(
                 _ => {}
             }
         }
-        ResponsesStreamEvent::Failed(e) => {
-            let error = e.response.error.map_or_else(
-                || ProviderError::new(ProviderErrorKind::Api, "Unknown Responses API failure"),
-                |e| map_responses_error(e.code, e.message, ProviderErrorKind::Api),
-            );
-            responses.push(Err(error.into()));
-        }
-        ResponsesStreamEvent::Error(e) => {
-            let message = format!("Responses API error: {}", e.message);
-            responses.push(Err(map_responses_error(e.code, message, ProviderErrorKind::Unknown).into()));
-        }
+        ResponsesStreamEvent::Failed(e) => responses.push(Err(ProviderError::from(e).into())),
+        ResponsesStreamEvent::Error(e) => responses.push(Err(ProviderError::from(e).into())),
         ResponsesStreamEvent::Ignored
+        | ResponsesStreamEvent::Metadata(_)
         | ResponsesStreamEvent::OutputTextDelta(_)
         | ResponsesStreamEvent::ReasoningSummaryTextDelta(_) => {}
     }
@@ -308,6 +410,23 @@ mod tests {
             responses.push(result.unwrap());
         }
         responses
+    }
+
+    #[tokio::test]
+    async fn classified_transport_errors_preserve_diagnostics() {
+        for (kind, status, code) in [
+            (ProviderErrorKind::Authentication, 401, "invalid_api_key"),
+            (ProviderErrorKind::RateLimit, 429, "rate_limit_exceeded"),
+        ] {
+            let expected = ProviderError::new(kind, "rejected")
+                .with_http_status(status)
+                .with_code(Some(code.into()))
+                .with_request_id(Some("req-1".into()));
+            let stream = tokio_stream::iter(vec![Err(expected.clone().into())]);
+            let responses = process_response_stream(stream).collect::<Vec<_>>().await;
+            assert_eq!(responses.len(), 1);
+            assert_eq!(responses[0].as_ref().unwrap_err().provider(), Some(&expected));
+        }
     }
 
     #[tokio::test]
@@ -354,15 +473,15 @@ mod tests {
 
         assert!(matches!(responses[0], LlmResponse::Start { .. }));
         assert!(
-            matches!(&responses[1], LlmResponse::ToolRequestStart { id, name } if id == "fc_1" && name == "read_file")
+            matches!(&responses[1], LlmResponse::ToolRequestStart { id, name } if id == "call_1" && name == "read_file")
         );
-        assert!(matches!(responses[2], LlmResponse::ToolRequestArg { .. }));
-        assert!(matches!(responses[3], LlmResponse::ToolRequestArg { .. }));
+        assert!(matches!(&responses[2], LlmResponse::ToolRequestArg { id, .. } if id == "call_1"));
+        assert!(matches!(&responses[3], LlmResponse::ToolRequestArg { id, .. } if id == "call_1"));
 
         let tc = responses.iter().find(|r| matches!(r, LlmResponse::ToolRequestComplete { .. }));
         assert!(tc.is_some());
         if let LlmResponse::ToolRequestComplete { tool_call } = tc.unwrap() {
-            assert_eq!(tool_call.id, "fc_1");
+            assert_eq!(tool_call.id, "call_1");
             assert_eq!(tool_call.name, "read_file");
             assert_eq!(tool_call.arguments, r#"{"path":"foo.rs"}"#);
         }
@@ -370,10 +489,7 @@ mod tests {
 
     #[tokio::test]
     async fn error_event_without_code_stays_retryable() {
-        let stream = make_stream(vec![ResponsesStreamEvent::Error(ResponsesErrorEvent {
-            code: None,
-            message: "Rate limit exceeded".to_string(),
-        })]);
+        let stream = make_stream(vec![error_event(None, "Rate limit exceeded".to_string())]);
         let mut response_stream = Box::pin(process_response_stream(stream));
 
         let mut responses = Vec::new();
@@ -389,10 +505,7 @@ mod tests {
 
     #[tokio::test]
     async fn error_event_with_unknown_code_stays_retryable() {
-        let events = vec![Ok(ResponsesStreamEvent::Error(ResponsesErrorEvent {
-            code: Some("bogus".to_string()),
-            message: "boom".to_string(),
-        }))];
+        let events = vec![Ok(error_event(Some("bogus".to_string()), "boom".to_string()))];
         let responses = process_response_stream(tokio_stream::iter(events)).collect::<Vec<_>>().await;
         let err = responses[0].as_ref().expect_err("expected error to surface as Err");
         assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::Unknown), "got {err:?}");
@@ -401,10 +514,7 @@ mod tests {
 
     #[tokio::test]
     async fn error_event_with_rate_limit_code_is_rate_limited() {
-        let events = vec![Ok(ResponsesStreamEvent::Error(ResponsesErrorEvent {
-            code: Some("rate_limit_exceeded".to_string()),
-            message: "slow down".to_string(),
-        }))];
+        let events = vec![Ok(error_event(Some("rate_limit_exceeded".to_string()), "slow down".to_string()))];
         let responses = process_response_stream(tokio_stream::iter(events)).collect::<Vec<_>>().await;
         let err = responses[0].as_ref().expect_err("expected error to surface as Err");
         assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::RateLimit), "got {err:?}");
@@ -413,15 +523,9 @@ mod tests {
 
     #[tokio::test]
     async fn failed_event_with_server_error_code_is_retryable() {
-        let responses = failed_events([ResponsesFailedEvent {
-            response: ResponsesFailed {
-                error: Some(ResponsesErrorEvent {
-                    code: Some("server_error".to_string()),
-                    message: "The server had an error".to_string(),
-                }),
-            },
-        }])
-        .await;
+        let responses =
+            failed_events([failed_event(Some("server_error".to_string()), "The server had an error".to_string())])
+                .await;
         let err = responses[0].as_ref().expect_err("expected failure to surface as Err");
         assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::Server), "got {err:?}");
         assert!(err.is_retryable());
@@ -430,15 +534,8 @@ mod tests {
 
     #[tokio::test]
     async fn failed_event_with_rate_limit_code_is_retryable() {
-        let responses = failed_events([ResponsesFailedEvent {
-            response: ResponsesFailed {
-                error: Some(ResponsesErrorEvent {
-                    code: Some("rate_limit_exceeded".to_string()),
-                    message: "slow down".to_string(),
-                }),
-            },
-        }])
-        .await;
+        let responses =
+            failed_events([failed_event(Some("rate_limit_exceeded".to_string()), "slow down".to_string())]).await;
         let err = responses[0].as_ref().expect_err("expected failure to surface as Err");
         assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::RateLimit), "got {err:?}");
         assert!(err.is_retryable());
@@ -447,12 +544,7 @@ mod tests {
     #[tokio::test]
     async fn failed_event_with_unknown_code_is_terminal() {
         for code in [Some("invalid_prompt".to_string()), Some("bogus".to_string()), None] {
-            let responses = failed_events([ResponsesFailedEvent {
-                response: ResponsesFailed {
-                    error: Some(ResponsesErrorEvent { code: code.clone(), message: "bad".to_string() }),
-                },
-            }])
-            .await;
+            let responses = failed_events([failed_event(code.clone(), "bad".to_string())]).await;
             let err = responses[0].as_ref().expect_err("expected failure to surface as Err");
             assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::Api), "got {err:?}");
             assert!(!err.is_retryable(), "unknown/failed codes must be terminal: {err:?}");
@@ -461,10 +553,7 @@ mod tests {
 
     #[tokio::test]
     async fn error_event_with_server_error_code_is_retryable() {
-        let events = vec![Ok(ResponsesStreamEvent::Error(ResponsesErrorEvent {
-            code: Some("server_error".to_string()),
-            message: "boom".to_string(),
-        }))];
+        let events = vec![Ok(error_event(Some("server_error".to_string()), "boom".to_string()))];
         let responses = process_response_stream(tokio_stream::iter(events)).collect::<Vec<_>>().await;
         let err = responses[0].as_ref().expect_err("expected error to surface as Err");
         assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::Server), "got {err:?}");
@@ -516,10 +605,7 @@ mod tests {
 
     #[tokio::test]
     async fn error_event_before_creation_keeps_the_servers_message() {
-        let events = vec![Ok(ResponsesStreamEvent::Error(ResponsesErrorEvent {
-            code: None,
-            message: "Rate limit exceeded".to_string(),
-        }))];
+        let events = vec![Ok(error_event(None, "Rate limit exceeded".to_string()))];
         let responses = process_response_stream(tokio_stream::iter(events)).collect::<Vec<_>>().await;
 
         let err = responses[0].as_ref().expect_err("expected the error event to surface as Err");
@@ -529,11 +615,7 @@ mod tests {
 
     #[tokio::test]
     async fn failure_event_before_creation_keeps_the_servers_message() {
-        let events = vec![Ok(ResponsesStreamEvent::Failed(ResponsesFailedEvent {
-            response: ResponsesFailed {
-                error: Some(ResponsesErrorEvent { code: None, message: "model overloaded".to_string() }),
-            },
-        }))];
+        let events = vec![Ok(ResponsesStreamEvent::Failed(failed_event(None, "model overloaded".to_string())))];
         let responses = process_response_stream(tokio_stream::iter(events)).collect::<Vec<_>>().await;
 
         let err = responses[0].as_ref().expect_err("expected the failure event to surface as Err");
@@ -600,7 +682,6 @@ mod tests {
         assert_eq!(usage.cache_creation_tokens.map(crate::Tokens::get), Some(1024));
     }
 
-    /// Decode a captured SSE body and run it through the shared processor.
     async fn failed_events<const N: usize>(events: [ResponsesFailedEvent; N]) -> Vec<Result<LlmResponse>> {
         let events = events.into_iter().map(ResponsesStreamEvent::Failed).map(Ok);
         process_response_stream(tokio_stream::iter(events)).collect().await
@@ -706,6 +787,20 @@ mod tests {
         assert!(responses.is_empty());
     }
 
+    fn error_event(code: Option<String>, message: String) -> ResponsesStreamEvent {
+        ResponsesStreamEvent::Error(ResponsesErrorEvent {
+            inline: ResponsesError { code, message: Some(message), kind: None },
+            ..ResponsesErrorEvent::default()
+        })
+    }
+
+    fn failed_event(code: Option<String>, message: String) -> ResponsesFailedEvent {
+        ResponsesFailedEvent {
+            response: ResponsesFailed { error: Some(ResponsesError { code, message: Some(message), kind: None }) },
+            ..ResponsesFailedEvent::default()
+        }
+    }
+
     fn text_delta(delta: &str) -> ResponsesStreamEvent {
         ResponsesStreamEvent::OutputTextDelta(ResponsesTextDeltaEvent { delta: delta.to_string() })
     }
@@ -723,7 +818,7 @@ mod tests {
 
     fn completed(status: Status, usage: Option<ResponsesUsage>) -> ResponsesStreamEvent {
         ResponsesStreamEvent::Completed(ResponsesCompletedEvent {
-            response: ResponsesCompleted { usage, status: Some(status) },
+            response: ResponsesCompleted { id: None, usage, status: Some(status), output: None },
         })
     }
 

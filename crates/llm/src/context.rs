@@ -21,6 +21,8 @@ pub struct Context {
     prompt_cache_key: Option<String>,
     #[serde(skip)]
     session_affinity_key: Option<String>,
+    #[serde(skip)]
+    turn_id: Option<String>,
 }
 
 impl Context {
@@ -32,6 +34,7 @@ impl Context {
             model_settings: ModelSettings::default(),
             prompt_cache_key: None,
             session_affinity_key: None,
+            turn_id: None,
         }
     }
 
@@ -49,6 +52,15 @@ impl Context {
 
     pub fn set_session_affinity_key(&mut self, key: Option<String>) {
         self.session_affinity_key = key;
+    }
+
+    /// Runtime identity shared by inference requests within one user turn.
+    pub fn turn_id(&self) -> Option<&str> {
+        self.turn_id.as_deref()
+    }
+
+    pub fn set_turn_id(&mut self, id: Option<String>) {
+        self.turn_id = id;
     }
 
     pub fn reasoning_effort(&self) -> Option<ReasoningEffort> {
@@ -225,6 +237,23 @@ mod tests {
 
     use crate::ToolCallResult;
     use crate::catalog::LlmModel;
+
+    #[test]
+    fn turn_identity_is_runtime_only_and_survives_transformations() {
+        let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
+        assert_eq!(context.turn_id(), None);
+        context.set_turn_id(Some("turn-1".into()));
+        assert_eq!(context.clone().turn_id(), Some("turn-1"));
+        assert_eq!(context.filter_encrypted_reasoning(None).turn_id(), Some("turn-1"));
+        assert_eq!(context.with_compacted_summary("summary").turn_id(), Some("turn-1"));
+        context.replace_conversation(vec![ChatMessage::user("replacement")]);
+        assert_eq!(context.turn_id(), Some("turn-1"));
+        let json = serde_json::to_value(&context).unwrap();
+        assert!(json.get("turn_id").is_none());
+        assert_eq!(serde_json::from_value::<Context>(json).unwrap().turn_id(), None);
+        context.set_turn_id(None);
+        assert_eq!(context.turn_id(), None);
+    }
 
     fn create_test_context() -> Context {
         let messages = vec![

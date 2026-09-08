@@ -12,5 +12,6 @@ mod agent {
     mod replace_conversation_tests;
     mod retry_tests;
     mod trace_tests;
+    mod turn_identity_tests;
     mod usage_tests;
 }

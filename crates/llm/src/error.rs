@@ -51,7 +51,7 @@ pub enum LlmError {
     /// rejected the input or contained malformed data).
     #[error("Failed to build provider request: {0}")]
     ProviderRequest(String),
-    /// An upstream client library rejected an argument as invalid.
+    /// A caller or upstream client library supplied an invalid argument.
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
 }
@@ -69,6 +69,28 @@ pub enum ProviderErrorKind {
 }
 
 impl ProviderErrorKind {
+    pub fn from_http_status(status: u16) -> Self {
+        match status {
+            401 | 403 => Self::Authentication,
+            408 | 504 => Self::Timeout,
+            429 => Self::RateLimit,
+            500..600 => Self::Server,
+            _ => Self::Api,
+        }
+    }
+
+    /// The kind implied by an `OpenAI`-style error code, when the code is recognized.
+    pub(crate) fn from_code(code: &str) -> Option<Self> {
+        match code {
+            "invalid_api_key" | "invalid_authentication" | "authentication_error" | "token_expired" => {
+                Some(Self::Authentication)
+            }
+            "rate_limit_exceeded" => Some(Self::RateLimit),
+            "server_error" => Some(Self::Server),
+            _ => None,
+        }
+    }
+
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
@@ -120,14 +142,7 @@ impl ProviderError {
     }
 
     pub fn from_http_status(status: u16, message: impl Into<String>) -> Self {
-        match status {
-            401 | 403 => Self::authentication(message),
-            408 | 504 => Self::timeout(message),
-            429 => Self::rate_limit(message),
-            s if (500..600).contains(&s) => Self::server(message),
-            _ => Self::api(message),
-        }
-        .with_http_status(status)
+        Self::new(ProviderErrorKind::from_http_status(status), message).with_http_status(status)
     }
 
     pub fn with_http_status(mut self, status: u16) -> Self {

@@ -89,9 +89,7 @@ impl ModelProviderParser {
             Box::new(move |model: &str, connection: ProviderConnectionConfig| {
                 let store = Arc::clone(&store);
                 let model = model.to_string();
-                Box::pin(async move {
-                    Ok(Box::new(CodexProvider::new(store).with_connection(connection).with_model(&model)) as _)
-                })
+                Box::pin(async move { Ok(Box::new(CodexProvider::new(store, connection, &model)?) as _) })
             }),
         );
         self

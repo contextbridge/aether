@@ -24,7 +24,7 @@ Errors that can occur when interacting with LLM providers.
 - **`InvalidModelSpec`** -- A `provider:model` identity could not be parsed.
 - **`MissingProviderUrl`** -- Provider endpoint URL has not been configured.
 - **`ProviderRequest`** -- A provider request, header, or signature could not be constructed (e.g. an SDK builder rejected the input or contained malformed data).
-- **`InvalidArgument`** -- An upstream client library rejected an argument as invalid.
+- **`InvalidArgument`** -- A caller or upstream client library supplied an invalid argument, such as reusing a Codex provider for a different conversation.
 
 
 # Type alias

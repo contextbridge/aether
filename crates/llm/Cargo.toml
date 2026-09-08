@@ -2,6 +2,7 @@
 name = "aether-llm"
 version = "0.8.1"
 edition = "2024"
+rust-version = "1.98"
 description = "Multi-provider LLM abstraction layer for the Aether AI agent framework"
 license = "MIT"
 repository = "https://github.com/contextbridge/aether"
@@ -35,7 +36,7 @@ bedrock = [
     "dep:base64",
     "dep:time",
 ]
-codex = ["dep:aether-auth", "dep:oauth2", "dep:base64", "dep:url"]
+codex = ["dep:aether-auth", "dep:oauth2", "dep:base64", "dep:url", "dep:reqwest-websocket"]
 
 [dependencies]
 async-openai = { workspace = true }
@@ -50,6 +51,7 @@ base64 = { workspace = true, optional = true }
 chrono = { workspace = true }
 eventsource-stream = { workspace = true }
 reqwest = { workspace = true }
+reqwest-websocket = { workspace = true, optional = true }
 futures = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true, optional = true }
@@ -78,7 +80,8 @@ llm-codegen = { package = "aether-llm-codegen", path = "../llm-codegen", version
 
 [dev-dependencies]
 aether-doctest = { path = "../doctest" }
-axum = { workspace = true }
+axum = { workspace = true, features = ["ws"] }
+tokio = { workspace = true, features = ["test-util"] }
 tempfile = { workspace = true }
 tracing-subscriber = { workspace = true }
 
@@ -89,3 +92,7 @@ required-features = ["bedrock"]
 [[example]]
 name = "bedrock_mantle"
 required-features = ["bedrock"]
+
+[[example]]
+name = "codex_websocket"
+required-features = ["codex", "aether-auth/keyring"]

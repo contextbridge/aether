@@ -58,7 +58,7 @@ impl ResponsesRequestPolicy {
     }
 
     /// Effort to send, if any — an explicit request beats the provider default.
-    fn effort(&self, context: &Context) -> Option<ReasoningEffort> {
+    pub(crate) fn effort(&self, context: &Context) -> Option<ReasoningEffort> {
         context.reasoning_effort().or(self.default_effort)
     }
 }
@@ -160,9 +160,6 @@ pub(crate) fn map_messages(messages: &[ChatMessage]) -> Result<(Option<String>, 
                 }));
             }
             ChatMessage::Assistant { content, tool_calls, reasoning, .. } => {
-                if !content.is_empty() {
-                    items.push(easy_message(Role::Assistant, content.clone()));
-                }
                 if let Some(encrypted) = &reasoning.encrypted_content {
                     items.push(InputItem::Item(Item::Reasoning(ReasoningItem {
                         id: Some(encrypted.id.clone()),
@@ -171,6 +168,9 @@ pub(crate) fn map_messages(messages: &[ChatMessage]) -> Result<(Option<String>, 
                         content: None,
                         status: None,
                     })));
+                }
+                if !content.is_empty() {
+                    items.push(easy_message(Role::Assistant, content.clone()));
                 }
                 for tc in tool_calls {
                     items.push(InputItem::Item(Item::FunctionCall(FunctionToolCall {
@@ -565,15 +565,16 @@ mod tests {
         }];
 
         let (_, items) = map_messages(&messages).unwrap();
-        // Should have: easy_message (text) + reasoning item = 2
         assert_eq!(items.len(), 2);
 
-        let reasoning_item = &items[1];
+        // Reasoning precedes the message, matching the order the model produced them.
+        let reasoning_item = &items[0];
         if let InputItem::Item(Item::Reasoning(r)) = reasoning_item {
             assert_eq!(r.encrypted_content.as_deref(), Some("encrypted-blob"));
         } else {
             panic!("Expected Item::Reasoning, got {reasoning_item:?}");
         }
+        assert!(matches!(&items[1], InputItem::EasyMessage(_)));
     }
 
     #[test]

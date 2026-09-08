@@ -163,6 +163,24 @@ context.set_model_settings(ModelSettings {
 # }
 ```
 
+### Codex WebSocket lifecycle
+
+With the `codex` feature, each `CodexProvider::new(oauth_store, connection, model)?`
+owns one conversation over a persistent Responses `WebSocket`. Reuse that
+provider for sequential requests; create separate providers for concurrent
+conversations. Clones share the same session. Overlapping calls are serialized
+through a bounded request channel; consume or drop the active stream before
+awaiting the next one.
+
+The first request's nonempty `Context::set_session_affinity_key` binds the
+conversation's routing ID; without one, the provider generates a stable ID.
+A later request cannot bind the provider to a different conversation. Set a
+fresh `Context::set_turn_id` per user turn; Aether's core agent does both
+automatically. Dropping an active stream before its terminal result discards
+the socket; dropping a queued stream cancels only that request. Once `Done`
+is yielded the session is ready for the next request.
+Idle sockets expire even while the provider remains alive.
+
 ## Providers
 
 | Provider | Example model string | Env var |
