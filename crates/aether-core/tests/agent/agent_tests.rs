@@ -6,8 +6,8 @@ use aether_core::{
     events::{AgentEvent, Command, TurnOutcome, UserCommand},
     testing::{agent_event, content_events, test_agent},
 };
-use llm::testing::{FakeLlmProvider, llm_response};
-use llm::{ChatMessage, ContentBlock, LlmResponse, StopReason, ToolDefinition};
+use llm::testing::llm_response;
+use llm::{ChatMessage, ContentBlock, LlmResponse, StopReason};
 use serde_json::json;
 
 fn split_json_in_half(input: &str) -> (&str, &str) {
@@ -96,38 +96,21 @@ async fn test_single_tool_call() -> Result<(), Box<dyn Error>> {
 #[tokio::test]
 async fn failed_mcp_command_submission_completes_the_tool_with_an_error() -> Result<(), Box<dyn Error>> {
     let tool_request = json!({ "a": 3, "b": 5 });
-    let llm = FakeLlmProvider::new(vec![
-        llm_response("message_1").tool_call("call_1", "test__add_numbers", &[&tool_request.to_string()]).build(),
+    let llm_responses = [
+        llm_response("message_1").tool_call("call_1", "test__missing_tool", &[&tool_request.to_string()]).build(),
         llm_response("message_2").text(&["recovered"]).build(),
-    ]);
-    let mcp = aether_core::mcp::mcp("/workspace").spawn().await?;
-    let mcp_handle = mcp.handle().clone();
-    drop(mcp);
-    let tool = ToolDefinition::new("test__add_numbers", "Adds numbers", serde_json::json!({ "type": "object" }));
-    let (command_tx, mut event_rx, _handle) =
-        aether_core::core::agent(llm).tools(mcp_handle, vec![tool]).spawn().await?;
+    ];
 
-    command_tx.send(Command::UserCommand(UserCommand::Text { content: vec![ContentBlock::text("3+5 = ?")] })).await?;
-    drop(command_tx);
+    let messages = test_agent().llm_responses(&llm_responses).user_text("3+5 = ?").run().await?;
 
-    let mut events = Vec::new();
-    for _ in 0..20 {
-        let event = event_rx.recv().await.expect("agent emits a terminal turn event");
-        let turn_ended = event.turn_outcome().is_some();
-        events.push(event);
-        if turn_ended {
-            break;
-        }
-    }
-
-    assert!(events.iter().any(|event| {
+    assert!(messages.iter().any(|event| {
         matches!(
             event,
             AgentEvent::Tool(ToolEvent::Error { error })
                 if error.id == "call_1" && error.error.contains("Failed to resolve tool")
         )
     }));
-    assert!(matches!(events.last(), Some(AgentEvent::Turn(TurnEvent::Ended { .. }))));
+    assert!(matches!(messages.last(), Some(AgentEvent::Turn(TurnEvent::Ended { .. }))));
     Ok(())
 }
 

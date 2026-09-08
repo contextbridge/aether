@@ -206,7 +206,7 @@ struct AgentTestConfig {
     observers: Vec<Box<dyn AgentObserver>>,
     mcp_server: Option<(String, FakeMcpServer)>,
     initial_messages: Vec<ChatMessage>,
-    system_prompt: Option<Prompt>,
+    system_prompts: Vec<Prompt>,
     session_affinity_key: Option<String>,
     compaction: Option<CompactionConfig>,
     model_settings: Option<ModelSettings>,
@@ -241,7 +241,7 @@ impl TestAgentBuilder {
                 observers: Vec::new(),
                 mcp_server: Some(("test".to_string(), FakeMcpServer::new())),
                 initial_messages: Vec::new(),
-                system_prompt: None,
+                system_prompts: Vec::new(),
                 session_affinity_key: None,
                 compaction: None,
                 model_settings: None,
@@ -320,9 +320,10 @@ impl TestAgentBuilder {
         self
     }
 
-    /// Set the system prompt.
+    /// Set the system prompt. Multiple prompts are concatenated with double
+    /// newlines, mirroring [`crate::core::AgentBuilder::system_prompt`].
     pub fn system_prompt(mut self, prompt: Prompt) -> Self {
-        self.agent.system_prompt = Some(prompt);
+        self.agent.system_prompts.push(prompt);
         self
     }
 
@@ -410,7 +411,7 @@ impl TestAgentBuilder {
         } else {
             builder = builder.retry(RetryConfig::disabled());
         }
-        if let Some(prompt) = config.system_prompt {
+        for prompt in config.system_prompts {
             builder = builder.system_prompt(prompt);
         }
         if let Some(key) = config.session_affinity_key {
