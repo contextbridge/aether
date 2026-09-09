@@ -165,7 +165,7 @@ describe("runHeadless()", () => {
   });
 
   it("streams events while the child is alive and cleans up on break", async () => {
-    let pid: number;
+    let pid = 0;
     for await (const event of heldStream()) {
       pid = eventPid(event);
       expect(() => process.kill(pid, 0)).not.toThrow();
@@ -176,7 +176,7 @@ describe("runHeadless()", () => {
 
   it("cleans up when the loop body throws", async () => {
     const failure = new Error("consumer failed");
-    let pid: number;
+    let pid = 0;
     await expect(
       (async () => {
         for await (const event of heldStream()) {
