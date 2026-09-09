@@ -125,7 +125,7 @@ export async function generate<T extends z.ZodType>(
       ? `${prompt}\n\nRespond with ONLY valid JSON. Do not include markdown fences or explanatory prose.`
       : prompt;
 
-  const { stdout } = await runCommand(command, args, {
+  const stdout = await runCommand(command, args, {
     cwd: process.cwd(),
     env: resolveEnv(options.env),
     stdin: promptWithInstructions,

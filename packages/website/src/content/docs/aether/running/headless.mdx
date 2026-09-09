@@ -152,7 +152,8 @@ Available event kinds:
 | `context_compaction_started` | Context compaction beginning.                                  |
 | `context_compaction_ended`   | Context compaction finished (completed, failed, or cancelled). |
 | `context_compaction_result`  | Context compaction completed.                                  |
-| `context_usage`              | Token usage update.                                            |
+| `context_usage`              | Current context-window usage.                                  |
+| `session_usage`              | Per-call tokens and estimated cost, plus cumulative totals.     |
 | `context_cleared`            | Context was cleared.                                           |
 | `turn_started`               | Turn processing began.                                         |
 | `turn_ended`                 | Turn completed, failed, or was cancelled.                      |

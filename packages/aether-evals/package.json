@@ -1,6 +1,6 @@
 {
   "name": "@aether-agent/evals",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Evaluation harness for the Aether agent SDK",
   "repository": {
     "type": "git",
@@ -25,7 +25,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@aether-agent/sdk": "^0.4.1",
+    "@aether-agent/sdk": "workspace:^",
     "testcontainers": "^12.1.0",
     "zod": "^4.4.3"
   },

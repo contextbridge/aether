@@ -73,13 +73,12 @@ export class GitRepo {
     signal?: AbortSignal,
   ): Promise<string> {
     const range = toCommit ? `${fromCommit}..${toCommit}` : fromCommit;
-    const result = await git(["-C", this.path, "diff", range], signal);
-    return result.stdout;
+    return git(["-C", this.path, "diff", range], signal);
   }
 }
 
-async function git(args: string[], signal?: AbortSignal) {
-  return await runCommand("git", args, {
+function git(args: string[], signal?: AbortSignal): Promise<string> {
+  return runCommand("git", args, {
     cwd: process.cwd(),
     env: processEnv,
     abortSignal: signal,
