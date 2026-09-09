@@ -1,7 +1,12 @@
-use crate::{LlmResponse, StopReason};
+use crate::{LlmError, LlmResponse, StopReason};
 
 pub fn llm_response(message_id: &str) -> LlmResponseBuilder {
     LlmResponseBuilder::new(message_id)
+}
+
+/// A turn whose call fails before the provider emits any frames.
+pub fn failed_call(error: impl Into<LlmError>) -> Vec<Result<LlmResponse, LlmError>> {
+    vec![Err(error.into())]
 }
 
 pub struct LlmResponseBuilder {
@@ -16,6 +21,14 @@ impl LlmResponseBuilder {
     pub fn text(mut self, chunks: &[&str]) -> Self {
         for chunk in chunks {
             self.chunks.push(LlmResponse::text(chunk));
+        }
+
+        self
+    }
+
+    pub fn reasoning(mut self, chunks: &[&str]) -> Self {
+        for chunk in chunks {
+            self.chunks.push(LlmResponse::reasoning(chunk));
         }
 
         self
@@ -54,11 +67,32 @@ impl LlmResponseBuilder {
         self.chunks.push(LlmResponse::done_with_stop_reason(stop_reason));
         self.chunks
     }
+
+    pub fn build_results(self) -> Vec<Result<LlmResponse, LlmError>> {
+        self.build().into_iter().map(Ok).collect()
+    }
+
+    /// The stream surfaces `error` after the frames built so far, then closes
+    /// with `Done` — a provider that reports a failure before ending cleanly.
+    pub fn build_with_error(self, error: impl Into<LlmError>) -> Vec<Result<LlmResponse, LlmError>> {
+        let mut results = self.build_results();
+        results.insert(results.len() - 1, Err(error.into()));
+        results
+    }
+
+    /// The stream dies on `error` instead of delivering `Done` — a connection
+    /// lost mid-flight.
+    pub fn build_interrupted(self, error: impl Into<LlmError>) -> Vec<Result<LlmResponse, LlmError>> {
+        let mut results: Vec<_> = self.chunks.into_iter().map(Ok).collect();
+        results.push(Err(error.into()));
+        results
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ProviderError;
 
     #[test]
     fn build_with_stop_reason_preserves_response_chunks() {
@@ -73,5 +107,56 @@ mod tests {
                 LlmResponse::Done { stop_reason: Some(StopReason::Length) },
             ]
         ));
+    }
+
+    #[test]
+    fn reasoning_appends_reasoning_frames() {
+        let frames = llm_response("message").reasoning(&["thinking", "harder"]).text(&["answer"]).build();
+
+        assert!(matches!(
+            frames.as_slice(),
+            [
+                LlmResponse::Start { .. },
+                LlmResponse::Reasoning { .. },
+                LlmResponse::Reasoning { .. },
+                LlmResponse::Text { .. },
+                LlmResponse::Done { .. },
+            ]
+        ));
+    }
+
+    #[test]
+    fn build_results_wraps_success_frames_in_ok() {
+        let results = llm_response("message").text(&["hi"]).build_results();
+
+        assert!(matches!(
+            results.as_slice(),
+            [Ok(LlmResponse::Start { .. }), Ok(LlmResponse::Text { .. }), Ok(LlmResponse::Done { .. })]
+        ));
+    }
+
+    #[test]
+    fn build_with_error_surfaces_error_before_done() {
+        let results = llm_response("message").usage(9, 1).build_with_error(ProviderError::api("HTTP 500"));
+
+        assert!(matches!(
+            results.as_slice(),
+            [Ok(LlmResponse::Start { .. }), Ok(LlmResponse::Usage { .. }), Err(_), Ok(LlmResponse::Done { .. }),]
+        ));
+    }
+
+    #[test]
+    fn build_interrupted_ends_with_error_and_no_done() {
+        let results =
+            llm_response("message").text(&["partial"]).build_interrupted(ProviderError::stream_interrupted("boom"));
+
+        assert!(matches!(results.as_slice(), [Ok(LlmResponse::Start { .. }), Ok(LlmResponse::Text { .. }), Err(_)]));
+    }
+
+    #[test]
+    fn failed_call_contains_only_the_error() {
+        let results = failed_call(ProviderError::server("boom"));
+
+        assert!(matches!(results.as_slice(), [Err(_)]));
     }
 }

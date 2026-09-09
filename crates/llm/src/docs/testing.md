@@ -34,3 +34,12 @@ let chunks = llm_response("msg-1")
     .build();
 // Produces: Start -> Text("Hello") -> Text(" world") -> ToolRequestStart -> ... -> Done
 ```
+
+`reasoning(&[...])` appends `Reasoning` frames, and `usage(in, out)` appends a `Usage` frame.
+
+Callers that script full turns (`Vec<Result<LlmResponse, LlmError>>`) use the result terminators:
+
+- `build_results()` — a successful turn, wrapped in `Ok`.
+- `build_with_error(error)` — the error frame is emitted after the frames built so far, then the stream closes with `Done`.
+- `build_interrupted(error)` — the stream dies on the error; no `Done` is delivered.
+- `failed_call(error)` — a turn that fails before the provider emits any frames.

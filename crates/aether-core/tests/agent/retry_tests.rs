@@ -4,13 +4,10 @@ use std::time::Duration;
 
 use aether_core::core::RetryConfig;
 use aether_core::events::{AgentEvent, LlmCallOutcome, TurnOutcome};
-use aether_core::testing::{FakeMcpServer, FakeTool, FakeToolResponse, test_agent};
-use llm::{LlmError, LlmResponse, ProviderError};
+use aether_core::testing::{FakeMcpServer, FakeTool, FakeToolResponse, fast_retry, test_agent};
+use llm::ProviderError;
+use llm::testing::{failed_call, llm_response};
 use rmcp::model::{CreateTaskResult, DetailedTask, Task, TaskPayload, TaskStatus};
-
-fn fast_retry(max_attempts: u32) -> RetryConfig {
-    RetryConfig { max_attempts, base_delay: Duration::from_millis(1), max_delay: Duration::from_millis(5) }
-}
 
 fn retry_attempts(messages: &[AgentEvent]) -> Vec<u32> {
     messages
@@ -29,17 +26,11 @@ fn has_failed_turn(messages: &[AgentEvent]) -> bool {
 #[tokio::test(start_paused = true)]
 async fn deferred_event_after_retry_clears_pending_tool_and_cancels_task() -> Result<(), Box<dyn Error>> {
     let arguments = serde_json::json!({}).to_string();
-    let mut interrupted = llm::testing::llm_response("msg_1")
-        .tool_call("deferred-call", "tasks__deferred", &[&arguments])
-        .build()
-        .into_iter()
-        .map(Ok)
-        .collect::<Vec<_>>();
-    interrupted.pop();
-    interrupted.push(Err(LlmError::from(ProviderError::stream_interrupted("retry after tool call".to_string()))));
     let attempts = vec![
-        interrupted,
-        vec![Ok(LlmResponse::start("msg_2")), Ok(LlmResponse::text("recovered")), Ok(LlmResponse::done())],
+        llm_response("msg_1")
+            .tool_call("deferred-call", "tasks__deferred", &[&arguments])
+            .build_interrupted(ProviderError::stream_interrupted("retry after tool call")),
+        llm_response("msg_2").text(&["recovered"]).build_results(),
     ];
 
     let now = chrono::Utc::now().to_rfc3339();
@@ -77,15 +68,15 @@ async fn deferred_event_after_retry_clears_pending_tool_and_cancels_task() -> Re
 
 #[tokio::test(start_paused = true)]
 async fn retries_then_succeeds_on_third_attempt() -> Result<(), Box<dyn Error>> {
-    let attempts: Vec<Vec<Result<LlmResponse, LlmError>>> = vec![
-        vec![Err(LlmError::from(
-            ProviderError::server("boom 1".to_string())
+    let attempts = vec![
+        failed_call(
+            ProviderError::server("boom 1")
                 .with_http_status(200)
                 .with_code(Some("server_error".to_string()))
                 .with_request_id(Some("req-1".to_string())),
-        ))],
-        vec![Err(LlmError::from(ProviderError::server("boom 2".to_string()).with_http_status(503)))],
-        vec![Ok(LlmResponse::start("msg_3")), Ok(LlmResponse::text("ok")), Ok(LlmResponse::done())],
+        ),
+        failed_call(ProviderError::server("boom 2").with_http_status(503)),
+        llm_response("msg_3").text(&["ok"]).build_results(),
     ];
 
     let result = test_agent()
@@ -132,9 +123,8 @@ async fn retries_then_succeeds_on_third_attempt() -> Result<(), Box<dyn Error>> 
 
 #[tokio::test(start_paused = true)]
 async fn exhausts_retries_then_emits_error() -> Result<(), Box<dyn Error>> {
-    let attempts: Vec<Vec<Result<LlmResponse, LlmError>>> = (0..6)
-        .map(|i| vec![Err(LlmError::from(ProviderError::server(format!("boom {i}")).with_http_status(503)))])
-        .collect();
+    let attempts: Vec<_> =
+        (0..6).map(|i| failed_call(ProviderError::server(format!("boom {i}")).with_http_status(503))).collect();
 
     let result = test_agent()
         .retry_config(fast_retry(3))
@@ -178,8 +168,7 @@ async fn exhausts_retries_then_emits_error() -> Result<(), Box<dyn Error>> {
 
 #[tokio::test(start_paused = true)]
 async fn non_retryable_error_surfaces_immediately() -> Result<(), Box<dyn Error>> {
-    let attempts: Vec<Vec<Result<LlmResponse, LlmError>>> =
-        vec![vec![Err(LlmError::from(ProviderError::api("HTTP 400 bad request".to_string())))]];
+    let attempts = vec![failed_call(ProviderError::api("HTTP 400 bad request"))];
 
     let result = test_agent()
         .retry_config(fast_retry(5))
@@ -201,8 +190,7 @@ async fn non_retryable_error_surfaces_immediately() -> Result<(), Box<dyn Error>
 
 #[tokio::test(start_paused = true)]
 async fn retry_disabled_surfaces_retryable_error_immediately() -> Result<(), Box<dyn Error>> {
-    let attempts: Vec<Vec<Result<LlmResponse, LlmError>>> =
-        vec![vec![Err(LlmError::from(ProviderError::server("would be retryable".to_string()).with_http_status(503)))]];
+    let attempts = vec![failed_call(ProviderError::server("would be retryable").with_http_status(503))];
 
     let result = test_agent()
         .retry_config(RetryConfig::disabled())
@@ -229,14 +217,11 @@ async fn retry_disabled_surfaces_retryable_error_immediately() -> Result<(), Box
 /// pre-`Start` failures.
 #[tokio::test(start_paused = true)]
 async fn mid_stream_interrupts_consume_retry_budget() -> Result<(), Box<dyn Error>> {
-    let attempts: Vec<Vec<Result<LlmResponse, LlmError>>> = (0..6)
+    let attempts: Vec<_> = (0..6)
         .map(|i| {
-            let id = format!("m{i}");
-            vec![
-                Ok(LlmResponse::start(&id)),
-                Ok(LlmResponse::text("partial")),
-                Err(LlmError::from(ProviderError::stream_interrupted(format!("boom {i}")))),
-            ]
+            llm_response(&format!("m{i}"))
+                .text(&["partial"])
+                .build_interrupted(ProviderError::stream_interrupted(format!("boom {i}")))
         })
         .collect();
 
@@ -268,10 +253,8 @@ async fn mid_stream_interrupts_consume_retry_budget() -> Result<(), Box<dyn Erro
 
 #[tokio::test(start_paused = true)]
 async fn rate_limited_error_is_retried() -> Result<(), Box<dyn Error>> {
-    let attempts: Vec<Vec<Result<LlmResponse, LlmError>>> = vec![
-        vec![Err(LlmError::from(ProviderError::rate_limit("slow down".to_string())))],
-        vec![Ok(LlmResponse::start("msg_2")), Ok(LlmResponse::text("ok")), Ok(LlmResponse::done())],
-    ];
+    let attempts =
+        vec![failed_call(ProviderError::rate_limit("slow down")), llm_response("msg_2").text(&["ok"]).build_results()];
 
     let result = test_agent()
         .retry_config(fast_retry(5))
@@ -291,9 +274,9 @@ async fn rate_limited_error_is_retried() -> Result<(), Box<dyn Error>> {
 async fn cancel_during_retry_wait_aborts_pending_retry() -> Result<(), Box<dyn Error>> {
     use aether_core::testing::TestScenario;
 
-    let attempts: Vec<Vec<Result<LlmResponse, LlmError>>> = vec![
-        vec![Err(LlmError::from(ProviderError::server("boom".to_string()).with_http_status(503)))],
-        vec![Ok(LlmResponse::start("msg_2")), Ok(LlmResponse::text("should not see this")), Ok(LlmResponse::done())],
+    let attempts = vec![
+        failed_call(ProviderError::server("boom").with_http_status(503)),
+        llm_response("msg_2").text(&["should not see this"]).build_results(),
     ];
 
     // Long retry delay; with virtual time it never elapses unless we advance.

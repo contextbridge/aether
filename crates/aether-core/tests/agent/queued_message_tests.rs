@@ -4,7 +4,7 @@ use std::sync::Arc;
 use aether_core::events::TurnOutcome;
 use aether_core::testing::{TestScenario, test_agent};
 use llm::testing::llm_response;
-use llm::{ChatMessage, ContentBlock, Context, LlmResponse, StopReason};
+use llm::{ChatMessage, ContentBlock, Context, StopReason};
 use tokio::sync::Notify;
 
 #[tokio::test]
@@ -45,7 +45,7 @@ async fn user_message_during_tool_execution_is_queued() {
     let request_json = serde_json::json!({ "a": 2, "b": 3 }).to_string();
     let turns = vec![
         llm_response("msg_1").tool_call("call_1", "test__add_numbers", &[&request_json]).build(),
-        vec![LlmResponse::start("msg_2"), LlmResponse::text("done"), LlmResponse::done()],
+        llm_response("msg_2").text(&["done"]).build(),
     ];
 
     // Pause turn 1 right after ToolRequestStart (chunk index 1). At that point the
@@ -110,11 +110,11 @@ struct Scenario {
 /// Drives a two-turn conversation where one or more user messages are queued
 /// while the first turn's LLM stream is deliberately paused mid-flight.
 async fn run_queued_scenario(first_stop_reason: Option<StopReason>, queued: &[&str]) -> Scenario {
-    let first_done = first_stop_reason.map_or_else(LlmResponse::done, LlmResponse::done_with_stop_reason);
-    let turns = vec![
-        vec![LlmResponse::start("msg_1"), LlmResponse::text("hello"), LlmResponse::text(" world"), first_done],
-        vec![LlmResponse::start("msg_2"), LlmResponse::text("next turn"), LlmResponse::done()],
-    ];
+    let first_turn = match first_stop_reason {
+        Some(stop_reason) => llm_response("msg_1").text(&["hello", " world"]).build_with_stop_reason(stop_reason),
+        None => llm_response("msg_1").text(&["hello", " world"]).build(),
+    };
+    let turns = vec![first_turn, llm_response("msg_2").text(&["next turn"]).build()];
 
     let release = Arc::new(Notify::new());
     let mut scenario =

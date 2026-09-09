@@ -1,15 +1,10 @@
 use aether_core::context::CompactionConfig;
-use aether_core::core::RetryConfig;
 use aether_core::events::{AgentEvent, LlmCallOutcome, SubAgentProgressPayload, ToolEvent, TurnEvent, TurnOutcome};
-use aether_core::testing::{FakeMcpServer, FakeTool, FakeToolResponse, TestScenario, test_agent};
+use aether_core::testing::{FakeMcpServer, FakeTool, FakeToolResponse, TestScenario, fast_retry, test_agent};
 use llm::alloyed::AlloyedModelProvider;
 use llm::testing::{FakeLlmProvider, llm_response, priced_model, session_usage_event};
-use llm::{
-    ChatMessage, LlmCallPurpose, LlmError, LlmModel, LlmResponse, ProviderError, SessionUsageEvent, TokenUsage,
-    UsageSource, Usd,
-};
+use llm::{ChatMessage, LlmCallPurpose, LlmModel, ProviderError, SessionUsageEvent, TokenUsage, UsageSource, Usd};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::Notify;
 
 #[tokio::test]
@@ -62,12 +57,7 @@ async fn priced_model_costs_each_call_and_keeps_totals_priced() {
 #[tokio::test]
 async fn usage_received_before_a_stream_error_survives_the_failed_turn() {
     let events = test_agent()
-        .llm_result_responses(&[vec![
-            Ok(LlmResponse::start("msg")),
-            Ok(LlmResponse::Usage { tokens: TokenUsage::new(9, 1) }),
-            Err(LlmError::from(ProviderError::api("HTTP 500".to_string()))),
-            Ok(LlmResponse::done()),
-        ]])
+        .llm_result_responses(&[llm_response("msg").usage(9, 1).build_with_error(ProviderError::api("HTTP 500"))])
         .without_mcp()
         .user_text("hello")
         .run()
@@ -110,17 +100,12 @@ async fn usage_received_before_cancellation_survives_the_cancelled_turn() {
 
 #[tokio::test]
 async fn retried_attempts_without_usage_add_nothing() {
-    let mut interrupted = vec![Ok(LlmResponse::start("msg_1"))];
-    interrupted.push(Err(LlmError::from(ProviderError::stream_interrupted("retry".to_string()))));
-    let recovered = llm_response("msg_2").usage(3, 2).text(&["ok"]).build().into_iter().map(Ok).collect::<Vec<_>>();
+    let interrupted = llm_response("msg_1").build_interrupted(ProviderError::stream_interrupted("retry"));
+    let recovered = llm_response("msg_2").usage(3, 2).text(&["ok"]).build_results();
 
     let events = test_agent()
         .llm_result_responses(&[interrupted, recovered])
-        .retry_config(RetryConfig {
-            max_attempts: 3,
-            base_delay: Duration::from_millis(1),
-            max_delay: Duration::from_millis(5),
-        })
+        .retry_config(fast_retry(3))
         .without_mcp()
         .user_text("hello")
         .run()

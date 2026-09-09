@@ -2,20 +2,16 @@ use aether_core::events::{MessageEvent, TurnEvent};
 use std::error::Error;
 
 use aether_core::{events::AgentEvent, testing::test_agent};
-use llm::{ChatMessage, LlmError, LlmResponse, ProviderError};
+use llm::testing::llm_response;
+use llm::{ChatMessage, ProviderError};
 
 #[tokio::test]
 async fn test_api_error_mid_stream_does_not_add_empty_assistant_message() -> Result<(), Box<dyn Error>> {
     // First call: Start → Err → Done (simulates HTTP 522 mid-stream)
-    let error_response: Vec<Result<LlmResponse, LlmError>> = vec![
-        Ok(LlmResponse::start("msg_1")),
-        Err(LlmError::from(ProviderError::api("HTTP 522: connection timed out".to_string()))),
-        Ok(LlmResponse::done()),
-    ];
+    let error_response = llm_response("msg_1").build_with_error(ProviderError::api("HTTP 522: connection timed out"));
 
     // Second call: normal success (triggered by second user message)
-    let success_response: Vec<Result<LlmResponse, LlmError>> =
-        vec![Ok(LlmResponse::start("msg_2")), Ok(LlmResponse::text("Hello!")), Ok(LlmResponse::done())];
+    let success_response = llm_response("msg_2").text(&["Hello!"]).build_results();
 
     // Only send the first user message to avoid race conditions.
     // After the error + Done cycle, we manually inspect captured contexts.
