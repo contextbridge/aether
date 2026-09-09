@@ -21,13 +21,12 @@ const getWeather = tool({
 });
 
 await using weather = await mcp({ name: "weather", tools: [getWeather] });
-await runHeadless({
+for await (const event of runHeadless({
   binaryPath: process.env.AETHER_BIN ?? "/usr/local/bin/aether",
   prompt,
   cwd: process.env.AETHER_EVAL_CWD ?? process.cwd(),
   model: process.env.AETHER_EVAL_MODEL ?? "zai:glm-5.3",
   settings: { agents: [], mcps: [weather.spec] },
-  output: "json",
-  stdout: "inherit",
-  stderr: "inherit",
-});
+})) {
+  console.log(JSON.stringify(event));
+}
