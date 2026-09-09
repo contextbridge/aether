@@ -53,10 +53,6 @@ impl CaptureServer {
         Self::start_with_response(CHAT_COMPLETIONS_FIXTURE).await
     }
 
-    pub(crate) async fn start_openrouter() -> Self {
-        Self::start_with_response(OPENROUTER_FIXTURE).await
-    }
-
     pub(crate) async fn start_with_response(response: &'static str) -> Self {
         Self::start_with_spec(ResponseSpec::sse(response)).await
     }
@@ -81,7 +77,6 @@ impl CaptureServer {
 
 const RESPONSES_FIXTURE: &str = include_str!("../../tests/fixtures/openai_responses/01_minimal.sse");
 const CHAT_COMPLETIONS_FIXTURE: &str = include_str!("../../tests/fixtures/openai/01_minimal.sse");
-const OPENROUTER_FIXTURE: &str = include_str!("../../tests/fixtures/openrouter/01_minimal.sse");
 
 async fn capture(
     State(state): State<Arc<CaptureState>>,

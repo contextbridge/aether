@@ -144,7 +144,7 @@ impl AnthropicProvider {
         let response = self.client.post(&url).headers(headers).json(&request).send().await?;
 
         if !response.status().is_success() {
-            return Err(rejected("Anthropic API", response, anthropic_code).await);
+            return Err(rejected(response, anthropic_code).await.into());
         }
 
         let event_stream = response.bytes_stream().eventsource();

@@ -1,6 +1,27 @@
-use crate::{LlmError, ProviderError};
-use reqwest::{Response, header::HeaderMap};
+use crate::ProviderError;
+use async_openai::{Client, config::Config, error::OpenAIError, middleware::HttpRequestFactory};
+use reqwest::{Request, Response, header::HeaderMap};
 use serde_json::{Value, from_str};
+use tower::{Service, ServiceExt, service_fn};
+
+/// Preserve HTTP diagnostics before async-openai deserializes rejected responses.
+pub(crate) fn openai_client<T, U>(config: T, service: U) -> Client<T>
+where
+    T: Config,
+    U: Service<Request, Response = Response, Error = reqwest::Error> + Clone + Send + Sync + 'static,
+    U::Future: Send + 'static,
+{
+    Client::with_config(config).with_http_service(service_fn(move |factory: HttpRequestFactory| {
+        let service = service.clone();
+        async move {
+            let response = service.oneshot(factory.build().await?).await.map_err(OpenAIError::Reqwest)?;
+            if response.status().is_success() {
+                return Ok(response);
+            }
+            Err(OpenAIError::Boxed(Box::new(rejected(response, responses_code).await)))
+        }
+    }))
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct HttpResponseMetadata {
@@ -28,18 +49,21 @@ pub(crate) fn extract_request_id(headers: &HeaderMap) -> Option<String> {
     None
 }
 
-pub(crate) async fn rejected(provider: &str, response: Response, code: fn(&str) -> Option<String>) -> LlmError {
+pub(crate) async fn rejected(response: Response, code: fn(&str) -> Option<String>) -> ProviderError {
     let metadata = HttpResponseMetadata::from(&response);
     let body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-    let message = format!("{provider} request failed with status {}: {body}", metadata.status);
+    let message = format!("request failed with status {}: {body}", metadata.status);
     ProviderError::from_http_status(metadata.status, message)
         .with_code(code(&body))
         .with_request_id(metadata.request_id)
-        .into()
 }
 
 pub(crate) fn extract_json_code(body: &str, pointer: &str) -> Option<String> {
-    from_str::<Value>(body).ok()?.pointer(pointer)?.as_str().map(String::from)
+    match from_str::<Value>(body).ok()?.pointer(pointer)? {
+        Value::String(code) => Some(code.clone()),
+        Value::Number(code) => Some(code.to_string()),
+        _ => None,
+    }
 }
 
 pub(crate) fn responses_code(body: &str) -> Option<String> {

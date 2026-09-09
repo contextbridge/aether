@@ -247,6 +247,9 @@ impl From<async_openai::error::OpenAIError> for LlmError {
                 ProviderError::from_http_status(status, message).with_code(code).into()
             }
             OpenAIError::JSONDeserialize(e, _) => LlmError::JsonParsing(e.to_string()),
+            OpenAIError::Boxed(e) => e
+                .downcast::<ProviderError>()
+                .map_or_else(|error| ProviderError::api(error.to_string()).into(), |error| (*error).into()),
             OpenAIError::FileSaveError(s) | OpenAIError::FileReadError(s) => LlmError::IoError(s),
             OpenAIError::InvalidArgument(s) => LlmError::InvalidArgument(s),
         }
@@ -360,6 +363,18 @@ mod tests {
     }
 
     #[test]
+    fn async_openai_boxed_provider_error_preserves_classification_and_diagnostics() {
+        let provider = ProviderError::rate_limit("slow down")
+            .with_http_status(429)
+            .with_code(Some("429".into()))
+            .with_request_id(Some("request-123".into()));
+        let error = LlmError::from(async_openai::error::OpenAIError::Boxed(Box::new(provider.clone())));
+
+        assert_eq!(error.provider(), Some(&provider));
+        assert!(error.is_retryable());
+    }
+
+    #[test]
     fn async_openai_stream_error_is_interruption() {
         let io = std::io::Error::other("eof");
         let error = LlmError::from(async_openai::error::OpenAIError::StreamError(Box::new(
@@ -368,5 +383,16 @@ mod tests {
         let provider = error.provider().expect("expected provider error");
         assert_eq!(provider.kind, ProviderErrorKind::StreamInterrupted);
         assert!(error.is_retryable());
+    }
+
+    #[test]
+    fn async_openai_non_error_body_stays_a_json_parsing_error() {
+        let body = r#"{"id":"chatcmpl-1","object":"chat.completion","choices":[]}"#;
+        let parse_error = serde_json::from_str::<String>(body).unwrap_err();
+
+        let error = LlmError::from(async_openai::error::OpenAIError::JSONDeserialize(parse_error, body.to_string()));
+
+        assert!(matches!(error, LlmError::JsonParsing(_)), "got {error:?}");
+        assert!(!error.is_retryable());
     }
 }

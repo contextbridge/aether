@@ -1,4 +1,5 @@
 use crate::provider::get_context_window;
+use crate::providers::http::openai_client;
 use crate::providers::openai_compatible::{AetherOpenAiConfig, build_chat_request, create_custom_stream_generic};
 use crate::{
     Context, LlmError, LlmResponseStream, ProviderAuthMode, ProviderConnectionConfig, ProviderFactory, Result,
@@ -50,7 +51,7 @@ impl GeminiProvider {
     fn build_openai_client(&self, api_key: &str) -> async_openai::Client<AetherOpenAiConfig> {
         let api_base = self.base_url.as_deref().unwrap_or(GEMINI_API_BASE);
         let config = async_openai::config::OpenAIConfig::new().with_api_key(api_key).with_api_base(api_base);
-        async_openai::Client::with_config(AetherOpenAiConfig::new(config, self.auth_mode))
+        openai_client(AetherOpenAiConfig::new(config, self.auth_mode), reqwest::Client::new())
     }
 }
 

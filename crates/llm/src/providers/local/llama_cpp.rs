@@ -1,6 +1,7 @@
 #![doc = include_str!(concat!(env!("OUT_DIR"), "/docs/llamacpp.md"))]
 
 use super::util::get_local_config;
+use crate::providers::http::openai_client;
 use crate::providers::openai::OpenAiChatProvider;
 use crate::{ProviderConnectionConfig, ProviderFactory, Result};
 use async_openai::{Client, config::OpenAIConfig};
@@ -12,13 +13,13 @@ pub struct LlamaCppProvider {
 
 impl LlamaCppProvider {
     pub fn new(base_url: &str) -> Self {
-        Self { client: Client::with_config(get_local_config(base_url)) }
+        Self { client: openai_client(get_local_config(base_url), reqwest::Client::new()) }
     }
 }
 
 impl Default for LlamaCppProvider {
     fn default() -> Self {
-        Self { client: Client::with_config(get_local_config("http://localhost:8080/v1")) }
+        Self::new("http://localhost:8080/v1")
     }
 }
 
@@ -29,7 +30,7 @@ impl ProviderFactory for LlamaCppProvider {
 
     fn from_env_with_connection(connection: ProviderConnectionConfig) -> impl Future<Output = Result<Self>> + Send {
         let base_url = connection.base_url.as_deref().unwrap_or("http://localhost:8080/v1");
-        ready(Ok(Self { client: Client::with_config(get_local_config(base_url)) }))
+        ready(Ok(Self::new(base_url)))
     }
 
     fn with_model(self, _model: &str) -> Self {
