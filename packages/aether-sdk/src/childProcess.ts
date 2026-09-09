@@ -1,5 +1,7 @@
-import { spawn, type StdioOptions } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { addAbortListener } from "node:events";
+import type { Readable, Writable } from "node:stream";
+import { text } from "node:stream/consumers";
 
 import {
   AetherSdkError,
@@ -8,125 +10,119 @@ import {
 } from "./errors.js";
 import { stopChild } from "./agentProcess.js";
 
-export type ProcessOutputMode = "pipe" | "inherit";
-
-export interface RunCommandOutput {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
+export interface CommandExit {
+  exitCode: number | null;
   signal: NodeJS.Signals | null;
+  stderr: string;
 }
 
 export interface RunCommandOptions {
   cwd: string;
   env: Record<string, string | undefined>;
   stdin?: string;
-  stdout?: ProcessOutputMode;
-  stderr?: ProcessOutputMode;
   abortSignal?: AbortSignal;
   spawnFailedMessage: string;
   exitedErrorCode: AetherSdkErrorCode;
-  exitedMessage: (result: RunCommandOutput) => string;
-  /** Called with each utf8 stdout chunk as it arrives (only when `stdout` is `"pipe"`). */
-  onStdout?: (chunk: string) => void;
-  /** Called with each utf8 stderr chunk as it arrives (only when `stderr` is `"pipe"`). */
-  onStderr?: (chunk: string) => void;
+  exitedMessage: (exit: CommandExit) => string;
 }
 
+/** Run a command to completion and return its stdout. */
 export function runCommand(
   command: string,
   args: string[],
   options: RunCommandOptions,
-): Promise<RunCommandOutput> {
+): Promise<string> {
+  return text(streamCommand(command, args, options));
+}
+
+/**
+ * Spawn a command and stream its stdout.
+ */
+export async function* streamCommand(
+  command: string,
+  args: string[],
+  options: RunCommandOptions,
+  transformStdout: (chunks: AsyncIterable<string>) => AsyncIterable<string> = (
+    chunks,
+  ) => chunks,
+): AsyncGenerator<string, void, unknown> {
   throwIfAborted(options.abortSignal);
 
-  return new Promise((resolve, reject) => {
-    const stdoutMode = options.stdout ?? "pipe";
-    const stderrMode = options.stderr ?? "pipe";
-    const stdio: StdioOptions = [
-      options.stdin === undefined ? "ignore" : "pipe",
-      stdoutMode,
-      stderrMode,
-    ];
-    let child: ReturnType<typeof spawn>;
-    try {
-      child = spawn(command, args, {
-        cwd: options.cwd,
-        env: options.env,
-        stdio,
-      });
-    } catch (err) {
-      reject(
-        new AetherSdkError(
-          "process_spawn_failed",
-          options.spawnFailedMessage,
-          err,
-        ),
-      );
-      return;
-    }
+  let child: ChildProcessByStdio<Writable | null, Readable, Readable>;
+  try {
+    const spawnOptions = { cwd: options.cwd, env: options.env };
+    child =
+      options.stdin === undefined
+        ? spawn(command, args, {
+            ...spawnOptions,
+            stdio: ["ignore", "pipe", "pipe"],
+          })
+        : spawn(command, args, { ...spawnOptions, stdio: "pipe" });
+  } catch (cause) {
+    throw spawnFailed(options, cause);
+  }
 
-    let stdout = "";
-    let stderr = "";
-    if (stdoutMode === "pipe") {
-      child.stdout?.setEncoding("utf8");
-      child.stdout?.on("data", (chunk: string) => {
-        stdout += chunk;
-        try {
-          options.onStdout?.(chunk);
-        } catch (err) {
-          void stopChild(child);
-          reject(err);
-        }
-      });
-    }
-    if (stderrMode === "pipe") {
-      child.stderr?.setEncoding("utf8");
-      child.stderr?.on("data", (chunk: string) => {
-        stderr += chunk;
-        try {
-          options.onStderr?.(chunk);
-        } catch (err) {
-          void stopChild(child);
-          reject(err);
-        }
-      });
-    }
-    if (options.stdin !== undefined) {
-      child.stdin?.end(options.stdin);
-    }
-
-    const abortCleanup = options.abortSignal
-      ? addAbortListener(options.abortSignal, () => {
-          void stopChild(child);
-          reject(new AetherSdkError("aborted", "Aborted by caller"));
-        })
-      : null;
-
-    child.on("error", (err) => {
-      abortCleanup?.[Symbol.dispose]();
-      reject(
-        new AetherSdkError(
-          "process_spawn_failed",
-          options.spawnFailedMessage,
-          err,
-        ),
-      );
-    });
-
-    child.on("close", (code, signal) => {
-      abortCleanup?.[Symbol.dispose]();
-      const result = { stdout, stderr, exitCode: code ?? -1, signal };
-      if (code === 0) {
-        resolve(result);
-      } else {
-        reject(
-          new AetherSdkError(
-            options.exitedErrorCode,
-            options.exitedMessage(result),
-          ),
-        );
-      }
-    });
+  let failure: AetherSdkError | undefined;
+  let stderr = "";
+  child.on("error", (cause) => {
+    failure = spawnFailed(options, cause);
   });
+
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+
+  child.stdin?.end(options.stdin);
+  const closed = new Promise<Omit<CommandExit, "stderr">>((resolve) => {
+    child.once("close", (exitCode, signal) => resolve({ exitCode, signal }));
+  });
+
+  const abortCleanup = options.abortSignal
+    ? addAbortListener(options.abortSignal, () => void stopChild(child))
+    : undefined;
+
+  try {
+    child.stdout.setEncoding("utf8");
+    for await (const chunk of transformStdout(child.stdout)) {
+      throwIfAborted(options.abortSignal);
+      yield chunk;
+    }
+    const { exitCode, signal } = await closed;
+    throwIfAborted(options.abortSignal);
+    if (failure) throw failure;
+    if (exitCode !== 0) {
+      throw new AetherSdkError(
+        options.exitedErrorCode,
+        options.exitedMessage({ exitCode, signal, stderr }),
+      );
+    }
+  } finally {
+    abortCleanup?.[Symbol.dispose]();
+    await stopChild(child);
+    await closed;
+  }
+}
+
+export async function* splitLines(
+  chunks: AsyncIterable<string>,
+): AsyncGenerator<string, void, unknown> {
+  let pending = "";
+  for await (const chunk of chunks) {
+    const lines = (pending + chunk).split(/\r?\n/);
+    pending = lines.pop()!;
+    yield* lines;
+  }
+  if (pending) yield pending;
+}
+
+function spawnFailed(
+  options: RunCommandOptions,
+  cause: unknown,
+): AetherSdkError {
+  return new AetherSdkError(
+    "process_spawn_failed",
+    options.spawnFailedMessage,
+    cause,
+  );
 }

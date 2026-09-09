@@ -1,81 +1,77 @@
 import { cwd as processCwd } from "node:process";
 
-import {
-  buildAetherCliCommand,
-  type AetherCliCommand,
-} from "./agentProcess.js";
-import { runCommand } from "./childProcess.js";
+import { buildAetherCliCommand } from "./agentProcess.js";
+import { splitLines, streamCommand } from "./childProcess.js";
 import { assertOptionInvariants, compactCliOptions } from "./cliOptions.js";
-import { throwIfAborted } from "./errors.js";
+import { AetherSdkError } from "./errors.js";
 import type { AetherHeadlessCliOptions } from "./generated/aether-headless-options.js";
+import type { AgentEvent } from "./generated/eval-types.js";
 import { resolveEnv } from "./processEnv.js";
-
-export type HeadlessOutputFormat = NonNullable<
-  AetherHeadlessCliOptions["output"]
->;
 
 export type HeadlessEventKind = NonNullable<
   AetherHeadlessCliOptions["events"]
 >[number];
 
-export type HeadlessStdioMode = "pipe" | "inherit";
-
-export interface AetherHeadlessResult {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-  signal: NodeJS.Signals | null;
-}
-
 export interface AetherHeadlessOptions extends Omit<
   AetherHeadlessCliOptions,
-  "mcpConfig" | "prompt"
+  "mcpConfig" | "prompt" | "output"
 > {
   prompt: string;
   binaryPath?: string;
   env?: Record<string, string | undefined>;
-  stdout?: HeadlessStdioMode;
-  stderr?: HeadlessStdioMode;
   abortSignal?: AbortSignal;
 }
 
-export async function runHeadless(
+/** Stream headless AgentEvents, terminating the child when iteration ends early. */
+export async function* runHeadless(
   options: AetherHeadlessOptions,
-): Promise<AetherHeadlessResult> {
-  throwIfAborted(options.abortSignal);
-  const { command, args } = buildHeadlessCommand(options);
-  return runHeadlessProcess(command, args, options);
-}
-
-function buildHeadlessCommand(
-  options: AetherHeadlessOptions,
-): AetherCliCommand {
-  const { binaryPath, stdout, stderr, abortSignal, env, ...cliOptions } =
-    options;
-
+): AsyncGenerator<AgentEvent, void, unknown> {
+  const { binaryPath, abortSignal, env, ...cliOptions } = options;
   assertOptionInvariants(cliOptions);
-
-  return buildAetherCliCommand({
+  const { command, args } = buildAetherCliCommand({
     binaryPath,
     subcommand: "headless",
-    options: compactCliOptions(cliOptions),
+    options: compactCliOptions({ ...cliOptions, output: "json" }),
   });
+  const lines = streamCommand(
+    command,
+    args,
+    {
+      cwd: options.cwd ?? processCwd(),
+      env: resolveEnv(env),
+      abortSignal,
+      spawnFailedMessage: `Failed to spawn aether headless at ${command}`,
+      exitedErrorCode: "process_exited",
+      exitedMessage: ({ exitCode, signal, stderr }) =>
+        `aether headless exited with code=${exitCode} signal=${signal}\n${stderr}`,
+    },
+    splitLines,
+  );
+  for await (const line of lines) {
+    if (line.trim()) yield parseEvent(line);
+  }
 }
 
-function runHeadlessProcess(
-  command: string,
-  args: string[],
-  options: AetherHeadlessOptions,
-): Promise<AetherHeadlessResult> {
-  return runCommand(command, args, {
-    cwd: options.cwd ?? processCwd(),
-    env: resolveEnv(options.env),
-    stdout: options.stdout,
-    stderr: options.stderr,
-    abortSignal: options.abortSignal,
-    spawnFailedMessage: `Failed to spawn aether headless at ${command}`,
-    exitedErrorCode: "process_exited",
-    exitedMessage: ({ exitCode, signal, stderr }) =>
-      `aether headless exited with code=${exitCode} signal=${signal}\n${stderr}`,
-  });
+function parseEvent(line: string): AgentEvent {
+  try {
+    const value: unknown = JSON.parse(line);
+    if (
+      !isRecord(value) ||
+      typeof value.category !== "string" ||
+      !isRecord(value.event)
+    ) {
+      throw new Error("Expected an AgentEvent envelope");
+    }
+    return value as AgentEvent;
+  } catch (cause) {
+    throw new AetherSdkError(
+      "invalid_protocol_message",
+      `Invalid headless AgentEvent: ${line}`,
+      cause,
+    );
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

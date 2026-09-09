@@ -16,13 +16,7 @@ export type {
   PermissionRequestHandler,
 } from "./session.js";
 export { runHeadless } from "./headless.js";
-export type {
-  AetherHeadlessOptions,
-  AetherHeadlessResult,
-  HeadlessEventKind,
-  HeadlessOutputFormat,
-  HeadlessStdioMode,
-} from "./headless.js";
+export type { AetherHeadlessOptions, HeadlessEventKind } from "./headless.js";
 export { tool } from "./tool.js";
 export { mcp } from "./mcp/index.js";
 export type { McpHandle, InlineMcpSource } from "./mcp/index.js";
