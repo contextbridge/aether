@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.2](https://github.com/contextbridge/aether/compare/aether-llm-v0.8.1...aether-llm-v0.8.2) - 2026-09-09
+
+### Fixed
+
+- *(llm)* retry on rate limits hidden behind json parse errors ([#440](https://github.com/contextbridge/aether/pull/440)) ([#442](https://github.com/contextbridge/aether/pull/442))
+
+### Other
+
+- scheduled code-cleanup ([#443](https://github.com/contextbridge/aether/pull/443))
+- Update models ([#437](https://github.com/contextbridge/aether/pull/437))
+- *(llm)* Bump codex client version for codex provider
+- *(llm)* Add astra to codex provider and update context window sizes
+- Update models ([#425](https://github.com/contextbridge/aether/pull/425))
+
 ## [0.8.1](https://github.com/contextbridge/aether/compare/aether-llm-v0.8.0...aether-llm-v0.8.1) - 2026-09-04
 
 ### Other
