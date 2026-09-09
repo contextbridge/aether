@@ -2,7 +2,7 @@ use aether_core::core::Prompt;
 use aether_core::events::{AgentEvent, Command, ContextEvent, ToolEvent, UserCommand};
 use aether_core::testing::{FakeMcpServer, FakeTool, FakeToolResponse, TestScenario, test_agent};
 use llm::testing::llm_response;
-use llm::{ChatMessage, ContentBlock, LlmResponse};
+use llm::{ChatMessage, ContentBlock};
 use rmcp::model::{CreateTaskResult, DetailedTask, Task, TaskPayload, TaskStatus};
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -22,8 +22,8 @@ async fn clear_context_suppresses_cancelled_background_task_notification() -> Re
         .fake_mcp_server("tasks", server)
         .llm_responses(&[
             llm_response("msg_1").tool_call("clear-call", "tasks__deferred", &[&arguments]).build(),
-            vec![LlmResponse::start("cancelled-followup"), LlmResponse::text("must not finish"), LlmResponse::done()],
-            vec![LlmResponse::start("msg_2"), LlmResponse::text("fresh context"), LlmResponse::done()],
+            llm_response("cancelled-followup").text(&["must not finish"]).build(),
+            llm_response("msg_2").text(&["fresh context"]).build(),
         ])
         .pause_turn_after(1, 0, release)
         .scenario(
@@ -61,8 +61,8 @@ async fn test_clear_context_resets_history_and_preserves_system_prompt() -> Resu
         .without_mcp()
         .system_prompt(Prompt::text("You are a test agent."))
         .llm_responses(&[
-            vec![LlmResponse::start("msg_1"), LlmResponse::text("First response"), LlmResponse::done()],
-            vec![LlmResponse::start("msg_2"), LlmResponse::text("Second response"), LlmResponse::done()],
+            llm_response("msg_1").text(&["First response"]).build(),
+            llm_response("msg_2").text(&["Second response"]).build(),
         ])
         .scenario(
             TestScenario::new()

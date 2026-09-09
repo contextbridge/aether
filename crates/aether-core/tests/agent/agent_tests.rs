@@ -7,7 +7,7 @@ use aether_core::{
     testing::{agent_event, content_events, test_agent},
 };
 use llm::testing::llm_response;
-use llm::{ChatMessage, ContentBlock, LlmResponse, StopReason};
+use llm::{ChatMessage, ContentBlock, StopReason};
 use serde_json::json;
 
 fn split_json_in_half(input: &str) -> (&str, &str) {
@@ -440,14 +440,10 @@ async fn test_reasoning_content_is_saved_in_context_after_tool_call() -> Result<
     let tool_request = json!({ "a": 2, "b": 3 });
 
     let llm_responses = [
-        vec![
-            LlmResponse::start("msg_1"),
-            LlmResponse::reasoning("internal plan"),
-            LlmResponse::tool_request_start("call_1", "test__add_numbers"),
-            LlmResponse::tool_request_arg("call_1", &tool_request.to_string()),
-            LlmResponse::tool_request_complete("call_1", "test__add_numbers", &tool_request.to_string()),
-            LlmResponse::done(),
-        ],
+        llm_response("msg_1")
+            .reasoning(&["internal plan"])
+            .tool_call("call_1", "test__add_numbers", &[&tool_request.to_string()])
+            .build(),
         llm_response("msg_2").text(&["Done"]).build(),
     ];
 
@@ -474,12 +470,7 @@ async fn test_reasoning_content_is_saved_in_context_after_tool_call() -> Result<
 
 #[tokio::test]
 async fn test_reasoning_chunks_emit_thought_messages() -> Result<(), Box<dyn Error>> {
-    let llm_responses = [vec![
-        LlmResponse::start("msg_1"),
-        LlmResponse::reasoning("internal plan"),
-        LlmResponse::text("Done"),
-        LlmResponse::done(),
-    ]];
+    let llm_responses = [llm_response("msg_1").reasoning(&["internal plan"]).text(&["Done"]).build()];
 
     let messages = test_agent().llm_responses(&llm_responses).user_text("do something").run().await?;
 

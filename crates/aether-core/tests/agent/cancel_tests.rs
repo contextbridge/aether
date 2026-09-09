@@ -1,6 +1,5 @@
 use aether_core::events::{AgentEvent, MessageEvent, ToolEvent, TurnEvent};
 use aether_core::testing::{FakeMcpServer, FakeTool, FakeToolResponse, TestScenario, test_agent};
-use llm::LlmResponse;
 use llm::testing::llm_response;
 use rmcp::model::{CallToolResult, ContentBlock, CreateTaskResult, DetailedTask, Task, TaskPayload, TaskStatus};
 use std::sync::Arc;
@@ -185,7 +184,7 @@ async fn user_cancel_surfaces_background_task_cancellation() {
         .fake_mcp_server("tasks", server)
         .llm_responses(&[
             llm_response("msg_1").tool_call("cancel-call", "tasks__deferred", &[&arguments]).build(),
-            vec![LlmResponse::start("paused-followup"), LlmResponse::done()],
+            llm_response("paused-followup").build(),
         ])
         .pause_turn_after(1, 0, release)
         .scenario(
@@ -231,7 +230,7 @@ async fn user_cancel_preserves_queued_background_task_outcome() {
         .fake_mcp_server("tasks", server)
         .llm_responses(&[
             llm_response("msg_1").tool_call("queued-call", "tasks__deferred", &[&arguments]).build(),
-            vec![LlmResponse::start("paused-followup"), LlmResponse::done()],
+            llm_response("paused-followup").build(),
             llm_response("msg_3").text(&["ack"]).build(),
         ])
         .pause_turn_after(1, 0, release)
