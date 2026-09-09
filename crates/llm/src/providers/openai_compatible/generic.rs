@@ -3,6 +3,7 @@ use schemars::Schema;
 
 use crate::catalog::Provider;
 use crate::provider::{error_stream, get_context_window};
+use crate::providers::http::openai_client;
 use crate::tool_schema::normalize_for_moonshot;
 use crate::{
     Context, LlmError, LlmModel, LlmResponseStream, ProviderAuthMode, ProviderConnectionConfig, Result,
@@ -111,7 +112,7 @@ impl GenericOpenAiProvider {
         let openai_config = AetherOpenAiConfig::new(openai_config, connection.auth_mode);
 
         Ok(Self {
-            client: Client::with_config(openai_config),
+            client: openai_client(openai_config, reqwest::Client::new()),
             model: config.default_model.to_string(),
             request_model: connection.request_model,
             config,

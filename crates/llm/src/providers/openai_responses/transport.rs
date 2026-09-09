@@ -28,7 +28,7 @@ pub(crate) async fn send(
 
 pub(crate) async fn open_connection(response: reqwest::Response) -> Result<ResponsesConnection> {
     if !response.status().is_success() {
-        return Err(rejected("Responses API", response, responses_code).await);
+        return Err(rejected(response, responses_code).await.into());
     }
     let metadata = HttpResponseMetadata::from(&response);
     Ok(ResponsesConnection { events: decode_response_sse(response), metadata })

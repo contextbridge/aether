@@ -1,6 +1,7 @@
 #![doc = include_str!(concat!(env!("OUT_DIR"), "/docs/ollama.md"))]
 
 use super::util::get_local_config;
+use crate::providers::http::openai_client;
 use crate::providers::openai::OpenAiChatProvider;
 use crate::{ProviderConnectionConfig, ProviderFactory, Result};
 use async_openai::{Client, config::OpenAIConfig};
@@ -13,11 +14,11 @@ pub struct OllamaProvider {
 
 impl OllamaProvider {
     pub fn new(model: &str, base_url: &str) -> Self {
-        Self { model: model.to_string(), client: Client::with_config(get_local_config(base_url)) }
+        Self { model: model.to_string(), client: openai_client(get_local_config(base_url), reqwest::Client::new()) }
     }
 
     pub fn default(model: &str) -> Self {
-        Self { model: model.to_string(), client: Client::with_config(get_local_config("http://localhost:11434/v1")) }
+        Self::new(model, "http://localhost:11434/v1")
     }
 }
 
@@ -28,7 +29,7 @@ impl ProviderFactory for OllamaProvider {
 
     fn from_env_with_connection(connection: ProviderConnectionConfig) -> impl Future<Output = Result<Self>> + Send {
         let base_url = connection.base_url.as_deref().unwrap_or("http://localhost:11434/v1");
-        ready(Ok(Self { model: String::new(), client: Client::with_config(get_local_config(base_url)) }))
+        ready(Ok(Self::new("", base_url)))
     }
 
     fn with_model(mut self, model: &str) -> Self {
