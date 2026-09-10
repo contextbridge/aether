@@ -1,5 +1,5 @@
 use agent_client_protocol::schema::v1 as acp;
-use clankerdiff_core::PatchLineKind;
+use clankerdiff_ratatui::diff::PatchLineKind;
 use wisp::conversation::{Conversation, ConversationContent};
 
 #[test]

@@ -1,7 +1,8 @@
 use std::{path::PathBuf, sync::Arc};
 
-use clankerdiff_core::DiffScope;
 use clankerdiff_git::RepositorySnapshot;
+use clankerdiff_ratatui::diff::DiffScope;
+use clankerdiff_watch::RepositoryState;
 use ratatui::{
     buffer::{Buffer, Cell},
     layout::{Position, Rect},
@@ -9,8 +10,8 @@ use ratatui::{
 };
 use utils::plan_review::PlanReviewElicitationMeta;
 use wisp::{
-    command::GitCommand,
-    git_review::{DiffDocument, FileDiff, GitDiffEvent},
+    command::GitWatchCommand,
+    git_review::{DiffDocument, FileDiff, GitWatchEvent},
     renderer::DrawContext,
     screens::{git_diff::GitDiffScreen, plan_review::PlanReviewScreen},
     surfaces::elicitation::ElicitationResponder,
@@ -24,17 +25,20 @@ fn git_review_clears_underlying_content_only_inside_its_viewport() {
         for lines in [1, 60] {
             let new = "fn added() {}\n".repeat(lines);
             let (mut screen, command) = GitDiffScreen::new(PathBuf::from("/workspace"));
-            let GitCommand::Load { request_id, .. } = command else {
+            let GitWatchCommand::Open { review_id, .. } = command else {
                 panic!("opening review must load the repository");
             };
-            screen.on_event(GitDiffEvent::Loaded {
-                request_id,
-                result: Ok(RepositorySnapshot {
-                    scope: DiffScope::Both,
-                    document: Arc::new(DiffDocument {
-                        repo_root: "/workspace".into(),
-                        files: vec![FileDiff::from_texts("src/lib.rs", "", &new).unwrap()],
+            screen.on_watch_event(GitWatchEvent {
+                review_id,
+                result: Ok(RepositoryState {
+                    snapshot: Arc::new(RepositorySnapshot {
+                        scope: DiffScope::Both,
+                        document: Arc::new(DiffDocument {
+                            repo_root: "/workspace".into(),
+                            files: vec![FileDiff::from_texts("src/lib.rs", "", &new).unwrap()],
+                        }),
                     }),
+                    error: None,
                 }),
             });
             assert_opaque_viewport(Rect::new(3, y, 120, 24), |area, buffer, cx| {

@@ -1,6 +1,6 @@
 use crate::theme::Theme;
 use crate::view::syntax::SyntaxHighlighter;
-use clankerdiff_markdown::MarkdownDocument;
+use clankerdiff_ratatui::MarkdownDocument;
 use clankerdiff_ratatui::{MarkdownLayoutOptions, MarkdownRenderer, MarkdownPresentation};
 use ratatui::text::Line;
 

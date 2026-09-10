@@ -1,4 +1,5 @@
 use unicode_width::UnicodeWidthStr;
+use wisp::command::GitCommand;
 
 use super::support::*;
 
@@ -23,6 +24,253 @@ fn open_patch(ui: &mut TestUi) {
     ui.key(key(KeyCode::Enter));
     ui.settle_tasks();
     ui.draw();
+}
+
+#[test]
+fn external_edits_refresh_an_idle_git_review() {
+    let mut ui = open_diff(changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n"), 160);
+    open_patch(&mut ui);
+    ui.executor_mut().git_mut().write_file("lib.rs", "fn external_edit() {}\n");
+    ui.settle_tasks();
+    ui.draw();
+    ui.assert_viewport_contains("external_edit");
+    ui.assert_viewport_not_contains("fn new()");
+}
+
+#[test]
+fn external_file_additions_and_removals_refresh_the_drawer() {
+    let mut ui = open_diff(FakeGit::new("/workspace"), 120);
+    ui.executor_mut().git_mut().add_file("external.rs", "fn added() {}\n");
+    ui.settle_tasks();
+    ui.draw();
+    ui.assert_viewport_contains("external.rs");
+
+    ui.executor_mut().git_mut().remove_file("external.rs");
+    ui.settle_tasks();
+    ui.draw();
+    ui.assert_viewport_not_contains("external.rs");
+}
+
+#[test]
+fn a_failed_initial_watch_can_be_retried_with_manual_refresh() {
+    let mut ui = open_diff(FakeGit::not_a_repository("/workspace"), 160);
+    ui.assert_viewport_contains("path is not inside a Git worktree");
+    ui.executor_mut().git_mut().set_repository_available(true);
+    ui.executor_mut().git_mut().add_file("recovered.rs", "fn recovered() {}\n");
+    ui.key(key(KeyCode::Char('r')));
+    ui.settle_tasks();
+    ui.draw();
+    ui.assert_viewport_contains("recovered.rs");
+    ui.assert_viewport_not_contains("path is not inside a Git worktree");
+}
+
+#[test]
+fn background_refresh_retains_comments_and_selected_file() {
+    let mut ui = open_diff(changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n"), 160);
+    open_patch(&mut ui);
+    ui.key(key(KeyCode::Char('c')));
+    ui.type_text("keep this feedback");
+    ui.key(key(KeyCode::Enter));
+    ui.executor_mut().git_mut().add_file("a.rs", "fn another_file() {}\n");
+    ui.settle_tasks();
+    ui.draw();
+    ui.assert_viewport_contains("keep this feedback");
+    ui.assert_viewport_contains("fn new()");
+    ui.assert_viewport_contains("a.rs");
+}
+
+#[test]
+fn background_refresh_waits_until_a_comment_draft_closes() {
+    let mut ui = open_diff(changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n"), 160);
+    open_patch(&mut ui);
+    ui.key(key(KeyCode::Char('c')));
+    ui.type_text("unfinished feedback");
+    ui.executor_mut().git_mut().write_file("lib.rs", "fn intermediate() {}\n");
+    ui.settle_tasks();
+    ui.executor_mut().git_mut().write_file("lib.rs", "fn latest_edit() {}\n");
+    ui.settle_tasks();
+    ui.draw();
+    ui.assert_viewport_contains("unfinished feedback");
+    ui.assert_viewport_not_contains("latest_edit");
+    ui.key(key(KeyCode::Esc));
+    ui.draw();
+    ui.assert_viewport_contains("latest_edit");
+    ui.assert_viewport_not_contains("intermediate");
+}
+
+#[test]
+fn background_failure_retains_the_document_and_recovers_without_content_changes() {
+    let mut ui = open_diff(changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n"), 160);
+    ui.executor_mut().git_mut().set_repository_available(false);
+    ui.settle_tasks();
+    ui.draw();
+    ui.assert_viewport_contains("fn new()");
+    ui.assert_viewport_contains("path is not inside a Git worktree");
+    ui.executor_mut().git_mut().set_repository_available(true);
+    ui.settle_tasks();
+    ui.draw();
+    ui.assert_viewport_contains("fn new()");
+    ui.assert_viewport_not_contains("path is not inside a Git worktree");
+}
+
+#[test]
+fn retained_watch_snapshot_survives_a_later_failure_while_editing() {
+    let mut ui = open_diff(changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n"), 160);
+    open_patch(&mut ui);
+    ui.key(key(KeyCode::Char('c')));
+    ui.type_text("unfinished feedback");
+    ui.executor_mut().git_mut().write_file("lib.rs", "fn retained_edit() {}\n");
+    // Coalescing may skip a successful event before delivering the next failure.
+    let _ = ui.executor_mut().next_git_watch_event().expect("changed snapshot");
+    ui.executor_mut().git_mut().set_repository_available(false);
+    ui.settle_tasks();
+    ui.draw();
+    ui.assert_viewport_contains("unfinished feedback");
+    ui.assert_viewport_not_contains("retained_edit");
+    ui.key(key(KeyCode::Esc));
+    ui.draw();
+    ui.assert_viewport_contains("retained_edit");
+    ui.assert_viewport_contains("path is not inside a Git worktree");
+    ui.executor_mut().git_mut().set_repository_available(true);
+    ui.settle_tasks();
+    ui.draw();
+    ui.assert_viewport_contains("retained_edit");
+    ui.assert_viewport_not_contains("path is not inside a Git worktree");
+}
+
+#[test]
+fn manual_refresh_installs_the_latest_watcher_state() {
+    let mut ui = open_diff(changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n"), 160);
+    ui.executor_mut().git_mut().write_file("lib.rs", "fn stale_edit() {}\n");
+    ui.executor_mut().git_mut().write_file("lib.rs", "fn current_edit() {}\n");
+    ui.key(key(KeyCode::Char('r')));
+    ui.settle_tasks();
+    ui.draw();
+    ui.assert_viewport_contains("current_edit");
+    ui.assert_viewport_not_contains("stale_edit");
+}
+
+#[test]
+fn background_snapshots_follow_scope_changes_and_reject_old_scope_updates() {
+    let mut git = changed_git("lib.rs", "fn original() {}\n", "fn staged_version() {}\n");
+    git.stage_all();
+    git.write_file("lib.rs", "fn working_version() {}\n");
+    let mut ui = open_diff(git, 160);
+    ui.executor_mut().git_mut().write_file("lib.rs", "fn external_version() {}\n");
+    let stale = ui.executor_mut().next_git_watch_event().expect("changed snapshot");
+    for _ in 0..2 {
+        ui.key(key(KeyCode::Char('S')));
+        ui.settle_tasks();
+    }
+    ui.deliver_result(CommandResult::GitWatch(stale));
+    ui.draw();
+    ui.assert_viewport_contains("Git Diff · Staged");
+    ui.assert_viewport_contains("staged_version");
+    ui.assert_viewport_not_contains("external_version");
+    ui.executor_mut().git_mut().stage_all();
+    ui.settle_tasks();
+    ui.draw();
+    ui.assert_viewport_contains("external_version");
+}
+
+#[test]
+fn background_updates_during_a_repository_action_do_not_lose_the_latest_snapshot() {
+    let mut ui = open_diff(changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n"), 160);
+    ui.key(key(KeyCode::Char('a')));
+    ui.executor_mut().git_mut().write_file("lib.rs", "fn external_version() {}\n");
+    let event = ui.executor_mut().next_git_watch_event().expect("changed snapshot");
+    ui.deliver_result(CommandResult::GitWatch(event));
+    ui.settle_tasks();
+    ui.draw();
+    ui.assert_viewport_contains("external_version");
+    assert_eq!(ui.executor().git().status("lib.rs"), Some((FileStatus::Modified, StageState::Staged)));
+    ui.key(key(KeyCode::Char('A')));
+    ui.settle_tasks();
+    assert_eq!(ui.executor().git().status("lib.rs"), Some((FileStatus::Modified, StageState::Unstaged)));
+}
+
+#[test]
+fn action_completion_does_not_refresh_or_install_a_snapshot() {
+    let mut ui = open_diff(changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n"), 160);
+    ui.key(key(KeyCode::Char('a')));
+    let commands = ui.take_commands();
+    let (review_id, action) = commands
+        .into_iter()
+        .find_map(|command| match command {
+            Command::Git(GitCommand::Apply { review_id, action }) => Some((review_id, action)),
+            _ => None,
+        })
+        .expect("stage action");
+    ui.executor_mut().git_mut().apply(action).expect("stage file");
+    ui.executor_mut().git_mut().write_file("lib.rs", "fn watcher_only() {}\n");
+    ui.deliver_result(CommandResult::GitDiff(GitDiffEvent { review_id, result: Ok(()) }));
+    assert!(ui.take_commands().is_empty(), "action completion must not request a refresh");
+    ui.draw();
+    ui.assert_viewport_contains("fn new()");
+    ui.assert_viewport_not_contains("watcher_only");
+    let event = ui.executor_mut().next_git_watch_event().expect("watcher update");
+    ui.deliver_result(CommandResult::GitWatch(event));
+    ui.draw();
+    ui.assert_viewport_contains("watcher_only");
+    ui.key(key(KeyCode::Char('A')));
+    ui.settle_tasks();
+    assert_eq!(ui.executor().git().status("lib.rs"), Some((FileStatus::Modified, StageState::Unstaged)));
+}
+
+#[test]
+fn a_snapshot_does_not_complete_an_in_flight_action() {
+    let mut ui = open_diff(changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n"), 160);
+    ui.key(key(KeyCode::Char('a')));
+    let commands = ui.take_commands();
+    let (review_id, action) = commands
+        .into_iter()
+        .find_map(|command| match command {
+            Command::Git(GitCommand::Apply { review_id, action }) => Some((review_id, action)),
+            _ => None,
+        })
+        .expect("stage action");
+    ui.executor_mut().git_mut().apply(action).expect("stage file");
+    let event = ui.executor_mut().next_git_watch_event().expect("index changed");
+    ui.deliver_result(CommandResult::GitWatch(event));
+    ui.key(key(KeyCode::Char('A')));
+    ui.settle_tasks();
+    assert_eq!(ui.executor().git().status("lib.rs"), Some((FileStatus::Modified, StageState::Staged)));
+    ui.deliver_result(CommandResult::GitDiff(GitDiffEvent { review_id, result: Ok(()) }));
+    ui.key(key(KeyCode::Char('A')));
+    ui.settle_tasks();
+    assert_eq!(ui.executor().git().status("lib.rs"), Some((FileStatus::Modified, StageState::Unstaged)));
+}
+
+#[test]
+fn initial_watch_completion_while_help_is_open_does_not_leave_review_loading() {
+    let git = changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n");
+    let mut ui = TestUiBuilder::new().working_dir("/workspace").dimensions(160, 15).git(git).build();
+    ui.key(ctrl('g'));
+    ui.key(key(KeyCode::Char('?')));
+    ui.settle_tasks();
+    ui.key(key(KeyCode::Esc));
+    ui.draw();
+    ui.assert_viewport_contains("fn new()");
+}
+
+#[test]
+fn closing_review_stops_its_watch_and_reopening_rejects_old_events() {
+    let mut ui = open_diff(changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n"), 160);
+    let old_id = ui.executor().git_watch_id().expect("active watch");
+    ui.executor_mut().git_mut().write_file("lib.rs", "fn stale_edit() {}\n");
+    let stale = ui.executor_mut().next_git_watch_event().expect("changed snapshot");
+    ui.key(key(KeyCode::Esc));
+    ui.settle_tasks();
+    assert!(ui.executor().git_watch_id().is_none());
+    ui.executor_mut().git_mut().write_file("lib.rs", "fn current_edit() {}\n");
+    assert!(ui.executor_mut().next_git_watch_event().is_none());
+    ui.key(ctrl('g'));
+    ui.settle_tasks();
+    assert_ne!(ui.executor().git_watch_id(), Some(old_id));
+    ui.deliver_result(CommandResult::GitWatch(stale));
+    ui.draw();
+    ui.assert_viewport_contains("current_edit");
+    ui.assert_viewport_not_contains("stale_edit");
 }
 
 #[test]
@@ -338,15 +586,35 @@ fn modified_key_events_do_not_trigger_git_actions() {
 }
 
 #[test]
-fn stale_git_events_do_not_replace_the_current_screen() {
+fn old_review_completions_cannot_finish_a_new_reviews_action() {
     let mut ui = open_diff(changed_git("file.rs", "fn old() {}\n", "fn new() {}\n"), 120);
-    ui.deliver_result(CommandResult::GitDiff(GitDiffEvent::ActionFinished {
-        request_id: wisp::request::RequestId::from(0),
-        result: Ok(()),
-    }));
+    let old_id = ui.executor().git_watch_id().expect("old review");
     ui.key(key(KeyCode::Esc));
-    ui.draw();
-    assert!(!ui.viewport_text().contains("Git Diff"));
+    ui.settle_tasks();
+    ui.key(ctrl('g'));
+    ui.settle_tasks();
+    let review_id = ui.executor().git_watch_id().expect("new review");
+    assert_ne!(old_id, review_id);
+    ui.key(key(KeyCode::Char('a')));
+    let commands = ui.take_commands();
+    let action = commands
+        .into_iter()
+        .find_map(|command| match command {
+            Command::Git(GitCommand::Apply { action, .. }) => Some(action),
+            _ => None,
+        })
+        .expect("stage action");
+    ui.executor_mut().git_mut().apply(action).unwrap();
+    let event = ui.executor_mut().next_git_watch_event().expect("staged snapshot");
+    ui.deliver_result(CommandResult::GitWatch(event));
+    ui.deliver_result(CommandResult::GitDiff(GitDiffEvent { review_id: old_id, result: Ok(()) }));
+    ui.key(key(KeyCode::Char('A')));
+    ui.settle_tasks();
+    assert_eq!(ui.executor().git().status("file.rs"), Some((FileStatus::Modified, StageState::Staged)));
+    ui.deliver_result(CommandResult::GitDiff(GitDiffEvent { review_id, result: Ok(()) }));
+    ui.key(key(KeyCode::Char('A')));
+    ui.settle_tasks();
+    assert_eq!(ui.executor().git().status("file.rs"), Some((FileStatus::Modified, StageState::Unstaged)));
 }
 
 #[test]
@@ -374,7 +642,7 @@ fn opening_review_schedules_theme_discovery() {
 #[test]
 fn discovered_custom_review_theme_uses_its_filename_globally() {
     use clankerdiff_ratatui::ThemeChoice;
-    use clankerdiff_theme::{ReviewTheme, ThemeId};
+    use clankerdiff_ratatui::theme::{ReviewTheme, ThemeId};
     let mut ui = open_diff(FakeGit::new("/workspace"), 120);
     let theme =
         ReviewTheme::from_bytes(ThemeId::Custom("custom.json".into()), &ReviewTheme::default().to_bytes().unwrap())
@@ -460,7 +728,7 @@ fn inline_preview_renders_a_bounded_prefix_of_canonical_rows() {
             .render(
                 width - 4,
                 theme.review(),
-                &mut clankerdiff_syntax::SyntaxHighlighter::default(),
+                &mut clankerdiff_ratatui::syntax::SyntaxHighlighter::default(),
                 DiffPreviewOptions { max_content_rows: usize::MAX, ..DiffPreviewOptions::default() },
             )
             .iter()

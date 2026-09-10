@@ -435,7 +435,7 @@ fn transcript_wrapping_never_exceeds_a_one_column_allocation() {
 #[test]
 fn trailing_newline_does_not_add_an_empty_user_content_row() {
     let mut ui = TestUi::new();
-    let user_background = ui.app().theme().sidebar_bg;
+    let user_background = ui.app().theme().surface;
     ui.type_text("hello");
     ui.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
     ui.key(key(KeyCode::Enter));
@@ -502,7 +502,7 @@ fn default_theme_is_sage() {
     let theme = Theme::default();
 
     assert_eq!(theme.review().id().to_string(), "sage");
-    assert_eq!(theme.background, Color::Rgb(0x15, 0x1d, 0x1f));
+    assert_eq!(theme.background, Color::Rgb(0x0d, 0x11, 0x10));
     assert_eq!(theme.text_primary, Color::Rgb(0xd4, 0xdd, 0xd6));
     assert_eq!(theme.accent, Color::Rgb(0x8f, 0xbc, 0xb0));
 }
@@ -510,11 +510,11 @@ fn default_theme_is_sage() {
 #[test]
 fn theme_loads_semantic_colors_from_json_file() {
     let mut file = tempfile::Builder::new().suffix(".json").tempfile().unwrap();
-    let mut review = clankerdiff_theme::ReviewTheme::default();
-    review.diff.foreground = clankerdiff_theme::Rgba::new(0x11, 0x22, 0x33, 255);
-    review.diff.background = clankerdiff_theme::Rgba::new(1, 2, 3, 255);
-    review.diff.accent = clankerdiff_theme::Rgba::new(0x44, 0x55, 0x66, 255);
-    review.markdown.heading = clankerdiff_theme::Rgba::new(0xab, 0xcd, 0xef, 255);
+    let mut review = clankerdiff_ratatui::theme::ReviewTheme::default();
+    review.ui.text = clankerdiff_ratatui::theme::Rgba::new(0x11, 0x22, 0x33, 255);
+    review.ui.canvas = clankerdiff_ratatui::theme::Rgba::new(1, 2, 3, 255);
+    review.ui.accent = clankerdiff_ratatui::theme::Rgba::new(0x44, 0x55, 0x66, 255);
+    review.markdown.heading = clankerdiff_ratatui::theme::Rgba::new(0xab, 0xcd, 0xef, 255);
     file.write_all(&review.to_bytes().unwrap()).unwrap();
     let theme = Theme::load_from_path(file.path()).unwrap();
 

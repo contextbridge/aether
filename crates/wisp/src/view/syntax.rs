@@ -1,7 +1,7 @@
 use crate::theme::Theme;
 use clankerdiff_ratatui::highlighted_line;
-use clankerdiff_syntax::LanguageHint;
-use clankerdiff_theme::Fingerprint;
+use clankerdiff_ratatui::syntax::LanguageHint;
+use clankerdiff_ratatui::theme::Fingerprint;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use std::rc::Rc;
@@ -17,7 +17,7 @@ pub type HighlightedLines = Rc<[Line<'static>]>;
 
 #[derive(Default)]
 pub struct SyntaxHighlighter {
-    pub(crate) inner: clankerdiff_syntax::SyntaxHighlighter,
+    pub(crate) inner: clankerdiff_ratatui::syntax::SyntaxHighlighter,
 }
 
 impl SyntaxHighlighter {

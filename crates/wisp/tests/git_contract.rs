@@ -7,12 +7,11 @@
 mod git_repo;
 use git_repo::Repo;
 
-use clankerdiff_core::{PatchLineKind, RepoPath, RepositoryAction};
+use clankerdiff_git::GitRepository;
+use clankerdiff_ratatui::diff::{PatchLineKind, RepoPath, RepositoryAction};
 use tempfile::TempDir;
-use wisp::command::GitCommand;
-use wisp::git_review::{DiffDocument, DiffScope, FileDiff, FileStatus, GitDiffEvent, StageState};
-use wisp::request::RequestId;
-use wisp::runtime::{execute_git, resolve_workspace_status};
+use wisp::git_review::{DiffDocument, DiffScope, FileDiff, FileStatus, StageState};
+use wisp::runtime::resolve_workspace_status;
 
 fn file<'a>(document: &'a DiffDocument, path: &str) -> &'a FileDiff {
     document
@@ -26,31 +25,15 @@ fn paths(document: &DiffDocument) -> Vec<&str> {
     document.files.iter().map(|file| file.path.as_str()).collect()
 }
 
-async fn run_action(command: GitCommand) {
-    match execute_git(command).await {
-        GitDiffEvent::ActionFinished { result, .. } => result.expect("action must succeed"),
-        event @ GitDiffEvent::Loaded { .. } => panic!("expected ActionFinished, got {event:?}"),
-    }
-}
-
-fn request(id: u64) -> RequestId {
-    RequestId::from(id)
-}
-
 #[tokio::test]
 async fn real_and_fake_git_report_the_same_non_repository_errors() {
     let outside = TempDir::new().unwrap();
     let root = outside.path().to_path_buf();
     let mut fake = wisp::testing::FakeGit::not_a_repository(&root);
-    for command in [
-        GitCommand::Load { request_id: request(10), working_dir: root.clone(), scope: DiffScope::Both },
-        GitCommand::Apply { request_id: request(11), repo_root: root, action: RepositoryAction::StageAll },
-    ] {
-        let real = execution_error(execute_git(command.clone()).await);
-        let fake = execution_error(fake.execute(command));
-        assert_eq!(fake.to_string(), real.to_string());
-        assert_eq!(std::mem::discriminant(&fake), std::mem::discriminant(&real));
-    }
+    let real = GitRepository::discover(&root).await.unwrap_err();
+    let fake = fake.apply(RepositoryAction::StageAll).unwrap_err();
+    assert_eq!(fake.to_string(), real.to_string());
+    assert_eq!(std::mem::discriminant(&fake), std::mem::discriminant(&real));
 }
 
 #[tokio::test]
@@ -58,22 +41,12 @@ async fn real_and_fake_git_report_the_same_commit_errors() {
     let repo = Repo::init();
     let mut fake = wisp::testing::FakeGit::new(&repo.root);
     for message in ["  ", "nothing staged"] {
-        let command = GitCommand::Apply {
-            request_id: request(12),
-            repo_root: repo.root.clone(),
-            action: RepositoryAction::Commit { message: message.into() },
-        };
-        let real = execution_error(execute_git(command.clone()).await);
-        let fake = execution_error(fake.execute(command));
+        let action = RepositoryAction::Commit { message: message.into() };
+        let repository = GitRepository::discover(&repo.root).await.unwrap();
+        let real = repository.apply(action.clone()).await.unwrap_err();
+        let fake = fake.apply(action).unwrap_err();
         assert_eq!(fake.to_string(), real.to_string());
         assert_eq!(std::mem::discriminant(&fake), std::mem::discriminant(&real));
-    }
-}
-
-fn execution_error(event: GitDiffEvent) -> wisp::git_review::GitDiffError {
-    match event {
-        GitDiffEvent::Loaded { result, .. } => result.unwrap_err(),
-        GitDiffEvent::ActionFinished { result, .. } => result.unwrap_err(),
     }
 }
 
@@ -136,36 +109,17 @@ async fn stage_commit_round_trip_reaches_a_clean_tree() {
     repo.git(&["commit", "-m", "init"]);
     repo.write("file.txt", "two\n");
 
-    run_action(GitCommand::Apply {
-        request_id: request(2),
-        repo_root: repo.root.clone(),
-        action: RepositoryAction::StagePaths(vec![RepoPath::new("file.txt").unwrap()]),
-    })
-    .await;
+    let repository = GitRepository::discover(&repo.root).await.unwrap();
+    repository.apply(RepositoryAction::StagePaths(vec![RepoPath::new("file.txt").unwrap()])).await.unwrap();
     let document = repo.load(DiffScope::Both).await;
     assert_eq!(file(&document, "file.txt").staged, StageState::Staged);
 
-    run_action(GitCommand::Apply {
-        request_id: request(3),
-        repo_root: repo.root.clone(),
-        action: RepositoryAction::UnstagePaths(vec![RepoPath::new("file.txt").unwrap()]),
-    })
-    .await;
+    repository.apply(RepositoryAction::UnstagePaths(vec![RepoPath::new("file.txt").unwrap()])).await.unwrap();
     let document = repo.load(DiffScope::Both).await;
     assert_eq!(file(&document, "file.txt").staged, StageState::Unstaged);
 
-    run_action(GitCommand::Apply {
-        request_id: request(4),
-        repo_root: repo.root.clone(),
-        action: RepositoryAction::StageAll,
-    })
-    .await;
-    run_action(GitCommand::Apply {
-        request_id: request(5),
-        repo_root: repo.root.clone(),
-        action: RepositoryAction::Commit { message: "update".to_string() },
-    })
-    .await;
+    repository.apply(RepositoryAction::StageAll).await.unwrap();
+    repository.apply(RepositoryAction::Commit { message: "update".to_string() }).await.unwrap();
     let document = repo.load(DiffScope::Both).await;
     assert!(document.files.is_empty(), "committed tree must be clean, found {:?}", paths(&document));
 }

@@ -46,12 +46,9 @@ rustdoc-args = ["--cfg", "docsrs"]
 workspace = true
 
 [dependencies]
-clankerdiff-core = { workspace = true }
-clankerdiff-theme = { workspace = true }
-clankerdiff-syntax = { workspace = true }
-clankerdiff-markdown = { workspace = true }
 clankerdiff-ratatui = { workspace = true }
 clankerdiff-git = { workspace = true }
+clankerdiff-watch = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.14" }
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client"], version = "0.4.3" }
 agent-client-protocol = { workspace = true }

@@ -5,7 +5,7 @@ use crate::settings::overlay::{SettingsChange, SettingsMenuEntry, SettingsMenuVa
 use crate::settings::{ThemeSettings, UiSettings};
 use crate::theme::{Theme, ThemeApplicationError};
 use acp_utils::config_option_id::ConfigOptionId;
-use clankerdiff_theme::ReviewTheme;
+use clankerdiff_ratatui::theme::ReviewTheme;
 use utils::ReasoningEffort;
 
 pub(super) fn cycle_reasoning_option(config_options: &[LocalConfigOption]) -> Option<(String, String)> {

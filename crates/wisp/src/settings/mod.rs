@@ -5,7 +5,7 @@ pub(crate) mod overlay;
 mod settings_model;
 mod themes;
 
-use clankerdiff_theme::ReviewTheme;
+use clankerdiff_ratatui::theme::ReviewTheme;
 pub(crate) use settings_model::SettingsModel;
 pub(crate) use themes::{builtin_review_theme_choices, review_theme_choices};
 pub use themes::{list_theme_files, load_theme_file};
@@ -83,7 +83,7 @@ impl ThemeSettings {
 
     pub fn from_selection_id(value: &str) -> Result<Self, ThemeLoadError> {
         if let Some(id) = value.strip_prefix("builtin:") {
-            clankerdiff_theme::ReviewTheme::builtin(id)?;
+            clankerdiff_ratatui::theme::ReviewTheme::builtin(id)?;
             Ok(Self::Builtin { id: id.into() })
         } else if let Some(file) = value.strip_prefix("file:") {
             themes::validate_file_name(file)?;

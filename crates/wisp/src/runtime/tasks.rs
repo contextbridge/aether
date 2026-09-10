@@ -9,7 +9,6 @@ use tokio::task::{AbortHandle, JoinError, JoinSet};
 pub(super) enum ReadTask {
     AttachmentPreparation,
     FileIndex,
-    GitReview,
     ThemeList,
     ReviewThemeList,
     Workspace,

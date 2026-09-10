@@ -513,7 +513,13 @@ fn bash_tool_keeps_highlighting_after_title_and_display_metadata_updates() {
         "a finished bash call should read as completed: {viewport}"
     );
     assert_eq!(viewport.matches(command).count(), 1, "the command should render exactly once: {viewport}");
-    assert!(!has_cell(&ui.conversation(), "c", |cell| cell.bg == ui.app().theme().code_bg));
+    let conversation = ui.conversation();
+    let row = row_containing(&conversation, command).expect("command row");
+    let text = row_text(&conversation, row);
+    let start = u16::try_from(text[..text.find(command).unwrap()].width()).unwrap();
+    for offset in start..start + u16::try_from(command.width()).unwrap() {
+        assert_eq!(conversation[(conversation.area.left() + offset, row)].bg, Color::Reset);
+    }
 }
 
 #[test]

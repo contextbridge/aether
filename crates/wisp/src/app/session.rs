@@ -140,6 +140,7 @@ impl App {
                 GitReviewOutput::Task(task) => {
                     self.queue(Command::Git(task));
                 }
+                GitReviewOutput::Watch(command) => self.queue(Command::GitWatch(command)),
             },
         }
     }
@@ -150,6 +151,9 @@ impl App {
     }
 
     pub(super) fn open_route(&mut self, route: Route) {
+        if let Route::GitReview(screen) = &self.route {
+            self.queue(Command::GitWatch(screen.close()));
+        }
         if matches!(route, Route::GitReview(_) | Route::PlanReview(_)) {
             self.queue(Command::Filesystem(FilesystemCommand::ListReviewThemes));
         }
@@ -161,7 +165,7 @@ impl App {
         if self.overlay.is_some() {
             self.close_overlay();
         } else {
-            self.route = Route::Conversation;
+            self.return_to_conversation();
         }
     }
 

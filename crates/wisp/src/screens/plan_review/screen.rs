@@ -3,8 +3,8 @@ use crate::surfaces::elicitation::ElicitationResponder;
 use crate::surfaces::input::{PlanReviewOutput, ReviewOutcome, UiEvent};
 use crate::view::generation::Generation;
 use crate::{renderer::DrawContext, settings::builtin_review_theme_choices};
-use clankerdiff_core::ReviewCapabilities;
-use clankerdiff_markdown::{MarkdownDocument, MarkdownReviewDecision, MarkdownReviewEvent};
+use clankerdiff_ratatui::ReviewCapabilities;
+use clankerdiff_ratatui::markdown::{MarkdownDocument, MarkdownReviewDecision, MarkdownReviewEvent};
 use clankerdiff_ratatui::{InputOutcome, MarkdownReviewState, MarkdownReviewWidget};
 use crossterm::event::Event;
 use ratatui::{

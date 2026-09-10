@@ -868,10 +868,10 @@ fn settings_overlay_uses_borderless_modal_chrome_and_padded_highlights() {
     assert_eq!(footer_column, modal.x + 2);
 
     let highlighted_row = (modal.top()..modal.bottom())
-        .find(|&y| buffer.cell((modal.x + 2, y)).is_some_and(|cell| cell.bg == theme.text_primary))
+        .find(|&y| buffer.cell((modal.x + 2, y)).is_some_and(|cell| cell.bg == theme.accent))
         .expect("the selected settings row should be highlighted");
-    assert_eq!(buffer.cell((modal.x, highlighted_row)).unwrap().bg, theme.text_primary);
-    assert_eq!(buffer.cell((modal.x + 1, highlighted_row)).unwrap().bg, theme.text_primary);
+    assert_eq!(buffer.cell((modal.x, highlighted_row)).unwrap().bg, theme.accent);
+    assert_eq!(buffer.cell((modal.x + 1, highlighted_row)).unwrap().bg, theme.accent);
 }
 
 #[test]
@@ -1286,7 +1286,7 @@ fn failed_queued_theme_retains_the_last_successful_selection() {
             _ => None,
         })
         .expect("first change starts immediately");
-    let theme = Theme::from_review(clankerdiff_theme::ReviewTheme::builtin("ayu-dark").unwrap());
+    let theme = Theme::from_review(clankerdiff_ratatui::theme::ReviewTheme::builtin("ayu-dark").unwrap());
     ui.deliver_result(CommandResult::ThemeApplied(Ok((first, theme.clone()))));
     let second = ui
         .take_commands()

@@ -4,7 +4,7 @@ use ratatui::TerminalOptions;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use wisp::app::WorkspaceMoveState;
-use wisp::command::{AgentCommand, Command, CommandResult, GitCommand, TerminalCommand};
+use wisp::command::{AgentCommand, Command, CommandResult, GitWatchCommand, TerminalCommand};
 
 use super::support::{
     BooleanPropertySchema, ElicitationSchema, StringPropertySchema, TestUi, TestUiBuilder, accepted_content, acp,
@@ -760,9 +760,9 @@ mod screen_mouse {
     use std::sync::Arc;
 
     use super::*;
-    use clankerdiff_core::DiffScope;
     use clankerdiff_git::RepositorySnapshot;
-    use wisp::git_review::{DiffDocument, FileDiff, GitDiffEvent};
+    use clankerdiff_ratatui::diff::DiffScope;
+    use wisp::git_review::{DiffDocument, FileDiff, GitWatchEvent};
     use wisp::renderer::DrawContext;
     use wisp::screens::git_diff::GitDiffScreen;
     use wisp::surfaces::input::{MouseAction, UiEvent};
@@ -804,10 +804,17 @@ mod screen_mouse {
 
     fn open_screen() -> GitDiffScreen {
         let (mut screen, task) = GitDiffScreen::new(std::path::PathBuf::from("/tmp/repo"));
-        let GitCommand::Load { request_id, .. } = task else {
+        let GitWatchCommand::Open { review_id, .. } = task else {
             panic!("opening Git review must load its document");
         };
-        screen.on_event(GitDiffEvent::Loaded { request_id, result: Ok(make_test_document()) });
+        screen.on_watch_event(GitWatchEvent {
+            review_id,
+            result: Ok(clankerdiff_watch::RepositoryState {
+                snapshot: std::sync::Arc::new(make_test_document()),
+                error: None,
+            }),
+        });
+        screen.on_event(wisp::git_review::GitDiffEvent { review_id, result: Ok(()) });
         screen
     }
 

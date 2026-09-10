@@ -13,7 +13,6 @@ use crate::settings::{
     ResolvedStatusLineSettings, SettingsModel, UiSettings, resolve_content_padding, resolve_status_line_settings,
 };
 use crate::surfaces::composer::Composer;
-use crate::surfaces::input::RootOutput;
 use crate::surfaces::picker::CommandEntry;
 use crate::surfaces::workspace_picker::WorkspacePicker;
 use crate::theme::Theme;
@@ -222,9 +221,14 @@ impl App {
             }
             CommandResult::FilesIndexed { request_id, files } => self.composer.on_files_indexed(request_id, files),
             CommandResult::GitDiff(event) => {
-                let Route::GitReview(screen) = &mut self.route else { return };
-                let outputs = screen.on_event(event).into_iter().map(RootOutput::GitReview).collect();
-                self.dispatch_outputs(outputs);
+                if let Route::GitReview(screen) = &mut self.route {
+                    screen.on_event(event);
+                }
+            }
+            CommandResult::GitWatch(event) => {
+                if let Route::GitReview(screen) = &mut self.route {
+                    screen.on_watch_event(event);
+                }
             }
             CommandResult::SubmissionPrepared(outcome) => self.finish_submission(outcome),
             CommandResult::ThemesListed(files) => {
@@ -473,7 +477,6 @@ impl App {
     }
 
     fn return_to_conversation(&mut self) {
-        self.close_overlay();
-        self.route = Route::Conversation;
+        self.open_route(Route::Conversation);
     }
 }

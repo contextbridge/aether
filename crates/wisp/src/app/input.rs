@@ -122,7 +122,7 @@ impl App {
         if self.ui.keybindings.toggle_git_diff.matches(key) {
             let (screen, task) = GitDiffScreen::new(self.session.working_dir().to_path_buf());
             self.open_route(Route::GitReview(Box::new(screen)));
-            self.queue(Command::Git(task));
+            self.queue(Command::GitWatch(task));
             return;
         }
 

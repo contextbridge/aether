@@ -7,11 +7,15 @@
 use crate::app::message::Message;
 use crate::app::{App, AppConfig};
 use crate::attachment::{AttachmentOutcome, PromptAttachment, build_attachments_with};
-use crate::command::{AgentCommand, Command, CommandResult, FilesystemCommand, GitCommand};
+use crate::command::{AgentCommand, Command, CommandResult, FilesystemCommand, GitCommand, GitWatchCommand};
 use crate::file_index::{FileEntry, MAX_INDEXED_FILES, file_entries};
-use crate::git_review::{DiffDocument, DiffScope, FileDiff, FileStatus, GitDiffError, GitDiffEvent, StageState};
+use crate::git_review::{
+    DiffDocument, DiffScope, FileDiff, FileStatus, GitDiffError, GitDiffEvent, GitWatchError, GitWatchEvent,
+    GitWatchResult, StageState,
+};
 pub use crate::renderer::RenderStats;
 use crate::renderer::Renderer;
+use crate::request::RequestId;
 use crate::session::platform::BrowserOpener;
 use crate::session::terminal::inline_viewport_height;
 use crate::session::workspace_status::WorkspaceStatus;
@@ -24,6 +28,7 @@ use acp_utils::notifications::{
 };
 use agent_client_protocol::schema::v1::{self as acp, SessionId};
 use clankerdiff_git::RepositorySnapshot;
+use clankerdiff_watch::RepositoryState;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
 use ratatui::buffer::{Buffer, Cell};
@@ -47,6 +52,11 @@ pub struct FakeExecutor {
     /// Commands not yet completed by `settle_tasks`.
     pending: VecDeque<Command>,
     git: FakeGit,
+    git_watch: Option<GitWatchEvent>,
+    git_watch_started: bool,
+    git_scope: DiffScope,
+    git_watch_changed: bool,
+    git_completion: Option<GitDiffEvent>,
     filesystem: FakeFilesystem,
 }
 
@@ -62,7 +72,17 @@ impl FakeExecutor {
     }
 
     pub fn with_git(git: FakeGit) -> Self {
-        Self { available: VecDeque::new(), pending: VecDeque::new(), git, filesystem: FakeFilesystem::default() }
+        Self {
+            available: VecDeque::new(),
+            pending: VecDeque::new(),
+            git,
+            git_watch: None,
+            git_watch_started: false,
+            git_scope: DiffScope::default(),
+            git_watch_changed: false,
+            git_completion: None,
+            filesystem: FakeFilesystem::default(),
+        }
     }
 
     pub fn git(&self) -> &FakeGit {
@@ -71,6 +91,31 @@ impl FakeExecutor {
 
     pub fn git_mut(&mut self) -> &mut FakeGit {
         &mut self.git
+    }
+
+    pub fn git_watch_id(&self) -> Option<RequestId> {
+        self.git_watch.as_ref().map(|event| event.review_id)
+    }
+
+    pub fn next_git_watch_event(&mut self) -> Option<GitWatchEvent> {
+        if !self.git_watch_started {
+            return None;
+        }
+        let current = self.git_watch.as_mut()?;
+        let result = self.git.watch_snapshot(self.git_scope, current.result.as_ref().ok());
+        let unchanged = match (&current.result, &result) {
+            (Ok(previous), Ok(next)) => {
+                previous.snapshot == next.snapshot && previous.error_message() == next.error_message()
+            }
+            (Err(previous), Err(next)) => previous.to_string() == next.to_string(),
+            _ => false,
+        };
+        if unchanged && !self.git_watch_changed {
+            return None;
+        }
+        self.git_watch_changed = false;
+        current.result = result;
+        Some(current.clone())
     }
 
     pub fn filesystem(&self) -> &FakeFilesystem {
@@ -94,7 +139,19 @@ impl FakeExecutor {
                 status: WorkspaceStatus::new(cwd.display().to_string(), None),
                 cwd,
             }),
-            Command::Git(command) => Some(CommandResult::GitDiff(self.git.execute(command))),
+            Command::Git(GitCommand::Apply { review_id, action }) => {
+                if self.git_watch_id() != Some(review_id) || !self.git_watch_started {
+                    return Some(CommandResult::GitWatch(GitWatchEvent {
+                        review_id,
+                        result: Err(Arc::new(GitWatchError::Stopped)),
+                    }));
+                }
+                Some(CommandResult::GitDiff(GitDiffEvent {
+                    review_id,
+                    result: self.git.apply(action).map_err(Arc::new),
+                }))
+            }
+            Command::GitWatch(command) => self.watch_git(&command),
             Command::Filesystem(FilesystemCommand::PrepareSubmission { attachments }) => {
                 Some(CommandResult::SubmissionPrepared(self.filesystem.build_attachments(&attachments)))
             }
@@ -103,6 +160,51 @@ impl FakeExecutor {
             }
             _ => None,
         }
+    }
+
+    fn watch_git(&mut self, command: &GitWatchCommand) -> Option<CommandResult> {
+        let (review_id, scope) = match *command {
+            GitWatchCommand::Open { review_id, scope, .. } => {
+                self.git_watch_started = false;
+                self.git_watch_changed = false;
+                self.git_completion = None;
+                self.git_watch = None;
+                (review_id, scope)
+            }
+            GitWatchCommand::Refresh { review_id, scope } => {
+                if self.git_watch_id() != Some(review_id) {
+                    return Some(CommandResult::GitWatch(GitWatchEvent {
+                        review_id,
+                        result: Err(Arc::new(GitWatchError::Stopped)),
+                    }));
+                }
+                self.git_scope = scope;
+                if self.git_watch_started {
+                    self.git_watch_changed = self.next_git_watch_event().is_some();
+                    let state = self.git_watch.as_ref().expect("active watch").result.as_ref().expect("started watch");
+                    let result = state.error.clone().map_or(Ok(()), Err);
+                    return Some(CommandResult::GitDiff(GitDiffEvent { review_id, result }));
+                }
+                (review_id, scope)
+            }
+            GitWatchCommand::Close { review_id } => {
+                if self.git_watch_id() == Some(review_id) {
+                    self.git_watch = None;
+                    self.git_watch_started = false;
+                    self.git_watch_changed = false;
+                    self.git_completion = None;
+                }
+                return None;
+            }
+        };
+        self.git_scope = scope;
+        let event = GitWatchEvent { review_id, result: self.git.watch_snapshot(scope, None) };
+        self.git_watch_started = event.result.is_ok();
+        if self.git_watch_started {
+            self.git_completion = Some(GitDiffEvent { review_id, result: Ok(()) });
+        }
+        self.git_watch = Some(event.clone());
+        Some(CommandResult::GitWatch(event))
     }
 
     fn take_pending(&mut self) -> Vec<Command> {
@@ -229,6 +331,10 @@ impl FakeGit {
         Self { state: std::sync::Arc::new(std::sync::Mutex::new(state)) }
     }
 
+    pub fn set_repository_available(&mut self, available: bool) {
+        self.state.lock().unwrap().is_repo = available;
+    }
+
     pub fn root(&self) -> PathBuf {
         self.state.lock().unwrap().root.clone()
     }
@@ -334,6 +440,56 @@ impl FakeGit {
         self.state.lock().unwrap().files.get(path).and_then(status_of)
     }
 
+    pub fn apply(&mut self, action: clankerdiff_ratatui::diff::RepositoryAction) -> Result<(), GitDiffError> {
+        use clankerdiff_ratatui::diff::RepositoryAction;
+        if !self.state.lock().unwrap().is_repo {
+            return Err(GitDiffError::NotRepository);
+        }
+        match action {
+            RepositoryAction::StagePaths(paths) => {
+                for path in paths {
+                    self.stage(path.as_str());
+                }
+                Ok(())
+            }
+            RepositoryAction::UnstagePaths(paths) => {
+                for path in paths {
+                    self.unstage(path.as_str());
+                }
+                Ok(())
+            }
+            RepositoryAction::StageAll => {
+                self.stage_all();
+                Ok(())
+            }
+            RepositoryAction::UnstageAll => {
+                self.unstage_all();
+                Ok(())
+            }
+            RepositoryAction::Commit { message } => self.commit(message),
+            RepositoryAction::Discard { path, status } => {
+                if status == FileStatus::Untracked {
+                    self.state.lock().unwrap().files.remove(path.as_str());
+                } else {
+                    self.discard(path.as_str());
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn watch_snapshot(&self, scope: DiffScope, previous: Option<&RepositoryState>) -> GitWatchResult {
+        match self.load_diff(scope) {
+            Ok(snapshot) => Ok(RepositoryState { snapshot: Arc::new(snapshot), error: None }),
+            Err(error) => match previous {
+                Some(previous) => {
+                    Ok(RepositoryState { snapshot: previous.snapshot.clone(), error: Some(Arc::new(error)) })
+                }
+                None => Err(Arc::new(GitWatchError::Git(error))),
+            },
+        }
+    }
+
     fn load_diff(&self, scope: DiffScope) -> Result<RepositorySnapshot, GitDiffError> {
         let state = self.state.lock().unwrap();
         if !state.is_repo {
@@ -375,52 +531,6 @@ impl FakeGit {
         let document = DiffDocument { repo_root: state.root.to_string_lossy().into_owned(), files };
         Ok(clankerdiff_git::RepositorySnapshot { scope, document: std::sync::Arc::new(document) })
     }
-
-    pub fn execute(&mut self, command: GitCommand) -> GitDiffEvent {
-        use clankerdiff_core::RepositoryAction;
-        match command {
-            GitCommand::Load { request_id, scope, .. } => {
-                GitDiffEvent::Loaded { request_id, result: self.load_diff(scope) }
-            }
-            GitCommand::Apply { request_id, action, .. } => {
-                if !self.state.lock().unwrap().is_repo {
-                    return GitDiffEvent::ActionFinished { request_id, result: Err(GitDiffError::NotRepository) };
-                }
-                let result = match action {
-                    RepositoryAction::StagePaths(paths) => {
-                        for path in paths {
-                            self.stage(path.as_str());
-                        }
-                        Ok(())
-                    }
-                    RepositoryAction::UnstagePaths(paths) => {
-                        for path in paths {
-                            self.unstage(path.as_str());
-                        }
-                        Ok(())
-                    }
-                    RepositoryAction::StageAll => {
-                        self.stage_all();
-                        Ok(())
-                    }
-                    RepositoryAction::UnstageAll => {
-                        self.unstage_all();
-                        Ok(())
-                    }
-                    RepositoryAction::Commit { message } => self.commit(message),
-                    RepositoryAction::Discard { path, status } => {
-                        if status == FileStatus::Untracked {
-                            self.state.lock().unwrap().files.remove(path.as_str());
-                        } else {
-                            self.discard(path.as_str());
-                        }
-                        Ok(())
-                    }
-                };
-                GitDiffEvent::ActionFinished { request_id, result }
-            }
-        }
-    }
 }
 
 fn status_of(file: &FakeGitFile) -> Option<(FileStatus, StageState)> {
@@ -449,8 +559,8 @@ fn status_of(file: &FakeGitFile) -> Option<(FileStatus, StageState)> {
     Some((status, stage))
 }
 
-fn fake_source(bytes: Option<&[u8]>) -> clankerdiff_core::SourceResult {
-    use clankerdiff_core::{SourceDocument, SourceUnavailable};
+fn fake_source(bytes: Option<&[u8]>) -> clankerdiff_ratatui::diff::SourceResult {
+    use clankerdiff_ratatui::diff::{SourceDocument, SourceUnavailable};
     match bytes {
         None => Err(SourceUnavailable::Absent),
         Some(bytes) if is_binary(bytes) => Err(SourceUnavailable::Binary),
@@ -963,6 +1073,14 @@ where
         loop {
             let pending = self.executor.take_pending();
             if pending.is_empty() {
+                if let Some(event) = self.executor.next_git_watch_event() {
+                    self.deliver_result(CommandResult::GitWatch(event));
+                    continue;
+                }
+                if let Some(event) = self.executor.git_completion.take() {
+                    self.deliver_result(CommandResult::GitDiff(event));
+                    continue;
+                }
                 return;
             }
             if initial_batch {

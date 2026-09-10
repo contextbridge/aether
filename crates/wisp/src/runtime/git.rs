@@ -1,29 +1,5 @@
-use crate::command::GitCommand;
-use crate::git_review::GitDiffEvent;
 use crate::session::workspace_status::{WorkspaceStatus, home_relative_path};
-use clankerdiff_git::GitRepository;
 use std::path::Path;
-
-pub async fn execute(command: GitCommand) -> GitDiffEvent {
-    match command {
-        GitCommand::Load { request_id, working_dir, scope } => {
-            let result = async {
-                let repository = GitRepository::discover(working_dir).await?;
-                repository.snapshot_with_sources(scope).await
-            }
-            .await;
-            GitDiffEvent::Loaded { request_id, result }
-        }
-        GitCommand::Apply { request_id, repo_root, action } => {
-            let result = async {
-                let repository = GitRepository::discover(repo_root).await?;
-                repository.apply(action).await
-            }
-            .await;
-            GitDiffEvent::ActionFinished { request_id, result }
-        }
-    }
-}
 
 pub async fn resolve_workspace_status(cwd: &Path) -> WorkspaceStatus {
     let git_ref = match git_ref(cwd, &["branch", "--show-current"]).await {

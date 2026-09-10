@@ -1,18 +1,20 @@
 use crate::request::RequestId;
-use clankerdiff_git::RepositorySnapshot;
+use clankerdiff_watch::RepositoryState;
+use std::sync::Arc;
 
 pub use clankerdiff_git::GitError as GitDiffError;
+pub use clankerdiff_watch::WatchError as GitWatchError;
 
-#[derive(Debug)]
-pub enum GitDiffEvent {
-    Loaded { request_id: RequestId, result: Result<RepositorySnapshot, GitDiffError> },
-    ActionFinished { request_id: RequestId, result: Result<(), GitDiffError> },
+pub type GitWatchResult = Result<RepositoryState, Arc<GitWatchError>>;
+
+#[derive(Debug, Clone)]
+pub struct GitWatchEvent {
+    pub review_id: RequestId,
+    pub result: GitWatchResult,
 }
 
-impl GitDiffEvent {
-    pub fn request_id(&self) -> RequestId {
-        match self {
-            Self::Loaded { request_id, .. } | Self::ActionFinished { request_id, .. } => *request_id,
-        }
-    }
+#[derive(Debug)]
+pub struct GitDiffEvent {
+    pub review_id: RequestId,
+    pub result: Result<(), Arc<GitDiffError>>,
 }

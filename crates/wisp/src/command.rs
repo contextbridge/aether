@@ -1,6 +1,6 @@
 use crate::attachment::{AttachmentOutcome, PromptAttachment};
 use crate::file_index::FileEntry;
-use crate::git_review::{DiffScope, GitDiffEvent};
+use crate::git_review::{DiffScope, GitDiffEvent, GitWatchEvent};
 use crate::request::RequestId;
 use crate::session::workspace_status::WorkspaceStatus;
 use crate::settings::UiSettings;
@@ -12,7 +12,7 @@ use acp_utils::notifications::{
 use agent_client_protocol::schema::v1::{
     ContentBlock, ListSessionsResponse, NewSessionResponse, SessionConfigOption, SessionId,
 };
-use clankerdiff_core::RepositoryAction;
+use clankerdiff_ratatui::diff::RepositoryAction;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
@@ -20,6 +20,7 @@ pub enum Command {
     Agent(AgentCommand),
     Filesystem(FilesystemCommand),
     Git(GitCommand),
+    GitWatch(GitWatchCommand),
     ResolveWorkspace { cwd: PathBuf },
     Terminal(TerminalCommand),
 }
@@ -91,8 +92,14 @@ pub enum FilesystemCommand {
 
 #[derive(Debug, Clone)]
 pub enum GitCommand {
-    Load { request_id: RequestId, working_dir: PathBuf, scope: DiffScope },
-    Apply { request_id: RequestId, repo_root: PathBuf, action: RepositoryAction },
+    Apply { review_id: RequestId, action: RepositoryAction },
+}
+
+#[derive(Debug, Clone)]
+pub enum GitWatchCommand {
+    Open { review_id: RequestId, working_dir: PathBuf, scope: DiffScope },
+    Refresh { review_id: RequestId, scope: DiffScope },
+    Close { review_id: RequestId },
 }
 
 #[derive(Debug, Clone)]
@@ -118,6 +125,7 @@ pub enum CommandResult {
     WorkspaceMoveFailed { error: String },
     FilesIndexed { request_id: RequestId, files: Vec<FileEntry> },
     GitDiff(GitDiffEvent),
+    GitWatch(GitWatchEvent),
     SubmissionPrepared(AttachmentOutcome),
     ThemesListed(Vec<String>),
     ReviewThemesListed(Vec<clankerdiff_ratatui::ThemeChoice>),

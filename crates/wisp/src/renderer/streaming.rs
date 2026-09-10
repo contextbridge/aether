@@ -4,7 +4,7 @@ use crate::conversation::item_view::{content_width, indent_lines};
 use crate::conversation::{ConversationItem, Revision};
 use crate::view::markdown::layout_options;
 use crate::view::wrap::as_u16;
-use clankerdiff_markdown::MarkdownStream;
+use clankerdiff_ratatui::markdown::MarkdownStream;
 use clankerdiff_ratatui::{
     MarkdownCommitError, MarkdownRenderer, MarkdownRow, MarkdownStreamError, StreamingMarkdownPolicy,
     StreamingMarkdownState,

@@ -1,7 +1,7 @@
 use crate::settings::{ThemeSettings, load_theme_file};
-use clankerdiff_ratatui::{RatatuiTheme, composite_color};
-use clankerdiff_theme::{NoticeTone, ReviewTheme, ThemeId};
-use ratatui::style::Color;
+use clankerdiff_ratatui::{RatatuiTheme, RatatuiUiTheme, composite_color, layered_style};
+use clankerdiff_ratatui::theme::{ReviewTheme, SelectionState, ThemeId};
+use ratatui::style::{Color, Style};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -10,7 +10,7 @@ pub struct Theme {
     pub text_primary: Color,
     pub text_secondary: Color,
     pub background: Color,
-    pub sidebar_bg: Color,
+    pub surface: Color,
     pub accent: Color,
     pub heading: Color,
     pub link: Color,
@@ -34,7 +34,7 @@ pub enum ThemeLoadError {
     #[error("Could not read theme: {0}")]
     Io(#[from] std::io::Error),
     #[error(transparent)]
-    Theme(#[from] clankerdiff_theme::ThemeError),
+    Theme(#[from] clankerdiff_ratatui::theme::ThemeError),
     #[error("Invalid theme file name: {0}")]
     InvalidFile(String),
 }
@@ -72,15 +72,24 @@ impl Theme {
         &self.review
     }
 
+    pub fn surface_style(&self) -> Style {
+        let ui = self.review.ui;
+        layered_style(ui.text, ui.surface, ui.canvas)
+    }
+
+    pub fn selection_style(&self, state: SelectionState) -> Style {
+        RatatuiUiTheme::from(&self.review.ui).selection_style(state)
+    }
+
     pub fn from_review(review: ReviewTheme) -> Self {
         let native = RatatuiTheme::from(&review);
         let ui = native.ui;
         let color = |value| composite_color(value, review.diff.background);
         Self {
             text_primary: ui.text,
-            text_secondary: ui.text_muted,
+            text_secondary: ui.text_secondary,
             background: ui.canvas,
-            sidebar_bg: ui.surface_selected,
+            surface: ui.surface,
             accent: ui.accent,
             heading: color(review.markdown.heading),
             link: color(review.markdown.link),
@@ -88,9 +97,9 @@ impl Theme {
             code_fg: color(review.markdown.code),
             code_bg: color(review.markdown.code_background),
             success: ui.positive,
-            warning: ui.notice_style(NoticeTone::Warning).fg.unwrap_or(ui.text),
+            warning: ui.warning,
             error: ui.destructive,
-            info: ui.notice_style(NoticeTone::Info).fg.unwrap_or(ui.text),
+            info: ui.info,
             muted: ui.text_muted,
             diff_added_fg: native.addition,
             diff_added_bg: native.addition_background,

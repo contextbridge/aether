@@ -1,5 +1,5 @@
 use crate::surfaces::input::{MouseAction, UiEvent};
-use clankerdiff_theme::ThemeId;
+use clankerdiff_ratatui::theme::ThemeId;
 use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 pub(super) fn crossterm_event(event: UiEvent) -> Event {

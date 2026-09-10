@@ -1,10 +1,10 @@
-use clankerdiff_theme::{ReviewTheme, ThemeChoice};
+use clankerdiff_ratatui::theme::{ReviewTheme, ThemeChoice};
 
 use crate::theme::{Theme, ThemeLoadError};
 use std::path::{Path, PathBuf};
 
 pub(crate) fn builtin_review_theme_choices() -> Vec<ThemeChoice> {
-    clankerdiff_theme::ReviewTheme::catalog()
+    clankerdiff_ratatui::theme::ReviewTheme::catalog()
         .into_iter()
         .map(|descriptor| {
             ThemeChoice::new(descriptor.name, ReviewTheme::builtin(&descriptor.id).expect("catalog theme"))

@@ -1,10 +1,8 @@
+use clankerdiff_git::GitRepository;
 use std::path::PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
-use wisp::command::GitCommand;
-use wisp::git_review::{DiffDocument, DiffScope, GitDiffEvent};
-use wisp::request::RequestId;
-use wisp::runtime::execute_git;
+use wisp::git_review::{DiffDocument, DiffScope};
 
 pub struct Repo {
     _dir: TempDir,
@@ -43,12 +41,7 @@ impl Repo {
     }
 
     pub async fn load(&self, scope: DiffScope) -> DiffDocument {
-        let command = GitCommand::Load { request_id: RequestId::from(1), working_dir: self.root.clone(), scope };
-        match execute_git(command).await {
-            GitDiffEvent::Loaded { result, .. } => {
-                (*result.expect("load must succeed against a real repository").document).clone()
-            }
-            event @ GitDiffEvent::ActionFinished { .. } => panic!("expected Loaded, got {event:?}"),
-        }
+        let repository = GitRepository::discover(&self.root).await.expect("discover repository");
+        (*repository.snapshot_with_sources(scope).await.expect("load repository").document).clone()
     }
 }
