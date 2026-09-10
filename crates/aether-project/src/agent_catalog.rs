@@ -281,41 +281,12 @@ fn parse_model(agent: &str, model: &str) -> Result<ModelSpec, SettingsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::{fake_spec, project};
     use aether_core::agent_spec::AgentSpecExposure;
     use llm::ModelSettings;
-    use mcp_utils::client::ToolFilter;
-    use std::fs;
-
-    fn create_temp_project() -> tempfile::TempDir {
-        tempfile::tempdir().unwrap()
-    }
-
-    fn write_file(dir: &Path, path: &str, content: &str) {
-        let full_path = dir.join(path);
-        if let Some(parent) = full_path.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(full_path, content).unwrap();
-    }
-
-    fn make_spec(name: &str, exposure: AgentSpecExposure) -> AgentSpec {
-        AgentSpec {
-            name: name.to_string(),
-            description: format!("{name} agent"),
-            model: "anthropic:claude-sonnet-4-5".to_string(),
-            reasoning_effort: None,
-            model_settings: ModelSettings::default(),
-            context_window: None,
-            prompts: vec![],
-            provider_connections: ProviderConnectionOverrides::default(),
-            mcp_config_sources: Vec::new(),
-            exposure,
-            tools: ToolFilter::default(),
-        }
-    }
 
     fn create_test_catalog(project_root: PathBuf) -> AgentCatalog {
-        let planner = make_spec("planner", AgentSpecExposure::both());
+        let planner = fake_spec("planner", AgentSpecExposure::both());
         AgentCatalog::new(project_root, vec![planner], None)
     }
 
@@ -349,10 +320,10 @@ mod tests {
 
     #[test]
     fn provider_connections_reach_every_agent_not_just_the_selected_one() {
-        let dir = create_temp_project();
+        let dir = project();
         let catalog = AgentCatalog::new(
-            dir.path().to_path_buf(),
-            vec![make_spec("planner", AgentSpecExposure::both()), make_spec("worker", AgentSpecExposure::agent_only())],
+            dir.root().to_path_buf(),
+            vec![fake_spec("planner", AgentSpecExposure::both()), fake_spec("worker", AgentSpecExposure::agent_only())],
             None,
         )
         .with_provider_connections(overrides("https://runtime.test"));
@@ -364,11 +335,11 @@ mod tests {
 
     #[test]
     fn runtime_provider_connections_win_over_settings_declared_ones() {
-        let dir = create_temp_project();
-        let mut declared = make_spec("planner", AgentSpecExposure::both());
+        let dir = project();
+        let mut declared = fake_spec("planner", AgentSpecExposure::both());
         declared.provider_connections = overrides("https://from-settings.test");
 
-        let catalog = AgentCatalog::new(dir.path().to_path_buf(), vec![declared], None)
+        let catalog = AgentCatalog::new(dir.root().to_path_buf(), vec![declared], None)
             .with_provider_connections(overrides("https://runtime.test"));
 
         assert_eq!(base_url(catalog.get("planner").unwrap()).as_deref(), Some("https://runtime.test"));
@@ -376,9 +347,9 @@ mod tests {
 
     #[test]
     fn default_spec_inherits_runtime_provider_connections() {
-        let dir = create_temp_project();
+        let dir = project();
         let catalog =
-            AgentCatalog::empty(dir.path().to_path_buf()).with_provider_connections(overrides("https://runtime.test"));
+            AgentCatalog::empty(dir.root().to_path_buf()).with_provider_connections(overrides("https://runtime.test"));
 
         let spec = catalog.default_spec(&"anthropic:claude-sonnet-4-5".parse().unwrap(), None);
 
@@ -388,8 +359,7 @@ mod tests {
 
     #[test]
     fn settings_provider_connections_apply_to_explicit_model_specs() {
-        let dir = create_temp_project();
-        write_file(dir.path(), "BASE.md", "Base instructions");
+        let dir = project().file("BASE.md", "Base instructions");
         let settings = AetherSettings {
             agents: vec![AgentConfig {
                 name: "planner".to_string(),
@@ -402,7 +372,7 @@ mod tests {
             providers: overrides("https://settings.test"),
             ..AetherSettings::default()
         };
-        let catalog = AgentCatalog::from_settings_or_empty(dir.path(), settings).unwrap();
+        let catalog = AgentCatalog::from_settings_or_empty(dir.root(), settings).unwrap();
 
         let spec = catalog.default_spec(&"anthropic:claude-sonnet-4-5".parse().unwrap(), None);
 
@@ -411,9 +381,9 @@ mod tests {
 
     #[test]
     fn settings_provider_connections_apply_to_fallback_specs_without_agents() {
-        let dir = create_temp_project();
+        let dir = project();
         let settings = AetherSettings { providers: overrides("https://settings.test"), ..AetherSettings::default() };
-        let catalog = AgentCatalog::from_settings_or_empty(dir.path(), settings).unwrap();
+        let catalog = AgentCatalog::from_settings_or_empty(dir.root(), settings).unwrap();
 
         let spec = catalog.default_spec(&"anthropic:claude-sonnet-4-5".parse().unwrap(), None);
 
@@ -422,9 +392,9 @@ mod tests {
 
     #[test]
     fn runtime_provider_connections_override_settings_for_default_specs() {
-        let dir = create_temp_project();
+        let dir = project();
         let settings = AetherSettings { providers: overrides("https://settings.test"), ..AetherSettings::default() };
-        let catalog = AgentCatalog::from_settings_or_empty(dir.path(), settings)
+        let catalog = AgentCatalog::from_settings_or_empty(dir.root(), settings)
             .unwrap()
             .with_provider_connections(overrides("https://runtime.test"));
 
@@ -435,8 +405,8 @@ mod tests {
 
     #[test]
     fn default_spec_without_overrides_leaves_connections_unset() {
-        let dir = create_temp_project();
-        let catalog = AgentCatalog::empty(dir.path().to_path_buf());
+        let dir = project();
+        let catalog = AgentCatalog::empty(dir.root().to_path_buf());
 
         let spec = catalog.default_spec(&"anthropic:claude-sonnet-4-5".parse().unwrap(), None);
 
@@ -445,13 +415,13 @@ mod tests {
 
     #[test]
     fn user_invocable_filters_correctly() {
-        let dir = create_temp_project();
-        let root = dir.path().to_path_buf();
+        let dir = project();
+        let root = dir.root().to_path_buf();
         let catalog = AgentCatalog::new(
             root,
             vec![
-                make_spec("planner", AgentSpecExposure::both()),
-                make_spec("internal", AgentSpecExposure::agent_only()),
+                fake_spec("planner", AgentSpecExposure::both()),
+                fake_spec("internal", AgentSpecExposure::agent_only()),
             ],
             None,
         );
@@ -463,13 +433,13 @@ mod tests {
 
     #[test]
     fn agent_invocable_filters_correctly() {
-        let dir = create_temp_project();
-        let root = dir.path().to_path_buf();
+        let dir = project();
+        let root = dir.root().to_path_buf();
         let catalog = AgentCatalog::new(
             root,
             vec![
-                make_spec("planner", AgentSpecExposure::both()),
-                make_spec("user-only", AgentSpecExposure::user_only()),
+                fake_spec("planner", AgentSpecExposure::both()),
+                fake_spec("user-only", AgentSpecExposure::user_only()),
             ],
             None,
         );
@@ -481,10 +451,10 @@ mod tests {
 
     #[test]
     fn default_agent_uses_selected_agent() {
-        let dir = create_temp_project();
+        let dir = project();
         let catalog = AgentCatalog::new(
-            dir.path().to_path_buf(),
-            vec![make_spec("first", AgentSpecExposure::both()), make_spec("second", AgentSpecExposure::both())],
+            dir.root().to_path_buf(),
+            vec![fake_spec("first", AgentSpecExposure::both()), fake_spec("second", AgentSpecExposure::both())],
             Some("second".to_string()),
         );
 
@@ -493,12 +463,12 @@ mod tests {
 
     #[test]
     fn default_agent_falls_back_to_first_user_invocable() {
-        let dir = create_temp_project();
+        let dir = project();
         let catalog = AgentCatalog::new(
-            dir.path().to_path_buf(),
+            dir.root().to_path_buf(),
             vec![
-                make_spec("internal", AgentSpecExposure::agent_only()),
-                make_spec("visible", AgentSpecExposure::user_only()),
+                fake_spec("internal", AgentSpecExposure::agent_only()),
+                fake_spec("visible", AgentSpecExposure::user_only()),
             ],
             None,
         );
@@ -508,16 +478,15 @@ mod tests {
 
     #[test]
     fn get_returns_error_for_missing_agent() {
-        let dir = create_temp_project();
-        let catalog = create_test_catalog(dir.path().to_path_buf());
+        let dir = project();
+        let catalog = create_test_catalog(dir.root().to_path_buf());
         let result = catalog.get("nonexistent");
         assert!(matches!(result, Err(SettingsError::AgentNotFound { .. })));
     }
 
     #[test]
     fn agent_rejects_reasoning_effort_unsupported_by_model() {
-        let dir = create_temp_project();
-        write_file(dir.path(), "BASE.md", "Base instructions");
+        let dir = project().file("BASE.md", "Base instructions");
         let config = AetherSettings {
             agents: vec![AgentConfig {
                 name: "planner".to_string(),
@@ -531,15 +500,14 @@ mod tests {
             ..AetherSettings::default()
         };
 
-        let error = AgentCatalog::from_settings(dir.path(), config).unwrap_err();
+        let error = AgentCatalog::from_settings(dir.root(), config).unwrap_err();
 
         assert!(matches!(error, SettingsError::InvalidReasoningEffort { .. }));
     }
 
     #[test]
     fn agent_context_window_is_resolved_into_spec() {
-        let dir = create_temp_project();
-        write_file(dir.path(), "BASE.md", "Base instructions");
+        let dir = project().file("BASE.md", "Base instructions");
 
         let config = AetherSettings {
             agents: vec![AgentConfig {
@@ -554,7 +522,7 @@ mod tests {
             ..AetherSettings::default()
         };
 
-        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
+        let catalog = AgentCatalog::from_settings(dir.root(), config).unwrap();
         let spec = catalog.resolve("planner").unwrap();
 
         assert_eq!(spec.context_window, Some(200_000));
@@ -562,8 +530,7 @@ mod tests {
 
     #[test]
     fn agent_model_settings_resolve_from_config_json() {
-        let dir = create_temp_project();
-        write_file(dir.path(), "BASE.md", "Base instructions");
+        let dir = project().file("BASE.md", "Base instructions");
 
         let json = r#"{
             "agents": [{
@@ -577,7 +544,7 @@ mod tests {
         }"#;
 
         let config: AetherSettings = serde_json::from_str(json).unwrap();
-        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
+        let catalog = AgentCatalog::from_settings(dir.root(), config).unwrap();
         let spec = catalog.resolve("judge").unwrap();
 
         assert_eq!(
@@ -610,8 +577,7 @@ mod tests {
 
     #[test]
     fn top_level_prompts_are_inherited_when_agent_prompts_are_empty() {
-        let dir = create_temp_project();
-        write_file(dir.path(), "BASE.md", "Base instructions");
+        let dir = project().file("BASE.md", "Base instructions");
 
         let config = AetherSettings {
             prompts: vec![crate::PromptSource::file("BASE.md")],
@@ -625,7 +591,7 @@ mod tests {
             ..AetherSettings::default()
         };
 
-        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
+        let catalog = AgentCatalog::from_settings(dir.root(), config).unwrap();
         let spec = catalog.resolve("planner").unwrap();
 
         assert!(has_prompt_file(&spec, "BASE.md"));
@@ -633,9 +599,7 @@ mod tests {
 
     #[test]
     fn agent_prompts_override_top_level_prompts() {
-        let dir = create_temp_project();
-        write_file(dir.path(), "BASE.md", "Base instructions");
-        write_file(dir.path(), "AGENT.md", "Agent instructions");
+        let dir = project().file("BASE.md", "Base instructions").file("AGENT.md", "Agent instructions");
 
         let config = AetherSettings {
             prompts: vec![crate::PromptSource::file("BASE.md")],
@@ -650,7 +614,7 @@ mod tests {
             ..AetherSettings::default()
         };
 
-        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
+        let catalog = AgentCatalog::from_settings(dir.root(), config).unwrap();
         let spec = catalog.resolve("planner").unwrap();
 
         assert!(has_prompt_file(&spec, "AGENT.md"));
@@ -659,9 +623,7 @@ mod tests {
 
     #[test]
     fn top_level_mcps_are_inherited_when_agent_mcps_are_empty() {
-        let dir = create_temp_project();
-        write_file(dir.path(), "BASE.md", "Base instructions");
-        write_file(dir.path(), "base-mcp.json", "{}");
+        let dir = project().file("BASE.md", "Base instructions").file("base-mcp.json", "{}");
 
         let config = AetherSettings {
             prompts: vec![crate::PromptSource::file("BASE.md")],
@@ -676,18 +638,16 @@ mod tests {
             ..AetherSettings::default()
         };
 
-        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
+        let catalog = AgentCatalog::from_settings(dir.root(), config).unwrap();
         let spec = catalog.resolve("planner").unwrap();
 
-        assert_eq!(file_sources(&spec), vec![(dir.path().join("base-mcp.json"), false)]);
+        assert_eq!(file_sources(&spec), vec![(dir.root().join("base-mcp.json"), false)]);
     }
 
     #[test]
     fn agent_mcps_override_top_level_mcps() {
-        let dir = create_temp_project();
-        write_file(dir.path(), "BASE.md", "Base instructions");
-        write_file(dir.path(), "base-mcp.json", "{}");
-        write_file(dir.path(), "agent-mcp.json", "{}");
+        let dir =
+            project().file("BASE.md", "Base instructions").file("base-mcp.json", "{}").file("agent-mcp.json", "{}");
 
         let config = AetherSettings {
             prompts: vec![crate::PromptSource::file("BASE.md")],
@@ -703,10 +663,10 @@ mod tests {
             ..AetherSettings::default()
         };
 
-        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
+        let catalog = AgentCatalog::from_settings(dir.root(), config).unwrap();
         let spec = catalog.resolve("planner").unwrap();
 
-        assert_eq!(file_sources(&spec), vec![(dir.path().join("agent-mcp.json"), false)]);
+        assert_eq!(file_sources(&spec), vec![(dir.root().join("agent-mcp.json"), false)]);
     }
 
     #[test]
@@ -729,31 +689,30 @@ mod tests {
 
     #[test]
     fn resolve_missing_agent_returns_error() {
-        let dir = create_temp_project();
-        let catalog = create_test_catalog(dir.path().to_path_buf());
+        let dir = project();
+        let catalog = create_test_catalog(dir.root().to_path_buf());
         let result = catalog.resolve("missing");
         assert!(matches!(result, Err(SettingsError::AgentNotFound { .. })));
     }
 
     #[test]
     fn resolve_preserves_agent_mcp() {
-        let dir = create_temp_project();
-        write_file(dir.path(), "agent-mcp.json", "{}");
+        let dir = project().file("agent-mcp.json", "{}");
 
-        let mut planner = make_spec("planner", AgentSpecExposure::both());
-        planner.mcp_config_sources = vec![McpConfigSource::model_visible(dir.path().join("agent-mcp.json"))];
+        let mut planner = fake_spec("planner", AgentSpecExposure::both());
+        planner.mcp_config_sources = vec![McpConfigSource::model_visible(dir.root().join("agent-mcp.json"))];
 
-        let catalog = AgentCatalog::new(dir.path().to_path_buf(), vec![planner], None);
+        let catalog = AgentCatalog::new(dir.root().to_path_buf(), vec![planner], None);
 
         let spec = catalog.resolve("planner").unwrap();
-        assert_eq!(file_sources(&spec), vec![(dir.path().join("agent-mcp.json"), false)]);
+        assert_eq!(file_sources(&spec), vec![(dir.root().join("agent-mcp.json"), false)]);
     }
 
     #[test]
     fn resolve_no_mcp_config_is_valid() {
-        let dir = create_temp_project();
+        let dir = project();
         let catalog =
-            AgentCatalog::new(dir.path().to_path_buf(), vec![make_spec("planner", AgentSpecExposure::both())], None);
+            AgentCatalog::new(dir.root().to_path_buf(), vec![fake_spec("planner", AgentSpecExposure::both())], None);
 
         let spec = catalog.resolve("planner").unwrap();
         assert!(spec.mcp_config_sources.is_empty());

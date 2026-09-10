@@ -32,8 +32,13 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 glob = { workspace = true }
 globset = { workspace = true }
+tempfile = { workspace = true, optional = true }
+
+[features]
+testing = ["dep:tempfile"]
 
 [dev-dependencies]
+aether-project = { package = "aether-project", path = ".", features = ["testing"] }
 aether-doctest = { path = "../doctest" }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }

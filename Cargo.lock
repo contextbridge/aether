@@ -344,6 +344,7 @@ dependencies = [
  "aether-doctest",
  "aether-llm",
  "aether-mcp-utils",
+ "aether-project",
  "aether-utils",
  "glob",
  "globset",
