@@ -7,6 +7,8 @@ mod error;
 mod mcp_config_source_config;
 mod prompt_catalog;
 pub mod prompt_file;
+#[cfg(feature = "testing")]
+pub mod testing;
 
 pub use aether_core::core::{PromptSource, PromptSourceError};
 pub use aether_settings::{

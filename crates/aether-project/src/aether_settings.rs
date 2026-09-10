@@ -496,11 +496,11 @@ impl TryFrom<&str> for AetherSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::{agent_config, home, project, settings_agent};
     use crate::{AgentCatalog, McpFileSpec, McpSourceSpec, PromptSource};
     use aether_core::agent_spec::McpConfigSource;
     use aether_core::core::Prompt;
     use std::collections::BTreeMap;
-    use std::fs::{create_dir_all, write};
 
     #[test]
     fn telemetry_is_disabled_when_absent() {
@@ -690,23 +690,22 @@ mod tests {
 
     #[test]
     fn project_settings_exist_checks_project_settings_file() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(!project_settings_exist(dir.path()));
-        write_file(dir.path(), PROJECT_SETTINGS_PATH, "{}");
-        assert!(project_settings_exist(dir.path()));
+        let project = project();
+        assert!(!project_settings_exist(project.root()));
+        project.write(PROJECT_SETTINGS_PATH, "{}");
+        assert!(project_settings_exist(project.root()));
     }
 
     #[test]
     fn resolves_selected_agent() {
-        let dir = tempfile::tempdir().unwrap();
-        write_file(dir.path(), "PROMPT.md", "Be helpful");
+        let dir = project().file("PROMPT.md", "Be helpful");
         let config = AetherSettings {
             agent: Some("beta".to_string()),
             agents: vec![agent_config("alpha"), agent_config("beta")],
             ..AetherSettings::default()
         };
 
-        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
+        let catalog = AgentCatalog::from_settings(dir.root(), config).unwrap();
 
         assert_eq!(catalog.default_agent().map(|spec| spec.name.as_str()), Some("beta"));
     }
@@ -726,27 +725,26 @@ mod tests {
 
     #[test]
     fn settings_file_paths_are_project_relative() {
-        let dir = tempfile::tempdir().unwrap();
-        write_file(dir.path(), "PROMPT.md", "Be helpful");
-        write_file(
-            dir.path(),
-            "nested/config.json",
+        let dir = project()
+            .file("PROMPT.md", "Be helpful")
+            .file(
+                "nested/config.json",
             r#"{"agents":[{"name":"alpha","description":"Alpha","model":"anthropic:claude-sonnet-4-5","userInvocable":true,"prompts":[{"type":"file","path":"PROMPT.md"}]}]}"#,
         );
 
         let config = AetherSettings::load(
-            dir.path(),
-            [AetherSettingsSource::File(SettingsFileSource::new("nested/config.json", dir.path()))],
+            dir.root(),
+            [AetherSettingsSource::File(SettingsFileSource::new("nested/config.json", dir.root()))],
         )
         .unwrap();
-        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
+        let catalog = AgentCatalog::from_settings(dir.root(), config).unwrap();
 
         assert_eq!(catalog.all()[0].name, "alpha");
     }
 
     #[test]
     fn load_merges_sources_with_rightmost_agent_winning() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = project();
         let base = AetherSettings {
             agent: Some("alpha".to_string()),
             prompts: vec![PromptSource::file("BASE.md")],
@@ -764,7 +762,7 @@ mod tests {
         };
 
         let config = AetherSettings::load(
-            dir.path(),
+            dir.root(),
             [AetherSettingsSource::Value(Box::new(base)), AetherSettingsSource::Value(Box::new(override_config))],
         )
         .unwrap();
@@ -785,12 +783,8 @@ mod tests {
 
     #[test]
     fn load_default_merges_user_and_project_settings_with_project_winning() {
-        let project = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let aether_home = home.path().join(".aether");
-        write_file(
-            &aether_home,
-            "settings.json",
+        let project = project();
+        let home = home().settings(
             r#"{
                 "agent":"shared",
                 "prompts":["USER.md"],
@@ -800,8 +794,7 @@ mod tests {
                 ]
             }"#,
         );
-        write_file(
-            project.path(),
+        project.write(
             ".aether/settings.json",
             r#"{
                 "agent":"project-only",
@@ -813,7 +806,8 @@ mod tests {
             }"#,
         );
 
-        let config = load_default_from_home(project.path(), &aether_home).unwrap();
+        let aether_home = home.aether();
+        let config = load_default_from_home(project.root(), &aether_home).unwrap();
         assert_eq!(
             config,
             AetherSettings {
@@ -831,16 +825,13 @@ mod tests {
 
     #[test]
     fn load_default_uses_user_settings_when_project_settings_are_missing() {
-        let project = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let aether_home = home.path().join(".aether");
-        write_file(
-            &aether_home,
-            "settings.json",
+        let project = project();
+        let home = home().settings(
             r#"{"agents":[{"name":"user-only","description":"User only","model":"anthropic:claude-sonnet-4-5","userInvocable":true}]}"#,
         );
 
-        let config = load_default_from_home(project.path(), &aether_home).unwrap();
+        let aether_home = home.aether();
+        let config = load_default_from_home(project.root(), &aether_home).unwrap();
         assert_eq!(
             config,
             AetherSettings { agents: vec![settings_agent("user-only", "User only")], ..AetherSettings::default() }
@@ -849,15 +840,12 @@ mod tests {
 
     #[test]
     fn load_default_resolves_user_agent_paths_from_aether_home() {
-        let project = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let aether_home = home.path().join(".aether");
-        write_file(&aether_home, "agents/user.md", "User instructions");
-        write_file(&aether_home, "mcp/user.json", r#"{"servers":{}}"#);
-        write_file(
-            &aether_home,
-            "settings.json",
-            r#"{
+        let project = project();
+        let home = home()
+            .file(".aether/agents/user.md", "User instructions")
+            .file(".aether/mcp/user.json", r#"{"servers":{}}"#)
+            .settings(
+                r#"{
                 "agents":[{
                     "name":"user-only",
                     "description":"User only",
@@ -867,10 +855,11 @@ mod tests {
                     "mcps":["mcp/user.json"]
                 }]
             }"#,
-        );
+            );
 
-        let config = load_default_from_home(project.path(), &aether_home).unwrap();
-        let catalog = AgentCatalog::from_settings(project.path(), config).unwrap();
+        let aether_home = home.aether();
+        let config = load_default_from_home(project.root(), &aether_home).unwrap();
+        let catalog = AgentCatalog::from_settings(project.root(), config).unwrap();
         let spec = catalog.resolve("user-only").unwrap();
 
         let expected_prompt = aether_home.join("agents/user.md");
@@ -886,16 +875,14 @@ mod tests {
 
     #[test]
     fn load_default_uses_project_settings_when_user_settings_are_missing() {
-        let project = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let aether_home = home.path().join(".aether");
-        write_file(
-            project.path(),
+        let home = home();
+        let project = project().file(
             ".aether/settings.json",
             r#"{"agents":[{"name":"project-only","description":"Project only","model":"anthropic:claude-sonnet-4-5","userInvocable":true}]}"#,
         );
 
-        let config = load_default_from_home(project.path(), &aether_home).unwrap();
+        let aether_home = home.aether();
+        let config = load_default_from_home(project.root(), &aether_home).unwrap();
 
         assert_eq!(
             config,
@@ -908,29 +895,28 @@ mod tests {
 
     #[test]
     fn load_default_returns_default_when_user_and_project_settings_are_missing() {
-        let project = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let aether_home = home.path().join(".aether");
-        let config = load_default_from_home(project.path(), &aether_home).unwrap();
+        let project = project();
+        let home = home();
+        let aether_home = home.aether();
+        let config = load_default_from_home(project.root(), &aether_home).unwrap();
         assert_eq!(config, AetherSettings::default());
     }
 
     #[test]
     fn load_default_rejects_malformed_user_settings() {
-        let project = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let aether_home = home.path().join(".aether");
-        write_file(&aether_home, "settings.json", "{not-json");
-        let err = load_default_from_home(project.path(), &aether_home).unwrap_err();
+        let project = project();
+        let home = home().settings("{not-json");
+        let aether_home = home.aether();
+        let err = load_default_from_home(project.root(), &aether_home).unwrap_err();
         assert!(matches!(err, SettingsError::ParseError(_)));
     }
 
     #[test]
     fn strict_file_source_errors_when_missing() {
-        let project = tempfile::tempdir().unwrap();
+        let project = project();
         let err = AetherSettings::load(
-            project.path(),
-            [AetherSettingsSource::File(SettingsFileSource::new("missing.json", project.path()))],
+            project.root(),
+            [AetherSettingsSource::File(SettingsFileSource::new("missing.json", project.root()))],
         )
         .unwrap_err();
 
@@ -939,10 +925,10 @@ mod tests {
 
     #[test]
     fn optional_file_source_returns_default_when_missing() {
-        let project = tempfile::tempdir().unwrap();
+        let project = project();
         let config = AetherSettings::load(
-            project.path(),
-            [AetherSettingsSource::OptionalFile(SettingsFileSource::new("missing.json", project.path()))],
+            project.root(),
+            [AetherSettingsSource::OptionalFile(SettingsFileSource::new("missing.json", project.root()))],
         )
         .unwrap();
 
@@ -951,10 +937,10 @@ mod tests {
 
     #[test]
     fn inline_resources_replaces_file_sources_with_their_contents() {
-        let root = tempfile::tempdir().unwrap();
-        write_file(root.path(), "BASE.md", "Be helpful");
-        write_file(root.path(), "AGENT.md", "Edit carefully");
-        write_file(root.path(), "mcp.json", r#"{"servers":{"coding":{"type":"stdio","command":"run"}}}"#);
+        let project = project()
+            .file("BASE.md", "Be helpful")
+            .file("AGENT.md", "Edit carefully")
+            .file("mcp.json", r#"{"servers":{"coding":{"type":"stdio","command":"run"}}}"#);
 
         let mut settings = AetherSettings {
             prompts: vec![PromptSource::file("BASE.md")],
@@ -967,7 +953,7 @@ mod tests {
             ..AetherSettings::default()
         };
 
-        settings.inline_resources(root.path()).unwrap();
+        settings.inline_resources(project.root()).unwrap();
 
         assert_eq!(settings.prompts, vec![PromptSource::Text { text: "Be helpful".to_string() }]);
         assert_eq!(settings.agents[0].prompts, vec![PromptSource::Text { text: "Edit carefully".to_string() }]);
@@ -982,8 +968,7 @@ mod tests {
 
     #[test]
     fn inline_resources_drops_optional_missing_sources() {
-        let root = tempfile::tempdir().unwrap();
-        write_file(root.path(), "PROMPT.md", "Agent prompt");
+        let project = project().file("PROMPT.md", "Agent prompt");
         let mut settings = AetherSettings {
             prompts: vec![PromptSource::file("absent.md").optional()],
             mcps: vec![McpSourceSpec::File(McpFileSpec::new("absent.json").optional())],
@@ -991,7 +976,7 @@ mod tests {
             ..AetherSettings::default()
         };
 
-        settings.inline_resources(root.path()).unwrap();
+        settings.inline_resources(project.root()).unwrap();
 
         assert!(settings.prompts.is_empty());
         assert!(settings.mcps.is_empty());
@@ -999,21 +984,20 @@ mod tests {
 
     #[test]
     fn inline_resources_errors_on_required_missing_mcp() {
-        let root = tempfile::tempdir().unwrap();
+        let project = project();
         let mut settings = AetherSettings {
             mcps: vec![McpSourceSpec::file("absent.json")],
             agents: vec![agent_config("alpha")],
             ..AetherSettings::default()
         };
 
-        let err = settings.inline_resources(root.path()).unwrap_err();
+        let err = settings.inline_resources(project.root()).unwrap_err();
         assert!(matches!(err, SettingsError::InvalidMcpConfigPath { .. }));
     }
 
     #[test]
     fn resolves_inline_mcp_config() {
-        let dir = tempfile::tempdir().unwrap();
-        write_file(dir.path(), "PROMPT.md", "Be helpful");
+        let dir = project().file("PROMPT.md", "Be helpful");
         let config = AetherSettings {
             agent: None,
             agents: vec![AgentConfig {
@@ -1023,7 +1007,7 @@ mod tests {
             ..AetherSettings::default()
         };
 
-        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
+        let catalog = AgentCatalog::from_settings(dir.root(), config).unwrap();
         let spec = catalog.resolve("alpha").unwrap();
 
         assert_eq!(spec.mcp_config_sources.len(), 1);
@@ -1134,15 +1118,8 @@ mod tests {
 
     #[test]
     fn load_default_resolves_workspace_scoped_user_prompt_and_mcp_paths() {
-        let project = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let aether_home = home.path().join(".aether");
-        write_file(&aether_home, "agents/planner/SYSTEM.md", "System instructions");
-        write_file(project.path(), "AGENTS.md", "Agent instructions");
-        write_file(project.path(), ".aether/mcp.json", r#"{"servers":{}}"#);
-        write_file(
-            &aether_home,
-            "settings.json",
+        let project = project().file("AGENTS.md", "Agent instructions").file(".aether/mcp.json", r#"{"servers":{}}"#);
+        let home = home().file(".aether/agents/planner/SYSTEM.md", "System instructions").settings(
             r#"{
                 "agents":[{
                     "name":"planner",
@@ -1160,12 +1137,13 @@ mod tests {
             }"#,
         );
 
-        let config = load_default_from_home(project.path(), &aether_home).unwrap();
-        let catalog = AgentCatalog::from_settings(project.path(), config).unwrap();
+        let aether_home = home.aether();
+        let config = load_default_from_home(project.root(), &aether_home).unwrap();
+        let catalog = AgentCatalog::from_settings(project.root(), config).unwrap();
         let spec = catalog.resolve("planner").unwrap();
 
         let expected_system = aether_home.join("agents/planner/SYSTEM.md");
-        let expected_agents = project.path().join("AGENTS.md");
+        let expected_agents = project.root().join("AGENTS.md");
         assert!(spec.prompts.iter().any(|p| match p {
             Prompt::File { path, .. } => path == &expected_system,
             _ => false,
@@ -1176,17 +1154,13 @@ mod tests {
         }));
         assert!(matches!(
             &spec.mcp_config_sources[0],
-            McpConfigSource::File { path, defer_tools: false } if *path == project.path().join(".aether/mcp.json")
+            McpConfigSource::File { path, defer_tools: false } if *path == project.root().join(".aether/mcp.json")
         ));
     }
 
     #[test]
     fn workspace_scoped_paths_expand_in_project_settings_without_absolutizing_normal_relative_paths() {
-        let project = tempfile::tempdir().unwrap();
-        write_file(project.path(), "PROJECT.md", "Project prompt");
-        write_file(project.path(), "AGENTS.md", "Agent prompt");
-        write_file(
-            project.path(),
+        let project = project().file("PROJECT.md", "Project prompt").file("AGENTS.md", "Agent prompt").file(
             ".aether/settings.json",
             r#"{
                 "agents":[{
@@ -1200,8 +1174,8 @@ mod tests {
         );
 
         let config = AetherSettings::load(
-            project.path(),
-            [AetherSettingsSource::OptionalFile(SettingsFileSource::new(PROJECT_SETTINGS_PATH, project.path()))],
+            project.root(),
+            [AetherSettingsSource::OptionalFile(SettingsFileSource::new(PROJECT_SETTINGS_PATH, project.root()))],
         )
         .unwrap();
 
@@ -1211,10 +1185,10 @@ mod tests {
 
     #[test]
     fn json_and_value_sources_preserve_workspace_scoped_paths_losslessly() {
-        let project = tempfile::tempdir().unwrap();
+        let project = project();
 
         let json_config = AetherSettings::load(
-            project.path(),
+            project.root(),
             [AetherSettingsSource::Json(
                 r#"{
                     "agents":[{
@@ -1233,7 +1207,7 @@ mod tests {
         assert_eq!(json_config.agents[0].prompts[0], PromptSource::file("${WORKSPACE}/AGENTS.md"));
 
         let value_config = AetherSettings::load(
-            project.path(),
+            project.root(),
             [AetherSettingsSource::Value(Box::new(AetherSettings {
                 agents: vec![AgentConfig {
                     prompts: vec![PromptSource::file("${WORKSPACE}/AGENTS.md")],
@@ -1248,8 +1222,7 @@ mod tests {
 
     #[test]
     fn optional_workspace_scoped_mcp_source_is_skipped_when_missing() {
-        let project = tempfile::tempdir().unwrap();
-        write_file(project.path(), "BASE.md", "Base instructions");
+        let project = project().file("BASE.md", "Base instructions");
         let config = AetherSettings {
             agents: vec![AgentConfig {
                 prompts: vec![PromptSource::file("BASE.md")],
@@ -1259,8 +1232,8 @@ mod tests {
             ..AetherSettings::default()
         };
 
-        let config = AetherSettings::load(project.path(), [AetherSettingsSource::Value(Box::new(config))]).unwrap();
-        let catalog = AgentCatalog::from_settings(project.path(), config).unwrap();
+        let config = AetherSettings::load(project.root(), [AetherSettingsSource::Value(Box::new(config))]).unwrap();
+        let catalog = AgentCatalog::from_settings(project.root(), config).unwrap();
         let spec = catalog.resolve("alpha").unwrap();
 
         assert!(spec.mcp_config_sources.is_empty());
@@ -1268,8 +1241,7 @@ mod tests {
 
     #[test]
     fn optional_mcp_source_skips_unresolved_variable() {
-        let project = tempfile::tempdir().unwrap();
-        write_file(project.path(), "BASE.md", "Base instructions");
+        let project = project().file("BASE.md", "Base instructions");
         let config = AetherSettings {
             agents: vec![AgentConfig {
                 prompts: vec![PromptSource::file("BASE.md")],
@@ -1279,8 +1251,8 @@ mod tests {
             ..AetherSettings::default()
         };
 
-        let config = AetherSettings::load(project.path(), [AetherSettingsSource::Value(Box::new(config))]).unwrap();
-        let catalog = AgentCatalog::from_settings(project.path(), config).unwrap();
+        let config = AetherSettings::load(project.root(), [AetherSettingsSource::Value(Box::new(config))]).unwrap();
+        let catalog = AgentCatalog::from_settings(project.root(), config).unwrap();
         let spec = catalog.resolve("alpha").unwrap();
 
         assert!(spec.mcp_config_sources.is_empty());
@@ -1288,8 +1260,7 @@ mod tests {
 
     #[test]
     fn required_mcp_source_errors_on_unresolved_variable() {
-        let project = tempfile::tempdir().unwrap();
-        write_file(project.path(), "BASE.md", "Base instructions");
+        let project = project().file("BASE.md", "Base instructions");
         let config = AetherSettings {
             agents: vec![AgentConfig {
                 prompts: vec![PromptSource::file("BASE.md")],
@@ -1299,14 +1270,13 @@ mod tests {
             ..AetherSettings::default()
         };
 
-        let err = AgentCatalog::from_settings(project.path(), config).unwrap_err();
+        let err = AgentCatalog::from_settings(project.root(), config).unwrap_err();
         assert!(matches!(err, SettingsError::UnresolvedMcpConfigVariable { .. }));
     }
 
     #[test]
     fn required_workspace_scoped_mcp_source_errors_when_missing() {
-        let project = tempfile::tempdir().unwrap();
-        write_file(project.path(), "BASE.md", "Base instructions");
+        let project = project().file("BASE.md", "Base instructions");
         let config = AetherSettings {
             agents: vec![AgentConfig {
                 prompts: vec![PromptSource::file("BASE.md")],
@@ -1316,15 +1286,13 @@ mod tests {
             ..AetherSettings::default()
         };
 
-        let err = AgentCatalog::from_settings(project.path(), config).unwrap_err();
+        let err = AgentCatalog::from_settings(project.root(), config).unwrap_err();
         assert!(matches!(err, SettingsError::InvalidMcpConfigPath { .. }));
     }
 
     #[test]
     fn optional_existing_mcp_source_preserves_defer_tools_flag() {
-        let project = tempfile::tempdir().unwrap();
-        write_file(project.path(), "BASE.md", "Base instructions");
-        write_file(project.path(), "mcp.json", r#"{"servers":{}}"#);
+        let project = project().file("BASE.md", "Base instructions").file("mcp.json", r#"{"servers":{}}"#);
         let config = AetherSettings {
             agents: vec![AgentConfig {
                 prompts: vec![PromptSource::file("BASE.md")],
@@ -1334,7 +1302,7 @@ mod tests {
             ..AetherSettings::default()
         };
 
-        let catalog = AgentCatalog::from_settings(project.path(), config).unwrap();
+        let catalog = AgentCatalog::from_settings(project.root(), config).unwrap();
         let spec = catalog.resolve("alpha").unwrap();
 
         assert!(matches!(&spec.mcp_config_sources[0], McpConfigSource::File { defer_tools: true, .. }));
@@ -1356,7 +1324,7 @@ mod tests {
 
     #[test]
     fn all_optional_prompts_missing_errors_with_no_prompts() {
-        let project = tempfile::tempdir().unwrap();
+        let project = project();
         let config = AetherSettings {
             agents: vec![AgentConfig {
                 prompts: vec![PromptSource::file("MISSING.md").optional()],
@@ -1365,7 +1333,7 @@ mod tests {
             ..AetherSettings::default()
         };
 
-        let err = AgentCatalog::from_settings(project.path(), config).unwrap_err();
+        let err = AgentCatalog::from_settings(project.root(), config).unwrap_err();
         assert!(matches!(err, SettingsError::AllOptionalPromptsMissing { agent } if agent == "alpha"));
     }
 
@@ -1397,14 +1365,8 @@ mod tests {
 
     #[test]
     fn user_settings_relative_paths_absolutize_at_load_but_workspace_token_is_preserved() {
-        let project = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let aether_home = home.path().join(".aether");
-        write_file(&aether_home, "agents/planner/SYSTEM.md", "system");
-        write_file(project.path(), "AGENTS.md", "agents");
-        write_file(
-            &aether_home,
-            "settings.json",
+        let project = project().file("AGENTS.md", "agents");
+        let home = home().file(".aether/agents/planner/SYSTEM.md", "system").settings(
             r#"{"agents":[{
                 "name":"planner",
                 "description":"Plans",
@@ -1414,7 +1376,8 @@ mod tests {
             }]}"#,
         );
 
-        let settings = load_default_from_home(project.path(), &aether_home).unwrap();
+        let aether_home = home.aether();
+        let settings = load_default_from_home(project.root(), &aether_home).unwrap();
 
         let expected_user = aether_home.join("agents/planner/SYSTEM.md").to_string_lossy().to_string();
         assert_eq!(
@@ -1426,36 +1389,6 @@ mod tests {
 
     fn load_default_from_home(project_root: &Path, aether_home: &Path) -> Result<AetherSettings, SettingsError> {
         AetherSettings::load(project_root, default_sources_for_home(project_root, Some(aether_home)))
-    }
-
-    fn write_file(dir: &Path, path: &str, content: &str) {
-        let full = dir.join(path);
-        if let Some(parent) = full.parent() {
-            create_dir_all(parent).unwrap();
-        }
-
-        write(full, content).unwrap();
-    }
-
-    fn settings_agent(name: &str, description: &str) -> AgentConfig {
-        AgentConfig {
-            name: name.to_string(),
-            description: description.to_string(),
-            model: "anthropic:claude-sonnet-4-5".to_string(),
-            user_invocable: true,
-            ..AgentConfig::default()
-        }
-    }
-
-    fn agent_config(name: &str) -> AgentConfig {
-        AgentConfig {
-            name: name.to_string(),
-            description: format!("{name} agent"),
-            model: "anthropic:claude-sonnet-4-5".to_string(),
-            user_invocable: true,
-            prompts: vec![PromptSource::file("PROMPT.md")],
-            ..AgentConfig::default()
-        }
     }
 
     #[test]

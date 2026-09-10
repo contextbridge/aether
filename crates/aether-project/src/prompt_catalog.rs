@@ -126,36 +126,23 @@ fn validate_catalog(specs: &[PromptFile]) -> Result<(), SettingsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use tempfile::TempDir;
-
-    fn create_temp_project() -> TempDir {
-        tempfile::tempdir().unwrap()
-    }
-
-    fn write_skill(dir: &Path, name: &str, content: &str) {
-        let skill_dir = dir.join(name);
-        fs::create_dir_all(&skill_dir).unwrap();
-        fs::write(skill_dir.join(SKILL_FILENAME), content).unwrap();
-    }
+    use crate::testing::project;
 
     #[test]
     fn discover_empty_project() {
-        let dir = create_temp_project();
-        let catalog = PromptCatalog::from_dir(dir.path()).unwrap();
+        let dir = project();
+        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert!(catalog.all().is_empty());
     }
 
     #[test]
     fn discover_user_only_prompt() {
-        let dir = create_temp_project();
-        write_skill(
-            dir.path(),
+        let dir = project().skill(
             "commit",
             "---\ndescription: Generate commit messages\nuser-invocable: true\nagent-invocable: false\n---\nGenerate a commit message.",
         );
 
-        let catalog = PromptCatalog::from_dir(dir.path()).unwrap();
+        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert_eq!(catalog.all().len(), 1);
 
         let spec = &catalog.all()[0];
@@ -167,14 +154,10 @@ mod tests {
 
     #[test]
     fn discover_agent_only_prompt() {
-        let dir = create_temp_project();
-        write_skill(
-            dir.path(),
-            "explain-code",
-            "---\ndescription: Explain code\nagent-invocable: true\n---\nExplain the code.",
-        );
+        let dir = project()
+            .skill("explain-code", "---\ndescription: Explain code\nagent-invocable: true\n---\nExplain the code.");
 
-        let catalog = PromptCatalog::from_dir(dir.path()).unwrap();
+        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert_eq!(catalog.all().len(), 1);
 
         let spec = &catalog.all()[0];
@@ -184,14 +167,12 @@ mod tests {
 
     #[test]
     fn discover_rule_only_prompt() {
-        let dir = create_temp_project();
-        write_skill(
-            dir.path(),
+        let dir = project().skill(
             "rust-rules",
             "---\ndescription: Rust conventions\nagent-invocable: false\ntriggers:\n  read:\n    - \"crates/**/*.rs\"\n---\nFollow Rust conventions.",
         );
 
-        let catalog = PromptCatalog::from_dir(dir.path()).unwrap();
+        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert_eq!(catalog.all().len(), 1);
 
         let spec = &catalog.all()[0];
@@ -204,14 +185,12 @@ mod tests {
 
     #[test]
     fn discover_dual_use_prompt() {
-        let dir = create_temp_project();
-        write_skill(
-            dir.path(),
+        let dir = project().skill(
             "explain",
             "---\ndescription: Explain code\nuser-invocable: true\nagent-invocable: true\nargument-hint: \"[path]\"\n---\nExplain with diagrams.",
         );
 
-        let catalog = PromptCatalog::from_dir(dir.path()).unwrap();
+        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         let spec = &catalog.all()[0];
         assert!(spec.user_invocable);
         assert!(spec.agent_invocable);
@@ -225,82 +204,69 @@ mod tests {
 
     #[test]
     fn reject_duplicate_names() {
-        let dir = create_temp_project();
-        write_skill(dir.path(), "foo", "---\ndescription: First\nuser-invocable: true\n---\nContent.");
-        // Second skill with explicit name override to "foo"
-        write_skill(dir.path(), "bar", "---\nname: foo\ndescription: Second\nuser-invocable: true\n---\nContent.");
+        let dir = project()
+            // Second skill has an explicit name override so it collides with "foo"
+            .skill("foo", "---\ndescription: First\nuser-invocable: true\n---\nContent.")
+            .skill("bar", "---\nname: foo\ndescription: Second\nuser-invocable: true\n---\nContent.");
 
-        let result = PromptCatalog::from_dir(dir.path());
+        let result = PromptCatalog::from_dir(dir.root());
         assert!(matches!(result, Err(SettingsError::DuplicatePromptName { .. })));
     }
 
     #[test]
     fn empty_description_defaults_to_name() {
-        let dir = create_temp_project();
-        write_skill(dir.path(), "bad", "---\ndescription: \"\"\nuser-invocable: true\n---\nContent.");
+        let dir = project().skill("bad", "---\ndescription: \"\"\nuser-invocable: true\n---\nContent.");
 
-        let catalog = PromptCatalog::from_dir(dir.path()).unwrap();
+        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert_eq!(catalog.all().len(), 1);
         assert_eq!(catalog.all()[0].description, "bad");
     }
 
     #[test]
     fn skill_without_activation_surface_defaults_to_user_invocable() {
-        let dir = create_temp_project();
-        write_skill(dir.path(), "noop", "---\ndescription: Does nothing\n---\nContent.");
+        let dir = project().skill("noop", "---\ndescription: Does nothing\n---\nContent.");
 
-        let catalog = PromptCatalog::from_dir(dir.path()).unwrap();
+        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert_eq!(catalog.all().len(), 1);
         assert!(catalog.all()[0].user_invocable);
     }
 
     #[test]
     fn flat_md_without_activation_surface_is_skipped() {
-        let dir = create_temp_project();
-        write_flat_rule(dir.path(), "noop.md", "---\ndescription: Does nothing\nagent-invocable: false\n---\nContent.");
+        let dir = project().file("noop.md", "---\ndescription: Does nothing\nagent-invocable: false\n---\nContent.");
 
-        let catalog = PromptCatalog::from_dir(dir.path()).unwrap();
+        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert!(catalog.all().is_empty());
     }
 
     #[test]
     fn name_defaults_to_directory_name() {
-        let dir = create_temp_project();
-        write_skill(dir.path(), "my-skill", "---\ndescription: My skill\nagent-invocable: true\n---\nContent.");
+        let dir = project().skill("my-skill", "---\ndescription: My skill\nagent-invocable: true\n---\nContent.");
 
-        let catalog = PromptCatalog::from_dir(dir.path()).unwrap();
+        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert_eq!(catalog.all()[0].name, "my-skill");
     }
 
     #[test]
     fn name_from_frontmatter_overrides_directory() {
-        let dir = create_temp_project();
-        write_skill(
-            dir.path(),
-            "dir-name",
-            "---\nname: custom-name\ndescription: Custom\nuser-invocable: true\n---\nContent.",
-        );
+        let dir = project()
+            .skill("dir-name", "---\nname: custom-name\ndescription: Custom\nuser-invocable: true\n---\nContent.");
 
-        let catalog = PromptCatalog::from_dir(dir.path()).unwrap();
+        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert_eq!(catalog.all()[0].name, "custom-name");
     }
 
     #[test]
     fn matching_read_rules_finds_matches() {
-        let dir = create_temp_project();
-        write_skill(
-            dir.path(),
-            "rust-rules",
-            "---\ndescription: Rust rules\ntriggers:\n  read:\n    - \"src/**/*.rs\"\n---\nRust rules.",
-        );
-        write_skill(
-            dir.path(),
-            "ts-rules",
-            "---\ndescription: TS rules\ntriggers:\n  read:\n    - \"src/**/*.ts\"\n---\nTS rules.",
-        );
-        write_skill(dir.path(), "commit", "---\ndescription: Commit\nuser-invocable: true\n---\nCommit.");
+        let dir = project()
+            .skill(
+                "rust-rules",
+                "---\ndescription: Rust rules\ntriggers:\n  read:\n    - \"src/**/*.rs\"\n---\nRust rules.",
+            )
+            .skill("ts-rules", "---\ndescription: TS rules\ntriggers:\n  read:\n    - \"src/**/*.ts\"\n---\nTS rules.")
+            .skill("commit", "---\ndescription: Commit\nuser-invocable: true\n---\nCommit.");
 
-        let catalog = PromptCatalog::from_dir(dir.path()).unwrap();
+        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         let matches = catalog.matching_rules("src/main.rs");
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].name, "rust-rules");
@@ -315,14 +281,12 @@ mod tests {
 
     #[test]
     fn pure_flat_rule_not_in_user_or_agent_invocable() {
-        let dir = create_temp_project();
-        write_flat_rule(
-            dir.path(),
+        let dir = project().file(
             "rule.md",
             "---\ndescription: A rule\nagent-invocable: false\ntriggers:\n  read:\n    - \"*.rs\"\n---\nRule content.",
         );
 
-        let catalog = PromptCatalog::from_dir(dir.path()).unwrap();
+        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert_eq!(catalog.all().len(), 1);
         assert_eq!(catalog.slash_commands().count(), 0);
         assert_eq!(catalog.skills().count(), 0);
@@ -330,25 +294,23 @@ mod tests {
 
     #[test]
     fn skips_hidden_directories() {
-        let dir = create_temp_project();
-        write_skill(dir.path(), ".archived", "---\ndescription: Archived\nuser-invocable: true\n---\nOld.");
-        write_skill(dir.path(), "visible", "---\ndescription: Visible\nuser-invocable: true\n---\nNew.");
+        let dir = project()
+            .skill(".archived", "---\ndescription: Archived\nuser-invocable: true\n---\nOld.")
+            .skill("visible", "---\ndescription: Visible\nuser-invocable: true\n---\nNew.");
 
-        let catalog = PromptCatalog::from_dir(dir.path()).unwrap();
+        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert_eq!(catalog.all().len(), 1);
         assert_eq!(catalog.all()[0].name, "visible");
     }
 
     #[test]
     fn preserves_tags_and_metadata() {
-        let dir = create_temp_project();
-        write_skill(
-            dir.path(),
+        let dir = project().skill(
             "tagged",
             "---\ndescription: Tagged skill\nagent-invocable: true\ntags:\n  - rust\n  - testing\nagent_authored: true\nhelpful: 5\nharmful: 1\n---\nContent.",
         );
 
-        let catalog = PromptCatalog::from_dir(dir.path()).unwrap();
+        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         let spec = &catalog.all()[0];
         assert_eq!(spec.tags, vec!["rust", "testing"]);
         assert!(spec.agent_authored);
@@ -358,12 +320,10 @@ mod tests {
 
     #[test]
     fn from_dirs_last_wins() {
-        let dir_a = create_temp_project();
-        let dir_b = create_temp_project();
-        write_skill(dir_a.path(), "rust", "---\ndescription: Rust A\nagent-invocable: true\n---\nFrom dir A.");
-        write_skill(dir_b.path(), "rust", "---\ndescription: Rust B\nagent-invocable: true\n---\nFrom dir B.");
+        let dir_a = project().skill("rust", "---\ndescription: Rust A\nagent-invocable: true\n---\nFrom dir A.");
+        let dir_b = project().skill("rust", "---\ndescription: Rust B\nagent-invocable: true\n---\nFrom dir B.");
 
-        let catalog = PromptCatalog::from_dirs(&[dir_a.path().to_path_buf(), dir_b.path().to_path_buf()]);
+        let catalog = PromptCatalog::from_dirs(&[dir_a.root().to_path_buf(), dir_b.root().to_path_buf()]);
         assert_eq!(catalog.all().len(), 1);
 
         let spec = &catalog.all()[0];
@@ -374,12 +334,10 @@ mod tests {
 
     #[test]
     fn from_dirs_union() {
-        let dir_a = create_temp_project();
-        let dir_b = create_temp_project();
-        write_skill(dir_a.path(), "rust", "---\ndescription: Rust\nagent-invocable: true\n---\nRust content.");
-        write_skill(dir_b.path(), "python", "---\ndescription: Python\nagent-invocable: true\n---\nPython content.");
+        let dir_a = project().skill("rust", "---\ndescription: Rust\nagent-invocable: true\n---\nRust content.");
+        let dir_b = project().skill("python", "---\ndescription: Python\nagent-invocable: true\n---\nPython content.");
 
-        let catalog = PromptCatalog::from_dirs(&[dir_a.path().to_path_buf(), dir_b.path().to_path_buf()]);
+        let catalog = PromptCatalog::from_dirs(&[dir_a.root().to_path_buf(), dir_b.root().to_path_buf()]);
         assert_eq!(catalog.all().len(), 2);
 
         let names: Vec<&str> = catalog.all().iter().map(|s| s.name.as_str()).collect();
@@ -389,29 +347,22 @@ mod tests {
 
     #[test]
     fn from_dirs_skips_missing() {
-        let dir_a = create_temp_project();
+        let dir_a = project().skill("rust", "---\ndescription: Rust\nagent-invocable: true\n---\nRust content.");
         let missing = PathBuf::from("/tmp/nonexistent-skills-dir-12345");
-        write_skill(dir_a.path(), "rust", "---\ndescription: Rust\nagent-invocable: true\n---\nRust content.");
 
-        let catalog = PromptCatalog::from_dirs(&[missing, dir_a.path().to_path_buf()]);
+        let catalog = PromptCatalog::from_dirs(&[missing, dir_a.root().to_path_buf()]);
         assert_eq!(catalog.all().len(), 1);
         assert_eq!(catalog.all()[0].name, "rust");
     }
 
-    fn write_flat_rule(dir: &Path, filename: &str, content: &str) {
-        fs::write(dir.join(filename), content).unwrap();
-    }
-
     #[test]
     fn discover_flat_md_rule_with_globs() {
-        let dir = create_temp_project();
-        write_flat_rule(
-            dir.path(),
+        let dir = project().file(
             "rust-conventions.md",
             "---\ndescription: Rust conventions\nglobs:\n  - \"**/*.rs\"\n---\nFollow Rust conventions.",
         );
 
-        let catalog = PromptCatalog::from_dir(dir.path()).unwrap();
+        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert_eq!(catalog.all().len(), 1);
 
         let spec = &catalog.all()[0];
@@ -423,14 +374,10 @@ mod tests {
 
     #[test]
     fn discover_flat_md_rule_with_paths() {
-        let dir = create_temp_project();
-        write_flat_rule(
-            dir.path(),
-            "ts-rules.md",
-            "---\ndescription: TS rules\npaths:\n  - \"**/*.ts\"\n---\nTypeScript rules.",
-        );
+        let dir = project()
+            .file("ts-rules.md", "---\ndescription: TS rules\npaths:\n  - \"**/*.ts\"\n---\nTypeScript rules.");
 
-        let catalog = PromptCatalog::from_dir(dir.path()).unwrap();
+        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert_eq!(catalog.all().len(), 1);
 
         let spec = &catalog.all()[0];
@@ -440,15 +387,11 @@ mod tests {
 
     #[test]
     fn discover_mixed_skill_md_and_flat_rules() {
-        let dir = create_temp_project();
-        write_skill(dir.path(), "commit", "---\ndescription: Commit\nuser-invocable: true\n---\nCommit message.");
-        write_flat_rule(
-            dir.path(),
-            "rust-rules.md",
-            "---\ndescription: Rust rules\nglobs:\n  - \"**/*.rs\"\n---\nRust conventions.",
-        );
+        let dir = project()
+            .skill("commit", "---\ndescription: Commit\nuser-invocable: true\n---\nCommit message.")
+            .file("rust-rules.md", "---\ndescription: Rust rules\nglobs:\n  - \"**/*.rs\"\n---\nRust conventions.");
 
-        let catalog = PromptCatalog::from_dir(dir.path()).unwrap();
+        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert_eq!(catalog.all().len(), 2);
 
         let names: Vec<&str> = catalog.all().iter().map(|s| s.name.as_str()).collect();
@@ -458,16 +401,11 @@ mod tests {
 
     #[test]
     fn from_dirs_merges_flat_rules() {
-        let dir_a = create_temp_project();
-        let dir_b = create_temp_project();
-        write_skill(dir_a.path(), "commit", "---\ndescription: Commit\nuser-invocable: true\n---\nCommit.");
-        write_flat_rule(
-            dir_b.path(),
-            "rust-rules.md",
-            "---\ndescription: Rust rules\nglobs:\n  - \"**/*.rs\"\n---\nRust conventions.",
-        );
+        let dir_a = project().skill("commit", "---\ndescription: Commit\nuser-invocable: true\n---\nCommit.");
+        let dir_b = project()
+            .file("rust-rules.md", "---\ndescription: Rust rules\nglobs:\n  - \"**/*.rs\"\n---\nRust conventions.");
 
-        let catalog = PromptCatalog::from_dirs(&[dir_a.path().to_path_buf(), dir_b.path().to_path_buf()]);
+        let catalog = PromptCatalog::from_dirs(&[dir_a.root().to_path_buf(), dir_b.root().to_path_buf()]);
         assert_eq!(catalog.all().len(), 2);
 
         let names: Vec<&str> = catalog.all().iter().map(|s| s.name.as_str()).collect();
@@ -477,10 +415,9 @@ mod tests {
 
     #[test]
     fn flat_rule_without_description_uses_name() {
-        let dir = create_temp_project();
-        write_flat_rule(dir.path(), "my-rule.md", "---\nglobs:\n  - \"**/*.rs\"\n---\nRule body.");
+        let dir = project().file("my-rule.md", "---\nglobs:\n  - \"**/*.rs\"\n---\nRule body.");
 
-        let catalog = PromptCatalog::from_dir(dir.path()).unwrap();
+        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert_eq!(catalog.all().len(), 1);
 
         let spec = &catalog.all()[0];
@@ -490,19 +427,11 @@ mod tests {
 
     #[test]
     fn skips_hidden_flat_md_files() {
-        let dir = create_temp_project();
-        write_flat_rule(
-            dir.path(),
-            ".hidden-rule.md",
-            "---\ndescription: Hidden\nglobs:\n  - \"**/*.rs\"\n---\nHidden.",
-        );
-        write_flat_rule(
-            dir.path(),
-            "visible-rule.md",
-            "---\ndescription: Visible\nglobs:\n  - \"**/*.ts\"\n---\nVisible.",
-        );
+        let dir = project()
+            .file(".hidden-rule.md", "---\ndescription: Hidden\nglobs:\n  - \"**/*.rs\"\n---\nHidden.")
+            .file("visible-rule.md", "---\ndescription: Visible\nglobs:\n  - \"**/*.ts\"\n---\nVisible.");
 
-        let catalog = PromptCatalog::from_dir(dir.path()).unwrap();
+        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert_eq!(catalog.all().len(), 1);
         assert_eq!(catalog.all()[0].name, "visible-rule");
     }
