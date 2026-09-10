@@ -1,5 +1,6 @@
 use super::support::*;
 use utils::ReasoningEffort;
+use wisp::theme::{ThemeApplicationError, ThemeLoadError};
 
 fn server_status_entry(name: &str, status: McpServerStatus) -> McpServerStatusEntry {
     McpServerStatusEntry::new(name, status)
@@ -1286,7 +1287,7 @@ fn failed_queued_theme_retains_the_last_successful_selection() {
         })
         .expect("first change starts immediately");
     let theme = Theme::from_review(clankerdiff_theme::ReviewTheme::builtin("ayu-dark").unwrap());
-    ui.deliver_result(CommandResult::ThemeApplied { settings: first, theme: theme.clone(), error: None });
+    ui.deliver_result(CommandResult::ThemeApplied(Ok((first, theme.clone()))));
     let second = ui
         .take_commands()
         .into_iter()
@@ -1295,11 +1296,10 @@ fn failed_queued_theme_retains_the_last_successful_selection() {
             _ => None,
         })
         .expect("second change starts after the first completes");
-    ui.deliver_result(CommandResult::ThemeApplied {
-        settings: second,
-        theme: Theme::default(),
-        error: Some("invalid JSON".into()),
-    });
+    assert_eq!(second.theme.selection_id(), "file:second.json");
+    ui.deliver_result(CommandResult::ThemeApplied(Err(ThemeApplicationError::Load(ThemeLoadError::Io(
+        std::io::Error::new(std::io::ErrorKind::NotFound, "theme missing"),
+    )))));
     assert_eq!(ui.app().ui_settings().theme.selection_id(), "file:first.json");
     assert_eq!(ui.app().theme().review().revision(), theme.review().revision());
 }
@@ -1530,7 +1530,7 @@ fn settle_theme_tasks_newest_first(ui: &mut TestUi) {
             return;
         }
         for settings in batch.into_iter().rev() {
-            ui.deliver_result(CommandResult::ThemeApplied { settings, theme: Theme::default(), error: None });
+            ui.deliver_result(CommandResult::ThemeApplied(Ok((settings, Theme::default()))));
         }
     }
 }

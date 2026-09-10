@@ -1,4 +1,4 @@
-use crate::settings::{ThemeSettings, UiSettings, load_theme_file};
+use crate::settings::{ThemeSettings, load_theme_file};
 use clankerdiff_ratatui::{RatatuiTheme, composite_color};
 use clankerdiff_theme::{NoticeTone, ReviewTheme, ThemeId};
 use ratatui::style::Color;
@@ -39,14 +39,17 @@ pub enum ThemeLoadError {
     InvalidFile(String),
 }
 
-impl Theme {
-    pub fn load(settings: &UiSettings) -> Self {
-        Self::load_selection(&settings.theme).unwrap_or_else(|error| {
-            tracing::warn!(%error, "Could not load selected theme");
-            Self::default()
-        })
-    }
+#[derive(Debug, thiserror::Error)]
+pub enum ThemeApplicationError {
+    #[error(transparent)]
+    Load(#[from] ThemeLoadError),
+    #[error("Could not save theme settings: {0}")]
+    Save(#[source] std::io::Error),
+    #[error("Theme task failed: {0}")]
+    Task(#[from] tokio::task::JoinError),
+}
 
+impl Theme {
     pub fn load_selection(selection: &ThemeSettings) -> Result<Self, ThemeLoadError> {
         match selection {
             ThemeSettings::Builtin { id } => Ok(Self::from_review(ReviewTheme::builtin(id)?)),

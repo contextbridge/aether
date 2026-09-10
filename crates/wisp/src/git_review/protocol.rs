@@ -1,17 +1,7 @@
 use crate::request::RequestId;
 use clankerdiff_git::RepositorySnapshot;
 
-#[derive(Debug, thiserror::Error)]
-pub enum GitDiffError {
-    #[error("Not a Git repository")]
-    NotARepository,
-    #[error("{stderr}")]
-    CommandFailed { stderr: String },
-    #[error(transparent)]
-    Repository(#[from] clankerdiff_git::GitError),
-    #[error(transparent)]
-    Diff(#[from] clankerdiff_core::DiffError),
-}
+pub use clankerdiff_git::GitError as GitDiffError;
 
 #[derive(Debug)]
 pub enum GitDiffEvent {

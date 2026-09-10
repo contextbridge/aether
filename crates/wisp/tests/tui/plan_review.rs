@@ -13,7 +13,10 @@ use wisp::testing::buffer_text;
 use wisp::{
     renderer::DrawContext,
     screens::plan_review::PlanReviewScreen,
-    surfaces::{elicitation::ElicitationResponder, input::PlanReviewOutput},
+    surfaces::{
+        elicitation::ElicitationResponder,
+        input::{PlanReviewOutput, UiEvent},
+    },
     theme::Theme,
     view::{generation::Generation, syntax::SyntaxHighlighter},
 };
@@ -30,12 +33,12 @@ fn screen(markdown: &str) -> (PlanReviewScreen, Responses) {
     )
 }
 
-fn key(code: KeyCode) -> KeyEvent {
-    KeyEvent::new(code, KeyModifiers::NONE)
+fn key(code: KeyCode) -> UiEvent {
+    UiEvent::Key(KeyEvent::new(code, KeyModifiers::NONE))
 }
 fn type_text(screen: &mut PlanReviewScreen, text: &str) {
     for character in text.chars() {
-        screen.on_key(key(KeyCode::Char(character)));
+        screen.on_ui_event(key(KeyCode::Char(character)));
     }
 }
 fn render(screen: &mut PlanReviewScreen, width: u16, height: u16) -> Buffer {
@@ -57,11 +60,11 @@ fn decisions_preserve_acp_payload_and_resolve_exactly_once() {
         let (mut screen, responses) = screen("# Plan\n\nImplement this.");
         assert!(
             screen
-                .on_key(key(KeyCode::Char(binding)))
+                .on_ui_event(key(KeyCode::Char(binding)))
                 .iter()
                 .any(|output| matches!(output, PlanReviewOutput::Outcome(_)))
         );
-        screen.on_key(key(KeyCode::Char(binding)));
+        screen.on_ui_event(key(KeyCode::Char(binding)));
         screen.cancel();
         drop(screen);
         let responses = responses.lock().unwrap();
@@ -90,11 +93,11 @@ fn cancellation_and_route_destruction_resolve_exactly_once() {
 #[test]
 fn semantic_comment_submission_retains_path_source_and_heading_context() {
     let (mut screen, responses) = screen("# Plan\n\nBroken paragraph.\n\n```rust\nfn main() {}\n```\n");
-    screen.on_key(key(KeyCode::Char('j')));
-    screen.on_key(key(KeyCode::Char('c')));
+    screen.on_ui_event(key(KeyCode::Char('j')));
+    screen.on_ui_event(key(KeyCode::Char('c')));
     type_text(&mut screen, "Clarify this paragraph");
-    screen.on_key(key(KeyCode::Enter));
-    screen.on_key(key(KeyCode::Char('r')));
+    screen.on_ui_event(key(KeyCode::Enter));
+    screen.on_ui_event(key(KeyCode::Char('r')));
     let responses = responses.lock().unwrap();
     assert_eq!(responses.len(), 1);
     let content = accepted_content(&responses[0]);
@@ -108,11 +111,11 @@ fn semantic_comment_submission_retains_path_source_and_heading_context() {
 #[test]
 fn code_line_comments_preserve_source_context() {
     let (mut screen, responses) = screen("# Plan\n\n```rust\nfn first() {}\nfn last() {}\n```\n");
-    screen.on_key(key(KeyCode::Char('G')));
-    screen.on_key(key(KeyCode::Char('c')));
+    screen.on_ui_event(key(KeyCode::Char('G')));
+    screen.on_ui_event(key(KeyCode::Char('c')));
     type_text(&mut screen, "Rename this function");
-    screen.on_key(key(KeyCode::Enter));
-    screen.on_key(key(KeyCode::Char('r')));
+    screen.on_ui_event(key(KeyCode::Enter));
+    screen.on_ui_event(key(KeyCode::Char('r')));
     let responses = responses.lock().unwrap();
     let content = accepted_content(&responses[0]);
     let feedback = content["feedback"].as_str().unwrap();
@@ -123,14 +126,14 @@ fn code_line_comments_preserve_source_context() {
 #[test]
 fn draft_and_help_escape_do_not_cancel_review() {
     let (mut screen, responses) = screen("# Plan\n\nbody");
-    screen.on_key(key(KeyCode::Char('?')));
-    screen.on_key(key(KeyCode::Esc));
+    screen.on_ui_event(key(KeyCode::Char('?')));
+    screen.on_ui_event(key(KeyCode::Esc));
     assert!(responses.lock().unwrap().is_empty());
-    screen.on_key(key(KeyCode::Char('c')));
+    screen.on_ui_event(key(KeyCode::Char('c')));
     type_text(&mut screen, "discard me");
-    screen.on_key(key(KeyCode::Esc));
+    screen.on_ui_event(key(KeyCode::Esc));
     assert!(responses.lock().unwrap().is_empty());
-    screen.on_key(key(KeyCode::Char('r')));
+    screen.on_ui_event(key(KeyCode::Char('r')));
     let responses = responses.lock().unwrap();
     assert!(!accepted_content(&responses[0])["feedback"].as_str().unwrap().contains("discard me"));
 }
@@ -141,10 +144,14 @@ fn modified_and_released_decision_keys_do_not_submit() {
     for modifiers in
         [KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SUPER, KeyModifiers::HYPER, KeyModifiers::META]
     {
-        screen.on_key(KeyEvent::new(KeyCode::Char('a'), modifiers));
-        screen.on_key(KeyEvent::new(KeyCode::Char('r'), modifiers));
+        screen.on_ui_event(UiEvent::Key(KeyEvent::new(KeyCode::Char('a'), modifiers)));
+        screen.on_ui_event(UiEvent::Key(KeyEvent::new(KeyCode::Char('r'), modifiers)));
     }
-    screen.on_key(KeyEvent::new_with_kind(KeyCode::Char('a'), KeyModifiers::NONE, KeyEventKind::Release));
+    screen.on_ui_event(UiEvent::Key(KeyEvent::new_with_kind(
+        KeyCode::Char('a'),
+        KeyModifiers::NONE,
+        KeyEventKind::Release,
+    )));
     assert!(responses.lock().unwrap().is_empty());
 }
 
@@ -165,9 +172,9 @@ fn widget_paints_each_host_buffer_and_renders_tables() {
 fn theme_picker_returns_a_stable_selection_without_resolving_review() {
     let (mut screen, responses) = screen("# Plan");
     render(&mut screen, 100, 24);
-    screen.on_key(key(KeyCode::Char('t')));
+    screen.on_ui_event(key(KeyCode::Char('t')));
     render(&mut screen, 100, 24);
-    let outputs = screen.on_key(key(KeyCode::Enter));
+    let outputs = screen.on_ui_event(key(KeyCode::Enter));
     assert!(
         outputs.iter().any(|output| matches!(output, PlanReviewOutput::SetTheme(id) if id == "builtin:sage")),
         "{outputs:?}"

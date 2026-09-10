@@ -94,7 +94,7 @@ impl FakeExecutor {
                 status: WorkspaceStatus::new(cwd.display().to_string(), None),
                 cwd,
             }),
-            Command::Git(command) => Some(CommandResult::GitDiff(self.git.apply(command))),
+            Command::Git(command) => Some(CommandResult::GitDiff(self.git.execute(command))),
             Command::Filesystem(FilesystemCommand::PrepareSubmission { attachments }) => {
                 Some(CommandResult::SubmissionPrepared(self.filesystem.build_attachments(&attachments)))
             }
@@ -208,7 +208,6 @@ struct FakeGitState {
     files: BTreeMap<String, FakeGitFile>,
     commits: Vec<String>,
     is_repo: bool,
-    commit_error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -228,10 +227,6 @@ impl FakeGit {
     pub fn not_a_repository(root: impl Into<PathBuf>) -> Self {
         let state = FakeGitState { root: root.into(), ..FakeGitState::default() };
         Self { state: std::sync::Arc::new(std::sync::Mutex::new(state)) }
-    }
-
-    pub fn fail_next_commit(&mut self, error: impl Into<String>) {
-        self.state.lock().unwrap().commit_error = Some(error.into());
     }
 
     pub fn root(&self) -> PathBuf {
@@ -305,14 +300,14 @@ impl FakeGit {
         true
     }
 
-    pub fn commit(&mut self, message: impl Into<String>) -> Result<(), String> {
+    pub fn commit(&mut self, message: impl Into<String>) -> Result<(), GitDiffError> {
         let message = message.into();
         let mut state = self.state.lock().unwrap();
         if message.trim().is_empty() {
-            return Err("empty commit message".to_string());
+            return Err(GitDiffError::EmptyCommitMessage);
         }
         if !state.files.values().any(|file| file.staged_contents != file.committed_contents) {
-            return Err("nothing to commit".to_string());
+            return Err(GitDiffError::CommandFailed { operation: "commit", status: Some(1), stderr: String::new() });
         }
         for file in state.files.values_mut() {
             if file.staged_contents != file.committed_contents {
@@ -342,7 +337,7 @@ impl FakeGit {
     fn load_diff(&self, scope: DiffScope) -> Result<RepositorySnapshot, GitDiffError> {
         let state = self.state.lock().unwrap();
         if !state.is_repo {
-            return Err(GitDiffError::NotARepository);
+            return Err(GitDiffError::NotRepository);
         }
         let mut files = Vec::new();
         for file in state.files.values() {
@@ -359,8 +354,8 @@ impl FakeGit {
             let mut diff = if binary {
                 FileDiff::from_texts(file.path.clone(), "", "")?
             } else {
-                let old_text = old.as_deref().map(bytes_to_text).transpose()?.unwrap_or_default();
-                let new_text = new.as_deref().map(bytes_to_text).transpose()?.unwrap_or_default();
+                let old_text = old.as_deref().map(String::from_utf8_lossy).unwrap_or_default();
+                let new_text = new.as_deref().map(String::from_utf8_lossy).unwrap_or_default();
                 FileDiff::from_texts(file.path.clone(), &old_text, &new_text)?
             };
             diff.status = match (old, new) {
@@ -381,13 +376,16 @@ impl FakeGit {
         Ok(clankerdiff_git::RepositorySnapshot { scope, document: std::sync::Arc::new(document) })
     }
 
-    fn apply(&mut self, command: GitCommand) -> GitDiffEvent {
+    pub fn execute(&mut self, command: GitCommand) -> GitDiffEvent {
         use clankerdiff_core::RepositoryAction;
         match command {
             GitCommand::Load { request_id, scope, .. } => {
                 GitDiffEvent::Loaded { request_id, result: self.load_diff(scope) }
             }
             GitCommand::Apply { request_id, action, .. } => {
+                if !self.state.lock().unwrap().is_repo {
+                    return GitDiffEvent::ActionFinished { request_id, result: Err(GitDiffError::NotRepository) };
+                }
                 let result = match action {
                     RepositoryAction::StagePaths(paths) => {
                         for path in paths {
@@ -409,13 +407,7 @@ impl FakeGit {
                         self.unstage_all();
                         Ok(())
                     }
-                    RepositoryAction::Commit { message } => {
-                        let error = self.state.lock().unwrap().commit_error.take();
-                        error.map_or_else(
-                            || self.commit(message).map_err(|stderr| GitDiffError::CommandFailed { stderr }),
-                            |stderr| Err(GitDiffError::CommandFailed { stderr }),
-                        )
-                    }
+                    RepositoryAction::Commit { message } => self.commit(message),
                     RepositoryAction::Discard { path, status } => {
                         if status == FileStatus::Untracked {
                             self.state.lock().unwrap().files.remove(path.as_str());
@@ -468,12 +460,6 @@ fn fake_source(bytes: Option<&[u8]>) -> clankerdiff_core::SourceResult {
 
 fn is_binary(bytes: &[u8]) -> bool {
     bytes.iter().take(8192).any(|byte| *byte == 0) || std::str::from_utf8(bytes).is_err()
-}
-
-fn bytes_to_text(bytes: &[u8]) -> Result<String, GitDiffError> {
-    std::str::from_utf8(bytes)
-        .map(str::to_string)
-        .map_err(|error| GitDiffError::CommandFailed { stderr: error.to_string() })
 }
 
 /// Deterministic terminal wrapper used by focused golden tests.

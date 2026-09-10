@@ -50,8 +50,4 @@ impl SyntaxHighlighter {
             }
         }
     }
-
-    pub fn clear(&mut self) {
-        self.inner.clear_cache();
-    }
 }

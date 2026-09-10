@@ -1,18 +1,18 @@
 use crate::attachment::{AttachmentOutcome, PromptAttachment};
 use crate::file_index::FileEntry;
 use crate::git_review::{DiffScope, GitDiffEvent};
-use clankerdiff_core::RepositoryAction;
 use crate::request::RequestId;
 use crate::session::workspace_status::WorkspaceStatus;
 use crate::settings::UiSettings;
-use crate::theme::Theme;
+use crate::theme::{Theme, ThemeApplicationError};
 use acp_utils::notifications::{
-    PromptSearchParams, PromptSearchResponse, SessionPreviewResponse, WorkspaceListResponse, WorkspaceMoveTarget,
-    WorkspaceMoveResponse,
+    PromptSearchParams, PromptSearchResponse, SessionPreviewResponse, WorkspaceListResponse, WorkspaceMoveResponse,
+    WorkspaceMoveTarget,
 };
 use agent_client_protocol::schema::v1::{
     ContentBlock, ListSessionsResponse, NewSessionResponse, SessionConfigOption, SessionId,
 };
+use clankerdiff_core::RepositoryAction;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
@@ -86,7 +86,7 @@ pub enum FilesystemCommand {
     PrepareSubmission { attachments: Vec<PromptAttachment> },
     ListThemes,
     ListReviewThemes,
-    ApplyTheme { settings: Box<UiSettings>, value: String },
+    ApplyTheme { settings: Box<UiSettings> },
 }
 
 #[derive(Debug, Clone)]
@@ -121,7 +121,7 @@ pub enum CommandResult {
     SubmissionPrepared(AttachmentOutcome),
     ThemesListed(Vec<String>),
     ReviewThemesListed(Vec<clankerdiff_ratatui::ThemeChoice>),
-    ThemeApplied { settings: Box<UiSettings>, theme: Theme, error: Option<String> },
+    ThemeApplied(Result<(Box<UiSettings>, Theme), ThemeApplicationError>),
     WorkspaceResolved { cwd: PathBuf, status: WorkspaceStatus },
     Failed { command: FailedCommand, error: String },
 }

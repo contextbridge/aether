@@ -3,8 +3,9 @@
 //! `FakeGit`; these only guard that the subprocess boundary and its parsers
 //! still agree with actual `git` output.
 
-use std::path::PathBuf;
-use std::process::Command;
+#[path = "support/git_repo.rs"]
+mod git_repo;
+use git_repo::Repo;
 
 use clankerdiff_core::{PatchLineKind, RepoPath, RepositoryAction};
 use tempfile::TempDir;
@@ -12,44 +13,6 @@ use wisp::command::GitCommand;
 use wisp::git_review::{DiffDocument, DiffScope, FileDiff, FileStatus, GitDiffEvent, StageState};
 use wisp::request::RequestId;
 use wisp::runtime::{execute_git, resolve_workspace_status};
-
-struct Repo {
-    _dir: TempDir,
-    root: PathBuf,
-}
-
-impl Repo {
-    fn init() -> Self {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path().canonicalize().unwrap();
-        let repo = Self { _dir: dir, root };
-        repo.git(&["init", "--initial-branch=main"]);
-        repo.git(&["config", "user.name", "Contract Test"]);
-        repo.git(&["config", "user.email", "contract@example.com"]);
-        repo
-    }
-
-    fn git(&self, args: &[&str]) {
-        let output = Command::new("git").current_dir(&self.root).args(args).output().unwrap();
-        assert!(output.status.success(), "git {args:?} failed: {}", String::from_utf8_lossy(&output.stderr));
-    }
-
-    fn write(&self, path: &str, contents: impl AsRef<[u8]>) {
-        let path = self.root.join(path);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, contents).unwrap();
-    }
-
-    async fn load(&self, scope: DiffScope) -> DiffDocument {
-        let command = GitCommand::Load { request_id: RequestId::from(1), working_dir: self.root.clone(), scope };
-        match execute_git(command).await {
-            GitDiffEvent::Loaded { result, .. } => {
-                (*result.expect("load must succeed against a real repository").document).clone()
-            }
-            event @ GitDiffEvent::ActionFinished { .. } => panic!("expected Loaded, got {event:?}"),
-        }
-    }
-}
 
 fn file<'a>(document: &'a DiffDocument, path: &str) -> &'a FileDiff {
     document
@@ -72,6 +35,46 @@ async fn run_action(command: GitCommand) {
 
 fn request(id: u64) -> RequestId {
     RequestId::from(id)
+}
+
+#[tokio::test]
+async fn real_and_fake_git_report_the_same_non_repository_errors() {
+    let outside = TempDir::new().unwrap();
+    let root = outside.path().to_path_buf();
+    let mut fake = wisp::testing::FakeGit::not_a_repository(&root);
+    for command in [
+        GitCommand::Load { request_id: request(10), working_dir: root.clone(), scope: DiffScope::Both },
+        GitCommand::Apply { request_id: request(11), repo_root: root, action: RepositoryAction::StageAll },
+    ] {
+        let real = execution_error(execute_git(command.clone()).await);
+        let fake = execution_error(fake.execute(command));
+        assert_eq!(fake.to_string(), real.to_string());
+        assert_eq!(std::mem::discriminant(&fake), std::mem::discriminant(&real));
+    }
+}
+
+#[tokio::test]
+async fn real_and_fake_git_report_the_same_commit_errors() {
+    let repo = Repo::init();
+    let mut fake = wisp::testing::FakeGit::new(&repo.root);
+    for message in ["  ", "nothing staged"] {
+        let command = GitCommand::Apply {
+            request_id: request(12),
+            repo_root: repo.root.clone(),
+            action: RepositoryAction::Commit { message: message.into() },
+        };
+        let real = execution_error(execute_git(command.clone()).await);
+        let fake = execution_error(fake.execute(command));
+        assert_eq!(fake.to_string(), real.to_string());
+        assert_eq!(std::mem::discriminant(&fake), std::mem::discriminant(&real));
+    }
+}
+
+fn execution_error(event: GitDiffEvent) -> wisp::git_review::GitDiffError {
+    match event {
+        GitDiffEvent::Loaded { result, .. } => result.unwrap_err(),
+        GitDiffEvent::ActionFinished { result, .. } => result.unwrap_err(),
+    }
 }
 
 #[tokio::test]

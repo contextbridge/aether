@@ -1,6 +1,5 @@
 use clankerdiff_theme::{ReviewTheme, ThemeChoice};
 
-use crate::settings::{ThemeSettings, UiSettings};
 use crate::theme::{Theme, ThemeLoadError};
 use std::path::{Path, PathBuf};
 
@@ -22,13 +21,6 @@ pub(crate) fn review_theme_choices() -> Vec<ThemeChoice> {
         }
     }
     choices
-}
-
-pub fn resolve_theme_file_path(settings: &UiSettings) -> Option<PathBuf> {
-    let ThemeSettings::File { file } = &settings.theme else {
-        return None;
-    };
-    resolve_theme_file_path_from_name(file).ok()
 }
 
 pub fn list_theme_files() -> Vec<String> {

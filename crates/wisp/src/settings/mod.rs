@@ -8,7 +8,7 @@ mod themes;
 use clankerdiff_theme::ReviewTheme;
 pub(crate) use settings_model::SettingsModel;
 pub(crate) use themes::{builtin_review_theme_choices, review_theme_choices};
-pub use themes::{list_theme_files, load_theme_file, resolve_theme_file_path};
+pub use themes::{list_theme_files, load_theme_file};
 
 use acp_utils::settings::SettingsStore;
 use serde::{Deserialize, Serialize};

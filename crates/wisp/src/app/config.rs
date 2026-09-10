@@ -3,7 +3,7 @@ use crate::command::{Command, FilesystemCommand};
 use crate::session::session_config_view::{LocalConfigOption, LocalConfigView};
 use crate::settings::overlay::{SettingsChange, SettingsMenuEntry, SettingsMenuValue};
 use crate::settings::{ThemeSettings, UiSettings};
-use crate::theme::Theme;
+use crate::theme::{Theme, ThemeApplicationError};
 use acp_utils::config_option_id::ConfigOptionId;
 use clankerdiff_theme::ReviewTheme;
 use utils::ReasoningEffort;
@@ -19,36 +19,36 @@ pub(super) fn cycle_reasoning_option(config_options: &[LocalConfigOption]) -> Op
 }
 
 impl App {
-    /// Themes are persisted and parsed by the task runner. Only one change runs
+    /// Themes are loaded and persisted by the task runner. Only one change runs
     /// at a time, because two racing saves can finish in either order and leave
     /// both the renderer and the settings file on a choice the user moved past.
     pub(super) fn apply_theme_change(&mut self, value: &str) {
-        if let Err(error) = ThemeSettings::from_selection_id(value) {
-            self.notify(&format!("Invalid theme selection: {error}"));
-            return;
-        }
-        if let Some(request) = self.ui.settings.request_theme_change(value.to_string()) {
-            self.queue(Command::Filesystem(FilesystemCommand::ApplyTheme {
-                settings: Box::new(request.settings),
-                value: request.value,
-            }));
+        let selection = match ThemeSettings::from_selection_id(value) {
+            Ok(selection) => selection,
+            Err(error) => {
+                self.notify(&format!("Invalid theme selection: {error}"));
+                return;
+            }
+        };
+        if let Some(settings) = self.ui.settings.request_theme_change(selection) {
+            self.queue(Command::Filesystem(FilesystemCommand::ApplyTheme { settings: Box::new(settings) }));
         }
     }
 
-    pub(super) fn finish_theme_change(&mut self, settings: Box<UiSettings>, theme: Theme, error: Option<String>) {
-        let succeeded = error.is_none();
-        if let Some(error) = error {
-            self.notify(&format!("Failed to apply theme: {error}"));
-        }
-        if succeeded {
-            self.ui.theme = theme;
-        }
+    pub(super) fn finish_theme_change(&mut self, result: Result<(Box<UiSettings>, Theme), ThemeApplicationError>) {
+        let settings = match result {
+            Ok((settings, theme)) => {
+                self.ui.theme = theme;
+                Some(*settings)
+            }
+            Err(error) => {
+                self.notify(&format!("Failed to apply theme: {error}"));
+                None
+            }
+        };
         self.ui.theme_generation.bump();
-        if let Some(request) = self.ui.settings.finish_theme_change(succeeded.then_some(*settings)) {
-            self.queue(Command::Filesystem(FilesystemCommand::ApplyTheme {
-                settings: Box::new(request.settings),
-                value: request.value,
-            }));
+        if let Some(settings) = self.ui.settings.finish_theme_change(settings) {
+            self.queue(Command::Filesystem(FilesystemCommand::ApplyTheme { settings: Box::new(settings) }));
         }
         self.apply_settings_change(&SettingsChange {
             config_id: acp_utils::config_option_id::THEME_CONFIG_ID.to_string(),

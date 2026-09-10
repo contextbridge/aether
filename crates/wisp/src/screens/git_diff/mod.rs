@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clankerdiff_core::{DiffReviewEvent, DiffScope, InteractionPhase, ReviewCapabilities};
 use clankerdiff_ratatui::{DiffReviewState, DiffReviewWidget, InputOutcome, default_diff_keybindings};
 use clankerdiff_theme::ThemeChoice;
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     buffer::Buffer,
     layout::{Position, Rect},
@@ -13,7 +13,8 @@ use ratatui::{
 use crate::git_review::GitDiffEvent;
 use crate::renderer::DrawContext;
 use crate::request::RequestId;
-use crate::surfaces::input::{GitReviewOutput, MouseAction, ReviewOutcome, UiEvent};
+use crate::screens::reviewer::{crossterm_event, theme_selection};
+use crate::surfaces::input::{GitReviewOutput, ReviewOutcome, UiEvent};
 use crate::view::generation::Generation;
 use crate::{command::GitCommand, settings::builtin_review_theme_choices};
 
@@ -57,17 +58,7 @@ impl GitDiffScreen {
     }
 
     pub fn on_ui_event(&mut self, event: UiEvent) -> Vec<GitReviewOutput> {
-        let event = match event {
-            UiEvent::Key(key) => Event::Key(key),
-            UiEvent::Paste(text) => Event::Paste(text),
-            UiEvent::Mouse(action, (column, row)) => mouse_event(action, row, column),
-        };
-
-        self.handle_event(event)
-    }
-
-    pub fn on_mouse(&mut self, action: MouseAction, row: u16, column: u16) {
-        self.handle_event(mouse_event(action, row, column));
+        self.handle_event(crossterm_event(event))
     }
 
     pub fn on_event(&mut self, event: GitDiffEvent) -> Vec<GitReviewOutput> {
@@ -89,7 +80,7 @@ impl GitDiffScreen {
                         self.state.set_background_error(None);
                     }
                     Err(error) if after_action => {
-                        self.state.set_error(format!("Repository action succeeded, but refresh failed: {error}"))
+                        self.state.set_error(format!("Repository action succeeded, but refresh failed: {error}"));
                     }
                     Err(error) => self.state.set_error(error.to_string()),
                 }
@@ -126,10 +117,7 @@ impl GitDiffScreen {
         let outcome = clankerdiff_ratatui::handle_crossterm_event(&mut self.state, event);
         match outcome {
             InputOutcome::Ignored | InputOutcome::Consumed => Vec::new(),
-            InputOutcome::ThemeSelected(id) => vec![GitReviewOutput::SetTheme(match id {
-                clankerdiff_theme::ThemeId::Custom(name) => format!("file:{name}"),
-                id => format!("builtin:{id}"),
-            })],
+            InputOutcome::ThemeSelected(id) => vec![GitReviewOutput::SetTheme(theme_selection(id))],
             InputOutcome::Emitted(event) => match event {
                 DiffReviewEvent::Cancel => vec![GitReviewOutput::Outcome(ReviewOutcome::Cancelled)],
                 DiffReviewEvent::SubmitReview(submission) => {
@@ -160,13 +148,4 @@ impl GitDiffScreen {
 enum RequestKind {
     Load { after_action: bool },
     Action,
-}
-
-fn mouse_event(action: MouseAction, row: u16, column: u16) -> Event {
-    let kind = match action {
-        MouseAction::ScrollUp => MouseEventKind::ScrollUp,
-        MouseAction::ScrollDown => MouseEventKind::ScrollDown,
-        MouseAction::Click => MouseEventKind::Down(MouseButton::Left),
-    };
-    Event::Mouse(MouseEvent { kind, row, column, modifiers: KeyModifiers::NONE })
 }

@@ -1,13 +1,11 @@
-use crate::command::{AgentCommand, Command, CommandResult, FailedCommand};
 use crate::app::keybindings::Keybindings;
 use crate::app::message::Message;
+use crate::command::{AgentCommand, Command, CommandResult, FailedCommand};
 use crate::conversation::items::{Conversation, ConversationItem};
 use crate::conversation::progress_indicator::{ProgressIndicator, ProgressPhase};
 use crate::conversation::status_line::StatusLineModel;
 use crate::conversation::tool_calls::ToolStatus;
-use crate::session::platform::{
-    BrowserOpener, ClipboardWriter, default_browser_opener, default_clipboard_writer,
-};
+use crate::session::platform::{BrowserOpener, ClipboardWriter, default_browser_opener, default_clipboard_writer};
 use crate::session::session_config_view::LocalConfigOption;
 use crate::session::session_model::SessionModel;
 use crate::session::workspace_status::WorkspaceStatus;
@@ -16,10 +14,10 @@ use crate::settings::{
 };
 use crate::surfaces::composer::Composer;
 use crate::surfaces::input::RootOutput;
-use crate::surfaces::workspace_picker::WorkspacePicker;
 use crate::surfaces::picker::CommandEntry;
-use crate::view::generation::Generation;
+use crate::surfaces::workspace_picker::WorkspacePicker;
 use crate::theme::Theme;
+use crate::view::generation::Generation;
 use acp_utils::client::AcpEvent;
 use acp_utils::notifications::AetherCapabilities;
 use agent_client_protocol::schema::v1::{self as acp, SessionId};
@@ -238,9 +236,9 @@ impl App {
             CommandResult::ReviewThemesListed(choices) => match &mut self.route {
                 Route::GitReview(screen) => screen.set_theme_choices(choices),
                 Route::PlanReview(screen) => screen.set_theme_choices(choices),
-                Route::Conversation => {},
+                Route::Conversation => {}
             },
-            CommandResult::ThemeApplied { settings, theme, error } => self.finish_theme_change(settings, theme, error),
+            CommandResult::ThemeApplied(result) => self.finish_theme_change(result),
             CommandResult::WorkspaceResolved { cwd, status } => {
                 if self.session.working_dir() == cwd {
                     self.session.set_workspace_status(status);

@@ -13,20 +13,16 @@ use wisp::git_review::{DiffScope, GitDiffError, GitDiffEvent};
 use wisp::request::RequestId;
 use wisp::runtime::CommandDispatcher;
 
+#[path = "support/git_repo.rs"]
+mod git_repo;
+use git_repo::Repo;
+
 #[tokio::test]
-async fn git_mutations_finish_in_dispatch_order_and_shutdown_drains_them() {
+async fn git_mutations_finish_in_dispatch_order_and_shutdown_drains_them() -> Result<(), TestError> {
     use clankerdiff_core::RepositoryAction;
-    let root = TempDir::new().unwrap();
-    let git = |args: &[&str]| {
-        let output = std::process::Command::new("git").current_dir(root.path()).args(args).output().unwrap();
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-        output.stdout
-    };
-    git(&["init", "--initial-branch=main"]);
-    git(&["config", "user.name", "Test"]);
-    git(&["config", "user.email", "test@example.com"]);
-    std::fs::write(root.path().join("file.txt"), "new contents\n").unwrap();
-    let mut dispatcher = CommandDispatcher::new(AcpClientHandle::detached());
+    let repo = Repo::init();
+    repo.write("file.txt", "new contents\n");
+    let mut dispatcher = CommandDispatcher::new(disconnected_client().await?);
     for action in [
         RepositoryAction::StageAll,
         RepositoryAction::UnstageAll,
@@ -35,14 +31,16 @@ async fn git_mutations_finish_in_dispatch_order_and_shutdown_drains_them() {
     ] {
         dispatcher.dispatch(Command::Git(GitCommand::Apply {
             request_id: RequestId::next(),
-            repo_root: root.path().canonicalize().unwrap(),
+            repo_root: repo.root.clone(),
             action,
         }));
     }
     dispatcher.shutdown().await;
     assert!(!dispatcher.has_pending_tasks());
-    assert_eq!(git(&["show", "HEAD:file.txt"]), b"new contents\n");
-    assert!(git(&["status", "--porcelain"]).is_empty());
+    assert_eq!(repo.git(&["show", "HEAD:file.txt"]), b"new contents\n");
+    assert!(repo.git(&["status", "--porcelain"]).is_empty());
+    assert!(repo.load(DiffScope::Both).await.files.is_empty());
+    Ok(())
 }
 
 #[test]
@@ -93,8 +91,29 @@ async fn supervised_git_reads_report_completion() -> Result<(), TestError> {
         dispatcher.next_result().await,
         Some(CommandResult::GitDiff(GitDiffEvent::Loaded {
             request_id: actual,
-            result: Err(GitDiffError::Repository(_)),
+            result: Err(GitDiffError::NotRepository),
         })) if actual == request_id
+    ));
+    assert!(!dispatcher.has_pending_tasks());
+    Ok(())
+}
+
+#[tokio::test]
+async fn theme_load_failure_is_returned_as_a_typed_result() -> Result<(), TestError> {
+    use wisp::command::FilesystemCommand;
+    use wisp::settings::{ThemeSettings, UiSettings};
+    use wisp::theme::{ThemeApplicationError, ThemeLoadError};
+
+    let mut dispatcher = CommandDispatcher::new(disconnected_client().await?);
+    dispatcher.dispatch(Command::Filesystem(FilesystemCommand::ApplyTheme {
+        settings: Box::new(UiSettings {
+            theme: ThemeSettings::File { file: "../invalid.json".into() },
+            ..UiSettings::default()
+        }),
+    }));
+    assert!(matches!(dispatcher.next_result().await,
+        Some(CommandResult::ThemeApplied(Err(ThemeApplicationError::Load(ThemeLoadError::InvalidFile(file)))))
+        if file == "../invalid.json"
     ));
     assert!(!dispatcher.has_pending_tasks());
     Ok(())

@@ -71,7 +71,7 @@ fn ctrl_g_opens_and_esc_closes_git_diff() {
 #[test]
 fn non_repository_error_does_not_block_close() {
     let mut ui = open_diff(FakeGit::not_a_repository("/workspace"), 80);
-    assert!(ui.viewport_text().contains("Not a Git repository"));
+    assert!(ui.viewport_text().contains("path is not inside a Git worktree"));
 
     ui.key(key(KeyCode::Esc));
     ui.draw();
@@ -356,7 +356,7 @@ fn git_theme_picker_routes_selection_to_global_settings() {
     ui.draw();
     ui.key(key(KeyCode::Enter));
     assert!(ui.take_commands().iter().any(|command| matches!(command,
-        Command::Filesystem(FilesystemCommand::ApplyTheme { value, .. }) if value == "builtin:sage"
+        Command::Filesystem(FilesystemCommand::ApplyTheme { settings }) if settings.theme.selection_id() == "builtin:sage"
     )));
 }
 
@@ -388,14 +388,14 @@ fn discovered_custom_review_theme_uses_its_filename_globally() {
         .take_commands()
         .into_iter()
         .find_map(|command| match command {
-            Command::Filesystem(FilesystemCommand::ApplyTheme { settings, value }) => {
-                assert_eq!(value, "file:custom.json");
+            Command::Filesystem(FilesystemCommand::ApplyTheme { settings }) => {
+                assert_eq!(settings.theme.selection_id(), "file:custom.json");
                 Some(settings)
             }
             _ => None,
         })
         .expect("custom selection schedules application");
-    ui.deliver_result(CommandResult::ThemeApplied { settings, theme: Theme::from_review(theme.clone()), error: None });
+    ui.deliver_result(CommandResult::ThemeApplied(Ok((settings, Theme::from_review(theme.clone())))));
     ui.draw();
     assert_eq!(ui.app().ui_settings().theme.selection_id(), "file:custom.json");
     assert_eq!(ui.app().theme().review().revision(), theme.revision());
@@ -419,11 +419,10 @@ fn failed_review_theme_selection_restores_installed_colors() {
             _ => None,
         })
         .expect("review selection schedules theme application");
-    ui.deliver_result(CommandResult::ThemeApplied {
-        settings,
-        theme: Theme::default(),
-        error: Some("save failed".into()),
-    });
+    assert_ne!(settings.theme.selection_id(), "builtin:sage");
+    ui.deliver_result(CommandResult::ThemeApplied(Err(wisp::theme::ThemeApplicationError::Save(
+        std::io::Error::other("save failed"),
+    ))));
     ui.draw();
     assert_eq!(ui.app().ui_settings().theme.selection_id(), "builtin:sage");
     assert_eq!(ui.backend().buffer()[(0, 0)].bg, original);
@@ -433,7 +432,6 @@ fn failed_review_theme_selection_restores_installed_colors() {
 fn inline_preview_renders_a_bounded_prefix_of_canonical_rows() {
     use clankerdiff_ratatui::{DiffPreviewOptions, DiffPreviewState};
     use wisp::git_review::FileDiff;
-    use wisp::view::diff::render_diff;
 
     let old: String = (1..=40).fold(String::new(), |mut text, n| {
         let _ = writeln!(text, "line {n}");
@@ -443,32 +441,44 @@ fn inline_preview_renders_a_bounded_prefix_of_canonical_rows() {
         let _ = if n % 3 == 0 { writeln!(text, "changed {n}") } else { writeln!(text, "line {n}") };
         text
     });
-    let file = FileDiff::from_texts("src/lib.rs", &old, &new).unwrap();
+    let file = FileDiff::from_texts("src/main.rs", &old, &new).unwrap();
     let theme = Theme::default();
 
     for width in [60u16, 120] {
-        let mut highlighter = SyntaxHighlighter::new();
+        let mut ui = TestUi::with_dimensions(width, 40);
+        ui.submit("edit file");
+        ui.acp_event(tool_call("edit", "Edit file"));
+        ui.acp_event(tool_completed_with_diff_contents("edit", &old, &new));
+        ui.complete_prompt(acp::StopReason::EndTurn);
+        ui.draw();
+        let conversation = ui.conversation();
+        let start = row_containing(&conversation, "@@").expect("diff hunk header");
+        let end = row_containing(&conversation, "more rows").expect("bounded preview notice");
+        let preview: Vec<String> =
+            (start..end).map(|row| row_text(&conversation, row).trim_end().to_string()).collect();
         let canonical: Vec<String> = DiffPreviewState::new(file.clone())
             .render(
-                width,
+                width - 4,
                 theme.review(),
                 &mut clankerdiff_syntax::SyntaxHighlighter::default(),
                 DiffPreviewOptions { max_content_rows: usize::MAX, ..DiffPreviewOptions::default() },
             )
             .iter()
-            .map(|line| line.spans.iter().map(|span| span.content.as_ref()).collect())
-            .collect();
-        let preview: Vec<String> = render_diff(&file, width, &theme, &mut highlighter)
-            .iter()
-            .map(|line| line.spans.iter().map(|span| span.content.as_ref()).collect())
+            .map(|line| {
+                let text: String = line.spans.iter().map(|span| span.content.as_ref()).collect();
+                format!("  {}", text.trim_end())
+            })
             .collect();
 
-        let shown = preview.iter().take_while(|line| !line.contains("more rows")).count();
-        assert!(shown > 0, "preview at width {width} is empty");
-        assert!(shown < preview.len(), "preview at width {width} should end in a truncation notice");
+        assert_eq!(preview.len(), 20, "conversation previews must remain bounded");
         assert_eq!(
-            preview[..shown],
-            canonical[..shown],
+            row_text(&conversation, end).trim_end(),
+            format!("  … {} more rows", canonical.len() - preview.len()),
+        );
+        assert!(preview.len() < canonical.len(), "preview must truncate canonical rows");
+        assert_eq!(
+            preview,
+            canonical[..preview.len()],
             "inline preview at width {width} must be a prefix of the canonical content rows"
         );
     }

@@ -376,7 +376,7 @@ fn markdown_horizontal_rule_uses_available_width() {
 }
 
 #[test]
-fn transcript_markdown_wraps_at_word_boundaries() {
+fn transcript_markdown_wraps_at_content_width() {
     let mut ui = TestUi::with_dimensions(13, 15);
     ui.submit("wrap words");
     ui.acp_event(text_chunk("alpha beta gamma"));
@@ -385,9 +385,8 @@ fn transcript_markdown_wraps_at_word_boundaries() {
 
     let conversation = ui.conversation();
     let alpha = row_containing(&conversation, "alpha").expect("first word should render");
-    let rendered: String =
-        (alpha..alpha + 2).map(|row| row_text(&conversation, row)).collect::<String>().split_whitespace().collect();
-    assert_eq!(rendered, "alphabetagamma");
+    assert_eq!(row_text(&conversation, alpha).trim_end(), "  alpha bet");
+    assert_eq!(row_text(&conversation, alpha + 1).trim_end(), "  a gamma");
 }
 
 #[test]
