@@ -2,7 +2,6 @@ use super::TurnState;
 use super::plan_tracker::PlanTracker;
 use super::progress_indicator::ProgressIndicator;
 use super::tool_calls::{ToolCall, ToolStatus, raw_input_fragment};
-use crate::view::markdown::{FenceLine, complete_lines_with_fences};
 use acp_utils::notifications::SubAgentProgressParams;
 use agent_client_protocol::schema::v1 as acp;
 use std::collections::HashMap;
@@ -147,26 +146,6 @@ impl Conversation {
         {
             text.text.push_str(chunk);
             item.revision.bump();
-        }
-        while let Some(finalized_end) = self.items.last().and_then(|item| match &item.content {
-            ConversationContent::Assistant(text) => complete_lines_with_fences(&text.text)
-                .find(|(_, line)| matches!(line, FenceLine::Blank))
-                .map(|(offset, _)| offset),
-            _ => None,
-        }) {
-            let trailing = match self.items.last_mut() {
-                Some(ConversationItem { content: ConversationContent::Assistant(text), state, revision, .. }) => {
-                    let trailing = text.text.split_off(finalized_end);
-                    *state = ItemState::Sealed;
-                    revision.bump();
-                    trailing
-                }
-                _ => break,
-            };
-            if trailing.is_empty() {
-                break;
-            }
-            self.push(ItemState::Open, ConversationContent::Assistant(TextItem { text: trailing }));
         }
     }
 

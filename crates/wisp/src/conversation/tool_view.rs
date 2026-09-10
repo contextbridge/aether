@@ -1,4 +1,3 @@
-use crate::view::diff::render_diff;
 use crate::view::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
 use crate::view::wrap::{as_u16, truncate_to_width, wrap_line};
@@ -20,6 +19,7 @@ pub(crate) fn tool_lines(
     spinner_tick: usize,
     theme: &Theme,
     highlighter: &mut SyntaxHighlighter,
+    preview: Option<&[Line<'static>]>,
 ) -> Vec<Line<'static>> {
     let parsed_command = tool.bash_command();
     let bash_command = visible_bash_command(parsed_command.as_deref(), tool.display_value.as_deref(), &tool.status);
@@ -35,10 +35,8 @@ pub(crate) fn tool_lines(
     ]);
     let suffix = tool_suffix(detail, &tool.status, theme);
     let mut lines = tool_line(prefix, suffix, bash_command, content_width, padding + 2, theme, highlighter);
-    if matches!(tool.status, ToolStatus::Success)
-        && let Some(preview) = &tool.diff
-    {
-        lines.extend(indent_lines(render_diff(preview, content_width, theme, highlighter), padding));
+    if let Some(preview) = preview {
+        lines.extend(indent_lines(preview.to_vec(), padding));
     }
     if !tool.sub_agents.is_empty() {
         lines.push(Line::default());
@@ -187,5 +185,9 @@ fn tool_line(
 
 fn styled_code_line(mut line: Line<'static>, theme: &Theme) -> Line<'static> {
     line.style = line.style.patch(Style::new().fg(theme.code_fg));
+    line.style.bg = None;
+    for span in &mut line.spans {
+        span.style.bg = None;
+    }
     line
 }

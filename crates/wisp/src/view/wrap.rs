@@ -152,15 +152,6 @@ pub fn wrap_text_char(text: &str, max_width: usize) -> Vec<String> {
     lines
 }
 
-/// Row and column a cursor sitting immediately after `prefix` occupies once the
-/// text is hard-wrapped at `max_width`.
-pub fn text_position_in_wrap(prefix: &str, max_width: usize) -> (usize, u16) {
-    let lines = wrap_text_char(prefix, max_width);
-    let row = lines.len().saturating_sub(1);
-    let column = lines.last().map_or(0, |line| line.width());
-    (row, u16::try_from(column).unwrap_or(u16::MAX))
-}
-
 /// Forces `line` to occupy exactly `width` columns, truncating with an ellipsis
 /// or padding with `fill_style`.
 pub fn fit_line(mut line: Line<'static>, width: usize, fill_style: Style) -> Line<'static> {
@@ -519,31 +510,6 @@ mod tests {
             for row in wrap_line(line.clone(), width) {
                 assert!(row.width() <= usize::from(width), "{:?} exceeds width {width}", line_text(&row));
             }
-        }
-    }
-
-    #[test]
-    fn text_position_in_wrap_single_line() {
-        let (line, col) = text_position_in_wrap("hello", 10);
-        assert_eq!(line, 0);
-        assert_eq!(col, 5);
-    }
-
-    #[test]
-    fn text_position_in_wrap_multi_line() {
-        let (line, col) = text_position_in_wrap("abcdefghijkl", 5);
-        assert_eq!(line, 2);
-        assert_eq!(col, 2);
-    }
-
-    #[test]
-    fn text_position_in_wrap_agrees_with_wrap_text_char() {
-        let text = "the quick brown fox";
-        for width in 1..12 {
-            let (row, column) = text_position_in_wrap(text, width);
-            let wrapped = wrap_text_char(text, width);
-            assert_eq!(row, wrapped.len() - 1, "row disagrees at width {width}");
-            assert_eq!(usize::from(column), wrapped[row].width(), "column disagrees at width {width}");
         }
     }
 

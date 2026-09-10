@@ -1186,7 +1186,7 @@ fn settings_theme_picker_opens_and_shows_default() {
 
     ui.draw();
     let viewport = ui.viewport_text();
-    assert!(viewport.contains("Default"), "Theme picker should show Default option:\n{viewport}");
+    assert!(viewport.contains("Sage"), "Theme picker should show Default option:\n{viewport}");
     assert!(viewport.contains("Theme"), "Theme picker should have Theme header:\n{viewport}");
 }
 
@@ -1201,7 +1201,7 @@ fn settings_theme_selection_returns_to_menu() {
 
     ui.draw();
     let viewport = ui.viewport_text();
-    assert!(viewport.contains("Theme: Default"), "Should return to menu with Default selected:\n{viewport}");
+    assert!(viewport.contains("Theme: Sage"), "Should return to menu with Default selected:\n{viewport}");
 }
 
 #[test]
@@ -1214,7 +1214,7 @@ fn settings_theme_empty_file_list_shows_only_default() {
 
     ui.draw();
     let viewport = ui.viewport_text();
-    assert!(viewport.contains("Default"), "Should show Default theme option:\n{viewport}");
+    assert!(viewport.contains("Sage"), "Should show Default theme option:\n{viewport}");
 }
 
 #[test]
@@ -1233,11 +1233,17 @@ fn opening_settings_requests_the_theme_list() {
 fn listed_themes_appear_in_the_theme_picker() {
     let mut ui = TestUiBuilder::new().build();
     open_settings(&mut ui);
-    ui.deliver_result(CommandResult::ThemesListed(vec!["dracula.tmTheme".to_string(), "kanagawa.tmTheme".to_string()]));
+    ui.deliver_result(CommandResult::ThemesListed(vec!["dracula.json".to_string(), "kanagawa.json".to_string()]));
 
     ui.key(key(KeyCode::Enter));
+    ui.type_text("dracula");
     let text = overlay_text(&mut ui);
     assert!(text.contains("dracula"), "theme picker should list dracula:\n{text}");
+    for _ in 0..7 {
+        ui.key(key(KeyCode::Backspace));
+    }
+    ui.type_text("kanagawa");
+    let text = overlay_text(&mut ui);
     assert!(text.contains("kanagawa"), "theme picker should list kanagawa:\n{text}");
 }
 
@@ -1245,25 +1251,80 @@ fn listed_themes_appear_in_the_theme_picker() {
 fn settings_menu_has_a_single_theme_row_after_themes_load() {
     let mut ui = TestUiBuilder::new().build();
     open_settings(&mut ui);
-    ui.deliver_result(CommandResult::ThemesListed(vec!["dracula.tmTheme".to_string()]));
+    ui.deliver_result(CommandResult::ThemesListed(vec!["dracula.json".to_string()]));
 
     let text = overlay_text(&mut ui);
     assert_eq!(text.matches("Theme:").count(), 1, "the theme row must be replaced, not duplicated:\n{text}");
 }
 
 #[test]
+fn invalid_startup_theme_is_visible_without_overwriting_the_selection() {
+    let settings = wisp::settings::UiSettings {
+        theme: wisp::settings::ThemeSettings::File { file: "../invalid.json".into() },
+        ..wisp::settings::UiSettings::default()
+    };
+    let mut ui = TestUiBuilder::new().settings(settings).dimensions(120, 15).build();
+    ui.draw();
+    assert!(ui.viewport_text().contains("Could not load selected theme"), "{}", ui.viewport_text());
+    assert_eq!(ui.app().ui_settings().theme.selection_id(), "file:../invalid.json");
+    assert_eq!(ui.app().theme().review().revision(), Theme::default().review().revision());
+}
+
+#[test]
+fn failed_queued_theme_retains_the_last_successful_selection() {
+    let mut ui = TestUiBuilder::new().build();
+    open_settings(&mut ui);
+    ui.deliver_result(CommandResult::ThemesListed(vec!["first.json".into(), "second.json".into()]));
+    select_theme(&mut ui, "first");
+    select_theme(&mut ui, "second");
+    let first = ui
+        .take_commands()
+        .into_iter()
+        .find_map(|command| match command {
+            Command::Filesystem(FilesystemCommand::ApplyTheme { settings, .. }) => Some(settings),
+            _ => None,
+        })
+        .expect("first change starts immediately");
+    let theme = Theme::from_review(clankerdiff_theme::ReviewTheme::builtin("ayu-dark").unwrap());
+    ui.deliver_result(CommandResult::ThemeApplied { settings: first, theme: theme.clone(), error: None });
+    let second = ui
+        .take_commands()
+        .into_iter()
+        .find_map(|command| match command {
+            Command::Filesystem(FilesystemCommand::ApplyTheme { settings, .. }) => Some(settings),
+            _ => None,
+        })
+        .expect("second change starts after the first completes");
+    ui.deliver_result(CommandResult::ThemeApplied {
+        settings: second,
+        theme: Theme::default(),
+        error: Some("invalid JSON".into()),
+    });
+    assert_eq!(ui.app().ui_settings().theme.selection_id(), "file:first.json");
+    assert_eq!(ui.app().theme().review().revision(), theme.review().revision());
+}
+
+#[test]
+fn malformed_theme_file_selections_are_rejected_during_deserialization() {
+    for file in ["../escape.json", "/absolute.json", "old.tmTheme", "", "nested/file.json"] {
+        let value = serde_json::json!({ "source": "file", "file": file });
+        assert!(serde_json::from_value::<wisp::settings::ThemeSettings>(value).is_err(), "accepted {file:?}");
+    }
+}
+
+#[test]
 fn rapid_theme_changes_settle_on_the_newest_choice() {
     let mut ui = TestUiBuilder::new().build();
     open_settings(&mut ui);
-    ui.deliver_result(CommandResult::ThemesListed(vec!["first.tmTheme".to_string(), "second.tmTheme".to_string()]));
+    ui.deliver_result(CommandResult::ThemesListed(vec!["first.json".to_string(), "second.json".to_string()]));
 
     select_theme(&mut ui, "first");
     select_theme(&mut ui, "second");
     settle_theme_tasks_newest_first(&mut ui);
 
     assert_eq!(
-        ui.app().ui_settings().theme.file.as_deref(),
-        Some("second.tmTheme"),
+        ui.app().ui_settings().theme.selection_id(),
+        "file:second.json",
         "a theme change that finishes late must not undo the one the user made after it"
     );
 }
@@ -1301,7 +1362,7 @@ fn theme_selection_keeps_overlay_open_and_refreshes_display() {
 
     ui.draw();
     let viewport = ui.viewport_text();
-    assert!(viewport.contains("Theme: Default"), "Theme should show Default after selection:\n{viewport}");
+    assert!(viewport.contains("Theme: Sage"), "Theme should show Default after selection:\n{viewport}");
 }
 
 #[test]
@@ -2001,6 +2062,12 @@ fn configured_keybinding_replaces_the_default_chord() {
     ui.key(ctrl('d'));
     ui.draw();
     assert!(ui.viewport_text().contains("Git Diff"), "configured chord must open the git diff");
+    ui.key(ctrl('g'));
+    ui.draw();
+    assert!(ui.viewport_text().contains("Git Diff"), "the old chord remains unbound in review");
+    ui.key(ctrl('d'));
+    ui.draw();
+    assert!(!ui.viewport_text().contains("Git Diff"), "configured chord must close the git diff");
 }
 
 #[test]

@@ -61,6 +61,12 @@ impl App {
             self.dispatch_outputs(actions);
             return;
         }
+        if let UiEvent::Key(key) = &event
+            && self.ui.keybindings.toggle_git_diff.matches(*key)
+            && matches!(&self.route, Route::GitReview(screen) if screen.is_browsing()) {
+            self.close_active();
+            return;
+        }
         let actions: Vec<RootOutput> = match &mut self.route {
             Route::GitReview(screen) => screen.on_ui_event(event).into_iter().map(RootOutput::GitReview).collect(),
             Route::PlanReview(screen) => screen.on_ui_event(event).into_iter().map(RootOutput::PlanReview).collect(),

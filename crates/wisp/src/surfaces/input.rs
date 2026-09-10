@@ -58,6 +58,7 @@ pub enum ReviewOutcome {
 
 #[derive(Debug)]
 pub enum GitReviewOutput {
+    SetTheme(String),
     Outcome(ReviewOutcome),
     Task(GitCommand),
 }
@@ -65,6 +66,7 @@ pub enum GitReviewOutput {
 #[derive(Debug)]
 pub enum PlanReviewOutput {
     Outcome(ReviewOutcome),
+    SetTheme(String),
 }
 
 #[derive(Debug)]

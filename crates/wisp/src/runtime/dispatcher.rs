@@ -24,6 +24,7 @@ impl CommandDispatcher {
                     FilesystemCommand::IndexFiles { .. } => Some(ReadTask::FileIndex),
                     FilesystemCommand::PrepareSubmission { .. } => Some(ReadTask::AttachmentPreparation),
                     FilesystemCommand::ListThemes => Some(ReadTask::ThemeList),
+                    FilesystemCommand::ListReviewThemes => Some(ReadTask::ReviewThemeList),
                     FilesystemCommand::ApplyTheme { .. } => None,
                 };
                 let work = async move { files::execute(command).await };
@@ -35,12 +36,15 @@ impl CommandDispatcher {
                 None
             }
             Command::Git(command) => {
-                let read = matches!(command, GitCommand::Load { .. } | GitCommand::LoadFullFile { .. });
+                let mutation_root = match &command {
+                    GitCommand::Load { .. } => None,
+                    GitCommand::Apply { repo_root, .. } => Some(repo_root.clone()),
+                };
                 let work = async move { CommandResult::GitDiff(git::execute(command).await) };
-                if read {
-                    self.tasks.spawn_read(ReadTask::GitReview, work);
+                if let Some(repo_root) = mutation_root {
+                    self.tasks.spawn_git_mutation(repo_root, work);
                 } else {
-                    self.tasks.spawn_mutation(work);
+                    self.tasks.spawn_read(ReadTask::GitReview, work);
                 }
                 None
             }

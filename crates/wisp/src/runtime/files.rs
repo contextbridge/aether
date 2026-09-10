@@ -1,7 +1,7 @@
 use crate::attachment::{AttachmentOutcome, build_attachments};
 use crate::command::{CommandResult, FailedCommand, FilesystemCommand};
 use crate::file_index::index_files;
-use crate::settings::{list_theme_files, load_theme_file, save_settings};
+use crate::settings::{list_theme_files, review_theme_choices, save_settings};
 use crate::theme::Theme;
 use tokio::task::JoinError;
 
@@ -33,12 +33,23 @@ pub(super) async fn execute(command: FilesystemCommand) -> CommandResult {
                 error: error.to_string(),
             },
         },
-        FilesystemCommand::ApplyTheme { settings, value } => {
+        FilesystemCommand::ListReviewThemes => match run_blocking(review_theme_choices).await {
+            Ok(choices) => CommandResult::ReviewThemesListed(choices),
+            Err(error) => CommandResult::Failed {
+                command: FailedCommand::Other("load review themes"),
+                error: error.to_string(),
+            },
+        },
+        FilesystemCommand::ApplyTheme { settings, value: _ } => {
             let fallback_settings = settings.clone();
             run_blocking(move || {
-                let error = save_settings(&settings).err().map(|error| error.to_string());
-                let theme = if value.is_empty() { Theme::default() } else { load_theme_file(&value) };
-                CommandResult::ThemeApplied { settings, theme, error }
+                match Theme::load_selection(&settings.theme) {
+                    Ok(theme) => {
+                        let error = save_settings(&settings).err().map(|error| error.to_string());
+                        CommandResult::ThemeApplied { settings, theme, error }
+                    }
+                    Err(error) => CommandResult::ThemeApplied { settings, theme: Theme::default(), error: Some(error.to_string()) },
+                }
             })
             .await
             .unwrap_or_else(|error| CommandResult::ThemeApplied {

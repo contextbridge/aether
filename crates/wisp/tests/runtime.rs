@@ -13,6 +13,38 @@ use wisp::git_review::{DiffScope, GitDiffError, GitDiffEvent};
 use wisp::request::RequestId;
 use wisp::runtime::CommandDispatcher;
 
+#[tokio::test]
+async fn git_mutations_finish_in_dispatch_order_and_shutdown_drains_them() {
+    use clankerdiff_core::RepositoryAction;
+    let root = TempDir::new().unwrap();
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git").current_dir(root.path()).args(args).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        output.stdout
+    };
+    git(&["init", "--initial-branch=main"]);
+    git(&["config", "user.name", "Test"]);
+    git(&["config", "user.email", "test@example.com"]);
+    std::fs::write(root.path().join("file.txt"), "new contents\n").unwrap();
+    let mut dispatcher = CommandDispatcher::new(AcpClientHandle::detached());
+    for action in [
+        RepositoryAction::StageAll,
+        RepositoryAction::UnstageAll,
+        RepositoryAction::StageAll,
+        RepositoryAction::Commit { message: "ordered commit".into() },
+    ] {
+        dispatcher.dispatch(Command::Git(GitCommand::Apply {
+            request_id: RequestId::next(),
+            repo_root: root.path().canonicalize().unwrap(),
+            action,
+        }));
+    }
+    dispatcher.shutdown().await;
+    assert!(!dispatcher.has_pending_tasks());
+    assert_eq!(git(&["show", "HEAD:file.txt"]), b"new contents\n");
+    assert!(git(&["status", "--porcelain"]).is_empty());
+}
+
 #[test]
 fn file_index_limit_counts_only_indexed_files() {
     let root = TempDir::new().unwrap();
@@ -51,7 +83,6 @@ async fn supervised_git_reads_report_completion() -> Result<(), TestError> {
             .dispatch(Command::Git(GitCommand::Load {
                 request_id,
                 working_dir: outside_repository.path().to_path_buf(),
-                repo_root: None,
                 scope: DiffScope::Both,
             }))
             .is_none()
@@ -62,7 +93,7 @@ async fn supervised_git_reads_report_completion() -> Result<(), TestError> {
         dispatcher.next_result().await,
         Some(CommandResult::GitDiff(GitDiffEvent::Loaded {
             request_id: actual,
-            result: Err(GitDiffError::NotARepository),
+            result: Err(GitDiffError::Repository(_)),
         })) if actual == request_id
     ));
     assert!(!dispatcher.has_pending_tasks());

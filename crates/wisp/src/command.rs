@@ -1,6 +1,7 @@
 use crate::attachment::{AttachmentOutcome, PromptAttachment};
 use crate::file_index::FileEntry;
-use crate::git_review::{DiffScope, FileStatus, GitDiffEvent};
+use crate::git_review::{DiffScope, GitDiffEvent};
+use clankerdiff_core::RepositoryAction;
 use crate::request::RequestId;
 use crate::session::workspace_status::WorkspaceStatus;
 use crate::settings::UiSettings;
@@ -84,19 +85,14 @@ pub enum FilesystemCommand {
     IndexFiles { request_id: RequestId, root: PathBuf },
     PrepareSubmission { attachments: Vec<PromptAttachment> },
     ListThemes,
+    ListReviewThemes,
     ApplyTheme { settings: Box<UiSettings>, value: String },
 }
 
 #[derive(Debug, Clone)]
 pub enum GitCommand {
-    Load { request_id: RequestId, working_dir: PathBuf, repo_root: Option<PathBuf>, scope: DiffScope },
-    StageFiles { request_id: RequestId, repo_root: PathBuf, paths: Vec<String> },
-    UnstageFiles { request_id: RequestId, repo_root: PathBuf, paths: Vec<String> },
-    StageAll { request_id: RequestId, repo_root: PathBuf },
-    UnstageAll { request_id: RequestId, repo_root: PathBuf },
-    Commit { request_id: RequestId, repo_root: PathBuf, message: String },
-    DiscardFile { request_id: RequestId, repo_root: PathBuf, path: String, status: FileStatus },
-    LoadFullFile { request_id: RequestId, repo_root: PathBuf, path: String },
+    Load { request_id: RequestId, working_dir: PathBuf, scope: DiffScope },
+    Apply { request_id: RequestId, repo_root: PathBuf, action: RepositoryAction },
 }
 
 #[derive(Debug, Clone)]
@@ -124,6 +120,7 @@ pub enum CommandResult {
     GitDiff(GitDiffEvent),
     SubmissionPrepared(AttachmentOutcome),
     ThemesListed(Vec<String>),
+    ReviewThemesListed(Vec<clankerdiff_ratatui::ThemeChoice>),
     ThemeApplied { settings: Box<UiSettings>, theme: Theme, error: Option<String> },
     WorkspaceResolved { cwd: PathBuf, status: WorkspaceStatus },
     Failed { command: FailedCommand, error: String },

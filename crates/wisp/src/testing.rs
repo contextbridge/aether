@@ -9,9 +9,7 @@ use crate::app::{App, AppConfig};
 use crate::attachment::{AttachmentOutcome, PromptAttachment, build_attachments_with};
 use crate::command::{AgentCommand, Command, CommandResult, FilesystemCommand, GitCommand};
 use crate::file_index::{FileEntry, MAX_INDEXED_FILES, file_entries};
-use crate::git_review::{
-    DiffDocument, DiffScope, FileDiff, FileStatus, GitDiffError, GitDiffEvent, StageState, build_untracked_file_diff,
-};
+use crate::git_review::{DiffDocument, DiffScope, FileDiff, FileStatus, GitDiffError, GitDiffEvent, StageState};
 pub use crate::renderer::RenderStats;
 use crate::renderer::Renderer;
 use crate::session::platform::BrowserOpener;
@@ -25,6 +23,7 @@ use acp_utils::notifications::{
     AetherCapabilities, SubAgentEvent, SubAgentProgressParams, SubAgentToolRequest, SubAgentToolResult,
 };
 use agent_client_protocol::schema::v1::{self as acp, SessionId};
+use clankerdiff_git::RepositorySnapshot;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
 use ratatui::buffer::{Buffer, Cell};
@@ -340,121 +339,93 @@ impl FakeGit {
         self.state.lock().unwrap().files.get(path).and_then(status_of)
     }
 
-    fn load_diff(&self, scope: DiffScope) -> Result<DiffDocument, GitDiffError> {
+    fn load_diff(&self, scope: DiffScope) -> Result<RepositorySnapshot, GitDiffError> {
         let state = self.state.lock().unwrap();
         if !state.is_repo {
             return Err(GitDiffError::NotARepository);
         }
-
         let mut files = Vec::new();
         for file in state.files.values() {
-            let untracked = file.committed_contents.is_none() && file.staged_contents.is_none();
-            if untracked {
-                if scope.includes_untracked()
-                    && let Some(contents) = &file.contents
-                {
-                    files.push(build_untracked_file_diff(file.path.clone(), contents));
-                }
-                continue;
-            }
-
             let (old, new) = match scope {
                 DiffScope::Staged => (&file.committed_contents, &file.staged_contents),
-                DiffScope::Unstaged => {
-                    let old =
-                        if file.staged_contents.is_some() { &file.staged_contents } else { &file.committed_contents };
-                    (old, &file.contents)
-                }
+                DiffScope::Unstaged => (&file.staged_contents, &file.contents),
                 DiffScope::Both => (&file.committed_contents, &file.contents),
             };
             if old == new {
                 continue;
             }
-
-            let staged = status_of(file).map_or(StageState::Unstaged, |(_, stage)| stage);
             let binary = old.as_ref().is_some_and(|bytes| is_binary(bytes))
                 || new.as_ref().is_some_and(|bytes| is_binary(bytes));
-            if binary {
-                let status = match (old, new) {
-                    (None, Some(_)) => FileStatus::Added,
-                    (Some(_), None) => FileStatus::Deleted,
-                    _ => FileStatus::Modified,
-                };
-                files.push(FileDiff {
-                    old_path: (status != FileStatus::Added).then(|| file.path.clone()),
-                    path: file.path.clone(),
-                    status,
-                    staged,
-                    hunks: Vec::new(),
-                    binary: true,
-                });
-                continue;
-            }
-
-            let old_text = old.as_deref().map(bytes_to_text).transpose()?.unwrap_or_default();
-            let new_text = new.as_deref().map(bytes_to_text).transpose()?.unwrap_or_default();
-            let mut diff = FileDiff::from_texts(file.path.clone(), &old_text, &new_text);
-            diff.staged = staged;
+            let mut diff = if binary {
+                FileDiff::from_texts(file.path.clone(), "", "")?
+            } else {
+                let old_text = old.as_deref().map(bytes_to_text).transpose()?.unwrap_or_default();
+                let new_text = new.as_deref().map(bytes_to_text).transpose()?.unwrap_or_default();
+                FileDiff::from_texts(file.path.clone(), &old_text, &new_text)?
+            };
+            diff.status = match (old, new) {
+                (None, Some(_)) if file.committed_contents.is_none() && file.staged_contents.is_none() => {
+                    FileStatus::Untracked
+                }
+                (None, Some(_)) => FileStatus::Added,
+                (Some(_), None) => FileStatus::Deleted,
+                _ => FileStatus::Modified,
+            };
+            diff.old_path = old.is_some().then(|| diff.path.clone());
+            diff.staged = status_of(file).map_or(StageState::Unstaged, |(_, stage)| stage);
+            diff.binary = binary;
+            diff = diff.with_sources(fake_source(old.as_deref()), fake_source(new.as_deref()));
             files.push(diff);
         }
-        files.sort_by(|left, right| left.path.cmp(&right.path));
-        Ok(DiffDocument { repo_root: state.root.clone(), files })
-    }
-
-    fn read_full_file(&self, path: &str) -> Result<String, GitDiffError> {
-        let state = self.state.lock().unwrap();
-        let Some(contents) = state.files.get(path).and_then(|file| {
-            file.contents.as_deref().or(file.staged_contents.as_deref()).or(file.committed_contents.as_deref())
-        }) else {
-            return Err(GitDiffError::CommandFailed { stderr: format!("Cannot read {path}: file not found") });
-        };
-        String::from_utf8(contents.to_vec())
-            .map_err(|error| GitDiffError::CommandFailed { stderr: format!("Cannot read {path}: {error}") })
+        let document = DiffDocument { repo_root: state.root.to_string_lossy().into_owned(), files };
+        Ok(clankerdiff_git::RepositorySnapshot { scope, document: std::sync::Arc::new(document) })
     }
 
     fn apply(&mut self, command: GitCommand) -> GitDiffEvent {
+        use clankerdiff_core::RepositoryAction;
         match command {
             GitCommand::Load { request_id, scope, .. } => {
                 GitDiffEvent::Loaded { request_id, result: self.load_diff(scope) }
             }
-            GitCommand::StageFiles { request_id, paths, .. } => {
-                for path in paths {
-                    self.stage(&path);
-                }
-                GitDiffEvent::ActionFinished { request_id, result: Ok(()) }
-            }
-            GitCommand::UnstageFiles { request_id, paths, .. } => {
-                for path in paths {
-                    self.unstage(&path);
-                }
-                GitDiffEvent::ActionFinished { request_id, result: Ok(()) }
-            }
-            GitCommand::StageAll { request_id, .. } => {
-                self.stage_all();
-                GitDiffEvent::ActionFinished { request_id, result: Ok(()) }
-            }
-            GitCommand::UnstageAll { request_id, .. } => {
-                self.unstage_all();
-                GitDiffEvent::ActionFinished { request_id, result: Ok(()) }
-            }
-            GitCommand::Commit { request_id, message, .. } => {
-                let error = self.state.lock().unwrap().commit_error.take();
-                let result = error.map_or_else(
-                    || self.commit(message).map_err(|stderr| GitDiffError::CommandFailed { stderr }),
-                    |stderr| Err(GitDiffError::CommandFailed { stderr }),
-                );
+            GitCommand::Apply { request_id, action, .. } => {
+                let result = match action {
+                    RepositoryAction::StagePaths(paths) => {
+                        for path in paths {
+                            self.stage(path.as_str());
+                        }
+                        Ok(())
+                    }
+                    RepositoryAction::UnstagePaths(paths) => {
+                        for path in paths {
+                            self.unstage(path.as_str());
+                        }
+                        Ok(())
+                    }
+                    RepositoryAction::StageAll => {
+                        self.stage_all();
+                        Ok(())
+                    }
+                    RepositoryAction::UnstageAll => {
+                        self.unstage_all();
+                        Ok(())
+                    }
+                    RepositoryAction::Commit { message } => {
+                        let error = self.state.lock().unwrap().commit_error.take();
+                        error.map_or_else(
+                            || self.commit(message).map_err(|stderr| GitDiffError::CommandFailed { stderr }),
+                            |stderr| Err(GitDiffError::CommandFailed { stderr }),
+                        )
+                    }
+                    RepositoryAction::Discard { path, status } => {
+                        if status == FileStatus::Untracked {
+                            self.state.lock().unwrap().files.remove(path.as_str());
+                        } else {
+                            self.discard(path.as_str());
+                        }
+                        Ok(())
+                    }
+                };
                 GitDiffEvent::ActionFinished { request_id, result }
-            }
-            GitCommand::DiscardFile { request_id, path, status, .. } => {
-                if status == FileStatus::Untracked {
-                    self.state.lock().unwrap().files.remove(&path);
-                } else {
-                    self.discard(&path);
-                }
-                GitDiffEvent::ActionFinished { request_id, result: Ok(()) }
-            }
-            GitCommand::LoadFullFile { request_id, path, .. } => {
-                GitDiffEvent::FullFileLoaded { request_id, result: self.read_full_file(&path), path }
             }
         }
     }
@@ -484,6 +455,15 @@ fn status_of(file: &FakeGitFile) -> Option<(FileStatus, StageState)> {
     };
     let status = if file.contents.is_none() { FileStatus::Deleted } else { FileStatus::Modified };
     Some((status, stage))
+}
+
+fn fake_source(bytes: Option<&[u8]>) -> clankerdiff_core::SourceResult {
+    use clankerdiff_core::{SourceDocument, SourceUnavailable};
+    match bytes {
+        None => Err(SourceUnavailable::Absent),
+        Some(bytes) if is_binary(bytes) => Err(SourceUnavailable::Binary),
+        Some(bytes) => SourceDocument::new(String::from_utf8_lossy(bytes)).map(std::sync::Arc::new),
+    }
 }
 
 fn is_binary(bytes: &[u8]) -> bool {
@@ -832,7 +812,11 @@ where
 
     /// Draws one frame, like the event loop does after every input batch.
     pub fn draw(&mut self) {
-        self.renderer.draw(&mut self.terminal, &mut self.app).unwrap();
+        self.try_draw().unwrap();
+    }
+
+    pub fn try_draw(&mut self) -> Result<(), crate::error::RenderError<B::Error>> {
+        self.renderer.draw(&mut self.terminal, &mut self.app)
     }
 
     pub fn render_stats(&mut self) -> RenderStats {

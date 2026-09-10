@@ -757,8 +757,11 @@ fn screen_rows(ui: &mut TestUi) -> Vec<String> {
 }
 
 mod screen_mouse {
+    use std::sync::Arc;
+
     use super::*;
-    use wisp::git_review::{DiffDocument, FileDiff, FileStatus, GitDiffEvent, StageState};
+    use clankerdiff_core::DiffScope;
+    use wisp::git_review::{DiffDocument, FileDiff, GitDiffEvent};
     use wisp::renderer::DrawContext;
     use wisp::screens::git_diff::GitDiffScreen;
     use wisp::surfaces::input::MouseAction;
@@ -766,48 +769,17 @@ mod screen_mouse {
     use wisp::view::generation::Generation;
     use wisp::view::syntax::SyntaxHighlighter;
 
-    fn make_test_document() -> DiffDocument {
-        use wisp::git_review::{Hunk, PatchLine, PatchLineKind};
-        DiffDocument {
-            repo_root: std::path::PathBuf::from("/tmp/repo"),
-            files: vec![
-                FileDiff {
-                    old_path: None,
-                    path: "src/main.rs".to_string(),
-                    status: FileStatus::Modified,
-                    staged: StageState::Unstaged,
-                    hunks: vec![Hunk {
-                        header: "@@ -1,5 +1,5 @@".to_string(),
-                        old_start: 1,
-                        old_count: 5,
-                        new_start: 1,
-                        new_count: 5,
-                        lines: vec![PatchLine {
-                            kind: PatchLineKind::Context,
-                            text: "fn main() {".to_string(),
-                            old_line_no: Some(1),
-                            new_line_no: Some(1),
-                        }],
-                    }],
-                    binary: false,
-                },
-                FileDiff {
-                    old_path: None,
-                    path: "src/lib.rs".to_string(),
-                    status: FileStatus::Added,
-                    staged: StageState::Unstaged,
-                    hunks: vec![],
-                    binary: false,
-                },
-                FileDiff {
-                    old_path: None,
-                    path: "Cargo.toml".to_string(),
-                    status: FileStatus::Modified,
-                    staged: StageState::Unstaged,
-                    hunks: vec![],
-                    binary: false,
-                },
-            ],
+    fn make_test_document() -> RepositorySnapshot {
+        RepositorySnapshot {
+            scope: DiffScope::Both,
+            document: Arc::new(DiffDocument {
+                repo_root: "/tmp/repo".into(),
+                files: vec![
+                    FileDiff::from_texts("src/main.rs", "fn old() {}\n", "fn main() {}\n").unwrap(),
+                    FileDiff::from_texts("src/lib.rs", "", "pub fn library() {}\n").unwrap(),
+                    FileDiff::from_texts("Cargo.toml", "old\n", "new\n").unwrap(),
+                ],
+            }),
         }
     }
 
@@ -852,7 +824,7 @@ mod screen_mouse {
 
         let buffer = render_git_diff(&mut screen, 120, 40);
         let text = buffer_text(&buffer);
-        assert!(text.contains("[Enter] open"), "drawer focus footer: {text}");
+        assert!(text.contains("Right open"), "drawer focus footer: {text}");
     }
 
     #[test]
@@ -867,7 +839,7 @@ mod screen_mouse {
 
         let buffer = render_git_diff(&mut screen, 120, 40);
         let text = buffer_text(&buffer);
-        assert!(text.contains("[c] comment"), "patch focus footer: {text}");
+        assert!(text.contains("files"), "patch focus footer: {text}");
     }
 
     #[test]
@@ -882,7 +854,7 @@ mod screen_mouse {
 
         let buffer = render_git_diff(&mut screen, 60, 40);
         let text = buffer_text(&buffer);
-        assert!(text.contains("[c] comment"), "narrow layout should focus patch: {text}");
+        assert!(text.contains("files"), "narrow layout should focus patch: {text}");
     }
 
     #[test]
@@ -917,7 +889,7 @@ mod screen_mouse {
 
         let buffer = render_git_diff(&mut screen, 200, 40);
         let text = buffer_text(&buffer);
-        assert!(text.contains("[c] comment"), "patch should be focused: {text}");
+        assert!(text.contains("files"), "patch should be focused: {text}");
     }
 }
 

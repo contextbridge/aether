@@ -1,3 +1,5 @@
+use std::path::MAIN_SEPARATOR_STR;
+
 use crate::git_review::FileDiff;
 use acp_utils::AETHER_TOOL_NAME_META_KEY;
 use acp_utils::notifications::{SubAgentEvent, SubAgentProgressParams};
@@ -150,11 +152,18 @@ impl ToolCall {
         if let Some(content) = &update.fields.content {
             for item in content {
                 if let acp::ToolCallContent::Diff(diff) = item {
-                    self.diff = Some(Box::new(FileDiff::from_texts(
-                        diff.path.display().to_string(),
+                    let path = diff.path.strip_prefix(MAIN_SEPARATOR_STR).unwrap_or(&diff.path);
+                    match FileDiff::from_texts(
+                        path.to_string_lossy().as_ref(),
                         diff.old_text.as_deref().unwrap_or_default(),
                         &diff.new_text,
-                    )));
+                    ) {
+                        Ok(preview) => self.diff = Some(Box::new(preview)),
+                        Err(error) => {
+                            self.diff = None;
+                            self.display_value = Some(format!("Cannot preview {}: {error}", diff.path.display()));
+                        }
+                    }
                 }
             }
         }

@@ -25,18 +25,19 @@ use std::collections::HashMap;
 
 use crate::app::App;
 use crate::conversation::{ConversationId, ConversationItemId};
+use crate::error::RenderError;
+use crate::theme::Theme;
 use crate::view::generation::Generation;
 use crate::view::syntax::SyntaxHighlighter;
-use crate::theme::Theme;
 use frame::draw_frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
 
-pub use stats::RenderStats;
 use cache::RenderCache;
 use history::{CommitPoint, NativeHistoryCursor};
 use layout::FrameLayout;
 use stats::Lap;
+pub use stats::RenderStats;
 use streaming::StreamEntry;
 
 /// Shared rendering services, borrowed for the duration of one draw.
@@ -62,6 +63,7 @@ pub struct Renderer {
     render_cache: RenderCache,
     native_history: NativeHistoryCursor,
     stream_cache: HashMap<ConversationItemId, StreamEntry>,
+    preview_cache: HashMap<ConversationItemId, (crate::conversation::Revision, clankerdiff_ratatui::DiffPreviewState)>,
     stats: RenderStats,
 }
 
@@ -80,6 +82,7 @@ impl Renderer {
             render_cache: RenderCache::default(),
             native_history: NativeHistoryCursor::default(),
             stream_cache: HashMap::new(),
+            preview_cache: HashMap::new(),
             stats: RenderStats::default(),
         }
     }
@@ -99,9 +102,7 @@ impl Renderer {
         if self.theme_generation != Some(app.theme_generation()) {
             self.theme = app.theme().clone();
             self.theme_generation = Some(app.theme_generation());
-            self.highlighter.clear();
             self.render_cache.clear();
-            self.stream_cache.clear();
         }
     }
 
@@ -109,16 +110,15 @@ impl Renderer {
         self.theme_generation.unwrap_or_default()
     }
 
-    pub fn draw<B: Backend>(&mut self, terminal: &mut Terminal<B>, app: &mut App) -> Result<(), B::Error> {
+    pub fn draw<B: Backend>(&mut self, terminal: &mut Terminal<B>, app: &mut App) -> Result<(), RenderError<B::Error>> {
         self.sync_theme(app);
-        terminal.autoresize()?;
+        terminal.autoresize().map_err(RenderError::Backend)?;
         let area = terminal.get_frame().area();
         self.sync_conversation(app.conversation_id());
 
         let lap = Lap::start();
         let layout = FrameLayout::new(area, app, self);
-        let capacity =
-            usize::from(layout.transcript_height).saturating_sub(usize::from(layout.progress_height));
+        let capacity = usize::from(layout.transcript_height).saturating_sub(usize::from(layout.progress_height));
         self.stats.ns_layout += lap.ns();
 
         let lap = Lap::start();
@@ -127,7 +127,7 @@ impl Renderer {
 
         let live = if app.full_screen_active() { Vec::new() } else { live };
         let lap = Lap::start();
-        terminal.draw(|frame| draw_frame(frame, app, self, &layout, &live))?;
+        terminal.draw(|frame| draw_frame(frame, app, self, &layout, &live)).map_err(RenderError::Backend)?;
         self.stats.ns_draw += lap.ns();
         self.stats.frames += 1;
         self.render_cache.current = std::mem::take(&mut self.render_cache.frame);
@@ -146,6 +146,7 @@ impl Renderer {
                 NativeHistoryCursor { conversation_id: Some(conversation_id), commit: CommitPoint::default() };
             self.render_cache.clear();
             self.stream_cache.clear();
+            self.preview_cache.clear();
         }
     }
 }

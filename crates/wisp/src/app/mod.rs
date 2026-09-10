@@ -143,11 +143,15 @@ impl App {
     }
 
     pub fn new(config: AppConfig) -> Self {
+        let (theme, theme_error) = match Theme::load_selection(&config.settings.theme) {
+            Ok(theme) => (theme, None),
+            Err(error) => (Theme::default(), Some(error)),
+        };
         let ui = UiConfig {
             content_padding: resolve_content_padding(&config.settings),
             status_line: resolve_status_line_settings(&config.settings),
             keybindings: Keybindings::from_settings(&config.settings),
-            theme: Theme::load(&config.settings),
+            theme,
             theme_generation: Generation::default(),
             settings: SettingsModel::new(config.settings.clone()),
         };
@@ -155,7 +159,7 @@ impl App {
         let initial_commands = builtin_commands(&capabilities);
         let browser_opener = config.browser_opener.clone();
         let clipboard_writer = config.clipboard_writer.clone();
-        Self {
+        let mut app = Self {
             session: SessionModel::from_config(config, capabilities),
             ui,
             available_commands: initial_commands,
@@ -168,7 +172,11 @@ impl App {
             submission: SubmissionState::default(),
             browser_opener,
             clipboard_writer,
+        };
+        if let Some(error) = theme_error {
+            app.notify(&format!("Could not load selected theme: {error}"));
         }
+        app
     }
 
     /// Reduce one external input and return its commands.
@@ -227,6 +235,11 @@ impl App {
                     overlay.upsert_local_entries(entries);
                 }
             }
+            CommandResult::ReviewThemesListed(choices) => match &mut self.route {
+                Route::GitReview(screen) => screen.set_theme_choices(choices),
+                Route::PlanReview(screen) => screen.set_theme_choices(choices),
+                Route::Conversation => {},
+            },
             CommandResult::ThemeApplied { settings, theme, error } => self.finish_theme_change(settings, theme, error),
             CommandResult::WorkspaceResolved { cwd, status } => {
                 if self.session.working_dir() == cwd {

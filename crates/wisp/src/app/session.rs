@@ -126,6 +126,7 @@ impl App {
                 }
             },
             RootOutput::Elicitation(ElicitationOutput::Close) => self.close_active(),
+            RootOutput::PlanReview(PlanReviewOutput::SetTheme(value)) => self.apply_theme_change(&value),
             RootOutput::PlanReview(PlanReviewOutput::Outcome(outcome)) => {
                 if let ReviewOutcome::Submitted(summary) = outcome {
                     self.notify(&summary);
@@ -133,6 +134,7 @@ impl App {
                 self.close_active();
             }
             RootOutput::GitReview(output) => match output {
+                GitReviewOutput::SetTheme(value) => self.apply_theme_change(&value),
                 GitReviewOutput::Outcome(ReviewOutcome::Cancelled) => self.close_active(),
                 GitReviewOutput::Outcome(ReviewOutcome::Submitted(prompt)) => self.submit_review(&prompt),
                 GitReviewOutput::Task(task) => {
@@ -148,6 +150,9 @@ impl App {
     }
 
     pub(super) fn open_route(&mut self, route: Route) {
+        if matches!(route, Route::GitReview(_) | Route::PlanReview(_)) {
+            self.queue(Command::Filesystem(FilesystemCommand::ListReviewThemes));
+        }
         self.close_overlay();
         self.route = route;
     }

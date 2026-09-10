@@ -1,6 +1,8 @@
 use crate::command::{CommandResult, FailedCommand};
 use std::collections::HashMap;
 use std::future::Future;
+use std::path::PathBuf;
+use tokio::sync::oneshot::{self, error::TryRecvError};
 use tokio::task::{AbortHandle, JoinError, JoinSet};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -9,6 +11,7 @@ pub(super) enum ReadTask {
     FileIndex,
     GitReview,
     ThemeList,
+    ReviewThemeList,
     Workspace,
 }
 
@@ -17,14 +20,11 @@ pub(super) struct TaskSupervisor {
     tasks: JoinSet<TaskCompletion>,
     reads: HashMap<ReadTask, AbortHandle>,
     network: Vec<AbortHandle>,
+    git_mutations: HashMap<PathBuf, oneshot::Receiver<()>>,
 }
 
 impl TaskSupervisor {
-    pub(super) fn spawn_read(
-        &mut self,
-        key: ReadTask,
-        work: impl Future<Output = CommandResult> + Send + 'static,
-    ) {
+    pub(super) fn spawn_read(&mut self, key: ReadTask, work: impl Future<Output = CommandResult> + Send + 'static) {
         let handle = self.tasks.spawn(async move { TaskCompletion::Read(key, work.await) });
         if let Some(superseded) = self.reads.insert(key, handle) {
             superseded.abort();
@@ -33,6 +33,24 @@ impl TaskSupervisor {
 
     pub(super) fn spawn_mutation(&mut self, work: impl Future<Output = CommandResult> + Send + 'static) {
         self.tasks.spawn(async move { TaskCompletion::Mutation(work.await) });
+    }
+
+    pub(super) fn spawn_git_mutation(
+        &mut self,
+        repo_root: PathBuf,
+        task: impl Future<Output = CommandResult> + Send + 'static,
+    ) {
+        self.git_mutations.retain(|_, completion| matches!(completion.try_recv(), Err(TryRecvError::Empty)));
+        let (finished, completion) = oneshot::channel();
+        let previous = self.git_mutations.insert(repo_root, completion);
+        self.spawn_mutation(async move {
+            if let Some(previous) = previous {
+                let _ = previous.await;
+            }
+            let result = task.await;
+            let _ = finished.send(());
+            result
+        });
     }
 
     pub(super) fn spawn_network(&mut self, work: impl Future<Output = CommandResult> + Send + 'static) {
@@ -77,6 +95,7 @@ impl TaskSupervisor {
         while let Some(result) = self.tasks.join_next().await {
             log_join_error(result);
         }
+        self.git_mutations.clear();
     }
 }
 

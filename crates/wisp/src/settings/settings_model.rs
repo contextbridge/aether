@@ -34,19 +34,18 @@ impl SettingsModel {
         }
     }
 
-    pub(crate) fn finish_theme_change(&mut self, settings: UiSettings) -> Option<ThemeChangeRequest> {
+    pub(crate) fn finish_theme_change(&mut self, settings: Option<UiSettings>) -> Option<ThemeChangeRequest> {
         self.theme.in_flight = false;
-        if let Some(value) = self.theme.queued.take() {
-            Some(self.start_theme_change(value))
-        } else {
+        if let Some(settings) = settings {
             self.ui = settings;
-            None
         }
+        self.theme.queued.take().map(|value| self.start_theme_change(value))
     }
 
     fn start_theme_change(&mut self, value: String) -> ThemeChangeRequest {
         let mut settings = self.ui.clone();
-        settings.theme.file = (!value.is_empty()).then(|| value.clone());
+        settings.theme =
+            super::ThemeSettings::from_selection_id(&value).expect("theme selection validated before scheduling");
         self.theme.in_flight = true;
         ThemeChangeRequest { settings, value }
     }

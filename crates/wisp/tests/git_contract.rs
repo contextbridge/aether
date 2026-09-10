@@ -6,9 +6,10 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+use clankerdiff_core::{PatchLineKind, RepoPath, RepositoryAction};
 use tempfile::TempDir;
 use wisp::command::GitCommand;
-use wisp::git_review::{DiffDocument, DiffScope, FileDiff, FileStatus, GitDiffEvent, PatchLineKind, StageState};
+use wisp::git_review::{DiffDocument, DiffScope, FileDiff, FileStatus, GitDiffEvent, StageState};
 use wisp::request::RequestId;
 use wisp::runtime::{execute_git, resolve_workspace_status};
 
@@ -40,11 +41,12 @@ impl Repo {
     }
 
     async fn load(&self, scope: DiffScope) -> DiffDocument {
-        let command =
-            GitCommand::Load { request_id: RequestId::from(1), working_dir: self.root.clone(), repo_root: None, scope };
+        let command = GitCommand::Load { request_id: RequestId::from(1), working_dir: self.root.clone(), scope };
         match execute_git(command).await {
-            GitDiffEvent::Loaded { result, .. } => result.expect("load must succeed against a real repository"),
-            event => panic!("expected Loaded, got {event:?}"),
+            GitDiffEvent::Loaded { result, .. } => {
+                (*result.expect("load must succeed against a real repository").document).clone()
+            }
+            event @ GitDiffEvent::ActionFinished { .. } => panic!("expected Loaded, got {event:?}"),
         }
     }
 }
@@ -53,7 +55,7 @@ fn file<'a>(document: &'a DiffDocument, path: &str) -> &'a FileDiff {
     document
         .files
         .iter()
-        .find(|file| file.path == path)
+        .find(|file| file.path.as_str() == path)
         .unwrap_or_else(|| panic!("{path} missing from {:?}", paths(document)))
 }
 
@@ -64,7 +66,7 @@ fn paths(document: &DiffDocument) -> Vec<&str> {
 async fn run_action(command: GitCommand) {
     match execute_git(command).await {
         GitDiffEvent::ActionFinished { result, .. } => result.expect("action must succeed"),
-        event => panic!("expected ActionFinished, got {event:?}"),
+        event @ GitDiffEvent::Loaded { .. } => panic!("expected ActionFinished, got {event:?}"),
     }
 }
 
@@ -86,7 +88,7 @@ async fn load_parses_modified_staged_and_untracked_files() {
     repo.write("untracked.txt", "brand new\n");
 
     let document = repo.load(DiffScope::Both).await;
-    assert_eq!(document.repo_root, repo.root);
+    assert_eq!(document.repo_root, repo.root.to_string_lossy());
 
     let modified = file(&document, "src/lib.rs");
     assert_eq!(modified.status, FileStatus::Modified);
@@ -96,7 +98,7 @@ async fn load_parses_modified_staged_and_untracked_files() {
         .iter()
         .flat_map(|hunk| hunk.lines.iter())
         .filter(|line| line.kind == PatchLineKind::Added)
-        .map(|line| line.text.as_str())
+        .map(|line| line.text.as_ref())
         .collect();
     assert_eq!(added, ["fn two() { changed(); }"]);
     let removed = modified
@@ -105,7 +107,7 @@ async fn load_parses_modified_staged_and_untracked_files() {
         .flat_map(|hunk| hunk.lines.iter())
         .find(|line| line.kind == PatchLineKind::Removed)
         .expect("the old line must appear as removed");
-    assert_eq!(removed.text, "fn two() {}");
+    assert_eq!(removed.text.as_ref(), "fn two() {}");
     assert_eq!(removed.old_line_no, Some(2));
 
     let staged = file(&document, "staged.txt");
@@ -118,7 +120,7 @@ async fn load_parses_modified_staged_and_untracked_files() {
             .hunks
             .iter()
             .flat_map(|hunk| hunk.lines.iter())
-            .any(|line| line.kind == PatchLineKind::Added && line.text == "brand new"),
+            .any(|line| line.kind == PatchLineKind::Added && line.text.as_ref() == "brand new"),
         "untracked contents must render as additions"
     );
 }
@@ -131,29 +133,34 @@ async fn stage_commit_round_trip_reaches_a_clean_tree() {
     repo.git(&["commit", "-m", "init"]);
     repo.write("file.txt", "two\n");
 
-    run_action(GitCommand::StageFiles {
+    run_action(GitCommand::Apply {
         request_id: request(2),
         repo_root: repo.root.clone(),
-        paths: vec!["file.txt".to_string()],
+        action: RepositoryAction::StagePaths(vec![RepoPath::new("file.txt").unwrap()]),
     })
     .await;
     let document = repo.load(DiffScope::Both).await;
     assert_eq!(file(&document, "file.txt").staged, StageState::Staged);
 
-    run_action(GitCommand::UnstageFiles {
+    run_action(GitCommand::Apply {
         request_id: request(3),
         repo_root: repo.root.clone(),
-        paths: vec!["file.txt".to_string()],
+        action: RepositoryAction::UnstagePaths(vec![RepoPath::new("file.txt").unwrap()]),
     })
     .await;
     let document = repo.load(DiffScope::Both).await;
     assert_eq!(file(&document, "file.txt").staged, StageState::Unstaged);
 
-    run_action(GitCommand::StageAll { request_id: request(4), repo_root: repo.root.clone() }).await;
-    run_action(GitCommand::Commit {
+    run_action(GitCommand::Apply {
+        request_id: request(4),
+        repo_root: repo.root.clone(),
+        action: RepositoryAction::StageAll,
+    })
+    .await;
+    run_action(GitCommand::Apply {
         request_id: request(5),
         repo_root: repo.root.clone(),
-        message: "update".to_string(),
+        action: RepositoryAction::Commit { message: "update".to_string() },
     })
     .await;
     let document = repo.load(DiffScope::Both).await;
@@ -175,7 +182,7 @@ async fn renames_and_binary_files_survive_parsing() {
 
     let renamed = file(&document, "new_name.rs");
     assert_eq!(renamed.status, FileStatus::Renamed);
-    assert_eq!(renamed.old_path.as_deref(), Some("old_name.rs"));
+    assert_eq!(renamed.old_path.as_ref().map(RepoPath::as_str), Some("old_name.rs"));
 
     let binary = file(&document, "image.bin");
     assert!(binary.binary, "binary change must be flagged");

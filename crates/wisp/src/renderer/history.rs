@@ -1,6 +1,8 @@
 use crate::app::App;
 use crate::conversation::{ConversationContent, ConversationId, ConversationItem, ItemState};
+use crate::error::RenderError;
 use crate::view::wrap::as_u16;
+use clankerdiff_ratatui::MarkdownCommitError;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
 use ratatui::text::{Line, Text};
@@ -52,9 +54,9 @@ impl Renderer {
         app: &App,
         width: u16,
         capacity: usize,
-    ) -> Result<Vec<Line<'static>>, B::Error> {
+    ) -> Result<Vec<Line<'static>>, RenderError<B::Error>> {
         let items = app.conversation_items();
-        let live = self.live_lines(app, width);
+        let live = self.live_lines(app, width)?;
         let mut overflow = live.len().saturating_sub(capacity);
         if overflow == 0 {
             return Ok(live);
@@ -65,43 +67,34 @@ impl Renderer {
                 break;
             };
             let (item_width, item_padding) = commit.dimensions(width, app.content_padding());
-            let rendered = self.lines(
-                std::slice::from_ref(item),
-                items.get(commit.item_index.wrapping_sub(1)).map(content_kind),
-                item_width,
-                item_padding,
-                app.spinner_tick(),
-            );
-            let committed = commit.rows.min(rendered.len());
-            let pending = &rendered[committed..];
-            match item.state() {
-                ItemState::Sealed => {
-                    insert_history_lines(terminal, pending)?;
-                    self.stats.history_rows_inserted += pending.len() as u64;
-                    overflow = overflow.saturating_sub(pending.len());
-                    self.native_history.commit = CommitPoint {
-                        item_index: commit.item_index + 1,
-                        ..CommitPoint::default()
-                    };
-                }
-                ItemState::Open if streams_into_history(item) => {
-                    // The still-growing last row stays live: appending text
-                    // can rewrap it, and native history cannot be rewritten.
-                    let take = overflow.min(pending.len().saturating_sub(1));
-                    insert_history_lines(terminal, &pending[..take])?;
-                    self.stats.history_rows_inserted += take as u64;
-                    self.native_history.commit = CommitPoint {
-                        item_index: commit.item_index,
-                        rows: committed + take,
-                        width: item_width,
-                        padding: item_padding,
-                    };
-                    break;
-                }
+            let previous = items.get(commit.item_index.wrapping_sub(1)).map(content_kind);
+            let separator = usize::from(previous.is_some_and(|kind| kind != content_kind(item)));
+            let rendered =
+                self.item_suffix(item, previous, item_width, item_padding, app.spinner_tick(), commit.rows)?;
+            let committed = commit.rows;
+            let pending = rendered.as_slice();
+            let take = match item.state() {
+                ItemState::Sealed => pending.len(),
+                ItemState::Open if streams_into_history(item) => overflow.min(pending.len().saturating_sub(1)),
                 ItemState::Open => break,
+            };
+            let mut rows = committed;
+            insert_history_lines(terminal, &pending[..take], |inserted| {
+                rows += inserted;
+                self.stats.history_rows_inserted += inserted as u64;
+                self.native_history.commit =
+                    CommitPoint { item_index: commit.item_index, rows, width: item_width, padding: item_padding };
+                self.acknowledge_stream_rows(item, rows.saturating_sub(separator))
+            })?;
+            if item.state() == ItemState::Open {
+                break;
             }
+            self.stream_cache.remove(&item.id());
+            self.preview_cache.remove(&item.id());
+            overflow = overflow.saturating_sub(take);
+            self.native_history.commit = CommitPoint { item_index: commit.item_index + 1, ..CommitPoint::default() };
         }
-        Ok(self.live_lines(app, width))
+        self.live_lines(app, width).map_err(RenderError::from)
     }
 }
 
@@ -114,12 +107,23 @@ pub(super) fn streams_into_history(item: &ConversationItem) -> bool {
 }
 
 /// The only function that writes to the terminal outside a frame draw.
-fn insert_history_lines<B: Backend>(terminal: &mut Terminal<B>, lines: &[Line<'static>]) -> Result<(), B::Error> {
-    for chunk in lines.chunks(usize::from(u16::MAX)) {
+fn insert_history_lines<T: Backend>(
+    terminal: &mut Terminal<T>,
+    lines: &[Line<'static>],
+    mut acknowledge: impl FnMut(usize) -> Result<(), MarkdownCommitError>,
+) -> Result<(), RenderError<T::Error>> {
+    let height = terminal.size().map_err(RenderError::Backend)?.height;
+    let viewport_height = terminal.get_frame().area().height;
+    let batch_size = usize::from(height.saturating_sub(viewport_height).max(1));
+    for chunk in lines.chunks(batch_size) {
+        let inserted = chunk.len();
         let chunk = chunk.to_vec();
-        terminal.insert_before(as_u16(chunk.len()), move |buffer| {
-            Paragraph::new(Text::from(chunk)).render(buffer.area, buffer);
-        })?;
+        terminal
+            .insert_before(as_u16(inserted), move |buffer| {
+                Paragraph::new(Text::from(chunk)).render(buffer.area, buffer);
+            })
+            .map_err(RenderError::Backend)?;
+        acknowledge(inserted)?;
     }
     Ok(())
 }
