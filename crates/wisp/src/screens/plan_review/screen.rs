@@ -11,7 +11,7 @@ use ratatui::{
     buffer::Buffer,
     layout::{Position, Rect},
     style::Style,
-    widgets::{Paragraph, StatefulWidget, Widget},
+    widgets::{Clear, Paragraph, StatefulWidget, Widget},
 };
 use std::sync::Arc;
 use utils::plan_review::{PlanReviewDecision, PlanReviewElicitationMeta};
@@ -57,6 +57,7 @@ impl PlanReviewScreen {
             self.state.set_theme(cx.theme.review().clone());
             self.theme_generation = Some(cx.theme_generation);
         }
+        Clear.render(area, buf);
         MarkdownReviewWidget::new().title(&self.title).render(area, buf, &mut self.state);
         if let Some(error) = &self.error {
             let footer = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, area.height.min(1));

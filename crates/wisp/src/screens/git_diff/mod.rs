@@ -7,7 +7,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     buffer::Buffer,
     layout::{Position, Rect},
-    widgets::StatefulWidget,
+    widgets::{Clear, StatefulWidget, Widget},
 };
 
 use crate::git_review::GitDiffEvent;
@@ -102,6 +102,7 @@ impl GitDiffScreen {
             self.state.set_theme(cx.theme.review().clone());
             self.theme_generation = Some(cx.theme_generation);
         }
+        Clear.render(area, buf);
         DiffReviewWidget::new().title(format!("Git Diff · {:?}", self.scope)).render(area, buf, &mut self.state);
         self.state.cursor_position()
     }
