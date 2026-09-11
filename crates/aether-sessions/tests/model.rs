@@ -3,7 +3,8 @@ use aether_core::events::{
     TurnEvent, TurnOutcome,
 };
 use aether_sessions::model::last_session_usage;
-use aether_sessions::{SessionControlEvent, SessionEvent, UserEvent, last_agent_from_events};
+use aether_sessions::testing::{agent_switched, turn_ended, user_message};
+use aether_sessions::{SessionEvent, UserEvent, last_agent_from_events};
 use llm::testing::session_usage_event;
 use llm::{LlmCallPurpose, SessionUsageEvent, TokenUsage};
 
@@ -15,7 +16,7 @@ fn persisted_event_policy_covers_representative_variants() {
         max_attempts: 3,
         delay_ms: 10,
     }));
-    let cancelled = SessionEvent::Agent(AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Cancelled }));
+    let cancelled = turn_ended(TurnOutcome::Cancelled);
     let compaction = SessionEvent::Agent(AgentEvent::Context(ContextEvent::CompactionEnded {
         outcome: CompactionOutcome::Completed,
     }));
@@ -43,9 +44,7 @@ fn last_session_usage_picks_the_latest_sample_from_a_partial_log() {
     let events = vec![
         SessionEvent::Agent(AgentEvent::SessionUsage(session_usage(1, 5))),
         SessionEvent::Agent(AgentEvent::SessionUsage(session_usage(2, 9))),
-        SessionEvent::Agent(AgentEvent::Turn(TurnEvent::Ended {
-            outcome: TurnOutcome::Failed { error: "boom".into() },
-        })),
+        turn_ended(TurnOutcome::Failed { error: "boom".into() }),
     ];
 
     let last = last_session_usage(&events).expect("usage was logged before the failure");
@@ -62,7 +61,7 @@ fn session_usage(sequence: u64, total_input_tokens: u64) -> SessionUsageEvent {
 
 #[test]
 fn content_helpers_extract_user_text_only() {
-    let message = SessionEvent::User(UserEvent::Message { content: vec![llm::ContentBlock::text("Hello")] });
+    let message = user_message("Hello");
 
     assert_eq!(message.user_content().as_deref(), Some("Hello"));
     assert_eq!(message.content().as_deref(), Some("Hello"));
@@ -71,7 +70,7 @@ fn content_helpers_extract_user_text_only() {
 
 #[test]
 fn event_json_tags_remain_compatible() {
-    let event = SessionEvent::User(UserEvent::Message { content: vec![llm::ContentBlock::text("Hello")] });
+    let event = user_message("Hello");
     let json = serde_json::to_value(&event).unwrap();
 
     assert_eq!(json["kind"], "user");
@@ -103,13 +102,7 @@ fn failed_call_diagnostics_survive_session_json_round_trip() {
 
 #[test]
 fn last_agent_uses_the_last_switch() {
-    let events = [
-        SessionEvent::Control(SessionControlEvent::AgentSwitched { from: None, to: Some("planner".into()) }),
-        SessionEvent::Control(SessionControlEvent::AgentSwitched {
-            from: Some("planner".into()),
-            to: Some("coder".into()),
-        }),
-    ];
+    let events = [agent_switched(None, Some("planner")), agent_switched(Some("planner"), Some("coder"))];
 
     assert_eq!(last_agent_from_events(Some("default".into()), &events), Some("coder".into()));
     assert_eq!(last_agent_from_events(Some("default".into()), &[]), Some("default".into()));
