@@ -128,6 +128,58 @@ mod tests {
     }
 
     #[test]
+    fn nested_samples_and_resumption_preserve_cumulative_cost_components() {
+        let model = ModelIdentity::of(Some(&priced_model()));
+        let tokens = TokenUsage {
+            cache_read_tokens: Some(20.into()),
+            cache_creation_tokens: Some(10.into()),
+            ..TokenUsage::new(100, 50)
+        };
+
+        let mut root = SessionUsageTracker::new("root");
+        root.record(LlmCallPurpose::Chat, model.clone(), tokens);
+
+        let mut child = SessionUsageTracker::new("child");
+        let child_sample = child.record(LlmCallPurpose::Chat, model.clone(), tokens);
+        root.record_child("child-task", child_sample);
+
+        let mut grandchild = SessionUsageTracker::new("grandchild");
+        let sample = grandchild.record(LlmCallPurpose::Compaction, model.clone(), tokens);
+        let sample_cost = sample.estimated_cost.unwrap();
+        let folded = child.record_child("grandchild-task", sample);
+
+        let last = root.record_child("child-task", folded);
+
+        assert_eq!(last.sequence, 3);
+        assert_eq!(last.source.agent_id, grandchild.source().agent_id);
+        assert_eq!(last.totals.tokens.input_tokens.get(), 300);
+        assert_eq!(last.estimated_cost, Some(sample_cost));
+        assert_cost_components(&last, sample_cost, 3);
+
+        let persisted = serde_json::to_string(&last).unwrap();
+        let mut resumed = SessionUsageTracker::new("root");
+        resumed.resume_from(&serde_json::from_str(&persisted).unwrap());
+        let next = resumed.record(LlmCallPurpose::Chat, model, tokens);
+        assert_eq!(next.sequence, 4);
+        assert_eq!(next.totals.tokens.input_tokens.get(), 400);
+        assert_cost_components(&next, sample_cost, 4);
+    }
+
+    fn assert_cost_components(event: &SessionUsageEvent, cost: UsageCost, samples: usize) {
+        let totals = serde_json::to_value(&event.totals).unwrap();
+        for (field, amount) in [
+            ("estimated_input_usd", cost.input_usd),
+            ("estimated_output_usd", cost.output_usd),
+            ("estimated_cache_read_usd", cost.cache_read_usd),
+            ("estimated_cache_creation_usd", cost.cache_creation_usd),
+            ("estimated_usd", cost.total_usd),
+        ] {
+            let expected = (0..samples).fold(llm::Usd::ZERO, |total, _| total + amount);
+            assert_eq!(totals[field], serde_json::json!(expected), "{field}");
+        }
+    }
+
+    #[test]
     fn child_samples_keep_lineage_they_already_carry() {
         let mut tracker = SessionUsageTracker::new("root");
         let mut grandchild = session_usage_event(1, TokenUsage::new(1, 1));
