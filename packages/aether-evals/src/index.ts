@@ -63,6 +63,8 @@ export type {
   PlanMeta,
   PlanMetaEntry,
   PlanMetaStatus,
+  SessionUsageEvent,
+  SessionUsageTotals,
   StopReason,
   TokenUsage,
   ToolCallError,
@@ -73,4 +75,6 @@ export type {
   ToolResultMeta,
   TurnEvent,
   TurnOutcome,
+  UsageCost,
+  UsageSource,
 } from "@aether-agent/sdk";

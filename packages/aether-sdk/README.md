@@ -166,8 +166,7 @@ for await (const message of session.prompt("Implement the feature")) {
 
 Costs are catalog-based USD estimates. `totals.estimated_usd` excludes calls
 whose model pricing is unknown; `totals.unpriced_calls` reports how many were
-excluded. Sub-agent usage includes agent and task identity in
-`message.usage.source`.
+excluded.
 
 ## Multi-turn usage
 

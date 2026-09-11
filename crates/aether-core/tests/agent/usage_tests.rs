@@ -44,6 +44,7 @@ async fn priced_model_costs_each_call_and_keeps_totals_priced() {
 
     let usage = session_usage(&events);
     assert_eq!(usage.len(), 2);
+    assert_cumulative_cost_components(&usage);
     let first_cost = usage[0].estimated_cost.expect("catalog model is priced").total_usd;
     let second_cost = usage[1].estimated_cost.expect("catalog model is priced").total_usd;
     assert!(first_cost.get() > 0.0 && second_cost.get() > 0.0);
@@ -57,6 +58,7 @@ async fn priced_model_costs_each_call_and_keeps_totals_priced() {
 #[tokio::test]
 async fn usage_received_before_a_stream_error_survives_the_failed_turn() {
     let events = test_agent()
+        .model(priced_model())
         .llm_result_responses(&[llm_response("msg").usage(9, 1).build_with_error(ProviderError::api("HTTP 500"))])
         .without_mcp()
         .user_text("hello")
@@ -70,12 +72,14 @@ async fn usage_received_before_a_stream_error_survives_the_failed_turn() {
     });
     assert!(usage_index < failed_index);
     assert_eq!(session_usage(&events)[0].tokens.input_tokens.get(), 9);
+    assert_cumulative_cost_components(&session_usage(&events));
 }
 
 #[tokio::test]
 async fn usage_received_before_cancellation_survives_the_cancelled_turn() {
     let release = Arc::new(Notify::new());
     let events = test_agent()
+        .model(priced_model())
         .llm_responses(&[llm_response("msg").usage(5, 3).text(&["never delivered"]).build()])
         .without_mcp()
         .pause_turn_after(0, 2, release)
@@ -96,6 +100,7 @@ async fn usage_received_before_cancellation_survives_the_cancelled_turn() {
     });
     assert!(usage_index < cancelled_index);
     assert_eq!(session_usage(&events).len(), 1);
+    assert_cumulative_cost_components(&session_usage(&events));
 }
 
 #[tokio::test]
@@ -121,6 +126,7 @@ async fn retried_attempts_without_usage_add_nothing() {
 #[tokio::test]
 async fn compaction_usage_is_recorded_once_before_the_compaction_call_ends() {
     let events = test_agent()
+        .model(priced_model())
         .llm_responses(&[
             llm_response("sum").usage(50, 10).text(&["summary"]).build(),
             llm_response("msg").usage(20, 5).text(&["hello"]).build(),
@@ -141,6 +147,7 @@ async fn compaction_usage_is_recorded_once_before_the_compaction_call_ends() {
     assert_eq!(usage[1].purpose, LlmCallPurpose::Chat);
     assert_eq!(usage[1].totals.tokens.input_tokens.get(), 70);
     assert_eq!(usage[1].totals.tokens.output_tokens.get(), 15);
+    assert_cumulative_cost_components(&usage);
 
     let compaction_usage_index = position(
         &events,
@@ -261,6 +268,26 @@ async fn alloyed_usage_is_attributed_to_the_member_that_served_the_call() {
         })
         .collect::<Vec<_>>();
     assert_eq!(started, served, "usage must name the same model as the call that produced it");
+}
+
+fn assert_cumulative_cost_components(events: &[&SessionUsageEvent]) {
+    let mut input = Usd::ZERO;
+    let mut output = Usd::ZERO;
+    let mut cache_read = Usd::ZERO;
+    let mut cache_creation = Usd::ZERO;
+    for event in events {
+        let cost = event.estimated_cost.expect("catalog model is priced");
+        input += cost.input_usd;
+        output += cost.output_usd;
+        cache_read += cost.cache_read_usd;
+        cache_creation += cost.cache_creation_usd;
+        assert_eq!(event.totals.estimated_input_usd, input);
+        assert_eq!(event.totals.estimated_output_usd, output);
+        assert_eq!(event.totals.estimated_cache_read_usd, cache_read);
+        assert_eq!(event.totals.estimated_cache_creation_usd, cache_creation);
+        let sum = input + output + cache_read + cache_creation;
+        assert!((event.totals.estimated_usd.get() - sum.get()).abs() < 1e-12);
+    }
 }
 
 fn two_distinct_models() -> [LlmModel; 2] {

@@ -126,6 +126,7 @@ async fn session_usage_columns_are_projected_for_root_and_sub_agent_samples() {
             tokens: TokenUsage { cache_read_tokens: Some(3.into()), ..TokenUsage::new(14, 7) },
             estimated_usd: Usd::new(0.25),
             unpriced_calls: 1,
+            ..SessionUsageTotals::default()
         },
         ..session_usage_event(2, TokenUsage::new(4, 2))
     };
@@ -409,7 +410,7 @@ fn root_usage(source: &UsageSource) -> SessionUsageEvent {
         source: source.clone(),
         model: ModelIdentity { provider: Some("anthropic".into()), model_id: Some("claude".into()), pricing: None },
         estimated_cost: Some(UsageCost { total_usd: Usd::new(0.25), ..UsageCost::default() }),
-        totals: SessionUsageTotals { tokens, estimated_usd: Usd::new(0.25), unpriced_calls: 0 },
+        totals: SessionUsageTotals { tokens, estimated_usd: Usd::new(0.25), ..SessionUsageTotals::default() },
         ..session_usage_event(1, tokens)
     }
 }

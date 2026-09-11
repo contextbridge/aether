@@ -107,6 +107,21 @@ describe("runHeadless()", () => {
     ).toEqual(events);
   });
 
+  it("retains cumulative usage received before the process fails", async () => {
+    const usage: AgentEvent = {
+      category: "session_usage",
+      event: sessionUsageFactory.build(),
+    };
+    const received: AgentEvent[] = [];
+    await expect(
+      Array.fromAsync(
+        streamRaw(JSON.stringify(usage) + "\n", { FAKE_EXIT_CODE: "2" }),
+        (event) => received.push(event),
+      ),
+    ).rejects.toMatchObject({ code: "process_exited" });
+    expect(received).toEqual([usage]);
+  });
+
   it.each(["", "\n\r\n  \n"])(
     "accepts empty output and blank lines: %j",
     async (raw) => {
