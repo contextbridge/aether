@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.3](https://github.com/contextbridge/aether/compare/aether-llm-v0.8.2...aether-llm-v0.8.3) - 2026-09-11
+
+### Added
+
+- Add additional cumulative cost components for sessions ([#448](https://github.com/contextbridge/aether/pull/448))
+
 ## [0.8.2](https://github.com/contextbridge/aether/compare/aether-llm-v0.8.1...aether-llm-v0.8.2) - 2026-09-09
 
 ### Fixed

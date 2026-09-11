@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.3](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.6.2...aether-mcp-utils-v0.6.3) - 2026-09-11
+
+### Fixed
+
+- allow empty test router with rmcp 3.3 ([#449](https://github.com/contextbridge/aether/pull/449))
+
 ## [0.6.2](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.6.1...aether-mcp-utils-v0.6.2) - 2026-09-09
 
 ### Other

@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.3](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.7.2...aether-agent-core-v0.7.3) - 2026-09-11
+
+### Added
+
+- Add additional cumulative cost components for sessions ([#448](https://github.com/contextbridge/aether/pull/448))
+
 ## [0.7.2](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.7.1...aether-agent-core-v0.7.2) - 2026-09-09
 
 ### Other

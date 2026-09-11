@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.14](https://github.com/contextbridge/aether/compare/aether-auth-v0.1.13...aether-auth-v0.1.14) - 2026-09-11
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.1.13](https://github.com/contextbridge/aether/compare/aether-auth-v0.1.12...aether-auth-v0.1.13) - 2026-08-27
 
 ### Fixed
