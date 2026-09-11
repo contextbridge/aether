@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.42](https://github.com/contextbridge/aether/compare/aether-project-v0.5.41...aether-project-v0.5.42) - 2026-09-11
+
+### Other
+
+- scheduled code-cleanup ([#446](https://github.com/contextbridge/aether/pull/446))
+
 ## [0.5.41](https://github.com/contextbridge/aether/compare/aether-project-v0.5.40...aether-project-v0.5.41) - 2026-09-09
 
 ### Other
