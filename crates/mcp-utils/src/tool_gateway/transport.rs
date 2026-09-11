@@ -178,7 +178,7 @@ mod tests {
         tool_router: ToolRouter<Self>,
     }
 
-    #[tool_router]
+    #[tool_router(allow_empty)]
     impl TestServer {}
 
     #[allow(clippy::unused_async_trait_impl)]
@@ -239,6 +239,17 @@ mod tests {
         let socket = transport.path().to_path_buf();
         let _server = transport.spawn(TestServer { tool_router: TestServer::tool_router() });
         let _client = ().serve(connect(&socket).await.unwrap()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn connected_client_can_list_empty_tools() {
+        let path = UnixSocketPath::new().unwrap();
+        let transport = UnixSocketMcpTransport::bind(path).unwrap();
+        let socket = transport.path().to_path_buf();
+        let _server = transport.spawn(TestServer { tool_router: TestServer::tool_router() });
+        let client = ().serve(connect(&socket).await.unwrap()).await.unwrap();
+
+        assert!(client.list_all_tools().await.unwrap().is_empty());
     }
 
     #[tokio::test]
