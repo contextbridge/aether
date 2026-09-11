@@ -169,7 +169,13 @@ for await (const message of session.prompt("Implement the feature")) {
 update. `totals` contains cumulative usage after that call. Costs are
 catalog-based USD estimates; `totals.estimated_usd` excludes calls whose model
 pricing is unknown, and `totals.unpriced_calls` reports how many were excluded.
-Sub-agent calls include agent and task attribution in `source`.
+
+Cumulative cost breakdowns are available via `totals.estimated_input_usd`,
+`totals.estimated_output_usd`, `totals.estimated_cache_read_usd`, and
+`totals.estimated_cache_creation_usd`.
+
+Do not sum `totals` fields across snapshots or group/filter by `source.parent_agent_id`. The root agent's stream includes sub-agent and
+compaction in its totals, even when `source` identifies a child.
 
 ## TypeScript tools
 
