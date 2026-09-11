@@ -15,6 +15,7 @@ workspace = true
 [features]
 default = []
 analytics = ["dep:chrono", "dep:futures", "dep:sqlx", "dep:tokio"]
+testing = ["dep:tempfile"]
 
 [dependencies]
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", default-features = false, version = "0.4.2" }
@@ -25,10 +26,12 @@ futures = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true, features = ["macros", "rt-multi-thread", "time"] }
 tracing = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.14" }
 
 [dev-dependencies]
+aether-sessions = { path = ".", features = ["testing"] }
 tempfile = { workspace = true }

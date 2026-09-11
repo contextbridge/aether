@@ -390,6 +390,7 @@ dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
  "aether-llm",
+ "aether-sessions",
  "aether-utils",
  "chrono",
  "futures",

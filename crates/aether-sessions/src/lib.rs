@@ -8,6 +8,9 @@ pub mod model;
 pub mod store;
 pub mod transcript;
 
+#[cfg(feature = "testing")]
+pub mod testing;
+
 pub use error::{SessionLogError, SessionStoreError};
 pub use log::{SessionLine, SessionLog, SessionLogEntry};
 pub use model::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent, last_agent_from_events};
