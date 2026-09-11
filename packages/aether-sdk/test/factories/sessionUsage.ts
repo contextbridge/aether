@@ -42,6 +42,10 @@ export const sessionUsageFactory = Factory.define<SessionUsageEvent>(() => ({
       cache_read_tokens: 300,
     },
     estimated_usd: 400,
+    estimated_input_usd: 40,
+    estimated_output_usd: 80,
+    estimated_cache_read_usd: 120,
+    estimated_cache_creation_usd: 160,
     unpriced_calls: 10,
   },
 }));
