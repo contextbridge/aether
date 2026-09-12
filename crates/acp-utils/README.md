@@ -7,9 +7,10 @@ Utilities for the [Agent Client Protocol](https://agentclientprotocol.com/) (ACP
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 
-- [Protocol compatibility](#protocol-compatibility)
 - [Key Types](#key-types)
 - [Feature Flags](#feature-flags)
+- [WebSocket transport](#websocket-transport)
+- [Ordered session loading](#ordered-session-loading)
 - [License](#license)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -27,6 +28,11 @@ Utilities for the [Agent Client Protocol](https://agentclientprotocol.com/) (ACP
 |---------|-------------|---------|
 | `client` | ACP client (for UIs connecting to agents) | yes |
 | `server` | ACP server (for agents accepting connections) | yes |
+| `websocket` | Message-oriented WebSocket transport | no |
+
+## WebSocket transport
+
+Enable the `websocket` feature to use `websocket::WebSocketTransport<S>` with an already-established WebSocket connection.
 
 ## License
 

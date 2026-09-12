@@ -11,6 +11,9 @@ pub mod elicitation;
 pub mod notifications;
 pub mod settings;
 
+#[cfg(feature = "websocket")]
+pub mod websocket;
+
 #[cfg(feature = "client")]
 pub mod client;
 

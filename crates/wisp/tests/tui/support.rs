@@ -218,8 +218,8 @@ pub(crate) fn sessions_listed(sessions: Vec<acp::SessionInfo>) -> CommandResult 
     CommandResult::SessionsListed(acp::ListSessionsResponse::new(sessions))
 }
 
-pub(crate) fn session_loaded(session_id: &str, config_options: Vec<acp::SessionConfigOption>) -> CommandResult {
-    CommandResult::SessionLoaded(LoadedSession {
+pub(crate) fn session_loaded(session_id: &str, config_options: Vec<acp::SessionConfigOption>) -> AcpEvent {
+    AcpEvent::SessionLoaded(LoadedSession {
         session_id: SessionId::new(session_id),
         response: acp::LoadSessionResponse::new().config_options(config_options),
         replay: Vec::new(),

@@ -1,6 +1,6 @@
-use acp_utils::client::{AcpEvent, connect_acp_client};
+use acp_utils::client::{AcpClient, AcpClientError, AcpEvent, LoadedSession, ReplayableEvent, connect_acp_client};
 use acp_utils::notifications::{
-    PromptSearchParams, PromptSearchResponse, SessionPreviewParams, SessionPreviewResponse,
+    ContextCompactionParams, PromptSearchParams, PromptSearchResponse, SessionPreviewParams, SessionPreviewResponse,
 };
 use acp_utils::testing::duplex_pair;
 use agent_client_protocol::schema::ProtocolVersion;
@@ -11,10 +11,10 @@ use agent_client_protocol::schema::v1::{
     ResumeSessionResponse, SessionId, SessionInfo, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
     StopReason, TextContent,
 };
-use agent_client_protocol::{self as acp, Agent};
+use agent_client_protocol::{self as acp, Agent, Builder, Client, ConnectTo, HandleDispatchFrom, NullRun};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, mpsc::error::TryRecvError};
 use tokio::task::{LocalSet, spawn_local};
 
 #[tokio::test(flavor = "current_thread")]
@@ -145,23 +145,48 @@ async fn prompt_completion_follows_session_updates_on_the_event_stream() {
         .await;
 }
 
-#[allow(clippy::too_many_lines)]
 #[tokio::test(flavor = "current_thread")]
-async fn initialized_client_manages_typed_sessions_and_collects_replay() {
+async fn loaded_snapshot_is_delivered_on_the_event_channel() -> Result<(), TestError> {
     LocalSet::new()
         .run_until(async {
-            let (agent_transport, client_transport) = duplex_pair();
-            let agent_builder = Agent
-                .builder()
-                .on_receive_request(
-                    async |_request: InitializeRequest, responder, _cx| {
-                        responder.respond(
-                            InitializeResponse::new(ProtocolVersion::V1)
-                                .agent_info(Implementation::new("Typed Fake", "1.0")),
-                        )
-                    },
-                    acp::on_receive_request!(),
-                )
+            let mut client = TestClientBuilder::default()
+                .replay_message("saved", "snapshot")
+                .compaction_active(true)
+                .live_message("saved", "live")
+                .build()
+                .await?;
+
+            client.handle.load_session(LoadSessionRequest::new("saved", "/remote")).await?;
+
+            let loaded = take_loaded_session(&mut client)?;
+            assert_eq!(loaded.session_id, SessionId::new("saved"));
+            let [ReplayableEvent::SessionUpdate(notification), ReplayableEvent::ContextCompaction(compaction)] =
+                loaded.replay.as_slice()
+            else {
+                return Err(TestError::Unexpected("expected message followed by compaction in replay"));
+            };
+            assert_eq!(notification.as_ref(), &message("saved", "snapshot"));
+            assert!(compaction.active);
+            let Some(AcpEvent::SessionUpdate { session_id, update }) = client.event_rx.recv().await else {
+                return Err(TestError::Unexpected("expected live update after snapshot"));
+            };
+            assert_eq!(session_id, SessionId::new("saved"));
+            assert_eq!(*update, message("saved", "live").update);
+            Ok(())
+        })
+        .await
+}
+
+#[allow(clippy::too_many_lines)]
+#[tokio::test(flavor = "current_thread")]
+async fn initialized_client_manages_typed_sessions_and_collects_replay() -> Result<(), TestError> {
+    LocalSet::new()
+        .run_until(async {
+            let agent_builder = TestClientBuilder::default()
+                .agent_info(Implementation::new("Typed Fake", "1.0"))
+                .replay_message("other", "unrelated")
+                .replay_message("listed", "replayed")
+                .agent()
                 .on_receive_request(
                     async |_request: NewSessionRequest, responder, _cx| {
                         responder.respond(NewSessionResponse::new(SessionId::new("created")))
@@ -171,25 +196,6 @@ async fn initialized_client_manages_typed_sessions_and_collects_replay() {
                 .on_receive_request(
                     async |_request: ListSessionsRequest, responder, _cx| {
                         responder.respond(ListSessionsResponse::new(vec![SessionInfo::new("listed", "/tmp/project")]))
-                    },
-                    acp::on_receive_request!(),
-                )
-                .on_receive_request(
-                    async |request: LoadSessionRequest, responder, cx| {
-                        let session_id = request.session_id.clone();
-                        cx.send_notification(SessionNotification::new(
-                            "other",
-                            SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(
-                                "unrelated",
-                            )))),
-                        ))?;
-                        cx.send_notification(SessionNotification::new(
-                            session_id,
-                            SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(
-                                "replayed",
-                            )))),
-                        ))?;
-                        responder.respond(LoadSessionResponse::new())
                     },
                     acp::on_receive_request!(),
                 )
@@ -230,54 +236,138 @@ async fn initialized_client_manages_typed_sessions_and_collects_replay() {
                     },
                     acp::on_receive_request!(),
                 );
-            spawn_local(async move {
-                let _ = agent_builder.connect_to(agent_transport).await;
-            });
-
-            let mut client = connect_acp_client(client_transport, InitializeRequest::new(ProtocolVersion::V1))
-                .await
-                .expect("initialization succeeds");
+            let mut client = connect_test_agent(agent_builder).await?;
             assert_eq!(client.agent_name(), "Typed Fake");
             assert!(client.initialize_response.agent_info.is_some());
 
             let created =
-                client.handle.new_session(NewSessionRequest::new("/tmp/project")).await.expect("create succeeds");
+                client.handle.new_session(NewSessionRequest::new("/tmp/project")).await?;
             assert_eq!(created.session_id, SessionId::new("created"));
 
-            let listed = client.handle.list_sessions(ListSessionsRequest::new()).await.expect("list succeeds");
+            let listed = client.handle.list_sessions(ListSessionsRequest::new()).await?;
             assert_eq!(listed.sessions.len(), 1);
             assert_eq!(listed.sessions[0].session_id, SessionId::new("listed"));
 
-            let loaded = client
-                .handle
-                .load_session(LoadSessionRequest::new("listed", "/tmp/project"))
-                .await
-                .expect("load succeeds");
-            assert_eq!(loaded.replay.len(), 1);
-            assert_eq!(loaded.replay[0].session_id, SessionId::new("listed"));
-            let event = client.event_rx.try_recv().expect("other session remains on the event stream");
+            client.handle.load_session(LoadSessionRequest::new("listed", "/tmp/project")).await?;
+            let event = client.event_rx.try_recv()?;
             assert!(
                 matches!(event, AcpEvent::SessionUpdate { session_id, .. } if session_id == SessionId::new("other"))
             );
+            let loaded = take_loaded_session(&mut client)?;
+            assert_eq!(loaded.replay.len(), 1);
+            assert!(matches!(&loaded.replay[0], ReplayableEvent::SessionUpdate(notification) if notification.session_id == SessionId::new("listed")));
 
             client
                 .handle
                 .resume_session(ResumeSessionRequest::new("listed", "/tmp/project"))
-                .await
-                .expect("resume succeeds");
+                .await?;
             let search = client
                 .handle
                 .search_prompts(PromptSearchParams { query: "hello".to_string(), limit: Some(10) })
-                .await
-                .expect("search succeeds");
+                .await?;
             assert_eq!(search.query, "hello");
             let preview = client
                 .handle
                 .preview_session(SessionPreviewParams { session_id: "listed".to_string() })
-                .await
-                .expect("preview succeeds");
+                .await?;
             assert_eq!(preview.session_id, "listed");
-            client.handle.close_session(CloseSessionRequest::new("listed")).await.expect("close succeeds");
+            client.handle.close_session(CloseSessionRequest::new("listed")).await?;
+            Ok(())
         })
-        .await;
+        .await
+}
+
+#[derive(Default)]
+struct TestClientBuilder {
+    agent_info: Option<Implementation>,
+    replay: Vec<SessionNotification>,
+    live: Vec<SessionNotification>,
+    compaction_active: Option<bool>,
+}
+
+impl TestClientBuilder {
+    fn agent_info(mut self, info: Implementation) -> Self {
+        self.agent_info = Some(info);
+        self
+    }
+
+    fn replay_message(mut self, session_id: &str, text: &str) -> Self {
+        self.replay.push(message(session_id, text));
+        self
+    }
+
+    fn live_message(mut self, session_id: &str, text: &str) -> Self {
+        self.live.push(message(session_id, text));
+        self
+    }
+
+    fn compaction_active(mut self, active: bool) -> Self {
+        self.compaction_active = Some(active);
+        self
+    }
+
+    async fn build(self) -> Result<AcpClient, TestError> {
+        connect_test_agent(self.agent()).await
+    }
+
+    fn agent(self) -> Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
+        Agent
+            .builder()
+            .on_receive_request(
+                async move |_: InitializeRequest, responder, _cx| {
+                    let mut response = InitializeResponse::new(ProtocolVersion::V1);
+                    response.agent_info.clone_from(&self.agent_info);
+                    responder.respond(response)
+                },
+                acp::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |_: LoadSessionRequest, responder, cx| {
+                    for notification in &self.replay {
+                        cx.send_notification(notification.clone())?;
+                    }
+                    if let Some(active) = self.compaction_active {
+                        cx.send_notification(ContextCompactionParams { active })?;
+                    }
+                    responder.respond(LoadSessionResponse::new())?;
+                    for notification in &self.live {
+                        cx.send_notification(notification.clone())?;
+                    }
+                    Ok(())
+                },
+                acp::on_receive_request!(),
+            )
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum TestError {
+    #[error(transparent)]
+    Client(#[from] AcpClientError),
+    #[error(transparent)]
+    Receive(#[from] TryRecvError),
+    #[error("{0}")]
+    Unexpected(&'static str),
+}
+
+async fn connect_test_agent(agent: impl ConnectTo<Client> + 'static) -> Result<AcpClient, TestError> {
+    let (agent_transport, client_transport) = duplex_pair();
+    spawn_local(async move {
+        let _ = agent.connect_to(agent_transport).await;
+    });
+    Ok(connect_acp_client(client_transport, InitializeRequest::new(ProtocolVersion::V1)).await?)
+}
+
+fn take_loaded_session(client: &mut AcpClient) -> Result<LoadedSession, TestError> {
+    let AcpEvent::SessionLoaded(loaded) = client.event_rx.try_recv()? else {
+        return Err(TestError::Unexpected("expected loaded snapshot before live events"));
+    };
+    Ok(loaded)
+}
+
+fn message(session_id: &str, text: &str) -> SessionNotification {
+    SessionNotification::new(
+        SessionId::new(session_id.to_owned()),
+        SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(text)))),
+    )
 }

@@ -304,17 +304,18 @@ fn loaded_session_replays_typed_notifications_in_order() {
     assert!(!viewport.contains("buffered message"), "buffered updates should not render yet:\n{viewport}");
     assert!(!viewport.contains("buffered agent"), "buffered updates should not render yet:\n{viewport}");
 
-    ui.deliver_result(CommandResult::SessionLoaded(LoadedSession {
+    ui.acp_event(AcpEvent::SessionLoaded(LoadedSession {
         session_id: SessionId::new("loaded"),
         response: acp::LoadSessionResponse::new().config_options(vec![select_option("model", "sonnet")]),
         replay: vec![
-            acp::SessionNotification::new(SessionId::new("loaded"), user_message_chunk("buffered message")),
+            acp::SessionNotification::new(SessionId::new("loaded"), user_message_chunk("buffered message")).into(),
             acp::SessionNotification::new(
                 SessionId::new("loaded"),
                 acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
                     acp::TextContent::new("buffered agent"),
                 ))),
-            ),
+            )
+            .into(),
         ],
     }));
 
@@ -335,7 +336,7 @@ fn updates_from_the_abandoned_session_do_not_reach_the_loaded_one() {
     ui.deliver_result(sessions_listed(vec![session_info("loaded", "/tmp/loaded", "Loaded", "2025-01-01T00:00:00Z")]));
     ui.key(key(KeyCode::Enter));
     let _ = ui.next_agent_command().unwrap();
-    ui.deliver_result(session_loaded("loaded", Vec::new()));
+    ui.acp_event(session_loaded("loaded", Vec::new()));
 
     ui.acp_event(session_update_for("test-session", user_message_chunk("late message from the old session")));
 
@@ -360,7 +361,7 @@ fn loaded_session_uses_server_config_values() {
     app.key(key(KeyCode::Enter));
     let _ = app.next_agent_command().unwrap();
 
-    app.deliver_result(session_loaded(
+    app.acp_event(session_loaded(
         "loaded",
         vec![select_option("model", "sonnet"), mode_option("code", &["code", "plan", "ask"])],
     ));
