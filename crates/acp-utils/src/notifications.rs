@@ -2,7 +2,7 @@
 //! notifications.
 use std::path::PathBuf;
 
-use agent_client_protocol::schema::v1::{AuthMethod, Meta};
+use agent_client_protocol::schema::v2::{AuthMethod, Meta};
 use agent_client_protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 pub use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -282,7 +282,7 @@ pub struct SubAgentToolError {
 #[cfg(test)]
 mod tests {
     use agent_client_protocol::JsonRpcMessage;
-    use agent_client_protocol::schema::v1::AuthMethodAgent;
+    use agent_client_protocol::schema::v2::AuthMethodAgent;
 
     use super::*;
 
