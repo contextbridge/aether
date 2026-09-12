@@ -1,5 +1,5 @@
 use aether_core::mcp::McpHandle;
-use agent_client_protocol::schema::v1::AvailableCommand;
+use agent_client_protocol::schema::v2::AvailableCommand;
 use rmcp::model::{ContentBlock, GetPromptResult, Prompt as McpPrompt};
 use std::collections::HashSet;
 use thiserror::Error;

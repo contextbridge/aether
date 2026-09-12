@@ -5,8 +5,8 @@ use aether_auth::OAuthCredentialStorage;
 use aether_core::events::{AgentCommand, AgentEvent, Command, ToolEvent, TurnOutcome};
 use aether_sessions::model::{SessionControlEvent, SessionEvent, UserEvent, last_session_usage};
 use aether_sessions::transcript::conversation_messages_from_events;
-use agent_client_protocol::schema::v1::{self as acp, PromptResponse, SessionId, SetSessionConfigOptionResponse};
-use agent_client_protocol::{Client, ConnectionTo, Responder};
+use agent_client_protocol::schema::v2::{self as acp, PromptResponse, SessionId, SetSessionConfigOptionResponse};
+use agent_client_protocol::{Client, ConnectionTo, Error, Responder};
 use llm::catalog::LlmModel;
 use llm::parser::ModelProviderParser;
 use llm::{ChatMessage, ContentBlock, ProviderConnectionOverrides, ReasoningEffort};
@@ -379,9 +379,9 @@ async fn apply_idle_config_change(
     io: &SessionIo,
     setting: &ConfigSetting,
     available: &[LlmModel],
-) -> Result<SetSessionConfigOptionResponse, acp::Error> {
+) -> Result<SetSessionConfigOptionResponse, Error> {
     apply_config_change(actor, io, setting, available)?;
-    apply_deferred_agent_switch(actor, io).await.map_err(|_| acp::Error::internal_error())?;
+    apply_deferred_agent_switch(actor, io).await.map_err(|_| Error::internal_error())?;
     let options = actor.get_config().config_options(available, io.oauth_credential_store.as_ref());
     Ok(SetSessionConfigOptionResponse::new(options))
 }
@@ -419,7 +419,7 @@ fn apply_config_change(
     io: &SessionIo,
     setting: &ConfigSetting,
     available: &[LlmModel],
-) -> Result<SetSessionConfigOptionResponse, acp::Error> {
+) -> Result<SetSessionConfigOptionResponse, Error> {
     actor.config.apply_config_change(&actor.modes, available, setting)?;
     publish_snapshot(actor, io);
 
@@ -493,7 +493,7 @@ fn respond_prompt(responder: Responder<PromptResponse>, result: Result<acp::Stop
         }
         Err(e) => {
             error!("Prompt failed: {e}");
-            Err(acp::Error::internal_error())
+            Err(Error::internal_error())
         }
     };
     if let Err(e) = responder.respond_with_result(response) {
@@ -643,7 +643,7 @@ mod tests {
         effort: Option<RE>,
         mode: Option<&str>,
         setting: &ConfigSetting,
-    ) -> (Result<(), acp::Error>, SessionConfigState) {
+    ) -> (Result<(), Error>, SessionConfigState) {
         let mut state = SessionConfigState::with_selection(active.into(), mode.map(Into::into), effort);
         let result = state.apply_config_change(&validated_modes(), &available_models(), setting);
         (result, state)

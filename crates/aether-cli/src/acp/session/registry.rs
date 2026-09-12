@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v1::SessionId;
+use agent_client_protocol::schema::v2::SessionId;
 use std::collections::HashMap;
 use tokio::sync::{Mutex, mpsc};
 

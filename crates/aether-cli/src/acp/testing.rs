@@ -23,7 +23,7 @@ use aether_core::mcp::{ServerFactory, mcp};
 use aether_project::AgentCatalog;
 use aether_sessions::SessionStore;
 use aether_sessions::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent, last_agent_from_events};
-use agent_client_protocol::schema::v1::{SessionId, SessionUpdate};
+use agent_client_protocol::schema::v2::{SessionId, SessionUpdate, StateUpdate, StopReason};
 use agent_client_protocol::{Agent, Client, ConnectionTo};
 use futures::FutureExt;
 use llm::ProviderConnectionOverrides;
@@ -47,7 +47,9 @@ const CODER_REPLY: &str = "coder reply";
 pub struct AcpTestHarness {
     pub client_cx: ConnectionTo<Agent>,
     pub peer: TestPeer,
+    pub auth_updates: mpsc::UnboundedReceiver<acp_utils::notifications::AuthMethodsUpdatedParams>,
     resume_agent: FakeAcpAgent,
+    pub oauth_store: Arc<aether_auth::FakeOAuthCredentialStore>,
     agent_cx: ConnectionTo<Client>,
     state: Arc<AcpState>,
     session_store: Arc<SessionStore>,
@@ -78,18 +80,30 @@ impl AcpTestHarness {
         let mut resume_agents = HashMap::new();
         resume_agents.insert(resume_def.spec.name.clone(), resume_def);
         let runtime_factory = Arc::new(FakeRuntimeFactory { cwd: PathBuf::from("/tmp"), agents: resume_agents });
-        let state = Arc::new(AcpState::new(AcpStateConfig {
-            session_store: session_store.clone(),
-            workspace_manager,
-            oauth_credential_store: fake_oauth_store(),
-            initial_selection: InitialSessionSelection::default(),
-            settings_source: SettingsSourceArgs::default(),
-            provider_connections: ProviderConnectionOverrides::default(),
-            telemetry: None,
-            runtime_factory: Some(runtime_factory),
-        }));
+        let oauth_store = Arc::new(aether_auth::FakeOAuthCredentialStore::new());
+        let state = Arc::new(AcpState::with_login(
+            AcpStateConfig {
+                session_store: session_store.clone(),
+                workspace_manager,
+                oauth_credential_store: oauth_store.clone(),
+                initial_selection: InitialSessionSelection::default(),
+                settings_source: SettingsSourceArgs::default(),
+                provider_connections: ProviderConnectionOverrides::default(),
+                telemetry: None,
+                runtime_factory: Some(runtime_factory),
+            },
+            Arc::new(FakeProviderLogin),
+        ));
 
         let (peer, client_builder) = TestPeer::new();
+        let (auth_tx, auth_updates) = mpsc::unbounded_channel();
+        let client_builder = client_builder.on_receive_notification(
+            async move |notification: acp_utils::notifications::AuthMethodsUpdatedParams, _cx| {
+                let _ = auth_tx.send(notification);
+                Ok(())
+            },
+            agent_client_protocol::on_receive_notification!(),
+        );
         let (agent_transport, client_transport) = duplex_pair();
         let (agent_cx_tx, agent_cx_rx) = oneshot::channel::<ConnectionTo<Client>>();
         let (client_cx_tx, client_cx_rx) = oneshot::channel::<ConnectionTo<Agent>>();
@@ -117,7 +131,7 @@ impl AcpTestHarness {
 
         let agent_cx = agent_cx_rx.await.expect("agent side connect_with produced a ConnectionTo");
         let client_cx = client_cx_rx.await.expect("client side connect_with produced a ConnectionTo");
-        Self { client_cx, peer, resume_agent, agent_cx, state, session_store, _tmp: tmp }
+        Self { client_cx, peer, auth_updates, resume_agent, oauth_store, agent_cx, state, session_store, _tmp: tmp }
     }
 
     pub fn resume_agent(&self) -> &FakeAcpAgent {
@@ -148,6 +162,18 @@ impl AcpTestHarness {
         let events = self.session_store.load(session_id).map(|(_, events)| events).unwrap_or_default();
         let selected_mode = last_agent_from_events(Some("Planner".to_string()), &events);
         self.insert_switching_session(SessionId::new(session_id), events, selected_mode, false).await
+    }
+
+    pub async fn expect_idle(&mut self, session_id: &SessionId, expected: StopReason) {
+        loop {
+            let notification = self.peer.next_session_notification().await;
+            if notification.session_id == *session_id
+                && let SessionUpdate::StateUpdate(StateUpdate::Idle(idle)) = notification.update
+            {
+                assert_eq!(idle.stop_reason, Some(expected));
+                return;
+            }
+        }
     }
 
     pub async fn expect_mcp_server_status(&mut self, expected: &[&str]) {
@@ -203,7 +229,7 @@ impl AcpTestHarness {
             session_id: id.clone(),
             connection: self.agent_cx.clone(),
             repository: self.session_store.clone(),
-            oauth_credential_store: fake_oauth_store(),
+            oauth_credential_store: self.oauth_store.clone(),
             active_agent: AgentKey::Default,
             specs,
             runtime_factory: factory,
@@ -290,7 +316,7 @@ impl AcpTestHarness {
             session_id: acp_session_id.clone(),
             connection: self.agent_cx.clone(),
             repository: self.session_store.clone(),
-            oauth_credential_store: fake_oauth_store(),
+            oauth_credential_store: self.oauth_store.clone(),
             active_agent: AgentKey::Named(initial_agent),
             specs,
             runtime_factory: factory,
@@ -501,8 +527,16 @@ fn fake_agent(name: &str, server_name: &str, prompt_name: &str, reply: &str) -> 
     (def, observer)
 }
 
-fn fake_oauth_store() -> Arc<dyn OAuthCredentialStorage> {
-    Arc::new(aether_auth::FakeOAuthCredentialStore::new())
+struct FakeProviderLogin;
+
+#[async_trait::async_trait]
+impl super::state::ProviderLogin for FakeProviderLogin {
+    async fn login(&self, store: &dyn OAuthCredentialStorage) -> Result<(), llm::LlmError> {
+        store
+            .save("codex", serde_json::json!({"access_token": "fake-access", "refresh_token": "fake-refresh"}))
+            .await?;
+        Ok(())
+    }
 }
 
 fn switching_modes() -> Modes {

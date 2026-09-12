@@ -1,6 +1,6 @@
 use acp_utils::config_option_id::ConfigOptionId;
 use aether_cli::acp::testing::{AcpTestHarness, FakeAgentSwitchingSession};
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::schema::v2::{
     ContentBlock, PromptRequest, PromptResponse, SetSessionConfigOptionRequest, StopReason, TextContent,
 };
 use std::future::Future;
@@ -64,7 +64,8 @@ async fn mode_switch_routes_next_prompt_to_target_agent_and_refreshes_ui_state()
             harness.expect_available_commands(&["edit"], &["plan"]).await;
 
             let response = prompt.await.expect("prompt succeeds");
-            assert_eq!(response.stop_reason, StopReason::EndTurn);
+            assert_eq!(serde_json::to_value(response).unwrap(), serde_json::json!({}));
+            harness.expect_idle(fake.session_id(), StopReason::EndTurn).await;
             fake.coder().assert_saw_exactly(&["implement it"]);
             fake.planner().assert_never_ran();
         })
@@ -81,7 +82,8 @@ async fn switch_to_coder_receives_shared_prior_transcript() {
             harness.expect_available_commands(&["plan"], &["edit"]).await;
 
             let first_prompt = send_prompt(&harness, &fake, "make a plan");
-            assert_eq!(first_prompt.await.expect("first prompt succeeds").stop_reason, StopReason::EndTurn);
+            first_prompt.await.expect("first prompt accepted");
+            harness.expect_idle(fake.session_id(), StopReason::EndTurn).await;
             fake.planner().assert_saw(&["make a plan"]);
 
             select_coder(&harness, &fake).await;
@@ -90,7 +92,8 @@ async fn switch_to_coder_receives_shared_prior_transcript() {
 
             harness.expect_mcp_server_status(&["coder-mcp"]).await;
             harness.expect_available_commands(&["edit"], &["plan"]).await;
-            assert_eq!(second_prompt.await.expect("second prompt succeeds").stop_reason, StopReason::EndTurn);
+            second_prompt.await.expect("second prompt accepted");
+            harness.expect_idle(fake.session_id(), StopReason::EndTurn).await;
             fake.coder().assert_saw(&["make a plan", PLANNER_REPLY, "write code"]);
         })
         .await;
@@ -111,7 +114,8 @@ async fn switching_back_reuses_warm_runtime_and_syncs_latest_transcript() {
 
             harness.expect_mcp_server_status(&["coder-mcp"]).await;
             harness.expect_available_commands(&["edit"], &["plan"]).await;
-            assert_eq!(coder_prompt.await.expect("coder prompt succeeds").stop_reason, StopReason::EndTurn);
+            coder_prompt.await.expect("coder prompt accepted");
+            harness.expect_idle(fake.session_id(), StopReason::EndTurn).await;
             fake.coder().assert_saw_exactly(&["write code"]);
 
             select_planner(&harness, &fake).await;
@@ -120,7 +124,8 @@ async fn switching_back_reuses_warm_runtime_and_syncs_latest_transcript() {
 
             harness.expect_mcp_server_status(&["planner-mcp"]).await;
             harness.expect_available_commands(&["plan"], &["edit"]).await;
-            assert_eq!(planner_prompt.await.expect("planner prompt succeeds").stop_reason, StopReason::EndTurn);
+            planner_prompt.await.expect("planner prompt accepted");
+            harness.expect_idle(fake.session_id(), StopReason::EndTurn).await;
             fake.planner().assert_saw(&["write code", CODER_REPLY, "review code"]);
         })
         .await;
@@ -136,7 +141,8 @@ async fn mode_change_applies_at_next_prompt_boundary() {
             harness.expect_available_commands(&["plan"], &["edit"]).await;
 
             let in_flight = send_prompt(&harness, &fake, "stay planner for this turn");
-            assert_eq!(in_flight.await.expect("in-flight prompt succeeds").stop_reason, StopReason::EndTurn);
+            in_flight.await.expect("prompt accepted");
+            harness.expect_idle(fake.session_id(), StopReason::EndTurn).await;
             fake.planner().assert_saw(&["stay planner for this turn"]);
 
             select_coder(&harness, &fake).await;
@@ -145,7 +151,8 @@ async fn mode_change_applies_at_next_prompt_boundary() {
 
             harness.expect_mcp_server_status(&["coder-mcp"]).await;
             harness.expect_available_commands(&["edit"], &["plan"]).await;
-            assert_eq!(next.await.expect("next prompt succeeds").stop_reason, StopReason::EndTurn);
+            next.await.expect("next prompt accepted");
+            harness.expect_idle(fake.session_id(), StopReason::EndTurn).await;
             fake.coder().assert_saw(&["stay planner for this turn", PLANNER_REPLY, "now coder"]);
         })
         .await;
@@ -155,14 +162,15 @@ async fn mode_change_applies_at_next_prompt_boundary() {
 async fn loaded_session_restores_last_active_agent_from_control_events() {
     LocalSet::new()
         .run_until(async {
-            let harness = AcpTestHarness::start().await;
+            let mut harness = AcpTestHarness::start().await;
             harness.append_stored_session("loaded", "2026-05-01T00:00:00Z");
             harness.append_stored_prompt("loaded", "previous request");
             harness.append_agent_switch("loaded", Some("Planner"), Some("Coder"));
             let fake = harness.insert_loaded_agent_switching_session("loaded").await;
 
             let prompt = send_prompt(&harness, &fake, "continue");
-            assert_eq!(prompt.await.expect("prompt succeeds").stop_reason, StopReason::EndTurn);
+            prompt.await.expect("prompt accepted");
+            harness.expect_idle(fake.session_id(), StopReason::EndTurn).await;
             fake.coder().assert_saw(&["previous request", "continue"]);
             fake.planner().assert_never_ran();
         })

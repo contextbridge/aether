@@ -1,5 +1,6 @@
 mod acp_agent_switching;
 mod acp_cancellation;
+mod acp_control_plane;
 mod acp_prompt_search;
 mod acp_session_lifecycle;
 mod acp_stdio;

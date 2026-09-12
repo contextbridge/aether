@@ -1,5 +1,5 @@
 use acp_utils::server::AcpServerError;
-use agent_client_protocol::schema::v1::{self as acp, SessionId};
+use agent_client_protocol::schema::v2::{self as acp, SessionId};
 use agent_client_protocol::{Client, ConnectionTo};
 use llm::ContentBlock;
 use tracing::{error, info};
@@ -41,7 +41,7 @@ pub(crate) fn send_available_commands(
     available_commands: Vec<acp::AvailableCommand>,
 ) {
     if let Err(e) = connection
-        .send_notification(acp::SessionNotification::new(
+        .send_notification(acp::UpdateSessionNotification::new(
             acp_session_id,
             acp::SessionUpdate::AvailableCommandsUpdate(acp::AvailableCommandsUpdate::new(available_commands)),
         ))

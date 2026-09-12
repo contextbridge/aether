@@ -3,7 +3,7 @@ use acp_utils::notifications::{
 };
 use aether_cli::acp::testing::AcpTestHarness;
 use aether_cli::workspace::testing::{clone_repo, git, git_status, init_repo};
-use agent_client_protocol::schema::v1::ListSessionsRequest;
+use agent_client_protocol::schema::v2::ListSessionsRequest;
 use std::fs;
 use std::future::Future;
 use tokio::task::LocalSet;
