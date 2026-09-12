@@ -108,6 +108,8 @@ ast-grep-core = "0.45"
 ast-grep-language = "0.45"
 
 # Terminal UI
+# Temporary local dependency until the patch-generation API is released.
+clankerdiff-core = { path = "../diff/crates/diff-core" }
 clankerdiff-ratatui = { version = "0.1.7", features = ["crossterm-backend"] }
 clankerdiff-git = "0.1.7"
 clankerdiff-watch = "0.1.7"

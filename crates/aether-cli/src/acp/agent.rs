@@ -2,9 +2,9 @@ use super::state::AcpState;
 use acp_utils::notifications::{
     McpRequest, PromptSearchParams, SessionPreviewParams, WorkspaceListParams, WorkspaceMoveParams,
 };
-use agent_client_protocol::schema::v1::{
-    AuthenticateRequest, CancelNotification, CloseSessionRequest, InitializeRequest, ListSessionsRequest,
-    LoadSessionRequest, NewSessionRequest, PromptRequest, ResumeSessionRequest, SetSessionConfigOptionRequest,
+use agent_client_protocol::schema::v2::{
+    CancelSessionNotification, CloseSessionRequest, InitializeRequest, ListSessionsRequest, LoginAuthRequest,
+    LogoutAuthRequest, NewSessionRequest, PromptRequest, ResumeSessionRequest, SetSessionConfigOptionRequest,
 };
 use agent_client_protocol::{
     self as acp, Agent, Builder, Client, ConnectionTo, HandleDispatchFrom, JsonRpcResponse, NullRun, Responder,
@@ -15,7 +15,7 @@ use std::sync::Arc;
 #[allow(clippy::too_many_lines)]
 pub(crate) fn acp_agent_builder(state: Arc<AcpState>) -> Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
     Agent
-        .builder()
+        .v2()
         .on_receive_request(
             {
                 let state = state.clone();
@@ -29,10 +29,10 @@ pub(crate) fn acp_agent_builder(state: Arc<AcpState>) -> Builder<Agent, impl Han
         .on_receive_request(
             {
                 let state = state.clone();
-                async move |req: AuthenticateRequest, responder, cx| {
+                async move |req: LoginAuthRequest, responder, cx| {
                     let state = state.clone();
                     let cx_for_call = cx.clone();
-                    spawn_response(&cx, responder, async move { state.authenticate(req, &cx_for_call).await })
+                    spawn_response(&cx, responder, async move { state.login(req, &cx_for_call).await })
                 }
             },
             acp::on_receive_request!(),
@@ -61,10 +61,10 @@ pub(crate) fn acp_agent_builder(state: Arc<AcpState>) -> Builder<Agent, impl Han
         .on_receive_request(
             {
                 let state = state.clone();
-                async move |req: LoadSessionRequest, responder, cx| {
+                async move |req: LogoutAuthRequest, responder, cx| {
                     let state = state.clone();
                     let cx_for_call = cx.clone();
-                    spawn_response(&cx, responder, async move { state.load_session(req, &cx_for_call).await })
+                    spawn_response(&cx, responder, async move { state.logout(req, &cx_for_call).await })
                 }
             },
             acp::on_receive_request!(),
@@ -93,12 +93,9 @@ pub(crate) fn acp_agent_builder(state: Arc<AcpState>) -> Builder<Agent, impl Han
         .on_receive_request(
             {
                 let state = state.clone();
-                async move |req: PromptRequest, responder, cx| {
-                    let state = state.clone();
-                    cx.spawn(async move {
-                        state.route_prompt(req, responder).await;
-                        Ok(())
-                    })
+                async move |req: PromptRequest, responder, _cx| {
+                    state.route_prompt(req, responder).await;
+                    Ok(())
                 }
             },
             acp::on_receive_request!(),
@@ -159,7 +156,7 @@ pub(crate) fn acp_agent_builder(state: Arc<AcpState>) -> Builder<Agent, impl Han
         .on_receive_notification(
             {
                 let state = state.clone();
-                async move |notif: CancelNotification, _cx| {
+                async move |notif: CancelSessionNotification, _cx| {
                     let _ = state.cancel(notif).await;
                     Ok(())
                 }

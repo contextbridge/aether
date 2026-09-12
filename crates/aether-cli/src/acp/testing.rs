@@ -23,12 +23,12 @@ use aether_core::mcp::{ServerFactory, mcp};
 use aether_project::AgentCatalog;
 use aether_sessions::SessionStore;
 use aether_sessions::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent, last_agent_from_events};
-use agent_client_protocol::schema::v1::{SessionId, SessionUpdate};
+use agent_client_protocol::schema::v2::{SessionId, SessionUpdate, StateUpdate, StopReason};
 use agent_client_protocol::{Agent, Client, ConnectionTo};
 use futures::FutureExt;
-use llm::ProviderConnectionOverrides;
 use llm::testing::FakeLlmProvider;
 use llm::{ChatMessage, Context, LlmResponse, SessionUsageEvent, StreamingModelProvider};
+use llm::{MessageId, ProviderConnectionOverrides};
 use mcp_utils::client::{InMemoryServerSpec, McpServer, McpTransport, ToolExposure};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -47,7 +47,9 @@ const CODER_REPLY: &str = "coder reply";
 pub struct AcpTestHarness {
     pub client_cx: ConnectionTo<Agent>,
     pub peer: TestPeer,
+    pub auth_updates: mpsc::UnboundedReceiver<acp_utils::notifications::AuthMethodsUpdatedParams>,
     resume_agent: FakeAcpAgent,
+    pub oauth_store: Arc<aether_auth::FakeOAuthCredentialStore>,
     agent_cx: ConnectionTo<Client>,
     state: Arc<AcpState>,
     session_store: Arc<SessionStore>,
@@ -78,18 +80,30 @@ impl AcpTestHarness {
         let mut resume_agents = HashMap::new();
         resume_agents.insert(resume_def.spec.name.clone(), resume_def);
         let runtime_factory = Arc::new(FakeRuntimeFactory { cwd: PathBuf::from("/tmp"), agents: resume_agents });
-        let state = Arc::new(AcpState::new(AcpStateConfig {
-            session_store: session_store.clone(),
-            workspace_manager,
-            oauth_credential_store: fake_oauth_store(),
-            initial_selection: InitialSessionSelection::default(),
-            settings_source: SettingsSourceArgs::default(),
-            provider_connections: ProviderConnectionOverrides::default(),
-            telemetry: None,
-            runtime_factory: Some(runtime_factory),
-        }));
+        let oauth_store = Arc::new(aether_auth::FakeOAuthCredentialStore::new());
+        let state = Arc::new(AcpState::with_login(
+            AcpStateConfig {
+                session_store: session_store.clone(),
+                workspace_manager,
+                oauth_credential_store: oauth_store.clone(),
+                initial_selection: InitialSessionSelection::default(),
+                settings_source: SettingsSourceArgs::default(),
+                provider_connections: ProviderConnectionOverrides::default(),
+                telemetry: None,
+                runtime_factory: Some(runtime_factory),
+            },
+            Arc::new(FakeProviderLogin),
+        ));
 
         let (peer, client_builder) = TestPeer::new();
+        let (auth_tx, auth_updates) = mpsc::unbounded_channel();
+        let client_builder = client_builder.on_receive_notification(
+            async move |notification: acp_utils::notifications::AuthMethodsUpdatedParams, _cx| {
+                let _ = auth_tx.send(notification);
+                Ok(())
+            },
+            agent_client_protocol::on_receive_notification!(),
+        );
         let (agent_transport, client_transport) = duplex_pair();
         let (agent_cx_tx, agent_cx_rx) = oneshot::channel::<ConnectionTo<Client>>();
         let (client_cx_tx, client_cx_rx) = oneshot::channel::<ConnectionTo<Agent>>();
@@ -117,7 +131,7 @@ impl AcpTestHarness {
 
         let agent_cx = agent_cx_rx.await.expect("agent side connect_with produced a ConnectionTo");
         let client_cx = client_cx_rx.await.expect("client side connect_with produced a ConnectionTo");
-        Self { client_cx, peer, resume_agent, agent_cx, state, session_store, _tmp: tmp }
+        Self { client_cx, peer, auth_updates, resume_agent, oauth_store, agent_cx, state, session_store, _tmp: tmp }
     }
 
     pub fn resume_agent(&self) -> &FakeAcpAgent {
@@ -148,6 +162,18 @@ impl AcpTestHarness {
         let events = self.session_store.load(session_id).map(|(_, events)| events).unwrap_or_default();
         let selected_mode = last_agent_from_events(Some("Planner".to_string()), &events);
         self.insert_switching_session(SessionId::new(session_id), events, selected_mode, false).await
+    }
+
+    pub async fn expect_idle(&mut self, session_id: &SessionId, expected: StopReason) {
+        loop {
+            let notification = self.peer.next_session_notification().await;
+            if notification.session_id == *session_id
+                && let SessionUpdate::StateUpdate(StateUpdate::Idle(idle)) = notification.update
+            {
+                assert_eq!(idle.stop_reason, Some(expected));
+                return;
+            }
+        }
     }
 
     pub async fn expect_mcp_server_status(&mut self, expected: &[&str]) {
@@ -203,11 +229,12 @@ impl AcpTestHarness {
             session_id: id.clone(),
             connection: self.agent_cx.clone(),
             repository: self.session_store.clone(),
-            oauth_credential_store: fake_oauth_store(),
+            oauth_credential_store: self.oauth_store.clone(),
             active_agent: AgentKey::Default,
             specs,
             runtime_factory: factory,
             transcript: Vec::new(),
+            replay: false,
             modes: Modes::default(),
             config: SessionConfigState::with_selection(model.to_string(), None, None),
         })
@@ -235,12 +262,18 @@ impl AcpTestHarness {
     pub fn append_stored_prompt(&self, session_id: &str, prompt: &str) {
         self.append_stored_event(
             session_id,
-            &SessionEvent::User(UserEvent::Message { content: vec![llm::ContentBlock::text(prompt)] }),
+            &SessionEvent::User(UserEvent::Message {
+                message_id: llm::MessageId::new(),
+                content: vec![llm::ContentBlock::text(prompt)],
+            }),
         );
     }
 
     pub fn append_stored_user_blocks(&self, session_id: &str, blocks: Vec<llm::ContentBlock>) {
-        self.append_stored_event(session_id, &SessionEvent::User(UserEvent::Message { content: blocks }));
+        self.append_stored_event(
+            session_id,
+            &SessionEvent::User(UserEvent::Message { message_id: llm::MessageId::new(), content: blocks }),
+        );
     }
 
     pub fn append_stored_agent_turn(&self, session_id: &str, text: &str) {
@@ -255,7 +288,7 @@ impl AcpTestHarness {
         self.append_stored_event(
             session_id,
             &SessionEvent::Agent(AgentEvent::Message(MessageEvent::Text {
-                message_id: "msg".to_string(),
+                message_id: MessageId::new(),
                 chunk: text.to_string(),
                 is_complete: true,
             })),
@@ -290,11 +323,12 @@ impl AcpTestHarness {
             session_id: acp_session_id.clone(),
             connection: self.agent_cx.clone(),
             repository: self.session_store.clone(),
-            oauth_credential_store: fake_oauth_store(),
+            oauth_credential_store: self.oauth_store.clone(),
             active_agent: AgentKey::Named(initial_agent),
             specs,
             runtime_factory: factory,
             transcript: events,
+            replay: false,
             modes: switching_modes(),
             config: SessionConfigState::with_selection("anthropic:claude-sonnet-4-5".to_string(), selected_mode, None),
         })
@@ -377,7 +411,7 @@ struct FakeRuntimeFactory {
 
 struct FakeAgentDef {
     spec: AgentSpec,
-    provider: Mutex<Option<Arc<dyn StreamingModelProvider>>>,
+    provider: Arc<dyn StreamingModelProvider>,
     mcp: Option<(String, String)>,
 }
 
@@ -396,12 +430,7 @@ impl RuntimeFactory for FakeRuntimeFactory {
             .get(&spec.name)
             .or_else(|| self.agents.values().next())
             .ok_or_else(|| SessionError::AgentNotFound(spec.name.clone()))?;
-        let provider = def
-            .provider
-            .lock()
-            .expect("fake provider lock is healthy")
-            .take()
-            .expect("fake agent runtime spawned more than once");
+        let provider = def.provider.clone();
 
         let mut mcp_builder = mcp(&self.cwd).with_tool_filter(spec.tools.clone());
         if let Some((server_name, prompt_name)) = &def.mcp {
@@ -488,21 +517,28 @@ impl RuntimeFactory for StubRuntimeFactory {
 }
 
 fn fake_agent(name: &str, server_name: &str, prompt_name: &str, reply: &str) -> (FakeAgentDef, FakeAcpAgent) {
-    let provider =
-        FakeLlmProvider::new(vec![vec![LlmResponse::start("msg"), LlmResponse::text(reply), LlmResponse::done()]])
-            .with_display_name(name);
+    let provider = FakeLlmProvider::new(vec![vec![LlmResponse::Start, LlmResponse::text(reply), LlmResponse::done()]])
+        .with_display_name(name);
     let captured_contexts = provider.captured_contexts();
     let def = FakeAgentDef {
         spec: fake_agent_spec(name),
-        provider: Mutex::new(Some(Arc::new(provider))),
+        provider: Arc::new(provider),
         mcp: Some((server_name.to_string(), prompt_name.to_string())),
     };
     let observer = FakeAcpAgent { name: name.to_string(), captured_contexts };
     (def, observer)
 }
 
-fn fake_oauth_store() -> Arc<dyn OAuthCredentialStorage> {
-    Arc::new(aether_auth::FakeOAuthCredentialStore::new())
+struct FakeProviderLogin;
+
+#[async_trait::async_trait]
+impl super::state::ProviderLogin for FakeProviderLogin {
+    async fn login(&self, store: &dyn OAuthCredentialStorage) -> Result<(), llm::LlmError> {
+        store
+            .save("codex", serde_json::json!({"access_token": "fake-access", "refresh_token": "fake-refresh"}))
+            .await?;
+        Ok(())
+    }
 }
 
 fn switching_modes() -> Modes {

@@ -1,5 +1,5 @@
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::InitializeRequest;
+use agent_client_protocol::schema::v2::{Implementation, InitializeRequest};
 use std::error::Error;
 use std::io::{BufRead, BufReader, Error as IoError, Write};
 use std::os::fd::OwnedFd;
@@ -48,7 +48,7 @@ fn options_json_with_trace_context_serves_acp() -> TestResult {
 }
 
 #[test]
-fn pipe_backed_stdio_rejects_unknown_non_underscore_methods() -> TestResult {
+fn pipe_backed_stdio_rejects_removed_v1_methods() -> TestResult {
     let log_dir = tempfile::tempdir()?;
     let mut child = acp_command(log_dir.path()).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
     let mut stdin = child.stdin.take().ok_or_else(|| IoError::other("child stdin"))?;
@@ -111,7 +111,7 @@ fn acp_command(log_dir: &std::path::Path) -> Command {
 }
 
 fn initialize_line() -> TestResult<String> {
-    let params = serde_json::to_value(InitializeRequest::new(ProtocolVersion::V1))?;
+    let params = serde_json::to_value(InitializeRequest::new(ProtocolVersion::V2, Implementation::new("test", "1")))?;
     let line = serde_json::json!({
         "jsonrpc": "2.0",
         "method": "initialize",
@@ -123,8 +123,8 @@ fn initialize_line() -> TestResult<String> {
 
 fn non_underscore_batch_line() -> TestResult<String> {
     let batch = serde_json::json!([
-        {"jsonrpc": "2.0", "method": "unknown/one", "params": {}, "id": 2},
-        {"jsonrpc": "2.0", "method": "unknown/two", "params": {}, "id": 3}
+        {"jsonrpc": "2.0", "method": "session/load", "params": {}, "id": 2},
+        {"jsonrpc": "2.0", "method": "authenticate", "params": {}, "id": 3}
     ]);
     Ok(format!("{}\n", serde_json::to_string(&batch)?))
 }
@@ -132,6 +132,9 @@ fn non_underscore_batch_line() -> TestResult<String> {
 fn assert_initialize_response(line: &str) -> TestResult {
     let response: serde_json::Value = serde_json::from_str(line)?;
     assert_eq!(response["id"], serde_json::json!(1), "response should echo the request id: {response}");
-    assert!(response.get("result").is_some(), "initialize should return a result: {response}");
+    assert_eq!(response["result"]["protocolVersion"], 2);
+    assert_eq!(response["result"]["info"]["name"], "Aether");
+    assert!(response["result"]["capabilities"]["session"].is_object());
+    assert!(response["result"]["capabilities"].get("loadSession").is_none());
     Ok(())
 }

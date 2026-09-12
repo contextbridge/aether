@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v1 as acp;
+use agent_client_protocol::Error;
 use llm::ReasoningEffort;
 use llm::catalog::{LlmModel, validate_reasoning_effort};
 use tracing::error;
@@ -77,12 +77,12 @@ impl SessionConfigState {
         modes: &Modes,
         available: &[LlmModel],
         setting: &ConfigSetting,
-    ) -> Result<(), acp::Error> {
+    ) -> Result<(), Error> {
         match setting {
             ConfigSetting::Mode(value) => {
                 let Some((_mode_model, mode_reasoning_effort)) = modes.resolve(value) else {
                     error!("Unknown or invalid mode: {}", value);
-                    return Err(acp::Error::invalid_params());
+                    return Err(Error::invalid_params());
                 };
 
                 self.pending =
@@ -93,7 +93,7 @@ impl SessionConfigState {
             ConfigSetting::Model(value) => {
                 let Some(spec) = parse_available_spec(available, value) else {
                     error!("Unknown model in set_session_config_option: {}", value);
-                    return Err(acp::Error::invalid_params());
+                    return Err(Error::invalid_params());
                 };
                 self.pending = (self.active_model != *value).then(|| Pending::Model(value.clone()));
                 self.reasoning_effort = spec.clamp_reasoning_effort(self.reasoning_effort);
@@ -102,7 +102,7 @@ impl SessionConfigState {
                 let model_id = self.effective_model(modes);
                 if let Err(error) = validate_reasoning_effort(&model_id, *effort) {
                     error!("Invalid reasoning effort in set_session_config_option: {error}");
-                    return Err(acp::Error::invalid_params());
+                    return Err(Error::invalid_params());
                 }
                 self.reasoning_effort = *effort;
             }

@@ -5,8 +5,8 @@ use aether_auth::OAuthCredentialStorage;
 use aether_core::events::{AgentCommand, AgentEvent, Command, ToolEvent, TurnOutcome};
 use aether_sessions::model::{SessionControlEvent, SessionEvent, UserEvent, last_session_usage};
 use aether_sessions::transcript::conversation_messages_from_events;
-use agent_client_protocol::schema::v1::{self as acp, PromptResponse, SessionId, SetSessionConfigOptionResponse};
-use agent_client_protocol::{Client, ConnectionTo, Responder};
+use agent_client_protocol::schema::v2::{self as acp, PromptResponse, SessionId, SetSessionConfigOptionResponse};
+use agent_client_protocol::{Client, ConnectionTo, Error, Responder};
 use llm::catalog::LlmModel;
 use llm::parser::ModelProviderParser;
 use llm::{ChatMessage, ContentBlock, ProviderConnectionOverrides, ReasoningEffort};
@@ -27,10 +27,12 @@ use super::model::{Modes, get_all_models};
 use super::runtime::{AgentRuntime, RUNTIME_EVENT_CHANNEL_CAPACITY, RuntimeEvent, RuntimeFactory};
 use super::slash_commands::{expand_slash_command_in_content, send_available_commands};
 use crate::acp::protocol::commands::map_mcp_prompt_to_available_command;
+use crate::acp::protocol::content::map_user_message;
 use crate::acp::protocol::events::{
     AgentExtNotification, map_agent_event_to_session_notification, try_extract_plan_notification,
     try_into_agent_notification,
 };
+use crate::acp::protocol::replay::replay_to_client;
 use crate::slash_commands::dedupe_commands_by_name;
 use aether_sessions::SessionStore;
 
@@ -118,6 +120,7 @@ pub(crate) struct SessionActorInit {
     pub specs: SessionAgents,
     pub runtime_factory: Arc<dyn RuntimeFactory>,
     pub transcript: Vec<SessionEvent>,
+    pub replay: bool,
     pub modes: Modes,
     pub config: SessionConfigState,
 }
@@ -159,6 +162,9 @@ impl SessionActor {
         };
 
         actor.ensure_active_running().await?;
+        if init.replay {
+            replay_to_client(&actor.transcript, &init.connection, &init.session_id);
+        }
         let (cmd_tx, mut cmd_rx) = mpsc::channel(SESSION_COMMAND_CHANNEL_CAPACITY);
         let (snapshot_tx, snapshot_rx) = watch::channel(actor.get_config());
         let cancel = CancellationToken::new();
@@ -306,12 +312,7 @@ async fn on_session_command(
 ) {
     match cmd {
         SessionCommand::Prompt { content, responder } => {
-            let result = handle_prompt(actor, runtime_event_rx, cmd_rx, io, content).await;
-            let turn_ok = result.is_ok();
-            respond_prompt(responder, result);
-            if turn_ok {
-                let _ = apply_deferred_agent_switch(actor, io).await;
-            }
+            run_prompt_turn(actor, runtime_event_rx, cmd_rx, io, content, responder).await;
         }
         SessionCommand::Cancel => info!("Cancel received while idle, ignoring"),
         SessionCommand::SetConfig { setting, available, responder } => {
@@ -326,13 +327,51 @@ async fn on_session_command(
     }
 }
 
-async fn handle_prompt(
+async fn run_prompt_turn(
     actor: &mut SessionActor,
     runtime_event_rx: &mut mpsc::Receiver<RuntimeEvent>,
     cmd_rx: &mut mpsc::Receiver<SessionCommand>,
     io: &SessionIo,
     content: Vec<ContentBlock>,
-) -> Result<acp::StopReason, SessionError> {
+    responder: Responder<PromptResponse>,
+) {
+    let (message_id, content) = match prepare_prompt(actor, io, content).await {
+        Ok(prompt) => prompt,
+        Err(error) => {
+            error!("Prompt preparation failed: {error}");
+            let _ = responder.respond_with_error(Error::internal_error());
+            return;
+        }
+    };
+    let _ = responder.respond(PromptResponse::new());
+    let user = map_user_message(message_id.to_string().into(), &content);
+    send_session_update(io, acp::SessionUpdate::UserMessage(user));
+    send_session_update(io, acp::SessionUpdate::StateUpdate(acp::StateUpdate::Running(acp::RunningStateUpdate::new())));
+    let reason = match handle_prompt(actor, runtime_event_rx, cmd_rx, io, message_id, content).await {
+        Ok(reason) => {
+            info!("Turn completed, stop reason: {reason:?}");
+            reason
+        }
+        Err(error) => {
+            error!("Accepted prompt failed: {error}");
+            let message = acp::AgentMessage::new(llm::MessageId::new().to_string())
+                .content(vec![acp::ContentBlock::Text(acp::TextContent::new(format!("Error: {error}")))]);
+            send_session_update(io, acp::SessionUpdate::AgentMessage(message));
+            acp::StopReason::EndTurn
+        }
+    };
+    send_session_update(
+        io,
+        acp::SessionUpdate::StateUpdate(acp::StateUpdate::Idle(acp::IdleStateUpdate::new().stop_reason(reason))),
+    );
+    let _ = apply_deferred_agent_switch(actor, io).await;
+}
+
+async fn prepare_prompt(
+    actor: &mut SessionActor,
+    io: &SessionIo,
+    content: Vec<ContentBlock>,
+) -> Result<(llm::MessageId, Vec<ContentBlock>), SessionError> {
     let switch = actor.config.begin_prompt(&actor.modes);
     publish_snapshot(actor, io);
     apply_switch(actor, io, switch).await?;
@@ -340,8 +379,22 @@ async fn handle_prompt(
     actor.send_active_command(Command::agent(AgentCommand::SetReasoningEffort(actor.config.reasoning_effort))).await?;
 
     let content = expand_slash_command_in_content(actor.active_runtime()?, content).await;
-    persist_event(actor, io, SessionEvent::User(UserEvent::Message { content: content.clone() }));
-    actor.send_active_command(Command::with_content(content)).await?;
+    let message_id = llm::MessageId::new();
+    let event = SessionEvent::User(UserEvent::Message { message_id: message_id.clone(), content: content.clone() });
+    io.repository.append_event(&io.session_id.0, &event)?;
+    actor.record_event(event);
+    Ok((message_id, content))
+}
+
+async fn handle_prompt(
+    actor: &mut SessionActor,
+    runtime_event_rx: &mut mpsc::Receiver<RuntimeEvent>,
+    cmd_rx: &mut mpsc::Receiver<SessionCommand>,
+    io: &SessionIo,
+    message_id: llm::MessageId,
+    content: Vec<ContentBlock>,
+) -> Result<acp::StopReason, SessionError> {
+    actor.send_active_command(Command::with_message_id(message_id, content)).await?;
 
     loop {
         tokio::select! {
@@ -356,10 +409,9 @@ async fn handle_prompt(
                     break Err(SessionError::CommandChannel("agent channel closed".to_string()));
                 };
                 if let Some(message) = on_runtime_event(actor, io, event).await
-                    && let Some(reason) = turn_stop_reason(&message)
+                    && let Some(outcome) = message.turn_outcome()
                 {
-                    info!("Turn completed, stop reason: {:?}", reason);
-                    break Ok(reason);
+                    break turn_result(outcome);
                 }
             }
             Some(cmd) = cmd_rx.recv() => {
@@ -379,18 +431,19 @@ async fn apply_idle_config_change(
     io: &SessionIo,
     setting: &ConfigSetting,
     available: &[LlmModel],
-) -> Result<SetSessionConfigOptionResponse, acp::Error> {
+) -> Result<SetSessionConfigOptionResponse, Error> {
     apply_config_change(actor, io, setting, available)?;
-    apply_deferred_agent_switch(actor, io).await.map_err(|_| acp::Error::internal_error())?;
+    apply_deferred_agent_switch(actor, io).await.map_err(|_| Error::internal_error())?;
     let options = actor.get_config().config_options(available, io.oauth_credential_store.as_ref());
     Ok(SetSessionConfigOptionResponse::new(options))
 }
 
-fn turn_stop_reason(message: &AgentEvent) -> Option<acp::StopReason> {
-    message.turn_outcome().map(|outcome| match outcome {
-        TurnOutcome::Cancelled => acp::StopReason::Cancelled,
-        TurnOutcome::Completed | TurnOutcome::Failed { .. } => acp::StopReason::EndTurn,
-    })
+fn turn_result(outcome: &TurnOutcome) -> Result<acp::StopReason, SessionError> {
+    match outcome {
+        TurnOutcome::Completed => Ok(acp::StopReason::EndTurn),
+        TurnOutcome::Cancelled => Ok(acp::StopReason::Cancelled),
+        TurnOutcome::Failed { error } => Err(SessionError::TurnFailed(error.clone())),
+    }
 }
 
 async fn handle_in_flight_command(actor: &mut SessionActor, io: &SessionIo, cmd: SessionCommand) {
@@ -409,7 +462,7 @@ async fn handle_in_flight_command(actor: &mut SessionActor, io: &SessionIo, cmd:
             let _ = responder.respond_with_result(result);
         }
         SessionCommand::Prompt { responder, .. } => {
-            respond_prompt(responder, Err(SessionError::CommandChannel("prompt already in progress".to_string())));
+            let _ = responder.respond_with_error(Error::invalid_request());
         }
     }
 }
@@ -419,7 +472,7 @@ fn apply_config_change(
     io: &SessionIo,
     setting: &ConfigSetting,
     available: &[LlmModel],
-) -> Result<SetSessionConfigOptionResponse, acp::Error> {
+) -> Result<SetSessionConfigOptionResponse, Error> {
     actor.config.apply_config_change(&actor.modes, available, setting)?;
     publish_snapshot(actor, io);
 
@@ -485,19 +538,11 @@ async fn on_runtime_event(actor: &mut SessionActor, io: &SessionIo, event: Runti
     }
 }
 
-fn respond_prompt(responder: Responder<PromptResponse>, result: Result<acp::StopReason, SessionError>) {
-    let response = match result {
-        Ok(stop_reason) => {
-            info!("Prompt completed with stop reason: {:?}", stop_reason);
-            Ok(PromptResponse::new(stop_reason))
-        }
-        Err(e) => {
-            error!("Prompt failed: {e}");
-            Err(acp::Error::internal_error())
-        }
-    };
-    if let Err(e) = responder.respond_with_result(response) {
-        warn!("failed to send prompt response: {e:?}");
+fn send_session_update(io: &SessionIo, update: acp::SessionUpdate) {
+    if let Err(error) =
+        io.connection.send_notification(acp::UpdateSessionNotification::new(io.session_id.clone(), update))
+    {
+        warn!("Failed to send session update: {error}");
     }
 }
 
@@ -643,7 +688,7 @@ mod tests {
         effort: Option<RE>,
         mode: Option<&str>,
         setting: &ConfigSetting,
-    ) -> (Result<(), acp::Error>, SessionConfigState) {
+    ) -> (Result<(), Error>, SessionConfigState) {
         let mut state = SessionConfigState::with_selection(active.into(), mode.map(Into::into), effort);
         let result = state.apply_config_change(&validated_modes(), &available_models(), setting);
         (result, state)
