@@ -14,7 +14,7 @@ async fn disconnect_drops_connection_before_the_ui_releases_a_pending_approval()
         .run_until(async {
             let (agent_transport, client_transport) = duplex_pair();
             let agent = Agent
-                .builder()
+                .v2()
                 .on_receive_request(
                     async |_: InitializeRequest, responder, _cx| {
                         responder.respond(InitializeResponse::new(

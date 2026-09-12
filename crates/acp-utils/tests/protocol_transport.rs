@@ -21,7 +21,7 @@ async fn duplex_initialization_uses_v2_info() {
             let (agent_transport, client_transport) = duplex_pair();
             let server = spawn_local(
                 Agent
-                    .builder()
+                    .v2()
                     .on_receive_request(
                         async |request: InitializeRequest, responder, _cx| {
                             assert_eq!(request.protocol_version, ProtocolVersion::V2);
@@ -33,7 +33,7 @@ async fn duplex_initialization_uses_v2_info() {
                     .connect_to(agent_transport),
             );
             Client
-                .builder()
+                .v2()
                 .connect_with(client_transport, async |cx| {
                     let response = cx.send_request(initialize_request()).block_task().await?;
                     assert_eq!(response.protocol_version, ProtocolVersion::V2);

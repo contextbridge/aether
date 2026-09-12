@@ -47,7 +47,7 @@ impl TestPeer {
             Arc::new(Mutex::new(None));
 
         let builder = Client
-            .builder()
+            .v2()
             .on_receive_notification(
                 {
                     let tx = sn_tx;
@@ -176,7 +176,7 @@ pub async fn test_connection() -> (ConnectionTo<Client>, TestPeer) {
     let (cx_tx, cx_rx) = oneshot::channel::<ConnectionTo<Client>>();
     spawn_local(async move {
         let _ = Agent
-            .builder()
+            .v2()
             .connect_with(agent_transport, async move |cx: ConnectionTo<Client>| {
                 let _ = cx_tx.send(cx);
                 std::future::pending::<()>().await;

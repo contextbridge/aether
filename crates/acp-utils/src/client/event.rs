@@ -5,7 +5,7 @@ use agent_client_protocol::schema::v2::{
     CreateElicitationRequest, CreateElicitationResponse, SessionId, UpdateSessionNotification,
 };
 
-use crate::client::LoadedSession;
+use crate::client::ResumedSession;
 use crate::notifications::{
     AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, McpNotification, SessionUsageParams,
     SubAgentProgressParams,
@@ -43,7 +43,7 @@ impl From<ReplayableEvent> for AcpEvent {
 
 /// Events forwarded from the ACP connection to the main event loop.
 pub enum AcpEvent {
-    SessionLoaded(LoadedSession),
+    SessionResumed(ResumedSession),
     SessionUpdate { session_id: SessionId, update: Box<SessionUpdate> },
     ContextCleared(ContextClearedParams),
     ContextCompaction(ContextCompactionParams),

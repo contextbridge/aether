@@ -1,20 +1,24 @@
-use acp_utils::client::{AcpClient, AcpClientError, AcpEvent, LoadedSession, ReplayableEvent, connect_acp_client};
+use acp::schema::v2::{AgentCapabilities, LoginAuthRequest, LoginAuthResponse};
+use acp_utils::client::{AcpClient, AcpClientError, AcpEvent, ReplayableEvent, ResumedSession, connect_acp_client};
 use acp_utils::notifications::{
     ContextCompactionParams, PromptSearchParams, PromptSearchResponse, SessionPreviewParams, SessionPreviewResponse,
 };
-use acp_utils::testing::duplex_pair;
+use acp_utils::testing::{duplex_pair, idle_notification, initialize_request, initialize_response};
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
-    CancelNotification, CloseSessionRequest, CloseSessionResponse, ContentBlock, ContentChunk, Implementation,
-    InitializeRequest, InitializeResponse, ListSessionsRequest, ListSessionsResponse, LoadSessionRequest,
-    LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse, ResumeSessionRequest,
-    ResumeSessionResponse, SessionId, SessionInfo, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
-    StopReason, TextContent,
+use agent_client_protocol::schema::v2::{
+    CancelSessionNotification, CloseSessionRequest, CloseSessionResponse, ContentBlock, ContentChunk, Implementation,
+    InitializeRequest, InitializeResponse, ListSessionsRequest, ListSessionsResponse, NewSessionRequest,
+    NewSessionResponse, PromptRequest, PromptResponse, ReplayFrom, ReplayFromStart, ResumeSessionRequest,
+    ResumeSessionResponse, SessionId, SessionInfo, SessionUpdate, SetSessionConfigOptionRequest, StopReason,
+    TextContent, UpdateSessionNotification,
 };
 use agent_client_protocol::{self as acp, Agent, Builder, Client, ConnectTo, HandleDispatchFrom, NullRun};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{Notify, mpsc::error::TryRecvError};
+use tokio::sync::{
+    Notify,
+    mpsc::{error::TryRecvError, unbounded_channel},
+};
 use tokio::task::{LocalSet, spawn_local};
 
 #[tokio::test(flavor = "current_thread")]
@@ -23,15 +27,17 @@ async fn cancel_reaches_the_agent_while_a_config_response_is_outstanding() {
         .run_until(async {
             let (agent_transport, client_transport) = duplex_pair();
             let cancelled = Arc::new(Notify::new());
+            let (prompt_tx, mut prompt_rx) = unbounded_channel();
+            let (config_tx, mut config_rx) = unbounded_channel();
 
             let agent_builder = Agent
-                .builder()
+                .v2()
                 .on_receive_request(
                     async |_req: InitializeRequest, responder, _cx| {
-                        responder.respond(
-                            InitializeResponse::new(ProtocolVersion::V1)
-                                .agent_info(Implementation::new("Fake Agent", "0.0.0")),
-                        )
+                        responder.respond(InitializeResponse::new(
+                            ProtocolVersion::V2,
+                            Implementation::new("Fake Agent", "0.0.0"),
+                        ))
                     },
                     acp::on_receive_request!(),
                 )
@@ -42,15 +48,15 @@ async fn cancel_reaches_the_agent_while_a_config_response_is_outstanding() {
                     acp::on_receive_request!(),
                 )
                 .on_receive_request(
-                    async |_req: PromptRequest, responder, _cx| {
-                        std::mem::forget(responder);
+                    async move |_req: PromptRequest, responder, _cx| {
+                        prompt_tx.send(responder).unwrap();
                         Ok(())
                     },
                     acp::on_receive_request!(),
                 )
                 .on_receive_request(
-                    async |_req: SetSessionConfigOptionRequest, responder, _cx| {
-                        std::mem::forget(responder);
+                    async move |_req: SetSessionConfigOptionRequest, responder, _cx| {
+                        config_tx.send(responder).unwrap();
                         Ok(())
                     },
                     acp::on_receive_request!(),
@@ -58,7 +64,7 @@ async fn cancel_reaches_the_agent_while_a_config_response_is_outstanding() {
                 .on_receive_notification(
                     {
                         let cancelled = Arc::clone(&cancelled);
-                        async move |_n: CancelNotification, _cx| {
+                        async move |_n: CancelSessionNotification, _cx| {
                             cancelled.notify_one();
                             Ok(())
                         }
@@ -69,7 +75,7 @@ async fn cancel_reaches_the_agent_while_a_config_response_is_outstanding() {
                 let _ = agent_builder.connect_to(agent_transport).await;
             });
 
-            let client = connect_acp_client(client_transport, InitializeRequest::new(ProtocolVersion::V1))
+            let client = connect_acp_client(client_transport, acp_utils::testing::initialize_request())
                 .await
                 .expect("initialization succeeds");
 
@@ -87,6 +93,7 @@ async fn cancel_reaches_the_agent_while_a_config_response_is_outstanding() {
                     .prompt(PromptRequest::new(prompt_session_id, vec![ContentBlock::Text(TextContent::new("hi"))]))
                     .await;
             });
+            let prompt_responder = prompt_rx.recv().await.unwrap();
             let config_handle = client.handle.clone();
             let config_session_id = session_id.clone();
             spawn_local(async move {
@@ -94,9 +101,12 @@ async fn cancel_reaches_the_agent_while_a_config_response_is_outstanding() {
                     .set_config_option(SetSessionConfigOptionRequest::new(config_session_id, "mode", "Plan"))
                     .await;
             });
-            client.handle.cancel(CancelNotification::new(session_id)).await.expect("cancel queues");
+            let config_responder = config_rx.recv().await.unwrap();
+            client.handle.cancel(CancelSessionNotification::new(session_id)).await.expect("cancel queues");
 
             cancelled.notified().await;
+            drop((prompt_responder, config_responder));
+            client.handle.disconnect().await;
         })
         .await;
 }
@@ -107,22 +117,25 @@ async fn prompt_completion_follows_session_updates_on_the_event_stream() {
         .run_until(async {
             let (agent_transport, client_transport) = duplex_pair();
             let agent_builder = Agent
-                .builder()
+                .v2()
                 .on_receive_request(
-                    async |_request: InitializeRequest, responder, _cx| {
-                        responder.respond(InitializeResponse::new(ProtocolVersion::V1))
-                    },
+                    async |_request: InitializeRequest, responder, _cx| responder.respond(initialize_response()),
                     acp::on_receive_request!(),
                 )
                 .on_receive_request(
                     async |request: PromptRequest, responder, cx| {
-                        cx.send_notification(SessionNotification::new(
-                            request.session_id,
-                            SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(
-                                "final answer",
-                            )))),
+                        cx.send_notification(UpdateSessionNotification::new(
+                            request.session_id.clone(),
+                            SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                                ContentBlock::Text(TextContent::new("final answer")),
+                                "answer",
+                            )),
                         ))?;
-                        responder.respond(PromptResponse::new(StopReason::EndTurn))
+                        cx.send_notification(acp_utils::testing::idle_notification(
+                            request.session_id,
+                            Some(StopReason::EndTurn),
+                        ))?;
+                        responder.respond(PromptResponse::new())
                     },
                     acp::on_receive_request!(),
                 );
@@ -130,9 +143,8 @@ async fn prompt_completion_follows_session_updates_on_the_event_stream() {
                 let _ = agent_builder.connect_to(agent_transport).await;
             });
 
-            let mut client = connect_acp_client(client_transport, InitializeRequest::new(ProtocolVersion::V1))
-                .await
-                .expect("initialization succeeds");
+            let mut client =
+                connect_acp_client(client_transport, initialize_request()).await.expect("initialization succeeds");
             client
                 .handle
                 .prompt(PromptRequest::new("session", vec![ContentBlock::Text(TextContent::new("hello"))]))
@@ -140,13 +152,17 @@ async fn prompt_completion_follows_session_updates_on_the_event_stream() {
                 .expect("prompt succeeds");
 
             assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::SessionUpdate { .. })));
-            assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::PromptCompleted(StopReason::EndTurn))));
+            assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::SessionUpdate { .. })));
+            assert!(matches!(
+                client.event_rx.recv().await,
+                Some(AcpEvent::PromptCompleted { stop_reason: StopReason::EndTurn, .. })
+            ));
         })
         .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn loaded_snapshot_is_delivered_on_the_event_channel() -> Result<(), TestError> {
+async fn resumed_snapshot_is_delivered_on_the_event_channel() -> Result<(), TestError> {
     LocalSet::new()
         .run_until(async {
             let mut client = TestClientBuilder::default()
@@ -156,17 +172,29 @@ async fn loaded_snapshot_is_delivered_on_the_event_channel() -> Result<(), TestE
                 .build()
                 .await?;
 
-            client.handle.load_session(LoadSessionRequest::new("saved", "/remote")).await?;
+            client
+                .handle
+                .resume_session(
+                    ResumeSessionRequest::new("saved", "/remote")
+                        .replay_from(ReplayFrom::Start(ReplayFromStart::new())),
+                )
+                .await?;
+            assert!(client.event_rx.try_recv().is_err(), "plain resume must request no history");
+            client.handle.resume_session_with_replay(ResumeSessionRequest::new("saved", "/remote")).await?;
 
-            let loaded = take_loaded_session(&mut client)?;
+            let loaded = take_resumed_session(&mut client)?;
             assert_eq!(loaded.session_id, SessionId::new("saved"));
-            let [ReplayableEvent::SessionUpdate(notification), ReplayableEvent::ContextCompaction(compaction)] =
-                loaded.replay.as_slice()
+            let [
+                ReplayableEvent::SessionUpdate(notification),
+                ReplayableEvent::ContextCompaction(compaction),
+                ReplayableEvent::SessionUpdate(idle),
+            ] = loaded.replay.as_slice()
             else {
                 return Err(TestError::Unexpected("expected message followed by compaction in replay"));
             };
             assert_eq!(notification.as_ref(), &message("saved", "snapshot"));
             assert!(compaction.active);
+            assert_eq!(idle.as_ref(), &acp_utils::testing::idle_notification("saved", None));
             let Some(AcpEvent::SessionUpdate { session_id, update }) = client.event_rx.recv().await else {
                 return Err(TestError::Unexpected("expected live update after snapshot"));
             };
@@ -196,12 +224,6 @@ async fn initialized_client_manages_typed_sessions_and_collects_replay() -> Resu
                 .on_receive_request(
                     async |_request: ListSessionsRequest, responder, _cx| {
                         responder.respond(ListSessionsResponse::new(vec![SessionInfo::new("listed", "/tmp/project")]))
-                    },
-                    acp::on_receive_request!(),
-                )
-                .on_receive_request(
-                    async |_request: ResumeSessionRequest, responder, _cx| {
-                        responder.respond(ResumeSessionResponse::new())
                     },
                     acp::on_receive_request!(),
                 )
@@ -238,7 +260,7 @@ async fn initialized_client_manages_typed_sessions_and_collects_replay() -> Resu
                 );
             let mut client = connect_test_agent(agent_builder).await?;
             assert_eq!(client.agent_name(), "Typed Fake");
-            assert!(client.initialize_response.agent_info.is_some());
+            assert_eq!(client.initialize_response.info.name, "Typed Fake");
 
             let created =
                 client.handle.new_session(NewSessionRequest::new("/tmp/project")).await?;
@@ -248,13 +270,13 @@ async fn initialized_client_manages_typed_sessions_and_collects_replay() -> Resu
             assert_eq!(listed.sessions.len(), 1);
             assert_eq!(listed.sessions[0].session_id, SessionId::new("listed"));
 
-            client.handle.load_session(LoadSessionRequest::new("listed", "/tmp/project")).await?;
+            client.handle.resume_session_with_replay(ResumeSessionRequest::new("listed", "/tmp/project")).await?;
             let event = client.event_rx.try_recv()?;
             assert!(
                 matches!(event, AcpEvent::SessionUpdate { session_id, .. } if session_id == SessionId::new("other"))
             );
-            let loaded = take_loaded_session(&mut client)?;
-            assert_eq!(loaded.replay.len(), 1);
+            let loaded = take_resumed_session(&mut client)?;
+            assert_eq!(loaded.replay.len(), 2);
             assert!(matches!(&loaded.replay[0], ReplayableEvent::SessionUpdate(notification) if notification.session_id == SessionId::new("listed")));
 
             client
@@ -277,17 +299,78 @@ async fn initialized_client_manages_typed_sessions_and_collects_replay() -> Resu
         .await
 }
 
+#[tokio::test]
+async fn initialization_without_capabilities_exposes_none() -> Result<(), TestError> {
+    LocalSet::new()
+        .run_until(async {
+            let client = TestClientBuilder::default().build().await?;
+            assert!(client.prompt_capabilities().is_none());
+            assert!(client.session_capabilities().is_none());
+            client.handle.disconnect().await;
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test]
+async fn v2_initialization_accessors_expose_agent_metadata() -> Result<(), TestError> {
+    use acp::schema::v2::{PromptCapabilities, SessionCapabilities};
+    LocalSet::new()
+        .run_until(async {
+            let client = TestClientBuilder::default()
+                .agent_info(Implementation::new("agent", "1").title("Display Name"))
+                .capabilities(
+                    AgentCapabilities::new().session(SessionCapabilities::new().prompt(PromptCapabilities::new())),
+                )
+                .build()
+                .await?;
+            assert_eq!(client.initialize_response.protocol_version, ProtocolVersion::V2);
+            assert_eq!(client.agent_name(), "Display Name");
+            assert!(client.prompt_capabilities().is_some());
+            assert!(client.session_capabilities().is_some());
+            assert!(client.auth_methods().is_empty());
+            client.handle.disconnect().await;
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test]
+async fn login_accepts_supported_methods_and_rejects_unknown_methods() -> Result<(), TestError> {
+    LocalSet::new()
+        .run_until(async {
+            let client = TestClientBuilder::default().login_method("login").build().await?;
+            assert!(client.handle.login(LoginAuthRequest::new("unknown")).await.is_err());
+            client.handle.login(LoginAuthRequest::new("login")).await?;
+            client.handle.disconnect().await;
+            Ok(())
+        })
+        .await
+}
+
 #[derive(Default)]
 struct TestClientBuilder {
     agent_info: Option<Implementation>,
-    replay: Vec<SessionNotification>,
-    live: Vec<SessionNotification>,
+    replay: Vec<UpdateSessionNotification>,
+    live: Vec<UpdateSessionNotification>,
     compaction_active: Option<bool>,
+    capabilities: Option<AgentCapabilities>,
+    login_method: Option<&'static str>,
 }
 
 impl TestClientBuilder {
     fn agent_info(mut self, info: Implementation) -> Self {
         self.agent_info = Some(info);
+        self
+    }
+
+    fn capabilities(mut self, capabilities: AgentCapabilities) -> Self {
+        self.capabilities = Some(capabilities);
+        self
+    }
+
+    fn login_method(mut self, method: &'static str) -> Self {
+        self.login_method = Some(method);
         self
     }
 
@@ -312,24 +395,43 @@ impl TestClientBuilder {
 
     fn agent(self) -> Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
         Agent
-            .builder()
+            .v2()
             .on_receive_request(
                 async move |_: InitializeRequest, responder, _cx| {
-                    let mut response = InitializeResponse::new(ProtocolVersion::V1);
-                    response.agent_info.clone_from(&self.agent_info);
+                    let mut response = initialize_response();
+                    if let Some(info) = &self.agent_info {
+                        response.info = info.clone();
+                    }
+                    if let Some(capabilities) = &self.capabilities {
+                        response = response.capabilities(capabilities.clone());
+                    }
                     responder.respond(response)
                 },
                 acp::on_receive_request!(),
             )
             .on_receive_request(
-                async move |_: LoadSessionRequest, responder, cx| {
+                async move |request: LoginAuthRequest, responder, _cx| {
+                    if self.login_method == Some(request.method_id.0.as_ref()) {
+                        responder.respond(LoginAuthResponse::new())
+                    } else {
+                        responder.respond_with_error(acp::Error::invalid_params())
+                    }
+                },
+                acp::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |request: ResumeSessionRequest, responder, cx| {
+                    if request.replay_from.is_none() {
+                        return responder.respond(ResumeSessionResponse::new());
+                    }
                     for notification in &self.replay {
                         cx.send_notification(notification.clone())?;
                     }
                     if let Some(active) = self.compaction_active {
                         cx.send_notification(ContextCompactionParams { active })?;
                     }
-                    responder.respond(LoadSessionResponse::new())?;
+                    cx.send_notification(idle_notification(request.session_id, None))?;
+                    responder.respond(ResumeSessionResponse::new())?;
                     for notification in &self.live {
                         cx.send_notification(notification.clone())?;
                     }
@@ -355,19 +457,19 @@ async fn connect_test_agent(agent: impl ConnectTo<Client> + 'static) -> Result<A
     spawn_local(async move {
         let _ = agent.connect_to(agent_transport).await;
     });
-    Ok(connect_acp_client(client_transport, InitializeRequest::new(ProtocolVersion::V1)).await?)
+    Ok(connect_acp_client(client_transport, acp_utils::testing::initialize_request()).await?)
 }
 
-fn take_loaded_session(client: &mut AcpClient) -> Result<LoadedSession, TestError> {
-    let AcpEvent::SessionLoaded(loaded) = client.event_rx.try_recv()? else {
+fn take_resumed_session(client: &mut AcpClient) -> Result<ResumedSession, TestError> {
+    let AcpEvent::SessionResumed(loaded) = client.event_rx.try_recv()? else {
         return Err(TestError::Unexpected("expected loaded snapshot before live events"));
     };
     Ok(loaded)
 }
 
-fn message(session_id: &str, text: &str) -> SessionNotification {
-    SessionNotification::new(
+fn message(session_id: &str, text: &str) -> UpdateSessionNotification {
+    UpdateSessionNotification::new(
         SessionId::new(session_id.to_owned()),
-        SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(text)))),
+        SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(text)), "message")),
     )
 }

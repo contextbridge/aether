@@ -68,7 +68,7 @@ async fn agent_exited_message_includes_stderr_and_status() {
         .run_until(async {
             let script = "exec 1>&-; sleep 0.05; printf '%s\\n' 'No such file' >&2; exit 2";
             let agent = TokioAcpAgent::from_command("/bin/sh", vec!["-c".into(), script.into()]);
-            let client = Client.builder().with_spawned(async |cx| {
+            let client = Client.v2().with_spawned(async |cx| {
                 cx.send_request(InitializeRequest::new(
                     ProtocolVersion::V2,
                     Implementation::new("test-client", "0.0.0"),
