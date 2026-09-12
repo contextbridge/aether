@@ -108,7 +108,7 @@ mod tests {
         let path = temp.path().join("s.jsonl");
         let mut file = File::create(&path).unwrap();
         writeln!(file, r#"{{"sessionId":"s","cwd":"/tmp","model":"m","createdAt":"now"}}"#).unwrap();
-        writeln!(file, r#"{{"kind":"user","data":{{"type":"message","content":[{{"type":"text","text":"hi"}}]}}}}"#)
+        writeln!(file, r#"{{"kind":"user","data":{{"type":"message","message_id":"user","content":[{{"type":"text","text":"hi"}}]}}}}"#)
             .unwrap();
         writeln!(file, "not json").unwrap();
         writeln!(

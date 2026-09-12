@@ -205,7 +205,7 @@ struct SessionLogScan {
 fn read_session_summary(path: &Path) -> Result<SessionSummary, SessionStoreError> {
     let scan = read_bounded_session(path, ScanLimits::SUMMARY)?;
     let title = scan.events.iter().find_map(|event| match event {
-        SessionEvent::User(UserEvent::Message { content }) => Some(extract_title(content)),
+        SessionEvent::User(UserEvent::Message { content, .. }) => Some(extract_title(content)),
         _ => None,
     });
     Ok(SessionSummary { meta: scan.meta, title })
@@ -220,7 +220,7 @@ fn read_session_preview(path: &Path, limits: ScanLimits) -> Result<SessionPrevie
 
     for event in scan.events {
         match event {
-            SessionEvent::User(UserEvent::Message { content }) => {
+            SessionEvent::User(UserEvent::Message { content, .. }) => {
                 let text = ContentBlock::join_text(&content);
                 let text = if text.is_empty() { "[media prompt]".to_string() } else { text };
                 if !push_preview_turn(&mut transcript, SessionPreviewRole::User, &text) {

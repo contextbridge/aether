@@ -6,6 +6,29 @@ use aether_sessions::testing::{
 use aether_sessions::{SessionEvent, context_from_events, conversation_messages_from_events};
 
 #[test]
+fn reconstruction_preserves_stored_message_identity() {
+    let context = context_from_events(&[assistant_text("stored-id", "Response"), turn_ended(TurnOutcome::Completed)]);
+    let value = serde_json::to_value(&context.messages()[0]).unwrap();
+    assert_eq!(value["message_id"], "stored-id");
+}
+
+#[test]
+fn reconstruction_preserves_messages_within_one_turn() {
+    let context = context_from_events(&[
+        assistant_text("first", "First response"),
+        assistant_text("second", "Second response"),
+        turn_ended(TurnOutcome::Completed),
+    ]);
+    assert_eq!(context.message_count(), 2);
+    assert!(
+        matches!(&context.messages()[0], llm::ChatMessage::Assistant { content, .. } if content == "First response")
+    );
+    assert!(
+        matches!(&context.messages()[1], llm::ChatMessage::Assistant { content, .. } if content == "Second response")
+    );
+}
+
+#[test]
 fn reconstructs_conversation_and_ignores_control_events() {
     let messages = conversation_messages_from_events(&[
         user_message("Hello"),
@@ -17,6 +40,28 @@ fn reconstructs_conversation_and_ignores_control_events() {
     assert_eq!(messages.len(), 2);
     assert!(matches!(messages[0], llm::ChatMessage::User { .. }));
     assert!(matches!(messages[1], llm::ChatMessage::Assistant { .. }));
+}
+
+#[test]
+fn task_completion_during_iteration_preserves_pending_tools() {
+    let task = aether_core::events::ToolEvent::TaskCancelled {
+        request: llm::ToolCallRequest {
+            id: "background-call".into(),
+            name: "background".into(),
+            arguments: "{}".into(),
+        },
+        task_id: "task".into(),
+    };
+    let context = context_from_events(&[
+        tool_result("call", "read", "contents"),
+        SessionEvent::Agent(AgentEvent::Tool(task.clone())),
+        assistant_text("assistant", "done"),
+        turn_ended(TurnOutcome::Completed),
+    ]);
+    assert_eq!(context.message_count(), 3);
+    assert_eq!(context.messages()[0].message_id().as_str(), "assistant");
+    assert!(context.messages()[1].is_tool_result());
+    assert_eq!(context.messages()[2].message_id(), task.task_context_message().unwrap().message_id());
 }
 
 #[test]
@@ -41,12 +86,13 @@ fn reconstructs_tools_failures_and_context_boundaries() {
     let events = [
         user_message("Read missing.txt"),
         tool_error("call-1", "read_file", "file not found"),
+        assistant_text("tool-response", ""),
         turn_ended(TurnOutcome::Completed),
         SessionEvent::Agent(AgentEvent::Context(ContextEvent::Cleared)),
         user_message("Start fresh"),
     ];
     let context = context_from_events(&events);
-    let before_clear = context_from_events(&events[..3]);
+    let before_clear = context_from_events(&events[..4]);
 
     assert_eq!(before_clear.message_count(), 3);
     assert!(

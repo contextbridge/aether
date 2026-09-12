@@ -7,7 +7,7 @@ use std::fs;
 use std::path::Path;
 
 use aether_core::events::{AgentEvent, ContextEvent, MessageEvent, StreamState, ToolEvent, TurnEvent, TurnOutcome};
-use llm::{ContentBlock, ToolCallError, ToolCallRequest, ToolCallResult};
+use llm::{ContentBlock, MessageId, ToolCallError, ToolCallRequest, ToolCallResult};
 use tempfile::TempDir;
 
 use crate::model::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent};
@@ -34,7 +34,7 @@ pub fn user_message(text: &str) -> SessionEvent {
 
 /// A user message event carrying arbitrary content blocks (text, images, ...).
 pub fn user_message_with(content: Vec<ContentBlock>) -> SessionEvent {
-    SessionEvent::User(UserEvent::Message { content })
+    SessionEvent::User(UserEvent::Message { message_id: MessageId::new(), content })
 }
 
 /// The complete assistant text for `message_id`.
@@ -89,6 +89,7 @@ pub fn agent_switched(from: Option<&str>, to: Option<&str>) -> SessionEvent {
 /// A compaction result replacing `messages_removed` prior messages with `summary`.
 pub fn compaction_result(summary: &str, messages_removed: usize) -> SessionEvent {
     SessionEvent::Agent(AgentEvent::Context(ContextEvent::CompactionResult {
+        message_id: MessageId::new(),
         summary: summary.into(),
         messages_removed,
     }))
