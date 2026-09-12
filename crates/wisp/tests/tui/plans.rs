@@ -190,7 +190,7 @@ fn plan_cleared_on_session_loaded() {
     ui.acp_event(plan_update(vec![plan_entry("Task", acp::PlanEntryStatus::Pending)]));
     assert!(ui.app().has_plan());
 
-    ui.deliver_result(session_loaded("other-session", Vec::new()));
+    ui.acp_event(session_loaded("other-session", Vec::new()));
     assert!(!ui.app().has_plan());
 
     ui.draw();

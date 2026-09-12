@@ -562,7 +562,7 @@ mod progress_indicator_tests {
         let mut ui = TestUi::new();
         ui.submit("hello");
         ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
-        ui.deliver_result(session_loaded("loaded-session", Vec::new()));
+        ui.acp_event(session_loaded("loaded-session", Vec::new()));
 
         ui.draw();
         let viewport = ui.viewport_text();

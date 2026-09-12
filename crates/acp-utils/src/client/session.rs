@@ -1,5 +1,5 @@
 use super::error::AcpClientError;
-use super::event::AcpEvent;
+use super::event::{AcpEvent, ReplayableEvent};
 use crate::notifications::{
     AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, McpNotification, McpRequest,
     PromptSearchParams, PromptSearchResponse, SessionPreviewParams, SessionPreviewResponse, SessionUsageParams,
@@ -38,7 +38,7 @@ pub struct AcpClient {
 pub struct LoadedSession {
     pub session_id: SessionId,
     pub response: LoadSessionResponse,
-    pub replay: Vec<SessionNotification>,
+    pub replay: Vec<ReplayableEvent>,
 }
 
 /// Connect to an ACP agent and complete initialization without creating a session.
@@ -105,8 +105,8 @@ impl AcpClientHandle {
         await_response(receiver).await
     }
 
-    /// Load a session and collect its replay notifications in wire order.
-    pub async fn load_session(&self, request: LoadSessionRequest) -> Result<LoadedSession, AcpClientError> {
+    /// Load a session.
+    pub async fn load_session(&self, request: LoadSessionRequest) -> Result<LoadSessionResponse, AcpClientError> {
         let (response, receiver) = oneshot::channel();
         self.send(ClientCommand::LoadSession { request, response })?;
         await_response(receiver).await
@@ -227,13 +227,32 @@ type RequestFn = Box<dyn FnOnce(Result<&ConnectionTo<acp::Agent>, AcpClientError
 
 enum ClientCommand {
     Prompt { request: PromptRequest, response: Response<PromptResponse> },
-    LoadSession { request: LoadSessionRequest, response: Response<LoadedSession> },
+    LoadSession { request: LoadSessionRequest, response: Response<LoadSessionResponse> },
     Request { allow_during_prompt: bool, run: RequestFn },
 }
 
 struct ReplayState {
     session_id: SessionId,
-    notifications: Vec<SessionNotification>,
+    notifications: Vec<ReplayableEvent>,
+}
+
+fn send_replayable_event(
+    event_tx: &mpsc::UnboundedSender<AcpEvent>,
+    replay_state: &Mutex<Option<ReplayState>>,
+    event: ReplayableEvent,
+) {
+    let mut replay = replay_state.lock().expect("replay state lock poisoned");
+    if let Some(capture) = replay.as_mut() {
+        let matches_session = match &event {
+            ReplayableEvent::SessionUpdate(notification) => notification.session_id == capture.session_id,
+            _ => true,
+        };
+        if matches_session {
+            capture.notifications.push(event);
+            return;
+        }
+    }
+    let _ = event_tx.send(event.into());
 }
 
 async fn await_response<T>(receiver: oneshot::Receiver<Result<T, AcpClientError>>) -> Result<T, AcpClientError> {
@@ -281,19 +300,7 @@ async fn run_client_connection(
                     let event_tx = event_tx.clone();
                     let replay_state = Arc::clone(&replay_state);
                     async move |notification: SessionNotification, _cx| {
-                        let passthrough = {
-                            let mut replay = replay_state.lock().expect("replay state lock poisoned");
-                            match replay.as_mut() {
-                                Some(state) if state.session_id == notification.session_id => {
-                                    state.notifications.push(notification);
-                                    None
-                                }
-                                _ => Some(notification),
-                            }
-                        };
-                        if let Some(SessionNotification { session_id, update, .. }) = passthrough {
-                            let _ = event_tx.send(AcpEvent::SessionUpdate { session_id, update: Box::new(update) });
-                        }
+                        send_replayable_event(&event_tx, &replay_state, notification.into());
                         Ok(())
                     }
                 },
@@ -302,8 +309,9 @@ async fn run_client_connection(
             .on_receive_notification(
                 {
                     let event_tx = event_tx.clone();
+                    let replay_state = Arc::clone(&replay_state);
                     async move |params: ContextCompactionParams, _cx| {
-                        let _ = event_tx.send(AcpEvent::ContextCompaction(params));
+                        send_replayable_event(&event_tx, &replay_state, ReplayableEvent::ContextCompaction(params));
                         Ok(())
                     }
                 },
@@ -312,8 +320,9 @@ async fn run_client_connection(
             .on_receive_notification(
                 {
                     let event_tx = event_tx.clone();
+                    let replay_state = Arc::clone(&replay_state);
                     async move |params: ContextClearedParams, _cx| {
-                        let _ = event_tx.send(AcpEvent::ContextCleared(params));
+                        send_replayable_event(&event_tx, &replay_state, ReplayableEvent::ContextCleared(params));
                         Ok(())
                     }
                 },
@@ -322,8 +331,13 @@ async fn run_client_connection(
             .on_receive_notification(
                 {
                     let event_tx = event_tx.clone();
+                    let replay_state = Arc::clone(&replay_state);
                     async move |params: SubAgentProgressParams, _cx| {
-                        let _ = event_tx.send(AcpEvent::SubAgentProgress(params));
+                        send_replayable_event(
+                            &event_tx,
+                            &replay_state,
+                            ReplayableEvent::SubAgentProgress(Box::new(params)),
+                        );
                         Ok(())
                     }
                 },
@@ -332,8 +346,13 @@ async fn run_client_connection(
             .on_receive_notification(
                 {
                     let event_tx = event_tx.clone();
+                    let replay_state = Arc::clone(&replay_state);
                     async move |params: SessionUsageParams, _cx| {
-                        let _ = event_tx.send(AcpEvent::SessionUsage(Box::new(params)));
+                        send_replayable_event(
+                            &event_tx,
+                            &replay_state,
+                            ReplayableEvent::SessionUsage(Box::new(params)),
+                        );
                         Ok(())
                     }
                 },
@@ -352,8 +371,9 @@ async fn run_client_connection(
             .on_receive_notification(
                 {
                     let event_tx = event_tx.clone();
+                    let replay_state = Arc::clone(&replay_state);
                     async move |params: McpNotification, _cx| {
-                        let _ = event_tx.send(AcpEvent::McpNotification(params));
+                        send_replayable_event(&event_tx, &replay_state, ReplayableEvent::McpNotification(params));
                         Ok(())
                     }
                 },
@@ -473,13 +493,24 @@ async fn handle_command(
             let session_id = request.session_id.clone();
             *replay_state.lock().expect("replay state lock poisoned") =
                 Some(ReplayState { session_id: session_id.clone(), notifications: vec![] });
-            let result = cx.send_request(request).block_task().await.map_err(AcpClientError::Protocol);
-            let replay = replay_state
-                .lock()
-                .expect("replay state lock poisoned")
-                .take()
-                .map_or_else(Vec::new, |state| state.notifications);
-            let _ = response.send(result.map(|response| LoadedSession { session_id, response, replay }));
+            let replay_state = Arc::clone(replay_state);
+            let event_tx = event_tx.clone();
+            let (done_tx, done_rx) = oneshot::channel();
+            let _ = cx.send_request(request).on_receiving_result(move |result| async move {
+                let mut capture = replay_state.lock().expect("replay state lock poisoned");
+                let replay = capture.take().map(|capture| capture.notifications).unwrap_or_default();
+                let result = result.map_err(AcpClientError::Protocol).inspect(|metadata| {
+                    let _ = event_tx.send(AcpEvent::SessionLoaded(LoadedSession {
+                        session_id,
+                        response: metadata.clone(),
+                        replay,
+                    }));
+                });
+                let _ = response.send(result);
+                let _ = done_tx.send(());
+                Ok(())
+            });
+            let _ = done_rx.await;
         }
         ClientCommand::Request { allow_during_prompt, run } => {
             if state == ClientState::Prompting && !allow_during_prompt {

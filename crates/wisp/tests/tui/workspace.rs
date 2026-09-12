@@ -353,7 +353,7 @@ fn workspace_move_success_updates_cwd_and_reloads_session() {
         other => panic!("expected LoadSession, got {other:?}"),
     }
 
-    ui.deliver_result(session_loaded("test-session", Vec::new()));
+    ui.acp_event(session_loaded("test-session", Vec::new()));
     assert_eq!(ui.app().workspace_move_state(), WorkspaceMoveState::Idle);
 }
 
@@ -376,13 +376,13 @@ fn workspace_move_success_replays_loaded_session_updates() {
     ui.deliver_result(workspace_moved("/home/user/code/other"));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.deliver_result(CommandResult::SessionLoaded(LoadedSession {
+    ui.acp_event(AcpEvent::SessionLoaded(LoadedSession {
         session_id: SessionId::new("test-session"),
         response: acp::LoadSessionResponse::new(),
-        replay: vec![acp::SessionNotification::new(
-            SessionId::new("test-session"),
-            user_message_chunk("buffered-message"),
-        )],
+        replay: vec![
+            acp::SessionNotification::new(SessionId::new("test-session"), user_message_chunk("buffered-message"))
+                .into(),
+        ],
     }));
     assert_eq!(ui.app().workspace_move_state(), WorkspaceMoveState::Idle);
 

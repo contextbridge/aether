@@ -17,6 +17,7 @@ impl App {
     #[allow(clippy::too_many_lines)]
     pub fn on_acp_event(&mut self, event: AcpEvent) {
         match event {
+            AcpEvent::SessionLoaded(loaded) => self.on_loaded_session(loaded),
             AcpEvent::SessionUpdate { session_id, update } => {
                 if &session_id == self.session.session_id() {
                     self.on_session_update(&update);
@@ -100,10 +101,11 @@ impl App {
     pub(super) fn on_loaded_session(&mut self, loaded: LoadedSession) {
         let LoadedSession { session_id, response, replay } = loaded;
         self.reset_turn_state();
-        for notification in replay {
-            self.on_session_update(&notification.update);
+        self.session.set_session(session_id, Vec::new());
+        for event in replay {
+            self.on_acp_event(event.into());
         }
-        self.session.set_session(session_id, response.config_options.unwrap_or_default());
+        self.session.update_config_options(response.config_options.unwrap_or_default());
         self.return_to_conversation();
         self.session.end_workspace_move();
     }

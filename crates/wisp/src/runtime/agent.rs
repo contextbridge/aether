@@ -92,7 +92,7 @@ pub(super) fn execute(
                 handle
                     .load_session(LoadSessionRequest::new(session_id, cwd))
                     .await
-                    .map_or_else(|error| failed(failure, &error), CommandResult::SessionLoaded)
+                    .map_or_else(|error| failed(failure, &error), |_| CommandResult::AgentCommandAccepted)
             });
             None
         }

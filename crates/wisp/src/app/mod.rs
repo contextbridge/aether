@@ -234,7 +234,6 @@ impl App {
                 }
             }
             CommandResult::SessionsListed(response) => self.open_session_picker(response.sessions),
-            CommandResult::SessionLoaded(loaded) => self.on_loaded_session(loaded),
             CommandResult::NewSessionCreated(response) => {
                 self.on_new_session(response.session_id, response.config_options.unwrap_or_default());
             }

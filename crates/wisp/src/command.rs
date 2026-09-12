@@ -5,7 +5,6 @@ use crate::request::RequestId;
 use crate::session::workspace_status::WorkspaceStatus;
 use crate::settings::UiSettings;
 use crate::theme::Theme;
-use acp_utils::client::LoadedSession;
 use acp_utils::notifications::{
     PromptSearchParams, PromptSearchResponse, SessionPreviewResponse, WorkspaceListResponse, WorkspaceMoveTarget,
     WorkspaceMoveResponse,
@@ -112,7 +111,6 @@ pub enum CommandResult {
     AuthenticationCompleted { method_id: String },
     AuthenticationFailed { method_id: String },
     SessionsListed(ListSessionsResponse),
-    SessionLoaded(LoadedSession),
     NewSessionCreated(NewSessionResponse),
     PromptSearchResults(PromptSearchResponse),
     PromptSearchFailed { query: String, error: String },
