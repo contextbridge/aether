@@ -18,10 +18,10 @@ LLM models are specified in settings via a string with format `provider:model-id
 }
 ```
 
-| Form         | Example                      | Meaning                                                 |
-| ------------ | ---------------------------- | ------------------------------------------------------- |
-| Single model | `zai:glm-5.1`                | Use one provider/model pair.                            |
-| Alloy        | `zai:glm-5.1,openai:gpt-5.5` | Round-robin between model specs each conversation turn. |
+| Form         | Example                      | Meaning                                              |
+| ------------ | ---------------------------- | ---------------------------------------------------- |
+| Single model | `zai:glm-5.1`                | Use one provider/model pair.                         |
+| Alloy        | `zai:glm-5.1,openai:gpt-5.5` | Round-robin between model specs on each LLM call.    |
 
 ## Supported Providers
 
@@ -45,7 +45,7 @@ LLM models are specified in settings via a string with format `provider:model-id
 | ---------------- | ----------------------------------------------------------------------------- |
 | **Credentials**  | OAuth login stored in the configured credential store; OS keychain by default |
 | **Model syntax** | `codex:<model-id>`                                                            |
-| **Common model** | `codex:gpt-5.5`                                                               |
+| **Common models** | `codex:gpt-6-astra`, `codex:gpt-5.6-sol`, `codex:gpt-5.6-terra`, `codex:gpt-5.6-luna`, `codex:gpt-5.5`, `codex:gpt-5.4`, `codex:gpt-5.4-mini`, `codex:gpt-5.2` (272k context window) |
 
 Codex uses OpenAI's Codex OAuth flow through the client. If no Codex credentials are available, Aether asks you to log in when the model is selected.
 
@@ -99,7 +99,7 @@ Fireworks uses `https://api.fireworks.ai/inference/v1` by default. Serverless ca
       "requestModel": "accounts/acme/deployments/coding-prod"
     }
   },
-  "agents": [{ "model": "fireworks:accounts/fireworks/models/glm-5p1", "userInvocable": true }]
+  "agents": [{ "model": "fireworks:accounts/fireworks/models/glm-5p3", "userInvocable": true }]
 }
 ```
 
@@ -239,7 +239,7 @@ The top-level `providers` object (or per-agent `providers`) overrides how Aether
 
 | Field                 | Description                                                                 |
 | --------------------- | --------------------------------------------------------------------------- |
-| `url`                 | Base URL for API requests. Used by OpenAI-compatible, Foundry, and local providers. |
+| `url`                 | Base URL for API requests. Honored by every built-in provider (Anthropic, OpenAI, OpenRouter, Gemini, Codex, Bedrock, the OpenAI-compatible providers, and the local servers). |
 | `auth`                | Authentication mode: `default` (provider default) or `none` (skip auth). Use `none` only behind a trusted proxy that injects credentials. |
 | `requestModel`        | Overrides the model id sent in requests without changing the catalog identity used for capabilities, context window, and display. |
 | `inferenceProfileArn` | Bedrock application inference profile ARN to route requests through.       |
@@ -288,11 +288,21 @@ Some providers support extended thinking. Set `reasoningEffort` on an agent to r
 }
 ```
 
-Providers that do not support the requested effort ignore it or map it to their closest available setting.
+Providers expose only the effort levels they support. Requesting a level a model does not support is a settings validation error — Aether does not silently downgrade it. If you change models mid-session (for example through the terminal UI), Aether clamps the requested effort to the closest level the new model supports.
+
+## Prompt caching and retries
+
+Aether improves provider-side prompt caching automatically; no configuration is required:
+
+- **Anthropic** — requests enable prompt caching and cache the system prompt.
+- **Bedrock** — supported models get cache point markers.
+- **OpenRouter / OpenAI-compatible** — Aether derives a per-conversation prompt cache key and sends it so providers can route repeated prefixes to cached input (Fireworks and Foundry included; DeepSeek, Moonshot, and ZAI requests omit it).
+
+Transient failures (rate limits, 5xx responses, timeouts, and network/stream interruptions) are retried automatically with backoff.
 
 ## Alloying
 
-An alloy spec is a comma-separated list of model specs. Each conversation turn uses the next provider in the list, cycling round-robin.
+An alloy spec is a comma-separated list of model specs. Every LLM call uses the next provider in the list, cycling round-robin — a single conversation turn that includes tool-call loops may therefore use several different models.
 
 ```json title=".aether/settings.json"
 {

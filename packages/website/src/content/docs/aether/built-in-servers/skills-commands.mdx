@@ -80,6 +80,21 @@ See `traits.md` and `error-handling.md` for detailed patterns.
 
 Every authored artifact must have at least one activation surface: `user-invocable`, `agent-invocable`, `triggers.read`, `globs`, or `paths`.
 
+### Read-triggered rules
+
+Rules only fire when the `coding` server is pointed at the same directory via `--rules-dir` — the `skills` server only serves the artifacts; it does not observe file reads:
+
+```json title=".aether/mcp.json"
+{
+  "servers": {
+    "skills": { "type": "in-memory", "args": ["--dir", ".aether/skills"] },
+    "coding": { "type": "in-memory", "args": ["--rules-dir", ".aether/skills"] }
+  }
+}
+```
+
+With this wiring, the coding server matches every `read_file` call against the `triggers.read` globs and appends the matching rule content to the result as a system reminder.
+
 ## Tools
 
 | Tool           | Description                                                             |

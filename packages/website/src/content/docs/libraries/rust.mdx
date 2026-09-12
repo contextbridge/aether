@@ -5,8 +5,23 @@ description: Rust crates published by Aether.
 
 Aether's Rust libraries are documented on docs.rs.
 
-| Crate               | Description                                                     | Docs                                                           |
-| ------------------- | --------------------------------------------------------------- | -------------------------------------------------------------- |
-| `aether-agent-core` | Agent runtime for building AI agents with MCP tool integration. | [docs.rs/aether-agent-core](https://docs.rs/aether-agent-core) |
-| `aether-wisp`       | Terminal UI for AI coding agents via ACP.                       | [docs.rs/aether-wisp](https://docs.rs/aether-wisp)             |
-| `aether-llm`        | Multi-provider LLM abstraction layer.                           | [docs.rs/aether-llm](https://docs.rs/aether-llm)               |
+| Crate                   | Description                                                                     | Docs                                                                     |
+| ----------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `aether-agent-core`     | Core agent library — LLM + prompt + tools in a loop.                            | [docs.rs/aether-agent-core](https://docs.rs/aether-agent-core)           |
+| `aether-llm`            | Multi-provider LLM abstraction with alloying, retries, and usage tracking.      | [docs.rs/aether-llm](https://docs.rs/aether-llm)                         |
+| `aether-wisp`           | Terminal UI for AI coding agents via ACP.                                       | [docs.rs/aether-wisp](https://docs.rs/aether-wisp)                       |
+| `aether-agent-cli`      | Headless CLI, TUI entry point, and ACP server for editor integration.           | [docs.rs/aether-agent-cli](https://docs.rs/aether-agent-cli)             |
+| `aether-mcp-servers`    | Pre-built MCP tool servers (coding, LSP, skills, tasks, sub-agents, survey, plan). | [docs.rs/aether-mcp-servers](https://docs.rs/aether-mcp-servers)      |
+| `aether-project`        | Project configuration and agent catalog loaded from `.aether/settings.json`.    | [docs.rs/aether-project](https://docs.rs/aether-project)                 |
+| `aether-evals`          | Automated testing (evals) for LLM agents.                                       | [docs.rs/aether-evals](https://docs.rs/aether-evals)                     |
+| `aether-lspd`           | LSP daemon — shares language servers across agents.                             | [docs.rs/aether-lspd](https://docs.rs/aether-lspd)                       |
+| `aether-sessions`       | Session persistence, resume, and usage/cost history.                            | [docs.rs/aether-sessions](https://docs.rs/aether-sessions)               |
+| `aether-telemetry`      | OpenTelemetry GenAI traces and metrics for Aether agents.                       | [docs.rs/aether-telemetry](https://docs.rs/aether-telemetry)             |
+| `aether-auth`           | Credential stores (keyring, encrypted file) and OAuth flows.                    | [docs.rs/aether-auth](https://docs.rs/aether-auth)                       |
+| `aether-acp-utils`      | Agent Client Protocol helpers: extension notifications, elicitation, config options. | [docs.rs/aether-acp-utils](https://docs.rs/aether-acp-utils)         |
+| `aether-mcp-utils`      | MCP client utilities: server config, tool filtering, and OAuth handling.        | [docs.rs/aether-mcp-utils](https://docs.rs/aether-mcp-utils)             |
+| `aether-schemas`        | JSON Schemas for Aether settings, CLI options, and event types.                 | [docs.rs/aether-schemas](https://docs.rs/aether-schemas)                 |
+| `aether-utils`          | Shared utilities: reasoning effort, settings paths, and prompt interpolation.   | [docs.rs/aether-utils](https://docs.rs/aether-utils)                     |
+| `aether-llm-codegen`    | Code generator for the `aether-llm` model catalog.                              | [docs.rs/aether-llm-codegen](https://docs.rs/aether-llm-codegen)         |
+
+See [Introduction](/aether/introduction/) for a working Rust agent example, and the [TypeScript SDK](/libraries/typescript-sdk/) for the TypeScript equivalents.

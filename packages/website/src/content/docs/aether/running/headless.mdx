@@ -20,8 +20,10 @@ aether headless [OPTIONS] [PROMPT]...
 If prompt words are provided, Aether joins them with spaces. If no prompt is provided and stdin is not a TTY, Aether reads stdin, trims it, and uses that as the prompt.
 
 ```bash
-git diff --staged | aether headless "Review these changes"
+git diff --staged | aether headless
 ```
+
+Prompt words take precedence over stdin — if any positional prompt is given, stdin is ignored.
 
 ## Agent selection
 

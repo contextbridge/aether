@@ -84,14 +84,15 @@ The theme colors the entire UI: conversation text, syntax highlighting, diff ren
 
 ## Settings overlay
 
-Open with `/settings`. The overlay shows all configurable options:
+Open with `/settings`. The overlay lists a **Theme** entry provided by the terminal UI itself, plus the options advertised by the agent:
 
-- **Model** — Override the model used by the currently active agent runtime. Reasoning effort is adjusted from within the model pane, cycling it with `Tab` / `Shift+Tab` (also cyclable from anywhere with the global `Tab` binding)
-- **Mode** — Switch to a different user-invocable agent profile, including its prompts, MCP servers, tools, model, and provider settings (also cyclable with `Shift+Tab`)
+- **Theme** — Pick the UI theme: the built-in default or any `.tmTheme` file in `~/.wisp/themes/`. This entry comes from the terminal UI, not the agent.
+- **Model** — Multi-select the model(s) for the currently active agent runtime; selecting several sends a comma-separated model spec, which the agent alloys round-robin per LLM call. Reasoning effort is adjusted from within the model pane and follows whichever model is focused, cycling with `Tab` / `Shift+Tab` (the global `Tab` binding also cycles it from anywhere in the conversation)
+- **Mode** — Switch to a different user-invocable agent profile, including its prompts, MCP servers, tools, model, and provider settings. From the conversation view (outside the overlay), the global `Shift+Tab` binding also cycles modes
 - **MCP servers** — View connected servers and their status
 - **Provider logins** — Authenticate with providers that require it
 
-These options are advertised by the agent — the terminal UI discovers them at session start. Different agents may expose different options.
+Model, mode, MCP server, and provider login options are advertised by the agent — the terminal UI discovers them at session start. Different agents may expose different options.
 
 ## How agent config works
 

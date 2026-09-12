@@ -85,7 +85,9 @@ Content capture is disabled by default. Unless you enable a `content` flag, Aeth
 
 ## What Aether exports
 
-Each agent turn produces an `invoke_agent` root span carrying `gen_ai.agent.name`, so every LLM call beneath it is attributable to the agent that made it. Its child spans describe LLM calls (`chat <model>`) and tool executions (`execute_tool <name>`), including retries and terminal errors or cancellations.
+Each agent turn produces an `invoke_agent` span — named `invoke_agent <agent name>` when the agent identity is known, with `gen_ai.agent.name` set to match. Spans whose context has no remote parent are root spans; otherwise they continue the supplied trace (see [Correlating SDK runs](#correlating-sdk-runs)). Child spans describe LLM calls (`chat <model>`) and tool executions (`execute_tool <name>`), including retries and terminal errors or cancellations.
+
+Each `chat <model>` span carries token usage in `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens`, and `gen_ai.usage.reasoning.output_tokens` (when reported), plus `gen_ai.response.finish_reasons`. When the model's catalog pricing is known, the span also carries PostHog-style per-token price attributes: `$ai_input_token_price`, `$ai_output_token_price`, and — when the pricing differentiates — `$ai_cache_read_token_price` and `$ai_cache_write_token_price`, along with `$ai_reasoning_tokens`.
 
 With `content.systemInstructions` enabled, each `chat <model>` span carries the final rendered system prompt as `gen_ai.system_instructions` plus its `aether.llm.system_instructions.sha256` hash, so you can compare traces across prompt changes without reading the prompt itself. With `content.inputMessages` enabled, turn and chat spans also carry `aether.llm.input_messages.sha256` next to `gen_ai.input.messages`. Backends such as PostHog surface these attributes in the raw tracing tab.
 

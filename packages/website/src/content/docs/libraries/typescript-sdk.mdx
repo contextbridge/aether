@@ -115,7 +115,7 @@ for await (const event of runHeadless({
 
 ### Options
 
-`AetherHeadlessOptions` mirrors the [headless CLI flags](/aether/running/headless/#flags) plus SDK process controls:
+`AetherHeadlessOptions` mirrors most [headless CLI flags](/aether/running/headless/#flags) plus SDK process controls. The CLI's `mcpConfig`/`mcpConfigJson` and `output` options are intentionally not exposed — the SDK always emits newline-delimited JSON:
 
 | Option         | Description                                                                                                                                          |
 | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -152,8 +152,7 @@ A `result` message is always emitted last (unless the stream errors), so it is a
 
 ### Token usage and estimated cost
 
-Aether exposes accounting as a domain-level `usage` message rather than an ACP
-extension notification:
+The agent delivers accounting over the ACP extension notification `_aether/session_usage`; the SDK decodes it into a domain-level `usage` message:
 
 ```ts
 for await (const message of session.prompt("Implement the feature")) {
