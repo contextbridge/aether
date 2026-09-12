@@ -1,17 +1,18 @@
 use crate::attachment::{AttachmentOutcome, PromptAttachment};
 use crate::file_index::FileEntry;
-use crate::git_review::{DiffScope, FileStatus, GitDiffEvent};
+use crate::git_review::{DiffScope, GitDiffEvent, GitWatchEvent};
 use crate::request::RequestId;
 use crate::session::workspace_status::WorkspaceStatus;
 use crate::settings::UiSettings;
-use crate::theme::Theme;
+use crate::theme::{Theme, ThemeApplicationError};
 use acp_utils::notifications::{
-    PromptSearchParams, PromptSearchResponse, SessionPreviewResponse, WorkspaceListResponse, WorkspaceMoveTarget,
-    WorkspaceMoveResponse,
+    PromptSearchParams, PromptSearchResponse, SessionPreviewResponse, WorkspaceListResponse, WorkspaceMoveResponse,
+    WorkspaceMoveTarget,
 };
 use agent_client_protocol::schema::v1::{
     ContentBlock, ListSessionsResponse, NewSessionResponse, SessionConfigOption, SessionId,
 };
+use clankerdiff_ratatui::diff::RepositoryAction;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
@@ -19,6 +20,7 @@ pub enum Command {
     Agent(AgentCommand),
     Filesystem(FilesystemCommand),
     Git(GitCommand),
+    GitWatch(GitWatchCommand),
     ResolveWorkspace { cwd: PathBuf },
     Terminal(TerminalCommand),
 }
@@ -84,19 +86,20 @@ pub enum FilesystemCommand {
     IndexFiles { request_id: RequestId, root: PathBuf },
     PrepareSubmission { attachments: Vec<PromptAttachment> },
     ListThemes,
-    ApplyTheme { settings: Box<UiSettings>, value: String },
+    ListReviewThemes,
+    ApplyTheme { settings: Box<UiSettings> },
 }
 
 #[derive(Debug, Clone)]
 pub enum GitCommand {
-    Load { request_id: RequestId, working_dir: PathBuf, repo_root: Option<PathBuf>, scope: DiffScope },
-    StageFiles { request_id: RequestId, repo_root: PathBuf, paths: Vec<String> },
-    UnstageFiles { request_id: RequestId, repo_root: PathBuf, paths: Vec<String> },
-    StageAll { request_id: RequestId, repo_root: PathBuf },
-    UnstageAll { request_id: RequestId, repo_root: PathBuf },
-    Commit { request_id: RequestId, repo_root: PathBuf, message: String },
-    DiscardFile { request_id: RequestId, repo_root: PathBuf, path: String, status: FileStatus },
-    LoadFullFile { request_id: RequestId, repo_root: PathBuf, path: String },
+    Apply { review_id: RequestId, action: RepositoryAction },
+}
+
+#[derive(Debug, Clone)]
+pub enum GitWatchCommand {
+    Open { review_id: RequestId, working_dir: PathBuf, scope: DiffScope },
+    Refresh { review_id: RequestId, scope: DiffScope },
+    Close { review_id: RequestId },
 }
 
 #[derive(Debug, Clone)]
@@ -122,9 +125,11 @@ pub enum CommandResult {
     WorkspaceMoveFailed { error: String },
     FilesIndexed { request_id: RequestId, files: Vec<FileEntry> },
     GitDiff(GitDiffEvent),
+    GitWatch(GitWatchEvent),
     SubmissionPrepared(AttachmentOutcome),
     ThemesListed(Vec<String>),
-    ThemeApplied { settings: Box<UiSettings>, theme: Theme, error: Option<String> },
+    ReviewThemesListed(Vec<clankerdiff_ratatui::ThemeChoice>),
+    ThemeApplied(Result<(Box<UiSettings>, Theme), ThemeApplicationError>),
     WorkspaceResolved { cwd: PathBuf, status: WorkspaceStatus },
     Failed { command: FailedCommand, error: String },
 }

@@ -4,7 +4,7 @@ use ratatui::TerminalOptions;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use wisp::app::WorkspaceMoveState;
-use wisp::command::{AgentCommand, Command, CommandResult, GitCommand, TerminalCommand};
+use wisp::command::{AgentCommand, Command, CommandResult, GitWatchCommand, TerminalCommand};
 
 use super::support::{
     BooleanPropertySchema, ElicitationSchema, StringPropertySchema, TestUi, TestUiBuilder, accepted_content, acp,
@@ -757,57 +757,30 @@ fn screen_rows(ui: &mut TestUi) -> Vec<String> {
 }
 
 mod screen_mouse {
+    use std::sync::Arc;
+
     use super::*;
-    use wisp::git_review::{DiffDocument, FileDiff, FileStatus, GitDiffEvent, StageState};
+    use clankerdiff_git::RepositorySnapshot;
+    use clankerdiff_ratatui::diff::DiffScope;
+    use wisp::git_review::{DiffDocument, FileDiff, GitWatchEvent};
     use wisp::renderer::DrawContext;
     use wisp::screens::git_diff::GitDiffScreen;
-    use wisp::surfaces::input::MouseAction;
+    use wisp::surfaces::input::{MouseAction, UiEvent};
     use wisp::theme::Theme;
     use wisp::view::generation::Generation;
     use wisp::view::syntax::SyntaxHighlighter;
 
-    fn make_test_document() -> DiffDocument {
-        use wisp::git_review::{Hunk, PatchLine, PatchLineKind};
-        DiffDocument {
-            repo_root: std::path::PathBuf::from("/tmp/repo"),
-            files: vec![
-                FileDiff {
-                    old_path: None,
-                    path: "src/main.rs".to_string(),
-                    status: FileStatus::Modified,
-                    staged: StageState::Unstaged,
-                    hunks: vec![Hunk {
-                        header: "@@ -1,5 +1,5 @@".to_string(),
-                        old_start: 1,
-                        old_count: 5,
-                        new_start: 1,
-                        new_count: 5,
-                        lines: vec![PatchLine {
-                            kind: PatchLineKind::Context,
-                            text: "fn main() {".to_string(),
-                            old_line_no: Some(1),
-                            new_line_no: Some(1),
-                        }],
-                    }],
-                    binary: false,
-                },
-                FileDiff {
-                    old_path: None,
-                    path: "src/lib.rs".to_string(),
-                    status: FileStatus::Added,
-                    staged: StageState::Unstaged,
-                    hunks: vec![],
-                    binary: false,
-                },
-                FileDiff {
-                    old_path: None,
-                    path: "Cargo.toml".to_string(),
-                    status: FileStatus::Modified,
-                    staged: StageState::Unstaged,
-                    hunks: vec![],
-                    binary: false,
-                },
-            ],
+    fn make_test_document() -> RepositorySnapshot {
+        RepositorySnapshot {
+            scope: DiffScope::Both,
+            document: Arc::new(DiffDocument {
+                repo_root: "/tmp/repo".into(),
+                files: vec![
+                    FileDiff::from_texts("src/main.rs", "fn old() {}\n", "fn main() {}\n").unwrap(),
+                    FileDiff::from_texts("src/lib.rs", "", "pub fn library() {}\n").unwrap(),
+                    FileDiff::from_texts("Cargo.toml", "old\n", "new\n").unwrap(),
+                ],
+            }),
         }
     }
 
@@ -831,93 +804,103 @@ mod screen_mouse {
 
     fn open_screen() -> GitDiffScreen {
         let (mut screen, task) = GitDiffScreen::new(std::path::PathBuf::from("/tmp/repo"));
-        let GitCommand::Load { request_id, .. } = task else {
+        let GitWatchCommand::Open { review_id, .. } = task else {
             panic!("opening Git review must load its document");
         };
-        screen.on_event(GitDiffEvent::Loaded { request_id, result: Ok(make_test_document()) });
+        screen.on_watch_event(GitWatchEvent {
+            review_id,
+            result: Ok(clankerdiff_watch::RepositoryState {
+                snapshot: std::sync::Arc::new(make_test_document()),
+                error: None,
+            }),
+        });
+        screen.on_event(wisp::git_review::GitDiffEvent { review_id, result: Ok(()) });
         screen
+    }
+
+    fn assert_drawer_focus(buffer: &Buffer, focused: bool) {
+        let accent = Theme::default().accent;
+        let selected = (1..buffer.area.bottom() - 2)
+            .map(|y| &buffer[(1, y)])
+            .find(|cell| cell.bg == accent)
+            .expect("drawer has a selected row");
+        assert_eq!(
+            selected.modifier.contains(ratatui::style::Modifier::BOLD),
+            focused,
+            "selected drawer row is bold only while focused:\n{}",
+            buffer_text(buffer)
+        );
     }
 
     #[test]
     fn git_diff_click_left_side_selects_drawer() {
         let mut screen = open_screen();
 
-        // Render at wide width (120)
-        let _buffer = render_git_diff(&mut screen, 120, 40);
+        screen.on_ui_event(UiEvent::Key(key(KeyCode::Tab)));
+        let before = render_git_diff(&mut screen, 120, 40);
+        assert_drawer_focus(&before, false);
 
-        // drawer_width = (120/3).clamp(24,36) = 36
-        // body starts at x=1 (after border)
-        // Click at x=20 (left side, well within drawer)
-        screen.on_mouse(MouseAction::Click, 3, 20);
+        assert!(screen.on_ui_event(UiEvent::Mouse(MouseAction::Click, (20, 3))).is_empty());
 
         let buffer = render_git_diff(&mut screen, 120, 40);
-        let text = buffer_text(&buffer);
-        assert!(text.contains("[Enter] open"), "drawer focus footer: {text}");
+        assert_drawer_focus(&buffer, true);
     }
 
     #[test]
     fn git_diff_click_right_side_selects_patch() {
         let mut screen = open_screen();
 
-        let _buffer = render_git_diff(&mut screen, 120, 40);
+        let before = render_git_diff(&mut screen, 120, 40);
+        assert_drawer_focus(&before, true);
 
-        // drawer_width = 36, body_x = 1. Drawer spans x=1..37. Patch spans x=38..
-        // Click at x=60 (right side, patch area)
-        screen.on_mouse(MouseAction::Click, 3, 60);
+        assert!(screen.on_ui_event(UiEvent::Mouse(MouseAction::Click, (60, 3))).is_empty());
 
         let buffer = render_git_diff(&mut screen, 120, 40);
-        let text = buffer_text(&buffer);
-        assert!(text.contains("[c] comment"), "patch focus footer: {text}");
+        assert_drawer_focus(&buffer, false);
     }
 
     #[test]
     fn git_diff_click_narrow_layout_always_patch() {
         let mut screen = open_screen();
 
-        // Render at narrow width (< 72)
-        let _buffer = render_git_diff(&mut screen, 60, 40);
+        render_git_diff(&mut screen, 60, 40);
 
-        // Even clicking on the left side should focus Patch
-        screen.on_mouse(MouseAction::Click, 3, 2);
+        assert!(screen.on_ui_event(UiEvent::Mouse(MouseAction::Click, (2, 3))).is_empty());
 
+        screen.on_ui_event(UiEvent::Key(key(KeyCode::Char('c'))));
         let buffer = render_git_diff(&mut screen, 60, 40);
-        let text = buffer_text(&buffer);
-        assert!(text.contains("[c] comment"), "narrow layout should focus patch: {text}");
+        assert!(buffer_text(&buffer).contains("save"), "patch focus must allow drafting a comment");
     }
 
     #[test]
     fn git_diff_click_on_border_is_ignored() {
         let mut screen = open_screen();
 
-        let _buffer = render_git_diff(&mut screen, 120, 40);
+        let before = render_git_diff(&mut screen, 120, 40);
 
         // Click at y=0 (top border) — should be ignored
-        screen.on_mouse(MouseAction::Click, 0, 40);
+        assert!(screen.on_ui_event(UiEvent::Mouse(MouseAction::Click, (40, 0))).is_empty());
 
         let buffer = render_git_diff(&mut screen, 120, 40);
-        let text = buffer_text(&buffer);
-        assert!(text.contains("Git Diff"), "screen should still render: {text}");
+        assert_eq!(buffer, before, "border clicks must not alter selection or focus");
     }
 
     #[test]
     fn git_diff_click_after_resize_uses_new_pane_rects() {
         let mut screen = open_screen();
 
-        // Render at width 120: drawer_width = 36, drawer x=1..37
-        render_git_diff(&mut screen, 120, 40);
+        render_git_diff(&mut screen, 60, 40);
+        assert!(screen.on_ui_event(UiEvent::Mouse(MouseAction::Click, (20, 3))).is_empty());
+        screen.on_ui_event(UiEvent::Key(key(KeyCode::Char('c'))));
+        let draft = render_git_diff(&mut screen, 60, 40);
+        assert!(buffer_text(&draft).contains("save"));
+        screen.on_ui_event(UiEvent::Key(key(KeyCode::Esc)));
 
-        // Click at x=50 (patch area at width 120)
-        screen.on_mouse(MouseAction::Click, 3, 50);
-
-        // Resize to width 200: drawer_width = 36, drawer x=1..37
-        render_git_diff(&mut screen, 200, 40);
-
-        // Click at x=50 should still be in patch area
-        screen.on_mouse(MouseAction::Click, 3, 50);
-
-        let buffer = render_git_diff(&mut screen, 200, 40);
-        let text = buffer_text(&buffer);
-        assert!(text.contains("[c] comment"), "patch should be focused: {text}");
+        let before = render_git_diff(&mut screen, 120, 40);
+        assert_drawer_focus(&before, false);
+        assert!(screen.on_ui_event(UiEvent::Mouse(MouseAction::Click, (20, 3))).is_empty());
+        let after = render_git_diff(&mut screen, 120, 40);
+        assert_drawer_focus(&after, true);
     }
 }
 

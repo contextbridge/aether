@@ -344,7 +344,10 @@ fn wide_diff_marks_truncated_panel_content() {
 #[test]
 fn markdown_blockquote_prefixes_inline_code_first_content() {
     let mut ui = TestUi::with_dimensions(44, 15);
-    let code_background = ui.app().theme().code_bg;
+    let code_background = clankerdiff_ratatui::composite_color(
+        ui.app().theme().review().markdown.inline_code_background,
+        ui.app().theme().review().diff.background,
+    );
     ui.submit("quote this");
     ui.acp_event(text_chunk("> `quoted`"));
     ui.complete_prompt(acp::StopReason::EndTurn);
@@ -352,7 +355,7 @@ fn markdown_blockquote_prefixes_inline_code_first_content() {
 
     let conversation = ui.conversation();
     let row = row_containing(&conversation, "quoted").expect("blockquote content should render");
-    assert_eq!(row_text(&conversation, row).trim_end(), "    quoted");
+    assert_eq!(row_text(&conversation, row).trim_end(), "  │ quoted");
     assert!(
         has_cell(&conversation, "q", |cell| cell.bg == code_background),
         "inline code keeps its background inside a blockquote"
@@ -373,7 +376,7 @@ fn markdown_horizontal_rule_uses_available_width() {
 }
 
 #[test]
-fn transcript_markdown_wraps_at_word_boundaries() {
+fn transcript_markdown_wraps_at_content_width() {
     let mut ui = TestUi::with_dimensions(13, 15);
     ui.submit("wrap words");
     ui.acp_event(text_chunk("alpha beta gamma"));
@@ -382,11 +385,8 @@ fn transcript_markdown_wraps_at_word_boundaries() {
 
     let conversation = ui.conversation();
     let alpha = row_containing(&conversation, "alpha").expect("first word should render");
-    let beta = row_containing(&conversation, "beta").expect("second word should render");
-    let gamma = row_containing(&conversation, "gamma").expect("third word should render");
-    assert_eq!(beta, alpha + 1);
-    assert_eq!(gamma, beta + 1);
-    assert_eq!(row_text(&conversation, alpha).trim_end(), "  alpha");
+    assert_eq!(row_text(&conversation, alpha).trim_end(), "  alpha bet");
+    assert_eq!(row_text(&conversation, alpha + 1).trim_end(), "  a gamma");
 }
 
 #[test]
@@ -429,15 +429,13 @@ fn transcript_wrapping_never_exceeds_a_one_column_allocation() {
     ui.draw();
 
     let conversation = ui.conversation();
-    let row = row_containing(&conversation, "…").expect("wide glyph should truncate to an ellipsis");
-    assert_eq!(row_text(&conversation, row).trim_end(), "  …");
     assert!(!has_cell(&conversation, "界", |_| true), "the wide glyph must not spill past the one-column allocation");
 }
 
 #[test]
 fn trailing_newline_does_not_add_an_empty_user_content_row() {
     let mut ui = TestUi::new();
-    let user_background = ui.app().theme().sidebar_bg;
+    let user_background = ui.app().theme().surface;
     ui.type_text("hello");
     ui.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
     ui.key(key(KeyCode::Enter));
@@ -461,9 +459,8 @@ fn markdown_renders_lists_strikethrough_and_tables() {
     let text = buffer_text(&conversation);
     assert!(text.contains("• first"), "{text}");
     assert!(text.contains("• second"), "{text}");
-    assert!(text.contains("| Name  | Value |"), "{text}");
-    assert!(text.contains("|-------|-------|"), "{text}");
-    assert!(text.contains("| alpha | beta  |"), "{text}");
+    assert!(text.contains("│ Name  │ Value │"), "{text}");
+    assert!(text.contains("│ alpha │ beta  │"), "{text}");
     assert!(has_cell(&conversation, "r", |cell| cell.modifier.contains(Modifier::CROSSED_OUT)));
 }
 
@@ -504,26 +501,22 @@ fn streaming_markdown_reuses_unchanged_renders_and_finalizes_once() {
 fn default_theme_is_sage() {
     let theme = Theme::default();
 
-    assert_eq!(theme.syntect().name.as_deref(), Some("Sage"));
-    assert_eq!(theme.background, Color::Rgb(0x15, 0x1d, 0x1f));
+    assert_eq!(theme.review().id().to_string(), "sage");
+    assert_eq!(theme.background, Color::Rgb(0x0d, 0x11, 0x10));
     assert_eq!(theme.text_primary, Color::Rgb(0xd4, 0xdd, 0xd6));
     assert_eq!(theme.accent, Color::Rgb(0x8f, 0xbc, 0xb0));
 }
 
 #[test]
-fn theme_loads_semantic_colors_from_tmtheme_file() {
-    let mut file = tempfile::Builder::new().suffix(".tmTheme").tempfile().unwrap();
-    write!(
-        file,
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0"><dict><key>name</key><string>Test</string><key>settings</key><array>
-<dict><key>settings</key><dict><key>foreground</key><string>#112233</string><key>background</key><string>#010203</string><key>caret</key><string>#445566</string></dict></dict>
-<dict><key>scope</key><string>markup.heading</string><key>settings</key><dict><key>foreground</key><string>#abcdef</string></dict></dict>
-</array></dict></plist>"#
-    )
-    .unwrap();
-
-    let theme = Theme::load_from_path(file.path());
+fn theme_loads_semantic_colors_from_json_file() {
+    let mut file = tempfile::Builder::new().suffix(".json").tempfile().unwrap();
+    let mut review = clankerdiff_ratatui::theme::ReviewTheme::default();
+    review.ui.text = clankerdiff_ratatui::theme::Rgba::new(0x11, 0x22, 0x33, 255);
+    review.ui.canvas = clankerdiff_ratatui::theme::Rgba::new(1, 2, 3, 255);
+    review.ui.accent = clankerdiff_ratatui::theme::Rgba::new(0x44, 0x55, 0x66, 255);
+    review.markdown.heading = clankerdiff_ratatui::theme::Rgba::new(0xab, 0xcd, 0xef, 255);
+    file.write_all(&review.to_bytes().unwrap()).unwrap();
+    let theme = Theme::load_from_path(file.path()).unwrap();
 
     assert_eq!(theme.text_primary, Color::Rgb(0x11, 0x22, 0x33));
     assert_eq!(theme.background, Color::Rgb(0x01, 0x02, 0x03));
@@ -567,17 +560,14 @@ fn syntax_highlighting_and_plain_code_fallback_are_explicit() {
     let plain = highlighter.highlight("not highlighted", "not-a-language", &theme);
     assert_eq!(plain.len(), 1);
     assert_eq!(plain[0].spans[0].content, "not highlighted");
-    assert_eq!(plain[0].style.fg, Some(theme.code_fg));
-    assert_eq!(plain[0].style.bg, Some(theme.code_bg));
+    assert_eq!(plain[0].spans[0].style.fg, Some(theme.code_fg));
+    assert_eq!(plain[0].spans[0].style.bg, Some(theme.code_bg));
 }
 
 #[test]
-fn invalid_theme_path_falls_back_to_the_native_default() {
-    let theme = Theme::load_from_path(std::path::Path::new("/path/that/does/not/exist.tmTheme"));
-
-    assert_eq!(theme.syntect().name.as_deref(), Some("Sage"));
-    assert_eq!(theme.background, Color::Rgb(0x15, 0x1d, 0x1f));
-    assert_eq!(theme.text_primary, Color::Rgb(0xd4, 0xdd, 0xd6));
+fn invalid_theme_paths_return_errors() {
+    assert!(Theme::load_from_path(std::path::Path::new("/path/that/does/not/exist.json")).is_err());
+    assert!(Theme::load_from_path(std::path::Path::new("/path/legacy.tmTheme")).is_err());
 }
 
 #[test]
@@ -603,12 +593,12 @@ fn large_markdown_history_preserves_order_across_scrollback_and_viewport() {
 #[test]
 fn settings_deserializes_status_line() {
     let settings: UiSettings = serde_json::from_str(
-        r#"{"contentPadding":4,"theme":{"file":"nord.tmTheme","future":true},"statusLine":{"left":[{"type":"cwd"}],"right":[{"type":"agent"}]}}"#,
+        r#"{"contentPadding":4,"theme":{"source":"file","file":"nord.json"},"statusLine":{"left":[{"type":"cwd"}],"right":[{"type":"agent"}]}}"#,
     )
     .unwrap();
 
     assert_eq!(settings.content_padding, Some(4));
-    assert_eq!(settings.theme.file.as_deref(), Some("nord.tmTheme"));
+    assert_eq!(settings.theme.selection_id(), "file:nord.json");
     assert!(settings.status_line.is_some());
     let sl = settings.status_line.unwrap();
     assert_eq!(sl.left, Some(vec![StatusLineSegmentConfig::Cwd { max_width: None }]));

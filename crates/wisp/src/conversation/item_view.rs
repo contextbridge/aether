@@ -1,8 +1,7 @@
+use crate::theme::Theme;
 use crate::view::markdown::render_markdown;
 use crate::view::syntax::SyntaxHighlighter;
-use crate::theme::Theme;
 use crate::view::wrap::wrap_text;
-use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
@@ -27,6 +26,7 @@ pub(crate) fn item_lines(
     spinner_tick: usize,
     theme: &Theme,
     highlighter: &mut SyntaxHighlighter,
+    preview: Option<&[Line<'static>]>,
 ) -> Vec<Line<'static>> {
     let content_width = content_width(width, padding);
     match item.content() {
@@ -35,7 +35,9 @@ pub(crate) fn item_lines(
             indent_lines(render_markdown(&text.text, content_width, theme, highlighter), padding)
         }
         ConversationContent::Notice(notice) => user_block_lines(&notice.text, width, padding, theme),
-        ConversationContent::Tool(tool) => tool_lines(tool, content_width, padding, spinner_tick, theme, highlighter),
+        ConversationContent::Tool(tool) => {
+            tool_lines(tool, content_width, padding, spinner_tick, theme, highlighter, preview)
+        }
     }
 }
 
@@ -67,7 +69,7 @@ pub(crate) fn indent_lines(lines: Vec<Line<'static>>, padding: usize) -> Vec<Lin
 
 /// The user's own message, drawn as a full-width tinted block.
 fn user_block_lines(text: &str, width: u16, padding: usize, theme: &Theme) -> Vec<Line<'static>> {
-    let block_style = Style::new().bg(theme.sidebar_bg).fg(theme.text_primary);
+    let block_style = theme.surface_style();
     let width = usize::from(width);
     let content_width = width.saturating_sub(padding.saturating_mul(2)).max(1);
     let blank = Line::styled(" ".repeat(width), block_style);

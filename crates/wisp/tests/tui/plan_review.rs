@@ -1,723 +1,195 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::TerminalOptions;
-use ratatui::backend::TestBackend;
-use ratatui::buffer::Buffer;
-use std::path::PathBuf;
-use tokio::sync::oneshot;
-use utils::plan_review::PlanReviewElicitationMeta;
-use wisp::renderer::DrawContext;
-use wisp::screens::plan_review::PlanReviewScreen;
-use wisp::screens::plan_review::{PlanDocument, ReviewComment, compile_feedback};
-use wisp::surfaces::elicitation::ElicitationResponder;
-use wisp::surfaces::input::MouseAction;
-use wisp::surfaces::input::PlanReviewOutput;
-use wisp::testing::buffer_text;
-use wisp::theme::Theme;
-use wisp::view::generation::Generation;
-use wisp::view::syntax::SyntaxHighlighter;
-
 use super::support::{
     CreateElicitationResponse, ElicitationAction, ElicitationSchema, accepted_content, assert_ctrl_c_exits,
-    block_on_local, form_elicitation, make_app, row_containing, row_text, with_elicitation,
+    block_on_local, form_elicitation, make_app, with_elicitation,
+};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::{buffer::Buffer, layout::Rect};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
+use utils::plan_review::PlanReviewElicitationMeta;
+use wisp::testing::buffer_text;
+use wisp::{
+    renderer::DrawContext,
+    screens::plan_review::PlanReviewScreen,
+    surfaces::{
+        elicitation::ElicitationResponder,
+        input::{PlanReviewOutput, UiEvent},
+    },
+    theme::Theme,
+    view::{generation::Generation, syntax::SyntaxHighlighter},
 };
 
-fn make_meta(markdown: &str) -> PlanReviewElicitationMeta {
-    PlanReviewElicitationMeta::new(&PathBuf::from("/tmp/plan.md"), markdown)
+type Responses = Arc<Mutex<Vec<CreateElicitationResponse>>>;
+
+fn screen(markdown: &str) -> (PlanReviewScreen, Responses) {
+    let responses = Arc::new(Mutex::new(Vec::new()));
+    let output = Arc::clone(&responses);
+    let responder = ElicitationResponder::from_fn(move |response| output.lock().unwrap().push(response));
+    (
+        PlanReviewScreen::new(PlanReviewElicitationMeta::new(&PathBuf::from("/tmp/plan.md"), markdown), responder),
+        responses,
+    )
 }
 
-fn make_screen(markdown: &str) -> (PlanReviewScreen, oneshot::Receiver<CreateElicitationResponse>) {
-    let meta = make_meta(markdown);
-    let (tx, rx) = oneshot::channel();
-    let responder = ElicitationResponder::from_fn(move |response: CreateElicitationResponse| {
-        let _ = tx.send(response);
-    });
-    (PlanReviewScreen::new(meta, responder), rx)
+fn key(code: KeyCode) -> UiEvent {
+    UiEvent::Key(KeyEvent::new(code, KeyModifiers::NONE))
 }
-
-fn key(code: KeyCode) -> KeyEvent {
-    KeyEvent::new(code, KeyModifiers::NONE)
+fn type_text(screen: &mut PlanReviewScreen, text: &str) {
+    for character in text.chars() {
+        screen.on_ui_event(key(KeyCode::Char(character)));
+    }
 }
-
-/// Sends a key and reports whether it ended the review.
-fn closes(screen: &mut PlanReviewScreen, key: KeyEvent) -> bool {
-    screen.on_key(key).iter().any(|message| matches!(message, PlanReviewOutput::Outcome(_)))
-}
-
-fn render_screen(screen: &mut PlanReviewScreen, width: u16, height: u16) -> Buffer {
+fn render(screen: &mut PlanReviewScreen, width: u16, height: u16) -> Buffer {
+    let area = Rect::new(3, 2, width, height);
+    let mut buffer = Buffer::empty(area);
     let theme = Theme::default();
     let mut highlighter = SyntaxHighlighter::new();
-    let backend = TestBackend::new(width, height);
-    let mut terminal = ratatui::Terminal::with_options(backend, TerminalOptions::default()).unwrap();
-    terminal
-        .draw(|frame| {
-            let mut cx =
-                DrawContext { theme: &theme, highlighter: &mut highlighter, theme_generation: Generation::default() };
-            screen.render(frame.area(), frame.buffer_mut(), &mut cx);
-        })
-        .unwrap();
-    terminal.backend().buffer().clone()
+    screen.render(
+        area,
+        &mut buffer,
+        &mut DrawContext { theme: &theme, highlighter: &mut highlighter, theme_generation: Generation::default() },
+    );
+    buffer
 }
 
 #[test]
-fn document_parses_outline_from_plan_markdown() {
-    let markdown = "# Overview\ncontent\n## Implementation\nmore\n### Details\nnested";
-    let document = PlanDocument::parse("plan.md", markdown);
-
-    assert_eq!(document.outline.len(), 3);
-    assert_eq!(document.outline[0].title, "Overview");
-    assert_eq!(document.outline[0].level, 1);
-    assert_eq!(document.outline[0].first_line_no, 1);
-    assert_eq!(document.outline[1].title, "Implementation");
-    assert_eq!(document.outline[1].level, 2);
-    assert_eq!(document.outline[1].first_line_no, 3);
-    assert_eq!(document.outline[2].title, "Details");
-    assert_eq!(document.outline[2].level, 3);
-    assert_eq!(document.outline[2].first_line_no, 5);
+fn decisions_preserve_acp_payload_and_resolve_exactly_once() {
+    for (binding, decision) in [('a', "approve"), ('r', "deny")] {
+        let (mut screen, responses) = screen("# Plan\n\nImplement this.");
+        assert!(
+            screen
+                .on_ui_event(key(KeyCode::Char(binding)))
+                .iter()
+                .any(|output| matches!(output, PlanReviewOutput::Outcome(_)))
+        );
+        screen.on_ui_event(key(KeyCode::Char(binding)));
+        screen.cancel();
+        drop(screen);
+        let responses = responses.lock().unwrap();
+        assert_eq!(responses.len(), 1);
+        let content = accepted_content(&responses[0]);
+        assert_eq!(content["decision"], decision);
+        assert!(content["feedback"].is_string());
+    }
 }
 
 #[test]
-fn document_tracks_section_membership_per_line() {
-    let markdown = "# Intro\nfirst\n## Body\nsecond\n## Summary\nthird";
-    let document = PlanDocument::parse("plan.md", markdown);
-
-    assert_eq!(document.section_title_for(&document.lines[0]), Some("Intro"));
-    assert_eq!(document.section_title_for(&document.lines[1]), Some("Intro"));
-    assert_eq!(document.section_title_for(&document.lines[2]), Some("Body"));
-    assert_eq!(document.section_title_for(&document.lines[3]), Some("Body"));
-    assert_eq!(document.section_title_for(&document.lines[4]), Some("Summary"));
-    assert_eq!(document.section_title_for(&document.lines[5]), Some("Summary"));
+fn cancellation_and_route_destruction_resolve_exactly_once() {
+    for explicit in [false, true] {
+        let (mut screen, responses) = screen("# Plan\n\nbody");
+        if explicit {
+            screen.cancel();
+            screen.cancel();
+        }
+        drop(screen);
+        let responses = responses.lock().unwrap();
+        assert_eq!(responses.len(), 1);
+        assert!(matches!(responses[0].action, ElicitationAction::Cancel));
+    }
 }
 
 #[test]
-fn source_line_cursor_moves_with_jk() {
-    let markdown = "# Plan\nline 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10";
-    let (mut screen, _rx) = make_screen(markdown);
-
-    // Initial position: line 0 (0-indexed)
-    assert!(!closes(&mut screen, key(KeyCode::Char('j')))); // → line 1
-    assert!(!closes(&mut screen, key(KeyCode::Char('j')))); // → line 2
-    assert!(!closes(&mut screen, key(KeyCode::Char('k')))); // → line 1
-    assert!(!closes(&mut screen, key(KeyCode::Char('k')))); // → line 0
-    assert!(!closes(&mut screen, key(KeyCode::Char('k')))); // → line 0 (clamped)
-}
-
-#[test]
-fn source_line_cursor_goes_to_top_and_bottom() {
-    let markdown = "# Plan\na\nb\nc\nd";
-    let (mut screen, _rx) = make_screen(markdown);
-
-    assert!(!closes(&mut screen, key(KeyCode::Char('G')))); // bottom
-    assert!(!closes(&mut screen, key(KeyCode::Char('g')))); // top
-}
-
-#[test]
-fn n_and_p_jump_between_headings() {
-    let markdown = "# One\ntext\n## Two\ntext\n### Three\ntext\n#### Four\ntext";
-    let (mut screen, _rx) = make_screen(markdown);
-
-    // Start at line 0
-    assert!(!closes(&mut screen, key(KeyCode::Char('n')))); // jump to next heading (line 2)
-    assert!(!closes(&mut screen, key(KeyCode::Char('n')))); // jump to next heading (line 4)
-    assert!(!closes(&mut screen, key(KeyCode::Char('p')))); // jump to prev heading (line 2)
-    assert!(!closes(&mut screen, key(KeyCode::Char('p')))); // jump to prev heading (line 0)
-}
-
-#[test]
-fn comment_submit_at_first_line() {
-    let markdown = "# Plan\nfirst line";
-    let (mut screen, mut rx) = make_screen(markdown);
-
-    // Press 'c' to start comment, type text, press Enter to submit
-    assert!(!closes(&mut screen, key(KeyCode::Char('c')))); // start comment
-    type_text(&mut screen, "needs work");
-    assert!(!closes(&mut screen, key(KeyCode::Enter))); // submit
-
-    // Request changes - should include the comment
-    assert!(closes(&mut screen, key(KeyCode::Char('r'))));
-    let response = rx.try_recv().expect("responder should have been called");
-    let content = accepted_content(&response);
-    assert!(content["feedback"].as_str().unwrap().contains("needs work"));
-}
-
-#[test]
-fn comment_cancel_with_escape() {
-    let markdown = "# Plan\nsome line\n## More\nanother line";
-    let (mut screen, mut rx) = make_screen(markdown);
-
-    // Move to line 2
-    assert!(!closes(&mut screen, key(KeyCode::Char('j'))));
-    assert!(!closes(&mut screen, key(KeyCode::Char('j'))));
-
-    // Start comment, type, cancel
-    assert!(!closes(&mut screen, key(KeyCode::Char('c'))));
-    type_text(&mut screen, "should be discarded");
-    assert!(!closes(&mut screen, key(KeyCode::Esc))); // cancel draft
-
-    // Submit request-changes — canceled draft must not leak
-    assert!(closes(&mut screen, key(KeyCode::Char('r'))));
-    let response = rx.try_recv().expect("responder should have been called");
-    let content = accepted_content(&response);
+fn semantic_comment_submission_retains_path_source_and_heading_context() {
+    let (mut screen, responses) = screen("# Plan\n\nBroken paragraph.\n\n```rust\nfn main() {}\n```\n");
+    screen.on_ui_event(key(KeyCode::Char('j')));
+    screen.on_ui_event(key(KeyCode::Char('c')));
+    type_text(&mut screen, "Clarify this paragraph");
+    screen.on_ui_event(key(KeyCode::Enter));
+    screen.on_ui_event(key(KeyCode::Char('r')));
+    let responses = responses.lock().unwrap();
+    assert_eq!(responses.len(), 1);
+    let content = accepted_content(&responses[0]);
+    assert_eq!(content["decision"], "deny");
     let feedback = content["feedback"].as_str().unwrap();
-    assert!(!feedback.contains("should be discarded"), "canceled draft must not leak into feedback: {feedback}");
-    assert!(feedback.contains("no inline comments"), "should return no-inline-comments fallback: {feedback}");
+    for expected in ["Clarify this paragraph", "plan.md", "Broken paragraph", "Plan"] {
+        assert!(feedback.contains(expected), "missing {expected}: {feedback}");
+    }
 }
 
 #[test]
-fn comment_undo_removes_last_comment() {
-    let markdown = "# Plan\na\nb\nc";
-    let (mut screen, _rx) = make_screen(markdown);
-
-    // Add comment on line 1
-    assert!(!closes(&mut screen, key(KeyCode::Char('c'))));
-    type_text(&mut screen, "first");
-    assert!(!closes(&mut screen, key(KeyCode::Enter)));
-
-    // Add comment on line 2
-    assert!(!closes(&mut screen, key(KeyCode::Char('j'))));
-    assert!(!closes(&mut screen, key(KeyCode::Char('c'))));
-    type_text(&mut screen, "second");
-    assert!(!closes(&mut screen, key(KeyCode::Enter)));
-
-    // Undo last
-    assert!(!closes(&mut screen, key(KeyCode::Char('u'))));
-
-    // Submit feedback: should only contain "first"
-    assert!(closes(&mut screen, key(KeyCode::Char('r'))));
+fn code_line_comments_preserve_source_context() {
+    let (mut screen, responses) = screen("# Plan\n\n```rust\nfn first() {}\nfn last() {}\n```\n");
+    screen.on_ui_event(key(KeyCode::Char('G')));
+    screen.on_ui_event(key(KeyCode::Char('c')));
+    type_text(&mut screen, "Rename this function");
+    screen.on_ui_event(key(KeyCode::Enter));
+    screen.on_ui_event(key(KeyCode::Char('r')));
+    let responses = responses.lock().unwrap();
+    let content = accepted_content(&responses[0]);
+    let feedback = content["feedback"].as_str().unwrap();
+    assert!(feedback.contains("Rename this function"), "{feedback}");
+    assert!(feedback.contains("fn last()"), "{feedback}");
 }
 
 #[test]
-fn comment_at_last_line() {
-    let markdown = "# Plan\na";
-    let (mut screen, _rx) = make_screen(markdown);
-
-    // Go to last line
-    assert!(!closes(&mut screen, key(KeyCode::Char('G'))));
-    assert!(!closes(&mut screen, key(KeyCode::Char('c'))));
-    type_text(&mut screen, "last line comment");
-    assert!(!closes(&mut screen, key(KeyCode::Enter)));
+fn draft_and_help_escape_do_not_cancel_review() {
+    let (mut screen, responses) = screen("# Plan\n\nbody");
+    screen.on_ui_event(key(KeyCode::Char('?')));
+    screen.on_ui_event(key(KeyCode::Esc));
+    assert!(responses.lock().unwrap().is_empty());
+    screen.on_ui_event(key(KeyCode::Char('c')));
+    type_text(&mut screen, "discard me");
+    screen.on_ui_event(key(KeyCode::Esc));
+    assert!(responses.lock().unwrap().is_empty());
+    screen.on_ui_event(key(KeyCode::Char('r')));
+    let responses = responses.lock().unwrap();
+    assert!(!accepted_content(&responses[0])["feedback"].as_str().unwrap().contains("discard me"));
 }
 
 #[test]
-fn comment_at_middle_line() {
-    let markdown = "# Plan\na\nb\nc\nd\ne";
-    let (mut screen, _rx) = make_screen(markdown);
-
-    // Go to middle line (line 2, 0-indexed)
-    assert!(!closes(&mut screen, key(KeyCode::Char('j'))));
-    assert!(!closes(&mut screen, key(KeyCode::Char('j'))));
-    assert!(!closes(&mut screen, key(KeyCode::Char('c'))));
-    type_text(&mut screen, "middle");
-    assert!(!closes(&mut screen, key(KeyCode::Enter)));
-}
-
-#[test]
-fn feedback_groups_comments_by_section() {
-    let markdown = "# Intro\nintro text\n## Details\ndetail text";
-    let document = PlanDocument::parse("plan.md", markdown);
-
-    let comments =
-        vec![ReviewComment::new(2, "fix intro".to_string()), ReviewComment::new(4, "fix details".to_string())];
-
-    let feedback = compile_feedback(&document, &comments);
-    assert!(feedback.contains("## Intro"));
-    assert!(feedback.contains("## Details"));
-    assert!(feedback.contains("Line 2"));
-    assert!(feedback.contains("Line 4"));
-}
-
-#[test]
-fn feedback_handles_multiline_comments() {
-    let markdown = "# Top\nline";
-    let document = PlanDocument::parse("plan.md", markdown);
-    let comments = vec![ReviewComment::new(2, "First point\n\nSecond point".to_string())];
-
-    let feedback = compile_feedback(&document, &comments);
-    assert!(feedback.contains("- First point"));
-    assert!(feedback.contains("- Second point"));
-}
-
-#[test]
-fn feedback_sanitizes_backticks_in_snippets() {
-    let markdown = "# Top\nuse `backtick` here";
-    let document = PlanDocument::parse("plan.md", markdown);
-    let comments = vec![ReviewComment::new(2, "ok".to_string())];
-
-    let feedback = compile_feedback(&document, &comments);
-    assert!(feedback.contains("\\`backtick\\`"));
-}
-
-#[test]
-fn feedback_truncates_long_snippets() {
-    let long_line = "x".repeat(200);
-    let markdown = format!("# Top\n{long_line}");
-    let document = PlanDocument::parse("plan.md", &markdown);
-    let comments = vec![ReviewComment::new(2, "ok".to_string())];
-
-    let feedback = compile_feedback(&document, &comments);
-    assert!(feedback.contains("..."));
-    assert!(!feedback.contains(&long_line));
-}
-
-#[test]
-fn feedback_no_comments_produces_fallback() {
-    let markdown = "# Plan\nline";
-    let document = PlanDocument::parse("plan.md", markdown);
-    let feedback = compile_feedback(&document, &[]);
-    assert!(feedback.contains("no inline comments"));
-}
-
-#[test]
-fn feedback_handles_code_fence_lines_in_snippets() {
-    let markdown = "# Plan\n```rust\nfn main() {}\n```";
-    let document = PlanDocument::parse("plan.md", markdown);
-    let comments = vec![ReviewComment::new(2, "wrong language".to_string())];
-
-    let feedback = compile_feedback(&document, &comments);
-    // Code fence markers get backtick-escaped during sanitization
-    assert!(feedback.contains('`'), "feedback should contain backtick-quoted snippet");
-}
-
-#[test]
-fn approve_sends_correct_payload() {
-    let markdown = "# Plan\ntext";
-    let (mut screen, mut rx) = make_screen(markdown);
-
-    // Approve
-    assert!(closes(&mut screen, key(KeyCode::Char('a'))));
-
-    let response = rx.try_recv().expect("responder should have been called");
-    let content = accepted_content(&response);
-    assert_eq!(content["decision"].as_str().unwrap(), "approve");
-}
-
-#[test]
-fn request_changes_sends_feedback_in_payload() {
-    let markdown = "# Plan\nbroken line";
-    let (mut screen, mut rx) = make_screen(markdown);
-
-    // Add a comment
-    assert!(!closes(&mut screen, key(KeyCode::Char('j')))); // move to line 1
-    assert!(!closes(&mut screen, key(KeyCode::Char('c'))));
-    type_text(&mut screen, "this is wrong");
-    assert!(!closes(&mut screen, key(KeyCode::Enter)));
-
-    // Request changes
-    assert!(closes(&mut screen, key(KeyCode::Char('r'))));
-
-    let response = rx.try_recv().expect("responder should have been called");
-    let content = accepted_content(&response);
-    assert_eq!(content["decision"].as_str().unwrap(), "deny");
-    assert!(content["feedback"].as_str().unwrap().contains("this is wrong"));
-}
-
-#[test]
-fn cancel_sends_correct_payload() {
-    let markdown = "# Plan\ntext";
-    let (mut screen, mut rx) = make_screen(markdown);
-
-    assert!(closes(&mut screen, key(KeyCode::Esc)));
-
-    let response = rx.try_recv().expect("responder should have been called");
-    assert!(matches!(&response.action, ElicitationAction::Cancel));
-}
-
-#[test]
-fn responder_is_called_exactly_once_on_approve() {
-    let markdown = "# Plan\ntext";
-    let (mut screen, mut rx) = make_screen(markdown);
-
-    assert!(closes(&mut screen, key(KeyCode::Char('a'))));
-    assert!(rx.try_recv().is_ok(), "responder should fire exactly once");
-    assert!(rx.try_recv().is_err(), "responder should NOT fire twice");
-}
-
-#[test]
-fn responder_is_called_exactly_once_on_close_replacement() {
-    let markdown = "# Plan\ntext";
-    let (mut screen, mut rx) = make_screen(markdown);
-
-    // Call cancel() (which happens on screen close/replacement)
-    screen.cancel();
-
-    assert!(rx.try_recv().is_ok(), "cancel should fire responder");
-    assert!(rx.try_recv().is_err(), "responder should NOT fire twice");
-
-    // Calling cancel again should be a no-op
-    screen.cancel();
-}
-
-#[test]
-fn responder_is_called_exactly_once_on_request_changes() {
-    let markdown = "# Plan\ntext";
-    let (mut screen, mut rx) = make_screen(markdown);
-
-    assert!(closes(&mut screen, key(KeyCode::Char('r'))));
-    assert!(rx.try_recv().is_ok());
-    assert!(rx.try_recv().is_err());
-
-    // After responder fires, screen stays closed - all keys return true
-    assert!(closes(&mut screen, key(KeyCode::Char('j'))));
-    assert!(closes(&mut screen, key(KeyCode::Char('a'))));
-    assert!(rx.try_recv().is_err());
-}
-
-#[test]
-fn modified_chars_do_not_approve_or_reject_the_plan() {
-    let (mut screen, mut rx) = make_screen("# Plan\nbody");
+fn modified_and_released_decision_keys_do_not_submit() {
+    let (mut screen, responses) = screen("# Plan\n\nbody");
     for modifiers in
         [KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SUPER, KeyModifiers::HYPER, KeyModifiers::META]
     {
-        assert!(!closes(&mut screen, KeyEvent::new(KeyCode::Char('a'), modifiers)), "{modifiers:?} must not approve");
-        assert!(!closes(&mut screen, KeyEvent::new(KeyCode::Char('r'), modifiers)), "{modifiers:?} must not reject");
+        screen.on_ui_event(UiEvent::Key(KeyEvent::new(KeyCode::Char('a'), modifiers)));
+        screen.on_ui_event(UiEvent::Key(KeyEvent::new(KeyCode::Char('r'), modifiers)));
     }
-    assert!(rx.try_recv().is_err(), "no decision should be sent for a composed char");
-
-    assert!(closes(&mut screen, key(KeyCode::Char('a'))));
-    let response = rx.try_recv().expect("plain 'a' should approve");
-    assert_eq!(accepted_content(&response)["decision"], "approve");
+    screen.on_ui_event(UiEvent::Key(KeyEvent::new_with_kind(
+        KeyCode::Char('a'),
+        KeyModifiers::NONE,
+        KeyEventKind::Release,
+    )));
+    assert!(responses.lock().unwrap().is_empty());
 }
 
 #[test]
-fn modified_chars_do_not_start_a_comment_or_navigate() {
-    let (mut screen, _rx) = make_screen("# Plan\nfirst\nsecond");
+fn widget_paints_each_host_buffer_and_renders_tables() {
+    let (mut screen, _responses) = screen("# Plan\n\n| Task | Status |\n| --- | --- |\n| Implement | Ready |\n");
+    for width in [35, 100] {
+        let first = render(&mut screen, width, 24);
+        let second = render(&mut screen, width, 24);
+        assert_eq!(first, second);
+        let text = buffer_text(&first);
+        assert!(text.contains("Implement"), "{text}");
+        assert!(text.contains("Ready"), "{text}");
+    }
+}
 
-    assert!(!closes(&mut screen, KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
-    assert!(!buffer_text(&render_screen(&mut screen, 80, 24)).contains("new comment"));
-
-    let before = render_screen(&mut screen, 80, 24);
-    assert!(!closes(&mut screen, KeyEvent::new(KeyCode::Char('j'), KeyModifiers::ALT)));
-    assert_eq!(buffer_text(&before), buffer_text(&render_screen(&mut screen, 80, 24)));
-
-    assert!(!closes(&mut screen, key(KeyCode::Char('j'))));
+#[test]
+fn theme_picker_returns_a_stable_selection_without_resolving_review() {
+    let (mut screen, responses) = screen("# Plan");
+    render(&mut screen, 100, 24);
+    screen.on_ui_event(key(KeyCode::Char('t')));
+    render(&mut screen, 100, 24);
+    let outputs = screen.on_ui_event(key(KeyCode::Enter));
+    assert!(
+        outputs.iter().any(|output| matches!(output, PlanReviewOutput::SetTheme(id) if id == "builtin:sage")),
+        "{outputs:?}"
+    );
+    assert!(responses.lock().unwrap().is_empty());
 }
 
 #[test]
 fn double_ctrl_c_exits_over_plan_review() {
     block_on_local(async {
         let mut app = make_app();
-
         let meta = PlanReviewElicitationMeta::new(&PathBuf::from("/tmp/plan.md"), "# Plan\nbody").to_json().unwrap();
         with_elicitation(&mut app, form_elicitation("plan", "Approve plan?", ElicitationSchema::new()).meta(meta))
             .await;
         assert!(app.app().full_screen_active());
         assert_ctrl_c_exits(&mut app);
     });
-}
-
-#[test]
-fn wide_screen_shows_plan_and_outline_panels() {
-    let markdown = "# Overview\ncontent\n## Details\nmore";
-    let (mut screen, _rx) = make_screen(markdown);
-
-    let buffer = render_screen(&mut screen, 80, 24);
-    let text = buffer_text(&buffer);
-    assert!(text.contains("Outline"), "wide screen should show Outline panel: {text}");
-    assert!(text.contains("Overview"), "wide screen should show section in outline");
-    assert!(text.contains("Details"), "wide screen should show second section");
-}
-
-#[test]
-fn wide_screen_renders_plan_with_line_numbers() {
-    let markdown = "# Plan\nline one\nline two\nline three";
-    let (mut screen, _rx) = make_screen(markdown);
-
-    let buffer = render_screen(&mut screen, 80, 24);
-    let text = buffer_text(&buffer);
-    assert!(text.contains('1'), "should have line number 1");
-    assert!(text.contains("line one"), "should show source text");
-}
-
-#[test]
-fn narrow_screen_falls_back_to_single_pane() {
-    let markdown = "# Overview\ntext\n## Details\nmore";
-    let (mut screen, _rx) = make_screen(markdown);
-
-    // Width under MIN_SPLIT_WIDTH (60)
-    let buffer = render_screen(&mut screen, 50, 24);
-    let text = buffer_text(&buffer);
-    assert!(!text.contains("Outline"), "narrow screen should NOT show Outline panel but got: {text}");
-    assert!(text.contains("text"), "narrow screen should show plan content");
-}
-
-#[test]
-fn footer_shows_only_primary_contextual_actions() {
-    let markdown = "# Plan\ntext";
-    let (mut screen, _rx) = make_screen(markdown);
-
-    let buffer = render_screen(&mut screen, 80, 24);
-    let text = buffer_text(&buffer);
-    assert!(text.contains("[a] approve"), "{text}");
-    assert!(text.contains("[r] changes"), "{text}");
-    assert!(text.contains("[c] comment"), "{text}");
-    assert!(text.contains("[?] shortcuts"), "{text}");
-    assert!(!text.contains("heading"), "secondary navigation belongs in shortcut help: {text}");
-}
-
-#[test]
-fn plan_review_shortcut_help_opens_and_closes_before_the_review() {
-    let markdown = "# Plan\ntext";
-    let (mut screen, _rx) = make_screen(markdown);
-
-    assert!(!closes(&mut screen, key(KeyCode::Char('?'))));
-    let help = buffer_text(&render_screen(&mut screen, 80, 24));
-    assert!(help.contains("Review shortcuts"), "{help}");
-    assert!(help.contains("Navigation"), "{help}");
-    assert!(help.contains("Decision"), "{help}");
-    assert!(help.contains("next heading"), "{help}");
-
-    assert!(!closes(&mut screen, key(KeyCode::Esc)));
-    let review = buffer_text(&render_screen(&mut screen, 80, 24));
-    assert!(!review.contains("Review shortcuts"));
-    assert!(review.contains("Plan"));
-}
-
-#[test]
-fn plan_review_shortcut_help_uses_one_readable_column_when_narrow() {
-    let (mut screen, _rx) = make_screen("# Plan\ntext");
-
-    assert!(!closes(&mut screen, key(KeyCode::Char('?'))));
-    let help = buffer_text(&render_screen(&mut screen, 40, 24));
-
-    assert!(help.contains("previous heading"), "{help}");
-    assert!(help.contains("request changes"), "{help}");
-}
-
-#[test]
-fn plan_without_an_outline_advertises_the_working_top_shortcut() {
-    let (mut screen, _rx) = make_screen("plain text");
-
-    let footer = buffer_text(&render_screen(&mut screen, 80, 24));
-
-    assert!(footer.contains("[g] top"), "{footer}");
-    assert!(!footer.contains("[h] top"), "{footer}");
-}
-
-#[test]
-fn plan_review_keeps_a_bottom_draft_and_its_cursor_visible() {
-    block_on_local(async {
-        let markdown = (1..=30).map(|line| format!("line {line}")).collect::<Vec<_>>().join("\n");
-        let mut ui = make_app();
-        let meta = PlanReviewElicitationMeta::new(&PathBuf::from("/tmp/plan.md"), &markdown).to_json().unwrap();
-        let _response =
-            with_elicitation(&mut ui, form_elicitation("plan", "Approve plan?", ElicitationSchema::new()).meta(meta))
-                .await;
-        ui.draw();
-
-        assert!(!ui.backend().cursor_visible(), "the hidden composer must not own the cursor");
-
-        ui.key(key(KeyCode::Char('G')));
-        ui.key(key(KeyCode::Char('c')));
-        ui.type_text(&format!("{}END", "x".repeat(80)));
-        ui.draw();
-
-        let buffer = ui.backend().buffer();
-        let row = row_containing(buffer, "END").expect("wrapped draft tail should scroll into view");
-        let text = row_text(buffer, row);
-        let end = u16::try_from(text.chars().position(|character| character == 'D').unwrap() + 1).unwrap();
-        assert!(ui.backend().cursor_visible());
-        assert_eq!(ui.backend().cursor_position(), ratatui::layout::Position::new(end, row));
-    });
-}
-
-#[test]
-fn comment_editor_is_rendered_inline() {
-    let markdown = "# Plan\nsome line\n## More\nanother line";
-    let (mut screen, _rx) = make_screen(markdown);
-
-    // Start a comment on line 2 (0-indexed)
-    assert!(!closes(&mut screen, key(KeyCode::Char('j'))));
-    assert!(!closes(&mut screen, key(KeyCode::Char('c'))));
-    type_text(&mut screen, "fix this");
-
-    let buffer = render_screen(&mut screen, 80, 24);
-    let text = buffer_text(&buffer);
-    assert!(text.contains("Draft"), "should show the draft box header: {text}");
-    assert!(text.contains("fix this"), "should show draft text: {text}");
-}
-
-#[test]
-fn submitted_comments_appear_inline() {
-    let markdown = "# Plan\nline one\nline two";
-    let (mut screen, _rx) = make_screen(markdown);
-
-    // Submit a comment
-    assert!(!closes(&mut screen, key(KeyCode::Char('c'))));
-    type_text(&mut screen, "needs improvement");
-    assert!(!closes(&mut screen, key(KeyCode::Enter)));
-
-    let buffer = render_screen(&mut screen, 80, 24);
-    let text = buffer_text(&buffer);
-    assert!(text.contains("Comment on line"), "should show comment header: {text}");
-    assert!(text.contains("needs improvement"), "should show comment body: {text}");
-}
-
-#[test]
-fn focus_switches_between_outline_and_plan() {
-    let markdown = "# Overview\ncontent\n## Details\nmore";
-    let (mut screen, _rx) = make_screen(markdown);
-
-    // Plan is focused by default
-    // Switch to outline
-    assert!(!closes(&mut screen, key(KeyCode::Char('h'))));
-
-    // In outline mode, Enter should jump
-    let buffer = render_screen(&mut screen, 80, 24);
-    let text = buffer_text(&buffer);
-    assert!(text.contains("Overview"), "outline should show section");
-
-    // Switch back to plan
-    assert!(!closes(&mut screen, key(KeyCode::Char('l'))));
-}
-
-#[test]
-fn outline_without_sections_shows_no_split() {
-    let markdown = "just text\nno headings";
-    let (mut screen, _rx) = make_screen(markdown);
-
-    let buffer = render_screen(&mut screen, 80, 24);
-    let text = buffer_text(&buffer);
-    assert!(!text.contains("Outline"), "no outline when no headings: {text}");
-}
-
-#[test]
-fn mouse_click_in_outline_pane_focuses_outline_at_wide_width() {
-    let markdown = "# Section One\nline a\n## Section Two\nline b";
-    let (mut screen, _rx) = make_screen(markdown);
-
-    render_screen(&mut screen, 80, 24);
-
-    // Clicks at y=2 (past border), x=2 (left side, within outline_width = 80/4 = 20)
-    screen.on_mouse(MouseAction::Click, 2, 2);
-
-    let buffer = render_screen(&mut screen, 80, 24);
-    let text = buffer_text(&buffer);
-    // Outline should have accent background when focused
-    assert!(text.contains("Section One"), "outline should show sections: {text}");
-    assert!(text.contains("Section Two"), "outline should show sections: {text}");
-}
-
-#[test]
-fn mouse_click_in_plan_pane_focuses_plan_at_wide_width() {
-    let markdown = "# Section One\nline a\n## Section Two\nline b";
-    let (mut screen, _rx) = make_screen(markdown);
-
-    render_screen(&mut screen, 80, 24);
-
-    // Clicks at y=2, x=60 (right side, past outline_width = 20)
-    screen.on_mouse(MouseAction::Click, 2, 60);
-
-    let buffer = render_screen(&mut screen, 80, 24);
-    let text = buffer_text(&buffer);
-    assert!(text.contains("Section One"), "plan should show sections: {text}");
-}
-
-#[test]
-fn mouse_click_at_narrow_width_always_focuses_plan() {
-    let markdown = "# Section One\nline a\n## Section Two\nline b";
-    let (mut screen, _rx) = make_screen(markdown);
-
-    // 50-wide: below MIN_SPLIT_WIDTH (60), no split
-    render_screen(&mut screen, 50, 24);
-
-    // Click at y=2, x=2 — even on the "left" side, should be Plan
-    screen.on_mouse(MouseAction::Click, 2, 2);
-
-    let buffer = render_screen(&mut screen, 50, 24);
-    let text = buffer_text(&buffer);
-    // No outline pane in narrow layout
-    assert!(!text.contains("Outline"), "no outline in narrow layout: {text}");
-}
-
-#[test]
-fn mouse_click_on_border_is_ignored() {
-    let markdown = "# Section One\nline a";
-    let (mut screen, _rx) = make_screen(markdown);
-
-    render_screen(&mut screen, 80, 24);
-
-    // Plan starts as default focus
-    // Click at y=0 (border), focus shouldn't change
-    screen.on_mouse(MouseAction::Click, 0, 30);
-
-    let buffer = render_screen(&mut screen, 80, 24);
-    let text = buffer_text(&buffer);
-    assert!(text.contains("Section One"), "plan should still render: {text}");
-}
-
-#[test]
-fn mouse_click_after_resize_uses_correct_pane_rects() {
-    let markdown = "# Section One\nline a\n## Section Two\nline b";
-    let (mut screen, _rx) = make_screen(markdown);
-
-    // Render at wide width
-    render_screen(&mut screen, 100, 30);
-
-    // outline_width at width=100: 100/4=25
-    // Click at x=5 (outline side)
-    screen.on_mouse(MouseAction::Click, 2, 5);
-
-    // Resize to different width
-    render_screen(&mut screen, 120, 30);
-
-    // outline_width at width=120: 120/4=30
-    // Click at x=5 still in outline side
-    screen.on_mouse(MouseAction::Click, 2, 5);
-
-    // Click at x=90 is in plan side at width 120
-    screen.on_mouse(MouseAction::Click, 2, 90);
-
-    let buffer = render_screen(&mut screen, 120, 30);
-    let text = buffer_text(&buffer);
-    assert!(text.contains("Section One"), "plan should render: {text}");
-}
-
-#[test]
-fn mouse_wheel_moves_the_plan_cursor_like_an_arrow_key() {
-    let markdown = "one\ntwo\nthree\nfour\nfive";
-    let (mut arrow_screen, mut arrow_rx) = make_screen(markdown);
-    let (mut wheel_screen, mut wheel_rx) = make_screen(markdown);
-
-    render_screen(&mut arrow_screen, 50, 10);
-    render_screen(&mut wheel_screen, 50, 10);
-    arrow_screen.on_key(key(KeyCode::Down));
-    wheel_screen.on_mouse(MouseAction::ScrollDown, 2, 20);
-
-    for screen in [&mut arrow_screen, &mut wheel_screen] {
-        screen.on_key(key(KeyCode::Char('c')));
-        type_text(screen, "selected");
-        screen.on_key(key(KeyCode::Enter));
-        screen.on_key(key(KeyCode::Char('r')));
-    }
-
-    let arrow_response = arrow_rx.try_recv().expect("arrow review should submit");
-    let wheel_response = wheel_rx.try_recv().expect("wheel review should submit");
-    assert_eq!(accepted_content(&wheel_response)["feedback"], accepted_content(&arrow_response)["feedback"]);
-    assert!(accepted_content(&wheel_response)["feedback"].as_str().unwrap().contains("Line 2"));
-}
-
-#[test]
-fn mouse_wheel_moves_past_a_wrapped_source_line() {
-    let markdown = format!("{}\nnext line", "wrapped ".repeat(20));
-    let (mut screen, mut rx) = make_screen(&markdown);
-
-    render_screen(&mut screen, 30, 10);
-    screen.on_mouse(MouseAction::ScrollDown, 2, 15);
-    screen.on_key(key(KeyCode::Char('c')));
-    type_text(&mut screen, "selected");
-    screen.on_key(key(KeyCode::Enter));
-    screen.on_key(key(KeyCode::Char('r')));
-
-    let response = rx.try_recv().expect("review should submit");
-    let feedback = accepted_content(&response)["feedback"].as_str().unwrap().to_string();
-    assert!(feedback.contains("Line 2"), "wheel should move past the wrapped first line: {feedback}");
-}
-
-fn type_text(screen: &mut PlanReviewScreen, text: &str) {
-    for c in text.chars() {
-        if c == ' ' {
-            screen.on_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
-        } else {
-            screen.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
-        }
-    }
 }

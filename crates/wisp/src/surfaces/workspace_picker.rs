@@ -1,9 +1,9 @@
 use crate::renderer::DrawContext;
 use crate::session::workspace_status::home_relative_path;
 use crate::surfaces::input::{Nav, UiEvent, WorkspacePickerOutput, is_press};
+use crate::theme::Theme;
 use crate::view::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::view::filterable_list::FilterableList;
-use crate::theme::Theme;
 use crate::view::widgets::TextInput;
 use acp_utils::notifications::{WorkspaceEntry, WorkspaceMoveTarget};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -95,7 +95,7 @@ impl WorkspacePicker {
             Paragraph::new(vec![Line::raw(""), hint]).render(inner, buf);
         }
 
-        let field = Style::new().fg(theme.text_primary).bg(theme.sidebar_bg);
+        let field = theme.surface_style();
         TextInput::new(name)
             .prefix("  Name: ")
             .prefix_style(field)

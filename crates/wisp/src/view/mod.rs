@@ -4,7 +4,6 @@
 //! are passed to `StatefulWidget` implementations separately. Line-building
 //! helpers remain plain functions because they are also measured, cached, or
 //! inserted into scrollback before a terminal area exists.
-pub mod diff;
 pub(crate) mod edit_buffer;
 
 pub mod filterable_list;

@@ -5,12 +5,16 @@ pub(crate) mod overlay;
 mod settings_model;
 mod themes;
 
+use clankerdiff_ratatui::theme::ReviewTheme;
 pub(crate) use settings_model::SettingsModel;
-pub use themes::{list_theme_files, load_theme_file, resolve_theme_file_path};
+pub(crate) use themes::{builtin_review_theme_choices, review_theme_choices};
+pub use themes::{list_theme_files, load_theme_file};
 
 use acp_utils::settings::SettingsStore;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
+
+use crate::theme::ThemeLoadError;
 
 pub const DEFAULT_CONTENT_PADDING: usize = 2;
 
@@ -50,10 +54,56 @@ pub struct KeybindingsSettings {
     pub open_prompt_search: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct ThemeSettings {
-    pub file: Option<String>,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "source", rename_all = "lowercase", deny_unknown_fields)]
+pub enum ThemeSettings {
+    Builtin {
+        #[serde(deserialize_with = "deserialize_builtin_theme")]
+        id: String,
+    },
+    File {
+        #[serde(deserialize_with = "deserialize_theme_file")]
+        file: String,
+    },
+}
+
+impl Default for ThemeSettings {
+    fn default() -> Self {
+        Self::Builtin { id: "sage".into() }
+    }
+}
+
+impl ThemeSettings {
+    pub fn selection_id(&self) -> String {
+        match self {
+            Self::Builtin { id } => format!("builtin:{id}"),
+            Self::File { file } => format!("file:{file}"),
+        }
+    }
+
+    pub fn from_selection_id(value: &str) -> Result<Self, ThemeLoadError> {
+        if let Some(id) = value.strip_prefix("builtin:") {
+            clankerdiff_ratatui::theme::ReviewTheme::builtin(id)?;
+            Ok(Self::Builtin { id: id.into() })
+        } else if let Some(file) = value.strip_prefix("file:") {
+            themes::validate_file_name(file)?;
+            Ok(Self::File { file: file.into() })
+        } else {
+            Err(ThemeLoadError::InvalidFile(value.into()))
+        }
+    }
+}
+
+fn deserialize_theme_file<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let file = String::deserialize(deserializer)?;
+    themes::validate_file_name(&file).map_err(serde::de::Error::custom)?;
+    Ok(file)
+}
+
+fn deserialize_builtin_theme<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let id = String::deserialize(deserializer)?;
+    ReviewTheme::builtin(&id).map_err(serde::de::Error::custom)?;
+    Ok(id)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -313,14 +363,14 @@ mod tests {
         let settings: UiSettings = serde_json::from_str(
             r#"{
                 "contentPadding": 4,
-                "theme": {"file": "nord.tmTheme"},
+                "theme": {"source": "file", "file": "nord.json"},
                 "statusLine": {"left": ["cwd"]}
             }"#,
         )
         .unwrap();
 
         assert_eq!(settings.content_padding, Some(4));
-        assert_eq!(settings.theme.file.as_deref(), Some("nord.tmTheme"));
+        assert_eq!(settings.theme, ThemeSettings::File { file: "nord.json".into() });
     }
 
     #[test]
@@ -361,12 +411,12 @@ mod tests {
     #[test]
     fn status_line_settings_present_are_no_longer_ignored() {
         let settings: UiSettings = serde_json::from_str(
-            r#"{"contentPadding":4,"theme":{"file":"nord.tmTheme","future":true},"statusLine":{"left":[{"type":"cwd"}],"right":[{"type":"agent"}]}}"#,
+            r#"{"contentPadding":4,"theme":{"source":"file","file":"nord.json"},"statusLine":{"left":[{"type":"cwd"}],"right":[{"type":"agent"}]}}"#,
         )
         .unwrap();
 
         assert_eq!(settings.content_padding, Some(4));
-        assert_eq!(settings.theme.file.as_deref(), Some("nord.tmTheme"));
+        assert_eq!(settings.theme, ThemeSettings::File { file: "nord.json".into() });
         assert!(settings.status_line.is_some());
         let sl = settings.status_line.unwrap();
         assert_eq!(sl.left, Some(vec![StatusLineSegmentConfig::Cwd { max_width: None }]));

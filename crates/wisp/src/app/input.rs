@@ -61,6 +61,12 @@ impl App {
             self.dispatch_outputs(actions);
             return;
         }
+        if let UiEvent::Key(key) = &event
+            && self.ui.keybindings.toggle_git_diff.matches(*key)
+            && matches!(&self.route, Route::GitReview(screen) if screen.is_browsing()) {
+            self.close_active();
+            return;
+        }
         let actions: Vec<RootOutput> = match &mut self.route {
             Route::GitReview(screen) => screen.on_ui_event(event).into_iter().map(RootOutput::GitReview).collect(),
             Route::PlanReview(screen) => screen.on_ui_event(event).into_iter().map(RootOutput::PlanReview).collect(),
@@ -116,7 +122,7 @@ impl App {
         if self.ui.keybindings.toggle_git_diff.matches(key) {
             let (screen, task) = GitDiffScreen::new(self.session.working_dir().to_path_buf());
             self.open_route(Route::GitReview(Box::new(screen)));
-            self.queue(Command::Git(task));
+            self.queue(Command::GitWatch(task));
             return;
         }
 

@@ -46,11 +46,11 @@ The connected agent may advertise additional commands.
 
 UI preferences are stored in `~/.wisp/settings.json`. Set `WISP_HOME` to use a different configuration directory. Supported settings include themes, content padding, status-line segments, and global keybindings.
 
-Place TextMate `.tmTheme` files in `~/.wisp/themes/` and select one in settings:
+Choose a Clankerdiff built-in theme in `/settings`, or place versioned Clankerdiff JSON theme files in `~/.wisp/themes/`. A built-ins use `{"source":"builtin","id":"sage"}`; custom uses the JSON filename:
 
 ```json
 {
-  "theme": { "file": "my-theme.tmTheme" },
+  "theme": { "source": "file", "file": "my-theme.json" },
   "keybindings": {
     "toggleGitDiff": "ctrl+d"
   }

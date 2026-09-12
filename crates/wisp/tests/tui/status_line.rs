@@ -1,6 +1,8 @@
 use acp_utils::client::AcpEvent;
 use acp_utils::notifications::{McpServerStatus, McpServerStatusEntry};
 use agent_client_protocol::schema::v1::{self as acp, SessionId};
+use clankerdiff_ratatui::composite_color;
+use clankerdiff_ratatui::theme::{ReviewTheme, Rgba, ThemeError};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::time::{Duration, Instant};
 use wisp::session::workspace_status::WorkspaceStatus;
@@ -57,6 +59,67 @@ fn type_and_submit(ui: &mut TestUi, text: &str) {
 
 fn context_usage(used: u64, limit: u64) -> AcpEvent {
     session_update(acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(used, limit)))
+}
+
+#[test]
+fn every_builtin_renders_distinct_status_roles() -> Result<(), ThemeError> {
+    for descriptor in ReviewTheme::catalog() {
+        let review = ReviewTheme::builtin(&descriptor.id)?;
+        let palette = review.ui;
+        let settings =
+            UiSettings { theme: wisp::settings::ThemeSettings::Builtin { id: descriptor.id }, ..Default::default() };
+        let mut ui = make_ui(&settings, 180, 20);
+        ui.acp_event(config_update(vec![model_option(), reasoning_option(), mode_option()]));
+        ui.acp_event(context_usage(150_000, 200_000));
+        ui.acp_event(AcpEvent::McpNotification(acp_utils::notifications::McpNotification::ServerStatus {
+            servers: vec![McpServerStatusEntry::new("linear", McpServerStatus::NeedsOAuth)],
+        }));
+        let buffer = ui.viewport();
+        for (text, color) in [
+            ("aether", palette.info),
+            ("medium", palette.info),
+            ("main", palette.positive),
+            ("Claude Sonnet", palette.positive),
+            ("~/code/demo", palette.text_secondary),
+            ("ctx", palette.warning),
+            ("1 server needs auth", palette.warning),
+        ] {
+            assert_text_color(&buffer, text, composite_color(color, palette.canvas));
+        }
+        ui.acp_event(context_usage(180_000, 200_000));
+        assert_text_color(&ui.viewport(), "ctx", composite_color(palette.destructive, palette.canvas));
+    }
+    Ok(())
+}
+
+#[test]
+fn ui_only_theme_switch_recolors_status_mentions_and_message_surfaces() {
+    let mut ui = make_ui(&UiSettings::default(), 180, 20);
+    ui.submit("user message");
+    ui.complete_prompt(acp::StopReason::EndTurn);
+    ui.type_text("@src/lib.rs ");
+    let mut review = ReviewTheme::default();
+    let syntax_revision = review.syntax.revision();
+    for (info, surface) in [
+        (Rgba::new(40, 160, 220, 255), Rgba::new(35, 45, 55, 255)),
+        (Rgba::new(90, 180, 240, 255), Rgba::new(45, 55, 65, 255)),
+    ] {
+        review.ui.info = info;
+        review.ui.surface = surface;
+        let settings = Box::new(ui.app().ui_settings().clone());
+        ui.deliver_result(CommandResult::ThemeApplied(Ok((settings, Theme::from_review(review.clone())))));
+        let buffer = ui.viewport();
+        let color = composite_color(info, review.ui.canvas);
+        assert_text_color(&buffer, "aether", color);
+        assert_text_color(&buffer, "@src/lib.rs", color);
+        assert!(
+            buffer
+                .content()
+                .iter()
+                .any(|cell| cell.symbol() == "u" && cell.bg == composite_color(surface, review.ui.canvas))
+        );
+    }
+    assert_eq!(ui.app().theme().review().syntax.revision(), syntax_revision);
 }
 
 #[test]
@@ -664,4 +727,21 @@ fn context_exactly_half_fills_one_and_a_half_slots() {
     let text = ui.viewport_text();
     assert!(text.contains("100k"), "should show formatted count, got:\n{text}");
     assert!(text.contains("200k"), "should show limit, got:\n{text}");
+}
+
+fn assert_text_color(buffer: &Buffer, text: &str, color: Color) {
+    let symbols: Vec<_> = text.chars().map(|character| character.to_string()).collect();
+    let matched = (buffer.area.top()..buffer.area.bottom()).any(|y| {
+        (buffer.area.left()..buffer.area.right()).any(|x| {
+            symbols.iter().enumerate().all(|(offset, symbol)| {
+                let Ok(offset) = u16::try_from(offset) else {
+                    return false;
+                };
+                buffer
+                    .cell((x.saturating_add(offset), y))
+                    .is_some_and(|cell| cell.symbol() == symbol && cell.fg == color)
+            })
+        })
+    });
+    assert!(matched, "{text:?} should be {color:?}:\n{}", buffer_text(buffer));
 }

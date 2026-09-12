@@ -1,13 +1,11 @@
-use crate::command::{AgentCommand, Command, CommandResult, FailedCommand};
 use crate::app::keybindings::Keybindings;
 use crate::app::message::Message;
+use crate::command::{AgentCommand, Command, CommandResult, FailedCommand};
 use crate::conversation::items::{Conversation, ConversationItem};
 use crate::conversation::progress_indicator::{ProgressIndicator, ProgressPhase};
 use crate::conversation::status_line::StatusLineModel;
 use crate::conversation::tool_calls::ToolStatus;
-use crate::session::platform::{
-    BrowserOpener, ClipboardWriter, default_browser_opener, default_clipboard_writer,
-};
+use crate::session::platform::{BrowserOpener, ClipboardWriter, default_browser_opener, default_clipboard_writer};
 use crate::session::session_config_view::LocalConfigOption;
 use crate::session::session_model::SessionModel;
 use crate::session::workspace_status::WorkspaceStatus;
@@ -15,11 +13,10 @@ use crate::settings::{
     ResolvedStatusLineSettings, SettingsModel, UiSettings, resolve_content_padding, resolve_status_line_settings,
 };
 use crate::surfaces::composer::Composer;
-use crate::surfaces::input::RootOutput;
-use crate::surfaces::workspace_picker::WorkspacePicker;
 use crate::surfaces::picker::CommandEntry;
-use crate::view::generation::Generation;
+use crate::surfaces::workspace_picker::WorkspacePicker;
 use crate::theme::Theme;
+use crate::view::generation::Generation;
 use acp_utils::client::AcpEvent;
 use acp_utils::notifications::AetherCapabilities;
 use agent_client_protocol::schema::v1::{self as acp, SessionId};
@@ -143,11 +140,15 @@ impl App {
     }
 
     pub fn new(config: AppConfig) -> Self {
+        let (theme, theme_error) = match Theme::load_selection(&config.settings.theme) {
+            Ok(theme) => (theme, None),
+            Err(error) => (Theme::default(), Some(error)),
+        };
         let ui = UiConfig {
             content_padding: resolve_content_padding(&config.settings),
             status_line: resolve_status_line_settings(&config.settings),
             keybindings: Keybindings::from_settings(&config.settings),
-            theme: Theme::load(&config.settings),
+            theme,
             theme_generation: Generation::default(),
             settings: SettingsModel::new(config.settings.clone()),
         };
@@ -155,7 +156,7 @@ impl App {
         let initial_commands = builtin_commands(&capabilities);
         let browser_opener = config.browser_opener.clone();
         let clipboard_writer = config.clipboard_writer.clone();
-        Self {
+        let mut app = Self {
             session: SessionModel::from_config(config, capabilities),
             ui,
             available_commands: initial_commands,
@@ -168,7 +169,11 @@ impl App {
             submission: SubmissionState::default(),
             browser_opener,
             clipboard_writer,
+        };
+        if let Some(error) = theme_error {
+            app.notify(&format!("Could not load selected theme: {error}"));
         }
+        app
     }
 
     /// Reduce one external input and return its commands.
@@ -216,9 +221,14 @@ impl App {
             }
             CommandResult::FilesIndexed { request_id, files } => self.composer.on_files_indexed(request_id, files),
             CommandResult::GitDiff(event) => {
-                let Route::GitReview(screen) = &mut self.route else { return };
-                let outputs = screen.on_event(event).into_iter().map(RootOutput::GitReview).collect();
-                self.dispatch_outputs(outputs);
+                if let Route::GitReview(screen) = &mut self.route {
+                    screen.on_event(event);
+                }
+            }
+            CommandResult::GitWatch(event) => {
+                if let Route::GitReview(screen) = &mut self.route {
+                    screen.on_watch_event(event);
+                }
             }
             CommandResult::SubmissionPrepared(outcome) => self.finish_submission(outcome),
             CommandResult::ThemesListed(files) => {
@@ -227,7 +237,12 @@ impl App {
                     overlay.upsert_local_entries(entries);
                 }
             }
-            CommandResult::ThemeApplied { settings, theme, error } => self.finish_theme_change(settings, theme, error),
+            CommandResult::ReviewThemesListed(choices) => match &mut self.route {
+                Route::GitReview(screen) => screen.set_theme_choices(choices),
+                Route::PlanReview(screen) => screen.set_theme_choices(choices),
+                Route::Conversation => {}
+            },
+            CommandResult::ThemeApplied(result) => self.finish_theme_change(result),
             CommandResult::WorkspaceResolved { cwd, status } => {
                 if self.session.working_dir() == cwd {
                     self.session.set_workspace_status(status);
@@ -462,7 +477,6 @@ impl App {
     }
 
     fn return_to_conversation(&mut self) {
-        self.close_overlay();
-        self.route = Route::Conversation;
+        self.open_route(Route::Conversation);
     }
 }

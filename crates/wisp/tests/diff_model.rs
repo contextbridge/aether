@@ -1,80 +1,40 @@
-use std::path::PathBuf;
-
-use wisp::git_review::{
-    DiffDocument, DiffScope, FileDiff, FileStatus, PatchLineKind, StageState, parse_porcelain_status,
-    parse_unified_diff,
-};
+use agent_client_protocol::schema::v1 as acp;
+use clankerdiff_ratatui::diff::PatchLineKind;
+use wisp::conversation::{Conversation, ConversationContent};
 
 #[test]
-fn acp_texts_normalize_into_canonical_numbered_lines() {
-    let file = FileDiff::from_texts("src/lib.rs", "before\nkeep\n", "after\nkeep\nnew\n");
-
-    assert_eq!(file.status, FileStatus::Modified);
-    assert_eq!(file.old_path.as_deref(), Some("src/lib.rs"));
-    let lines = &file.hunks[0].lines;
-    assert_eq!(lines[0].kind, PatchLineKind::HunkHeader);
-    assert_eq!(lines[1].old_line_no, Some(1));
-    assert_eq!(lines[1].new_line_no, None);
-    assert_eq!(lines[1].kind, PatchLineKind::Removed);
-    assert_eq!(lines[2].old_line_no, None);
-    assert_eq!(lines[2].new_line_no, Some(1));
-    assert_eq!(lines[2].kind, PatchLineKind::Added);
-    assert_eq!(lines.last().and_then(|line| line.new_line_no), Some(3));
-}
-
-#[test]
-fn git_output_normalizes_rename_binary_and_untracked_files() {
-    let diff = concat!(
-        "diff --git a/old.txt b/new.txt\n",
-        "similarity index 100%\n",
-        "rename from old.txt\n",
-        "rename to new.txt\n",
-        "diff --git a/image.png b/image.png\n",
-        "index 123..456\n",
-        "Binary files a/image.png and b/image.png differ\n",
+fn acp_diff_retains_full_sources_and_absolute_path_context() {
+    let conversation = conversation_with_diff("/workspace/src/lib.rs");
+    let ConversationContent::Tool(tool) = conversation.items()[0].content() else {
+        panic!("tool item");
+    };
+    let file = tool.diff.as_ref().expect("valid preview");
+    assert_eq!(file.path.as_str(), "workspace/src/lib.rs");
+    assert!(file.old_source.is_ok());
+    assert!(file.new_source.is_ok());
+    assert!(
+        file.hunks
+            .iter()
+            .flat_map(|hunk| &hunk.lines)
+            .any(|line| line.kind == PatchLineKind::Added && line.text.as_ref() == "after")
     );
-    let document = DiffDocument::from_git_output(
-        PathBuf::from("/repo"),
-        diff,
-        "R  old.txt\0new.txt\0?? notes.txt\0",
-        [("notes.txt".to_string(), b"hello\n".to_vec())],
-        DiffScope::Both,
-    )
-    .unwrap();
-
-    assert_eq!(document.files.len(), 3);
-    assert_eq!(document.files[0].path, "image.png");
-    assert!(document.files[0].binary);
-    assert_eq!(document.files[1].status, FileStatus::Renamed);
-    assert_eq!(document.files[1].old_path.as_deref(), Some("old.txt"));
-    assert_eq!(document.files[1].staged, StageState::Staged);
-    assert_eq!(document.files[2].status, FileStatus::Untracked);
-    assert_eq!(document.files[2].staged, StageState::Unstaged);
 }
 
 #[test]
-fn porcelain_status_distinguishes_staged_partial_and_unstaged() {
-    let status = parse_porcelain_status("M  staged.rs\0MM partial.rs\0 M unstaged.rs\0");
-
-    assert_eq!(status["staged.rs"], StageState::Staged);
-    assert_eq!(status["partial.rs"], StageState::PartiallyStaged);
-    assert_eq!(status["unstaged.rs"], StageState::Unstaged);
+fn invalid_acp_diff_path_is_reported_instead_of_panicking() {
+    let conversation = conversation_with_diff("../escape.rs");
+    let ConversationContent::Tool(tool) = conversation.items()[0].content() else {
+        panic!("tool item");
+    };
+    assert!(tool.diff.is_none());
+    assert!(tool.display_value.as_ref().unwrap().contains("Cannot preview ../escape.rs"));
 }
 
-#[test]
-fn unified_parser_accepts_single_line_hunk_ranges() {
-    let files = parse_unified_diff(concat!(
-        "diff --git a/a.txt b/a.txt\n",
-        "index 111..222\n",
-        "--- a/a.txt\n",
-        "+++ b/a.txt\n",
-        "@@ -1 +1 @@\n",
-        "-old\n",
-        "+new\n",
-    ))
-    .unwrap();
-
-    assert_eq!(files[0].hunks[0].old_count, 1);
-    assert_eq!(files[0].hunks[0].new_count, 1);
-    assert_eq!(files[0].hunks[0].lines[1].text, "old");
+fn conversation_with_diff(path: &str) -> Conversation {
+    let mut conversation = Conversation::new();
+    conversation.on_tool_call(&acp::ToolCall::new("edit", "Edit file"));
+    let fields = acp::ToolCallUpdateFields::new()
+        .content(vec![acp::ToolCallContent::Diff(acp::Diff::new(path, "after\nkeep\n").old_text("before\nkeep\n"))]);
+    conversation.on_tool_call_update(&acp::ToolCallUpdate::new("edit", fields));
+    conversation
 }
