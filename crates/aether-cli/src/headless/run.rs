@@ -324,6 +324,10 @@ fn setup_tracing(verbose: bool) {
 #[cfg(test)]
 mod tests {
     use aether_core::events::StreamState;
+    use aether_core::testing::{
+        llm_call_ended, llm_call_started, retry_scheduled, tool_call, tool_call_update, tool_error, tool_progress,
+        tool_result,
+    };
 
     use super::*;
     use llm::ContextUsage;
@@ -356,38 +360,24 @@ mod tests {
 
     #[test]
     fn format_text_formats_tool_call() {
-        let msg = AgentEvent::Tool(ToolEvent::Call {
-            request: llm::ToolCallRequest {
-                id: "tc1".to_string(),
-                name: "bash".to_string(),
-                arguments: r#"{"cmd":"ls"}"#.to_string(),
-            },
-        });
+        let msg = tool_call("tc1", "bash", r#"{"cmd":"ls"}"#);
         assert_eq!(format_text(&msg), Some(r#"Tool call: bash({"cmd":"ls"})"#.to_string()));
     }
 
     #[test]
     fn format_text_skips_tool_call_updates() {
-        let msg =
-            AgentEvent::Tool(ToolEvent::CallUpdate { tool_call_id: "tc1".to_string(), chunk: "partial".to_string() });
+        let msg = tool_call_update("tc1", "partial");
         assert_eq!(format_text(&msg), None);
     }
 
     #[test]
     fn format_text_formats_tool_result() {
-        assert_eq!(format_text(&tool_result_msg()), Some("Tool result [bash]: ok".to_string()));
+        assert_eq!(format_text(&tool_result("tc1", "bash", "{}", "ok")), Some("Tool result [bash]: ok".to_string()));
     }
 
     #[test]
     fn format_text_formats_tool_error() {
-        let msg = AgentEvent::Tool(ToolEvent::Error {
-            error: llm::ToolCallError {
-                id: "tc1".to_string(),
-                name: "bash".to_string(),
-                arguments: None,
-                error: "not found".to_string(),
-            },
-        });
+        let msg = tool_error("tc1", "bash", "not found");
         assert_eq!(format_text(&msg), Some("Tool error [bash]: not found".to_string()));
     }
 
@@ -405,25 +395,19 @@ mod tests {
 
     #[test]
     fn format_text_formats_retry_schedule() {
-        let msg = retry_scheduled(1, 10);
+        let msg = retry_scheduled(1, 3, 10);
         assert_eq!(format_text(&msg), Some("Retrying (1/3) in 10ms".to_string()));
     }
 
     #[test]
     fn format_text_formats_llm_call_failure_that_will_retry() {
-        let msg = AgentEvent::Turn(TurnEvent::LlmCallEnded {
-            purpose: llm::LlmCallPurpose::Chat,
-            outcome: LlmCallOutcome::failed("overloaded", true),
-        });
+        let msg = llm_call_ended(LlmCallOutcome::failed("overloaded", true));
         assert_eq!(format_text(&msg), Some("LLM call failed (will retry): overloaded".to_string()));
     }
 
     #[test]
     fn format_text_skips_terminal_llm_call_failure() {
-        let msg = AgentEvent::Turn(TurnEvent::LlmCallEnded {
-            purpose: llm::LlmCallPurpose::Chat,
-            outcome: LlmCallOutcome::failed("boom", false),
-        });
+        let msg = llm_call_ended(LlmCallOutcome::failed("boom", false));
         assert_eq!(format_text(&msg), None);
     }
 
@@ -452,13 +436,13 @@ mod tests {
 
     #[test]
     fn format_text_formats_tool_progress_with_total() {
-        let msg = tool_progress(50.0, Some(100.0), Some("halfway"));
+        let msg = tool_progress("tc1", "bash", 50.0, Some(100.0), Some("halfway"));
         assert_eq!(format_text(&msg), Some("Tool progress [bash]: 50/100 - halfway".to_string()));
     }
 
     #[test]
     fn format_text_formats_tool_progress_without_total() {
-        let msg = tool_progress(42.0, None, None);
+        let msg = tool_progress("tc1", "bash", 42.0, None, None);
         assert_eq!(format_text(&msg), Some("Tool progress [bash]: 42".to_string()));
     }
 
@@ -491,13 +475,7 @@ mod tests {
     fn event_kind_none_for_non_output_fragments() {
         assert_eq!(event_kind(&AgentEvent::text("id", "x", StreamState::Partial)), None);
         assert_eq!(event_kind(&AgentEvent::thought("id", "x", StreamState::Partial)), None);
-        assert_eq!(
-            event_kind(&AgentEvent::Tool(ToolEvent::CallUpdate {
-                tool_call_id: "tc1".to_string(),
-                chunk: "x".to_string(),
-            })),
-            None,
-        );
+        assert_eq!(event_kind(&tool_call_update("tc1", "x")), None);
     }
 
     #[test]
@@ -507,32 +485,29 @@ mod tests {
 
     #[test]
     fn should_emit_empty_filter_rejects_non_output_events() {
-        assert!(should_emit(&tool_call_msg(), &[]));
+        assert!(should_emit(&tool_call("tc1", "bash", "{}"), &[]));
         assert!(should_emit(
             &AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Failed { error: "e".to_string() } }),
             &[]
         ));
         assert!(should_emit(&AgentEvent::turn_ended(TurnOutcome::Completed), &[]));
         assert!(!should_emit(&AgentEvent::text("id", "x", StreamState::Partial), &[]));
-        assert!(!should_emit(
-            &AgentEvent::Tool(ToolEvent::CallUpdate { tool_call_id: "tc1".to_string(), chunk: "x".to_string() }),
-            &[],
-        ));
+        assert!(!should_emit(&tool_call_update("tc1", "x"), &[]));
     }
 
     #[test]
     fn should_emit_single_type_whitelist() {
         let filter = &[CliEventKind::ToolCall];
-        assert!(should_emit(&tool_call_msg(), filter));
-        assert!(!should_emit(&tool_result_msg(), filter));
+        assert!(should_emit(&tool_call("tc1", "bash", "{}"), filter));
+        assert!(!should_emit(&tool_result("tc1", "bash", "{}", "ok"), filter));
         assert!(!should_emit(&AgentEvent::turn_ended(TurnOutcome::Completed), filter));
     }
 
     #[test]
     fn should_emit_multi_type_whitelist() {
         let filter = &[CliEventKind::ToolCall, CliEventKind::ToolResult];
-        assert!(should_emit(&tool_call_msg(), filter));
-        assert!(should_emit(&tool_result_msg(), filter));
+        assert!(should_emit(&tool_call("tc1", "bash", "{}"), filter));
+        assert!(should_emit(&tool_result("tc1", "bash", "{}", "ok"), filter));
         assert!(!should_emit(&AgentEvent::turn_ended(TurnOutcome::Completed), filter));
     }
 
@@ -550,25 +525,15 @@ mod tests {
         let samples = vec![
             (AgentEvent::text("id", "x", StreamState::Complete), CliEventKind::Text),
             (AgentEvent::thought("id", "x", StreamState::Complete), CliEventKind::Thought),
-            (tool_call_msg(), CliEventKind::ToolCall),
-            (tool_result_msg(), CliEventKind::ToolResult),
-            (
-                AgentEvent::Tool(ToolEvent::Error {
-                    error: llm::ToolCallError {
-                        id: "tc1".to_string(),
-                        name: "bash".to_string(),
-                        arguments: None,
-                        error: "boom".to_string(),
-                    },
-                }),
-                CliEventKind::ToolError,
-            ),
+            (tool_call("tc1", "bash", "{}"), CliEventKind::ToolCall),
+            (tool_result("tc1", "bash", "{}", "ok"), CliEventKind::ToolResult),
+            (tool_error("tc1", "bash", "boom"), CliEventKind::ToolError),
             (AgentEvent::Turn(TurnEvent::AutoContinue { attempt: 1, max_attempts: 3 }), CliEventKind::AutoContinue),
             (
                 AgentEvent::Model(ModelEvent::Switched { previous: "a".to_string(), new: "b".to_string() }),
                 CliEventKind::ModelSwitched,
             ),
-            (tool_progress(1.0, None, None), CliEventKind::ToolProgress),
+            (tool_progress("tc1", "bash", 1.0, None, None), CliEventKind::ToolProgress),
             (
                 AgentEvent::Context(ContextEvent::CompactionStarted { message_count: 1 }),
                 CliEventKind::ContextCompactionStarted,
@@ -589,15 +554,9 @@ mod tests {
             (AgentEvent::Context(ContextEvent::Cleared), CliEventKind::ContextCleared),
             (AgentEvent::Turn(TurnEvent::Started { content: vec![] }), CliEventKind::TurnStarted),
             (AgentEvent::turn_ended(TurnOutcome::Completed), CliEventKind::TurnEnded),
-            (retry_scheduled(1, 10), CliEventKind::LlmRetryScheduled),
+            (retry_scheduled(1, 3, 10), CliEventKind::LlmRetryScheduled),
             (llm_call_started(0), CliEventKind::LlmCallStarted),
-            (
-                AgentEvent::Turn(TurnEvent::LlmCallEnded {
-                    purpose: llm::LlmCallPurpose::Chat,
-                    outcome: aether_core::events::LlmCallOutcome::Cancelled,
-                }),
-                CliEventKind::LlmCallEnded,
-            ),
+            (llm_call_ended(LlmCallOutcome::Cancelled), CliEventKind::LlmCallEnded),
             (
                 AgentEvent::Tool(ToolEvent::ExecutionStarted {
                     tool_id: "tc1".to_string(),
@@ -632,60 +591,6 @@ mod tests {
         tx.send(AgentEvent::turn_ended(TurnOutcome::Failed { error: "boom".to_string() })).await.unwrap();
         let code = stream_output(rx, OutputFormat::Text, &[]).await;
         assert_eq!(code, ExitCode::FAILURE);
-    }
-
-    fn tool_call_msg() -> AgentEvent {
-        AgentEvent::Tool(ToolEvent::Call {
-            request: llm::ToolCallRequest {
-                id: "tc1".to_string(),
-                name: "bash".to_string(),
-                arguments: "{}".to_string(),
-            },
-        })
-    }
-
-    fn tool_result_msg() -> AgentEvent {
-        AgentEvent::Tool(ToolEvent::Result {
-            result: llm::ToolCallResult {
-                id: "tc1".to_string(),
-                name: "bash".to_string(),
-                arguments: "{}".to_string(),
-                result: "ok".to_string(),
-            },
-            result_meta: None,
-        })
-    }
-
-    fn tool_progress(progress: f64, total: Option<f64>, message: Option<&str>) -> AgentEvent {
-        AgentEvent::Tool(ToolEvent::Progress {
-            request: llm::ToolCallRequest {
-                id: "tc1".to_string(),
-                name: "bash".to_string(),
-                arguments: "{}".to_string(),
-            },
-            progress,
-            total,
-            message: message.map(str::to_string),
-        })
-    }
-
-    fn retry_scheduled(attempt: u32, delay_ms: u64) -> AgentEvent {
-        AgentEvent::Turn(TurnEvent::RetryScheduled {
-            purpose: llm::LlmCallPurpose::Chat,
-            attempt,
-            max_attempts: 3,
-            delay_ms,
-        })
-    }
-
-    fn llm_call_started(attempt: u32) -> AgentEvent {
-        AgentEvent::Turn(TurnEvent::LlmCallStarted {
-            purpose: llm::LlmCallPurpose::Chat,
-            model: llm::ModelIdentity::default(),
-            display_name: "test".to_string(),
-            attempt,
-            max_attempts: 3,
-        })
     }
 
     fn usage_update() -> AgentEvent {
