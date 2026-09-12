@@ -108,9 +108,9 @@ ast-grep-core = "0.45"
 ast-grep-language = "0.45"
 
 # Terminal UI
-clankerdiff-ratatui = { version = "0.1.7", features = ["crossterm-backend"] }
-clankerdiff-git = "0.1.7"
-clankerdiff-watch = "0.1.7"
+clankerdiff-ratatui = { version = "0.1.8", features = ["crossterm-backend"] }
+clankerdiff-git = "0.1.8"
+clankerdiff-watch = "0.1.8"
 crossterm = { version = "0.29", features = ["event-stream"] }
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "layout-cache", "scrolling-regions"] }
 nucleo = "0.5.0"
