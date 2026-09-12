@@ -5,7 +5,7 @@ description: Ask structured user questions through MCP elicitation.
 
 The `survey` server lets agents collect structured input from the user during a workflow: confirmations, choices, text fields, numbers, booleans, and more.
 
-It uses MCP elicitation, so the client renders a form and returns structured JSON instead of relying on free-form chat.
+It uses MCP elicitation, so the client renders a form and returns structured JSON instead of relying on free-form chat. The calling client must declare elicitation support; if it does not, `ask_user` returns a tool error explaining that elicitation is unsupported. Aether's own terminal UI and ACP clients convert elicitation requests into native forms.
 
 ## Configuration
 

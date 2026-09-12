@@ -71,7 +71,7 @@ In this user-level example, `PLANNER.md` is loaded from the Aether home, while `
 
 ## Agent prompt files
 
-The onboarding wizard writes a single base prompt file, `SYSTEM.md`, that is shared by every agent it creates:
+The onboarding wizard writes a base prompt file, `SYSTEM.md`, that agents inherit through the top-level `prompts` list:
 
 ```markdown title="SYSTEM.md"
 # System Instructions
@@ -86,9 +86,19 @@ Platform: !`uname -s`
 Today's date: !`date +%Y-%m-%d`
 OS Version: !`uname -a`
 </env>
+
+## Guidelines
+
+- Always call tools in parallel unless there are dependencies between tool calls.
+- You have a limited context window, spawn sub-agents when exploring the codebase or doing web-research.
+- Prefer using LSP tools to check for compilation errors, jump to definition and search for symbols over other tools (e.g. grep or bash) as they're faster and more token efficient.
+- When performing multi-step jobs, create tasks to keep yourself organized and on track.
+- When the user asks about how to use Aether (settings, tools, agents, commands, TUI etc), use your `aether-docs` skill instead of answering from memory.
 ```
 
-Agents inherit the top-level `prompts` list (which includes `SYSTEM.md`) by default. An agent can override it with its own `prompts` array — for example, the batteries-included wizard also writes `.aether/agents/codebase-explorer/AGENTS.md`, which is scoped to the Explore agent only.
+The batteries-included preset also writes an `aether-docs` skill under `.aether/skills/` (project scope) or `~/.aether/skills/` (user scope) to back that last guideline.
+
+Agents inherit the top-level `prompts` list (which includes `SYSTEM.md`) by default. An agent can override it with its own `prompts` array — for example, the batteries-included wizard gives the Explore agent its own `AGENTS.md` (written under the `agents/` directory of the settings scope), so Explore replaces the top-level list and does _not_ receive `SYSTEM.md`.
 
 Additional files such as `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md` are ordinary prompt sources. Include them when you want to reuse instructions already authored for other tools.
 
@@ -113,7 +123,7 @@ Current branch: !`git branch --show-current`
 Crate count: !`find packages -name Cargo.toml | wc -l`
 ```
 
-Aether runs each marker with `$SHELL -c` from the prompt cwd, substitutes trimmed stdout, and removes the marker if the command fails. Use interpolation for small, deterministic context such as dates, branch names, or environment summaries; avoid expensive commands in prompts because they run when the prompt is assembled.
+Aether runs each marker with `$SHELL -c` from the prompt cwd, substitutes the command's stdout (trailing whitespace removed), and removes the marker if the command fails. Use interpolation for small, deterministic context such as dates, branch names, or environment summaries; avoid expensive commands in prompts because they run when the prompt is assembled.
 
 Inline text sources do not run shell interpolation. Globbed markdown files do.
 

@@ -64,7 +64,7 @@ Start with a `name`, and short `description`.
 
 #### Model
 
-Set the LLM your agent uses via the `model` field using a string of the format `provider:model`, e.g. `zai:glm-5.1`.
+Set the LLM your agent uses via the `model` field using a string of the format `provider:model`, e.g. `zai:glm-5.1`. You can also list several comma-separated model specs (e.g. `zai:glm-5.3,openai:gpt-5.5`) to [alloy](/aether/settings/llm-providers/#alloying) models together.
 
 ```json {7} title=".aether/settings.json"
 {
@@ -80,7 +80,7 @@ Set the LLM your agent uses via the `model` field using a string of the format `
 }
 ```
 
-If you selected a model with reasoning capabilities, use the `reasoningEffort` field to control it.
+If you selected a model with reasoning capabilities, use the `reasoningEffort` field to control it. Supported values are `minimal`, `low`, `medium`, `high`, `xhigh`, and `max` — the model must actually support the level you request (see [reasoning effort](/aether/settings/llm-providers/#reasoning-effort)).
 
 ```json {8} title=".aether/settings.json"
 {
@@ -90,7 +90,7 @@ If you selected a model with reasoning capabilities, use the `reasoningEffort` f
       "name": "Build",
       "description": "Builds features and fixes bugs",
       "model": "zai:glm-5.1",
-      "reasoningEffort": "high" // minimal, low, medium, high, xhigh, or max
+      "reasoningEffort": "high"
     }
   ]
 }
@@ -122,7 +122,7 @@ See [LLMs](/aether/settings/llm-providers/) for more information on LLM and prov
 
 ### System Prompt
 
-Set your agent's system prompt via the `prompts` field, which is specified as an array of sources (file paths, globs, text, etc). Aether agents have no built-in system prompt, so what's in `prompts` is the _full_ system prompt.
+Set your agent's system prompt via the `prompts` field, which is specified as an array of sources (file paths, globs, text, etc). Aether agents have no built-in system prompt, so what's in `prompts` is the _full_ system prompt (connected MCP servers may append their own instructions after it — see [prompt ordering](/aether/settings/system-prompts/#prompt-ordering)).
 
 Prompt sources are concatenated in the order provided.
 

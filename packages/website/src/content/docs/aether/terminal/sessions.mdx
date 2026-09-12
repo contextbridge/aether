@@ -23,22 +23,36 @@ This tells the agent to create a fresh session. The conversation history is clea
 /resume
 ```
 
-This asks the agent for a list of previous sessions. A picker appears listing available sessions — type to fuzzy-search by title or path. When the terminal is wide enough, a preview panel shows each session's path, last-updated time, model, mode, tool-call count, and recent messages. Select one to restore it — the conversation history and configuration for that saved session are loaded from the agent.
+This asks the agent for a list of previous sessions. A picker appears listing available sessions — type to fuzzy-search by title or path. When the terminal is wide enough, a preview panel shows each session's title, path, creation time, model, mode, tool-call count, and recent messages. Select one to restore it — the conversation history and configuration for that saved session are loaded from the agent.
 
 ## Session state
 
 Each session tracks:
 
-| State                | Description                              |
-| -------------------- | ---------------------------------------- |
-| Session ID           | Unique identifier                        |
-| Title                | Agent-generated summary                  |
-| Working directory    | The directory the session was started in |
-| Config selections    | Model, reasoning effort, mode, etc.      |
-| Conversation history | Full message history (stored by agent)   |
+| State                | Description                                        |
+| -------------------- | -------------------------------------------------- |
+| Session ID           | Unique identifier                                  |
+| Title                | Derived from the session's first user message      |
+| Working directory    | The directory the session was started in           |
+| Config selections    | Model and mode                                     |
+| Conversation history | Full message history (stored by agent)             |
 
-When you switch sessions, the configuration options that were active in that session are restored.
+When you switch sessions, the model and mode selections that were active in that session are restored.
+
+## Usage and cost tracking
+
+The agent records per-call token usage and estimated cost for every session, including cumulative totals across the whole conversation (with sub-agent usage attributed via `parent_agent_id`). This usage is persisted with the session and restored on resume.
+
+The terminal UI does not render usage yet — to see it, run Aether [headlessly](/aether/running/headless/): every `session_usage` event carries the per-call tokens, estimated cost, and cumulative totals, and the text output prints a `Session usage` line per call that includes the totals so far.
 
 ## Multiple sessions
 
 You can have many sessions stored by the agent. Use `/resume` to switch between them. Only one session is active at a time.
+
+## Moving a session to another workspace
+
+```
+/move
+```
+
+Moves the active session to a different working directory. A picker appears listing the workspaces the agent knows about; the session continues with its history in the selected workspace.

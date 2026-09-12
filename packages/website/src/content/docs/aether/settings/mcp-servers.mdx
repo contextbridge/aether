@@ -336,7 +336,7 @@ Tools can be deferred in two ways:
 }
 ```
 
-`deferTools`can be set to: `false`, `true`, or an object; it defaults to `false`. `false` means every tool will be eagerly loaded into context. `true` defers loading every tool for progressive discovery. An object allows controlling which tools within a single MCP server are deferred via `include` and `exclude` rules.
+`deferTools` can be set to: `false`, `true`, or an object; it defaults to `false`. `false` means every tool will be eagerly loaded into context. `true` defers loading every tool for progressive discovery. An object allows controlling which tools within a single MCP server are deferred: `include` lists the tool name patterns to defer, and `exclude` lists patterns that stay eagerly loaded — `exclude` wins when a tool matches both, as with `performance_stop_trace` above.
 
 Discover deferred tools progressively, without loading their schemas into the model's initial context:
 

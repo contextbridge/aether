@@ -61,14 +61,16 @@ Each root task tree is stored in one JSONL file when persistent storage is enabl
 
 ## Listing and filtering
 
-`task_list` accepts optional filters:
+`task_list` accepts optional filters — but only one filter is applied per call. The filters are evaluated in priority order and the first one present wins; the rest are ignored:
 
 | Field       | Type      | Description                                                                          |
 | ----------- | --------- | ------------------------------------------------------------------------------------ |
-| `assignee`  | `string`  | Only return tasks assigned to this agent or worker.                                  |
-| `status`    | `string`  | Filter by status: `pending`, `inProgress`, `completed`, or `blocked`.                |
-| `treeId`    | `string`  | Only return tasks in one tree, identified by its root task ID.                       |
-| `readyOnly` | `boolean` | Only return tasks that are ready to start (pending with all dependencies completed).  |
+| `readyOnly` | `boolean` | Checked first. Only return tasks that are ready to start (pending with all dependencies completed). |
+| `treeId`    | `string`  | Checked second. Only return tasks in one tree, identified by its root task ID.       |
+| `assignee`  | `string`  | Checked third. Only return tasks assigned to this agent or worker.                   |
+| `status`    | `string`  | Checked last. Filter by status: `pending`, `inProgress`, `completed`, or `blocked`.  |
+
+With no filters, `task_list` returns every task across all trees.
 
 ## Examples
 
@@ -127,6 +129,8 @@ Complete a task and attach handoff context:
 | `blockers`  | Unresolved blockers.                    |
 | `filesRead` | Files examined.                         |
 | `resources` | External resources referenced.          |
+
+The response also reports what changed: a `changes` list of the field names that were updated, and a `newlyReady` list of dependent tasks that became ready to start because of the update.
 
 ## Input names
 
