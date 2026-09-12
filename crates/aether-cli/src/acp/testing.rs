@@ -26,9 +26,9 @@ use aether_sessions::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent,
 use agent_client_protocol::schema::v2::{SessionId, SessionUpdate, StateUpdate, StopReason};
 use agent_client_protocol::{Agent, Client, ConnectionTo};
 use futures::FutureExt;
-use llm::ProviderConnectionOverrides;
 use llm::testing::FakeLlmProvider;
 use llm::{ChatMessage, Context, LlmResponse, SessionUsageEvent, StreamingModelProvider};
+use llm::{MessageId, ProviderConnectionOverrides};
 use mcp_utils::client::{InMemoryServerSpec, McpServer, McpTransport, ToolExposure};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -261,12 +261,18 @@ impl AcpTestHarness {
     pub fn append_stored_prompt(&self, session_id: &str, prompt: &str) {
         self.append_stored_event(
             session_id,
-            &SessionEvent::User(UserEvent::Message { content: vec![llm::ContentBlock::text(prompt)] }),
+            &SessionEvent::User(UserEvent::Message {
+                message_id: llm::MessageId::new(),
+                content: vec![llm::ContentBlock::text(prompt)],
+            }),
         );
     }
 
     pub fn append_stored_user_blocks(&self, session_id: &str, blocks: Vec<llm::ContentBlock>) {
-        self.append_stored_event(session_id, &SessionEvent::User(UserEvent::Message { content: blocks }));
+        self.append_stored_event(
+            session_id,
+            &SessionEvent::User(UserEvent::Message { message_id: llm::MessageId::new(), content: blocks }),
+        );
     }
 
     pub fn append_stored_agent_turn(&self, session_id: &str, text: &str) {
@@ -281,7 +287,7 @@ impl AcpTestHarness {
         self.append_stored_event(
             session_id,
             &SessionEvent::Agent(AgentEvent::Message(MessageEvent::Text {
-                message_id: "msg".to_string(),
+                message_id: MessageId::new(),
                 chunk: text.to_string(),
                 is_complete: true,
             })),

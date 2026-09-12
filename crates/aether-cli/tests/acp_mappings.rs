@@ -83,8 +83,9 @@ fn live_chunks_append_and_replayed_messages_replace_under_stable_ids() {
             text.push_str(&content.text);
         }
         let complete = message(thought, "hello world", true);
-        assert!(map_agent_event_to_session_notification("session".into(), &complete).is_none());
+        let live = map_agent_event_to_session_notification("session".into(), &complete).unwrap().update;
         let replay = map_replayed_agent_event("session".into(), &complete).unwrap().update;
+        assert_eq!(live, replay);
         let (id, content) = match replay {
             acp::SessionUpdate::AgentMessage(m) => (m.message_id, m.content),
             acp::SessionUpdate::AgentThought(m) => (m.message_id, m.content),

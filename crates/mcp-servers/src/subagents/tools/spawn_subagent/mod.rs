@@ -7,6 +7,7 @@ use aether_core::{
     mcp::{McpRuntime, McpSession, mcp},
 };
 use futures::FutureExt;
+use llm::ContentBlock;
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -241,7 +242,8 @@ impl AgentExecutor {
             running_agent
                 .user_tx
                 .send(Command::UserCommand(UserCommand::Text {
-                    content: vec![llm::ContentBlock::text(&prompt_with_instructions)],
+                    message_id: MessageId::new(),
+                    content: vec![ContentBlock::text(&prompt_with_instructions)],
                 }))
                 .await
                 .map_err(|e| format!("Failed to send message to agent: {e}"))?;

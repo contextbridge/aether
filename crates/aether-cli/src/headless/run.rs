@@ -203,7 +203,7 @@ fn format_text(msg: &AgentEvent) -> Option<String> {
             TurnOutcome::Failed { error } => format!("Error: {error}"),
         }),
 
-        AgentEvent::Turn(TurnEvent::AutoContinue { attempt, max_attempts }) => {
+        AgentEvent::Turn(TurnEvent::AutoContinue { attempt, max_attempts, .. }) => {
             Some(format!("Continuing ({attempt}/{max_attempts})..."))
         }
 
@@ -250,7 +250,7 @@ fn format_text(msg: &AgentEvent) -> Option<String> {
             CompactionOutcome::Cancelled => "Context compaction cancelled".to_string(),
         }),
 
-        AgentEvent::Context(ContextEvent::CompactionResult { summary, messages_removed }) => {
+        AgentEvent::Context(ContextEvent::CompactionResult { summary, messages_removed, .. }) => {
             Some(format!("Context compacted: {messages_removed} messages removed. {summary}"))
         }
 
@@ -434,7 +434,12 @@ mod tests {
 
     #[test]
     fn format_text_formats_auto_continue() {
-        let msg = AgentEvent::Turn(TurnEvent::AutoContinue { attempt: 2, max_attempts: 5 });
+        let msg = AgentEvent::Turn(TurnEvent::AutoContinue {
+            attempt: 2,
+            max_attempts: 5,
+            message_id: llm::MessageId::new(),
+            content: vec![],
+        });
         assert_eq!(format_text(&msg), Some("Continuing (2/5)...".to_string()));
     }
 
@@ -471,6 +476,7 @@ mod tests {
     #[test]
     fn format_text_formats_context_compaction_result() {
         let msg = AgentEvent::Context(ContextEvent::CompactionResult {
+            message_id: llm::MessageId::new(),
             summary: "summary here".to_string(),
             messages_removed: 10,
         });
@@ -563,7 +569,15 @@ mod tests {
                 }),
                 CliEventKind::ToolError,
             ),
-            (AgentEvent::Turn(TurnEvent::AutoContinue { attempt: 1, max_attempts: 3 }), CliEventKind::AutoContinue),
+            (
+                AgentEvent::Turn(TurnEvent::AutoContinue {
+                    attempt: 1,
+                    max_attempts: 3,
+                    message_id: llm::MessageId::new(),
+                    content: vec![],
+                }),
+                CliEventKind::AutoContinue,
+            ),
             (
                 AgentEvent::Model(ModelEvent::Switched { previous: "a".to_string(), new: "b".to_string() }),
                 CliEventKind::ModelSwitched,
@@ -578,7 +592,11 @@ mod tests {
                 CliEventKind::ContextCompactionEnded,
             ),
             (
-                AgentEvent::Context(ContextEvent::CompactionResult { summary: "s".to_string(), messages_removed: 1 }),
+                AgentEvent::Context(ContextEvent::CompactionResult {
+                    message_id: llm::MessageId::new(),
+                    summary: "s".to_string(),
+                    messages_removed: 1,
+                }),
                 CliEventKind::ContextCompactionResult,
             ),
             (usage_update(), CliEventKind::ContextUsage),

@@ -195,16 +195,6 @@ pub(crate) fn map_agent_event_to_notification(
             Some(map_display_update_to_notification(session_id, request, meta))
         }
 
-        AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Failed { error } }) => {
-            Some(UpdateSessionNotification::new(
-                session_id,
-                SessionUpdate::AgentMessage(
-                    acp::AgentMessage::new(uuid::Uuid::new_v4().to_string())
-                        .content(vec![ContentBlock::Text(TextContent::new(format!("[Error] {error}")))]),
-                ),
-            ))
-        }
-
         AgentEvent::Context(
             ContextEvent::Cleared
             | ContextEvent::CompactionStarted { .. }
@@ -213,7 +203,7 @@ pub(crate) fn map_agent_event_to_notification(
         )
         | AgentEvent::Turn(
             TurnEvent::Started { .. }
-            | TurnEvent::Ended { outcome: TurnOutcome::Completed | TurnOutcome::Cancelled }
+            | TurnEvent::Ended { outcome: TurnOutcome::Completed | TurnOutcome::Cancelled | TurnOutcome::Failed { .. } }
             | TurnEvent::RetryScheduled { .. }
             | TurnEvent::LlmCallStarted { .. }
             | TurnEvent::LlmCallEnded { .. }
@@ -265,20 +255,14 @@ fn map_chunk_to_notification(
     wrap_message: fn(MessageId, Vec<ContentBlock>) -> SessionUpdate,
     message_id: &str,
 ) -> Option<UpdateSessionNotification> {
-    match mode {
-        // Skip the final completion message to avoid sending duplicate content.
-        // The client has already received all the chunks during streaming.
-        NotificationMode::Live if is_complete => return None,
-        NotificationMode::Replay if !is_complete => return None,
-        NotificationMode::Live | NotificationMode::Replay => {}
+    if matches!(mode, NotificationMode::Replay) && !is_complete {
+        return None;
     }
 
     let content = ContentBlock::Text(TextContent::new(chunk));
     let id = MessageId::new(message_id);
-    let content_chunk = match mode {
-        NotificationMode::Live => wrap(ContentChunk::new(content, id)),
-        NotificationMode::Replay => wrap_message(id, vec![content]),
-    };
+    let content_chunk =
+        if is_complete { wrap_message(id, vec![content]) } else { wrap(ContentChunk::new(content, id)) };
 
     Some(acp::UpdateSessionNotification::new(session_id, content_chunk))
 }
@@ -543,7 +527,7 @@ mod tests {
     fn test_text_includes_message_id() -> Result<(), String> {
         let session_id = SessionId::new("test-session");
         let msg = AgentEvent::Message(MessageEvent::Text {
-            message_id: "msg_42".to_string(),
+            message_id: "msg_42".into(),
             chunk: "hello".to_string(),
             is_complete: false,
         });
@@ -563,7 +547,7 @@ mod tests {
     fn test_thought_includes_message_id() -> Result<(), String> {
         let session_id = acp::SessionId::new("test-session");
         let msg = AgentEvent::Message(MessageEvent::Thought {
-            message_id: "msg_99".to_string(),
+            message_id: "msg_99".into(),
             chunk: "hmm...".to_string(),
             is_complete: false,
         });
@@ -586,7 +570,7 @@ mod tests {
             task_id: "task_1".to_string(),
             agent_name: "sub-agent".to_string(),
             event: AgentEvent::Message(MessageEvent::Text {
-                message_id: "msg_1".to_string(),
+                message_id: "msg_1".into(),
                 chunk: "Hello".to_string(),
                 is_complete: false,
             }),
@@ -618,7 +602,7 @@ mod tests {
     fn test_thought_maps_to_agent_thought_chunk_with_message_id() -> Result<(), String> {
         let session_id = acp::SessionId::new("test-session");
         let thought = AgentEvent::Message(MessageEvent::Thought {
-            message_id: "msg_1".to_string(),
+            message_id: "msg_1".into(),
             chunk: "thinking...".to_string(),
             is_complete: false,
         });
@@ -703,11 +687,11 @@ mod tests {
     }
 
     #[test]
-    fn test_live_mapping_skips_completed_chunks_but_replay_keeps_them() -> Result<(), String> {
+    fn live_and_replay_map_completed_messages_to_identical_upserts() -> Result<(), String> {
         let cases: Vec<(AgentEvent, &str)> = vec![
             (
                 AgentEvent::Message(MessageEvent::Text {
-                    message_id: "msg_1".to_string(),
+                    message_id: "msg_1".into(),
                     chunk: "done".to_string(),
                     is_complete: true,
                 }),
@@ -715,7 +699,7 @@ mod tests {
             ),
             (
                 AgentEvent::Message(MessageEvent::Thought {
-                    message_id: "msg_1".to_string(),
+                    message_id: "msg_1".into(),
                     chunk: "final reasoning".to_string(),
                     is_complete: true,
                 }),
@@ -725,12 +709,10 @@ mod tests {
 
         for (message, expected_text) in cases {
             let session_id = acp::SessionId::new("test-session");
-            assert!(
-                map_agent_event_to_session_notification(session_id.clone(), &message).is_none(),
-                "live mode should skip completed chunk"
-            );
-
+            let live =
+                map_agent_event_to_session_notification(session_id.clone(), &message).ok_or("live notification")?;
             let notification = map_replayed_agent_event(session_id, &message).ok_or("replay notification")?;
+            assert_eq!(live, notification);
 
             let (id, content) = match notification.update {
                 SessionUpdate::AgentMessage(message) => (message.message_id, message.content),

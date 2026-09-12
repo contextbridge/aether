@@ -340,8 +340,15 @@ async fn handle_prompt(
     actor.send_active_command(Command::agent(AgentCommand::SetReasoningEffort(actor.config.reasoning_effort))).await?;
 
     let content = expand_slash_command_in_content(actor.active_runtime()?, content).await;
-    persist_event(actor, io, SessionEvent::User(UserEvent::Message { content: content.clone() }));
-    actor.send_active_command(Command::with_content(content)).await?;
+    let message_id = llm::MessageId::new();
+    let event = SessionEvent::User(UserEvent::Message { message_id: message_id.clone(), content: content.clone() });
+    persist_event(actor, io, event.clone());
+    for notification in crate::acp::protocol::replay::map_session_event_to_notifications(&event, &io.session_id) {
+        if let Err(error) = io.connection.send_notification(notification) {
+            warn!("Failed to send user message: {error}");
+        }
+    }
+    actor.send_active_command(Command::with_message_id(message_id, content)).await?;
 
     loop {
         tokio::select! {

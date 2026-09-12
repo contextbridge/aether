@@ -8,10 +8,7 @@ use super::events::{NotificationMode, map_agent_event_to_notification};
 
 /// Replay session events to the client as ACP notifications.
 ///
-/// Message IDs are fresh for each replay, not durable transcript identities. Clients
-/// (including Wisp) must reset their transcript before a replaying resume, rather
-/// than merge replay into a previously displayed history. Agent chunks are omitted:
-/// only complete message upserts are replayed, avoiding duplicated streaming text.
+/// Replays message upserts. Partial chunks are omitted.
 pub fn replay_to_client(events: &[SessionEvent], connection: &ConnectionTo<Client>, session_id: &SessionId) {
     for event in events {
         for notif in map_session_event_to_notifications(event, session_id) {
@@ -29,26 +26,12 @@ pub fn map_session_event_to_notifications(
     session_id: &SessionId,
 ) -> Vec<UpdateSessionNotification> {
     match event {
-        SessionEvent::User(UserEvent::Message { content }) => vec![UpdateSessionNotification::new(
+        SessionEvent::User(UserEvent::Message { message_id, content }) => vec![UpdateSessionNotification::new(
             session_id.clone(),
-            SessionUpdate::UserMessage(map_user_message(uuid::Uuid::new_v4().to_string().into(), content)),
+            SessionUpdate::UserMessage(map_user_message(message_id.as_str().into(), content)),
         )],
         SessionEvent::Agent(message) => {
-            map_agent_event_to_notification(session_id.clone(), message, NotificationMode::Replay)
-                .map(|mut notification| {
-                    match &mut notification.update {
-                        SessionUpdate::AgentMessage(message) => {
-                            message.message_id = uuid::Uuid::new_v4().to_string().into();
-                        }
-                        SessionUpdate::AgentThought(message) => {
-                            message.message_id = uuid::Uuid::new_v4().to_string().into();
-                        }
-                        _ => {}
-                    }
-                    notification
-                })
-                .into_iter()
-                .collect()
+            map_agent_event_to_notification(session_id.clone(), message, NotificationMode::Replay).into_iter().collect()
         }
         SessionEvent::User(_) | SessionEvent::Control(_) => Vec::new(),
     }
@@ -60,9 +43,10 @@ mod tests {
     use agent_client_protocol::schema::v2 as acp;
 
     #[test]
-    fn replay_emits_one_user_upsert_with_media_in_order_and_fresh_identity() {
+    fn replay_emits_one_user_upsert_with_media_in_order_and_stable_identity() {
         let session_id = acp::SessionId::new("test-session");
         let event = SessionEvent::User(UserEvent::Message {
+            message_id: "user".into(),
             content: vec![
                 llm::ContentBlock::text("hello"),
                 llm::ContentBlock::Image { data: "aW1n".to_string(), mime_type: "image/png".to_string() },
@@ -74,7 +58,7 @@ mod tests {
         assert_eq!(first.len(), 1);
         let SessionUpdate::UserMessage(message) = &first[0].update else { panic!("expected user upsert") };
         let SessionUpdate::UserMessage(replayed) = &second[0].update else { panic!("expected user upsert") };
-        assert_ne!(message.message_id, replayed.message_id);
+        assert_eq!(message.message_id, replayed.message_id);
         let content = message.content.value().expect("whole message content");
         assert!(matches!(&content[0], acp::ContentBlock::Text(text) if text.text == "hello"));
         assert!(matches!(&content[1], acp::ContentBlock::Image(_)));
@@ -97,7 +81,7 @@ mod tests {
             let (cx, mut peer) = acp_utils::testing::test_connection().await;
             let session_id = SessionId::new("test");
             let events = vec![
-                SessionEvent::User(UserEvent::Message { content: vec![llm::ContentBlock::text("hello"), llm::ContentBlock::text("world")] }),
+                SessionEvent::User(UserEvent::Message { message_id: "user".into(), content: vec![llm::ContentBlock::text("hello"), llm::ContentBlock::text("world")] }),
                 SessionEvent::Agent(AgentEvent::Message(MessageEvent::Text { message_id: "original".into(), chunk: "reply".into(), is_complete: false })),
                 SessionEvent::Agent(AgentEvent::Message(MessageEvent::Text { message_id: "original".into(), chunk: "reply".into(), is_complete: true })),
             ];
@@ -107,7 +91,7 @@ mod tests {
             assert!(matches!(first.update, SessionUpdate::UserMessage(_)));
             let second = peer.next_session_notification().await;
             let SessionUpdate::AgentMessage(message) = second.update else { panic!("expected complete agent message") };
-            assert_ne!(message.message_id.0.as_ref(), "original");
+            assert_eq!(message.message_id.0.as_ref(), "original");
             assert!(matches!(&message.content.value().unwrap()[0], acp::ContentBlock::Text(text) if text.text == "reply"));
         }).await;
     }
