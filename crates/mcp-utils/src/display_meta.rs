@@ -32,8 +32,8 @@ pub struct FileDiff {
     /// Original file content (`None` for new files).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_text: Option<String>,
-    /// Content after the edit/write.
-    pub new_text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_text: Option<String>,
 }
 
 /// A snapshot of the agent's current task plan.
@@ -56,6 +56,7 @@ pub enum PlanMetaStatus {
     Pending,
     InProgress,
     Completed,
+    Cancelled,
 }
 
 /// Typed wrapper for the MCP `_meta` field on tool results.
@@ -162,7 +163,7 @@ mod tests {
         FileDiff {
             path: "/tmp/main.rs".to_string(),
             old_text: old_text.map(str::to_string),
-            new_text: "new content".to_string(),
+            new_text: Some("new content".to_string()),
         }
     }
 
@@ -244,6 +245,23 @@ mod tests {
         let meta_json = serde_json::to_value::<ToolResultMeta>(display("Read", "f.rs").into()).unwrap();
         assert!(meta_json.get("plan").is_none());
         assert!(meta_json.get("file_diff").is_none());
+    }
+
+    #[test]
+    fn empty_and_deleted_file_snapshots_remain_distinct() {
+        let empty: FileDiff = serde_json::from_value(serde_json::json!({
+            "path": "/tmp/file", "old_text": "old", "new_text": ""
+        }))
+        .unwrap();
+        let deleted: FileDiff = serde_json::from_value(serde_json::json!({
+            "path": "/tmp/file", "old_text": "old"
+        }))
+        .unwrap();
+        assert_eq!(empty.new_text.as_deref(), Some(""));
+        assert_eq!(deleted.new_text, None);
+        assert_serde_roundtrip(&empty);
+        assert_serde_roundtrip(&deleted);
+        assert_serde_roundtrip(&PlanMetaStatus::Cancelled);
     }
 
     #[test]
