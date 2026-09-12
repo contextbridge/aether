@@ -1,21 +1,25 @@
 use acp_utils::content::format_embedded_resource;
-use agent_client_protocol::schema::v1::{self as acp, ContentBlock, TextContent};
+use agent_client_protocol::schema::v2::{self as acp, ContentBlock, TextContent};
 use llm::ContentBlock as LlmContentBlock;
 
 /// Convert client-supplied ACP content blocks into LLM content blocks for the
 /// agent runtime. Unsupported/unknown blocks degrade to text.
-pub(crate) fn map_acp_to_content_blocks(blocks: Vec<ContentBlock>) -> Vec<LlmContentBlock> {
+pub fn map_acp_to_content_blocks(blocks: Vec<ContentBlock>) -> Vec<LlmContentBlock> {
     blocks
         .into_iter()
         .map(|block| match block {
             ContentBlock::Text(t) => LlmContentBlock::text(t.text),
-            ContentBlock::Image(img) => LlmContentBlock::Image { data: img.data, mime_type: img.mime_type },
-            ContentBlock::Audio(aud) => LlmContentBlock::Audio { data: aud.data, mime_type: aud.mime_type },
+            ContentBlock::Image(img) => LlmContentBlock::Image { data: img.data, mime_type: img.mime_type.to_string() },
+            ContentBlock::Audio(aud) => LlmContentBlock::Audio { data: aud.data, mime_type: aud.mime_type.to_string() },
             ContentBlock::Resource(r) => LlmContentBlock::text(format_embedded_resource(&r)),
             ContentBlock::ResourceLink(l) => LlmContentBlock::text(format!("[Resource: {}]", l.uri)),
             _ => LlmContentBlock::text("[Unknown content]"),
         })
         .collect()
+}
+
+pub fn map_user_message(message_id: acp::MessageId, blocks: &[LlmContentBlock]) -> acp::UserMessage {
+    acp::UserMessage::new(message_id).content(blocks.iter().map(map_user_content_block).collect::<Vec<_>>())
 }
 
 /// Convert a stored LLM content block back into an ACP content block for replay.

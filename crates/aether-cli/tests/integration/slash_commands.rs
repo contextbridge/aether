@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v1 as acp;
+use agent_client_protocol::schema::v2 as acp;
 use rmcp::model::{Prompt, PromptArgument};
 
 /// Create an MCP prompt with no arguments.
@@ -41,9 +41,9 @@ fn test_map_prompt_to_command_with_argument_hint() {
 
     assert_eq!(command.name, "search");
     match command.input {
-        Some(acp::AvailableCommandInput::Unstructured(input)) => {
+        Some(acp::AvailableCommandInput::Text(input)) => {
             assert_eq!(input.hint, "[query]");
         }
-        _ => panic!("Expected Unstructured input with hint"),
+        _ => panic!("Expected Text input with hint"),
     }
 }

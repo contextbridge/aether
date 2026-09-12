@@ -6,7 +6,12 @@ pub(crate) mod state;
 pub(crate) mod stdio;
 pub mod testing;
 
+pub use protocol::content::{map_acp_to_content_blocks, map_user_message};
+pub use protocol::events::{
+    map_agent_event_to_session_notification, map_replayed_agent_event, try_extract_plan_notification,
+};
 pub use protocol::map_mcp_prompt_to_available_command;
+pub use protocol::mcp::map_acp_mcp_servers;
 
 use crate::acp::agent::acp_agent_builder;
 use crate::acp::state::{AcpState, AcpStateConfig};

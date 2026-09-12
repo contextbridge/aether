@@ -79,6 +79,7 @@ dependencies = [
  "agent-client-protocol",
  "async-trait",
  "base64 0.23.1",
+ "clankerdiff-core 0.1.9",
  "clap",
  "crossterm",
  "dirs",
@@ -2595,8 +2596,20 @@ version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a9494118e3894630b6d68dd3b12e70b94e755693d8d6f94f5e52dd244bfe024"
 dependencies = [
- "clankerdiff-fingerprint",
- "clankerdiff-theme",
+ "clankerdiff-fingerprint 0.1.7",
+ "clankerdiff-theme 0.1.7",
+ "diffy",
+ "serde",
+ "similar",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "clankerdiff-core"
+version = "0.1.9"
+dependencies = [
+ "clankerdiff-fingerprint 0.1.9",
+ "clankerdiff-theme 0.1.9",
  "diffy",
  "serde",
  "similar",
@@ -2615,12 +2628,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "clankerdiff-fingerprint"
+version = "0.1.9"
+dependencies = [
+ "blake3",
+ "serde",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "clankerdiff-git"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a078de11f52770890f9d79c83ffb96aff8610e08ae76d52655490ec520b31f35"
 dependencies = [
- "clankerdiff-core",
+ "clankerdiff-core 0.1.7",
  "thiserror 2.0.20",
  "tokio",
 ]
@@ -2631,8 +2653,8 @@ version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cc769f92ad4e868d8e7192427c32f21b1fa80d089165493f9e5457bca6249b9e"
 dependencies = [
- "clankerdiff-core",
- "clankerdiff-fingerprint",
+ "clankerdiff-core 0.1.7",
+ "clankerdiff-fingerprint 0.1.7",
  "pulldown-cmark",
  "serde",
  "thiserror 2.0.20",
@@ -2645,10 +2667,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eb9aef297ecdb2879fe165a88cd10d70f715e72660fd7922ef5b0cbdc606f7d6"
 dependencies = [
  "bitflags 2.13.2",
- "clankerdiff-core",
+ "clankerdiff-core 0.1.7",
  "clankerdiff-markdown",
  "clankerdiff-syntax",
- "clankerdiff-theme",
+ "clankerdiff-theme 0.1.7",
  "crossterm",
  "imbl",
  "ratatui",
@@ -2727,8 +2749,8 @@ dependencies = [
  "arborium-zig",
  "arborium-zsh",
  "cc",
- "clankerdiff-fingerprint",
- "clankerdiff-theme",
+ "clankerdiff-fingerprint 0.1.7",
+ "clankerdiff-theme 0.1.7",
  "imbl",
  "lru",
  "thiserror 2.0.20",
@@ -2742,7 +2764,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc8d802c76988ae2cc01e91295df07923d0a97cb2d4060f981b550e0f29e99e1"
 dependencies = [
  "arborium-theme",
- "clankerdiff-fingerprint",
+ "clankerdiff-fingerprint 0.1.7",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "clankerdiff-theme"
+version = "0.1.9"
+dependencies = [
+ "arborium-theme",
+ "clankerdiff-fingerprint 0.1.9",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -2754,7 +2787,7 @@ version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "548a0258594b2c068b1d4eaf1a4ba25deb23ca666a3b02f2dc92688e9b193f1d"
 dependencies = [
- "clankerdiff-core",
+ "clankerdiff-core 0.1.7",
  "clankerdiff-git",
  "ignore",
  "notify",

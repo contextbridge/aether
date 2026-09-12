@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v1 as acp;
+use agent_client_protocol::schema::v2::{self as acp, AvailableCommandInput, TextCommandInput};
 use rmcp::model::Prompt as McpPrompt;
 
 /// Converts an MCP Prompt to an ACP `AvailableCommand`
@@ -14,7 +14,7 @@ pub fn map_mcp_prompt_to_available_command(prompt: &McpPrompt) -> acp::Available
         .and_then(|args| args.iter().find(|a| a.name.as_str() == "ARGUMENTS").and_then(|a| a.description.as_deref()))
         .unwrap_or("optional arguments");
 
-    let input = Some(acp::AvailableCommandInput::Unstructured(acp::UnstructuredCommandInput::new(hint)));
+    let input = Some(AvailableCommandInput::Text(TextCommandInput::new(hint)));
 
     let description = prompt.description.clone().unwrap_or_else(|| "No description available".to_string());
 
