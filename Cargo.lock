@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "aether-acp-utils"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "aether-acp-utils",
  "aether-llm",
@@ -62,7 +62,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-cli"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -102,7 +102,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-core"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "aether-evals"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -270,7 +270,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-servers"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "aether-agent-core",
  "aether-auth",
@@ -333,7 +333,7 @@ dependencies = [
 
 [[package]]
 name = "aether-project"
-version = "0.5.42"
+version = "0.5.43"
 dependencies = [
  "aether-agent-core",
  "aether-doctest",
@@ -355,7 +355,7 @@ dependencies = [
 
 [[package]]
 name = "aether-schemas"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "aether-agent-cli",
  "aether-agent-core",
@@ -380,7 +380,7 @@ dependencies = [
 
 [[package]]
 name = "aether-sessions"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -400,7 +400,7 @@ dependencies = [
 
 [[package]]
 name = "aether-telemetry"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -441,7 +441,7 @@ dependencies = [
 
 [[package]]
 name = "aether-wisp"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "aether-acp-utils",
  "aether-utils",
@@ -3094,7 +3094,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 2.0.119",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -4552,7 +4552,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "tokio",
  "tower-service",
  "tracing",
@@ -6332,7 +6332,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls 0.23.44",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -6371,7 +6371,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "tracing",
  "windows-sys 0.61.2",
 ]
@@ -7859,7 +7859,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

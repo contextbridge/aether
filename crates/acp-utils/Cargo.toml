@@ -1,6 +1,6 @@
 [package]
 name = "aether-acp-utils"
-version = "0.4.3"
+version = "0.4.4"
 edition = "2024"
 description = "Agent Client Protocol (ACP) utilities for the Aether AI agent framework"
 license = "MIT"
