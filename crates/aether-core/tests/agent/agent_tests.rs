@@ -6,9 +6,19 @@ use aether_core::{
     events::{AgentEvent, Command, TurnOutcome, UserCommand},
     testing::{agent_event, content_events, test_agent},
 };
-use llm::testing::llm_response;
 use llm::{ChatMessage, ContentBlock, StopReason};
+use llm::{MessageId, testing::llm_response};
 use serde_json::json;
+
+fn completed_message_ids(events: &[AgentEvent]) -> Vec<MessageId> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::Message(MessageEvent::Text { message_id, is_complete: true, .. }) => Some(message_id.clone()),
+            _ => None,
+        })
+        .collect()
+}
 
 fn split_json_in_half(input: &str) -> (&str, &str) {
     let split = input.char_indices().nth(input.len() / 2).map_or(1, |(idx, _)| idx).max(1).min(input.len() - 1);
@@ -20,10 +30,11 @@ async fn test_text_message() -> Result<(), Box<dyn Error>> {
     let id = "message_1";
     let chunks = ["Hello", "user"];
     let llm_responses = [llm_response(id).text(&chunks).build()];
-    let mut expected_messages = agent_event(id).text(&chunks).build();
-    expected_messages.push(AgentEvent::turn_ended(TurnOutcome::Completed));
-
     let messages = test_agent().llm_responses(&llm_responses).user_text("hi").run().await?;
+    let ids = completed_message_ids(&messages);
+    assert_ne!(ids[0].as_str(), id);
+    let mut expected_messages = agent_event(&ids[0]).text(&chunks).build();
+    expected_messages.push(AgentEvent::turn_ended(TurnOutcome::Completed));
     assert_eq!(content_events(messages), expected_messages);
     Ok(())
 }
@@ -79,16 +90,18 @@ async fn test_single_tool_call() -> Result<(), Box<dyn Error>> {
         llm_response(m2_id).text(&chunks).build(),
     ];
 
+    let messages = test_agent().llm_responses(&llm_responses).user_text("3+5 = ?").run().await?;
+    let ids = completed_message_ids(&messages);
+    assert_ne!(ids[0], ids[1]);
     let expected_messages = {
         let mut messages = Vec::new();
-        messages.extend(agent_event(m1_id).tool_call(t1_id, t1_name, &tool_request, &tool_result).build());
+        messages.extend(agent_event(&ids[0]).tool_call(t1_id, t1_name, &tool_request, &tool_result).build());
 
-        messages.extend(agent_event(m2_id).text(&chunks).build());
+        messages.extend(agent_event(&ids[1]).text(&chunks).build());
         messages.push(AgentEvent::turn_ended(TurnOutcome::Completed));
         messages
     };
 
-    let messages = test_agent().llm_responses(&llm_responses).user_text("3+5 = ?").run().await?;
     assert_eq!(content_events(messages), expected_messages);
     Ok(())
 }
@@ -173,20 +186,21 @@ async fn test_tool_call_failure() -> Result<(), Box<dyn Error>> {
         llm_response("message_2").text(&chunks).build(),
     ];
 
+    let messages = test_agent().llm_responses(&llm_responses).user_text("10 / 0 = ?").run().await?;
+    let ids = completed_message_ids(&messages);
     let expected_messages = {
         let mut messages = Vec::new();
         messages.extend(
-            agent_event("message_1")
+            agent_event(&ids[0])
                 .tool_call_with_error("call_1", "test__divide_numbers", &tool_request, "Division by zero")
                 .build(),
         );
 
-        messages.extend(agent_event("message_2").text(&chunks).build());
+        messages.extend(agent_event(&ids[1]).text(&chunks).build());
         messages.push(AgentEvent::turn_ended(TurnOutcome::Completed));
         messages
     };
 
-    let messages = test_agent().llm_responses(&llm_responses).user_text("10 / 0 = ?").run().await?;
     assert_eq!(content_events(messages), expected_messages);
     Ok(())
 }
@@ -210,10 +224,7 @@ async fn test_cancellation() -> Result<(), Box<dyn Error>> {
     let llm_responses = [llm_response("message_1").text(&chunks).build()];
     let messages = test_agent()
         .llm_responses(&llm_responses)
-        .commands(vec![
-            Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("hi")] }),
-            Command::UserCommand(UserCommand::Cancel),
-        ])
+        .commands(vec![Command::text("hi"), Command::UserCommand(UserCommand::Cancel)])
         .run()
         .await?;
 
@@ -429,7 +440,7 @@ fn auto_continue_attempts(events: &[AgentEvent]) -> Vec<(u32, u32)> {
     events
         .iter()
         .filter_map(|event| match event {
-            AgentEvent::Turn(TurnEvent::AutoContinue { attempt, max_attempts }) => Some((*attempt, *max_attempts)),
+            AgentEvent::Turn(TurnEvent::AutoContinue { attempt, max_attempts, .. }) => Some((*attempt, *max_attempts)),
             _ => None,
         })
         .collect()

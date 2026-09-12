@@ -15,6 +15,7 @@ async fn replace_conversation_preserves_system_prompt_for_next_request() {
                 .replace_conversation(vec![
                     ChatMessage::user("old user"),
                     ChatMessage::Assistant {
+                        message_id: "old-assistant".into(),
                         content: "old assistant".to_string(),
                         reasoning: AssistantReasoning::default(),
                         timestamp: IsoString::now(),
@@ -34,6 +35,7 @@ async fn replace_conversation_preserves_system_prompt_for_next_request() {
     assert!(
         matches!(messages[1], ChatMessage::User { ref content, .. } if content == &vec![ContentBlock::text("old user")])
     );
+    assert_eq!(messages[2].message_id().as_str(), "old-assistant");
     assert!(matches!(messages[2], ChatMessage::Assistant { ref content, .. } if content == "old assistant"));
     assert!(
         matches!(messages[3], ChatMessage::User { ref content, .. } if content == &vec![ContentBlock::text("new user")])

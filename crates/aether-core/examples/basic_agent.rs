@@ -15,6 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, mut rx, _handle) = agent(llm).system_prompt(Prompt::text("You are a helpful assistant.")).spawn().await?;
 
     tx.send(Command::UserCommand(UserCommand::Text {
+        message_id: llm::MessageId::new(),
         content: vec![ContentBlock::text("Write one paragraph about a unicorn")],
     }))
     .await?;
@@ -89,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            Some(AgentEvent::Turn(TurnEvent::AutoContinue { attempt, max_attempts })) => {
+            Some(AgentEvent::Turn(TurnEvent::AutoContinue { attempt, max_attempts, .. })) => {
                 println!("Auto-continuing: attempt {attempt}/{max_attempts} (LLM stopped due to length)");
             }
             Some(AgentEvent::Turn(turn @ TurnEvent::RetryScheduled { .. })) => {

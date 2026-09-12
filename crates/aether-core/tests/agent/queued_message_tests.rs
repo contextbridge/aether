@@ -12,13 +12,19 @@ async fn queued_text_does_not_cancel_active_stream_and_drains_into_single_turn()
     let Scenario { messages, contexts } = run_queued_scenario(None, &["beep", "boop", "zap"]).await;
 
     assert!(!messages.iter().any(|m| matches!(m.turn_outcome(), Some(TurnOutcome::Cancelled))),);
-    assert_eq!(complete_text(&messages, "msg_1").as_deref(), Some("hello world"));
-    assert_eq!(complete_text(&messages, "msg_2").as_deref(), Some("next turn"));
+    assert_eq!(complete_text(&messages, 0).as_deref(), Some("hello world"));
+    assert_eq!(complete_text(&messages, 1).as_deref(), Some("next turn"));
     assert_eq!(contexts.len(), 2);
 
-    let drained = "beep\nboop\nzap";
-    assert_eq!(user_texts(&contexts[1]), vec!["original prompt", drained]);
-    assert!(assistant_index(&contexts[1], "hello world") < user_index(&contexts[1], drained),);
+    assert_eq!(user_texts(&contexts[1]), vec!["original prompt", "beep", "boop", "zap"]);
+    assert!(assistant_index(&contexts[1], "hello world") < user_index(&contexts[1], "beep"));
+    let user_ids: std::collections::HashSet<_> = contexts[1]
+        .messages()
+        .iter()
+        .filter(|message| matches!(message, ChatMessage::User { .. }))
+        .map(ChatMessage::message_id)
+        .collect();
+    assert_eq!(user_ids.len(), 4);
 }
 
 #[tokio::test]
@@ -26,11 +32,11 @@ async fn queued_text_suppresses_intermediate_done_between_turns() {
     let Scenario { messages, .. } = run_queued_scenario(None, &["beep", "boop", "zap"]).await;
     let first_complete = messages
         .iter()
-        .position(|m| is_complete_text(m, "msg_1", "hello world"))
+        .position(|m| is_complete_text(m, "hello world"))
         .expect("Expected complete text for first turn");
 
     let second_stream =
-        messages.iter().position(|m| is_partial_text_for(m, "msg_2")).expect("Expected streamed text for second turn");
+        messages.iter().position(|m| is_partial_text(m, "next turn")).expect("Expected streamed text for second turn");
 
     assert!(
         !messages[first_complete + 1..second_stream]
@@ -117,8 +123,7 @@ async fn run_queued_scenario(first_stop_reason: Option<StopReason>, queued: &[&s
     let turns = vec![first_turn, llm_response("msg_2").text(&["next turn"]).build()];
 
     let release = Arc::new(Notify::new());
-    let mut scenario =
-        TestScenario::new().user_text("original prompt").wait_for(|m| is_partial_text(m, "msg_1", "hello"));
+    let mut scenario = TestScenario::new().user_text("original prompt").wait_for(|m| is_partial_text(m, "hello"));
     for text in queued {
         scenario = scenario.user_text(*text);
     }
@@ -138,25 +143,22 @@ async fn run_queued_scenario(first_stop_reason: Option<StopReason>, queued: &[&s
     }
 }
 
-fn is_partial_text(m: &AgentEvent, id: &str, chunk: &str) -> bool {
-    matches!(m, AgentEvent::Message(MessageEvent::Text { message_id, chunk: c, is_complete: false, .. }) if message_id == id && c == chunk)
+fn is_partial_text(m: &AgentEvent, chunk: &str) -> bool {
+    matches!(m, AgentEvent::Message(MessageEvent::Text { chunk: c, is_complete: false, .. }) if c == chunk)
 }
 
-fn is_partial_text_for(m: &AgentEvent, id: &str) -> bool {
-    matches!(m, AgentEvent::Message(MessageEvent::Text { message_id, is_complete: false, .. }) if message_id == id)
+fn is_complete_text(m: &AgentEvent, chunk: &str) -> bool {
+    matches!(m, AgentEvent::Message(MessageEvent::Text { chunk: c, is_complete: true, .. }) if c == chunk)
 }
 
-fn is_complete_text(m: &AgentEvent, id: &str, chunk: &str) -> bool {
-    matches!(m, AgentEvent::Message(MessageEvent::Text { message_id, chunk: c, is_complete: true, .. }) if message_id == id && c == chunk)
-}
-
-fn complete_text(messages: &[AgentEvent], id: &str) -> Option<String> {
-    messages.iter().find_map(|m| match m {
-        AgentEvent::Message(MessageEvent::Text { message_id, chunk, is_complete: true, .. }) if message_id == id => {
-            Some(chunk.clone())
-        }
-        _ => None,
-    })
+fn complete_text(messages: &[AgentEvent], index: usize) -> Option<String> {
+    messages
+        .iter()
+        .filter_map(|m| match m {
+            AgentEvent::Message(MessageEvent::Text { chunk, is_complete: true, .. }) => Some(chunk.clone()),
+            _ => None,
+        })
+        .nth(index)
 }
 
 fn user_texts(context: &Context) -> Vec<String> {

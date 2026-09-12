@@ -1,4 +1,4 @@
-use llm::{ContentBlock, LlmCallPurpose, LlmError, ModelIdentity, StopReason, TokenUsage};
+use llm::{ContentBlock, LlmCallPurpose, LlmError, MessageId, ModelIdentity, StopReason, TokenUsage};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -97,7 +97,7 @@ pub enum TurnEvent {
     LlmCallEnded { purpose: LlmCallPurpose, outcome: LlmCallOutcome },
     /// The agent is auto-continuing because the LLM stopped with a resumable
     /// stop reason.
-    AutoContinue { attempt: u32, max_attempts: u32 },
+    AutoContinue { attempt: u32, max_attempts: u32, message_id: MessageId, content: Vec<ContentBlock> },
     /// The turn reached a terminal state.
     Ended { outcome: TurnOutcome },
 }

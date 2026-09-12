@@ -12,11 +12,10 @@ use crate::events::{
 };
 use crate::mcp::McpHandle;
 use futures::Stream;
-use llm::types::IsoString;
 use llm::{
     AssistantReasoning, ChatMessage, Context, EncryptedReasoningContent, LlmCallPurpose, LlmError, LlmModel,
-    LlmResponse, ModelIdentity, StopReason, StreamingModelProvider, TokenUsage, ToolCallError, ToolCallRequest,
-    ToolCallResult,
+    LlmResponse, MessageId, ModelIdentity, StopReason, StreamingModelProvider, TokenUsage, ToolCallError,
+    ToolCallRequest, ToolCallResult,
 };
 use mcp_utils::client::{CallToolError, CallToolOptions, ToolCallEvent};
 use std::collections::VecDeque;
@@ -152,11 +151,11 @@ impl Agent {
                     self.on_user_clear_context(&mut state).await;
                 }
 
-                StreamEvent::Command(Command::UserCommand(UserCommand::Text { content })) => {
+                StreamEvent::Command(Command::UserCommand(UserCommand::Text { message_id, content })) => {
                     if self.is_busy() {
-                        self.queued_inputs.push_back(QueuedInput::User(content));
+                        self.queued_inputs.push_back(QueuedInput::User { message_id, content });
                     } else {
-                        self.begin_turn(QueuedInput::User(content), &mut state).await;
+                        self.begin_turn(QueuedInput::User { message_id, content }, &mut state).await;
                     }
                 }
 
@@ -223,7 +222,7 @@ impl Agent {
         tracing::debug!("Agent task shutting down - input channel closed");
     }
 
-    async fn on_iteration_complete(&mut self, id: String, iteration: IterationState) {
+    async fn on_iteration_complete(&mut self, id: MessageId, iteration: IterationState) {
         let IterationState {
             message_content,
             reasoning_summary_text,
@@ -233,17 +232,17 @@ impl Agent {
             ..
         } = iteration;
         let has_tool_calls = !completed_tool_calls.is_empty();
-        let has_content = !message_content.is_empty() || has_tool_calls;
+        let has_content = !message_content.is_empty() || !reasoning_summary_text.is_empty() || has_tool_calls;
         let should_auto_continue = self.auto_continue.should_continue(stop_reason.as_ref());
 
         if has_content {
             let reasoning = AssistantReasoning::from_parts(reasoning_summary_text.clone(), encrypted_reasoning);
-            self.context.push_assistant_turn(&message_content, reasoning, completed_tool_calls);
+            self.context.push_assistant_turn(id.clone(), &message_content, reasoning, completed_tool_calls);
 
             self.emit(AgentEvent::text(&id, &message_content, StreamState::Complete)).await;
 
             if !reasoning_summary_text.is_empty() {
-                self.emit(AgentEvent::thought(&id, &reasoning_summary_text, StreamState::Complete)).await;
+                self.emit(AgentEvent::thought(&id.thought(), &reasoning_summary_text, StreamState::Complete)).await;
             }
         }
 
@@ -260,13 +259,7 @@ impl Agent {
                 self.auto_continue.max
             );
 
-            self.emit(AgentEvent::Turn(TurnEvent::AutoContinue {
-                attempt: self.auto_continue.count,
-                max_attempts: self.auto_continue.max,
-            }))
-            .await;
-
-            self.inject_continuation_prompt(&message_content, stop_reason.as_ref());
+            self.inject_continuation_prompt(stop_reason.as_ref()).await;
             self.start_next_turn().await;
         } else {
             tracing::debug!("LLM completed turn with stop reason: {:?}", stop_reason);
@@ -444,24 +437,20 @@ impl Agent {
     }
 
     /// Inject a continuation prompt when the LLM stops due to a resumable reason.
-    fn inject_continuation_prompt(&mut self, previous_response: &str, stop_reason: Option<&StopReason>) {
-        if !previous_response.is_empty() {
-            self.context.add_message(ChatMessage::Assistant {
-                content: previous_response.to_string(),
-                reasoning: AssistantReasoning::default(),
-                timestamp: IsoString::now(),
-                tool_calls: Vec::new(),
-            });
-        }
-
+    async fn inject_continuation_prompt(&mut self, stop_reason: Option<&StopReason>) {
         let reason = stop_reason.map_or_else(|| "Unknown".to_string(), |reason| format!("{reason:?}"));
-
-        self.context.add_message(ChatMessage::User {
-            content: vec![llm::ContentBlock::text(format!(
-                "<system-notification>The LLM API stopped with reason '{reason}'. Continue from where you left off and finish your task.</system-notification>"
-            ))],
-            timestamp: IsoString::now(),
-        });
+        let message_id = MessageId::new();
+        let content = vec![llm::ContentBlock::text(format!(
+            "<system-notification>The LLM API stopped with reason '{reason}'. Continue from where you left off and finish your task.</system-notification>"
+        ))];
+        self.context.add_message(ChatMessage::user_with_id(message_id.clone(), content.clone()));
+        self.emit(AgentEvent::Turn(TurnEvent::AutoContinue {
+            attempt: self.auto_continue.count,
+            max_attempts: self.auto_continue.max,
+            message_id,
+            content,
+        }))
+        .await;
     }
 
     async fn on_llm_event(&mut self, result: Result<LlmResponse, LlmError>, state: &mut IterationState) {
@@ -479,8 +468,8 @@ impl Agent {
         };
 
         match response {
-            Start { message_id } => {
-                state.on_llm_start(message_id);
+            Start { .. } => {
+                state.on_llm_start(MessageId::new());
             }
 
             Text { chunk } => {
@@ -490,7 +479,7 @@ impl Agent {
             Reasoning { chunk } => {
                 state.reasoning_summary_text.push_str(&chunk);
                 if let Some(id) = state.current_message_id.clone() {
-                    self.emit(AgentEvent::thought(&id, &chunk, StreamState::Partial)).await;
+                    self.emit(AgentEvent::thought(&id.thought(), &chunk, StreamState::Partial)).await;
                 }
             }
 
@@ -630,9 +619,11 @@ impl Agent {
         match result {
             Ok(result) => {
                 tracing::info!("Context compacted: {} messages removed", result.messages_removed);
-                self.context = self.context.with_compacted_summary(&result.summary);
+                let message_id = MessageId::new();
+                self.context = self.context.with_compacted_summary(message_id.clone(), &result.summary);
                 self.token_tracker.reset_current_usage();
                 self.emit(AgentEvent::Context(ContextEvent::CompactionResult {
+                    message_id,
                     summary: result.summary,
                     messages_removed: result.messages_removed,
                 }))
@@ -710,23 +701,13 @@ impl Agent {
     }
 
     async fn commit_inputs(&mut self, inputs: VecDeque<QueuedInput>) {
-        let mut user_content = Vec::new();
         for input in inputs {
             match input {
-                QueuedInput::User(content) => user_content.extend(content),
-                QueuedInput::TaskOutcome(outcome) => {
-                    self.commit_user_content(&mut user_content);
-                    self.record_task_outcome(*outcome).await;
+                QueuedInput::User { message_id, content } => {
+                    self.context.add_message(ChatMessage::user_with_id(message_id, content));
                 }
+                QueuedInput::TaskOutcome(outcome) => self.record_task_outcome(*outcome).await,
             }
-        }
-        self.commit_user_content(&mut user_content);
-    }
-
-    fn commit_user_content(&mut self, content: &mut Vec<llm::ContentBlock>) {
-        if !content.is_empty() {
-            self.context
-                .add_message(ChatMessage::User { content: std::mem::take(content), timestamp: IsoString::now() });
         }
     }
 
@@ -749,6 +730,12 @@ impl Agent {
 
     async fn finish_turn(&mut self, outcome: TurnOutcome) {
         if std::mem::take(&mut self.turn_active) {
+            if let TurnOutcome::Failed { error } = &outcome {
+                let message_id = MessageId::new();
+                let content = format!("[Error] {error}");
+                self.context.push_assistant_turn(message_id.clone(), &content, AssistantReasoning::default(), vec![]);
+                self.emit(AgentEvent::text(&message_id, &content, StreamState::Complete)).await;
+            }
             self.emit(AgentEvent::turn_ended(outcome)).await;
         }
     }
@@ -807,7 +794,7 @@ impl AutoContinue {
 
 #[derive(Debug, Default)]
 struct IterationState {
-    current_message_id: Option<String>,
+    current_message_id: Option<MessageId>,
     message_content: String,
     reasoning_summary_text: String,
     encrypted_reasoning: Option<EncryptedReasoningContent>,
@@ -819,7 +806,7 @@ struct IterationState {
 }
 
 impl IterationState {
-    fn on_llm_start(&mut self, message_id: String) {
+    fn on_llm_start(&mut self, message_id: MessageId) {
         self.current_message_id = Some(message_id);
         self.message_content.clear();
         self.reasoning_summary_text.clear();

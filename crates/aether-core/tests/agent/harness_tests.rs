@@ -3,7 +3,8 @@ use aether_core::testing::{TestAgentStep, TestScenario, test_agent};
 
 #[test]
 fn scenario_steps_build_common_user_commands() {
-    let TestAgentStep::Send(Command::UserCommand(UserCommand::Text { content })) = TestAgentStep::user_text("hello")
+    let TestAgentStep::Send(Command::UserCommand(UserCommand::Text { content, .. })) =
+        TestAgentStep::user_text("hello")
     else {
         panic!("expected user text command");
     };
