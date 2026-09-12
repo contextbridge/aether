@@ -74,6 +74,7 @@ pub enum EditFailureKind {
 pub struct WriteTextFileResult {
     pub path: PathBuf,
     pub bytes_written: usize,
+    pub original_content: Option<String>,
 }
 
 #[derive(Debug)]
@@ -92,6 +93,11 @@ pub async fn read_text_file(path: &Path) -> Result<String, FileError> {
 }
 
 pub async fn write_text_file(path: &Path, content: &str) -> Result<WriteTextFileResult, FileError> {
+    let original_content = match read_text_file(path).await {
+        Ok(content) => Some(content),
+        Err(FileError::NotFound { .. }) => None,
+        Err(error) => return Err(error),
+    };
     if let Some(parent) = path.parent()
         && let Err(error) = create_dir_all(parent).await
     {
@@ -102,7 +108,7 @@ pub async fn write_text_file(path: &Path, content: &str) -> Result<WriteTextFile
         return Err(FileError::WriteFailed { path: display_path(path), reason: error.to_string() });
     }
 
-    Ok(WriteTextFileResult { path: path.to_path_buf(), bytes_written: content.len() })
+    Ok(WriteTextFileResult { path: path.to_path_buf(), bytes_written: content.len(), original_content })
 }
 
 pub async fn apply_edits(path: &Path, edits: &[FileEdit]) -> Result<ApplyEditsResult, FileError> {

@@ -34,7 +34,8 @@ pub async fn write_file_contents(args: WriteFileArgs) -> Result<WriteFileRespons
     let result = write_text_file(file_path, &args.content).await?;
     let file_path = result.path.to_string_lossy().into_owned();
     let display_meta = ToolDisplayMeta::new("Write file", basename(&file_path));
-    let file_diff = FileDiff { path: file_path.clone(), old_text: None, new_text: args.content };
+    let file_diff =
+        FileDiff { path: file_path.clone(), old_text: result.original_content, new_text: Some(args.content) };
 
     Ok(WriteFileResponse {
         message: format!("Successfully wrote {} bytes to {}", result.bytes_written, file_path),
@@ -69,7 +70,7 @@ mod tests {
         let meta = result.meta.unwrap();
         let diff = meta.file_diff.unwrap();
         assert!(diff.old_text.is_none());
-        assert_eq!(diff.new_text, content);
+        assert_eq!(diff.new_text.as_deref(), Some(content));
         assert_eq!(diff.path, file_path.to_string_lossy().to_string());
     }
 
@@ -102,7 +103,7 @@ mod tests {
         .unwrap();
 
         let diff = result.meta.unwrap().file_diff.unwrap();
-        assert_eq!(diff.new_text, "");
+        assert_eq!(diff.new_text.as_deref(), Some(""));
         assert!(diff.old_text.is_none());
     }
 
@@ -123,8 +124,8 @@ mod tests {
         assert_eq!(fs::read_to_string(&file_path).unwrap(), new_content);
 
         let diff = result.meta.unwrap().file_diff.unwrap();
-        assert!(diff.old_text.is_none());
-        assert_eq!(diff.new_text, new_content);
+        assert_eq!(diff.old_text.as_deref(), Some("old content"));
+        assert_eq!(diff.new_text.as_deref(), Some(new_content));
     }
 
     #[test]

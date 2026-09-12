@@ -422,7 +422,8 @@ async fn write_plan_file(plans_dir: &Path, input: WritePlanInput) -> Result<Writ
     let result = write_text_file(&path, &input.content).await?;
     let plan_path = result.path.to_string_lossy().into_owned();
     let display_meta = ToolDisplayMeta::new("Write plan", basename(&plan_path));
-    let file_diff = FileDiff { path: plan_path.clone(), old_text: None, new_text: input.content };
+    let file_diff =
+        FileDiff { path: plan_path.clone(), old_text: result.original_content, new_text: Some(input.content) };
 
     Ok(WritePlanOutput {
         plan_name: plan_name.into_string(),
@@ -438,8 +439,11 @@ async fn edit_plan_file(plans_dir: &Path, input: EditPlanInput) -> Result<EditPl
     let result = apply_edits(&path, &input.edits).await?;
     let plan_path = result.path.to_string_lossy().into_owned();
     let display_meta = ToolDisplayMeta::new("Edit plan", basename(&plan_path));
-    let file_diff =
-        FileDiff { path: plan_path.clone(), old_text: Some(result.original_content), new_text: result.updated_content };
+    let file_diff = FileDiff {
+        path: plan_path.clone(),
+        old_text: Some(result.original_content),
+        new_text: Some(result.updated_content),
+    };
 
     Ok(EditPlanOutput {
         plan_name: plan_name.into_string(),

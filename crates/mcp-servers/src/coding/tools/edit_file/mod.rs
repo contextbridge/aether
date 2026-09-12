@@ -40,7 +40,7 @@ pub async fn edit_file_contents(args: EditFileArgs) -> Result<EditFileResponse, 
     let total_lines = updated_content.lines().count();
     let display_meta = ToolDisplayMeta::new("Edit file", basename(&file_path));
     let file_diff =
-        FileDiff { path: file_path.clone(), old_text: Some(original_content), new_text: updated_content.clone() };
+        FileDiff { path: file_path.clone(), old_text: Some(original_content), new_text: Some(updated_content.clone()) };
 
     Ok(EditFileResponse {
         status: "success".to_string(),
@@ -109,8 +109,8 @@ mod tests {
         let meta = result.meta.unwrap();
         let diff = meta.file_diff.unwrap();
         assert_eq!(diff.old_text.as_deref(), Some(original));
-        assert!(diff.new_text.contains("replaced"));
-        assert!(!diff.new_text.contains("line3"));
+        assert!(diff.new_text.as_deref().unwrap().contains("replaced"));
+        assert!(!diff.new_text.as_deref().unwrap().contains("line3"));
         assert_eq!(diff.path, file_path.to_string_lossy().to_string());
     }
 
