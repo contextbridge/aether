@@ -238,8 +238,8 @@ mod tests {
     use super::*;
     use crate::types::IsoString;
     use crate::{
-        AssistantReasoning, ContentBlock, EncryptedReasoningContent, LlmError, ToolCallError, ToolCallRequest,
-        ToolCallResult,
+        AssistantReasoning, ContentBlock, EncryptedReasoningContent, LlmError, MessageId, ToolCallError,
+        ToolCallRequest, ToolCallResult,
     };
 
     fn openai_request(model: &str, context: &Context) -> Result<CreateResponse> {
@@ -284,6 +284,7 @@ mod tests {
             vec![
                 ChatMessage::user("Search for rust"),
                 ChatMessage::Assistant {
+                    message_id: crate::MessageId::new(),
                     content: String::new(),
                     reasoning: AssistantReasoning::default(),
                     timestamp: IsoString::now(),
@@ -338,6 +339,7 @@ mod tests {
     fn build_request_rejects_audio_content() {
         let context = Context::new(
             vec![ChatMessage::User {
+                message_id: MessageId::new(),
                 content: vec![ContentBlock::Audio { data: "YXVkaW8=".to_string(), mime_type: "audio/wav".to_string() }],
                 timestamp: IsoString::now(),
             }],
@@ -405,6 +407,7 @@ mod tests {
         let messages = vec![
             ChatMessage::user("Read foo.rs"),
             ChatMessage::Assistant {
+                message_id: MessageId::new(),
                 content: "I'll read that file.".to_string(),
                 reasoning: AssistantReasoning::default(),
                 timestamp: IsoString::now(),
@@ -421,6 +424,7 @@ mod tests {
                 result: "fn main() {}".to_string(),
             })),
             ChatMessage::Assistant {
+                message_id: MessageId::new(),
                 content: "Here's the file content.".to_string(),
                 reasoning: AssistantReasoning::default(),
                 timestamp: IsoString::now(),
@@ -473,6 +477,7 @@ mod tests {
     #[test]
     fn map_messages_handles_summary() {
         let messages = vec![ChatMessage::Summary {
+            message_id: MessageId::new(),
             content: "User asked about Rust.".to_string(),
             timestamp: IsoString::now(),
             messages_compacted: 5,
@@ -498,6 +503,7 @@ mod tests {
         let messages = vec![
             ChatMessage::user("Hello"),
             ChatMessage::Assistant {
+                message_id: MessageId::new(),
                 content: "Hi".to_string(),
                 reasoning: AssistantReasoning::default(),
                 timestamp: IsoString::now(),
@@ -551,6 +557,7 @@ mod tests {
     #[test]
     fn map_messages_includes_encrypted_reasoning_item() {
         let messages = vec![ChatMessage::Assistant {
+            message_id: MessageId::new(),
             content: "thinking done".to_string(),
             reasoning: AssistantReasoning::from_parts(
                 "summary".to_string(),
@@ -579,6 +586,7 @@ mod tests {
     #[test]
     fn map_messages_skips_reasoning_item_without_encrypted_content() {
         let messages = vec![ChatMessage::Assistant {
+            message_id: MessageId::new(),
             content: "no encrypted".to_string(),
             reasoning: AssistantReasoning::from_parts("just a summary".to_string(), None),
             timestamp: IsoString::now(),
@@ -594,6 +602,7 @@ mod tests {
     #[test]
     fn map_messages_with_audio_errors() {
         let messages = vec![ChatMessage::User {
+            message_id: MessageId::new(),
             content: vec![ContentBlock::Audio { data: "YXVkaW8=".to_string(), mime_type: "audio/wav".to_string() }],
             timestamp: IsoString::now(),
         }];

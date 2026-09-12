@@ -7,6 +7,7 @@ mod context;
 mod credential;
 pub mod error;
 mod llm_response;
+mod message_id;
 mod model_settings;
 pub mod parser;
 pub mod provider;
@@ -25,6 +26,7 @@ pub use context::Context;
 pub use credential::ProviderCredential;
 pub use error::{LlmError, ProviderError, ProviderErrorKind, Result};
 pub use llm_response::{LlmResponse, StopReason};
+pub use message_id::MessageId;
 pub use model_settings::ModelSettings;
 pub use provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider};
 pub use provider_connection::{

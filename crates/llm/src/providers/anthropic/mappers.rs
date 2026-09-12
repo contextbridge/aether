@@ -158,6 +158,7 @@ mod tests {
     #[test]
     fn test_map_user_message_with_image() {
         let messages = vec![ChatMessage::User {
+            message_id: crate::MessageId::new(),
             content: vec![
                 ContentBlock::text("Look at this:"),
                 ContentBlock::Image { data: "aW1hZ2VkYXRh".to_string(), mime_type: "image/png".to_string() },
@@ -219,6 +220,7 @@ mod tests {
     #[test]
     fn test_map_assistant_with_tool_calls() {
         let messages = vec![ChatMessage::Assistant {
+            message_id: crate::MessageId::new(),
             content: "I'll help you with that".to_string(),
             reasoning: AssistantReasoning::default(),
             timestamp: IsoString::now(),

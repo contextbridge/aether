@@ -233,12 +233,13 @@ fn json_to_document(value: &Value) -> Document {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AssistantReasoning;
     use crate::tools::{ToolCallError, ToolCallRequest, ToolCallResult};
     use crate::types::IsoString;
+    use crate::{AssistantReasoning, MessageId};
 
     fn assistant_message(content: &str, tool_calls: Vec<ToolCallRequest>) -> ChatMessage {
         ChatMessage::Assistant {
+            message_id: crate::MessageId::new(),
             content: content.to_string(),
             reasoning: AssistantReasoning::default(),
             timestamp: IsoString::now(),
@@ -283,6 +284,7 @@ mod tests {
     #[test]
     fn test_map_user_message_with_image() {
         let messages = vec![ChatMessage::User {
+            message_id: crate::MessageId::new(),
             content: vec![
                 ContentBlock::text("Look:"),
                 ContentBlock::Image { data: BASE64.encode(b"fakepng"), mime_type: "image/png".to_string() },
@@ -299,6 +301,7 @@ mod tests {
     #[test]
     fn test_map_user_message_with_audio_errors() {
         let messages = vec![ChatMessage::User {
+            message_id: crate::MessageId::new(),
             content: vec![
                 ContentBlock::text("Listen:"),
                 ContentBlock::Audio { data: BASE64.encode(b"fakewav"), mime_type: "audio/wav".to_string() },
@@ -398,7 +401,11 @@ mod tests {
 
     #[test]
     fn test_map_error_message() {
-        let messages = vec![ChatMessage::Error { message: "something broke".to_string(), timestamp: IsoString::now() }];
+        let messages = vec![ChatMessage::Error {
+            message_id: MessageId::new(),
+            message: "something broke".to_string(),
+            timestamp: IsoString::now(),
+        }];
 
         let (_system, mapped) = map_messages(&messages, None).unwrap();
         assert_eq!(mapped.len(), 1);
@@ -412,6 +419,7 @@ mod tests {
     #[test]
     fn test_map_summary_message() {
         let messages = vec![ChatMessage::Summary {
+            message_id: crate::MessageId::new(),
             content: "we talked about stuff".to_string(),
             timestamp: IsoString::now(),
             messages_compacted: 10,

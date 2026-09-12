@@ -15,10 +15,12 @@ use llm::{Context, ChatMessage, ContentBlock, ToolDefinition, types::IsoString};
 let context = Context::new(
     vec![
         ChatMessage::System {
+            message_id: llm::MessageId::new(),
             content: "You are a helpful assistant.".into(),
             timestamp: IsoString::now(),
         },
         ChatMessage::User {
+            message_id: llm::MessageId::new(),
             content: vec![ContentBlock::text("What is Rust?")],
             timestamp: IsoString::now(),
         },

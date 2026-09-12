@@ -95,7 +95,7 @@ fn provider_from_connection(connection: ProviderConnectionConfig) -> Result<Open
 mod tests {
     use super::*;
     use crate::providers::test_capture_server::CaptureServer;
-    use crate::{ChatMessage, ReasoningEffort};
+    use crate::{ChatMessage, ContentBlock, MessageId, ReasoningEffort};
     use tokio_stream::StreamExt;
 
     #[tokio::test]
@@ -154,10 +154,8 @@ mod tests {
         let provider = OpenAiProvider::from_env_with_connection(connection).await.unwrap();
         let context = Context::new(
             vec![ChatMessage::User {
-                content: vec![crate::ContentBlock::Audio {
-                    data: "YXVkaW8=".to_string(),
-                    mime_type: "audio/wav".to_string(),
-                }],
+                message_id: MessageId::new(),
+                content: vec![ContentBlock::Audio { data: "YXVkaW8=".to_string(), mime_type: "audio/wav".to_string() }],
                 timestamp: crate::types::IsoString::now(),
             }],
             vec![],

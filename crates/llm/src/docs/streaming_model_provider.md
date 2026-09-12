@@ -25,6 +25,7 @@ use tokio_stream::StreamExt;
 async fn ask(provider: &dyn StreamingModelProvider) {
     let context = Context::new(
         vec![ChatMessage::User {
+            message_id: llm::MessageId::new(),
             content: vec![ContentBlock::text("Hello!")],
             timestamp: llm::types::IsoString::now(),
         }],

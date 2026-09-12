@@ -301,7 +301,7 @@ mod tests {
     use crate::catalog::Provider;
     use crate::providers::test_capture_server::CaptureServer;
     use crate::types::IsoString;
-    use crate::{AssistantReasoning, ChatMessage, EncryptedReasoningContent, LlmModel};
+    use crate::{AssistantReasoning, ChatMessage, EncryptedReasoningContent, LlmModel, MessageId};
     use axum::Router;
     use axum::body::Body;
     use axum::extract::State;
@@ -484,6 +484,7 @@ mod tests {
         let provider = mantle_provider(&server).await;
         let context = Context::new(
             vec![ChatMessage::Assistant {
+                message_id: MessageId::new(),
                 content: "previous answer".to_string(),
                 reasoning: AssistantReasoning {
                     summary_text: None,
