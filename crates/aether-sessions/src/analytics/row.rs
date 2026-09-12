@@ -133,7 +133,9 @@ struct EventProjection {
 impl From<&SessionEvent> for EventProjection {
     fn from(event: &SessionEvent) -> Self {
         match event {
-            SessionEvent::User(UserEvent::Message { .. }) => Self::new("user", "user_message"),
+            SessionEvent::User(UserEvent::Message { message_id, .. }) => {
+                Self { message_id: Some(message_id.to_string()), ..Self::new("user", "user_message") }
+            }
             SessionEvent::User(UserEvent::ClearContext) => Self::new("user", "clear_context"),
             SessionEvent::Control(SessionControlEvent::AgentSwitched { .. }) => Self::new("control", "agent_switched"),
             SessionEvent::Agent(event) => Self::from(event),
@@ -145,10 +147,10 @@ impl From<&AgentEvent> for EventProjection {
     fn from(event: &AgentEvent) -> Self {
         match event {
             AgentEvent::Message(MessageEvent::Text { message_id, .. }) => {
-                Self { message_id: Some(message_id.clone()), ..Self::new("agent", "message_text") }
+                Self { message_id: Some(message_id.to_string()), ..Self::new("agent", "message_text") }
             }
             AgentEvent::Message(MessageEvent::Thought { message_id, .. }) => {
-                Self { message_id: Some(message_id.clone()), ..Self::new("agent", "message_thought") }
+                Self { message_id: Some(message_id.to_string()), ..Self::new("agent", "message_thought") }
             }
             AgentEvent::Tool(event) => Self::from_tool(event),
             AgentEvent::Turn(event) => Self::from_turn(event),
@@ -269,7 +271,9 @@ impl EventProjection {
                 }),
                 ..Self::new("agent", "context_compaction_ended")
             },
-            ContextEvent::CompactionResult { .. } => Self::new("agent", "context_compaction_result"),
+            ContextEvent::CompactionResult { message_id, .. } => {
+                Self { message_id: Some(message_id.to_string()), ..Self::new("agent", "context_compaction_result") }
+            }
             ContextEvent::UsageUpdated { usage } => Self {
                 usage_ratio: usage.usage_ratio,
                 context_limit: usage.context_limit.map(clamp_i64),

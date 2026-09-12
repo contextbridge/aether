@@ -13,24 +13,26 @@ fn append_and_load_roundtrip_preserves_metadata_and_persisted_events() {
     let store = TestStore::new();
     let meta = session_meta("session-1", DEFAULT_CREATED_AT);
     store.append_meta("session-1", &meta);
-    store.append("session-1", &user_message("Hello"));
+    let user = user_message("Hello");
+    store.append("session-1", &user);
     store.append("session-1", &partial_text("message-1", "partial"));
     store.append("session-1", &assistant_text("message-1", "Hi there"));
 
     let (loaded_meta, events) = store.store().load("session-1").expect("session exists");
     assert_eq!(loaded_meta, meta);
-    assert_eq!(events, vec![user_message("Hello"), assistant_text("message-1", "Hi there")]);
+    assert_eq!(events, vec![user, assistant_text("message-1", "Hi there")]);
 }
 
 #[test]
 fn load_ignores_malformed_trailing_event_lines() {
     let store = TestStore::new();
     let meta = serde_json::to_string(&session_meta("session-1", DEFAULT_CREATED_AT)).unwrap();
-    let user = serde_json::to_string(&user_message("valid")).unwrap();
+    let event = user_message("valid");
+    let user = serde_json::to_string(&event).unwrap();
     store.write_raw("session-1.jsonl", &format!("{meta}\n{user}\n{{partial json\n"));
 
     let (_, events) = store.store().load("session-1").expect("metadata is valid");
-    assert_eq!(events, vec![user_message("valid")]);
+    assert_eq!(events, vec![event]);
 }
 
 #[test]
@@ -162,8 +164,9 @@ fn committed_event_survives_a_derived_index_failure_and_can_be_rebuilt() {
     let store = TestStore::new().session("session-1", &[]);
     std::fs::create_dir(store.path().join("prompt-history.jsonl")).unwrap();
 
-    store.append("session-1", &user_message("repair me"));
-    assert_eq!(store.store().load("session-1").expect("session exists").1, vec![user_message("repair me")]);
+    let event = user_message("repair me");
+    store.append("session-1", &event);
+    assert_eq!(store.store().load("session-1").expect("session exists").1, vec![event]);
 
     std::fs::remove_dir(store.path().join("prompt-history.jsonl")).unwrap();
     store.store().rebuild_prompt_history().expect("rebuild succeeds");

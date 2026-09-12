@@ -3,7 +3,8 @@ use std::io::Cursor;
 
 const META: &str =
     r#"{"sessionId":"session-1","cwd":"/tmp/project","model":"test-model","createdAt":"2026-01-01T00:00:00Z"}"#;
-const USER: &str = r#"{"kind":"user","data":{"type":"message","content":[{"type":"text","text":"Hello"}]}}"#;
+const USER: &str =
+    r#"{"kind":"user","data":{"type":"message","message_id":"user","content":[{"type":"text","text":"Hello"}]}}"#;
 const TRANSIENT: &str = r#"{"kind":"agent","data":{"category":"message","event":{"type":"text","message_id":"message-1","chunk":"partial","is_complete":false}}}"#;
 
 #[test]
