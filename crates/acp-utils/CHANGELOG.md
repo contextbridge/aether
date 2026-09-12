@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.4](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.4.3...aether-acp-utils-v0.4.4) - 2026-09-12
+
+### Added
+
+- *(acp-utils)* add WebSocket transport and reliable client lifecycle ([#452](https://github.com/contextbridge/aether/pull/452))
+
 ## [0.4.3](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.4.2...aether-acp-utils-v0.4.3) - 2026-09-11
 
 ### Other
