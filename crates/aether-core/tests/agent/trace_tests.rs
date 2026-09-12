@@ -14,8 +14,8 @@ use llm::{ProviderError, StopReason};
 async fn tool_call_turn_emits_full_trace() -> Result<(), Box<dyn Error>> {
     let tool_request = serde_json::json!({ "a": 3, "b": 5 });
     let llm_responses = [
-        llm_response("m1").tool_call("call_1", "test__add_numbers", &[&tool_request.to_string()]).build(),
-        llm_response("m2").text(&["The sum is 8"]).build(),
+        llm_response().tool_call("call_1", "test__add_numbers", &[&tool_request.to_string()]).build(),
+        llm_response().text(&["The sum is 8"]).build(),
     ];
 
     let trace = test_agent().llm_responses(&llm_responses).user_text("3+5 = ?").run_trace().await?;
@@ -79,7 +79,7 @@ async fn tool_call_turn_emits_full_trace() -> Result<(), Box<dyn Error>> {
 async fn observers_receive_the_rendered_prompt_for_each_llm_request() -> Result<(), Box<dyn Error>> {
     let observer = FakeAgentObserver::new();
     let system_prompts = observer.system_prompts();
-    let responses = [llm_response("m1").text(&["hi"]).build()];
+    let responses = [llm_response().text(&["hi"]).build()];
 
     test_agent()
         .system_prompt(Prompt::Text("You are the test agent.".to_string()))
@@ -97,7 +97,7 @@ async fn observers_receive_the_rendered_prompt_for_each_llm_request() -> Result<
 async fn retried_call_traces_each_attempt() -> Result<(), Box<dyn Error>> {
     let attempts = vec![
         failed_call(ProviderError::server("boom").with_http_status(503)),
-        llm_response("m2").text(&["ok"]).build_results(),
+        llm_response().text(&["ok"]).build_results(),
     ];
 
     let trace =
@@ -153,7 +153,7 @@ async fn exhausted_retries_fail_the_turn() -> Result<(), Box<dyn Error>> {
 async fn cancel_during_retry_wait_traces_cancelled_turn_without_starting_call() -> Result<(), Box<dyn Error>> {
     let attempts = vec![
         failed_call(ProviderError::server("boom").with_http_status(503)),
-        llm_response("m2").text(&["never seen"]).build_results(),
+        llm_response().text(&["never seen"]).build_results(),
     ];
     let retry = RetryConfig { max_attempts: 5, base_delay: Duration::from_mins(1), max_delay: Duration::from_mins(1) };
 
@@ -179,9 +179,9 @@ async fn cancel_during_retry_wait_traces_cancelled_turn_without_starting_call() 
 #[tokio::test]
 async fn usage_triggered_compaction_runs_before_the_next_chat_call() -> Result<(), Box<dyn Error>> {
     let responses = [
-        llm_response("m1").text(&["hi"]).usage(90_000, 10).build_with_stop_reason(StopReason::Length),
-        llm_response("summary").text(&["summary"]).usage(50, 5).build(),
-        llm_response("m2").text(&["done"]).build(),
+        llm_response().text(&["hi"]).usage(90_000, 10).build_with_stop_reason(StopReason::Length),
+        llm_response().text(&["summary"]).usage(50, 5).build(),
+        llm_response().text(&["done"]).build(),
     ];
 
     let trace =

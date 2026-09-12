@@ -1,7 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use llm::ContextUsage;
+use llm::{ContextUsage, MessageId};
 
 /// Terminal result of a context compaction operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -21,7 +21,7 @@ pub enum ContextEvent {
     /// Context compaction reached a terminal state.
     CompactionEnded { outcome: CompactionOutcome },
     /// Context was compacted to reduce token usage.
-    CompactionResult { summary: String, messages_removed: usize },
+    CompactionResult { message_id: MessageId, summary: String, messages_removed: usize },
     /// Context usage update for UI display.
     UsageUpdated { usage: ContextUsage },
     /// The agent context was cleared and reset to its blank state.

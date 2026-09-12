@@ -1,7 +1,6 @@
 use clap::Parser;
 use futures::StreamExt;
 use llm::providers::anthropic::AnthropicProvider;
-use llm::types::IsoString;
 use llm::{ChatMessage, Context, LlmResponse, ModelSettings, ProviderFactory, StreamingModelProvider, ToolDefinition};
 use serde_json::json;
 use std::error::Error;
@@ -51,7 +50,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Prepare context
     let messages = vec![
         ChatMessage::system("You are a helpful AI assistant. Be concise but informative in your responses."),
-        ChatMessage::User { content: vec![llm::ContentBlock::text(args.prompt)], timestamp: IsoString::now() },
+        ChatMessage::user(args.prompt),
     ];
 
     let tools = vec![
@@ -103,9 +102,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     while let Some(result) = stream.next().await {
         match result? {
-            LlmResponse::Start { message_id } => {
-                println!("\n✅ Started (ID: {message_id})");
-            }
+            LlmResponse::Start => println!("\n✅ Started"),
             LlmResponse::Text { chunk } => {
                 print!("{chunk}");
                 io::stdout().flush().unwrap();

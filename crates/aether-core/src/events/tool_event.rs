@@ -1,6 +1,6 @@
 use super::SubAgentProgressPayload;
 use llm::types::IsoString;
-use llm::{ChatMessage, ContentBlock, ToolCallError, ToolCallRequest, ToolCallResult, ToolDefinition};
+use llm::{ChatMessage, ContentBlock, MessageId, ToolCallError, ToolCallRequest, ToolCallResult, ToolDefinition};
 use mcp_utils::display_meta::ToolResultMeta;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -76,7 +76,11 @@ pub enum TaskOutcomeState {
 
 impl TaskOutcome {
     pub fn context_message(&self) -> ChatMessage {
-        ChatMessage::User { content: self.content_blocks(), timestamp: IsoString::now() }
+        ChatMessage::User {
+            message_id: MessageId::task_result(&self.task_id),
+            content: self.content_blocks(),
+            timestamp: IsoString::now(),
+        }
     }
 
     pub fn content_blocks(&self) -> Vec<ContentBlock> {
@@ -116,7 +120,11 @@ pub fn task_created_result(request: &ToolCallRequest, task_id: &str) -> ToolCall
 const TASK_CANCELLED_BODY: &str = "The background task was cancelled and will not produce a result.";
 
 fn task_result_message(request: &ToolCallRequest, task_id: &str, status: &str, body: &str) -> ChatMessage {
-    ChatMessage::User { content: task_result_content(request, task_id, status, body), timestamp: IsoString::now() }
+    ChatMessage::User {
+        message_id: MessageId::task_result(task_id),
+        content: task_result_content(request, task_id, status, body),
+        timestamp: IsoString::now(),
+    }
 }
 
 fn task_result_content(request: &ToolCallRequest, task_id: &str, status: &str, body: &str) -> Vec<ContentBlock> {

@@ -15,7 +15,7 @@ fn user_message(text: &str) -> ChatMessage {
 #[tokio::test]
 async fn oversized_context_is_compacted_before_the_llm_call() {
     let result = test_agent()
-        .llm_responses(&[llm_response("sum").text(&["summary"]).build(), llm_response("msg").text(&["hello"]).build()])
+        .llm_responses(&[llm_response().text(&["summary"]).build(), llm_response().text(&["hello"]).build()])
         .context_window_override(100)
         .compaction_config(CompactionConfig::with_threshold(0.85))
         .messages(vec![user_message(&"x".repeat(400))])
@@ -40,7 +40,7 @@ async fn oversized_context_is_compacted_before_the_llm_call() {
 async fn cancel_during_compaction_ends_the_turn() {
     let release = Arc::new(Notify::new());
     let trace = test_agent()
-        .llm_responses(&[llm_response("sum").text(&["summary"]).build()])
+        .llm_responses(&[llm_response().text(&["summary"]).build()])
         .context_window_override(100)
         .compaction_config(CompactionConfig::with_threshold(0.85))
         .messages(vec![user_message(&"x".repeat(400))])
@@ -81,9 +81,9 @@ async fn cancel_during_compaction_preserves_the_initiating_message() {
     let release = Arc::new(Notify::new());
     let result = test_agent()
         .llm_responses(&[
-            llm_response("sum").text(&["summary"]).build(),
-            llm_response("sum2").text(&["summary"]).build(),
-            llm_response("msg").text(&["hello"]).build(),
+            llm_response().text(&["summary"]).build(),
+            llm_response().text(&["summary"]).build(),
+            llm_response().text(&["hello"]).build(),
         ])
         .context_window_override(100)
         .compaction_config(CompactionConfig::with_threshold(0.85))

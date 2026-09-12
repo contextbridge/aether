@@ -5,7 +5,6 @@ use crate::core::{Agent, AgentDeps, Prompt, PromptCache, Result};
 use crate::events::{AgentEvent, AgentObserver, Command};
 use crate::mcp::McpHandle;
 use llm::parser::ModelProviderParser;
-use llm::types::IsoString;
 use llm::{ChatMessage, Context, ModelSettings, SessionUsageEvent, StreamingModelProvider, ToolDefinition};
 use std::sync::Arc;
 use std::time::Duration;
@@ -246,7 +245,7 @@ impl AgentBuilder {
         let mut messages = Vec::new();
 
         if !system_content.is_empty() {
-            messages.push(ChatMessage::System { content: system_content, timestamp: IsoString::now() });
+            messages.push(ChatMessage::system(system_content));
         }
 
         messages.extend(self.initial_messages);

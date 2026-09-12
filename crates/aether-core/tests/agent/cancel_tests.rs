@@ -15,8 +15,8 @@ async fn user_cancel_does_not_report_foreground_tool_as_background_task() {
     let events = test_agent()
         .fake_mcp_server("tasks", server)
         .llm_responses(&[
-            llm_response("msg_1").tool_call("foreground-call", "tasks__slow", &[&arguments]).build(),
-            llm_response("msg_2").text(&["still works"]).build(),
+            llm_response().tool_call("foreground-call", "tasks__slow", &[&arguments]).build(),
+            llm_response().text(&["still works"]).build(),
         ])
         .scenario(
             TestScenario::new()
@@ -59,9 +59,9 @@ async fn immediate_background_outcome_follows_deferred_event() {
     let events = test_agent()
         .fake_mcp_server("tasks", server)
         .llm_responses(&[
-            llm_response("msg_1").tool_call("terminal-call", "tasks__terminal", &[&arguments]).build(),
-            llm_response("msg_2").text(&["background task started"]).build(),
-            llm_response("msg_3").text(&["handled result"]).build(),
+            llm_response().tool_call("terminal-call", "tasks__terminal", &[&arguments]).build(),
+            llm_response().text(&["background task started"]).build(),
+            llm_response().text(&["handled result"]).build(),
         ])
         .scenario(
             TestScenario::new()
@@ -114,9 +114,9 @@ async fn background_task_progress_reaches_agent_events() {
     let events = test_agent()
         .fake_mcp_server("tasks", server)
         .llm_responses(&[
-            llm_response("msg_1").tool_call("progress-call", "tasks__deferred", &[&arguments]).build(),
-            llm_response("msg_2").text(&["background task started"]).build(),
-            llm_response("msg_3").text(&["handled result"]).build(),
+            llm_response().tool_call("progress-call", "tasks__deferred", &[&arguments]).build(),
+            llm_response().text(&["background task started"]).build(),
+            llm_response().text(&["handled result"]).build(),
         ])
         .scenario(
             TestScenario::new()
@@ -153,8 +153,8 @@ async fn closing_agent_input_cancels_background_tasks() {
     test_agent()
         .fake_mcp_server("tasks", server)
         .llm_responses(&[
-            llm_response("msg_1").tool_call("shutdown-call", "tasks__deferred", &[&arguments]).build(),
-            llm_response("msg_2").text(&["background task started"]).build(),
+            llm_response().tool_call("shutdown-call", "tasks__deferred", &[&arguments]).build(),
+            llm_response().text(&["background task started"]).build(),
         ])
         .scenario(
             TestScenario::new()
@@ -183,8 +183,8 @@ async fn user_cancel_surfaces_background_task_cancellation() {
     let events = test_agent()
         .fake_mcp_server("tasks", server)
         .llm_responses(&[
-            llm_response("msg_1").tool_call("cancel-call", "tasks__deferred", &[&arguments]).build(),
-            llm_response("paused-followup").build(),
+            llm_response().tool_call("cancel-call", "tasks__deferred", &[&arguments]).build(),
+            llm_response().build(),
         ])
         .pause_turn_after(1, 0, release)
         .scenario(
@@ -229,9 +229,9 @@ async fn user_cancel_preserves_queued_background_task_outcome() {
     let events = test_agent()
         .fake_mcp_server("tasks", server)
         .llm_responses(&[
-            llm_response("msg_1").tool_call("queued-call", "tasks__deferred", &[&arguments]).build(),
-            llm_response("paused-followup").build(),
-            llm_response("msg_3").text(&["ack"]).build(),
+            llm_response().tool_call("queued-call", "tasks__deferred", &[&arguments]).build(),
+            llm_response().build(),
+            llm_response().text(&["ack"]).build(),
         ])
         .pause_turn_after(1, 0, release)
         .scenario(
@@ -275,8 +275,8 @@ async fn user_cancel_preserves_queued_background_task_outcome() {
 async fn test_prompt_after_cancel_produces_response() {
     let events = test_agent()
         .llm_responses(&[
-            llm_response("msg_1").text(&["Hello", " world", " this", " is", " a", " long", " response"]).build(),
-            llm_response("msg_2").text(&["Second response"]).build(),
+            llm_response().text(&["Hello", " world", " this", " is", " a", " long", " response"]).build(),
+            llm_response().text(&["Second response"]).build(),
         ])
         .scenario(
             TestScenario::new()

@@ -21,9 +21,9 @@ async fn clear_context_suppresses_cancelled_background_task_notification() -> Re
     let result = test_agent()
         .fake_mcp_server("tasks", server)
         .llm_responses(&[
-            llm_response("msg_1").tool_call("clear-call", "tasks__deferred", &[&arguments]).build(),
-            llm_response("cancelled-followup").text(&["must not finish"]).build(),
-            llm_response("msg_2").text(&["fresh context"]).build(),
+            llm_response().tool_call("clear-call", "tasks__deferred", &[&arguments]).build(),
+            llm_response().text(&["must not finish"]).build(),
+            llm_response().text(&["fresh context"]).build(),
         ])
         .pause_turn_after(1, 0, release)
         .scenario(
@@ -61,8 +61,8 @@ async fn test_clear_context_resets_history_and_preserves_system_prompt() -> Resu
         .without_mcp()
         .system_prompt(Prompt::text("You are a test agent."))
         .llm_responses(&[
-            llm_response("msg_1").text(&["First response"]).build(),
-            llm_response("msg_2").text(&["Second response"]).build(),
+            llm_response().text(&["First response"]).build(),
+            llm_response().text(&["Second response"]).build(),
         ])
         .scenario(
             TestScenario::new()

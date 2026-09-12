@@ -24,6 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     tx.send(Command::UserCommand(UserCommand::Text {
+        message_id: llm::MessageId::new(),
         content: vec![ContentBlock::text("Visit https://contextbridge.ai and tell me what you see")],
     }))
     .await?;
@@ -97,7 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            Some(AgentEvent::Turn(TurnEvent::AutoContinue { attempt, max_attempts })) => {
+            Some(AgentEvent::Turn(TurnEvent::AutoContinue { attempt, max_attempts, .. })) => {
                 println!("Auto-continuing: attempt {attempt}/{max_attempts} (LLM stopped due to length)");
             }
             Some(AgentEvent::Turn(turn @ TurnEvent::RetryScheduled { .. })) => {

@@ -163,7 +163,7 @@ async fn session_affinity_key() -> Result<String, Box<dyn Error>> {
 }
 
 fn response() -> Vec<LlmResponse> {
-    llm_response("message").text(&["done"]).build()
+    llm_response().text(&["done"]).build()
 }
 
 fn server_with_tool(name: &str) -> FakeMcpServer {
