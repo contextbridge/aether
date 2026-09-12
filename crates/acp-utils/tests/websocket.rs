@@ -1,12 +1,13 @@
 #![cfg(feature = "websocket")]
 
 use acp_utils::client::{AcpEvent, connect_acp_client};
+use acp_utils::testing::{idle_notification, initialize_request, initialize_response, running_notification};
 use acp_utils::websocket::WebSocketTransport;
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::schema::v2::{
     ContentBlock, ContentChunk, CreateElicitationRequest, CreateElicitationResponse, ElicitationAction,
-    ElicitationFormMode, ElicitationSchema, ElicitationSessionScope, InitializeRequest, InitializeResponse,
-    PromptRequest, PromptResponse, SessionNotification, SessionUpdate, StopReason, TextContent,
+    ElicitationFormMode, ElicitationSchema, ElicitationSessionScope, InitializeRequest, PromptRequest, PromptResponse,
+    SessionUpdate, StateUpdate, StopReason, TextContent, UpdateSessionNotification,
 };
 use agent_client_protocol::{self as acp, Agent, Builder, Client, HandleDispatchFrom, NullRun};
 use futures::{SinkExt, StreamExt};
@@ -34,13 +35,18 @@ async fn acp_over_websocket_with_elicitation() -> Result<(), TestError> {
             let agent = streaming_elicitation_agent(&["hello ", "world"]);
             let server_task = spawn_local(agent.connect_to(WebSocketTransport::new(server)));
             let mut client =
-                connect_acp_client(WebSocketTransport::new(client), InitializeRequest::new(ProtocolVersion::V1))
+                connect_acp_client(WebSocketTransport::new(client), initialize_request())
                     .await?;
 
             let handle = client.handle.clone();
             let prompt = spawn_local(async move {
                 handle.prompt(PromptRequest::new("session", vec![ContentBlock::Text(TextContent::new("hi"))])).await
             });
+
+            let Some(AcpEvent::SessionUpdate { update, .. }) = client.event_rx.recv().await else {
+                return Err(TestError::Unexpected("expected running update"));
+            };
+            assert!(matches!(*update, SessionUpdate::StateUpdate(StateUpdate::Running(_))));
 
             for expected in ["hello ", "world"] {
                 let Some(AcpEvent::SessionUpdate { update, .. }) = client.event_rx.recv().await else {
@@ -50,6 +56,7 @@ async fn acp_over_websocket_with_elicitation() -> Result<(), TestError> {
                     return Err(TestError::Unexpected("expected agent message chunk"));
                 };
                 assert_eq!(chunk.content, ContentBlock::Text(TextContent::new(expected)));
+                assert_eq!(chunk.message_id.0.as_ref(), "message-1");
             }
 
             let Some(AcpEvent::ElicitationRequest { responder, .. }) = client.event_rx.recv().await else {
@@ -57,8 +64,12 @@ async fn acp_over_websocket_with_elicitation() -> Result<(), TestError> {
             };
 
             responder.respond(CreateElicitationResponse::new(ElicitationAction::Decline))?;
-            assert_eq!(prompt.await??.stop_reason, StopReason::EndTurn);
-            assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::PromptCompleted(StopReason::EndTurn))));
+            prompt.await??;
+            let Some(AcpEvent::SessionUpdate { update, .. }) = client.event_rx.recv().await else {
+                return Err(TestError::Unexpected("expected idle update"));
+            };
+            assert_eq!(*update, idle_notification("session", Some(StopReason::EndTurn)).update);
+            assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::PromptCompleted { session_id, stop_reason: StopReason::EndTurn }) if session_id.0.as_ref() == "session"));
             drop(client);
             server_task.abort();
             let _ = server_task.await;
@@ -106,8 +117,8 @@ async fn caller_established_socket_supports_acp_initialization() -> Result<(), T
             let client = Client
                 .builder()
                 .connect_with(WebSocketTransport::new(socket), async |cx| {
-                    let response = cx.send_request(InitializeRequest::new(ProtocolVersion::V1)).block_task().await?;
-                    assert_eq!(response.protocol_version, ProtocolVersion::V1);
+                    let response = cx.send_request(initialize_request()).block_task().await?;
+                    assert_eq!(response.protocol_version, ProtocolVersion::V2);
                     Ok(())
                 })
                 .await;
@@ -127,7 +138,7 @@ async fn final_response_is_not_lost_when_close_is_already_buffered() -> Result<(
             let peer = spawn_local(async move {
                 let request = receive_json(&mut server).await?;
                 let response =
-                    serde_json::json!({"jsonrpc": "2.0", "id": request["id"], "result": {"protocolVersion": 1}});
+                    serde_json::json!({"jsonrpc": "2.0", "id": request["id"], "result": {"protocolVersion": 2, "info": {"name": "test-agent", "version": "0.0.0"}}});
                 server.feed(Message::Text(response.to_string().into())).await?;
                 server.feed(Message::Close(None)).await?;
                 server.flush().await?;
@@ -139,7 +150,7 @@ async fn final_response_is_not_lost_when_close_is_already_buffered() -> Result<(
                 Ok::<_, TestError>(())
             });
             let client =
-                connect_acp_client(WebSocketTransport::new(client_socket), InitializeRequest::new(ProtocolVersion::V1))
+                connect_acp_client(WebSocketTransport::new(client_socket), initialize_request())
                     .await;
             assert!(client.is_ok(), "last response must be delivered before EOF");
             peer.await??;
@@ -210,7 +221,7 @@ async fn receive_json(socket: &mut WebSocketStream<DuplexStream>) -> Result<serd
 
 fn test_agent() -> Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
     Agent.builder().on_receive_request(
-        async |_: InitializeRequest, responder, _cx| responder.respond(InitializeResponse::new(ProtocolVersion::V1)),
+        async |_: InitializeRequest, responder, _cx| responder.respond(initialize_response()),
         acp::on_receive_request!(),
     )
 }
@@ -220,21 +231,29 @@ fn streaming_elicitation_agent(
 ) -> Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
     test_agent().on_receive_request(
         async move |request: PromptRequest, responder, cx| {
+            responder.respond(PromptResponse::new())?;
+            cx.send_notification(running_notification(request.session_id.clone()))?;
             for &text in chunks {
-                cx.send_notification(SessionNotification::new(
+                cx.send_notification(UpdateSessionNotification::new(
                     request.session_id.clone(),
-                    SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(text)))),
+                    SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                        ContentBlock::Text(TextContent::new(text)),
+                        "message-1",
+                    )),
                 ))?;
             }
             let input = CreateElicitationRequest::new(
-                ElicitationFormMode::new(ElicitationSessionScope::new(request.session_id), ElicitationSchema::new()),
+                ElicitationFormMode::new(
+                    ElicitationSessionScope::new(request.session_id.clone()),
+                    ElicitationSchema::new(),
+                ),
                 "Continue?",
             );
             let connection = cx.clone();
             cx.spawn(async move {
                 let response = connection.send_request(input).block_task().await?;
                 assert_eq!(response.action, ElicitationAction::Decline);
-                responder.respond(PromptResponse::new(StopReason::EndTurn))
+                connection.send_notification(idle_notification(request.session_id, Some(StopReason::EndTurn)))
             })?;
             Ok(())
         },

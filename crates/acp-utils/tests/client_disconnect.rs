@@ -1,7 +1,7 @@
 use acp::schema::ProtocolVersion;
-use acp::schema::v1::{
-    CancelNotification, CloseSessionRequest, CreateElicitationRequest, ElicitationFormMode, ElicitationSchema,
-    ElicitationSessionScope, InitializeRequest, InitializeResponse, PromptRequest,
+use acp::schema::v2::{
+    CancelSessionNotification, CloseSessionRequest, CreateElicitationRequest, ElicitationFormMode, ElicitationSchema,
+    ElicitationSessionScope, Implementation, InitializeRequest, InitializeResponse, PromptRequest,
 };
 use acp_utils::client::{AcpEvent, connect_acp_client};
 use acp_utils::testing::duplex_pair;
@@ -17,7 +17,10 @@ async fn disconnect_drops_connection_before_the_ui_releases_a_pending_approval()
                 .builder()
                 .on_receive_request(
                     async |_: InitializeRequest, responder, _cx| {
-                        responder.respond(InitializeResponse::new(ProtocolVersion::V1))
+                        responder.respond(InitializeResponse::new(
+                            ProtocolVersion::V2,
+                            Implementation::new("test-agent", "0.0.0"),
+                        ))
                     },
                     acp::on_receive_request!(),
                 )
@@ -42,7 +45,7 @@ async fn disconnect_drops_connection_before_the_ui_releases_a_pending_approval()
                     acp::on_receive_request!(),
                 )
                 .on_receive_notification(
-                    async |_: CancelNotification, _cx| -> Result<(), acp::Error> {
+                    async |_: CancelSessionNotification, _cx| -> Result<(), acp::Error> {
                         panic!("disconnect must not send session/cancel");
                     },
                     acp::on_receive_notification!(),
@@ -54,8 +57,12 @@ async fn disconnect_drops_connection_before_the_ui_releases_a_pending_approval()
                     acp::on_receive_request!(),
                 );
             let server = spawn_local(agent.connect_to(agent_transport));
-            let mut client =
-                connect_acp_client(client_transport, InitializeRequest::new(ProtocolVersion::V1)).await.unwrap();
+            let mut client = connect_acp_client(
+                client_transport,
+                InitializeRequest::new(ProtocolVersion::V2, Implementation::new("test-client", "0.0.0")),
+            )
+            .await
+            .unwrap();
             let handle = client.handle.clone();
             let prompt = spawn_local(async move { handle.prompt(PromptRequest::new("live", vec![])).await });
             let Some(AcpEvent::ElicitationRequest { responder, .. }) = client.event_rx.recv().await else {

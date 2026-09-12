@@ -1,6 +1,6 @@
 use acp_utils::client::TokioAcpAgent;
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::InitializeRequest;
+use agent_client_protocol::schema::v2::{Implementation, InitializeRequest};
 use agent_client_protocol::{Client, ConnectTo};
 use std::path::Path;
 use std::str::FromStr;
@@ -69,7 +69,12 @@ async fn agent_exited_message_includes_stderr_and_status() {
             let script = "exec 1>&-; sleep 0.05; printf '%s\\n' 'No such file' >&2; exit 2";
             let agent = TokioAcpAgent::from_command("/bin/sh", vec!["-c".into(), script.into()]);
             let client = Client.builder().with_spawned(async |cx| {
-                cx.send_request(InitializeRequest::new(ProtocolVersion::V1)).block_task().await?;
+                cx.send_request(InitializeRequest::new(
+                    ProtocolVersion::V2,
+                    Implementation::new("test-client", "0.0.0"),
+                ))
+                .block_task()
+                .await?;
                 Ok(())
             });
             let result = ConnectTo::<Client>::connect_to(agent, client).await;

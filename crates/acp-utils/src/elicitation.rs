@@ -1,5 +1,5 @@
 use crate::notifications::AETHER_META_NAMESPACE;
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::schema::v2::{
     self as acp, CompleteElicitationNotification, CreateElicitationRequest, CreateElicitationResponse, Meta, SessionId,
 };
 use rmcp::model::{self as mcp, ElicitRequestParams, ElicitResult};
@@ -276,7 +276,7 @@ fn build_scoped_elicitation_id(session_id: &SessionId, server_name: &str, elicit
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::schema::v2::{
         ElicitationAction, ElicitationMode, ElicitationPropertySchema, ElicitationScope,
     };
 
@@ -363,8 +363,8 @@ mod tests {
 
     #[test]
     fn url_id_namespacing_is_unambiguous() {
-        let first = build_scoped_elicitation_id(&SessionId::new("session"), "alpha:bravo", "oauth");
-        let second = build_scoped_elicitation_id(&SessionId::new("session"), "alpha", "bravo:oauth");
+        let first = build_acp_elicitation_completion_notification(&SessionId::new("session"), "alpha:bravo", "oauth");
+        let second = build_acp_elicitation_completion_notification(&SessionId::new("session"), "alpha", "bravo:oauth");
 
         assert_ne!(first, second);
     }

@@ -1,8 +1,8 @@
 use acp::Responder;
-use acp::schema::v1::{SessionUpdate, StopReason};
+use acp::schema::v2::{SessionUpdate, StopReason};
 use agent_client_protocol as acp;
-use agent_client_protocol::schema::v1::{
-    CreateElicitationRequest, CreateElicitationResponse, SessionId, SessionNotification,
+use agent_client_protocol::schema::v2::{
+    CreateElicitationRequest, CreateElicitationResponse, SessionId, UpdateSessionNotification,
 };
 
 use crate::client::LoadedSession;
@@ -12,7 +12,7 @@ use crate::notifications::{
 };
 
 pub enum ReplayableEvent {
-    SessionUpdate(Box<SessionNotification>),
+    SessionUpdate(Box<UpdateSessionNotification>),
     ContextCleared(ContextClearedParams),
     ContextCompaction(ContextCompactionParams),
     SubAgentProgress(Box<SubAgentProgressParams>),
@@ -20,8 +20,8 @@ pub enum ReplayableEvent {
     McpNotification(McpNotification),
 }
 
-impl From<SessionNotification> for ReplayableEvent {
-    fn from(notification: SessionNotification) -> Self {
+impl From<UpdateSessionNotification> for ReplayableEvent {
+    fn from(notification: UpdateSessionNotification) -> Self {
         Self::SessionUpdate(Box::new(notification))
     }
 }
@@ -52,6 +52,6 @@ pub enum AcpEvent {
     AuthMethodsUpdated(AuthMethodsUpdatedParams),
     McpNotification(McpNotification),
     ElicitationRequest { params: Box<CreateElicitationRequest>, responder: Responder<CreateElicitationResponse> },
-    PromptCompleted(StopReason),
+    PromptCompleted { session_id: SessionId, stop_reason: StopReason },
     ConnectionClosed,
 }

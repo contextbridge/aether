@@ -7,9 +7,12 @@
 //!
 
 use crate::notifications::McpNotification;
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::schema::ProtocolVersion;
+use agent_client_protocol::schema::v2::{
     CompleteElicitationNotification, CreateElicitationRequest, CreateElicitationResponse, ElicitationFormMode,
-    ElicitationSchema, ElicitationSessionScope, SessionNotification,
+    ElicitationSchema, ElicitationSessionScope, IdleStateUpdate, Implementation, InitializeRequest, InitializeResponse,
+    PlanEntry, PlanId, PlanUpdate, PlanUpdateContent, RunningStateUpdate, SessionId, SessionUpdate, StateUpdate,
+    StopReason, UpdateSessionNotification,
 };
 use agent_client_protocol::{
     self as acp, Agent, Builder, ByteStreams, Client, ConnectionTo, HandleDispatchFrom, NullRun, Responder,
@@ -24,7 +27,7 @@ use tokio_util::compat::{Compat, TokioAsyncReadCompatExt, TokioAsyncWriteCompatE
 pub type DuplexByteStreams = ByteStreams<Compat<DuplexStream>, Compat<DuplexStream>>;
 
 pub struct TestPeer {
-    session_notifications: mpsc::UnboundedReceiver<SessionNotification>,
+    session_notifications: mpsc::UnboundedReceiver<UpdateSessionNotification>,
     mcp_notifications: mpsc::UnboundedReceiver<McpNotification>,
     elicitation_requests: mpsc::UnboundedReceiver<CreateElicitationRequest>,
     elicitation_completions: mpsc::UnboundedReceiver<CompleteElicitationNotification>,
@@ -34,7 +37,7 @@ pub struct TestPeer {
 
 impl TestPeer {
     pub fn new() -> (Self, Builder<Client, impl HandleDispatchFrom<Agent>, NullRun>) {
-        let (sn_tx, sn_rx) = mpsc::unbounded_channel::<SessionNotification>();
+        let (sn_tx, sn_rx) = mpsc::unbounded_channel::<UpdateSessionNotification>();
         let (mcp_tx, mcp_rx) = mpsc::unbounded_channel::<McpNotification>();
         let (el_tx, el_rx) = mpsc::unbounded_channel::<CreateElicitationRequest>();
         let (complete_tx, complete_rx) = mpsc::unbounded_channel::<CompleteElicitationNotification>();
@@ -48,7 +51,7 @@ impl TestPeer {
             .on_receive_notification(
                 {
                     let tx = sn_tx;
-                    async move |n: SessionNotification, _cx| {
+                    async move |n: UpdateSessionNotification, _cx| {
                         let _ = tx.send(n);
                         Ok(())
                     }
@@ -109,7 +112,7 @@ impl TestPeer {
         (peer, builder)
     }
 
-    pub async fn next_session_notification(&mut self) -> SessionNotification {
+    pub async fn next_session_notification(&mut self) -> UpdateSessionNotification {
         self.session_notifications.recv().await.expect("peer channel closed")
     }
 
@@ -184,6 +187,47 @@ pub async fn test_connection() -> (ConnectionTo<Client>, TestPeer) {
 
     let cx = cx_rx.await.expect("agent side connect_with produced a ConnectionTo");
     (cx, peer)
+}
+
+/// Initialization request from an in-memory v2 client.
+pub fn initialize_request() -> InitializeRequest {
+    InitializeRequest::new(ProtocolVersion::V2, Implementation::new("test-client", "0.0.0"))
+}
+
+/// Initialization response from an in-memory v2 agent.
+pub fn initialize_response() -> InitializeResponse {
+    InitializeResponse::new(ProtocolVersion::V2, Implementation::new("test-agent", "0.0.0"))
+}
+
+/// A live foreground turn has started.
+pub fn running_notification(session_id: impl Into<SessionId>) -> UpdateSessionNotification {
+    UpdateSessionNotification::new(
+        session_id,
+        SessionUpdate::StateUpdate(StateUpdate::Running(RunningStateUpdate::new())),
+    )
+}
+
+/// Foreground work is idle, optionally with a reported stop reason.
+pub fn idle_notification(
+    session_id: impl Into<SessionId>,
+    stop_reason: Option<StopReason>,
+) -> UpdateSessionNotification {
+    UpdateSessionNotification::new(
+        session_id,
+        SessionUpdate::StateUpdate(StateUpdate::Idle(IdleStateUpdate::new().stop_reason(stop_reason))),
+    )
+}
+
+/// Replace the entries of an agent-owned plan.
+pub fn plan_notification(
+    session_id: impl Into<SessionId>,
+    plan_id: impl Into<PlanId>,
+    entries: Vec<PlanEntry>,
+) -> UpdateSessionNotification {
+    UpdateSessionNotification::new(
+        session_id,
+        SessionUpdate::PlanUpdate(PlanUpdate::new(PlanUpdateContent::items(plan_id, entries))),
+    )
 }
 
 fn placeholder_params() -> CreateElicitationRequest {
