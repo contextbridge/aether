@@ -411,14 +411,13 @@ fn to_sub_agent_event(event: &AgentEvent) -> SubAgentEvent {
 mod tests {
     use super::*;
     use acp_utils::notifications::SubAgentEvent;
-    use aether_core::events::CompactionOutcome;
-    use aether_core::events::SubAgentProgressPayload;
+    use aether_core::events::{CompactionOutcome, StreamState, SubAgentProgressPayload};
+    use aether_core::testing::{tool_call, tool_call_result, tool_call_update, tool_progress, tool_request};
     use llm::ContextUsage;
-    use llm::ToolCallRequest;
 
     #[test]
     fn task_status_maps_to_acp_lifecycle_status() {
-        let request = ToolCallRequest { id: "call-1".into(), name: "tasks__work".into(), arguments: "{}".into() };
+        let request = tool_request("call-1", "tasks__work", "{}");
         let cases = [
             ("working", ToolCallStatus::InProgress),
             ("input_required", ToolCallStatus::Pending),
@@ -446,7 +445,7 @@ mod tests {
     #[test]
     fn cancelled_task_notification_maps_to_failed_tool_status() {
         let event = AgentEvent::Tool(ToolEvent::TaskCancelled {
-            request: ToolCallRequest { id: "call-1".into(), name: "tasks__work".into(), arguments: "{}".into() },
+            request: tool_request("call-1", "tasks__work", "{}"),
             task_id: "task-1".into(),
         });
 
@@ -509,11 +508,7 @@ mod tests {
     #[test]
     fn test_text_includes_message_id() -> Result<(), String> {
         let session_id = SessionId::new("test-session");
-        let msg = AgentEvent::Message(MessageEvent::Text {
-            message_id: "msg_42".to_string(),
-            chunk: "hello".to_string(),
-            is_complete: false,
-        });
+        let msg = AgentEvent::text("msg_42", "hello", StreamState::Partial);
 
         let notification =
             map_agent_event_to_notification(session_id, &msg, NotificationMode::Live).ok_or("live notification")?;
@@ -530,11 +525,7 @@ mod tests {
     #[test]
     fn test_thought_includes_message_id() -> Result<(), String> {
         let session_id = acp::SessionId::new("test-session");
-        let msg = AgentEvent::Message(MessageEvent::Thought {
-            message_id: "msg_99".to_string(),
-            chunk: "hmm...".to_string(),
-            is_complete: false,
-        });
+        let msg = AgentEvent::thought("msg_99", "hmm...", StreamState::Partial);
 
         let notification =
             map_agent_event_to_notification(session_id, &msg, NotificationMode::Live).ok_or("live notification")?;
@@ -554,19 +545,11 @@ mod tests {
         let payload = SubAgentProgressPayload {
             task_id: "task_1".to_string(),
             agent_name: "sub-agent".to_string(),
-            event: AgentEvent::Message(MessageEvent::Text {
-                message_id: "msg_1".to_string(),
-                chunk: "Hello".to_string(),
-                is_complete: false,
-            }),
+            event: AgentEvent::text("msg_1", "Hello", StreamState::Partial),
         };
 
         let tool_progress = AgentEvent::Tool(ToolEvent::SubAgentProgress {
-            request: ToolCallRequest {
-                id: "call_123".to_string(),
-                name: "plugins__spawn_subagent".to_string(),
-                arguments: "{}".to_string(),
-            },
+            request: tool_request("call_123", "plugins__spawn_subagent", "{}"),
             payload: Box::new(payload),
         });
 
@@ -586,11 +569,7 @@ mod tests {
     #[test]
     fn test_thought_maps_to_agent_thought_chunk_with_message_id() -> Result<(), String> {
         let session_id = acp::SessionId::new("test-session");
-        let thought = AgentEvent::Message(MessageEvent::Thought {
-            message_id: "msg_1".to_string(),
-            chunk: "thinking...".to_string(),
-            is_complete: false,
-        });
+        let thought = AgentEvent::thought("msg_1", "thinking...", StreamState::Partial);
 
         let notification = map_agent_event_to_session_notification(session_id, &thought).ok_or("notification")?;
 
@@ -610,13 +589,7 @@ mod tests {
     #[test]
     fn test_tool_call_maps_to_tool_call_notification() -> Result<(), String> {
         let session_id = acp::SessionId::new("test-session");
-        let message = AgentEvent::Tool(ToolEvent::Call {
-            request: ToolCallRequest {
-                id: "call_1".to_string(),
-                name: "coding__read_file".to_string(),
-                arguments: "{}".to_string(),
-            },
-        });
+        let message = tool_call("call_1", "coding__read_file", "{}");
 
         let notification = map_agent_event_to_session_notification(session_id, &message).ok_or("notification")?;
 
@@ -633,10 +606,7 @@ mod tests {
     #[test]
     fn test_tool_call_update_maps_to_tool_call_update_notification() -> Result<(), String> {
         let session_id = acp::SessionId::new("test-session");
-        let message = AgentEvent::Tool(ToolEvent::CallUpdate {
-            tool_call_id: "call_1".to_string(),
-            chunk: r#"{"filePath":"Cargo.toml"}"#.to_string(),
-        });
+        let message = tool_call_update("call_1", r#"{"filePath":"Cargo.toml"}"#);
 
         let notification = map_agent_event_to_session_notification(session_id, &message).ok_or("notification")?;
 
@@ -653,10 +623,7 @@ mod tests {
     #[test]
     fn test_tool_call_update_has_same_live_and_replay_mapping() -> Result<(), String> {
         let session_id = acp::SessionId::new("test-session");
-        let message = AgentEvent::Tool(ToolEvent::CallUpdate {
-            tool_call_id: "call_1".to_string(),
-            chunk: r#"{"filePath":"Cargo.toml"}"#.to_string(),
-        });
+        let message = tool_call_update("call_1", r#"{"filePath":"Cargo.toml"}"#);
 
         let live = map_agent_event_to_notification(session_id.clone(), &message, NotificationMode::Live)
             .ok_or("live notification")?;
@@ -676,22 +643,8 @@ mod tests {
     #[test]
     fn test_live_mapping_skips_completed_chunks_but_replay_keeps_them() -> Result<(), String> {
         let cases: Vec<(AgentEvent, &str)> = vec![
-            (
-                AgentEvent::Message(MessageEvent::Text {
-                    message_id: "msg_1".to_string(),
-                    chunk: "done".to_string(),
-                    is_complete: true,
-                }),
-                "done",
-            ),
-            (
-                AgentEvent::Message(MessageEvent::Thought {
-                    message_id: "msg_1".to_string(),
-                    chunk: "final reasoning".to_string(),
-                    is_complete: true,
-                }),
-                "final reasoning",
-            ),
+            (AgentEvent::text("msg_1", "done", StreamState::Complete), "done"),
+            (AgentEvent::thought("msg_1", "final reasoning", StreamState::Complete), "final reasoning"),
         ];
 
         for (message, expected_text) in cases {
@@ -762,16 +715,7 @@ mod tests {
         let session_id = acp::SessionId::new("test-session");
 
         // Simulate a tool progress message with invalid JSON
-        let tool_progress = AgentEvent::Tool(ToolEvent::Progress {
-            request: ToolCallRequest {
-                id: "call_456".to_string(),
-                name: "some_tool".to_string(),
-                arguments: "{}".to_string(),
-            },
-            progress: 50.0,
-            total: None,
-            message: Some("not valid json".to_string()),
-        });
+        let tool_progress = tool_progress("call_456", "some_tool", 50.0, None, Some("not valid json"));
 
         let notification = map_agent_event_to_session_notification(session_id.clone(), &tool_progress);
 
@@ -795,11 +739,7 @@ mod tests {
     #[test]
     fn test_tool_call_notification_includes_original_tool_name_meta() -> Result<(), String> {
         let session_id = acp::SessionId::new("test-session");
-        let request = ToolCallRequest {
-            id: "call_1".to_string(),
-            name: "coding__read_file".to_string(),
-            arguments: "{}".to_string(),
-        };
+        let request = tool_request("call_1", "coding__read_file", "{}");
 
         let notification = map_tool_call_to_notification(session_id, &request);
         let SessionUpdate::ToolCall(tool_call) = notification.update else {
@@ -816,12 +756,7 @@ mod tests {
         use mcp_utils::display_meta::ToolDisplayMeta;
 
         let session_id = acp::SessionId::new("test-session");
-        let result = ToolCallResult {
-            id: "call_1".to_string(),
-            name: "coding__read_file".to_string(),
-            arguments: "{}".to_string(),
-            result: "file contents".to_string(),
-        };
+        let result = tool_call_result("call_1", "coding__read_file", "{}", "file contents");
         let rm: ToolResultMeta = ToolDisplayMeta::new("Read file", "Cargo.toml, 156 lines").into();
 
         let notification = map_tool_result_to_notification(session_id, &result, Some(&rm));
@@ -843,12 +778,7 @@ mod tests {
     #[test]
     fn test_result_without_result_meta() -> Result<(), String> {
         let session_id = acp::SessionId::new("test-session");
-        let result = ToolCallResult {
-            id: "call_1".to_string(),
-            name: "external__some_tool".to_string(),
-            arguments: "{}".to_string(),
-            result: "ok".to_string(),
-        };
+        let result = tool_call_result("call_1", "external__some_tool", "{}", "ok");
 
         let notification = map_tool_result_to_notification(session_id, &result, None);
         let update = match notification.update {
@@ -905,11 +835,7 @@ mod tests {
         let session_id = acp::SessionId::new("test-session");
         let meta = ToolResultMeta::from(ToolDisplayMeta::new("Read file", "main.rs"));
 
-        let request = ToolCallRequest {
-            id: "call_789".to_string(),
-            name: "coding__read_file".to_string(),
-            arguments: "{}".to_string(),
-        };
+        let request = tool_request("call_789", "coding__read_file", "{}");
 
         let event = AgentEvent::Tool(ToolEvent::DisplayUpdate { request, meta });
         let notification = map_agent_event_to_session_notification(session_id, &event)
@@ -939,12 +865,7 @@ mod tests {
         use mcp_utils::display_meta::ToolDisplayMeta;
 
         let event = AgentEvent::Tool(ToolEvent::Result {
-            result: ToolCallResult {
-                id: "call_1".to_string(),
-                name: "coding__read_file".to_string(),
-                arguments: r#"{"filePath":"Cargo.toml"}"#.to_string(),
-                result: "ok".to_string(),
-            },
+            result: tool_call_result("call_1", "coding__read_file", r#"{"filePath":"Cargo.toml"}"#, "ok"),
             result_meta: Some(ToolDisplayMeta::new("Read file", "Cargo.toml, 156 lines").into()),
         });
 
