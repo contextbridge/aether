@@ -225,7 +225,7 @@ mod tests {
         let fd = rm.file_diff.expect("file_diff should be present");
         assert_eq!(fd.path, "/tmp/main.rs");
         assert_eq!(fd.old_text.as_deref(), Some("old content"));
-        assert_eq!(fd.new_text, "new content");
+        assert_eq!(fd.new_text.as_deref(), Some("new content"));
     }
 
     #[test]
