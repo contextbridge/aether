@@ -28,7 +28,7 @@ A builder for constructing response sequences with less boilerplate:
 ```rust,no_run
 use llm::testing::llm_response;
 
-let chunks = llm_response("msg-1")
+let chunks = llm_response()
     .text(&["Hello", " world"])
     .tool_call("tc-1", "read_file", &[r#"{"path":"#, r#""foo.rs"}"#])
     .build();

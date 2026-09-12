@@ -148,7 +148,7 @@ fn tool_definition_to_openai(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{tool_schema::normalize_for_moonshot, types::IsoString};
+    use crate::{MessageId, tool_schema::normalize_for_moonshot, types::IsoString};
 
     #[test]
     fn map_user_content_text_only() {
@@ -265,6 +265,7 @@ mod tests {
     #[test]
     fn map_messages_with_ogg_audio_returns_unsupported_content() {
         let messages = vec![ChatMessage::User {
+            message_id: MessageId::new(),
             content: vec![
                 ContentBlock::text("Listen:"),
                 ContentBlock::Audio { data: "YXVkaW9kYXRh".to_string(), mime_type: "audio/ogg".to_string() },

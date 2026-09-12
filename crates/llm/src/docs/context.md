@@ -19,6 +19,7 @@ let context = Context::new(
             timestamp: IsoString::now(),
         },
         ChatMessage::User {
+            message_id: llm::MessageId::new(),
             content: vec![ContentBlock::text("What is Rust?")],
             timestamp: IsoString::now(),
         },
