@@ -151,6 +151,7 @@ async fn loaded_snapshot_is_delivered_on_the_event_channel() -> Result<(), TestE
         .run_until(async {
             let mut client = TestClientBuilder::default()
                 .replay_message("saved", "snapshot")
+                .compaction_active(true)
                 .live_message("saved", "live")
                 .build()
                 .await?;
@@ -159,10 +160,13 @@ async fn loaded_snapshot_is_delivered_on_the_event_channel() -> Result<(), TestE
 
             let loaded = take_loaded_session(&mut client)?;
             assert_eq!(loaded.session_id, SessionId::new("saved"));
-            let [ReplayableEvent::SessionUpdate(notification)] = loaded.replay.as_slice() else {
-                return Err(TestError::Unexpected("expected exactly one replayed session update"));
+            let [ReplayableEvent::SessionUpdate(notification), ReplayableEvent::ContextCompaction(compaction)] =
+                loaded.replay.as_slice()
+            else {
+                return Err(TestError::Unexpected("expected message followed by compaction in replay"));
             };
             assert_eq!(notification.as_ref(), &message("saved", "snapshot"));
+            assert!(compaction.active);
             let Some(AcpEvent::SessionUpdate { session_id, update }) = client.event_rx.recv().await else {
                 return Err(TestError::Unexpected("expected live update after snapshot"));
             };

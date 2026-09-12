@@ -7,7 +7,6 @@ Utilities for the [Agent Client Protocol](https://agentclientprotocol.com/) (ACP
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 
-- [Protocol compatibility](#protocol-compatibility)
 - [Key Types](#key-types)
 - [Feature Flags](#feature-flags)
 - [WebSocket transport](#websocket-transport)
@@ -33,7 +32,7 @@ Utilities for the [Agent Client Protocol](https://agentclientprotocol.com/) (ACP
 
 ## WebSocket transport
 
-Enable the `websocket` feature to use ACP via websockets, via the `websocket::WebSocketTransport<S>` struct. 
+Enable the `websocket` feature to use `websocket::WebSocketTransport<S>` with an already-established WebSocket connection.
 
 ## License
 
