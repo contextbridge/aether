@@ -28,6 +28,7 @@ default = ["client", "server"]
 client = []
 server = []
 testing = ["client"]
+websocket = ["dep:tokio-tungstenite"]
 
 [dependencies]
 agent-client-protocol = { workspace = true }
@@ -44,6 +45,7 @@ tracing = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.14" }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
+tokio-tungstenite = { workspace = true, optional = true }
 
 [dev-dependencies]
 aether-acp-utils = { path = ".", features = ["testing"] }
