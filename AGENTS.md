@@ -7,6 +7,11 @@
 - **Lint** -- `just lint`
 - **Format** -- `just fmt`
 
+## Workflows 
+
+1. When making code changes, rely on your LSP tools for compile/error checking (as its much faster) and run only targeted tests. Then, run other `just` verification checks only at the end. 
+2. When nagivating or searching for code, prefer your LSP and AST Grep tools as they're faster.
+
 ## Coding Style
 
 1. Backwards compatibility and fallbacks are not a concern when planning or implementing code.
@@ -26,6 +31,7 @@
 3. Prefer integration tests that assert against state using fakes (e.g. in memory file system that asserts file contents) over mocks that test behavior (e.g. how many times did we call write_file?)
 4. Don't put timeouts into tests, this always leads to flaky tests on CPUs with different speeds.
 5. All tests must test _only_ the public API. Never write tests that test a private method as that couples the tests to implementation details and makes the code harder to refactor.
+6. Tests should be easy to write and easy to read, meaning they aren't verbose. Use the test builder pattern (see: https://jmmv.dev/2020/12/builder-pattern-for-tests.html). Prefer using and extending existing builders vs creating new bespoke ones.
 
 ### Error handling
 
