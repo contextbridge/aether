@@ -2,7 +2,7 @@ use acp_utils::elicitation;
 use acp_utils::notifications::McpNotification;
 use acp_utils::server::AcpServerError;
 use aether_auth::OAuthCredentialStorage;
-use aether_core::events::{AgentCommand, AgentEvent, Command, ToolEvent, TurnOutcome};
+use aether_core::events::{AgentCommand, AgentEvent, Command, MessageEvent, ToolEvent, TurnOutcome};
 use aether_sessions::model::{SessionControlEvent, SessionEvent, UserEvent, last_session_usage};
 use aether_sessions::transcript::conversation_messages_from_events;
 use agent_client_protocol::schema::v2::{self as acp, PromptResponse, SessionId, SetSessionConfigOptionResponse};
@@ -354,9 +354,12 @@ async fn run_prompt_turn(
         }
         Err(error) => {
             error!("Accepted prompt failed: {error}");
-            let message = acp::AgentMessage::new(llm::MessageId::new().to_string())
-                .content(vec![acp::ContentBlock::Text(acp::TextContent::new(format!("Error: {error}")))]);
-            send_session_update(io, acp::SessionUpdate::AgentMessage(message));
+            let message = AgentEvent::Message(MessageEvent::Text {
+                message_id: llm::MessageId::new(),
+                chunk: format!("Error: {error}"),
+                is_complete: true,
+            });
+            record_agent_event(actor, io, &message);
             acp::StopReason::EndTurn
         }
     };
@@ -520,8 +523,7 @@ async fn on_runtime_event(actor: &mut SessionActor, io: &SessionIo, event: Runti
 
     match event {
         RuntimeEvent::Agent { message, .. } => {
-            persist_event(actor, io, SessionEvent::Agent(message.clone()));
-            forward_notification(&io.connection, &io.session_id, &message);
+            record_agent_event(actor, io, &message);
             Some(message)
         }
         RuntimeEvent::Mcp { event, .. } => {
@@ -544,6 +546,11 @@ fn send_session_update(io: &SessionIo, update: acp::SessionUpdate) {
     {
         warn!("Failed to send session update: {error}");
     }
+}
+
+fn record_agent_event(actor: &mut SessionActor, io: &SessionIo, message: &AgentEvent) {
+    persist_event(actor, io, SessionEvent::Agent(message.clone()));
+    forward_notification(&io.connection, &io.session_id, message);
 }
 
 fn persist_event(actor: &mut SessionActor, io: &SessionIo, event: SessionEvent) {
