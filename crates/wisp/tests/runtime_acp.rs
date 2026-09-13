@@ -1,15 +1,17 @@
 #![cfg(feature = "testing")]
 
 use acp_utils::client::{AcpClientError, AcpEvent};
-use acp_utils::testing::duplex_pair;
+use acp_utils::testing::{duplex_pair, idle_notification, running_notification};
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v2::UpdateSessionNotification;
 use agent_client_protocol::schema::v2::{
     AgentCapabilities, AuthMethodId, CancelSessionNotification, ContentBlock, Implementation, InitializeRequest,
     InitializeResponse, LoginAuthRequest, LoginAuthResponse, NewSessionRequest, NewSessionResponse, PromptCapabilities,
     PromptImageCapabilities, PromptRequest, PromptResponse, ReplayFrom, ResumeSessionRequest, ResumeSessionResponse,
     SessionCapabilities, SessionConfigId, SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption,
     SessionId, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, TextContent,
+};
+use agent_client_protocol::schema::v2::{
+    ContentChunk, SessionUpdate, StopReason, UpdateSessionNotification, UserMessage,
 };
 use agent_client_protocol::{Agent, Responder};
 use std::path::PathBuf;
@@ -75,42 +77,49 @@ async fn runtime_login_and_config_requests_use_v2_payloads() {
 
 #[tokio::test]
 async fn accepted_turn_finishes_the_ui_only_after_matching_live_idle() {
-    LocalSet::new().run_until(async {
-        for reason in [Some("end_turn"), Some("cancelled"), None] {
-            let (mut session, mut peer) = connect(None).await;
-            let mut ui = wisp::testing::TestUi::new();
-            ui.deliver_result(CommandResult::NewSessionCreated(NewSessionResponse::new("new")));
-            ui.submit("hello");
-            let mut dispatcher = CommandDispatcher::new(session.client_handle.clone());
-            for command in ui.executor_mut().take_commands() {
-                dispatcher.dispatch(command);
-            }
-            let (_, responder) = peer.prompt.recv().await.unwrap();
-            responder.respond(PromptResponse::new()).unwrap();
-            ui.deliver_result(dispatcher.next_result().await.unwrap());
-            assert!(ui.app().waiting_for_response(), "acceptance is not completion");
-            for (id, value) in [
-                ("other", serde_json::json!({"sessionUpdate":"state_update", "state":"idle"})),
-                ("new", serde_json::json!({"sessionUpdate":"user_message", "messageId":"user", "content":[{"type":"text", "text":"hello"}]})),
-                ("new", serde_json::json!({"sessionUpdate":"state_update", "state":"running"})),
-                ("new", serde_json::json!({"sessionUpdate":"agent_message_chunk", "messageId":"reply", "content":{"type":"text", "text":"response"}})),
-            ] {
-                peer.connection.send_notification(UpdateSessionNotification::new(id, serde_json::from_value(value).unwrap())).unwrap();
+    LocalSet::new()
+        .run_until(async {
+            for reason in [Some(StopReason::EndTurn), Some(StopReason::Cancelled), None] {
+                let (mut session, mut peer) = connect(None).await;
+                let mut ui = wisp::testing::TestUi::new();
+                ui.deliver_result(CommandResult::NewSessionCreated(NewSessionResponse::new("new")));
+                ui.submit("hello");
+                let mut dispatcher = CommandDispatcher::new(session.client_handle.clone());
+                for command in ui.executor_mut().take_commands() {
+                    dispatcher.dispatch(command);
+                }
+                let (_, responder) = peer.prompt.recv().await.unwrap();
+                responder.respond(PromptResponse::new()).unwrap();
+                ui.deliver_result(dispatcher.next_result().await.unwrap());
+                assert!(ui.app().waiting_for_response(), "acceptance is not completion");
+                for notification in [
+                    idle_notification("other", None),
+                    UpdateSessionNotification::new(
+                        "new",
+                        SessionUpdate::UserMessage(UserMessage::new("user").content(vec!["hello".into()])),
+                    ),
+                    running_notification("new"),
+                    UpdateSessionNotification::new(
+                        "new",
+                        SessionUpdate::AgentMessageChunk(ContentChunk::new("response".into(), "reply")),
+                    ),
+                ] {
+                    peer.connection.send_notification(notification).unwrap();
+                    ui.acp_event(session.event_rx.recv().await.unwrap());
+                    assert!(ui.app().waiting_for_response());
+                }
+                peer.connection.send_notification(idle_notification("new", reason)).unwrap();
                 ui.acp_event(session.event_rx.recv().await.unwrap());
-                assert!(ui.app().waiting_for_response());
+                assert!(ui.app().waiting_for_response(), "raw idle must not complete");
+                ui.acp_event(session.event_rx.recv().await.unwrap());
+                assert!(!ui.app().waiting_for_response());
+                let text = ui.conversation_text();
+                assert_eq!(text.matches("hello").count(), 1, "{text}");
+                assert!(text.contains("response"));
+                session.client_handle.disconnect().await;
             }
-            let idle = serde_json::from_value(serde_json::json!({"sessionUpdate":"state_update", "state":"idle", "stopReason":reason})).unwrap();
-            peer.connection.send_notification(UpdateSessionNotification::new("new", idle)).unwrap();
-            ui.acp_event(session.event_rx.recv().await.unwrap());
-            assert!(ui.app().waiting_for_response(), "raw idle must not complete");
-            ui.acp_event(session.event_rx.recv().await.unwrap());
-            assert!(!ui.app().waiting_for_response());
-            let text = ui.conversation_text();
-            assert_eq!(text.matches("hello").count(), 1, "{text}");
-            assert!(text.contains("response"));
-            session.client_handle.disconnect().await;
-        }
-    }).await;
+        })
+        .await;
 }
 
 #[tokio::test]

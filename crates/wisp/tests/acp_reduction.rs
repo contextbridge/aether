@@ -1,19 +1,23 @@
 #![cfg(feature = "testing")]
 
-use acp_utils::client::AcpEvent;
+use acp_utils::client::{AcpEvent, ReplayableEvent};
+use acp_utils::testing::{idle_notification, plan_notification, running_notification};
+use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::v2 as acp;
 use wisp::conversation::tool_calls::ToolStatus;
-use wisp::testing::{TestUi, session_update};
+use wisp::testing::{TestUi, session_update, text_chunk_with_id, tool_completed};
 
 #[test]
 fn user_ack_and_idle_preserve_one_foreground_turn() {
     let mut ui = TestUi::new();
     ui.submit("hello");
-    ui.acp_event(update(serde_json::json!({"sessionUpdate":"user_message", "messageId":"user-1", "content":[{"type":"text", "text":"hello"}]})));
-    ui.acp_event(update(serde_json::json!({"sessionUpdate":"state_update", "state":"running"})));
+    ui.acp_event(session_update(acp::SessionUpdate::UserMessage(
+        acp::UserMessage::new("user-1").content(vec!["hello".into()]),
+    )));
+    ui.acp_event(session_update(running_notification("test-session").update));
     assert!(ui.app().waiting_for_response());
-    ui.acp_event(update(serde_json::json!({"sessionUpdate":"agent_message_chunk", "messageId":"reply-1", "content":{"type":"text", "text":"world"}})));
-    ui.acp_event(update(serde_json::json!({"sessionUpdate":"state_update", "state":"idle", "stopReason":"end_turn"})));
+    ui.acp_event(text_chunk_with_id("reply-1", "world"));
+    ui.acp_event(session_update(idle_notification("test-session", Some(acp::StopReason::EndTurn)).update));
     assert!(ui.app().waiting_for_response(), "raw idle must not finish a turn twice");
     ui.acp_event(AcpEvent::PromptCompleted { session_id: "other".into(), stop_reason: acp::StopReason::EndTurn });
     assert!(ui.app().waiting_for_response());
@@ -44,15 +48,17 @@ fn user_ack_and_idle_preserve_one_foreground_turn() {
 fn live_messages_can_be_replaced_cleared_and_appended_after_idle() {
     let mut ui = TestUi::new();
     ui.submit("question");
-    ui.acp_event(message("agent_message", "reply", "obsolete answer"));
+    ui.acp_event(message("reply", "obsolete answer"));
     ui.complete_prompt(acp::StopReason::EndTurn);
     ui.assert_conversation_contains("obsolete answer");
-    ui.acp_event(message("agent_message", "reply", "corrected answer"));
+    ui.acp_event(message("reply", "corrected answer"));
     ui.assert_conversation_contains("corrected answer");
     ui.assert_conversation_not_contains("obsolete answer");
-    ui.acp_event(update(serde_json::json!({"sessionUpdate":"agent_message", "messageId":"reply", "content":null})));
+    ui.acp_event(session_update(acp::SessionUpdate::AgentMessage(
+        acp::AgentMessage::new("reply").content(MaybeUndefined::Null),
+    )));
     ui.assert_conversation_not_contains("corrected answer");
-    ui.acp_event(update(serde_json::json!({"sessionUpdate":"agent_message_chunk", "messageId":"reply", "content":{"type":"text", "text":"appended answer"}})));
+    ui.acp_event(text_chunk_with_id("reply", "appended answer"));
     ui.assert_conversation_contains("appended answer");
     assert!(!ui.app().progress_indicator().is_active());
 }
@@ -61,11 +67,9 @@ fn live_messages_can_be_replaced_cleared_and_appended_after_idle() {
 fn ready_and_replayed_updates_do_not_start_activity() {
     let mut ui = TestUi::new();
     for event in [
-        update(serde_json::json!({"sessionUpdate":"state_update", "state":"idle"})),
-        message("agent_message", "history", "saved response"),
-        update(
-            serde_json::json!({"sessionUpdate":"agent_message_chunk", "messageId":"history", "content":{"type":"text", "text":" tail"}}),
-        ),
+        session_update(idle_notification("test-session", None).update),
+        message("history", "saved response"),
+        text_chunk_with_id("history", " tail"),
     ] {
         ui.acp_event(event);
     }
@@ -78,7 +82,9 @@ fn ready_and_replayed_updates_do_not_start_activity() {
 fn requires_action_and_unknown_updates_preserve_the_turn() {
     let mut ui = TestUi::with_dimensions(80, 20);
     ui.submit("question");
-    ui.acp_event(update(serde_json::json!({"sessionUpdate":"state_update", "state":"requires_action"})));
+    ui.acp_event(session_update(acp::SessionUpdate::StateUpdate(acp::StateUpdate::RequiresAction(
+        acp::RequiresActionStateUpdate::new(),
+    ))));
     ui.assert_viewport_contains("Waiting for action");
     for value in [
         serde_json::json!({"sessionUpdate":"future_update", "field":true}),
@@ -98,13 +104,14 @@ fn requires_action_and_unknown_updates_preserve_the_turn() {
 fn tool_and_plan_updates_are_upserts_and_chunks_append() {
     let mut ui = TestUi::new();
     ui.submit("work");
-    ui.acp_event(update(
-        serde_json::json!({"sessionUpdate":"tool_call_update", "toolCallId":"tool", "title":"Read file"}),
-    ));
-    ui.acp_event(update(serde_json::json!({"sessionUpdate":"tool_call_content_chunk", "toolCallId":"tool", "content":{"type":"content", "content":{"type":"text", "text":"output"}}})));
-    ui.acp_event(update(
-        serde_json::json!({"sessionUpdate":"tool_call_update", "toolCallId":"tool", "status":"completed"}),
-    ));
+    ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(
+        acp::ToolCallUpdate::new("tool").title("Read file"),
+    )));
+    ui.acp_event(session_update(acp::SessionUpdate::ToolCallContentChunk(acp::ToolCallContentChunk::new(
+        "tool",
+        acp::ToolCallContent::Content(Box::new(acp::Content::new("output"))),
+    ))));
+    ui.acp_event(tool_completed("tool"));
     let tools: Vec<_> = ui
         .app()
         .conversation_items()
@@ -118,12 +125,14 @@ fn tool_and_plan_updates_are_upserts_and_chunks_append() {
     assert_eq!(tools[0].title(), "Read file");
     assert_eq!(tools[0].status, ToolStatus::Success);
     for (id, text) in [("a", "old"), ("b", "preserved"), ("a", "replacement")] {
-        ui.acp_event(session_update(acp::SessionUpdate::PlanUpdate(acp::PlanUpdate::new(
-            acp::PlanUpdateContent::items(
+        ui.acp_event(session_update(
+            plan_notification(
+                "test-session",
                 id,
                 vec![acp::PlanEntry::new(text, acp::PlanEntryPriority::Medium, acp::PlanEntryStatus::Pending)],
-            ),
-        ))));
+            )
+            .update,
+        ));
     }
     let entries = ui.app().plan_entries();
     assert_eq!(entries.iter().map(|entry| entry.content.as_str()).collect::<Vec<_>>(), ["replacement"]);
@@ -136,10 +145,13 @@ fn repeated_resume_replaces_history_without_adopting_a_live_echo() {
     ui.complete_prompt(acp::StopReason::EndTurn);
     for _ in 0..2 {
         let replay = [
-            serde_json::json!({"sessionUpdate":"user_message", "messageId":"user", "content":[{"type":"text", "text":"saved prompt"}]}),
-            serde_json::json!({"sessionUpdate":"agent_message", "messageId":"reply", "content":[{"type":"text", "text":"saved answer"}]}),
-            serde_json::json!({"sessionUpdate":"state_update", "state":"idle"}),
-        ].into_iter().map(|value| acp_utils::client::ReplayableEvent::SessionUpdate(Box::new(acp::UpdateSessionNotification::new("restored", serde_json::from_value(value).unwrap())))).collect();
+            acp::SessionUpdate::UserMessage(acp::UserMessage::new("user").content(vec!["saved prompt".into()])),
+            acp::SessionUpdate::AgentMessage(acp::AgentMessage::new("reply").content(vec!["saved answer".into()])),
+            idle_notification("restored", None).update,
+        ]
+        .into_iter()
+        .map(|update| ReplayableEvent::SessionUpdate(Box::new(acp::UpdateSessionNotification::new("restored", update))))
+        .collect();
         ui.acp_event(AcpEvent::SessionResumed(acp_utils::client::ResumedSession {
             session_id: "restored".into(),
             response: acp::ResumeSessionResponse::new(),
@@ -168,8 +180,8 @@ fn seeded_history_uses_distinct_message_ids_and_finishes_each_turn() {
     assert!(!ui.app().waiting_for_response());
 }
 
-fn message(kind: &str, id: &str, text: &str) -> AcpEvent {
-    update(serde_json::json!({"sessionUpdate":kind, "messageId":id, "content":[{"type":"text", "text":text}]}))
+fn message(id: &str, text: &str) -> AcpEvent {
+    session_update(acp::SessionUpdate::AgentMessage(acp::AgentMessage::new(id).content(vec![text.into()])))
 }
 
 fn update(value: serde_json::Value) -> AcpEvent {

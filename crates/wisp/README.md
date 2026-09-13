@@ -12,7 +12,7 @@ wisp                       # launches the default agent ("aether acp")
 wisp --agent "my-agent"    # launches a custom ACP agent
 ```
 
-The `--agent` flag accepts any shell command that speaks ACP v2 over stdio. 
+The `--agent` flag accepts any shell command that speaks ACP v2 over stdio.
 
 ## Keybindings
 

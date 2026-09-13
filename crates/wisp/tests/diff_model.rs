@@ -25,32 +25,31 @@ fn text_diff_fixture_omits_patch_for_unchanged_content() {
 fn acp_diff_preserves_patch_and_absolute_change_paths() {
     let conversation =
         conversation_with_diff(acp::Diff::patch(PATCH, vec![acp::DiffChange::modify(path("/workspace/src/lib.rs"))]));
-    let diff = &tool(&conversation).diffs()[0];
-    assert_eq!(diff.patch.as_deref(), Some(PATCH));
-    assert_eq!(diff.changes, ["M /workspace/src/lib.rs"]);
+    let diff = tool(&conversation).diffs().next().unwrap();
+    assert_eq!(diff.patch.as_ref().unwrap().text, PATCH);
+    assert_eq!(diff.patch.as_ref().unwrap().format, acp::DiffPatchFormat::GitPatch);
+    assert_eq!(diff.changes, [acp::DiffChange::modify(path("/workspace/src/lib.rs"))]);
 }
 
 #[test]
 fn patchless_diff_lists_all_changes_without_fabricating_sources() {
-    let conversation = conversation_with_diff(acp::Diff::new(vec![
+    let diff = acp::Diff::new(vec![
         acp::DiffChange::add(path("/workspace/new.rs")),
         acp::DiffChange::delete(path("/workspace/old.rs")),
         acp::DiffChange::modify(path("/workspace/changed.rs")),
         acp::DiffChange::move_file(path("/workspace/from.rs"), path("/workspace/to.rs")),
         acp::DiffChange::copy(path("/workspace/source.rs"), path("/workspace/copy.rs")),
-    ]));
-    let diff = &tool(&conversation).diffs()[0];
-    assert!(diff.patch.is_none());
-    assert_eq!(
-        diff.changes,
-        [
-            "A /workspace/new.rs",
-            "D /workspace/old.rs",
-            "M /workspace/changed.rs",
-            "R /workspace/from.rs → /workspace/to.rs",
-            "C /workspace/source.rs → /workspace/copy.rs"
-        ]
-    );
+    ]);
+    let mut ui = ui_with_diff(diff);
+    for label in [
+        "A /workspace/new.rs",
+        "D /workspace/old.rs",
+        "M /workspace/changed.rs",
+        "R /workspace/from.rs → /workspace/to.rs",
+        "C /workspace/source.rs → /workspace/copy.rs",
+    ] {
+        ui.assert_conversation_contains(label);
+    }
 }
 
 #[test]
@@ -60,10 +59,8 @@ fn unknown_changes_and_patch_formats_are_displayable_without_parsing() {
         "patch": {"format": "_future", "text": "future patch"}
     }))
     .unwrap();
-    let conversation = conversation_with_diff(diff);
-    let diff = &tool(&conversation).diffs()[0];
-    assert_eq!(diff.changes, ["Unknown file change"]);
-    assert_eq!(diff.patch.as_deref(), Some("future patch"));
+    let mut ui = ui_with_diff(diff);
+    ui.assert_conversation_contains("Unknown file change");
 }
 
 #[test]
@@ -74,17 +71,41 @@ fn diff_content_replacement_and_null_drop_stale_previews() {
         "edit",
         acp::ToolCallContent::Diff(acp::Diff::new(vec![acp::DiffChange::add(path("/workspace/b"))])),
     ));
-    assert_eq!(tool(&conversation).diffs().len(), 2);
+    assert_eq!(tool(&conversation).diffs().count(), 2);
     conversation.on_tool_call_update(&acp::ToolCallUpdate::new("edit"));
-    assert_eq!(tool(&conversation).diffs().len(), 2);
+    assert_eq!(tool(&conversation).diffs().count(), 2);
     conversation.on_tool_call_update(&acp::ToolCallUpdate::new("edit").content(vec![]));
-    assert!(tool(&conversation).diffs().is_empty());
+    assert!(tool(&conversation).diffs().next().is_none());
     conversation.on_tool_call_content_chunk(&acp::ToolCallContentChunk::new(
         "edit",
         acp::ToolCallContent::Diff(acp::Diff::new(vec![])),
     ));
     conversation.on_tool_call_update(&acp::ToolCallUpdate::new("edit").content(MaybeUndefined::Null));
-    assert!(tool(&conversation).diffs().is_empty());
+    assert!(tool(&conversation).diffs().next().is_none());
+}
+
+#[test]
+fn unknown_patch_format_is_not_rendered_as_a_git_patch() {
+    let diff = serde_json::from_value(serde_json::json!({
+        "changes": [{"operation": "modify", "path": "/workspace/src/lib.rs"}],
+        "patch": {"format": "_future", "text": PATCH}
+    }))
+    .unwrap();
+    let mut ui = ui_with_diff(diff);
+    ui.assert_conversation_contains("M /workspace/src/lib.rs");
+    ui.assert_conversation_not_contains("before");
+    ui.assert_conversation_not_contains("after");
+}
+
+fn ui_with_diff(diff: acp::Diff) -> wisp::testing::TestUi {
+    let mut ui = wisp::testing::TestUi::with_dimensions(100, 30);
+    ui.acp_event(wisp::testing::session_update(acp::SessionUpdate::ToolCallUpdate(
+        acp::ToolCallUpdate::new("edit")
+            .title("Edit files")
+            .status(acp::ToolCallStatus::Completed)
+            .content(vec![acp::ToolCallContent::Diff(diff)]),
+    )));
+    ui
 }
 
 fn path(value: &str) -> acp::AbsolutePath {
