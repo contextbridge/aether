@@ -81,7 +81,7 @@ async fn spans_form_a_turn_rooted_hierarchy() -> Result<(), Box<dyn Error>> {
 async fn failed_and_cancelled_calls_carry_error_attributes() -> Result<(), Box<dyn Error>> {
     let attempts: Vec<Vec<Result<LlmResponse, LlmError>>> = vec![
         vec![Err(LlmError::from(ProviderError::server("boom".to_string()).with_http_status(503)))],
-        vec![Ok(LlmResponse::start("m2")), Ok(LlmResponse::text("never seen")), Ok(LlmResponse::done())],
+        vec![Ok(LlmResponse::Start), Ok(LlmResponse::text("never seen")), Ok(LlmResponse::done())],
     ];
     let retry = RetryConfig { max_attempts: 5, base_delay: Duration::from_mins(1), max_delay: Duration::from_mins(1) };
     let trace = test_agent()
@@ -182,10 +182,10 @@ async fn content_flags_gate_each_gen_ai_attribute() -> Result<(), Box<dyn Error>
 async fn tool_only_llm_call_captures_generation_output() -> Result<(), Box<dyn Error>> {
     let request = serde_json::json!({ "a": 3, "b": 5 });
     let responses = [
-        llm_response("m1")
+        llm_response()
             .tool_call("call_1", "test__add_numbers", &[&request.to_string()])
             .build_with_stop_reason(StopReason::ToolCalls),
-        llm_response("m2").text(&["The sum is 8"]).build(),
+        llm_response().text(&["The sum is 8"]).build(),
     ];
     let trace = test_agent().llm_responses(&responses).user_text("3+5 = ?").run_trace().await?;
 
@@ -325,8 +325,8 @@ async fn completed_message_sets_turn_output_without_streamed_chunks() -> Result<
 async fn tool_error_ends_the_tool_span_with_error_status() -> Result<(), Box<dyn Error>> {
     let request = serde_json::json!({ "a": 8, "b": 0 });
     let responses = [
-        llm_response("m1").tool_call("call_1", "test__divide_numbers", &[&request.to_string()]).build(),
-        llm_response("m2").text(&["that did not work"]).build(),
+        llm_response().tool_call("call_1", "test__divide_numbers", &[&request.to_string()]).build(),
+        llm_response().text(&["that did not work"]).build(),
     ];
     let trace = test_agent().llm_responses(&responses).user_text("8/0 = ?").run_trace().await?;
 
@@ -345,9 +345,9 @@ async fn tool_error_ends_the_tool_span_with_error_status() -> Result<(), Box<dyn
 #[tokio::test]
 async fn compaction_call_is_tagged_and_parented_to_the_turn() -> Result<(), Box<dyn Error>> {
     let responses = [
-        llm_response("m1").text(&["hi"]).usage(90_000, 10).build_with_stop_reason(StopReason::Length),
-        llm_response("summary").text(&["summary"]).usage(50, 5).build(),
-        llm_response("m2").text(&["done"]).build(),
+        llm_response().text(&["hi"]).usage(90_000, 10).build_with_stop_reason(StopReason::Length),
+        llm_response().text(&["summary"]).usage(50, 5).build(),
+        llm_response().text(&["done"]).build(),
     ];
     let trace =
         test_agent().context_window_override(100_000).llm_responses(&responses).user_text("go").run_trace().await?;
@@ -445,12 +445,12 @@ async fn genai_metrics_use_the_expected_scope_units_and_attributes() -> Result<(
 async fn happy_tool_trace() -> Result<AgentTrace, Box<dyn Error>> {
     let request = serde_json::json!({ "a": 3, "b": 5 });
     let responses = [
-        llm_response("m1")
+        llm_response()
             .text(&["hello "])
             .tool_call("call_1", "test__add_numbers", &[&request.to_string()])
             .usage(100, 20)
             .build(),
-        llm_response("m2").text(&["The sum is 8"]).usage(30, 7).build(),
+        llm_response().text(&["The sum is 8"]).usage(30, 7).build(),
     ];
     Ok(test_agent()
         .model("anthropic:claude-sonnet-4-5".parse()?)
