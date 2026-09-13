@@ -93,12 +93,9 @@ pub(crate) fn acp_agent_builder(state: Arc<AcpState>) -> Builder<Agent, impl Han
         .on_receive_request(
             {
                 let state = state.clone();
-                async move |req: PromptRequest, responder, cx| {
-                    let state = state.clone();
-                    cx.spawn(async move {
-                        state.route_prompt(req, responder).await;
-                        Ok(())
-                    })
+                async move |req: PromptRequest, responder, _cx| {
+                    state.route_prompt(req, responder).await;
+                    Ok(())
                 }
             },
             acp::on_receive_request!(),

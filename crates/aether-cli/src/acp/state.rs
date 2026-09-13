@@ -269,7 +269,7 @@ impl AcpState {
 
     /// Route a prompt to its session actor. Validates media support against the
     /// session's effective model before dispatch, then hands the responder to
-    /// the actor which answers when the turn completes.
+    /// the actor which acknowledges acceptance before streaming the turn.
     pub(crate) async fn route_prompt(&self, args: PromptRequest, responder: Responder<PromptResponse>) {
         info!("Received prompt for session: {:?}", args.session_id);
         let session_id = args.session_id.0.to_string();

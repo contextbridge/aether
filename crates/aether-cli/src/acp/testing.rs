@@ -409,7 +409,7 @@ struct FakeRuntimeFactory {
 
 struct FakeAgentDef {
     spec: AgentSpec,
-    provider: Mutex<Option<Arc<dyn StreamingModelProvider>>>,
+    provider: Arc<dyn StreamingModelProvider>,
     mcp: Option<(String, String)>,
 }
 
@@ -428,12 +428,7 @@ impl RuntimeFactory for FakeRuntimeFactory {
             .get(&spec.name)
             .or_else(|| self.agents.values().next())
             .ok_or_else(|| SessionError::AgentNotFound(spec.name.clone()))?;
-        let provider = def
-            .provider
-            .lock()
-            .expect("fake provider lock is healthy")
-            .take()
-            .expect("fake agent runtime spawned more than once");
+        let provider = def.provider.clone();
 
         let mut mcp_builder = mcp(&self.cwd).with_tool_filter(spec.tools.clone());
         if let Some((server_name, prompt_name)) = &def.mcp {
@@ -526,7 +521,7 @@ fn fake_agent(name: &str, server_name: &str, prompt_name: &str, reply: &str) -> 
     let captured_contexts = provider.captured_contexts();
     let def = FakeAgentDef {
         spec: fake_agent_spec(name),
-        provider: Mutex::new(Some(Arc::new(provider))),
+        provider: Arc::new(provider),
         mcp: Some((server_name.to_string(), prompt_name.to_string())),
     };
     let observer = FakeAcpAgent { name: name.to_string(), captured_contexts };

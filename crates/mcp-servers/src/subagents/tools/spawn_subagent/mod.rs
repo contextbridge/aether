@@ -7,7 +7,7 @@ use aether_core::{
     mcp::{McpRuntime, McpSession, mcp},
 };
 use futures::FutureExt;
-use llm::ContentBlock;
+use llm::{ContentBlock, MessageId};
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

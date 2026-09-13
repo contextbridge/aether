@@ -3,7 +3,8 @@ use aether_core::core::agent;
 use agent_client_protocol::Error;
 use agent_client_protocol::schema::v2::{
     AbsolutePath, CloseSessionRequest, CloseSessionResponse, ContentBlock, ListSessionsRequest, ListSessionsResponse,
-    PromptRequest, ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate, StopReason, TextContent,
+    PromptRequest, ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate, StopReason,
+    TextContent,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -147,7 +148,8 @@ async fn resume_replays_persisted_transcript_over_the_server_connection() {
         harness
             .client_cx
             .send_request(
-                ResumeSessionRequest::new(session_id, AbsolutePath::new("/tmp")).replay_from(ReplayFromStart::new()),
+                ResumeSessionRequest::new(session_id, AbsolutePath::new("/tmp"))
+                    .replay_from(ReplayFrom::Start(ReplayFromStart::new())),
             )
             .block_task()
             .await

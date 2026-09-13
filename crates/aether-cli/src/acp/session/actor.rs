@@ -26,6 +26,7 @@ use super::error::SessionError;
 use super::model::{Modes, get_all_models};
 use super::runtime::{AgentRuntime, RUNTIME_EVENT_CHANNEL_CAPACITY, RuntimeEvent, RuntimeFactory};
 use super::slash_commands::{expand_slash_command_in_content, send_available_commands};
+use crate::acp::map_user_message;
 use crate::acp::protocol::commands::map_mcp_prompt_to_available_command;
 use crate::acp::protocol::events::{
     AgentExtNotification, map_agent_event_to_session_notification, try_extract_plan_notification,
@@ -306,12 +307,43 @@ async fn on_session_command(
 ) {
     match cmd {
         SessionCommand::Prompt { content, responder } => {
-            let result = handle_prompt(actor, runtime_event_rx, cmd_rx, io, content).await;
-            let turn_ok = result.is_ok();
-            respond_prompt(responder, result);
-            if turn_ok {
-                let _ = apply_deferred_agent_switch(actor, io).await;
-            }
+            let (message_id, content) = match prepare_prompt(actor, io, content).await {
+                Ok(prompt) => prompt,
+                Err(error) => {
+                    error!("Prompt preparation failed: {error}");
+                    let _ = responder.respond_with_error(Error::internal_error());
+                    return;
+                }
+            };
+            let _ = responder.respond(PromptResponse::new());
+            let user = map_user_message(message_id.to_string().into(), &content);
+            send_session_update(io, acp::SessionUpdate::UserMessage(user));
+            send_session_update(
+                io,
+                acp::SessionUpdate::StateUpdate(acp::StateUpdate::Running(acp::RunningStateUpdate::new())),
+            );
+            let result = handle_prompt(actor, runtime_event_rx, cmd_rx, io, message_id, content).await;
+            let reason = match result {
+                Ok(reason) => reason,
+                Err(error) => {
+                    error!("Accepted prompt failed: {error}");
+                    send_session_update(
+                        io,
+                        acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
+                            format!("Error: {error}").into(),
+                            llm::MessageId::new().to_string(),
+                        )),
+                    );
+                    acp::StopReason::EndTurn
+                }
+            };
+            send_session_update(
+                io,
+                acp::SessionUpdate::StateUpdate(acp::StateUpdate::Idle(
+                    acp::IdleStateUpdate::new().stop_reason(reason),
+                )),
+            );
+            let _ = apply_deferred_agent_switch(actor, io).await;
         }
         SessionCommand::Cancel => info!("Cancel received while idle, ignoring"),
         SessionCommand::SetConfig { setting, available, responder } => {
@@ -326,13 +358,11 @@ async fn on_session_command(
     }
 }
 
-async fn handle_prompt(
+async fn prepare_prompt(
     actor: &mut SessionActor,
-    runtime_event_rx: &mut mpsc::Receiver<RuntimeEvent>,
-    cmd_rx: &mut mpsc::Receiver<SessionCommand>,
     io: &SessionIo,
     content: Vec<ContentBlock>,
-) -> Result<acp::StopReason, SessionError> {
+) -> Result<(llm::MessageId, Vec<ContentBlock>), SessionError> {
     let switch = actor.config.begin_prompt(&actor.modes);
     publish_snapshot(actor, io);
     apply_switch(actor, io, switch).await?;
@@ -342,12 +372,19 @@ async fn handle_prompt(
     let content = expand_slash_command_in_content(actor.active_runtime()?, content).await;
     let message_id = llm::MessageId::new();
     let event = SessionEvent::User(UserEvent::Message { message_id: message_id.clone(), content: content.clone() });
-    persist_event(actor, io, event.clone());
-    for notification in crate::acp::protocol::replay::map_session_event_to_notifications(&event, &io.session_id) {
-        if let Err(error) = io.connection.send_notification(notification) {
-            warn!("Failed to send user message: {error}");
-        }
-    }
+    io.repository.append_event(&io.session_id.0, &event)?;
+    actor.record_event(event);
+    Ok((message_id, content))
+}
+
+async fn handle_prompt(
+    actor: &mut SessionActor,
+    runtime_event_rx: &mut mpsc::Receiver<RuntimeEvent>,
+    cmd_rx: &mut mpsc::Receiver<SessionCommand>,
+    io: &SessionIo,
+    message_id: llm::MessageId,
+    content: Vec<ContentBlock>,
+) -> Result<acp::StopReason, SessionError> {
     actor.send_active_command(Command::with_message_id(message_id, content)).await?;
 
     loop {
@@ -416,7 +453,7 @@ async fn handle_in_flight_command(actor: &mut SessionActor, io: &SessionIo, cmd:
             let _ = responder.respond_with_result(result);
         }
         SessionCommand::Prompt { responder, .. } => {
-            respond_prompt(responder, Err(SessionError::CommandChannel("prompt already in progress".to_string())));
+            let _ = responder.respond_with_error(Error::invalid_request());
         }
     }
 }
@@ -492,19 +529,11 @@ async fn on_runtime_event(actor: &mut SessionActor, io: &SessionIo, event: Runti
     }
 }
 
-fn respond_prompt(responder: Responder<PromptResponse>, result: Result<acp::StopReason, SessionError>) {
-    let response = match result {
-        Ok(stop_reason) => {
-            info!("Prompt completed with stop reason: {:?}", stop_reason);
-            Ok(PromptResponse::new(stop_reason))
-        }
-        Err(e) => {
-            error!("Prompt failed: {e}");
-            Err(Error::internal_error())
-        }
-    };
-    if let Err(e) = responder.respond_with_result(response) {
-        warn!("failed to send prompt response: {e:?}");
+fn send_session_update(io: &SessionIo, update: acp::SessionUpdate) {
+    if let Err(error) =
+        io.connection.send_notification(acp::UpdateSessionNotification::new(io.session_id.clone(), update))
+    {
+        warn!("Failed to send session update: {error}");
     }
 }
 
