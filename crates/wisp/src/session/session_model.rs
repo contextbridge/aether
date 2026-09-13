@@ -145,8 +145,7 @@ impl SessionModel {
     /// wholesale. Optimistic edits made through `update_config_option_value`
     /// are either confirmed or corrected by the next update.
     pub fn update_config_options(&mut self, config_options: Vec<acp::SessionConfigOption>) {
-        let next = config_options.into_iter().map(LocalConfigOption::from_acp).collect::<Vec<_>>();
-        self.config_options = next;
+        self.config_options = config_options.into_iter().map(LocalConfigOption::from_acp).collect();
     }
 
     pub fn update_config_option_value(&mut self, config_id: &str, value: &str) {
@@ -160,7 +159,7 @@ impl SessionModel {
 
     pub fn set_session(&mut self, session_id: SessionId, config_options: Vec<acp::SessionConfigOption>) {
         self.session_id = session_id;
-        self.config_options = config_options.into_iter().map(LocalConfigOption::from_acp).collect();
+        self.update_config_options(config_options);
     }
 
     pub fn set_working_dir(&mut self, working_dir: PathBuf) {

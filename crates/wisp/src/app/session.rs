@@ -114,12 +114,7 @@ impl App {
             RootOutput::Settings(output) => match output {
                 SettingsOutput::Close => self.close_active(),
                 SettingsOutput::SetConfigOption { config_id, value } => {
-                    self.queue(Command::Agent(AgentCommand::SetConfigOption {
-                        conversation_id: self.conversation_id(),
-                        session_id: self.session.session_id().clone(),
-                        config_id: config_id.clone(),
-                        value: value.as_str().into(),
-                    }));
+                    self.set_config_option(&config_id, &value);
                     self.apply_settings_change(&SettingsChange { config_id, new_value: value });
                 }
                 SettingsOutput::SetTheme(value) => self.apply_theme_change(&value),
@@ -248,12 +243,7 @@ impl App {
                 continue;
             };
             if select.current_value != value {
-                self.queue(Command::Agent(AgentCommand::SetConfigOption {
-                        conversation_id: self.conversation_id(),
-                    session_id: self.session.session_id().clone(),
-                    config_id: config_id.clone(),
-                    value: value.as_str().into(),
-                }));
+                self.set_config_option(config_id, value);
             }
         }
     }

@@ -330,6 +330,16 @@ impl App {
         self.commands.push_back(command);
     }
 
+    /// Queues a config change for the agent and session the app is attached to.
+    fn set_config_option(&mut self, config_id: &str, value: &str) {
+        self.queue(Command::Agent(AgentCommand::SetConfigOption {
+            conversation_id: self.conversation_id(),
+            session_id: self.session.session_id().clone(),
+            config_id: config_id.to_string(),
+            value: value.into(),
+        }));
+    }
+
     pub fn on_tick(&mut self, now: Instant) {
         if let ExitState::Confirming(armed_at) = self.exit_state
             && now.duration_since(armed_at) > CTRL_C_CONFIRM_WINDOW
@@ -473,15 +483,11 @@ impl App {
 
     /// Drops all conversation state atomically before starting a new session.
     fn reset_conversation(&mut self) {
-        self.reset_turn_state();
-        self.submission.reset();
-        self.conversation.clear();
-    }
-
-    fn reset_turn_state(&mut self) {
         // The spinner phase is cosmetic and survives, so a swap does not make
         // the indicator visibly jump.
         self.conversation.reset_feature_state();
+        self.submission.reset();
+        self.conversation.clear();
     }
 
     fn refresh_progress(&mut self) {
