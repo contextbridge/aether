@@ -18,7 +18,6 @@ pub struct FakeAgent {
     new_session: Option<NewSessionResponse>,
     sessions: Option<Vec<SessionInfo>>,
     login_method: Option<String>,
-    hold_login: bool,
     hold_config: bool,
     hold_list_sessions: bool,
     replay: Vec<UpdateSessionNotification>,
@@ -36,7 +35,6 @@ pub struct FakeAgentRequests {
     pub prompt: mpsc::UnboundedReceiver<(PromptRequest, Responder<PromptResponse>)>,
     pub resume: mpsc::UnboundedReceiver<(ResumeSessionRequest, Responder<ResumeSessionResponse>)>,
     pub cancel: mpsc::UnboundedReceiver<CancelSessionNotification>,
-    pub pending_login: mpsc::UnboundedReceiver<Responder<LoginAuthResponse>>,
     pub pending_config: mpsc::UnboundedReceiver<Responder<SetSessionConfigOptionResponse>>,
     pub list_sessions: mpsc::UnboundedReceiver<(ListSessionsRequest, Responder<ListSessionsResponse>)>,
     pub close_session: mpsc::UnboundedReceiver<CloseSessionRequest>,
@@ -49,7 +47,6 @@ impl Default for FakeAgent {
             new_session: None,
             sessions: None,
             login_method: None,
-            hold_login: false,
             hold_config: false,
             hold_list_sessions: false,
             replay: Vec::new(),
@@ -71,10 +68,6 @@ impl FakeAgent {
     }
     pub fn login_method(mut self, method: &str) -> Self {
         self.login_method = Some(method.into());
-        self
-    }
-    pub fn hold_login(mut self, hold: bool) -> Self {
-        self.hold_login = hold;
         self
     }
     pub fn hold_config(mut self, hold: bool) -> Self {
@@ -115,7 +108,6 @@ impl FakeAgent {
         let (prompt, prompt_rx) = mpsc::unbounded_channel();
         let (resume, resume_rx) = mpsc::unbounded_channel();
         let (cancel, cancel_rx) = mpsc::unbounded_channel();
-        let (pending_login, pending_login_rx) = mpsc::unbounded_channel();
         let (pending_config, pending_config_rx) = mpsc::unbounded_channel();
         let (list_sessions, list_sessions_rx) = mpsc::unbounded_channel();
         let (close_session, close_session_rx) = mpsc::unbounded_channel();
@@ -128,7 +120,6 @@ impl FakeAgent {
             prompt,
             resume,
             cancel,
-            pending_login,
             pending_config,
             list_sessions,
             close_session,
@@ -144,7 +135,6 @@ impl FakeAgent {
                 prompt: prompt_rx,
                 resume: resume_rx,
                 cancel: cancel_rx,
-                pending_login: pending_login_rx,
                 pending_config: pending_config_rx,
                 list_sessions: list_sessions_rx,
                 close_session: close_session_rx,
@@ -214,10 +204,6 @@ impl HandleDispatchFrom<Client> for FakeAgent {
                 let allowed = self.login_method.as_deref() == Some(request.method_id.0.as_ref());
                 if let Some(capture) = &self.capture {
                     let _ = capture.login.send(request);
-                    if self.hold_login {
-                        let _ = capture.pending_login.send(responder);
-                        return Ok(());
-                    }
                 }
                 if allowed {
                     responder.respond(LoginAuthResponse::new())
@@ -301,7 +287,6 @@ struct Capture {
     prompt: mpsc::UnboundedSender<(PromptRequest, Responder<PromptResponse>)>,
     resume: mpsc::UnboundedSender<(ResumeSessionRequest, Responder<ResumeSessionResponse>)>,
     cancel: mpsc::UnboundedSender<CancelSessionNotification>,
-    pending_login: mpsc::UnboundedSender<Responder<LoginAuthResponse>>,
     pending_config: mpsc::UnboundedSender<Responder<SetSessionConfigOptionResponse>>,
     list_sessions: mpsc::UnboundedSender<(ListSessionsRequest, Responder<ListSessionsResponse>)>,
     close_session: mpsc::UnboundedSender<CloseSessionRequest>,

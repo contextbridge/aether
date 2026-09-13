@@ -183,10 +183,6 @@ struct Peer {
 }
 
 async fn connect(capabilities: Option<SessionCapabilities>) -> (Session, Peer) {
-    connect_with_pending_login(capabilities, false).await
-}
-
-async fn connect_with_pending_login(capabilities: Option<SessionCapabilities>, hold_login: bool) -> (Session, Peer) {
     let (agent, mut requests) = acp_utils::testing::FakeAgent::default()
         .agent_info(Implementation::new("Fake agent", "1"))
         .capabilities(AgentCapabilities::new().session(capabilities))
@@ -197,7 +193,6 @@ async fn connect_with_pending_login(capabilities: Option<SessionCapabilities>, h
             vec![SessionConfigSelectOption::new("fast", "Fast")],
         )]))
         .login_method("provider")
-        .hold_login(hold_login)
         .capture();
     let (agent_transport, client_transport) = duplex_pair();
     spawn_local(agent.agent().connect_to(agent_transport));
