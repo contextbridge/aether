@@ -6,6 +6,9 @@
 //! regressions like extension method-name typos surface in tests).
 //!
 
+mod fake_agent;
+pub use fake_agent::{FakeAgent, FakeAgentRequests};
+
 use crate::notifications::McpNotification;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v2::{
@@ -15,7 +18,8 @@ use agent_client_protocol::schema::v2::{
     StopReason, UpdateSessionNotification,
 };
 use agent_client_protocol::{
-    self as acp, Agent, Builder, ByteStreams, Client, ConnectionTo, HandleDispatchFrom, NullRun, Responder,
+    self as acp, Agent, Builder, ByteStreams, Client, ConnectionTo, HandleConnectionClose, HandleDispatchFrom, NullRun,
+    Responder, RunWithConnectionTo,
 };
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -48,6 +52,7 @@ impl TestPeer {
 
         let builder = Client
             .v2()
+            .name("test-client")
             .on_receive_notification(
                 {
                     let tx = sn_tx;
@@ -167,26 +172,56 @@ pub fn duplex_pair() -> (DuplexByteStreams, DuplexByteStreams) {
 /// a peer on the other end. Must be called inside a `LocalSet`.
 pub async fn test_connection() -> (ConnectionTo<Client>, TestPeer) {
     let (peer, client_builder) = TestPeer::new();
+    let pair = connect_pair(Agent.v2().name("test-agent"), client_builder).await;
+    (pair.agent, peer)
+}
+
+pub struct ConnectedPair {
+    pub agent: ConnectionTo<Client>,
+    pub client: ConnectionTo<Agent>,
+    pub agent_task: tokio::task::JoinHandle<Result<(), acp::Error>>,
+    pub client_task: tokio::task::JoinHandle<Result<(), acp::Error>>,
+}
+
+pub async fn connect_pair<T, U, V, X, Y, Z>(
+    agent: Builder<Agent, T, U, V>,
+    client: Builder<Client, X, Y, Z>,
+) -> ConnectedPair
+where
+    T: HandleDispatchFrom<Client> + 'static,
+    U: RunWithConnectionTo<Client> + 'static,
+    V: HandleConnectionClose<Client> + 'static,
+    X: HandleDispatchFrom<Agent> + 'static,
+    Y: RunWithConnectionTo<Agent> + 'static,
+    Z: HandleConnectionClose<Agent> + 'static,
+{
     let (agent_transport, client_transport) = duplex_pair();
-
-    spawn_local(async move {
-        let _ = client_builder.connect_to(client_transport).await;
-    });
-
-    let (cx_tx, cx_rx) = oneshot::channel::<ConnectionTo<Client>>();
-    spawn_local(async move {
-        let _ = Agent
-            .v2()
+    let (agent_tx, agent_rx) = oneshot::channel();
+    let (client_tx, client_rx) = oneshot::channel();
+    let agent_task = spawn_local(async move {
+        agent
             .connect_with(agent_transport, async move |cx: ConnectionTo<Client>| {
-                let _ = cx_tx.send(cx);
-                std::future::pending::<()>().await;
+                let _ = agent_tx.send(cx.clone());
+                cx.incoming_closed().await;
                 Ok(())
             })
-            .await;
+            .await
     });
-
-    let cx = cx_rx.await.expect("agent side connect_with produced a ConnectionTo");
-    (cx, peer)
+    let client_task = spawn_local(async move {
+        client
+            .connect_with(client_transport, async move |cx: ConnectionTo<Agent>| {
+                let _ = client_tx.send(cx.clone());
+                cx.incoming_closed().await;
+                Ok(())
+            })
+            .await
+    });
+    ConnectedPair {
+        agent: agent_rx.await.expect("agent connection"),
+        client: client_rx.await.expect("client connection"),
+        agent_task,
+        client_task,
+    }
 }
 
 /// Initialization request from an in-memory v2 client.

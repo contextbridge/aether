@@ -5,9 +5,11 @@ use std::path::PathBuf;
 use agent_client_protocol::schema::v2::{AuthMethod, Meta};
 use agent_client_protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 pub use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize};
 
 pub use mcp_utils::status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
+
+use crate::meta::{from_meta, to_meta};
 
 pub const AETHER_META_NAMESPACE: &str = "contextbridge/aether";
 
@@ -168,12 +170,12 @@ impl SessionDisplayMeta {
 
     #[must_use]
     pub fn to_meta(&self) -> Meta {
-        to_aether_meta(self)
+        to_meta(self, Some(AETHER_META_NAMESPACE)).unwrap_or_default()
     }
 
     #[must_use]
     pub fn from_meta(meta: Option<&Meta>) -> Self {
-        from_aether_meta(meta)
+        from_meta(meta, Some(AETHER_META_NAMESPACE))
     }
 }
 
@@ -191,26 +193,13 @@ pub struct AetherCapabilities {
 impl AetherCapabilities {
     #[must_use]
     pub fn to_meta(self) -> Meta {
-        to_aether_meta(&self)
+        to_meta(&self, Some(AETHER_META_NAMESPACE)).unwrap_or_default()
     }
 
     #[must_use]
     pub fn from_meta(meta: Option<&Meta>) -> Self {
-        from_aether_meta(meta)
+        from_meta(meta, Some(AETHER_META_NAMESPACE))
     }
-}
-
-fn to_aether_meta<T: Serialize>(value: &T) -> Meta {
-    let mut meta = Meta::new();
-    meta.insert(AETHER_META_NAMESPACE.to_string(), serde_json::json!(value));
-    meta
-}
-
-fn from_aether_meta<T: DeserializeOwned + Default>(meta: Option<&Meta>) -> T {
-    meta.and_then(|m| m.get(AETHER_META_NAMESPACE))
-        .cloned()
-        .and_then(|value| serde_json::from_value(value).ok())
-        .unwrap_or_default()
 }
 
 /// Server→client MCP extension notifications (relay → wisp).

@@ -10,7 +10,9 @@ Utilities for the [Agent Client Protocol](https://agentclientprotocol.com/) (ACP
 - [Key Types](#key-types)
 - [Feature Flags](#feature-flags)
 - [WebSocket transport](#websocket-transport)
-- [Ordered session loading](#ordered-session-loading)
+- [Client ownership and turn completion](#client-ownership-and-turn-completion)
+- [Session switching and replay](#session-switching-and-replay)
+- [Cancellation and disconnect](#cancellation-and-disconnect)
 - [License](#license)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -18,17 +20,19 @@ Utilities for the [Agent Client Protocol](https://agentclientprotocol.com/) (ACP
 ## Key Types
 
 - **`elicitation`** -- Typed conversion between MCP elicitation and native ACP `elicitation/create` messages
-- **`ContextUsageParams`** -- Token usage tracking notifications
+- **`SessionUsageParams`** -- Token usage tracking notifications
 - **`McpNotification` / `McpRequest`** -- MCP message tunneling over ACP
 - **`TokioAcpAgent`** -- Tokio-native ACP transport
+- **`AcpClientHandle`** -- Initialized, cloneable client for typed ACP v2 requests
+- **`AcpEvent` / `ResumedSession`** -- Live UI events and atomically committed replay snapshots
 
 ## Feature Flags
 
 | Feature | Description | Default |
 |---------|-------------|---------|
 | `client` | ACP client (for UIs connecting to agents) | yes |
-| `server` | ACP server (for agents accepting connections) | yes |
 | `websocket` | Message-oriented WebSocket transport | no |
+| `testing` | Public in-memory ACP test peers and transport helpers (enables `client`) | no |
 
 ## WebSocket transport
 

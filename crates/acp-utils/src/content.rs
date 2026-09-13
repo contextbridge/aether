@@ -8,7 +8,7 @@ pub fn map_content_blocks_to_text(blocks: Vec<acp::ContentBlock>) -> String {
     blocks
         .into_iter()
         .map(|block| match block {
-            acp::ContentBlock::Text(text) => text.text.clone(),
+            acp::ContentBlock::Text(text) => text.text,
             acp::ContentBlock::Image(_) => "[Image content]".to_string(),
             acp::ContentBlock::Audio(_) => "[Audio content]".to_string(),
             acp::ContentBlock::ResourceLink(link) => {

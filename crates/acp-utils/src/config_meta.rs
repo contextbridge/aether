@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use utils::{ReasoningEffort, is_false};
 
+use crate::meta::to_meta;
+
 type Meta = serde_json::Map<String, serde_json::Value>;
 
 /// Meta for a top-level `SessionConfigOption` (e.g. the "model" config).
@@ -29,33 +31,21 @@ impl SelectOptionMeta {
 
 impl ConfigOptionMeta {
     pub fn into_meta(self) -> Option<Meta> {
-        if self == Self::default() {
-            return None;
-        }
-        match serde_json::to_value(self).expect("ConfigOptionMeta should serialize") {
-            serde_json::Value::Object(map) => Some(map),
-            _ => unreachable!(),
-        }
+        to_meta(&self, None)
     }
 
     pub fn from_meta(meta: Option<&Meta>) -> Self {
-        meta.and_then(|m| serde_json::from_value(serde_json::Value::Object(m.clone())).ok()).unwrap_or_default()
+        from_meta(meta, None)
     }
 }
 
 impl SelectOptionMeta {
     pub fn into_meta(self) -> Option<Meta> {
-        if self == Self::default() {
-            return None;
-        }
-        match serde_json::to_value(self).expect("SelectOptionMeta should serialize") {
-            serde_json::Value::Object(map) => Some(map),
-            _ => unreachable!(),
-        }
+        to_meta(&self, None)
     }
 
     pub fn from_meta(meta: Option<&Meta>) -> Self {
-        meta.and_then(|m| serde_json::from_value(serde_json::Value::Object(m.clone())).ok()).unwrap_or_default()
+        from_meta(meta, None)
     }
 }
 

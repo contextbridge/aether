@@ -34,25 +34,23 @@ async fn acp_over_websocket_with_elicitation() -> Result<(), TestError> {
             let (server, client) = SocketPairBuilder::default().build().await;
             let agent = streaming_elicitation_agent(&["hello ", "world"]);
             let server_task = spawn_local(agent.connect_to(WebSocketTransport::new(server)));
-            let mut client =
-                connect_acp_client(WebSocketTransport::new(client), initialize_request())
-                    .await?;
+            let mut client = connect_acp_client(WebSocketTransport::new(client), initialize_request()).await?;
 
             let handle = client.handle.clone();
             let prompt = spawn_local(async move {
                 handle.prompt(PromptRequest::new("session", vec![ContentBlock::Text(TextContent::new("hi"))])).await
             });
 
-            let Some(AcpEvent::SessionUpdate { update, .. }) = client.event_rx.recv().await else {
+            let Some(AcpEvent::SessionUpdate(notification)) = client.event_rx.recv().await else {
                 return Err(TestError::Unexpected("expected running update"));
             };
-            assert!(matches!(*update, SessionUpdate::StateUpdate(StateUpdate::Running(_))));
+            assert!(matches!(notification.update, SessionUpdate::StateUpdate(StateUpdate::Running(_))));
 
             for expected in ["hello ", "world"] {
-                let Some(AcpEvent::SessionUpdate { update, .. }) = client.event_rx.recv().await else {
+                let Some(AcpEvent::SessionUpdate(notification)) = client.event_rx.recv().await else {
                     return Err(TestError::Unexpected("expected streamed update"));
                 };
-                let SessionUpdate::AgentMessageChunk(chunk) = *update else {
+                let SessionUpdate::AgentMessageChunk(chunk) = notification.update else {
                     return Err(TestError::Unexpected("expected agent message chunk"));
                 };
                 assert_eq!(chunk.content, ContentBlock::Text(TextContent::new(expected)));
@@ -65,11 +63,10 @@ async fn acp_over_websocket_with_elicitation() -> Result<(), TestError> {
 
             responder.respond(CreateElicitationResponse::new(ElicitationAction::Decline))?;
             prompt.await??;
-            let Some(AcpEvent::SessionUpdate { update, .. }) = client.event_rx.recv().await else {
+            let Some(AcpEvent::SessionUpdate(notification)) = client.event_rx.recv().await else {
                 return Err(TestError::Unexpected("expected idle update"));
             };
-            assert_eq!(*update, idle_notification("session", Some(StopReason::EndTurn)).update);
-            assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::PromptCompleted { session_id, stop_reason: StopReason::EndTurn }) if session_id.0.as_ref() == "session"));
+            assert_eq!(notification.update, idle_notification("session", Some(StopReason::EndTurn)).update);
             drop(client);
             server_task.abort();
             let _ = server_task.await;
@@ -162,7 +159,7 @@ async fn final_response_is_not_lost_when_close_is_already_buffered() -> Result<(
 #[tokio::test]
 async fn final_turn_and_replay_events_are_delivered_before_buffered_close() -> Result<(), TestError> {
     use acp::schema::v2::ResumeSessionRequest;
-    use acp_utils::client::ReplayableEvent;
+    use acp_utils::client::AcpEvent;
 
     LocalSet::new()
         .run_until(async {
@@ -177,19 +174,15 @@ async fn final_turn_and_replay_events_are_delivered_before_buffered_close() -> R
                     let Some(AcpEvent::SessionResumed(snapshot)) = client.event_rx.recv().await else {
                         return Err(TestError::Unexpected("expected replay snapshot before close"));
                     };
-                    assert!(matches!(snapshot.replay.as_slice(), [ReplayableEvent::SessionUpdate(notification)]
+                    assert!(matches!(snapshot.replay.as_slice(), [AcpEvent::SessionUpdate(notification)]
                     if **notification == idle_notification("session", Some(StopReason::EndTurn))));
                 } else {
                     client.handle.prompt(PromptRequest::new("session", vec![])).await?;
-                    assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::SessionUpdate { update, .. })
-                    if *update == idle_notification("session", Some(StopReason::EndTurn)).update));
-                    assert!(matches!(
-                        client.event_rx.recv().await,
-                        Some(AcpEvent::PromptCompleted { stop_reason: StopReason::EndTurn, .. })
-                    ));
+                    assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::SessionUpdate(notification))
+                    if notification.update == idle_notification("session", Some(StopReason::EndTurn)).update));
                 }
-                assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::SessionUpdate { update, .. })
-                if *update == running_notification("session").update));
+                assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::SessionUpdate(notification))
+                if notification.update == running_notification("session").update));
                 assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::ConnectionClosed)));
                 assert!(client.event_rx.recv().await.is_none());
                 peer.await??;

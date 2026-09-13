@@ -11,6 +11,7 @@ pub mod config_meta;
 pub mod config_option_id;
 pub mod content;
 pub mod elicitation;
+pub mod meta;
 pub mod notifications;
 pub mod settings;
 
@@ -19,9 +20,6 @@ pub mod websocket;
 
 #[cfg(feature = "client")]
 pub mod client;
-
-#[cfg(feature = "server")]
-pub mod server;
 
 #[cfg(feature = "testing")]
 pub mod testing;
