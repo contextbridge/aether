@@ -1,6 +1,6 @@
 use acp_utils::config_meta::{ConfigOptionMeta, SelectOptionMeta};
 use acp_utils::config_option_id::ConfigOptionId;
-use agent_client_protocol::schema::v1::{self as acp, SessionConfigOptionCategory};
+use agent_client_protocol::schema::v2::{self as acp, SessionConfigOptionCategory};
 use utils::ReasoningEffort;
 
 /// Client-owned configuration state projected from an ACP session schema.
@@ -69,7 +69,13 @@ impl LocalConfigOption {
             }
             _ => LocalConfigKind::Boolean { current_value: false },
         };
-        Self { id: option.id.0.to_string(), name: option.name, category: option.category, meta: option.meta, kind }
+        Self {
+            id: option.config_id.0.to_string(),
+            name: option.name,
+            category: option.category,
+            meta: option.meta,
+            kind,
+        }
     }
 
     pub(crate) fn select(&self) -> Option<LocalConfigSelect<'_>> {

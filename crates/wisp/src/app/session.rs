@@ -9,7 +9,7 @@ use crate::surfaces::input::{
 };
 use crate::surfaces::picker::CommandEntry;
 use acp_utils::notifications::AetherCapabilities;
-use agent_client_protocol::schema::v1::SessionId;
+use agent_client_protocol::schema::v2::SessionId;
 
 pub(super) fn builtin_commands(capabilities: &AetherCapabilities) -> Vec<CommandEntry> {
     let mut commands: Vec<CommandEntry> = [
@@ -85,7 +85,7 @@ impl App {
         match output {
             RootOutput::Session(output) => match output {
                 SessionPickerOutput::Close => self.close_active(),
-                SessionPickerOutput::Load { session_id, cwd } => self.load_session(&session_id, &cwd),
+                SessionPickerOutput::Resume { session_id, cwd } => self.resume_session(&session_id, &cwd),
                 SessionPickerOutput::Preview(session_id) => {
                     self.queue(Command::Agent(AgentCommand::SessionPreview { session_id }));
                 }
@@ -107,7 +107,7 @@ impl App {
                     self.queue(Command::Agent(AgentCommand::SetConfigOption {
                         session_id: self.session.session_id().clone(),
                         config_id: config_id.clone(),
-                        value: value.clone(),
+                        value: value.as_str().into(),
                     }));
                     self.apply_settings_change(&SettingsChange { config_id, new_value: value });
                 }
@@ -188,13 +188,12 @@ impl App {
         self.session.update_config_option_value(&change.config_id, &change.new_value);
     }
 
-    fn load_session(&mut self, session_id: &SessionId, cwd: &std::path::Path) {
-        self.queue(Command::Agent(AgentCommand::LoadSession {
+    fn resume_session(&mut self, session_id: &SessionId, cwd: &std::path::Path) {
+        self.queue(Command::Agent(AgentCommand::ResumeSession {
             session_id: session_id.clone(),
             cwd: cwd.to_path_buf(),
         }));
         self.return_to_conversation();
-        self.reset_conversation();
     }
 
     pub(super) fn on_workspace_moved(&mut self, new_cwd: std::path::PathBuf) {
@@ -204,7 +203,7 @@ impl App {
         self.notify(&format!("Moved to {}", home_relative_path(&new_cwd)));
         self.session.begin_workspace_load();
         let session_id = self.session.session_id().clone();
-        self.queue(Command::Agent(AgentCommand::LoadSession { session_id, cwd: new_cwd.clone() }));
+        self.queue(Command::Agent(AgentCommand::ResumeSession { session_id, cwd: new_cwd.clone() }));
         self.session.set_working_dir(new_cwd);
     }
 
@@ -232,7 +231,7 @@ impl App {
                 self.queue(Command::Agent(AgentCommand::SetConfigOption {
                     session_id: self.session.session_id().clone(),
                     config_id: config_id.clone(),
-                    value: value.clone(),
+                    value: value.as_str().into(),
                 }));
             }
         }

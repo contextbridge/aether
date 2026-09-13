@@ -2,7 +2,7 @@ use crate::command::{GitCommand, GitWatchCommand};
 use crate::view::filterable_list::FilterableList;
 use crate::view::selection::Direction;
 use acp_utils::notifications::WorkspaceMoveTarget;
-use agent_client_protocol::schema::v1::SessionId;
+use agent_client_protocol::schema::v2::SessionId;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::path::PathBuf;
 
@@ -23,7 +23,7 @@ pub(crate) fn is_press(key: KeyEvent) -> bool {
 #[derive(Debug)]
 pub enum SessionPickerOutput {
     Close,
-    Load { session_id: SessionId, cwd: PathBuf },
+    Resume { session_id: SessionId, cwd: PathBuf },
     Preview(String),
 }
 

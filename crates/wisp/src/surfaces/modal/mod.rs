@@ -6,7 +6,7 @@ use crate::renderer::DrawContext;
 use crate::surfaces::elicitation::ElicitationResponder;
 use acp_utils::elicitation::source_mcp_server_name;
 use agent_client_protocol::Responder;
-use agent_client_protocol::schema::v1::{CreateElicitationRequest, CreateElicitationResponse, ElicitationMode};
+use agent_client_protocol::schema::v2::{CreateElicitationRequest, CreateElicitationResponse, ElicitationMode};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Position, Rect};
@@ -217,7 +217,7 @@ mod tests {
     use super::form::permission_like_schema;
     use super::*;
     use acp_utils::testing::test_connection;
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::schema::v2::{
         ElicitationAction, ElicitationFormMode, ElicitationSchema, ElicitationSessionScope, ElicitationUrlMode,
     };
     use std::sync::Arc;

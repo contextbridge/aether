@@ -63,7 +63,8 @@ impl App {
         }
         if let UiEvent::Key(key) = &event
             && self.ui.keybindings.toggle_git_diff.matches(*key)
-            && matches!(&self.route, Route::GitReview(screen) if screen.is_browsing()) {
+            && matches!(&self.route, Route::GitReview(screen) if screen.is_browsing())
+        {
             self.close_active();
             return;
         }
@@ -200,7 +201,7 @@ impl App {
             self.queue(Command::Agent(AgentCommand::SetConfigOption {
                 session_id: self.session.session_id().clone(),
                 config_id: id.clone(),
-                value: value.clone(),
+                value: value.as_str().into(),
             }));
             self.session.update_config_option_value(&id, &value);
         }

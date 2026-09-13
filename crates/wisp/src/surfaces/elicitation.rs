@@ -1,5 +1,5 @@
 use agent_client_protocol::Responder;
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::schema::v2::{
     CreateElicitationResponse, ElicitationAcceptAction, ElicitationAction, ElicitationContentValue,
 };
 use std::collections::BTreeMap;

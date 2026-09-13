@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v1 as acp;
+use agent_client_protocol::schema::v2 as acp;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use std::io::Read;

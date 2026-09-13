@@ -1,7 +1,7 @@
 use crate::session::session_config_view::{LocalConfigKind, LocalConfigOption};
 use crate::session::workspace_status::WorkspaceStatus;
 use acp_utils::notifications::{AetherCapabilities, McpServerStatus, McpServerStatusEntry};
-use agent_client_protocol::schema::v1::{self as acp, SessionId};
+use agent_client_protocol::schema::v2::{self as acp, SessionId};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,7 +157,6 @@ impl SessionModel {
             current_value.push_str(value);
         }
     }
-
 
     pub fn set_session(&mut self, session_id: SessionId, config_options: Vec<acp::SessionConfigOption>) {
         self.session_id = session_id;

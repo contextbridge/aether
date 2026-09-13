@@ -20,7 +20,7 @@ use crate::view::widgets::key_hints;
 use acp_utils::config_meta::SelectOptionMeta;
 use acp_utils::notifications::McpServerStatusEntry;
 use agent_client_protocol::Responder;
-use agent_client_protocol::schema::v1::{AuthMethod, CreateElicitationRequest, CreateElicitationResponse};
+use agent_client_protocol::schema::v2::{AuthMethod, CreateElicitationRequest, CreateElicitationResponse};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};

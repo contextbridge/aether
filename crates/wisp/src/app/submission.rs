@@ -1,9 +1,9 @@
 use super::App;
+use crate::attachment::{AttachmentOutcome, PromptAttachment};
 use crate::command::{AgentCommand, Command, FilesystemCommand};
 use crate::session::session_config_view::LocalConfigView;
-use crate::attachment::{AttachmentOutcome, PromptAttachment};
 use acp_utils::config_option_id::ConfigOptionId;
-use agent_client_protocol::schema::v1 as acp;
+use agent_client_protocol::schema::v2 as acp;
 
 #[derive(Default)]
 pub(super) enum SubmissionState {
@@ -27,7 +27,8 @@ impl SubmissionState {
 
 impl App {
     pub(super) fn submit(&mut self) {
-        if self.composer.is_empty() || self.waiting_for_response() || !matches!(self.submission, SubmissionState::Idle) {
+        if self.composer.is_empty() || self.waiting_for_response() || !matches!(self.submission, SubmissionState::Idle)
+        {
             return;
         }
 
@@ -77,10 +78,10 @@ impl App {
             return None;
         }
 
-        if requires_image && !self.session.prompt_capabilities().image {
+        if requires_image && self.session.prompt_capabilities().image.is_none() {
             return Some("ACP agent does not support image input.".to_string());
         }
-        if requires_audio && !self.session.prompt_capabilities().audio {
+        if requires_audio && self.session.prompt_capabilities().audio.is_none() {
             return Some("ACP agent does not support audio input.".to_string());
         }
 

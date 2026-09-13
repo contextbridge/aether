@@ -8,16 +8,16 @@ use crate::screens::plan_review::PlanReviewScreen;
 use crate::surfaces::modal::ElicitationModal;
 use crate::surfaces::picker::CommandEntry;
 use crate::surfaces::session_picker::SessionPicker;
-use acp_utils::client::{AcpEvent, LoadedSession};
+use acp_utils::client::{AcpEvent, ResumedSession};
 use acp_utils::notifications::McpNotification;
-use agent_client_protocol::schema::v1::{self as acp, CreateElicitationRequest, ElicitationMode, SessionId};
+use agent_client_protocol::schema::v2::{self as acp, CreateElicitationRequest, ElicitationMode, SessionId};
 use std::time::Instant;
 
 impl App {
     #[allow(clippy::too_many_lines)]
     pub fn on_acp_event(&mut self, event: AcpEvent) {
         match event {
-            AcpEvent::SessionLoaded(loaded) => self.on_loaded_session(loaded),
+            AcpEvent::SessionResumed(loaded) => self.on_resumed_session(loaded),
             AcpEvent::SessionUpdate { session_id, update } => {
                 if &session_id == self.session.session_id() {
                     self.on_session_update(&update);
@@ -73,7 +73,7 @@ impl App {
                 }
             }
             AcpEvent::ConnectionClosed => self.on_connection_closed(),
-            AcpEvent::SessionUsage(_) => {},
+            AcpEvent::SessionUsage(_) => {}
             AcpEvent::SubAgentProgress(progress) => {
                 if self.conversation.progress_indicator().accepts_activity() {
                     self.conversation.on_sub_agent_progress(&progress);
@@ -98,14 +98,14 @@ impl App {
         self.open_overlay(Overlay::Sessions(picker));
     }
 
-    pub(super) fn on_loaded_session(&mut self, loaded: LoadedSession) {
-        let LoadedSession { session_id, response, replay } = loaded;
-        self.reset_turn_state();
+    pub(super) fn on_resumed_session(&mut self, loaded: ResumedSession) {
+        let ResumedSession { session_id, response, replay } = loaded;
+        self.reset_conversation();
         self.session.set_session(session_id, Vec::new());
         for event in replay {
             self.on_acp_event(event.into());
         }
-        self.session.update_config_options(response.config_options.unwrap_or_default());
+        self.session.update_config_options(response.config_options);
         self.return_to_conversation();
         self.session.end_workspace_move();
     }
