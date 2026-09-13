@@ -64,7 +64,6 @@ export class AetherSession {
   readonly newSessionResponse: acp.NewSessionResponse;
 
   private closed = false;
-  /** The one foreground turn; a prompt is in progress exactly while this is set. */
   private turn: Turn | null = null;
   private abortCleanup: Disposable | null = null;
 
