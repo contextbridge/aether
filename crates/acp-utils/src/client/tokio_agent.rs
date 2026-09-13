@@ -105,6 +105,7 @@ async fn connect_stdio<T: Role>(config: AcpAgentConfig, client: impl ConnectTo<T
     }
 }
 
+// ACP 2.0.0's SpawnedRun and Task::new wrap prior error data under another `data` field.
 fn has_incoming_transport_closed(error: &Error) -> bool {
     fn data_has_reason(data: &serde_json::Value) -> bool {
         data.get("reason").and_then(serde_json::Value::as_str) == Some(INCOMING_TRANSPORT_CLOSED_REASON)
