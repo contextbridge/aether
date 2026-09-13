@@ -107,10 +107,6 @@ impl AcpTestHarness {
         }
     }
 
-    pub async fn shutdown(&self) {
-        self.state.shutdown_all().await;
-    }
-
     pub async fn start() -> Self {
         let tmp = tempfile::tempdir().expect("tempdir for session store");
         let session_store = Arc::new(SessionStore::from_path(tmp.path().to_path_buf()));
@@ -407,21 +403,9 @@ impl FakeAgentSwitchingSession {
     pub fn coder(&self) -> &FakeAcpAgent {
         &self.coder
     }
-
-    pub fn agent(&self, name: &str) -> &FakeAcpAgent {
-        match name {
-            "Planner" => &self.planner,
-            "Coder" => &self.coder,
-            other => panic!("unknown fake ACP agent {other:?}"),
-        }
-    }
 }
 
 impl FakeAcpAgent {
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
     /// Asserts the agent's most recent turn saw a conversation containing each
     /// of `expected` (user or assistant text), in addition to anything else.
     pub fn assert_saw(&self, expected: &[&str]) {
