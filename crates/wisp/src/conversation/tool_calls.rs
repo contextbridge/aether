@@ -9,7 +9,6 @@ pub const SUB_AGENT_VISIBLE_TOOL_LIMIT: usize = 3;
 pub struct SubAgentToolCall {
     pub id: String,
     pub name: String,
-    pub arguments: String,
     pub raw_input: String,
     pub display_value: Option<String>,
     pub status: ToolStatus,
@@ -43,8 +42,7 @@ impl SubAgentState {
             self.tool_calls.push(SubAgentToolCall {
                 id: id.to_string(),
                 name: name.to_string(),
-                raw_input: arguments.clone(),
-                arguments,
+                raw_input: arguments,
                 display_value: None,
                 status: ToolStatus::Running,
                 kind: tool_kind(name),
@@ -57,7 +55,6 @@ impl SubAgentState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolCall {
-    pub id: String,
     pub status: ToolStatus,
     pub sub_agents: Vec<SubAgentState>,
     protocol: Box<acp::ToolCallUpdate>,
@@ -66,12 +63,11 @@ pub struct ToolCall {
 impl ToolCall {
     pub fn from_update(update: &acp::ToolCallUpdate) -> Self {
         let mut tool = Self {
-            id: update.tool_call_id.to_string(),
             status: ToolStatus::Running,
             sub_agents: Vec::new(),
-            protocol: Box::new(acp::ToolCallUpdate::new(update.tool_call_id.clone())),
+            protocol: Box::new(update.clone()),
         };
-        tool.apply_update(update);
+        tool.refresh_status();
         tool
     }
 
@@ -100,13 +96,7 @@ impl ToolCall {
 
     pub fn apply_update(&mut self, update: &acp::ToolCallUpdate) {
         self.protocol.apply_update(update.clone());
-        if !update.status.is_undefined() {
-            self.status = match self.protocol.status.value() {
-                Some(acp::ToolCallStatus::Completed) => ToolStatus::Success,
-                Some(acp::ToolCallStatus::Failed) => ToolStatus::Error("failed".to_string()),
-                _ => ToolStatus::Running,
-            };
-        }
+        self.refresh_status();
     }
 
     pub fn append_content(&mut self, content: acp::ToolCallContent) {
@@ -157,6 +147,16 @@ impl ToolCall {
         tool_kind(self.meta_str(AETHER_TOOL_NAME_META_KEY).unwrap_or_else(|| self.title()))
     }
 
+    /// Re-derives the coarse status from the merged protocol update; `Undefined`
+    /// fields keep their previous value, so re-running this is idempotent.
+    fn refresh_status(&mut self) {
+        self.status = match self.protocol.status.value() {
+            Some(acp::ToolCallStatus::Completed) => ToolStatus::Success,
+            Some(acp::ToolCallStatus::Failed) => ToolStatus::Error("failed".to_string()),
+            _ => ToolStatus::Running,
+        };
+    }
+
     fn meta_str(&self, key: &str) -> Option<&str> {
         self.protocol.meta.value().and_then(|meta| meta.get(key)).and_then(serde_json::Value::as_str)
     }
@@ -186,13 +186,11 @@ fn apply_sub_agent_progress(states: &mut Vec<SubAgentState>, notification: &SubA
             let call = agent.upsert(&request.id, &request.name, request.arguments.clone());
             update_title(&mut call.name, &request.name);
             call.kind = tool_kind(&request.name);
-            call.arguments.clone_from(&request.arguments);
             call.raw_input.clone_from(&request.arguments);
             call.status = ToolStatus::Running;
         }
         SubAgentEvent::ToolCallUpdate { update } => {
             let call = agent.upsert(&update.id, "tool", String::new());
-            call.arguments.push_str(&update.chunk);
             call.raw_input.push_str(&update.chunk);
             call.status = ToolStatus::Running;
         }

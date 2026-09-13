@@ -128,7 +128,7 @@ fn sub_agent_tree_lines(
             let bash_command =
                 visible_bash_command(parsed_command.as_deref(), tool.display_value.as_deref(), &tool.status);
             let detail = bash_command.map_or_else(
-                || tool_detail(tool.display_value.as_deref(), &tool.arguments, &tool.status),
+                || tool_detail(tool.display_value.as_deref(), &tool.raw_input, &tool.status),
                 |command| bash_tool_detail(command, tool.display_value.as_deref(), &tool.status),
             );
             let prefix = Line::from(vec![
