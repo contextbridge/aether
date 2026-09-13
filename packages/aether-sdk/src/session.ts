@@ -2,7 +2,7 @@ import type { AetherAcpOptions } from "./generated/aether-acp-options.js";
 import type { SessionUsageEvent } from "./generated/eval-types.js";
 import { addAbortListener } from "node:events";
 import path from "node:path";
-import * as acp from "@agentclientprotocol/sdk";
+import * as acp from "@agentclientprotocol/sdk/experimental/v2";
 import { AsyncQueue } from "./asyncQueue.js";
 import {
   startAgent,
@@ -64,7 +64,8 @@ export class AetherSession {
   readonly newSessionResponse: acp.NewSessionResponse;
 
   private closed = false;
-  private promptInProgress = false;
+  /** The one foreground turn; a prompt is in progress exactly while this is set. */
+  private turn: Turn | null = null;
   private abortCleanup: Disposable | null = null;
 
   static async start(
@@ -89,29 +90,30 @@ export class AetherSession {
 
     stack.defer(() => agentProcess.close());
 
-    const connection = new acp.ClientSideConnection(
-      () => createAcpClient({ onPermissionRequest, onElicitation }, events),
-      agentProcess.stream,
-    );
+    let session: AetherSession | undefined;
+    const connection = createAcpClient(
+      { onPermissionRequest, onElicitation },
+      events,
+      (notification) => session?.onSessionUpdate(notification),
+    ).connect(agentProcess.stream);
 
-    const initializeResponse = await connection.initialize({
+    stack.defer(() => connection.close());
+
+    const initializeResponse = await connection.agent.request("initialize", {
       protocolVersion: acp.PROTOCOL_VERSION,
-      clientInfo: { name: "@aether-agent/sdk", version: SDK_VERSION },
-      clientCapabilities: {
-        fs: { readTextFile: false, writeTextFile: false },
-        terminal: false,
+      info: { name: "@aether-agent/sdk", version: SDK_VERSION },
+      capabilities: {
         ...(onElicitation ? { elicitation: { form: {}, url: {} } } : {}),
       },
     });
 
     throwIfAborted(abortSignal);
 
-    const newSessionResponse = await connection.newSession({
+    const newSessionResponse = await connection.agent.request("session/new", {
       cwd: path.resolve(cwd),
-      mcpServers: [],
     });
 
-    const session = new AetherSession(
+    session = new AetherSession(
       agentProcess,
       connection,
       events,
@@ -127,7 +129,7 @@ export class AetherSession {
 
   private constructor(
     private readonly agentProcess: AcpAgentProcess,
-    private readonly connection: acp.ClientSideConnection,
+    private readonly connection: acp.ClientConnection,
     private readonly events: AsyncQueue<AetherMessage>,
     initializeResponse: acp.InitializeResponse,
     newSessionResponse: acp.NewSessionResponse,
@@ -156,7 +158,9 @@ export class AetherSession {
 
   async cancel(): Promise<void> {
     if (!this.closed)
-      await this.connection.cancel({ sessionId: this.sessionId });
+      await this.connection.agent.notify("session/cancel", {
+        sessionId: this.sessionId,
+      });
   }
 
   async close(): Promise<void> {
@@ -165,11 +169,47 @@ export class AetherSession {
     this.abortCleanup?.[Symbol.dispose]();
     this.abortCleanup = null;
     this.events.close();
+    this.connection.close();
     await this.agentProcess.close();
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
     await this.close();
+  }
+
+  private onSessionUpdate(notification: acp.UpdateSessionNotification): void {
+    if (
+      notification.sessionId !== this.sessionId ||
+      !this.turn ||
+      this.turn.completed
+    )
+      return;
+    const update = notification.update;
+    if (
+      acp.SessionUpdate.isStateUpdate(update) &&
+      acp.StateUpdate.isIdle(update)
+    ) {
+      this.turn.stopReason ??= update.stopReason ?? "end_turn";
+      this.completeTurn();
+    }
+  }
+
+  private completeTurn(): void {
+    const turn = this.turn;
+    if (!turn?.accepted || turn.stopReason === undefined || turn.completed)
+      return;
+    turn.completed = true;
+    const stopReason = turn.stopReason;
+
+    setImmediate(() => {
+      if (this.turn !== turn || this.closed || this.connection.signal.aborted)
+        return;
+      this.events.push({
+        type: "result",
+        sessionId: this.sessionId,
+        stopReason,
+      });
+    });
   }
 
   private async *streamPrompt(
@@ -180,60 +220,67 @@ export class AetherSession {
         "session_not_started",
         "AetherSession is closed",
       );
-    if (this.promptInProgress) {
+    if (this.turn) {
       throw new AetherSdkError(
         "prompt_in_progress",
         "AetherSession already has a prompt in progress",
       );
     }
 
-    this.promptInProgress = true;
-    let completed = false;
-    const promptPromise = this.connection
-      .prompt({ sessionId: this.sessionId, prompt })
-      .then(async (response) => {
-        completed = true;
-        // ACP routes session responses and connection notifications independently.
-        await new Promise<void>((resolve) => setImmediate(resolve));
-        this.events.push({
-          type: "result",
-          sessionId: this.sessionId,
-          stopReason: response.stopReason,
-        });
-        return response;
-      })
-      .catch((err: unknown) => {
-        this.events.fail(err);
-        throw err;
-      });
+    const turn: Turn = { accepted: false, completed: false };
+    this.turn = turn;
+    let rejection: Extract<AetherMessage, { type: "error" }> | undefined;
+    const promptPromise = this.connection.agent
+      .request("session/prompt", { sessionId: this.sessionId, prompt })
+      .then(
+        () => {
+          turn.accepted = true;
+          this.completeTurn();
+        },
+        (error: unknown) => {
+          rejection = { type: "error", error };
+          this.events.push(rejection);
+        },
+      );
 
     let yieldedResult = false;
     try {
       for await (const event of this.events) {
-        if (event.type === "result" && event.sessionId === this.sessionId) {
-          yieldedResult = true;
-          yield event;
-          break;
-        }
+        if (event === rejection) throw rejection.error;
+        yieldedResult =
+          event.type === "result" && event.sessionId === this.sessionId;
         yield event;
+        if (yieldedResult) return;
       }
       await promptPromise;
+      if (!this.closed) {
+        throw new AetherSdkError(
+          "process_exited",
+          "ACP connection closed before the turn reached idle",
+        );
+      }
     } finally {
-      if (!yieldedResult && !this.closed) {
-        if (!completed) await this.cancel().catch(() => undefined);
-        await promptPromise.catch(() => undefined);
+      if (!yieldedResult && !this.closed && !rejection) {
+        if (!turn.completed) await this.cancel().catch(() => undefined);
+        await promptPromise;
         try {
           for await (const event of this.events) {
             if (event.type === "result" || event.type === "error") break;
           }
         } catch {
-          // Queue may be in errored state if the prompt rejected.
+          // Transport or malformed extension errors can fail the shared queue.
         }
       }
-      this.promptInProgress = false;
+      this.turn = null;
     }
   }
 }
+
+type Turn = {
+  accepted: boolean;
+  stopReason?: acp.StopReason;
+  completed: boolean;
+};
 
 function createAcpClient(
   {
@@ -244,60 +291,50 @@ function createAcpClient(
     onElicitation: AetherSessionOptions["onElicitation"];
   },
   events: AsyncQueue<AetherMessage>,
-): acp.Client {
-  return {
-    async sessionUpdate(notification: acp.SessionNotification): Promise<void> {
+  onSessionUpdate: (notification: acp.UpdateSessionNotification) => void,
+): acp.ClientApp {
+  return acp
+    .client()
+    .onNotification("session/update", ({ params: notification }) => {
       events.push({
         type: "session_update",
         sessionId: notification.sessionId,
         update: notification.update,
         raw: notification,
       });
-    },
-
-    async requestPermission(
-      request: acp.RequestPermissionRequest,
-    ): Promise<acp.RequestPermissionResponse> {
-      return onPermissionRequest(request);
-    },
-
-    async unstable_createElicitation(
-      request: acp.CreateElicitationRequest,
-    ): Promise<acp.CreateElicitationResponse> {
-      if (!onElicitation) return { action: "cancel" };
-      return onElicitation(request);
-    },
-
-    async unstable_completeElicitation(
-      notification: acp.CompleteElicitationNotification,
-    ): Promise<void> {
+      onSessionUpdate(notification);
+    })
+    .onRequest("session/request_permission", ({ params }) =>
+      onPermissionRequest(params),
+    )
+    .onRequest("elicitation/create", ({ params }) =>
+      onElicitation ? onElicitation(params) : { action: "cancel" },
+    )
+    .onNotification("elicitation/complete", ({ params: notification }) => {
       events.push({
         type: "elicitation_complete",
         elicitationId: notification.elicitationId,
       });
-    },
-
-    async extNotification(
-      method: string,
-      params: Record<string, unknown>,
-    ): Promise<void> {
-      try {
-        const usage = parseUsageNotification(method, params);
-        if (usage) events.push({ type: "usage", usage });
-      } catch (error) {
-        events.fail(error);
-      }
-    },
-  } satisfies acp.Client;
+    })
+    .onNotification(
+      "_aether/session_usage",
+      (params) => params,
+      ({ params }) => {
+        try {
+          const usage = parseUsageNotification(params);
+          if (usage) events.push({ type: "usage", usage });
+        } catch (error) {
+          events.fail(error);
+        }
+      },
+    );
 }
 
-function parseUsageNotification(
-  method: string,
-  params: Record<string, unknown>,
-): SessionUsageEvent | undefined {
-  if (method !== "_aether/session_usage") return undefined;
-
-  const usage = params.usage;
+function parseUsageNotification(params: unknown): SessionUsageEvent {
+  const usage =
+    params && typeof params === "object" && "usage" in params
+      ? params.usage
+      : undefined;
   if (!usage || typeof usage !== "object") {
     throw new AetherSdkError(
       "invalid_protocol_message",

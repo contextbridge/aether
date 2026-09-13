@@ -2,11 +2,11 @@
 // Tiny fake "aether acp" stand-in. Speaks ACP over stdio.
 //
 // Behavior:
-//   - initialize -> respond with V1 capabilities.
+//   - initialize -> respond with V2 capabilities.
 //   - newSession -> echo session id, store settings + _meta to log file.
 //   - prompt -> emit a session_update chunk, optionally request a permission
 //     decision, request an elicitation, and/or call a custom MCP tool, then
-//     return stopReason="end_turn".
+//     emit idle with stopReason="end_turn" after the acceptance ack.
 //
 // Configurable via env:
 //   FAKE_AETHER_CALL_MCP_SERVER   Name of the SDK-supplied MCP server to call
@@ -18,7 +18,11 @@
 //   FAKE_AETHER_LOG_FILE          Optional path; debug events written there.
 
 import { Readable, Writable } from "node:stream";
-import { AgentSideConnection, ndJsonStream } from "@agentclientprotocol/sdk";
+import {
+  agent as createAgent,
+  ndJsonStream,
+  batchNotification,
+} from "@agentclientprotocol/sdk/experimental/v2";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { appendFileSync } from "node:fs";
@@ -88,15 +92,16 @@ const inlineServers = collectInlineServers();
 let capturedSessionId = null;
 let capturedMeta = null;
 let conn;
+let activeTurn;
+let messageSequence = 0;
 
 const agent = {
-  async initialize() {
+  async initialize(params) {
+    log(JSON.stringify({ event: "initialize", params }));
     return {
-      protocolVersion: 1,
-      agentCapabilities: {
-        loadSession: true,
-        mcpCapabilities: { http: true, sse: true },
-      },
+      protocolVersion: 2,
+      info: { name: "fake-aether", version: "0.0.1" },
+      capabilities: { session: { mcp: { http: {}, stdio: {} } } },
       authMethods: [],
     };
   },
@@ -112,10 +117,99 @@ const agent = {
         meta: capturedMeta,
       }),
     );
-    return { sessionId: capturedSessionId };
+    if (process.env.FAKE_AETHER_READY_IDLE) await sendIdle(capturedSessionId);
+    return { sessionId: capturedSessionId, configOptions: [] };
   },
 
   async prompt(params) {
+    if (activeTurn) throw new Error("Busy");
+    if (params.prompt[0]?.text === "reject-submission")
+      throw new Error("Rejected submission");
+    const turn = {
+      sessionId: params.sessionId,
+      cancelled: false,
+      messageId: `message-${++messageSequence}`,
+    };
+    activeTurn = turn;
+    if (process.env.FAKE_AETHER_IDLE_BEFORE_ACK) {
+      await runTurn(params, turn);
+    } else {
+      setImmediate(() => void runTurn(params, turn));
+    }
+    return {};
+  },
+  async cancel() {
+    if (activeTurn) {
+      activeTurn.cancelled = true;
+      activeTurn.release?.();
+    }
+  },
+  async login() {
+    return {};
+  },
+  async logout() {
+    return {};
+  },
+  async setSessionConfigOption() {
+    return { configOptions: [] };
+  },
+  async listSessions() {
+    return { sessions: [] };
+  },
+  async resumeSession(params) {
+    if (params.replayFrom?.type === "start") {
+      await conn.notify("session/update", {
+        sessionId: params.sessionId,
+        update: {
+          sessionUpdate: "user_message",
+          messageId: "history-user",
+          content: [{ type: "text", text: "history" }],
+        },
+      });
+      await sendIdle(params.sessionId);
+    }
+    return { configOptions: [] };
+  },
+  async closeSession() {
+    return {};
+  },
+};
+
+async function sendIdle(sessionId, stopReason) {
+  await conn.notify("session/update", {
+    sessionId,
+    update: {
+      sessionUpdate: "state_update",
+      state: "idle",
+      ...(stopReason ? { stopReason } : {}),
+    },
+  });
+}
+
+async function runTurn(params, turn) {
+  try {
+    await conn.notify("session/update", {
+      sessionId: params.sessionId,
+      update: {
+        sessionUpdate: "user_message",
+        messageId: `user-${turn.messageId}`,
+        content: params.prompt,
+      },
+    });
+    await conn.notify("session/update", {
+      sessionId: params.sessionId,
+      update: { sessionUpdate: "state_update", state: "running" },
+    });
+    if (process.env.FAKE_AETHER_UNRELATED_IDLE)
+      await sendIdle("unrelated-session", "cancelled");
+    if (process.env.FAKE_AETHER_WAIT_FOR_CANCEL)
+      await new Promise((resolve) => {
+        turn.release = resolve;
+        if (turn.cancelled) resolve();
+      });
+    if (process.env.FAKE_AETHER_DISCONNECT_AFTER_ACK) process.exit(0);
+    if (process.env.FAKE_AETHER_FAIL_AFTER_ACK)
+      throw new Error("Fake post-ack failure");
     log(
       JSON.stringify({
         event: "prompt",
@@ -126,13 +220,17 @@ const agent = {
 
     let chunkText = "hello from fake aether";
     if (process.env.FAKE_AETHER_REQUEST_PERMISSION) {
-      const decision = await conn.requestPermission({
+      const decision = await conn.request("session/request_permission", {
         sessionId: params.sessionId,
-        toolCall: {
-          toolCallId: "tc-1",
-          title: "test",
-          kind: "execute",
-          rawInput: {},
+        title: "Run test tool?",
+        subject: {
+          type: "tool_call",
+          toolCall: {
+            toolCallId: "tc-1",
+            title: "test",
+            kind: "execute",
+            rawInput: {},
+          },
         },
         options: [
           { optionId: "allow", name: "Allow", kind: "allow_once" },
@@ -143,7 +241,7 @@ const agent = {
     }
 
     if (process.env.FAKE_AETHER_REQUEST_ELICITATION) {
-      const response = await conn.unstable_createElicitation({
+      const response = await conn.request("elicitation/create", {
         mode: "form",
         sessionId: params.sessionId,
         requestedSchema: {
@@ -153,23 +251,25 @@ const agent = {
         message: "What is your name?",
       });
       chunkText = JSON.stringify(response);
-      await conn.unstable_completeElicitation({ elicitationId: "elicit-1" });
+      await conn.notify("elicitation/complete", { elicitationId: "elicit-1" });
     }
 
-    await conn.sessionUpdate({
+    await conn.notify("session/update", {
       sessionId: params.sessionId,
       update: {
         sessionUpdate: "agent_message_chunk",
+        messageId: turn.messageId,
         content: { type: "text", text: chunkText },
       },
     });
 
     const extraChunks = Number(process.env.FAKE_AETHER_EXTRA_CHUNKS ?? "0");
     for (let i = 0; i < extraChunks; i++) {
-      await conn.sessionUpdate({
+      await conn.notify("session/update", {
         sessionId: params.sessionId,
         update: {
           sessionUpdate: "agent_message_chunk",
+          messageId: turn.messageId,
           content: { type: "text", text: `chunk-${i + 2}` },
         },
       });
@@ -177,7 +277,7 @@ const agent = {
 
     if (process.env.FAKE_AETHER_EXT_NOTIFICATION) {
       const notification = JSON.parse(process.env.FAKE_AETHER_EXT_NOTIFICATION);
-      await conn.extNotification(notification.method, notification.params);
+      await conn.notify(notification.method, notification.params);
     }
 
     const callName = process.env.FAKE_AETHER_CALL_MCP_SERVER;
@@ -212,51 +312,50 @@ const agent = {
         await client.close();
       }
     }
+  } catch (error) {
+    await conn.notify("session/update", {
+      sessionId: params.sessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        messageId: turn.messageId,
+        content: { type: "text", text: String(error) },
+      },
+    });
+  } finally {
+    activeTurn = null;
+    const stopReason = turn.cancelled
+      ? "cancelled"
+      : process.env.FAKE_AETHER_NO_STOP_REASON
+        ? undefined
+        : "end_turn";
+    if (process.env.FAKE_AETHER_DUPLICATE_IDLE) {
+      await conn.batch(
+        [stopReason, "cancelled"].map((reason) =>
+          batchNotification("session/update", {
+            sessionId: params.sessionId,
+            update: {
+              sessionUpdate: "state_update",
+              state: "idle",
+              stopReason: reason,
+            },
+          }),
+        ),
+      );
+    } else {
+      await sendIdle(params.sessionId, stopReason);
+    }
+  }
+}
 
-    return { stopReason: "end_turn" };
-  },
-  async cancel() {
-    /* no-op */
-  },
-  async authenticate() {
-    return {};
-  },
-  async setSessionMode() {
-    return {};
-  },
-  async setSessionConfigOption() {
-    return { configOptions: [] };
-  },
-  async loadSession() {
-    return {};
-  },
-  async listSessions() {
-    return { sessions: [] };
-  },
-  async forkSession() {
-    return {};
-  },
-  async resumeSession() {
-    return {};
-  },
-  async closeSession() {
-    return {};
-  },
-  async setSessionModel() {
-    return {};
-  },
-  async listProviders() {
-    return { providers: [] };
-  },
-  async setProviders() {
-    return {};
-  },
-  async disableProviders() {
-    return {};
-  },
-  async logout() {
-    return {};
-  },
-};
-
-conn = new AgentSideConnection(() => agent, stream);
+const app = createAgent()
+  .onRequest("initialize", ({ params }) => agent.initialize(params))
+  .onRequest("session/new", ({ params }) => agent.newSession(params))
+  .onRequest("session/prompt", ({ params }) => agent.prompt(params))
+  .onNotification("session/cancel", () => agent.cancel())
+  .onRequest("auth/login", () => agent.login())
+  .onRequest("auth/logout", () => agent.logout())
+  .onRequest("session/resume", ({ params }) => agent.resumeSession(params))
+  .onRequest("session/list", () => agent.listSessions())
+  .onRequest("session/close", () => agent.closeSession())
+  .onRequest("session/set_config_option", () => agent.setSessionConfigOption());
+conn = app.connect(stream).client;

@@ -44,6 +44,8 @@ describe("E2E tests", () => {
         },
       });
       expect(session.sessionId).toBeTruthy();
+      expect(session.initializeResponse.protocolVersion).toBe(2);
+      expect(session.initializeResponse.capabilities?.session).toBeDefined();
       await session.close();
     } finally {
       await rm(cwd, { recursive: true, force: true });

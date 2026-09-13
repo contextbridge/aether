@@ -1,4 +1,4 @@
-import type * as acp from "@agentclientprotocol/sdk";
+import type * as acp from "@agentclientprotocol/sdk/experimental/v2";
 import type {
   CallToolResult,
   ToolAnnotations,
@@ -25,7 +25,7 @@ export type AetherMessage =
       type: "session_update";
       sessionId: string;
       update: acp.SessionUpdate;
-      raw: acp.SessionNotification;
+      raw: acp.UpdateSessionNotification;
     }
   | { type: "usage"; usage: SessionUsageEvent }
   | { type: "elicitation_complete"; elicitationId: string }
