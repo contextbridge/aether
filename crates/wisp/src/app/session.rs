@@ -11,6 +11,11 @@ use crate::surfaces::picker::CommandEntry;
 use acp_utils::notifications::AetherCapabilities;
 use agent_client_protocol::schema::v2::SessionId;
 
+pub(super) enum SessionTransition {
+    Creating,
+    Resuming { session_id: SessionId, cwd: std::path::PathBuf },
+}
+
 pub(super) fn builtin_commands(capabilities: &AetherCapabilities) -> Vec<CommandEntry> {
     let mut commands: Vec<CommandEntry> = [
         ("clear", "Start a new session"),
@@ -41,6 +46,11 @@ impl App {
         self.composer.clear();
         match cmd.name.as_str() {
             "clear" => {
+                if !self.can_start_foreground_operation() {
+                    self.notify("Cannot clear while a prompt or session transition is in progress");
+                    return;
+                }
+                self.session_transition = Some(SessionTransition::Creating);
                 self.queue(Command::Agent(AgentCommand::NewSession { cwd: self.session.working_dir().to_path_buf() }));
             }
             "resume" => {
@@ -65,7 +75,7 @@ impl App {
     }
 
     fn begin_workspace_move(&mut self) {
-        if self.waiting_for_response() || !self.session.workspace_move_state().is_idle() {
+        if !self.can_start_foreground_operation() {
             self.notify("Cannot move workspace while a prompt is running or another move is in progress");
             return;
         }
@@ -105,6 +115,7 @@ impl App {
                 SettingsOutput::Close => self.close_active(),
                 SettingsOutput::SetConfigOption { config_id, value } => {
                     self.queue(Command::Agent(AgentCommand::SetConfigOption {
+                        conversation_id: self.conversation_id(),
                         session_id: self.session.session_id().clone(),
                         config_id: config_id.clone(),
                         value: value.as_str().into(),
@@ -189,6 +200,13 @@ impl App {
     }
 
     fn resume_session(&mut self, session_id: &SessionId, cwd: &std::path::Path) {
+        if !self.can_start_foreground_operation() {
+            self.notify("Cannot resume while a prompt or session transition is in progress");
+            return;
+        }
+        self.session_transition = Some(SessionTransition::Resuming {
+            session_id: session_id.clone(), cwd: cwd.to_path_buf(),
+        });
         self.queue(Command::Agent(AgentCommand::ResumeSession {
             session_id: session_id.clone(),
             cwd: cwd.to_path_buf(),
@@ -199,17 +217,19 @@ impl App {
     pub(super) fn on_workspace_moved(&mut self, new_cwd: std::path::PathBuf) {
         self.queue(Command::ResolveWorkspace { cwd: new_cwd.clone() });
         self.return_to_conversation();
-        self.reset_conversation();
         self.notify(&format!("Moved to {}", home_relative_path(&new_cwd)));
         self.session.begin_workspace_load();
         let session_id = self.session.session_id().clone();
+        self.session_transition = Some(SessionTransition::Resuming {
+            session_id: session_id.clone(), cwd: new_cwd.clone(),
+        });
         self.queue(Command::Agent(AgentCommand::ResumeSession { session_id, cwd: new_cwd.clone() }));
         self.session.set_working_dir(new_cwd);
     }
 
     /// Sends the review the git-diff screen assembled as a normal prompt.
     pub(super) fn submit_review(&mut self, prompt: &str) {
-        if self.waiting_for_response() {
+        if !self.can_start_foreground_operation() {
             return;
         }
         self.conversation.append_notice(format!("[wisp] Submitted review of working tree diff.\n{prompt}"));
@@ -229,12 +249,21 @@ impl App {
             };
             if select.current_value != value {
                 self.queue(Command::Agent(AgentCommand::SetConfigOption {
+                        conversation_id: self.conversation_id(),
                     session_id: self.session.session_id().clone(),
                     config_id: config_id.clone(),
                     value: value.as_str().into(),
                 }));
             }
         }
+    }
+
+    pub(super) fn can_start_foreground_operation(&self) -> bool {
+        !self.waiting_for_response()
+            && !self.prompt_acceptance_pending
+            && self.session_transition.is_none()
+            && self.session.workspace_move_state().is_idle()
+            && matches!(self.submission, super::submission::SubmissionState::Idle)
     }
 
     /// Adds a semantic notice for information outside the agent's own output.

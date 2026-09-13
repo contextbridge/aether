@@ -45,11 +45,11 @@ fn mode_option() -> acp::SessionConfigOption {
 }
 
 fn config_update(options: Vec<acp::SessionConfigOption>) -> AcpEvent {
-    use acp_utils::client::AcpEvent as ACP;
-    ACP::SessionUpdate {
-        session_id: SessionId::new("test-session"),
-        update: Box::new(acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(options))),
-    }
+    acp::UpdateSessionNotification::new(
+        SessionId::new("test-session"),
+        acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(options)),
+    )
+    .into()
 }
 
 fn type_and_submit(ui: &mut TestUi, text: &str) {

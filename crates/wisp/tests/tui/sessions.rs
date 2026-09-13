@@ -19,6 +19,8 @@ fn clear_creates_new_session_and_resets_state() {
     let mut ui = TestUi::new();
 
     ui.submit("old message");
+    ui.next_agent_command().unwrap();
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
     ui.assert_viewport_contains("old message");
 
@@ -200,6 +202,8 @@ fn load_session_send_failure_cleans_up_buffer_and_shows_error() {
     assert!(has_error, "expected visible transcript error for load_session failure, got {messages:?}");
 
     assert!(!app.app().exit_requested(), "app should remain interactive after load_session failure");
+    app.submit("retry");
+    assert!(matches!(app.next_agent_command(), Some(AgentCommand::Prompt { .. })));
 }
 
 #[test]
@@ -399,7 +403,10 @@ fn session_list_error_shows_in_transcript() {
     app.type_text("/resume");
     app.key(key(KeyCode::Tab));
 
-    app.deliver_result(CommandResult::ConfigOptionUpdateFailed { error: "list sessions failed".to_string() });
+    app.deliver_result(CommandResult::ConfigOptionUpdateFailed {
+        conversation_id: app.app().conversation_id(),
+        error: "list sessions failed".to_string(),
+    });
 
     let messages: Vec<_> = message_texts(&app).collect();
     let has_error = messages.iter().any(|message| message.contains("list sessions failed"));

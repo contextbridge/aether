@@ -276,12 +276,9 @@ async fn closed_agent_connection_becomes_a_reducer_visible_failure() -> Result<(
 
     let result = dispatcher.dispatch(Command::Agent(AgentCommand::Cancel { session_id: SessionId::new("session") }));
 
-    assert!(result.is_none());
-    assert!(dispatcher.has_pending_tasks());
-    assert!(matches!(
-        dispatcher.next_result().await,
-        Some(CommandResult::Failed { command: FailedCommand::Other("cancel"), .. })
-    ));
+    assert!(matches!(result, Some(CommandResult::Failed { command: FailedCommand::Other("cancel"), .. })));
+    assert!(!dispatcher.has_pending_tasks());
+    assert!(dispatcher.next_result().await.is_none());
     dispatcher.shutdown().await;
     Ok(())
 }

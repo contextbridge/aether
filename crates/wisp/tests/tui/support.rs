@@ -248,7 +248,7 @@ pub(crate) fn session_preview_response(session_id: &str) -> SessionPreviewRespon
 }
 
 pub(crate) fn session_update_for(session_id: &str, update: acp::SessionUpdate) -> AcpEvent {
-    AcpEvent::SessionUpdate { session_id: SessionId::new(session_id), update: Box::new(update) }
+    acp::UpdateSessionNotification::new(SessionId::new(session_id), update).into()
 }
 
 pub(crate) fn user_message_chunk(text: &str) -> acp::SessionUpdate {

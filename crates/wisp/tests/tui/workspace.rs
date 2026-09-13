@@ -353,8 +353,15 @@ fn workspace_move_success_updates_cwd_and_reloads_session() {
         other => panic!("expected LoadSession, got {other:?}"),
     }
 
+    ui.type_text("/clear");
+    ui.key(key(KeyCode::Tab));
+    assert!(ui.next_agent_command().is_none(), "workspace replay still owns the transition");
+    ui.submit("wait for replay");
+    assert!(ui.next_agent_command().is_none());
     ui.acp_event(session_loaded("test-session", Vec::new()));
     assert_eq!(ui.app().workspace_move_state(), WorkspaceMoveState::Idle);
+    ui.submit("ready");
+    assert!(matches!(ui.next_agent_command(), Some(AgentCommand::Prompt { .. })));
 }
 
 #[test]
@@ -402,6 +409,9 @@ fn workspace_move_success_replays_loaded_session_updates() {
 #[test]
 fn workspace_move_load_session_failure_recovers() {
     let mut ui = make_ui_with_workspace_move();
+    ui.submit("keep this transcript");
+    ui.next_agent_command().unwrap();
+    ui.complete_prompt(acp::StopReason::EndTurn);
 
     ui.type_text("/move");
     ui.key(key(KeyCode::Tab));
@@ -429,6 +439,10 @@ fn workspace_move_load_session_failure_recovers() {
     let viewport = ui.viewport_text();
     let joined = viewport.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(joined.contains("Failed to resume session"), "{viewport}");
+    ui.assert_conversation_contains("keep this transcript");
+    assert_eq!(ui.app().session_id().0.as_ref(), "test-session");
+    ui.submit("retry after failed reload");
+    assert!(matches!(ui.next_agent_command(), Some(AgentCommand::Prompt { .. })));
 }
 
 #[test]

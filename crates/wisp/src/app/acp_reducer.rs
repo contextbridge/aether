@@ -1,5 +1,6 @@
 use super::session::builtin_commands;
 use super::{App, ExitState, Overlay, Route};
+use crate::app::session::SessionTransition;
 use crate::command::{AgentCommand, Command, TerminalCommand};
 use crate::conversation::tool_calls::ToolStatus;
 use crate::conversation::{ContextUsageDisplay, MessageRole};
@@ -22,20 +23,10 @@ impl App {
     pub fn on_acp_event(&mut self, event: AcpEvent) {
         match event {
             AcpEvent::SessionResumed(loaded) => self.on_resumed_session(loaded),
-            AcpEvent::SessionUpdate { session_id, update } => {
-                if &session_id == self.session.session_id() {
-                    self.on_session_update(&update);
+            AcpEvent::SessionUpdate(notification) => {
+                if &notification.session_id == self.session.session_id() {
+                    self.on_session_update(&notification.update);
                 }
-            }
-            AcpEvent::PromptCompleted { session_id, stop_reason } => {
-                if &session_id != self.session.session_id() || !self.waiting_for_response() {
-                    return;
-                }
-                let status = match stop_reason {
-                    acp::StopReason::Cancelled => ToolStatus::Error("cancelled".to_string()),
-                    _ => ToolStatus::Success,
-                };
-                self.finish_prompt(&status);
             }
             AcpEvent::ContextCompaction(params) => {
                 if self.conversation.progress_indicator().accepts_activity() {
@@ -80,7 +71,6 @@ impl App {
                 }
             }
             AcpEvent::ConnectionClosed => self.on_connection_closed(),
-            AcpEvent::SessionUsage(_) => {}
             AcpEvent::SubAgentProgress(progress) => {
                 if self.conversation.progress_indicator().accepts_activity() {
                     self.conversation.on_sub_agent_progress(&progress);
@@ -107,10 +97,25 @@ impl App {
 
     pub(super) fn on_resumed_session(&mut self, loaded: ResumedSession) {
         let ResumedSession { session_id, response, replay } = loaded;
+        if self.waiting_for_response() || self.prompt_acceptance_pending {
+            return;
+        }
+        match &self.session_transition {
+            Some(SessionTransition::Resuming { session_id: expected, cwd }) if *expected == session_id => {
+                if self.session.working_dir() != cwd {
+                    let cwd = cwd.clone();
+                    self.session.set_working_dir(cwd.clone());
+                    self.queue(Command::ResolveWorkspace { cwd });
+                }
+            }
+            Some(_) => return,
+            None if !self.session.workspace_move_state().is_idle() => return,
+            None => {}
+        }
         self.reset_conversation();
         self.session.set_session(session_id, Vec::new());
         for event in replay {
-            self.on_acp_event(event.into());
+            self.on_acp_event(event);
         }
         self.session.update_config_options(response.config_options);
         if self.session.workspace_move_state() == WorkspaceMoveState::LoadingSession {
@@ -118,9 +123,18 @@ impl App {
         }
         self.return_to_conversation();
         self.session.end_workspace_move();
+        self.session_transition = None;
     }
 
     pub(super) fn on_new_session(&mut self, session_id: SessionId, config_options: Vec<acp::SessionConfigOption>) {
+        if self.waiting_for_response()
+            || self.prompt_acceptance_pending
+            || !self.session.workspace_move_state().is_idle()
+            || matches!(self.session_transition, Some(super::session::SessionTransition::Resuming { .. }))
+        {
+            return;
+        }
+        self.session_transition = None;
         self.close_elicitation_owner();
         self.return_to_conversation();
         let previous_selections: Vec<(String, String)> = self
@@ -151,6 +165,8 @@ impl App {
         self.return_to_conversation();
         self.session.end_workspace_move();
         self.commands.retain(|command| !matches!(command, Command::Terminal(TerminalCommand::RingBell)));
+        self.session_transition = None;
+        self.prompt_acceptance_pending = false;
         self.exit_state = ExitState::Exiting;
     }
 
@@ -169,6 +185,13 @@ impl App {
             self.observe_activity(update);
         }
         match update {
+            SessionUpdate::StateUpdate(StateUpdate::Idle(idle)) if self.waiting_for_response() => {
+                let status = match idle.stop_reason {
+                    Some(acp::StopReason::Cancelled) => ToolStatus::Error("cancelled".to_string()),
+                    _ => ToolStatus::Success,
+                };
+                self.finish_prompt(&status);
+            }
             SessionUpdate::UserMessage(message) => {
                 self.conversation.upsert_message(MessageRole::User, message.message_id.clone(), &message.content);
             }

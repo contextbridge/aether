@@ -1,6 +1,6 @@
 #![cfg(feature = "testing")]
 
-use acp_utils::client::{AcpEvent, ReplayableEvent};
+use acp_utils::client::AcpEvent;
 use acp_utils::testing::{idle_notification, plan_notification, running_notification};
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::v2 as acp;
@@ -17,14 +17,9 @@ fn user_ack_and_idle_preserve_one_foreground_turn() {
     ui.acp_event(session_update(running_notification("test-session").update));
     assert!(ui.app().waiting_for_response());
     ui.acp_event(text_chunk_with_id("reply-1", "world"));
-    ui.acp_event(session_update(idle_notification("test-session", Some(acp::StopReason::EndTurn)).update));
-    assert!(ui.app().waiting_for_response(), "raw idle must not finish a turn twice");
-    ui.acp_event(AcpEvent::PromptCompleted { session_id: "other".into(), stop_reason: acp::StopReason::EndTurn });
+    ui.acp_event(idle_notification("other", Some(acp::StopReason::EndTurn)).into());
     assert!(ui.app().waiting_for_response());
-    ui.acp_event(AcpEvent::PromptCompleted {
-        session_id: "test-session".into(),
-        stop_reason: acp::StopReason::EndTurn,
-    });
+    ui.acp_event(session_update(idle_notification("test-session", Some(acp::StopReason::EndTurn)).update));
     assert!(!ui.app().waiting_for_response());
     let text = ui.conversation_text();
     assert_eq!(text.matches("hello").count(), 1, "{text}");
@@ -42,6 +37,82 @@ fn user_ack_and_idle_preserve_one_foreground_turn() {
     );
     ui.complete_prompt(acp::StopReason::EndTurn);
     assert!(ui.executor_mut().take_commands().is_empty());
+}
+
+#[test]
+fn prompt_rejection_recovers_before_and_after_native_idle() {
+    use wisp::command::{AgentCommand, CommandResult, FailedCommand};
+    for idle_first in [false, true] {
+        let mut ui = TestUi::new();
+        ui.submit("first");
+        ui.next_agent_command().unwrap();
+        if idle_first {
+            ui.acp_event(session_update(idle_notification("test-session", None).update));
+            assert!(!ui.app().waiting_for_response());
+        }
+        ui.submit("next");
+        assert!(ui.next_agent_command().is_none(), "pending result still owns submission");
+        ui.deliver_result(CommandResult::AgentCommandAccepted);
+        ui.key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
+        assert!(ui.next_agent_command().is_none(), "unrelated acceptance cannot release a prompt");
+        ui.deliver_result(CommandResult::Failed { command: FailedCommand::Prompt, error: "rejected".into() });
+        assert!(!ui.app().waiting_for_response());
+        ui.key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
+        assert!(matches!(ui.next_agent_command(), Some(AgentCommand::Prompt { text, .. }) if text == "next"));
+        assert!(ui.app().waiting_for_response());
+    }
+}
+
+#[test]
+fn cancellation_keeps_final_output_and_ignores_late_acceptance() {
+    use wisp::command::CommandResult;
+    let mut ui = TestUi::new();
+    ui.submit("hello");
+    ui.next_agent_command().unwrap();
+    ui.deliver_result(CommandResult::AgentCommandAccepted);
+    assert!(ui.app().waiting_for_response(), "cancel is not completion");
+    ui.acp_event(text_chunk_with_id("reply", "final output"));
+    ui.acp_event(session_update(idle_notification("test-session", Some(acp::StopReason::Cancelled)).update));
+    assert!(!ui.app().waiting_for_response());
+    ui.deliver_result(CommandResult::PromptAccepted);
+    assert!(!ui.app().waiting_for_response(), "late acceptance must not restart the turn");
+    assert_eq!(ui.conversation_text().matches("final output").count(), 1);
+}
+
+#[test]
+fn config_result_for_a_replaced_conversation_is_ignored() {
+    use wisp::command::CommandResult;
+    for restored_id in ["test-session", "other"] {
+        let mut ui = TestUi::new();
+        ui.deliver_result(CommandResult::NewSessionCreated(acp::NewSessionResponse::new("test-session")));
+        let stale = ui.app().conversation_id();
+        ui.deliver_result(CommandResult::ConfigOptionsUpdated {
+            conversation_id: stale,
+            options: vec![model_option("stale")],
+        });
+        assert_eq!(ui.app().config_options().len(), 1);
+
+        ui.acp_event(AcpEvent::SessionResumed(acp_utils::client::ResumedSession {
+            session_id: restored_id.into(),
+            response: acp::ResumeSessionResponse::new().config_options(vec![model_option("restored")]),
+            replay: vec![],
+        }));
+        ui.deliver_result(CommandResult::ConfigOptionsUpdated { conversation_id: stale, options: vec![] });
+        assert_eq!(ui.app().config_options().len(), 1, "stale result must not erase restored configuration");
+    }
+}
+
+#[test]
+fn replay_snapshot_cannot_replace_a_live_turn() {
+    let mut ui = TestUi::new();
+    ui.submit("current");
+    ui.acp_event(AcpEvent::SessionResumed(acp_utils::client::ResumedSession {
+        session_id: "test-session".into(),
+        response: acp::ResumeSessionResponse::new(),
+        replay: vec![idle_notification("test-session", None).into()],
+    }));
+    assert!(ui.app().waiting_for_response());
+    ui.assert_conversation_contains("current");
 }
 
 #[test]
@@ -150,7 +221,7 @@ fn repeated_resume_replaces_history_without_adopting_a_live_echo() {
             idle_notification("restored", None).update,
         ]
         .into_iter()
-        .map(|update| ReplayableEvent::SessionUpdate(Box::new(acp::UpdateSessionNotification::new("restored", update))))
+        .map(|update| AcpEvent::SessionUpdate(Box::new(acp::UpdateSessionNotification::new("restored", update))))
         .collect();
         ui.acp_event(AcpEvent::SessionResumed(acp_utils::client::ResumedSession {
             session_id: "restored".into(),
@@ -178,6 +249,10 @@ fn seeded_history_uses_distinct_message_ids_and_finishes_each_turn() {
     assert_eq!(users.len(), 3);
     assert_ne!(users[0].message_id(), users[1].message_id());
     assert!(!ui.app().waiting_for_response());
+}
+
+fn model_option(value: &str) -> acp::SessionConfigOption {
+    acp::SessionConfigOption::select("model", "Model", value, vec![acp::SessionConfigSelectOption::new(value, value)])
 }
 
 fn message(id: &str, text: &str) -> AcpEvent {

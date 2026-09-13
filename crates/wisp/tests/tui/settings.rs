@@ -1109,7 +1109,10 @@ fn config_option_update_failed_shows_in_transcript() {
     ui.key(key(KeyCode::Tab));
     assert!(ui.app().has_modal());
 
-    ui.deliver_result(CommandResult::ConfigOptionUpdateFailed { error: "invalid model".to_string() });
+    ui.deliver_result(CommandResult::ConfigOptionUpdateFailed {
+        conversation_id: ui.app().conversation_id(),
+        error: "invalid model".to_string(),
+    });
 
     // Overlay should still be open
     assert!(ui.app().has_modal());

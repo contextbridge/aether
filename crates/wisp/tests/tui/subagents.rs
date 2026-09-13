@@ -230,6 +230,7 @@ fn sub_agent_drain_includes_sub_agents_in_history_items() {
 #[test]
 fn sub_agent_prompt_error_finalizes_sub_agents() {
     let mut app = make_app();
+    app.submit("work");
     app.acp_event(tool_call("parent-1", "spawn_subagent"));
     app.acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", "{}"));
 
@@ -551,6 +552,7 @@ mod progress_indicator_tests {
         let mut ui = TestUi::new();
         ui.submit("hello");
         ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        ui.complete_prompt(acp::StopReason::EndTurn);
         ui.deliver_result(new_session_created("new-session", Vec::new()));
 
         ui.draw();
@@ -564,6 +566,7 @@ mod progress_indicator_tests {
         let mut ui = TestUi::new();
         ui.submit("hello");
         ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        ui.complete_prompt(acp::StopReason::EndTurn);
         ui.acp_event(session_loaded("loaded-session", Vec::new()));
 
         ui.draw();

@@ -71,6 +71,8 @@ pub struct App {
     /// What the event loop still owes the outside world.
     commands: VecDeque<Command>,
     submission: SubmissionState,
+    session_transition: Option<session::SessionTransition>,
+    prompt_acceptance_pending: bool,
     browser_opener: BrowserOpener,
     clipboard_writer: ClipboardWriter,
 }
@@ -168,6 +170,8 @@ impl App {
             exit_state: ExitState::Idle,
             commands: VecDeque::new(),
             submission: SubmissionState::default(),
+            session_transition: None,
+            prompt_acceptance_pending: false,
             browser_opener,
             clipboard_writer,
         };
@@ -198,14 +202,21 @@ impl App {
 
     pub fn on_command_result(&mut self, result: CommandResult) {
         match result {
+            CommandResult::PromptAccepted => self.prompt_acceptance_pending = false,
             CommandResult::AgentCommandAccepted => {}
-            CommandResult::ConfigOptionsUpdated(options) => {
+            CommandResult::ConfigOptionsUpdated { conversation_id, options } => {
+                if conversation_id != self.conversation_id() {
+                    return;
+                }
                 self.session.update_config_options(options);
                 if let Some(Overlay::Settings(overlay)) = self.overlay.as_mut() {
                     overlay.update_config_options(self.session.config_options());
                 }
             }
-            CommandResult::ConfigOptionUpdateFailed { error } => {
+            CommandResult::ConfigOptionUpdateFailed { conversation_id, error } => {
+                if conversation_id != self.conversation_id() {
+                    return;
+                }
                 tracing::warn!("set_session_config_option failed: {error}");
                 self.notify(&format!("Failed to update setting: {error}"));
             }
@@ -287,18 +298,25 @@ impl App {
     fn on_command_failed(&mut self, command: FailedCommand, error: &str) {
         match command {
             FailedCommand::Prompt => {
-                self.finish_prompt(&ToolStatus::Error(format!("failed: {error}")));
+                self.prompt_acceptance_pending = false;
+                if self.waiting_for_response() {
+                    self.finish_prompt(&ToolStatus::Error(format!("failed: {error}")));
+                }
                 self.submission.reset();
             }
-            FailedCommand::ResumeSession | FailedCommand::ListWorkspaces | FailedCommand::MoveWorkspace => {
+            FailedCommand::ResumeSession => {
+                self.session_transition = None;
                 self.session.end_workspace_move();
             }
+            FailedCommand::ListWorkspaces | FailedCommand::MoveWorkspace => self.session.end_workspace_move(),
+            FailedCommand::Other("create new session") => self.session_transition = None,
             FailedCommand::Other(_) => {}
         }
         self.notify(&format!("Failed to {}: {error}", command.describe()));
     }
 
     fn start_prompt(&mut self, text: String, content: Option<Vec<acp::ContentBlock>>) {
+        self.prompt_acceptance_pending = true;
         self.conversation.turn_mut().set_prompt_in_flight(true);
         self.conversation.progress_indicator_mut().prompt_started();
         self.queue(Command::Agent(AgentCommand::Prompt {

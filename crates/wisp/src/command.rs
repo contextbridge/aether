@@ -1,5 +1,6 @@
 use crate::attachment::{AttachmentOutcome, PromptAttachment};
 use crate::file_index::FileEntry;
+use crate::conversation::ConversationId;
 use crate::git_review::{DiffScope, GitDiffEvent, GitWatchEvent};
 use crate::request::RequestId;
 use crate::session::workspace_status::WorkspaceStatus;
@@ -29,7 +30,7 @@ pub enum Command {
 pub enum AgentCommand {
     Prompt { session_id: SessionId, text: String, content: Option<Vec<ContentBlock>> },
     Cancel { session_id: SessionId },
-    SetConfigOption { session_id: SessionId, config_id: String, value: SessionConfigOptionValue },
+    SetConfigOption { conversation_id: ConversationId, session_id: SessionId, config_id: String, value: SessionConfigOptionValue },
     AuthenticateMcpServer { session_id: SessionId, server_name: String },
     Authenticate { method_id: String },
     ListSessions,
@@ -108,9 +109,10 @@ pub enum TerminalCommand {
 }
 
 pub enum CommandResult {
+    PromptAccepted,
     AgentCommandAccepted,
-    ConfigOptionsUpdated(Vec<SessionConfigOption>),
-    ConfigOptionUpdateFailed { error: String },
+    ConfigOptionsUpdated { conversation_id: ConversationId, options: Vec<SessionConfigOption> },
+    ConfigOptionUpdateFailed { conversation_id: ConversationId, error: String },
     AuthenticationCompleted { method_id: String },
     AuthenticationFailed { method_id: String },
     SessionsListed(ListSessionsResponse),

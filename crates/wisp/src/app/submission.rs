@@ -27,8 +27,7 @@ impl SubmissionState {
 
 impl App {
     pub(super) fn submit(&mut self) {
-        if self.composer.is_empty() || self.waiting_for_response() || !matches!(self.submission, SubmissionState::Idle)
-        {
+        if self.composer.is_empty() || !self.can_start_foreground_operation() {
             return;
         }
 

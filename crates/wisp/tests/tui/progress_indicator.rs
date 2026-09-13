@@ -49,15 +49,14 @@ fn keeps_status_segments_visible_until_prompt_completes() {
 }
 
 #[test]
-fn prompt_completion_event_clears_responding_state() {
+fn native_idle_clears_responding_state() {
     let (mut ui, _) = progress_ui();
     ui.acp_event(text_chunk("final answer"));
     ui.assert_viewport_contains("Responding…");
 
-    ui.acp_event(AcpEvent::PromptCompleted {
-        session_id: SessionId::new("test-session"),
-        stop_reason: acp::StopReason::EndTurn,
-    });
+    ui.acp_event(session_update(
+        acp_utils::testing::idle_notification("test-session", Some(acp::StopReason::EndTurn)).update,
+    ));
 
     assert!(!ui.app().waiting_for_response());
     assert!(!ui.app().is_agent_busy());

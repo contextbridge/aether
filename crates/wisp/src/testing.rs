@@ -1066,12 +1066,12 @@ where
     }
 
     pub fn complete_prompt(&mut self, stop_reason: acp::StopReason) {
+        self.deliver_result(CommandResult::PromptAccepted);
         let session_id = self.app.session_id().clone();
         let update = acp::SessionUpdate::StateUpdate(acp::StateUpdate::Idle(
-            acp::IdleStateUpdate::new().stop_reason(stop_reason.clone()),
+            acp::IdleStateUpdate::new().stop_reason(stop_reason),
         ));
-        self.acp_event(AcpEvent::SessionUpdate { session_id: session_id.clone(), update: Box::new(update) });
-        self.acp_event(AcpEvent::PromptCompleted { session_id, stop_reason });
+        self.acp_event(acp::UpdateSessionNotification::new(session_id, update).into());
     }
 
     pub fn tick(&mut self, now: Instant) {
@@ -1648,7 +1648,7 @@ fn reconcile(state: &mut State, incoming: Vec<Delta>) -> Outcome {
 ";
 
 pub fn session_update(update: acp::SessionUpdate) -> AcpEvent {
-    AcpEvent::SessionUpdate { session_id: SessionId::new("test-session"), update: Box::new(update) }
+    acp::UpdateSessionNotification::new(SessionId::new("test-session"), update).into()
 }
 
 pub fn text_chunk(text: &str) -> AcpEvent {

@@ -2,22 +2,22 @@
 
 use acp_utils::client::{AcpClientError, AcpEvent};
 use acp_utils::testing::{duplex_pair, idle_notification, running_notification};
+use agent_client_protocol::Responder;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v2::{
     AgentCapabilities, AuthMethodId, CancelSessionNotification, ContentBlock, Implementation, InitializeRequest,
-    InitializeResponse, LoginAuthRequest, LoginAuthResponse, NewSessionRequest, NewSessionResponse, PromptCapabilities,
-    PromptImageCapabilities, PromptRequest, PromptResponse, ReplayFrom, ResumeSessionRequest, ResumeSessionResponse,
-    SessionCapabilities, SessionConfigId, SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption,
-    SessionId, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, TextContent,
+    LoginAuthRequest, LoginAuthResponse, NewSessionResponse, PromptCapabilities, PromptImageCapabilities,
+    PromptRequest, PromptResponse, ReplayFrom, ResumeSessionRequest, ResumeSessionResponse, SessionCapabilities,
+    SessionConfigId, SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption, SessionId,
+    SetSessionConfigOptionRequest, TextContent,
 };
 use agent_client_protocol::schema::v2::{
     ContentChunk, SessionUpdate, StopReason, UpdateSessionNotification, UserMessage,
 };
-use agent_client_protocol::{Agent, Responder};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tokio::task::{LocalSet, spawn_local};
-use wisp::command::{AgentCommand, Command, CommandResult, FailedCommand};
+use wisp::command::{AgentCommand, Command, CommandResult};
 use wisp::runtime::CommandDispatcher;
 use wisp::session::Session;
 
@@ -31,7 +31,7 @@ async fn connection_negotiates_v2_and_projects_optional_capabilities() {
                     SessionCapabilities::new().prompt(PromptCapabilities::new().image(PromptImageCapabilities::new())),
                 ),
             ] {
-                let (session, mut peer) = connect(capabilities.clone()).await;
+                let (session, mut peer) = Box::pin(connect(capabilities.clone())).await;
                 let initialize = peer.initialize.recv().await.unwrap();
                 assert_eq!(initialize.protocol_version, ProtocolVersion::V2);
                 assert_eq!(initialize.info.name, "wisp");
@@ -57,14 +57,15 @@ async fn runtime_login_and_config_requests_use_v2_payloads() {
         assert!(matches!(dispatcher.next_result().await, Some(CommandResult::AuthenticationCompleted { method_id }) if method_id == "provider"));
         assert_eq!(peer.login.recv().await.unwrap().method_id, AuthMethodId::new("provider"));
 
+        let conversation_id = wisp::testing::TestUi::new().app().conversation_id();
         for (value, expected) in [
             (SessionConfigOptionValue::from("fast"), serde_json::json!({"type": "id", "value": "fast"})),
             (SessionConfigOptionValue::from(true), serde_json::json!({"type": "boolean", "value": true})),
         ] {
             dispatcher.dispatch(Command::Agent(AgentCommand::SetConfigOption {
-                session_id: session.session_id.clone(), config_id: "setting".into(), value,
+                conversation_id, session_id: session.session_id.clone(), config_id: "setting".into(), value,
             }));
-            assert!(matches!(dispatcher.next_result().await, Some(CommandResult::ConfigOptionsUpdated(_))));
+            assert!(matches!(dispatcher.next_result().await, Some(CommandResult::ConfigOptionsUpdated { .. })));
             let request = peer.config.recv().await.unwrap();
             let wire = serde_json::to_value(request).unwrap();
             assert_eq!(wire["configId"], "setting");
@@ -81,7 +82,7 @@ async fn accepted_turn_finishes_the_ui_only_after_matching_live_idle() {
         .run_until(async {
             for reason in [Some(StopReason::EndTurn), Some(StopReason::Cancelled), None] {
                 let (mut session, mut peer) = connect(None).await;
-                let mut ui = wisp::testing::TestUi::new();
+                let mut ui = Box::new(wisp::testing::TestUi::new());
                 ui.deliver_result(CommandResult::NewSessionCreated(NewSessionResponse::new("new")));
                 ui.submit("hello");
                 let mut dispatcher = CommandDispatcher::new(session.client_handle.clone());
@@ -92,8 +93,15 @@ async fn accepted_turn_finishes_the_ui_only_after_matching_live_idle() {
                 responder.respond(PromptResponse::new()).unwrap();
                 ui.deliver_result(dispatcher.next_result().await.unwrap());
                 assert!(ui.app().waiting_for_response(), "acceptance is not completion");
+                if reason == Some(StopReason::Cancelled) {
+                    let cancelled = dispatcher
+                        .dispatch(Command::Agent(AgentCommand::Cancel { session_id: "new".into() }))
+                        .expect("cancel is accepted immediately");
+                    assert_eq!(peer.cancel.recv().await.unwrap().session_id, SessionId::new("new"));
+                    ui.deliver_result(cancelled);
+                    assert!(ui.app().waiting_for_response(), "cancel is not completion");
+                }
                 for notification in [
-                    idle_notification("other", None),
                     UpdateSessionNotification::new(
                         "new",
                         SessionUpdate::UserMessage(UserMessage::new("user").content(vec!["hello".into()])),
@@ -110,8 +118,6 @@ async fn accepted_turn_finishes_the_ui_only_after_matching_live_idle() {
                 }
                 peer.connection.send_notification(idle_notification("new", reason)).unwrap();
                 ui.acp_event(session.event_rx.recv().await.unwrap());
-                assert!(ui.app().waiting_for_response(), "raw idle must not complete");
-                ui.acp_event(session.event_rx.recv().await.unwrap());
                 assert!(!ui.app().waiting_for_response());
                 let text = ui.conversation_text();
                 assert_eq!(text.matches("hello").count(), 1, "{text}");
@@ -123,7 +129,7 @@ async fn accepted_turn_finishes_the_ui_only_after_matching_live_idle() {
 }
 
 #[tokio::test]
-async fn runtime_replays_sequentially_and_rejects_restore_during_a_turn() {
+async fn runtime_replays_sequentially_without_owning_turn_policy() {
     LocalSet::new().run_until(async {
         let (mut session, mut peer) = connect(None).await;
         let mut dispatcher = CommandDispatcher::new(session.client_handle.clone());
@@ -131,8 +137,7 @@ async fn runtime_replays_sequentially_and_rejects_restore_during_a_turn() {
             dispatcher.dispatch(Command::Agent(AgentCommand::ResumeSession { session_id: id.into(), cwd: PathBuf::from("/workspace") }));
             let (request, responder) = peer.resume.recv().await.unwrap();
             assert!(matches!(request.replay_from, Some(ReplayFrom::Start(_))));
-            assert!(matches!(session.client_handle.resume_session(ResumeSessionRequest::new("other", "/workspace")).await, Err(AcpClientError::Busy)));
-            assert!(matches!(session.client_handle.prompt(PromptRequest::new("other", vec![])).await, Err(AcpClientError::Busy)));
+            assert!(matches!(session.client_handle.resume_session(ResumeSessionRequest::new("other", "/workspace")).await, Err(AcpClientError::RestorationPending)));
             responder.respond(ResumeSessionResponse::new()).unwrap();
             assert!(matches!(dispatcher.next_result().await, Some(CommandResult::AgentCommandAccepted)));
             assert!(matches!(session.event_rx.recv().await, Some(AcpEvent::SessionResumed(resumed)) if resumed.session_id == SessionId::new(id)));
@@ -143,7 +148,7 @@ async fn runtime_replays_sequentially_and_rejects_restore_during_a_turn() {
         });
         let (request, responder) = peer.resume.recv().await.unwrap();
         assert!(request.replay_from.is_none());
-        assert!(matches!(session.client_handle.resume_session_with_replay(ResumeSessionRequest::new("other", "/workspace")).await, Err(AcpClientError::Busy)));
+        assert!(matches!(session.client_handle.resume_session_with_replay(ResumeSessionRequest::new("other", "/workspace")).await, Err(AcpClientError::RestorationPending)));
         responder.respond(ResumeSessionResponse::new()).unwrap();
         plain_resume.await.unwrap().unwrap();
         assert!(session.event_rx.try_recv().is_err());
@@ -154,13 +159,15 @@ async fn runtime_replays_sequentially_and_rejects_restore_during_a_turn() {
         let (request, responder) = peer.prompt.recv().await.unwrap();
         assert_eq!(request.prompt, vec![ContentBlock::Text(TextContent::new("hello"))]);
         responder.respond(PromptResponse::new()).unwrap();
-        assert!(matches!(dispatcher.next_result().await, Some(CommandResult::AgentCommandAccepted)));
+        assert!(matches!(dispatcher.next_result().await, Some(CommandResult::PromptAccepted)));
         dispatcher.dispatch(Command::Agent(AgentCommand::ResumeSession { session_id: "other".into(), cwd: PathBuf::from("/workspace") }));
-        assert!(matches!(dispatcher.next_result().await, Some(CommandResult::Failed { command: FailedCommand::ResumeSession, .. })));
+        let (_, responder) = peer.resume.recv().await.unwrap();
+        responder.respond(ResumeSessionResponse::new()).unwrap();
+        assert!(matches!(dispatcher.next_result().await, Some(CommandResult::AgentCommandAccepted)));
+        assert!(matches!(session.event_rx.recv().await, Some(AcpEvent::SessionResumed(_))));
         dispatcher.dispatch(Command::Agent(AgentCommand::Authenticate { method_id: "provider".into() }));
         assert!(matches!(dispatcher.next_result().await, Some(CommandResult::AuthenticationCompleted { .. })));
-        dispatcher.dispatch(Command::Agent(AgentCommand::Cancel { session_id: "second".into() }));
-        assert!(matches!(dispatcher.next_result().await, Some(CommandResult::AgentCommandAccepted)));
+        assert!(matches!(dispatcher.dispatch(Command::Agent(AgentCommand::Cancel { session_id: "second".into() })), Some(CommandResult::AgentCommandAccepted)));
         assert_eq!(peer.cancel.recv().await.unwrap().session_id, SessionId::new("second"));
         session.client_handle.disconnect().await;
     }).await;
@@ -174,80 +181,44 @@ struct Peer {
     resume: mpsc::UnboundedReceiver<(ResumeSessionRequest, Responder<ResumeSessionResponse>)>,
     prompt: mpsc::UnboundedReceiver<(PromptRequest, Responder<PromptResponse>)>,
     cancel: mpsc::UnboundedReceiver<CancelSessionNotification>,
+    pending_login: mpsc::UnboundedReceiver<Responder<LoginAuthResponse>>,
 }
 
 async fn connect(capabilities: Option<SessionCapabilities>) -> (Session, Peer) {
-    let (connection_tx, mut connection_rx) = mpsc::unbounded_channel();
-    let (initialize_tx, initialize) = mpsc::unbounded_channel();
-    let (login_tx, login) = mpsc::unbounded_channel();
-    let (config_tx, config) = mpsc::unbounded_channel();
-    let (resume_tx, resume) = mpsc::unbounded_channel();
-    let (prompt_tx, prompt) = mpsc::unbounded_channel();
-    let (cancel_tx, cancel) = mpsc::unbounded_channel();
-    let agent = Agent
-        .v2()
-        .on_receive_request(
-            async move |request: InitializeRequest, responder, cx| {
-                connection_tx.send(cx).unwrap();
-                initialize_tx.send(request).unwrap();
-                responder.respond(
-                    InitializeResponse::new(ProtocolVersion::V2, Implementation::new("Fake agent", "1"))
-                        .capabilities(AgentCapabilities::new().session(capabilities.clone())),
-                )
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            async |request: NewSessionRequest, responder, _cx| {
-                assert_eq!(request.cwd.0, PathBuf::from("/workspace"));
-                assert!(request.mcp_servers.is_empty());
-                responder.respond(NewSessionResponse::new("new").config_options(vec![SessionConfigOption::select(
-                    "model",
-                    "Model",
-                    "fast",
-                    vec![SessionConfigSelectOption::new("fast", "Fast")],
-                )]))
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            async move |request: LoginAuthRequest, responder, _cx| {
-                login_tx.send(request).unwrap();
-                responder.respond(LoginAuthResponse::new())
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            async move |request: SetSessionConfigOptionRequest, responder, _cx| {
-                config_tx.send(request).unwrap();
-                responder.respond(SetSessionConfigOptionResponse::new(vec![]))
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            async move |request: ResumeSessionRequest, responder, _cx| {
-                resume_tx.send((request, responder)).unwrap();
-                Ok(())
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            async move |request: PromptRequest, responder, _cx| {
-                prompt_tx.send((request, responder)).unwrap();
-                Ok(())
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_notification(
-            async move |notification: CancelSessionNotification, _cx| {
-                cancel_tx.send(notification).unwrap();
-                Ok(())
-            },
-            agent_client_protocol::on_receive_notification!(),
-        );
+    connect_with_pending_login(capabilities, false).await
+}
+
+async fn connect_with_pending_login(capabilities: Option<SessionCapabilities>, hold_login: bool) -> (Session, Peer) {
+    let (agent, mut requests) = acp_utils::testing::FakeAgent::default()
+        .agent_info(Implementation::new("Fake agent", "1"))
+        .capabilities(AgentCapabilities::new().session(capabilities))
+        .new_session_response(NewSessionResponse::new("new").config_options(vec![SessionConfigOption::select(
+            "model",
+            "Model",
+            "fast",
+            vec![SessionConfigSelectOption::new("fast", "Fast")],
+        )]))
+        .login_method("provider")
+        .hold_login(hold_login)
+        .capture();
     let (agent_transport, client_transport) = duplex_pair();
-    spawn_local(agent.connect_to(agent_transport));
+    spawn_local(agent.agent().connect_to(agent_transport));
     let session = Session::connect_to(client_transport, PathBuf::from("/workspace")).await.unwrap();
-    let connection = connection_rx.recv().await.unwrap();
-    (session, Peer { connection, initialize, login, config, resume, prompt, cancel })
+    let created = requests.new_session.recv().await.unwrap();
+    assert_eq!(created.cwd.0, PathBuf::from("/workspace"));
+    assert!(created.mcp_servers.is_empty());
+    let connection = requests.connection.recv().await.unwrap();
+    (
+        session,
+        Peer {
+            connection,
+            initialize: requests.initialize,
+            login: requests.login,
+            config: requests.config,
+            resume: requests.resume,
+            prompt: requests.prompt,
+            cancel: requests.cancel,
+            pending_login: requests.pending_login,
+        },
+    )
 }
