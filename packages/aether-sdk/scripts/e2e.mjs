@@ -87,7 +87,7 @@ const agentSelection = {
 
 out(`> aether: ${binaryPath}\n`);
 out(`> cwd:    ${cwd}\n`);
-if (agentSelection) out(`> select: ${JSON.stringify(agentSelection)}\n`);
+out(`> select: ${JSON.stringify(agentSelection)}\n`);
 out(`> prompt: ${prompt}\n\n`);
 
 await using weather = await mcp({ name: "weather", tools: [getWeather] });

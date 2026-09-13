@@ -158,13 +158,10 @@ const agent = {
   },
   async resumeSession(params) {
     if (params.replayFrom?.type === "start") {
-      await conn.notify("session/update", {
-        sessionId: params.sessionId,
-        update: {
-          sessionUpdate: "user_message",
-          messageId: "history-user",
-          content: [{ type: "text", text: "history" }],
-        },
+      await notifyUpdate(params.sessionId, {
+        sessionUpdate: "user_message",
+        messageId: "history-user",
+        content: [{ type: "text", text: "history" }],
       });
       await sendIdle(params.sessionId);
     }
@@ -175,30 +172,28 @@ const agent = {
   },
 };
 
+async function notifyUpdate(sessionId, update) {
+  await conn.notify("session/update", { sessionId, update });
+}
+
 async function sendIdle(sessionId, stopReason) {
-  await conn.notify("session/update", {
-    sessionId,
-    update: {
-      sessionUpdate: "state_update",
-      state: "idle",
-      ...(stopReason ? { stopReason } : {}),
-    },
+  await notifyUpdate(sessionId, {
+    sessionUpdate: "state_update",
+    state: "idle",
+    ...(stopReason ? { stopReason } : {}),
   });
 }
 
 async function runTurn(params, turn) {
   try {
-    await conn.notify("session/update", {
-      sessionId: params.sessionId,
-      update: {
-        sessionUpdate: "user_message",
-        messageId: `user-${turn.messageId}`,
-        content: params.prompt,
-      },
+    await notifyUpdate(params.sessionId, {
+      sessionUpdate: "user_message",
+      messageId: `user-${turn.messageId}`,
+      content: params.prompt,
     });
-    await conn.notify("session/update", {
-      sessionId: params.sessionId,
-      update: { sessionUpdate: "state_update", state: "running" },
+    await notifyUpdate(params.sessionId, {
+      sessionUpdate: "state_update",
+      state: "running",
     });
     if (process.env.FAKE_AETHER_UNRELATED_IDLE)
       await sendIdle("unrelated-session", "cancelled");
@@ -254,24 +249,18 @@ async function runTurn(params, turn) {
       await conn.notify("elicitation/complete", { elicitationId: "elicit-1" });
     }
 
-    await conn.notify("session/update", {
-      sessionId: params.sessionId,
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        messageId: turn.messageId,
-        content: { type: "text", text: chunkText },
-      },
+    await notifyUpdate(params.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      messageId: turn.messageId,
+      content: { type: "text", text: chunkText },
     });
 
     const extraChunks = Number(process.env.FAKE_AETHER_EXTRA_CHUNKS ?? "0");
     for (let i = 0; i < extraChunks; i++) {
-      await conn.notify("session/update", {
-        sessionId: params.sessionId,
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          messageId: turn.messageId,
-          content: { type: "text", text: `chunk-${i + 2}` },
-        },
+      await notifyUpdate(params.sessionId, {
+        sessionUpdate: "agent_message_chunk",
+        messageId: turn.messageId,
+        content: { type: "text", text: `chunk-${i + 2}` },
       });
     }
 
@@ -313,13 +302,10 @@ async function runTurn(params, turn) {
       }
     }
   } catch (error) {
-    await conn.notify("session/update", {
-      sessionId: params.sessionId,
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        messageId: turn.messageId,
-        content: { type: "text", text: String(error) },
-      },
+    await notifyUpdate(params.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      messageId: turn.messageId,
+      content: { type: "text", text: String(error) },
     });
   } finally {
     activeTurn = null;

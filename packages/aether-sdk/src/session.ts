@@ -320,8 +320,7 @@ function createAcpClient(
       (params) => params,
       ({ params }) => {
         try {
-          const usage = parseUsageNotification(params);
-          if (usage) events.push({ type: "usage", usage });
+          events.push({ type: "usage", usage: parseUsageNotification(params) });
         } catch (error) {
           events.fail(error);
         }
@@ -330,10 +329,7 @@ function createAcpClient(
 }
 
 function parseUsageNotification(params: unknown): SessionUsageEvent {
-  const usage =
-    params && typeof params === "object" && "usage" in params
-      ? params.usage
-      : undefined;
+  const usage = (params as { usage?: unknown } | null | undefined)?.usage;
   if (!usage || typeof usage !== "object") {
     throw new AetherSdkError(
       "invalid_protocol_message",

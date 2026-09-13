@@ -10,6 +10,23 @@ const FAKE_AETHER = path.resolve(
   "fakeAether.mjs",
 );
 
+function agentMessageText(messages: AetherMessage[]): string {
+  const update = messages.find(
+    (m) =>
+      m.type === "session_update" &&
+      acp.SessionUpdate.isAgentMessageChunk(m.update),
+  );
+  if (
+    update?.type === "session_update" &&
+    acp.SessionUpdate.isAgentMessageChunk(update.update)
+  ) {
+    return acp.ContentBlock.isText(update.update.content)
+      ? update.update.content.text
+      : "";
+  }
+  throw new Error("expected agent_message_chunk update");
+}
+
 describe("default permission handler", () => {
   it("auto-selects the first allow_* option when no handler is supplied", async () => {
     const session = await AetherSession.start({
@@ -26,23 +43,9 @@ describe("default permission handler", () => {
       await session.close();
     }
 
-    const update = messages.find(
-      (m) =>
-        m.type === "session_update" &&
-        acp.SessionUpdate.isAgentMessageChunk(m.update),
-    );
-    if (
-      update?.type === "session_update" &&
-      acp.SessionUpdate.isAgentMessageChunk(update.update)
-    ) {
-      const text = acp.ContentBlock.isText(update.update.content)
-        ? update.update.content.text
-        : "";
-      expect(text).toContain('"selected"');
-      expect(text).toContain('"allow"');
-    } else {
-      throw new Error("expected agent_message_chunk update");
-    }
+    const text = agentMessageText(messages);
+    expect(text).toContain('"selected"');
+    expect(text).toContain('"allow"');
   });
 
   it("uses the user-supplied permission handler when provided", async () => {
@@ -68,21 +71,6 @@ describe("default permission handler", () => {
       await session.close();
     }
 
-    const update = messages.find(
-      (m) =>
-        m.type === "session_update" &&
-        acp.SessionUpdate.isAgentMessageChunk(m.update),
-    );
-    if (
-      update?.type === "session_update" &&
-      acp.SessionUpdate.isAgentMessageChunk(update.update)
-    ) {
-      const text = acp.ContentBlock.isText(update.update.content)
-        ? update.update.content.text
-        : "";
-      expect(text).toContain('"reject"');
-    } else {
-      throw new Error("expected agent_message_chunk update");
-    }
+    expect(agentMessageText(messages)).toContain('"reject"');
   });
 });

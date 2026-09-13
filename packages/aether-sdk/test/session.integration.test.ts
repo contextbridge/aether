@@ -16,6 +16,15 @@ import {
 import { sessionUsageFactory } from "./factories/sessionUsage.js";
 import { TRACE_CONTEXT } from "./traceContext.js";
 
+// Every fake-agent turn streams four session_update messages before the
+// terminal message ("result" or "usage").
+const SESSION_UPDATES = [
+  "session_update",
+  "session_update",
+  "session_update",
+  "session_update",
+] as const;
+
 const FAKE_AETHER = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "fakeAether.mjs",
@@ -308,10 +317,7 @@ describe("AetherSession with a fake ACP agent", () => {
     const types = messages.map((m) => m.type);
     expect(types.slice(0, -1).sort()).toEqual([
       "elicitation_complete",
-      "session_update",
-      "session_update",
-      "session_update",
-      "session_update",
+      ...SESSION_UPDATES,
     ]);
     expect(types.at(-1)).toBe("result");
     expect(requests).toMatchObject([
@@ -346,13 +352,7 @@ describe("AetherSession with a fake ACP agent", () => {
           .slice(0, -1)
           .map((message) => message.type)
           .sort(),
-      ).toEqual([
-        "session_update",
-        "session_update",
-        "session_update",
-        "session_update",
-        "usage",
-      ]);
+      ).toEqual([...SESSION_UPDATES, "usage"]);
       expect(messages.at(-1)?.type).toBe("result");
 
       expect(messages.find((message) => message.type === "usage")).toEqual({
@@ -383,10 +383,7 @@ describe("AetherSession with a fake ACP agent", () => {
         messages.push(message);
       }
       expect(messages.map((message) => message.type)).toEqual([
-        "session_update",
-        "session_update",
-        "session_update",
-        "session_update",
+        ...SESSION_UPDATES,
         "result",
       ]);
     } finally {
@@ -430,18 +427,9 @@ describe("AetherSession with a fake ACP agent", () => {
       for await (const message of session.prompt("second"))
         second.push(message);
 
-      expect(first.map((m) => m.type)).toEqual([
-        "session_update",
-        "session_update",
-        "session_update",
-        "session_update",
-        "result",
-      ]);
+      expect(first.map((m) => m.type)).toEqual([...SESSION_UPDATES, "result"]);
       expect(second.map((m) => m.type)).toEqual([
-        "session_update",
-        "session_update",
-        "session_update",
-        "session_update",
+        ...SESSION_UPDATES,
         "result",
       ]);
     } finally {
@@ -539,10 +527,7 @@ describe("AetherSession with a fake ACP agent", () => {
         second.push(message);
       }
       expect(second.map((m) => m.type)).toEqual([
-        "session_update",
-        "session_update",
-        "session_update",
-        "session_update",
+        ...SESSION_UPDATES,
         "result",
       ]);
     } finally {
