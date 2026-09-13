@@ -428,10 +428,7 @@ describe("AetherSession with a fake ACP agent", () => {
         second.push(message);
 
       expect(first.map((m) => m.type)).toEqual([...SESSION_UPDATES, "result"]);
-      expect(second.map((m) => m.type)).toEqual([
-        ...SESSION_UPDATES,
-        "result",
-      ]);
+      expect(second.map((m) => m.type)).toEqual([...SESSION_UPDATES, "result"]);
     } finally {
       await session.close();
     }
@@ -526,10 +523,7 @@ describe("AetherSession with a fake ACP agent", () => {
       for await (const message of session.prompt("second")) {
         second.push(message);
       }
-      expect(second.map((m) => m.type)).toEqual([
-        ...SESSION_UPDATES,
-        "result",
-      ]);
+      expect(second.map((m) => m.type)).toEqual([...SESSION_UPDATES, "result"]);
     } finally {
       await session.close();
     }
