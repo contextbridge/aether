@@ -53,6 +53,16 @@ pub struct McpRuntime {
 }
 
 impl McpRuntime {
+    pub async fn shutdown(&mut self) {
+        self.handle.abort();
+        if let Some(handle) = self.agent_sync_handle.take() {
+            handle.abort();
+            let _ = handle.await;
+        }
+        let _ = (&mut self.handle).await;
+        self.gateway.take();
+    }
+
     pub fn handle(&self) -> &McpHandle {
         &self.mcp
     }
