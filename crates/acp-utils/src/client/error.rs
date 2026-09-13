@@ -5,10 +5,6 @@ pub enum AcpClientError {
     #[error("invalid agent command: {0}")]
     InvalidAgentCommand(#[source] agent_client_protocol::Error),
 
-    /// The transport could not be established before the ACP handshake.
-    #[error("ACP connection failed before handshake: {0}")]
-    ConnectFailed(#[source] agent_client_protocol::Error),
-
     /// The agent subprocess exited unexpectedly.
     #[error("agent subprocess crashed: {0}")]
     AgentCrashed(String),
@@ -18,7 +14,11 @@ pub enum AcpClientError {
     #[error("ACP protocol error: {0}")]
     Protocol(#[source] agent_client_protocol::Error),
 
-    /// The requested lifecycle operation cannot run during a foreground turn or restoration.
-    #[error("ACP client is busy with a foreground turn or restoration")]
-    Busy,
+    /// A restoration still owns the incoming replay stream.
+    #[error("an ACP restoration is still pending")]
+    RestorationPending,
+
+    /// The restoration was cancelled before its snapshot was committed.
+    #[error("ACP restoration was cancelled")]
+    RestorationCancelled,
 }
