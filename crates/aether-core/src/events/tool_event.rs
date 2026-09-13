@@ -76,20 +76,21 @@ pub enum TaskOutcomeState {
 
 impl TaskOutcome {
     pub fn context_message(&self) -> ChatMessage {
-        ChatMessage::User {
-            message_id: MessageId::task_result(&self.task_id),
-            content: self.content_blocks(),
-            timestamp: IsoString::now(),
-        }
+        let (status, body) = self.status_body();
+        task_result_message(&self.request, &self.task_id, status, body)
     }
 
     pub fn content_blocks(&self) -> Vec<ContentBlock> {
-        let (status, body) = match &self.state {
+        let (status, body) = self.status_body();
+        task_result_content(&self.request, &self.task_id, status, body)
+    }
+
+    fn status_body(&self) -> (&str, &str) {
+        match &self.state {
             TaskOutcomeState::Completed { result, .. } => ("completed", result.result.as_str()),
             TaskOutcomeState::Failed { error } => ("failed", error.error.as_str()),
             TaskOutcomeState::Cancelled => ("cancelled", TASK_CANCELLED_BODY),
-        };
-        task_result_content(&self.request, &self.task_id, status, body)
+        }
     }
 }
 
