@@ -155,7 +155,6 @@ impl AcpClientHandle {
             && restore.session_id == session_id
         {
             restore.abandoned = true;
-            restore.replay = None;
         }
         Ok(())
     }
@@ -210,7 +209,6 @@ impl AcpClientHandle {
                         }
                     }
                     drop(state);
-                    drop(completion);
                     Ok(())
                 });
                 Ok(())
@@ -263,7 +261,6 @@ impl Drop for RestoreCaller {
             && restore.generation == self.generation
         {
             restore.abandoned = true;
-            restore.replay = None;
         }
     }
 }
@@ -356,6 +353,10 @@ impl HandleDispatchFrom<acp::Agent> for ClientHandlers {
         cx: ConnectionTo<acp::Agent>,
     ) -> Result<Handled<Dispatch>, acp::Error> {
         let state = &self.0;
+        let replayable = |event| {
+            state.lock().unwrap().replayable(event);
+            Ok::<_, acp::Error>(())
+        };
         MatchDispatchFrom::new(message, &cx)
             .if_request(async |request: RequestPermissionRequest, responder| {
                 let state = state.lock().unwrap();
@@ -375,30 +376,15 @@ impl HandleDispatchFrom<acp::Agent> for ClientHandlers {
                 Ok(())
             })
             .await
-            .if_notification(async |params: UpdateSessionNotification| {
-                state.lock().unwrap().replayable(params.into());
-                Ok(())
-            })
+            .if_notification(async |params: UpdateSessionNotification| replayable(params.into()))
             .await
-            .if_notification(async |params: ContextCompactionParams| {
-                state.lock().unwrap().replayable(AcpEvent::ContextCompaction(params));
-                Ok(())
-            })
+            .if_notification(async |params: ContextCompactionParams| replayable(AcpEvent::ContextCompaction(params)))
             .await
-            .if_notification(async |params: ContextClearedParams| {
-                state.lock().unwrap().replayable(AcpEvent::ContextCleared(params));
-                Ok(())
-            })
+            .if_notification(async |params: ContextClearedParams| replayable(AcpEvent::ContextCleared(params)))
             .await
-            .if_notification(async |params: SubAgentProgressParams| {
-                state.lock().unwrap().replayable(AcpEvent::SubAgentProgress(params));
-                Ok(())
-            })
+            .if_notification(async |params: SubAgentProgressParams| replayable(AcpEvent::SubAgentProgress(params)))
             .await
-            .if_notification(async |params: McpNotification| {
-                state.lock().unwrap().replayable(AcpEvent::McpNotification(params));
-                Ok(())
-            })
+            .if_notification(async |params: McpNotification| replayable(AcpEvent::McpNotification(params)))
             .await
             .if_notification(async |params: AuthMethodsUpdatedParams| {
                 state.lock().unwrap().emit(AcpEvent::AuthMethodsUpdated(params));
