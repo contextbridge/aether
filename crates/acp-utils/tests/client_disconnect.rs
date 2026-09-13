@@ -3,7 +3,7 @@ use acp::schema::v2::{
     PromptRequest,
 };
 use acp_utils::client::{AcpClientError, AcpEvent, connect_acp_client};
-use acp_utils::testing::{FakeAgent, duplex_pair, initialize_request, initialize_response};
+use acp_utils::testing::{FakeAgent, duplex_pair, initialize_request};
 use agent_client_protocol::{self as acp, Agent};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::{LocalSet, spawn_local};

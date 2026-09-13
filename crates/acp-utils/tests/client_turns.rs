@@ -1,14 +1,9 @@
 use acp::schema::v2::{
-    CancelSessionNotification, CloseSessionRequest, ContentChunk, ListSessionsRequest, PermissionOption,
-    PermissionOptionKind, PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
-    ResumeSessionRequest, ResumeSessionResponse, SessionId, SessionUpdate, StopReason, UpdateSessionNotification,
+    CloseSessionRequest, ListSessionsRequest, PromptRequest, PromptResponse, ResumeSessionRequest,
+    ResumeSessionResponse, SessionId, UpdateSessionNotification,
 };
 use acp_utils::client::{AcpClient, AcpClientError, AcpEvent, connect_acp_client};
-use acp_utils::notifications::{
-    ContextClearedParams, ContextCompactionParams, McpNotification, McpServerStatus, McpServerStatusEntry,
-    SessionUsageParams, SubAgentEvent, SubAgentProgressParams,
-};
-use acp_utils::testing::{duplex_pair, idle_notification, initialize_request, running_notification};
+use acp_utils::testing::{duplex_pair, initialize_request, running_notification};
 use agent_client_protocol::{self as acp, Client, ConnectionTo, Responder};
 use tokio::sync::mpsc;
 use tokio::task::{LocalSet, spawn_local};
@@ -71,38 +66,21 @@ struct TurnTest {
     client: AcpClient,
     connection: ConnectionTo<Client>,
     prompts: mpsc::UnboundedReceiver<(PromptRequest, Responder<PromptResponse>)>,
-    cancellations: mpsc::UnboundedReceiver<CancelSessionNotification>,
     resumes: mpsc::UnboundedReceiver<(ResumeSessionRequest, Responder<ResumeSessionResponse>)>,
-    server: tokio::task::JoinHandle<Result<(), acp::Error>>,
 }
 
 impl TurnTest {
     async fn connect() -> Self {
         let (agent_transport, client_transport) = duplex_pair();
         let (agent, mut requests) = acp_utils::testing::FakeAgent::default().sessions(vec![]).capture();
-        let server = spawn_local(agent.agent().connect_to(agent_transport));
+        spawn_local(agent.agent().connect_to(agent_transport));
         let client = connect_acp_client(client_transport, initialize_request()).await.unwrap();
         Self {
             client,
             connection: requests.connection.recv().await.unwrap(),
             prompts: requests.prompt,
-            cancellations: requests.cancel,
             resumes: requests.resume,
-            server,
         }
-    }
-
-    async fn permission(&self, session: &str) -> RequestPermissionOutcome {
-        self.connection
-            .send_request(RequestPermissionRequest::new(
-                session.to_owned(),
-                "Continue?",
-                vec![PermissionOption::new("allow", "Allow", PermissionOptionKind::AllowOnce)],
-            ))
-            .block_task()
-            .await
-            .unwrap()
-            .outcome
     }
 
     async fn submit(&mut self, session: &str) -> PendingPrompt {
@@ -110,12 +88,6 @@ impl TurnTest {
         let request = PromptRequest::new(session.to_owned(), vec![]);
         let result = spawn_local(async move { handle.prompt(request).await });
         PendingPrompt { responder: self.prompts.recv().await.unwrap().1, result }
-    }
-
-    async fn cancel(&mut self, session: &str) {
-        let session_id = SessionId::new(session.to_owned());
-        self.client.handle.cancel(CancelSessionNotification::new(session_id.clone())).unwrap();
-        assert_eq!(self.cancellations.recv().await.unwrap().session_id, session_id);
     }
 
     fn resume(
@@ -138,31 +110,7 @@ impl TurnTest {
         );
     }
 
-    async fn assert_clean_retry(&mut self) {
-        let retry = self.resume("one", true);
-        let (_, responder) = self.resumes.recv().await.unwrap();
-        let idle = idle_notification("one", None);
-        self.send(idle.clone());
-        responder.respond(ResumeSessionResponse::new()).unwrap();
-        retry.await.unwrap().unwrap();
-        let Some(AcpEvent::SessionResumed(snapshot)) = self.client.event_rx.recv().await else {
-            panic!("retry must commit a fresh snapshot");
-        };
-        assert_eq!(snapshot.session_id, idle.session_id);
-        assert!(matches!(snapshot.replay.as_slice(), [AcpEvent::SessionUpdate(update)] if **update == idle));
-    }
-
     fn send(&self, notification: UpdateSessionNotification) {
         self.connection.send_notification(notification).unwrap();
-    }
-
-    async fn update(&mut self) {
-        assert!(matches!(self.client.event_rx.recv().await, Some(AcpEvent::SessionUpdate(_))));
-    }
-
-    async fn completed(&mut self, session: &str, reason: StopReason) {
-        assert!(
-            matches!(self.client.event_rx.recv().await, Some(AcpEvent::SessionUpdate(notification)) if notification.session_id == SessionId::new(session.to_owned()) && notification.update == idle_notification(session.to_owned(), Some(reason)).update)
-        );
     }
 }

@@ -6,10 +6,9 @@ use agent_client_protocol::Responder;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v2::{
     AgentCapabilities, AuthMethodId, CancelSessionNotification, ContentBlock, Implementation, InitializeRequest,
-    LoginAuthRequest, LoginAuthResponse, NewSessionResponse, PromptCapabilities, PromptImageCapabilities,
-    PromptRequest, PromptResponse, ReplayFrom, ResumeSessionRequest, ResumeSessionResponse, SessionCapabilities,
-    SessionConfigId, SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption, SessionId,
-    SetSessionConfigOptionRequest, TextContent,
+    LoginAuthRequest, NewSessionResponse, PromptCapabilities, PromptImageCapabilities, PromptRequest, PromptResponse,
+    ReplayFrom, ResumeSessionRequest, ResumeSessionResponse, SessionCapabilities, SessionConfigId, SessionConfigOption,
+    SessionConfigOptionValue, SessionConfigSelectOption, SessionId, SetSessionConfigOptionRequest, TextContent,
 };
 use agent_client_protocol::schema::v2::{
     ContentChunk, SessionUpdate, StopReason, UpdateSessionNotification, UserMessage,
@@ -181,7 +180,6 @@ struct Peer {
     resume: mpsc::UnboundedReceiver<(ResumeSessionRequest, Responder<ResumeSessionResponse>)>,
     prompt: mpsc::UnboundedReceiver<(PromptRequest, Responder<PromptResponse>)>,
     cancel: mpsc::UnboundedReceiver<CancelSessionNotification>,
-    pending_login: mpsc::UnboundedReceiver<Responder<LoginAuthResponse>>,
 }
 
 async fn connect(capabilities: Option<SessionCapabilities>) -> (Session, Peer) {
@@ -218,7 +216,6 @@ async fn connect_with_pending_login(capabilities: Option<SessionCapabilities>, h
             resume: requests.resume,
             prompt: requests.prompt,
             cancel: requests.cancel,
-            pending_login: requests.pending_login,
         },
     )
 }
