@@ -362,7 +362,9 @@ impl HandleDispatchFrom<acp::Agent> for ClientHandlers {
                 let outcome = if state.session_id.as_ref() != Some(&request.session_id) || state.cancelled {
                     RequestPermissionOutcome::Cancelled
                 } else {
-                    RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(auto_approve_option(&request)))
+                    auto_approve_option(&request).map_or(RequestPermissionOutcome::Cancelled, |option| {
+                        RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option))
+                    })
                 };
                 let _ = responder.respond(RequestPermissionResponse::new(outcome));
                 Ok(())
@@ -415,10 +417,10 @@ async fn await_response<T>(receiver: oneshot::Receiver<Result<T, AcpClientError>
     receiver.await.map_err(|_| AcpClientError::AgentCrashed("ACP task ended before responding".to_string()))?
 }
 
-fn auto_approve_option(req: &RequestPermissionRequest) -> PermissionOptionId {
-    debug_assert!(!req.options.is_empty(), "ACP guarantees at least one permission option");
+fn auto_approve_option(req: &RequestPermissionRequest) -> Option<PermissionOptionId> {
     req.options
         .iter()
         .find(|option| matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways))
-        .map_or_else(|| req.options[0].option_id.clone(), |option| option.option_id.clone())
+        .or_else(|| req.options.first())
+        .map(|option| option.option_id.clone())
 }
