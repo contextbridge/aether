@@ -2593,9 +2593,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-core"
-version = "0.1.10"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33332ea601531ef14bce28ca7df50f90bb59080131c88ced469815ffb87c4766"
+checksum = "abae99e42673591c5c71a5ed42bf40182db16ed59e9937c479abe5823d12881a"
 dependencies = [
  "clankerdiff-fingerprint",
  "clankerdiff-theme",
@@ -2607,9 +2607,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-fingerprint"
-version = "0.1.10"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c41db7fb89a744f70057af99f6ecbc26f2d4ddfe7f196e5860b485cee2c74997"
+checksum = "834d807e3f84c50dc11223092a696ac299cc7c7b6329ed4602761179fb8176de"
 dependencies = [
  "blake3",
  "serde",
@@ -2618,9 +2618,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-git"
-version = "0.1.10"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "acab0c70cdeb628e2e593117dc267cc02f020bd05a01630c223c4a086d21d9e8"
+checksum = "e04fa26831d4485ca5d1d75dddd4850e7176cecb655bfabbd41dcfbba4cdb39a"
 dependencies = [
  "clankerdiff-core",
  "thiserror 2.0.20",
@@ -2629,9 +2629,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-markdown"
-version = "0.1.10"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89a2a77a1cb2d7c5c6756df129e338f56124bb627204745c87ea2e196dbd23d7"
+checksum = "08c0c6c7884b83d87a1f5d71bc464d793405bc88720d720229c10c8be380cd4e"
 dependencies = [
  "clankerdiff-core",
  "clankerdiff-fingerprint",
@@ -2642,9 +2642,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-ratatui"
-version = "0.1.10"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "263db89236a2751d404a346a843dd695282e2a3f62997af49eb407f2f94b1e51"
+checksum = "50d64c2bda4a7fff1336e9410b6c158997cff9070b5a9c6978b20636ca61298b"
 dependencies = [
  "bitflags 2.13.2",
  "clankerdiff-core",
@@ -2662,9 +2662,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-syntax"
-version = "0.1.10"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d39253cf0faed9616cda9c3240c782701aac0f4be962d6475eff584f71dd794"
+checksum = "ca905de8a9967ea4a1802d2e6347eb98894f5a9726558fc3c847132b255ae932"
 dependencies = [
  "arborium-asm",
  "arborium-bash",
@@ -2739,9 +2739,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-theme"
-version = "0.1.10"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ab2cb351fae1db784a38a4565725d9546c79cd79e99e6bfca92e19d3d1f9e42"
+checksum = "c338c69cfc2cc5e36de41ee3f07eb24b7d5aca1ac9b0aa9e735b6668ba363c07"
 dependencies = [
  "arborium-theme",
  "clankerdiff-fingerprint",
@@ -2752,9 +2752,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-watch"
-version = "0.1.10"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5906d1d7bb3431090d1d96339037e47ba32c3cbd702419b56e1c71e41062cab8"
+checksum = "3a3c49702456aadc84d979728ecb99a20a016081a0a561b8e536fb328062b9ac"
 dependencies = [
  "clankerdiff-core",
  "clankerdiff-git",

@@ -51,7 +51,7 @@ async fn workspace_move_to_new_sibling_clones_changes_and_resets_source() {
         let sessions =
             harness.client_cx.send_request(ListSessionsRequest::new()).block_task().await.expect("list sessions");
         let session = sessions.sessions.iter().find(|s| s.session_id.0.as_ref() == "s1").expect("session exists");
-        assert_eq!(session.cwd, response.new_cwd);
+        assert_eq!(session.cwd.0, response.new_cwd);
     })
     .await;
 }
