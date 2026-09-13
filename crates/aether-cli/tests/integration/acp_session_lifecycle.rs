@@ -3,8 +3,8 @@ use aether_core::core::agent;
 use agent_client_protocol::Error;
 use agent_client_protocol::schema::v2::{
     AbsolutePath, CloseSessionRequest, CloseSessionResponse, ContentBlock, ListSessionsRequest, ListSessionsResponse,
-    PromptRequest, ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate, StopReason,
-    TextContent,
+    NewSessionRequest, PromptRequest, PromptResponse, ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId,
+    SessionUpdate, StopReason, TextContent,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -215,6 +215,44 @@ async fn resume_and_close_reject_unknown_sessions() {
         assert!(close.is_err());
     })
     .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn disconnect_during_startup_leaves_no_detached_runtime() {
+    with_harness(|mut harness| async move {
+        harness.append_stored_session("active", "2026-05-01T00:00:00Z");
+        let mut pending = harness.pause_next_runtime();
+        let resume =
+            harness.client_cx.send_request(ResumeSessionRequest::new("active", AbsolutePath::new("/tmp"))).block_task();
+        pending.wait_until_started().await;
+        {
+            let disconnect = harness.disconnect();
+            tokio::pin!(disconnect);
+            assert!(futures::poll!(&mut disconnect).is_pending());
+            assert!(resume.await.is_err());
+            pending.finish(true);
+            disconnect.await;
+        }
+        assert_eq!(harness.live_runtime_count(), 0);
+    })
+    .await;
+}
+
+async fn resume(harness: &AcpTestHarness, id: &str) {
+    harness
+        .client_cx
+        .send_request(ResumeSessionRequest::new(id, AbsolutePath::new("/tmp")))
+        .block_task()
+        .await
+        .unwrap();
+}
+
+async fn prompt(harness: &AcpTestHarness, id: &str) -> Result<PromptResponse, Error> {
+    harness
+        .client_cx
+        .send_request(PromptRequest::new(id, vec![ContentBlock::Text(TextContent::new("hello"))]))
+        .block_task()
+        .await
 }
 
 async fn next_history(harness: &mut AcpTestHarness) -> SessionUpdate {

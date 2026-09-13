@@ -1,3 +1,4 @@
+use crate::acp::session::actor::SessionIo;
 use acp_utils::AETHER_PLAN_ENTRY_CANCELLED_STATUS;
 use acp_utils::notifications::{
     ContextClearedParams, ContextCompactionParams, SessionUsageParams, SubAgentEvent, SubAgentProgressParams,
@@ -9,94 +10,47 @@ use aether_core::events::{
 };
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::v2::{
-    self as acp, Content, ContentBlock, ContentChunk, MessageId, PlanEntry, PlanEntryPriority, PlanEntryStatus,
-    SessionId, SessionUpdate, TextContent, ToolCallContent, ToolCallStatus, ToolCallUpdate, UpdateSessionNotification,
-    UsageUpdate,
+    self as acp, ContentBlock, ContentChunk, MessageId, PlanEntry, PlanEntryPriority, PlanEntryStatus, SessionUpdate,
+    ToolCallContent, ToolCallStatus, ToolCallUpdate, UsageUpdate,
 };
-use agent_client_protocol::{JsonRpcMessage, UntypedMessage};
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
 use mcp_utils::display_meta::{PlanMetaStatus, ToolResultMeta};
 
 /// Converts Aether `AgentEvent` to ACP `SessionUpdate`
-pub fn map_agent_event_to_session_notification(
-    session_id: SessionId,
-    msg: &AgentEvent,
-) -> Option<UpdateSessionNotification> {
-    map_agent_event_to_notification(session_id, msg, NotificationMode::Live)
+pub fn map_agent_event_to_session_notification(msg: &AgentEvent) -> Option<SessionUpdate> {
+    map_agent_event_to_notification(msg, NotificationMode::Live)
 }
 
-/// Typed union of agent-side extension notifications that the actor forwards
-/// to the client. Each variant serializes to its own `_aether/*` wire method
-/// and is sent via [`ConnectionTo<Client>::send_notification`].
-pub enum AgentExtNotification {
-    ContextCompaction(ContextCompactionParams),
-    ContextCleared(ContextClearedParams),
-    SubAgentProgress(Box<SubAgentProgressParams>),
-    SessionUsage(Box<SessionUsageParams>),
-}
-
-impl AgentExtNotification {
-    pub fn method(&self) -> &str {
-        match self {
-            Self::ContextCompaction(params) => params.method(),
-            Self::ContextCleared(params) => params.method(),
-            Self::SubAgentProgress(params) => params.method(),
-            Self::SessionUsage(params) => params.method(),
-        }
-    }
-
-    pub fn to_untyped(&self) -> Result<UntypedMessage, agent_client_protocol::Error> {
-        match self {
-            Self::ContextCompaction(params) => params.to_untyped_message(),
-            Self::ContextCleared(params) => params.to_untyped_message(),
-            Self::SubAgentProgress(params) => params.to_untyped_message(),
-            Self::SessionUsage(params) => params.to_untyped_message(),
-        }
-    }
-}
-
-pub fn try_into_agent_notification(msg: &AgentEvent) -> Option<AgentExtNotification> {
+pub(crate) fn forward_agent_notification(io: &SessionIo, msg: &AgentEvent) {
     match msg {
         AgentEvent::Context(ContextEvent::CompactionStarted { .. }) => {
-            Some(AgentExtNotification::ContextCompaction(ContextCompactionParams { active: true }))
+            io.send(ContextCompactionParams { active: true });
         }
         AgentEvent::Context(ContextEvent::CompactionEnded { .. }) => {
-            Some(AgentExtNotification::ContextCompaction(ContextCompactionParams { active: false }))
+            io.send(ContextCompactionParams { active: false });
         }
 
-        AgentEvent::Tool(ToolEvent::SubAgentProgress { request, payload }) => {
-            Some(AgentExtNotification::SubAgentProgress(Box::new(SubAgentProgressParams {
-                parent_tool_id: request.id.clone(),
-                task_id: payload.task_id.clone(),
-                agent_name: payload.agent_name.clone(),
-                event: to_sub_agent_event(&payload.event),
-            })))
-        }
-        AgentEvent::Context(ContextEvent::Cleared) => {
-            Some(AgentExtNotification::ContextCleared(ContextClearedParams::default()))
-        }
-        AgentEvent::SessionUsage(usage) => {
-            Some(AgentExtNotification::SessionUsage(Box::new(SessionUsageParams { usage: usage.clone() })))
-        }
-        _ => None,
+        AgentEvent::Tool(ToolEvent::SubAgentProgress { request, payload }) => io.send(SubAgentProgressParams {
+            parent_tool_id: request.id.clone(),
+            task_id: payload.task_id.clone(),
+            agent_name: payload.agent_name.clone(),
+            event: to_sub_agent_event(&payload.event),
+        }),
+        AgentEvent::Context(ContextEvent::Cleared) => io.send(ContextClearedParams::default()),
+        AgentEvent::SessionUsage(usage) => io.send(SessionUsageParams { usage: usage.clone() }),
+        _ => {}
     }
 }
 
 /// Replace the session's itemized plan with the tool result's plan snapshot.
-pub fn try_extract_plan_notification(
-    session_id: SessionId,
-    result_meta: Option<&ToolResultMeta>,
-) -> Option<UpdateSessionNotification> {
+pub fn try_extract_plan_notification(result_meta: Option<&ToolResultMeta>) -> Option<SessionUpdate> {
     let plan_meta = result_meta?.plan.as_ref()?;
     let entries = plan_meta
         .entries
         .iter()
         .map(|e| PlanEntry::new(e.content.clone(), PlanEntryPriority::Medium, plan_status_to_acp(e.status)))
         .collect();
-    Some(UpdateSessionNotification::new(
-        session_id,
-        SessionUpdate::PlanUpdate(acp::PlanUpdate::new(acp::PlanUpdateContent::items("aether-plan", entries))),
-    ))
+    Some(SessionUpdate::PlanUpdate(acp::PlanUpdate::new(acp::PlanUpdateContent::items("aether-plan", entries))))
 }
 
 #[derive(Clone, Copy)]
@@ -105,79 +59,60 @@ pub(crate) enum NotificationMode {
     Replay,
 }
 
-pub(crate) fn map_agent_event_to_notification(
-    session_id: SessionId,
-    msg: &AgentEvent,
-    mode: NotificationMode,
-) -> Option<UpdateSessionNotification> {
+pub(crate) fn map_agent_event_to_notification(msg: &AgentEvent, mode: NotificationMode) -> Option<SessionUpdate> {
     match msg {
-        AgentEvent::Context(ContextEvent::UsageUpdated { usage }) => {
-            map_context_usage_to_notification(session_id, usage)
-        }
+        AgentEvent::Context(ContextEvent::UsageUpdated { usage }) => map_context_usage_to_notification(usage),
 
         AgentEvent::Message(MessageEvent::Text { message_id, chunk, is_complete }) => {
-            map_message_to_notification(session_id, MessageKind::Text, message_id, chunk, *is_complete, mode)
+            map_message_to_notification(MessageKind::Text, message_id, chunk, *is_complete, mode)
         }
 
         AgentEvent::Message(MessageEvent::Thought { message_id, chunk, is_complete }) => {
-            map_message_to_notification(session_id, MessageKind::Thought, message_id, chunk, *is_complete, mode)
+            map_message_to_notification(MessageKind::Thought, message_id, chunk, *is_complete, mode)
         }
 
-        AgentEvent::Tool(ToolEvent::Call { request, .. }) => Some(map_tool_call_to_notification(session_id, request)),
+        AgentEvent::Tool(ToolEvent::Call { request, .. }) => Some(map_tool_call_to_notification(request)),
 
         AgentEvent::Tool(ToolEvent::CallUpdate { tool_call_id, chunk, .. }) => {
-            Some(map_tool_call_update_to_notification(session_id, tool_call_id, chunk))
+            Some(map_tool_call_update_to_notification(tool_call_id, chunk))
         }
 
         AgentEvent::Tool(
             ToolEvent::Result { result, result_meta, .. } | ToolEvent::TaskCompleted { result, result_meta, .. },
-        ) => Some(map_tool_result_to_notification(session_id, result, result_meta.as_ref())),
+        ) => Some(map_tool_result_to_notification(result, result_meta.as_ref())),
 
-        AgentEvent::Tool(ToolEvent::Error { error, .. }) => Some(map_tool_error_to_notification(session_id, error)),
+        AgentEvent::Tool(ToolEvent::Error { error, .. } | ToolEvent::TaskFailed { error, .. }) => {
+            Some(map_tool_error_to_notification(error))
+        }
 
         AgentEvent::Tool(ToolEvent::TaskCreated { request, status_message, .. }) => {
-            Some(UpdateSessionNotification::new(
-                session_id,
-                SessionUpdate::ToolCallUpdate(
-                    ToolCallUpdate::new(request.id.clone())
-                        .status(ToolCallStatus::Pending)
-                        .title(status_message.as_deref().unwrap_or("Background task")),
-                ),
+            Some(SessionUpdate::ToolCallUpdate(
+                ToolCallUpdate::new(request.id.clone())
+                    .status(ToolCallStatus::Pending)
+                    .title(status_message.as_deref().unwrap_or("Background task")),
             ))
         }
 
-        AgentEvent::Tool(ToolEvent::TaskFailed { error, .. }) => {
-            Some(map_tool_error_to_notification(session_id, error))
-        }
-
-        AgentEvent::Tool(ToolEvent::TaskCancelled { request, .. }) => Some(UpdateSessionNotification::new(
-            session_id,
-            SessionUpdate::ToolCallUpdate(
-                ToolCallUpdate::new(request.id.clone()).status(ToolCallStatus::Failed).content(vec![
-                    ToolCallContent::Content(Box::new(Content::new(ContentBlock::Text(TextContent::new(
-                        "The background task was cancelled and will not produce a result.",
-                    ))))),
-                ]),
-            ),
+        AgentEvent::Tool(ToolEvent::TaskCancelled { request, .. }) => Some(SessionUpdate::ToolCallUpdate(
+            ToolCallUpdate::new(request.id.clone())
+                .status(ToolCallStatus::Failed)
+                .content(vec!["The background task was cancelled and will not produce a result.".into()]),
         )),
 
         AgentEvent::Tool(ToolEvent::TaskStatus { request, status, status_message, .. }) => {
-            Some(UpdateSessionNotification::new(
-                session_id,
-                SessionUpdate::ToolCallUpdate(
-                    ToolCallUpdate::new(request.id.clone())
-                        .status(task_status_to_acp(status))
-                        .title(status_message.as_deref().unwrap_or(status)),
-                ),
+            Some(SessionUpdate::ToolCallUpdate(
+                ToolCallUpdate::new(request.id.clone())
+                    .status(task_status_to_acp(status))
+                    .title(status_message.as_deref().unwrap_or(status)),
             ))
         }
 
         AgentEvent::Tool(ToolEvent::Progress { request, progress, total, message }) => {
-            Some(map_tool_progress_to_notification(session_id, request, *progress, *total, message.as_deref()))
+            Some(map_tool_progress_to_notification(request, *progress, *total, message.as_deref()))
         }
 
         AgentEvent::Tool(ToolEvent::DisplayUpdate { request, meta }) => {
-            Some(map_display_update_to_notification(session_id, request, meta))
+            Some(map_display_update_to_notification(request, meta))
         }
 
         AgentEvent::Context(
@@ -237,17 +172,16 @@ enum MessageKind {
 }
 
 fn map_message_to_notification(
-    session_id: SessionId,
     kind: MessageKind,
     message_id: &llm::MessageId,
     chunk: &str,
     is_complete: bool,
     mode: NotificationMode,
-) -> Option<UpdateSessionNotification> {
+) -> Option<SessionUpdate> {
     if matches!(mode, NotificationMode::Replay) && !is_complete {
         return None;
     }
-    let content = ContentBlock::Text(TextContent::new(chunk));
+    let content = ContentBlock::from(chunk);
     let update = match (kind, is_complete) {
         (MessageKind::Text, false) => {
             SessionUpdate::AgentMessageChunk(ContentChunk::new(content, MessageId::new(message_id.as_str())))
@@ -262,53 +196,40 @@ fn map_message_to_notification(
             SessionUpdate::AgentThought(acp::AgentThought::new(thought_message_id(message_id)).content(vec![content]))
         }
     };
-    Some(UpdateSessionNotification::new(session_id, update))
+    Some(update)
 }
 
 fn thought_message_id(message_id: &llm::MessageId) -> MessageId {
     MessageId::new(format!("{message_id}:thought"))
 }
 
-fn map_tool_call_to_notification(session_id: SessionId, request: &ToolCallRequest) -> UpdateSessionNotification {
+fn map_tool_call_to_notification(request: &ToolCallRequest) -> SessionUpdate {
     let raw_input = serde_json::from_str(&request.arguments).map_or(MaybeUndefined::Undefined, json_patch_value);
-    UpdateSessionNotification::new(
-        session_id,
-        SessionUpdate::ToolCallUpdate(
-            ToolCallUpdate::new(request.id.clone())
-                .title(humanize_tool_name(&request.name))
-                .status(acp::ToolCallStatus::InProgress)
-                .raw_input(raw_input)
-                .meta(aether_tool_name_meta(&request.name)),
-        ),
+    SessionUpdate::ToolCallUpdate(
+        ToolCallUpdate::new(request.id.clone())
+            .title(humanize_tool_name(&request.name))
+            .status(acp::ToolCallStatus::InProgress)
+            .raw_input(raw_input)
+            .meta(aether_tool_name_meta(&request.name)),
     )
 }
 
-fn map_tool_call_update_to_notification(
-    session_id: SessionId,
-    tool_call_id: &str,
-    chunk: &str,
-) -> UpdateSessionNotification {
+fn map_tool_call_update_to_notification(tool_call_id: &str, chunk: &str) -> SessionUpdate {
     let update = ToolCallUpdate::new(tool_call_id.to_string())
         .status(ToolCallStatus::InProgress)
         .raw_input(json_patch_value(parse_tool_call_chunk(chunk)));
 
-    UpdateSessionNotification::new(session_id, SessionUpdate::ToolCallUpdate(update))
+    SessionUpdate::ToolCallUpdate(update)
 }
 
-fn map_tool_result_to_notification(
-    session_id: SessionId,
-    result: &ToolCallResult,
-    result_meta: Option<&ToolResultMeta>,
-) -> UpdateSessionNotification {
-    let mut content = vec![ToolCallContent::Content(Box::new(Content::new(ContentBlock::Text(TextContent::new(
-        result.result.clone(),
-    )))))];
+fn map_tool_result_to_notification(result: &ToolCallResult, result_meta: Option<&ToolResultMeta>) -> SessionUpdate {
+    let mut content = vec![ToolCallContent::from(result.result.clone())];
 
     if let Some(rm) = result_meta
         && let Some(fd) = &rm.file_diff
         && let Some(diff) = super::diff::map_file_diff(fd)
     {
-        content.push(ToolCallContent::Diff(diff));
+        content.push(diff.into());
     }
 
     let mut update = ToolCallUpdate::new(result.id.clone()).status(ToolCallStatus::Completed).content(content);
@@ -317,66 +238,45 @@ fn map_tool_result_to_notification(
         update = update.title(rm.display.title.clone()).meta(tool_display_meta(&result.name, &rm.display.value));
     }
 
-    UpdateSessionNotification::new(session_id, SessionUpdate::ToolCallUpdate(update))
+    SessionUpdate::ToolCallUpdate(update)
 }
 
-fn map_tool_error_to_notification(session_id: SessionId, error: &ToolCallError) -> UpdateSessionNotification {
-    UpdateSessionNotification::new(
-        session_id,
-        SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(error.id.clone()).status(ToolCallStatus::Failed).content(
-            vec![ToolCallContent::Content(Box::new(Content::new(ContentBlock::Text(TextContent::new(
-                error.error.clone(),
-            )))))],
-        )),
+fn map_tool_error_to_notification(error: &ToolCallError) -> SessionUpdate {
+    SessionUpdate::ToolCallUpdate(
+        ToolCallUpdate::new(error.id.clone()).status(ToolCallStatus::Failed).content(vec![error.error.clone().into()]),
     )
 }
 
-fn map_context_usage_to_notification(
-    session_id: SessionId,
-    usage: &llm::ContextUsage,
-) -> Option<UpdateSessionNotification> {
+fn map_context_usage_to_notification(usage: &llm::ContextUsage) -> Option<SessionUpdate> {
     usage.context_limit.map(|context_limit| {
-        UpdateSessionNotification::new(
-            session_id,
-            SessionUpdate::UsageUpdate(UsageUpdate::new(usage.input_tokens.into(), context_limit.into())),
-        )
+        SessionUpdate::UsageUpdate(UsageUpdate::new(usage.input_tokens.into(), context_limit.into()))
     })
 }
 
 fn map_tool_progress_to_notification(
-    session_id: SessionId,
     request: &ToolCallRequest,
     progress: f64,
     total: Option<f64>,
     message: Option<&str>,
-) -> UpdateSessionNotification {
+) -> SessionUpdate {
     tracing::debug!("Tool progress: {message:?}");
 
     let total_str = total.map_or_else(|| "?".to_string(), |t| t.to_string());
     let progress_text = message
         .map_or_else(|| format!("Progress: {progress}/{total_str}"), |msg| format!("{msg} ({progress}/{total_str})"));
 
-    UpdateSessionNotification::new(
-        session_id,
-        SessionUpdate::ToolCallUpdate(
-            ToolCallUpdate::new(request.id.clone()).status(ToolCallStatus::InProgress).content(vec![
-                ToolCallContent::Content(Box::new(Content::new(ContentBlock::Text(TextContent::new(progress_text))))),
-            ]),
-        ),
+    SessionUpdate::ToolCallUpdate(
+        ToolCallUpdate::new(request.id.clone()).status(ToolCallStatus::InProgress).content(vec![progress_text.into()]),
     )
 }
 
-fn map_display_update_to_notification(
-    session_id: SessionId,
-    request: &ToolCallRequest,
-    meta: &ToolResultMeta,
-) -> UpdateSessionNotification {
+fn map_display_update_to_notification(request: &ToolCallRequest, meta: &ToolResultMeta) -> SessionUpdate {
     let update = ToolCallUpdate::new(request.id.clone())
         .status(ToolCallStatus::InProgress)
         .title(meta.display.title.clone())
         .meta(tool_display_meta(&request.name, &meta.display.value));
 
-    UpdateSessionNotification::new(session_id, SessionUpdate::ToolCallUpdate(update))
+    SessionUpdate::ToolCallUpdate(update)
 }
 
 fn tool_display_meta(name: &str, value: &str) -> serde_json::Map<String, serde_json::Value> {
@@ -420,18 +320,37 @@ mod tests {
     use super::*;
     use acp_utils::notifications::SubAgentEvent;
     use aether_core::events::{CompactionOutcome, SubAgentProgressPayload};
+    use agent_client_protocol::Client;
+    use agent_client_protocol::schema::v2::TextContent;
     use llm::{ContextUsage, ToolCallRequest};
     use mcp_utils::display_meta::{PlanMeta, PlanMetaEntry, ToolDisplayMeta};
     use serde_json::json;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    fn forwarded<N: agent_client_protocol::JsonRpcNotification + Send + 'static>(event: &AgentEvent) -> N {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(
+            tokio::task::LocalSet::new().run_until(async {
+                let (tx, mut rx) = unbounded_channel();
+                let client = Client.v2().on_receive_notification(
+                    async move |notification: N, _cx| {
+                        tx.send(notification).ok();
+                        Ok(())
+                    },
+                    agent_client_protocol::on_receive_notification!(),
+                );
+                let pair = acp_utils::testing::connect_pair(agent_client_protocol::Agent.v2(), client).await;
+                forward_agent_notification(&SessionIo::new(pair.agent, "session".into()), event);
+                rx.recv().await.unwrap()
+            }),
+        )
+    }
 
     fn sub_agent_notification(event: AgentEvent) -> SubAgentEvent {
         let event = AgentEvent::Tool(ToolEvent::SubAgentProgress {
             request: ToolCallRequest { id: "parent".into(), name: "spawn".into(), arguments: "{}".into() },
             payload: Box::new(SubAgentProgressPayload { task_id: "task".into(), agent_name: "worker".into(), event }),
         });
-        let AgentExtNotification::SubAgentProgress(params) = try_into_agent_notification(&event).unwrap() else {
-            panic!("expected subagent progress")
-        };
+        let params: SubAgentProgressParams = forwarded(&event);
         params.event
     }
 
@@ -453,9 +372,8 @@ mod tests {
                 status: status.into(),
                 status_message: None,
             });
-            let notification = map_agent_event_to_session_notification(SessionId::new("session"), &event)
-                .expect("task status notification");
-            let SessionUpdate::ToolCallUpdate(update) = notification.update else {
+            let notification = map_agent_event_to_session_notification(&event).expect("task status notification");
+            let SessionUpdate::ToolCallUpdate(update) = notification else {
                 panic!("expected tool call update");
             };
             assert_eq!(update.status, MaybeUndefined::Value(expected));
@@ -469,9 +387,8 @@ mod tests {
             task_id: "task-1".into(),
         });
 
-        let notification = map_agent_event_to_session_notification(SessionId::new("session"), &event)
-            .expect("task cancellation notification");
-        let SessionUpdate::ToolCallUpdate(update) = notification.update else {
+        let notification = map_agent_event_to_session_notification(&event).expect("task cancellation notification");
+        let SessionUpdate::ToolCallUpdate(update) = notification else {
             panic!("expected tool call update");
         };
 
@@ -488,9 +405,8 @@ mod tests {
             },
         });
 
-        let notification = map_agent_event_to_session_notification(SessionId::new("session"), &event)
-            .expect("context usage notification");
-        let SessionUpdate::UsageUpdate(update) = notification.update else {
+        let notification = map_agent_event_to_session_notification(&event).expect("context usage notification");
+        let SessionUpdate::UsageUpdate(update) = notification else {
             panic!("expected usage update");
         };
 
@@ -499,36 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn extension_notifications_report_and_serialize_their_wire_methods() {
-        let cases = [
-            (
-                AgentExtNotification::ContextCompaction(ContextCompactionParams { active: true }),
-                "_aether/context_compaction",
-            ),
-            (AgentExtNotification::ContextCleared(ContextClearedParams::default()), "_aether/context_cleared"),
-            (
-                AgentExtNotification::SubAgentProgress(Box::new(SubAgentProgressParams {
-                    parent_tool_id: "parent".into(),
-                    task_id: "task".into(),
-                    agent_name: "agent".into(),
-                    event: SubAgentEvent::Other,
-                })),
-                "_aether/sub_agent_progress",
-            ),
-        ];
-
-        for (notification, expected_method) in cases {
-            assert_eq!(notification.method(), expected_method);
-            let wire = serde_json::to_value(notification.to_untyped().expect("extension serializes"))
-                .expect("untyped message serializes");
-            assert_eq!(wire["method"], expected_method);
-        }
-    }
-
-    #[test]
-    fn test_sub_agent_progress_emits_ext_notification() -> Result<(), String> {
-        let session_id = acp::SessionId::new("test-session");
-
+    fn test_sub_agent_progress_emits_ext_notification() {
         let payload = SubAgentProgressPayload {
             task_id: "task_1".to_string(),
             agent_name: "sub-agent".to_string(),
@@ -548,22 +435,17 @@ mod tests {
             payload: Box::new(payload),
         });
 
-        assert!(map_agent_event_to_session_notification(session_id.clone(), &tool_progress).is_none());
+        assert!(map_agent_event_to_session_notification(&tool_progress).is_none());
 
-        let agent_notif = try_into_agent_notification(&tool_progress).ok_or("agent notification")?;
-        let AgentExtNotification::SubAgentProgress(params) = agent_notif else {
-            return Err("expected SubAgentProgress".to_string());
-        };
+        let params: SubAgentProgressParams = forwarded(&tool_progress);
         assert_eq!(params.parent_tool_id, "call_123");
         assert_eq!(params.task_id, "task_1");
         assert_eq!(params.agent_name, "sub-agent");
         assert!(matches!(params.event, SubAgentEvent::Other));
-        Ok(())
     }
 
     #[test]
     fn test_tool_call_maps_to_tool_call_notification() -> Result<(), String> {
-        let session_id = acp::SessionId::new("test-session");
         let message = AgentEvent::Tool(ToolEvent::Call {
             request: ToolCallRequest {
                 id: "call_1".to_string(),
@@ -572,9 +454,9 @@ mod tests {
             },
         });
 
-        let notification = map_agent_event_to_session_notification(session_id, &message).ok_or("notification")?;
+        let notification = map_agent_event_to_session_notification(&message).ok_or("notification")?;
 
-        let tool_call = match notification.update {
+        let tool_call = match notification {
             acp::SessionUpdate::ToolCallUpdate(tool_call) => tool_call,
             other => return Err(format!("Expected ToolCall, got {other:?}")),
         };
@@ -586,15 +468,14 @@ mod tests {
 
     #[test]
     fn test_tool_call_update_maps_to_tool_call_update_notification() -> Result<(), String> {
-        let session_id = acp::SessionId::new("test-session");
         let message = AgentEvent::Tool(ToolEvent::CallUpdate {
             tool_call_id: "call_1".to_string(),
             chunk: r#"{"filePath":"Cargo.toml"}"#.to_string(),
         });
 
-        let notification = map_agent_event_to_session_notification(session_id, &message).ok_or("notification")?;
+        let notification = map_agent_event_to_session_notification(&message).ok_or("notification")?;
 
-        let update = match notification.update {
+        let update = match notification {
             acp::SessionUpdate::ToolCallUpdate(update) => update,
             other => return Err(format!("Expected ToolCallUpdate, got {other:?}")),
         };
@@ -606,17 +487,16 @@ mod tests {
 
     #[test]
     fn test_tool_call_update_has_same_live_and_replay_mapping() -> Result<(), String> {
-        let session_id = acp::SessionId::new("test-session");
         let message = AgentEvent::Tool(ToolEvent::CallUpdate {
             tool_call_id: "call_1".to_string(),
             chunk: r#"{"filePath":"Cargo.toml"}"#.to_string(),
         });
 
-        let live = map_agent_event_to_session_notification(session_id.clone(), &message).ok_or("live notification")?;
-        let replay = map_agent_event_to_notification(session_id, &message, NotificationMode::Replay)
-            .ok_or("replay notification")?;
+        let live = map_agent_event_to_session_notification(&message).ok_or("live notification")?;
+        let replay =
+            map_agent_event_to_notification(&message, NotificationMode::Replay).ok_or("replay notification")?;
 
-        let (live_update, replay_update) = match (live.update, replay.update) {
+        let (live_update, replay_update) = match (live, replay) {
             (acp::SessionUpdate::ToolCallUpdate(live), acp::SessionUpdate::ToolCallUpdate(replay)) => (live, replay),
             other => return Err(format!("Expected ToolCallUpdate pair, got {other:?}")),
         };
@@ -627,12 +507,9 @@ mod tests {
     }
 
     #[test]
-    fn test_compaction_lifecycle_maps_to_agent_notifications() -> Result<(), String> {
+    fn test_compaction_lifecycle_maps_to_agent_notifications() {
         let started = AgentEvent::Context(ContextEvent::CompactionStarted { message_count: 12 });
-        let started = try_into_agent_notification(&started).ok_or("compaction start notification")?;
-        let AgentExtNotification::ContextCompaction(started) = started else {
-            return Err("expected ContextCompaction".to_string());
-        };
+        let started: ContextCompactionParams = forwarded(&started);
         assert!(started.active);
 
         for outcome in [
@@ -641,30 +518,18 @@ mod tests {
             CompactionOutcome::Cancelled,
         ] {
             let ended = AgentEvent::Context(ContextEvent::CompactionEnded { outcome });
-            let ended = try_into_agent_notification(&ended).ok_or("compaction end notification")?;
-            let AgentExtNotification::ContextCompaction(ended) = ended else {
-                return Err("expected ContextCompaction".to_string());
-            };
+            let ended: ContextCompactionParams = forwarded(&ended);
             assert!(!ended.active);
         }
-
-        Ok(())
     }
 
     #[test]
-    fn test_context_cleared_maps_to_agent_notification() -> Result<(), String> {
-        let notif = try_into_agent_notification(&AgentEvent::Context(ContextEvent::Cleared))
-            .ok_or("context cleared should emit agent notification")?;
-        match notif {
-            AgentExtNotification::ContextCleared(_) => Ok(()),
-            _ => Err("expected ContextCleared".to_string()),
-        }
+    fn test_context_cleared_maps_to_agent_notification() {
+        let _: ContextClearedParams = forwarded(&AgentEvent::Context(ContextEvent::Cleared));
     }
 
     #[test]
     fn test_tool_progress_with_invalid_json_falls_back_to_simple_message() -> Result<(), String> {
-        let session_id = acp::SessionId::new("test-session");
-
         // Simulate a tool progress message with invalid JSON
         let tool_progress = AgentEvent::Tool(ToolEvent::Progress {
             request: ToolCallRequest {
@@ -677,13 +542,13 @@ mod tests {
             message: Some("not valid json".to_string()),
         });
 
-        let notification = map_agent_event_to_session_notification(session_id.clone(), &tool_progress);
+        let notification = map_agent_event_to_session_notification(&tool_progress);
 
         assert!(notification.is_some());
 
         // Should still produce a notification with the message as-is
         let notification = notification.ok_or("expected notification")?;
-        let SessionUpdate::ToolCallUpdate(update) = notification.update else {
+        let SessionUpdate::ToolCallUpdate(update) = notification else {
             return Err("Expected ToolCallUpdate".to_string());
         };
         if let MaybeUndefined::Value(content) = &update.content
@@ -698,7 +563,6 @@ mod tests {
 
     #[test]
     fn test_tool_call_notification_includes_original_tool_name_meta() -> Result<(), String> {
-        let session_id = acp::SessionId::new("test-session");
         let request = ToolCallRequest {
             id: "call_1".to_string(),
             name: "coding__read_file".to_string(),
@@ -706,9 +570,8 @@ mod tests {
         };
 
         let notification =
-            map_agent_event_to_session_notification(session_id, &AgentEvent::Tool(ToolEvent::Call { request }))
-                .unwrap();
-        let SessionUpdate::ToolCallUpdate(tool_call) = notification.update else {
+            map_agent_event_to_session_notification(&AgentEvent::Tool(ToolEvent::Call { request })).unwrap();
+        let SessionUpdate::ToolCallUpdate(tool_call) = notification else {
             return Err("Expected ToolCall".to_string());
         };
         let meta = tool_call.meta.take().ok_or("meta should be present")?;
@@ -721,7 +584,6 @@ mod tests {
     fn test_result_with_result_meta_sets_meta() -> Result<(), String> {
         use mcp_utils::display_meta::ToolDisplayMeta;
 
-        let session_id = acp::SessionId::new("test-session");
         let result = ToolCallResult {
             id: "call_1".to_string(),
             name: "coding__read_file".to_string(),
@@ -730,12 +592,12 @@ mod tests {
         };
         let rm: ToolResultMeta = ToolDisplayMeta::new("Read file", "Cargo.toml, 156 lines").into();
 
-        let notification = map_agent_event_to_session_notification(
-            session_id,
-            &AgentEvent::Tool(ToolEvent::Result { result, result_meta: Some(rm) }),
-        )
+        let notification = map_agent_event_to_session_notification(&AgentEvent::Tool(ToolEvent::Result {
+            result,
+            result_meta: Some(rm),
+        }))
         .unwrap();
-        let update = match notification.update {
+        let update = match notification {
             SessionUpdate::ToolCallUpdate(update) => update,
             other => return Err(format!("Expected ToolCallUpdate, got {other:?}")),
         };
@@ -752,7 +614,6 @@ mod tests {
 
     #[test]
     fn test_result_without_result_meta() -> Result<(), String> {
-        let session_id = acp::SessionId::new("test-session");
         let result = ToolCallResult {
             id: "call_1".to_string(),
             name: "external__some_tool".to_string(),
@@ -760,12 +621,10 @@ mod tests {
             result: "ok".to_string(),
         };
 
-        let notification = map_agent_event_to_session_notification(
-            session_id,
-            &AgentEvent::Tool(ToolEvent::Result { result, result_meta: None }),
-        )
-        .unwrap();
-        let update = match notification.update {
+        let notification =
+            map_agent_event_to_session_notification(&AgentEvent::Tool(ToolEvent::Result { result, result_meta: None }))
+                .unwrap();
+        let update = match notification {
             acp::SessionUpdate::ToolCallUpdate(update) => update,
             other => return Err(format!("Expected ToolCallUpdate, got {other:?}")),
         };
@@ -778,17 +637,15 @@ mod tests {
     fn test_plan_notification_none_when_no_plan_or_no_meta() {
         use mcp_utils::display_meta::ToolDisplayMeta;
 
-        let sid = acp::SessionId::new("test-session");
         let meta: ToolResultMeta = ToolDisplayMeta::new("Read file", "main.rs").into();
-        assert!(try_extract_plan_notification(sid.clone(), Some(&meta)).is_none());
-        assert!(try_extract_plan_notification(sid, None).is_none());
+        assert!(try_extract_plan_notification(Some(&meta)).is_none());
+        assert!(try_extract_plan_notification(None).is_none());
     }
 
     #[test]
     fn test_display_update_emits_meta_update() -> Result<(), String> {
         use mcp_utils::display_meta::ToolDisplayMeta;
 
-        let session_id = acp::SessionId::new("test-session");
         let meta = ToolResultMeta::from(ToolDisplayMeta::new("Read file", "main.rs"));
 
         let request = ToolCallRequest {
@@ -798,10 +655,10 @@ mod tests {
         };
 
         let event = AgentEvent::Tool(ToolEvent::DisplayUpdate { request, meta });
-        let notification = map_agent_event_to_session_notification(session_id, &event)
-            .ok_or("display update should produce a notification")?;
+        let notification =
+            map_agent_event_to_session_notification(&event).ok_or("display update should produce a notification")?;
 
-        let update = match notification.update {
+        let update = match notification {
             acp::SessionUpdate::ToolCallUpdate(update) => update,
             other => return Err(format!("Expected ToolCallUpdate, got {other:?}")),
         };
@@ -933,8 +790,8 @@ mod tests {
             let mut text = String::new();
             for chunk in ["hello", " world"] {
                 let event = message(thought, chunk, false);
-                assert!(map_agent_event_to_notification("session".into(), &event, NotificationMode::Replay).is_none());
-                let update = map_agent_event_to_session_notification("session".into(), &event).unwrap().update;
+                assert!(map_agent_event_to_notification(&event, NotificationMode::Replay).is_none());
+                let update = map_agent_event_to_session_notification(&event).unwrap();
                 let chunk = match update {
                     SessionUpdate::AgentMessageChunk(c) | SessionUpdate::AgentThoughtChunk(c) => c,
                     other => panic!("expected chunk: {other:?}"),
@@ -944,9 +801,8 @@ mod tests {
                 text.push_str(&content.text);
             }
             let complete = message(thought, "hello world", true);
-            let live = map_agent_event_to_session_notification("session".into(), &complete).unwrap().update;
-            let replay =
-                map_agent_event_to_notification("session".into(), &complete, NotificationMode::Replay).unwrap().update;
+            let live = map_agent_event_to_session_notification(&complete).unwrap();
+            let replay = map_agent_event_to_notification(&complete, NotificationMode::Replay).unwrap();
             assert_eq!(live, replay);
             let (id, content) = match replay {
                 SessionUpdate::AgentMessage(m) => (m.message_id, m.content),
@@ -963,15 +819,14 @@ mod tests {
         let statuses =
             [PlanMetaStatus::Pending, PlanMetaStatus::InProgress, PlanMetaStatus::Completed, PlanMetaStatus::Cancelled];
         let mut id = None;
-        for session in ["one", "two"] {
+        for _ in 0..2 {
             for entries in [
                 statuses.iter().map(|status| PlanMetaEntry { content: "task".into(), status: *status }).collect(),
                 vec![],
             ] {
                 let meta = ToolResultMeta::with_plan(ToolDisplayMeta::new("Todo", ""), PlanMeta { entries });
-                let notification = try_extract_plan_notification(session.into(), Some(&meta)).unwrap();
-                assert_eq!(notification.session_id, SessionId::new(session));
-                let SessionUpdate::PlanUpdate(update) = notification.update else { panic!("expected plan update") };
+                let notification = try_extract_plan_notification(Some(&meta)).unwrap();
+                let SessionUpdate::PlanUpdate(update) = notification else { panic!("expected plan update") };
                 let acp::PlanUpdateContent::Items(plan) = update.plan else { panic!("expected items") };
                 assert_eq!(id.get_or_insert(plan.plan_id.clone()), &plan.plan_id);
                 let wire = serde_json::to_value(&plan).unwrap();
@@ -1009,9 +864,9 @@ mod tests {
     }
 
     fn mapped_tool(event: &AgentEvent) -> ToolCallUpdate {
-        let notification = map_agent_event_to_session_notification("session".into(), event).unwrap();
-        assert_eq!(serde_json::to_value(&notification).unwrap()["update"]["sessionUpdate"], "tool_call_update");
-        let SessionUpdate::ToolCallUpdate(tool) = notification.update else { panic!("expected tool upsert") };
+        let notification = map_agent_event_to_session_notification(event).unwrap();
+        assert_eq!(serde_json::to_value(&notification).unwrap()["sessionUpdate"], "tool_call_update");
+        let SessionUpdate::ToolCallUpdate(tool) = notification else { panic!("expected tool upsert") };
         tool
     }
 

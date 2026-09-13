@@ -1,6 +1,5 @@
-use acp_utils::server::AcpServerError;
-use agent_client_protocol::schema::v2::{self as acp, SessionId};
-use agent_client_protocol::{Client, ConnectionTo};
+use super::actor::SessionIo;
+use agent_client_protocol::schema::v2 as acp;
 use llm::ContentBlock;
 use tracing::{error, info};
 
@@ -35,18 +34,6 @@ async fn expand_slash_command_text(runtime: &AgentRuntime, text: String) -> Stri
     }
 }
 
-pub(crate) fn send_available_commands(
-    connection: &ConnectionTo<Client>,
-    acp_session_id: SessionId,
-    available_commands: Vec<acp::AvailableCommand>,
-) {
-    if let Err(e) = connection
-        .send_notification(acp::UpdateSessionNotification::new(
-            acp_session_id,
-            acp::SessionUpdate::AvailableCommandsUpdate(acp::AvailableCommandsUpdate::new(available_commands)),
-        ))
-        .map_err(|e| AcpServerError::protocol("session/update", e))
-    {
-        error!("Failed to send available commands update: {:?}", e);
-    }
+pub(crate) fn send_available_commands(io: &SessionIo, available_commands: Vec<acp::AvailableCommand>) {
+    io.send_update(acp::SessionUpdate::AvailableCommandsUpdate(acp::AvailableCommandsUpdate::new(available_commands)));
 }

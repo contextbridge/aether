@@ -1,5 +1,5 @@
 use acp_utils::content::format_embedded_resource;
-use agent_client_protocol::schema::v2::{self as acp, ContentBlock, TextContent};
+use agent_client_protocol::schema::v2::{self as acp, ContentBlock};
 use llm::ContentBlock as LlmContentBlock;
 
 /// Convert client-supplied ACP content blocks into LLM content blocks for the
@@ -25,7 +25,7 @@ pub(crate) fn map_user_message(message_id: acp::MessageId, blocks: &[LlmContentB
 /// Convert a stored LLM content block back into an ACP content block for replay.
 pub(crate) fn map_user_content_block(block: &LlmContentBlock) -> ContentBlock {
     match block {
-        LlmContentBlock::Text { text } => ContentBlock::Text(TextContent::new(text.clone())),
+        LlmContentBlock::Text { text } => ContentBlock::from(text.clone()),
         LlmContentBlock::Image { data, mime_type } => {
             ContentBlock::Image(acp::ImageContent::new(data.clone(), mime_type.clone()))
         }

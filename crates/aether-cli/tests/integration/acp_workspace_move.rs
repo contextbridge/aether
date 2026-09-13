@@ -94,7 +94,7 @@ async fn workspace_move_to_existing_target_on_different_head_fails_actionably() 
             .await
             .expect_err("move should fail");
 
-        assert!(error.message.contains("different commit"), "unexpected error: {}", error.message);
+        assert!(error.to_string().contains("different commit"), "unexpected error: {error}");
         assert_eq!(fs::read_to_string(repo.join("committed.txt")).unwrap(), "edited\n");
     })
     .await;
@@ -115,7 +115,7 @@ async fn workspace_move_to_dirty_target_fails_and_leaves_source_untouched() {
             .await
             .expect_err("move should fail");
 
-        assert!(error.message.contains("uncommitted changes"), "unexpected error: {}", error.message);
+        assert!(error.to_string().contains("uncommitted changes"), "unexpected error: {error}");
         assert_eq!(fs::read_to_string(repo.join("committed.txt")).unwrap(), "edited\n");
     })
     .await;
@@ -133,7 +133,7 @@ async fn workspace_move_rejects_workspace_from_different_repository() {
             .await
             .expect_err("move should fail");
 
-        assert!(error.message.contains("different repository"), "unexpected error: {}", error.message);
+        assert!(error.to_string().contains("different repository"), "unexpected error: {error}");
     })
     .await;
 }

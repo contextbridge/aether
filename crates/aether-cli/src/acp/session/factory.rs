@@ -44,6 +44,24 @@ pub(crate) struct CreatedSession {
     pub config_options: Vec<acp::SessionConfigOption>,
 }
 
+pub(crate) struct PreparedSession {
+    init: SessionActorInit,
+    available: Vec<LlmModel>,
+}
+
+impl PreparedSession {
+    pub(crate) async fn start(self) -> Result<CreatedSession, Error> {
+        let session_id = self.init.session_id.clone();
+        let credentials = self.init.oauth_credential_store.clone();
+        let handle = SessionActor::spawn(self.init).await.map_err(|e| {
+            error!("Failed to start session actor: {e}");
+            Error::internal_error()
+        })?;
+        let config_options = handle.config_snapshot().config_options(&self.available, credentials.as_ref());
+        Ok(CreatedSession { session_id, handle, config_options })
+    }
+}
+
 impl SessionFactory {
     pub(crate) fn new(
         settings_source: SettingsSourceArgs,
@@ -65,12 +83,12 @@ impl SessionFactory {
         }
     }
 
-    pub(crate) async fn create(
+    pub(crate) async fn prepare_new(
         &self,
         mut args: NewSessionRequest,
         cx: &ConnectionTo<Client>,
         mcp_capabilities: ClientCapabilities,
-    ) -> Result<CreatedSession, Error> {
+    ) -> Result<PreparedSession, Error> {
         // Inside a sandbox container the client sends the *host* cwd, but the
         // project is mounted at the container's working directory.
         if std::env::var("AETHER_INSIDE_SANDBOX").is_ok() {
@@ -100,23 +118,32 @@ impl SessionFactory {
             error!("Failed to write session meta: {e}");
         }
 
-        let runtime_factory = self.production_runtime_factory(
-            args.cwd.into_inner(),
-            args.mcp_servers,
-            mode_catalog.specs.catalog(),
-            mcp_capabilities,
-            &session_id,
-        );
-        self.build_session(SessionId::new(session_id), runtime_factory, mode_catalog, resolved, Vec::new(), false, cx)
-            .await
+        let runtime_factory = self.runtime_factory.clone().unwrap_or_else(|| {
+            self.production_runtime_factory(
+                args.cwd.into_inner(),
+                args.mcp_servers,
+                mode_catalog.specs.catalog(),
+                mcp_capabilities,
+                &session_id,
+            )
+        });
+        Ok(self.prepare_session(
+            SessionId::new(session_id),
+            runtime_factory,
+            mode_catalog,
+            resolved,
+            Vec::new(),
+            false,
+            cx,
+        ))
     }
 
-    pub(crate) async fn resume(
+    pub(crate) async fn prepare_resume(
         &self,
         args: ResumeSessionRequest,
         cx: &ConnectionTo<Client>,
         mcp_capabilities: ClientCapabilities,
-    ) -> Result<CreatedSession, Error> {
+    ) -> Result<PreparedSession, Error> {
         let replay = match args.replay_from {
             Some(acp::ReplayFrom::Start(_)) => true,
             None => false,
@@ -133,7 +160,7 @@ impl SessionFactory {
         cx: &ConnectionTo<Client>,
         mcp_capabilities: ClientCapabilities,
         replay: bool,
-    ) -> Result<CreatedSession, Error> {
+    ) -> Result<PreparedSession, Error> {
         let session_id_string = session_id.0.to_string();
         info!("Restoring session: {session_id_string}");
 
@@ -159,7 +186,7 @@ impl SessionFactory {
                 session_id.0.as_ref(),
             )
         });
-        self.build_session(session_id, runtime_factory, mode_catalog, resolved, events, replay, cx).await
+        Ok(self.prepare_session(session_id, runtime_factory, mode_catalog, resolved, events, replay, cx))
     }
 
     fn production_runtime_factory(
@@ -178,7 +205,7 @@ impl SessionFactory {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn build_session(
+    fn prepare_session(
         &self,
         session_id: SessionId,
         runtime_factory: Arc<dyn RuntimeFactory>,
@@ -187,9 +214,9 @@ impl SessionFactory {
         transcript: Vec<SessionEvent>,
         replay: bool,
         cx: &ConnectionTo<Client>,
-    ) -> Result<CreatedSession, Error> {
-        let handle = SessionActor::spawn(SessionActorInit {
-            session_id: session_id.clone(),
+    ) -> PreparedSession {
+        let init = SessionActorInit {
+            session_id,
             connection: cx.clone(),
             repository: self.session_store.clone(),
             oauth_credential_store: Arc::clone(&self.oauth_credential_store),
@@ -200,18 +227,8 @@ impl SessionFactory {
             replay,
             modes: mode_catalog.modes,
             config: resolved.config,
-        })
-        .await
-        .map_err(|e| {
-            error!("Failed to start session actor: {e}");
-            Error::internal_error()
-        })?;
-
-        let config_options =
-            handle.config_snapshot().config_options(&mode_catalog.available, self.oauth_credential_store.as_ref());
-
-        info!("Session {} ready", session_id.0);
-        Ok(CreatedSession { session_id, handle, config_options })
+        };
+        PreparedSession { init, available: mode_catalog.available }
     }
 
     fn resolve_new_session(

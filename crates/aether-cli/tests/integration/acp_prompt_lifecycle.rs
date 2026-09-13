@@ -1,8 +1,7 @@
 use aether_cli::acp::testing::AcpTestHarness;
 use aether_core::core::agent;
 use agent_client_protocol::schema::v2::{
-    AgentMessage, CancelSessionNotification, CloseSessionRequest, ContentBlock, PromptRequest, ReplayFrom,
-    ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate, StateUpdate, StopReason,
+    CancelSessionNotification, ContentBlock, PromptRequest, SessionId, SessionUpdate, StateUpdate, StopReason,
 };
 use llm::{LlmResponse, testing::FakeLlmProvider};
 use std::sync::Arc;
@@ -58,12 +57,6 @@ async fn provider_failure_after_acceptance_reports_error_and_idle() {
             }
         }
     }).await;
-}
-
-fn message_contains(message: &AgentMessage, needle: &str) -> bool {
-    message.content.value().is_some_and(|content| {
-        content.iter().any(|block| matches!(block, ContentBlock::Text(text) if text.text.contains(needle)))
-    })
 }
 
 #[tokio::test(flavor = "current_thread")]

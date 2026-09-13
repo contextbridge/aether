@@ -64,6 +64,18 @@ impl AgentRuntime {
         Self { agent_tx, latest_mcp_snapshot, agent_handle, mcp_runtime, agent_pump_handle, mcp_pump_handle }
     }
 
+    pub(crate) async fn shutdown(mut self) {
+        if let Some(handle) = self.agent_handle.take() {
+            handle.abort();
+            handle.await_completion().await;
+        }
+        self.agent_pump_handle.abort();
+        self.mcp_pump_handle.abort();
+        let _ = (&mut self.agent_pump_handle).await;
+        let _ = (&mut self.mcp_pump_handle).await;
+        self.mcp_runtime.shutdown().await;
+    }
+
     pub(crate) async fn send_agent_command(&self, command: Command) -> Result<(), SessionError> {
         self.agent_tx
             .send(command)
