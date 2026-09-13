@@ -980,7 +980,7 @@ fn settings_selecting_option_emits_config_option() {
     match cmd {
         AgentCommand::SetConfigOption { config_id, value, .. } => {
             assert_eq!(config_id, "model");
-            assert_eq!(value, "claude");
+            assert_eq!(value, acp::SessionConfigOptionValue::id("claude"));
         }
         other => panic!("expected SetConfigOption, got: {other:?}"),
     }
@@ -1051,7 +1051,7 @@ fn settings_multi_select_toggle_and_confirm() {
     match cmd {
         AgentCommand::SetConfigOption { config_id, value, .. } => {
             assert_eq!(config_id, "model");
-            assert!(value.contains("anthropic:opus"), "value: {value}");
+            assert_eq!(value, acp::SessionConfigOptionValue::id("anthropic:opus"));
         }
         other => panic!("expected SetConfigOption, got: {other:?}"),
     }
@@ -2026,7 +2026,9 @@ fn model_selector_toggles_only_what_the_query_left_visible() {
     ui.key(key(KeyCode::Esc));
 
     match ui.next_agent_command().expect("expected the filtered model to be committed") {
-        AgentCommand::SetConfigOption { value, .. } => assert_eq!(value, "openai:gpt-4o"),
+        AgentCommand::SetConfigOption { value, .. } => {
+            assert_eq!(value, acp::SessionConfigOptionValue::id("openai:gpt-4o"));
+        }
         other => panic!("expected SetConfigOption, got: {other:?}"),
     }
 }

@@ -54,7 +54,7 @@ fn clear_restores_compatible_config_selections() {
 
     let restore_cmd = app.next_agent_command().unwrap();
     assert!(
-        matches!(&restore_cmd, AgentCommand::SetConfigOption { config_id, value, .. } if config_id == "model" && value == "opus"),
+        matches!(&restore_cmd, AgentCommand::SetConfigOption { config_id, value, .. } if config_id == "model" && value == &acp::SessionConfigOptionValue::id("opus")),
         "expected model restored to opus, got {restore_cmd:?}"
     );
 }
@@ -103,7 +103,7 @@ fn resume_loads_selected_session() {
 
     let cmd = app.next_agent_command().unwrap();
     assert!(
-        matches!(&cmd, AgentCommand::LoadSession { session_id, cwd } if session_id.0.as_ref() == "old" && cwd == &std::path::PathBuf::from("/tmp/old")),
+        matches!(&cmd, AgentCommand::ResumeSession { session_id, cwd } if session_id.0.as_ref() == "old" && cwd == &std::path::PathBuf::from("/tmp/old")),
         "expected LoadSession for old session, got {cmd:?}"
     );
 }
@@ -189,11 +189,14 @@ fn load_session_send_failure_cleans_up_buffer_and_shows_error() {
     assert!(app.app().has_session_picker());
 
     app.key(key(KeyCode::Enter));
-    assert!(matches!(app.next_command(), Some(Command::Agent(AgentCommand::LoadSession { .. }))));
-    app.deliver_result(CommandResult::Failed { command: FailedCommand::LoadSession, error: "send failed".to_string() });
+    assert!(matches!(app.next_command(), Some(Command::Agent(AgentCommand::ResumeSession { .. }))));
+    app.deliver_result(CommandResult::Failed {
+        command: FailedCommand::ResumeSession,
+        error: "send failed".to_string(),
+    });
 
     let messages: Vec<_> = message_texts(&app).collect();
-    let has_error = messages.iter().any(|message| message.contains("load session") && message.contains("fail"));
+    let has_error = messages.iter().any(|message| message.contains("resume session") && message.contains("fail"));
     assert!(has_error, "expected visible transcript error for load_session failure, got {messages:?}");
 
     assert!(!app.app().exit_requested(), "app should remain interactive after load_session failure");
@@ -304,16 +307,18 @@ fn loaded_session_replays_typed_notifications_in_order() {
     assert!(!viewport.contains("buffered message"), "buffered updates should not render yet:\n{viewport}");
     assert!(!viewport.contains("buffered agent"), "buffered updates should not render yet:\n{viewport}");
 
-    ui.acp_event(AcpEvent::SessionLoaded(LoadedSession {
+    ui.acp_event(AcpEvent::SessionResumed(ResumedSession {
         session_id: SessionId::new("loaded"),
-        response: acp::LoadSessionResponse::new().config_options(vec![select_option("model", "sonnet")]),
+        response: acp::ResumeSessionResponse::default().config_options(vec![select_option("model", "sonnet")]),
         replay: vec![
-            acp::SessionNotification::new(SessionId::new("loaded"), user_message_chunk("buffered message")).into(),
-            acp::SessionNotification::new(
+            acp::UpdateSessionNotification::new(SessionId::new("loaded"), user_message_chunk("buffered message"))
+                .into(),
+            acp::UpdateSessionNotification::new(
                 SessionId::new("loaded"),
-                acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
-                    acp::TextContent::new("buffered agent"),
-                ))),
+                acp::SessionUpdate::AgentMessage(
+                    acp::AgentMessage::new("replayed-agent")
+                        .content(vec![acp::ContentBlock::Text(acp::TextContent::new("buffered agent"))]),
+                ),
             )
             .into(),
         ],

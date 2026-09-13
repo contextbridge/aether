@@ -1,4 +1,4 @@
-pub(crate) use acp_utils::client::{AcpEvent, LoadedSession};
+pub(crate) use acp_utils::client::{AcpEvent, ResumedSession};
 pub(crate) use acp_utils::config_meta::SelectOptionMeta;
 pub(crate) use acp_utils::config_option_id::ConfigOptionId;
 pub(crate) use acp_utils::notifications::{
@@ -8,7 +8,7 @@ pub(crate) use acp_utils::notifications::{
     WorkspaceListResponse, WorkspaceMoveResponse,
 };
 pub(crate) use acp_utils::testing::test_connection;
-pub(crate) use agent_client_protocol::schema::v1::{
+pub(crate) use agent_client_protocol::schema::v2::{
     self as acp, BooleanPropertySchema, CreateElicitationRequest, CreateElicitationResponse, ElicitationAction,
     ElicitationFormMode, ElicitationSchema, ElicitationSessionScope, ElicitationUrlMode, SessionId,
     StringPropertySchema,
@@ -178,7 +178,7 @@ pub(crate) fn ctrl(c: char) -> KeyEvent {
 }
 
 pub(crate) fn tool_call(id: &str, title: &str) -> AcpEvent {
-    session_update(acp::SessionUpdate::ToolCall(acp::ToolCall::new(id.to_string(), title)))
+    session_update(acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(id.to_string()).title(title)))
 }
 
 pub(crate) fn tool_completed_with_diff(id: &str) -> AcpEvent {
@@ -186,13 +186,12 @@ pub(crate) fn tool_completed_with_diff(id: &str) -> AcpEvent {
 }
 
 pub(crate) fn tool_completed_with_diff_contents(id: &str, old: &str, new: &str) -> AcpEvent {
-    let diff = acp::Diff::new("src/main.rs", new).old_text(old);
-    session_update(acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
-        id.to_string(),
-        acp::ToolCallUpdateFields::new()
+    let diff = wisp::testing::text_diff("/src/main.rs", old, new);
+    session_update(acp::SessionUpdate::ToolCallUpdate(
+        acp::ToolCallUpdate::new(id.to_string())
             .content(vec![acp::ToolCallContent::Diff(diff)])
             .status(acp::ToolCallStatus::Completed),
-    )))
+    ))
 }
 
 /// Renders the composer's completion list and reports whether `needle` shows up.
@@ -219,9 +218,9 @@ pub(crate) fn sessions_listed(sessions: Vec<acp::SessionInfo>) -> CommandResult 
 }
 
 pub(crate) fn session_loaded(session_id: &str, config_options: Vec<acp::SessionConfigOption>) -> AcpEvent {
-    AcpEvent::SessionLoaded(LoadedSession {
+    AcpEvent::SessionResumed(ResumedSession {
         session_id: SessionId::new(session_id),
-        response: acp::LoadSessionResponse::new().config_options(config_options),
+        response: acp::ResumeSessionResponse::default().config_options(config_options),
         replay: Vec::new(),
     })
 }
@@ -253,7 +252,9 @@ pub(crate) fn session_update_for(session_id: &str, update: acp::SessionUpdate) -
 }
 
 pub(crate) fn user_message_chunk(text: &str) -> acp::SessionUpdate {
-    acp::SessionUpdate::UserMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new(text))))
+    acp::SessionUpdate::UserMessage(
+        acp::UserMessage::new("user-message").content(vec![acp::ContentBlock::Text(acp::TextContent::new(text))]),
+    )
 }
 
 pub(crate) fn make_app_with_session_preview() -> TestUi {
@@ -289,5 +290,5 @@ pub(crate) fn prompt_failed(error: &str) -> CommandResult {
 }
 
 pub(crate) fn session_load_failed(error: &str) -> CommandResult {
-    CommandResult::Failed { command: FailedCommand::LoadSession, error: error.to_string() }
+    CommandResult::Failed { command: FailedCommand::ResumeSession, error: error.to_string() }
 }

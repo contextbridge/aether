@@ -1,9 +1,6 @@
-use std::path::MAIN_SEPARATOR_STR;
-
-use crate::git_review::FileDiff;
 use acp_utils::AETHER_TOOL_NAME_META_KEY;
 use acp_utils::notifications::{SubAgentEvent, SubAgentProgressParams};
-use agent_client_protocol::schema::v1 as acp;
+use agent_client_protocol::schema::{MaybeUndefined, v2 as acp};
 
 pub const SUB_AGENT_VISIBLE_TOOL_LIMIT: usize = 3;
 
@@ -58,6 +55,132 @@ impl SubAgentState {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolDiff {
+    pub changes: Vec<String>,
+    pub patch: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolCall {
+    pub id: String,
+    pub status: ToolStatus,
+    pub sub_agents: Vec<SubAgentState>,
+    protocol: Box<acp::ToolCallUpdate>,
+}
+
+impl ToolCall {
+    pub fn from_update(update: &acp::ToolCallUpdate) -> Self {
+        let mut tool = Self {
+            id: update.tool_call_id.to_string(),
+            status: ToolStatus::Running,
+            sub_agents: Vec::new(),
+            protocol: Box::new(acp::ToolCallUpdate::new(update.tool_call_id.clone())),
+        };
+        tool.apply_update(update);
+        tool
+    }
+
+    pub fn title(&self) -> &str {
+        self.protocol.title.value().map_or("", String::as_str)
+    }
+
+    pub fn raw_input(&self) -> String {
+        self.protocol.raw_input.value().map_or_else(String::new, raw_input_fragment)
+    }
+
+    pub fn display_value(&self) -> Option<&str> {
+        self.meta_str("display_value")
+    }
+
+    pub fn content(&self) -> &[acp::ToolCallContent] {
+        self.protocol.content.value().map_or(&[], Vec::as_slice)
+    }
+
+    pub fn diffs(&self) -> Vec<ToolDiff> {
+        self.content()
+            .iter()
+            .filter_map(|content| match content {
+                acp::ToolCallContent::Diff(diff) => Some(ToolDiff {
+                    changes: diff.changes.iter().map(diff_change_label).collect(),
+                    patch: diff.patch.as_ref().map(|patch| patch.text.clone()),
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn apply_update(&mut self, update: &acp::ToolCallUpdate) {
+        self.protocol.apply_update(update.clone());
+        if !update.status.is_undefined() {
+            self.status = match self.protocol.status.value() {
+                Some(acp::ToolCallStatus::Completed) => ToolStatus::Success,
+                Some(acp::ToolCallStatus::Failed) => ToolStatus::Error("failed".to_string()),
+                _ => ToolStatus::Running,
+            };
+        }
+    }
+
+    pub fn append_content(&mut self, content: acp::ToolCallContent) {
+        match &mut self.protocol.content {
+            MaybeUndefined::Value(items) => items.push(content),
+            value => *value = MaybeUndefined::Value(vec![content]),
+        }
+    }
+
+    pub(crate) fn apply_sub_agent_progress(&mut self, notification: &SubAgentProgressParams) {
+        apply_sub_agent_progress(&mut self.sub_agents, notification);
+    }
+
+    pub(crate) fn finalize(&mut self, terminal_status: &ToolStatus) {
+        if self.status == ToolStatus::Running {
+            self.status = terminal_status.clone();
+        }
+        for agent in &mut self.sub_agents {
+            agent.done = true;
+            for call in &mut agent.tool_calls {
+                if matches!(call.status, ToolStatus::Running) {
+                    call.status = terminal_status.clone();
+                }
+            }
+        }
+    }
+
+    pub fn bash_command(&self) -> Option<String> {
+        bash_command(self.kind(), &self.raw_input())
+    }
+
+    pub(crate) fn is_running(&self) -> bool {
+        self.status == ToolStatus::Running
+            || self.sub_agents.iter().any(|agent| {
+                !agent.done || agent.tool_calls.iter().any(|call| matches!(call.status, ToolStatus::Running))
+            })
+    }
+
+    /// Whether this call's rendering can no longer change: it reached a
+    /// terminal status and every spawned sub-agent has finished. A background
+    /// spawn completes before its agents start reporting, so an empty tree on
+    /// a completed spawner means "not yet", not "none".
+    pub(crate) fn rendering_final(&self) -> bool {
+        !self.is_running() && (self.kind() != ToolKind::SpawnSubagent || !self.sub_agents.is_empty())
+    }
+
+    fn kind(&self) -> ToolKind {
+        tool_kind(self.meta_str(AETHER_TOOL_NAME_META_KEY).unwrap_or_else(|| self.title()))
+    }
+
+    fn meta_str(&self, key: &str) -> Option<&str> {
+        self.protocol.meta.value().and_then(|meta| meta.get(key)).and_then(serde_json::Value::as_str)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolStatus {
+    Running,
+    Success,
+    Error(String),
+}
+
 fn apply_sub_agent_progress(states: &mut Vec<SubAgentState>, notification: &SubAgentProgressParams) {
     let index = states.iter().position(|agent| agent.task_id == notification.task_id).unwrap_or_else(|| {
         states.push(SubAgentState {
@@ -104,122 +227,19 @@ fn apply_sub_agent_progress(states: &mut Vec<SubAgentState>, notification: &SubA
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolCall {
-    pub id: String,
-    pub title: String,
-    pub status: ToolStatus,
-    pub diff: Option<Box<FileDiff>>,
-    pub raw_input: String,
-    pub display_value: Option<String>,
-    pub sub_agents: Vec<SubAgentState>,
-    kind: ToolKind,
-}
-
-impl ToolCall {
-    pub(crate) fn from_acp(tool_call: &acp::ToolCall) -> Self {
-        let tool_name = tool_call
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.get(AETHER_TOOL_NAME_META_KEY))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or(&tool_call.title);
-        let raw_input = tool_call.raw_input.as_ref().map_or_else(String::new, raw_input_fragment);
-        Self {
-            id: tool_call.tool_call_id.0.to_string(),
-            title: tool_call.title.clone(),
-            status: ToolStatus::Running,
-            diff: None,
-            raw_input,
-            display_value: None,
-            sub_agents: Vec::new(),
-            kind: tool_kind(tool_name),
+fn diff_change_label(change: &acp::DiffChange) -> String {
+    match &change.operation {
+        acp::DiffChangeOperation::Add(change) => format!("A {}", change.path.0.display()),
+        acp::DiffChangeOperation::Delete(change) => format!("D {}", change.path.0.display()),
+        acp::DiffChangeOperation::Modify(change) => format!("M {}", change.path.0.display()),
+        acp::DiffChangeOperation::Move(change) => {
+            format!("R {} → {}", change.old_path.0.display(), change.path.0.display())
         }
+        acp::DiffChangeOperation::Copy(change) => {
+            format!("C {} → {}", change.old_path.0.display(), change.path.0.display())
+        }
+        _ => "Unknown file change".to_string(),
     }
-
-    pub(crate) fn apply_update(&mut self, update: &acp::ToolCallUpdate) {
-        if let Some(title) = &update.fields.title {
-            update_title(&mut self.title, title);
-        }
-        if let Some(raw_input) = &update.fields.raw_input {
-            self.raw_input.push_str(&raw_input_fragment(raw_input));
-        }
-        if let Some(meta) = &update.meta
-            && let Some(serde_json::Value::String(display_value)) = meta.get("display_value")
-        {
-            self.display_value = Some(display_value.clone());
-        }
-        if let Some(content) = &update.fields.content {
-            for item in content {
-                if let acp::ToolCallContent::Diff(diff) = item {
-                    let path = diff.path.strip_prefix(MAIN_SEPARATOR_STR).unwrap_or(&diff.path);
-                    match FileDiff::from_texts(
-                        path.to_string_lossy().as_ref(),
-                        diff.old_text.as_deref().unwrap_or_default(),
-                        &diff.new_text,
-                    ) {
-                        Ok(preview) => self.diff = Some(Box::new(preview)),
-                        Err(error) => {
-                            self.diff = None;
-                            self.display_value = Some(format!("Cannot preview {}: {error}", diff.path.display()));
-                        }
-                    }
-                }
-            }
-        }
-        if let Some(status) = update.fields.status {
-            match status {
-                acp::ToolCallStatus::Completed => self.status = ToolStatus::Success,
-                acp::ToolCallStatus::Failed => self.status = ToolStatus::Error("failed".to_string()),
-                acp::ToolCallStatus::InProgress | acp::ToolCallStatus::Pending => self.status = ToolStatus::Running,
-                _ => {}
-            }
-        }
-    }
-
-    pub(crate) fn apply_sub_agent_progress(&mut self, notification: &SubAgentProgressParams) {
-        apply_sub_agent_progress(&mut self.sub_agents, notification);
-    }
-
-    pub(crate) fn finalize(&mut self, terminal_status: &ToolStatus) {
-        if self.status == ToolStatus::Running {
-            self.status = terminal_status.clone();
-        }
-        for agent in &mut self.sub_agents {
-            agent.done = true;
-            for call in &mut agent.tool_calls {
-                if matches!(call.status, ToolStatus::Running) {
-                    call.status = terminal_status.clone();
-                }
-            }
-        }
-    }
-
-    pub fn bash_command(&self) -> Option<String> {
-        bash_command(self.kind, &self.raw_input)
-    }
-
-    pub(crate) fn is_running(&self) -> bool {
-        self.status == ToolStatus::Running
-            || self.sub_agents.iter().any(|agent| {
-                !agent.done || agent.tool_calls.iter().any(|call| matches!(call.status, ToolStatus::Running))
-            })
-    }
-
-    /// Whether this call's rendering can no longer change: it reached a
-    /// terminal status and every spawned sub-agent has finished. A background
-    /// spawn completes before its agents start reporting, so an empty tree on
-    /// a completed spawner means "not yet", not "none".
-    pub(crate) fn rendering_final(&self) -> bool {
-        !self.is_running() && (self.kind != ToolKind::SpawnSubagent || !self.sub_agents.is_empty())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ToolStatus {
-    Running,
-    Success,
-    Error(String),
 }
 
 fn update_title(current: &mut String, new_title: &str) {
@@ -229,7 +249,7 @@ fn update_title(current: &mut String, new_title: &str) {
     }
 }
 
-pub(crate) fn raw_input_fragment(raw_input: &serde_json::Value) -> String {
+fn raw_input_fragment(raw_input: &serde_json::Value) -> String {
     raw_input.as_str().map_or_else(|| raw_input.to_string(), str::to_string)
 }
 

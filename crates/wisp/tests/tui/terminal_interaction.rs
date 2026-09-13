@@ -52,7 +52,7 @@ fn click(column: u16, row: u16) -> crossterm::event::Event {
 
 mod picker_click {
     use super::*;
-    use agent_client_protocol::schema::v1::SessionInfo;
+    use agent_client_protocol::schema::v2::{SessionId, SessionInfo};
 
     #[test]
     fn session_picker_click_first_row_selects_index_zero() {
@@ -60,9 +60,9 @@ mod picker_click {
 
         // Open session picker with sessions
         let sessions = vec![
-            SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("s1"), "/tmp"),
-            SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("s2"), "/tmp"),
-            SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("s3"), "/tmp"),
+            SessionInfo::new(SessionId::new("s1"), "/tmp"),
+            SessionInfo::new(SessionId::new("s2"), "/tmp"),
+            SessionInfo::new(SessionId::new("s3"), "/tmp"),
         ];
         ui.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(sessions)));
         assert!(ui.app().has_session_picker());
@@ -78,10 +78,8 @@ mod picker_click {
     fn session_picker_click_outside_row_range_is_clamped() {
         let mut ui = make_ui();
 
-        let sessions = vec![
-            SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("s1"), "/tmp"),
-            SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("s2"), "/tmp"),
-        ];
+        let sessions =
+            vec![SessionInfo::new(SessionId::new("s1"), "/tmp"), SessionInfo::new(SessionId::new("s2"), "/tmp")];
         ui.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(sessions)));
         assert!(ui.app().has_session_picker());
 
@@ -97,11 +95,11 @@ mod picker_click {
     fn session_picker_click_with_filter_uses_visible_rows() {
         let mut ui = make_ui();
 
-        let mut session_a = SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("aaa"), "/tmp");
+        let mut session_a = SessionInfo::new(SessionId::new("aaa"), "/tmp");
         session_a.title = Some("Alpha Project".to_string());
-        let mut session_b = SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("bbb"), "/tmp");
+        let mut session_b = SessionInfo::new(SessionId::new("bbb"), "/tmp");
         session_b.title = Some("Beta Project".to_string());
-        let mut session_c = SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("ccc"), "/tmp");
+        let mut session_c = SessionInfo::new(SessionId::new("ccc"), "/tmp");
         session_c.title = Some("Alpha Config".to_string());
 
         ui.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(vec![
@@ -185,7 +183,7 @@ mod picker_click {
 
 mod mouse_capture {
     use super::*;
-    use agent_client_protocol::schema::v1::SessionInfo;
+    use agent_client_protocol::schema::v2::{SessionId, SessionInfo};
 
     #[test]
     fn no_capture_when_no_fullscreen_or_modal() {
@@ -196,8 +194,8 @@ mod mouse_capture {
     #[test]
     fn capture_enabled_when_session_picker_is_open() {
         let mut app = make_app();
-        let current_id = agent_client_protocol::schema::v1::SessionId::new("test-session");
-        let other = SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("other"), "/tmp");
+        let current_id = SessionId::new("test-session");
+        let other = SessionInfo::new(SessionId::new("other"), "/tmp");
         app.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(vec![other])));
         std::mem::drop(current_id);
 
@@ -234,7 +232,7 @@ mod mouse_capture {
     #[test]
     fn capture_disabled_after_connection_closed() {
         let mut app = make_app();
-        let other = SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("other"), "/tmp");
+        let other = SessionInfo::new(SessionId::new("other"), "/tmp");
         app.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(vec![other])));
         assert!(app.app().needs_mouse_capture());
 
@@ -245,7 +243,7 @@ mod mouse_capture {
 
 mod bell {
     use super::*;
-    use agent_client_protocol::schema::v1 as acp;
+    use agent_client_protocol::schema::v2 as acp;
 
     #[test]
     fn bell_after_normal_completion() {
@@ -341,14 +339,14 @@ mod resize {
 
 mod event_routing {
     use super::*;
-    use agent_client_protocol::schema::v1::SessionInfo;
+    use agent_client_protocol::schema::v2::{SessionId, SessionInfo};
 
     #[test]
     fn mouse_click_outside_surface_is_ignored() {
         let mut app = make_app();
 
         app.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(vec![SessionInfo::new(
-            agent_client_protocol::schema::v1::SessionId::new("other"),
+            SessionId::new("other"),
             "/tmp",
         )])));
         assert!(app.app().has_session_picker());
@@ -395,7 +393,7 @@ mod event_routing {
 
     #[test]
     fn scroll_on_settings_overlay_changes_menu_selection() {
-        use agent_client_protocol::schema::v1::{SessionConfigOption, SessionConfigSelectOption};
+        use agent_client_protocol::schema::v2::{SessionConfigOption, SessionConfigSelectOption};
         let opts = vec![
             SessionConfigOption::select(
                 "model",
@@ -424,7 +422,7 @@ mod event_routing {
 
     #[test]
     fn settings_overlay_click_selects_entry() {
-        use agent_client_protocol::schema::v1::{SessionConfigOption, SessionConfigSelectOption};
+        use agent_client_protocol::schema::v2::{SessionConfigOption, SessionConfigSelectOption};
         let opts = vec![SessionConfigOption::select(
             "model",
             "Model",
@@ -449,7 +447,7 @@ mod event_routing {
         use acp_utils::notifications::{
             McpNotification, McpServerAuthCapability, McpServerStatus, McpServerStatusEntry,
         };
-        use agent_client_protocol::schema::v1::{
+        use agent_client_protocol::schema::v2::{
             AuthMethod, AuthMethodAgent, SessionConfigOption, SessionConfigSelectOption,
         };
 
@@ -484,7 +482,7 @@ mod event_routing {
         ui.terminal_event(click(10, beta_row));
         assert!(matches!(
             ui.next_agent_command(),
-            Some(AgentCommand::SetConfigOption { config_id, value, .. }) if config_id == "model" && value == "b"
+            Some(AgentCommand::SetConfigOption { config_id, value, .. }) if config_id == "model" && value == acp::SessionConfigOptionValue::id("b")
         ));
 
         let server = McpServerStatusEntry::new("linear", McpServerStatus::NeedsOAuth)
@@ -518,11 +516,11 @@ mod event_routing {
     #[test]
     fn session_picker_scroll_changes_selection() {
         let mut ui = make_ui();
-        let current = agent_client_protocol::schema::v1::SessionId::new("test-session");
+        let current = SessionId::new("test-session");
         let sessions = vec![
-            SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("a"), "/tmp/a"),
-            SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("b"), "/tmp/b"),
-            SessionInfo::new(agent_client_protocol::schema::v1::SessionId::new("c"), "/tmp/c"),
+            SessionInfo::new(SessionId::new("a"), "/tmp/a"),
+            SessionInfo::new(SessionId::new("b"), "/tmp/b"),
+            SessionInfo::new(SessionId::new("c"), "/tmp/c"),
         ];
         ui.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(sessions)));
         std::mem::drop(current);
@@ -905,18 +903,17 @@ mod screen_mouse {
 }
 
 mod mouse_owning_surfaces {
+    use agent_client_protocol::schema::v2::{SessionConfigOption, SessionConfigSelectOption, SessionId, SessionInfo};
+
     use super::*;
 
     #[test]
     fn settings_overlay_sets_surface_rect() {
-        let opts = vec![agent_client_protocol::schema::v1::SessionConfigOption::select(
+        let opts = vec![SessionConfigOption::select(
             "model",
             "Model",
             "a",
-            vec![
-                agent_client_protocol::schema::v1::SessionConfigSelectOption::new("a", "Alpha"),
-                agent_client_protocol::schema::v1::SessionConfigSelectOption::new("b", "Beta"),
-            ],
+            vec![SessionConfigSelectOption::new("a", "Alpha"), SessionConfigSelectOption::new("b", "Beta")],
         )];
         let mut ui = TestUiBuilder::new().config_options(opts).dimensions(80, 24).build();
 
@@ -934,13 +931,11 @@ mod mouse_owning_surfaces {
     #[test]
     fn session_picker_sets_surface_rect() {
         let mut ui = make_ui();
-        let current = agent_client_protocol::schema::v1::SessionId::new("test-session");
-        ui.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(vec![
-            agent_client_protocol::schema::v1::SessionInfo::new(
-                agent_client_protocol::schema::v1::SessionId::new("other"),
-                std::path::PathBuf::from("/tmp"),
-            ),
-        ])));
+        let current = SessionId::new("test-session");
+        ui.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(vec![SessionInfo::new(
+            SessionId::new("other"),
+            std::path::PathBuf::from("/tmp"),
+        )])));
         std::mem::drop(current);
 
         ui.draw();

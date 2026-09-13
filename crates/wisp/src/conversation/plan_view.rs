@@ -1,5 +1,5 @@
 use crate::theme::Theme;
-use agent_client_protocol::schema::v1::{PlanEntry, PlanEntryStatus};
+use agent_client_protocol::schema::v2::{PlanEntry, PlanEntryStatus};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -47,9 +47,16 @@ fn build_plan_lines(entries: &[PlanEntry], theme: &Theme) -> Vec<Line<'static>> 
 
     for entry in entries {
         let mut spans = Vec::new();
-        match entry.status {
+        match &entry.status {
             PlanEntryStatus::Completed => {
                 spans.push(Span::styled(format!("  {CHECKBOX_FILLED} "), Style::new().fg(theme.muted)));
+                spans.push(Span::styled(
+                    entry.content.clone(),
+                    Style::new().fg(theme.muted).add_modifier(Modifier::CROSSED_OUT),
+                ));
+            }
+            PlanEntryStatus::Other(value) if value == "_aether_cancelled" || value == "cancelled" => {
+                spans.push(Span::styled("  × ", Style::new().fg(theme.muted)));
                 spans.push(Span::styled(
                     entry.content.clone(),
                     Style::new().fg(theme.muted).add_modifier(Modifier::CROSSED_OUT),
@@ -73,7 +80,7 @@ fn build_plan_lines(entries: &[PlanEntry], theme: &Theme) -> Vec<Line<'static>> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v1::{PlanEntryPriority, PlanEntryStatus};
+    use agent_client_protocol::schema::v2::{PlanEntryPriority, PlanEntryStatus};
 
     fn test_theme() -> Theme {
         Theme::default()

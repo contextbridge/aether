@@ -2,9 +2,9 @@ use crate::command::{AgentCommand, CommandResult};
 use crate::runtime::tasks::TaskSupervisor;
 use acp_utils::client::{AcpClientError, AcpClientHandle};
 use acp_utils::notifications::{McpRequest, SessionPreviewParams, WorkspaceListParams, WorkspaceMoveParams};
-use agent_client_protocol::schema::v1::{
-    AuthenticateRequest, CancelNotification, ContentBlock, ListSessionsRequest, LoadSessionRequest, NewSessionRequest,
-    PromptRequest, SetSessionConfigOptionRequest, TextContent,
+use agent_client_protocol::schema::v2::{
+    CancelSessionNotification, ContentBlock, ListSessionsRequest, LoginAuthRequest, NewSessionRequest, PromptRequest,
+    ResumeSessionRequest, SetSessionConfigOptionRequest, TextContent,
 };
 
 #[allow(clippy::too_many_lines)]
@@ -33,7 +33,7 @@ pub(super) fn execute(
             let handle = handle.clone();
             tasks.spawn_network(async move {
                 handle
-                    .cancel(CancelNotification::new(session_id))
+                    .cancel(CancelSessionNotification::new(session_id))
                     .await
                     .map_or_else(|error| failed(failure, &error), |()| CommandResult::AgentCommandAccepted)
             });
@@ -43,11 +43,12 @@ pub(super) fn execute(
             let handle = handle.clone();
             tasks.spawn_network(async move {
                 handle
-                    .set_config_option(SetSessionConfigOptionRequest::new(session_id, config_id, value.as_str()))
+                    .set_config_option(SetSessionConfigOptionRequest::new(session_id, config_id, value))
                     .await
-                    .map_or_else(|error| CommandResult::ConfigOptionUpdateFailed { error: error.to_string() }, |response| {
-                        CommandResult::ConfigOptionsUpdated(response.config_options)
-                    })
+                    .map_or_else(
+                        |error| CommandResult::ConfigOptionUpdateFailed { error: error.to_string() },
+                        |response| CommandResult::ConfigOptionsUpdated(response.config_options),
+                    )
             });
             None
         }
@@ -66,13 +67,10 @@ pub(super) fn execute(
             let handle = handle.clone();
             tasks.spawn_network(async move {
                 let failed_method_id = method_id.clone();
-                handle
-                    .authenticate(AuthenticateRequest::new(method_id.clone()))
-                    .await
-                    .map_or_else(
-                        |_| CommandResult::AuthenticationFailed { method_id: failed_method_id },
-                        |_| CommandResult::AuthenticationCompleted { method_id },
-                    )
+                handle.login(LoginAuthRequest::new(method_id.clone())).await.map_or_else(
+                    |_| CommandResult::AuthenticationFailed { method_id: failed_method_id },
+                    |_| CommandResult::AuthenticationCompleted { method_id },
+                )
             });
             None
         }
@@ -86,11 +84,11 @@ pub(super) fn execute(
             });
             None
         }
-        AgentCommand::LoadSession { session_id, cwd } => {
+        AgentCommand::ResumeSession { session_id, cwd } => {
             let handle = handle.clone();
             tasks.spawn_network(async move {
                 handle
-                    .load_session(LoadSessionRequest::new(session_id, cwd))
+                    .resume_session_with_replay(ResumeSessionRequest::new(session_id, cwd))
                     .await
                     .map_or_else(|error| failed(failure, &error), |_| CommandResult::AgentCommandAccepted)
             });
@@ -121,39 +119,30 @@ pub(super) fn execute(
             let failed_id = session_id.clone();
             let handle = handle.clone();
             tasks.spawn_network(async move {
-                handle
-                    .preview_session(SessionPreviewParams { session_id })
-                    .await
-                    .map_or_else(
-                        |error| CommandResult::SessionPreviewFailed { session_id: failed_id, error: error.to_string() },
-                        CommandResult::SessionPreviewLoaded,
-                    )
+                handle.preview_session(SessionPreviewParams { session_id }).await.map_or_else(
+                    |error| CommandResult::SessionPreviewFailed { session_id: failed_id, error: error.to_string() },
+                    CommandResult::SessionPreviewLoaded,
+                )
             });
             None
         }
         AgentCommand::ListWorkspaces { session_id } => {
             let handle = handle.clone();
             tasks.spawn_network(async move {
-                handle
-                    .list_workspaces(WorkspaceListParams { session_id })
-                    .await
-                    .map_or_else(
-                        |error| CommandResult::WorkspaceListFailed { error: error.to_string() },
-                        CommandResult::WorkspacesListed,
-                    )
+                handle.list_workspaces(WorkspaceListParams { session_id }).await.map_or_else(
+                    |error| CommandResult::WorkspaceListFailed { error: error.to_string() },
+                    CommandResult::WorkspacesListed,
+                )
             });
             None
         }
         AgentCommand::MoveWorkspace { session_id, target } => {
             let handle = handle.clone();
             tasks.spawn_network(async move {
-                handle
-                    .move_workspace(WorkspaceMoveParams { session_id, target })
-                    .await
-                    .map_or_else(
-                        |error| CommandResult::WorkspaceMoveFailed { error: error.to_string() },
-                        CommandResult::WorkspaceMoved,
-                    )
+                handle.move_workspace(WorkspaceMoveParams { session_id, target }).await.map_or_else(
+                    |error| CommandResult::WorkspaceMoveFailed { error: error.to_string() },
+                    CommandResult::WorkspaceMoved,
+                )
             });
             None
         }

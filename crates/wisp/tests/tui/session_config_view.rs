@@ -1,8 +1,31 @@
 use acp_utils::config_meta::SelectOptionMeta;
 use acp_utils::config_option_id::ConfigOptionId;
-use agent_client_protocol::schema::v1::{SessionConfigOption, SessionConfigSelectGroup, SessionConfigSelectOption};
+use agent_client_protocol::schema::v2::{SessionConfigOption, SessionConfigSelectGroup, SessionConfigSelectOption};
 use utils::ReasoningEffort;
 use wisp::session::session_config_view::{LocalConfigOption, LocalConfigView};
+
+#[test]
+fn projects_v2_wire_ids_and_tolerates_unknown_categories() {
+    let option: SessionConfigOption = serde_json::from_value(serde_json::json!({
+        "configId": "model",
+        "name": "Model",
+        "category": "future_category",
+        "type": "select",
+        "currentValue": "fast",
+        "options": [{
+            "groupId": "provider",
+            "name": "Provider",
+            "options": [{"value": "fast", "name": "Fast"}]
+        }]
+    }))
+    .unwrap();
+    let options = [LocalConfigOption::from_acp(option)];
+    let view = LocalConfigView::new(&options);
+    assert_eq!(options[0].id, "model");
+    assert_eq!(view.current_display_name(ConfigOptionId::Model).as_deref(), Some("Fast"));
+    assert_eq!(view.flattened_options(ConfigOptionId::Model)[0].group.as_deref(), Some("Provider"));
+    assert_eq!(view.next_mode(), None);
+}
 
 fn option(value: &str, name: &str) -> SessionConfigSelectOption {
     SessionConfigSelectOption::new(value.to_string(), name.to_string())
@@ -16,8 +39,8 @@ fn projects_grouped_choices_current_display_and_model_metadata() {
         .meta(SelectOptionMeta { reasoning_levels: vec![], supports_image: false, supports_audio: true }.into_meta());
     let mut model =
         SessionConfigOption::select("model", "Model", "image,audio", Vec::<SessionConfigSelectOption>::new());
-    if let agent_client_protocol::schema::v1::SessionConfigKind::Select(select) = &mut model.kind {
-        select.options = agent_client_protocol::schema::v1::SessionConfigSelectOptions::Grouped(vec![
+    if let agent_client_protocol::schema::v2::SessionConfigKind::Select(select) = &mut model.kind {
+        select.options = agent_client_protocol::schema::v2::SessionConfigSelectOptions::Grouped(vec![
             SessionConfigSelectGroup::new("media", "Media", vec![image, audio]),
         ]);
     }

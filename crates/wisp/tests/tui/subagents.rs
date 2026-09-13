@@ -85,7 +85,7 @@ fn sub_agent_parent_stays_live_while_child_running() {
     app.complete_prompt(acp::StopReason::EndTurn);
     assert!(
         app.app().conversation_items().iter().any(|item| {
-            matches!(item.content(), ConversationContent::Tool(tool) if tool.title == "spawn_subagent")
+            matches!(item.content(), ConversationContent::Tool(tool) if tool.title() == "spawn_subagent")
         })
     );
 }
@@ -116,6 +116,7 @@ fn sub_agent_context_cleared_removes_state() {
 #[test]
 fn sub_agent_wants_tick_while_running() {
     let mut app = make_app();
+    app.submit("explore");
     app.acp_event(tool_call("parent-1", "spawn_subagent"));
     app.acp_event(tool_completed("parent-1"));
     app.acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", "{}"));
@@ -213,7 +214,7 @@ fn sub_agent_drain_includes_sub_agents_in_history_items() {
     app.complete_prompt(acp::StopReason::EndTurn);
 
     let tool_item = app.app().conversation_items().iter().find_map(|item| match item.content() {
-        ConversationContent::Tool(tool) if tool.title == "spawn_subagent" => Some(tool),
+        ConversationContent::Tool(tool) if tool.title() == "spawn_subagent" => Some(tool),
         _ => None,
     });
 
@@ -241,6 +242,7 @@ fn sub_agent_prompt_error_finalizes_sub_agents() {
 #[test]
 fn sub_agent_prompt_cancelled_finalizes_sub_agents() {
     let mut app = make_app();
+    app.submit("explore");
     app.acp_event(tool_call("parent-1", "spawn_subagent"));
     app.acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", "{}"));
 

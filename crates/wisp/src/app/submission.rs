@@ -1,9 +1,9 @@
 use super::App;
+use crate::attachment::{AttachmentOutcome, PromptAttachment};
 use crate::command::{AgentCommand, Command, FilesystemCommand};
 use crate::session::session_config_view::LocalConfigView;
-use crate::attachment::{AttachmentOutcome, PromptAttachment};
 use acp_utils::config_option_id::ConfigOptionId;
-use agent_client_protocol::schema::v1 as acp;
+use agent_client_protocol::schema::v2 as acp;
 
 #[derive(Default)]
 pub(super) enum SubmissionState {
@@ -27,7 +27,8 @@ impl SubmissionState {
 
 impl App {
     pub(super) fn submit(&mut self) {
-        if self.composer.is_empty() || self.waiting_for_response() || !matches!(self.submission, SubmissionState::Idle) {
+        if self.composer.is_empty() || self.waiting_for_response() || !matches!(self.submission, SubmissionState::Idle)
+        {
             return;
         }
 
@@ -53,15 +54,21 @@ impl App {
         let Some(text) = self.submission.take() else {
             return;
         };
-        self.conversation.append_user_content(&text);
-        for placeholder in &outcome.placeholders {
-            self.conversation.append_user_content(placeholder);
+        let display = std::iter::once(text.as_str())
+            .chain(outcome.placeholders.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let media_error = self.media_support_error(&outcome.blocks);
+        if media_error.is_some() {
+            self.conversation.append_user_content(display);
+        } else {
+            self.conversation.append_pending_user_content(display);
         }
         for warning in &outcome.warnings {
             self.notify(warning);
         }
 
-        if let Some(message) = self.media_support_error(&outcome.blocks) {
+        if let Some(message) = media_error {
             self.notify(&message);
             return;
         }
@@ -77,10 +84,10 @@ impl App {
             return None;
         }
 
-        if requires_image && !self.session.prompt_capabilities().image {
+        if requires_image && self.session.prompt_capabilities().image.is_none() {
             return Some("ACP agent does not support image input.".to_string());
         }
-        if requires_audio && !self.session.prompt_capabilities().audio {
+        if requires_audio && self.session.prompt_capabilities().audio.is_none() {
             return Some("ACP agent does not support audio input.".to_string());
         }
 

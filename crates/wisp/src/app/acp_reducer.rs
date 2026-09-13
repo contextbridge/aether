@@ -1,29 +1,36 @@
 use super::session::builtin_commands;
 use super::{App, ExitState, Overlay, Route};
-use crate::attachment::placeholder_for_content_block;
 use crate::command::{AgentCommand, Command, TerminalCommand};
-use crate::conversation::ContextUsageDisplay;
 use crate::conversation::tool_calls::ToolStatus;
+use crate::conversation::{ContextUsageDisplay, MessageRole};
 use crate::screens::plan_review::PlanReviewScreen;
+use crate::session::session_model::WorkspaceMoveState;
+use crate::session::workspace_status::home_relative_path;
 use crate::surfaces::modal::ElicitationModal;
 use crate::surfaces::picker::CommandEntry;
 use crate::surfaces::session_picker::SessionPicker;
-use acp_utils::client::{AcpEvent, LoadedSession};
+use acp_utils::client::{AcpEvent, ResumedSession};
 use acp_utils::notifications::McpNotification;
-use agent_client_protocol::schema::v1::{self as acp, CreateElicitationRequest, ElicitationMode, SessionId};
+use agent_client_protocol::schema::MaybeUndefined;
+use agent_client_protocol::schema::v2::{
+    self as acp, CreateElicitationRequest, ElicitationMode, SessionId, SessionUpdate, StateUpdate,
+};
 use std::time::Instant;
 
 impl App {
     #[allow(clippy::too_many_lines)]
     pub fn on_acp_event(&mut self, event: AcpEvent) {
         match event {
-            AcpEvent::SessionLoaded(loaded) => self.on_loaded_session(loaded),
+            AcpEvent::SessionResumed(loaded) => self.on_resumed_session(loaded),
             AcpEvent::SessionUpdate { session_id, update } => {
                 if &session_id == self.session.session_id() {
                     self.on_session_update(&update);
                 }
             }
-            AcpEvent::PromptCompleted(stop_reason) => {
+            AcpEvent::PromptCompleted { session_id, stop_reason } => {
+                if &session_id != self.session.session_id() || !self.waiting_for_response() {
+                    return;
+                }
                 let status = match stop_reason {
                     acp::StopReason::Cancelled => ToolStatus::Error("cancelled".to_string()),
                     _ => ToolStatus::Success,
@@ -73,7 +80,7 @@ impl App {
                 }
             }
             AcpEvent::ConnectionClosed => self.on_connection_closed(),
-            AcpEvent::SessionUsage(_) => {},
+            AcpEvent::SessionUsage(_) => {}
             AcpEvent::SubAgentProgress(progress) => {
                 if self.conversation.progress_indicator().accepts_activity() {
                     self.conversation.on_sub_agent_progress(&progress);
@@ -98,14 +105,17 @@ impl App {
         self.open_overlay(Overlay::Sessions(picker));
     }
 
-    pub(super) fn on_loaded_session(&mut self, loaded: LoadedSession) {
-        let LoadedSession { session_id, response, replay } = loaded;
-        self.reset_turn_state();
+    pub(super) fn on_resumed_session(&mut self, loaded: ResumedSession) {
+        let ResumedSession { session_id, response, replay } = loaded;
+        self.reset_conversation();
         self.session.set_session(session_id, Vec::new());
         for event in replay {
             self.on_acp_event(event.into());
         }
-        self.session.update_config_options(response.config_options.unwrap_or_default());
+        self.session.update_config_options(response.config_options);
+        if self.session.workspace_move_state() == WorkspaceMoveState::LoadingSession {
+            self.notify(&format!("Moved to {}", home_relative_path(self.session.working_dir())));
+        }
         self.return_to_conversation();
         self.session.end_workspace_move();
     }
@@ -154,43 +164,30 @@ impl App {
         }
     }
 
-    fn on_session_update(&mut self, update: &acp::SessionUpdate) {
-        if is_agent_activity(update) && !self.conversation.progress_indicator().accepts_activity() {
-            return;
+    fn on_session_update(&mut self, update: &SessionUpdate) {
+        if self.waiting_for_response() {
+            self.observe_activity(update);
         }
         match update {
-            acp::SessionUpdate::UserMessageChunk(chunk) => {
-                if let Some(text) = match &chunk.content {
-                    acp::ContentBlock::Text(text) => Some(text.text.clone()),
-                    block => placeholder_for_content_block(block).map(str::to_string),
-                } {
-                    self.conversation.append_user_content(text);
-                }
+            SessionUpdate::UserMessage(message) => {
+                self.conversation.upsert_message(MessageRole::User, message.message_id.clone(), &message.content);
             }
-            acp::SessionUpdate::AgentMessageChunk(chunk) => {
-                if let acp::ContentBlock::Text(text_content) = &chunk.content {
-                    if !text_content.text.is_empty() {
-                        self.conversation.progress_indicator_mut().response_started();
-                    }
-                    self.conversation.append_assistant_chunk(&text_content.text);
-                }
+            SessionUpdate::AgentMessage(message) => {
+                self.conversation.upsert_message(MessageRole::Assistant, message.message_id.clone(), &message.content);
             }
-            acp::SessionUpdate::AgentThoughtChunk(chunk) => {
-                if let acp::ContentBlock::Text(text_content) = &chunk.content
-                    && !text_content.text.is_empty()
-                {
-                    self.conversation.progress_indicator_mut().record_thought(&text_content.text);
-                }
+            SessionUpdate::UserMessageChunk(chunk) => {
+                self.conversation.append_message_chunk(MessageRole::User, chunk);
             }
-            acp::SessionUpdate::ToolCall(tool_call) => {
-                self.conversation.progress_indicator_mut().tool_activity();
-                self.conversation.on_tool_call(tool_call);
+            SessionUpdate::AgentMessageChunk(chunk) => {
+                self.conversation.append_message_chunk(MessageRole::Assistant, chunk);
             }
-            acp::SessionUpdate::ToolCallUpdate(update) => {
-                self.conversation.progress_indicator_mut().tool_activity();
+            SessionUpdate::ToolCallContentChunk(chunk) => {
+                self.conversation.on_tool_call_content_chunk(chunk);
+            }
+            SessionUpdate::ToolCallUpdate(update) => {
                 self.conversation.on_tool_call_update(update);
             }
-            acp::SessionUpdate::AvailableCommandsUpdate(update) => {
+            SessionUpdate::AvailableCommandsUpdate(update) => {
                 let agent_commands: Vec<_> = update
                     .available_commands
                     .iter()
@@ -199,7 +196,7 @@ impl App {
                         description: command.description.clone(),
                         has_input: command.input.is_some(),
                         hint: match &command.input {
-                            Some(acp::AvailableCommandInput::Unstructured(input)) => Some(input.hint.clone()),
+                            Some(acp::AvailableCommandInput::Text(input)) => Some(input.hint.clone()),
                             _ => None,
                         },
                         builtin: false,
@@ -209,26 +206,49 @@ impl App {
                 all.extend(agent_commands);
                 self.available_commands = all;
             }
-            acp::SessionUpdate::ConfigOptionUpdate(update) => {
+            SessionUpdate::ConfigOptionUpdate(update) => {
                 self.session.update_config_options(update.config_options.clone());
-                self.conversation.finish_current_block();
                 if let Some(Overlay::Settings(overlay)) = self.overlay.as_mut() {
                     overlay.update_config_options(self.session.config_options());
                 }
             }
-            acp::SessionUpdate::Plan(plan) => {
-                self.conversation.plan_tracker_mut().replace(plan.entries.clone(), Instant::now());
-                self.conversation.finish_current_block();
+            SessionUpdate::PlanUpdate(plan) => {
+                self.conversation.plan_tracker_mut().apply_update(plan, Instant::now());
             }
-            acp::SessionUpdate::UsageUpdate(usage) => {
+            SessionUpdate::UsageUpdate(usage) => {
                 self.conversation.turn_mut().set_context_usage(Some(ContextUsageDisplay {
                     used_tokens: u32::try_from(usage.used).unwrap_or(u32::MAX),
                     limit_tokens: u32::try_from(usage.size).unwrap_or(u32::MAX),
                 }));
             }
-            _ => {
-                self.conversation.finish_current_block();
+            _ => {}
+        }
+    }
+
+    fn observe_activity(&mut self, update: &SessionUpdate) {
+        let indicator = self.conversation.progress_indicator_mut();
+        match update {
+            SessionUpdate::AgentMessageChunk(_) | SessionUpdate::StateUpdate(StateUpdate::Running(_)) => {
+                indicator.response_started();
             }
+            SessionUpdate::StateUpdate(StateUpdate::RequiresAction(_)) => indicator.requires_action(),
+            SessionUpdate::ToolCallUpdate(_) => indicator.tool_activity(),
+            SessionUpdate::AgentThoughtChunk(chunk) => {
+                if let acp::ContentBlock::Text(text) = &chunk.content
+                    && !text.text.is_empty()
+                {
+                    indicator.record_thought(&chunk.message_id, &text.text);
+                }
+            }
+            SessionUpdate::AgentThought(message) => match &message.content {
+                MaybeUndefined::Undefined => {}
+                MaybeUndefined::Null => indicator.replace_thought(&message.message_id, ""),
+                MaybeUndefined::Value(blocks) => {
+                    let text = acp_utils::content::map_content_blocks_to_text(blocks.clone());
+                    indicator.replace_thought(&message.message_id, &text);
+                }
+            },
+            _ => {}
         }
     }
 
@@ -242,16 +262,6 @@ impl App {
             self.queue(Command::Terminal(TerminalCommand::RingBell));
         }
     }
-}
-
-fn is_agent_activity(update: &acp::SessionUpdate) -> bool {
-    matches!(
-        update,
-        acp::SessionUpdate::AgentMessageChunk(_)
-            | acp::SessionUpdate::AgentThoughtChunk(_)
-            | acp::SessionUpdate::ToolCall(_)
-            | acp::SessionUpdate::ToolCallUpdate(_)
-    )
 }
 
 pub(super) fn plan_review_meta(

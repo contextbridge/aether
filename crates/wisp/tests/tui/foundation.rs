@@ -38,7 +38,7 @@ fn auth_methods_update_replaces_current_auth_methods() {
     app.acp_event(AcpEvent::AuthMethodsUpdated(AuthMethodsUpdatedParams { auth_methods: updated }));
 
     assert_eq!(app.app().auth_methods().len(), 1);
-    assert_eq!(app.app().auth_methods()[0].id().0.as_ref(), "updated");
+    assert_eq!(app.app().auth_methods()[0].method_id().0.as_ref(), "updated");
 }
 
 #[test]

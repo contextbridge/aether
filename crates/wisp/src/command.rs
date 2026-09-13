@@ -9,8 +9,8 @@ use acp_utils::notifications::{
     PromptSearchParams, PromptSearchResponse, SessionPreviewResponse, WorkspaceListResponse, WorkspaceMoveResponse,
     WorkspaceMoveTarget,
 };
-use agent_client_protocol::schema::v1::{
-    ContentBlock, ListSessionsResponse, NewSessionResponse, SessionConfigOption, SessionId,
+use agent_client_protocol::schema::v2::{
+    ContentBlock, ListSessionsResponse, NewSessionResponse, SessionConfigOption, SessionConfigOptionValue, SessionId,
 };
 use clankerdiff_ratatui::diff::RepositoryAction;
 use std::path::PathBuf;
@@ -29,11 +29,11 @@ pub enum Command {
 pub enum AgentCommand {
     Prompt { session_id: SessionId, text: String, content: Option<Vec<ContentBlock>> },
     Cancel { session_id: SessionId },
-    SetConfigOption { session_id: SessionId, config_id: String, value: String },
+    SetConfigOption { session_id: SessionId, config_id: String, value: SessionConfigOptionValue },
     AuthenticateMcpServer { session_id: SessionId, server_name: String },
     Authenticate { method_id: String },
     ListSessions,
-    LoadSession { session_id: SessionId, cwd: PathBuf },
+    ResumeSession { session_id: SessionId, cwd: PathBuf },
     NewSession { cwd: PathBuf },
     SearchPrompts(PromptSearchParams),
     SessionPreview { session_id: String },
@@ -45,7 +45,7 @@ impl AgentCommand {
     pub(crate) fn failure(&self) -> FailedCommand {
         match self {
             Self::Prompt { .. } => FailedCommand::Prompt,
-            Self::LoadSession { .. } => FailedCommand::LoadSession,
+            Self::ResumeSession { .. } => FailedCommand::ResumeSession,
             Self::ListWorkspaces { .. } => FailedCommand::ListWorkspaces,
             Self::MoveWorkspace { .. } => FailedCommand::MoveWorkspace,
             Self::Cancel { .. } => FailedCommand::Other("cancel"),
@@ -63,7 +63,7 @@ impl AgentCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailedCommand {
     Prompt,
-    LoadSession,
+    ResumeSession,
     ListWorkspaces,
     MoveWorkspace,
     Other(&'static str),
@@ -73,7 +73,7 @@ impl FailedCommand {
     pub fn describe(self) -> &'static str {
         match self {
             Self::Prompt => "send prompt",
-            Self::LoadSession => "load session",
+            Self::ResumeSession => "resume session",
             Self::ListWorkspaces => "list workspaces",
             Self::MoveWorkspace => "move workspace",
             Self::Other(name) => name,

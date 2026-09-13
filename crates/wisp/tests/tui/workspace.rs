@@ -346,7 +346,7 @@ fn workspace_move_success_updates_cwd_and_reloads_session() {
 
     let load_cmd = ui.next_agent_command().unwrap();
     match load_cmd {
-        AgentCommand::LoadSession { session_id, cwd } => {
+        AgentCommand::ResumeSession { session_id, cwd } => {
             assert_eq!(session_id.0.as_ref(), "test-session");
             assert_eq!(cwd, std::path::Path::new("/home/user/code/other"));
         }
@@ -376,11 +376,11 @@ fn workspace_move_success_replays_loaded_session_updates() {
     ui.deliver_result(workspace_moved("/home/user/code/other"));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.acp_event(AcpEvent::SessionLoaded(LoadedSession {
+    ui.acp_event(AcpEvent::SessionResumed(ResumedSession {
         session_id: SessionId::new("test-session"),
-        response: acp::LoadSessionResponse::new(),
+        response: acp::ResumeSessionResponse::default(),
         replay: vec![
-            acp::SessionNotification::new(SessionId::new("test-session"), user_message_chunk("buffered-message"))
+            acp::UpdateSessionNotification::new(SessionId::new("test-session"), user_message_chunk("buffered-message"))
                 .into(),
         ],
     }));
@@ -392,7 +392,11 @@ fn workspace_move_success_replays_loaded_session_updates() {
     let collapsed = viewport.replace('\n', " ");
     let words: Vec<&str> = collapsed.split_whitespace().collect();
     let joined = words.join(" ");
-    assert!(joined.contains("Moved to /home/user/code/other"), "{viewport}");
+    assert_eq!(joined.matches("Moved to /home/user/code/other").count(), 1, "{viewport}");
+
+    ui.acp_event(session_loaded("another-session", Vec::new()));
+    ui.assert_viewport_not_contains("Moved to");
+    ui.assert_viewport_not_contains("buffered-message");
 }
 
 #[test]
@@ -415,13 +419,16 @@ fn workspace_move_load_session_failure_recovers() {
     assert_eq!(ui.app().workspace_move_state(), WorkspaceMoveState::LoadingSession);
     let _ = ui.next_agent_command().unwrap();
 
-    ui.deliver_result(CommandResult::Failed { command: FailedCommand::LoadSession, error: "send failed".to_string() });
+    ui.deliver_result(CommandResult::Failed {
+        command: FailedCommand::ResumeSession,
+        error: "send failed".to_string(),
+    });
     assert_eq!(ui.app().workspace_move_state(), WorkspaceMoveState::Idle);
 
     ui.draw();
     let viewport = ui.viewport_text();
     let joined = viewport.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(joined.contains("Failed to load session"), "{viewport}");
+    assert!(joined.contains("Failed to resume session"), "{viewport}");
 }
 
 #[test]

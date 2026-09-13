@@ -1,6 +1,6 @@
 use acp_utils::client::AcpEvent;
 use acp_utils::notifications::ContextCompactionParams;
-use agent_client_protocol::schema::v1 as acp;
+use agent_client_protocol::schema::v2 as acp;
 
 use super::support::*;
 
@@ -19,7 +19,7 @@ fn progress_ui() -> (TestUi, Instant) {
 }
 
 fn running_tool(id: &str, title: &str) -> AcpEvent {
-    session_update(acp::SessionUpdate::ToolCall(acp::ToolCall::new(id.to_string(), title)))
+    tool_call(id, title)
 }
 
 fn context_usage(used: u64, limit: u64) -> AcpEvent {
@@ -54,7 +54,10 @@ fn prompt_completion_event_clears_responding_state() {
     ui.acp_event(text_chunk("final answer"));
     ui.assert_viewport_contains("Responding…");
 
-    ui.acp_event(AcpEvent::PromptCompleted(acp::StopReason::EndTurn));
+    ui.acp_event(AcpEvent::PromptCompleted {
+        session_id: SessionId::new("test-session"),
+        stop_reason: acp::StopReason::EndTurn,
+    });
 
     assert!(!ui.app().waiting_for_response());
     assert!(!ui.app().is_agent_busy());
@@ -62,7 +65,7 @@ fn prompt_completion_event_clears_responding_state() {
 }
 
 #[test]
-fn activity_after_prompt_completion_is_ignored() {
+fn updates_after_prompt_completion_do_not_restart_progress() {
     let (mut ui, _) = progress_ui();
     ui.acp_event(text_chunk("final answer"));
     ui.complete_prompt(acp::StopReason::EndTurn);
@@ -72,11 +75,16 @@ fn activity_after_prompt_completion_is_ignored() {
     ui.acp_event(tool_call("late-tool", "Late tool"));
     ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
 
-    ui.assert_viewport_not_contains("late chunk");
+    assert!(
+        ui.app().conversation_items().iter().any(|item| item.text().is_some_and(|text| text.contains("late chunk")))
+    );
     ui.assert_viewport_not_contains("late thought");
-    ui.assert_viewport_not_contains("Late tool");
     ui.assert_viewport_not_contains("Responding…");
-    assert!(!ui.app().wants_tick());
+    ui.assert_viewport_not_contains("Working…");
+    ui.assert_viewport_not_contains("Thinking…");
+    ui.assert_viewport_not_contains("Compacting context...");
+    assert!(!ui.app().progress_indicator().is_active());
+    assert!(!ui.app().waiting_for_response());
 }
 
 #[test]
@@ -119,6 +127,55 @@ fn reasoning_is_ephemeral_and_scoped_to_thinking() {
     ui.submit("again");
     ui.tick(t0 + Duration::from_millis(300));
     ui.assert_viewport_not_contains("fresh reasoning");
+}
+
+#[test]
+fn thought_upserts_replace_and_clear_only_the_ephemeral_preview() {
+    let (mut ui, _) = progress_ui();
+    for (content, expected) in [
+        (serde_json::json!([{"type": "text", "text": "initial reasoning"}]), "initial reasoning"),
+        (serde_json::json!([{"type": "text", "text": "replacement reasoning"}]), "replacement reasoning"),
+        (serde_json::Value::Null, ""),
+    ] {
+        ui.acp_event(session_update(
+            serde_json::from_value(serde_json::json!({
+                "sessionUpdate": "agent_thought", "messageId": "thought-upsert", "content": content
+            }))
+            .unwrap(),
+        ));
+        assert!(ui.app().conversation_items().iter().all(|item| item.message_id().is_none()));
+        if expected.is_empty() {
+            ui.assert_viewport_not_contains("reasoning");
+        } else {
+            assert!(activity_row(&mut ui, "Thinking…").contains(expected));
+        }
+        assert!(!ui.history_text().contains("reasoning"));
+    }
+    ui.assert_viewport_not_contains("reasoning");
+    ui.acp_event(session_update(acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(
+        "appended reasoning".into(),
+        "thought-upsert",
+    ))));
+    ui.acp_event(session_update(
+        serde_json::from_value(serde_json::json!({
+            "sessionUpdate": "agent_thought", "messageId": "thought-upsert"
+        }))
+        .unwrap(),
+    ));
+    ui.acp_event(session_update(
+        serde_json::from_value(serde_json::json!({
+            "sessionUpdate": "agent_thought", "messageId": "another-thought", "content": null
+        }))
+        .unwrap(),
+    ));
+    assert!(activity_row(&mut ui, "Thinking…").contains("appended reasoning"));
+    ui.acp_event(session_update(
+        serde_json::from_value(serde_json::json!({
+            "sessionUpdate": "agent_thought", "messageId": "thought-upsert", "content": []
+        }))
+        .unwrap(),
+    ));
+    ui.assert_viewport_not_contains("reasoning");
 }
 
 #[test]
@@ -180,6 +237,7 @@ fn phases_follow_agent_events() {
 fn stray_thought_chunk_is_not_interruptible() {
     let mut ui = TestUiBuilder::new().dimensions(120, 15).build();
     ui.acp_event(thought_chunk("pondering"));
-    ui.assert_viewport_contains("Thinking…");
+    ui.assert_viewport_not_contains("Thinking…");
+    ui.assert_viewport_not_contains("pondering");
     ui.assert_viewport_not_contains("esc to interrupt");
 }

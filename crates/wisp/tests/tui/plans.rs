@@ -5,7 +5,9 @@ fn plan_entry(content: &str, status: acp::PlanEntryStatus) -> acp::PlanEntry {
 }
 
 fn plan_update(entries: Vec<acp::PlanEntry>) -> AcpEvent {
-    session_update(acp::SessionUpdate::Plan(acp::Plan::new(entries)))
+    session_update(acp::SessionUpdate::PlanUpdate(acp::PlanUpdate::new(acp::PlanUpdateContent::Items(
+        acp::PlanItems::new("plan", entries),
+    ))))
 }
 
 #[test]

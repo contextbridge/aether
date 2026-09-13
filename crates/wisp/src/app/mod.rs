@@ -19,7 +19,8 @@ use crate::theme::Theme;
 use crate::view::generation::Generation;
 use acp_utils::client::AcpEvent;
 use acp_utils::notifications::AetherCapabilities;
-use agent_client_protocol::schema::v1::{self as acp, SessionId};
+use agent_client_protocol::schema::v2::PlanEntry;
+use agent_client_protocol::schema::v2::{self as acp, SessionId};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -250,7 +251,7 @@ impl App {
             }
             CommandResult::SessionsListed(response) => self.open_session_picker(response.sessions),
             CommandResult::NewSessionCreated(response) => {
-                self.on_new_session(response.session_id, response.config_options.unwrap_or_default());
+                self.on_new_session(response.session_id, response.config_options);
             }
             CommandResult::PromptSearchResults(response) => self.composer.prompt_search_on_results(response),
             CommandResult::PromptSearchFailed { query, error } => {
@@ -289,7 +290,7 @@ impl App {
                 self.finish_prompt(&ToolStatus::Error(format!("failed: {error}")));
                 self.submission.reset();
             }
-            FailedCommand::LoadSession | FailedCommand::ListWorkspaces | FailedCommand::MoveWorkspace => {
+            FailedCommand::ResumeSession | FailedCommand::ListWorkspaces | FailedCommand::MoveWorkspace => {
                 self.session.end_workspace_move();
             }
             FailedCommand::Other(_) => {}
@@ -356,6 +357,10 @@ impl App {
 
     pub fn exit_requested(&self) -> bool {
         self.exit_state == ExitState::Exiting
+    }
+
+    pub fn session_id(&self) -> &acp::SessionId {
+        self.session.session_id()
     }
 
     pub fn conversation_items(&self) -> &[ConversationItem] {
@@ -438,7 +443,7 @@ impl App {
         self.conversation.turn().spinner_tick()
     }
 
-    pub fn plan_entries(&self) -> Vec<acp::PlanEntry> {
+    pub fn plan_entries(&self) -> Vec<PlanEntry> {
         self.conversation.plan_tracker().current_entries()
     }
 
@@ -455,10 +460,6 @@ impl App {
         self.conversation.clear();
     }
 
-    /// Clears the per-turn indicators that must not survive into a different
-    /// conversation. Used on its own when a load lands, because the conversation
-    /// was already cleared when that load was requested — and may since have
-    /// gained notices the user still needs to see.
     fn reset_turn_state(&mut self) {
         // The spinner phase is cosmetic and survives, so a swap does not make
         // the indicator visibly jump.

@@ -1,6 +1,6 @@
 use acp_utils::client::AcpEvent;
 use acp_utils::notifications::{McpServerStatus, McpServerStatusEntry};
-use agent_client_protocol::schema::v1::{self as acp, SessionId};
+use agent_client_protocol::schema::v2::{self as acp, SessionId};
 use clankerdiff_ratatui::composite_color;
 use clankerdiff_ratatui::theme::{ReviewTheme, Rgba, ThemeError};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

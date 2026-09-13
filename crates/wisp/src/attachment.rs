@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v1 as acp;
+use agent_client_protocol::schema::v2 as acp;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use std::io::Read;
@@ -7,8 +7,6 @@ use url::Url;
 
 const IMAGE_ATTACHMENT_LABEL: &str = "image attachment";
 const AUDIO_ATTACHMENT_LABEL: &str = "audio attachment";
-pub(crate) const IMAGE_ATTACHMENT_PLACEHOLDER: &str = "[image attachment]";
-pub(crate) const AUDIO_ATTACHMENT_PLACEHOLDER: &str = "[audio attachment]";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptAttachment {
@@ -28,14 +26,6 @@ pub struct AttachmentOutcome {
     pub blocks: Vec<acp::ContentBlock>,
     pub placeholders: Vec<String>,
     pub warnings: Vec<String>,
-}
-
-pub(crate) fn placeholder_for_content_block(block: &acp::ContentBlock) -> Option<&'static str> {
-    match block {
-        acp::ContentBlock::Image(_) => Some(IMAGE_ATTACHMENT_PLACEHOLDER),
-        acp::ContentBlock::Audio(_) => Some(AUDIO_ATTACHMENT_PLACEHOLDER),
-        _ => None,
-    }
 }
 
 pub fn classify_attachment(path: &Path) -> AttachmentKind {

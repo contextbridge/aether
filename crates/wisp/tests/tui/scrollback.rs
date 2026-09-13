@@ -1,5 +1,71 @@
 use super::support::*;
 
+#[test]
+fn committed_message_replacements_publish_a_corrected_transcript_once() {
+    let mut ui = TestUi::new();
+    commit_overflowing_reply(&mut ui);
+    ui.acp_event(session_update(acp::SessionUpdate::AgentMessage(
+        acp::AgentMessage::new("overflow-reply").content(vec![acp::ContentBlock::from("corrected answer")]),
+    )));
+    ui.draw();
+    ui.assert_history_contains("Transcript updated;");
+    ui.assert_viewport_contains("corrected answer");
+    let history = ui.history_text();
+    ui.draw();
+    assert_eq!(ui.history_text(), history);
+    ui.acp_event(wisp::testing::text_chunk_with_id("overflow-reply", " plus more"));
+    ui.draw();
+    ui.assert_viewport_contains("corrected answer plus more");
+}
+
+#[test]
+fn late_chunk_for_a_fully_committed_message_is_not_lost() {
+    let mut ui = TestUi::new();
+    commit_overflowing_reply(&mut ui);
+    ui.assert_history_contains("finished reply");
+    ui.acp_event(wisp::testing::text_chunk_with_id("overflow-reply", "\n\nlate appendix"));
+    ui.draw();
+    let history = ui.history_text();
+    let corrected = history.split("superseded.").last().unwrap();
+    assert!(corrected.contains("late appendix"));
+    assert_eq!(corrected.matches("overflow-line-0").count(), 1);
+    ui.draw();
+    assert_eq!(ui.history_text(), history);
+}
+
+#[test]
+fn committed_message_clear_publishes_a_corrected_transcript() {
+    let mut ui = TestUi::new();
+    commit_overflowing_reply(&mut ui);
+    ui.acp_event(session_update(acp::SessionUpdate::AgentMessage(
+        acp::AgentMessage::new("overflow-reply").content(agent_client_protocol::schema::MaybeUndefined::Null),
+    )));
+    ui.draw();
+    ui.assert_history_contains("Transcript updated;");
+    assert!(!ui.viewport_text().contains("overflow-line"));
+}
+
+#[test]
+fn live_message_upserts_replace_clear_and_append_without_a_history_correction() {
+    let mut ui = TestUi::new();
+    ui.acp_event(wisp::testing::text_chunk_with_id("mutable", "a longer original"));
+    ui.draw();
+    for replacement in [Some("é"), None, Some(""), Some("new")] {
+        let content = replacement.map_or(agent_client_protocol::schema::MaybeUndefined::Null, |text| {
+            agent_client_protocol::schema::MaybeUndefined::Value(vec![acp::ContentBlock::from(text)])
+        });
+        ui.acp_event(session_update(acp::SessionUpdate::AgentMessage(
+            acp::AgentMessage::new("mutable").content(content),
+        )));
+        ui.draw();
+        ui.assert_viewport_not_contains("original");
+        ui.acp_event(wisp::testing::text_chunk_with_id("mutable", " tail"));
+        ui.draw();
+        ui.assert_viewport_contains(&format!("{} tail", replacement.unwrap_or_default()));
+    }
+    ui.assert_history_not_contains("Transcript updated;");
+}
+
 fn drain_commands(app: &mut TestUi) {
     let _ = app.take_commands();
 }
@@ -17,14 +83,13 @@ fn commit_overflowing_reply(ui: &mut TestUi) {
         writeln!(reply, "overflow-line-{index}").unwrap();
         reply.push('\n');
     }
-    ui.acp_event(text_chunk(&format!("{reply}still streaming")));
+    ui.acp_event(wisp::testing::text_chunk_with_id("overflow-reply", &format!("{reply}finished reply")));
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
     assert!(
         ui.history_text().contains("overflow-line-0"),
         "precondition: a prior reply must have been committed to scrollback"
     );
-    // Complete the turn so the app is idle and later commands (e.g. /move) are not blocked.
-    ui.complete_prompt(acp::StopReason::EndTurn);
 }
 
 #[test]
@@ -65,7 +130,7 @@ fn session_switch_preserves_native_scrollback_without_purging() {
     assert_command(&mut ui, |c| matches!(c, AgentCommand::ListSessions), "/resume");
     ui.deliver_result(sessions_listed(vec![session_info("other", "/tmp/elsewhere", "Other", "2025-01-01T00:00:00Z")]));
     ui.key(key(KeyCode::Enter));
-    assert_command(&mut ui, |c| matches!(c, AgentCommand::LoadSession { .. }), "resume");
+    assert_command(&mut ui, |c| matches!(c, AgentCommand::ResumeSession { .. }), "resume");
 
     ui.assert_history_contains("overflow-line-0");
 

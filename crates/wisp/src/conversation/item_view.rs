@@ -26,8 +26,10 @@ pub(crate) fn item_lines(
     spinner_tick: usize,
     theme: &Theme,
     highlighter: &mut SyntaxHighlighter,
-    preview: Option<&[Line<'static>]>,
 ) -> Vec<Line<'static>> {
+    if item.text().is_some_and(str::is_empty) {
+        return Vec::new();
+    }
     let content_width = content_width(width, padding);
     match item.content() {
         ConversationContent::User(text) => user_block_lines(&text.text, width, padding, theme),
@@ -35,9 +37,7 @@ pub(crate) fn item_lines(
             indent_lines(render_markdown(&text.text, content_width, theme, highlighter), padding)
         }
         ConversationContent::Notice(notice) => user_block_lines(&notice.text, width, padding, theme),
-        ConversationContent::Tool(tool) => {
-            tool_lines(tool, content_width, padding, spinner_tick, theme, highlighter, preview)
-        }
+        ConversationContent::Tool(tool) => tool_lines(tool, content_width, padding, spinner_tick, theme, highlighter),
     }
 }
 

@@ -1,10 +1,10 @@
 use crate::renderer::DrawContext;
 use crate::surfaces::input::{Nav, SessionPickerOutput, UiEvent, one};
-use crate::view::filterable_list::FilterableList;
 use crate::theme::Theme;
+use crate::view::filterable_list::FilterableList;
 use crate::view::wrap::truncate_to_width;
 use acp_utils::notifications::SessionPreviewResponse;
-use agent_client_protocol::schema::v1::{self as acp, SessionId};
+use agent_client_protocol::schema::v2::{self as acp, SessionId};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::Style;
@@ -33,7 +33,7 @@ impl SessionPicker {
     pub fn new(sessions: Vec<acp::SessionInfo>, preview_enabled: bool) -> Self {
         Self {
             sessions: FilterableList::new(sessions, |session| {
-                format!("{} {}", session.title.as_deref().unwrap_or(""), session.cwd.display())
+                format!("{} {}", session.title.as_deref().unwrap_or(""), session.cwd.0.display())
             }),
             preview_enabled,
             previews: HashMap::new(),
@@ -78,11 +78,12 @@ impl SessionPicker {
             let name = session
                 .title
                 .as_deref()
-                .unwrap_or_else(|| session.cwd.file_name().map_or("?", |name| name.to_str().unwrap_or("?")));
+                .unwrap_or_else(|| session.cwd.0.file_name().map_or("?", |name| name.to_str().unwrap_or("?")));
             let cwd = session
                 .cwd
+                .0
                 .file_name()
-                .map_or_else(|| session.cwd.display().to_string(), |name| name.to_string_lossy().into_owned());
+                .map_or_else(|| session.cwd.0.display().to_string(), |name| name.to_string_lossy().into_owned());
             Line::styled(format!("  {}  {cwd}", truncate_to_width(name, 48)), Style::new().fg(theme.text_secondary))
         });
     }
@@ -99,7 +100,7 @@ impl SessionPicker {
                 format!(" Title: {}", session.title.as_deref().unwrap_or("(untitled)")),
                 Style::new().fg(theme.text_primary),
             ),
-            Line::styled(format!(" Path: {}", session.cwd.display()), muted),
+            Line::styled(format!(" Path: {}", session.cwd.0.display()), muted),
         ];
 
         if let Some(timestamp) = &session.updated_at {
@@ -158,9 +159,9 @@ impl SessionPicker {
     }
 
     fn activate(&mut self) -> Vec<SessionPickerOutput> {
-        one(self.sessions.selected_entry().map(|session| SessionPickerOutput::Load {
+        one(self.sessions.selected_entry().map(|session| SessionPickerOutput::Resume {
             session_id: SessionId::new(session.session_id.0.to_string()),
-            cwd: session.cwd.clone(),
+            cwd: session.cwd.0.clone(),
         }))
     }
 }

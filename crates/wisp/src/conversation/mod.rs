@@ -8,8 +8,8 @@ pub mod tool_calls;
 pub(crate) mod tool_view;
 mod turn;
 pub use items::{
-    Conversation, ConversationContent, ConversationId, ConversationItem, ConversationItemId, ItemState, Notice,
-    Revision, TextItem,
+    Conversation, ConversationContent, ConversationId, ConversationItem, ConversationItemId, ItemState, MessageRole,
+    Notice, Revision, TextItem,
 };
 pub use tool_calls::{SubAgentState, SubAgentToolCall, ToolCall, ToolStatus};
 pub use turn::{ContextUsageDisplay, TurnState};

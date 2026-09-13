@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::schema::v2::{
     ElicitationContentValue, ElicitationPropertySchema, ElicitationSchema, EnumOption, MultiSelectItems,
     MultiSelectPropertySchema, StringPropertySchema,
 };
@@ -199,7 +199,9 @@ impl FormModal {
 
     fn text_buffer(&mut self) -> Option<&mut EditBuffer> {
         match self.focused_kind()? {
-            FormFieldKind::Text(buffer) | FormFieldKind::Integer(buffer) | FormFieldKind::Number(buffer) => Some(buffer),
+            FormFieldKind::Text(buffer) | FormFieldKind::Integer(buffer) | FormFieldKind::Number(buffer) => {
+                Some(buffer)
+            }
             _ => None,
         }
     }
@@ -891,12 +893,7 @@ impl FormField {
                     return if self.required { Err(missing()) } else { Ok(None) };
                 }
                 let invalid = || format!("{} must be an integer", self.label);
-                value
-                    .text()
-                    .parse::<i64>()
-                    .map(ElicitationContentValue::Integer)
-                    .map(Some)
-                    .map_err(|_| invalid())
+                value.text().parse::<i64>().map(ElicitationContentValue::Integer).map(Some).map_err(|_| invalid())
             }
             FormFieldKind::Number(value) => {
                 if value.is_empty() {
@@ -1016,7 +1013,7 @@ pub(super) fn permission_like_schema() -> ElicitationSchema {
 mod tests {
     use super::*;
     use crate::testing::{buffer_text, row_containing};
-    use agent_client_protocol::schema::v1::{BooleanPropertySchema, IntegerPropertySchema, NumberPropertySchema};
+    use agent_client_protocol::schema::v2::{BooleanPropertySchema, IntegerPropertySchema, NumberPropertySchema};
     use crossterm::event::KeyModifiers;
     use serde_json::Value;
 
