@@ -186,7 +186,7 @@ impl AcpClientHandle {
         self.dispatch(request, RequestGate::Always).await
     }
 
-    /// Send a request that must wait until no foreground turn or restoration is active.
+    /// Reject with [`AcpClientError::Busy`] if a foreground turn or restoration is active.
     async fn request_when_idle<T>(&self, request: T) -> Result<T::Response, AcpClientError>
     where
         T: JsonRpcRequest + Send + 'static,

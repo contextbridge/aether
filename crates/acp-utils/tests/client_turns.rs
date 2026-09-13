@@ -15,7 +15,7 @@ use tokio::task::{LocalSet, spawn_local};
 async fn cancellation_before_and_after_acceptance_waits_for_agent_idle() {
     LocalSet::new()
         .run_until(async {
-            let mut fake = TurnTestBuilder::default().build().await;
+            let mut fake = TurnTest::connect().await;
             for before_ack in [true, false] {
                 let prompt = fake.submit("one").await;
                 if before_ack {
@@ -49,7 +49,7 @@ async fn cancellation_before_and_after_acceptance_waits_for_agent_idle() {
 async fn one_foreground_turn_blocks_other_sessions_until_idle() {
     LocalSet::new()
         .run_until(async {
-            let mut fake = TurnTestBuilder::default().build().await;
+            let mut fake = TurnTest::connect().await;
             for session in ["one", "two"] {
                 let prompt = fake.submit(session).await;
                 fake.assert_prompt_busy("other").await;
@@ -76,21 +76,6 @@ async fn one_foreground_turn_blocks_other_sessions_until_idle() {
             assert!(fake.client.event_rx.recv().await.is_none());
         })
         .await;
-}
-
-#[derive(Default)]
-struct TurnTestBuilder {
-    accepted_turn: Option<&'static str>,
-}
-
-impl TurnTestBuilder {
-    async fn build(self) -> TurnTest {
-        let mut test = TurnTest::connect().await;
-        if let Some(session) = self.accepted_turn {
-            test.submit(session).await.accept().await;
-        }
-        test
-    }
 }
 
 struct PendingPrompt {
