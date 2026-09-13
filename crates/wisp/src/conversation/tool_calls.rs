@@ -55,12 +55,6 @@ impl SubAgentState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolDiff {
-    pub changes: Vec<String>,
-    pub patch: Option<String>,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolCall {
     pub id: String,
@@ -97,17 +91,11 @@ impl ToolCall {
         self.protocol.content.value().map_or(&[], Vec::as_slice)
     }
 
-    pub fn diffs(&self) -> Vec<ToolDiff> {
-        self.content()
-            .iter()
-            .filter_map(|content| match content {
-                acp::ToolCallContent::Diff(diff) => Some(ToolDiff {
-                    changes: diff.changes.iter().map(diff_change_label).collect(),
-                    patch: diff.patch.as_ref().map(|patch| patch.text.clone()),
-                }),
-                _ => None,
-            })
-            .collect()
+    pub fn diffs(&self) -> impl Iterator<Item = &acp::Diff> {
+        self.content().iter().filter_map(|content| match content {
+            acp::ToolCallContent::Diff(diff) => Some(diff),
+            _ => None,
+        })
     }
 
     pub fn apply_update(&mut self, update: &acp::ToolCallUpdate) {
@@ -157,8 +145,8 @@ impl ToolCall {
             })
     }
 
-    /// Whether this call's rendering can no longer change: it reached a
-    /// terminal status and every spawned sub-agent has finished. A background
+    /// Whether this call can enter native history: it reached a terminal
+    /// status and every spawned sub-agent has finished. A background
     /// spawn completes before its agents start reporting, so an empty tree on
     /// a completed spawner means "not yet", not "none".
     pub(crate) fn rendering_final(&self) -> bool {
@@ -224,21 +212,6 @@ fn apply_sub_agent_progress(states: &mut Vec<SubAgentState>, notification: &SubA
         }
         SubAgentEvent::Done => agent.done = true,
         SubAgentEvent::Other => {}
-    }
-}
-
-fn diff_change_label(change: &acp::DiffChange) -> String {
-    match &change.operation {
-        acp::DiffChangeOperation::Add(change) => format!("A {}", change.path.0.display()),
-        acp::DiffChangeOperation::Delete(change) => format!("D {}", change.path.0.display()),
-        acp::DiffChangeOperation::Modify(change) => format!("M {}", change.path.0.display()),
-        acp::DiffChangeOperation::Move(change) => {
-            format!("R {} → {}", change.old_path.0.display(), change.path.0.display())
-        }
-        acp::DiffChangeOperation::Copy(change) => {
-            format!("C {} → {}", change.old_path.0.display(), change.path.0.display())
-        }
-        _ => "Unknown file change".to_string(),
     }
 }
 

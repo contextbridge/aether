@@ -78,7 +78,7 @@ impl ConversationItem {
         self.revision
     }
 
-    /// Advances whenever already-rendered text is rewritten rather than appended to.
+    /// Advances when a change can invalidate rows already committed to native history.
     pub fn replacement_revision(&self) -> Revision {
         self.replacement_revision
     }
@@ -173,7 +173,7 @@ impl Conversation {
         let content = message_content(role, text);
         if self.items[index].content != content {
             self.items[index].content = content;
-            self.replace(index);
+            self.items[index].changed(true);
         }
     }
 
@@ -185,10 +185,8 @@ impl Conversation {
             ConversationContent::User(current) | ConversationContent::Assistant(current) => current.text.push_str(&text),
             ConversationContent::Tool(_) | ConversationContent::Notice(_) => return,
         }
-        if !text.is_empty() && (!item.is_open() || role == MessageRole::User) {
-            self.replace(index);
-        } else {
-            item.revision.bump();
+        if !text.is_empty() {
+            item.changed(!item.is_open() || role == MessageRole::User);
         }
     }
 
@@ -223,7 +221,7 @@ impl Conversation {
                 tool_call.finalize(terminal_status);
             }
             item.state = ItemState::Sealed;
-            item.revision.bump();
+            item.changed(false);
         }
     }
 
@@ -314,18 +312,17 @@ impl Conversation {
         id
     }
 
-    fn replace(&mut self, index: usize) {
-        let item = &mut self.items[index];
-        item.replacement_revision.bump();
-        item.revision.bump();
-    }
-
     fn update_tool(&mut self, index: usize, apply: impl FnOnce(&mut ToolCall)) {
         let item = &mut self.items[index];
         if let ConversationContent::Tool(tool_call) = &mut item.content {
+            let previous = tool_call.clone();
             apply(tool_call);
-            item.state = if tool_call.rendering_final() { ItemState::Sealed } else { ItemState::Open };
-            item.revision.bump();
+            if *tool_call == previous {
+                return;
+            }
+            let state = if tool_call.rendering_final() { ItemState::Sealed } else { ItemState::Open };
+            item.changed(!item.is_open());
+            item.state = state;
         }
     }
 }
@@ -334,6 +331,15 @@ fn message_content(role: MessageRole, text: String) -> ConversationContent {
     match role {
         MessageRole::User => ConversationContent::User(TextItem { text }),
         MessageRole::Assistant => ConversationContent::Assistant(TextItem { text }),
+    }
+}
+
+impl ConversationItem {
+    fn changed(&mut self, replaces_history: bool) {
+        if replaces_history {
+            self.replacement_revision.bump();
+        }
+        self.revision.bump();
     }
 }
 

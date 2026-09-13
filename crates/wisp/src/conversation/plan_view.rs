@@ -1,4 +1,5 @@
 use crate::theme::Theme;
+use acp_utils::AETHER_PLAN_ENTRY_CANCELLED_STATUS;
 use agent_client_protocol::schema::v2::{PlanEntry, PlanEntryStatus};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -55,7 +56,7 @@ fn build_plan_lines(entries: &[PlanEntry], theme: &Theme) -> Vec<Line<'static>> 
                     Style::new().fg(theme.muted).add_modifier(Modifier::CROSSED_OUT),
                 ));
             }
-            PlanEntryStatus::Other(value) if value == "_aether_cancelled" || value == "cancelled" => {
+            PlanEntryStatus::Other(value) if value == AETHER_PLAN_ENTRY_CANCELLED_STATUS => {
                 spans.push(Span::styled("  × ", Style::new().fg(theme.muted)));
                 spans.push(Span::styled(
                     entry.content.clone(),
@@ -88,6 +89,18 @@ mod tests {
 
     fn entry(content: &str, status: PlanEntryStatus) -> PlanEntry {
         PlanEntry::new(content.to_string(), PlanEntryPriority::Medium, status)
+    }
+
+    #[test]
+    fn only_namespaced_cancelled_status_renders_as_terminal() {
+        let theme = Theme::default();
+        for (status, glyph) in [(acp_utils::AETHER_PLAN_ENTRY_CANCELLED_STATUS, "×"), ("cancelled", "☐")] {
+            let entries = vec![entry("Task", PlanEntryStatus::Other(status.into()))];
+            let area = Rect::new(0, 0, 30, 3);
+            let mut buffer = Buffer::empty(area);
+            PlanView::new(&entries, &theme).render(area, &mut buffer);
+            assert_eq!(buffer[(2, 2)].symbol(), glyph);
+        }
     }
 
     #[test]

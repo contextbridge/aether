@@ -1067,10 +1067,9 @@ where
 
     pub fn complete_prompt(&mut self, stop_reason: acp::StopReason) {
         let session_id = self.app.session_id().clone();
-        let update = serde_json::from_value(
-            json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": stop_reason}),
-        )
-        .unwrap();
+        let update = acp::SessionUpdate::StateUpdate(acp::StateUpdate::Idle(
+            acp::IdleStateUpdate::new().stop_reason(stop_reason.clone()),
+        ));
         self.acp_event(AcpEvent::SessionUpdate { session_id: session_id.clone(), update: Box::new(update) });
         self.acp_event(AcpEvent::PromptCompleted { session_id, stop_reason });
     }
