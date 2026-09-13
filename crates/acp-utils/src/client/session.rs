@@ -111,11 +111,11 @@ impl AcpClientHandle {
     }
 
     pub async fn new_session(&self, request: NewSessionRequest) -> Result<NewSessionResponse, AcpClientError> {
-        self.request(request, false).await
+        self.request_when_idle(request).await
     }
 
     pub async fn list_sessions(&self, request: ListSessionsRequest) -> Result<ListSessionsResponse, AcpClientError> {
-        self.request(request, false).await
+        self.request_when_idle(request).await
     }
 
     /// Resume a session without collecting or replaying its prior notifications.
@@ -124,12 +124,12 @@ impl AcpClientHandle {
     }
 
     pub async fn close_session(&self, request: CloseSessionRequest) -> Result<CloseSessionResponse, AcpClientError> {
-        self.request(request, false).await
+        self.request_when_idle(request).await
     }
 
     /// Search the agent's prompt history through Aether's ACP extension.
     pub async fn search_prompts(&self, params: PromptSearchParams) -> Result<PromptSearchResponse, AcpClientError> {
-        self.request(params, false).await
+        self.request_when_idle(params).await
     }
 
     /// Load a session preview through Aether's ACP extension.
@@ -137,28 +137,28 @@ impl AcpClientHandle {
         &self,
         params: SessionPreviewParams,
     ) -> Result<SessionPreviewResponse, AcpClientError> {
-        self.request(params, false).await
+        self.request_when_idle(params).await
     }
 
     /// List workspaces through Aether's ACP extension.
     pub async fn list_workspaces(&self, params: WorkspaceListParams) -> Result<WorkspaceListResponse, AcpClientError> {
-        self.request(params, false).await
+        self.request_when_idle(params).await
     }
 
     /// Move a session through Aether's ACP extension.
     pub async fn move_workspace(&self, params: WorkspaceMoveParams) -> Result<WorkspaceMoveResponse, AcpClientError> {
-        self.request(params, false).await
+        self.request_when_idle(params).await
     }
 
     pub async fn set_config_option(
         &self,
         request: SetSessionConfigOptionRequest,
     ) -> Result<SetSessionConfigOptionResponse, AcpClientError> {
-        self.request(request, true).await
+        self.request(request).await
     }
 
     pub async fn login(&self, request: LoginAuthRequest) -> Result<LoginAuthResponse, AcpClientError> {
-        self.request(request, true).await
+        self.request(request).await
     }
 
     pub async fn cancel(&self, request: CancelSessionNotification) -> Result<(), AcpClientError> {
@@ -177,14 +177,32 @@ impl AcpClientHandle {
         await_response(receiver).await
     }
 
-    async fn request<T>(&self, request: T, allow_during_activity: bool) -> Result<T::Response, AcpClientError>
+    /// Send a request that is valid at any time, even during a foreground turn or restoration.
+    async fn request<T>(&self, request: T) -> Result<T::Response, AcpClientError>
+    where
+        T: JsonRpcRequest + Send + 'static,
+        T::Response: Send,
+    {
+        self.dispatch(request, RequestGate::Always).await
+    }
+
+    /// Send a request that must wait until no foreground turn or restoration is active.
+    async fn request_when_idle<T>(&self, request: T) -> Result<T::Response, AcpClientError>
+    where
+        T: JsonRpcRequest + Send + 'static,
+        T::Response: Send,
+    {
+        self.dispatch(request, RequestGate::IdleOnly).await
+    }
+
+    async fn dispatch<T>(&self, request: T, gate: RequestGate) -> Result<T::Response, AcpClientError>
     where
         T: JsonRpcRequest + Send + 'static,
         T::Response: Send,
     {
         let (response, receiver) = oneshot::channel();
         self.send(ClientCommand::Request {
-            allow_during_activity,
+            gate,
             run: Box::new(move |cx| match cx {
                 Ok(cx) => send_typed_response(cx, request, response),
                 Err(error) => {
@@ -201,7 +219,7 @@ impl AcpClientHandle {
     {
         let (response, receiver) = oneshot::channel();
         self.send(ClientCommand::Request {
-            allow_during_activity: true,
+            gate: RequestGate::Always,
             run: Box::new(move |cx| {
                 let result = cx.and_then(|cx| cx.send_notification(notification).map_err(AcpClientError::Protocol));
                 let _ = response.send(result);
@@ -235,7 +253,14 @@ enum ClientCommand {
     Cancel { request: CancelSessionNotification, response: Response<()> },
     Prompt { request: PromptRequest, response: Response<PromptResponse> },
     ResumeSession { request: ResumeSessionRequest, response: Response<ResumeSessionResponse> },
-    Request { allow_during_activity: bool, run: RequestFn },
+    Request { gate: RequestGate, run: RequestFn },
+}
+
+/// Whether a request may run while a foreground turn or restoration is active.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RequestGate {
+    Always,
+    IdleOnly,
 }
 
 enum ClientMessage {
@@ -385,8 +410,8 @@ impl ClientLoop {
                     Ok(())
                 });
             }
-            ClientCommand::Request { allow_during_activity, run } => {
-                run(if busy && !allow_during_activity { Err(AcpClientError::Busy) } else { Ok(cx) });
+            ClientCommand::Request { gate, run } => {
+                run(if busy && gate == RequestGate::IdleOnly { Err(AcpClientError::Busy) } else { Ok(cx) });
             }
         }
     }
@@ -427,7 +452,6 @@ impl ClientLoop {
     }
 }
 
-#[allow(clippy::too_many_lines)]
 async fn run_client_connection(
     agent: impl ConnectTo<Client> + 'static,
     init_request: InitializeRequest,
@@ -437,6 +461,20 @@ async fn run_client_connection(
 ) {
     let inbox = &state.inbox;
     let connection_result = {
+        macro_rules! forward {
+            ($builder:expr, $params:ty, $wrap:expr) => {
+                $builder.on_receive_notification(
+                    {
+                        let inbox = inbox.clone();
+                        async move |params: $params, _cx| {
+                            let _ = inbox.send($wrap(params));
+                            Ok(())
+                        }
+                    },
+                    acp::on_receive_notification!(),
+                )
+            };
+        }
         let connection = Client
             .v2()
             .on_receive_request(
@@ -461,90 +499,38 @@ async fn run_client_connection(
                     }
                 },
                 acp::on_receive_request!(),
-            )
-            .on_receive_notification(
-                {
-                    let inbox = inbox.clone();
-                    async move |notification: UpdateSessionNotification, _cx| {
-                        let _ = inbox.send(ClientMessage::Replayable(notification.into()));
-                        Ok(())
-                    }
-                },
-                acp::on_receive_notification!(),
-            )
-            .on_receive_notification(
-                {
-                    let inbox = inbox.clone();
-                    async move |params: ContextCompactionParams, _cx| {
-                        let _ = inbox.send(ClientMessage::Replayable(ReplayableEvent::ContextCompaction(params)));
-                        Ok(())
-                    }
-                },
-                acp::on_receive_notification!(),
-            )
-            .on_receive_notification(
-                {
-                    let inbox = inbox.clone();
-                    async move |params: ContextClearedParams, _cx| {
-                        let _ = inbox.send(ClientMessage::Replayable(ReplayableEvent::ContextCleared(params)));
-                        Ok(())
-                    }
-                },
-                acp::on_receive_notification!(),
-            )
-            .on_receive_notification(
-                {
-                    let inbox = inbox.clone();
-                    async move |params: SubAgentProgressParams, _cx| {
-                        let _ =
-                            inbox.send(ClientMessage::Replayable(ReplayableEvent::SubAgentProgress(Box::new(params))));
-                        Ok(())
-                    }
-                },
-                acp::on_receive_notification!(),
-            )
-            .on_receive_notification(
-                {
-                    let inbox = inbox.clone();
-                    async move |params: SessionUsageParams, _cx| {
-                        let _ = inbox.send(ClientMessage::Replayable(ReplayableEvent::SessionUsage(Box::new(params))));
-                        Ok(())
-                    }
-                },
-                acp::on_receive_notification!(),
-            )
-            .on_receive_notification(
-                {
-                    let inbox = inbox.clone();
-                    async move |params: AuthMethodsUpdatedParams, _cx| {
-                        let _ = inbox.send(ClientMessage::Event(AcpEvent::AuthMethodsUpdated(params)));
-                        Ok(())
-                    }
-                },
-                acp::on_receive_notification!(),
-            )
-            .on_receive_notification(
-                {
-                    let inbox = inbox.clone();
-                    async move |params: McpNotification, _cx| {
-                        let _ = inbox.send(ClientMessage::Replayable(ReplayableEvent::McpNotification(params)));
-                        Ok(())
-                    }
-                },
-                acp::on_receive_notification!(),
-            )
-            .connect_with(agent, {
-                let inbox = inbox.clone();
-                async move |cx: ConnectionTo<acp::Agent>| {
-                    let connection = cx.clone();
-                    cx.send_request(init_request).on_receiving_result(move |result| async move {
-                        let _ = inbox.send(ClientMessage::Initialized { cx: connection, result: result.map(Box::new) });
-                        Ok(())
-                    })?;
-                    cx.incoming_closed().await;
+            );
+        let connection = forward!(connection, UpdateSessionNotification, |n: UpdateSessionNotification| {
+            ClientMessage::Replayable(n.into())
+        });
+        let connection = forward!(connection, ContextCompactionParams, |p| {
+            ClientMessage::Replayable(ReplayableEvent::ContextCompaction(p))
+        });
+        let connection = forward!(connection, ContextClearedParams, |p| ClientMessage::Replayable(
+            ReplayableEvent::ContextCleared(p)
+        ));
+        let connection = forward!(connection, SubAgentProgressParams, |p| {
+            ClientMessage::Replayable(ReplayableEvent::SubAgentProgress(Box::new(p)))
+        });
+        let connection = forward!(connection, SessionUsageParams, |p| {
+            ClientMessage::Replayable(ReplayableEvent::SessionUsage(Box::new(p)))
+        });
+        let connection =
+            forward!(connection, AuthMethodsUpdatedParams, |p| ClientMessage::Event(AcpEvent::AuthMethodsUpdated(p)));
+        let connection =
+            forward!(connection, McpNotification, |p| ClientMessage::Replayable(ReplayableEvent::McpNotification(p)));
+        let connection = connection.connect_with(agent, {
+            let inbox = inbox.clone();
+            async move |cx: ConnectionTo<acp::Agent>| {
+                let connection = cx.clone();
+                cx.send_request(init_request).on_receiving_result(move |result| async move {
+                    let _ = inbox.send(ClientMessage::Initialized { cx: connection, result: result.map(Box::new) });
                     Ok(())
-                }
-            });
+                })?;
+                cx.incoming_closed().await;
+                Ok(())
+            }
+        });
         tokio::pin!(connection);
         loop {
             tokio::select! {
