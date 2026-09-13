@@ -93,11 +93,7 @@ pub async fn read_text_file(path: &Path) -> Result<String, FileError> {
 }
 
 pub async fn write_text_file(path: &Path, content: &str) -> Result<WriteTextFileResult, FileError> {
-    let original_content = match read_text_file(path).await {
-        Ok(content) => Some(content),
-        Err(FileError::NotFound { .. }) => None,
-        Err(error) => return Err(error),
-    };
+    let original_content = read_text_file(path).await.ok();
     if let Some(parent) = path.parent()
         && let Err(error) = create_dir_all(parent).await
     {
