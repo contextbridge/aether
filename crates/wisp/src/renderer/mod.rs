@@ -63,7 +63,6 @@ pub struct Renderer {
     render_cache: RenderCache,
     native_history: NativeHistoryCursor,
     stream_cache: HashMap<ConversationItemId, StreamEntry>,
-    preview_cache: HashMap<ConversationItemId, (crate::conversation::Revision, clankerdiff_ratatui::DiffPreviewState)>,
     stats: RenderStats,
 }
 
@@ -82,7 +81,6 @@ impl Renderer {
             render_cache: RenderCache::default(),
             native_history: NativeHistoryCursor::default(),
             stream_cache: HashMap::new(),
-            preview_cache: HashMap::new(),
             stats: RenderStats::default(),
         }
     }
@@ -146,7 +144,6 @@ impl Renderer {
                 NativeHistoryCursor { conversation_id: Some(conversation_id), commit: CommitPoint::default() };
             self.render_cache.clear();
             self.stream_cache.clear();
-            self.preview_cache.clear();
         }
     }
 }

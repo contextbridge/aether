@@ -90,7 +90,6 @@ impl Renderer {
                 break;
             }
             self.stream_cache.remove(&item.id());
-            self.preview_cache.remove(&item.id());
             overflow = overflow.saturating_sub(take);
             self.native_history.commit = CommitPoint { item_index: commit.item_index + 1, ..CommitPoint::default() };
         }
@@ -103,7 +102,7 @@ impl Renderer {
 /// still-growing last row is final; an open tool call redraws in place
 /// (spinner, status, sub-agent tree) and must stay live until sealed.
 pub(super) fn streams_into_history(item: &ConversationItem) -> bool {
-    matches!(item.content(), ConversationContent::Assistant(_))
+    item.message_id().is_none() && matches!(item.content(), ConversationContent::Assistant(_))
 }
 
 /// The only function that writes to the terminal outside a frame draw.

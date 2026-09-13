@@ -1,5 +1,5 @@
-use crate::view::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
+use crate::view::syntax::SyntaxHighlighter;
 use crate::view::wrap::{as_u16, truncate_to_width, wrap_line};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -19,7 +19,6 @@ pub(crate) fn tool_lines(
     spinner_tick: usize,
     theme: &Theme,
     highlighter: &mut SyntaxHighlighter,
-    preview: Option<&[Line<'static>]>,
 ) -> Vec<Line<'static>> {
     let parsed_command = tool.bash_command();
     let bash_command = visible_bash_command(parsed_command.as_deref(), tool.display_value.as_deref(), &tool.status);
@@ -35,8 +34,18 @@ pub(crate) fn tool_lines(
     ]);
     let suffix = tool_suffix(detail, &tool.status, theme);
     let mut lines = tool_line(prefix, suffix, bash_command, content_width, padding + 2, theme, highlighter);
-    if let Some(preview) = preview {
-        lines.extend(indent_lines(preview.to_vec(), padding));
+    for diff in &tool.diffs {
+        for change in &diff.changes {
+            lines.extend(indent_lines(
+                wrap_line(Line::styled(change.clone(), Style::new().fg(theme.muted)), content_width),
+                padding,
+            ));
+        }
+        if let Some(patch) = &diff.patch {
+            for line in highlighter.highlight(patch, "diff", theme).iter() {
+                lines.extend(indent_lines(wrap_line(line.clone(), content_width), padding));
+            }
+        }
     }
     if !tool.sub_agents.is_empty() {
         lines.push(Line::default());

@@ -1,8 +1,7 @@
 use std::rc::Rc;
 
 use crate::app::App;
-use crate::conversation::item_view::{ContentKind, content_kind, content_width, item_lines};
-use crate::conversation::tool_calls::ToolStatus;
+use crate::conversation::item_view::{ContentKind, content_kind, item_lines};
 use crate::conversation::{ConversationContent, ConversationItem};
 use crate::view::wrap::as_u16;
 use clankerdiff_ratatui::MarkdownStreamError;
@@ -107,7 +106,7 @@ impl Renderer {
         spinner_tick: usize,
     ) -> Rc<[Line<'static>]> {
         let shape = RenderShape { width, padding: as_u16(padding), theme: self.generation() };
-        let Self { theme, highlighter, render_cache, preview_cache, stats, .. } = self;
+        let Self { theme, highlighter, render_cache, stats, .. } = self;
         let animated = matches!(item.content(), ConversationContent::Tool(_)) && item.is_open();
         let key = RenderKey {
             item_id: item.id(),
@@ -116,29 +115,8 @@ impl Renderer {
             spinner: animated.then_some(spinner_tick),
         };
         let lap = Lap::start();
-        let (lines, built) = render_cache.get_or_insert_with(key, || {
-            let preview = if let ConversationContent::Tool(tool) = item.content()
-                && matches!(tool.status, ToolStatus::Success)
-                && let Some(file) = &tool.diff
-            {
-                let entry = preview_cache
-                    .entry(item.id())
-                    .or_insert_with(|| (item.revision(), clankerdiff_ratatui::DiffPreviewState::new((**file).clone())));
-                if entry.0 != item.revision() {
-                    entry.1.set_file((**file).clone());
-                    entry.0 = item.revision();
-                }
-                Some(entry.1.render(
-                    content_width(width, padding),
-                    theme.review(),
-                    &mut highlighter.inner,
-                    clankerdiff_ratatui::DiffPreviewOptions::default(),
-                ))
-            } else {
-                None
-            };
-            Rc::from(item_lines(item, width, padding, spinner_tick, theme, highlighter, preview.as_deref()))
-        });
+        let (lines, built) = render_cache
+            .get_or_insert_with(key, || Rc::from(item_lines(item, width, padding, spinner_tick, theme, highlighter)));
         if !built {
             return lines;
         }

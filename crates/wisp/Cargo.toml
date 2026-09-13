@@ -24,6 +24,11 @@ name = "wisp"
 path = "src/main.rs"
 
 [[test]]
+name = "conversation_model"
+path = "tests/conversation_model.rs"
+required-features = ["testing"]
+
+[[test]]
 name = "diff_model"
 path = "tests/diff_model.rs"
 required-features = ["testing"]

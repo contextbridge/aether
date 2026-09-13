@@ -1,9 +1,6 @@
-use std::path::MAIN_SEPARATOR_STR;
-
-use crate::git_review::FileDiff;
 use acp_utils::AETHER_TOOL_NAME_META_KEY;
 use acp_utils::notifications::{SubAgentEvent, SubAgentProgressParams};
-use agent_client_protocol::schema::v1 as acp;
+use agent_client_protocol::schema::{MaybeUndefined, v2 as acp};
 
 pub const SUB_AGENT_VISIBLE_TOOL_LIMIT: usize = 3;
 
@@ -58,58 +55,19 @@ impl SubAgentState {
     }
 }
 
-fn apply_sub_agent_progress(states: &mut Vec<SubAgentState>, notification: &SubAgentProgressParams) {
-    let index = states.iter().position(|agent| agent.task_id == notification.task_id).unwrap_or_else(|| {
-        states.push(SubAgentState {
-            task_id: notification.task_id.clone(),
-            agent_name: notification.agent_name.clone(),
-            done: false,
-            tool_calls: Vec::new(),
-        });
-        states.len() - 1
-    });
-    let agent = &mut states[index];
-
-    match &notification.event {
-        SubAgentEvent::ToolCall { request } => {
-            let call = agent.upsert(&request.id, &request.name, request.arguments.clone());
-            update_title(&mut call.name, &request.name);
-            call.kind = tool_kind(&request.name);
-            call.arguments.clone_from(&request.arguments);
-            call.raw_input.clone_from(&request.arguments);
-            call.status = ToolStatus::Running;
-        }
-        SubAgentEvent::ToolCallUpdate { update } => {
-            let call = agent.upsert(&update.id, "tool", String::new());
-            call.arguments.push_str(&update.chunk);
-            call.raw_input.push_str(&update.chunk);
-            call.status = ToolStatus::Running;
-        }
-        SubAgentEvent::ToolResult { result } => {
-            if let Some(call) = agent.tool_call_mut(&result.id) {
-                call.status = ToolStatus::Success;
-                if let Some(result_meta) = &result.result_meta {
-                    call.name.clone_from(&result_meta.display.title);
-                    call.display_value = Some(result_meta.display.value.clone());
-                }
-            }
-        }
-        SubAgentEvent::ToolError { error } => {
-            if let Some(call) = agent.tool_call_mut(&error.id) {
-                call.status = ToolStatus::Error("failed".to_string());
-            }
-        }
-        SubAgentEvent::Done => agent.done = true,
-        SubAgentEvent::Other => {}
-    }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolDiff {
+    pub changes: Vec<String>,
+    pub patch: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ToolCall {
     pub id: String,
     pub title: String,
     pub status: ToolStatus,
-    pub diff: Option<Box<FileDiff>>,
+    pub diffs: Vec<ToolDiff>,
+    protocol: Box<acp::ToolCallUpdate>,
     pub raw_input: String,
     pub display_value: Option<String>,
     pub sub_agents: Vec<SubAgentState>,
@@ -117,64 +75,72 @@ pub struct ToolCall {
 }
 
 impl ToolCall {
-    pub(crate) fn from_acp(tool_call: &acp::ToolCall) -> Self {
-        let tool_name = tool_call
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.get(AETHER_TOOL_NAME_META_KEY))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or(&tool_call.title);
-        let raw_input = tool_call.raw_input.as_ref().map_or_else(String::new, raw_input_fragment);
-        Self {
-            id: tool_call.tool_call_id.0.to_string(),
-            title: tool_call.title.clone(),
+    pub fn from_update(update: &acp::ToolCallUpdate) -> Self {
+        let mut tool = Self {
+            id: update.tool_call_id.to_string(),
+            title: String::new(),
             status: ToolStatus::Running,
-            diff: None,
-            raw_input,
+            diffs: Vec::new(),
+            protocol: Box::new(acp::ToolCallUpdate::new(update.tool_call_id.clone())),
+            raw_input: String::new(),
             display_value: None,
             sub_agents: Vec::new(),
-            kind: tool_kind(tool_name),
+            kind: ToolKind::Other,
+        };
+        tool.apply_update(update);
+        tool
+    }
+
+    pub fn content(&self) -> &[acp::ToolCallContent] {
+        self.protocol.content.value().map_or(&[], Vec::as_slice)
+    }
+
+    pub fn apply_update(&mut self, update: &acp::ToolCallUpdate) {
+        self.protocol.apply_update(update.clone());
+        self.title = self.protocol.title.value().cloned().unwrap_or_default();
+        self.raw_input = self.protocol.raw_input.value().map_or_else(String::new, raw_input_fragment);
+        let meta = self.protocol.meta.value();
+        self.display_value =
+            meta.and_then(|meta| meta.get("display_value")).and_then(serde_json::Value::as_str).map(str::to_string);
+        let name = meta
+            .and_then(|meta| meta.get(AETHER_TOOL_NAME_META_KEY))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(&self.title);
+        self.kind = tool_kind(name);
+        if !update.status.is_undefined() {
+            self.status = match self.protocol.status.value() {
+                Some(acp::ToolCallStatus::Completed) => ToolStatus::Success,
+                Some(acp::ToolCallStatus::Failed) => ToolStatus::Error("failed".to_string()),
+                _ => ToolStatus::Running,
+            };
+        }
+        if !update.content.is_undefined() {
+            self.refresh_diffs();
         }
     }
 
-    pub(crate) fn apply_update(&mut self, update: &acp::ToolCallUpdate) {
-        if let Some(title) = &update.fields.title {
-            update_title(&mut self.title, title);
+    pub fn append_content(&mut self, content: acp::ToolCallContent) {
+        match &mut self.protocol.content {
+            MaybeUndefined::Value(items) => items.push(content),
+            value => *value = MaybeUndefined::Value(vec![content]),
         }
-        if let Some(raw_input) = &update.fields.raw_input {
-            self.raw_input.push_str(&raw_input_fragment(raw_input));
-        }
-        if let Some(meta) = &update.meta
-            && let Some(serde_json::Value::String(display_value)) = meta.get("display_value")
-        {
-            self.display_value = Some(display_value.clone());
-        }
-        if let Some(content) = &update.fields.content {
-            for item in content {
-                if let acp::ToolCallContent::Diff(diff) = item {
-                    let path = diff.path.strip_prefix(MAIN_SEPARATOR_STR).unwrap_or(&diff.path);
-                    match FileDiff::from_texts(
-                        path.to_string_lossy().as_ref(),
-                        diff.old_text.as_deref().unwrap_or_default(),
-                        &diff.new_text,
-                    ) {
-                        Ok(preview) => self.diff = Some(Box::new(preview)),
-                        Err(error) => {
-                            self.diff = None;
-                            self.display_value = Some(format!("Cannot preview {}: {error}", diff.path.display()));
-                        }
-                    }
-                }
-            }
-        }
-        if let Some(status) = update.fields.status {
-            match status {
-                acp::ToolCallStatus::Completed => self.status = ToolStatus::Success,
-                acp::ToolCallStatus::Failed => self.status = ToolStatus::Error("failed".to_string()),
-                acp::ToolCallStatus::InProgress | acp::ToolCallStatus::Pending => self.status = ToolStatus::Running,
-                _ => {}
-            }
-        }
+        self.refresh_diffs();
+    }
+
+    fn refresh_diffs(&mut self) {
+        self.diffs = self
+            .content()
+            .iter()
+            .filter_map(|content| {
+                let acp::ToolCallContent::Diff(diff) = content else {
+                    return None;
+                };
+                Some(ToolDiff {
+                    changes: diff.changes.iter().map(diff_change_label).collect(),
+                    patch: diff.patch.as_ref().map(|patch| patch.text.clone()),
+                })
+            })
+            .collect();
     }
 
     pub(crate) fn apply_sub_agent_progress(&mut self, notification: &SubAgentProgressParams) {
@@ -222,6 +188,67 @@ pub enum ToolStatus {
     Error(String),
 }
 
+fn apply_sub_agent_progress(states: &mut Vec<SubAgentState>, notification: &SubAgentProgressParams) {
+    let index = states.iter().position(|agent| agent.task_id == notification.task_id).unwrap_or_else(|| {
+        states.push(SubAgentState {
+            task_id: notification.task_id.clone(),
+            agent_name: notification.agent_name.clone(),
+            done: false,
+            tool_calls: Vec::new(),
+        });
+        states.len() - 1
+    });
+    let agent = &mut states[index];
+
+    match &notification.event {
+        SubAgentEvent::ToolCall { request } => {
+            let call = agent.upsert(&request.id, &request.name, request.arguments.clone());
+            update_title(&mut call.name, &request.name);
+            call.kind = tool_kind(&request.name);
+            call.arguments.clone_from(&request.arguments);
+            call.raw_input.clone_from(&request.arguments);
+            call.status = ToolStatus::Running;
+        }
+        SubAgentEvent::ToolCallUpdate { update } => {
+            let call = agent.upsert(&update.id, "tool", String::new());
+            call.arguments.push_str(&update.chunk);
+            call.raw_input.push_str(&update.chunk);
+            call.status = ToolStatus::Running;
+        }
+        SubAgentEvent::ToolResult { result } => {
+            if let Some(call) = agent.tool_call_mut(&result.id) {
+                call.status = ToolStatus::Success;
+                if let Some(result_meta) = &result.result_meta {
+                    call.name.clone_from(&result_meta.display.title);
+                    call.display_value = Some(result_meta.display.value.clone());
+                }
+            }
+        }
+        SubAgentEvent::ToolError { error } => {
+            if let Some(call) = agent.tool_call_mut(&error.id) {
+                call.status = ToolStatus::Error("failed".to_string());
+            }
+        }
+        SubAgentEvent::Done => agent.done = true,
+        SubAgentEvent::Other => {}
+    }
+}
+
+fn diff_change_label(change: &acp::DiffChange) -> String {
+    match &change.operation {
+        acp::DiffChangeOperation::Add(change) => format!("A {}", change.path.0.display()),
+        acp::DiffChangeOperation::Delete(change) => format!("D {}", change.path.0.display()),
+        acp::DiffChangeOperation::Modify(change) => format!("M {}", change.path.0.display()),
+        acp::DiffChangeOperation::Move(change) => {
+            format!("R {} → {}", change.old_path.0.display(), change.path.0.display())
+        }
+        acp::DiffChangeOperation::Copy(change) => {
+            format!("C {} → {}", change.old_path.0.display(), change.path.0.display())
+        }
+        _ => "Unknown file change".to_string(),
+    }
+}
+
 fn update_title(current: &mut String, new_title: &str) {
     if !new_title.is_empty() {
         current.clear();
@@ -229,7 +256,7 @@ fn update_title(current: &mut String, new_title: &str) {
     }
 }
 
-pub(crate) fn raw_input_fragment(raw_input: &serde_json::Value) -> String {
+fn raw_input_fragment(raw_input: &serde_json::Value) -> String {
     raw_input.as_str().map_or_else(|| raw_input.to_string(), str::to_string)
 }
 

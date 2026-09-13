@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v1::{self as acp};
+use agent_client_protocol::schema::v2::{self as acp};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -9,47 +9,59 @@ pub const GRACE_PERIOD: Duration = Duration::from_secs(3);
 /// The agent's plan, with completed entries expiring after a grace period.
 #[derive(Debug)]
 pub struct PlanTracker {
-    entries: Vec<acp::PlanEntry>,
+    plans: Vec<(acp::PlanId, Vec<acp::PlanEntry>)>,
     /// When each entry was first reported complete. ACP plan entries have no
     /// stable id, so content is the only available identity key.
-    completed_at: HashMap<String, Instant>,
+    completed_at: HashMap<(acp::PlanId, String), Instant>,
     last_tick: Instant,
 }
 
 impl Default for PlanTracker {
     fn default() -> Self {
-        Self { entries: Vec::new(), completed_at: HashMap::new(), last_tick: Instant::now() }
+        Self { plans: Vec::new(), completed_at: HashMap::new(), last_tick: Instant::now() }
     }
 }
 
 impl PlanTracker {
-    pub fn replace(&mut self, entries: Vec<acp::PlanEntry>, now: Instant) {
-        let active_keys: HashSet<_> = entries.iter().map(Self::entry_key).collect();
-        self.completed_at.retain(|key, _| active_keys.contains(key));
+    pub fn apply_update(&mut self, update: &acp::PlanUpdate, now: Instant) {
+        if let acp::PlanUpdateContent::Items(items) = &update.plan {
+            self.replace(items.plan_id.clone(), items.entries.clone(), now);
+        }
+    }
+
+    pub fn replace(&mut self, plan_id: acp::PlanId, entries: Vec<acp::PlanEntry>, now: Instant) {
+        let active_keys: HashSet<_> = entries.iter().map(|entry| entry.content.clone()).collect();
+        self.completed_at.retain(|(id, key), _| *id != plan_id || active_keys.contains(key));
 
         for entry in &entries {
-            let key = Self::entry_key(entry);
-            match entry.status {
-                acp::PlanEntryStatus::Completed => {
-                    self.completed_at.entry(key).or_insert(now);
-                }
-                _ => {
-                    self.completed_at.remove(&key);
-                }
+            let key = (plan_id.clone(), entry.content.clone());
+            if terminal_status(&entry.status) {
+                self.completed_at.entry(key).or_insert(now);
+            } else {
+                self.completed_at.remove(&key);
             }
         }
 
-        self.entries = entries;
+        if let Some((_, current)) = self.plans.iter_mut().find(|(id, _)| *id == plan_id) {
+            *current = entries;
+        } else {
+            self.plans.push((plan_id, entries));
+        }
     }
 
     /// Entries to draw at `now`, ordered in-progress, then pending, then the
     /// completed ones still inside their grace period.
     pub fn visible_entries(&self, now: Instant) -> Vec<acp::PlanEntry> {
-        let mut visible: Vec<_> = self.entries.iter().filter(|entry| self.is_visible(entry, now)).cloned().collect();
+        let mut visible: Vec<_> = self
+            .plans
+            .iter()
+            .flat_map(|(id, entries)| entries.iter().filter(|entry| self.is_visible(id, entry, now)))
+            .cloned()
+            .collect();
         visible.sort_by_key(|entry| match entry.status {
             acp::PlanEntryStatus::InProgress => 0,
             acp::PlanEntryStatus::Pending => 1,
-            acp::PlanEntryStatus::Completed => 2,
+            _ if terminal_status(&entry.status) => 2,
             _ => 3,
         });
         visible
@@ -61,45 +73,46 @@ impl PlanTracker {
     }
 
     pub fn clear(&mut self) {
-        self.entries.clear();
+        self.plans.clear();
         self.completed_at.clear();
     }
 
     /// Whether a completed entry is still counting down, which is what keeps the
     /// tick loop running long enough to expire it.
     pub fn has_completed_in_grace_period(&self) -> bool {
-        self.entries.iter().any(|entry| {
-            matches!(entry.status, acp::PlanEntryStatus::Completed) && self.is_visible(entry, self.last_tick)
+        self.plans.iter().any(|(id, entries)| {
+            entries.iter().any(|entry| terminal_status(&entry.status) && self.is_visible(id, entry, self.last_tick))
         })
     }
 
     pub fn has_entries(&self) -> bool {
-        !self.entries.is_empty()
+        self.plans.iter().any(|(_, entries)| !entries.is_empty())
     }
 
     pub fn on_tick(&mut self, now: Instant) {
         self.last_tick = now;
     }
 
-    fn is_visible(&self, entry: &acp::PlanEntry, now: Instant) -> bool {
+    fn is_visible(&self, plan_id: &acp::PlanId, entry: &acp::PlanEntry, now: Instant) -> bool {
         match entry.status {
-            acp::PlanEntryStatus::Completed => self
+            _ if terminal_status(&entry.status) => self
                 .completed_at
-                .get(&Self::entry_key(entry))
+                .get(&(plan_id.clone(), entry.content.clone()))
                 .is_some_and(|completed_at| now.saturating_duration_since(*completed_at) <= GRACE_PERIOD),
             _ => true,
         }
     }
+}
 
-    fn entry_key(entry: &acp::PlanEntry) -> String {
-        entry.content.clone()
-    }
+fn terminal_status(status: &acp::PlanEntryStatus) -> bool {
+    matches!(status, acp::PlanEntryStatus::Completed)
+        || matches!(status, acp::PlanEntryStatus::Other(value) if value == "_aether_cancelled" || value == "cancelled")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v1::{PlanEntryPriority, PlanEntryStatus};
+    use agent_client_protocol::schema::v2::{PlanEntryPriority, PlanEntryStatus};
     use std::time::{Duration, Instant};
 
     fn entry(content: &str, status: PlanEntryStatus) -> acp::PlanEntry {
@@ -111,8 +124,8 @@ mod tests {
         let mut tracker = PlanTracker::default();
         let now = Instant::now();
 
-        tracker.replace(vec![entry("Task A", PlanEntryStatus::Pending)], now);
-        tracker.replace(vec![entry("Task A", PlanEntryStatus::Completed)], now);
+        tracker.replace("plan".into(), vec![entry("Task A", PlanEntryStatus::Pending)], now);
+        tracker.replace("plan".into(), vec![entry("Task A", PlanEntryStatus::Completed)], now);
 
         let visible = tracker.visible_entries(now);
         assert_eq!(visible.len(), 1);
@@ -124,7 +137,7 @@ mod tests {
         let mut tracker = PlanTracker::default();
         let now = Instant::now();
 
-        tracker.replace(vec![entry("Task A", PlanEntryStatus::Completed)], now);
+        tracker.replace("plan".into(), vec![entry("Task A", PlanEntryStatus::Completed)], now);
 
         let visible = tracker.visible_entries(now + GRACE_PERIOD + Duration::from_millis(1));
         assert!(visible.is_empty());
@@ -135,7 +148,7 @@ mod tests {
         let mut tracker = PlanTracker::default();
         let now = Instant::now();
 
-        tracker.replace(vec![entry("Task A", PlanEntryStatus::Completed)], now);
+        tracker.replace("plan".into(), vec![entry("Task A", PlanEntryStatus::Completed)], now);
 
         let visible = tracker.visible_entries(now + GRACE_PERIOD);
         assert_eq!(visible.len(), 1);
@@ -147,6 +160,7 @@ mod tests {
         let now = Instant::now();
 
         tracker.replace(
+            "plan".into(),
             vec![entry("Pending task", PlanEntryStatus::Pending), entry("Active task", PlanEntryStatus::InProgress)],
             now,
         );
@@ -162,7 +176,7 @@ mod tests {
         let mut tracker = PlanTracker::default();
         let completed_at = Instant::now();
 
-        tracker.replace(vec![entry("Task A", PlanEntryStatus::Completed)], completed_at);
+        tracker.replace("plan".into(), vec![entry("Task A", PlanEntryStatus::Completed)], completed_at);
 
         let now_before = completed_at.checked_sub(Duration::from_secs(1)).unwrap();
         let visible = tracker.visible_entries(now_before);
@@ -175,6 +189,7 @@ mod tests {
         let now = Instant::now();
 
         tracker.replace(
+            "plan".into(),
             vec![
                 entry("P-A", PlanEntryStatus::Pending),
                 entry("IP-B", PlanEntryStatus::InProgress),
@@ -203,6 +218,7 @@ mod tests {
         let now = Instant::now();
 
         tracker.replace(
+            "plan".into(),
             vec![
                 entry("Completed", PlanEntryStatus::Completed),
                 entry("Pending", PlanEntryStatus::Pending),
@@ -222,6 +238,7 @@ mod tests {
         let now = Instant::now();
 
         tracker.replace(
+            "plan".into(),
             vec![
                 entry("Completed Old", PlanEntryStatus::Completed),
                 entry("Active", PlanEntryStatus::InProgress),
@@ -242,8 +259,8 @@ mod tests {
         let now = Instant::now();
         let entry = entry("Task A", PlanEntryStatus::Completed);
 
-        tracker.replace(vec![entry.clone()], now);
-        tracker.replace(vec![entry], now + Duration::from_secs(2));
+        tracker.replace("plan".into(), vec![entry.clone()], now);
+        tracker.replace("plan".into(), vec![entry], now + Duration::from_secs(2));
 
         assert_eq!(tracker.visible_entries(now + GRACE_PERIOD).len(), 1);
         assert!(tracker.visible_entries(now + GRACE_PERIOD + Duration::from_millis(1)).is_empty());
@@ -254,9 +271,9 @@ mod tests {
         let mut tracker = PlanTracker::default();
         let now = Instant::now();
 
-        tracker.replace(vec![entry("Task A", PlanEntryStatus::Completed)], now);
-        tracker.replace(vec![entry("Task A", PlanEntryStatus::Pending)], now + Duration::from_secs(1));
-        tracker.replace(vec![entry("Task A", PlanEntryStatus::Completed)], now + Duration::from_secs(2));
+        tracker.replace("plan".into(), vec![entry("Task A", PlanEntryStatus::Completed)], now);
+        tracker.replace("plan".into(), vec![entry("Task A", PlanEntryStatus::Pending)], now + Duration::from_secs(1));
+        tracker.replace("plan".into(), vec![entry("Task A", PlanEntryStatus::Completed)], now + Duration::from_secs(2));
 
         assert_eq!(tracker.visible_entries(now + GRACE_PERIOD + Duration::from_millis(1)).len(), 1);
     }
@@ -266,9 +283,9 @@ mod tests {
         let mut tracker = PlanTracker::default();
         let now = Instant::now();
 
-        tracker.replace(vec![entry("Task A", PlanEntryStatus::Completed)], now);
-        tracker.replace(vec![], now + Duration::from_secs(1));
-        tracker.replace(vec![entry("Task A", PlanEntryStatus::Completed)], now + Duration::from_secs(2));
+        tracker.replace("plan".into(), vec![entry("Task A", PlanEntryStatus::Completed)], now);
+        tracker.replace("plan".into(), vec![], now + Duration::from_secs(1));
+        tracker.replace("plan".into(), vec![entry("Task A", PlanEntryStatus::Completed)], now + Duration::from_secs(2));
 
         assert_eq!(tracker.visible_entries(now + GRACE_PERIOD + Duration::from_millis(1)).len(), 1);
     }
@@ -279,6 +296,7 @@ mod tests {
         let now = Instant::now();
 
         tracker.replace(
+            "plan".into(),
             vec![entry("Task A", PlanEntryStatus::Completed), entry("Task B", PlanEntryStatus::InProgress)],
             now,
         );
@@ -295,7 +313,7 @@ mod tests {
         let mut tracker = PlanTracker::default();
         let now = Instant::now();
 
-        tracker.replace(vec![entry("Task A", PlanEntryStatus::Pending)], now);
+        tracker.replace("plan".into(), vec![entry("Task A", PlanEntryStatus::Pending)], now);
         assert!(tracker.has_entries());
 
         tracker.clear();
@@ -307,7 +325,7 @@ mod tests {
         let mut tracker = PlanTracker::default();
         let now = Instant::now();
 
-        tracker.replace(vec![entry("Task A", PlanEntryStatus::Completed)], now);
+        tracker.replace("plan".into(), vec![entry("Task A", PlanEntryStatus::Completed)], now);
         tracker.on_tick(now);
 
         assert!(tracker.has_completed_in_grace_period());
@@ -318,7 +336,7 @@ mod tests {
         let mut tracker = PlanTracker::default();
         let now = Instant::now();
 
-        tracker.replace(vec![entry("Task A", PlanEntryStatus::Completed)], now);
+        tracker.replace("plan".into(), vec![entry("Task A", PlanEntryStatus::Completed)], now);
         tracker.on_tick(now + GRACE_PERIOD + Duration::from_millis(1));
 
         assert!(!tracker.has_completed_in_grace_period());
@@ -329,7 +347,7 @@ mod tests {
         let mut tracker = PlanTracker::default();
         let now = Instant::now();
 
-        tracker.replace(vec![entry("Task A", PlanEntryStatus::Pending)], now);
+        tracker.replace("plan".into(), vec![entry("Task A", PlanEntryStatus::Pending)], now);
         tracker.on_tick(now);
 
         assert!(!tracker.has_completed_in_grace_period());

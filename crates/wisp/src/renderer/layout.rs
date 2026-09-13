@@ -3,7 +3,7 @@ use crate::conversation::plan_view::PlanView;
 use crate::conversation::status_line::StatusLine;
 use crate::surfaces::composer::ComposerLayout;
 use crate::view::wrap::as_u16;
-use agent_client_protocol::schema::v1::PlanEntry;
+use agent_client_protocol::schema::v2::PlanEntry;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 
 use super::Renderer;

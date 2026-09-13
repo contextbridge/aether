@@ -20,6 +20,7 @@ use crate::view::generation::Generation;
 use acp_utils::client::AcpEvent;
 use acp_utils::notifications::AetherCapabilities;
 use agent_client_protocol::schema::v1::{self as acp, SessionId};
+use agent_client_protocol::schema::v2::PlanEntry;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -438,7 +439,7 @@ impl App {
         self.conversation.turn().spinner_tick()
     }
 
-    pub fn plan_entries(&self) -> Vec<acp::PlanEntry> {
+    pub fn plan_entries(&self) -> Vec<PlanEntry> {
         self.conversation.plan_tracker().current_entries()
     }
 
