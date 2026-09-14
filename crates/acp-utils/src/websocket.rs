@@ -18,13 +18,13 @@ pub enum WebSocketError {
     UnexpectedFrame,
     #[error("binary WebSocket messages are not supported")]
     BinaryMessage,
-    #[error("WebSocket consumer cannot keep up")]
-    SlowConsumer,
+    #[error("WebSocket consumer closed")]
+    ConsumerClosed,
     #[error("WebSocket write deadline exceeded")]
     WriteDeadline,
 }
 
-/// Websocket transport for ACP
+/// WebSocket transport for ACP
 pub struct WebSocketTransport<T> {
     socket: WebSocketStream<T>,
 }
@@ -87,7 +87,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocketTransport<T> {
                 message = self.socket.next() => {
                     match message {
                         Some(Ok(Message::Text(text))) => {
-                            from_tx.try_send(Ok(text.to_string())).map_err(|_| WebSocketError::SlowConsumer)?;
+                            from_tx.send(Ok(text.to_string())).await.map_err(|_| WebSocketError::ConsumerClosed)?;
                         }
                         Some(Ok(Message::Ping(_))) => {
                             // Tungstenite queues the matching Pong; flush it even while ACP is idle.

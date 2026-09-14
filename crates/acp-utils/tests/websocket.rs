@@ -191,6 +191,51 @@ async fn final_turn_and_replay_events_are_delivered_before_buffered_close() -> R
 }
 
 #[tokio::test]
+async fn burst_and_replay_updates_survive_backpressure_and_buffered_close() -> Result<(), TestError> {
+    use acp::schema::v2::ResumeSessionRequest;
+
+    LocalSet::new()
+        .run_until(async {
+            for replay in [false, true] {
+                let updates: Vec<_> = (0..2048)
+                    .map(|index| {
+                        UpdateSessionNotification::new(
+                            "session",
+                            SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                                ContentBlock::Text(TextContent::new(index.to_string())),
+                                "message-1",
+                            )),
+                        )
+                    })
+                    .collect();
+                let mut builder = SocketPairBuilder::default().buffer_capacity(1024 * 1024);
+                for update in &updates[..1024] {
+                    builder = builder.before_response(update.clone());
+                }
+                for update in &updates[1024..] {
+                    builder = builder.after_response(update.clone());
+                }
+                let (mut client, peer) = builder.build_closing_agent().await?;
+                if replay {
+                    client.handle.resume_session_with_replay(ResumeSessionRequest::new("session", "/tmp")).await?;
+                } else {
+                    client.handle.prompt(PromptRequest::new("session", vec![])).await?;
+                }
+                for expected in updates {
+                    let Some(AcpEvent::SessionUpdate(notification)) = client.event_rx.recv().await else {
+                        return Err(TestError::Unexpected("burst lost a session update"));
+                    };
+                    assert_eq!(*notification, expected);
+                }
+                assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::ConnectionClosed)));
+                peer.await??;
+            }
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test]
 async fn invalid_utf8_terminates_the_connection() -> Result<(), TestError> {
     LocalSet::new()
         .run_until(async {
@@ -227,8 +272,40 @@ async fn idle_connection_sends_periodic_keepalive_pings() -> Result<(), TestErro
         .await
 }
 
+#[tokio::test]
+async fn transport_closes_cleanly_when_peer_component_finishes_first() -> Result<(), TestError> {
+    LocalSet::new()
+        .run_until(async {
+            for _ in 0..40 {
+                let (mut server, client_socket) = SocketPairBuilder::default().build().await;
+                let peer = spawn_local(async move {
+                    let message = receive_message(&mut server).await?;
+                    assert!(matches!(message, Message::Close(_)), "expected transport-initiated close");
+                    while server.next().await.is_some() {}
+                    Ok::<_, TestError>(())
+                });
+                let result =
+                    acp::ConnectTo::<Client>::connect_to(WebSocketTransport::new(client_socket), ImmediatePeer).await;
+                let peer_result = peer.await?;
+                result?;
+                peer_result?;
+            }
+            Ok(())
+        })
+        .await
+}
+
+struct ImmediatePeer;
+
+impl acp::ConnectTo<Agent> for ImmediatePeer {
+    fn connect_to(self, _client: impl acp::ConnectTo<Client>) -> impl Future<Output = Result<(), acp::Error>> {
+        std::future::ready(Ok(()))
+    }
+}
+
 #[derive(Default)]
 struct SocketPairBuilder {
+    buffer_capacity: Option<usize>,
     server_config: Option<WebSocketConfig>,
     client_config: Option<WebSocketConfig>,
     before_response: Vec<UpdateSessionNotification>,
@@ -236,6 +313,11 @@ struct SocketPairBuilder {
 }
 
 impl SocketPairBuilder {
+    fn buffer_capacity(mut self, capacity: usize) -> Self {
+        self.buffer_capacity = Some(capacity);
+        self
+    }
+
     fn before_response(mut self, update: UpdateSessionNotification) -> Self {
         self.before_response.push(update);
         self
@@ -278,7 +360,7 @@ impl SocketPairBuilder {
     }
 
     async fn build(self) -> (WebSocketStream<DuplexStream>, WebSocketStream<DuplexStream>) {
-        let (server, client) = duplex(64 * 1024);
+        let (server, client) = duplex(self.buffer_capacity.unwrap_or(64 * 1024));
         tokio::join!(
             WebSocketStream::from_raw_socket(server, Role::Server, self.server_config),
             WebSocketStream::from_raw_socket(client, Role::Client, self.client_config),
