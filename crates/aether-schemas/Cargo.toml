@@ -19,7 +19,7 @@ aether-cli = { package = "aether-agent-cli", path = "../aether-cli", version = "
 aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.8.1" }
 aether-evals = { path = "../aether-evals", version = "0.3.5" }
 aether-project = { path = "../aether-project", version = "0.5.44" }
-llm = { package = "aether-llm", path = "../llm", version = "0.9.0" }
+llm = { package = "aether-llm", path = "../llm", version = "0.9.1" }
 schemars = { workspace = true }
 serde_json = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.14" }

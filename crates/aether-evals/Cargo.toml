@@ -27,7 +27,7 @@ tracing = { workspace = true }
 tempfile = { workspace = true }
 aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.8.1" }
 aether-project = { path = "../aether-project", version = "0.5.44" }
-llm = { package = "aether-llm", path = "../llm", version = "0.9.0" }
+llm = { package = "aether-llm", path = "../llm", version = "0.9.1" }
 testcontainers = { workspace = true }
 
 [lib]
