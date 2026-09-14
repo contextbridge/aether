@@ -21,8 +21,8 @@ workspace = true
 
 [dependencies]
 aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.8.1" }
-llm = { package = "aether-llm", path = "../llm", version = "0.9.0" }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.7.0" }
+llm = { package = "aether-llm", path = "../llm", version = "0.9.1" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.7.1" }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.14" }
 schemars = { workspace = true }
 serde = { workspace = true }

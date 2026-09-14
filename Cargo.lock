@@ -193,7 +193,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "aether-auth",
  "aether-doctest",
@@ -311,7 +311,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-utils"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "aether-auth",
  "aether-doctest",
