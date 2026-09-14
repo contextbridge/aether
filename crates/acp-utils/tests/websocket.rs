@@ -10,7 +10,8 @@ use agent_client_protocol::schema::v2::{
     SessionUpdate, StateUpdate, StopReason, TextContent, UpdateSessionNotification,
 };
 use agent_client_protocol::{self as acp, Agent, Client, HandleDispatchFrom, NullRun, V2Builder};
-use futures::{SinkExt, StreamExt};
+use futures::{FutureExt, SinkExt, StreamExt};
+use std::time::Duration;
 use tokio::io::{DuplexStream, duplex};
 use tokio::net::TcpListener;
 use tokio::task::{LocalSet, spawn_local};
@@ -197,6 +198,30 @@ async fn invalid_utf8_terminates_the_connection() -> Result<(), TestError> {
             let task = spawn_local(Agent.v2().connect_to(WebSocketTransport::new(server)));
             client.send(Message::Frame(Frame::message(vec![0xff], OpCode::Data(Data::Text), true))).await?;
             assert!(task.await?.is_err());
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(start_paused = true)]
+async fn idle_connection_sends_periodic_keepalive_pings() -> Result<(), TestError> {
+    LocalSet::new()
+        .run_until(async {
+            let (server, mut client) = SocketPairBuilder::default().build().await;
+            let task = spawn_local(Agent.v2().connect_to(WebSocketTransport::new(server)));
+            tokio::task::yield_now().await;
+
+            for _ in 0..4 {
+                assert!(client.next().now_or_never().is_none());
+                tokio::time::advance(Duration::from_secs(20)).await;
+                tokio::task::yield_now().await;
+                assert!(matches!(client.next().now_or_never(), Some(Some(Ok(Message::Ping(_))))));
+                client.flush().await?;
+                tokio::task::yield_now().await;
+            }
+
+            task.abort();
+            let _ = task.await;
             Ok(())
         })
         .await
