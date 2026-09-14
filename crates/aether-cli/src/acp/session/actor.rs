@@ -14,8 +14,9 @@ use llm::parser::ModelProviderParser;
 use llm::{ChatMessage, ContentBlock, ProviderConnectionOverrides};
 use mcp_utils::client::{ElicitationRequest, McpClientEvent, McpServerStatusEntry, cancel_result};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -42,11 +43,34 @@ const SESSION_COMMAND_CHANNEL_CAPACITY: usize = 50;
 /// A command routed to a single session's actor. The actor is the only consumer
 /// of these, so per-session state never needs an additional lock.
 pub(crate) enum SessionCommand {
-    Prompt { content: Vec<ContentBlock>, display_content: Vec<ContentBlock>, responder: Responder<PromptResponse> },
+    Prompt {
+        content: Vec<ContentBlock>,
+        display_content: Vec<ContentBlock>,
+        responder: Responder<PromptResponse>,
+    },
     Cancel,
-    SetConfig { setting: ConfigSetting, available: Vec<LlmModel>, responder: Responder<SetSessionConfigOptionResponse> },
-    AuthenticateMcp { server_name: String },
-    RefreshConfigOptions { available: Vec<LlmModel> },
+    Attach {
+        connection: ConnectionTo<Client>,
+        replay: bool,
+        available: Vec<LlmModel>,
+        cwd: PathBuf,
+        mcp_servers: Vec<acp::McpServer>,
+        reply: oneshot::Sender<Result<Vec<acp::SessionConfigOption>, Error>>,
+    },
+    Detach {
+        reply: oneshot::Sender<()>,
+    },
+    SetConfig {
+        setting: ConfigSetting,
+        available: Vec<LlmModel>,
+        responder: Responder<SetSessionConfigOptionResponse>,
+    },
+    AuthenticateMcp {
+        server_name: String,
+    },
+    RefreshConfigOptions {
+        available: Vec<LlmModel>,
+    },
 }
 
 /// Handle the [`SessionRegistry`](crate::acp::session::registry::SessionRegistry) keeps
@@ -64,25 +88,26 @@ impl SessionHandle {
         self.cmd_tx.clone()
     }
 
-    /// Signal the actor loop to exit. Idempotent.
-    pub(crate) fn cancel(&self) {
+    pub(crate) async fn shutdown(&mut self) {
         self.cancel.cancel();
-    }
-
-    /// Wait for the actor task to finish after calling [`Self::cancel`].
-    pub(crate) async fn join(&mut self) {
         let _ = (&mut self.join).await;
     }
 }
 
+impl Drop for SessionHandle {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
+}
+
 pub(crate) struct SessionIo {
-    connection: ConnectionTo<Client>,
+    connection: Option<ConnectionTo<Client>>,
     session_id: SessionId,
 }
 
 impl SessionIo {
     pub(crate) fn new(connection: ConnectionTo<Client>, session_id: SessionId) -> Self {
-        Self { connection, session_id }
+        Self { connection: Some(connection), session_id }
     }
 
     pub(crate) fn send_update(&self, update: acp::SessionUpdate) {
@@ -90,12 +115,16 @@ impl SessionIo {
     }
 
     pub(crate) fn send(&self, notification: impl agent_client_protocol::JsonRpcNotification) {
-        notify(&self.connection, notification);
+        if let Some(connection) = &self.connection {
+            notify(connection, notification);
+        }
     }
 }
 
 pub(crate) struct SessionActorInit {
     pub session_id: SessionId,
+    pub cwd: PathBuf,
+    pub mcp_servers: Vec<acp::McpServer>,
     pub connection: ConnectionTo<Client>,
     pub repository: Arc<SessionStore>,
     pub oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
@@ -112,6 +141,8 @@ pub(crate) struct SessionActorInit {
 /// is serialized through the command channel.
 pub(crate) struct SessionActor {
     io: SessionIo,
+    cwd: PathBuf,
+    mcp_servers: Vec<acp::McpServer>,
     repository: Arc<SessionStore>,
     oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
     cancel: CancellationToken,
@@ -152,6 +183,8 @@ impl SessionActor {
         let cancel = CancellationToken::new();
         let mut actor = SessionActor {
             io: SessionIo::new(init.connection, init.session_id),
+            cwd: init.cwd,
+            mcp_servers: init.mcp_servers,
             repository: init.repository,
             oauth_credential_store: init.oauth_credential_store,
             cancel: cancel.clone(),
@@ -316,6 +349,31 @@ impl SessionActor {
             }
             SessionCommand::Prompt { content, display_content, responder } => {
                 self.start_prompt(content, display_content, responder).await;
+            }
+            SessionCommand::Attach { connection, cwd, mcp_servers, replay, available, reply } => {
+                if self.cwd != cwd || self.mcp_servers != mcp_servers {
+                    let _ = reply
+                        .send(Err(Error::invalid_params().data("live session cwd and MCP servers cannot be changed")));
+                    return;
+                }
+                self.io.connection = Some(connection);
+                if replay {
+                    replay_to_client(&self.transcript, &self.io);
+                }
+                let state = match self.turn {
+                    TurnState::Running => acp::StateUpdate::Running(acp::RunningStateUpdate::new()),
+                    TurnState::Idle | TurnState::Preparing { .. } => {
+                        acp::StateUpdate::Idle(acp::IdleStateUpdate::new())
+                    }
+                };
+                self.io.send_update(acp::SessionUpdate::StateUpdate(state));
+                let _ = self.publish_active_mcps();
+                let options = self.config.config_options(&self.modes, &available, self.oauth_credential_store.as_ref());
+                let _ = reply.send(Ok(options));
+            }
+            SessionCommand::Detach { reply } => {
+                self.io.connection = None;
+                let _ = reply.send(());
             }
             SessionCommand::Cancel => self.cancel_turn().await,
             SessionCommand::SetConfig { setting, available, responder } => {
@@ -526,7 +584,11 @@ fn forward_notification(io: &SessionIo, msg: &AgentEvent) {
 fn on_mcp_client_event(io: &SessionIo, event: McpClientEvent) {
     match event {
         McpClientEvent::Elicitation(elicitation) => {
-            spawn_elicitation_request(&io.connection, &io.session_id, *elicitation);
+            if let Some(connection) = &io.connection {
+                spawn_elicitation_request(connection, &io.session_id, *elicitation);
+            } else {
+                let _ = elicitation.response_sender.send(cancel_result());
+            }
         }
         McpClientEvent::ElicitationComplete { server_name, elicitation_id } => {
             io.send(elicitation::build_acp_elicitation_completion_notification(

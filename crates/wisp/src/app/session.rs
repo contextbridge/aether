@@ -1,7 +1,7 @@
 use super::config::build_theme_entries;
 use super::{App, ForegroundOperation, Overlay, Route};
 use crate::command::{AgentCommand, Command, FilesystemCommand};
-use crate::session::workspace_status::home_relative_path;
+use crate::session::WorkspaceAccess;
 use crate::settings::overlay::{SettingsChange, SettingsOverlay};
 use crate::surfaces::input::{
     ElicitationOutput, GitReviewOutput, PlanReviewOutput, ReviewOutcome, RootOutput, SessionPickerOutput,
@@ -213,10 +213,20 @@ impl App {
         self.return_to_conversation();
     }
 
+    pub(super) fn resolve_workspace(&mut self, cwd: std::path::PathBuf) {
+        if self.session.workspace_access() == WorkspaceAccess::Local {
+            self.queue(Command::ResolveWorkspace { cwd });
+        }
+    }
+
+    pub(super) fn workspace_display_path(&self, cwd: &std::path::Path) -> String {
+        self.session.workspace_access().display_path(cwd)
+    }
+
     pub(super) fn on_workspace_moved(&mut self, new_cwd: std::path::PathBuf) {
-        self.queue(Command::ResolveWorkspace { cwd: new_cwd.clone() });
+        self.resolve_workspace(new_cwd.clone());
         self.return_to_conversation();
-        self.notify(&format!("Moved to {}", home_relative_path(&new_cwd)));
+        self.notify(&format!("Moved to {}", self.workspace_display_path(&new_cwd)));
         let session_id = self.session.session_id().clone();
         self.reset_conversation();
         self.foreground = ForegroundOperation::LoadingWorkspaceSession {

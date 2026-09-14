@@ -26,15 +26,15 @@ pub async fn run(
     mut event_rx: mpsc::UnboundedReceiver<AcpEvent>,
     client_handle: AcpClientHandle,
 ) -> Result<(), AppError> {
-    let (_, terminal_height) = size()?;
-    let viewport = Viewport::Inline(inline_viewport_height(terminal_height));
-    let mut session = TerminalSession::enter(viewport)?;
     let mut dispatcher = CommandDispatcher::new(client_handle);
-
-    let initial_commands = app.take_commands();
-    dispatch_commands(&mut dispatcher, &mut app, initial_commands);
-    let result = run_event_loop(&mut session, &mut app, &mut renderer, &mut event_rx, &mut dispatcher).await;
-    drop(session);
+    let result = async {
+        let (_, terminal_height) = size()?;
+        let viewport = Viewport::Inline(inline_viewport_height(terminal_height));
+        let mut session = TerminalSession::enter(viewport)?;
+        let initial_commands = app.take_commands();
+        dispatch_commands(&mut dispatcher, &mut app, initial_commands);
+        run_event_loop(&mut session, &mut app, &mut renderer, &mut event_rx, &mut dispatcher).await
+    }.await;
     dispatcher.shutdown().await;
     result
 }
@@ -78,7 +78,7 @@ async fn run_event_loop(
             }
 
             acp_event = event_rx.recv() => {
-                let Some(event) = acp_event else { return Ok(()); };
+                let event = acp_event.unwrap_or(AcpEvent::ConnectionClosed);
                 let commands = app.update(Message::Agent(Box::new(event)));
                 dispatch_commands(dispatcher, app, commands);
                 for _ in 1..MAX_ACP_EVENTS_PER_FRAME {
@@ -103,8 +103,8 @@ async fn run_event_loop(
 
         session.set_mouse_capture(app.needs_mouse_capture());
 
-        if app.exit_requested() {
-            return Ok(());
+        if let Some(result) = app.exit_result() {
+            return result;
         }
         renderer.draw(session.terminal_mut(), app)?;
     }

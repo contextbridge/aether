@@ -69,6 +69,21 @@ fn make_select_group(
 }
 
 #[test]
+fn remote_paste_never_attaches_even_when_the_path_exists_locally() {
+    let tmp = TempDir::new().unwrap();
+    let image = create_temp_file(&tmp, "photo.png", b"client-only contents");
+    let mut ui = TestUiBuilder::new().remote_workspace().build();
+    ui.paste(image.to_str().unwrap());
+    assert!(ui.app().composer().pending_media().is_empty());
+    assert_eq!(ui.app().composer().text(), image.to_str().unwrap());
+    ui.key(key(KeyCode::Enter));
+    assert!(
+        matches!(ui.next_agent_command(), Some(AgentCommand::Prompt { text, content: None, .. }) if text == image.to_str().unwrap())
+    );
+    assert!(ui.take_commands().is_empty());
+}
+
+#[test]
 fn paste_image_path_adds_pending_media() {
     let mut app = make_app();
     let tmp = TempDir::new().unwrap();

@@ -1,10 +1,9 @@
 use super::session::builtin_commands;
-use super::{App, ExitState, ForegroundOperation, Overlay, Route};
+use super::{App, ExitState, ForegroundOperation, Overlay, PromptPhase, Route};
 use crate::command::{AgentCommand, Command, TerminalCommand};
 use crate::conversation::tool_calls::ToolStatus;
 use crate::conversation::{ContextUsageDisplay, MessageRole};
 use crate::screens::plan_review::PlanReviewScreen;
-use crate::session::workspace_status::home_relative_path;
 use crate::surfaces::modal::ElicitationModal;
 use crate::surfaces::picker::CommandEntry;
 use crate::surfaces::session_picker::SessionPicker;
@@ -95,14 +94,14 @@ impl App {
                 if self.session.working_dir() != cwd {
                     let cwd = cwd.clone();
                     self.session.set_working_dir(cwd.clone());
-                    self.queue(Command::ResolveWorkspace { cwd });
+                    self.resolve_workspace(cwd);
                 }
             }
             _ => return,
         }
         self.session.update_config_options(response.config_options);
         if matches!(self.foreground, ForegroundOperation::LoadingWorkspaceSession { .. }) {
-            self.notify(&format!("Moved to {}", home_relative_path(self.session.working_dir())));
+            self.notify(&format!("Moved to {}", self.workspace_display_path(self.session.working_dir())));
         }
         self.return_to_conversation();
         self.foreground = ForegroundOperation::Idle;
@@ -132,14 +131,14 @@ impl App {
         }
     }
 
-    /// The agent is gone: answer anything it is still waiting on, tear down
-    /// every route and overlay, and ask the event loop to exit.
+    /// The connection is gone, but a remote agent may still be running.
+    /// Release local interactions and overlays, then ask the event loop to exit.
     fn on_connection_closed(&mut self) {
         self.close_elicitation_owner();
         self.return_to_conversation();
         self.foreground = ForegroundOperation::Idle;
         self.commands.retain(|command| !matches!(command, Command::Terminal(TerminalCommand::RingBell)));
-        self.exit_state = ExitState::Exiting;
+        self.exit_state = ExitState::ConnectionLost;
     }
 
     /// Answers any elicitation the current route or overlay is holding, leaving the
@@ -153,6 +152,10 @@ impl App {
     }
 
     fn on_session_update(&mut self, update: &SessionUpdate) {
+        if matches!(update, SessionUpdate::StateUpdate(StateUpdate::Running(_))) && self.foreground.is_idle() {
+            self.foreground = ForegroundOperation::Prompt(PromptPhase::Running);
+            self.conversation.progress_indicator_mut().prompt_started();
+        }
         if self.waiting_for_response() {
             self.observe_activity(update);
         }

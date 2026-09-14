@@ -5,21 +5,30 @@ use rmcp::model::{
 use rmcp::service::{DynService, RequestContext};
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use std::sync::Arc;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, mpsc};
 
 #[derive(Clone)]
 pub(crate) struct FakePromptMcp {
     prompt_name: String,
     gate: Option<(Arc<Notify>, Arc<Notify>)>,
+    elicitation_results: Option<mpsc::UnboundedSender<rmcp::model::ElicitResult>>,
 }
 
 impl FakePromptMcp {
     pub(crate) fn new(prompt_name: &str) -> Self {
-        Self { prompt_name: prompt_name.to_string(), gate: None }
+        Self { prompt_name: prompt_name.to_string(), gate: None, elicitation_results: None }
     }
 
     pub(crate) fn with_gate(mut self, gate: Option<(Arc<Notify>, Arc<Notify>)>) -> Self {
         self.gate = gate;
+        self
+    }
+
+    pub(crate) fn with_elicitation(
+        mut self,
+        results: Option<mpsc::UnboundedSender<rmcp::model::ElicitResult>>,
+    ) -> Self {
+        self.elicitation_results = results;
         self
     }
 
@@ -47,7 +56,7 @@ impl ServerHandler for FakePromptMcp {
     fn get_prompt(
         &self,
         request: GetPromptRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<GetPromptResponse, McpError>> + Send + '_ {
         let result = if request.name.as_str() == self.prompt_name {
             let messages = vec![PromptMessage::new_text(Role::User, format!("expanded {}", self.prompt_name))];
@@ -59,6 +68,14 @@ impl ServerHandler for FakePromptMcp {
             if let Some((started, release)) = &self.gate {
                 started.notify_one();
                 release.notified().await;
+            }
+            if let Some(results) = &self.elicitation_results {
+                let params = serde_json::from_value(serde_json::json!({
+                    "mode": "form", "message": "Continue?", "requestedSchema": {"type": "object", "properties": {}}
+                }))
+                .expect("valid elicitation request");
+                let response = context.peer.create_elicitation(params).await.expect("elicitation response");
+                let _ = results.send(response);
             }
             result
         }

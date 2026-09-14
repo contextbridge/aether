@@ -3,6 +3,7 @@ mod acp_cancellation;
 mod acp_control_plane;
 mod acp_prompt_lifecycle;
 mod acp_prompt_search;
+mod acp_remote;
 mod acp_session_lifecycle;
 mod acp_stdio;
 mod acp_workspace_move;

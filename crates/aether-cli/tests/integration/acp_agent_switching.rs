@@ -130,8 +130,8 @@ async fn switching_back_reuses_warm_runtime_and_syncs_latest_transcript() {
             planner_prompt.await.expect("planner prompt accepted");
             harness.expect_idle(fake.session_id(), StopReason::EndTurn).await;
             fake.planner().assert_saw(&["write code", CODER_REPLY, "review code"]);
-            harness.disconnect().await;
-            assert_eq!(harness.live_runtime_count(), 0, "disconnect joins all cached runtimes");
+            harness.shutdown().await;
+            assert_eq!(harness.live_runtime_count(), 0, "shutdown joins all cached runtimes");
         })
         .await;
 }

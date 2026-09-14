@@ -12,6 +12,12 @@ impl App {
         }
 
         let mentions = self.composer.selected_mentions();
+        if self.session.workspace_access() == crate::session::WorkspaceAccess::Remote
+            && (!mentions.is_empty() || !self.composer.pending_media().is_empty())
+        {
+            self.notify("Path attachments are unavailable for remote workspaces; remove attachments before sending");
+            return;
+        }
         let (text, pending_media) = self.composer.take_submission();
         let mut all_attachments: Vec<PromptAttachment> =
             mentions.into_iter().map(|m| PromptAttachment { path: m.path, display_name: m.display_name }).collect();

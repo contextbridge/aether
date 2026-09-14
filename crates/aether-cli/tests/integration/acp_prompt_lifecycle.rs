@@ -22,7 +22,7 @@ async fn cancel_during_mcp_prompt_expansion_does_not_wait_for_the_server() {
             prompt.await.unwrap();
             harness.expect_idle(&id, StopReason::Cancelled).await;
             session.planner().assert_never_ran();
-            harness.disconnect().await;
+            harness.shutdown().await;
             assert_eq!(harness.live_runtime_count(), 0);
         })
         .await;

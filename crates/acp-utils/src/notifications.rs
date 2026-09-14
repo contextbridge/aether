@@ -2,7 +2,7 @@
 //! notifications.
 use std::path::PathBuf;
 
-use agent_client_protocol::schema::v2::{AuthMethod, Meta};
+use agent_client_protocol::schema::v2::{AuthMethod, Meta, SessionId};
 use agent_client_protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 pub use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,27 @@ pub use mcp_utils::status::{McpServerAuthCapability, McpServerStatus, McpServerS
 use crate::meta::{from_meta, to_meta};
 
 pub const AETHER_META_NAMESPACE: &str = "contextbridge/aether";
+
+/// Remote host discovery, advertised on the initialize response only.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteServerInfo {
+    pub cwd: PathBuf,
+    pub session_id: Option<SessionId>,
+}
+
+impl RemoteServerInfo {
+    #[must_use]
+    pub fn to_meta(&self) -> Meta {
+        to_meta(&RemoteInitializationMeta { remote: Some(self.clone()) }, Some(AETHER_META_NAMESPACE))
+            .unwrap_or_default()
+    }
+
+    #[must_use]
+    pub fn from_meta(meta: Option<&Meta>) -> Option<Self> {
+        from_meta::<RemoteInitializationMeta>(meta, Some(AETHER_META_NAMESPACE)).remote
+    }
+}
 
 /// Parameters for `_aether/session_usage` notifications.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonRpcNotification)]
@@ -259,6 +280,11 @@ pub struct SubAgentToolResult {
 pub struct SubAgentToolError {
     pub id: String,
     pub name: String,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct RemoteInitializationMeta {
+    remote: Option<RemoteServerInfo>,
 }
 
 #[cfg(test)]

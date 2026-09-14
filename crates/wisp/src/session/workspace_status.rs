@@ -1,5 +1,21 @@
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WorkspaceAccess {
+    #[default]
+    Local,
+    Remote,
+}
+
+impl WorkspaceAccess {
+    pub fn display_path(self, path: &Path) -> String {
+        match self {
+            Self::Local => home_relative_path(path),
+            Self::Remote => path.display().to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceStatus {
     pub display_dir: String,
@@ -9,6 +25,10 @@ pub struct WorkspaceStatus {
 impl WorkspaceStatus {
     pub fn new(display_dir: impl Into<String>, git_ref: Option<String>) -> Self {
         Self { display_dir: display_dir.into(), git_ref }
+    }
+
+    pub fn remote(cwd: &Path) -> Self {
+        Self::new(format!("remote: {}", cwd.display()), None)
     }
 
     /// Creates the path portion of the status without touching the repository.

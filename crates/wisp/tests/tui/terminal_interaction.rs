@@ -25,6 +25,40 @@ fn workspaces_completed(response: acp_utils::notifications::WorkspaceListRespons
     CommandResult::WorkspacesListed(Ok(response))
 }
 
+#[test]
+fn remote_checkout_actions_are_blocked_without_losing_text() {
+    for key in [KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL), key(KeyCode::Char('@'))] {
+        let mut ui = TestUiBuilder::new().remote_workspace().dimensions(120, 24).build();
+        ui.type_text("draft");
+        ui.key(key);
+        assert!(!ui.app().full_screen_active());
+        assert!(!ui.app().composer().has_completion());
+        assert!(ui.take_commands().is_empty());
+        ui.assert_conversation_contains("unavailable for remote workspaces");
+        assert!(ui.app().composer().text().starts_with("draft"));
+    }
+}
+
+#[test]
+fn remote_pasted_paths_remain_text_and_settings_remain_local() {
+    let mut ui = TestUiBuilder::new().remote_workspace().dimensions(120, 24).build();
+    ui.terminal_event(crossterm::event::Event::Paste("/server/screenshot.png".into()));
+    assert_eq!(ui.app().composer().text(), "/server/screenshot.png");
+    ui.key(key(KeyCode::Enter));
+    assert!(
+        matches!(ui.next_agent_command(), Some(AgentCommand::Prompt { text, .. }) if text == "/server/screenshot.png")
+    );
+    ui.complete_prompt(acp::StopReason::EndTurn);
+    ui.type_text("/settings");
+    ui.key(key(KeyCode::Tab));
+    assert!(ui.app().has_modal());
+    assert!(
+        ui.take_commands()
+            .iter()
+            .any(|command| matches!(command, Command::Filesystem(wisp::command::FilesystemCommand::ListThemes)))
+    );
+}
+
 fn make_app() -> TestUi {
     TestUiBuilder::new().build()
 }

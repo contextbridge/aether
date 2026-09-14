@@ -3,6 +3,7 @@ use super::{App, ExitState, Overlay, Route};
 use crate::command::{AgentCommand, Command};
 use crate::renderer::DrawContext;
 use crate::screens::git_diff::GitDiffScreen;
+use crate::session::WorkspaceAccess;
 use crate::session::session_config_view::LocalConfigView;
 use crate::surfaces::composer::ComposerOutcome;
 use crate::surfaces::dropped_files::parse_dropped_file_paths;
@@ -116,11 +117,15 @@ impl App {
             && self.session.capabilities().prompt_search
             && !self.composer.has_completion()
         {
-            self.composer.open_prompt_search();
+            self.composer.open_prompt_search(self.session.workspace_access());
             return;
         }
 
         if self.ui.keybindings.toggle_git_diff.matches(key) {
+            if self.session.workspace_access() == WorkspaceAccess::Remote {
+                self.notify("Git review is unavailable for remote workspaces");
+                return;
+            }
             let (screen, task) = GitDiffScreen::new(self.session.working_dir().to_path_buf());
             self.open_route(Route::GitReview(Box::new(screen)));
             self.queue(Command::GitWatch(task));
@@ -170,6 +175,8 @@ impl App {
                 self.composer.insert_char(character);
                 if opens_command_picker {
                     self.composer.open_command_picker(self.available_commands.clone());
+                } else if self.session.workspace_access() == WorkspaceAccess::Remote {
+                    self.notify("File picker is unavailable for remote workspaces");
                 } else {
                     let command = self.composer.open_file_picker(self.session.working_dir());
                     self.queue(Command::Filesystem(command));
@@ -220,7 +227,8 @@ impl App {
             self.apply_composer_outcome(outcome);
             return;
         }
-        let added = parse_dropped_file_paths(text).is_some_and(|paths| self.composer.add_dropped_media(paths));
+        let added = self.session.workspace_access() == WorkspaceAccess::Local
+            && parse_dropped_file_paths(text).is_some_and(|paths| self.composer.add_dropped_media(paths));
         if !added {
             self.composer.insert_paste(text);
         }

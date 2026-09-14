@@ -41,6 +41,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::sync::mpsc::UnboundedReceiver;
 
 /// A deterministic command runner for integration tests.
 ///
@@ -1299,6 +1300,7 @@ pub struct TestUiBuilder {
     width: u16,
     height: u16,
     working_dir: Option<PathBuf>,
+    workspace_access: crate::session::WorkspaceAccess,
     capabilities: AetherCapabilities,
     prompt_capabilities: acp::PromptCapabilities,
     config_options: Vec<acp::SessionConfigOption>,
@@ -1316,6 +1318,7 @@ impl Default for TestUiBuilder {
             width: 40,
             height: 15,
             working_dir: None,
+            workspace_access: crate::session::WorkspaceAccess::Local,
             capabilities: AetherCapabilities::default(),
             prompt_capabilities: acp::PromptCapabilities::new(),
             config_options: Vec::new(),
@@ -1337,6 +1340,11 @@ impl TestUiBuilder {
     pub fn dimensions(mut self, width: u16, height: u16) -> Self {
         self.width = width;
         self.height = height;
+        self
+    }
+
+    pub fn remote_workspace(mut self) -> Self {
+        self.workspace_access = crate::session::WorkspaceAccess::Remote;
         self
     }
 
@@ -1402,8 +1410,19 @@ impl TestUiBuilder {
         self.finish()
     }
 
+    pub fn build_from_session(self, session: crate::session::Session) -> (TestUi, UnboundedReceiver<AcpEvent>) {
+        let (app, events, _) = App::from_session(session, self.settings.clone());
+        let mut ui = self.finish_with_app(app);
+        ui.executor.record(ui.app.take_commands());
+        (ui, events)
+    }
+
     fn finish(self) -> TestUi {
         let app = App::new(self.app_config());
+        self.finish_with_app(app)
+    }
+
+    fn finish_with_app(self, app: App) -> TestUi {
         TestUi {
             app,
             renderer: Renderer::new(),
@@ -1433,6 +1452,7 @@ impl TestUiBuilder {
                 .clone()
                 .unwrap_or_else(|| WorkspaceStatus::new("~/code/demo", Some("main".to_string()))),
             working_dir: self.working_dir.clone().unwrap_or_else(|| PathBuf::from(".")),
+            workspace_access: self.workspace_access,
             settings: self.settings.clone(),
             browser_opener: {
                 let opened = self.opened_urls.clone();

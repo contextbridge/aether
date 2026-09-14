@@ -1,4 +1,6 @@
+use aether_cli::acp::server::{ServerArgs, ServerRunError, run_server};
 use aether_cli::acp::{AcpArgs, AcpRunError, AcpRunOutcome, run_acp};
+use aether_cli::client::{ClientArgs, ClientRunError, run_client};
 use aether_cli::error::CliError;
 use aether_cli::generate_command::{GenerateArgs, GenerateCommandError, run as run_generate_command};
 use aether_cli::headless::{HeadlessArgs, run_headless};
@@ -22,6 +24,10 @@ enum MainError {
     Generate(#[from] GenerateCommandError),
     #[error("{0}")]
     Acp(#[from] AcpRunError),
+    #[error(transparent)]
+    Server(#[from] ServerRunError),
+    #[error(transparent)]
+    Client(#[from] ClientRunError),
     #[error("{0}")]
     Init(#[from] InitError),
     #[error("{0}")]
@@ -55,8 +61,12 @@ enum Command {
     Headless(HeadlessArgs),
     /// Call a model with a single prompt and print its response
     Generate(GenerateArgs),
-    /// Start the ACP server
+    /// Start the stdio ACP server
     Acp(AcpArgs),
+    /// Host a persistent remote ACP session over WebSocket
+    Server(ServerArgs),
+    /// Attach the TUI to a remote Aether server without starting a local agent
+    Client(ClientArgs),
     /// Print the fully assembled system prompt (for debugging)
     ShowPrompt(PromptArgs),
     /// Discover and call deferred MCP tools
@@ -88,6 +98,10 @@ fn main() -> ExitCode {
                 AcpRunOutcome::CleanDisconnect => ExitCode::SUCCESS,
             })
             .map_err(Into::into),
+
+        Some(Command::Server(args)) => rt.block_on(run_server(args)).map(|()| ExitCode::SUCCESS).map_err(Into::into),
+
+        Some(Command::Client(args)) => rt.block_on(run_client(args)).map(|()| ExitCode::SUCCESS).map_err(Into::into),
 
         Some(Command::ShowPrompt(args)) => {
             rt.block_on(run_prompt(args)).map(|()| ExitCode::SUCCESS).map_err(Into::into)

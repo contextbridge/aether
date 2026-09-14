@@ -137,12 +137,17 @@ impl TestPeer {
         self.elicitation_responses.lock().unwrap().push_back(response);
     }
 
+    pub fn capture_next_elicitation(&self) -> oneshot::Receiver<Responder<CreateElicitationResponse>> {
+        let (sender, receiver) = oneshot::channel();
+        *self.responder_capture.lock().unwrap() = Some(sender);
+        receiver
+    }
+
     pub async fn fake_elicitation(
         &mut self,
         cx: &ConnectionTo<Client>,
     ) -> (Responder<CreateElicitationResponse>, oneshot::Receiver<CreateElicitationResponse>) {
-        let (responder_tx, responder_rx) = oneshot::channel::<Responder<CreateElicitationResponse>>();
-        *self.responder_capture.lock().unwrap() = Some(responder_tx);
+        let responder_rx = self.capture_next_elicitation();
 
         let (response_tx, response_rx) = oneshot::channel::<CreateElicitationResponse>();
         let cx = cx.clone();
@@ -217,7 +222,7 @@ where
     }
 }
 
-struct CaptureConnection<R: acp::Role>(oneshot::Sender<ConnectionTo<R>>);
+pub struct CaptureConnection<R: acp::Role>(pub oneshot::Sender<ConnectionTo<R>>);
 
 impl<R: acp::Role> RunWithConnectionTo<R> for CaptureConnection<R> {
     async fn run_with_connection_to(self, cx: ConnectionTo<R>) -> Result<(), acp::Error> {

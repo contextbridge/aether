@@ -103,6 +103,20 @@ Aether takes a different approach. Agents begin as blank slates with _no_ system
      aether headless "Refactor auth module"
      ```
 
+Run the agent remotely while keeping the terminal UI local:
+
+```bash
+# Agent machine (loopback listener):
+aether server --cwd /workspace/project --agent Build
+
+# Client machine, with an SSH tunnel running:
+ssh -N -L 8765:127.0.0.1:8765 user@agent-machine
+# In another local terminal:
+aether client
+```
+
+Exit and run `aether client` again to reattach; accepted work continues on the server. See [remote usage and deployment boundaries](https://aether-agent.io/aether/running/remote/). The raw server is unauthenticated—use a tunnel, private network, or authenticating TLS proxy.
+
 ## Using Aether as a library
 
 Use `aether-agent-core` as a Rust library to build your own agent in ~25 lines. Bring your own model via the `StreamingModelProvider` trait, or alloy models together to round-robin across providers per turn.

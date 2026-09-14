@@ -52,21 +52,6 @@ pub(crate) struct PreparedSession {
 }
 
 impl PreparedSession {
-    pub(crate) fn refresh_transcript(mut self) -> Result<Self, Error> {
-        let (meta, transcript) =
-            self.init.repository.load(&self.init.session_id.0).map_err(Error::into_internal_error)?;
-        let mut catalog =
-            SessionModeCatalog { specs: self.init.specs, modes: self.init.modes, available: self.available };
-        let resolved = resolve_loaded_session(&mut catalog, &meta, &transcript)?;
-        self.init.specs = catalog.specs;
-        self.init.modes = catalog.modes;
-        self.available = catalog.available;
-        self.init.active_agent = resolved.active_agent;
-        self.init.config = resolved.config;
-        self.init.transcript = transcript;
-        Ok(self)
-    }
-
     pub(crate) async fn start(self) -> Result<CreatedSession, Error> {
         let session_id = self.init.session_id.clone();
         let config_options = self.init.config.config_options(
@@ -114,6 +99,8 @@ impl SessionFactory {
         cx: &ConnectionTo<Client>,
         mcp_capabilities: ClientCapabilities,
     ) -> Result<PreparedSession, Error> {
+        let cwd = args.cwd.clone().into_inner();
+        let mcp_servers = args.mcp_servers.clone();
         // Inside a sandbox container the client sends the *host* cwd, but the
         // project is mounted at the container's working directory.
         if std::env::var("AETHER_INSIDE_SANDBOX").is_ok() {
@@ -154,6 +141,8 @@ impl SessionFactory {
         });
         Ok(self.prepare_session(
             SessionId::new(session_id),
+            cwd,
+            mcp_servers,
             runtime_factory,
             mode_catalog,
             resolved,
@@ -168,12 +157,8 @@ impl SessionFactory {
         args: ResumeSessionRequest,
         cx: &ConnectionTo<Client>,
         mcp_capabilities: ClientCapabilities,
+        replay: bool,
     ) -> Result<PreparedSession, Error> {
-        let replay = match args.replay_from {
-            Some(acp::ReplayFrom::Start(_)) => true,
-            None => false,
-            Some(_) => return Err(Error::invalid_params()),
-        };
         self.restore(args.session_id, args.cwd.into_inner(), args.mcp_servers, cx, mcp_capabilities, replay).await
     }
 
@@ -204,14 +189,24 @@ impl SessionFactory {
         let resolved = resolve_loaded_session(&mut mode_catalog, &meta, &events)?;
         let runtime_factory = self.runtime_factory.clone().unwrap_or_else(|| {
             self.production_runtime_factory(
-                cwd,
-                mcp_servers,
+                cwd.clone(),
+                mcp_servers.clone(),
                 mode_catalog.specs.catalog(),
                 mcp_capabilities,
                 session_id.0.as_ref(),
             )
         });
-        Ok(self.prepare_session(session_id, runtime_factory, mode_catalog, resolved, events, replay, cx))
+        Ok(self.prepare_session(
+            session_id,
+            cwd,
+            mcp_servers,
+            runtime_factory,
+            mode_catalog,
+            resolved,
+            events,
+            replay,
+            cx,
+        ))
     }
 
     fn production_runtime_factory(
@@ -233,6 +228,8 @@ impl SessionFactory {
     fn prepare_session(
         &self,
         session_id: SessionId,
+        cwd: PathBuf,
+        mcp_servers: Vec<acp::McpServer>,
         runtime_factory: Arc<dyn RuntimeFactory>,
         mode_catalog: SessionModeCatalog,
         resolved: ResolvedSession,
@@ -242,6 +239,8 @@ impl SessionFactory {
     ) -> PreparedSession {
         let init = SessionActorInit {
             session_id,
+            cwd,
+            mcp_servers,
             connection: cx.clone(),
             repository: self.session_store.clone(),
             oauth_credential_store: Arc::clone(&self.oauth_credential_store),
