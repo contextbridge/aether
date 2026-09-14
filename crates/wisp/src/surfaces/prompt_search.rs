@@ -156,7 +156,7 @@ impl PromptSearchPicker {
 
 fn result_line(result: &PromptSearchResult, max_width: usize, theme: &Theme, workspace_access: WorkspaceAccess) -> Line<'static> {
     let cwd_display = match workspace_access.display_path(&result.cwd) {
-        full if workspace_access == WorkspaceAccess::Remote || full.width() <= MAX_CWD_WIDTH => full,
+        full if full.width() <= MAX_CWD_WIDTH => full,
         full => result
             .cwd
             .file_name()

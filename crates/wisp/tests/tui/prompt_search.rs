@@ -11,7 +11,8 @@ fn remote_prompt_search_keeps_server_paths_and_accepts_results() {
         "h",
         vec![prompt_search_result_with_cwd("hello world", 0, 1, cwd.clone())],
     )));
-    ui.assert_viewport_contains(&format!("remote: {}", cwd.display()));
+    ui.assert_viewport_contains(&cwd.display().to_string());
+    ui.assert_viewport_not_contains(&format!("remote: {}", cwd.display()));
     ui.key(key(KeyCode::Enter));
     assert_eq!(ui.app().composer().text(), "hello world");
     ui.key(key(KeyCode::Enter));

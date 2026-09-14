@@ -7,7 +7,8 @@ fn remote_workspace_move_keeps_paths_server_side() {
     ui.key(key(KeyCode::Tab));
     assert!(matches!(ui.next_agent_command(), Some(AgentCommand::ListWorkspaces { .. })));
     ui.deliver_result(workspaces_listed(vec![workspace_entry("/server/next", false)]));
-    ui.assert_viewport_contains("remote: /server/next");
+    ui.assert_viewport_contains("/server/next");
+    ui.assert_viewport_not_contains("remote: /server/next");
     ui.key(key(KeyCode::Enter));
     assert!(matches!(ui.next_agent_command(), Some(AgentCommand::MoveWorkspace { .. })));
     ui.deliver_result(workspace_moved("/server/next"));

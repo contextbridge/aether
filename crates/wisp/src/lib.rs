@@ -50,12 +50,13 @@ use error::AppError;
 use renderer::Renderer;
 use settings::UiSettings;
 use std::fs::create_dir_all;
+use std::path::Path;
 use tracing_appender::rolling::daily;
 use tracing_subscriber::EnvFilter;
 
 /// Launch the Wisp TUI with the given agent subprocess command.
 pub async fn run_tui(agent_command: &str, settings: UiSettings, log_dir: Option<&str>) -> Result<(), AppError> {
-    setup_logging(log_dir);
+    setup_logging(log_dir.map(Path::new));
     let session = Session::connect(agent_command).await?;
     run_with_session(session, settings).await
 }
@@ -65,7 +66,7 @@ pub async fn run_remote_tui(
     transport: impl ConnectTo<Client> + 'static,
     requested_session: Option<SessionId>,
     settings: UiSettings,
-    log_dir: Option<&str>,
+    log_dir: Option<&Path>,
 ) -> Result<(), AppError> {
     setup_logging(log_dir);
     let session = Session::connect_remote_to(transport, requested_session).await?;
@@ -78,8 +79,8 @@ pub async fn run_with_session(session: Session, settings: UiSettings) -> Result<
     runtime::run(app, Renderer::new(), event_rx, client_handle).await
 }
 
-fn setup_logging(log_dir: Option<&str>) {
-    let dir = log_dir.unwrap_or(DEFAULT_LOG_DIR);
+fn setup_logging(log_dir: Option<&Path>) {
+    let dir = log_dir.unwrap_or_else(|| Path::new(DEFAULT_LOG_DIR));
     create_dir_all(dir).ok();
     let _ = tracing_subscriber::fmt()
         .with_writer(daily(dir, "wisp.log"))

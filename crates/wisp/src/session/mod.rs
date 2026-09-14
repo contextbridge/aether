@@ -19,21 +19,7 @@ use std::env::current_dir;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum WorkspaceAccess {
-    #[default]
-    Local,
-    Remote,
-}
-
-impl WorkspaceAccess {
-    pub fn display_path(self, path: &std::path::Path) -> String {
-        match self {
-            Self::Local => workspace_status::home_relative_path(path),
-            Self::Remote => format!("remote: {}", path.display()),
-        }
-    }
-}
+pub use workspace_status::WorkspaceAccess;
 
 pub struct Session {
     pub client: AcpClient,
@@ -49,17 +35,15 @@ impl Session {
         transport: impl ConnectTo<Client> + 'static,
         requested_session: Option<SessionId>,
     ) -> Result<Self, AppError> {
-        let init_request =
-            InitializeRequest::new(ProtocolVersion::V2, Implementation::new("wisp", env!("CARGO_PKG_VERSION")))
-                .capabilities(client_capabilities());
-        let client = connect_acp_client(transport, init_request).await?;
+        let client = connect_acp_client(transport, initialize_request()).await?;
         let remote = RemoteServerInfo::from_meta(client.initialize_response.meta.as_ref())
             .ok_or(AppError::MissingRemoteContract)?;
-        let selected = requested_session.or_else(|| remote.session_id.clone());
-        let working_dir = if let Some(id) = selected.as_ref().filter(|id| Some(*id) != remote.session_id.as_ref()) {
-            client.handle.request(SessionPreviewParams { session_id: id.to_string() }).await?.cwd
-        } else {
-            remote.cwd
+        let (selected, working_dir) = match (requested_session, remote.session_id) {
+            (Some(requested), live) if live.as_ref() != Some(&requested) => {
+                let cwd = client.handle.request(SessionPreviewParams { session_id: requested.to_string() }).await?.cwd;
+                (Some(requested), cwd)
+            }
+            (requested, live) => (requested.or(live), remote.cwd),
         };
         let response = if let Some(id) = selected {
             let resumed = client.handle
@@ -81,10 +65,7 @@ impl Session {
 
     pub async fn connect_to(agent: impl ConnectTo<Client> + 'static, working_dir: PathBuf) -> Result<Self, AppError> {
         let workspace_status = WorkspaceStatus::initial(&working_dir);
-        let init_request =
-            InitializeRequest::new(ProtocolVersion::V2, Implementation::new("wisp", env!("CARGO_PKG_VERSION")))
-                .capabilities(client_capabilities());
-        let client = connect_acp_client(agent, init_request).await?;
+        let client = connect_acp_client(agent, initialize_request()).await?;
         let session_response = client.handle.new_session(NewSessionRequest::new(working_dir.clone())).await?;
 
         Ok(Self {
@@ -95,6 +76,11 @@ impl Session {
             workspace_status,
         })
     }
+}
+
+fn initialize_request() -> InitializeRequest {
+    InitializeRequest::new(ProtocolVersion::V2, Implementation::new("wisp", env!("CARGO_PKG_VERSION")))
+        .capabilities(client_capabilities())
 }
 
 fn client_capabilities() -> ClientCapabilities {
