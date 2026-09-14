@@ -26,6 +26,7 @@ workspace = true
 [features]
 default = ["client"]
 client = []
+agent = ["tokio/net"]
 testing = ["client"]
 websocket = ["dep:tokio-tungstenite"]
 

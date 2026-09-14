@@ -1,4 +1,6 @@
-use acp_utils::client::TokioAcpAgent;
+#![cfg(feature = "agent")]
+
+use acp_utils::agent::TokioAcpAgent;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v2::{Implementation, InitializeRequest};
 use agent_client_protocol::{Client, ConnectTo};

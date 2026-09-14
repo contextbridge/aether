@@ -1,8 +1,4 @@
-//! Tokio-native parent-side ACP transport.
-//!
-//! `agent_client_protocol::AcpAgent` spawns the child via smol's
-//! `async_process::Command`, which wraps stdio in `blocking::Unblock`. Inside a
-//! tokio runtime that causes a busy loop. This avoids the issue by spawning stdio agents with `tokio::process::Command`
+
 
 use agent_client_protocol::util::internal_error;
 use agent_client_protocol::{

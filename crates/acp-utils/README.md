@@ -10,9 +10,6 @@ Utilities for the [Agent Client Protocol](https://agentclientprotocol.com/) (ACP
 - [Key Types](#key-types)
 - [Feature Flags](#feature-flags)
 - [WebSocket transport](#websocket-transport)
-- [Client ownership and turn completion](#client-ownership-and-turn-completion)
-- [Session switching and replay](#session-switching-and-replay)
-- [Cancellation and disconnect](#cancellation-and-disconnect)
 - [License](#license)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -24,13 +21,14 @@ Utilities for the [Agent Client Protocol](https://agentclientprotocol.com/) (ACP
 - **`McpNotification` / `McpRequest`** -- MCP message tunneling over ACP
 - **`TokioAcpAgent`** -- Tokio-native ACP transport
 - **`AcpClientHandle`** -- Initialized, cloneable client for typed ACP v2 requests
-- **`AcpEvent` / `ResumedSession`** -- Live UI events and atomically committed replay snapshots
+- **`AcpEvent`** -- Ordered notifications, including replay updates sent before the resume response
 
 ## Feature Flags
 
 | Feature | Description | Default |
 |---------|-------------|---------|
 | `client` | ACP client (for UIs connecting to agents) | yes |
+| `agent` | Tokio-native agent subprocess and Unix stdio transports | no |
 | `websocket` | Message-oriented WebSocket transport | no |
 | `testing` | Public in-memory ACP test peers and transport helpers (enables `client`) | no |
 
