@@ -12,6 +12,7 @@ use llm::{ProviderConnectionOverrides, ReasoningEffort};
 use rmcp::model::ClientCapabilities;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::sync::OnceCell;
 use tracing::{error, info, warn};
 
 use super::actor::{SessionActor, SessionActorInit, SessionHandle};
@@ -35,6 +36,7 @@ pub(crate) struct SessionFactory {
     initial_selection: InitialSessionSelection,
     observer_factory: Option<DynObserverFactory>,
     runtime_factory: Option<Arc<dyn RuntimeFactory>>,
+    available: OnceCell<Vec<LlmModel>>,
 }
 
 /// The fully-built session ready to be registered with [`AcpState`](crate::acp::state::AcpState).
@@ -50,14 +52,32 @@ pub(crate) struct PreparedSession {
 }
 
 impl PreparedSession {
+    pub(crate) fn refresh_transcript(mut self) -> Result<Self, Error> {
+        let (meta, transcript) =
+            self.init.repository.load(&self.init.session_id.0).map_err(Error::into_internal_error)?;
+        let mut catalog =
+            SessionModeCatalog { specs: self.init.specs, modes: self.init.modes, available: self.available };
+        let resolved = resolve_loaded_session(&mut catalog, &meta, &transcript)?;
+        self.init.specs = catalog.specs;
+        self.init.modes = catalog.modes;
+        self.available = catalog.available;
+        self.init.active_agent = resolved.active_agent;
+        self.init.config = resolved.config;
+        self.init.transcript = transcript;
+        Ok(self)
+    }
+
     pub(crate) async fn start(self) -> Result<CreatedSession, Error> {
         let session_id = self.init.session_id.clone();
-        let credentials = self.init.oauth_credential_store.clone();
+        let config_options = self.init.config.config_options(
+            &self.init.modes,
+            &self.available,
+            self.init.oauth_credential_store.as_ref(),
+        );
         let handle = SessionActor::spawn(self.init).await.map_err(|e| {
             error!("Failed to start session actor: {e}");
             Error::internal_error()
         })?;
-        let config_options = handle.config_snapshot().config_options(&self.available, credentials.as_ref());
         Ok(CreatedSession { session_id, handle, config_options })
     }
 }
@@ -80,7 +100,12 @@ impl SessionFactory {
             initial_selection,
             observer_factory,
             runtime_factory,
+            available: OnceCell::new(),
         }
+    }
+
+    pub(crate) async fn available_models(&self) -> &[LlmModel] {
+        self.available.get_or_init(get_local_models).await
     }
 
     pub(crate) async fn prepare_new(
@@ -281,7 +306,7 @@ impl SessionFactory {
             })?
             .with_provider_connections(self.provider_connections.clone());
 
-        let available = get_local_models().await;
+        let available = self.available_models().await.to_vec();
         let modes = Modes::from_specs(catalog.all(), &available);
 
         Ok(SessionModeCatalog { specs: SessionAgents::new(catalog), modes, available })

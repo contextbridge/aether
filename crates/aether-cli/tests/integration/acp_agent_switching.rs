@@ -1,7 +1,8 @@
 use acp_utils::config_option_id::ConfigOptionId;
 use aether_cli::acp::testing::{AcpTestHarness, FakeAgentSwitchingSession};
 use agent_client_protocol::schema::v2::{
-    ContentBlock, PromptRequest, PromptResponse, SetSessionConfigOptionRequest, StopReason, TextContent,
+    CloseSessionRequest, ContentBlock, PromptRequest, PromptResponse, SetSessionConfigOptionRequest, StopReason,
+    TextContent,
 };
 use std::future::Future;
 use tokio::task::LocalSet;
@@ -118,7 +119,9 @@ async fn switching_back_reuses_warm_runtime_and_syncs_latest_transcript() {
             harness.expect_idle(fake.session_id(), StopReason::EndTurn).await;
             fake.coder().assert_saw_exactly(&["write code"]);
 
+            assert_eq!(harness.live_runtime_count(), 2);
             select_planner(&harness, &fake).await;
+            assert_eq!(harness.live_runtime_count(), 2, "switching back keeps the warm runtime");
             let planner_prompt = send_prompt(&harness, &fake, "review code");
             tokio::pin!(planner_prompt);
 
@@ -127,6 +130,8 @@ async fn switching_back_reuses_warm_runtime_and_syncs_latest_transcript() {
             planner_prompt.await.expect("planner prompt accepted");
             harness.expect_idle(fake.session_id(), StopReason::EndTurn).await;
             fake.planner().assert_saw(&["write code", CODER_REPLY, "review code"]);
+            harness.disconnect().await;
+            assert_eq!(harness.live_runtime_count(), 0, "disconnect joins all cached runtimes");
         })
         .await;
 }
@@ -200,6 +205,34 @@ async fn loaded_session_reports_initial_mcp_server_status_for_restored_agent() {
             let _fake = harness.insert_loaded_agent_switching_session("loaded").await;
 
             harness.expect_mcp_server_status(&["coder-mcp"]).await;
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn close_interrupts_runtime_startup_during_mode_switch() {
+    LocalSet::new()
+        .run_until(async {
+            let harness = AcpTestHarness::start().await;
+            let fake = harness.insert_agent_switching_session().await;
+            let mut pending = harness.pause_next_runtime();
+            let switching = harness
+                .client_cx
+                .send_request(SetSessionConfigOptionRequest::new(
+                    fake.session_id().clone(),
+                    ConfigOptionId::Mode.as_str(),
+                    "Coder",
+                ))
+                .block_task();
+            pending.wait_until_started().await;
+            harness
+                .client_cx
+                .send_request(CloseSessionRequest::new(fake.session_id().clone()))
+                .block_task()
+                .await
+                .expect("close interrupts startup");
+            assert!(switching.await.is_err());
+            assert_eq!(harness.live_runtime_count(), 0);
         })
         .await;
 }

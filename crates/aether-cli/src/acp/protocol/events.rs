@@ -16,12 +16,14 @@ use agent_client_protocol::schema::v2::{
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
 use mcp_utils::display_meta::{PlanMetaStatus, ToolResultMeta};
 
-/// Converts Aether `AgentEvent` to ACP `SessionUpdate`
-pub fn map_agent_event_to_session_notification(msg: &AgentEvent) -> Option<SessionUpdate> {
-    map_agent_event_to_notification(msg, NotificationMode::Live)
-}
-
-pub(crate) fn forward_agent_notification(io: &SessionIo, msg: &AgentEvent) {
+/// Sends updates in delivery order.
+pub(crate) fn project_agent_event(msg: &AgentEvent, mode: NotificationMode, io: &SessionIo) {
+    if let Some(update) = map_agent_event_to_notification(msg, mode) {
+        io.send_update(update);
+    }
+    if matches!(mode, NotificationMode::Replay) {
+        return;
+    }
     match msg {
         AgentEvent::Context(ContextEvent::CompactionStarted { .. }) => {
             io.send(ContextCompactionParams { active: true });
@@ -29,16 +31,22 @@ pub(crate) fn forward_agent_notification(io: &SessionIo, msg: &AgentEvent) {
         AgentEvent::Context(ContextEvent::CompactionEnded { .. }) => {
             io.send(ContextCompactionParams { active: false });
         }
-
-        AgentEvent::Tool(ToolEvent::SubAgentProgress { request, payload }) => io.send(SubAgentProgressParams {
-            parent_tool_id: request.id.clone(),
-            task_id: payload.task_id.clone(),
-            agent_name: payload.agent_name.clone(),
-            event: to_sub_agent_event(&payload.event),
-        }),
+        AgentEvent::Tool(ToolEvent::SubAgentProgress { request, payload }) => {
+            io.send(SubAgentProgressParams {
+                parent_tool_id: request.id.clone(),
+                task_id: payload.task_id.clone(),
+                agent_name: payload.agent_name.clone(),
+                event: to_sub_agent_event(&payload.event),
+            });
+        }
         AgentEvent::Context(ContextEvent::Cleared) => io.send(ContextClearedParams::default()),
         AgentEvent::SessionUsage(usage) => io.send(SessionUsageParams { usage: usage.clone() }),
         _ => {}
+    }
+    if let AgentEvent::Tool(ToolEvent::Result { result_meta, .. }) = msg
+        && let Some(update) = try_extract_plan_notification(result_meta.as_ref())
+    {
+        io.send_update(update);
     }
 }
 
@@ -54,12 +62,12 @@ pub fn try_extract_plan_notification(result_meta: Option<&ToolResultMeta>) -> Op
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum NotificationMode {
+pub enum NotificationMode {
     Live,
     Replay,
 }
 
-pub(crate) fn map_agent_event_to_notification(msg: &AgentEvent, mode: NotificationMode) -> Option<SessionUpdate> {
+pub fn map_agent_event_to_notification(msg: &AgentEvent, mode: NotificationMode) -> Option<SessionUpdate> {
     match msg {
         AgentEvent::Context(ContextEvent::UsageUpdated { usage }) => map_context_usage_to_notification(usage),
 
@@ -339,7 +347,8 @@ mod tests {
                     agent_client_protocol::on_receive_notification!(),
                 );
                 let pair = acp_utils::testing::connect_pair(agent_client_protocol::Agent.v2(), client).await;
-                forward_agent_notification(&SessionIo::new(pair.agent, "session".into()), event);
+                let io = SessionIo::new(pair.agent, "session".into());
+                project_agent_event(event, NotificationMode::Live, &io);
                 rx.recv().await.unwrap()
             }),
         )
@@ -861,6 +870,10 @@ mod tests {
             },
             result_meta,
         })
+    }
+
+    fn map_agent_event_to_session_notification(event: &AgentEvent) -> Option<SessionUpdate> {
+        map_agent_event_to_notification(event, NotificationMode::Live)
     }
 
     fn mapped_tool(event: &AgentEvent) -> ToolCallUpdate {

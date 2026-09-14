@@ -1,7 +1,6 @@
 use super::agent_key::AgentKey;
 use super::error::SessionError;
 use crate::runtime::{Runtime, RuntimeBuilder};
-use crate::slash_commands::list_prompts;
 use aether_auth::OAuthHandler;
 use aether_core::agent_spec::AgentSpec;
 use aether_core::core::{AgentDeps, AgentHandle};
@@ -12,56 +11,29 @@ use mcp_utils::client::{
     ElicitingOAuthHandler, McpClientEvent, McpConnectionDetails, McpError, McpServer, McpServerStatusEntry,
     OAuthHandlerFactory,
 };
-use rmcp::model::Prompt as McpPrompt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
-use tokio::task::JoinHandle;
-
-/// Capacity of the channel that fans runtime events from every spawned agent
-/// into the session actor relay loop.
-pub(crate) const RUNTIME_EVENT_CHANNEL_CAPACITY: usize = 50;
 
 pub(crate) struct AgentRuntime {
+    pub(crate) agent_rx: mpsc::Receiver<AgentEvent>,
+    pub(crate) event_rx: mpsc::Receiver<McpClientEvent>,
     agent_tx: mpsc::Sender<Command>,
     latest_mcp_snapshot: watch::Receiver<McpConnectionDetails>,
     agent_handle: Option<AgentHandle>,
     mcp_runtime: McpRuntime,
-    agent_pump_handle: JoinHandle<()>,
-    mcp_pump_handle: JoinHandle<()>,
 }
 
 impl AgentRuntime {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        agent: AgentKey,
         agent_tx: mpsc::Sender<Command>,
-        mut agent_rx: mpsc::Receiver<AgentEvent>,
+        agent_rx: mpsc::Receiver<AgentEvent>,
         agent_handle: Option<AgentHandle>,
-        mut event_rx: mpsc::Receiver<McpClientEvent>,
+        event_rx: mpsc::Receiver<McpClientEvent>,
         mcp_runtime: McpRuntime,
-        runtime_event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Self {
         let latest_mcp_snapshot = mcp_runtime.handle().subscribe();
-        let agent_event_tx = runtime_event_tx.clone();
-        let agent_event_key = agent.clone();
-        let agent_pump_handle = tokio::spawn(async move {
-            while let Some(message) = agent_rx.recv().await {
-                if agent_event_tx.send(RuntimeEvent::Agent { agent: agent_event_key.clone(), message }).await.is_err() {
-                    break;
-                }
-            }
-        });
-
-        let mcp_pump_handle = tokio::spawn(async move {
-            while let Some(event) = event_rx.recv().await {
-                if runtime_event_tx.send(RuntimeEvent::Mcp { agent: agent.clone(), event }).await.is_err() {
-                    break;
-                }
-            }
-        });
-
-        Self { agent_tx, latest_mcp_snapshot, agent_handle, mcp_runtime, agent_pump_handle, mcp_pump_handle }
+        Self { agent_rx, event_rx, agent_tx, latest_mcp_snapshot, agent_handle, mcp_runtime }
     }
 
     pub(crate) async fn shutdown(mut self) {
@@ -69,37 +41,22 @@ impl AgentRuntime {
             handle.abort();
             handle.await_completion().await;
         }
-        self.agent_pump_handle.abort();
-        self.mcp_pump_handle.abort();
-        let _ = (&mut self.agent_pump_handle).await;
-        let _ = (&mut self.mcp_pump_handle).await;
         self.mcp_runtime.shutdown().await;
     }
 
     pub(crate) async fn send_agent_command(&self, command: Command) -> Result<(), SessionError> {
-        self.agent_tx
-            .send(command)
-            .await
-            .map_err(|e| SessionError::CommandChannel(format!("failed to send agent command: {e}")))
+        self.agent_tx.send(command).await.map_err(|_| SessionError::CommandChannelClosed)
     }
 
     pub(crate) async fn replace_conversation(&self, messages: Vec<ChatMessage>) -> Result<(), SessionError> {
         self.agent_tx
             .send(Command::agent(AgentCommand::ReplaceConversation(messages)))
             .await
-            .map_err(|e| SessionError::CommandChannel(format!("failed to sync active conversation: {e}")))
+            .map_err(|_| SessionError::CommandChannelClosed)
     }
 
     pub(crate) fn mcp(&self) -> &McpHandle {
         self.mcp_runtime.handle()
-    }
-
-    pub(crate) async fn list_prompts(&self) -> Result<Vec<McpPrompt>, SessionError> {
-        list_prompts(self.mcp()).await.map_err(|error| SessionError::McpOperation(error.to_string()))
-    }
-
-    pub(crate) async fn authenticate_mcp_server(&self, name: &str) -> Result<(), SessionError> {
-        self.mcp().authenticate_server(name).await.map_err(|error| SessionError::McpOperation(error.to_string()))
     }
 
     pub(crate) fn mcp_server_statuses(&self) -> Vec<McpServerStatusEntry> {
@@ -112,15 +69,7 @@ impl Drop for AgentRuntime {
         if let Some(handle) = &self.agent_handle {
             handle.abort();
         }
-        self.agent_pump_handle.abort();
-        self.mcp_pump_handle.abort();
     }
-}
-
-#[allow(clippy::large_enum_variant)]
-pub(crate) enum RuntimeEvent {
-    Agent { agent: AgentKey, message: AgentEvent },
-    Mcp { agent: AgentKey, event: McpClientEvent },
 }
 
 /// Spawns the [`AgentRuntime`] backing a session's agent. Production uses
@@ -134,7 +83,6 @@ pub(crate) trait RuntimeFactory: Send + Sync {
         spec: &AgentSpec,
         initial_messages: Vec<ChatMessage>,
         usage_seed: Option<SessionUsageEvent>,
-        runtime_event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Result<AgentRuntime, SessionError>;
 }
 
@@ -154,11 +102,10 @@ impl ProductionRuntimeFactory {
 impl RuntimeFactory for ProductionRuntimeFactory {
     async fn spawn(
         &self,
-        agent: AgentKey,
+        _agent: AgentKey,
         spec: &AgentSpec,
         initial_messages: Vec<ChatMessage>,
         usage_seed: Option<SessionUsageEvent>,
-        runtime_event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Result<AgentRuntime, SessionError> {
         let extra_servers = self.mcp_servers.clone();
 
@@ -175,7 +122,7 @@ impl RuntimeFactory for ProductionRuntimeFactory {
         let runtime = builder.build(None, Some(initial_messages)).await?;
 
         let Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime } = runtime;
-        Ok(AgentRuntime::new(agent, agent_tx, agent_rx, Some(agent_handle), event_rx, mcp_runtime, runtime_event_tx))
+        Ok(AgentRuntime::new(agent_tx, agent_rx, Some(agent_handle), event_rx, mcp_runtime))
     }
 }
 

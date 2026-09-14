@@ -42,8 +42,7 @@ impl HandleDispatchFrom<Client> for AcpHandlers {
             .if_request(async |req: NewSessionRequest, responder| {
                 let state = state.clone();
                 let connection = cx.clone();
-                spawn_lifecycle_response(responder, async move { state.new_session(req, &connection).await });
-                Ok(())
+                spawn_response(&cx, responder, async move { state.new_session(req, &connection).await })
             })
             .await
             .if_request(async |req: ListSessionsRequest, responder| {
@@ -60,14 +59,12 @@ impl HandleDispatchFrom<Client> for AcpHandlers {
             .if_request(async |req: ResumeSessionRequest, responder| {
                 let state = state.clone();
                 let connection = cx.clone();
-                spawn_lifecycle_response(responder, async move { state.resume_session(req, &connection).await });
-                Ok(())
+                spawn_response(&cx, responder, async move { state.resume_session(req, &connection).await })
             })
             .await
             .if_request(async |req: CloseSessionRequest, responder| {
                 let state = state.clone();
-                spawn_lifecycle_response(responder, async move { state.close_session(req).await });
-                Ok(())
+                spawn_response(&cx, responder, async move { state.close_session(req).await })
             })
             .await
             .if_request(async |req: PromptRequest, responder| {
@@ -100,8 +97,7 @@ impl HandleDispatchFrom<Client> for AcpHandlers {
             .await
             .if_request(async |req: WorkspaceMoveParams, responder| {
                 let state = state.clone();
-                spawn_lifecycle_response(responder, async move { state.workspace_move(&req).await });
-                Ok(())
+                spawn_response(&cx, responder, async move { state.workspace_move(&req).await })
             })
             .await
             .if_notification(async |notification: CancelSessionNotification| {
@@ -120,19 +116,6 @@ impl HandleDispatchFrom<Client> for AcpHandlers {
     fn describe_chain(&self) -> impl std::fmt::Debug {
         "AcpHandlers"
     }
-}
-
-// Lifecycle work must finish cleanup even when ACP drops its connection-scoped tasks.
-fn spawn_lifecycle_response<T, U>(responder: Responder<T>, future: U)
-where
-    T: JsonRpcResponse + Send + 'static,
-    U: Future<Output = Result<T, acp::Error>> + Send + 'static,
-{
-    tokio::spawn(async move {
-        if let Err(e) = responder.respond_with_result(future.await) {
-            tracing::warn!("failed to send ACP lifecycle response: {e:?}");
-        }
-    });
 }
 
 fn spawn_response<T, U>(cx: &ConnectionTo<Client>, responder: Responder<T>, future: U) -> Result<(), acp::Error>

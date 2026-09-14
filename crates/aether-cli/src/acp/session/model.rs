@@ -158,6 +158,7 @@ impl Deref for Modes {
 }
 
 impl Modes {
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn new(modes: Vec<ValidatedMode>) -> Self {
         Self(modes)
     }

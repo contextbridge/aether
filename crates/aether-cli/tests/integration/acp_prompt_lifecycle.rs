@@ -8,6 +8,27 @@ use std::sync::Arc;
 use tokio::{sync::Notify, task::LocalSet};
 
 #[tokio::test(flavor = "current_thread")]
+async fn cancel_during_mcp_prompt_expansion_does_not_wait_for_the_server() {
+    LocalSet::new()
+        .run_until(async {
+            let mut harness = AcpTestHarness::start().await;
+            let (started, _release) = harness.pause_prompt_expansion();
+            let session = harness.insert_agent_switching_session().await;
+            let id = session.session_id().clone();
+            let prompt =
+                harness.client_cx.send_request(PromptRequest::new(id.clone(), vec!["/plan".into()])).block_task();
+            started.notified().await;
+            harness.client_cx.send_notification(CancelSessionNotification::new(id.clone())).unwrap();
+            prompt.await.unwrap();
+            harness.expect_idle(&id, StopReason::Cancelled).await;
+            session.planner().assert_never_ran();
+            harness.disconnect().await;
+            assert_eq!(harness.live_runtime_count(), 0);
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn cancel_sent_before_acceptance_is_not_lost() {
     LocalSet::new()
         .run_until(async {

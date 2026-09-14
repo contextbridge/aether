@@ -230,7 +230,6 @@ async fn disconnect_during_startup_leaves_no_detached_runtime() {
             tokio::pin!(disconnect);
             assert!(futures::poll!(&mut disconnect).is_pending());
             assert!(resume.await.is_err());
-            pending.finish(true);
             disconnect.await;
         }
         assert_eq!(harness.live_runtime_count(), 0);

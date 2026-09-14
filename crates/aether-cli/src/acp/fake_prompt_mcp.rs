@@ -4,15 +4,23 @@ use rmcp::model::{
 };
 use rmcp::service::{DynService, RequestContext};
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
+use std::sync::Arc;
+use tokio::sync::Notify;
 
 #[derive(Clone)]
 pub(crate) struct FakePromptMcp {
     prompt_name: String,
+    gate: Option<(Arc<Notify>, Arc<Notify>)>,
 }
 
 impl FakePromptMcp {
     pub(crate) fn new(prompt_name: &str) -> Self {
-        Self { prompt_name: prompt_name.to_string() }
+        Self { prompt_name: prompt_name.to_string(), gate: None }
+    }
+
+    pub(crate) fn with_gate(mut self, gate: Option<(Arc<Notify>, Arc<Notify>)>) -> Self {
+        self.gate = gate;
+        self
     }
 
     pub(crate) fn into_dyn(self) -> Box<dyn DynService<RoleServer>> {
@@ -47,6 +55,12 @@ impl ServerHandler for FakePromptMcp {
         } else {
             Err(McpError::invalid_params(format!("Prompt '{}' not found", request.name), None))
         };
-        std::future::ready(result)
+        async move {
+            if let Some((started, release)) = &self.gate {
+                started.notify_one();
+                release.notified().await;
+            }
+            result
+        }
     }
 }

@@ -2,19 +2,21 @@ use crate::acp::protocol::notify;
 use acp_utils::elicitation;
 use acp_utils::notifications::McpNotification;
 use aether_auth::OAuthCredentialStorage;
-use aether_core::events::{AgentCommand, AgentEvent, Command, MessageEvent, ToolEvent, TurnOutcome};
+use aether_core::events::{AgentCommand, AgentEvent, Command, MessageEvent, TurnOutcome};
+use aether_core::mcp::McpHandle;
 use aether_sessions::model::{SessionControlEvent, SessionEvent, UserEvent, last_session_usage};
 use aether_sessions::transcript::conversation_messages_from_events;
 use agent_client_protocol::schema::v2::{self as acp, PromptResponse, SessionId, SetSessionConfigOptionResponse};
 use agent_client_protocol::{Client, ConnectionTo, Error, Responder};
+use futures::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use llm::catalog::LlmModel;
 use llm::parser::ModelProviderParser;
-use llm::{ChatMessage, ContentBlock, ProviderConnectionOverrides, ReasoningEffort};
+use llm::{ChatMessage, ContentBlock, ProviderConnectionOverrides};
 use mcp_utils::client::{ElicitationRequest, McpClientEvent, McpServerStatusEntry, cancel_result};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, watch};
-use tokio::task::JoinHandle;
+use tokio::sync::mpsc;
+use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
@@ -23,15 +25,14 @@ use super::agents::SessionAgents;
 use super::config::{SessionConfigState, Switch};
 use super::config_setting::ConfigSetting;
 use super::error::SessionError;
-use super::model::{Modes, get_all_models};
-use super::runtime::{AgentRuntime, RUNTIME_EVENT_CHANNEL_CAPACITY, RuntimeEvent, RuntimeFactory};
+use super::model::Modes;
+use super::runtime::{AgentRuntime, RuntimeFactory};
 use super::slash_commands::{expand_slash_command_in_content, send_available_commands};
 use crate::acp::protocol::commands::map_mcp_prompt_to_available_command;
 use crate::acp::protocol::content::map_user_message;
-use crate::acp::protocol::events::{
-    forward_agent_notification, map_agent_event_to_session_notification, try_extract_plan_notification,
-};
+use crate::acp::protocol::events::{NotificationMode, project_agent_event};
 use crate::acp::protocol::replay::replay_to_client;
+use crate::acp::state::validate_prompt_support;
 use crate::slash_commands::dedupe_commands_by_name;
 use aether_sessions::SessionStore;
 
@@ -45,27 +46,22 @@ pub(crate) enum SessionCommand {
     Cancel,
     SetConfig { setting: ConfigSetting, available: Vec<LlmModel>, responder: Responder<SetSessionConfigOptionResponse> },
     AuthenticateMcp { server_name: String },
+    RefreshConfigOptions { available: Vec<LlmModel> },
 }
 
 /// Handle the [`SessionRegistry`](crate::acp::session::registry::SessionRegistry) keeps
-/// for each live session: a command channel into the actor plus a lock-free snapshot
-/// of the session's config for broadcast fanout.
+/// for the active session: its command channel and joined shutdown.
 pub(crate) struct SessionHandle {
     cmd_tx: mpsc::Sender<SessionCommand>,
-    snapshot_rx: watch::Receiver<ConfigSnapshot>,
     cancel: CancellationToken,
     join: JoinHandle<()>,
 }
 
 impl SessionHandle {
     /// Clone the command channel so callers can route without holding the
-    /// session-map lock across an await.
+    /// registry lock across an await.
     pub(crate) fn command_sender(&self) -> mpsc::Sender<SessionCommand> {
         self.cmd_tx.clone()
-    }
-
-    pub(crate) fn config_snapshot(&self) -> ConfigSnapshot {
-        self.snapshot_rx.borrow().clone()
     }
 
     /// Signal the actor loop to exit. Idempotent.
@@ -73,49 +69,9 @@ impl SessionHandle {
         self.cancel.cancel();
     }
 
-    /// Wait for the actor task to finish. Call [`Self::cancel`] first; when
-    /// draining many sessions, fan out `cancel()` before awaiting any `join()`
-    /// so shutdowns run concurrently.
-    pub(crate) async fn join(self) {
-        let _ = self.join.await;
-    }
-}
-
-/// Lock-free view of a session's mode/model selection, published whenever the
-/// actor mutates its config so global broadcasts (e.g. auth updates) can rebuild
-/// config options without touching the actor.
-#[derive(Clone)]
-pub(crate) struct ConfigSnapshot {
-    pub modes: Modes,
-    pub selected_mode: Option<String>,
-    pub effective_model: String,
-    pub reasoning_effort: Option<ReasoningEffort>,
-}
-
-impl ConfigSnapshot {
-    fn from_state(config: &SessionConfigState, modes: &Modes) -> Self {
-        Self {
-            modes: modes.clone(),
-            selected_mode: config.selected_mode.clone(),
-            effective_model: config.effective_model(modes),
-            reasoning_effort: config.reasoning_effort,
-        }
-    }
-
-    pub(crate) fn config_options(
-        &self,
-        available: &[LlmModel],
-        credential_store: &dyn OAuthCredentialStorage,
-    ) -> Vec<acp::SessionConfigOption> {
-        let all_models = get_all_models(available);
-        self.modes.config_options(
-            available,
-            self.selected_mode.as_deref(),
-            &self.effective_model,
-            self.reasoning_effort,
-            &all_models,
-            credential_store,
-        )
+    /// Wait for the actor task to finish after calling [`Self::cancel`].
+    pub(crate) async fn join(&mut self) {
+        let _ = (&mut self.join).await;
     }
 }
 
@@ -158,46 +114,57 @@ pub(crate) struct SessionActor {
     io: SessionIo,
     repository: Arc<SessionStore>,
     oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
-    snapshot_tx: watch::Sender<ConfigSnapshot>,
     cancel: CancellationToken,
     active_agent: AgentKey,
     specs: SessionAgents,
     runtimes: HashMap<AgentKey, AgentRuntime>,
     runtime_factory: Arc<dyn RuntimeFactory>,
-    runtime_event_tx: mpsc::Sender<RuntimeEvent>,
     transcript: Vec<SessionEvent>,
     config: SessionConfigState,
     modes: Modes,
+    turn: TurnState,
+    preparation: JoinSet<Vec<ContentBlock>>,
+    command_refresh: Option<BoxFuture<'static, Result<Vec<acp::AvailableCommand>, SessionError>>>,
+    authentications: FuturesUnordered<BoxFuture<'static, Result<(), SessionError>>>,
+}
+
+#[derive(Default)]
+enum TurnState {
+    #[default]
+    Idle,
+    Preparing {
+        responder: Box<Responder<PromptResponse>>,
+    },
+    Running,
 }
 
 /// List a runtime's MCP prompts as ACP available commands, de-duplicated by
 /// name. Used at actor startup and after agent switches.
-async fn available_commands_for(runtime: &AgentRuntime) -> Result<Vec<acp::AvailableCommand>, SessionError> {
-    let prompts = runtime.list_prompts().await?;
+async fn available_commands_for(mcp: McpHandle) -> Result<Vec<acp::AvailableCommand>, SessionError> {
+    let prompts = mcp.list_prompts().await.map_err(SessionError::McpOperation)?;
     let prompt_commands = prompts.iter().map(map_mcp_prompt_to_available_command).collect();
     Ok(dedupe_commands_by_name(prompt_commands))
 }
 
 impl SessionActor {
     pub(crate) async fn spawn(init: SessionActorInit) -> Result<SessionHandle, SessionError> {
-        let (runtime_event_tx, mut runtime_event_rx) = mpsc::channel(RUNTIME_EVENT_CHANNEL_CAPACITY);
-
-        let (snapshot_tx, snapshot_rx) = watch::channel(ConfigSnapshot::from_state(&init.config, &init.modes));
         let cancel = CancellationToken::new();
         let mut actor = SessionActor {
             io: SessionIo::new(init.connection, init.session_id),
             repository: init.repository,
             oauth_credential_store: init.oauth_credential_store,
-            snapshot_tx,
             cancel: cancel.clone(),
             active_agent: init.active_agent,
             specs: init.specs,
             runtimes: HashMap::new(),
             runtime_factory: init.runtime_factory,
-            runtime_event_tx,
             transcript: init.transcript,
             config: init.config,
             modes: init.modes,
+            turn: TurnState::Idle,
+            preparation: JoinSet::new(),
+            command_refresh: None,
+            authentications: FuturesUnordered::new(),
         };
         actor.ensure_active_running().await?;
         if init.replay {
@@ -208,18 +175,56 @@ impl SessionActor {
             if let Ok(runtime) = actor.active_runtime() {
                 send_mcp_server_status(&actor.io, runtime.mcp_server_statuses());
             }
-            match actor.list_available_commands().await {
-                Ok(commands) => send_available_commands(&actor.io, commands),
-                Err(error) => error!("Failed to list initial available commands: {error}"),
-            }
+            actor.refresh_available_commands();
+            let shutdown = actor.cancel.clone();
             loop {
+                let runtime = actor.runtimes.get_mut(&actor.active_agent).expect("active runtime is running");
                 tokio::select! {
-                    () = actor.cancel.cancelled() => break,
-                    Some(cmd) = cmd_rx.recv() => {
-                        actor.on_session_command(&mut runtime_event_rx, &mut cmd_rx, cmd).await;
+                    biased;
+                    () = shutdown.cancelled() => {
+                        actor.cancel_turn().await;
+                        break;
                     }
-                    Some(event) = runtime_event_rx.recv() => {
-                        actor.on_runtime_event(event).await;
+                    Some(cmd) = cmd_rx.recv() => {
+                        actor.on_session_command(cmd).await;
+                    }
+                    Some(content) = actor.preparation.join_next(), if !actor.preparation.is_empty() => {
+                        match content {
+                            Ok(content) => actor.accept_prompt(content).await,
+                            Err(error) => {
+                                error!("Prompt preparation task failed: {error}");
+                                if let TurnState::Preparing { responder } = std::mem::take(&mut actor.turn) {
+                                    let _ = responder.respond_with_error(Error::internal_error());
+                                }
+                            }
+                        }
+                    }
+                    Some(result) = actor.authentications.next(), if !actor.authentications.is_empty() => {
+                        if let Err(error) = result {
+                            error!("MCP server authentication failed: {error}");
+                        }
+                    }
+                    result = async { actor.command_refresh.as_mut().unwrap().await }, if actor.command_refresh.is_some() => {
+                        actor.command_refresh = None;
+                        match result {
+                            Ok(commands) => send_available_commands(&actor.io, commands),
+                            Err(error) => error!("Failed to refresh available commands: {error}"),
+                        }
+                    }
+                    Some(message) = runtime.agent_rx.recv() => {
+                        actor.record_agent_event(&message);
+                        if matches!(actor.turn, TurnState::Running)
+                            && let Some(outcome) = message.turn_outcome()
+                        {
+                            actor.finish_turn(turn_result(outcome)).await;
+                        }
+                    }
+                    Some(event) = runtime.event_rx.recv() => {
+                        let refresh_commands = matches!(event, McpClientEvent::ConnectionReady(_));
+                        on_mcp_client_event(&actor.io, event);
+                        if refresh_commands {
+                            actor.refresh_available_commands();
+                        }
                     }
                     else => break,
                 }
@@ -229,15 +234,13 @@ impl SessionActor {
             }
         });
 
-        Ok(SessionHandle { cmd_tx, snapshot_rx, cancel, join })
+        Ok(SessionHandle { cmd_tx, cancel, join })
     }
 
-    async fn list_available_commands(&self) -> Result<Vec<acp::AvailableCommand>, SessionError> {
-        available_commands_for(self.active_runtime()?).await
-    }
-
-    fn active_agent(&self) -> &AgentKey {
-        &self.active_agent
+    fn refresh_available_commands(&mut self) {
+        if let Ok(runtime) = self.active_runtime() {
+            self.command_refresh = Some(available_commands_for(runtime.mcp().clone()).boxed());
+        }
     }
 
     fn active_runtime(&self) -> Result<&AgentRuntime, SessionError> {
@@ -246,10 +249,6 @@ impl SessionActor {
 
     fn active_provider_connections(&self) -> ProviderConnectionOverrides {
         self.specs.get(&self.active_agent).map(|spec| spec.provider_connections.clone()).unwrap_or_default()
-    }
-
-    fn get_config(&self) -> ConfigSnapshot {
-        ConfigSnapshot::from_state(&self.config, &self.modes)
     }
 
     async fn select_agent(&mut self, agent_name: &str) -> Result<Option<SessionEvent>, SessionError> {
@@ -269,17 +268,13 @@ impl SessionActor {
         Ok(Some(SessionEvent::Control(SessionControlEvent::AgentSwitched { from, to })))
     }
 
-    async fn sync_active_conversation(&self) -> Result<(), SessionError> {
+    async fn sync_active_conversation(&mut self) -> Result<(), SessionError> {
         let messages = conversation_messages_from_events(&self.transcript);
         self.active_runtime()?.replace_conversation(messages).await
     }
 
-    async fn send_active_command(&self, command: Command) -> Result<(), SessionError> {
+    async fn send_active_command(&mut self, command: Command) -> Result<(), SessionError> {
         self.active_runtime()?.send_agent_command(command).await
-    }
-
-    async fn authenticate_active_mcp_server(&self, name: &str) -> Result<(), SessionError> {
-        self.active_runtime()?.authenticate_mcp_server(name).await
     }
 
     async fn ensure_active_running(&mut self) -> Result<(), SessionError> {
@@ -298,10 +293,11 @@ impl SessionActor {
 
         let spec = self.specs.get(target).ok_or_else(|| SessionError::AgentNotFound(target.display_name()))?;
         let usage_seed = last_session_usage(&self.transcript).cloned();
-        let runtime = self
-            .runtime_factory
-            .spawn(target.clone(), spec, messages, usage_seed, self.runtime_event_tx.clone())
-            .await?;
+        let runtime = tokio::select! {
+            biased;
+            () = self.cancel.cancelled() => return Err(SessionError::Cancelled),
+            runtime = self.runtime_factory.spawn(target.clone(), spec, messages, usage_seed) => runtime?,
+        };
         self.runtimes.insert(target.clone(), runtime);
         Ok(())
     }
@@ -312,49 +308,90 @@ impl SessionActor {
 }
 
 impl SessionActor {
-    async fn on_session_command(
-        &mut self,
-        runtime_event_rx: &mut mpsc::Receiver<RuntimeEvent>,
-        cmd_rx: &mut mpsc::Receiver<SessionCommand>,
-        cmd: SessionCommand,
-    ) {
+    async fn on_session_command(&mut self, cmd: SessionCommand) {
         match cmd {
-            SessionCommand::Prompt { content, responder } => {
-                self.run_prompt_turn(runtime_event_rx, cmd_rx, content, responder).await;
+            SessionCommand::Prompt { responder, .. } if !matches!(self.turn, TurnState::Idle) => {
+                let _ = responder.respond_with_error(Error::invalid_request());
             }
-            SessionCommand::Cancel => info!("Cancel received while idle, ignoring"),
+            SessionCommand::Prompt { content, responder } => self.start_prompt(content, responder).await,
+            SessionCommand::Cancel => self.cancel_turn().await,
             SessionCommand::SetConfig { setting, available, responder } => {
-                let result = self.apply_idle_config_change(&setting, &available).await;
+                let result = if matches!(self.turn, TurnState::Idle) {
+                    self.apply_idle_config_change(&setting, &available).await
+                } else {
+                    self.apply_config_change(&setting, &available)
+                };
                 let _ = responder.respond_with_result(result);
             }
+            SessionCommand::RefreshConfigOptions { available } => {
+                let options = self.config.config_options(&self.modes, &available, self.oauth_credential_store.as_ref());
+                self.io.send_update(acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(options)));
+            }
             SessionCommand::AuthenticateMcp { server_name } => {
-                if let Err(error) = self.authenticate_active_mcp_server(&server_name).await {
-                    error!("MCP server authentication failed: {error}");
+                if let Ok(runtime) = self.active_runtime() {
+                    let mcp = runtime.mcp().clone();
+                    self.authentications.push(
+                        async move { mcp.authenticate_server(&server_name).await.map_err(SessionError::McpOperation) }
+                            .boxed(),
+                    );
                 }
             }
         }
     }
 
-    async fn run_prompt_turn(
-        &mut self,
-        runtime_event_rx: &mut mpsc::Receiver<RuntimeEvent>,
-        cmd_rx: &mut mpsc::Receiver<SessionCommand>,
-        content: Vec<ContentBlock>,
-        responder: Responder<PromptResponse>,
-    ) {
-        let (message_id, content) = match self.prepare_prompt(content).await {
-            Ok(prompt) => prompt,
+    async fn start_prompt(&mut self, content: Vec<ContentBlock>, responder: Responder<PromptResponse>) {
+        if let Err(error) = validate_prompt_support(&self.config.effective_model(&self.modes), &content) {
+            let _ = responder.respond_with_error(error);
+            return;
+        }
+        match self.prepare_prompt_runtime().await {
+            Ok(mcp) => {
+                self.preparation.spawn(async move { expand_slash_command_in_content(&mcp, content).await });
+                self.turn = TurnState::Preparing { responder: Box::new(responder) };
+            }
             Err(error) => {
                 error!("Prompt preparation failed: {error}");
                 let _ = responder.respond_with_error(Error::internal_error());
-                return;
             }
-        };
+        }
+    }
+
+    async fn cancel_turn(&mut self) {
+        if matches!(self.turn, TurnState::Running) {
+            let _ = self.send_active_command(Command::cancel()).await;
+            if self.cancel.is_cancelled() {
+                self.finish_turn(Ok(acp::StopReason::Cancelled)).await;
+            }
+        } else if let TurnState::Preparing { responder } = std::mem::take(&mut self.turn) {
+            self.preparation.shutdown().await;
+            let _ = responder.respond(PromptResponse::new());
+            self.finish_turn(Ok(acp::StopReason::Cancelled)).await;
+        }
+    }
+
+    async fn accept_prompt(&mut self, content: Vec<ContentBlock>) {
+        let TurnState::Preparing { responder, .. } = std::mem::take(&mut self.turn) else { return };
+        let message_id = llm::MessageId::new();
+        let event = SessionEvent::User(UserEvent::Message { message_id: message_id.clone(), content: content.clone() });
+        if let Err(error) = self.repository.append_event(&self.io.session_id.0, &event) {
+            error!("Failed to persist prompt: {error}");
+            let _ = responder.respond_with_error(Error::internal_error());
+            return;
+        }
+        self.record_event(event);
         let _ = responder.respond(PromptResponse::new());
         let user = map_user_message(message_id.to_string().into(), &content);
         self.io.send_update(acp::SessionUpdate::UserMessage(user));
         self.io.send_update(acp::SessionUpdate::StateUpdate(acp::StateUpdate::Running(acp::RunningStateUpdate::new())));
-        let reason = match self.handle_prompt(runtime_event_rx, cmd_rx, message_id, content).await {
+        self.turn = TurnState::Running;
+        if let Err(error) = self.send_active_command(Command::with_message_id(message_id, content)).await {
+            self.finish_turn(Err(error)).await;
+        }
+    }
+
+    async fn finish_turn(&mut self, result: Result<acp::StopReason, SessionError>) {
+        self.turn = TurnState::Idle;
+        let reason = match result {
             Ok(reason) => {
                 info!("Turn completed, stop reason: {reason:?}");
                 reason
@@ -373,60 +410,19 @@ impl SessionActor {
         self.io.send_update(acp::SessionUpdate::StateUpdate(acp::StateUpdate::Idle(
             acp::IdleStateUpdate::new().stop_reason(reason),
         )));
-        let _ = self.apply_deferred_agent_switch().await;
+        if !self.cancel.is_cancelled() {
+            let _ = self.apply_deferred_agent_switch().await;
+        }
     }
 
-    async fn prepare_prompt(
-        &mut self,
-        content: Vec<ContentBlock>,
-    ) -> Result<(llm::MessageId, Vec<ContentBlock>), SessionError> {
+    async fn prepare_prompt_runtime(&mut self) -> Result<McpHandle, SessionError> {
         let switch = self.config.begin_prompt(&self.modes);
-        self.publish_snapshot();
         self.apply_switch(switch).await?;
 
         self.send_active_command(Command::agent(AgentCommand::SetReasoningEffort(self.config.reasoning_effort)))
             .await?;
 
-        let content = expand_slash_command_in_content(self.active_runtime()?, content).await;
-        let message_id = llm::MessageId::new();
-        let event = SessionEvent::User(UserEvent::Message { message_id: message_id.clone(), content: content.clone() });
-        self.repository.append_event(&self.io.session_id.0, &event)?;
-        self.record_event(event);
-        Ok((message_id, content))
-    }
-
-    async fn handle_prompt(
-        &mut self,
-        runtime_event_rx: &mut mpsc::Receiver<RuntimeEvent>,
-        cmd_rx: &mut mpsc::Receiver<SessionCommand>,
-        message_id: llm::MessageId,
-        content: Vec<ContentBlock>,
-    ) -> Result<acp::StopReason, SessionError> {
-        self.send_active_command(Command::with_message_id(message_id, content)).await?;
-
-        loop {
-            tokio::select! {
-                () = self.cancel.cancelled() => {
-                    info!("Cancellation observed during active prompt; forwarding Cancel to agent");
-                    let _ = self.send_active_command(Command::cancel()).await;
-                    break Ok(acp::StopReason::Cancelled);
-                }
-                event = runtime_event_rx.recv() => {
-                    let Some(event) = event else {
-                        error!("Agent channel closed unexpectedly");
-                        break Err(SessionError::CommandChannel("agent channel closed".to_string()));
-                    };
-                    if let Some(message) = self.on_runtime_event(event).await
-                        && let Some(outcome) = message.turn_outcome()
-                    {
-                        break turn_result(outcome);
-                    }
-                }
-                Some(cmd) = cmd_rx.recv() => {
-                    self.handle_in_flight_command(cmd).await;
-                }
-            }
-        }
+        Ok(self.active_runtime()?.mcp().clone())
     }
 
     async fn apply_deferred_agent_switch(&mut self) -> Result<(), SessionError> {
@@ -441,29 +437,8 @@ impl SessionActor {
     ) -> Result<SetSessionConfigOptionResponse, Error> {
         self.apply_config_change(setting, available)?;
         self.apply_deferred_agent_switch().await.map_err(|_| Error::internal_error())?;
-        let options = self.get_config().config_options(available, self.oauth_credential_store.as_ref());
+        let options = self.config.config_options(&self.modes, available, self.oauth_credential_store.as_ref());
         Ok(SetSessionConfigOptionResponse::new(options))
-    }
-
-    async fn handle_in_flight_command(&mut self, cmd: SessionCommand) {
-        match cmd {
-            SessionCommand::Cancel => {
-                info!("Cancel received during prompt processing");
-                let _ = self.send_active_command(Command::cancel()).await;
-            }
-            SessionCommand::AuthenticateMcp { server_name } => {
-                if let Err(error) = self.authenticate_active_mcp_server(&server_name).await {
-                    error!("MCP server authentication failed: {error}");
-                }
-            }
-            SessionCommand::SetConfig { setting, available, responder } => {
-                let result = self.apply_config_change(&setting, &available);
-                let _ = responder.respond_with_result(result);
-            }
-            SessionCommand::Prompt { responder, .. } => {
-                let _ = responder.respond_with_error(Error::invalid_request());
-            }
-        }
     }
 
     fn apply_config_change(
@@ -472,70 +447,34 @@ impl SessionActor {
         available: &[LlmModel],
     ) -> Result<SetSessionConfigOptionResponse, Error> {
         self.config.apply_config_change(&self.modes, available, setting)?;
-        self.publish_snapshot();
 
-        let options = self.get_config().config_options(available, self.oauth_credential_store.as_ref());
+        let options = self.config.config_options(&self.modes, available, self.oauth_credential_store.as_ref());
         Ok(SetSessionConfigOptionResponse::new(options))
     }
 
     async fn apply_switch(&mut self, switch: Switch) -> Result<(), SessionError> {
         match switch {
             Switch::Agent(agent_name) => {
-                self.publish_snapshot();
                 if let Some(event) = self.select_agent(&agent_name).await? {
                     self.persist_event(event);
                 }
-                self.publish_active_mcps().await
+                self.publish_active_mcps()
             }
             Switch::Model(model) => {
                 let parser = ModelProviderParser::default()
                     .with_provider_connections(self.active_provider_connections())
                     .with_codex_provider(Arc::clone(&self.oauth_credential_store));
-                let (provider, _) =
-                    parser.parse(&model).await.map_err(|e| SessionError::McpOperation(format!("{e}")))?;
+                let (provider, _) = parser.parse(&model).await?;
                 self.send_active_command(Command::agent(AgentCommand::SwitchModel(provider))).await
             }
             Switch::None => Ok(()),
         }
     }
 
-    async fn publish_active_mcps(&self) -> Result<(), SessionError> {
+    fn publish_active_mcps(&mut self) -> Result<(), SessionError> {
         send_mcp_server_status(&self.io, self.active_runtime()?.mcp_server_statuses());
-        send_available_commands(&self.io, self.list_available_commands().await?);
+        self.refresh_available_commands();
         Ok(())
-    }
-
-    fn publish_snapshot(&self) {
-        let _ = self.snapshot_tx.send(self.get_config());
-    }
-
-    async fn on_runtime_event(&mut self, event: RuntimeEvent) -> Option<AgentEvent> {
-        let from_active = match &event {
-            RuntimeEvent::Agent { agent, .. } | RuntimeEvent::Mcp { agent, .. } => agent == self.active_agent(),
-        };
-        if !from_active {
-            return None;
-        }
-
-        match event {
-            RuntimeEvent::Agent { message, .. } => {
-                self.record_agent_event(&message);
-                Some(message)
-            }
-            RuntimeEvent::Mcp { event, .. } => {
-                let refresh_commands = matches!(event, McpClientEvent::ConnectionReady(_));
-                on_mcp_client_event(&self.io, event);
-                if refresh_commands {
-                    match self.list_available_commands().await {
-                        Ok(commands) => {
-                            send_available_commands(&self.io, commands);
-                        }
-                        Err(error) => error!("Failed to refresh available commands after MCP bootstrap: {error}"),
-                    }
-                }
-                None
-            }
-        }
     }
 
     fn record_agent_event(&mut self, message: &AgentEvent) {
@@ -569,15 +508,7 @@ fn send_mcp_server_status(io: &SessionIo, servers: Vec<McpServerStatusEntry>) {
 }
 
 fn forward_notification(io: &SessionIo, msg: &AgentEvent) {
-    if let Some(notification) = map_agent_event_to_session_notification(msg) {
-        io.send_update(notification);
-    }
-    forward_agent_notification(io, msg);
-    if let AgentEvent::Tool(ToolEvent::Result { result_meta, .. }) = msg
-        && let Some(notification) = try_extract_plan_notification(result_meta.as_ref())
-    {
-        io.send_update(notification);
-    }
+    project_agent_event(msg, NotificationMode::Live, io);
 }
 
 fn on_mcp_client_event(io: &SessionIo, event: McpClientEvent) {
@@ -643,7 +574,7 @@ mod tests {
     use super::*;
     use crate::acp::session::config::Pending;
     use crate::acp::session::model::ValidatedMode;
-    use ReasoningEffort as RE;
+    use llm::ReasoningEffort as RE;
 
     const SONNET: &str = "anthropic:claude-sonnet-4-5";
     const DEEPSEEK: &str = "deepseek:deepseek-v4-flash";

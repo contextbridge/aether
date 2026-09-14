@@ -1,10 +1,12 @@
+use aether_auth::OAuthCredentialStorage;
 use agent_client_protocol::Error;
+use agent_client_protocol::schema::v2::SessionConfigOption;
 use llm::ReasoningEffort;
 use llm::catalog::{LlmModel, validate_reasoning_effort};
 use tracing::error;
 
 use super::config_setting::ConfigSetting;
-use super::model::{Modes, parse_available_spec};
+use super::model::{Modes, get_all_models, parse_available_spec};
 
 #[derive(Debug)]
 pub(crate) enum Switch {
@@ -33,6 +35,22 @@ pub(crate) struct SessionConfigState {
 }
 
 impl SessionConfigState {
+    pub(crate) fn config_options(
+        &self,
+        modes: &Modes,
+        available: &[LlmModel],
+        credential_store: &dyn OAuthCredentialStorage,
+    ) -> Vec<SessionConfigOption> {
+        modes.config_options(
+            available,
+            self.selected_mode.as_deref(),
+            &self.effective_model(modes),
+            self.reasoning_effort,
+            &get_all_models(available),
+            credential_store,
+        )
+    }
+
     pub(crate) fn with_selection(
         active_model: String,
         selected_mode: Option<String>,

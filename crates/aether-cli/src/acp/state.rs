@@ -9,16 +9,15 @@ use aether_telemetry::TelemetryRuntime;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v2::{
     self as acp, AgentCapabilities, AuthMethod, CancelSessionNotification, CloseSessionRequest, CloseSessionResponse,
-    ConfigOptionUpdate, Implementation, InitializeRequest, InitializeResponse, ListSessionsRequest,
-    ListSessionsResponse, LoginAuthRequest, LoginAuthResponse, LogoutAuthRequest, LogoutAuthResponse, McpCapabilities,
-    NewSessionRequest, NewSessionResponse, PromptAudioCapabilities, PromptCapabilities,
-    PromptEmbeddedContextCapabilities, PromptImageCapabilities, PromptRequest, PromptResponse, ResumeSessionRequest,
-    ResumeSessionResponse, SessionId, SessionUpdate, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
-    UpdateSessionNotification,
+    Implementation, InitializeRequest, InitializeResponse, ListSessionsRequest, ListSessionsResponse, LoginAuthRequest,
+    LoginAuthResponse, LogoutAuthRequest, LogoutAuthResponse, McpCapabilities, NewSessionRequest, NewSessionResponse,
+    PromptAudioCapabilities, PromptCapabilities, PromptEmbeddedContextCapabilities, PromptImageCapabilities,
+    PromptRequest, PromptResponse, ResumeSessionRequest, ResumeSessionResponse, SetSessionConfigOptionRequest,
+    SetSessionConfigOptionResponse,
 };
 use agent_client_protocol::util::internal_error;
 use agent_client_protocol::{Client, ConnectionTo, Error, Responder};
-use llm::catalog::{LlmModel, ModelSpec, get_local_models};
+use llm::catalog::{LlmModel, ModelSpec};
 use llm::{ContentBlock, ProviderConnectionOverrides};
 use mcp_utils::client::{client_capabilities, client_capabilities_for};
 use std::collections::HashSet;
@@ -29,7 +28,9 @@ use tokio::task::spawn_blocking;
 use tracing::{error, info};
 
 use super::protocol::content::map_acp_to_content_blocks;
-use super::session::actor::{SessionActor, SessionActorInit, SessionCommand};
+use super::session::actor::SessionCommand;
+#[cfg(any(test, feature = "testing"))]
+use super::session::actor::{SessionActor, SessionActorInit};
 use super::session::config_setting::ConfigSetting;
 use super::session::factory::SessionFactory;
 use super::session::model::supports_prompt_audio;
@@ -48,8 +49,6 @@ pub(crate) trait ProviderLogin: Send + Sync {
 pub(crate) struct AcpState {
     login: Arc<dyn ProviderLogin>,
     registry: SessionRegistry,
-    /// Serializes lifecycle work independently of command dispatch; true after shutdown.
-    lifecycle: Mutex<bool>,
     session_store: Arc<SessionStore>,
     workspace_manager: Arc<WorkspaceManager>,
     oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
@@ -87,7 +86,6 @@ impl AcpState {
         Self {
             login,
             registry: SessionRegistry::new(),
-            lifecycle: Mutex::new(false),
             session_store: config.session_store,
             workspace_manager: config.workspace_manager,
             oauth_credential_store: config.oauth_credential_store,
@@ -101,7 +99,7 @@ impl AcpState {
         info!("Received initialize request: {:?}", args);
         *self.mcp_capabilities.lock().await = mcp_client_capabilities(&args.capabilities);
         let auth_methods = build_auth_methods(self.oauth_credential_store.as_ref());
-        let available = get_local_models().await;
+        let available = self.factory.available_models().await.to_vec();
         let prompt_capabilities = prompt_capabilities_for_models(&available);
         let aether_capabilities =
             AetherCapabilities { prompt_search: true, session_preview: true, workspace_move: true };
@@ -140,7 +138,6 @@ impl AcpState {
         req: NewSessionRequest,
         cx: &ConnectionTo<Client>,
     ) -> Result<NewSessionResponse, Error> {
-        let _lifecycle = self.lifecycle_guard().await?;
         let mcp_capabilities = self.mcp_capabilities.lock().await.clone();
         let prepared = self.factory.prepare_new(req, cx, mcp_capabilities).await?;
         self.registry.stop().await;
@@ -165,12 +162,11 @@ impl AcpState {
         req: ResumeSessionRequest,
         cx: &ConnectionTo<Client>,
     ) -> Result<ResumeSessionResponse, Error> {
-        let _lifecycle = self.lifecycle_guard().await?;
         let mcp_capabilities = self.mcp_capabilities.lock().await.clone();
-        let prepared = self.factory.prepare_resume(req.clone(), cx, mcp_capabilities.clone()).await?;
-        let reloading = self.registry.lookup(req.session_id.0.as_ref()).await.is_some();
+        let reloading = self.registry.lookup(Some(req.session_id.0.as_ref())).await.is_some();
+        let prepared = self.factory.prepare_resume(req, cx, mcp_capabilities).await?;
         self.registry.stop().await;
-        let prepared = if reloading { self.factory.prepare_resume(req, cx, mcp_capabilities).await? } else { prepared };
+        let prepared = if reloading { prepared.refresh_transcript()? } else { prepared };
         let created = prepared.start().await?;
         let response = ResumeSessionResponse::new().config_options(created.config_options);
         self.registry.register(&created.session_id, created.handle).await;
@@ -178,9 +174,8 @@ impl AcpState {
     }
 
     pub(crate) async fn close_session(&self, req: CloseSessionRequest) -> Result<CloseSessionResponse, Error> {
-        let _lifecycle = self.lifecycle.lock().await;
         let session_id = req.session_id.0.to_string();
-        if self.registry.lookup(&session_id).await.is_none() {
+        if self.registry.lookup(Some(&session_id)).await.is_none() {
             error!("Session not found for close: {session_id}");
             return Err(Error::invalid_params().data(format!("unknown session: {session_id}")));
         }
@@ -244,7 +239,6 @@ impl AcpState {
     /// Moves the session's uncommitted changes to the target workspace, then
     /// relocates the stored session to the target directory.
     pub(crate) async fn workspace_move(&self, params: &WorkspaceMoveParams) -> Result<WorkspaceMoveResponse, Error> {
-        let _lifecycle = self.lifecycle_guard().await?;
         let target = params.target.clone();
         let session_id = params.session_id.clone();
         let response = self
@@ -277,24 +271,17 @@ impl AcpState {
         .map_err(workspace_request_error)
     }
 
-    /// Route a prompt to its session actor. Validates media support against the
-    /// session's effective model before dispatch, then hands the responder to
-    /// the actor which acknowledges acceptance before streaming the turn.
+    /// Route a prompt to its session actor for validation and acceptance.
     pub(crate) async fn route_prompt(&self, args: PromptRequest, responder: Responder<PromptResponse>) {
         info!("Received prompt for session: {:?}", args.session_id);
         let session_id = args.session_id.0.to_string();
         let content = map_acp_to_content_blocks(args.prompt);
 
-        let Some((sender, snapshot)) = self.registry.lookup_with_snapshot(&session_id).await else {
+        let Some(sender) = self.registry.lookup(Some(&session_id)).await else {
             error!("Session not found: {session_id}");
             respond_err(responder, Error::invalid_params());
             return;
         };
-
-        if let Err(e) = validate_prompt_support(&snapshot.effective_model, &content) {
-            respond_err(responder, e);
-            return;
-        }
 
         if let Err(SessionCommand::Prompt { responder, .. }) =
             sender.send(SessionCommand::Prompt { content, responder }).await.map_err(|e| e.0)
@@ -307,7 +294,7 @@ impl AcpState {
     pub(crate) async fn cancel(&self, args: CancelSessionNotification) -> Result<(), Error> {
         info!("Received cancel for session: {:?}", args.session_id);
         let session_id = args.session_id.0.to_string();
-        let Some(sender) = self.registry.lookup(&session_id).await else {
+        let Some(sender) = self.registry.lookup(Some(&session_id)).await else {
             error!("Session not found for cancel: {session_id}");
             return Err(Error::invalid_params());
         };
@@ -345,13 +332,13 @@ impl AcpState {
             }
         };
 
-        let Some(sender) = self.registry.lookup(&session_id).await else {
+        let Some(sender) = self.registry.lookup(Some(&session_id)).await else {
             error!("Session not found: {session_id}");
             respond_err(responder, Error::invalid_params());
             return;
         };
 
-        let available = get_local_models().await;
+        let available = self.factory.available_models().await.to_vec();
         if let Err(SessionCommand::SetConfig { responder, .. }) =
             sender.send(SessionCommand::SetConfig { setting, available, responder }).await.map_err(|e| e.0)
         {
@@ -364,7 +351,7 @@ impl AcpState {
         info!("Received MCP ext request: {:?}", request);
         match request {
             McpRequest::Authenticate { session_id, server_name } => {
-                let Some(sender) = self.registry.lookup(&session_id).await else {
+                let Some(sender) = self.registry.lookup(Some(&session_id)).await else {
                     error!("Session not found for authenticate_mcp_server: {session_id}");
                     return Err(Error::invalid_params());
                 };
@@ -377,47 +364,32 @@ impl AcpState {
         Ok(())
     }
 
-    /// Stop the active actor and prevent queued lifecycle requests from starting another.
+    /// Join the active actor after connection-scoped requests have been dropped.
     pub(crate) async fn shutdown_all(&self) {
-        let mut closed = self.lifecycle.lock().await;
-        *closed = true;
         self.registry.stop().await;
         if let Some(telemetry) = &self.telemetry {
             telemetry.shutdown_or_log();
         }
     }
 
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) async fn register_session(&self, init: SessionActorInit) {
-        let _lifecycle = self.lifecycle_guard().await.expect("cannot insert a test session after shutdown");
         self.registry.stop().await;
         let id = init.session_id.clone();
         let handle = SessionActor::spawn(init).await.expect("test session actor spawns");
         self.registry.register(&id, handle).await;
     }
 
-    async fn lifecycle_guard(&self) -> Result<tokio::sync::MutexGuard<'_, bool>, Error> {
-        let closed = self.lifecycle.lock().await;
-        if *closed {
-            return Err(Error::invalid_request());
-        }
-        Ok(closed)
-    }
-
     async fn broadcast_auth_state(&self, cx: &ConnectionTo<Client>) {
         let auth_methods = build_auth_methods(self.oauth_credential_store.as_ref());
         notify(cx, AuthMethodsUpdatedParams { auth_methods });
-        self.broadcast_config_options(cx).await;
+        self.broadcast_config_options().await;
     }
 
-    async fn broadcast_config_options(&self, cx: &ConnectionTo<Client>) {
-        let available = get_local_models().await;
-        if let Some((id, snapshot)) = self.registry.config_snapshot().await {
-            let options = snapshot.config_options(&available, self.oauth_credential_store.as_ref());
-            let notification = UpdateSessionNotification::new(
-                SessionId::new(id),
-                SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(options)),
-            );
-            notify(cx, notification);
+    async fn broadcast_config_options(&self) {
+        if let Some(sender) = self.registry.lookup(None).await {
+            let available = self.factory.available_models().await.to_vec();
+            let _ = sender.send(SessionCommand::RefreshConfigOptions { available }).await;
         }
     }
 }
@@ -515,7 +487,7 @@ fn selected_models(model_value: &str) -> Result<Vec<LlmModel>, Error> {
     model_value.parse::<ModelSpec>().map(|spec| spec.models().to_vec()).map_err(|_| Error::invalid_params())
 }
 
-fn validate_prompt_support(model_value: &str, content: &[ContentBlock]) -> Result<(), Error> {
+pub(crate) fn validate_prompt_support(model_value: &str, content: &[ContentBlock]) -> Result<(), Error> {
     let modalities = PromptModalities::from_content(content);
     if modalities.is_empty() {
         return Ok(());

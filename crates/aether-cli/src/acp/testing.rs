@@ -6,7 +6,7 @@ use super::session::agents::SessionAgents;
 use super::session::config::SessionConfigState;
 use super::session::error::SessionError;
 use super::session::model::{Modes, ValidatedMode};
-use super::session::runtime::{AgentRuntime, RuntimeEvent, RuntimeFactory};
+use super::session::runtime::{AgentRuntime, RuntimeFactory};
 use super::state::{AcpState, AcpStateConfig};
 use crate::error::CliError;
 use crate::resolve::InitialSessionSelection;
@@ -92,6 +92,12 @@ impl AcpTestHarness {
         let (release, proceed) = oneshot::channel();
         self.runtime_control.lock().unwrap().pending = Some((started, proceed));
         PendingRuntime { started: observed, release }
+    }
+
+    pub fn pause_prompt_expansion(&self) -> (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>) {
+        let gate = (Arc::new(tokio::sync::Notify::new()), Arc::new(tokio::sync::Notify::new()));
+        self.runtime_control.lock().unwrap().prompt_gate = Some(gate.clone());
+        gate
     }
 
     pub fn live_runtime_count(&self) -> usize {
@@ -450,6 +456,7 @@ struct FakeRuntimeFactory {
 struct FakeRuntimeControl {
     agents: Vec<mpsc::Sender<Command>>,
     pending: Option<(oneshot::Sender<()>, oneshot::Receiver<bool>)>,
+    prompt_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
 }
 
 struct FakeAgentDef {
@@ -462,11 +469,10 @@ struct FakeAgentDef {
 impl RuntimeFactory for FakeRuntimeFactory {
     async fn spawn(
         &self,
-        agent: AgentKey,
+        _agent: AgentKey,
         spec: &AgentSpec,
         initial_messages: Vec<ChatMessage>,
         usage_seed: Option<SessionUsageEvent>,
-        runtime_event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Result<AgentRuntime, SessionError> {
         let pending = self.control.lock().unwrap().pending.take();
         if let Some((started, proceed)) = pending {
@@ -486,9 +492,11 @@ impl RuntimeFactory for FakeRuntimeFactory {
         if let Some((server_name, prompt_name)) = &def.mcp {
             let factory_name = server_name.clone();
             let prompt_name = prompt_name.clone();
+            let gate = self.control.lock().unwrap().prompt_gate.clone();
             let factory: ServerFactory = Box::new(move |_spec, _services| {
                 let prompt_name = prompt_name.clone();
-                async move { FakePromptMcp::new(&prompt_name).into_dyn() }.boxed()
+                let gate = gate.clone();
+                async move { FakePromptMcp::new(&prompt_name).with_gate(gate).into_dyn() }.boxed()
             });
             mcp_builder = mcp_builder.register_in_memory_server(factory_name.clone(), factory).with_servers(vec![
                 McpServer::new(
@@ -502,10 +510,7 @@ impl RuntimeFactory for FakeRuntimeFactory {
         }
         let mut spawn =
             mcp_builder.spawn().await.map_err(|e| SessionError::Build(CliError::McpError(e.to_string())))?;
-        spawn
-            .block_until_ready()
-            .await
-            .ok_or_else(|| SessionError::McpOperation("fake MCP bootstrap aborted".to_string()))?;
+        spawn.block_until_ready().await.ok_or(SessionError::McpStartupStopped)?;
         let mcp_handle = spawn.handle().clone();
         let mut builder = AgentBuilder::new(provider).max_auto_continues(0);
         if let Some(last) = &usage_seed {
@@ -523,7 +528,7 @@ impl RuntimeFactory for FakeRuntimeFactory {
         self.control.lock().unwrap().agents.push(agent_tx.clone());
         let (mcp_runtime, event_rx) = spawn.connect_agent(agent_tx.clone()).await.split();
 
-        Ok(AgentRuntime::new(agent, agent_tx, agent_rx, Some(agent_handle), event_rx, mcp_runtime, runtime_event_tx))
+        Ok(AgentRuntime::new(agent_tx, agent_rx, Some(agent_handle), event_rx, mcp_runtime))
     }
 }
 
@@ -542,11 +547,10 @@ struct StubAgentParts {
 impl RuntimeFactory for StubRuntimeFactory {
     async fn spawn(
         &self,
-        agent: AgentKey,
+        _agent: AgentKey,
         _spec: &AgentSpec,
         _initial_messages: Vec<ChatMessage>,
         _usage_seed: Option<SessionUsageEvent>,
-        runtime_event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Result<AgentRuntime, SessionError> {
         let parts = self
             .agent_parts
@@ -557,13 +561,10 @@ impl RuntimeFactory for StubRuntimeFactory {
 
         let mut spawn =
             mcp(&self.cwd).spawn().await.map_err(|e| SessionError::Build(CliError::McpError(e.to_string())))?;
-        spawn
-            .block_until_ready()
-            .await
-            .ok_or_else(|| SessionError::McpOperation("stub MCP bootstrap aborted".to_string()))?;
+        spawn.block_until_ready().await.ok_or(SessionError::McpStartupStopped)?;
         let (mcp_runtime, event_rx) = spawn.connect_agent(parts.tx.clone()).await.split();
 
-        Ok(AgentRuntime::new(agent, parts.tx, parts.rx, Some(parts.handle), event_rx, mcp_runtime, runtime_event_tx))
+        Ok(AgentRuntime::new(parts.tx, parts.rx, Some(parts.handle), event_rx, mcp_runtime))
     }
 }
 
