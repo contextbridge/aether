@@ -38,12 +38,6 @@ pub(crate) fn tool_lines(
     let suffix = tool_suffix(detail, &tool.status, theme);
     let mut lines = tool_line(prefix, suffix, bash_command, content_width, padding + 2, theme, highlighter);
     for diff in tool.diffs().filter(|_| tool.status == ToolStatus::Success) {
-        for change in &diff.changes {
-            lines.extend(indent_lines(
-                wrap_line(Line::styled(diff_change_label(change), Style::new().fg(theme.muted)), content_width),
-                padding,
-            ));
-        }
         if let Some(patch) = &diff.patch
             && patch.format == acp::DiffPatchFormat::GitPatch
         {
@@ -73,21 +67,6 @@ pub(crate) fn tool_lines(
         lines.extend(sub_agent_tree_lines(&tool.sub_agents, content_width, spinner_tick, padding, theme, highlighter));
     }
     lines
-}
-
-fn diff_change_label(change: &acp::DiffChange) -> String {
-    match &change.operation {
-        acp::DiffChangeOperation::Add(change) => format!("A {}", change.path.0.display()),
-        acp::DiffChangeOperation::Delete(change) => format!("D {}", change.path.0.display()),
-        acp::DiffChangeOperation::Modify(change) => format!("M {}", change.path.0.display()),
-        acp::DiffChangeOperation::Move(change) => {
-            format!("R {} → {}", change.old_path.0.display(), change.path.0.display())
-        }
-        acp::DiffChangeOperation::Copy(change) => {
-            format!("C {} → {}", change.old_path.0.display(), change.path.0.display())
-        }
-        _ => "Unknown file change".to_string(),
-    }
 }
 
 /// Tree of sub-agents beneath a spawning tool, each with its recent tool calls.
