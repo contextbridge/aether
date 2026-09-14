@@ -673,8 +673,16 @@ mod tests {
     use aether_sessions::SessionStore;
 
     const SONNET: &str = "anthropic:claude-sonnet-4-5";
-    const DEEPSEEK: &str = "deepseek:deepseek-v4-flash";
     const AUDIO_ONLY: &str = "bedrock:mistral.voxtral-small-24b-2507";
+
+    fn text_only_model() -> LlmModel {
+        // Upstream model metadata changes weekly, so look the fixture up instead of pinning a model id.
+        LlmModel::all()
+            .iter()
+            .find(|model| !model.supports_image() && !supports_prompt_audio(model))
+            .cloned()
+            .expect("catalog contains a text-only model")
+    }
 
     fn fake_oauth_store() -> Arc<dyn OAuthCredentialStorage> {
         Arc::new(aether_auth::FakeOAuthCredentialStore::new())
@@ -763,7 +771,7 @@ mod tests {
         assert!(audio_capable.image.is_none());
         assert!(audio_capable.audio.is_some());
 
-        let text_only = prompt_capabilities_for_models(&[DEEPSEEK.parse().unwrap()]);
+        let text_only = prompt_capabilities_for_models(&[text_only_model()]);
         assert!(text_only.image.is_none());
         assert!(text_only.audio.is_none());
     }
@@ -774,11 +782,12 @@ mod tests {
         let audio_content =
             vec![ContentBlock::Audio { data: "YXVkaW8=".to_string(), mime_type: "audio/wav".to_string() }];
 
+        let text_only = text_only_model().to_string();
         assert!(validate_prompt_support(SONNET, &image_content).is_ok());
-        assert!(validate_prompt_support(DEEPSEEK, &image_content).is_err());
+        assert!(validate_prompt_support(&text_only, &image_content).is_err());
         assert!(validate_prompt_support(AUDIO_ONLY, &audio_content).is_ok());
         assert!(validate_prompt_support(SONNET, &audio_content).is_err());
-        assert!(validate_prompt_support(format!("{SONNET},{DEEPSEEK}").as_str(), &image_content).is_err());
-        assert!(validate_prompt_support(format!("{AUDIO_ONLY},{DEEPSEEK}").as_str(), &audio_content).is_err());
+        assert!(validate_prompt_support(format!("{SONNET},{text_only}").as_str(), &image_content).is_err());
+        assert!(validate_prompt_support(format!("{AUDIO_ONLY},{text_only}").as_str(), &audio_content).is_err());
     }
 }
