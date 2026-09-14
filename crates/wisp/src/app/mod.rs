@@ -1,3 +1,4 @@
+use crate::Session;
 use crate::app::keybindings::Keybindings;
 use crate::app::message::Message;
 use crate::command::{AgentCommand, Command, CommandResult};
@@ -5,6 +6,7 @@ use crate::conversation::items::{Conversation, ConversationItem};
 use crate::conversation::progress_indicator::{ProgressIndicator, ProgressPhase};
 use crate::conversation::status_line::StatusLineModel;
 use crate::conversation::tool_calls::ToolStatus;
+use crate::session::WorkspaceAccess;
 use crate::session::platform::{BrowserOpener, ClipboardWriter, default_browser_opener, default_clipboard_writer};
 use crate::session::session_config_view::LocalConfigOption;
 use crate::session::session_model::SessionModel;
@@ -39,9 +41,9 @@ mod keybindings;
 mod session;
 mod submission;
 use config::build_theme_entries;
+pub use foreground::{ForegroundOperation, PromptPhase};
 use input::CTRL_C_CONFIRM_WINDOW;
 use session::builtin_commands;
-pub use foreground::{ForegroundOperation, PromptPhase};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ExitState {
@@ -49,6 +51,7 @@ pub enum ExitState {
     Idle,
     Confirming(Instant),
     Exiting,
+    ConnectionLost,
 }
 
 impl ExitState {
@@ -89,6 +92,7 @@ pub struct AppConfig {
     pub initialize_response: acp::InitializeResponse,
     pub session_response: acp::NewSessionResponse,
     pub workspace_status: WorkspaceStatus,
+    pub workspace_access: WorkspaceAccess,
     pub working_dir: PathBuf,
     pub settings: UiSettings,
     /// Host services the UI reaches for; injected so tests observe URL opens
@@ -107,17 +111,18 @@ impl App {
         session: crate::session::Session,
         settings: UiSettings,
     ) -> (Self, mpsc::UnboundedReceiver<AcpEvent>, acp_utils::client::AcpClientHandle) {
-        let crate::session::Session { client, response, working_dir, workspace_status } = session;
+        let Session { client, response, working_dir, workspace_status, workspace_access } = session;
         let mut app = Self::new(AppConfig {
             initialize_response: client.initialize_response,
             session_response: response,
             workspace_status,
+            workspace_access,
             working_dir,
             settings,
             browser_opener: default_browser_opener(),
             clipboard_writer: default_clipboard_writer(),
         });
-        app.queue(Command::ResolveWorkspace { cwd: app.session.working_dir().to_path_buf() });
+        app.resolve_workspace(app.session.working_dir().to_path_buf());
         (app, client.event_rx, client.handle)
     }
 
@@ -276,7 +281,9 @@ impl App {
             }
             CommandResult::SessionsListed(Ok(response)) => self.open_session_picker(response.sessions),
             CommandResult::SessionsListed(Err(error)) => self.notify(&format!("Failed to list sessions: {error}")),
-            CommandResult::PromptSearchResults { result: Ok(response), .. } => self.composer.prompt_search_on_results(response),
+            CommandResult::PromptSearchResults { result: Ok(response), .. } => {
+                self.composer.prompt_search_on_results(response);
+            }
             CommandResult::PromptSearchResults { query, result: Err(error) } => {
                 if let Some(picker) = self.composer.prompt_search_mut() {
                     picker.on_failed(&query, error);
@@ -293,7 +300,10 @@ impl App {
                 }
             }
             CommandResult::WorkspacesListed(Ok(response)) => {
-                self.open_overlay(Overlay::Workspaces(WorkspacePicker::new(response.workspaces)));
+                self.open_overlay(Overlay::Workspaces(WorkspacePicker::new(
+                    response.workspaces,
+                    self.session.workspace_access(),
+                )));
                 self.foreground = ForegroundOperation::PickingWorkspace;
             }
             CommandResult::WorkspacesListed(Err(error)) => {
@@ -381,7 +391,15 @@ impl App {
     }
 
     pub fn exit_requested(&self) -> bool {
-        self.exit_state == ExitState::Exiting
+        self.exit_result().is_some()
+    }
+
+    pub fn exit_result(&self) -> Option<Result<(), crate::error::AppError>> {
+        match self.exit_state {
+            ExitState::Exiting => Some(Ok(())),
+            ExitState::ConnectionLost => Some(Err(crate::error::AppError::ConnectionLost)),
+            ExitState::Idle | ExitState::Confirming(_) => None,
+        }
     }
 
     pub fn session_id(&self) -> &acp::SessionId {

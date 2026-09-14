@@ -43,13 +43,14 @@ mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.
 mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.5.3" }
 wisp = { package = "aether-wisp", path = "../wisp", version = "0.6.3" }
 ratatui = { workspace = true }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["agent"], version = "0.4.3" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["agent", "websocket"], version = "0.4.3" }
 agent-client-protocol = { workspace = true }
 clankerdiff-core = { workspace = true }
 aether-lspd = { path = "../aether-lspd", version = "0.1.36" }
 rmcp = { workspace = true, features = ["client", "elicitation", "server", "transport-streamable-http-client-reqwest"] }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "net", "fs", "time"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "net", "fs", "time", "signal"] }
+tokio-tungstenite = { workspace = true }
 tokio-util = { workspace = true, features = ["compat"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

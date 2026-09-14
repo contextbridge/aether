@@ -2,6 +2,7 @@ pub(crate) mod agent;
 #[cfg(any(test, feature = "testing"))]
 pub(crate) mod fake_prompt_mcp;
 pub(crate) mod protocol;
+pub mod server;
 pub(crate) mod session;
 pub(crate) mod state;
 #[cfg(any(test, feature = "testing"))]
@@ -144,6 +145,18 @@ pub enum AcpOptionsJsonError {
 pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
     info!("Starting Aether ACP server");
 
+    let cwd = current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let state = initialize_host(args, &cwd, None)?;
+    let connect_result = acp_agent_builder(state.clone()).connect_to(Stdio::new()).await;
+    state.shutdown_all().await;
+
+    match connect_result {
+        Ok(()) => Ok(AcpRunOutcome::CleanDisconnect),
+        Err(err) => Err(AcpRunError::Protocol(err)),
+    }
+}
+
+fn initialize_host(args: AcpArgs, cwd: &Path, remote_cwd: Option<PathBuf>) -> Result<Arc<AcpState>, AcpRunError> {
     let config = AcpRunConfig::from_args(args)?;
     setup_logging(&config.log_dir);
 
@@ -156,8 +169,7 @@ pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
     };
     let session_store = Arc::new(SessionStore::new().map_err(AcpRunError::SessionStore)?);
     let workspace_manager = Arc::new(WorkspaceManager::new().map_err(AcpRunError::WorkspaceManager)?);
-    let cwd = current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let settings = config.settings_source.load_settings(&cwd)?;
+    let settings = config.settings_source.load_settings(cwd)?;
     let telemetry = match build_telemetry_runtime(settings.telemetry.as_ref(), config.trace_context) {
         Ok(telemetry) => telemetry,
         Err(error @ TelemetryInitError::InvalidTraceContext(_)) => return Err(AcpRunError::Telemetry(error)),
@@ -167,7 +179,7 @@ pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
         }
     };
     let oauth_credential_store = oauth_credential_store_from_config(settings.credentials_store)?;
-    let state = Arc::new(AcpState::new(AcpStateConfig {
+    Ok(Arc::new(AcpState::new(AcpStateConfig {
         session_store,
         workspace_manager,
         oauth_credential_store,
@@ -176,15 +188,8 @@ pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
         provider_connections: config.provider_connections,
         telemetry,
         runtime_factory: None,
-    }));
-
-    let connect_result = acp_agent_builder(state.clone()).connect_to(Stdio::new()).await;
-    state.shutdown_all().await;
-
-    match connect_result {
-        Ok(()) => Ok(AcpRunOutcome::CleanDisconnect),
-        Err(err) => Err(AcpRunError::Protocol(err)),
-    }
+        remote_cwd,
+    })))
 }
 
 #[derive(Debug)]

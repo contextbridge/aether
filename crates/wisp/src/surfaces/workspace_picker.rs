@@ -1,5 +1,5 @@
 use crate::renderer::DrawContext;
-use crate::session::workspace_status::home_relative_path;
+use crate::session::WorkspaceAccess;
 use crate::surfaces::input::{Nav, UiEvent, WorkspacePickerOutput, is_press};
 use crate::theme::Theme;
 use crate::view::edit_buffer::{EditBuffer, apply_edit_key};
@@ -19,6 +19,7 @@ pub struct WorkspacePicker {
     rows: FilterableList<WorkspaceRow>,
     parent_dir: Option<PathBuf>,
     mode: Mode,
+    workspace_access: WorkspaceAccess,
 }
 
 enum Mode {
@@ -35,14 +36,15 @@ enum WorkspaceRow {
 const CREATE_NEW_LABEL: &str = "Create new workspace…";
 
 impl WorkspacePicker {
-    pub fn new(workspaces: Vec<WorkspaceEntry>) -> Self {
+    pub fn new(workspaces: Vec<WorkspaceEntry>, workspace_access: WorkspaceAccess) -> Self {
         let parent_dir = workspaces.iter().find(|w| w.is_current).and_then(|w| w.path.parent().map(Path::to_path_buf));
         let mut rows: Vec<WorkspaceRow> =
             workspaces.into_iter().filter(|w| !w.is_current).map(WorkspaceRow::Existing).collect();
         rows.push(WorkspaceRow::CreateNew);
         Self {
-            rows: FilterableList::new(rows, |row| match row {
-                WorkspaceRow::Existing(entry) => home_relative_path(&entry.path),
+            workspace_access,
+            rows: FilterableList::new(rows, move |row| match row {
+                WorkspaceRow::Existing(entry) => workspace_access.display_path(&entry.path),
                 WorkspaceRow::CreateNew => CREATE_NEW_LABEL.to_string(),
             }),
             parent_dir,
@@ -74,22 +76,23 @@ impl WorkspacePicker {
     }
 
     fn render_list(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
+        let workspace_access = self.workspace_access;
         self.rows.render_pane("Workspaces", "  (no matching workspaces)", area, buf, theme, |row| match row {
             WorkspaceRow::Existing(entry) => {
-                Line::styled(format!("  {}", home_relative_path(&entry.path)), Style::new().fg(theme.text_secondary))
+                Line::styled(format!("  {}", workspace_access.display_path(&entry.path)), Style::new().fg(theme.text_secondary))
             }
             WorkspaceRow::CreateNew => Line::styled(format!("  {CREATE_NEW_LABEL}"), Style::new().fg(theme.info)),
         });
     }
 
-    fn render_name_input(parent_dir: Option<&Path>, name: &EditBuffer, area: Rect, buf: &mut Buffer, theme: &Theme) {
+    fn render_name_input(workspace_access: WorkspaceAccess, parent_dir: Option<&Path>, name: &EditBuffer, area: Rect, buf: &mut Buffer, theme: &Theme) {
         let block = Block::bordered().title(" New workspace ").style(Style::new().fg(theme.text_primary));
         let inner = block.inner(area);
         block.render(area, buf);
 
         if let Some(parent) = parent_dir {
             let hint = Line::from(Span::styled(
-                format!("  will be created in {}/", home_relative_path(parent)),
+                format!("  will be created in {}/", workspace_access.display_path(parent)),
                 Style::new().fg(theme.muted),
             ));
             Paragraph::new(vec![Line::raw(""), hint]).render(inner, buf);
@@ -152,7 +155,7 @@ impl WorkspacePicker {
 impl WorkspacePicker {
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
         match &mut self.mode {
-            Mode::NamingNew { name } => Self::render_name_input(self.parent_dir.as_deref(), name, area, buf, cx.theme),
+            Mode::NamingNew { name } => Self::render_name_input(self.workspace_access, self.parent_dir.as_deref(), name, area, buf, cx.theme),
             Mode::List => self.render_list(area, buf, cx.theme),
         }
         None

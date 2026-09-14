@@ -11,6 +11,10 @@ impl WorkspaceStatus {
         Self { display_dir: display_dir.into(), git_ref }
     }
 
+    pub fn remote(cwd: &Path) -> Self {
+        Self::new(super::WorkspaceAccess::Remote.display_path(cwd), None)
+    }
+
     /// Creates the path portion of the status without touching the repository.
     /// Git metadata is resolved by the runtime's `Command::ResolveWorkspace`
     /// operation, keeping process execution outside session state.

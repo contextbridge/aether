@@ -1,0 +1,93 @@
+---
+title: Remote agent
+description: Run Aether on a remote machine and attach its terminal UI locally over ACP.
+---
+
+Run the agent, tools, and checkout on one machine while using Aether's normal terminal UI on another. The remote connection uses ACP v2 over WebSocket; the client does not start a local agent or require a local checkout, model credentials, or onboarding.
+
+## Connect through an SSH tunnel
+
+1. On the **agent machine**, configure your agent and provider/MCP credentials, then start the foreground server:
+
+   ```bash
+   aether server --cwd /workspace/project --agent Build
+   ```
+
+   The default listener is `127.0.0.1:8765`. Settings are resolved on the server using its working directory. The service initializes shared dependencies immediately; the agent runtime starts when a client creates a session. Use an existing agent name from your settings, or select a model with `--model` instead.
+
+2. On the **client machine**, leave a tunnel running:
+
+   ```bash
+   ssh -N -L 8765:127.0.0.1:8765 user@agent-machine
+   ```
+
+3. In another local terminal, attach:
+
+   ```bash
+   aether client
+   ```
+
+   This defaults to `ws://127.0.0.1:8765`. Startup resumes the server's current session, or creates a new one in the **server's** working directory when none is active.
+
+4. Exit using the normal confirmation flow (by default, press Ctrl+C twice). Run the same client command again to reattach. An accepted prompt keeps running and completed output is persisted while you are detached.
+
+The server is a foreground process, not a daemon. Keep it alive in a persistent shell or manage it with your VM's service manager. Client disconnection does not stop it; Ctrl+C or SIGTERM sent to the **server process** shuts down its connections and runtimes.
+
+## Commands
+
+```bash
+# Listen on a private network interface; all-interface binding is explicit.
+aether server --listen 0.0.0.0:8765 -C /workspace/project --agent Build
+
+# Attach from another machine on that private network.
+aether client ws://agent-machine:8765
+
+# Deliberately restore a saved session instead of the current live one.
+aether client ws://agent-machine:8765 --session <session-id>
+
+# Supply headers to an existing authenticating TLS gateway.
+aether client wss://agent.example/acp -H 'Authorization: Bearer ...'
+```
+
+| Server option | Meaning |
+| --- | --- |
+| `--listen <SocketAddr>` | Bind address; defaults to `127.0.0.1:8765`. |
+| `-C`, `--cwd <PathBuf>` | Server working directory; defaults to `.` and must exist on the server. |
+| ACP options | Existing agent/model, settings, provider override, and logging options. See `aether server --help`; `--agent` and `--model` are alternatives. |
+
+| Client option | Meaning |
+| --- | --- |
+| `[URL]` | `ws://` or `wss://` endpoint; defaults to `ws://127.0.0.1:8765`. Paths and query strings are preserved. |
+| `--session <ID>` | Select a saved session explicitly. Its directory is looked up on the server. |
+| `-H`, `--header 'Name: value'` | Repeatable HTTP headers for your gateway/proxy. Values may contain colons. |
+| `--log-dir <DIR>` | Client UI logs; defaults to `/tmp/wisp-logs`. |
+
+The client loads local Wisp UI settings, not local Aether project or provider settings. Provider/MCP credentials, workspace files, and session logs stay on the server. Browser-based OAuth flows needing server-local callbacks require suitable deployment connectivity; Aether does not tunnel those callbacks.
+
+## Detach, cancel, and restore
+
+- **Exit the client:** disconnect only. The same live actor, agent runtime, MCP runtime, and session ID remain on the server.
+- **Escape / explicit cancellation:** retains normal cancellation behavior; when used to cancel a running turn, it sends ACP cancellation. It is not detach.
+- **Reattach to the live session:** receive completed conversation history, current config, running/idle state, and subsequent live updates. Reattachment does not restart the turn.
+- **Select a different saved session:** deliberately stop the current session and restore the selected conversation. `/resume` offers the server-side session picker; `/clear` deliberately creates a fresh session.
+- **Explicit ACP session close or server shutdown:** stop runtimes. A server restart can restore saved conversation context, but cannot continue interrupted tool execution. After restart, select a saved session with `--session` or `/resume`; startup does not guess which saved session to restore.
+
+An unexpected connection loss restores the terminal and exits with an error. There is **no automatic reconnect or prompt retry**. If a prompt's acceptance response was lost, reconnect and inspect the transcript before resubmitting: a retry could execute tools twice.
+
+Partial streamed chunks, intermediate tool states, and pending dialogs are not guaranteed to be recovered. Pending survey/plan-approval/other elicitation requests are cancelled on disconnect; requests first raised while detached are cancelled immediately. They are not queued for reattachment. Cancelling an interaction does not itself cancel the session—the agent/tool decides how to handle that result.
+
+## Remote workspace boundaries
+
+The status line labels the server path as `remote:`. Server paths are never resolved against your local checkout or HOME. Local Git review/watch, file picking/indexing, and path-based attachments are unavailable in remote mode. Pasted paths remain ordinary text rather than being read as local files; blocked attachment actions leave the composer usable.
+
+Chat, streamed tool output and diffs delivered through ACP, prompt search, configuration, server status, forms, plan review, `/clear`, and `/resume` remain available. Workspace operations stay server-side. Themes, Wisp settings, rendering, terminal bell, clipboard, and browser integration remain client-local features.
+
+## Deployment and limitations
+
+- One live top-level session and **one attached client** at a time. A second connection receives HTTP `409 Conflict` and cannot take over the first.
+- The raw server has **no authentication or TLS certificate management**. Use private networking, SSH tunnelling, or an authenticating TLS reverse proxy. Do not expose the unauthenticated listener to the public internet. Client headers authenticate only to a gateway that actually validates them.
+- Header values are not printed in connection diagnostics. Keep credentials out of shared command history and screenshots as well.
+- There are no heartbeats, reconnect retries, configurable deadlines, or resume journals. A silently half-open connection may hold the client slot until the transport observes failure.
+- Persistence survives client disconnection, not server/VM termination, filesystem loss, or an ephemeral function invocation. Use a long-lived, network-reachable service with persistent storage.
+
+To verify a deployment, start a long-running tool, detach, let it complete, and reconnect. Repeat while the tool is still running. Check that completed output appears, the original execution continues, and the client's local checkout is untouched.

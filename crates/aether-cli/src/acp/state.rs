@@ -1,8 +1,8 @@
 use super::protocol::notify;
 use acp_utils::notifications::{
     AetherCapabilities, AuthMethodsUpdatedParams, McpRequest, PromptSearchParams, PromptSearchResponse,
-    SessionDisplayMeta, SessionPreviewParams, SessionPreviewResponse, WorkspaceListParams, WorkspaceListResponse,
-    WorkspaceMoveParams, WorkspaceMoveResponse,
+    RemoteServerInfo, SessionDisplayMeta, SessionPreviewParams, SessionPreviewResponse, WorkspaceListParams,
+    WorkspaceListResponse, WorkspaceMoveParams, WorkspaceMoveResponse,
 };
 use aether_auth::OAuthCredentialStorage;
 use aether_telemetry::TelemetryRuntime;
@@ -57,6 +57,7 @@ pub(crate) struct AcpState {
     factory: SessionFactory,
     telemetry: Option<Arc<TelemetryRuntime>>,
     mcp_capabilities: Mutex<rmcp::model::ClientCapabilities>,
+    remote_cwd: Option<PathBuf>,
 }
 
 pub(crate) struct AcpStateConfig {
@@ -68,6 +69,7 @@ pub(crate) struct AcpStateConfig {
     pub(crate) provider_connections: ProviderConnectionOverrides,
     pub(crate) telemetry: Option<Arc<TelemetryRuntime>>,
     pub(crate) runtime_factory: Option<Arc<dyn super::session::runtime::RuntimeFactory>>,
+    pub(crate) remote_cwd: Option<PathBuf>,
 }
 
 impl AcpState {
@@ -94,6 +96,7 @@ impl AcpState {
             factory,
             telemetry: config.telemetry,
             mcp_capabilities: Mutex::new(client_capabilities()),
+            remote_cwd: config.remote_cwd,
         }
     }
 
@@ -110,7 +113,20 @@ impl AcpState {
             .mcp(McpCapabilities::new().stdio(acp::McpStdioCapabilities::new()).http(acp::McpHttpCapabilities::new()))
             .meta(Some(aether_capabilities.to_meta()));
 
+        let remote_meta = if let Some(cwd) = &self.remote_cwd {
+            let active = self.registry.active_session().await;
+            Some(
+                RemoteServerInfo {
+                    cwd: active.as_ref().map_or_else(|| cwd.clone(), |session| session.inputs.cwd.clone()),
+                    session_id: active.map(|session| session.session_id),
+                }
+                .to_meta(),
+            )
+        } else {
+            None
+        };
         Ok(InitializeResponse::new(ProtocolVersion::V2, Implementation::new("Aether", "0.1.0"))
+            .meta(remote_meta)
             .capabilities(AgentCapabilities::new().session(session_capabilities))
             .auth_methods(auth_methods))
     }
@@ -567,6 +583,7 @@ mod tests {
             provider_connections: ProviderConnectionOverrides::default(),
             telemetry: None,
             runtime_factory: None,
+            remote_cwd: None,
         })
     }
 

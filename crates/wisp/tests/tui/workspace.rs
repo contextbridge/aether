@@ -1,5 +1,26 @@
 use super::support::*;
 
+#[test]
+fn remote_workspace_move_keeps_paths_server_side() {
+    let mut ui = TestUiBuilder::new().remote_workspace().workspace_move().dimensions(120, 24).build();
+    ui.type_text("/move");
+    ui.key(key(KeyCode::Tab));
+    assert!(matches!(ui.next_agent_command(), Some(AgentCommand::ListWorkspaces { .. })));
+    ui.deliver_result(workspaces_listed(vec![workspace_entry("/server/next", false)]));
+    ui.assert_viewport_contains("remote: /server/next");
+    ui.key(key(KeyCode::Enter));
+    assert!(matches!(ui.next_agent_command(), Some(AgentCommand::MoveWorkspace { .. })));
+    ui.deliver_result(workspace_moved("/server/next"));
+    assert!(matches!(ui.next_agent_command(), Some(AgentCommand::ResumeSession { .. })));
+    assert!(!ui.take_commands().iter().any(|command| matches!(command, Command::ResolveWorkspace { .. })));
+    ui.deliver_result(CommandResult::ResumeSession {
+        session_id: "test-session".into(),
+        result: Ok(acp::ResumeSessionResponse::new()),
+    });
+    ui.assert_viewport_contains("remote: /server/next");
+    assert!(!ui.take_commands().iter().any(|command| matches!(command, Command::ResolveWorkspace { .. })));
+}
+
 fn make_ui_with_workspace_move() -> TestUi {
     TestUiBuilder::new().workspace_move().build()
 }

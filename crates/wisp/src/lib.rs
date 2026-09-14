@@ -42,6 +42,7 @@ internal_modules!(
     view,
 );
 
+use agent_client_protocol::{Client, ConnectTo, schema::v2::SessionId};
 pub use session::Session;
 
 use app::App;
@@ -56,6 +57,18 @@ use tracing_subscriber::EnvFilter;
 pub async fn run_tui(agent_command: &str, settings: UiSettings, log_dir: Option<&str>) -> Result<(), AppError> {
     setup_logging(log_dir);
     let session = Session::connect(agent_command).await?;
+    run_with_session(session, settings).await
+}
+
+/// Launch the TUI attached to an Aether remote host over an established transport.
+pub async fn run_remote_tui(
+    transport: impl ConnectTo<Client> + 'static,
+    requested_session: Option<SessionId>,
+    settings: UiSettings,
+    log_dir: Option<&str>,
+) -> Result<(), AppError> {
+    setup_logging(log_dir);
+    let session = Session::connect_remote_to(transport, requested_session).await?;
     run_with_session(session, settings).await
 }
 

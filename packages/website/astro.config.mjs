@@ -130,6 +130,7 @@ export default defineConfig({
         },
         { label: "IDE (ACP)", slug: "aether/running/editor-integration" },
         { label: "Headless", slug: "aether/running/headless" },
+        { label: "Remote Agent", slug: "aether/running/remote" },
         {
           label: "Libraries",
           items: [

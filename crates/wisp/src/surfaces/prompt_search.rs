@@ -1,4 +1,4 @@
-use crate::session::workspace_status::home_relative_path;
+use crate::session::WorkspaceAccess;
 use crate::view::edit_buffer::EditBuffer;
 use crate::view::filterable_list::FilterableList;
 use crate::theme::Theme;
@@ -19,6 +19,7 @@ const MIN_PROMPT_WIDTH: usize = 16;
 
 #[derive(Debug)]
 pub struct PromptSearchPicker {
+    workspace_access: WorkspaceAccess,
     query: EditBuffer,
     results: FilterableList<PromptSearchResult>,
     loading: bool,
@@ -26,8 +27,8 @@ pub struct PromptSearchPicker {
 }
 
 impl PromptSearchPicker {
-    pub fn new() -> Self {
-        Self { query: EditBuffer::default(), results: Self::result_list(Vec::new()), loading: false, error: None }
+    pub fn new(workspace_access: WorkspaceAccess) -> Self {
+        Self { workspace_access, query: EditBuffer::default(), results: Self::result_list(Vec::new()), loading: false, error: None }
     }
 
     pub fn query(&self) -> &str {
@@ -136,7 +137,7 @@ impl PromptSearchPicker {
         }
 
         let width = usize::from(results_area.width.max(1));
-        let (view, selection) = self.results.view(theme, |result| result_line(result, width, theme));
+        let (view, selection) = self.results.view(theme, |result| result_line(result, width, theme, self.workspace_access));
         StatefulWidget::render(view, results_area, buf, selection);
     }
 
@@ -153,9 +154,9 @@ impl PromptSearchPicker {
     }
 }
 
-fn result_line(result: &PromptSearchResult, max_width: usize, theme: &Theme) -> Line<'static> {
-    let cwd_display = match home_relative_path(&result.cwd) {
-        full if full.width() <= MAX_CWD_WIDTH => full,
+fn result_line(result: &PromptSearchResult, max_width: usize, theme: &Theme, workspace_access: WorkspaceAccess) -> Line<'static> {
+    let cwd_display = match workspace_access.display_path(&result.cwd) {
+        full if workspace_access == WorkspaceAccess::Remote || full.width() <= MAX_CWD_WIDTH => full,
         full => result
             .cwd
             .file_name()

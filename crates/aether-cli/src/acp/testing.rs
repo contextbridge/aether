@@ -1,5 +1,6 @@
 use super::agent::acp_agent_builder;
 use super::fake_prompt_mcp::FakePromptMcp;
+use super::server::{AcpServer, ServerRunError};
 use super::session::actor::SessionActorInit;
 use super::session::agent_key::AgentKey;
 use super::session::agents::SessionAgents;
@@ -31,10 +32,11 @@ use llm::{ChatMessage, Context, LlmResponse, SessionUsageEvent, StreamingModelPr
 use llm::{MessageId, ProviderConnectionOverrides};
 use mcp_utils::client::{InMemoryServerSpec, McpServer, McpTransport, ToolExposure};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tokio::sync::{mpsc, oneshot};
-use tokio::task::spawn_local;
+use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio::task::{JoinHandle, spawn_local};
 
 const PLANNER_REPLY: &str = "planner reply";
 const CODER_REPLY: &str = "coder reply";
@@ -60,9 +62,40 @@ pub struct AcpTestHarness {
     _tmp: tempfile::TempDir,
 }
 
+/// A real loopback listener backed by the harness's existing state and fake runtimes.
+pub struct AcpWebSocketTestServer {
+    pub address: SocketAddr,
+    admission: Arc<Semaphore>,
+    shutdown: oneshot::Sender<()>,
+    task: JoinHandle<Result<(), ServerRunError>>,
+}
+
+impl AcpWebSocketTestServer {
+    pub fn url(&self) -> String {
+        format!("ws://{}", self.address)
+    }
+
+    /// Wait for a previously admitted connection to finish detaching its output.
+    pub async fn wait_until_detached(&self) {
+        drop(self.admission.acquire().await.expect("admission gate remains open"));
+    }
+
+    pub async fn shutdown(self) {
+        let _ = self.shutdown.send(());
+        self.task.await.expect("listener task joins").expect("listener shuts down");
+    }
+
+    /// Drop the running server without executing the normal async shutdown path.
+    pub async fn abort(self) {
+        self.task.abort();
+        assert!(self.task.await.expect_err("listener task is aborted").is_cancelled());
+    }
+}
+
 #[derive(Default)]
 pub struct AcpTestHarnessBuilder {
     persistent_host: bool,
+    remote_cwd: Option<PathBuf>,
 }
 
 impl AcpTestHarnessBuilder {
@@ -71,8 +104,13 @@ impl AcpTestHarnessBuilder {
         self
     }
 
+    pub fn remote_cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
+        self.remote_cwd = Some(cwd.into());
+        self
+    }
+
     pub async fn start(self) -> AcpTestHarness {
-        AcpTestHarness::start_with(self.persistent_host).await
+        AcpTestHarness::start_with(self.persistent_host, self.remote_cwd).await
     }
 }
 
@@ -158,6 +196,28 @@ impl AcpTestHarness {
         self.server_done = Some(connection.done);
     }
 
+    /// Move this persistent host from its in-memory connection to a real port-zero listener.
+    pub async fn serve_websocket(&mut self) -> AcpWebSocketTestServer {
+        assert!(self.persistent_host, "a WebSocket listener requires a persistent host");
+        self.disconnect().await;
+        let server = AcpServer::bind("127.0.0.1:0".parse().unwrap()).await.expect("bind test server");
+        let address = server.local_addr().expect("listener address");
+        let admission = server.admission();
+        let (shutdown, stopped) = oneshot::channel();
+        let state = self.state.clone();
+        let task = tokio::spawn(async move {
+            let result = server
+                .run(state.clone(), async move {
+                    let _ = stopped.await;
+                    Ok(())
+                })
+                .await;
+            state.shutdown_all().await;
+            result
+        });
+        AcpWebSocketTestServer { address, admission, shutdown, task }
+    }
+
     /// Stop the connection and all host-owned session runtimes.
     pub async fn shutdown(&mut self) {
         self.disconnect().await;
@@ -170,7 +230,7 @@ impl AcpTestHarness {
         self.session_store.load(session_id.0.as_ref()).expect("stored session loads").1
     }
 
-    async fn start_with(persistent_host: bool) -> Self {
+    async fn start_with(persistent_host: bool, remote_cwd: Option<PathBuf>) -> Self {
         let tmp = tempfile::tempdir().expect("tempdir for session store");
         let session_store = Arc::new(SessionStore::from_path(tmp.path().to_path_buf()));
         let workspace_manager = Arc::new(WorkspaceManager::from_registry_path_with_cloner(
@@ -197,6 +257,7 @@ impl AcpTestHarness {
                 provider_connections: ProviderConnectionOverrides::default(),
                 telemetry: None,
                 runtime_factory: Some(runtime_factory),
+                remote_cwd,
             },
             Arc::new(FakeProviderLogin),
         ));

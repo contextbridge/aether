@@ -1,4 +1,5 @@
 use super::{idle_notification, initialize_response};
+use crate::notifications::{SessionPreviewParams, SessionPreviewResponse};
 use agent_client_protocol::schema::v2::{
     AgentCapabilities, CancelSessionNotification, CloseSessionRequest, CloseSessionResponse, CompactionStatus,
     CompactionUpdate, ContentChunk, Implementation, InitializeRequest, InitializeResponse, ListSessionsRequest,
@@ -16,6 +17,7 @@ pub struct FakeAgent {
     initialize: InitializeResponse,
     new_session: Option<NewSessionResponse>,
     sessions: Option<Vec<SessionInfo>>,
+    previews: Vec<SessionPreviewResponse>,
     login_method: Option<String>,
     hold_config: bool,
     hold_list_sessions: bool,
@@ -44,6 +46,7 @@ impl Default for FakeAgent {
             initialize: initialize_response(),
             new_session: None,
             sessions: None,
+            previews: Vec::new(),
             login_method: None,
             hold_config: false,
             hold_list_sessions: false,
@@ -55,6 +58,16 @@ impl Default for FakeAgent {
 }
 
 impl FakeAgent {
+    pub fn remote_server(mut self, info: &crate::notifications::RemoteServerInfo) -> Self {
+        self.initialize.meta = Some(info.to_meta());
+        self
+    }
+
+    pub fn session_preview(mut self, preview: SessionPreviewResponse) -> Self {
+        self.previews.push(preview);
+        self
+    }
+
     pub fn agent_info(mut self, info: Implementation) -> Self {
         self.initialize.info = info;
         self
@@ -176,6 +189,15 @@ impl HandleDispatchFrom<Client> for FakeAgent {
                     let _ = capture.new_session.send(request);
                 }
                 responder.respond(response.clone())?;
+                Ok(Handled::Yes)
+            })
+            .await
+            .if_request(async |request: SessionPreviewParams, responder| {
+                let Some(preview) = self.previews.iter().find(|preview| preview.session_id == request.session_id)
+                else {
+                    return Ok(Handled::No { message: (request, responder), retry: false });
+                };
+                responder.respond(preview.clone())?;
                 Ok(Handled::Yes)
             })
             .await

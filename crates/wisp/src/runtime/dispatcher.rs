@@ -162,6 +162,7 @@ impl CommandDispatcher {
 
     pub async fn shutdown(&mut self) {
         self.close_git_review();
+        self.client_handle.disconnect().await;
         self.tasks.shutdown().await;
     }
 

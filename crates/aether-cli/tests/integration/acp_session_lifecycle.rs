@@ -167,7 +167,7 @@ async fn resume_replays_persisted_transcript_over_the_server_connection() {
 async fn resume_restores_transcript_without_replay_and_replaces_active_session() {
     with_harness(|mut harness| async move {
         let active = harness.insert_agent_switching_session().await;
-        let session_id = active.session_id().clone();
+        let session_id = SessionId::new("different-saved-session");
         harness.append_stored_session(session_id.0.as_ref(), "2026-05-01T00:00:00Z");
         harness.append_stored_prompt(session_id.0.as_ref(), "prior user");
         harness.append_stored_agent_turn(session_id.0.as_ref(), "prior assistant");

@@ -1,6 +1,25 @@
 use super::support::*;
 
 #[test]
+fn remote_resume_preserves_server_path_without_local_resolution() {
+    let cwd =
+        std::env::var_os("HOME").map_or_else(|| "/server".into(), std::path::PathBuf::from).join("remote-project");
+    let mut ui = TestUiBuilder::new().remote_workspace().dimensions(160, 24).build();
+    ui.deliver_result(sessions_listed(vec![acp::SessionInfo::new("saved", cwd.clone())]));
+    ui.key(key(KeyCode::Enter));
+    assert!(matches!(ui.next_agent_command(), Some(AgentCommand::ResumeSession { .. })));
+    ui.deliver_result(CommandResult::ResumeSession {
+        session_id: "saved".into(),
+        result: Ok(acp::ResumeSessionResponse::new()),
+    });
+    assert!(!ui.take_commands().iter().any(|command| matches!(command, Command::ResolveWorkspace { .. })));
+    ui.assert_viewport_contains(&format!("remote: {}", cwd.display()));
+    ui.type_text("/clear");
+    ui.key(key(KeyCode::Tab));
+    assert!(matches!(ui.next_agent_command(), Some(AgentCommand::NewSession { cwd: actual }) if actual == cwd));
+}
+
+#[test]
 fn clear_is_builtin_and_issues_new_session_command() {
     let mut app = make_app();
 

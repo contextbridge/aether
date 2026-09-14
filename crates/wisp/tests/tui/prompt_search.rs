@@ -1,5 +1,23 @@
 use super::support::*;
 
+#[test]
+fn remote_prompt_search_keeps_server_paths_and_accepts_results() {
+    let cwd = std::env::var_os("HOME").map_or_else(|| "/server".into(), std::path::PathBuf::from);
+    let mut ui = TestUiBuilder::new().remote_workspace().prompt_search().dimensions(160, 24).build();
+    ui.key(ctrl('r'));
+    ui.type_text("h");
+    assert!(matches!(ui.next_agent_command(), Some(AgentCommand::SearchPrompts(_))));
+    ui.deliver_result(prompt_search_completed(prompt_search_response(
+        "h",
+        vec![prompt_search_result_with_cwd("hello world", 0, 1, cwd.clone())],
+    )));
+    ui.assert_viewport_contains(&format!("remote: {}", cwd.display()));
+    ui.key(key(KeyCode::Enter));
+    assert_eq!(ui.app().composer().text(), "hello world");
+    ui.key(key(KeyCode::Enter));
+    assert!(matches!(ui.next_agent_command(), Some(AgentCommand::Prompt { text, .. }) if text == "hello world"));
+}
+
 fn make_app_with_prompt_search() -> TestUi {
     TestUiBuilder::new().prompt_search().build()
 }

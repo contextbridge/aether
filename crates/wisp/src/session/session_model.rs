@@ -1,5 +1,6 @@
 use crate::session::session_config_view::{LocalConfigKind, LocalConfigOption};
 use crate::session::workspace_status::WorkspaceStatus;
+use crate::session::WorkspaceAccess;
 use acp_utils::notifications::{AetherCapabilities, McpServerStatus, McpServerStatusEntry};
 use agent_client_protocol::schema::v2::{self as acp, SessionId};
 use std::path::{Path, PathBuf};
@@ -8,6 +9,7 @@ pub struct SessionModel {
     session_id: SessionId,
     agent_name: String,
     working_dir: PathBuf,
+    workspace_access: WorkspaceAccess,
     workspace_status: WorkspaceStatus,
     prompt_capabilities: acp::PromptCapabilities,
     capabilities: AetherCapabilities,
@@ -23,9 +25,15 @@ impl SessionModel {
             session_response,
             working_dir,
             workspace_status,
+            workspace_access,
             ..
         } = config;
+        let workspace_status = match workspace_access {
+            WorkspaceAccess::Local => workspace_status,
+            WorkspaceAccess::Remote => WorkspaceStatus::remote(&working_dir),
+        };
         Self {
+            workspace_access,
             session_id: session_response.session_id,
             agent_name: initialize_response.info.title.unwrap_or(initialize_response.info.name),
             working_dir,
@@ -44,6 +52,10 @@ impl SessionModel {
 
     pub fn agent_name(&self) -> &str {
         &self.agent_name
+    }
+
+    pub fn workspace_access(&self) -> WorkspaceAccess {
+        self.workspace_access
     }
 
     pub fn working_dir(&self) -> &Path {
@@ -108,6 +120,9 @@ impl SessionModel {
     }
 
     pub fn set_working_dir(&mut self, working_dir: PathBuf) {
+        if self.workspace_access == WorkspaceAccess::Remote {
+            self.workspace_status = WorkspaceStatus::remote(&working_dir);
+        }
         self.working_dir = working_dir;
     }
 
