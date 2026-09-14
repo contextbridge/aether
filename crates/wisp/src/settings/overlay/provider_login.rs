@@ -3,7 +3,7 @@ use crate::surfaces::input::{Nav, SettingsOutput, UiEvent, one};
 use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
 use crate::view::filterable_list::FilterableList;
-use agent_client_protocol::schema::v1::AuthMethod;
+use agent_client_protocol::schema::v2::AuthMethod;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
@@ -106,7 +106,7 @@ pub(crate) fn build_provider_login_entries(methods: &[AuthMethod]) -> Vec<Provid
     methods
         .iter()
         .map(|method| ProviderLoginEntry {
-            method_id: method.id().0.to_string(),
+            method_id: method.method_id().0.to_string(),
             name: method.name().to_string(),
             status: if method.description() == Some("authenticated") {
                 ProviderLoginStatus::LoggedIn

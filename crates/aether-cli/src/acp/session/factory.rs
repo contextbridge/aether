@@ -4,16 +4,15 @@ use aether_core::core::AgentDeps;
 use aether_core::events::DynObserverFactory;
 use aether_project::AgentCatalog;
 use aether_sessions::model::{SessionEvent, SessionMeta, last_agent_from_events};
-use agent_client_protocol::schema::v1::{
-    self as acp, LoadSessionRequest, NewSessionRequest, ResumeSessionRequest, SessionId,
-};
-use agent_client_protocol::{Client, ConnectionTo};
+use agent_client_protocol::schema::v2::{self as acp, NewSessionRequest, ResumeSessionRequest, SessionId};
+use agent_client_protocol::{Client, ConnectionTo, Error};
 use llm::catalog::{LlmModel, get_local_models};
 use llm::types::IsoString;
 use llm::{ProviderConnectionOverrides, ReasoningEffort};
 use rmcp::model::ClientCapabilities;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::sync::OnceCell;
 use tracing::{error, info, warn};
 
 use super::actor::{SessionActor, SessionActorInit, SessionHandle};
@@ -27,7 +26,7 @@ use crate::resolve::{InitialSessionSelection, resolve_agent_from_catalog};
 use crate::settings_args::SettingsSourceArgs;
 use aether_sessions::{SessionStore, SessionStoreError};
 
-/// Builds the per-session actor for both new and loaded sessions, resolving
+/// Builds the per-session actor for both new and resumed sessions, resolving
 /// settings, agent catalog, model discovery, and the runtime factory.
 pub(crate) struct SessionFactory {
     settings_source: SettingsSourceArgs,
@@ -37,6 +36,7 @@ pub(crate) struct SessionFactory {
     initial_selection: InitialSessionSelection,
     observer_factory: Option<DynObserverFactory>,
     runtime_factory: Option<Arc<dyn RuntimeFactory>>,
+    available: OnceCell<Vec<LlmModel>>,
 }
 
 /// The fully-built session ready to be registered with [`AcpState`](crate::acp::state::AcpState).
@@ -44,12 +44,42 @@ pub(crate) struct CreatedSession {
     pub session_id: SessionId,
     pub handle: SessionHandle,
     pub config_options: Vec<acp::SessionConfigOption>,
-    pub replay_events: Vec<SessionEvent>,
 }
 
-struct SessionTranscript {
-    events: Vec<SessionEvent>,
-    replay: bool,
+pub(crate) struct PreparedSession {
+    init: SessionActorInit,
+    available: Vec<LlmModel>,
+}
+
+impl PreparedSession {
+    pub(crate) fn refresh_transcript(mut self) -> Result<Self, Error> {
+        let (meta, transcript) =
+            self.init.repository.load(&self.init.session_id.0).map_err(Error::into_internal_error)?;
+        let mut catalog =
+            SessionModeCatalog { specs: self.init.specs, modes: self.init.modes, available: self.available };
+        let resolved = resolve_loaded_session(&mut catalog, &meta, &transcript)?;
+        self.init.specs = catalog.specs;
+        self.init.modes = catalog.modes;
+        self.available = catalog.available;
+        self.init.active_agent = resolved.active_agent;
+        self.init.config = resolved.config;
+        self.init.transcript = transcript;
+        Ok(self)
+    }
+
+    pub(crate) async fn start(self) -> Result<CreatedSession, Error> {
+        let session_id = self.init.session_id.clone();
+        let config_options = self.init.config.config_options(
+            &self.init.modes,
+            &self.available,
+            self.init.oauth_credential_store.as_ref(),
+        );
+        let handle = SessionActor::spawn(self.init).await.map_err(|e| {
+            error!("Failed to start session actor: {e}");
+            Error::internal_error()
+        })?;
+        Ok(CreatedSession { session_id, handle, config_options })
+    }
 }
 
 impl SessionFactory {
@@ -70,36 +100,41 @@ impl SessionFactory {
             initial_selection,
             observer_factory,
             runtime_factory,
+            available: OnceCell::new(),
         }
     }
 
-    pub(crate) async fn create(
+    pub(crate) async fn available_models(&self) -> &[LlmModel] {
+        self.available.get_or_init(get_local_models).await
+    }
+
+    pub(crate) async fn prepare_new(
         &self,
         mut args: NewSessionRequest,
         cx: &ConnectionTo<Client>,
         mcp_capabilities: ClientCapabilities,
-    ) -> Result<CreatedSession, acp::Error> {
+    ) -> Result<PreparedSession, Error> {
         // Inside a sandbox container the client sends the *host* cwd, but the
         // project is mounted at the container's working directory.
         if std::env::var("AETHER_INSIDE_SANDBOX").is_ok() {
             let container_cwd = std::env::current_dir().unwrap_or_else(|_| "/workspace".into());
             info!("Sandbox: remapping cwd {:?} -> {:?}", args.cwd, container_cwd);
-            args.cwd = container_cwd;
+            args.cwd = acp::AbsolutePath::new(container_cwd);
         }
 
         info!("Creating new session with cwd: {:?}", args.cwd);
         let session_id = uuid::Uuid::new_v4().to_string();
 
-        let mut mode_catalog = self.load_mode_catalog(&args.cwd).await?;
+        let mut mode_catalog = self.load_mode_catalog(args.cwd.as_ref()).await?;
         let default_model = pick_default_model(&mode_catalog.available).cloned().ok_or_else(|| {
             error!("No models available — set an API key env var (e.g. ANTHROPIC_API_KEY)");
-            acp::Error::internal_error()
+            Error::internal_error()
         })?;
         let resolved = self.resolve_new_session(&mut mode_catalog, &default_model)?;
 
         let meta = SessionMeta {
             session_id: session_id.clone(),
-            cwd: args.cwd.clone(),
+            cwd: args.cwd.clone().into_inner(),
             model: resolved.config.active_model.clone(),
             selected_mode: resolved.config.selected_mode.clone(),
             created_at: IsoString::now().0,
@@ -108,40 +143,38 @@ impl SessionFactory {
             error!("Failed to write session meta: {e}");
         }
 
-        let runtime_factory = self.production_runtime_factory(
-            args.cwd,
-            args.mcp_servers,
-            mode_catalog.specs.catalog(),
-            mcp_capabilities,
-            &session_id,
-        );
-        self.build_session(
+        let runtime_factory = self.runtime_factory.clone().unwrap_or_else(|| {
+            self.production_runtime_factory(
+                args.cwd.into_inner(),
+                args.mcp_servers,
+                mode_catalog.specs.catalog(),
+                mcp_capabilities,
+                &session_id,
+            )
+        });
+        Ok(self.prepare_session(
             SessionId::new(session_id),
             runtime_factory,
             mode_catalog,
             resolved,
-            SessionTranscript { events: Vec::new(), replay: false },
+            Vec::new(),
+            false,
             cx,
-        )
-        .await
+        ))
     }
 
-    pub(crate) async fn load(
-        &self,
-        args: LoadSessionRequest,
-        cx: &ConnectionTo<Client>,
-        mcp_capabilities: ClientCapabilities,
-    ) -> Result<CreatedSession, acp::Error> {
-        self.restore(args.session_id, args.cwd, args.mcp_servers, cx, mcp_capabilities, true).await
-    }
-
-    pub(crate) async fn resume(
+    pub(crate) async fn prepare_resume(
         &self,
         args: ResumeSessionRequest,
         cx: &ConnectionTo<Client>,
         mcp_capabilities: ClientCapabilities,
-    ) -> Result<CreatedSession, acp::Error> {
-        self.restore(args.session_id, args.cwd, args.mcp_servers, cx, mcp_capabilities, false).await
+    ) -> Result<PreparedSession, Error> {
+        let replay = match args.replay_from {
+            Some(acp::ReplayFrom::Start(_)) => true,
+            None => false,
+            Some(_) => return Err(Error::invalid_params()),
+        };
+        self.restore(args.session_id, args.cwd.into_inner(), args.mcp_servers, cx, mcp_capabilities, replay).await
     }
 
     async fn restore(
@@ -152,18 +185,18 @@ impl SessionFactory {
         cx: &ConnectionTo<Client>,
         mcp_capabilities: ClientCapabilities,
         replay: bool,
-    ) -> Result<CreatedSession, acp::Error> {
+    ) -> Result<PreparedSession, Error> {
         let session_id_string = session_id.0.to_string();
         info!("Restoring session: {session_id_string}");
 
         let (meta, events) = self.session_store.load(&session_id_string).map_err(|error| match error {
             SessionStoreError::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 error!("Session not found: {session_id_string}");
-                acp::Error::invalid_params()
+                Error::invalid_params()
             }
             error => {
                 error!("Failed to load session {session_id_string}: {error}");
-                acp::Error::internal_error()
+                Error::internal_error()
             }
         })?;
 
@@ -178,15 +211,7 @@ impl SessionFactory {
                 session_id.0.as_ref(),
             )
         });
-        self.build_session(
-            session_id,
-            runtime_factory,
-            mode_catalog,
-            resolved,
-            SessionTranscript { events, replay },
-            cx,
-        )
-        .await
+        Ok(self.prepare_session(session_id, runtime_factory, mode_catalog, resolved, events, replay, cx))
     }
 
     fn production_runtime_factory(
@@ -204,52 +229,43 @@ impl SessionFactory {
         Arc::new(ProductionRuntimeFactory::new(cwd, map_acp_mcp_servers(mcp_servers), deps))
     }
 
-    async fn build_session(
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_session(
         &self,
         session_id: SessionId,
         runtime_factory: Arc<dyn RuntimeFactory>,
         mode_catalog: SessionModeCatalog,
         resolved: ResolvedSession,
-        transcript: SessionTranscript,
+        transcript: Vec<SessionEvent>,
+        replay: bool,
         cx: &ConnectionTo<Client>,
-    ) -> Result<CreatedSession, acp::Error> {
-        let SessionTranscript { events, replay } = transcript;
-        let replay_events = if replay { events.clone() } else { Vec::new() };
-        let handle = SessionActor::spawn(SessionActorInit {
-            session_id: session_id.clone(),
+    ) -> PreparedSession {
+        let init = SessionActorInit {
+            session_id,
             connection: cx.clone(),
             repository: self.session_store.clone(),
             oauth_credential_store: Arc::clone(&self.oauth_credential_store),
             active_agent: resolved.active_agent,
             specs: mode_catalog.specs,
             runtime_factory,
-            transcript: events,
+            transcript,
+            replay,
             modes: mode_catalog.modes,
             config: resolved.config,
-        })
-        .await
-        .map_err(|e| {
-            error!("Failed to start session actor: {e}");
-            acp::Error::internal_error()
-        })?;
-
-        let config_options =
-            handle.config_snapshot().config_options(&mode_catalog.available, self.oauth_credential_store.as_ref());
-
-        info!("Session {} ready", session_id.0);
-        Ok(CreatedSession { session_id, handle, config_options, replay_events })
+        };
+        PreparedSession { init, available: mode_catalog.available }
     }
 
     fn resolve_new_session(
         &self,
         mode_catalog: &mut SessionModeCatalog,
         default_model: &LlmModel,
-    ) -> Result<ResolvedSession, acp::Error> {
+    ) -> Result<ResolvedSession, Error> {
         let selection = match &self.initial_selection {
             InitialSessionSelection::Agent(agent) => {
                 if !mode_catalog.modes.iter().any(|mode| mode.name == *agent) {
                     warn!("Unknown or unavailable agent `{agent}` requested via --agent");
-                    return Err(acp::Error::invalid_params());
+                    return Err(Error::invalid_params());
                 }
                 self.initial_selection.clone()
             }
@@ -266,7 +282,7 @@ impl SessionFactory {
         let selected =
             resolve_agent_from_catalog(mode_catalog.specs.catalog().clone(), &selection).map_err(|error| {
                 warn!("Failed to resolve initial agent: {error}");
-                acp::Error::invalid_params()
+                Error::invalid_params()
             })?;
 
         if selected.spec.name == "__default__" {
@@ -274,23 +290,23 @@ impl SessionFactory {
         } else {
             if !mode_catalog.modes.iter().any(|mode| mode.name == selected.spec.name) {
                 warn!("Configured default agent `{}` is unavailable", selected.spec.name);
-                return Err(acp::Error::invalid_params());
+                return Err(Error::invalid_params());
             }
             resolve_named_session(mode_catalog, &selected.spec.name)
         }
     }
 
-    async fn load_mode_catalog(&self, cwd: &Path) -> Result<SessionModeCatalog, acp::Error> {
+    async fn load_mode_catalog(&self, cwd: &Path) -> Result<SessionModeCatalog, Error> {
         let catalog = self
             .settings_source
             .load_agent_catalog(cwd)
             .map_err(|e| {
                 error!("Failed to load agent catalog: {e}");
-                acp::Error::invalid_params()
+                Error::invalid_params()
             })?
             .with_provider_connections(self.provider_connections.clone());
 
-        let available = get_local_models().await;
+        let available = self.available_models().await.to_vec();
         let modes = Modes::from_specs(catalog.all(), &available);
 
         Ok(SessionModeCatalog { specs: SessionAgents::new(catalog), modes, available })
@@ -312,14 +328,14 @@ fn resolve_loaded_session(
     mode_catalog: &mut SessionModeCatalog,
     meta: &SessionMeta,
     events: &[SessionEvent],
-) -> Result<ResolvedSession, acp::Error> {
+) -> Result<ResolvedSession, Error> {
     if let Some(name) = last_agent_from_events(meta.selected_mode.clone(), events).as_deref() {
         return resolve_named_session(mode_catalog, name);
     }
 
     let parsed_model: LlmModel = meta.model.parse().map_err(|e: String| {
         error!("Failed to parse restored model '{}': {e}", meta.model);
-        acp::Error::invalid_params()
+        Error::invalid_params()
     })?;
     Ok(resolve_model_session(mode_catalog, &parsed_model, None))
 }
@@ -339,26 +355,26 @@ fn resolve_model_session(
     resolve_model_spec_session(mode_catalog, spec)
 }
 
-fn resolve_named_session(mode_catalog: &SessionModeCatalog, name: &str) -> Result<ResolvedSession, acp::Error> {
+fn resolve_named_session(mode_catalog: &SessionModeCatalog, name: &str) -> Result<ResolvedSession, Error> {
     let spec = mode_catalog.specs.get(&AgentKey::Named(name.to_owned())).ok_or_else(|| {
         error!("Failed to resolve runtime inputs for mode '{name}'");
-        acp::Error::invalid_params()
+        Error::invalid_params()
     })?;
     let config = SessionConfigState::with_selection(spec.model.clone(), Some(name.to_string()), spec.reasoning_effort);
     Ok(ResolvedSession { active_agent: AgentKey::Named(name.to_string()), config })
 }
 
-fn parse_available_model(model: &str, available: &[LlmModel]) -> Result<LlmModel, acp::Error> {
+fn parse_available_model(model: &str, available: &[LlmModel]) -> Result<LlmModel, Error> {
     let parsed = model.parse().map_err(|e: String| {
         warn!("Failed to parse --model `{model}`: {e}");
-        acp::Error::invalid_params()
+        Error::invalid_params()
     })?;
 
     if available.contains(&parsed) {
         Ok(parsed)
     } else {
         warn!("Requested model `{model}` is not available");
-        Err(acp::Error::invalid_params())
+        Err(Error::invalid_params())
     }
 }
 
@@ -375,7 +391,7 @@ mod tests {
     fn parse_available_model_rejects_bedrock_inference_profile_arn() {
         let available: Vec<LlmModel> = Vec::new();
         let error = parse_available_model(BEDROCK_ARN_AS_MODEL_REJECTED, &available).unwrap_err();
-        assert_eq!(error, acp::Error::invalid_params());
+        assert_eq!(error, Error::invalid_params());
     }
 
     #[test]

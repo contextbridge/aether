@@ -1,38 +1,29 @@
 use super::session::builtin_commands;
-use super::{App, ExitState, Overlay, Route};
-use crate::attachment::placeholder_for_content_block;
+use super::{App, ExitState, ForegroundOperation, Overlay, Route};
 use crate::command::{AgentCommand, Command, TerminalCommand};
-use crate::conversation::ContextUsageDisplay;
 use crate::conversation::tool_calls::ToolStatus;
+use crate::conversation::{ContextUsageDisplay, MessageRole};
 use crate::screens::plan_review::PlanReviewScreen;
+use crate::session::workspace_status::home_relative_path;
 use crate::surfaces::modal::ElicitationModal;
 use crate::surfaces::picker::CommandEntry;
 use crate::surfaces::session_picker::SessionPicker;
-use acp_utils::client::{AcpEvent, LoadedSession};
+use acp_utils::client::AcpEvent;
 use acp_utils::notifications::McpNotification;
-use agent_client_protocol::schema::v1::{self as acp, CreateElicitationRequest, ElicitationMode, SessionId};
+use agent_client_protocol::schema::MaybeUndefined;
+use agent_client_protocol::schema::v2::{
+    self as acp, CreateElicitationRequest, ElicitationMode, SessionId, SessionUpdate, StateUpdate,
+};
 use std::time::Instant;
 
 impl App {
     #[allow(clippy::too_many_lines)]
     pub fn on_acp_event(&mut self, event: AcpEvent) {
         match event {
-            AcpEvent::SessionLoaded(loaded) => self.on_loaded_session(loaded),
-            AcpEvent::SessionUpdate { session_id, update } => {
-                if &session_id == self.session.session_id() {
-                    self.on_session_update(&update);
-                }
-            }
-            AcpEvent::PromptCompleted(stop_reason) => {
-                let status = match stop_reason {
-                    acp::StopReason::Cancelled => ToolStatus::Error("cancelled".to_string()),
-                    _ => ToolStatus::Success,
-                };
-                self.finish_prompt(&status);
-            }
-            AcpEvent::ContextCompaction(params) => {
-                if self.conversation.progress_indicator().accepts_activity() {
-                    self.conversation.turn_mut().set_compaction_active(params.active);
+            AcpEvent::SessionUpdate(notification) => {
+                if &notification.session_id == self.session.session_id()
+                    || matches!(self.foreground, ForegroundOperation::CreatingSession { .. }) {
+                    self.on_session_update(&notification.update);
                 }
             }
             AcpEvent::ContextCleared(_) => {
@@ -73,7 +64,6 @@ impl App {
                 }
             }
             AcpEvent::ConnectionClosed => self.on_connection_closed(),
-            AcpEvent::SessionUsage(_) => {},
             AcpEvent::SubAgentProgress(progress) => {
                 if self.conversation.progress_indicator().accepts_activity() {
                     self.conversation.on_sub_agent_progress(&progress);
@@ -85,7 +75,7 @@ impl App {
     /// Reports why a workspace move could not proceed and leaves move mode.
     pub(super) fn abandon_workspace_move(&mut self, message: &str) {
         self.notify(message);
-        self.session.end_workspace_move();
+        self.foreground = ForegroundOperation::Idle;
     }
 
     pub(super) fn open_session_picker(&mut self, sessions: Vec<acp::SessionInfo>) {
@@ -98,29 +88,37 @@ impl App {
         self.open_overlay(Overlay::Sessions(picker));
     }
 
-    pub(super) fn on_loaded_session(&mut self, loaded: LoadedSession) {
-        let LoadedSession { session_id, response, replay } = loaded;
-        self.reset_turn_state();
-        self.session.set_session(session_id, Vec::new());
-        for event in replay {
-            self.on_acp_event(event.into());
+    pub(super) fn on_resumed_session(&mut self, session_id: &SessionId, response: acp::ResumeSessionResponse) {
+        match &self.foreground {
+            ForegroundOperation::ResumingSession { session_id: expected, cwd }
+            | ForegroundOperation::LoadingWorkspaceSession { session_id: expected, cwd } if expected == session_id => {
+                if self.session.working_dir() != cwd {
+                    let cwd = cwd.clone();
+                    self.session.set_working_dir(cwd.clone());
+                    self.queue(Command::ResolveWorkspace { cwd });
+                }
+            }
+            _ => return,
         }
-        self.session.update_config_options(response.config_options.unwrap_or_default());
+        self.session.update_config_options(response.config_options);
+        if matches!(self.foreground, ForegroundOperation::LoadingWorkspaceSession { .. }) {
+            self.notify(&format!("Moved to {}", home_relative_path(self.session.working_dir())));
+        }
         self.return_to_conversation();
-        self.session.end_workspace_move();
+        self.foreground = ForegroundOperation::Idle;
     }
 
     pub(super) fn on_new_session(&mut self, session_id: SessionId, config_options: Vec<acp::SessionConfigOption>) {
+        if !matches!(self.foreground, ForegroundOperation::Idle | ForegroundOperation::CreatingSession { .. }) {
+            return;
+        }
+        let previous_selections = match std::mem::take(&mut self.foreground) {
+            ForegroundOperation::CreatingSession { previous_selections } => previous_selections,
+            _ => Vec::new(),
+        };
         self.close_elicitation_owner();
         self.return_to_conversation();
-        let previous_selections: Vec<(String, String)> = self
-            .session
-            .config_options()
-            .iter()
-            .filter_map(|option| option.select().map(|select| (option.id.clone(), select.current_value.to_string())))
-            .collect();
         self.session.set_session(session_id, config_options);
-        self.reset_conversation();
         self.restore_config_selections(&previous_selections);
     }
 
@@ -139,7 +137,7 @@ impl App {
     fn on_connection_closed(&mut self) {
         self.close_elicitation_owner();
         self.return_to_conversation();
-        self.session.end_workspace_move();
+        self.foreground = ForegroundOperation::Idle;
         self.commands.retain(|command| !matches!(command, Command::Terminal(TerminalCommand::RingBell)));
         self.exit_state = ExitState::Exiting;
     }
@@ -154,43 +152,42 @@ impl App {
         }
     }
 
-    fn on_session_update(&mut self, update: &acp::SessionUpdate) {
-        if is_agent_activity(update) && !self.conversation.progress_indicator().accepts_activity() {
-            return;
+    fn on_session_update(&mut self, update: &SessionUpdate) {
+        if self.waiting_for_response() {
+            self.observe_activity(update);
         }
         match update {
-            acp::SessionUpdate::UserMessageChunk(chunk) => {
-                if let Some(text) = match &chunk.content {
-                    acp::ContentBlock::Text(text) => Some(text.text.clone()),
-                    block => placeholder_for_content_block(block).map(str::to_string),
-                } {
-                    self.conversation.append_user_content(text);
+            SessionUpdate::CompactionUpdate(update) => {
+                if self.conversation.progress_indicator().accepts_activity() {
+                    self.conversation.turn_mut().apply_compaction(update);
                 }
             }
-            acp::SessionUpdate::AgentMessageChunk(chunk) => {
-                if let acp::ContentBlock::Text(text_content) = &chunk.content {
-                    if !text_content.text.is_empty() {
-                        self.conversation.progress_indicator_mut().response_started();
-                    }
-                    self.conversation.append_assistant_chunk(&text_content.text);
-                }
+            SessionUpdate::StateUpdate(StateUpdate::Idle(idle)) if self.waiting_for_response() => {
+                let status = match idle.stop_reason {
+                    Some(acp::StopReason::Cancelled) => ToolStatus::Error("cancelled".to_string()),
+                    _ => ToolStatus::Success,
+                };
+                self.finish_prompt(&status);
             }
-            acp::SessionUpdate::AgentThoughtChunk(chunk) => {
-                if let acp::ContentBlock::Text(text_content) = &chunk.content
-                    && !text_content.text.is_empty()
-                {
-                    self.conversation.progress_indicator_mut().record_thought(&text_content.text);
-                }
+            SessionUpdate::UserMessage(message) => {
+                self.conversation.upsert_message(MessageRole::User, message.message_id.clone(), &message.content);
             }
-            acp::SessionUpdate::ToolCall(tool_call) => {
-                self.conversation.progress_indicator_mut().tool_activity();
-                self.conversation.on_tool_call(tool_call);
+            SessionUpdate::AgentMessage(message) => {
+                self.conversation.upsert_message(MessageRole::Assistant, message.message_id.clone(), &message.content);
             }
-            acp::SessionUpdate::ToolCallUpdate(update) => {
-                self.conversation.progress_indicator_mut().tool_activity();
+            SessionUpdate::UserMessageChunk(chunk) => {
+                self.conversation.append_message_chunk(MessageRole::User, chunk);
+            }
+            SessionUpdate::AgentMessageChunk(chunk) => {
+                self.conversation.append_message_chunk(MessageRole::Assistant, chunk);
+            }
+            SessionUpdate::ToolCallContentChunk(chunk) => {
+                self.conversation.on_tool_call_content_chunk(chunk);
+            }
+            SessionUpdate::ToolCallUpdate(update) => {
                 self.conversation.on_tool_call_update(update);
             }
-            acp::SessionUpdate::AvailableCommandsUpdate(update) => {
+            SessionUpdate::AvailableCommandsUpdate(update) => {
                 let agent_commands: Vec<_> = update
                     .available_commands
                     .iter()
@@ -199,7 +196,7 @@ impl App {
                         description: command.description.clone(),
                         has_input: command.input.is_some(),
                         hint: match &command.input {
-                            Some(acp::AvailableCommandInput::Unstructured(input)) => Some(input.hint.clone()),
+                            Some(acp::AvailableCommandInput::Text(input)) => Some(input.hint.clone()),
                             _ => None,
                         },
                         builtin: false,
@@ -209,49 +206,62 @@ impl App {
                 all.extend(agent_commands);
                 self.available_commands = all;
             }
-            acp::SessionUpdate::ConfigOptionUpdate(update) => {
+            SessionUpdate::ConfigOptionUpdate(update) => {
                 self.session.update_config_options(update.config_options.clone());
-                self.conversation.finish_current_block();
                 if let Some(Overlay::Settings(overlay)) = self.overlay.as_mut() {
                     overlay.update_config_options(self.session.config_options());
                 }
             }
-            acp::SessionUpdate::Plan(plan) => {
-                self.conversation.plan_tracker_mut().replace(plan.entries.clone(), Instant::now());
-                self.conversation.finish_current_block();
+            SessionUpdate::PlanUpdate(plan) => {
+                self.conversation.plan_tracker_mut().apply_update(plan, Instant::now());
             }
-            acp::SessionUpdate::UsageUpdate(usage) => {
+            SessionUpdate::UsageUpdate(usage) => {
                 self.conversation.turn_mut().set_context_usage(Some(ContextUsageDisplay {
                     used_tokens: u32::try_from(usage.used).unwrap_or(u32::MAX),
                     limit_tokens: u32::try_from(usage.size).unwrap_or(u32::MAX),
                 }));
             }
-            _ => {
-                self.conversation.finish_current_block();
+            _ => {}
+        }
+    }
+
+    fn observe_activity(&mut self, update: &SessionUpdate) {
+        let indicator = self.conversation.progress_indicator_mut();
+        match update {
+            SessionUpdate::AgentMessageChunk(_) | SessionUpdate::StateUpdate(StateUpdate::Running(_)) => {
+                indicator.response_started();
             }
+            SessionUpdate::StateUpdate(StateUpdate::RequiresAction(_)) => indicator.requires_action(),
+            SessionUpdate::ToolCallUpdate(_) => indicator.tool_activity(),
+            SessionUpdate::AgentThoughtChunk(chunk) => {
+                if let acp::ContentBlock::Text(text) = &chunk.content
+                    && !text.text.is_empty()
+                {
+                    indicator.record_thought(&chunk.message_id, &text.text);
+                }
+            }
+            SessionUpdate::AgentThought(message) => match &message.content {
+                MaybeUndefined::Undefined => {}
+                MaybeUndefined::Null => indicator.replace_thought(&message.message_id, ""),
+                MaybeUndefined::Value(blocks) => {
+                    let text = acp_utils::content::map_content_blocks_to_text(blocks.clone());
+                    indicator.replace_thought(&message.message_id, &text);
+                }
+            },
+            _ => {}
         }
     }
 
     pub(super) fn finish_prompt(&mut self, terminal_status: &ToolStatus) {
         let was_in_flight = self.waiting_for_response();
-        self.conversation.turn_mut().set_prompt_in_flight(false);
-        self.conversation.turn_mut().set_compaction_active(false);
+        self.foreground.finish_prompt();
+        self.conversation.turn_mut().clear_compactions();
         self.conversation.progress_indicator_mut().prompt_finished();
         self.conversation.finish_turn(terminal_status);
         if was_in_flight && matches!(terminal_status, ToolStatus::Success) {
             self.queue(Command::Terminal(TerminalCommand::RingBell));
         }
     }
-}
-
-fn is_agent_activity(update: &acp::SessionUpdate) -> bool {
-    matches!(
-        update,
-        acp::SessionUpdate::AgentMessageChunk(_)
-            | acp::SessionUpdate::AgentThoughtChunk(_)
-            | acp::SessionUpdate::ToolCall(_)
-            | acp::SessionUpdate::ToolCallUpdate(_)
-    )
 }
 
 pub(super) fn plan_review_meta(

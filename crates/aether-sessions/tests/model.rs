@@ -9,6 +9,25 @@ use llm::testing::session_usage_event;
 use llm::{LlmCallPurpose, SessionUsageEvent, TokenUsage};
 
 #[test]
+fn compaction_lifecycle_requires_persisted_ids() {
+    for event in [
+        ContextEvent::CompactionStarted { compaction_id: "operation".into(), message_count: 2 },
+        ContextEvent::CompactionResult {
+            compaction_id: "operation".into(),
+            message_id: "summary".into(),
+            summary: "text".into(),
+            messages_removed: 2,
+        },
+        ContextEvent::CompactionEnded { compaction_id: "operation".into(), outcome: CompactionOutcome::Completed },
+    ] {
+        let mut wire = serde_json::to_value(&event).unwrap();
+        assert_eq!(serde_json::from_value::<ContextEvent>(wire.clone()).unwrap(), event);
+        wire.as_object_mut().unwrap().remove("compaction_id");
+        assert!(serde_json::from_value::<ContextEvent>(wire).is_err());
+    }
+}
+
+#[test]
 fn persisted_event_policy_covers_representative_variants() {
     let retry = SessionEvent::Agent(AgentEvent::Turn(TurnEvent::RetryScheduled {
         purpose: LlmCallPurpose::Chat,
@@ -18,6 +37,7 @@ fn persisted_event_policy_covers_representative_variants() {
     }));
     let cancelled = turn_ended(TurnOutcome::Cancelled);
     let compaction = SessionEvent::Agent(AgentEvent::Context(ContextEvent::CompactionEnded {
+        compaction_id: "compaction".into(),
         outcome: CompactionOutcome::Completed,
     }));
     let partial = SessionEvent::Agent(AgentEvent::text("message", "partial", StreamState::Partial));

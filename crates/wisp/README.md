@@ -1,6 +1,6 @@
 # wisp
 
-A terminal interface for AI coding agents, built on the Agent Client Protocol (ACP).
+A terminal interface for AI coding agents, built on the Agent Client Protocol (ACP) v2.
 
 Wisp launches an ACP-compatible agent as a subprocess, streams markdown responses and tool activity, and provides built-in session management, file attachments, plan review, git review, and settings without leaving the terminal.
 
@@ -12,7 +12,7 @@ wisp                       # launches the default agent ("aether acp")
 wisp --agent "my-agent"    # launches a custom ACP agent
 ```
 
-The `--agent` flag accepts any shell command that speaks ACP over stdio.
+The `--agent` flag accepts any shell command that speaks ACP v2 over stdio.
 
 ## Keybindings
 

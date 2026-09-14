@@ -1,44 +1,33 @@
 use super::error::AcpClientError;
-use super::event::{AcpEvent, ReplayableEvent};
-use crate::notifications::{
-    AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, McpNotification, McpRequest,
-    PromptSearchParams, PromptSearchResponse, SessionPreviewParams, SessionPreviewResponse, SessionUsageParams,
-    SubAgentProgressParams, WorkspaceListParams, WorkspaceListResponse, WorkspaceMoveParams, WorkspaceMoveResponse,
+use super::event::AcpEvent;
+use crate::notifications::{AuthMethodsUpdatedParams, ContextClearedParams, McpNotification, SubAgentProgressParams};
+use agent_client_protocol::schema::v2::{
+    AuthMethod, CancelSessionNotification, CreateElicitationRequest, InitializeRequest, InitializeResponse,
+    NewSessionRequest, NewSessionResponse, PermissionOptionId, PermissionOptionKind, PromptCapabilities, PromptRequest,
+    PromptResponse, ReplayFrom, ReplayFromStart, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, ResumeSessionRequest, ResumeSessionResponse, SelectedPermissionOutcome,
+    SessionCapabilities, UpdateSessionNotification,
 };
-use agent_client_protocol::schema::v1::{
-    AuthMethod, AuthenticateRequest, AuthenticateResponse, CancelNotification, CloseSessionRequest,
-    CloseSessionResponse, CreateElicitationRequest, InitializeRequest, InitializeResponse, ListSessionsRequest,
-    ListSessionsResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
-    PermissionOptionId, PermissionOptionKind, PromptCapabilities, PromptRequest, PromptResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
-    ResumeSessionResponse, SelectedPermissionOutcome, SessionCapabilities, SessionId, SessionNotification,
-    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
+use agent_client_protocol::util::MatchDispatchFrom;
+use agent_client_protocol::{
+    self as acp, Client, ConnectTo, ConnectionTo, Dispatch, HandleDispatchFrom, Handled, V2ConnectionTo,
 };
-use agent_client_protocol::{self as acp, Client, ConnectTo, ConnectionTo, JsonRpcNotification, JsonRpcRequest};
-use std::sync::{Arc, Mutex};
-use tokio::sync::{mpsc, oneshot};
-use tokio_util::sync::CancellationToken;
+use std::future::Future;
+use std::sync::Arc;
+use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::task::JoinHandle;
 use tracing::info;
 
-/// A cloneable handle for issuing typed lifecycle requests and prompt commands.
 #[derive(Clone)]
 pub struct AcpClientHandle {
-    cmd_tx: mpsc::UnboundedSender<ClientCommand>,
+    cx: V2ConnectionTo<acp::Agent>,
     connection: Arc<ClientConnection>,
 }
 
-/// An initialized ACP connection that can create and manage multiple sessions.
 pub struct AcpClient {
     pub initialize_response: InitializeResponse,
     pub event_rx: mpsc::UnboundedReceiver<AcpEvent>,
     pub handle: AcpClientHandle,
-}
-
-/// The result of loading an ACP session, including notifications sent before the response.
-pub struct LoadedSession {
-    pub session_id: SessionId,
-    pub response: LoadSessionResponse,
-    pub replay: Vec<ReplayableEvent>,
 }
 
 /// Connect to an ACP agent and complete initialization without creating a session.
@@ -46,44 +35,28 @@ pub async fn connect_acp_client(
     agent: impl ConnectTo<Client> + 'static,
     init_request: InitializeRequest,
 ) -> Result<AcpClient, AcpClientError> {
-    let (event_tx, event_rx) = mpsc::unbounded_channel::<AcpEvent>();
-    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<ClientCommand>();
-    let (init_tx, init_rx) = oneshot::channel::<InitializeResult>();
-    let init_tx = Arc::new(Mutex::new(Some(init_tx)));
-    let replay_state = Arc::new(Mutex::new(None));
-
-    let connection =
-        Arc::new(ClientConnection { shutdown: CancellationToken::new(), shutdown_complete: CancellationToken::new() });
-
-    let shutdown = connection.shutdown.clone();
-    let stopped = connection.shutdown_complete.clone();
-    tokio::spawn(async move {
-        let _stopped = stopped.drop_guard();
-        run_client_connection(agent, event_tx, cmd_rx, init_tx, init_request, replay_state, shutdown).await;
-    });
-
-    let initialize_response = init_rx
-        .await
-        .map_err(|_| AcpClientError::AgentCrashed("ACP task died during initialization".to_string()))??;
-
-    Ok(AcpClient { initialize_response, event_rx, handle: AcpClientHandle { cmd_tx, connection } })
+    let (event_tx, event_rx) = mpsc::unbounded_channel();
+    let (init_tx, init_rx) = oneshot::channel();
+    let events = ConnectionEvents(event_tx);
+    let driver = tokio::spawn(run_client_connection(agent, init_request, init_tx, events));
+    let connection = Arc::new(ClientConnection { driver: Mutex::new(Some(driver)) });
+    let (initialize_response, cx) = await_response(init_rx).await?;
+    Ok(AcpClient { initialize_response, event_rx, handle: AcpClientHandle { cx, connection } })
 }
 
 impl AcpClient {
     /// The agent's display title, falling back to its implementation name.
     pub fn agent_name(&self) -> String {
-        self.initialize_response
-            .agent_info
-            .as_ref()
-            .map_or_else(|| "agent".to_string(), |info| info.title.as_deref().unwrap_or(&info.name).to_string())
+        let info = &self.initialize_response.info;
+        info.title.as_deref().unwrap_or(&info.name).to_string()
     }
 
-    pub fn prompt_capabilities(&self) -> &PromptCapabilities {
-        &self.initialize_response.agent_capabilities.prompt_capabilities
+    pub fn prompt_capabilities(&self) -> Option<&PromptCapabilities> {
+        self.session_capabilities().and_then(|session| session.prompt.as_ref())
     }
 
-    pub fn session_capabilities(&self) -> &SessionCapabilities {
-        &self.initialize_response.agent_capabilities.session_capabilities
+    pub fn session_capabilities(&self) -> Option<&SessionCapabilities> {
+        self.initialize_response.capabilities.session.as_ref()
     }
 
     pub fn auth_methods(&self) -> &[AuthMethod] {
@@ -92,455 +65,164 @@ impl AcpClient {
 }
 
 impl AcpClientHandle {
-    /// Stop this connection and wait for its transport and response tasks to
-    /// be dropped. Does not send session/cancel or session/close.
+    /// Stop this connection and join its driver without sending session/cancel or session/close.
     pub async fn disconnect(&self) {
-        self.connection.shutdown.cancel();
-        self.connection.shutdown_complete.cancelled().await;
+        let mut driver = self.connection.driver.lock().await;
+        if let Some(task) = driver.as_mut() {
+            task.abort();
+            let _ = task.await;
+        }
+        *driver = None;
     }
 
-    pub async fn prompt(&self, request: PromptRequest) -> Result<PromptResponse, AcpClientError> {
-        let (response, receiver) = oneshot::channel();
-        self.send(ClientCommand::Prompt { request, response })?;
-        await_response(receiver).await
-    }
-
-    /// Load a session.
-    pub async fn load_session(&self, request: LoadSessionRequest) -> Result<LoadSessionResponse, AcpClientError> {
-        let (response, receiver) = oneshot::channel();
-        self.send(ClientCommand::LoadSession { request, response })?;
-        await_response(receiver).await
-    }
-
-    pub async fn new_session(&self, request: NewSessionRequest) -> Result<NewSessionResponse, AcpClientError> {
-        self.request(request, false).await
-    }
-
-    pub async fn list_sessions(&self, request: ListSessionsRequest) -> Result<ListSessionsResponse, AcpClientError> {
-        self.request(request, false).await
-    }
-
-    /// Resume a session without collecting or replaying its prior notifications.
-    pub async fn resume_session(&self, request: ResumeSessionRequest) -> Result<ResumeSessionResponse, AcpClientError> {
-        self.request(request, false).await
-    }
-
-    pub async fn close_session(&self, request: CloseSessionRequest) -> Result<CloseSessionResponse, AcpClientError> {
-        self.request(request, false).await
-    }
-
-    /// Search the agent's prompt history through Aether's ACP extension.
-    pub async fn search_prompts(&self, params: PromptSearchParams) -> Result<PromptSearchResponse, AcpClientError> {
-        self.request(params, false).await
-    }
-
-    /// Load a session preview through Aether's ACP extension.
-    pub async fn preview_session(
+    pub fn prompt(
         &self,
-        params: SessionPreviewParams,
-    ) -> Result<SessionPreviewResponse, AcpClientError> {
-        self.request(params, false).await
+        request: PromptRequest,
+    ) -> impl Future<Output = Result<PromptResponse, AcpClientError>> + Send + use<> {
+        self.request(request)
     }
 
-    /// List workspaces through Aether's ACP extension.
-    pub async fn list_workspaces(&self, params: WorkspaceListParams) -> Result<WorkspaceListResponse, AcpClientError> {
-        self.request(params, false).await
-    }
-
-    /// Move a session through Aether's ACP extension.
-    pub async fn move_workspace(&self, params: WorkspaceMoveParams) -> Result<WorkspaceMoveResponse, AcpClientError> {
-        self.request(params, false).await
-    }
-
-    pub async fn set_config_option(
+    /// Request history as ordinary session updates, preceding the resume response.
+    pub fn resume_session_with_replay(
         &self,
-        request: SetSessionConfigOptionRequest,
-    ) -> Result<SetSessionConfigOptionResponse, AcpClientError> {
-        self.request(request, true).await
+        request: ResumeSessionRequest,
+    ) -> impl Future<Output = Result<ResumeSessionResponse, AcpClientError>> + Send + use<> {
+        self.request(request.replay_from(ReplayFrom::Start(ReplayFromStart::new())))
     }
 
-    pub async fn authenticate(&self, request: AuthenticateRequest) -> Result<AuthenticateResponse, AcpClientError> {
-        self.request(request, true).await
+    pub fn new_session(
+        &self,
+        request: NewSessionRequest,
+    ) -> impl Future<Output = Result<NewSessionResponse, AcpClientError>> + Send + use<> {
+        self.request(request)
     }
 
-    pub async fn cancel(&self, request: CancelNotification) -> Result<(), AcpClientError> {
-        self.notify(request).await
+    /// Send immediately; polling the returned future only waits for the response.
+    pub fn request<R: acp::JsonRpcRequest>(
+        &self,
+        request: R,
+    ) -> impl Future<Output = Result<R::Response, AcpClientError>> + Send + use<R> {
+        let sent = self.cx.send_request(request);
+        async move { sent.block_task().await.map_err(AcpClientError::Protocol) }
     }
 
-    pub async fn authenticate_mcp_server(&self, request: McpRequest) -> Result<(), AcpClientError> {
-        self.notify(request).await
+    /// Resume a session without requesting history.
+    pub fn resume_session(
+        &self,
+        request: ResumeSessionRequest,
+    ) -> impl Future<Output = Result<ResumeSessionResponse, AcpClientError>> + Send + use<> {
+        self.request(request.replay_from(None))
     }
 
-    async fn request<T>(&self, request: T, allow_during_prompt: bool) -> Result<T::Response, AcpClientError>
-    where
-        T: JsonRpcRequest + Send + 'static,
-        T::Response: Send,
-    {
-        let (response, receiver) = oneshot::channel();
-        self.send(ClientCommand::Request {
-            allow_during_prompt,
-            run: Box::new(move |cx| match cx {
-                Ok(cx) => send_typed_response(cx, request, response),
-                Err(error) => {
-                    let _ = response.send(Err(error));
-                }
-            }),
-        })?;
-        await_response(receiver).await
+    pub fn cancel(&self, request: CancelSessionNotification) -> Result<(), AcpClientError> {
+        self.notify(request)
     }
 
-    async fn notify<T>(&self, notification: T) -> Result<(), AcpClientError>
-    where
-        T: JsonRpcNotification + Send + 'static,
-    {
-        let (response, receiver) = oneshot::channel();
-        self.send(ClientCommand::Request {
-            allow_during_prompt: true,
-            run: Box::new(move |cx| {
-                let result = cx.and_then(|cx| cx.send_notification(notification).map_err(AcpClientError::Protocol));
-                let _ = response.send(result);
-            }),
-        })?;
-        await_response(receiver).await
-    }
-
-    fn send(&self, command: ClientCommand) -> Result<(), AcpClientError> {
-        self.cmd_tx.send(command).map_err(|_| AcpClientError::AgentCrashed("ACP task is no longer running".to_string()))
+    pub fn notify(&self, request: impl acp::JsonRpcNotification) -> Result<(), AcpClientError> {
+        self.cx.send_notification(request).map_err(AcpClientError::Protocol)
     }
 }
 
 struct ClientConnection {
-    shutdown: CancellationToken,
-    shutdown_complete: CancellationToken,
+    driver: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Drop for ClientConnection {
     fn drop(&mut self) {
-        self.shutdown.cancel();
-    }
-}
-
-type InitializeResult = Result<InitializeResponse, AcpClientError>;
-type InitializeSender = Arc<Mutex<Option<oneshot::Sender<InitializeResult>>>>;
-type Response<T> = oneshot::Sender<Result<T, AcpClientError>>;
-type RequestFn = Box<dyn FnOnce(Result<&ConnectionTo<acp::Agent>, AcpClientError>) + Send>;
-
-enum ClientCommand {
-    Prompt { request: PromptRequest, response: Response<PromptResponse> },
-    LoadSession { request: LoadSessionRequest, response: Response<LoadSessionResponse> },
-    Request { allow_during_prompt: bool, run: RequestFn },
-}
-
-struct ReplayState {
-    session_id: SessionId,
-    notifications: Vec<ReplayableEvent>,
-}
-
-fn send_replayable_event(
-    event_tx: &mpsc::UnboundedSender<AcpEvent>,
-    replay_state: &Mutex<Option<ReplayState>>,
-    event: ReplayableEvent,
-) {
-    let mut replay = replay_state.lock().expect("replay state lock poisoned");
-    if let Some(capture) = replay.as_mut() {
-        let matches_session = match &event {
-            ReplayableEvent::SessionUpdate(notification) => notification.session_id == capture.session_id,
-            _ => true,
-        };
-        if matches_session {
-            capture.notifications.push(event);
-            return;
+        if let Some(driver) = self.driver.get_mut() {
+            driver.abort();
         }
     }
-    let _ = event_tx.send(event.into());
+}
+
+struct ConnectionEvents(mpsc::UnboundedSender<AcpEvent>);
+
+impl Drop for ConnectionEvents {
+    fn drop(&mut self) {
+        let _ = self.0.send(AcpEvent::ConnectionClosed);
+    }
+}
+
+async fn run_client_connection(
+    agent: impl ConnectTo<Client> + 'static,
+    init_request: InitializeRequest,
+    init_tx: oneshot::Sender<Result<(InitializeResponse, V2ConnectionTo<acp::Agent>), AcpClientError>>,
+    events: ConnectionEvents,
+) {
+    let connection_result = Client
+        .v2()
+        .name("wisp")
+        .with_handler(ClientHandlers(events.0.clone()))
+        .connect_with(agent, async move |cx: V2ConnectionTo<acp::Agent>| {
+            let result = cx.send_request(init_request).block_task().await.map_err(AcpClientError::Protocol);
+            let _ = init_tx.send(result.map(|response| {
+                info!("ACP initialized: protocol={:?}, agent_info={:?}", response.protocol_version, response.info);
+                (response, cx.clone())
+            }));
+            cx.incoming_closed().await;
+            Ok(())
+        })
+        .await;
+    if let Err(error) = connection_result {
+        tracing::warn!("ACP connection exited with error: {error:?}");
+    }
+}
+
+struct ClientHandlers(mpsc::UnboundedSender<AcpEvent>);
+
+impl HandleDispatchFrom<acp::Agent> for ClientHandlers {
+    async fn handle_dispatch_from(
+        &mut self,
+        message: Dispatch,
+        cx: ConnectionTo<acp::Agent>,
+    ) -> Result<Handled<Dispatch>, acp::Error> {
+        let emit = |event| {
+            if let Err(error) = self.0.send(event)
+                && let AcpEvent::ElicitationRequest { responder, .. } = error.0
+            {
+                let _ = responder.respond_with_error(acp::Error::internal_error());
+            }
+            Ok::<_, acp::Error>(())
+        };
+        MatchDispatchFrom::new(message, &cx)
+            .if_request(async |request: RequestPermissionRequest, responder| {
+                let outcome = auto_approve_option(&request).map_or(RequestPermissionOutcome::Cancelled, |option| {
+                    RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option))
+                });
+                let _ = responder.respond(RequestPermissionResponse::new(outcome));
+                Ok(())
+            })
+            .await
+            .if_request(async |params: CreateElicitationRequest, responder| {
+                emit(AcpEvent::ElicitationRequest { params: Box::new(params), responder })
+            })
+            .await
+            .if_notification(async |params: UpdateSessionNotification| emit(params.into()))
+            .await
+            .if_notification(async |params: ContextClearedParams| emit(AcpEvent::ContextCleared(params)))
+            .await
+            .if_notification(async |params: SubAgentProgressParams| emit(AcpEvent::SubAgentProgress(params)))
+            .await
+            .if_notification(async |params: McpNotification| emit(AcpEvent::McpNotification(params)))
+            .await
+            .if_notification(async |params: AuthMethodsUpdatedParams| emit(AcpEvent::AuthMethodsUpdated(params)))
+            .await
+            .done()
+    }
+
+    fn describe_chain(&self) -> impl std::fmt::Debug {
+        "ClientHandlers"
+    }
 }
 
 async fn await_response<T>(receiver: oneshot::Receiver<Result<T, AcpClientError>>) -> Result<T, AcpClientError> {
     receiver.await.map_err(|_| AcpClientError::AgentCrashed("ACP task ended before responding".to_string()))?
 }
 
-#[allow(clippy::too_many_lines)]
-async fn run_client_connection(
-    agent: impl ConnectTo<Client> + 'static,
-    event_tx: mpsc::UnboundedSender<AcpEvent>,
-    mut cmd_rx: mpsc::UnboundedReceiver<ClientCommand>,
-    init_tx: InitializeSender,
-    init_request: InitializeRequest,
-    replay_state: Arc<Mutex<Option<ReplayState>>>,
-    shutdown: CancellationToken,
-) {
-    let connection_result = {
-        let connection = Client
-            .builder()
-            .on_receive_request(
-                async move |req: RequestPermissionRequest, responder, _cx| {
-                    responder.respond(RequestPermissionResponse::new(RequestPermissionOutcome::Selected(
-                        SelectedPermissionOutcome::new(auto_approve_option(&req)),
-                    )))
-                },
-                acp::on_receive_request!(),
-            )
-            .on_receive_request(
-                {
-                    let event_tx = event_tx.clone();
-                    async move |params: CreateElicitationRequest, responder, _cx| {
-                        if let Err(send_err) =
-                            event_tx.send(AcpEvent::ElicitationRequest { params: Box::new(params), responder })
-                            && let AcpEvent::ElicitationRequest { responder, .. } = send_err.0
-                        {
-                            return responder.respond_with_error(acp::Error::internal_error());
-                        }
-                        Ok(())
-                    }
-                },
-                acp::on_receive_request!(),
-            )
-            .on_receive_notification(
-                {
-                    let event_tx = event_tx.clone();
-                    let replay_state = Arc::clone(&replay_state);
-                    async move |notification: SessionNotification, _cx| {
-                        send_replayable_event(&event_tx, &replay_state, notification.into());
-                        Ok(())
-                    }
-                },
-                acp::on_receive_notification!(),
-            )
-            .on_receive_notification(
-                {
-                    let event_tx = event_tx.clone();
-                    let replay_state = Arc::clone(&replay_state);
-                    async move |params: ContextCompactionParams, _cx| {
-                        send_replayable_event(&event_tx, &replay_state, ReplayableEvent::ContextCompaction(params));
-                        Ok(())
-                    }
-                },
-                acp::on_receive_notification!(),
-            )
-            .on_receive_notification(
-                {
-                    let event_tx = event_tx.clone();
-                    let replay_state = Arc::clone(&replay_state);
-                    async move |params: ContextClearedParams, _cx| {
-                        send_replayable_event(&event_tx, &replay_state, ReplayableEvent::ContextCleared(params));
-                        Ok(())
-                    }
-                },
-                acp::on_receive_notification!(),
-            )
-            .on_receive_notification(
-                {
-                    let event_tx = event_tx.clone();
-                    let replay_state = Arc::clone(&replay_state);
-                    async move |params: SubAgentProgressParams, _cx| {
-                        send_replayable_event(
-                            &event_tx,
-                            &replay_state,
-                            ReplayableEvent::SubAgentProgress(Box::new(params)),
-                        );
-                        Ok(())
-                    }
-                },
-                acp::on_receive_notification!(),
-            )
-            .on_receive_notification(
-                {
-                    let event_tx = event_tx.clone();
-                    let replay_state = Arc::clone(&replay_state);
-                    async move |params: SessionUsageParams, _cx| {
-                        send_replayable_event(
-                            &event_tx,
-                            &replay_state,
-                            ReplayableEvent::SessionUsage(Box::new(params)),
-                        );
-                        Ok(())
-                    }
-                },
-                acp::on_receive_notification!(),
-            )
-            .on_receive_notification(
-                {
-                    let event_tx = event_tx.clone();
-                    async move |params: AuthMethodsUpdatedParams, _cx| {
-                        let _ = event_tx.send(AcpEvent::AuthMethodsUpdated(params));
-                        Ok(())
-                    }
-                },
-                acp::on_receive_notification!(),
-            )
-            .on_receive_notification(
-                {
-                    let event_tx = event_tx.clone();
-                    let replay_state = Arc::clone(&replay_state);
-                    async move |params: McpNotification, _cx| {
-                        send_replayable_event(&event_tx, &replay_state, ReplayableEvent::McpNotification(params));
-                        Ok(())
-                    }
-                },
-                acp::on_receive_notification!(),
-            )
-            .connect_with(agent, {
-                let event_tx = event_tx.clone();
-                let init_tx = Arc::clone(&init_tx);
-                async move |cx: ConnectionTo<acp::Agent>| {
-                    run_main(cx, event_tx, &mut cmd_rx, Arc::clone(&init_tx), init_request, replay_state).await;
-                    Ok(())
-                }
-            });
-        tokio::pin!(connection);
-        tokio::select! {
-            result = &mut connection => result,
-            () = shutdown.cancelled() => Ok(()),
-        }
-    };
-
-    if let Err(e) = connection_result {
-        tracing::warn!("ACP connection exited with error: {e:?}");
-        send_initialization(&init_tx, Err(AcpClientError::ConnectFailed(e)));
-    }
-    let _ = event_tx.send(AcpEvent::ConnectionClosed);
-}
-
-async fn run_main(
-    cx: ConnectionTo<acp::Agent>,
-    event_tx: mpsc::UnboundedSender<AcpEvent>,
-    cmd_rx: &mut mpsc::UnboundedReceiver<ClientCommand>,
-    init_tx: InitializeSender,
-    init_request: InitializeRequest,
-    replay_state: Arc<Mutex<Option<ReplayState>>>,
-) {
-    let init_resp = match cx.send_request(init_request).block_task().await {
-        Ok(response) => response,
-        Err(error) => {
-            send_initialization(&init_tx, Err(AcpClientError::Protocol(error)));
-            return;
-        }
-    };
-    info!("ACP initialized: protocol={:?}, agent_info={:?}", init_resp.protocol_version, init_resp.agent_info);
-    if !send_initialization(&init_tx, Ok(init_resp)) {
-        return;
-    }
-
-    while let Some(command) = cmd_rx.recv().await {
-        handle_command(&cx, &event_tx, command, ClientState::Idle, &replay_state, cmd_rx).await;
-    }
-}
-
-async fn run_prompt(
-    cx: &ConnectionTo<acp::Agent>,
-    event_tx: &mpsc::UnboundedSender<AcpEvent>,
-    cmd_rx: &mut mpsc::UnboundedReceiver<ClientCommand>,
-    replay_state: &Arc<Mutex<Option<ReplayState>>>,
-    request: PromptRequest,
-    response: Response<PromptResponse>,
-) {
-    let prompt_fut = cx.send_request(request).block_task();
-    tokio::pin!(prompt_fut);
-
-    loop {
-        tokio::select! {
-            result = &mut prompt_fut => {
-                match result {
-                    Ok(prompt_response) => {
-                        let _ = event_tx.send(AcpEvent::PromptCompleted(prompt_response.stop_reason));
-                        let _ = response.send(Ok(prompt_response));
-                    }
-                    Err(error) => {
-                        let _ = response.send(Err(AcpClientError::Protocol(error)));
-                    }
-                }
-                break;
-            }
-            Some(command) = cmd_rx.recv() => {
-                Box::pin(handle_command(cx, event_tx, command, ClientState::Prompting, replay_state, cmd_rx)).await;
-            }
-            else => break,
-        }
-    }
-}
-
-fn send_initialization(sender: &InitializeSender, result: InitializeResult) -> bool {
-    sender.lock().expect("initialization lock poisoned").take().is_some_and(|sender| sender.send(result).is_ok())
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ClientState {
-    Idle,
-    Prompting,
-}
-
-async fn handle_command(
-    cx: &ConnectionTo<acp::Agent>,
-    event_tx: &mpsc::UnboundedSender<AcpEvent>,
-    command: ClientCommand,
-    state: ClientState,
-    replay_state: &Arc<Mutex<Option<ReplayState>>>,
-    cmd_rx: &mut mpsc::UnboundedReceiver<ClientCommand>,
-) {
-    match command {
-        ClientCommand::Prompt { request, response } => {
-            if state == ClientState::Prompting {
-                let _ = response.send(Err(AcpClientError::Busy));
-            } else {
-                Box::pin(run_prompt(cx, event_tx, cmd_rx, replay_state, request, response)).await;
-            }
-        }
-        ClientCommand::LoadSession { request, response } => {
-            if state == ClientState::Prompting {
-                let _ = response.send(Err(AcpClientError::Busy));
-                return;
-            }
-            let session_id = request.session_id.clone();
-            *replay_state.lock().expect("replay state lock poisoned") =
-                Some(ReplayState { session_id: session_id.clone(), notifications: vec![] });
-            let replay_state = Arc::clone(replay_state);
-            let event_tx = event_tx.clone();
-            let (done_tx, done_rx) = oneshot::channel();
-            let _ = cx.send_request(request).on_receiving_result(move |result| async move {
-                let mut capture = replay_state.lock().expect("replay state lock poisoned");
-                let replay = capture.take().map(|capture| capture.notifications).unwrap_or_default();
-                let result = result.map_err(AcpClientError::Protocol).inspect(|metadata| {
-                    let _ = event_tx.send(AcpEvent::SessionLoaded(LoadedSession {
-                        session_id,
-                        response: metadata.clone(),
-                        replay,
-                    }));
-                });
-                let _ = response.send(result);
-                let _ = done_tx.send(());
-                Ok(())
-            });
-            let _ = done_rx.await;
-        }
-        ClientCommand::Request { allow_during_prompt, run } => {
-            if state == ClientState::Prompting && !allow_during_prompt {
-                run(Err(AcpClientError::Busy));
-            } else {
-                run(Ok(cx));
-            }
-        }
-    }
-}
-
-fn send_typed_response<T: JsonRpcRequest + 'static>(
-    cx: &ConnectionTo<acp::Agent>,
-    request: T,
-    response: Response<T::Response>,
-) {
-    let request = cx.send_request(request).block_task();
-    if let Err(error) = cx.spawn(async move {
-        let result = request.await.map_err(AcpClientError::Protocol);
-        let _ = response.send(result);
-        Ok(())
-    }) {
-        tracing::warn!("failed to spawn ACP request: {error:?}");
-    }
-}
-
-fn auto_approve_option(req: &RequestPermissionRequest) -> PermissionOptionId {
-    debug_assert!(!req.options.is_empty(), "ACP guarantees at least one permission option");
+fn auto_approve_option(req: &RequestPermissionRequest) -> Option<PermissionOptionId> {
     req.options
         .iter()
         .find(|option| matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways))
-        .map_or_else(|| req.options[0].option_id.clone(), |option| option.option_id.clone())
+        .or_else(|| req.options.first())
+        .map(|option| option.option_id.clone())
 }

@@ -34,7 +34,7 @@ use ratatui::Terminal;
 use ratatui::backend::Backend;
 
 use cache::RenderCache;
-use history::{CommitPoint, NativeHistoryCursor};
+use history::NativeHistoryCursor;
 use layout::FrameLayout;
 use stats::Lap;
 pub use stats::RenderStats;
@@ -63,7 +63,6 @@ pub struct Renderer {
     render_cache: RenderCache,
     native_history: NativeHistoryCursor,
     stream_cache: HashMap<ConversationItemId, StreamEntry>,
-    preview_cache: HashMap<ConversationItemId, (crate::conversation::Revision, clankerdiff_ratatui::DiffPreviewState)>,
     stats: RenderStats,
 }
 
@@ -82,7 +81,6 @@ impl Renderer {
             render_cache: RenderCache::default(),
             native_history: NativeHistoryCursor::default(),
             stream_cache: HashMap::new(),
-            preview_cache: HashMap::new(),
             stats: RenderStats::default(),
         }
     }
@@ -115,6 +113,7 @@ impl Renderer {
         terminal.autoresize().map_err(RenderError::Backend)?;
         let area = terminal.get_frame().area();
         self.sync_conversation(app.conversation_id());
+        self.reconcile_history(terminal, app)?;
 
         let lap = Lap::start();
         let layout = FrameLayout::new(area, app, self);
@@ -143,10 +142,9 @@ impl Renderer {
     fn sync_conversation(&mut self, conversation_id: ConversationId) {
         if self.native_history.conversation_id != Some(conversation_id) {
             self.native_history =
-                NativeHistoryCursor { conversation_id: Some(conversation_id), commit: CommitPoint::default() };
+                NativeHistoryCursor { conversation_id: Some(conversation_id), ..NativeHistoryCursor::default() };
             self.render_cache.clear();
             self.stream_cache.clear();
-            self.preview_cache.clear();
         }
     }
 }

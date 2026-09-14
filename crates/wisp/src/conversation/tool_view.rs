@@ -1,6 +1,9 @@
-use crate::view::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
+use crate::view::syntax::SyntaxHighlighter;
 use crate::view::wrap::{as_u16, truncate_to_width, wrap_line};
+use agent_client_protocol::schema::v2 as acp;
+use clankerdiff_ratatui::diff::{RepoPath, parse_git_diff_with_path_mapper};
+use clankerdiff_ratatui::{DiffPreviewOptions, render_diff_preview};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
@@ -19,30 +22,67 @@ pub(crate) fn tool_lines(
     spinner_tick: usize,
     theme: &Theme,
     highlighter: &mut SyntaxHighlighter,
-    preview: Option<&[Line<'static>]>,
 ) -> Vec<Line<'static>> {
     let parsed_command = tool.bash_command();
-    let bash_command = visible_bash_command(parsed_command.as_deref(), tool.display_value.as_deref(), &tool.status);
+    let bash_command = visible_bash_command(parsed_command.as_deref(), tool.display_value(), &tool.status);
     let detail = bash_command.map_or_else(
-        || tool_detail(tool.display_value.as_deref(), &tool.raw_input, &tool.status),
-        |command| bash_tool_detail(command, tool.display_value.as_deref(), &tool.status),
+        || tool_detail(tool.display_value(), &tool.raw_input(), &tool.status),
+        |command| bash_tool_detail(command, tool.display_value(), &tool.status),
     );
     let prefix = Line::from(vec![
         Span::raw(" ".repeat(padding)),
         status_glyph(&tool.status, spinner_tick, theme),
         Span::raw(" "),
-        Span::styled(tool.title.clone(), Style::new().fg(theme.text_primary)),
+        Span::styled(tool.title().to_string(), Style::new().fg(theme.text_primary)),
     ]);
     let suffix = tool_suffix(detail, &tool.status, theme);
     let mut lines = tool_line(prefix, suffix, bash_command, content_width, padding + 2, theme, highlighter);
-    if let Some(preview) = preview {
-        lines.extend(indent_lines(preview.to_vec(), padding));
+    for diff in tool.diffs().filter(|_| tool.status == ToolStatus::Success) {
+        if let Some(patch) = &diff.patch
+            && patch.format == acp::DiffPatchFormat::GitPatch
+        {
+            match parse_git_diff_with_path_mapper(patch.text.as_bytes(), |path| {
+                RepoPath::new(path.strip_prefix('/').unwrap_or(path))
+            }) {
+                Ok(files) => {
+                    for file in files {
+                        lines.extend(indent_lines(
+                            render_diff_preview(
+                                file,
+                                content_width,
+                                theme.review(),
+                                &mut highlighter.inner,
+                                DiffPreviewOptions::default(),
+                            ),
+                            padding,
+                        ));
+                    }
+                }
+                Err(error) => tracing::debug!(%error, "Cannot render tool diff patch"),
+            }
+        } else {
+            for change in &diff.changes {
+                let label = Line::styled(diff_change_label(change), Style::new().fg(theme.muted));
+                lines.extend(indent_lines(wrap_line(label, content_width), padding));
+            }
+        }
     }
     if !tool.sub_agents.is_empty() {
         lines.push(Line::default());
         lines.extend(sub_agent_tree_lines(&tool.sub_agents, content_width, spinner_tick, padding, theme, highlighter));
     }
     lines
+}
+
+fn diff_change_label(change: &acp::DiffChange) -> String {
+    match &change.operation {
+        acp::DiffChangeOperation::Add(change) => format!("A {}", change.path.0.display()),
+        acp::DiffChangeOperation::Delete(change) => format!("D {}", change.path.0.display()),
+        acp::DiffChangeOperation::Modify(change) => format!("M {}", change.path.0.display()),
+        acp::DiffChangeOperation::Move(change) => format!("R {} → {}", change.old_path.0.display(), change.path.0.display()),
+        acp::DiffChangeOperation::Copy(change) => format!("C {} → {}", change.old_path.0.display(), change.path.0.display()),
+        _ => "Unknown file change".into(),
+    }
 }
 
 /// Tree of sub-agents beneath a spawning tool, each with its recent tool calls.
@@ -83,7 +123,7 @@ fn sub_agent_tree_lines(
             let bash_command =
                 visible_bash_command(parsed_command.as_deref(), tool.display_value.as_deref(), &tool.status);
             let detail = bash_command.map_or_else(
-                || tool_detail(tool.display_value.as_deref(), &tool.arguments, &tool.status),
+                || tool_detail(tool.display_value.as_deref(), &tool.raw_input, &tool.status),
                 |command| bash_tool_detail(command, tool.display_value.as_deref(), &tool.status),
             );
             let prefix = Line::from(vec![

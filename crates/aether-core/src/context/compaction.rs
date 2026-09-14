@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio_stream::StreamExt;
 
 use llm::types::IsoString;
-use llm::{ChatMessage, Context, LlmResponse, StreamingModelProvider, TokenUsage};
+use llm::{ChatMessage, Context, LlmResponse, MessageId, StreamingModelProvider, TokenUsage};
 
 const SUMMARIZATION_PROMPT: &str = include_str!("prompts/summarization.md");
 
@@ -73,6 +73,7 @@ impl Compactor {
         let messages_removed = messages_to_summarize.len();
 
         context.add_message(ChatMessage::User {
+            message_id: MessageId::new(),
             content: vec![llm::ContentBlock::text(format!(
                 "{SUMMARIZATION_PROMPT}\n\nPlease perform a structured handoff of the conversation above."
             ))],
@@ -111,8 +112,8 @@ impl Compactor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use llm::ChatMessage;
     use llm::types::IsoString;
+    use llm::{ChatMessage, ContentBlock, MessageId};
 
     #[test]
     fn test_compaction_config_default() {
@@ -131,7 +132,7 @@ mod tests {
         use llm::testing::FakeLlmProvider;
 
         let summary_response = vec![
-            LlmResponse::start("msg-1"),
+            LlmResponse::Start,
             LlmResponse::text(
                 "## Primary Goal\nTest the compaction feature\n\n## Completed Work\n- Wrote initial tests\n\n## File Changes\n- `src/main.rs` — added entry point\n\n## Key Decisions\n- Use structured handoff — preserves context better\n\n## Current State\nRunning compaction tests\n\n## Next Steps\n1. Verify all tests pass\n\n## Open Questions\n(none)\n\n## Constraints\n(none)",
             ),
@@ -145,7 +146,8 @@ mod tests {
             vec![
                 ChatMessage::system("System"),
                 ChatMessage::User {
-                    content: vec![llm::ContentBlock::text("Test message")],
+                    message_id: MessageId::new(),
+                    content: vec![ContentBlock::text("Test message")],
                     timestamp: IsoString::now(),
                 },
             ],
@@ -174,7 +176,11 @@ mod tests {
         let context = Context::new(
             vec![
                 ChatMessage::system("System"),
-                ChatMessage::User { content: vec![llm::ContentBlock::text("Test")], timestamp: IsoString::now() },
+                ChatMessage::User {
+                    message_id: MessageId::new(),
+                    content: vec![ContentBlock::text("Test")],
+                    timestamp: IsoString::now(),
+                },
             ],
             vec![],
         );

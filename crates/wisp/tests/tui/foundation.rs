@@ -38,7 +38,7 @@ fn auth_methods_update_replaces_current_auth_methods() {
     app.acp_event(AcpEvent::AuthMethodsUpdated(AuthMethodsUpdatedParams { auth_methods: updated }));
 
     assert_eq!(app.app().auth_methods().len(), 1);
-    assert_eq!(app.app().auth_methods()[0].id().0.as_ref(), "updated");
+    assert_eq!(app.app().auth_methods()[0].method_id().0.as_ref(), "updated");
 }
 
 #[test]
@@ -140,6 +140,16 @@ fn selected_file_is_sent_as_an_acp_resource_attachment() {
     };
     assert_eq!(text, "@context.txt ");
     assert!(matches!(content.as_deref(), Some([acp::ContentBlock::Resource(_)])));
+    let mut blocks = vec![acp::ContentBlock::from(text)];
+    blocks.extend(content.unwrap());
+    let expanded = acp_utils::content::map_content_blocks_to_text(blocks);
+    assert!(expanded.contains("attached context"), "the model receives the file contents");
+    app.acp_event(session_update(acp::SessionUpdate::UserMessage(
+        acp::UserMessage::new("attached-user").content(vec![acp::ContentBlock::from(expanded)]),
+    )));
+    app.draw();
+    app.assert_viewport_contains("@context.txt");
+    assert!(!app.conversation_text().contains("attached context"));
 }
 
 #[test]
@@ -307,8 +317,15 @@ fn completed_tool_diff_is_themed_and_rendered_once() {
     let text = buffer_text(&conversation);
     assert_eq!(text.matches("old_name").count(), 1);
     assert_eq!(text.matches("new_name").count(), 1);
-    assert!(has_cell(&conversation, "-", |cell| cell.bg == removed_background));
-    assert!(has_cell(&conversation, "+", |cell| cell.bg == added_background));
+    let row_has_background = |row, background| {
+        (conversation.area.left()..conversation.area.right())
+            .filter_map(|x| conversation.cell((x, row)))
+            .any(|cell| cell.bg == background)
+    };
+    let removed_row = row_containing(&conversation, "old_name").expect("rendered removed diff row");
+    let added_row = row_containing(&conversation, "new_name").expect("rendered added diff row");
+    assert!(row_has_background(removed_row, removed_background));
+    assert!(row_has_background(added_row, added_background));
 }
 
 #[test]

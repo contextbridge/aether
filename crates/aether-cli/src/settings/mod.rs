@@ -20,7 +20,7 @@ pub struct SettingsInitArgs {
     #[arg(long, conflicts_with = "project")]
     pub user: bool,
 
-    /// Initialize project-level settings in <path>/.aether.
+    /// Initialize project-level settings in `<path>/.aether`.
     #[arg(long, conflicts_with = "user")]
     pub project: bool,
 

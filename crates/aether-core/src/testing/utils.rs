@@ -70,7 +70,7 @@ impl TestAgentStep {
     }
 
     pub fn user_text(text: impl Into<String>) -> Self {
-        Self::send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text(text.into())] }))
+        Self::send(Command::text(text))
     }
 
     pub fn cancel() -> Self {
@@ -264,7 +264,7 @@ impl TestAgentBuilder {
     }
 
     pub fn user_text(self, text: &str) -> Self {
-        self.commands(vec![Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text(text)] })])
+        self.commands(vec![Command::text(text)])
     }
 
     pub fn llm_responses(mut self, llm_responses: &[Vec<LlmResponse>]) -> Self {

@@ -1,4 +1,4 @@
-use llm::{ChatMessage, ContentBlock, ReasoningEffort, StreamingModelProvider, ToolDefinition};
+use llm::{ChatMessage, ContentBlock, MessageId, ReasoningEffort, StreamingModelProvider, ToolDefinition};
 
 /// The unified command type sent to the agent input channel.
 ///
@@ -16,7 +16,11 @@ impl Command {
     }
 
     pub fn with_content(content: Vec<ContentBlock>) -> Self {
-        Self::UserCommand(UserCommand::Text { content })
+        Self::with_message_id(MessageId::new(), content)
+    }
+
+    pub fn with_message_id(message_id: MessageId, content: Vec<ContentBlock>) -> Self {
+        Self::UserCommand(UserCommand::Text { message_id, content })
     }
 
     pub fn cancel() -> Self {
@@ -34,7 +38,7 @@ impl Command {
 
 /// User-initiated actions that the agent processes as part of normal interaction.
 pub enum UserCommand {
-    Text { content: Vec<ContentBlock> },
+    Text { message_id: MessageId, content: Vec<ContentBlock> },
     Cancel,
     ClearContext,
 }
@@ -42,7 +46,9 @@ pub enum UserCommand {
 impl std::fmt::Debug for UserCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            UserCommand::Text { content } => f.debug_struct("Text").field("content_blocks", &content.len()).finish(),
+            UserCommand::Text { content, .. } => {
+                f.debug_struct("Text").field("content_blocks", &content.len()).finish()
+            }
             UserCommand::Cancel => write!(f, "Cancel"),
             UserCommand::ClearContext => write!(f, "ClearContext"),
         }

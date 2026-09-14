@@ -28,6 +28,9 @@ path = "src/lib.rs"
 name = "aether"
 path = "src/main.rs"
 
+[features]
+testing = ["acp_utils/testing"]
+
 [dependencies]
 aether-auth = { path = "../aether-auth", version = "0.1.14", features = ["keyring"] }
 base64 = { workspace = true }
@@ -40,8 +43,9 @@ mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.
 mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.5.3" }
 wisp = { package = "aether-wisp", path = "../wisp", version = "0.6.3" }
 ratatui = { workspace = true }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["server", "testing"], version = "0.4.3" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["agent"], version = "0.4.3" }
 agent-client-protocol = { workspace = true }
+clankerdiff-core = { workspace = true }
 aether-lspd = { path = "../aether-lspd", version = "0.1.36" }
 rmcp = { workspace = true, features = ["client", "elicitation", "server", "transport-streamable-http-client-reqwest"] }
 thiserror = { workspace = true }
@@ -67,4 +71,5 @@ url = { workspace = true }
 libc = { workspace = true }
 
 [dev-dependencies]
+aether-agent-cli = { path = ".", features = ["testing"] }
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"], version = "0.4.3" }

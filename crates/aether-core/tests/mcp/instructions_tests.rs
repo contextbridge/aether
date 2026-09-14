@@ -68,7 +68,7 @@ async fn test_format_mcp_instructions_is_deterministically_ordered() {
 #[tokio::test]
 async fn test_agent_builder_includes_mcp_instructions_in_system_prompt() -> Result<(), Box<dyn Error>> {
     let result = test_agent()
-        .llm_responses(&[llm_response("message_1").text(&["done"]).build()])
+        .llm_responses(&[llm_response().text(&["done"]).build()])
         .system_prompt(Prompt::text("You are a test agent"))
         .system_prompt(Prompt::McpInstructions(instructions(&[("test-server", "Test instructions")])))
         .user_text("test")
@@ -88,7 +88,7 @@ async fn test_agent_builder_includes_mcp_instructions_in_system_prompt() -> Resu
 #[tokio::test]
 async fn test_agent_builder_works_without_mcp_instructions() -> Result<(), Box<dyn Error>> {
     let result = test_agent()
-        .llm_responses(&[llm_response("message_1").text(&["done"]).build()])
+        .llm_responses(&[llm_response().text(&["done"]).build()])
         .system_prompt(Prompt::text("You are a test agent"))
         .user_text("test")
         .run_with_context()

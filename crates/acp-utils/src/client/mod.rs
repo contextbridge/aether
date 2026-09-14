@@ -1,9 +1,7 @@
 mod error;
 mod event;
 mod session;
-mod tokio_agent;
 
 pub use error::AcpClientError;
-pub use event::{AcpEvent, ReplayableEvent};
-pub use session::{AcpClient, AcpClientHandle, LoadedSession, connect_acp_client};
-pub use tokio_agent::TokioAcpAgent;
+pub use event::AcpEvent;
+pub use session::{AcpClient, AcpClientHandle, connect_acp_client};

@@ -21,12 +21,13 @@ use crate::session::terminal::inline_viewport_height;
 use crate::session::workspace_status::WorkspaceStatus;
 use crate::settings::UiSettings;
 use crate::surfaces::composer::ComposerLayout;
-use acp_utils::AETHER_TOOL_NAME_META_KEY;
 use acp_utils::client::AcpEvent;
 use acp_utils::notifications::{
     AetherCapabilities, SubAgentEvent, SubAgentProgressParams, SubAgentToolRequest, SubAgentToolResult,
 };
-use agent_client_protocol::schema::v1::{self as acp, SessionId};
+use agent_client_protocol::schema::MaybeUndefined;
+use agent_client_protocol::schema::v2::{self as acp, SessionId, SessionUpdate, ToolCallUpdate};
+use clankerdiff_core::git_patch_from_texts;
 use clankerdiff_git::RepositorySnapshot;
 use clankerdiff_watch::RepositoryState;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
@@ -931,14 +932,20 @@ where
     /// after each turn so scrollback commits exactly like a live session.
     pub fn seed_long_history(&mut self, turns: usize) {
         for turn in 0..turns {
-            self.acp_event(user_chunk(&format!(
-                "Turn {turn}: reconcile the writer path in module_{turn} and add a regression test."
+            let prompt = format!("Turn {turn}: reconcile the writer path in module_{turn} and add a regression test.");
+            self.submit(&prompt);
+            self.acp_event(session_update(acp::SessionUpdate::UserMessage(
+                acp::UserMessage::new(format!("seed-user-{turn}"))
+                    .content(vec![acp::ContentBlock::Text(acp::TextContent::new(prompt))]),
             )));
-            self.acp_event(thought_chunk(&format!(
-                "Reading module_{turn} to find the torn-update window before touching any call site."
-            )));
-            self.acp_event(text_chunk(SEED_PROSE));
-            self.acp_event(text_chunk(SEED_CODE_BLOCK));
+            self.acp_event(session_update(acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(
+                acp::ContentBlock::Text(acp::TextContent::new(format!(
+                    "Reading module_{turn} to find the torn-update window before touching any call site."
+                ))),
+                format!("seed-thought-{turn}"),
+            ))));
+            self.acp_event(text_chunk_with_id(&format!("seed-response-{turn}"), SEED_PROSE));
+            self.acp_event(text_chunk_with_id(&format!("seed-response-{turn}"), SEED_CODE_BLOCK));
             let bash = format!("seed-bash-{turn}");
             self.acp_event(seed_bash_tool(&bash));
             self.acp_event(tool_completed(&bash));
@@ -948,7 +955,7 @@ where
             if turn % 8 == 0 {
                 self.seed_sub_agent_tree(turn);
             }
-            self.acp_event(text_chunk(SEED_CLOSING));
+            self.acp_event(text_chunk_with_id(&format!("seed-closing-{turn}"), SEED_CLOSING));
             self.complete_prompt(acp::StopReason::EndTurn);
             self.draw();
         }
@@ -1057,8 +1064,20 @@ where
         self.deliver(Message::Agent(Box::new(event)));
     }
 
+    pub fn begin_resume(&mut self, session_id: &str, cwd: &str) {
+        self.deliver_result(CommandResult::SessionsListed(Ok(acp::ListSessionsResponse::new(vec![
+            acp::SessionInfo::new(session_id.to_string(), cwd),
+        ]))));
+        self.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    }
+
     pub fn complete_prompt(&mut self, stop_reason: acp::StopReason) {
-        self.acp_event(AcpEvent::PromptCompleted(stop_reason));
+        self.deliver_result(CommandResult::Prompt(Ok(acp::PromptResponse::new())));
+        let session_id = self.app.session_id().clone();
+        let update = acp::SessionUpdate::StateUpdate(acp::StateUpdate::Idle(
+            acp::IdleStateUpdate::new().stop_reason(stop_reason),
+        ));
+        self.acp_event(acp::UpdateSessionNotification::new(session_id, update).into());
     }
 
     pub fn tick(&mut self, now: Instant) {
@@ -1400,12 +1419,15 @@ impl TestUiBuilder {
             .clone()
             .unwrap_or_else(|| acp::SessionCapabilities::new().meta(Some(self.capabilities.clone().to_meta())));
         AppConfig {
-            session_id: SessionId::new("test-session"),
-            agent_name: "aether".to_string(),
-            prompt_capabilities: self.prompt_capabilities.clone(),
-            session_capabilities,
-            config_options: self.config_options.clone(),
-            auth_methods: self.auth_methods.clone(),
+            initialize_response: acp::InitializeResponse::new(
+                agent_client_protocol::schema::ProtocolVersion::V2,
+                acp::Implementation::new("aether", "test"),
+            )
+            .capabilities(
+                acp::AgentCapabilities::new().session(session_capabilities.prompt(self.prompt_capabilities.clone())),
+            )
+            .auth_methods(self.auth_methods.clone()),
+            session_response: acp::NewSessionResponse::new("test-session").config_options(self.config_options.clone()),
             workspace_status: self
                 .workspace_status
                 .clone()
@@ -1635,68 +1657,69 @@ fn reconcile(state: &mut State, incoming: Vec<Delta>) -> Outcome {
 ";
 
 pub fn session_update(update: acp::SessionUpdate) -> AcpEvent {
-    AcpEvent::SessionUpdate { session_id: SessionId::new("test-session"), update: Box::new(update) }
+    acp::UpdateSessionNotification::new(SessionId::new("test-session"), update).into()
 }
 
-fn user_chunk(text: &str) -> AcpEvent {
-    session_update(acp::SessionUpdate::UserMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
-        acp::TextContent::new(text),
-    ))))
+pub fn compaction_update(id: &str, status: acp::CompactionStatus) -> AcpEvent {
+    session_update(acp::SessionUpdate::CompactionUpdate(acp::CompactionUpdate::new(id, status)))
 }
 
 pub fn text_chunk(text: &str) -> AcpEvent {
-    session_update(acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
-        acp::TextContent::new(text),
-    ))))
+    text_chunk_with_id("assistant", text)
+}
+
+pub fn text_chunk_with_id(message_id: &str, text: &str) -> AcpEvent {
+    session_update(acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
+        acp::ContentBlock::Text(acp::TextContent::new(text)),
+        message_id.to_string(),
+    )))
 }
 
 pub fn thought_chunk(text: &str) -> AcpEvent {
-    session_update(acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
-        acp::TextContent::new(text),
-    ))))
+    session_update(acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(
+        acp::ContentBlock::Text(acp::TextContent::new(text)),
+        "thought",
+    )))
 }
 
 fn seed_bash_tool(id: &str) -> AcpEvent {
-    let mut tool_call = acp::ToolCall::new(id.to_string(), format!("Run {id}"));
-    tool_call.meta = Some(seed_tool_meta("bash"));
-    tool_call.raw_input = Some(json!({ "command": "cargo test --module writer" }));
-    session_update(acp::SessionUpdate::ToolCall(tool_call))
+    let mut tool_call = ToolCallUpdate::new(id.to_string()).title(format!("Run {id}"));
+    tool_call.name = MaybeUndefined::Value("bash".into());
+    tool_call.raw_input = MaybeUndefined::Value(json!({ "command": "cargo test --module writer" }));
+    session_update(SessionUpdate::ToolCallUpdate(tool_call))
 }
 
 fn seed_edit_tool(id: &str, turn: usize) -> AcpEvent {
-    session_update(acp::SessionUpdate::ToolCall(acp::ToolCall::new(
-        id.to_string(),
-        format!("Editing src/module_{turn}.rs"),
-    )))
+    session_update(SessionUpdate::ToolCallUpdate(
+        ToolCallUpdate::new(id.to_string()).title(format!("Editing src/module_{turn}.rs")),
+    ))
 }
 
 fn seed_spawn_tool(id: &str) -> AcpEvent {
-    let mut tool_call = acp::ToolCall::new(id.to_string(), format!("Spawning sub-agents ({id})"));
-    tool_call.meta = Some(seed_tool_meta("spawn_subagent"));
-    session_update(acp::SessionUpdate::ToolCall(tool_call))
+    let mut tool_call = ToolCallUpdate::new(id.to_string()).title(format!("Spawning sub-agents ({id})"));
+    tool_call.name = MaybeUndefined::Value("spawn_subagent".into());
+    session_update(SessionUpdate::ToolCallUpdate(tool_call))
 }
 
-fn seed_tool_meta(tool_name: &str) -> acp::Meta {
-    let mut meta = serde_json::Map::new();
-    meta.insert(AETHER_TOOL_NAME_META_KEY.to_string(), json!(tool_name));
-    meta
+pub fn text_diff(path: &str, old: &str, new: &str) -> acp::Diff {
+    let diff_text = git_patch_from_texts(path, Some(old), Some(new)).expect("valid text diff");
+    acp::Diff::new(vec![acp::DiffChange::modify(acp::AbsolutePath::new(path))])
+        .with_patch(diff_text.map(acp::DiffPatch::new))
 }
 
 pub fn tool_completed(id: &str) -> AcpEvent {
-    session_update(acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
-        id.to_string(),
-        acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Completed),
-    )))
+    session_update(acp::SessionUpdate::ToolCallUpdate(
+        acp::ToolCallUpdate::new(id.to_string()).status(acp::ToolCallStatus::Completed),
+    ))
 }
 
 fn seed_tool_diff(id: &str, turn: usize) -> AcpEvent {
-    let diff = acp::Diff::new(format!("src/module_{turn}.rs"), SEED_DIFF_AFTER).old_text(SEED_DIFF_BEFORE);
-    session_update(acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
-        id.to_string(),
-        acp::ToolCallUpdateFields::new()
+    let diff = text_diff(&format!("/src/module_{turn}.rs"), SEED_DIFF_BEFORE, SEED_DIFF_AFTER);
+    session_update(acp::SessionUpdate::ToolCallUpdate(
+        acp::ToolCallUpdate::new(id.to_string())
             .content(vec![acp::ToolCallContent::Diff(diff)])
             .status(acp::ToolCallStatus::Completed),
-    )))
+    ))
 }
 
 fn seed_sub_agent(parent: &str, task: &str, agent: &str, event: SubAgentEvent) -> AcpEvent {

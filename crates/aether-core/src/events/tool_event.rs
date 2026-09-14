@@ -1,6 +1,6 @@
 use super::SubAgentProgressPayload;
 use llm::types::IsoString;
-use llm::{ChatMessage, ContentBlock, ToolCallError, ToolCallRequest, ToolCallResult, ToolDefinition};
+use llm::{ChatMessage, ContentBlock, MessageId, ToolCallError, ToolCallRequest, ToolCallResult, ToolDefinition};
 use mcp_utils::display_meta::ToolResultMeta;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -76,16 +76,21 @@ pub enum TaskOutcomeState {
 
 impl TaskOutcome {
     pub fn context_message(&self) -> ChatMessage {
-        ChatMessage::User { content: self.content_blocks(), timestamp: IsoString::now() }
+        let (status, body) = self.status_body();
+        task_result_message(&self.request, &self.task_id, status, body)
     }
 
     pub fn content_blocks(&self) -> Vec<ContentBlock> {
-        let (status, body) = match &self.state {
+        let (status, body) = self.status_body();
+        task_result_content(&self.request, &self.task_id, status, body)
+    }
+
+    fn status_body(&self) -> (&str, &str) {
+        match &self.state {
             TaskOutcomeState::Completed { result, .. } => ("completed", result.result.as_str()),
             TaskOutcomeState::Failed { error } => ("failed", error.error.as_str()),
             TaskOutcomeState::Cancelled => ("cancelled", TASK_CANCELLED_BODY),
-        };
-        task_result_content(&self.request, &self.task_id, status, body)
+        }
     }
 }
 
@@ -116,7 +121,11 @@ pub fn task_created_result(request: &ToolCallRequest, task_id: &str) -> ToolCall
 const TASK_CANCELLED_BODY: &str = "The background task was cancelled and will not produce a result.";
 
 fn task_result_message(request: &ToolCallRequest, task_id: &str, status: &str, body: &str) -> ChatMessage {
-    ChatMessage::User { content: task_result_content(request, task_id, status, body), timestamp: IsoString::now() }
+    ChatMessage::User {
+        message_id: MessageId::task_result(task_id),
+        content: task_result_content(request, task_id, status, body),
+        timestamp: IsoString::now(),
+    }
 }
 
 fn task_result_content(request: &ToolCallRequest, task_id: &str, status: &str, body: &str) -> Vec<ContentBlock> {

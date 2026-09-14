@@ -44,8 +44,7 @@ pub fn process_bedrock_stream(
     mut receiver: EventReceiver<ConverseStreamOutput, ConverseStreamOutputError>,
 ) -> impl Stream<Item = crate::Result<LlmResponse>> + Send {
     async_stream::stream! {
-        let message_id = uuid::Uuid::new_v4().to_string();
-        yield Ok(LlmResponse::Start { message_id });
+        yield Ok(LlmResponse::Start);
 
         let mut active_tool_calls: HashMap<i32, PendingToolCall> = HashMap::new();
         let mut last_stop_reason: Option<StopReason> = None;

@@ -2,7 +2,7 @@ use acp_utils::config_meta::{ConfigOptionMeta, SelectOptionMeta};
 use acp_utils::config_option_id::ConfigOptionId;
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::AgentSpec;
-use agent_client_protocol::schema::v1::{self as acp, SessionConfigOption, SessionConfigOptionCategory};
+use agent_client_protocol::schema::v2::{self as acp, SessionConfigOption, SessionConfigOptionCategory};
 use llm::ReasoningEffort;
 use llm::catalog::{LlmModel, ModelSpec};
 use std::collections::{BTreeMap, HashSet};
@@ -158,6 +158,7 @@ impl Deref for Modes {
 }
 
 impl Modes {
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn new(modes: Vec<ValidatedMode>) -> Self {
         Self(modes)
     }
@@ -252,7 +253,7 @@ mod tests {
     use super::*;
     use aether_auth::FakeOAuthCredentialStore;
     use aether_core::agent_spec::AgentSpecExposure;
-    use agent_client_protocol::schema::v1::{SessionConfigKind, SessionConfigSelectOption, SessionConfigSelectOptions};
+    use agent_client_protocol::schema::v2::{SessionConfigKind, SessionConfigSelectOption, SessionConfigSelectOptions};
     use llm::catalog::{AnthropicModel, BedrockFoundationModel, BedrockModel, DeepSeekModel, GeminiModel};
     use mcp_utils::client::ToolFilter;
 
@@ -311,11 +312,11 @@ mod tests {
     }
 
     fn has_option_id(opts: &[SessionConfigOption], id: &str) -> bool {
-        opts.iter().any(|o| o.id.0.as_ref() == id)
+        opts.iter().any(|o| o.config_id.0.as_ref() == id)
     }
 
     fn find_option<'a>(opts: &'a [SessionConfigOption], id: &str) -> &'a SessionConfigOption {
-        opts.iter().find(|o| o.id.0.as_ref() == id).unwrap_or_else(|| panic!("option '{id}' not found"))
+        opts.iter().find(|o| o.config_id.0.as_ref() == id).unwrap_or_else(|| panic!("option '{id}' not found"))
     }
 
     fn fake_store() -> FakeOAuthCredentialStore {

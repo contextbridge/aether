@@ -1,14 +1,14 @@
-pub(crate) use acp_utils::client::{AcpEvent, LoadedSession};
+pub(crate) use acp_utils::client::AcpEvent;
 pub(crate) use acp_utils::config_meta::SelectOptionMeta;
 pub(crate) use acp_utils::config_option_id::ConfigOptionId;
 pub(crate) use acp_utils::notifications::{
-    AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, McpNotification, McpServerAuthCapability,
-    McpServerStatus, McpServerStatusEntry, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn,
-    SubAgentEvent, SubAgentProgressParams, SubAgentToolRequest, SubAgentToolResult, WorkspaceEntry,
-    WorkspaceListResponse, WorkspaceMoveResponse,
+    AuthMethodsUpdatedParams, ContextClearedParams, McpNotification, McpServerAuthCapability, McpServerStatus,
+    McpServerStatusEntry, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn, SubAgentEvent,
+    SubAgentProgressParams, SubAgentToolRequest, SubAgentToolResult, WorkspaceEntry, WorkspaceListResponse,
+    WorkspaceMoveResponse,
 };
 pub(crate) use acp_utils::testing::test_connection;
-pub(crate) use agent_client_protocol::schema::v1::{
+pub(crate) use agent_client_protocol::schema::v2::{
     self as acp, BooleanPropertySchema, CreateElicitationRequest, CreateElicitationResponse, ElicitationAction,
     ElicitationFormMode, ElicitationSchema, ElicitationSessionScope, ElicitationUrlMode, SessionId,
     StringPropertySchema,
@@ -23,12 +23,12 @@ pub(crate) use std::sync::Arc;
 pub(crate) use std::time::{Duration, Instant};
 pub(crate) use tempfile::TempDir;
 pub(crate) use tokio::task::LocalSet;
-pub(crate) use wisp::app::WorkspaceMoveState;
-pub(crate) use wisp::command::{AgentCommand, Command, CommandResult, FailedCommand, FilesystemCommand};
+pub(crate) use wisp::app::ForegroundOperation;
+pub(crate) use wisp::command::{AgentCommand, Command, CommandResult, FilesystemCommand};
 pub(crate) use wisp::testing::{
     BackendEvent, CountingBackend, FakeGit, RecordingBackend, StreamContent, TestUi, TestUiBuilder, assert_buffer_eq,
-    buffer_text, chunk_message, has_cell, line_text, row_containing, row_text, rows_with_background, session_update,
-    text_chunk, thought_chunk, tool_completed,
+    buffer_text, chunk_message, compaction_update, has_cell, line_text, row_containing, row_text, rows_with_background,
+    session_update, text_chunk, thought_chunk, tool_completed,
 };
 
 pub(crate) use wisp::attachment::{AttachmentKind, PromptAttachment, build_attachments, classify_attachment};
@@ -178,7 +178,7 @@ pub(crate) fn ctrl(c: char) -> KeyEvent {
 }
 
 pub(crate) fn tool_call(id: &str, title: &str) -> AcpEvent {
-    session_update(acp::SessionUpdate::ToolCall(acp::ToolCall::new(id.to_string(), title)))
+    session_update(acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(id.to_string()).title(title)))
 }
 
 pub(crate) fn tool_completed_with_diff(id: &str) -> AcpEvent {
@@ -186,13 +186,12 @@ pub(crate) fn tool_completed_with_diff(id: &str) -> AcpEvent {
 }
 
 pub(crate) fn tool_completed_with_diff_contents(id: &str, old: &str, new: &str) -> AcpEvent {
-    let diff = acp::Diff::new("src/main.rs", new).old_text(old);
-    session_update(acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
-        id.to_string(),
-        acp::ToolCallUpdateFields::new()
+    let diff = wisp::testing::text_diff("/src/main.rs", old, new);
+    session_update(acp::SessionUpdate::ToolCallUpdate(
+        acp::ToolCallUpdate::new(id.to_string())
             .content(vec![acp::ToolCallContent::Diff(diff)])
             .status(acp::ToolCallStatus::Completed),
-    )))
+    ))
 }
 
 /// Renders the composer's completion list and reports whether `needle` shows up.
@@ -215,21 +214,20 @@ pub(crate) fn session_info(id: &str, cwd: &str, title: &str, updated_at: &str) -
 }
 
 pub(crate) fn sessions_listed(sessions: Vec<acp::SessionInfo>) -> CommandResult {
-    CommandResult::SessionsListed(acp::ListSessionsResponse::new(sessions))
+    CommandResult::SessionsListed(Ok(acp::ListSessionsResponse::new(sessions)))
 }
 
-pub(crate) fn session_loaded(session_id: &str, config_options: Vec<acp::SessionConfigOption>) -> AcpEvent {
-    AcpEvent::SessionLoaded(LoadedSession {
+pub(crate) fn session_loaded(session_id: &str, config_options: Vec<acp::SessionConfigOption>) -> CommandResult {
+    CommandResult::ResumeSession {
         session_id: SessionId::new(session_id),
-        response: acp::LoadSessionResponse::new().config_options(config_options),
-        replay: Vec::new(),
-    })
+        result: Ok(acp::ResumeSessionResponse::default().config_options(config_options)),
+    }
 }
 
 pub(crate) fn new_session_created(session_id: &str, config_options: Vec<acp::SessionConfigOption>) -> CommandResult {
-    CommandResult::NewSessionCreated(
-        acp::NewSessionResponse::new(SessionId::new(session_id)).config_options(config_options),
-    )
+    CommandResult::NewSession(Ok(
+        acp::NewSessionResponse::new(SessionId::new(session_id)).config_options(config_options)
+    ))
 }
 
 pub(crate) fn session_preview_response(session_id: &str) -> SessionPreviewResponse {
@@ -249,11 +247,13 @@ pub(crate) fn session_preview_response(session_id: &str) -> SessionPreviewRespon
 }
 
 pub(crate) fn session_update_for(session_id: &str, update: acp::SessionUpdate) -> AcpEvent {
-    AcpEvent::SessionUpdate { session_id: SessionId::new(session_id), update: Box::new(update) }
+    acp::UpdateSessionNotification::new(SessionId::new(session_id), update).into()
 }
 
 pub(crate) fn user_message_chunk(text: &str) -> acp::SessionUpdate {
-    acp::SessionUpdate::UserMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new(text))))
+    acp::SessionUpdate::UserMessage(
+        acp::UserMessage::new("user-message").content(vec![acp::ContentBlock::Text(acp::TextContent::new(text))]),
+    )
 }
 
 pub(crate) fn make_app_with_session_preview() -> TestUi {
@@ -269,25 +269,25 @@ pub(crate) fn workspace_entry(path: &str, is_current: bool) -> WorkspaceEntry {
 }
 
 pub(crate) fn workspaces_listed(workspaces: Vec<WorkspaceEntry>) -> CommandResult {
-    CommandResult::WorkspacesListed(WorkspaceListResponse { workspaces })
+    CommandResult::WorkspacesListed(Ok(WorkspaceListResponse { workspaces }))
 }
 
 pub(crate) fn workspace_list_failed(error: &str) -> CommandResult {
-    CommandResult::WorkspaceListFailed { error: error.to_string() }
+    CommandResult::WorkspacesListed(Err(error.to_string()))
 }
 
 pub(crate) fn workspace_moved(new_cwd: &str) -> CommandResult {
-    CommandResult::WorkspaceMoved(WorkspaceMoveResponse { new_cwd: std::path::PathBuf::from(new_cwd) })
+    CommandResult::WorkspaceMoved(Ok(WorkspaceMoveResponse { new_cwd: std::path::PathBuf::from(new_cwd) }))
 }
 
 pub(crate) fn workspace_move_failed(error: &str) -> CommandResult {
-    CommandResult::WorkspaceMoveFailed { error: error.to_string() }
+    CommandResult::WorkspaceMoved(Err(error.to_string()))
 }
 
 pub(crate) fn prompt_failed(error: &str) -> CommandResult {
-    CommandResult::Failed { command: FailedCommand::Prompt, error: error.to_string() }
+    CommandResult::Prompt(Err(error.to_string()))
 }
 
 pub(crate) fn session_load_failed(error: &str) -> CommandResult {
-    CommandResult::Failed { command: FailedCommand::LoadSession, error: error.to_string() }
+    CommandResult::ResumeSession { session_id: "test-session".into(), result: Err(error.to_string()) }
 }

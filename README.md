@@ -41,7 +41,7 @@ Aether takes a different approach. Agents begin as blank slates with _no_ system
 - **Your Model**: Anthropic, OpenAI, OpenRouter, DeepSeek, Fireworks AI, Gemini, Microsoft Foundry, Moonshot, ZAI, Llama.cpp, and Ollama are [supported out of the box](https://aether-agent.io/aether/configuration/llm-providers/). Bring your own provider via the `StreamingModelProvider` trait, or [alloy models together](https://aether-agent.io/aether/configuration/llm-providers/#alloying) to combine their strengths.
 - **Your Interface**: 
   - **TUI**: Aether's TUI supports syntax highlighting, PR-style comments on git diffs to give feedback to your agent, custom themes and more.
-  - **IDE/Editor**: Aether is an [ACP](https://agentclientprotocol.com/get-started/introduction) agent, so you can use it with any client that supports ACP (e.g. Zed).
+  - **IDE/Editor**: Aether is an [ACP v2](https://agentclientprotocol.com/protocol/v2/migration) agent. Editor clients must support the draft v2 protocol; v1-only clients are not compatible.
   - **Headless**: Aether can be run as a headless agent that streams structured JSON logs.
   - **Rust library**: Aether can also be used as a Rust library to build agentic applications.
   

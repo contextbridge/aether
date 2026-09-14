@@ -3,7 +3,7 @@ use acp_utils::notifications::{
 };
 use aether_cli::acp::testing::AcpTestHarness;
 use aether_cli::workspace::testing::{clone_repo, git, git_status, init_repo};
-use agent_client_protocol::schema::v1::ListSessionsRequest;
+use agent_client_protocol::schema::v2::ListSessionsRequest;
 use std::fs;
 use std::future::Future;
 use tokio::task::LocalSet;
@@ -51,7 +51,7 @@ async fn workspace_move_to_new_sibling_clones_changes_and_resets_source() {
         let sessions =
             harness.client_cx.send_request(ListSessionsRequest::new()).block_task().await.expect("list sessions");
         let session = sessions.sessions.iter().find(|s| s.session_id.0.as_ref() == "s1").expect("session exists");
-        assert_eq!(session.cwd, response.new_cwd);
+        assert_eq!(session.cwd.0, response.new_cwd);
     })
     .await;
 }
@@ -94,7 +94,7 @@ async fn workspace_move_to_existing_target_on_different_head_fails_actionably() 
             .await
             .expect_err("move should fail");
 
-        assert!(error.message.contains("different commit"), "unexpected error: {}", error.message);
+        assert!(error.to_string().contains("different commit"), "unexpected error: {error}");
         assert_eq!(fs::read_to_string(repo.join("committed.txt")).unwrap(), "edited\n");
     })
     .await;
@@ -115,7 +115,7 @@ async fn workspace_move_to_dirty_target_fails_and_leaves_source_untouched() {
             .await
             .expect_err("move should fail");
 
-        assert!(error.message.contains("uncommitted changes"), "unexpected error: {}", error.message);
+        assert!(error.to_string().contains("uncommitted changes"), "unexpected error: {error}");
         assert_eq!(fs::read_to_string(repo.join("committed.txt")).unwrap(), "edited\n");
     })
     .await;
@@ -133,7 +133,7 @@ async fn workspace_move_rejects_workspace_from_different_repository() {
             .await
             .expect_err("move should fail");
 
-        assert!(error.message.contains("different repository"), "unexpected error: {}", error.message);
+        assert!(error.to_string().contains("different repository"), "unexpected error: {error}");
     })
     .await;
 }

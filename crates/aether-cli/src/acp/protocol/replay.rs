@@ -1,121 +1,110 @@
-use acp_utils::server::AcpServerError;
+use crate::acp::session::actor::SessionIo;
+use aether_core::events::{AgentEvent, CompactionId, ContextEvent};
 use aether_sessions::{SessionEvent, UserEvent};
-use agent_client_protocol::schema::v1::{ContentChunk, SessionId, SessionNotification, SessionUpdate};
-use agent_client_protocol::{Client, ConnectionTo};
+use agent_client_protocol::schema::v2::{CompactionStatus, CompactionUpdate, SessionUpdate};
+use std::collections::HashMap;
 
-use super::content::map_user_content_block;
-use super::events::{NotificationMode, map_agent_event_to_notification};
+use super::content::map_user_message;
+use super::events::{NotificationMode, map_agent_event_to_notification, project_agent_event};
 
-/// Replay session events to the client as ACP notifications.
-pub async fn replay_to_client(events: &[SessionEvent], connection: &ConnectionTo<Client>, session_id: &SessionId) {
-    for event in events {
-        for notif in map_session_event_to_notifications(event, session_id) {
-            if let Err(e) =
-                connection.send_notification(notif).map_err(|e| AcpServerError::protocol("session/update", e))
+pub(crate) fn replay_to_client(events: &[SessionEvent], io: &SessionIo) {
+    let mut compactions: HashMap<&CompactionId, (usize, Option<CompactionUpdate>)> = HashMap::new();
+    for (position, event) in events.iter().enumerate() {
+        if let Some(id) = compaction_id(event) {
+            let entry = compactions.entry(id).or_insert((position, None));
+            if let SessionEvent::Agent(message) = event
+                && let Some(SessionUpdate::CompactionUpdate(update)) =
+                    map_agent_event_to_notification(message, NotificationMode::Replay)
+                && matches!(
+                    update.status,
+                    CompactionStatus::Completed | CompactionStatus::Failed | CompactionStatus::Cancelled
+                )
             {
-                tracing::error!("Failed to send replay notification: {e:?}");
+                entry.1 = Some(update);
             }
         }
     }
-}
-
-pub fn map_session_event_to_notifications(event: &SessionEvent, session_id: &SessionId) -> Vec<SessionNotification> {
-    match event {
-        SessionEvent::User(UserEvent::Message { content }) => content
-            .iter()
-            .map(|block| {
-                SessionNotification::new(
-                    session_id.clone(),
-                    SessionUpdate::UserMessageChunk(ContentChunk::new(map_user_content_block(block))),
-                )
-            })
-            .collect(),
-        SessionEvent::Agent(message) => {
-            map_agent_event_to_notification(session_id.clone(), message, NotificationMode::Replay).into_iter().collect()
+    for (position, event) in events.iter().enumerate() {
+        if let Some(id) = compaction_id(event) {
+            if let Some((first, update)) = compactions.get_mut(id)
+                && *first == position
+                && let Some(update) = update.take()
+            {
+                io.send_update(SessionUpdate::CompactionUpdate(update));
+            }
+            continue;
         }
-        SessionEvent::User(_) | SessionEvent::Control(_) => Vec::new(),
+        match event {
+            SessionEvent::User(UserEvent::Message { message_id, content, display_content }) => {
+                io.send_update(SessionUpdate::UserMessage(map_user_message(
+                    message_id.as_str().into(),
+                    display_content.as_deref().unwrap_or(content),
+                )));
+            }
+            SessionEvent::Agent(message) => project_agent_event(message, NotificationMode::Replay, io),
+            SessionEvent::User(_) | SessionEvent::Control(_) => {}
+        }
     }
 }
 
-#[cfg(test)]
-pub fn map_session_events_to_notifications(
-    events: &[SessionEvent],
-    session_id: &SessionId,
-) -> Vec<SessionNotification> {
-    events.iter().flat_map(|event| map_session_event_to_notifications(event, session_id)).collect()
+fn compaction_id(event: &SessionEvent) -> Option<&CompactionId> {
+    match event {
+        SessionEvent::Agent(AgentEvent::Context(
+            ContextEvent::CompactionStarted { compaction_id, .. }
+            | ContextEvent::CompactionResult { compaction_id, .. }
+            | ContextEvent::CompactionEnded { compaction_id, .. },
+        )) => Some(compaction_id),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v1 as acp;
+    use aether_core::events::{AgentEvent, MessageEvent};
+    use agent_client_protocol::schema::v2::{self as acp, SessionId};
 
-    #[test]
-    fn replay_emits_user_media_chunks_in_order() {
-        let session_id = acp::SessionId::new("test-session");
-        let events = vec![SessionEvent::User(UserEvent::Message {
-            content: vec![
-                llm::ContentBlock::text("hello"),
-                llm::ContentBlock::Image { data: "aW1n".to_string(), mime_type: "image/png".to_string() },
-                llm::ContentBlock::Audio { data: "YXVkaW8=".to_string(), mime_type: "audio/wav".to_string() },
-            ],
-        })];
-
-        let notifications = map_session_events_to_notifications(&events, &session_id);
-        let updates: Vec<_> = notifications.into_iter().map(|n| n.update).collect();
-        assert!(matches!(
-            &updates[0],
-            acp::SessionUpdate::UserMessageChunk(chunk)
-                if matches!(&chunk.content, acp::ContentBlock::Text(text) if text.text == "hello")
-        ));
-        assert!(matches!(
-            &updates[1],
-            acp::SessionUpdate::UserMessageChunk(chunk)
-                if matches!(&chunk.content, acp::ContentBlock::Image(_))
-        ));
-        assert!(matches!(
-            &updates[2],
-            acp::SessionUpdate::UserMessageChunk(chunk)
-                if matches!(&chunk.content, acp::ContentBlock::Audio(_))
-        ));
-    }
-
-    #[test]
-    fn replay_ignores_control_events() {
-        use aether_sessions::SessionControlEvent;
-
-        let session_id = acp::SessionId::new("test-session");
-        let events = vec![SessionEvent::Control(SessionControlEvent::AgentSwitched {
-            from: Some("Planner".to_string()),
-            to: Some("Coder".to_string()),
-        })];
-
-        let notifications = map_session_events_to_notifications(&events, &session_id);
-        assert!(notifications.is_empty());
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn replay_to_client_forwards_each_event_as_session_notification() {
-        use acp_utils::testing::test_connection;
-        use llm::ContentBlock as LlmContentBlock;
-        use tokio::task::LocalSet;
-
-        LocalSet::new()
-            .run_until(async {
-                let (cx, mut peer) = test_connection().await;
-                let session_id = acp::SessionId::new("test-session");
-                let events = vec![SessionEvent::User(UserEvent::Message {
-                    content: vec![LlmContentBlock::text("hello"), LlmContentBlock::text("world")],
-                })];
-
-                replay_to_client(&events, &cx, &session_id).await;
-
-                for _ in 0..2 {
-                    let notif = peer.next_session_notification().await;
-                    assert_eq!(notif.session_id, session_id);
-                    assert!(matches!(notif.update, SessionUpdate::UserMessageChunk(_)));
-                }
-            })
-            .await;
+    #[tokio::test]
+    async fn replay_preserves_message_identity_and_media_without_chunks_or_controls() {
+        tokio::task::LocalSet::new().run_until(async {
+            let (cx, mut peer) = acp_utils::testing::test_connection().await;
+            let session_id = SessionId::new("test");
+            let io = SessionIo::new(cx, session_id.clone());
+            let events = vec![
+                SessionEvent::User(UserEvent::Message {
+                    message_id: "user".into(),
+                    display_content: None,
+                    content: vec![
+                        llm::ContentBlock::text("hello"),
+                        llm::ContentBlock::Image { data: "aW1n".into(), mime_type: "image/png".into() },
+                        llm::ContentBlock::Audio { data: "YXVkaW8=".into(), mime_type: "audio/wav".into() },
+                    ],
+                }),
+                SessionEvent::Control(aether_sessions::SessionControlEvent::AgentSwitched {
+                    from: Some("Planner".into()), to: Some("Coder".into()),
+                }),
+                SessionEvent::Agent(AgentEvent::Message(MessageEvent::Text {
+                    message_id: "original".into(), chunk: "reply".into(), is_complete: false,
+                })),
+                SessionEvent::Agent(AgentEvent::Message(MessageEvent::Text {
+                    message_id: "original".into(), chunk: "reply".into(), is_complete: true,
+                })),
+            ];
+            for _ in 0..2 {
+                replay_to_client(&events, &io);
+                let first = peer.next_session_notification().await;
+                assert_eq!(first.session_id, session_id);
+                let SessionUpdate::UserMessage(message) = first.update else { panic!("expected user upsert") };
+                assert_eq!(message.message_id.0.as_ref(), "user");
+                let content = message.content.value().unwrap();
+                assert!(matches!(&content[0], acp::ContentBlock::Text(text) if text.text == "hello"));
+                assert!(matches!(&content[1], acp::ContentBlock::Image(_)));
+                assert!(matches!(&content[2], acp::ContentBlock::Audio(_)));
+                let second = peer.next_session_notification().await;
+                let SessionUpdate::AgentMessage(message) = second.update else { panic!("expected whole message") };
+                assert_eq!(message.message_id.0.as_ref(), "original");
+                assert!(matches!(&message.content.value().unwrap()[0], acp::ContentBlock::Text(text) if text.text == "reply"));
+            }
+        }).await;
     }
 }

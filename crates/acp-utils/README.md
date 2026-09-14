@@ -10,7 +10,6 @@ Utilities for the [Agent Client Protocol](https://agentclientprotocol.com/) (ACP
 - [Key Types](#key-types)
 - [Feature Flags](#feature-flags)
 - [WebSocket transport](#websocket-transport)
-- [Ordered session loading](#ordered-session-loading)
 - [License](#license)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -18,17 +17,20 @@ Utilities for the [Agent Client Protocol](https://agentclientprotocol.com/) (ACP
 ## Key Types
 
 - **`elicitation`** -- Typed conversion between MCP elicitation and native ACP `elicitation/create` messages
-- **`ContextUsageParams`** -- Token usage tracking notifications
+- **`SessionUsageParams`** -- Token usage tracking notifications
 - **`McpNotification` / `McpRequest`** -- MCP message tunneling over ACP
 - **`TokioAcpAgent`** -- Tokio-native ACP transport
+- **`AcpClientHandle`** -- Initialized, cloneable client for typed ACP v2 requests
+- **`AcpEvent`** -- Ordered notifications, including replay updates sent before the resume response
 
 ## Feature Flags
 
 | Feature | Description | Default |
 |---------|-------------|---------|
 | `client` | ACP client (for UIs connecting to agents) | yes |
-| `server` | ACP server (for agents accepting connections) | yes |
+| `agent` | Tokio-native agent subprocess and Unix stdio transports | no |
 | `websocket` | Message-oriented WebSocket transport | no |
+| `testing` | Public in-memory ACP test peers and transport helpers (enables `client`) | no |
 
 ## WebSocket transport
 

@@ -1,14 +1,15 @@
 #![cfg(feature = "websocket")]
 
 use acp_utils::client::{AcpEvent, connect_acp_client};
+use acp_utils::testing::{idle_notification, initialize_request, initialize_response, running_notification};
 use acp_utils::websocket::WebSocketTransport;
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::schema::v2::{
     ContentBlock, ContentChunk, CreateElicitationRequest, CreateElicitationResponse, ElicitationAction,
-    ElicitationFormMode, ElicitationSchema, ElicitationSessionScope, InitializeRequest, InitializeResponse,
-    PromptRequest, PromptResponse, SessionNotification, SessionUpdate, StopReason, TextContent,
+    ElicitationFormMode, ElicitationSchema, ElicitationSessionScope, InitializeRequest, PromptRequest, PromptResponse,
+    SessionUpdate, StateUpdate, StopReason, TextContent, UpdateSessionNotification,
 };
-use agent_client_protocol::{self as acp, Agent, Builder, Client, HandleDispatchFrom, NullRun};
+use agent_client_protocol::{self as acp, Agent, Client, HandleDispatchFrom, NullRun, V2Builder};
 use futures::{SinkExt, StreamExt};
 use tokio::io::{DuplexStream, duplex};
 use tokio::net::TcpListener;
@@ -33,23 +34,27 @@ async fn acp_over_websocket_with_elicitation() -> Result<(), TestError> {
             let (server, client) = SocketPairBuilder::default().build().await;
             let agent = streaming_elicitation_agent(&["hello ", "world"]);
             let server_task = spawn_local(agent.connect_to(WebSocketTransport::new(server)));
-            let mut client =
-                connect_acp_client(WebSocketTransport::new(client), InitializeRequest::new(ProtocolVersion::V1))
-                    .await?;
+            let mut client = connect_acp_client(WebSocketTransport::new(client), initialize_request()).await?;
 
             let handle = client.handle.clone();
             let prompt = spawn_local(async move {
                 handle.prompt(PromptRequest::new("session", vec![ContentBlock::Text(TextContent::new("hi"))])).await
             });
 
+            let Some(AcpEvent::SessionUpdate(notification)) = client.event_rx.recv().await else {
+                return Err(TestError::Unexpected("expected running update"));
+            };
+            assert!(matches!(notification.update, SessionUpdate::StateUpdate(StateUpdate::Running(_))));
+
             for expected in ["hello ", "world"] {
-                let Some(AcpEvent::SessionUpdate { update, .. }) = client.event_rx.recv().await else {
+                let Some(AcpEvent::SessionUpdate(notification)) = client.event_rx.recv().await else {
                     return Err(TestError::Unexpected("expected streamed update"));
                 };
-                let SessionUpdate::AgentMessageChunk(chunk) = *update else {
+                let SessionUpdate::AgentMessageChunk(chunk) = notification.update else {
                     return Err(TestError::Unexpected("expected agent message chunk"));
                 };
                 assert_eq!(chunk.content, ContentBlock::Text(TextContent::new(expected)));
+                assert_eq!(chunk.message_id.0.as_ref(), "message-1");
             }
 
             let Some(AcpEvent::ElicitationRequest { responder, .. }) = client.event_rx.recv().await else {
@@ -57,8 +62,11 @@ async fn acp_over_websocket_with_elicitation() -> Result<(), TestError> {
             };
 
             responder.respond(CreateElicitationResponse::new(ElicitationAction::Decline))?;
-            assert_eq!(prompt.await??.stop_reason, StopReason::EndTurn);
-            assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::PromptCompleted(StopReason::EndTurn))));
+            prompt.await??;
+            let Some(AcpEvent::SessionUpdate(notification)) = client.event_rx.recv().await else {
+                return Err(TestError::Unexpected("expected idle update"));
+            };
+            assert_eq!(notification.update, idle_notification("session", Some(StopReason::EndTurn)).update);
             drop(client);
             server_task.abort();
             let _ = server_task.await;
@@ -104,10 +112,10 @@ async fn caller_established_socket_supports_acp_initialization() -> Result<(), T
             request.headers_mut().insert("x-empty", "".parse()?);
             let (socket, _) = connect_async(request).await?;
             let client = Client
-                .builder()
+                .v2()
                 .connect_with(WebSocketTransport::new(socket), async |cx| {
-                    let response = cx.send_request(InitializeRequest::new(ProtocolVersion::V1)).block_task().await?;
-                    assert_eq!(response.protocol_version, ProtocolVersion::V1);
+                    let response = cx.send_request(initialize_request()).block_task().await?;
+                    assert_eq!(response.protocol_version, ProtocolVersion::V2);
                     Ok(())
                 })
                 .await;
@@ -127,7 +135,7 @@ async fn final_response_is_not_lost_when_close_is_already_buffered() -> Result<(
             let peer = spawn_local(async move {
                 let request = receive_json(&mut server).await?;
                 let response =
-                    serde_json::json!({"jsonrpc": "2.0", "id": request["id"], "result": {"protocolVersion": 1}});
+                    serde_json::json!({"jsonrpc": "2.0", "id": request["id"], "result": {"protocolVersion": 2, "info": {"name": "test-agent", "version": "0.0.0"}}});
                 server.feed(Message::Text(response.to_string().into())).await?;
                 server.feed(Message::Close(None)).await?;
                 server.flush().await?;
@@ -139,10 +147,43 @@ async fn final_response_is_not_lost_when_close_is_already_buffered() -> Result<(
                 Ok::<_, TestError>(())
             });
             let client =
-                connect_acp_client(WebSocketTransport::new(client_socket), InitializeRequest::new(ProtocolVersion::V1))
+                connect_acp_client(WebSocketTransport::new(client_socket), initialize_request())
                     .await;
             assert!(client.is_ok(), "last response must be delivered before EOF");
             peer.await??;
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test]
+async fn final_turn_and_replay_events_are_delivered_before_buffered_close() -> Result<(), TestError> {
+    use acp::schema::v2::ResumeSessionRequest;
+    use acp_utils::client::AcpEvent;
+
+    LocalSet::new()
+        .run_until(async {
+            for replay in [false, true] {
+                let (mut client, peer) = SocketPairBuilder::default()
+                    .before_response(idle_notification("session", Some(StopReason::EndTurn)))
+                    .after_response(running_notification("session"))
+                    .build_closing_agent()
+                    .await?;
+                if replay {
+                    client.handle.resume_session_with_replay(ResumeSessionRequest::new("session", "/tmp")).await?;
+                    assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::SessionUpdate(notification))
+                    if *notification == idle_notification("session", Some(StopReason::EndTurn))));
+                } else {
+                    client.handle.prompt(PromptRequest::new("session", vec![])).await?;
+                    assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::SessionUpdate(notification))
+                    if notification.update == idle_notification("session", Some(StopReason::EndTurn)).update));
+                }
+                assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::SessionUpdate(notification))
+                if notification.update == running_notification("session").update));
+                assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::ConnectionClosed)));
+                assert!(client.event_rx.recv().await.is_none());
+                peer.await??;
+            }
             Ok(())
         })
         .await
@@ -153,7 +194,7 @@ async fn invalid_utf8_terminates_the_connection() -> Result<(), TestError> {
     LocalSet::new()
         .run_until(async {
             let (server, mut client) = SocketPairBuilder::default().build().await;
-            let task = spawn_local(Agent.builder().connect_to(WebSocketTransport::new(server)));
+            let task = spawn_local(Agent.v2().connect_to(WebSocketTransport::new(server)));
             client.send(Message::Frame(Frame::message(vec![0xff], OpCode::Data(Data::Text), true))).await?;
             assert!(task.await?.is_err());
             Ok(())
@@ -165,9 +206,52 @@ async fn invalid_utf8_terminates_the_connection() -> Result<(), TestError> {
 struct SocketPairBuilder {
     server_config: Option<WebSocketConfig>,
     client_config: Option<WebSocketConfig>,
+    before_response: Vec<UpdateSessionNotification>,
+    after_response: Vec<UpdateSessionNotification>,
 }
 
 impl SocketPairBuilder {
+    fn before_response(mut self, update: UpdateSessionNotification) -> Self {
+        self.before_response.push(update);
+        self
+    }
+
+    fn after_response(mut self, update: UpdateSessionNotification) -> Self {
+        self.after_response.push(update);
+        self
+    }
+
+    async fn build_closing_agent(
+        mut self,
+    ) -> Result<(acp_utils::client::AcpClient, tokio::task::JoinHandle<Result<(), TestError>>), TestError> {
+        use serde_json::json;
+
+        let before = std::mem::take(&mut self.before_response);
+        let after = std::mem::take(&mut self.after_response);
+        let (mut server, client_socket) = self.build().await;
+        let peer = spawn_local(async move {
+            let init = receive_json(&mut server).await?;
+            let response = json!({"jsonrpc": "2.0", "id": init["id"], "result": initialize_response()});
+            server.send(Message::Text(response.to_string().into())).await?;
+            let request = receive_json(&mut server).await?;
+            let notification = |update| json!({"jsonrpc": "2.0", "method": "session/update", "params": update});
+            let response = json!({"jsonrpc": "2.0", "id": request["id"], "result": {}});
+            for message in
+                before.into_iter().map(notification).chain([response]).chain(after.into_iter().map(notification))
+            {
+                server.feed(Message::Text(message.to_string().into())).await?;
+            }
+            server.feed(Message::Close(None)).await?;
+            server.flush().await?;
+            while server.next().await.is_some_and(|message| matches!(message, Ok(Message::Ping(_) | Message::Pong(_))))
+            {
+            }
+            Ok(())
+        });
+        let client = connect_acp_client(WebSocketTransport::new(client_socket), initialize_request()).await?;
+        Ok((client, peer))
+    }
+
     async fn build(self) -> (WebSocketStream<DuplexStream>, WebSocketStream<DuplexStream>) {
         let (server, client) = duplex(64 * 1024);
         tokio::join!(
@@ -208,33 +292,41 @@ async fn receive_json(socket: &mut WebSocketStream<DuplexStream>) -> Result<serd
     Ok(serde_json::from_str(&text)?)
 }
 
-fn test_agent() -> Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
-    Agent.builder().on_receive_request(
-        async |_: InitializeRequest, responder, _cx| responder.respond(InitializeResponse::new(ProtocolVersion::V1)),
+fn test_agent() -> V2Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
+    Agent.v2().on_receive_request(
+        async |_: InitializeRequest, responder, _cx| responder.respond(initialize_response()),
         acp::on_receive_request!(),
     )
 }
 
 fn streaming_elicitation_agent(
     chunks: &'static [&'static str],
-) -> Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
+) -> V2Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
     test_agent().on_receive_request(
         async move |request: PromptRequest, responder, cx| {
+            responder.respond(PromptResponse::new())?;
+            cx.send_notification(running_notification(request.session_id.clone()))?;
             for &text in chunks {
-                cx.send_notification(SessionNotification::new(
+                cx.send_notification(UpdateSessionNotification::new(
                     request.session_id.clone(),
-                    SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(text)))),
+                    SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                        ContentBlock::Text(TextContent::new(text)),
+                        "message-1",
+                    )),
                 ))?;
             }
             let input = CreateElicitationRequest::new(
-                ElicitationFormMode::new(ElicitationSessionScope::new(request.session_id), ElicitationSchema::new()),
+                ElicitationFormMode::new(
+                    ElicitationSessionScope::new(request.session_id.clone()),
+                    ElicitationSchema::new(),
+                ),
                 "Continue?",
             );
             let connection = cx.clone();
             cx.spawn(async move {
                 let response = connection.send_request(input).block_task().await?;
                 assert_eq!(response.action, ElicitationAction::Decline);
-                responder.respond(PromptResponse::new(StopReason::EndTurn))
+                connection.send_notification(idle_notification(request.session_id, Some(StopReason::EndTurn)))
             })?;
             Ok(())
         },

@@ -6,7 +6,7 @@ use crate::model_settings::ModelSettings;
 use crate::reasoning::ReasoningEffort;
 use crate::types::IsoString;
 
-use super::{ChatMessage, ToolDefinition};
+use super::{ChatMessage, MessageId, ToolDefinition};
 
 #[doc = include_str!("docs/context.md")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,7 +79,7 @@ impl Context {
         if let Some(ChatMessage::System { content: existing, .. }) = self.messages.first_mut() {
             *existing = content;
         } else {
-            self.messages.insert(0, ChatMessage::System { content, timestamp: IsoString::now() });
+            self.messages.insert(0, ChatMessage::system(content));
         }
     }
 
@@ -119,6 +119,7 @@ impl Context {
     /// Build an assistant turn and its tool call results and append them to messages.
     pub fn push_assistant_turn(
         &mut self,
+        message_id: MessageId,
         content: &str,
         reasoning: AssistantReasoning,
         completed_tools: Vec<Result<super::ToolCallResult, super::ToolCallError>>,
@@ -138,6 +139,7 @@ impl Context {
             .collect();
 
         self.messages.push(ChatMessage::Assistant {
+            message_id,
             content: content.to_string(),
             reasoning,
             timestamp: IsoString::now(),
@@ -160,19 +162,22 @@ impl Context {
             .messages
             .iter()
             .map(|message| match message {
-                ChatMessage::Assistant { content, reasoning, timestamp, tool_calls } => ChatMessage::Assistant {
-                    content: content.clone(),
-                    reasoning: AssistantReasoning {
-                        summary_text: reasoning.summary_text.clone(),
-                        encrypted_content: reasoning
-                            .encrypted_content
-                            .as_ref()
-                            .filter(|encrypted| model.is_some_and(|model| &encrypted.model == model))
-                            .cloned(),
-                    },
-                    timestamp: timestamp.clone(),
-                    tool_calls: tool_calls.clone(),
-                },
+                ChatMessage::Assistant { message_id, content, reasoning, timestamp, tool_calls } => {
+                    ChatMessage::Assistant {
+                        message_id: message_id.clone(),
+                        content: content.clone(),
+                        reasoning: AssistantReasoning {
+                            summary_text: reasoning.summary_text.clone(),
+                            encrypted_content: reasoning
+                                .encrypted_content
+                                .as_ref()
+                                .filter(|encrypted| model.is_some_and(|model| &encrypted.model == model))
+                                .cloned(),
+                        },
+                        timestamp: timestamp.clone(),
+                        tool_calls: tool_calls.clone(),
+                    }
+                }
                 other => other.clone(),
             })
             .collect();
@@ -201,7 +206,7 @@ impl Context {
 
     /// Create a new context with all messages replaced by a summary.
     /// Preserves the system prompt and tools.
-    pub fn with_compacted_summary(&self, summary: &str) -> Context {
+    pub fn with_compacted_summary(&self, message_id: MessageId, summary: &str) -> Context {
         let system_messages: Vec<_> = self.messages.iter().filter(|msg| msg.is_system()).cloned().collect();
 
         let non_system_count = self.messages.len() - system_messages.len();
@@ -209,6 +214,7 @@ impl Context {
         let mut messages = system_messages;
         if non_system_count > 0 {
             messages.push(ChatMessage::Summary {
+                message_id,
                 content: summary.to_string(),
                 timestamp: IsoString::now(),
                 messages_compacted: non_system_count,
@@ -231,6 +237,7 @@ mod tests {
             ChatMessage::system("You are a helpful assistant."),
             ChatMessage::user("Hello"),
             ChatMessage::Assistant {
+                message_id: MessageId::new(),
                 content: "Hi there!".to_string(),
                 reasoning: AssistantReasoning::default(),
                 timestamp: IsoString::now(),
@@ -272,6 +279,7 @@ mod tests {
     fn replace_conversation_replaces_old_non_system_messages() {
         let mut ctx = create_test_context();
         ctx.replace_conversation(vec![ChatMessage::Assistant {
+            message_id: MessageId::new(),
             content: "replacement".to_string(),
             reasoning: AssistantReasoning::default(),
             timestamp: IsoString::now(),
@@ -317,7 +325,7 @@ mod tests {
     #[test]
     fn test_with_compacted_summary_preserves_system_prompt() {
         let ctx = create_test_context();
-        let compacted = ctx.with_compacted_summary("This is a summary of previous conversation.");
+        let compacted = ctx.with_compacted_summary(MessageId::new(), "This is a summary of previous conversation.");
 
         assert_eq!(compacted.message_count(), 2);
         assert!(compacted.messages()[0].is_system());
@@ -327,7 +335,7 @@ mod tests {
     #[test]
     fn test_with_compacted_summary_empty_context() {
         let ctx = Context::new(vec![ChatMessage::system("System")], vec![]);
-        let compacted = ctx.with_compacted_summary("Summary");
+        let compacted = ctx.with_compacted_summary(MessageId::new(), "Summary");
 
         assert_eq!(compacted.message_count(), 1);
     }
@@ -361,7 +369,7 @@ mod tests {
     fn test_prompt_cache_key_preserved_through_compaction() {
         let mut ctx = create_test_context();
         ctx.set_prompt_cache_key(Some("session-abc".to_string()));
-        let compacted = ctx.with_compacted_summary("Summary");
+        let compacted = ctx.with_compacted_summary(MessageId::new(), "Summary");
         assert_eq!(compacted.prompt_cache_key(), Some("session-abc"));
     }
 
@@ -383,7 +391,10 @@ mod tests {
         context.set_session_affinity_key(Some("conversation-123".to_string()));
 
         assert_eq!(context.session_affinity_key(), Some("conversation-123"));
-        assert_eq!(context.with_compacted_summary("Summary").session_affinity_key(), Some("conversation-123"));
+        assert_eq!(
+            context.with_compacted_summary(MessageId::new(), "Summary").session_affinity_key(),
+            Some("conversation-123")
+        );
         assert_eq!(context.filter_encrypted_reasoning(Some(&model)).session_affinity_key(), Some("conversation-123"));
     }
 
@@ -407,7 +418,7 @@ mod tests {
     fn test_reasoning_effort_preserved_through_compaction() {
         let mut ctx = create_test_context();
         ctx.set_reasoning_effort(Some(crate::ReasoningEffort::Medium));
-        let compacted = ctx.with_compacted_summary("Summary");
+        let compacted = ctx.with_compacted_summary(MessageId::new(), "Summary");
         assert_eq!(compacted.reasoning_effort(), Some(crate::ReasoningEffort::Medium));
     }
 
@@ -440,6 +451,7 @@ mod tests {
             vec![
                 ChatMessage::user("Hello"),
                 ChatMessage::Assistant {
+                    message_id: MessageId::new(),
                     content: "I see.".to_string(),
                     reasoning: AssistantReasoning {
                         summary_text: Some("thinking".to_string()),
@@ -455,7 +467,7 @@ mod tests {
             ],
             vec![],
         );
-        let compacted = ctx.with_compacted_summary("Summary of conversation");
+        let compacted = ctx.with_compacted_summary(MessageId::new(), "Summary of conversation");
 
         for msg in compacted.messages() {
             if let ChatMessage::Assistant { reasoning, .. } = msg {
@@ -469,6 +481,7 @@ mod tests {
         let model: LlmModel = "anthropic:claude-opus-4-6".parse().unwrap();
         let ctx = Context::new(
             vec![ChatMessage::Assistant {
+                message_id: MessageId::new(),
                 content: "reply".to_string(),
                 reasoning: AssistantReasoning {
                     summary_text: Some("think".to_string()),
@@ -498,6 +511,7 @@ mod tests {
         let model_b: LlmModel = "anthropic:claude-sonnet-4-5-20250929".parse().unwrap();
         let ctx = Context::new(
             vec![ChatMessage::Assistant {
+                message_id: MessageId::new(),
                 content: "reply".to_string(),
                 reasoning: AssistantReasoning {
                     summary_text: Some("think".to_string()),

@@ -3,11 +3,11 @@
 use acp_utils::client::{AcpClientError, AcpClientHandle, connect_acp_client};
 use acp_utils::testing::duplex_pair;
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{InitializeRequest, InitializeResponse, SessionId};
+use agent_client_protocol::schema::v2::{Implementation, InitializeRequest, InitializeResponse, SessionId};
 use agent_client_protocol::{self as acp, Agent};
 use tempfile::TempDir;
 use tokio::task::{JoinError, LocalSet, spawn_local};
-use wisp::command::{AgentCommand, Command, CommandResult, FailedCommand, GitCommand, GitWatchCommand};
+use wisp::command::{AgentCommand, Command, CommandResult, GitCommand, GitWatchCommand};
 use wisp::file_index::index_files_with_limit;
 use wisp::git_review::{DiffScope, GitDiffError, GitDiffEvent, GitWatchError, GitWatchEvent};
 use wisp::request::RequestId;
@@ -91,8 +91,8 @@ async fn git_watch_can_close_during_startup_and_replace_an_old_subscription() {
         scope: DiffScope::Both,
     }));
     dispatcher.dispatch(Command::GitWatch(GitWatchCommand::Close { review_id: first_id }));
-    assert!(!dispatcher.has_pending_tasks());
     assert!(dispatcher.next_result().await.is_none());
+    assert!(!dispatcher.has_pending_tasks());
 
     dispatcher.dispatch(Command::GitWatch(GitWatchCommand::Open {
         review_id: first_id,
@@ -276,12 +276,9 @@ async fn closed_agent_connection_becomes_a_reducer_visible_failure() -> Result<(
 
     let result = dispatcher.dispatch(Command::Agent(AgentCommand::Cancel { session_id: SessionId::new("session") }));
 
-    assert!(result.is_none());
-    assert!(dispatcher.has_pending_tasks());
-    assert!(matches!(
-        dispatcher.next_result().await,
-        Some(CommandResult::Failed { command: FailedCommand::Other("cancel"), .. })
-    ));
+    assert!(matches!(result, Some(CommandResult::Cancel(Err(_)))));
+    assert!(!dispatcher.has_pending_tasks());
+    assert!(dispatcher.next_result().await.is_none());
     dispatcher.shutdown().await;
     Ok(())
 }
@@ -357,14 +354,18 @@ async fn disconnected_client() -> Result<AcpClientHandle, TestError> {
     LocalSet::new()
         .run_until(async {
             let (agent_transport, client_transport) = duplex_pair();
-            let agent = Agent.builder().on_receive_request(
+            let agent = Agent.v2().on_receive_request(
                 async |_: InitializeRequest, responder, _cx| {
-                    responder.respond(InitializeResponse::new(ProtocolVersion::V1))
+                    responder.respond(InitializeResponse::new(ProtocolVersion::V2, Implementation::new("fake", "1")))
                 },
                 acp::on_receive_request!(),
             );
             let server = spawn_local(agent.connect_to(agent_transport));
-            let client = connect_acp_client(client_transport, InitializeRequest::new(ProtocolVersion::V1)).await?;
+            let client = connect_acp_client(
+                client_transport,
+                InitializeRequest::new(ProtocolVersion::V2, Implementation::new("wisp", "1")),
+            )
+            .await?;
             client.handle.disconnect().await;
             let _ = server.await?;
             Ok(client.handle)

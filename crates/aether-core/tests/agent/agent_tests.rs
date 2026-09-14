@@ -6,9 +6,19 @@ use aether_core::{
     events::{AgentEvent, Command, TurnOutcome, UserCommand},
     testing::{agent_event, content_events, test_agent},
 };
-use llm::testing::llm_response;
 use llm::{ChatMessage, ContentBlock, StopReason};
+use llm::{MessageId, testing::llm_response};
 use serde_json::json;
+
+fn completed_message_ids(events: &[AgentEvent]) -> Vec<MessageId> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::Message(MessageEvent::Text { message_id, is_complete: true, .. }) => Some(message_id.clone()),
+            _ => None,
+        })
+        .collect()
+}
 
 fn split_json_in_half(input: &str) -> (&str, &str) {
     let split = input.char_indices().nth(input.len() / 2).map_or(1, |(idx, _)| idx).max(1).min(input.len() - 1);
@@ -17,13 +27,12 @@ fn split_json_in_half(input: &str) -> (&str, &str) {
 
 #[tokio::test]
 async fn test_text_message() -> Result<(), Box<dyn Error>> {
-    let id = "message_1";
     let chunks = ["Hello", "user"];
-    let llm_responses = [llm_response(id).text(&chunks).build()];
-    let mut expected_messages = agent_event(id).text(&chunks).build();
-    expected_messages.push(AgentEvent::turn_ended(TurnOutcome::Completed));
-
+    let llm_responses = [llm_response().text(&chunks).build()];
     let messages = test_agent().llm_responses(&llm_responses).user_text("hi").run().await?;
+    let ids = completed_message_ids(&messages);
+    let mut expected_messages = agent_event(&ids[0]).text(&chunks).build();
+    expected_messages.push(AgentEvent::turn_ended(TurnOutcome::Completed));
     assert_eq!(content_events(messages), expected_messages);
     Ok(())
 }
@@ -33,7 +42,7 @@ async fn test_llm_call_lifecycle_reports_model_and_usage() -> Result<(), Box<dyn
     let model: llm::LlmModel = "codex:gpt-5.5".parse()?;
     let events = test_agent()
         .model(model.clone())
-        .llm_responses(&[llm_response("msg_1").text(&["hi"]).usage(120, 7).build()])
+        .llm_responses(&[llm_response().text(&["hi"]).usage(120, 7).build()])
         .user_text("hello")
         .run()
         .await?;
@@ -70,25 +79,26 @@ async fn test_llm_call_lifecycle_reports_model_and_usage() -> Result<(), Box<dyn
 async fn test_single_tool_call() -> Result<(), Box<dyn Error>> {
     let tool_request = json!({ "a": 3, "b": 5 });
     let tool_result = json!({ "sum": 8 });
-    let (m1_id, t1_id, t1_name) = ("message_1", "call_1", "test__add_numbers");
-    let m2_id = "message-2";
+    let (t1_id, t1_name) = ("call_1", "test__add_numbers");
     let chunks = ["The", " sum", " is", " 8"];
 
     let llm_responses = [
-        llm_response(m1_id).tool_call(t1_id, t1_name, &[&tool_request.to_string()]).build(),
-        llm_response(m2_id).text(&chunks).build(),
+        llm_response().tool_call(t1_id, t1_name, &[&tool_request.to_string()]).build(),
+        llm_response().text(&chunks).build(),
     ];
 
+    let messages = test_agent().llm_responses(&llm_responses).user_text("3+5 = ?").run().await?;
+    let ids = completed_message_ids(&messages);
+    assert_ne!(ids[0], ids[1]);
     let expected_messages = {
         let mut messages = Vec::new();
-        messages.extend(agent_event(m1_id).tool_call(t1_id, t1_name, &tool_request, &tool_result).build());
+        messages.extend(agent_event(&ids[0]).tool_call(t1_id, t1_name, &tool_request, &tool_result).build());
 
-        messages.extend(agent_event(m2_id).text(&chunks).build());
+        messages.extend(agent_event(&ids[1]).text(&chunks).build());
         messages.push(AgentEvent::turn_ended(TurnOutcome::Completed));
         messages
     };
 
-    let messages = test_agent().llm_responses(&llm_responses).user_text("3+5 = ?").run().await?;
     assert_eq!(content_events(messages), expected_messages);
     Ok(())
 }
@@ -97,8 +107,8 @@ async fn test_single_tool_call() -> Result<(), Box<dyn Error>> {
 async fn failed_mcp_command_submission_completes_the_tool_with_an_error() -> Result<(), Box<dyn Error>> {
     let tool_request = json!({ "a": 3, "b": 5 });
     let llm_responses = [
-        llm_response("message_1").tool_call("call_1", "test__missing_tool", &[&tool_request.to_string()]).build(),
-        llm_response("message_2").text(&["recovered"]).build(),
+        llm_response().tool_call("call_1", "test__missing_tool", &[&tool_request.to_string()]).build(),
+        llm_response().text(&["recovered"]).build(),
     ];
 
     let messages = test_agent().llm_responses(&llm_responses).user_text("3+5 = ?").run().await?;
@@ -120,8 +130,8 @@ async fn test_tool_request_arg_emits_tool_call_update() -> Result<(), Box<dyn Er
     let request_json = tool_request.to_string();
     let (arg_chunk_1, arg_chunk_2) = split_json_in_half(&request_json);
     let llm_responses = [
-        llm_response("message_1").tool_call("call_1", "test__add_numbers", &[arg_chunk_1, arg_chunk_2]).build(),
-        llm_response("message_2").text(&["done"]).build(),
+        llm_response().tool_call("call_1", "test__add_numbers", &[arg_chunk_1, arg_chunk_2]).build(),
+        llm_response().text(&["done"]).build(),
     ];
 
     let messages = test_agent().llm_responses(&llm_responses).user_text("3+5 = ?").run().await?;
@@ -169,24 +179,25 @@ async fn test_tool_call_failure() -> Result<(), Box<dyn Error>> {
     let chunks = ["I", " apologize", ",", " but", " division", " by", " zero", " is", " not", " allowed", "."];
 
     let llm_responses = [
-        llm_response("message_1").tool_call("call_1", "test__divide_numbers", &[&tool_request.to_string()]).build(),
-        llm_response("message_2").text(&chunks).build(),
+        llm_response().tool_call("call_1", "test__divide_numbers", &[&tool_request.to_string()]).build(),
+        llm_response().text(&chunks).build(),
     ];
 
+    let messages = test_agent().llm_responses(&llm_responses).user_text("10 / 0 = ?").run().await?;
+    let ids = completed_message_ids(&messages);
     let expected_messages = {
         let mut messages = Vec::new();
         messages.extend(
-            agent_event("message_1")
+            agent_event(&ids[0])
                 .tool_call_with_error("call_1", "test__divide_numbers", &tool_request, "Division by zero")
                 .build(),
         );
 
-        messages.extend(agent_event("message_2").text(&chunks).build());
+        messages.extend(agent_event(&ids[1]).text(&chunks).build());
         messages.push(AgentEvent::turn_ended(TurnOutcome::Completed));
         messages
     };
 
-    let messages = test_agent().llm_responses(&llm_responses).user_text("10 / 0 = ?").run().await?;
     assert_eq!(content_events(messages), expected_messages);
     Ok(())
 }
@@ -207,13 +218,10 @@ async fn test_cancellation() -> Result<(), Box<dyn Error>> {
         " processing",
     ];
 
-    let llm_responses = [llm_response("message_1").text(&chunks).build()];
+    let llm_responses = [llm_response().text(&chunks).build()];
     let messages = test_agent()
         .llm_responses(&llm_responses)
-        .commands(vec![
-            Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("hi")] }),
-            Command::UserCommand(UserCommand::Cancel),
-        ])
+        .commands(vec![Command::text("hi"), Command::UserCommand(UserCommand::Cancel)])
         .run()
         .await?;
 
@@ -243,11 +251,11 @@ async fn test_tool_timeout() -> Result<(), Box<dyn Error>> {
     let tool_timeout = 500;
 
     let tool_request = json!({ "sleep_ms": tool_duration });
-    let (m1_id, t1_id, t1_name) = ("message_1", "call_1", "test__slow_tool");
+    let (t1_id, t1_name) = ("call_1", "test__slow_tool");
 
     let llm_responses = [
-        llm_response(m1_id).tool_call(t1_id, t1_name, &[&tool_request.to_string()]).build(),
-        llm_response("message_2").text(&["done"]).build(),
+        llm_response().tool_call(t1_id, t1_name, &[&tool_request.to_string()]).build(),
+        llm_response().text(&["done"]).build(),
     ];
 
     let messages = test_agent()
@@ -271,8 +279,8 @@ async fn test_tool_timeout() -> Result<(), Box<dyn Error>> {
 
 #[tokio::test]
 async fn test_simple_message_content() -> Result<(), Box<dyn Error>> {
-    let (id, chunks) = ("message_1", ["Hello"]);
-    let llm_responses = [llm_response(id).text(&chunks).build()];
+    let chunks = ["Hello"];
+    let llm_responses = [llm_response().text(&chunks).build()];
 
     let result =
         test_agent().llm_responses(&llm_responses).user_text("Just a simple message").run_with_context().await?;
@@ -297,7 +305,7 @@ async fn test_simple_message_content() -> Result<(), Box<dyn Error>> {
 #[tokio::test]
 async fn test_auto_continue_not_triggered_for_end_turn() -> Result<(), Box<dyn Error>> {
     let chunks = ["I have completed the task."];
-    let llm_responses = [llm_response("msg_1").text(&chunks).build()];
+    let llm_responses = [llm_response().text(&chunks).build()];
 
     let messages =
         test_agent().llm_responses(&llm_responses).user_text("do something").max_auto_continues(3).run().await?;
@@ -314,7 +322,7 @@ async fn test_auto_continue_not_triggered_for_end_turn() -> Result<(), Box<dyn E
 async fn test_auto_continue_not_triggered_for_opening_message() -> Result<(), Box<dyn Error>> {
     let chunks = ["Hey there!", " How can I help?"];
 
-    let llm_responses = [llm_response("msg_1").text(&chunks).build()];
+    let llm_responses = [llm_response().text(&chunks).build()];
 
     let messages = test_agent().llm_responses(&llm_responses).user_text("hello").max_auto_continues(3).run().await?;
 
@@ -333,10 +341,10 @@ async fn test_auto_continue_not_triggered_for_opening_message() -> Result<(), Bo
 async fn test_auto_continue_triggers_on_length_stop_reason() -> Result<(), Box<dyn Error>> {
     let tool_request = json!({ "a": 2, "b": 3 });
     let llm_responses = [
-        llm_response("msg_1").tool_call("call_1", "test__add_numbers", &[&tool_request.to_string()]).build(),
-        llm_response("msg_2").text(&["I'm thinking about the problem..."]).build_with_stop_reason(StopReason::Length),
-        llm_response("msg_3").text(&["Let me continue..."]).build_with_stop_reason(StopReason::Length),
-        llm_response("msg_4").text(&["Done!"]).build(),
+        llm_response().tool_call("call_1", "test__add_numbers", &[&tool_request.to_string()]).build(),
+        llm_response().text(&["I'm thinking about the problem..."]).build_with_stop_reason(StopReason::Length),
+        llm_response().text(&["Let me continue..."]).build_with_stop_reason(StopReason::Length),
+        llm_response().text(&["Done!"]).build(),
     ];
 
     let messages =
@@ -350,8 +358,8 @@ async fn test_auto_continue_triggers_on_length_stop_reason() -> Result<(), Box<d
 #[tokio::test]
 async fn test_auto_continue_triggers_on_empty_length_stop_reason() -> Result<(), Box<dyn Error>> {
     let llm_responses = [
-        llm_response("msg_1").build_with_stop_reason(StopReason::Length),
-        llm_response("msg_2").text(&["Recovered after compaction"]).build(),
+        llm_response().build_with_stop_reason(StopReason::Length),
+        llm_response().text(&["Recovered after compaction"]).build(),
     ];
 
     let messages =
@@ -381,10 +389,10 @@ async fn test_auto_continue_respects_max_limit() -> Result<(), Box<dyn Error>> {
     let tool_request = json!({ "a": 2, "b": 3 });
 
     let llm_responses = [
-        llm_response("msg_1").tool_call("call_1", "test__add_numbers", &[&tool_request.to_string()]).build(),
-        llm_response("msg_2").text(&["Thinking..."]).build_with_stop_reason(StopReason::Length),
-        llm_response("msg_3").text(&["Still thinking..."]).build_with_stop_reason(StopReason::Length),
-        llm_response("msg_4").text(&["More thinking..."]).build_with_stop_reason(StopReason::Length),
+        llm_response().tool_call("call_1", "test__add_numbers", &[&tool_request.to_string()]).build(),
+        llm_response().text(&["Thinking..."]).build_with_stop_reason(StopReason::Length),
+        llm_response().text(&["Still thinking..."]).build_with_stop_reason(StopReason::Length),
+        llm_response().text(&["More thinking..."]).build_with_stop_reason(StopReason::Length),
     ];
 
     let messages =
@@ -409,8 +417,8 @@ async fn test_auto_continue_disabled_with_zero() -> Result<(), Box<dyn Error>> {
     let tool_request = json!({ "a": 2, "b": 3 });
 
     let llm_responses = [
-        llm_response("msg_1").tool_call("call_1", "test__add_numbers", &[&tool_request.to_string()]).build(),
-        llm_response("msg_2").text(&["No completion signal here"]).build_with_stop_reason(StopReason::Length),
+        llm_response().tool_call("call_1", "test__add_numbers", &[&tool_request.to_string()]).build(),
+        llm_response().text(&["No completion signal here"]).build_with_stop_reason(StopReason::Length),
     ];
 
     let messages =
@@ -429,7 +437,7 @@ fn auto_continue_attempts(events: &[AgentEvent]) -> Vec<(u32, u32)> {
     events
         .iter()
         .filter_map(|event| match event {
-            AgentEvent::Turn(TurnEvent::AutoContinue { attempt, max_attempts }) => Some((*attempt, *max_attempts)),
+            AgentEvent::Turn(TurnEvent::AutoContinue { attempt, max_attempts, .. }) => Some((*attempt, *max_attempts)),
             _ => None,
         })
         .collect()
@@ -440,11 +448,11 @@ async fn test_reasoning_content_is_saved_in_context_after_tool_call() -> Result<
     let tool_request = json!({ "a": 2, "b": 3 });
 
     let llm_responses = [
-        llm_response("msg_1")
+        llm_response()
             .reasoning(&["internal plan"])
             .tool_call("call_1", "test__add_numbers", &[&tool_request.to_string()])
             .build(),
-        llm_response("msg_2").text(&["Done"]).build(),
+        llm_response().text(&["Done"]).build(),
     ];
 
     let result = test_agent().llm_responses(&llm_responses).user_text("do something").run_with_context().await?;
@@ -470,7 +478,7 @@ async fn test_reasoning_content_is_saved_in_context_after_tool_call() -> Result<
 
 #[tokio::test]
 async fn test_reasoning_chunks_emit_thought_messages() -> Result<(), Box<dyn Error>> {
-    let llm_responses = [llm_response("msg_1").reasoning(&["internal plan"]).text(&["Done"]).build()];
+    let llm_responses = [llm_response().reasoning(&["internal plan"]).text(&["Done"]).build()];
 
     let messages = test_agent().llm_responses(&llm_responses).user_text("do something").run().await?;
 

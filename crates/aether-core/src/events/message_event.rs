@@ -1,3 +1,4 @@
+use llm::MessageId;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -34,7 +35,7 @@ impl StreamState {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessageEvent {
     /// Assistant response text.
-    Text { message_id: String, chunk: String, is_complete: bool },
+    Text { message_id: MessageId, chunk: String, is_complete: bool },
     /// Assistant reasoning summary text.
-    Thought { message_id: String, chunk: String, is_complete: bool },
+    Thought { message_id: MessageId, chunk: String, is_complete: bool },
 }

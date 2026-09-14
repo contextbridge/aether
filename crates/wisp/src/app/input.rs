@@ -63,7 +63,8 @@ impl App {
         }
         if let UiEvent::Key(key) = &event
             && self.ui.keybindings.toggle_git_diff.matches(*key)
-            && matches!(&self.route, Route::GitReview(screen) if screen.is_browsing()) {
+            && matches!(&self.route, Route::GitReview(screen) if screen.is_browsing())
+        {
             self.close_active();
             return;
         }
@@ -197,11 +198,7 @@ impl App {
 
     fn apply_config_cycle(&mut self, next: Option<(String, String)>) {
         if let Some((id, value)) = next {
-            self.queue(Command::Agent(AgentCommand::SetConfigOption {
-                session_id: self.session.session_id().clone(),
-                config_id: id.clone(),
-                value: value.clone(),
-            }));
+            self.set_config_option(&id, &value);
             self.session.update_config_option_value(&id, &value);
         }
     }

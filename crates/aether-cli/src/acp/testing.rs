@@ -1,12 +1,12 @@
 use super::agent::acp_agent_builder;
 use super::fake_prompt_mcp::FakePromptMcp;
-use super::session::actor::{SessionActor, SessionActorInit};
+use super::session::actor::SessionActorInit;
 use super::session::agent_key::AgentKey;
 use super::session::agents::SessionAgents;
 use super::session::config::SessionConfigState;
 use super::session::error::SessionError;
 use super::session::model::{Modes, ValidatedMode};
-use super::session::runtime::{AgentRuntime, RuntimeEvent, RuntimeFactory};
+use super::session::runtime::{AgentRuntime, RuntimeFactory};
 use super::state::{AcpState, AcpStateConfig};
 use crate::error::CliError;
 use crate::resolve::InitialSessionSelection;
@@ -14,7 +14,7 @@ use crate::settings_args::SettingsSourceArgs;
 use crate::workspace::WorkspaceManager;
 use crate::workspace::testing::StdCopyCloner;
 use acp_utils::notifications::McpNotification;
-use acp_utils::testing::{TestPeer, duplex_pair};
+use acp_utils::testing::TestPeer;
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
 use aether_core::core::{AgentBuilder, AgentHandle, Prompt};
@@ -23,12 +23,12 @@ use aether_core::mcp::{ServerFactory, mcp};
 use aether_project::AgentCatalog;
 use aether_sessions::SessionStore;
 use aether_sessions::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent, last_agent_from_events};
-use agent_client_protocol::schema::v1::{SessionId, SessionUpdate};
+use agent_client_protocol::schema::v2::{InitializeResponse, SessionId, SessionUpdate, StateUpdate, StopReason};
 use agent_client_protocol::{Agent, Client, ConnectionTo};
 use futures::FutureExt;
-use llm::ProviderConnectionOverrides;
 use llm::testing::FakeLlmProvider;
 use llm::{ChatMessage, Context, LlmResponse, SessionUsageEvent, StreamingModelProvider};
+use llm::{MessageId, ProviderConnectionOverrides};
 use mcp_utils::client::{InMemoryServerSpec, McpServer, McpTransport, ToolExposure};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -41,13 +41,19 @@ const CODER_REPLY: &str = "coder reply";
 
 /// In-memory ACP harness running the real `acp_agent_builder` against a
 /// pre-wired test client. Created via [`AcpTestHarness::start`] inside a
-/// `LocalSet`. The harness owns an [`AcpState`] and a temp-dir-backed
+/// `LocalSet`. The harness owns an `AcpState` and a temp-dir-backed
 /// [`SessionStore`] so tests can register fake-driven sessions without
 /// going through `new_session`.
 pub struct AcpTestHarness {
     pub client_cx: ConnectionTo<Agent>,
     pub peer: TestPeer,
+    pub initialize_response: InitializeResponse,
+    disconnect: Option<oneshot::Sender<()>>,
+    server_done: Option<oneshot::Receiver<()>>,
+    pub auth_updates: mpsc::UnboundedReceiver<acp_utils::notifications::AuthMethodsUpdatedParams>,
     resume_agent: FakeAcpAgent,
+    runtime_control: Arc<Mutex<FakeRuntimeControl>>,
+    pub oauth_store: Arc<aether_auth::FakeOAuthCredentialStore>,
     agent_cx: ConnectionTo<Client>,
     state: Arc<AcpState>,
     session_store: Arc<SessionStore>,
@@ -66,7 +72,48 @@ pub struct FakeAcpAgent {
     captured_contexts: Arc<Mutex<Vec<Context>>>,
 }
 
+pub struct PendingRuntime {
+    started: oneshot::Receiver<()>,
+    release: oneshot::Sender<bool>,
+}
+
+impl PendingRuntime {
+    pub async fn wait_until_started(&mut self) {
+        (&mut self.started).await.expect("runtime startup reached");
+    }
+
+    pub fn finish(self, succeed: bool) {
+        self.release.send(succeed).expect("runtime startup is waiting");
+    }
+}
+
 impl AcpTestHarness {
+    pub fn pause_next_runtime(&self) -> PendingRuntime {
+        let (started, observed) = oneshot::channel();
+        let (release, proceed) = oneshot::channel();
+        self.runtime_control.lock().unwrap().pending = Some((started, proceed));
+        PendingRuntime { started: observed, release }
+    }
+
+    pub fn pause_prompt_expansion(&self) -> (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>) {
+        let gate = (Arc::new(tokio::sync::Notify::new()), Arc::new(tokio::sync::Notify::new()));
+        self.runtime_control.lock().unwrap().prompt_gate = Some(gate.clone());
+        gate
+    }
+
+    pub fn live_runtime_count(&self) -> usize {
+        self.runtime_control.lock().unwrap().agents.iter().filter(|sender| !sender.is_closed()).count()
+    }
+
+    pub async fn disconnect(&mut self) {
+        if let Some(disconnect) = self.disconnect.take() {
+            let _ = disconnect.send(());
+        }
+        if let Some(done) = self.server_done.take() {
+            done.await.expect("server shutdown completes");
+        }
+    }
+
     pub async fn start() -> Self {
         let tmp = tempfile::tempdir().expect("tempdir for session store");
         let session_store = Arc::new(SessionStore::from_path(tmp.path().to_path_buf()));
@@ -77,47 +124,73 @@ impl AcpTestHarness {
         let (resume_def, resume_agent) = fake_agent("Resume", "resume-mcp", "resume", "resumed reply");
         let mut resume_agents = HashMap::new();
         resume_agents.insert(resume_def.spec.name.clone(), resume_def);
-        let runtime_factory = Arc::new(FakeRuntimeFactory { cwd: PathBuf::from("/tmp"), agents: resume_agents });
-        let state = Arc::new(AcpState::new(AcpStateConfig {
-            session_store: session_store.clone(),
-            workspace_manager,
-            oauth_credential_store: fake_oauth_store(),
-            initial_selection: InitialSessionSelection::default(),
-            settings_source: SettingsSourceArgs::default(),
-            provider_connections: ProviderConnectionOverrides::default(),
-            telemetry: None,
-            runtime_factory: Some(runtime_factory),
-        }));
+        let runtime_control = Arc::new(Mutex::new(FakeRuntimeControl::default()));
+        let runtime_factory = Arc::new(FakeRuntimeFactory {
+            cwd: PathBuf::from("/tmp"),
+            agents: resume_agents,
+            control: runtime_control.clone(),
+        });
+        let oauth_store = Arc::new(aether_auth::FakeOAuthCredentialStore::new());
+        let state = Arc::new(AcpState::with_login(
+            AcpStateConfig {
+                session_store: session_store.clone(),
+                workspace_manager,
+                oauth_credential_store: oauth_store.clone(),
+                initial_selection: InitialSessionSelection::default(),
+                settings_source: SettingsSourceArgs::default(),
+                provider_connections: ProviderConnectionOverrides::default(),
+                telemetry: None,
+                runtime_factory: Some(runtime_factory),
+            },
+            Arc::new(FakeProviderLogin),
+        ));
 
         let (peer, client_builder) = TestPeer::new();
-        let (agent_transport, client_transport) = duplex_pair();
-        let (agent_cx_tx, agent_cx_rx) = oneshot::channel::<ConnectionTo<Client>>();
-        let (client_cx_tx, client_cx_rx) = oneshot::channel::<ConnectionTo<Agent>>();
-
+        let (auth_tx, auth_updates) = mpsc::unbounded_channel();
+        let client_builder = client_builder.on_receive_notification(
+            async move |notification: acp_utils::notifications::AuthMethodsUpdatedParams, _cx| {
+                let _ = auth_tx.send(notification);
+                Ok(())
+            },
+            agent_client_protocol::on_receive_notification!(),
+        );
+        let pair = acp_utils::testing::connect_pair(acp_agent_builder(state.clone()), client_builder).await;
+        let initialize_response = pair
+            .client
+            .send_request(acp_utils::testing::initialize_request())
+            .block_task()
+            .await
+            .expect("initialize harness");
+        let (disconnect, disconnected) = oneshot::channel();
+        let (server_finished, server_done) = oneshot::channel();
         let server_state = state.clone();
         spawn_local(async move {
-            let _ = acp_agent_builder(server_state)
-                .connect_with(agent_transport, async move |cx: ConnectionTo<Client>| {
-                    let _ = agent_cx_tx.send(cx);
-                    std::future::pending::<()>().await;
-                    Ok(())
-                })
-                .await;
+            let _ = pair.agent_task.await;
+            server_state.shutdown_all().await;
+            let _ = server_finished.send(());
         });
-
         spawn_local(async move {
-            let _ = client_builder
-                .connect_with(client_transport, async move |cx: ConnectionTo<Agent>| {
-                    let _ = client_cx_tx.send(cx);
-                    std::future::pending::<()>().await;
-                    Ok(())
-                })
-                .await;
+            let _ = disconnected.await;
+            pair.client_task.abort();
+            let _ = pair.client_task.await;
         });
-
-        let agent_cx = agent_cx_rx.await.expect("agent side connect_with produced a ConnectionTo");
-        let client_cx = client_cx_rx.await.expect("client side connect_with produced a ConnectionTo");
-        Self { client_cx, peer, resume_agent, agent_cx, state, session_store, _tmp: tmp }
+        let agent_cx = pair.agent;
+        let client_cx = pair.client;
+        Self {
+            client_cx,
+            peer,
+            initialize_response,
+            disconnect: Some(disconnect),
+            server_done: Some(server_done),
+            auth_updates,
+            resume_agent,
+            runtime_control,
+            oauth_store,
+            agent_cx,
+            state,
+            session_store,
+            _tmp: tmp,
+        }
     }
 
     pub fn resume_agent(&self) -> &FakeAcpAgent {
@@ -148,6 +221,18 @@ impl AcpTestHarness {
         let events = self.session_store.load(session_id).map(|(_, events)| events).unwrap_or_default();
         let selected_mode = last_agent_from_events(Some("Planner".to_string()), &events);
         self.insert_switching_session(SessionId::new(session_id), events, selected_mode, false).await
+    }
+
+    pub async fn expect_idle(&mut self, session_id: &SessionId, expected: StopReason) {
+        loop {
+            let notification = self.peer.next_session_notification().await;
+            if notification.session_id == *session_id
+                && let SessionUpdate::StateUpdate(StateUpdate::Idle(idle)) = notification.update
+            {
+                assert_eq!(idle.stop_reason, Some(expected));
+                return;
+            }
+        }
     }
 
     pub async fn expect_mcp_server_status(&mut self, expected: &[&str]) {
@@ -199,21 +284,21 @@ impl AcpTestHarness {
             agent_parts: Mutex::new(Some(StubAgentParts { tx: agent_tx, rx: agent_rx, handle: agent_handle })),
         });
 
-        let handle = SessionActor::spawn(SessionActorInit {
-            session_id: id.clone(),
-            connection: self.agent_cx.clone(),
-            repository: self.session_store.clone(),
-            oauth_credential_store: fake_oauth_store(),
-            active_agent: AgentKey::Default,
-            specs,
-            runtime_factory: factory,
-            transcript: Vec::new(),
-            modes: Modes::default(),
-            config: SessionConfigState::with_selection(model.to_string(), None, None),
-        })
-        .await
-        .expect("stub session actor spawns");
-        self.state.register_session(&id, handle).await;
+        self.state
+            .register_session(SessionActorInit {
+                session_id: id.clone(),
+                connection: self.agent_cx.clone(),
+                repository: self.session_store.clone(),
+                oauth_credential_store: self.oauth_store.clone(),
+                active_agent: AgentKey::Default,
+                specs,
+                runtime_factory: factory,
+                transcript: Vec::new(),
+                replay: false,
+                modes: Modes::default(),
+                config: SessionConfigState::with_selection(model.to_string(), None, None),
+            })
+            .await;
     }
 
     pub fn append_stored_session(&self, session_id: &str, created_at: &str) {
@@ -235,12 +320,23 @@ impl AcpTestHarness {
     pub fn append_stored_prompt(&self, session_id: &str, prompt: &str) {
         self.append_stored_event(
             session_id,
-            &SessionEvent::User(UserEvent::Message { content: vec![llm::ContentBlock::text(prompt)] }),
+            &SessionEvent::User(UserEvent::Message {
+                message_id: llm::MessageId::new(),
+                content: vec![llm::ContentBlock::text(prompt)],
+                display_content: None,
+            }),
         );
     }
 
     pub fn append_stored_user_blocks(&self, session_id: &str, blocks: Vec<llm::ContentBlock>) {
-        self.append_stored_event(session_id, &SessionEvent::User(UserEvent::Message { content: blocks }));
+        self.append_stored_event(
+            session_id,
+            &SessionEvent::User(UserEvent::Message {
+                message_id: llm::MessageId::new(),
+                content: blocks,
+                display_content: None,
+            }),
+        );
     }
 
     pub fn append_stored_agent_turn(&self, session_id: &str, text: &str) {
@@ -255,7 +351,7 @@ impl AcpTestHarness {
         self.append_stored_event(
             session_id,
             &SessionEvent::Agent(AgentEvent::Message(MessageEvent::Text {
-                message_id: "msg".to_string(),
+                message_id: MessageId::new(),
                 chunk: text.to_string(),
                 is_complete: true,
             })),
@@ -283,28 +379,33 @@ impl AcpTestHarness {
         }
         let specs = SessionAgents::new(AgentCatalog::new(PathBuf::from("/tmp"), catalog_specs, None));
 
-        let factory = Arc::new(FakeRuntimeFactory { cwd: PathBuf::from("/tmp"), agents });
+        let factory =
+            Arc::new(FakeRuntimeFactory { cwd: PathBuf::from("/tmp"), agents, control: self.runtime_control.clone() });
         let initial_agent = selected_mode.clone().unwrap_or_else(|| "Planner".to_string());
 
-        let handle = SessionActor::spawn(SessionActorInit {
-            session_id: acp_session_id.clone(),
-            connection: self.agent_cx.clone(),
-            repository: self.session_store.clone(),
-            oauth_credential_store: fake_oauth_store(),
-            active_agent: AgentKey::Named(initial_agent),
-            specs,
-            runtime_factory: factory,
-            transcript: events,
-            modes: switching_modes(),
-            config: SessionConfigState::with_selection("anthropic:claude-sonnet-4-5".to_string(), selected_mode, None),
-        })
-        .await
-        .expect("fake agent switching session actor spawns");
-        self.state.register_session(&acp_session_id, handle).await;
+        self.state
+            .register_session(SessionActorInit {
+                session_id: acp_session_id.clone(),
+                connection: self.agent_cx.clone(),
+                repository: self.session_store.clone(),
+                oauth_credential_store: self.oauth_store.clone(),
+                active_agent: AgentKey::Named(initial_agent),
+                specs,
+                runtime_factory: factory,
+                transcript: events,
+                replay: false,
+                modes: switching_modes(),
+                config: SessionConfigState::with_selection(
+                    "anthropic:claude-sonnet-4-5".to_string(),
+                    selected_mode,
+                    None,
+                ),
+            })
+            .await;
         FakeAgentSwitchingSession { session_id: acp_session_id, planner, coder }
     }
 
-    fn append_stored_event(&self, session_id: &str, event: &SessionEvent) {
+    pub fn append_stored_event(&self, session_id: &str, event: &SessionEvent) {
         self.session_store.append_event(session_id, event).expect("stored session event appends");
     }
 }
@@ -321,21 +422,9 @@ impl FakeAgentSwitchingSession {
     pub fn coder(&self) -> &FakeAcpAgent {
         &self.coder
     }
-
-    pub fn agent(&self, name: &str) -> &FakeAcpAgent {
-        match name {
-            "Planner" => &self.planner,
-            "Coder" => &self.coder,
-            other => panic!("unknown fake ACP agent {other:?}"),
-        }
-    }
 }
 
 impl FakeAcpAgent {
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
     /// Asserts the agent's most recent turn saw a conversation containing each
     /// of `expected` (user or assistant text), in addition to anything else.
     pub fn assert_saw(&self, expected: &[&str]) {
@@ -352,6 +441,19 @@ impl FakeAcpAgent {
         let seen = self.latest_conversation();
         let expected: Vec<String> = expected.iter().map(|t| (*t).to_string()).collect();
         assert_eq!(seen, expected, "{} conversation mismatch", self.name);
+    }
+
+    pub fn assert_saw_user_content(&self, expected: &[llm::ContentBlock]) {
+        let contexts = self.captured_contexts.lock().expect("captured contexts lock is healthy");
+        let latest = contexts.last().expect("agent should have run a turn");
+        assert!(
+            latest
+                .messages()
+                .iter()
+                .any(|message| { matches!(message, ChatMessage::User { content, .. } if content == expected) }),
+            "{} should have seen user content {expected:?}",
+            self.name
+        );
     }
 
     /// Asserts the agent never ran a turn (its LLM was never invoked).
@@ -373,11 +475,19 @@ impl FakeAcpAgent {
 struct FakeRuntimeFactory {
     cwd: PathBuf,
     agents: HashMap<String, FakeAgentDef>,
+    control: Arc<Mutex<FakeRuntimeControl>>,
+}
+
+#[derive(Default)]
+struct FakeRuntimeControl {
+    agents: Vec<mpsc::Sender<Command>>,
+    pending: Option<(oneshot::Sender<()>, oneshot::Receiver<bool>)>,
+    prompt_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
 }
 
 struct FakeAgentDef {
     spec: AgentSpec,
-    provider: Mutex<Option<Arc<dyn StreamingModelProvider>>>,
+    provider: Arc<dyn StreamingModelProvider>,
     mcp: Option<(String, String)>,
 }
 
@@ -385,31 +495,34 @@ struct FakeAgentDef {
 impl RuntimeFactory for FakeRuntimeFactory {
     async fn spawn(
         &self,
-        agent: AgentKey,
+        _agent: AgentKey,
         spec: &AgentSpec,
         initial_messages: Vec<ChatMessage>,
         usage_seed: Option<SessionUsageEvent>,
-        runtime_event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Result<AgentRuntime, SessionError> {
+        let pending = self.control.lock().unwrap().pending.take();
+        if let Some((started, proceed)) = pending {
+            let _ = started.send(());
+            if !proceed.await.unwrap_or(false) {
+                return Err(SessionError::AgentNotFound("injected startup failure".to_string()));
+            }
+        }
         let def = self
             .agents
             .get(&spec.name)
             .or_else(|| self.agents.values().next())
             .ok_or_else(|| SessionError::AgentNotFound(spec.name.clone()))?;
-        let provider = def
-            .provider
-            .lock()
-            .expect("fake provider lock is healthy")
-            .take()
-            .expect("fake agent runtime spawned more than once");
+        let provider = def.provider.clone();
 
         let mut mcp_builder = mcp(&self.cwd).with_tool_filter(spec.tools.clone());
         if let Some((server_name, prompt_name)) = &def.mcp {
             let factory_name = server_name.clone();
             let prompt_name = prompt_name.clone();
+            let gate = self.control.lock().unwrap().prompt_gate.clone();
             let factory: ServerFactory = Box::new(move |_spec, _services| {
                 let prompt_name = prompt_name.clone();
-                async move { FakePromptMcp::new(&prompt_name).into_dyn() }.boxed()
+                let gate = gate.clone();
+                async move { FakePromptMcp::new(&prompt_name).with_gate(gate).into_dyn() }.boxed()
             });
             mcp_builder = mcp_builder.register_in_memory_server(factory_name.clone(), factory).with_servers(vec![
                 McpServer::new(
@@ -423,10 +536,7 @@ impl RuntimeFactory for FakeRuntimeFactory {
         }
         let mut spawn =
             mcp_builder.spawn().await.map_err(|e| SessionError::Build(CliError::McpError(e.to_string())))?;
-        spawn
-            .block_until_ready()
-            .await
-            .ok_or_else(|| SessionError::McpOperation("fake MCP bootstrap aborted".to_string()))?;
+        spawn.block_until_ready().await.ok_or(SessionError::McpStartupStopped)?;
         let mcp_handle = spawn.handle().clone();
         let mut builder = AgentBuilder::new(provider).max_auto_continues(0);
         if let Some(last) = &usage_seed {
@@ -441,9 +551,10 @@ impl RuntimeFactory for FakeRuntimeFactory {
             .spawn()
             .await
             .map_err(|e| SessionError::Build(CliError::AgentError(e.to_string())))?;
+        self.control.lock().unwrap().agents.push(agent_tx.clone());
         let (mcp_runtime, event_rx) = spawn.connect_agent(agent_tx.clone()).await.split();
 
-        Ok(AgentRuntime::new(agent, agent_tx, agent_rx, Some(agent_handle), event_rx, mcp_runtime, runtime_event_tx))
+        Ok(AgentRuntime::new(agent_tx, agent_rx, Some(agent_handle), event_rx, mcp_runtime))
     }
 }
 
@@ -462,11 +573,10 @@ struct StubAgentParts {
 impl RuntimeFactory for StubRuntimeFactory {
     async fn spawn(
         &self,
-        agent: AgentKey,
+        _agent: AgentKey,
         _spec: &AgentSpec,
         _initial_messages: Vec<ChatMessage>,
         _usage_seed: Option<SessionUsageEvent>,
-        runtime_event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Result<AgentRuntime, SessionError> {
         let parts = self
             .agent_parts
@@ -477,32 +587,36 @@ impl RuntimeFactory for StubRuntimeFactory {
 
         let mut spawn =
             mcp(&self.cwd).spawn().await.map_err(|e| SessionError::Build(CliError::McpError(e.to_string())))?;
-        spawn
-            .block_until_ready()
-            .await
-            .ok_or_else(|| SessionError::McpOperation("stub MCP bootstrap aborted".to_string()))?;
+        spawn.block_until_ready().await.ok_or(SessionError::McpStartupStopped)?;
         let (mcp_runtime, event_rx) = spawn.connect_agent(parts.tx.clone()).await.split();
 
-        Ok(AgentRuntime::new(agent, parts.tx, parts.rx, Some(parts.handle), event_rx, mcp_runtime, runtime_event_tx))
+        Ok(AgentRuntime::new(parts.tx, parts.rx, Some(parts.handle), event_rx, mcp_runtime))
     }
 }
 
 fn fake_agent(name: &str, server_name: &str, prompt_name: &str, reply: &str) -> (FakeAgentDef, FakeAcpAgent) {
-    let provider =
-        FakeLlmProvider::new(vec![vec![LlmResponse::start("msg"), LlmResponse::text(reply), LlmResponse::done()]])
-            .with_display_name(name);
+    let provider = FakeLlmProvider::new(vec![vec![LlmResponse::Start, LlmResponse::text(reply), LlmResponse::done()]])
+        .with_display_name(name);
     let captured_contexts = provider.captured_contexts();
     let def = FakeAgentDef {
         spec: fake_agent_spec(name),
-        provider: Mutex::new(Some(Arc::new(provider))),
+        provider: Arc::new(provider),
         mcp: Some((server_name.to_string(), prompt_name.to_string())),
     };
     let observer = FakeAcpAgent { name: name.to_string(), captured_contexts };
     (def, observer)
 }
 
-fn fake_oauth_store() -> Arc<dyn OAuthCredentialStorage> {
-    Arc::new(aether_auth::FakeOAuthCredentialStore::new())
+struct FakeProviderLogin;
+
+#[async_trait::async_trait]
+impl super::state::ProviderLogin for FakeProviderLogin {
+    async fn login(&self, store: &dyn OAuthCredentialStorage) -> Result<(), llm::LlmError> {
+        store
+            .save("codex", serde_json::json!({"access_token": "fake-access", "refresh_token": "fake-refresh"}))
+            .await?;
+        Ok(())
+    }
 }
 
 fn switching_modes() -> Modes {

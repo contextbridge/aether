@@ -1,11 +1,3 @@
-use acp_utils::AETHER_TOOL_NAME_META_KEY;
-
-pub fn aether_tool_name_meta(name: &str) -> serde_json::Map<String, serde_json::Value> {
-    let mut meta = serde_json::Map::new();
-    meta.insert(AETHER_TOOL_NAME_META_KEY.to_string(), name.to_string().into());
-    meta
-}
-
 pub fn parse_tool_call_chunk(chunk: &str) -> serde_json::Value {
     serde_json::from_str(chunk).unwrap_or_else(|_| serde_json::Value::String(chunk.to_string()))
 }

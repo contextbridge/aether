@@ -24,6 +24,11 @@ name = "wisp"
 path = "src/main.rs"
 
 [[test]]
+name = "conversation_model"
+path = "tests/conversation_model.rs"
+required-features = ["testing"]
+
+[[test]]
 name = "diff_model"
 path = "tests/diff_model.rs"
 required-features = ["testing"]
@@ -46,15 +51,17 @@ rustdoc-args = ["--cfg", "docsrs"]
 workspace = true
 
 [dependencies]
+clankerdiff-core = { workspace = true }
 clankerdiff-ratatui = { workspace = true }
 clankerdiff-git = { workspace = true }
 clankerdiff-watch = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.14" }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client"], version = "0.4.3" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "agent"], version = "0.4.3" }
 agent-client-protocol = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 futures = { workspace = true }
+tokio-stream = { workspace = true, features = ["sync"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "process", "time"] }
 clap = { workspace = true }
 tracing = { workspace = true }

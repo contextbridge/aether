@@ -16,6 +16,7 @@ use super::cache::RenderShape;
 
 pub(super) struct StreamEntry {
     revision: Option<Revision>,
+    replacement_revision: Option<Revision>,
     shape: RenderShape,
     stream: MarkdownStream,
     state: StreamingMarkdownState,
@@ -33,6 +34,10 @@ impl Renderer {
     ) -> Result<Vec<Line<'static>>, MarkdownStreamError> {
         let shape = RenderShape { width, padding: as_u16(padding), theme: self.generation() };
         let entry = self.stream_cache.entry(item.id()).or_insert_with(|| StreamEntry::new(shape));
+        if entry.replacement_revision != Some(item.replacement_revision()) {
+            *entry = StreamEntry::new(shape);
+            entry.replacement_revision = Some(item.replacement_revision());
+        }
         if entry.revision != Some(item.revision()) || entry.shape != shape {
             let text = item.text().unwrap_or_default();
             let consumed = entry.stream.source().len();
@@ -85,6 +90,7 @@ impl StreamEntry {
     fn new(shape: RenderShape) -> Self {
         Self {
             revision: None,
+            replacement_revision: None,
             shape,
             stream: MarkdownStream::new(),
             state: StreamingMarkdownState::new(StreamingMarkdownPolicy::Terminal),

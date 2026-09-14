@@ -1,165 +1,69 @@
 use crate::command::{AgentCommand, CommandResult};
 use crate::runtime::tasks::TaskSupervisor;
-use acp_utils::client::{AcpClientError, AcpClientHandle};
+use acp_utils::client::AcpClientHandle;
 use acp_utils::notifications::{McpRequest, SessionPreviewParams, WorkspaceListParams, WorkspaceMoveParams};
-use agent_client_protocol::schema::v1::{
-    AuthenticateRequest, CancelNotification, ContentBlock, ListSessionsRequest, LoadSessionRequest, NewSessionRequest,
-    PromptRequest, SetSessionConfigOptionRequest, TextContent,
+use agent_client_protocol::JsonRpcRequest;
+use agent_client_protocol::schema::v2::{
+    CancelSessionNotification, ContentBlock, ListSessionsRequest, LoginAuthRequest, NewSessionRequest, PromptRequest,
+    ReplayFrom, ReplayFromStart, ResumeSessionRequest, SetSessionConfigOptionRequest,
 };
 
-#[allow(clippy::too_many_lines)]
 pub(super) fn execute(
     handle: &AcpClientHandle,
     command: AgentCommand,
     tasks: &mut TaskSupervisor,
 ) -> Option<CommandResult> {
-    let failure = command.failure();
     match command {
         AgentCommand::Prompt { session_id, text, content } => {
-            let handle = handle.clone();
-            tasks.spawn_network(async move {
-                let mut prompt = vec![ContentBlock::Text(TextContent::new(text))];
-                if let Some(content) = content {
-                    prompt.extend(content);
-                }
-                handle
-                    .prompt(PromptRequest::new(session_id, prompt))
-                    .await
-                    .map_or_else(|error| failed(failure, &error), |_| CommandResult::AgentCommandAccepted)
-            });
-            None
+            let mut prompt = vec![ContentBlock::from(text)];
+            prompt.extend(content.into_iter().flatten());
+            submit_request(handle, tasks, PromptRequest::new(session_id, prompt), CommandResult::Prompt);
         }
-        AgentCommand::Cancel { session_id } => {
-            let handle = handle.clone();
-            tasks.spawn_network(async move {
-                handle
-                    .cancel(CancelNotification::new(session_id))
-                    .await
-                    .map_or_else(|error| failed(failure, &error), |()| CommandResult::AgentCommandAccepted)
-            });
-            None
-        }
-        AgentCommand::SetConfigOption { session_id, config_id, value } => {
-            let handle = handle.clone();
-            tasks.spawn_network(async move {
-                handle
-                    .set_config_option(SetSessionConfigOptionRequest::new(session_id, config_id, value.as_str()))
-                    .await
-                    .map_or_else(|error| CommandResult::ConfigOptionUpdateFailed { error: error.to_string() }, |response| {
-                        CommandResult::ConfigOptionsUpdated(response.config_options)
-                    })
-            });
-            None
-        }
+        AgentCommand::Cancel { session_id } => return Some(CommandResult::Cancel(
+            handle.cancel(CancelSessionNotification::new(session_id)).map_err(|error| error.to_string()),
+        )),
+        AgentCommand::SetConfigOption { conversation_id, session_id, config_id, value } => submit_request(
+            handle, tasks, SetSessionConfigOptionRequest::new(session_id, config_id, value),
+            move |result| CommandResult::ConfigOptionsUpdated { conversation_id, result },
+        ),
         AgentCommand::AuthenticateMcpServer { session_id, server_name } => {
-            let handle = handle.clone();
-            tasks.spawn_network(async move {
-                let request = McpRequest::Authenticate { session_id: session_id.0.to_string(), server_name };
-                handle
-                    .authenticate_mcp_server(request)
-                    .await
-                    .map_or_else(|error| failed(failure, &error), |()| CommandResult::AgentCommandAccepted)
-            });
-            None
+            let request = McpRequest::Authenticate { session_id: session_id.0.to_string(), server_name };
+            return Some(CommandResult::AuthenticateMcp(handle.notify(request).map_err(|error| error.to_string())));
         }
-        AgentCommand::Authenticate { method_id } => {
-            let handle = handle.clone();
-            tasks.spawn_network(async move {
-                let failed_method_id = method_id.clone();
-                handle
-                    .authenticate(AuthenticateRequest::new(method_id.clone()))
-                    .await
-                    .map_or_else(
-                        |_| CommandResult::AuthenticationFailed { method_id: failed_method_id },
-                        |_| CommandResult::AuthenticationCompleted { method_id },
-                    )
-            });
-            None
-        }
-        AgentCommand::ListSessions => {
-            let handle = handle.clone();
-            tasks.spawn_network(async move {
-                handle
-                    .list_sessions(ListSessionsRequest::new())
-                    .await
-                    .map_or_else(|error| failed(failure, &error), CommandResult::SessionsListed)
-            });
-            None
-        }
-        AgentCommand::LoadSession { session_id, cwd } => {
-            let handle = handle.clone();
-            tasks.spawn_network(async move {
-                handle
-                    .load_session(LoadSessionRequest::new(session_id, cwd))
-                    .await
-                    .map_or_else(|error| failed(failure, &error), |_| CommandResult::AgentCommandAccepted)
-            });
-            None
-        }
-        AgentCommand::NewSession { cwd } => {
-            let handle = handle.clone();
-            tasks.spawn_network(async move {
-                handle
-                    .new_session(NewSessionRequest::new(cwd))
-                    .await
-                    .map_or_else(|error| failed(failure, &error), CommandResult::NewSessionCreated)
-            });
-            None
-        }
+        AgentCommand::Authenticate { method_id } => submit_request(
+            handle, tasks, LoginAuthRequest::new(method_id.clone()),
+            move |result| CommandResult::AuthenticationCompleted { method_id, result },
+        ),
+        AgentCommand::ListSessions => submit_request(handle, tasks, ListSessionsRequest::new(), CommandResult::SessionsListed),
+        AgentCommand::ResumeSession { session_id, cwd } => submit_request(
+            handle, tasks, ResumeSessionRequest::new(session_id.clone(), cwd).replay_from(ReplayFrom::Start(ReplayFromStart::new())),
+            move |result| CommandResult::ResumeSession { session_id, result },
+        ),
+        AgentCommand::NewSession { cwd } => submit_request(handle, tasks, NewSessionRequest::new(cwd), CommandResult::NewSession),
         AgentCommand::SearchPrompts(params) => {
             let query = params.query.clone();
-            let handle = handle.clone();
-            tasks.spawn_network(async move {
-                match handle.search_prompts(params).await {
-                    Ok(response) => CommandResult::PromptSearchResults(response),
-                    Err(error) => CommandResult::PromptSearchFailed { query, error: error.to_string() },
-                }
-            });
-            None
+            submit_request(handle, tasks, params, move |result| CommandResult::PromptSearchResults { query, result });
         }
-        AgentCommand::SessionPreview { session_id } => {
-            let failed_id = session_id.clone();
-            let handle = handle.clone();
-            tasks.spawn_network(async move {
-                handle
-                    .preview_session(SessionPreviewParams { session_id })
-                    .await
-                    .map_or_else(
-                        |error| CommandResult::SessionPreviewFailed { session_id: failed_id, error: error.to_string() },
-                        CommandResult::SessionPreviewLoaded,
-                    )
-            });
-            None
-        }
-        AgentCommand::ListWorkspaces { session_id } => {
-            let handle = handle.clone();
-            tasks.spawn_network(async move {
-                handle
-                    .list_workspaces(WorkspaceListParams { session_id })
-                    .await
-                    .map_or_else(
-                        |error| CommandResult::WorkspaceListFailed { error: error.to_string() },
-                        CommandResult::WorkspacesListed,
-                    )
-            });
-            None
-        }
-        AgentCommand::MoveWorkspace { session_id, target } => {
-            let handle = handle.clone();
-            tasks.spawn_network(async move {
-                handle
-                    .move_workspace(WorkspaceMoveParams { session_id, target })
-                    .await
-                    .map_or_else(
-                        |error| CommandResult::WorkspaceMoveFailed { error: error.to_string() },
-                        CommandResult::WorkspaceMoved,
-                    )
-            });
-            None
-        }
+        AgentCommand::SessionPreview { session_id } => submit_request(
+            handle, tasks, SessionPreviewParams { session_id: session_id.clone() },
+            move |result| CommandResult::SessionPreviewLoaded { session_id, result },
+        ),
+        AgentCommand::ListWorkspaces { session_id } => submit_request(
+            handle, tasks, WorkspaceListParams { session_id }, CommandResult::WorkspacesListed,
+        ),
+        AgentCommand::MoveWorkspace { session_id, target } => submit_request(
+            handle, tasks, WorkspaceMoveParams { session_id, target }, CommandResult::WorkspaceMoved,
+        ),
     }
+    None
 }
 
-fn failed(failure: crate::command::FailedCommand, error: &AcpClientError) -> CommandResult {
-    CommandResult::Failed { command: failure, error: error.to_string() }
+fn submit_request<R: JsonRpcRequest + Send + 'static>(
+    handle: &AcpClientHandle,
+    tasks: &mut TaskSupervisor,
+    request: R,
+    complete: impl FnOnce(Result<R::Response, String>) -> CommandResult + Send + 'static,
+) {
+    let response = handle.request(request);
+    tasks.submit_network(async move { complete(response.await.map_err(|error| error.to_string())) });
 }

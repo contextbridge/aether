@@ -1,5 +1,6 @@
 use crate::theme::Theme;
 use crate::view::wrap::tail_to_width;
+use agent_client_protocol::schema::v2::MessageId;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -20,6 +21,7 @@ pub(crate) enum ProgressPhase {
     Idle,
     Thinking,
     Responding,
+    RequiresAction,
     Working,
     Compacting,
     MovingWorkspace,
@@ -32,6 +34,7 @@ impl ProgressPhase {
             Self::Idle => "",
             Self::Thinking => "Thinking…",
             Self::Responding => "Responding…",
+            Self::RequiresAction => "Waiting for action…",
             Self::Working => "Working…",
             Self::Compacting => "Compacting context...",
             Self::MovingWorkspace => "Moving workspace...",
@@ -53,6 +56,7 @@ pub struct ProgressIndicator {
     now: Instant,
     phase_started_at: Instant,
     thought: String,
+    thought_message_id: Option<MessageId>,
 }
 
 impl Default for ProgressIndicator {
@@ -66,6 +70,7 @@ impl Default for ProgressIndicator {
             now,
             phase_started_at: now,
             thought: String::new(),
+            thought_message_id: None,
         }
     }
 }
@@ -77,6 +82,7 @@ impl ProgressIndicator {
 
     pub(crate) fn prompt_started(&mut self) {
         self.thought.clear();
+        self.thought_message_id = None;
         self.accepts_activity = true;
         self.set_agent_phase(ProgressPhase::Thinking);
     }
@@ -85,12 +91,17 @@ impl ProgressIndicator {
         self.set_agent_phase(ProgressPhase::Responding);
     }
 
+    pub(crate) fn requires_action(&mut self) {
+        self.set_agent_phase(ProgressPhase::RequiresAction);
+    }
+
     pub(crate) fn tool_activity(&mut self) {
         self.set_agent_phase(ProgressPhase::Working);
     }
 
     pub(crate) fn prompt_finished(&mut self) {
         self.thought.clear();
+        self.thought_message_id = None;
         self.set_agent_phase(ProgressPhase::Idle);
         self.accepts_activity = false;
     }
@@ -104,9 +115,24 @@ impl ProgressIndicator {
         self.interruptible = interruptible;
     }
 
-    pub(crate) fn record_thought(&mut self, chunk: &str) {
+    pub(crate) fn replace_thought(&mut self, message_id: &MessageId, text: &str) {
+        if text.is_empty() && self.thought_message_id.as_ref() != Some(message_id) {
+            return;
+        }
+        self.thought.clear();
+        self.thought_message_id = None;
+        if !text.is_empty() {
+            self.record_thought(message_id, text);
+        }
+    }
+
+    pub(crate) fn record_thought(&mut self, message_id: &MessageId, chunk: &str) {
         if !self.accepts_activity {
             return;
+        }
+        if self.thought_message_id.as_ref() != Some(message_id) {
+            self.thought.clear();
+            self.thought_message_id = Some(message_id.clone());
         }
         self.set_agent_phase(ProgressPhase::Thinking);
         for character in chunk.chars() {
@@ -135,6 +161,7 @@ impl ProgressIndicator {
         }
         if self.agent_phase == ProgressPhase::Thinking && phase != ProgressPhase::Thinking {
             self.thought.clear();
+            self.thought_message_id = None;
         }
         self.agent_phase = phase;
     }

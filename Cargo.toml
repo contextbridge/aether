@@ -46,7 +46,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
 
 # ACP
-agent-client-protocol = { version = "2.0.0", features = ["unstable_elicitation"] }
+agent-client-protocol = { version = "=2.1.0", features = ["unstable_protocol_v2", "unstable_tool_call_name", "unstable_session_compaction"] }
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
 
 # MCP and API clients
@@ -108,9 +108,10 @@ ast-grep-core = "0.45"
 ast-grep-language = "0.45"
 
 # Terminal UI
-clankerdiff-ratatui = { version = "0.1.8", features = ["crossterm-backend"] }
-clankerdiff-git = "0.1.8"
-clankerdiff-watch = "0.1.8"
+clankerdiff-core = { version = "0.2.0" }
+clankerdiff-ratatui = { version = "0.2.0", features = ["crossterm-backend"] }
+clankerdiff-git = { version = "0.2.0" }
+clankerdiff-watch = { version = "0.2.0" }
 crossterm = { version = "0.29", features = ["event-stream"] }
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "layout-cache", "scrolling-regions"] }
 nucleo = "0.5.0"

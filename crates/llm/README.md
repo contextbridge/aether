@@ -38,6 +38,7 @@ async fn main() -> llm::Result<()> {
 
     let context = Context::new(
         vec![ChatMessage::User {
+            message_id: MessageId::new(),
             content: vec![ContentBlock::text("Explain ownership in Rust in two sentences.")],
             timestamp: IsoString::now(),
         }],
@@ -69,6 +70,7 @@ let context = Context::new(
             timestamp: IsoString::now(),
         },
         ChatMessage::User {
+            message_id: MessageId::new(),
             content: vec![ContentBlock::text("What is Rust?")],
             timestamp: IsoString::now(),
         },
@@ -99,6 +101,7 @@ let tools = vec![ToolDefinition::new(
 
 let mut context = Context::new(
     vec![ChatMessage::User {
+        message_id: MessageId::new(),
         content: vec![ContentBlock::text("What's the weather in Tokyo?")],
         timestamp: IsoString::now(),
     }],
@@ -108,6 +111,7 @@ let mut context = Context::new(
 // After streaming the response and executing the tool call,
 // feed the result back into the context:
 context.push_assistant_turn(
+    MessageId::new(),
     "Let me check the weather.",
     AssistantReasoning::default(),
     vec![Ok(ToolCallResult {

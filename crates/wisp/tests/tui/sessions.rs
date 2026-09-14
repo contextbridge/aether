@@ -19,14 +19,16 @@ fn clear_creates_new_session_and_resets_state() {
     let mut ui = TestUi::new();
 
     ui.submit("old message");
+    ui.next_agent_command().unwrap();
+    ui.complete_prompt(acp::StopReason::EndTurn);
     ui.draw();
     ui.assert_viewport_contains("old message");
 
+    let old_conversation = ui.app().conversation_id();
     ui.type_text("/clear");
     ui.key(key(KeyCode::Tab));
     let _ = ui.next_agent_command().unwrap();
 
-    let old_conversation = ui.app().conversation_id();
     ui.deliver_result(new_session_created("new-session", vec![select_option("model", "sonnet")]));
 
     assert_ne!(ui.app().conversation_id(), old_conversation);
@@ -47,6 +49,10 @@ fn clear_restores_compatible_config_selections() {
     app.key(key(KeyCode::Tab));
     let _ = app.next_agent_command().unwrap();
 
+    app.acp_event(AcpEvent::SessionUpdate(Box::new(acp::UpdateSessionNotification::new(
+        "new-session",
+        acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(vec![select_option("model", "haiku")])),
+    ))));
     app.deliver_result(new_session_created(
         "new-session",
         vec![select_option("model", "haiku"), mode_option("ask", &["code", "plan", "ask"])],
@@ -54,7 +60,7 @@ fn clear_restores_compatible_config_selections() {
 
     let restore_cmd = app.next_agent_command().unwrap();
     assert!(
-        matches!(&restore_cmd, AgentCommand::SetConfigOption { config_id, value, .. } if config_id == "model" && value == "opus"),
+        matches!(&restore_cmd, AgentCommand::SetConfigOption { config_id, value, .. } if config_id == "model" && value == &acp::SessionConfigOptionValue::id("opus")),
         "expected model restored to opus, got {restore_cmd:?}"
     );
 }
@@ -103,7 +109,7 @@ fn resume_loads_selected_session() {
 
     let cmd = app.next_agent_command().unwrap();
     assert!(
-        matches!(&cmd, AgentCommand::LoadSession { session_id, cwd } if session_id.0.as_ref() == "old" && cwd == &std::path::PathBuf::from("/tmp/old")),
+        matches!(&cmd, AgentCommand::ResumeSession { session_id, cwd } if session_id.0.as_ref() == "old" && cwd == &std::path::PathBuf::from("/tmp/old")),
         "expected LoadSession for old session, got {cmd:?}"
     );
 }
@@ -146,10 +152,7 @@ fn new_session_send_failure_shows_transcript_error() {
     app.type_text("/clear");
     app.key(key(KeyCode::Tab));
     assert!(matches!(app.next_command(), Some(Command::Agent(AgentCommand::NewSession { .. }))));
-    app.deliver_result(CommandResult::Failed {
-        command: FailedCommand::Other("create new session"),
-        error: "send failed".to_string(),
-    });
+    app.deliver_result(CommandResult::NewSession(Err("send failed".to_string())));
 
     let messages: Vec<_> = message_texts(&app).collect();
     let has_error = messages.iter().any(|message| message.contains("new session") && message.contains("fail"));
@@ -165,10 +168,7 @@ fn list_sessions_send_failure_shows_transcript_error() {
     app.type_text("/resume");
     app.key(key(KeyCode::Tab));
     assert!(matches!(app.next_command(), Some(Command::Agent(AgentCommand::ListSessions))));
-    app.deliver_result(CommandResult::Failed {
-        command: FailedCommand::Other("list sessions"),
-        error: "send failed".to_string(),
-    });
+    app.deliver_result(CommandResult::SessionsListed(Err("send failed".to_string())));
 
     let messages: Vec<_> = message_texts(&app).collect();
     let has_error = messages.iter().any(|message| message.contains("list sessions") && message.contains("fail"));
@@ -189,14 +189,16 @@ fn load_session_send_failure_cleans_up_buffer_and_shows_error() {
     assert!(app.app().has_session_picker());
 
     app.key(key(KeyCode::Enter));
-    assert!(matches!(app.next_command(), Some(Command::Agent(AgentCommand::LoadSession { .. }))));
-    app.deliver_result(CommandResult::Failed { command: FailedCommand::LoadSession, error: "send failed".to_string() });
+    assert!(matches!(app.next_command(), Some(Command::Agent(AgentCommand::ResumeSession { .. }))));
+    app.deliver_result(CommandResult::ResumeSession { session_id: "old".into(), result: Err("send failed".into()) });
 
     let messages: Vec<_> = message_texts(&app).collect();
-    let has_error = messages.iter().any(|message| message.contains("load session") && message.contains("fail"));
+    let has_error = messages.iter().any(|message| message.contains("resume session") && message.contains("fail"));
     assert!(has_error, "expected visible transcript error for load_session failure, got {messages:?}");
 
     assert!(!app.app().exit_requested(), "app should remain interactive after load_session failure");
+    app.submit("retry");
+    assert!(matches!(app.next_agent_command(), Some(AgentCommand::Prompt { .. })));
 }
 
 #[test]
@@ -259,7 +261,10 @@ fn stale_preview_does_not_replace_current() {
     ui.key(key(KeyCode::Down));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.deliver_result(CommandResult::SessionPreviewLoaded(session_preview_response("sess-1")));
+    ui.deliver_result(CommandResult::SessionPreviewLoaded {
+        session_id: "sess-1".into(),
+        result: Ok(session_preview_response("sess-1")),
+    });
 
     ui.draw();
     let viewport = ui.viewport_text();
@@ -277,9 +282,9 @@ fn session_preview_failure_shows_error() {
     ui.deliver_result(sessions_listed(vec![session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z")]));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.deliver_result(CommandResult::SessionPreviewFailed {
+    ui.deliver_result(CommandResult::SessionPreviewLoaded {
         session_id: "sess-1".to_string(),
-        error: "server unreachable".to_string(),
+        result: Err("server unreachable".to_string()),
     });
 
     ui.draw();
@@ -304,20 +309,21 @@ fn loaded_session_replays_typed_notifications_in_order() {
     assert!(!viewport.contains("buffered message"), "buffered updates should not render yet:\n{viewport}");
     assert!(!viewport.contains("buffered agent"), "buffered updates should not render yet:\n{viewport}");
 
-    ui.acp_event(AcpEvent::SessionLoaded(LoadedSession {
-        session_id: SessionId::new("loaded"),
-        response: acp::LoadSessionResponse::new().config_options(vec![select_option("model", "sonnet")]),
-        replay: vec![
-            acp::SessionNotification::new(SessionId::new("loaded"), user_message_chunk("buffered message")).into(),
-            acp::SessionNotification::new(
-                SessionId::new("loaded"),
-                acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
-                    acp::TextContent::new("buffered agent"),
-                ))),
-            )
-            .into(),
-        ],
-    }));
+    for event in [
+        acp::UpdateSessionNotification::new(SessionId::new("loaded"), user_message_chunk("buffered message")).into(),
+        acp::UpdateSessionNotification::new(
+            SessionId::new("loaded"),
+            acp::SessionUpdate::AgentMessage(
+                acp::AgentMessage::new("replayed-agent")
+                    .content(vec![acp::ContentBlock::Text(acp::TextContent::new("buffered agent"))]),
+            ),
+        )
+        .into(),
+    ] {
+        ui.acp_event(event);
+    }
+    ui.assert_conversation_contains("buffered message");
+    ui.deliver_result(session_loaded("loaded", vec![select_option("model", "sonnet")]));
 
     ui.draw();
     let viewport = ui.viewport_text();
@@ -336,7 +342,7 @@ fn updates_from_the_abandoned_session_do_not_reach_the_loaded_one() {
     ui.deliver_result(sessions_listed(vec![session_info("loaded", "/tmp/loaded", "Loaded", "2025-01-01T00:00:00Z")]));
     ui.key(key(KeyCode::Enter));
     let _ = ui.next_agent_command().unwrap();
-    ui.acp_event(session_loaded("loaded", Vec::new()));
+    ui.deliver_result(session_loaded("loaded", Vec::new()));
 
     ui.acp_event(session_update_for("test-session", user_message_chunk("late message from the old session")));
 
@@ -361,7 +367,7 @@ fn loaded_session_uses_server_config_values() {
     app.key(key(KeyCode::Enter));
     let _ = app.next_agent_command().unwrap();
 
-    app.acp_event(session_loaded(
+    app.deliver_result(session_loaded(
         "loaded",
         vec![select_option("model", "sonnet"), mode_option("code", &["code", "plan", "ask"])],
     ));
@@ -394,7 +400,7 @@ fn session_list_error_shows_in_transcript() {
     app.type_text("/resume");
     app.key(key(KeyCode::Tab));
 
-    app.deliver_result(CommandResult::ConfigOptionUpdateFailed { error: "list sessions failed".to_string() });
+    app.deliver_result(CommandResult::SessionsListed(Err("list sessions failed".to_string())));
 
     let messages: Vec<_> = message_texts(&app).collect();
     let has_error = messages.iter().any(|message| message.contains("list sessions failed"));

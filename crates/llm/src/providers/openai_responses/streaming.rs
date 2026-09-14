@@ -42,7 +42,7 @@ impl From<ResponsesUsage> for TokenUsage {
 #[serde(tag = "type")]
 pub enum ResponsesStreamEvent {
     #[serde(rename = "response.created")]
-    Created(ResponsesCreatedEvent),
+    Created,
     #[serde(rename = "response.output_text.delta")]
     OutputTextDelta(ResponsesTextDeltaEvent),
     #[serde(rename = "response.output_item.added")]
@@ -75,16 +75,6 @@ impl ResponsesStreamEvent {
     fn may_precede_creation(&self) -> bool {
         matches!(self, Self::Ignored | Self::Error(_) | Self::Failed(_))
     }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ResponsesCreatedEvent {
-    pub response: ResponsesCreated,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ResponsesCreated {
-    pub id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -171,7 +161,7 @@ where
                 }
             };
 
-            if matches!(event, ResponsesStreamEvent::Created(_)) {
+            if matches!(event, ResponsesStreamEvent::Created) {
                 started = true;
             } else if !started && !event.may_precede_creation() {
                 yield Err(ProviderError::stream_interrupted(
@@ -229,9 +219,7 @@ fn process_event(
     let incomplete = matches!(&event, ResponsesStreamEvent::Incomplete(_));
 
     match event {
-        ResponsesStreamEvent::Created(e) => {
-            responses.push(Ok(LlmResponse::Start { message_id: e.response.id }));
-        }
+        ResponsesStreamEvent::Created => responses.push(Ok(LlmResponse::Start)),
         ResponsesStreamEvent::OutputTextDelta(e) if !e.delta.is_empty() => {
             responses.push(Ok(LlmResponse::Text { chunk: e.delta }));
         }
@@ -319,7 +307,7 @@ mod tests {
         ])
         .await;
 
-        assert!(matches!(responses[0], LlmResponse::Start { .. }));
+        assert!(matches!(responses[0], LlmResponse::Start));
         assert!(matches!(responses[1], LlmResponse::Text { ref chunk } if chunk == "Hello"));
         assert!(matches!(responses[2], LlmResponse::Text { ref chunk } if chunk == " world"));
         assert!(matches!(
@@ -352,7 +340,7 @@ mod tests {
         ])
         .await;
 
-        assert!(matches!(responses[0], LlmResponse::Start { .. }));
+        assert!(matches!(responses[0], LlmResponse::Start));
         assert!(
             matches!(&responses[1], LlmResponse::ToolRequestStart { id, name } if id == "fc_1" && name == "read_file")
         );
@@ -558,7 +546,7 @@ mod tests {
         let stream = make_stream(vec![text_delta("partial")]);
         let responses = process_response_stream(stream).collect::<Vec<_>>().await;
 
-        assert!(matches!(responses[0], Ok(LlmResponse::Start { .. })));
+        assert!(matches!(responses[0], Ok(LlmResponse::Start)));
         assert!(matches!(responses[1], Ok(LlmResponse::Text { .. })));
         assert_eq!(
             responses[2].as_ref().err().and_then(LlmError::provider).map(|provider| provider.kind),
@@ -741,11 +729,7 @@ mod tests {
         events: Vec<ResponsesStreamEvent>,
     ) -> impl Stream<Item = Result<ResponsesStreamEvent>> + Send + Unpin {
         tokio_stream::iter(
-            std::iter::once(Ok(ResponsesStreamEvent::Created(ResponsesCreatedEvent {
-                response: ResponsesCreated { id: "resp_test".to_string() },
-            })))
-            .chain(events.into_iter().map(Ok))
-            .collect::<Vec<_>>(),
+            std::iter::once(Ok(ResponsesStreamEvent::Created)).chain(events.into_iter().map(Ok)).collect::<Vec<_>>(),
         )
     }
 

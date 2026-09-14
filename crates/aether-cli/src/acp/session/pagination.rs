@@ -1,5 +1,5 @@
 use aether_sessions::SessionSummary;
-use agent_client_protocol::schema::v1 as acp;
+use agent_client_protocol::Error;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
@@ -9,7 +9,7 @@ const SESSION_PAGE_SIZE: usize = 50;
 pub(crate) fn paginate_summaries(
     summaries: Vec<SessionSummary>,
     cursor: Option<&str>,
-) -> Result<(Vec<SessionSummary>, Option<String>), acp::Error> {
+) -> Result<(Vec<SessionSummary>, Option<String>), Error> {
     let start = match cursor {
         Some(cursor) => {
             let cursor = decode_cursor(cursor)?;
@@ -19,7 +19,7 @@ pub(crate) fn paginate_summaries(
                     summary.meta.created_at == cursor.created_at && summary.meta.session_id == cursor.session_id
                 })
                 .map(|index| index + 1)
-                .ok_or_else(acp::Error::invalid_params)?
+                .ok_or_else(Error::invalid_params)?
         }
         None => 0,
     };
@@ -41,7 +41,7 @@ fn encode_cursor(summary: &SessionSummary) -> String {
     URL_SAFE_NO_PAD.encode(serde_json::to_vec(&cursor).expect("session list cursor is serializable"))
 }
 
-fn decode_cursor(value: &str) -> Result<SessionListCursor, acp::Error> {
-    let bytes = URL_SAFE_NO_PAD.decode(value).map_err(|_| acp::Error::invalid_params())?;
-    serde_json::from_slice(&bytes).map_err(|_| acp::Error::invalid_params())
+fn decode_cursor(value: &str) -> Result<SessionListCursor, Error> {
+    let bytes = URL_SAFE_NO_PAD.decode(value).map_err(|_| Error::invalid_params())?;
+    serde_json::from_slice(&bytes).map_err(|_| Error::invalid_params())
 }

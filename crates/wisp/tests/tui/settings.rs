@@ -15,11 +15,14 @@ fn mcp_notification(servers: Vec<McpServerStatusEntry>) -> AcpEvent {
 }
 
 fn auth_complete(method_id: &str) -> CommandResult {
-    CommandResult::AuthenticationCompleted { method_id: method_id.to_string() }
+    CommandResult::AuthenticationCompleted {
+        method_id: method_id.to_string(),
+        result: Ok(acp::LoginAuthResponse::new()),
+    }
 }
 
 fn auth_failed(method_id: &str) -> CommandResult {
-    CommandResult::AuthenticationFailed { method_id: method_id.to_string() }
+    CommandResult::AuthenticationCompleted { method_id: method_id.to_string(), result: Err("login failed".into()) }
 }
 
 fn auth_method(id: &str, name: &str, description: Option<&str>) -> acp::AuthMethod {
@@ -980,7 +983,7 @@ fn settings_selecting_option_emits_config_option() {
     match cmd {
         AgentCommand::SetConfigOption { config_id, value, .. } => {
             assert_eq!(config_id, "model");
-            assert_eq!(value, "claude");
+            assert_eq!(value, acp::SessionConfigOptionValue::id("claude"));
         }
         other => panic!("expected SetConfigOption, got: {other:?}"),
     }
@@ -1051,7 +1054,7 @@ fn settings_multi_select_toggle_and_confirm() {
     match cmd {
         AgentCommand::SetConfigOption { config_id, value, .. } => {
             assert_eq!(config_id, "model");
-            assert!(value.contains("anthropic:opus"), "value: {value}");
+            assert_eq!(value, acp::SessionConfigOptionValue::id("anthropic:opus"));
         }
         other => panic!("expected SetConfigOption, got: {other:?}"),
     }
@@ -1109,7 +1112,10 @@ fn config_option_update_failed_shows_in_transcript() {
     ui.key(key(KeyCode::Tab));
     assert!(ui.app().has_modal());
 
-    ui.deliver_result(CommandResult::ConfigOptionUpdateFailed { error: "invalid model".to_string() });
+    ui.deliver_result(CommandResult::ConfigOptionsUpdated {
+        conversation_id: ui.app().conversation_id(),
+        result: Err("invalid model".to_string()),
+    });
 
     // Overlay should still be open
     assert!(ui.app().has_modal());
@@ -2026,7 +2032,9 @@ fn model_selector_toggles_only_what_the_query_left_visible() {
     ui.key(key(KeyCode::Esc));
 
     match ui.next_agent_command().expect("expected the filtered model to be committed") {
-        AgentCommand::SetConfigOption { value, .. } => assert_eq!(value, "openai:gpt-4o"),
+        AgentCommand::SetConfigOption { value, .. } => {
+            assert_eq!(value, acp::SessionConfigOptionValue::id("openai:gpt-4o"));
+        }
         other => panic!("expected SetConfigOption, got: {other:?}"),
     }
 }

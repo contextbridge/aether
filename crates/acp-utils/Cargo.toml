@@ -24,9 +24,9 @@ rustdoc-args = ["--cfg", "docsrs"]
 workspace = true
 
 [features]
-default = ["client", "server"]
+default = ["client"]
 client = []
-server = []
+agent = ["tokio/net"]
 testing = ["client"]
 websocket = ["dep:tokio-tungstenite"]
 

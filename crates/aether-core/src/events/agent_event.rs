@@ -94,7 +94,10 @@ mod tests {
                 outcome: LlmCallOutcome::Cancelled,
             }),
             AgentEvent::Context(ContextEvent::UsageUpdated { usage: ContextUsage::default() }),
-            AgentEvent::Context(ContextEvent::CompactionEnded { outcome: CompactionOutcome::Completed }),
+            AgentEvent::Context(ContextEvent::CompactionEnded {
+                compaction_id: "compaction".into(),
+                outcome: CompactionOutcome::Completed,
+            }),
             AgentEvent::Model(ModelEvent::Switched { previous: "a".into(), new: "b".into() }),
             AgentEvent::SessionUsage(llm::testing::session_usage_event(1, llm::TokenUsage::new(1, 2))),
             AgentEvent::Tool(ToolEvent::DisplayUpdate {

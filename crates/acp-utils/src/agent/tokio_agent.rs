@@ -1,9 +1,3 @@
-//! Tokio-native parent-side ACP transport.
-//!
-//! `agent_client_protocol::AcpAgent` spawns the child via smol's
-//! `async_process::Command`, which wraps stdio in `blocking::Unblock`. Inside a
-//! tokio runtime that causes a busy loop. This avoids the issue by spawning stdio agents with `tokio::process::Command`
-
 use agent_client_protocol::util::internal_error;
 use agent_client_protocol::{
     AcpAgent, AcpAgentConfig, ByteStreams, ConnectTo, Error, INCOMING_TRANSPORT_CLOSED_REASON, Role,
@@ -105,6 +99,7 @@ async fn connect_stdio<T: Role>(config: AcpAgentConfig, client: impl ConnectTo<T
     }
 }
 
+// ACP 2.0.0's SpawnedRun and Task::new wrap prior error data under another `data` field.
 fn has_incoming_transport_closed(error: &Error) -> bool {
     fn data_has_reason(data: &serde_json::Value) -> bool {
         data.get("reason").and_then(serde_json::Value::as_str) == Some(INCOMING_TRANSPORT_CLOSED_REASON)

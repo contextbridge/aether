@@ -1,18 +1,19 @@
 pub(crate) mod agent;
+#[cfg(any(test, feature = "testing"))]
 pub(crate) mod fake_prompt_mcp;
 pub(crate) mod protocol;
 pub(crate) mod session;
 pub(crate) mod state;
-pub(crate) mod stdio;
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
 pub use protocol::map_mcp_prompt_to_available_command;
 
 use crate::acp::agent::acp_agent_builder;
 use crate::acp::state::{AcpState, AcpStateConfig};
-use crate::acp::stdio::Stdio;
 use crate::provider_connection_args::ProviderConnectionArgs;
 use crate::settings_args::{ConflictingSettingsSources, SettingsSourceArgs};
+use acp_utils::agent::Stdio;
 use aether_project::AetherSettings;
 use aether_telemetry::{AgentTraceContext, TelemetryInitError};
 use agent_client_protocol as acp;

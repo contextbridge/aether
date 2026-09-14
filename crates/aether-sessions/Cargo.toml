@@ -33,5 +33,7 @@ tracing = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.14" }
 
 [dev-dependencies]
+aether-core = { package = "aether-agent-core", path = "../aether-core", features = ["testing"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 aether-sessions = { path = ".", features = ["testing"] }
 tempfile = { workspace = true }

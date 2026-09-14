@@ -1,18 +1,3 @@
-//! Piped Stdio transport for ACP.
-//!
-//! `agent_client_protocol::Stdio` (from acp crate) drives stdin/stdout via
-//! `blocking::Unblock` (blocking syscalls on a thread-pool worker) and treats
-//! every io error as fatal. That's a problem when the parent process spawns
-//! this binary with non-blocking pipe fds: a `read`/`write` on the child side
-//! can return `EAGAIN`, which the upstream transport surfaces as a fatal io error
-//! and tears the session down.
-//!
-//! We poll the fds via epoll instead, so `EAGAIN` isn't fatal. Which tokio type
-//! backs that depends on the fd: when spawned with `stdio: 'pipe'`, Node/libuv
-//! backs stdin/stdout with `AF_UNIX` socketpairs (not FIFOs), so we route sockets
-//! through `tokio::net::UnixStream` and real FIFOs through
-//! `tokio::net::unix::pipe`.
-
 use agent_client_protocol::{ByteStreams, ConnectTo, Error, Role};
 use futures::{AsyncRead, AsyncWrite};
 use std::fs::File;

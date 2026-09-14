@@ -1,6 +1,6 @@
 use acp_utils::client::AcpEvent;
 use acp_utils::notifications::{McpServerStatus, McpServerStatusEntry};
-use agent_client_protocol::schema::v1::{self as acp, SessionId};
+use agent_client_protocol::schema::v2::{self as acp, SessionId};
 use clankerdiff_ratatui::composite_color;
 use clankerdiff_ratatui::theme::{ReviewTheme, Rgba, ThemeError};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -45,11 +45,11 @@ fn mode_option() -> acp::SessionConfigOption {
 }
 
 fn config_update(options: Vec<acp::SessionConfigOption>) -> AcpEvent {
-    use acp_utils::client::AcpEvent as ACP;
-    ACP::SessionUpdate {
-        session_id: SessionId::new("test-session"),
-        update: Box::new(acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(options))),
-    }
+    acp::UpdateSessionNotification::new(
+        SessionId::new("test-session"),
+        acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(options)),
+    )
+    .into()
 }
 
 fn type_and_submit(ui: &mut TestUi, text: &str) {

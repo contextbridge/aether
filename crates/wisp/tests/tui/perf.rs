@@ -212,18 +212,23 @@ fn streamed_markdown_rendering_matches_one_shot_at_every_chunk() {
 }
 
 #[test]
-fn streamed_thought_never_appends_conversation_content() {
+fn streamed_thought_preserves_content_without_rendering_it() {
     let mut message = String::new();
     for index in 0..60 {
         let _ = writeln!(message, "Considering step {index} of the plan before acting.");
     }
     message.push_str("Ready to start.");
     let mut ui = perf_ui();
+    ui.submit("think");
+    let mut seen = String::new();
     for chunk in chunk_message(&message, 61) {
+        seen.push_str(&chunk);
         ui.acp_event(thought_chunk(&chunk));
         ui.draw();
 
-        assert!(ui.app().conversation_items().is_empty(), "thought chunks must never enter the conversation");
+        assert!(ui.app().conversation_items().iter().all(|item| !item.text().is_some_and(|t| t.contains("step"))));
+        assert!(!ui.history_text().contains("Considering step"));
+        assert!(ui.viewport_text().contains(seen.split_whitespace().last().unwrap()));
         assert!(ui.app().progress_indicator().is_active(), "streaming thought must keep the progress band active");
     }
 }

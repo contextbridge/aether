@@ -2,12 +2,14 @@
 //! notifications.
 use std::path::PathBuf;
 
-use agent_client_protocol::schema::v1::{AuthMethod, Meta};
+use agent_client_protocol::schema::v2::{AuthMethod, Meta};
 use agent_client_protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 pub use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize};
 
 pub use mcp_utils::status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
+
+use crate::meta::{from_meta, to_meta};
 
 pub const AETHER_META_NAMESPACE: &str = "contextbridge/aether";
 
@@ -16,13 +18,6 @@ pub const AETHER_META_NAMESPACE: &str = "contextbridge/aether";
 #[notification(method = "_aether/session_usage")]
 pub struct SessionUsageParams {
     pub usage: llm::SessionUsageEvent,
-}
-
-/// Parameters for `_aether/context_compaction` notifications.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcNotification)]
-#[notification(method = "_aether/context_compaction")]
-pub struct ContextCompactionParams {
-    pub active: bool,
 }
 
 /// Parameters for `_aether/context_cleared` notifications.
@@ -168,12 +163,12 @@ impl SessionDisplayMeta {
 
     #[must_use]
     pub fn to_meta(&self) -> Meta {
-        to_aether_meta(self)
+        to_meta(self, Some(AETHER_META_NAMESPACE)).unwrap_or_default()
     }
 
     #[must_use]
     pub fn from_meta(meta: Option<&Meta>) -> Self {
-        from_aether_meta(meta)
+        from_meta(meta, Some(AETHER_META_NAMESPACE))
     }
 }
 
@@ -191,26 +186,13 @@ pub struct AetherCapabilities {
 impl AetherCapabilities {
     #[must_use]
     pub fn to_meta(self) -> Meta {
-        to_aether_meta(&self)
+        to_meta(&self, Some(AETHER_META_NAMESPACE)).unwrap_or_default()
     }
 
     #[must_use]
     pub fn from_meta(meta: Option<&Meta>) -> Self {
-        from_aether_meta(meta)
+        from_meta(meta, Some(AETHER_META_NAMESPACE))
     }
-}
-
-fn to_aether_meta<T: Serialize>(value: &T) -> Meta {
-    let mut meta = Meta::new();
-    meta.insert(AETHER_META_NAMESPACE.to_string(), serde_json::json!(value));
-    meta
-}
-
-fn from_aether_meta<T: DeserializeOwned + Default>(meta: Option<&Meta>) -> T {
-    meta.and_then(|m| m.get(AETHER_META_NAMESPACE))
-        .cloned()
-        .and_then(|value| serde_json::from_value(value).ok())
-        .unwrap_or_default()
 }
 
 /// Server→client MCP extension notifications (relay → wisp).
@@ -282,7 +264,7 @@ pub struct SubAgentToolError {
 #[cfg(test)]
 mod tests {
     use agent_client_protocol::JsonRpcMessage;
-    use agent_client_protocol::schema::v1::AuthMethodAgent;
+    use agent_client_protocol::schema::v2::AuthMethodAgent;
 
     use super::*;
 
@@ -301,17 +283,6 @@ mod tests {
         let move_params =
             WorkspaceMoveParams { session_id: String::new(), target: WorkspaceMoveTarget::New { name: String::new() } };
         assert_eq!(move_params.method(), "_aether/workspace_move");
-    }
-
-    #[test]
-    fn context_compaction_params_roundtrip() {
-        for active in [true, false] {
-            let params = ContextCompactionParams { active };
-            let untyped = params.to_untyped_message().expect("serializable");
-            assert_eq!(untyped.method(), "_aether/context_compaction");
-            let parsed = ContextCompactionParams::parse_message(untyped.method(), untyped.params()).expect("roundtrip");
-            assert_eq!(parsed, params);
-        }
     }
 
     #[test]

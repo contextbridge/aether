@@ -9,12 +9,13 @@ use llm::{AssistantReasoning, ChatMessage, ContentBlock};
 async fn replace_conversation_preserves_system_prompt_for_next_request() {
     let result = test_agent()
         .system_prompt(Prompt::text("original system"))
-        .llm_responses(&[llm_response("msg").build()])
+        .llm_responses(&[llm_response().build()])
         .scenario(
             TestScenario::new()
                 .replace_conversation(vec![
                     ChatMessage::user("old user"),
                     ChatMessage::Assistant {
+                        message_id: "old-assistant".into(),
                         content: "old assistant".to_string(),
                         reasoning: AssistantReasoning::default(),
                         timestamp: IsoString::now(),
@@ -34,6 +35,7 @@ async fn replace_conversation_preserves_system_prompt_for_next_request() {
     assert!(
         matches!(messages[1], ChatMessage::User { ref content, .. } if content == &vec![ContentBlock::text("old user")])
     );
+    assert_eq!(messages[2].message_id().as_deref(), Some("old-assistant"));
     assert!(matches!(messages[2], ChatMessage::Assistant { ref content, .. } if content == "old assistant"));
     assert!(
         matches!(messages[3], ChatMessage::User { ref content, .. } if content == &vec![ContentBlock::text("new user")])
@@ -44,7 +46,7 @@ async fn replace_conversation_preserves_system_prompt_for_next_request() {
 #[tokio::test]
 async fn replace_conversation_preserves_token_usage() {
     let events = test_agent()
-        .llm_responses(&[llm_response("msg").usage(800, 10).build()])
+        .llm_responses(&[llm_response().usage(800, 10).build()])
         .provider_context_window(Some(1000))
         .scenario(
             TestScenario::new()

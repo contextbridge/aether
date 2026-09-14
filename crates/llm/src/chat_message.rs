@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::catalog::LlmModel;
 use crate::types::IsoString;
 
-use super::{ToolCallError, ToolCallRequest, ToolCallResult};
+use super::{MessageId, ToolCallError, ToolCallRequest, ToolCallResult};
 
 #[doc = include_str!("docs/content_block.md")]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -109,10 +109,12 @@ pub enum ChatMessage {
         timestamp: IsoString,
     },
     User {
+        message_id: MessageId,
         content: Vec<ContentBlock>,
         timestamp: IsoString,
     },
     Assistant {
+        message_id: MessageId,
         content: String,
         #[serde(default)]
         reasoning: AssistantReasoning,
@@ -121,12 +123,14 @@ pub enum ChatMessage {
     },
     ToolCallResult(Result<ToolCallResult, ToolCallError>),
     Error {
+        message_id: MessageId,
         message: String,
         timestamp: IsoString,
     },
     /// A compacted summary of previous conversation history.
     /// This replaces multiple messages with a structured summary to reduce context usage.
     Summary {
+        message_id: MessageId,
         content: String,
         timestamp: IsoString,
         /// Number of messages that were compacted into this summary
@@ -137,12 +141,29 @@ pub enum ChatMessage {
 impl ChatMessage {
     /// A user message carrying a single block of text, stamped now.
     pub fn user(text: impl Into<String>) -> Self {
-        ChatMessage::User { content: vec![ContentBlock::text(text)], timestamp: IsoString::now() }
+        Self::user_with_id(MessageId::new(), vec![ContentBlock::text(text)])
     }
 
     /// A system prompt, stamped now.
     pub fn system(content: impl Into<String>) -> Self {
         ChatMessage::System { content: content.into(), timestamp: IsoString::now() }
+    }
+
+    pub fn user_with_id(message_id: MessageId, content: Vec<ContentBlock>) -> Self {
+        Self::User { message_id, content, timestamp: IsoString::now() }
+    }
+
+    /// Identity of every message that can be addressed by clients; system prompts have none.
+    pub fn message_id(&self) -> Option<MessageId> {
+        match self {
+            Self::User { message_id, .. }
+            | Self::Assistant { message_id, .. }
+            | Self::Error { message_id, .. }
+            | Self::Summary { message_id, .. } => Some(message_id.clone()),
+            Self::ToolCallResult(Ok(result)) => Some(MessageId::tool_result(&result.id)),
+            Self::ToolCallResult(Err(error)) => Some(MessageId::tool_result(&error.id)),
+            Self::System { .. } => None,
+        }
     }
 
     /// Returns true if this message is a tool call result
@@ -297,6 +318,7 @@ mod tests {
     fn chat_message_assistant_serde_roundtrip_with_reasoning() {
         let model = make_model();
         let msg = ChatMessage::Assistant {
+            message_id: MessageId::new(),
             content: "response".to_string(),
             reasoning: AssistantReasoning {
                 summary_text: Some("plan".to_string()),
@@ -318,6 +340,7 @@ mod tests {
     fn estimated_bytes_includes_encrypted_content() {
         let model = make_model();
         let msg_with = ChatMessage::Assistant {
+            message_id: MessageId::new(),
             content: "hi".to_string(),
             reasoning: AssistantReasoning {
                 summary_text: Some("think".to_string()),
@@ -331,6 +354,7 @@ mod tests {
             tool_calls: vec![],
         };
         let msg_without = ChatMessage::Assistant {
+            message_id: MessageId::new(),
             content: "hi".to_string(),
             reasoning: AssistantReasoning { summary_text: Some("think".to_string()), encrypted_content: None },
             timestamp: IsoString::now(),

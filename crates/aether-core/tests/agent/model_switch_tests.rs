@@ -5,12 +5,12 @@ use llm::testing::{FakeLlmProvider, llm_response};
 #[tokio::test]
 async fn test_switch_model_emits_model_switched() -> Result<(), Box<dyn std::error::Error>> {
     // The switched-to provider will produce this response
-    let new_provider = FakeLlmProvider::with_single_response(llm_response("after-switch").text(&["Switched!"]).build());
+    let new_provider = FakeLlmProvider::with_single_response(llm_response().text(&["Switched!"]).build());
 
     // Initial LLM produces a response, then we switch
     let events = test_agent()
         .without_mcp()
-        .llm_responses(&[llm_response("msg-1").text(&["Hello"]).build()])
+        .llm_responses(&[llm_response().text(&["Hello"]).build()])
         .scenario(
             TestScenario::new()
                 .user_text("hi")
@@ -36,13 +36,12 @@ async fn test_switch_model_emits_model_switched() -> Result<(), Box<dyn std::err
 #[tokio::test]
 async fn test_switch_model_unknown_context_limit_resets_context_meter() -> Result<(), Box<dyn std::error::Error>> {
     let unknown_limit_provider =
-        FakeLlmProvider::with_single_response(llm_response("after-switch").text(&["Switched!"]).build())
-            .with_context_window(None);
+        FakeLlmProvider::with_single_response(llm_response().text(&["Switched!"]).build()).with_context_window(None);
 
     let events = test_agent()
         .without_mcp()
         .provider_context_window(Some(200_000))
-        .llm_responses(&[llm_response("msg-1").usage(1_000, 50).text(&["Hello"]).build()])
+        .llm_responses(&[llm_response().usage(1_000, 50).text(&["Hello"]).build()])
         .scenario(
             TestScenario::new().user_text("hi").wait_for_turn_end().switch_model(unknown_limit_provider).wait_for(
                 |event| {
