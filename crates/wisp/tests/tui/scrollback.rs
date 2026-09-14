@@ -134,7 +134,7 @@ fn session_switch_preserves_native_scrollback_without_purging() {
 
     ui.assert_history_contains("overflow-line-0");
 
-    ui.acp_event(session_loaded("other", Vec::new()));
+    ui.deliver_result(session_loaded("other", Vec::new()));
 
     ui.assert_history_contains("overflow-line-0");
 }

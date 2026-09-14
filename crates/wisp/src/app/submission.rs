@@ -1,29 +1,9 @@
-use super::App;
+use super::{App, ForegroundOperation};
 use crate::attachment::{AttachmentOutcome, PromptAttachment};
 use crate::command::{AgentCommand, Command, FilesystemCommand};
 use crate::session::session_config_view::LocalConfigView;
 use acp_utils::config_option_id::ConfigOptionId;
 use agent_client_protocol::schema::v2 as acp;
-
-#[derive(Default)]
-pub(super) enum SubmissionState {
-    #[default]
-    Idle,
-    Preparing(String),
-}
-
-impl SubmissionState {
-    fn take(&mut self) -> Option<String> {
-        match std::mem::take(self) {
-            Self::Preparing(text) => Some(text),
-            Self::Idle => None,
-        }
-    }
-
-    pub(super) fn reset(&mut self) {
-        *self = Self::Idle;
-    }
-}
 
 impl App {
     pub(super) fn submit(&mut self) {
@@ -37,7 +17,7 @@ impl App {
             mentions.into_iter().map(|m| PromptAttachment { path: m.path, display_name: m.display_name }).collect();
         all_attachments.extend(pending_media);
 
-        self.submission = SubmissionState::Preparing(text);
+        self.foreground = ForegroundOperation::PreparingPrompt(text);
         if all_attachments.is_empty() {
             self.finish_submission(AttachmentOutcome {
                 blocks: Vec::new(),
@@ -50,7 +30,7 @@ impl App {
     }
 
     pub(super) fn finish_submission(&mut self, outcome: AttachmentOutcome) {
-        let Some(text) = self.submission.take() else {
+        let Some(text) = self.foreground.take_prepared_prompt() else {
             return;
         };
         let display = std::iter::once(text.as_str())

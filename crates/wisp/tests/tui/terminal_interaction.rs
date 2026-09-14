@@ -3,7 +3,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use ratatui::TerminalOptions;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
-use wisp::app::WorkspaceMoveState;
+use wisp::app::ForegroundOperation;
 use wisp::command::{AgentCommand, Command, CommandResult, GitWatchCommand, TerminalCommand};
 
 use super::support::{
@@ -15,6 +15,14 @@ use super::support::{
 /// it had queued along with it.
 fn rang_bell(app: &mut TestUi) -> bool {
     app.take_commands().into_iter().any(|command| matches!(command, Command::Terminal(TerminalCommand::RingBell)))
+}
+
+fn sessions_completed(response: acp::ListSessionsResponse) -> CommandResult {
+    CommandResult::SessionsListed(Ok(response))
+}
+
+fn workspaces_completed(response: acp_utils::notifications::WorkspaceListResponse) -> CommandResult {
+    CommandResult::WorkspacesListed(Ok(response))
 }
 
 fn make_app() -> TestUi {
@@ -64,7 +72,7 @@ mod picker_click {
             SessionInfo::new(SessionId::new("s2"), "/tmp"),
             SessionInfo::new(SessionId::new("s3"), "/tmp"),
         ];
-        ui.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(sessions)));
+        ui.deliver_result(sessions_completed(acp::ListSessionsResponse::new(sessions)));
         assert!(ui.app().has_session_picker());
 
         ui.draw();
@@ -80,7 +88,7 @@ mod picker_click {
 
         let sessions =
             vec![SessionInfo::new(SessionId::new("s1"), "/tmp"), SessionInfo::new(SessionId::new("s2"), "/tmp")];
-        ui.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(sessions)));
+        ui.deliver_result(sessions_completed(acp::ListSessionsResponse::new(sessions)));
         assert!(ui.app().has_session_picker());
 
         ui.draw();
@@ -102,9 +110,7 @@ mod picker_click {
         let mut session_c = SessionInfo::new(SessionId::new("ccc"), "/tmp");
         session_c.title = Some("Alpha Config".to_string());
 
-        ui.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(vec![
-            session_a, session_b, session_c,
-        ])));
+        ui.deliver_result(sessions_completed(acp::ListSessionsResponse::new(vec![session_a, session_b, session_c])));
         assert!(ui.app().has_session_picker());
 
         // Type filter: "Alpha"
@@ -132,7 +138,7 @@ mod picker_click {
             WorkspaceEntry { path: std::path::PathBuf::from("/tmp/ws3"), is_current: false },
         ];
         let mut ui = make_ui();
-        ui.deliver_result(CommandResult::WorkspacesListed(WorkspaceListResponse { workspaces }));
+        ui.deliver_result(workspaces_completed(WorkspaceListResponse { workspaces }));
 
         ui.draw();
         let rect = navigation_rect(&mut ui);
@@ -146,7 +152,7 @@ mod picker_click {
 
         let workspaces = vec![WorkspaceEntry { path: std::path::PathBuf::from("/tmp/ws1"), is_current: false }];
         let mut ui = make_ui();
-        ui.deliver_result(CommandResult::WorkspacesListed(WorkspaceListResponse { workspaces }));
+        ui.deliver_result(workspaces_completed(WorkspaceListResponse { workspaces }));
 
         ui.draw();
 
@@ -165,7 +171,7 @@ mod picker_click {
             WorkspaceEntry { path: std::path::PathBuf::from("/tmp/other"), is_current: false },
         ];
         let mut ui = make_ui();
-        ui.deliver_result(CommandResult::WorkspacesListed(WorkspaceListResponse { workspaces }));
+        ui.deliver_result(workspaces_completed(WorkspaceListResponse { workspaces }));
 
         // Type filter: "beta"
         ui.key(key(KeyCode::Char('b')));
@@ -196,7 +202,7 @@ mod mouse_capture {
         let mut app = make_app();
         let current_id = SessionId::new("test-session");
         let other = SessionInfo::new(SessionId::new("other"), "/tmp");
-        app.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(vec![other])));
+        app.deliver_result(sessions_completed(acp::ListSessionsResponse::new(vec![other])));
         std::mem::drop(current_id);
 
         assert!(app.app().has_session_picker());
@@ -233,7 +239,7 @@ mod mouse_capture {
     fn capture_disabled_after_connection_closed() {
         let mut app = make_app();
         let other = SessionInfo::new(SessionId::new("other"), "/tmp");
-        app.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(vec![other])));
+        app.deliver_result(sessions_completed(acp::ListSessionsResponse::new(vec![other])));
         assert!(app.app().needs_mouse_capture());
 
         app.acp_event(AcpEvent::ConnectionClosed);
@@ -345,7 +351,7 @@ mod event_routing {
     fn mouse_click_outside_surface_is_ignored() {
         let mut app = make_app();
 
-        app.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(vec![SessionInfo::new(
+        app.deliver_result(sessions_completed(acp::ListSessionsResponse::new(vec![SessionInfo::new(
             SessionId::new("other"),
             "/tmp",
         )])));
@@ -522,7 +528,7 @@ mod event_routing {
             SessionInfo::new(SessionId::new("b"), "/tmp/b"),
             SessionInfo::new(SessionId::new("c"), "/tmp/c"),
         ];
-        ui.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(sessions)));
+        ui.deliver_result(sessions_completed(acp::ListSessionsResponse::new(sessions)));
         std::mem::drop(current);
         assert!(ui.app().has_session_picker());
 
@@ -577,8 +583,8 @@ mod event_routing {
             WorkspaceEntry { path: PathBuf::from("/tmp/b"), is_current: false },
             WorkspaceEntry { path: PathBuf::from("/tmp/c"), is_current: false },
         ];
-        ui.deliver_result(CommandResult::WorkspacesListed(WorkspaceListResponse { workspaces }));
-        assert!(matches!(ui.app().workspace_move_state(), WorkspaceMoveState::Picking));
+        ui.deliver_result(workspaces_completed(WorkspaceListResponse { workspaces }));
+        assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::PickingWorkspace));
 
         ui.draw();
 
@@ -932,7 +938,7 @@ mod mouse_owning_surfaces {
     fn session_picker_sets_surface_rect() {
         let mut ui = make_ui();
         let current = SessionId::new("test-session");
-        ui.deliver_result(CommandResult::SessionsListed(acp::ListSessionsResponse::new(vec![SessionInfo::new(
+        ui.deliver_result(sessions_completed(acp::ListSessionsResponse::new(vec![SessionInfo::new(
             SessionId::new("other"),
             std::path::PathBuf::from("/tmp"),
         )])));

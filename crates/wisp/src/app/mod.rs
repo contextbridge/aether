@@ -1,6 +1,6 @@
 use crate::app::keybindings::Keybindings;
 use crate::app::message::Message;
-use crate::command::{AgentCommand, Command, CommandResult, FailedCommand};
+use crate::command::{AgentCommand, Command, CommandResult};
 use crate::conversation::items::{Conversation, ConversationItem};
 use crate::conversation::progress_indicator::{ProgressIndicator, ProgressPhase};
 use crate::conversation::status_line::StatusLineModel;
@@ -20,7 +20,7 @@ use crate::view::generation::Generation;
 use acp_utils::client::AcpEvent;
 use acp_utils::notifications::AetherCapabilities;
 use agent_client_protocol::schema::v2::PlanEntry;
-use agent_client_protocol::schema::v2::{self as acp, SessionId};
+use agent_client_protocol::schema::v2::{self as acp};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -29,11 +29,11 @@ use tokio::sync::mpsc;
 pub mod message;
 mod navigation;
 
-pub use crate::session::session_model::WorkspaceMoveState;
 pub use navigation::{Overlay, Route};
 
 mod acp_reducer;
 mod config;
+mod foreground;
 mod input;
 mod keybindings;
 mod session;
@@ -41,7 +41,7 @@ mod submission;
 use config::build_theme_entries;
 use input::CTRL_C_CONFIRM_WINDOW;
 use session::builtin_commands;
-use submission::SubmissionState;
+pub use foreground::{ForegroundOperation, PromptPhase};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ExitState {
@@ -70,9 +70,7 @@ pub struct App {
     exit_state: ExitState,
     /// What the event loop still owes the outside world.
     commands: VecDeque<Command>,
-    submission: SubmissionState,
-    session_transition: Option<session::SessionTransition>,
-    prompt_acceptance_pending: bool,
+    foreground: ForegroundOperation,
     browser_opener: BrowserOpener,
     clipboard_writer: ClipboardWriter,
 }
@@ -88,13 +86,9 @@ struct UiConfig {
 }
 
 pub struct AppConfig {
-    pub session_id: SessionId,
-    pub agent_name: String,
+    pub initialize_response: acp::InitializeResponse,
+    pub session_response: acp::NewSessionResponse,
     pub workspace_status: WorkspaceStatus,
-    pub prompt_capabilities: acp::PromptCapabilities,
-    pub session_capabilities: acp::SessionCapabilities,
-    pub config_options: Vec<acp::SessionConfigOption>,
-    pub auth_methods: Vec<acp::AuthMethod>,
     pub working_dir: PathBuf,
     pub settings: UiSettings,
     /// Host services the UI reaches for; injected so tests observe URL opens
@@ -113,33 +107,18 @@ impl App {
         session: crate::session::Session,
         settings: UiSettings,
     ) -> (Self, mpsc::UnboundedReceiver<AcpEvent>, acp_utils::client::AcpClientHandle) {
-        let crate::session::Session {
-            session_id,
-            agent_name,
-            prompt_capabilities,
-            session_capabilities,
-            config_options,
-            auth_methods,
-            event_rx,
-            client_handle,
-            working_dir,
-            workspace_status,
-        } = session;
+        let crate::session::Session { client, response, working_dir, workspace_status } = session;
         let mut app = Self::new(AppConfig {
-            session_id,
-            agent_name,
+            initialize_response: client.initialize_response,
+            session_response: response,
             workspace_status,
-            prompt_capabilities,
-            session_capabilities,
-            config_options,
-            auth_methods,
             working_dir,
             settings,
             browser_opener: default_browser_opener(),
             clipboard_writer: default_clipboard_writer(),
         });
         app.queue(Command::ResolveWorkspace { cwd: app.session.working_dir().to_path_buf() });
-        (app, event_rx, client_handle)
+        (app, client.event_rx, client.handle)
     }
 
     pub fn new(config: AppConfig) -> Self {
@@ -155,7 +134,9 @@ impl App {
             theme_generation: Generation::default(),
             settings: SettingsModel::new(config.settings.clone()),
         };
-        let capabilities = AetherCapabilities::from_meta(config.session_capabilities.meta.as_ref());
+        let capabilities = AetherCapabilities::from_meta(
+            config.initialize_response.capabilities.session.as_ref().and_then(|session| session.meta.as_ref()),
+        );
         let initial_commands = builtin_commands(&capabilities);
         let browser_opener = config.browser_opener.clone();
         let clipboard_writer = config.clipboard_writer.clone();
@@ -169,9 +150,7 @@ impl App {
             composer: Composer::new(),
             exit_state: ExitState::Idle,
             commands: VecDeque::new(),
-            submission: SubmissionState::default(),
-            session_transition: None,
-            prompt_acceptance_pending: false,
+            foreground: ForegroundOperation::Idle,
             browser_opener,
             clipboard_writer,
         };
@@ -200,33 +179,67 @@ impl App {
         self.commands.drain(..).collect()
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn on_command_result(&mut self, result: CommandResult) {
         match result {
-            CommandResult::PromptAccepted => self.prompt_acceptance_pending = false,
-            CommandResult::AgentCommandAccepted => {}
-            CommandResult::ConfigOptionsUpdated { conversation_id, options } => {
+            CommandResult::Prompt(Ok(_)) => self.foreground.accept_prompt(),
+            CommandResult::Prompt(Err(error)) => {
+                if self.waiting_for_response() {
+                    self.finish_prompt(&ToolStatus::Error(format!("failed: {error}")));
+                }
+                self.foreground.reject_prompt();
+                self.notify(&format!("Failed to send prompt: {error}"));
+            }
+            CommandResult::Cancel(result) | CommandResult::AuthenticateMcp(result) => {
+                if let Err(error) = result {
+                    self.notify(&error);
+                }
+            }
+            CommandResult::NewSession(result) => match result {
+                Ok(response) => self.on_new_session(response.session_id, response.config_options),
+                Err(error) => {
+                    self.foreground = ForegroundOperation::Idle;
+                    self.notify(&format!("Failed to create new session: {error}"));
+                }
+            },
+            CommandResult::ResumeSession { session_id, result } => {
+                if !matches!(&self.foreground,
+                    ForegroundOperation::ResumingSession { session_id: expected, .. }
+                    | ForegroundOperation::LoadingWorkspaceSession { session_id: expected, .. } if expected == &session_id)
+                {
+                    return;
+                }
+                match result {
+                    Ok(response) => self.on_resumed_session(&session_id, response),
+                    Err(error) => {
+                        self.foreground = ForegroundOperation::Idle;
+                        self.notify(&format!("Failed to resume session: {error}"));
+                    }
+                }
+            }
+            CommandResult::ConfigOptionsUpdated { conversation_id, result: Ok(response) } => {
                 if conversation_id != self.conversation_id() {
                     return;
                 }
-                self.session.update_config_options(options);
+                self.session.update_config_options(response.config_options);
                 if let Some(Overlay::Settings(overlay)) = self.overlay.as_mut() {
                     overlay.update_config_options(self.session.config_options());
                 }
             }
-            CommandResult::ConfigOptionUpdateFailed { conversation_id, error } => {
+            CommandResult::ConfigOptionsUpdated { conversation_id, result: Err(error) } => {
                 if conversation_id != self.conversation_id() {
                     return;
                 }
                 tracing::warn!("set_session_config_option failed: {error}");
                 self.notify(&format!("Failed to update setting: {error}"));
             }
-            CommandResult::AuthenticationCompleted { method_id } => {
+            CommandResult::AuthenticationCompleted { method_id, result: Ok(_) } => {
                 if let Some(Overlay::Settings(overlay)) = self.overlay.as_mut() {
                     overlay.on_authenticate_complete(&method_id);
                 }
             }
-            CommandResult::AuthenticationFailed { method_id } => {
-                tracing::warn!("Provider authentication failed for {method_id}");
+            CommandResult::AuthenticationCompleted { method_id, result: Err(error) } => {
+                tracing::warn!("Provider authentication failed for {method_id}: {error}");
                 if let Some(Overlay::Settings(overlay)) = self.overlay.as_mut() {
                     overlay.on_authenticate_failed(&method_id);
                 }
@@ -237,6 +250,7 @@ impl App {
                     screen.on_event(event);
                 }
             }
+            CommandResult::GitWatchStarted { .. } => {}
             CommandResult::GitWatch(event) => {
                 if let Route::GitReview(screen) = &mut self.route {
                     screen.on_watch_event(event);
@@ -260,64 +274,41 @@ impl App {
                     self.session.set_workspace_status(status);
                 }
             }
-            CommandResult::SessionsListed(response) => self.open_session_picker(response.sessions),
-            CommandResult::NewSessionCreated(response) => {
-                self.on_new_session(response.session_id, response.config_options);
-            }
-            CommandResult::PromptSearchResults(response) => self.composer.prompt_search_on_results(response),
-            CommandResult::PromptSearchFailed { query, error } => {
+            CommandResult::SessionsListed(Ok(response)) => self.open_session_picker(response.sessions),
+            CommandResult::SessionsListed(Err(error)) => self.notify(&format!("Failed to list sessions: {error}")),
+            CommandResult::PromptSearchResults { result: Ok(response), .. } => self.composer.prompt_search_on_results(response),
+            CommandResult::PromptSearchResults { query, result: Err(error) } => {
                 if let Some(picker) = self.composer.prompt_search_mut() {
                     picker.on_failed(&query, error);
                 }
             }
-            CommandResult::SessionPreviewLoaded(preview) => {
+            CommandResult::SessionPreviewLoaded { result: Ok(preview), .. } => {
                 if let Some(Overlay::Sessions(picker)) = self.overlay.as_mut() {
                     picker.on_preview_loaded(preview);
                 }
             }
-            CommandResult::SessionPreviewFailed { session_id, error } => {
+            CommandResult::SessionPreviewLoaded { session_id, result: Err(error) } => {
                 if let Some(Overlay::Sessions(picker)) = self.overlay.as_mut() {
                     picker.on_preview_failed(&session_id, error);
                 }
             }
-            CommandResult::WorkspacesListed(response) => {
+            CommandResult::WorkspacesListed(Ok(response)) => {
                 self.open_overlay(Overlay::Workspaces(WorkspacePicker::new(response.workspaces)));
-                self.session.begin_workspace_picking();
+                self.foreground = ForegroundOperation::PickingWorkspace;
             }
-            CommandResult::WorkspaceListFailed { error } => {
+            CommandResult::WorkspacesListed(Err(error)) => {
                 self.abandon_workspace_move(&format!("Failed to list workspaces: {error}"));
             }
-            CommandResult::WorkspaceMoved(response) => self.on_workspace_moved(response.new_cwd),
-            CommandResult::WorkspaceMoveFailed { error } => {
+            CommandResult::WorkspaceMoved(Ok(response)) => self.on_workspace_moved(response.new_cwd),
+            CommandResult::WorkspaceMoved(Err(error)) => {
                 self.abandon_workspace_move(&format!("Workspace move failed: {error}"));
             }
-            CommandResult::Failed { command, error } => self.on_command_failed(command, &error),
+            CommandResult::BackgroundFailed(error) | CommandResult::TerminalFailed(error) => self.notify(&error),
         }
-    }
-
-    fn on_command_failed(&mut self, command: FailedCommand, error: &str) {
-        match command {
-            FailedCommand::Prompt => {
-                self.prompt_acceptance_pending = false;
-                if self.waiting_for_response() {
-                    self.finish_prompt(&ToolStatus::Error(format!("failed: {error}")));
-                }
-                self.submission.reset();
-            }
-            FailedCommand::ResumeSession => {
-                self.session_transition = None;
-                self.session.end_workspace_move();
-            }
-            FailedCommand::ListWorkspaces | FailedCommand::MoveWorkspace => self.session.end_workspace_move(),
-            FailedCommand::Other("create new session") => self.session_transition = None,
-            FailedCommand::Other(_) => {}
-        }
-        self.notify(&format!("Failed to {}: {error}", command.describe()));
     }
 
     fn start_prompt(&mut self, text: String, content: Option<Vec<acp::ContentBlock>>) {
-        self.prompt_acceptance_pending = true;
-        self.conversation.turn_mut().set_prompt_in_flight(true);
+        self.foreground = ForegroundOperation::Prompt(PromptPhase::Submitting);
         self.conversation.progress_indicator_mut().prompt_started();
         self.queue(Command::Agent(AgentCommand::Prompt {
             session_id: self.session.session_id().clone(),
@@ -355,8 +346,14 @@ impl App {
 
     pub fn wants_tick(&self) -> bool {
         self.waiting_for_response()
+            || matches!(
+                self.foreground,
+                ForegroundOperation::ListingWorkspaces
+                    | ForegroundOperation::PickingWorkspace
+                    | ForegroundOperation::MovingWorkspace
+                    | ForegroundOperation::LoadingWorkspaceSession { .. }
+            )
             || self.conversation.any_running()
-            || !self.session.workspace_move_state().is_idle()
             || self.conversation.turn().is_compaction_active()
             || self.conversation.progress_indicator().is_active()
             || self.exit_state.is_confirming()
@@ -379,8 +376,8 @@ impl App {
         self.route.is_fullscreen()
     }
 
-    pub fn workspace_move_state(&self) -> WorkspaceMoveState {
-        self.session.workspace_move_state()
+    pub fn foreground_operation(&self) -> &ForegroundOperation {
+        &self.foreground
     }
 
     pub fn exit_requested(&self) -> bool {
@@ -449,7 +446,7 @@ impl App {
 
     /// A prompt is outstanding, so the agent owes us a reply.
     pub fn waiting_for_response(&self) -> bool {
-        self.conversation.turn().is_prompt_in_flight()
+        self.foreground.prompt_in_flight()
     }
 
     /// Either the prompt or one of its tool calls is still running.
@@ -486,14 +483,14 @@ impl App {
         // The spinner phase is cosmetic and survives, so a swap does not make
         // the indicator visibly jump.
         self.conversation.reset_feature_state();
-        self.submission.reset();
+        self.foreground.clear_conversation();
         self.conversation.clear();
     }
 
     fn refresh_progress(&mut self) {
-        let override_phase = match self.session.workspace_move_state() {
-            WorkspaceMoveState::Moving => Some(ProgressPhase::MovingWorkspace),
-            WorkspaceMoveState::LoadingSession => Some(ProgressPhase::LoadingSession),
+        let override_phase = match self.foreground {
+            ForegroundOperation::MovingWorkspace => Some(ProgressPhase::MovingWorkspace),
+            ForegroundOperation::LoadingWorkspaceSession { .. } => Some(ProgressPhase::LoadingSession),
             _ if self.conversation.turn().is_compaction_active() => Some(ProgressPhase::Compacting),
             _ => None,
         };

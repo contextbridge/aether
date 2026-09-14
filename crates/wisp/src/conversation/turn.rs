@@ -16,21 +16,12 @@ impl ContextUsageDisplay {
 
 #[derive(Debug, Default)]
 pub struct TurnState {
-    prompt_in_flight: bool,
     compaction_active: bool,
     context_usage: Option<ContextUsageDisplay>,
     spinner_tick: usize,
 }
 
 impl TurnState {
-    pub fn is_prompt_in_flight(&self) -> bool {
-        self.prompt_in_flight
-    }
-
-    pub fn set_prompt_in_flight(&mut self, value: bool) {
-        self.prompt_in_flight = value;
-    }
-
     pub fn is_compaction_active(&self) -> bool {
         self.compaction_active
     }

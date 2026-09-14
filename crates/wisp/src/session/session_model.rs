@@ -4,21 +4,6 @@ use acp_utils::notifications::{AetherCapabilities, McpServerStatus, McpServerSta
 use agent_client_protocol::schema::v2::{self as acp, SessionId};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorkspaceMoveState {
-    Idle,
-    Listing,
-    Picking,
-    Moving,
-    LoadingSession,
-}
-
-impl WorkspaceMoveState {
-    pub fn is_idle(self) -> bool {
-        matches!(self, Self::Idle)
-    }
-}
-
 pub struct SessionModel {
     session_id: SessionId,
     agent_name: String,
@@ -28,32 +13,27 @@ pub struct SessionModel {
     capabilities: AetherCapabilities,
     config_options: Vec<LocalConfigOption>,
     auth_methods: Vec<acp::AuthMethod>,
-    workspace_move_state: WorkspaceMoveState,
     server_statuses: Vec<McpServerStatusEntry>,
 }
 
 impl SessionModel {
     pub fn from_config(config: crate::app::AppConfig, capabilities: AetherCapabilities) -> Self {
         let crate::app::AppConfig {
-            session_id,
-            agent_name,
+            initialize_response,
+            session_response,
             working_dir,
             workspace_status,
-            prompt_capabilities,
-            config_options,
-            auth_methods,
             ..
         } = config;
         Self {
-            session_id,
-            agent_name,
+            session_id: session_response.session_id,
+            agent_name: initialize_response.info.title.unwrap_or(initialize_response.info.name),
             working_dir,
             workspace_status,
-            prompt_capabilities,
+            prompt_capabilities: initialize_response.capabilities.session.and_then(|session| session.prompt).unwrap_or_default(),
             capabilities,
-            config_options: config_options.into_iter().map(LocalConfigOption::from_acp).collect(),
-            auth_methods,
-            workspace_move_state: WorkspaceMoveState::Idle,
+            config_options: session_response.config_options.into_iter().map(LocalConfigOption::from_acp).collect(),
+            auth_methods: initialize_response.auth_methods,
             server_statuses: Vec::new(),
         }
     }
@@ -88,41 +68,6 @@ impl SessionModel {
 
     pub fn workspace_status(&self) -> &WorkspaceStatus {
         &self.workspace_status
-    }
-
-    pub fn workspace_move_state(&self) -> WorkspaceMoveState {
-        self.workspace_move_state
-    }
-
-    pub fn begin_workspace_listing(&mut self) {
-        self.workspace_move_state = WorkspaceMoveState::Listing;
-    }
-
-    pub fn begin_workspace_picking(&mut self) {
-        self.workspace_move_state = WorkspaceMoveState::Picking;
-    }
-
-    pub fn begin_workspace_move(&mut self) {
-        self.workspace_move_state = WorkspaceMoveState::Moving;
-    }
-
-    /// The move landed; the session is being reloaded in the new workspace.
-    pub fn begin_workspace_load(&mut self) {
-        self.workspace_move_state = WorkspaceMoveState::LoadingSession;
-    }
-
-    /// Ends the move flow, wherever it was: a finished load, a failure, or the
-    /// user backing out.
-    pub fn end_workspace_move(&mut self) {
-        self.workspace_move_state = WorkspaceMoveState::Idle;
-    }
-
-    /// Leaves picking mode when the picker closes. Later phases survive an
-    /// overlay close, because the move is already in flight.
-    pub fn cancel_workspace_picking(&mut self) {
-        if self.workspace_move_state == WorkspaceMoveState::Picking {
-            self.workspace_move_state = WorkspaceMoveState::Idle;
-        }
     }
 
     pub fn server_statuses(&self) -> &[McpServerStatusEntry] {

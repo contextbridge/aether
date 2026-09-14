@@ -171,9 +171,9 @@ fn failed_config_update_shows_error_and_does_not_corrupt_state() {
     app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     let _ = app.next_agent_command().unwrap();
 
-    app.deliver_result(CommandResult::ConfigOptionUpdateFailed {
+    app.deliver_result(CommandResult::ConfigOptionsUpdated {
         conversation_id: app.app().conversation_id(),
-        error: "server error".to_string(),
+        result: Err("server error".to_string()),
     });
 
     let messages: Vec<_> = message_texts(&app).collect();

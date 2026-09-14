@@ -465,10 +465,7 @@ fn sync_prompt_failure_resets_busy_state() {
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
     let _ = app.next_agent_command().expect("prompt should be recorded before its completion fails");
-    app.deliver_result(CommandResult::Failed {
-        command: FailedCommand::Prompt,
-        error: "connection closed".to_string(),
-    });
+    app.deliver_result(CommandResult::Prompt(Err("connection closed".to_string())));
 
     assert!(!app.app().waiting_for_response(), "failed prompt should reset busy state");
     assert!(app.next_command().is_none(), "no follow-up prompt should be sent");
@@ -720,10 +717,7 @@ fn sync_failure_preserves_text_and_placeholders_in_transcript() {
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
     let _ = app.next_agent_command().expect("prompt should be recorded before its completion fails");
-    app.deliver_result(CommandResult::Failed {
-        command: FailedCommand::Prompt,
-        error: "connection closed".to_string(),
-    });
+    app.deliver_result(CommandResult::Prompt(Err("connection closed".to_string())));
 
     assert!(!app.app().waiting_for_response(), "failed prompt should reset busy state");
     assert!(app.next_command().is_none(), "no follow-up prompt should be sent");

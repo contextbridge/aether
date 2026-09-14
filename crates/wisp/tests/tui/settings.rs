@@ -15,11 +15,14 @@ fn mcp_notification(servers: Vec<McpServerStatusEntry>) -> AcpEvent {
 }
 
 fn auth_complete(method_id: &str) -> CommandResult {
-    CommandResult::AuthenticationCompleted { method_id: method_id.to_string() }
+    CommandResult::AuthenticationCompleted {
+        method_id: method_id.to_string(),
+        result: Ok(acp::LoginAuthResponse::new()),
+    }
 }
 
 fn auth_failed(method_id: &str) -> CommandResult {
-    CommandResult::AuthenticationFailed { method_id: method_id.to_string() }
+    CommandResult::AuthenticationCompleted { method_id: method_id.to_string(), result: Err("login failed".into()) }
 }
 
 fn auth_method(id: &str, name: &str, description: Option<&str>) -> acp::AuthMethod {
@@ -1109,9 +1112,9 @@ fn config_option_update_failed_shows_in_transcript() {
     ui.key(key(KeyCode::Tab));
     assert!(ui.app().has_modal());
 
-    ui.deliver_result(CommandResult::ConfigOptionUpdateFailed {
+    ui.deliver_result(CommandResult::ConfigOptionsUpdated {
         conversation_id: ui.app().conversation_id(),
-        error: "invalid model".to_string(),
+        result: Err("invalid model".to_string()),
     });
 
     // Overlay should still be open

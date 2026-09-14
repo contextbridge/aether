@@ -1,5 +1,5 @@
 use super::config::build_theme_entries;
-use super::{App, Overlay, Route};
+use super::{App, ForegroundOperation, Overlay, Route};
 use crate::command::{AgentCommand, Command, FilesystemCommand};
 use crate::session::workspace_status::home_relative_path;
 use crate::settings::overlay::{SettingsChange, SettingsOverlay};
@@ -10,11 +10,6 @@ use crate::surfaces::input::{
 use crate::surfaces::picker::CommandEntry;
 use acp_utils::notifications::AetherCapabilities;
 use agent_client_protocol::schema::v2::SessionId;
-
-pub(super) enum SessionTransition {
-    Creating,
-    Resuming { session_id: SessionId, cwd: std::path::PathBuf },
-}
 
 pub(super) fn builtin_commands(capabilities: &AetherCapabilities) -> Vec<CommandEntry> {
     let mut commands: Vec<CommandEntry> = [
@@ -50,7 +45,12 @@ impl App {
                     self.notify("Cannot clear while a prompt or session transition is in progress");
                     return;
                 }
-                self.session_transition = Some(SessionTransition::Creating);
+                self.reset_conversation();
+                self.foreground = ForegroundOperation::CreatingSession {
+                    previous_selections: self.session.config_options().iter().filter_map(|option| {
+                        option.select().map(|select| (option.id.clone(), select.current_value.to_string()))
+                    }).collect(),
+                };
                 self.queue(Command::Agent(AgentCommand::NewSession { cwd: self.session.working_dir().to_path_buf() }));
             }
             "resume" => {
@@ -79,7 +79,7 @@ impl App {
             self.notify("Cannot move workspace while a prompt is running or another move is in progress");
             return;
         }
-        self.session.begin_workspace_listing();
+        self.foreground = ForegroundOperation::ListingWorkspaces;
         self.queue(Command::Agent(AgentCommand::ListWorkspaces {
             session_id: self.session.session_id().0.to_string(),
         }));
@@ -104,7 +104,7 @@ impl App {
                 WorkspacePickerOutput::Close => self.close_active(),
                 WorkspacePickerOutput::Move { target } => {
                     self.close_overlay();
-                    self.session.begin_workspace_move();
+                    self.foreground = ForegroundOperation::MovingWorkspace;
                     self.queue(Command::Agent(AgentCommand::MoveWorkspace {
                         session_id: self.session.session_id().0.to_string(),
                         target,
@@ -184,7 +184,9 @@ impl App {
             }
         }
         self.overlay = None;
-        self.session.cancel_workspace_picking();
+        if matches!(self.foreground, ForegroundOperation::PickingWorkspace) {
+            self.foreground = ForegroundOperation::Idle;
+        }
     }
 
     pub(super) fn apply_settings_change(&mut self, change: &SettingsChange) {
@@ -199,9 +201,11 @@ impl App {
             self.notify("Cannot resume while a prompt or session transition is in progress");
             return;
         }
-        self.session_transition = Some(SessionTransition::Resuming {
+        self.reset_conversation();
+        self.session.set_session(session_id.clone(), Vec::new());
+        self.foreground = ForegroundOperation::ResumingSession {
             session_id: session_id.clone(), cwd: cwd.to_path_buf(),
-        });
+        };
         self.queue(Command::Agent(AgentCommand::ResumeSession {
             session_id: session_id.clone(),
             cwd: cwd.to_path_buf(),
@@ -213,11 +217,11 @@ impl App {
         self.queue(Command::ResolveWorkspace { cwd: new_cwd.clone() });
         self.return_to_conversation();
         self.notify(&format!("Moved to {}", home_relative_path(&new_cwd)));
-        self.session.begin_workspace_load();
         let session_id = self.session.session_id().clone();
-        self.session_transition = Some(SessionTransition::Resuming {
+        self.reset_conversation();
+        self.foreground = ForegroundOperation::LoadingWorkspaceSession {
             session_id: session_id.clone(), cwd: new_cwd.clone(),
-        });
+        };
         self.queue(Command::Agent(AgentCommand::ResumeSession { session_id, cwd: new_cwd.clone() }));
         self.session.set_working_dir(new_cwd);
     }
@@ -249,11 +253,7 @@ impl App {
     }
 
     pub(super) fn can_start_foreground_operation(&self) -> bool {
-        !self.waiting_for_response()
-            && !self.prompt_acceptance_pending
-            && self.session_transition.is_none()
-            && self.session.workspace_move_state().is_idle()
-            && matches!(self.submission, super::submission::SubmissionState::Idle)
+        self.foreground.is_idle()
     }
 
     /// Adds a semantic notice for information outside the agent's own output.

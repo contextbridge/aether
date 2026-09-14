@@ -1,16 +1,14 @@
 use super::session::builtin_commands;
-use super::{App, ExitState, Overlay, Route};
-use crate::app::session::SessionTransition;
+use super::{App, ExitState, ForegroundOperation, Overlay, Route};
 use crate::command::{AgentCommand, Command, TerminalCommand};
 use crate::conversation::tool_calls::ToolStatus;
 use crate::conversation::{ContextUsageDisplay, MessageRole};
 use crate::screens::plan_review::PlanReviewScreen;
-use crate::session::session_model::WorkspaceMoveState;
 use crate::session::workspace_status::home_relative_path;
 use crate::surfaces::modal::ElicitationModal;
 use crate::surfaces::picker::CommandEntry;
 use crate::surfaces::session_picker::SessionPicker;
-use acp_utils::client::{AcpEvent, ResumedSession};
+use acp_utils::client::AcpEvent;
 use acp_utils::notifications::McpNotification;
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::v2::{
@@ -22,9 +20,9 @@ impl App {
     #[allow(clippy::too_many_lines)]
     pub fn on_acp_event(&mut self, event: AcpEvent) {
         match event {
-            AcpEvent::SessionResumed(loaded) => self.on_resumed_session(loaded),
             AcpEvent::SessionUpdate(notification) => {
-                if &notification.session_id == self.session.session_id() {
+                if &notification.session_id == self.session.session_id()
+                    || matches!(self.foreground, ForegroundOperation::CreatingSession { .. }) {
                     self.on_session_update(&notification.update);
                 }
             }
@@ -82,7 +80,7 @@ impl App {
     /// Reports why a workspace move could not proceed and leaves move mode.
     pub(super) fn abandon_workspace_move(&mut self, message: &str) {
         self.notify(message);
-        self.session.end_workspace_move();
+        self.foreground = ForegroundOperation::Idle;
     }
 
     pub(super) fn open_session_picker(&mut self, sessions: Vec<acp::SessionInfo>) {
@@ -95,56 +93,37 @@ impl App {
         self.open_overlay(Overlay::Sessions(picker));
     }
 
-    pub(super) fn on_resumed_session(&mut self, loaded: ResumedSession) {
-        let ResumedSession { session_id, response, replay } = loaded;
-        if self.waiting_for_response() || self.prompt_acceptance_pending {
-            return;
-        }
-        match &self.session_transition {
-            Some(SessionTransition::Resuming { session_id: expected, cwd }) if *expected == session_id => {
+    pub(super) fn on_resumed_session(&mut self, session_id: &SessionId, response: acp::ResumeSessionResponse) {
+        match &self.foreground {
+            ForegroundOperation::ResumingSession { session_id: expected, cwd }
+            | ForegroundOperation::LoadingWorkspaceSession { session_id: expected, cwd } if expected == session_id => {
                 if self.session.working_dir() != cwd {
                     let cwd = cwd.clone();
                     self.session.set_working_dir(cwd.clone());
                     self.queue(Command::ResolveWorkspace { cwd });
                 }
             }
-            Some(_) => return,
-            None if !self.session.workspace_move_state().is_idle() => return,
-            None => {}
-        }
-        self.reset_conversation();
-        self.session.set_session(session_id, Vec::new());
-        for event in replay {
-            self.on_acp_event(event);
+            _ => return,
         }
         self.session.update_config_options(response.config_options);
-        if self.session.workspace_move_state() == WorkspaceMoveState::LoadingSession {
+        if matches!(self.foreground, ForegroundOperation::LoadingWorkspaceSession { .. }) {
             self.notify(&format!("Moved to {}", home_relative_path(self.session.working_dir())));
         }
         self.return_to_conversation();
-        self.session.end_workspace_move();
-        self.session_transition = None;
+        self.foreground = ForegroundOperation::Idle;
     }
 
     pub(super) fn on_new_session(&mut self, session_id: SessionId, config_options: Vec<acp::SessionConfigOption>) {
-        if self.waiting_for_response()
-            || self.prompt_acceptance_pending
-            || !self.session.workspace_move_state().is_idle()
-            || matches!(self.session_transition, Some(super::session::SessionTransition::Resuming { .. }))
-        {
+        if !matches!(self.foreground, ForegroundOperation::Idle | ForegroundOperation::CreatingSession { .. }) {
             return;
         }
-        self.session_transition = None;
+        let previous_selections = match std::mem::take(&mut self.foreground) {
+            ForegroundOperation::CreatingSession { previous_selections } => previous_selections,
+            _ => Vec::new(),
+        };
         self.close_elicitation_owner();
         self.return_to_conversation();
-        let previous_selections: Vec<(String, String)> = self
-            .session
-            .config_options()
-            .iter()
-            .filter_map(|option| option.select().map(|select| (option.id.clone(), select.current_value.to_string())))
-            .collect();
         self.session.set_session(session_id, config_options);
-        self.reset_conversation();
         self.restore_config_selections(&previous_selections);
     }
 
@@ -163,10 +142,8 @@ impl App {
     fn on_connection_closed(&mut self) {
         self.close_elicitation_owner();
         self.return_to_conversation();
-        self.session.end_workspace_move();
+        self.foreground = ForegroundOperation::Idle;
         self.commands.retain(|command| !matches!(command, Command::Terminal(TerminalCommand::RingBell)));
-        self.session_transition = None;
-        self.prompt_acceptance_pending = false;
         self.exit_state = ExitState::Exiting;
     }
 
@@ -277,7 +254,7 @@ impl App {
 
     pub(super) fn finish_prompt(&mut self, terminal_status: &ToolStatus) {
         let was_in_flight = self.waiting_for_response();
-        self.conversation.turn_mut().set_prompt_in_flight(false);
+        self.foreground.finish_prompt();
         self.conversation.turn_mut().set_compaction_active(false);
         self.conversation.progress_indicator_mut().prompt_finished();
         self.conversation.finish_turn(terminal_status);

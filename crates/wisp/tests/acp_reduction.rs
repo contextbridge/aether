@@ -41,7 +41,7 @@ fn user_ack_and_idle_preserve_one_foreground_turn() {
 
 #[test]
 fn prompt_rejection_recovers_before_and_after_native_idle() {
-    use wisp::command::{AgentCommand, CommandResult, FailedCommand};
+    use wisp::command::{AgentCommand, CommandResult};
     for idle_first in [false, true] {
         let mut ui = TestUi::new();
         ui.submit("first");
@@ -52,10 +52,10 @@ fn prompt_rejection_recovers_before_and_after_native_idle() {
         }
         ui.submit("next");
         assert!(ui.next_agent_command().is_none(), "pending result still owns submission");
-        ui.deliver_result(CommandResult::AgentCommandAccepted);
+        ui.deliver_result(CommandResult::Cancel(Ok(())));
         ui.key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
         assert!(ui.next_agent_command().is_none(), "unrelated acceptance cannot release a prompt");
-        ui.deliver_result(CommandResult::Failed { command: FailedCommand::Prompt, error: "rejected".into() });
+        ui.deliver_result(CommandResult::Prompt(Err("rejected".into())));
         assert!(!ui.app().waiting_for_response());
         ui.key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
         assert!(matches!(ui.next_agent_command(), Some(AgentCommand::Prompt { text, .. }) if text == "next"));
@@ -69,12 +69,12 @@ fn cancellation_keeps_final_output_and_ignores_late_acceptance() {
     let mut ui = TestUi::new();
     ui.submit("hello");
     ui.next_agent_command().unwrap();
-    ui.deliver_result(CommandResult::AgentCommandAccepted);
+    ui.deliver_result(CommandResult::Cancel(Ok(())));
     assert!(ui.app().waiting_for_response(), "cancel is not completion");
     ui.acp_event(text_chunk_with_id("reply", "final output"));
     ui.acp_event(session_update(idle_notification("test-session", Some(acp::StopReason::Cancelled)).update));
     assert!(!ui.app().waiting_for_response());
-    ui.deliver_result(CommandResult::PromptAccepted);
+    ui.deliver_result(CommandResult::Prompt(Ok(acp::PromptResponse::new())));
     assert!(!ui.app().waiting_for_response(), "late acceptance must not restart the turn");
     assert_eq!(ui.conversation_text().matches("final output").count(), 1);
 }
@@ -82,22 +82,25 @@ fn cancellation_keeps_final_output_and_ignores_late_acceptance() {
 #[test]
 fn config_result_for_a_replaced_conversation_is_ignored() {
     use wisp::command::CommandResult;
-    for restored_id in ["test-session", "other"] {
+    for restored_id in ["restored", "other"] {
         let mut ui = TestUi::new();
-        ui.deliver_result(CommandResult::NewSessionCreated(acp::NewSessionResponse::new("test-session")));
+        ui.deliver_result(CommandResult::NewSession(Ok(acp::NewSessionResponse::new("test-session"))));
         let stale = ui.app().conversation_id();
         ui.deliver_result(CommandResult::ConfigOptionsUpdated {
             conversation_id: stale,
-            options: vec![model_option("stale")],
+            result: Ok(acp::SetSessionConfigOptionResponse::new(vec![model_option("stale")])),
         });
         assert_eq!(ui.app().config_options().len(), 1);
 
-        ui.acp_event(AcpEvent::SessionResumed(acp_utils::client::ResumedSession {
+        ui.begin_resume(restored_id, "/tmp");
+        ui.deliver_result(CommandResult::ResumeSession {
             session_id: restored_id.into(),
-            response: acp::ResumeSessionResponse::new().config_options(vec![model_option("restored")]),
-            replay: vec![],
-        }));
-        ui.deliver_result(CommandResult::ConfigOptionsUpdated { conversation_id: stale, options: vec![] });
+            result: Ok(acp::ResumeSessionResponse::new().config_options(vec![model_option("restored")])),
+        });
+        ui.deliver_result(CommandResult::ConfigOptionsUpdated {
+            conversation_id: stale,
+            result: Ok(acp::SetSessionConfigOptionResponse::new(vec![])),
+        });
         assert_eq!(ui.app().config_options().len(), 1, "stale result must not erase restored configuration");
     }
 }
@@ -106,11 +109,10 @@ fn config_result_for_a_replaced_conversation_is_ignored() {
 fn replay_snapshot_cannot_replace_a_live_turn() {
     let mut ui = TestUi::new();
     ui.submit("current");
-    ui.acp_event(AcpEvent::SessionResumed(acp_utils::client::ResumedSession {
+    ui.deliver_result(wisp::command::CommandResult::ResumeSession {
         session_id: "test-session".into(),
-        response: acp::ResumeSessionResponse::new(),
-        replay: vec![idle_notification("test-session", None).into()],
-    }));
+        result: Ok(acp::ResumeSessionResponse::new()),
+    });
     assert!(ui.app().waiting_for_response());
     ui.assert_conversation_contains("current");
 }
@@ -214,20 +216,24 @@ fn repeated_resume_replaces_history_without_adopting_a_live_echo() {
     let mut ui = TestUi::new();
     ui.submit("old prompt");
     ui.complete_prompt(acp::StopReason::EndTurn);
-    for _ in 0..2 {
-        let replay = [
+    for id in ["restored", "restored-again"] {
+        ui.begin_resume(id, "/tmp");
+        let replay: Vec<_> = [
             acp::SessionUpdate::UserMessage(acp::UserMessage::new("user").content(vec!["saved prompt".into()])),
             acp::SessionUpdate::AgentMessage(acp::AgentMessage::new("reply").content(vec!["saved answer".into()])),
             idle_notification("restored", None).update,
         ]
         .into_iter()
-        .map(|update| AcpEvent::SessionUpdate(Box::new(acp::UpdateSessionNotification::new("restored", update))))
+        .map(|update| AcpEvent::SessionUpdate(Box::new(acp::UpdateSessionNotification::new(id, update))))
         .collect();
-        ui.acp_event(AcpEvent::SessionResumed(acp_utils::client::ResumedSession {
-            session_id: "restored".into(),
-            response: acp::ResumeSessionResponse::new(),
-            replay,
-        }));
+        for event in replay {
+            ui.acp_event(event);
+        }
+        assert_eq!(ui.conversation_text().matches("saved answer").count(), 1);
+        ui.deliver_result(wisp::command::CommandResult::ResumeSession {
+            session_id: id.into(),
+            result: Ok(acp::ResumeSessionResponse::new()),
+        });
         assert_eq!(ui.app().conversation_items().len(), 2);
         assert!(!ui.app().waiting_for_response());
         assert!(!ui.app().progress_indicator().is_active());

@@ -553,6 +553,8 @@ mod progress_indicator_tests {
         ui.submit("hello");
         ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
         ui.complete_prompt(acp::StopReason::EndTurn);
+        ui.type_text("/clear");
+        ui.key(key(KeyCode::Tab));
         ui.deliver_result(new_session_created("new-session", Vec::new()));
 
         ui.draw();
@@ -567,7 +569,8 @@ mod progress_indicator_tests {
         ui.submit("hello");
         ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
         ui.complete_prompt(acp::StopReason::EndTurn);
-        ui.acp_event(session_loaded("loaded-session", Vec::new()));
+        ui.begin_resume("loaded-session", "/tmp");
+        ui.deliver_result(session_loaded("loaded-session", Vec::new()));
 
         ui.draw();
         let viewport = ui.viewport_text();

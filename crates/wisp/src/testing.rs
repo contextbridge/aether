@@ -1065,8 +1065,15 @@ where
         self.deliver(Message::Agent(Box::new(event)));
     }
 
+    pub fn begin_resume(&mut self, session_id: &str, cwd: &str) {
+        self.deliver_result(CommandResult::SessionsListed(Ok(acp::ListSessionsResponse::new(vec![
+            acp::SessionInfo::new(session_id.to_string(), cwd),
+        ]))));
+        self.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    }
+
     pub fn complete_prompt(&mut self, stop_reason: acp::StopReason) {
-        self.deliver_result(CommandResult::PromptAccepted);
+        self.deliver_result(CommandResult::Prompt(Ok(acp::PromptResponse::new())));
         let session_id = self.app.session_id().clone();
         let update = acp::SessionUpdate::StateUpdate(acp::StateUpdate::Idle(
             acp::IdleStateUpdate::new().stop_reason(stop_reason),
@@ -1413,12 +1420,15 @@ impl TestUiBuilder {
             .clone()
             .unwrap_or_else(|| acp::SessionCapabilities::new().meta(Some(self.capabilities.clone().to_meta())));
         AppConfig {
-            session_id: SessionId::new("test-session"),
-            agent_name: "aether".to_string(),
-            prompt_capabilities: self.prompt_capabilities.clone(),
-            session_capabilities,
-            config_options: self.config_options.clone(),
-            auth_methods: self.auth_methods.clone(),
+            initialize_response: acp::InitializeResponse::new(
+                agent_client_protocol::schema::ProtocolVersion::V2,
+                acp::Implementation::new("aether", "test"),
+            )
+            .capabilities(
+                acp::AgentCapabilities::new().session(session_capabilities.prompt(self.prompt_capabilities.clone())),
+            )
+            .auth_methods(self.auth_methods.clone()),
+            session_response: acp::NewSessionResponse::new("test-session").config_options(self.config_options.clone()),
             workspace_status: self
                 .workspace_status
                 .clone()
