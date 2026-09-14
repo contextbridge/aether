@@ -1,8 +1,6 @@
 use super::error::AcpClientError;
 use super::event::AcpEvent;
-use crate::notifications::{
-    AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, McpNotification, SubAgentProgressParams,
-};
+use crate::notifications::{AuthMethodsUpdatedParams, ContextClearedParams, McpNotification, SubAgentProgressParams};
 use agent_client_protocol::schema::v2::{
     AuthMethod, CancelSessionNotification, CreateElicitationRequest, InitializeRequest, InitializeResponse,
     NewSessionRequest, NewSessionResponse, PermissionOptionId, PermissionOptionKind, PromptCapabilities, PromptRequest,
@@ -11,7 +9,9 @@ use agent_client_protocol::schema::v2::{
     SessionCapabilities, UpdateSessionNotification,
 };
 use agent_client_protocol::util::MatchDispatchFrom;
-use agent_client_protocol::{self as acp, Client, ConnectTo, ConnectionTo, Dispatch, HandleDispatchFrom, Handled};
+use agent_client_protocol::{
+    self as acp, Client, ConnectTo, ConnectionTo, Dispatch, HandleDispatchFrom, Handled, V2ConnectionTo,
+};
 use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc, oneshot};
@@ -20,7 +20,7 @@ use tracing::info;
 
 #[derive(Clone)]
 pub struct AcpClientHandle {
-    cx: ConnectionTo<acp::Agent>,
+    cx: V2ConnectionTo<acp::Agent>,
     connection: Arc<ClientConnection>,
 }
 
@@ -146,14 +146,14 @@ impl Drop for ConnectionEvents {
 async fn run_client_connection(
     agent: impl ConnectTo<Client> + 'static,
     init_request: InitializeRequest,
-    init_tx: oneshot::Sender<Result<(InitializeResponse, ConnectionTo<acp::Agent>), AcpClientError>>,
+    init_tx: oneshot::Sender<Result<(InitializeResponse, V2ConnectionTo<acp::Agent>), AcpClientError>>,
     events: ConnectionEvents,
 ) {
     let connection_result = Client
         .v2()
         .name("wisp")
         .with_handler(ClientHandlers(events.0.clone()))
-        .connect_with(agent, async move |cx: ConnectionTo<acp::Agent>| {
+        .connect_with(agent, async move |cx: V2ConnectionTo<acp::Agent>| {
             let result = cx.send_request(init_request).block_task().await.map_err(AcpClientError::Protocol);
             let _ = init_tx.send(result.map(|response| {
                 info!("ACP initialized: protocol={:?}, agent_info={:?}", response.protocol_version, response.info);
@@ -198,8 +198,6 @@ impl HandleDispatchFrom<acp::Agent> for ClientHandlers {
             })
             .await
             .if_notification(async |params: UpdateSessionNotification| emit(params.into()))
-            .await
-            .if_notification(async |params: ContextCompactionParams| emit(AcpEvent::ContextCompaction(params)))
             .await
             .if_notification(async |params: ContextClearedParams| emit(AcpEvent::ContextCleared(params)))
             .await

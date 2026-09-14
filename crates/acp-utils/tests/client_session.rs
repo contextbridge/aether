@@ -1,4 +1,4 @@
-use acp::schema::v2::{AgentCapabilities, LoginAuthRequest};
+use acp::schema::v2::{AgentCapabilities, CompactionStatus, LoginAuthRequest};
 use acp_utils::client::{AcpClient, AcpClientError, AcpEvent, connect_acp_client};
 use acp_utils::notifications::{
     PromptSearchParams, PromptSearchResponse, SessionPreviewParams, SessionPreviewResponse,
@@ -120,7 +120,7 @@ async fn replay_updates_precede_the_resume_response() -> Result<(), TestError> {
         .run_until(async {
             let mut client = acp_utils::testing::FakeAgent::default()
                 .replay_message("saved", "snapshot")
-                .compaction_active(true)
+                .compaction("saved", "compaction", CompactionStatus::Completed)
                 .live_message("saved", "live")
                 .build()
                 .await?;
@@ -138,14 +138,15 @@ async fn replay_updates_precede_the_resume_response() -> Result<(), TestError> {
             let replay = [client.event_rx.try_recv()?, client.event_rx.try_recv()?, client.event_rx.try_recv()?];
             let [
                 AcpEvent::SessionUpdate(notification),
-                AcpEvent::ContextCompaction(compaction),
+                AcpEvent::SessionUpdate(compaction),
                 AcpEvent::SessionUpdate(idle),
             ] = replay.as_slice()
             else {
                 return Err(TestError::Unexpected("expected message followed by compaction in replay"));
             };
             assert_eq!(notification.as_ref(), &message("saved", "snapshot"));
-            assert!(compaction.active);
+            assert!(matches!(&compaction.update, SessionUpdate::CompactionUpdate(update)
+                if update.status == CompactionStatus::Completed));
             assert_eq!(idle.as_ref(), &acp_utils::testing::idle_notification("saved", None));
             let Some(AcpEvent::SessionUpdate(notification)) = client.event_rx.recv().await else {
                 return Err(TestError::Unexpected("expected live update after snapshot"));

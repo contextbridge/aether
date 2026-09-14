@@ -9,7 +9,7 @@ use agent_client_protocol::schema::v2::{
     ElicitationFormMode, ElicitationSchema, ElicitationSessionScope, InitializeRequest, PromptRequest, PromptResponse,
     SessionUpdate, StateUpdate, StopReason, TextContent, UpdateSessionNotification,
 };
-use agent_client_protocol::{self as acp, Agent, Builder, Client, HandleDispatchFrom, NullRun};
+use agent_client_protocol::{self as acp, Agent, Client, HandleDispatchFrom, NullRun, V2Builder};
 use futures::{SinkExt, StreamExt};
 use tokio::io::{DuplexStream, duplex};
 use tokio::net::TcpListener;
@@ -292,7 +292,7 @@ async fn receive_json(socket: &mut WebSocketStream<DuplexStream>) -> Result<serd
     Ok(serde_json::from_str(&text)?)
 }
 
-fn test_agent() -> Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
+fn test_agent() -> V2Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
     Agent.v2().on_receive_request(
         async |_: InitializeRequest, responder, _cx| responder.respond(initialize_response()),
         acp::on_receive_request!(),
@@ -301,7 +301,7 @@ fn test_agent() -> Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
 
 fn streaming_elicitation_agent(
     chunks: &'static [&'static str],
-) -> Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
+) -> V2Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
     test_agent().on_receive_request(
         async move |request: PromptRequest, responder, cx| {
             responder.respond(PromptResponse::new())?;

@@ -10,7 +10,8 @@ use agent_client_protocol::schema::v2::{
 };
 use agent_client_protocol::{self as acp, Agent, ByteStreams, Client};
 use serde_json::json;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::oneshot;
 use tokio::task::{LocalSet, spawn_local};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
@@ -86,9 +87,24 @@ async fn test_peer_roundtrips_v2_updates_and_extensions() {
 async fn stdio_accepts_json_rpc_batch_notifications() {
     LocalSet::new().run_until(async {
         let (mut writer, reader) = tokio::io::duplex(4096);
-        let (output, _output_reader) = tokio::io::duplex(4096);
+        let (output, output_reader) = tokio::io::duplex(4096);
         let (mut peer, builder) = TestPeer::new();
-        let connection = spawn_local(builder.connect_to(ByteStreams::new(output.compat_write(), reader.compat())));
+        let (initialized, ready) = oneshot::channel();
+        let connection = spawn_local(builder.connect_with(
+            ByteStreams::new(output.compat_write(), reader.compat()),
+            async move |cx| {
+                cx.send_request(initialize_request()).block_task().await?;
+                let _ = initialized.send(());
+                cx.incoming_closed().await;
+                Ok(())
+            },
+        ));
+        let mut line = String::new();
+        BufReader::new(output_reader).read_line(&mut line).await.unwrap();
+        let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let response = json!({"jsonrpc": "2.0", "id": request["id"], "result": initialize_response()});
+        writer.write_all(format!("{response}\n").as_bytes()).await.unwrap();
+        ready.await.unwrap();
         let batch = json!([
             {"jsonrpc": "2.0", "method": "session/update", "params": {
                 "sessionId": "session", "update": {"sessionUpdate": "state_update", "state": "running"}

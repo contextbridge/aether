@@ -20,13 +20,6 @@ pub struct SessionUsageParams {
     pub usage: llm::SessionUsageEvent,
 }
 
-/// Parameters for `_aether/context_compaction` notifications.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcNotification)]
-#[notification(method = "_aether/context_compaction")]
-pub struct ContextCompactionParams {
-    pub active: bool,
-}
-
 /// Parameters for `_aether/context_cleared` notifications.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, JsonRpcNotification)]
 #[notification(method = "_aether/context_cleared")]
@@ -290,17 +283,6 @@ mod tests {
         let move_params =
             WorkspaceMoveParams { session_id: String::new(), target: WorkspaceMoveTarget::New { name: String::new() } };
         assert_eq!(move_params.method(), "_aether/workspace_move");
-    }
-
-    #[test]
-    fn context_compaction_params_roundtrip() {
-        for active in [true, false] {
-            let params = ContextCompactionParams { active };
-            let untyped = params.to_untyped_message().expect("serializable");
-            assert_eq!(untyped.method(), "_aether/context_compaction");
-            let parsed = ContextCompactionParams::parse_message(untyped.method(), untyped.params()).expect("roundtrip");
-            assert_eq!(parsed, params);
-        }
     }
 
     #[test]

@@ -1,15 +1,14 @@
 use super::{idle_notification, initialize_response};
-use crate::notifications::ContextCompactionParams;
 use agent_client_protocol::schema::v2::{
-    AgentCapabilities, CancelSessionNotification, CloseSessionRequest, CloseSessionResponse, ContentChunk,
-    Implementation, InitializeRequest, InitializeResponse, ListSessionsRequest, ListSessionsResponse, LoginAuthRequest,
-    LoginAuthResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse, ResumeSessionRequest,
-    ResumeSessionResponse, SessionId, SessionInfo, SessionUpdate, SetSessionConfigOptionRequest,
-    SetSessionConfigOptionResponse, UpdateSessionNotification,
+    AgentCapabilities, CancelSessionNotification, CloseSessionRequest, CloseSessionResponse, CompactionStatus,
+    CompactionUpdate, ContentChunk, Implementation, InitializeRequest, InitializeResponse, ListSessionsRequest,
+    ListSessionsResponse, LoginAuthRequest, LoginAuthResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
+    PromptResponse, ResumeSessionRequest, ResumeSessionResponse, SessionId, SessionInfo, SessionUpdate,
+    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, UpdateSessionNotification,
 };
 use agent_client_protocol::util::MatchDispatchFrom;
 use agent_client_protocol::{
-    self as acp, Agent, Builder, Client, ConnectionTo, Dispatch, HandleDispatchFrom, Handled, NullRun, Responder,
+    self as acp, Agent, Client, ConnectionTo, Dispatch, HandleDispatchFrom, Handled, NullRun, Responder, V2Builder,
 };
 use tokio::sync::mpsc;
 
@@ -22,7 +21,6 @@ pub struct FakeAgent {
     hold_list_sessions: bool,
     replay: Vec<UpdateSessionNotification>,
     live: Vec<UpdateSessionNotification>,
-    compaction: Option<bool>,
     capture: Option<Capture>,
 }
 
@@ -51,7 +49,6 @@ impl Default for FakeAgent {
             hold_list_sessions: false,
             replay: Vec::new(),
             live: Vec::new(),
-            compaction: None,
             capture: None,
         }
     }
@@ -94,8 +91,11 @@ impl FakeAgent {
         self.live.push(message(session_id, text));
         self
     }
-    pub fn compaction_active(mut self, active: bool) -> Self {
-        self.compaction = Some(active);
+    pub fn compaction(mut self, session_id: &str, compaction_id: &str, status: CompactionStatus) -> Self {
+        self.replay.push(UpdateSessionNotification::new(
+            session_id,
+            SessionUpdate::CompactionUpdate(CompactionUpdate::new(compaction_id, status)),
+        ));
         self
     }
 
@@ -142,7 +142,7 @@ impl FakeAgent {
         )
     }
 
-    pub fn agent(self) -> Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
+    pub fn agent(self) -> V2Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
         Agent.v2().name("fake-agent").with_handler(self)
     }
 
@@ -265,9 +265,6 @@ impl FakeAgent {
         }
         for notification in &self.replay {
             cx.send_notification(notification.clone())?;
-        }
-        if let Some(active) = self.compaction {
-            cx.send_notification(ContextCompactionParams { active })?;
         }
         cx.send_notification(idle_notification(request.session_id, None))?;
         responder.respond(ResumeSessionResponse::new())?;

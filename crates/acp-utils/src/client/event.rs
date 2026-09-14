@@ -1,6 +1,4 @@
-use crate::notifications::{
-    AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, McpNotification, SubAgentProgressParams,
-};
+use crate::notifications::{AuthMethodsUpdatedParams, ContextClearedParams, McpNotification, SubAgentProgressParams};
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::v2::{
     CreateElicitationRequest, CreateElicitationResponse, UpdateSessionNotification,
@@ -10,7 +8,6 @@ use agent_client_protocol::schema::v2::{
 pub enum AcpEvent {
     SessionUpdate(Box<UpdateSessionNotification>),
     ContextCleared(ContextClearedParams),
-    ContextCompaction(ContextCompactionParams),
     SubAgentProgress(SubAgentProgressParams),
     AuthMethodsUpdated(AuthMethodsUpdatedParams),
     McpNotification(McpNotification),

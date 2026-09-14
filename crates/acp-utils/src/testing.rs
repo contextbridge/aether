@@ -18,8 +18,8 @@ use agent_client_protocol::schema::v2::{
     StopReason, UpdateSessionNotification,
 };
 use agent_client_protocol::{
-    self as acp, Agent, Builder, ByteStreams, Client, ConnectionTo, HandleConnectionClose, HandleDispatchFrom, NullRun,
-    Responder, RunWithConnectionTo,
+    self as acp, Agent, ByteStreams, Client, ConnectionTo, HandleConnectionClose, HandleDispatchFrom, NullRun,
+    Responder, RunWithConnectionTo, V2Builder,
 };
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -40,7 +40,7 @@ pub struct TestPeer {
 }
 
 impl TestPeer {
-    pub fn new() -> (Self, Builder<Client, impl HandleDispatchFrom<Agent>, NullRun>) {
+    pub fn new() -> (Self, V2Builder<Client, impl HandleDispatchFrom<Agent>, NullRun>) {
         let (sn_tx, sn_rx) = mpsc::unbounded_channel::<UpdateSessionNotification>();
         let (mcp_tx, mcp_rx) = mpsc::unbounded_channel::<McpNotification>();
         let (el_tx, el_rx) = mpsc::unbounded_channel::<CreateElicitationRequest>();
@@ -172,7 +172,14 @@ pub fn duplex_pair() -> (DuplexByteStreams, DuplexByteStreams) {
 /// a peer on the other end. Must be called inside a `LocalSet`.
 pub async fn test_connection() -> (ConnectionTo<Client>, TestPeer) {
     let (peer, client_builder) = TestPeer::new();
-    let pair = connect_pair(Agent.v2().name("test-agent"), client_builder).await;
+    let agent = Agent.v2().name("test-agent").on_receive_request(
+        async |_: InitializeRequest, responder: Responder<InitializeResponse>, _cx| {
+            responder.respond(initialize_response())
+        },
+        acp::on_receive_request!(),
+    );
+    let pair = connect_pair(agent, client_builder).await;
+    pair.client.send_request(initialize_request()).block_task().await.expect("initialize test peers");
     (pair.agent, peer)
 }
 
@@ -184,8 +191,8 @@ pub struct ConnectedPair {
 }
 
 pub async fn connect_pair<T, U, V, X, Y, Z>(
-    agent: Builder<Agent, T, U, V>,
-    client: Builder<Client, X, Y, Z>,
+    agent: V2Builder<Agent, T, U, V>,
+    client: V2Builder<Client, X, Y, Z>,
 ) -> ConnectedPair
 where
     T: HandleDispatchFrom<Client> + 'static,
@@ -198,29 +205,25 @@ where
     let (agent_transport, client_transport) = duplex_pair();
     let (agent_tx, agent_rx) = oneshot::channel();
     let (client_tx, client_rx) = oneshot::channel();
-    let agent_task = spawn_local(async move {
-        agent
-            .connect_with(agent_transport, async move |cx: ConnectionTo<Client>| {
-                let _ = agent_tx.send(cx.clone());
-                cx.incoming_closed().await;
-                Ok(())
-            })
-            .await
-    });
-    let client_task = spawn_local(async move {
-        client
-            .connect_with(client_transport, async move |cx: ConnectionTo<Agent>| {
-                let _ = client_tx.send(cx.clone());
-                cx.incoming_closed().await;
-                Ok(())
-            })
-            .await
-    });
+    let agent_task =
+        spawn_local(async move { agent.with_runner(CaptureConnection(agent_tx)).connect_to(agent_transport).await });
+    let client_task =
+        spawn_local(async move { client.with_runner(CaptureConnection(client_tx)).connect_to(client_transport).await });
     ConnectedPair {
         agent: agent_rx.await.expect("agent connection"),
         client: client_rx.await.expect("client connection"),
         agent_task,
         client_task,
+    }
+}
+
+struct CaptureConnection<R: acp::Role>(oneshot::Sender<ConnectionTo<R>>);
+
+impl<R: acp::Role> RunWithConnectionTo<R> for CaptureConnection<R> {
+    async fn run_with_connection_to(self, cx: ConnectionTo<R>) -> Result<(), acp::Error> {
+        let _ = self.0.send(cx.clone());
+        cx.incoming_closed().await;
+        Ok(())
     }
 }
 

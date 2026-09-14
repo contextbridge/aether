@@ -1,12 +1,5 @@
 #![doc = include_str!("../README.md")]
 
-/// Meta key under which Aether agents publish the machine-readable tool name on an ACP
-/// `ToolCallUpdate._meta`, so consumers can recover the original tool name from the humanized title.
-pub const AETHER_TOOL_NAME_META_KEY: &str = "aetherToolName";
-
-/// ACP v2 has no cancelled plan-entry status, so Aether publishes this custom `PlanEntryStatus::Other` value.
-pub const AETHER_PLAN_ENTRY_CANCELLED_STATUS: &str = "_aether_cancelled";
-
 pub mod config_meta;
 pub mod config_option_id;
 pub mod content;
