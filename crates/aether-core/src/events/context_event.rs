@@ -1,3 +1,4 @@
+use super::CompactionId;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -13,15 +14,18 @@ pub enum CompactionOutcome {
 }
 
 /// Context lifecycle events.
+///
+/// Compaction IDs are required in persisted and headless events. Logs without
+/// these IDs are not migrated or assigned identities during deserialization.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContextEvent {
     /// Context compaction has been triggered.
-    CompactionStarted { message_count: usize },
+    CompactionStarted { compaction_id: CompactionId, message_count: usize },
     /// Context compaction reached a terminal state.
-    CompactionEnded { outcome: CompactionOutcome },
+    CompactionEnded { compaction_id: CompactionId, outcome: CompactionOutcome },
     /// Context was compacted to reduce token usage.
-    CompactionResult { message_id: MessageId, summary: String, messages_removed: usize },
+    CompactionResult { compaction_id: CompactionId, message_id: MessageId, summary: String, messages_removed: usize },
     /// Context usage update for UI display.
     UsageUpdated { usage: ContextUsage },
     /// The agent context was cleared and reset to its blank state.

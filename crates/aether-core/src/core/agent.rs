@@ -7,8 +7,8 @@ use crate::core::queued_input::QueuedInput;
 pub use crate::core::retry_config::RetryConfig;
 use crate::core::tool_execution::{ToolAbortPolicy, ToolExecutionUpdate, ToolExecutions};
 use crate::events::{
-    AgentCommand, AgentEvent, AgentObserver, Command, CompactionOutcome, ContextEvent, LlmCallOutcome, ModelEvent,
-    StreamState, TaskOutcome, ToolEvent, TraceContext, TurnEvent, TurnOutcome, UserCommand,
+    AgentCommand, AgentEvent, AgentObserver, Command, CompactionId, CompactionOutcome, ContextEvent, LlmCallOutcome,
+    ModelEvent, StreamState, TaskOutcome, ToolEvent, TraceContext, TurnEvent, TurnOutcome, UserCommand,
 };
 use crate::mcp::McpHandle;
 use futures::Stream;
@@ -85,6 +85,7 @@ pub struct Agent {
     prompt_cache: PromptCache,
     turn_active: bool,
     llm_call_active: bool,
+    active_compaction: Option<CompactionId>,
     active_model: Option<LlmModel>,
     session_usage: SessionUsageTracker,
 }
@@ -122,6 +123,7 @@ impl Agent {
             prompt_cache: config.prompt_cache,
             turn_active: false,
             llm_call_active: false,
+            active_compaction: None,
             active_model: None,
             session_usage: config.session_usage,
         }
@@ -422,13 +424,17 @@ impl Agent {
             self.finish_chat_call(LlmCallOutcome::Cancelled).await;
         }
         if self.streams.remove(&StreamKey::Compaction).is_some() {
+            let compaction_id = self.active_compaction.take().expect("active compaction stream has an identity");
             self.emit(AgentEvent::Turn(TurnEvent::LlmCallEnded {
                 purpose: LlmCallPurpose::Compaction,
                 outcome: LlmCallOutcome::Cancelled,
             }))
             .await;
-            self.emit(AgentEvent::Context(ContextEvent::CompactionEnded { outcome: CompactionOutcome::Cancelled }))
-                .await;
+            self.emit(AgentEvent::Context(ContextEvent::CompactionEnded {
+                compaction_id,
+                outcome: CompactionOutcome::Cancelled,
+            }))
+            .await;
         }
         self.streams.remove(&StreamKey::Llm);
         for tool_id in self.tool_executions.abort(&tool_policy) {
@@ -590,8 +596,13 @@ impl Agent {
 
     async fn begin_compaction(&mut self) {
         tracing::info!("Starting context compaction - {} messages", self.context.message_count());
-        self.emit(AgentEvent::Context(ContextEvent::CompactionStarted { message_count: self.context.message_count() }))
-            .await;
+        let compaction_id = CompactionId::new();
+        self.active_compaction = Some(compaction_id.clone());
+        self.emit(AgentEvent::Context(ContextEvent::CompactionStarted {
+            compaction_id,
+            message_count: self.context.message_count(),
+        }))
+        .await;
         let started = self.begin_llm_call(LlmCallPurpose::Compaction, 0);
         self.emit(started).await;
 
@@ -603,6 +614,7 @@ impl Agent {
     }
 
     async fn on_compaction_complete(&mut self, result: Result<CompactionResult, CompactionError>) {
+        let compaction_id = self.active_compaction.take().expect("completed compaction has an identity");
         if let Ok(result) = &result
             && let Some(usage) = result.usage
         {
@@ -621,17 +633,22 @@ impl Agent {
                 self.context = self.context.with_compacted_summary(message_id.clone(), &result.summary);
                 self.token_tracker.reset_current_usage();
                 self.emit(AgentEvent::Context(ContextEvent::CompactionResult {
+                    compaction_id: compaction_id.clone(),
                     message_id,
                     summary: result.summary,
                     messages_removed: result.messages_removed,
                 }))
                 .await;
-                self.emit(AgentEvent::Context(ContextEvent::CompactionEnded { outcome: CompactionOutcome::Completed }))
-                    .await;
+                self.emit(AgentEvent::Context(ContextEvent::CompactionEnded {
+                    compaction_id,
+                    outcome: CompactionOutcome::Completed,
+                }))
+                .await;
             }
             Err(e) => {
                 tracing::warn!("Context compaction failed: {e}");
                 self.emit(AgentEvent::Context(ContextEvent::CompactionEnded {
+                    compaction_id,
                     outcome: CompactionOutcome::Failed { error: e.to_string() },
                 }))
                 .await;

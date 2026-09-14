@@ -66,10 +66,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 break;
             }
-            Some(AgentEvent::Context(ContextEvent::CompactionStarted { message_count })) => {
+            Some(AgentEvent::Context(ContextEvent::CompactionStarted { message_count, .. })) => {
                 println!("Context compaction started: {message_count} messages");
             }
-            Some(AgentEvent::Context(ContextEvent::CompactionEnded { outcome })) => {
+            Some(AgentEvent::Context(ContextEvent::CompactionEnded { outcome, .. })) => {
                 println!("Context compaction ended: {outcome:?}");
             }
             Some(AgentEvent::Context(ContextEvent::CompactionResult { messages_removed, .. })) => {
