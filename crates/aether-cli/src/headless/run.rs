@@ -240,11 +240,11 @@ fn format_text(msg: &AgentEvent) -> Option<String> {
             }
         },
 
-        AgentEvent::Context(ContextEvent::CompactionStarted { message_count }) => {
+        AgentEvent::Context(ContextEvent::CompactionStarted { message_count, .. }) => {
             Some(format!("Context compaction started ({message_count} messages)"))
         }
 
-        AgentEvent::Context(ContextEvent::CompactionEnded { outcome }) => Some(match outcome {
+        AgentEvent::Context(ContextEvent::CompactionEnded { outcome, .. }) => Some(match outcome {
             CompactionOutcome::Completed => "Context compaction completed".to_string(),
             CompactionOutcome::Failed { error } => format!("Context compaction failed: {error}"),
             CompactionOutcome::Cancelled => "Context compaction cancelled".to_string(),
@@ -469,13 +469,17 @@ mod tests {
 
     #[test]
     fn format_text_formats_context_compaction_started() {
-        let msg = AgentEvent::Context(ContextEvent::CompactionStarted { message_count: 42 });
+        let msg = AgentEvent::Context(ContextEvent::CompactionStarted {
+            compaction_id: "compaction".into(),
+            message_count: 42,
+        });
         assert_eq!(format_text(&msg), Some("Context compaction started (42 messages)".to_string()));
     }
 
     #[test]
     fn format_text_formats_context_compaction_result() {
         let msg = AgentEvent::Context(ContextEvent::CompactionResult {
+            compaction_id: "compaction".into(),
             message_id: llm::MessageId::new(),
             summary: "summary here".to_string(),
             messages_removed: 10,
@@ -584,15 +588,22 @@ mod tests {
             ),
             (tool_progress(1.0, None, None), CliEventKind::ToolProgress),
             (
-                AgentEvent::Context(ContextEvent::CompactionStarted { message_count: 1 }),
+                AgentEvent::Context(ContextEvent::CompactionStarted {
+                    compaction_id: "compaction".into(),
+                    message_count: 1,
+                }),
                 CliEventKind::ContextCompactionStarted,
             ),
             (
-                AgentEvent::Context(ContextEvent::CompactionEnded { outcome: CompactionOutcome::Completed }),
+                AgentEvent::Context(ContextEvent::CompactionEnded {
+                    compaction_id: "compaction".into(),
+                    outcome: CompactionOutcome::Completed,
+                }),
                 CliEventKind::ContextCompactionEnded,
             ),
             (
                 AgentEvent::Context(ContextEvent::CompactionResult {
+                    compaction_id: "compaction".into(),
                     message_id: llm::MessageId::new(),
                     summary: "s".to_string(),
                     messages_removed: 1,

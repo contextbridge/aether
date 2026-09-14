@@ -10,7 +10,7 @@ async fn initialize_exposes_only_v2_nested_capabilities() {
     LocalSet::new()
         .run_until(async {
             let harness = AcpTestHarness::start().await;
-            let response = harness.client_cx.send_request(initialize()).block_task().await.unwrap();
+            let response = harness.initialize_response;
             assert_eq!(response.protocol_version, ProtocolVersion::V2);
             assert_eq!(response.info.name, "Aether");
             let wire = serde_json::to_value(&response).unwrap();
@@ -129,10 +129,6 @@ async fn resume_accepts_empty_or_omitted_lists_and_rejects_unknown_cursors() {
             assert!(harness.client_cx.send_request(request).block_task().await.is_err());
         })
         .await;
-}
-
-fn initialize() -> acp::InitializeRequest {
-    acp::InitializeRequest::new(ProtocolVersion::V2, acp::Implementation::new("test", "1"))
 }
 
 fn authenticated(methods: &[acp::AuthMethod]) -> bool {

@@ -23,7 +23,7 @@ use aether_core::mcp::{ServerFactory, mcp};
 use aether_project::AgentCatalog;
 use aether_sessions::SessionStore;
 use aether_sessions::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent, last_agent_from_events};
-use agent_client_protocol::schema::v2::{SessionId, SessionUpdate, StateUpdate, StopReason};
+use agent_client_protocol::schema::v2::{InitializeResponse, SessionId, SessionUpdate, StateUpdate, StopReason};
 use agent_client_protocol::{Agent, Client, ConnectionTo};
 use futures::FutureExt;
 use llm::testing::FakeLlmProvider;
@@ -47,6 +47,7 @@ const CODER_REPLY: &str = "coder reply";
 pub struct AcpTestHarness {
     pub client_cx: ConnectionTo<Agent>,
     pub peer: TestPeer,
+    pub initialize_response: InitializeResponse,
     disconnect: Option<oneshot::Sender<()>>,
     server_done: Option<oneshot::Receiver<()>>,
     pub auth_updates: mpsc::UnboundedReceiver<acp_utils::notifications::AuthMethodsUpdatedParams>,
@@ -154,6 +155,12 @@ impl AcpTestHarness {
             agent_client_protocol::on_receive_notification!(),
         );
         let pair = acp_utils::testing::connect_pair(acp_agent_builder(state.clone()), client_builder).await;
+        let initialize_response = pair
+            .client
+            .send_request(acp_utils::testing::initialize_request())
+            .block_task()
+            .await
+            .expect("initialize harness");
         let (disconnect, disconnected) = oneshot::channel();
         let (server_finished, server_done) = oneshot::channel();
         let server_state = state.clone();
@@ -172,6 +179,7 @@ impl AcpTestHarness {
         Self {
             client_cx,
             peer,
+            initialize_response,
             disconnect: Some(disconnect),
             server_done: Some(server_done),
             auth_updates,
@@ -397,7 +405,7 @@ impl AcpTestHarness {
         FakeAgentSwitchingSession { session_id: acp_session_id, planner, coder }
     }
 
-    fn append_stored_event(&self, session_id: &str, event: &SessionEvent) {
+    pub fn append_stored_event(&self, session_id: &str, event: &SessionEvent) {
         self.session_store.append_event(session_id, event).expect("stored session event appends");
     }
 }

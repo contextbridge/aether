@@ -1,11 +1,10 @@
 use crate::acp::session::actor::SessionIo;
-use acp_utils::AETHER_PLAN_ENTRY_CANCELLED_STATUS;
 use acp_utils::notifications::{
-    ContextClearedParams, ContextCompactionParams, SessionUsageParams, SubAgentEvent, SubAgentProgressParams,
-    SubAgentToolCallUpdate, SubAgentToolError, SubAgentToolRequest, SubAgentToolResult,
+    ContextClearedParams, SessionUsageParams, SubAgentEvent, SubAgentProgressParams, SubAgentToolCallUpdate,
+    SubAgentToolError, SubAgentToolRequest, SubAgentToolResult,
 };
 use aether_core::events::{
-    AgentEvent, ContextEvent, MessageEvent, ModelEvent, ToolEvent, TurnEvent, TurnOutcome, aether_tool_name_meta,
+    AgentEvent, CompactionOutcome, ContextEvent, MessageEvent, ModelEvent, ToolEvent, TurnEvent, TurnOutcome,
     humanize_tool_name, parse_tool_call_chunk,
 };
 use agent_client_protocol::schema::MaybeUndefined;
@@ -21,16 +20,15 @@ pub(crate) fn project_agent_event(msg: &AgentEvent, mode: NotificationMode, io: 
     if let Some(update) = map_agent_event_to_notification(msg, mode) {
         io.send_update(update);
     }
+    if let AgentEvent::Tool(ToolEvent::Result { result_meta, .. }) = msg
+        && let Some(update) = try_extract_plan_notification(result_meta.as_ref())
+    {
+        io.send_update(update);
+    }
     if matches!(mode, NotificationMode::Replay) {
         return;
     }
     match msg {
-        AgentEvent::Context(ContextEvent::CompactionStarted { .. }) => {
-            io.send(ContextCompactionParams { active: true });
-        }
-        AgentEvent::Context(ContextEvent::CompactionEnded { .. }) => {
-            io.send(ContextCompactionParams { active: false });
-        }
         AgentEvent::Tool(ToolEvent::SubAgentProgress { request, payload }) => {
             io.send(SubAgentProgressParams {
                 parent_tool_id: request.id.clone(),
@@ -42,11 +40,6 @@ pub(crate) fn project_agent_event(msg: &AgentEvent, mode: NotificationMode, io: 
         AgentEvent::Context(ContextEvent::Cleared) => io.send(ContextClearedParams::default()),
         AgentEvent::SessionUsage(usage) => io.send(SessionUsageParams { usage: usage.clone() }),
         _ => {}
-    }
-    if let AgentEvent::Tool(ToolEvent::Result { result_meta, .. }) = msg
-        && let Some(update) = try_extract_plan_notification(result_meta.as_ref())
-    {
-        io.send_update(update);
     }
 }
 
@@ -103,7 +96,7 @@ pub fn map_agent_event_to_notification(msg: &AgentEvent, mode: NotificationMode)
 
         AgentEvent::Tool(ToolEvent::TaskCancelled { request, .. }) => Some(SessionUpdate::ToolCallUpdate(
             ToolCallUpdate::new(request.id.clone())
-                .status(ToolCallStatus::Failed)
+                .status(ToolCallStatus::Cancelled)
                 .content(vec!["The background task was cancelled and will not produce a result.".into()]),
         )),
 
@@ -123,12 +116,29 @@ pub fn map_agent_event_to_notification(msg: &AgentEvent, mode: NotificationMode)
             Some(map_display_update_to_notification(request, meta))
         }
 
-        AgentEvent::Context(
-            ContextEvent::Cleared
-            | ContextEvent::CompactionStarted { .. }
-            | ContextEvent::CompactionEnded { .. }
-            | ContextEvent::CompactionResult { .. },
-        )
+        AgentEvent::Context(ContextEvent::CompactionStarted { compaction_id, .. }) => {
+            Some(SessionUpdate::CompactionUpdate(acp::CompactionUpdate::new(
+                compaction_id.as_str(),
+                acp::CompactionStatus::InProgress,
+            )))
+        }
+        AgentEvent::Context(ContextEvent::CompactionResult { compaction_id, summary, .. }) => {
+            Some(SessionUpdate::CompactionUpdate(
+                acp::CompactionUpdate::new(compaction_id.as_str(), acp::CompactionStatus::Completed)
+                    .summary(vec![ContentBlock::from(summary.clone())]),
+            ))
+        }
+        AgentEvent::Context(ContextEvent::CompactionEnded { compaction_id, outcome }) => match outcome {
+            CompactionOutcome::Completed => None,
+            CompactionOutcome::Failed { error } => Some(SessionUpdate::CompactionUpdate(
+                acp::CompactionUpdate::new(compaction_id.as_str(), acp::CompactionStatus::Failed).error(error.clone()),
+            )),
+            CompactionOutcome::Cancelled => Some(SessionUpdate::CompactionUpdate(acp::CompactionUpdate::new(
+                compaction_id.as_str(),
+                acp::CompactionStatus::Cancelled,
+            ))),
+        },
+        AgentEvent::Context(ContextEvent::Cleared)
         | AgentEvent::Turn(
             TurnEvent::Started { .. }
             | TurnEvent::Ended { outcome: TurnOutcome::Completed | TurnOutcome::Cancelled | TurnOutcome::Failed { .. } }
@@ -158,7 +168,8 @@ fn task_status_to_acp(status: &str) -> ToolCallStatus {
     match status {
         "working" => ToolCallStatus::InProgress,
         "completed" => ToolCallStatus::Completed,
-        "failed" | "cancelled" => ToolCallStatus::Failed,
+        "failed" => ToolCallStatus::Failed,
+        "cancelled" => ToolCallStatus::Cancelled,
         _ => ToolCallStatus::Pending,
     }
 }
@@ -169,7 +180,7 @@ fn plan_status_to_acp(status: PlanMetaStatus) -> PlanEntryStatus {
         PlanMetaStatus::InProgress => PlanEntryStatus::InProgress,
         PlanMetaStatus::Completed => PlanEntryStatus::Completed,
         PlanMetaStatus::Pending => PlanEntryStatus::Pending,
-        PlanMetaStatus::Cancelled => PlanEntryStatus::Other(AETHER_PLAN_ENTRY_CANCELLED_STATUS.into()),
+        PlanMetaStatus::Cancelled => PlanEntryStatus::Cancelled,
     }
 }
 
@@ -218,7 +229,7 @@ fn map_tool_call_to_notification(request: &ToolCallRequest) -> SessionUpdate {
             .title(humanize_tool_name(&request.name))
             .status(acp::ToolCallStatus::InProgress)
             .raw_input(raw_input)
-            .meta(aether_tool_name_meta(&request.name)),
+            .name(request.name.clone()),
     )
 }
 
@@ -243,7 +254,7 @@ fn map_tool_result_to_notification(result: &ToolCallResult, result_meta: Option<
     let mut update = ToolCallUpdate::new(result.id.clone()).status(ToolCallStatus::Completed).content(content);
 
     if let Some(rm) = result_meta {
-        update = update.title(rm.display.title.clone()).meta(tool_display_meta(&result.name, &rm.display.value));
+        update = update.title(rm.display.title.clone()).meta(tool_display_meta(&rm.display.value));
     }
 
     SessionUpdate::ToolCallUpdate(update)
@@ -282,13 +293,14 @@ fn map_display_update_to_notification(request: &ToolCallRequest, meta: &ToolResu
     let update = ToolCallUpdate::new(request.id.clone())
         .status(ToolCallStatus::InProgress)
         .title(meta.display.title.clone())
-        .meta(tool_display_meta(&request.name, &meta.display.value));
+        .name(request.name.clone())
+        .meta(tool_display_meta(&meta.display.value));
 
     SessionUpdate::ToolCallUpdate(update)
 }
 
-fn tool_display_meta(name: &str, value: &str) -> serde_json::Map<String, serde_json::Value> {
-    let mut meta = aether_tool_name_meta(name);
+fn tool_display_meta(value: &str) -> serde_json::Map<String, serde_json::Value> {
+    let mut meta = serde_json::Map::new();
     if !value.is_empty() {
         meta.insert("display_value".into(), value.into());
     }
@@ -327,7 +339,7 @@ fn to_sub_agent_event(event: &AgentEvent) -> SubAgentEvent {
 mod tests {
     use super::*;
     use acp_utils::notifications::SubAgentEvent;
-    use aether_core::events::{CompactionOutcome, SubAgentProgressPayload};
+    use aether_core::events::SubAgentProgressPayload;
     use agent_client_protocol::Client;
     use agent_client_protocol::schema::v2::TextContent;
     use llm::{ContextUsage, ToolCallRequest};
@@ -346,7 +358,14 @@ mod tests {
                     },
                     agent_client_protocol::on_receive_notification!(),
                 );
-                let pair = acp_utils::testing::connect_pair(agent_client_protocol::Agent.v2(), client).await;
+                let agent = agent_client_protocol::Agent.v2().on_receive_request(
+                    async |_: acp::InitializeRequest, responder, _cx| {
+                        responder.respond(acp_utils::testing::initialize_response())
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                );
+                let pair = acp_utils::testing::connect_pair(agent, client).await;
+                pair.client.send_request(acp_utils::testing::initialize_request()).block_task().await.unwrap();
                 let io = SessionIo::new(pair.agent, "session".into());
                 project_agent_event(event, NotificationMode::Live, &io);
                 rx.recv().await.unwrap()
@@ -371,7 +390,7 @@ mod tests {
             ("input_required", ToolCallStatus::Pending),
             ("completed", ToolCallStatus::Completed),
             ("failed", ToolCallStatus::Failed),
-            ("cancelled", ToolCallStatus::Failed),
+            ("cancelled", ToolCallStatus::Cancelled),
         ];
 
         for (status, expected) in cases {
@@ -390,7 +409,7 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_task_notification_maps_to_failed_tool_status() {
+    fn cancelled_task_notification_maps_to_cancelled_tool_status() {
         let event = AgentEvent::Tool(ToolEvent::TaskCancelled {
             request: ToolCallRequest { id: "call-1".into(), name: "tasks__work".into(), arguments: "{}".into() },
             task_id: "task-1".into(),
@@ -401,7 +420,7 @@ mod tests {
             panic!("expected tool call update");
         };
 
-        assert_eq!(update.status, MaybeUndefined::Value(ToolCallStatus::Failed));
+        assert_eq!(update.status, MaybeUndefined::Value(ToolCallStatus::Cancelled));
     }
 
     #[test]
@@ -516,23 +535,6 @@ mod tests {
     }
 
     #[test]
-    fn test_compaction_lifecycle_maps_to_agent_notifications() {
-        let started = AgentEvent::Context(ContextEvent::CompactionStarted { message_count: 12 });
-        let started: ContextCompactionParams = forwarded(&started);
-        assert!(started.active);
-
-        for outcome in [
-            CompactionOutcome::Completed,
-            CompactionOutcome::Failed { error: "failed".to_string() },
-            CompactionOutcome::Cancelled,
-        ] {
-            let ended = AgentEvent::Context(ContextEvent::CompactionEnded { outcome });
-            let ended: ContextCompactionParams = forwarded(&ended);
-            assert!(!ended.active);
-        }
-    }
-
-    #[test]
     fn test_context_cleared_maps_to_agent_notification() {
         let _: ContextClearedParams = forwarded(&AgentEvent::Context(ContextEvent::Cleared));
     }
@@ -571,7 +573,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_call_notification_includes_original_tool_name_meta() -> Result<(), String> {
+    fn test_tool_call_notification_includes_original_tool_name() -> Result<(), String> {
         let request = ToolCallRequest {
             id: "call_1".to_string(),
             name: "coding__read_file".to_string(),
@@ -583,8 +585,7 @@ mod tests {
         let SessionUpdate::ToolCallUpdate(tool_call) = notification else {
             return Err("Expected ToolCall".to_string());
         };
-        let meta = tool_call.meta.take().ok_or("meta should be present")?;
-        assert_eq!(meta.get("aetherToolName").and_then(|value| value.as_str()), Some("coding__read_file"));
+        assert_eq!(tool_call.name.value().map(String::as_str), Some("coding__read_file"));
         assert_eq!(tool_call.title, MaybeUndefined::Value("Read file".into()));
         Ok(())
     }
@@ -758,7 +759,7 @@ mod tests {
             chunk: "{\"other\":1}".into(),
         })));
         assert_eq!(tool.raw_input, MaybeUndefined::Value(json!({"other": 1})));
-        assert_eq!(tool.meta.value().unwrap()["aetherToolName"], "coding__read_file");
+        assert_eq!(tool.name.value().map(String::as_str), Some("coding__read_file"));
 
         let progress = AgentEvent::Tool(ToolEvent::Progress {
             request: request("{}"),
@@ -782,14 +783,14 @@ mod tests {
                 request: request("{}"),
                 meta: ToolDisplayMeta::new("Read", value).into(),
             })));
-            assert_eq!(tool.meta.value().unwrap()["aetherToolName"], "coding__read_file");
+            assert_eq!(tool.name.value().map(String::as_str), Some("coding__read_file"));
             assert_eq!(
                 tool.meta.value().unwrap().get("display_value").cloned(),
                 if value.is_empty() { None } else { Some(json!(value)) }
             );
         }
         tool.apply_update(mapped_tool(&result_event(Some(ToolDisplayMeta::new("Read", "done").into()))));
-        assert_eq!(tool.meta.value().unwrap()["aetherToolName"], "coding__read_file");
+        assert_eq!(tool.name.value().map(String::as_str), Some("coding__read_file"));
         assert_eq!(tool.meta.value().unwrap()["display_value"], "done");
     }
 
@@ -849,7 +850,7 @@ mod tests {
                             .iter()
                             .map(|entry| entry["status"].as_str().unwrap())
                             .collect::<Vec<_>>(),
-                        ["pending", "in_progress", "completed", AETHER_PLAN_ENTRY_CANCELLED_STATUS]
+                        ["pending", "in_progress", "completed", "cancelled"]
                     );
                 }
             }

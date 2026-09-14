@@ -8,13 +8,13 @@ use agent_client_protocol::schema::v2::{
 };
 use agent_client_protocol::util::MatchDispatchFrom;
 use agent_client_protocol::{
-    self as acp, Agent, Builder, Client, ConnectionTo, Dispatch, HandleDispatchFrom, Handled, JsonRpcResponse, NullRun,
-    Responder,
+    self as acp, Agent, Client, ConnectionTo, Dispatch, HandleDispatchFrom, Handled, JsonRpcResponse, NullRun,
+    Responder, V2Builder,
 };
 use std::future::Future;
 use std::sync::Arc;
 
-pub(crate) fn acp_agent_builder(state: Arc<AcpState>) -> Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
+pub(crate) fn acp_agent_builder(state: Arc<AcpState>) -> V2Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
     Agent.v2().name("aether-acp").with_handler(AcpHandlers(state))
 }
 

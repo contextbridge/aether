@@ -1,13 +1,39 @@
 use crate::acp::session::actor::SessionIo;
+use aether_core::events::{AgentEvent, CompactionId, ContextEvent};
 use aether_sessions::{SessionEvent, UserEvent};
-use agent_client_protocol::schema::v2::SessionUpdate;
+use agent_client_protocol::schema::v2::{CompactionStatus, CompactionUpdate, SessionUpdate};
+use std::collections::HashMap;
 
 use super::content::map_user_message;
-use super::events::{NotificationMode, project_agent_event};
+use super::events::{NotificationMode, map_agent_event_to_notification, project_agent_event};
 
-/// Replay events, omitting partial chunks.
 pub(crate) fn replay_to_client(events: &[SessionEvent], io: &SessionIo) {
-    for event in events {
+    let mut compactions: HashMap<&CompactionId, (usize, Option<CompactionUpdate>)> = HashMap::new();
+    for (position, event) in events.iter().enumerate() {
+        if let Some(id) = compaction_id(event) {
+            let entry = compactions.entry(id).or_insert((position, None));
+            if let SessionEvent::Agent(message) = event
+                && let Some(SessionUpdate::CompactionUpdate(update)) =
+                    map_agent_event_to_notification(message, NotificationMode::Replay)
+                && matches!(
+                    update.status,
+                    CompactionStatus::Completed | CompactionStatus::Failed | CompactionStatus::Cancelled
+                )
+            {
+                entry.1 = Some(update);
+            }
+        }
+    }
+    for (position, event) in events.iter().enumerate() {
+        if let Some(id) = compaction_id(event) {
+            if let Some((first, update)) = compactions.get_mut(id)
+                && *first == position
+                && let Some(update) = update.take()
+            {
+                io.send_update(SessionUpdate::CompactionUpdate(update));
+            }
+            continue;
+        }
         match event {
             SessionEvent::User(UserEvent::Message { message_id, content, display_content }) => {
                 io.send_update(SessionUpdate::UserMessage(map_user_message(
@@ -18,6 +44,17 @@ pub(crate) fn replay_to_client(events: &[SessionEvent], io: &SessionIo) {
             SessionEvent::Agent(message) => project_agent_event(message, NotificationMode::Replay, io),
             SessionEvent::User(_) | SessionEvent::Control(_) => {}
         }
+    }
+}
+
+fn compaction_id(event: &SessionEvent) -> Option<&CompactionId> {
+    match event {
+        SessionEvent::Agent(AgentEvent::Context(
+            ContextEvent::CompactionStarted { compaction_id, .. }
+            | ContextEvent::CompactionResult { compaction_id, .. }
+            | ContextEvent::CompactionEnded { compaction_id, .. },
+        )) => Some(compaction_id),
+        _ => None,
     }
 }
 
