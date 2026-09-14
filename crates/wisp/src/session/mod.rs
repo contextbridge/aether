@@ -6,28 +6,21 @@ pub mod workspace_status;
 
 use crate::error::AppError;
 use crate::session::workspace_status::WorkspaceStatus;
-use acp_utils::client::{AcpClientError, AcpClientHandle, AcpEvent, TokioAcpAgent, connect_acp_client};
+use acp_utils::agent::TokioAcpAgent;
+use acp_utils::client::{AcpClient, AcpClientError, connect_acp_client};
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v2::{
-    AuthMethod, ClientCapabilities, ElicitationCapabilities, ElicitationFormCapabilities, ElicitationUrlCapabilities,
-    Implementation, InitializeRequest, NewSessionRequest, PromptCapabilities, SessionCapabilities, SessionConfigOption,
-    SessionId,
+    ClientCapabilities, ElicitationCapabilities, ElicitationFormCapabilities, ElicitationUrlCapabilities,
+    Implementation, InitializeRequest, NewSessionRequest, NewSessionResponse,
 };
 use agent_client_protocol::{Client, ConnectTo};
 use std::env::current_dir;
 use std::path::PathBuf;
 use std::str::FromStr;
-use tokio::sync::mpsc;
 
 pub struct Session {
-    pub session_id: SessionId,
-    pub agent_name: String,
-    pub prompt_capabilities: PromptCapabilities,
-    pub session_capabilities: SessionCapabilities,
-    pub config_options: Vec<SessionConfigOption>,
-    pub auth_methods: Vec<AuthMethod>,
-    pub event_rx: mpsc::UnboundedReceiver<AcpEvent>,
-    pub client_handle: AcpClientHandle,
+    pub client: AcpClient,
+    pub response: NewSessionResponse,
     pub working_dir: PathBuf,
     pub workspace_status: WorkspaceStatus,
 }
@@ -48,14 +41,8 @@ impl Session {
         let session_response = client.handle.new_session(NewSessionRequest::new(working_dir.clone())).await?;
 
         Ok(Self {
-            session_id: session_response.session_id,
-            agent_name: client.agent_name(),
-            prompt_capabilities: client.prompt_capabilities().cloned().unwrap_or_default(),
-            session_capabilities: client.session_capabilities().cloned().unwrap_or_default(),
-            config_options: session_response.config_options,
-            auth_methods: client.auth_methods().to_vec(),
-            event_rx: client.event_rx,
-            client_handle: client.handle,
+            client,
+            response: session_response,
             working_dir,
             workspace_status,
         })
