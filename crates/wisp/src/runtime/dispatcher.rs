@@ -1,14 +1,16 @@
 use crate::command::{
-    Command, CommandResult, FailedCommand, FilesystemCommand, GitCommand, GitWatchCommand, TerminalCommand,
+    Command, CommandResult, FilesystemCommand, GitCommand, GitWatchCommand, TerminalCommand,
 };
 use crate::git_review::{DiffScope, GitDiffEvent, GitWatchEvent};
 use crate::request::RequestId;
 use crate::runtime::{agent, files, git};
 use acp_utils::client::AcpClientHandle;
 use clankerdiff_git::GitRepository;
-use clankerdiff_watch::{RepositoryRequest, RepositoryWatcher, WatchError, WatchOptions};
+use clankerdiff_watch::{RepositoryRequest, RepositoryState, RepositoryWatcher, WatchError, WatchOptions};
 use crossterm::{execute, style::Print};
-use futures::{FutureExt, future::BoxFuture};
+use futures::{StreamExt, future::poll_fn};
+use std::task::Poll;
+use tokio_stream::wrappers::WatchStream;
 use std::{io, path::PathBuf, sync::Arc};
 use tokio::sync::oneshot;
 
@@ -20,8 +22,7 @@ pub struct CommandDispatcher {
     git_review: Option<(RequestId, PathBuf)>,
     git_repository: Option<GitRepository>,
     git_watch: Option<RepositoryWatcher>,
-    git_start: Option<BoxFuture<'static, Result<(GitRepository, RepositoryWatcher), WatchError>>>,
-    git_refresh: Option<BoxFuture<'static, CommandResult>>,
+    git_updates: Option<WatchStream<RepositoryState>>,
 }
 
 impl CommandDispatcher {
@@ -32,8 +33,7 @@ impl CommandDispatcher {
             git_review: None,
             git_repository: None,
             git_watch: None,
-            git_start: None,
-            git_refresh: None,
+            git_updates: None,
         }
     }
 
@@ -79,8 +79,7 @@ impl CommandDispatcher {
                         }
                         if let Some(watcher) = &self.git_watch {
                             let requests = watcher.request_tx.clone();
-                            self.git_refresh = Some(
-                                async move {
+                            self.tasks.spawn_read(ReadTask::GitRefresh, async move {
                                     let (result_tx, completion) = oneshot::channel();
                                     if requests.send(RepositoryRequest::SetScope { scope, result_tx }).await.is_err() {
                                         return watch_stopped(review_id);
@@ -89,9 +88,7 @@ impl CommandDispatcher {
                                         Ok(result) => CommandResult::GitDiff(GitDiffEvent { review_id, result }),
                                         Err(_) => watch_stopped(review_id),
                                     }
-                                }
-                                .boxed(),
-                            );
+                            });
                         } else {
                             self.start_git_watch(scope);
                         }
@@ -116,48 +113,49 @@ impl CommandDispatcher {
     }
 
     pub fn has_pending_tasks(&self) -> bool {
-        !self.tasks.is_empty() || self.git_start.is_some() || self.git_watch.is_some() || self.git_refresh.is_some()
+        !self.tasks.is_empty() || self.git_updates.is_some()
     }
 
     pub async fn next_result(&mut self) -> Option<CommandResult> {
         loop {
-            tokio::select! {
-                biased;
-                started = async { self.git_start.as_mut().expect("starting watcher").await }, if self.git_start.is_some() => {
-                    self.git_start = None;
-                    let review_id = self.git_review.as_ref().expect("active review").0;
-                    let result = started.map(|(repository, mut watcher)| {
-                        let state = watcher.state_rx.borrow_and_update().clone();
-                        self.git_repository = Some(repository);
-                        self.git_watch = Some(watcher);
-                        self.git_refresh = Some(async move {
-                            CommandResult::GitDiff(GitDiffEvent { review_id, result: Ok(()) })
-                        }.boxed());
-                        state
-                    }).map_err(Arc::new);
-                    return Some(CommandResult::GitWatch(GitWatchEvent { review_id, result }));
-                }
-                changed = async { self.git_watch.as_mut().expect("active watcher").state_rx.changed().await }, if self.git_watch.is_some() => {
-                    let review_id = self.git_review.as_ref().expect("active review").0;
-                    if changed.is_err() {
-                        self.git_watch = None;
-                        self.git_repository = None;
-                        self.git_refresh = None;
-                        return Some(watch_stopped(review_id));
-                    }
-                    let state = self.git_watch.as_mut().expect("active watcher").state_rx.borrow_and_update().clone();
-                    return Some(CommandResult::GitWatch(GitWatchEvent { review_id, result: Ok(state) }));
-                }
-                result = async { self.git_refresh.as_mut().expect("pending refresh").await }, if self.git_refresh.is_some() => {
-                    self.git_refresh = None;
-                    return Some(result);
-                }
-                result = self.tasks.next(), if !self.tasks.is_empty() => {
-                    if result.is_some() {
-                        return result;
+            let result = poll_fn(|cx| {
+                if let (Some(updates), Some((review_id, _))) = (&mut self.git_updates, &self.git_review) {
+                    let review_id = *review_id;
+                    match updates.poll_next_unpin(cx) {
+                        Poll::Ready(Some(state)) => return Poll::Ready(Some(CommandResult::GitWatch(
+                            GitWatchEvent { review_id, result: Ok(state) },
+                        ))),
+                        Poll::Ready(None) => {
+                            self.close_git_review();
+                            return Poll::Ready(Some(watch_stopped(review_id)));
+                        }
+                        Poll::Pending => {}
                     }
                 }
-                else => return None,
+                match self.tasks.poll_result(cx) {
+                    Poll::Ready(None) if self.git_updates.is_some() => Poll::Pending,
+                    result => result,
+                }
+            }).await?;
+            match result {
+                CommandResult::GitWatchStarted { review_id, result } if self.is_review(review_id) => {
+                    match result {
+                        Ok(started) => {
+                            let (repository, watcher) = *started;
+                            self.git_updates = Some(WatchStream::new(watcher.state_rx.clone()));
+                            self.git_repository = Some(repository);
+                            self.git_watch = Some(watcher);
+                            self.tasks.spawn_read(ReadTask::GitRefresh, async move {
+                                CommandResult::GitDiff(GitDiffEvent { review_id, result: Ok(()) })
+                            });
+                        }
+                        Err(error) => return Some(CommandResult::GitWatch(GitWatchEvent {
+                            review_id, result: Err(Arc::new(error)),
+                        })),
+                    }
+                }
+                CommandResult::GitWatchStarted { .. } => {}
+                result => return Some(result),
             }
         }
     }
@@ -172,21 +170,22 @@ impl CommandDispatcher {
     }
 
     fn start_git_watch(&mut self, scope: DiffScope) {
-        let working_dir = self.git_review.as_ref().expect("active review").1.clone();
-        self.git_refresh = None;
-        self.git_start = Some(
-            async move {
+        let Some((review_id, working_dir)) = self.git_review.clone() else { return; };
+        self.tasks.cancel_read(ReadTask::GitRefresh);
+        self.tasks.spawn_read(ReadTask::GitStart, async move {
+            let result = async {
                 let repository = GitRepository::discover(working_dir).await?;
                 let watcher = RepositoryWatcher::spawn(repository.clone(), scope, WatchOptions::default()).await?;
-                Ok((repository, watcher))
-            }
-            .boxed(),
-        );
+                Ok(Box::new((repository, watcher)))
+            }.await;
+            CommandResult::GitWatchStarted { review_id, result }
+        });
     }
 
     fn close_git_review(&mut self) {
-        self.git_start = None;
-        self.git_refresh = None;
+        self.tasks.cancel_read(ReadTask::GitStart);
+        self.tasks.cancel_read(ReadTask::GitRefresh);
+        self.git_updates = None;
         self.git_watch = None;
         self.git_repository = None;
         self.git_review = None;
@@ -199,8 +198,5 @@ fn watch_stopped(review_id: RequestId) -> CommandResult {
 
 fn execute_terminal(command: &TerminalCommand) -> Option<CommandResult> {
     let TerminalCommand::RingBell = command;
-    execute!(io::stdout(), Print("\x07")).err().map(|error| CommandResult::Failed {
-        command: FailedCommand::Other("ring the terminal bell"),
-        error: error.to_string(),
-    })
+    execute!(io::stdout(), Print("\x07")).err().map(|error| CommandResult::TerminalFailed(error.to_string()))
 }

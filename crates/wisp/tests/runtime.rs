@@ -7,7 +7,7 @@ use agent_client_protocol::schema::v2::{Implementation, InitializeRequest, Initi
 use agent_client_protocol::{self as acp, Agent};
 use tempfile::TempDir;
 use tokio::task::{JoinError, LocalSet, spawn_local};
-use wisp::command::{AgentCommand, Command, CommandResult, FailedCommand, GitCommand, GitWatchCommand};
+use wisp::command::{AgentCommand, Command, CommandResult, GitCommand, GitWatchCommand};
 use wisp::file_index::index_files_with_limit;
 use wisp::git_review::{DiffScope, GitDiffError, GitDiffEvent, GitWatchError, GitWatchEvent};
 use wisp::request::RequestId;
@@ -91,8 +91,8 @@ async fn git_watch_can_close_during_startup_and_replace_an_old_subscription() {
         scope: DiffScope::Both,
     }));
     dispatcher.dispatch(Command::GitWatch(GitWatchCommand::Close { review_id: first_id }));
-    assert!(!dispatcher.has_pending_tasks());
     assert!(dispatcher.next_result().await.is_none());
+    assert!(!dispatcher.has_pending_tasks());
 
     dispatcher.dispatch(Command::GitWatch(GitWatchCommand::Open {
         review_id: first_id,
@@ -276,7 +276,7 @@ async fn closed_agent_connection_becomes_a_reducer_visible_failure() -> Result<(
 
     let result = dispatcher.dispatch(Command::Agent(AgentCommand::Cancel { session_id: SessionId::new("session") }));
 
-    assert!(matches!(result, Some(CommandResult::Failed { command: FailedCommand::Other("cancel"), .. })));
+    assert!(matches!(result, Some(CommandResult::Cancel(Err(_)))));
     assert!(!dispatcher.has_pending_tasks());
     assert!(dispatcher.next_result().await.is_none());
     dispatcher.shutdown().await;

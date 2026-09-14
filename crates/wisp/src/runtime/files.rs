@@ -1,5 +1,5 @@
 use crate::attachment::{AttachmentOutcome, build_attachments};
-use crate::command::{CommandResult, FailedCommand, FilesystemCommand};
+use crate::command::{CommandResult, FilesystemCommand};
 use crate::file_index::index_files;
 use crate::settings::{list_theme_files, review_theme_choices, save_settings};
 use crate::theme::{Theme, ThemeApplicationError};
@@ -10,7 +10,7 @@ pub(super) async fn execute(command: FilesystemCommand) -> CommandResult {
         FilesystemCommand::IndexFiles { request_id, root } => match run_blocking(move || index_files(&root)).await {
             Ok(files) => CommandResult::FilesIndexed { request_id, files },
             Err(error) => {
-                CommandResult::Failed { command: FailedCommand::Other("index files"), error: error.to_string() }
+                CommandResult::BackgroundFailed(format!("Failed to index files: {error}"))
             }
         },
         FilesystemCommand::PrepareSubmission { attachments } => {
@@ -25,13 +25,13 @@ pub(super) async fn execute(command: FilesystemCommand) -> CommandResult {
         FilesystemCommand::ListThemes => match run_blocking(list_theme_files).await {
             Ok(files) => CommandResult::ThemesListed(files),
             Err(error) => {
-                CommandResult::Failed { command: FailedCommand::Other("list themes"), error: error.to_string() }
+                CommandResult::BackgroundFailed(format!("Failed to list themes: {error}"))
             }
         },
         FilesystemCommand::ListReviewThemes => match run_blocking(review_theme_choices).await {
             Ok(choices) => CommandResult::ReviewThemesListed(choices),
             Err(error) => {
-                CommandResult::Failed { command: FailedCommand::Other("load review themes"), error: error.to_string() }
+                CommandResult::BackgroundFailed(format!("Failed to load review themes: {error}"))
             }
         },
         FilesystemCommand::ApplyTheme { settings } => CommandResult::ThemeApplied(

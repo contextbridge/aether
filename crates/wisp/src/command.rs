@@ -11,7 +11,8 @@ use acp_utils::notifications::{
     WorkspaceMoveTarget,
 };
 use agent_client_protocol::schema::v2::{
-    ContentBlock, ListSessionsResponse, NewSessionResponse, SessionConfigOption, SessionConfigOptionValue, SessionId,
+    ContentBlock, ListSessionsResponse, LoginAuthResponse, NewSessionResponse, PromptResponse,
+    ResumeSessionResponse, SetSessionConfigOptionResponse, SessionConfigOptionValue, SessionId,
 };
 use clankerdiff_ratatui::diff::RepositoryAction;
 use std::path::PathBuf;
@@ -42,46 +43,6 @@ pub enum AgentCommand {
     MoveWorkspace { session_id: String, target: WorkspaceMoveTarget },
 }
 
-impl AgentCommand {
-    pub(crate) fn failure(&self) -> FailedCommand {
-        match self {
-            Self::Prompt { .. } => FailedCommand::Prompt,
-            Self::ResumeSession { .. } => FailedCommand::ResumeSession,
-            Self::ListWorkspaces { .. } => FailedCommand::ListWorkspaces,
-            Self::MoveWorkspace { .. } => FailedCommand::MoveWorkspace,
-            Self::Cancel { .. } => FailedCommand::Other("cancel"),
-            Self::SetConfigOption { .. } => FailedCommand::Other("set config option"),
-            Self::AuthenticateMcpServer { .. } => FailedCommand::Other("authenticate MCP server"),
-            Self::Authenticate { .. } => FailedCommand::Other("authenticate provider"),
-            Self::ListSessions => FailedCommand::Other("list sessions"),
-            Self::NewSession { .. } => FailedCommand::Other("create new session"),
-            Self::SearchPrompts(_) => FailedCommand::Other("search prompts"),
-            Self::SessionPreview { .. } => FailedCommand::Other("preview session"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FailedCommand {
-    Prompt,
-    ResumeSession,
-    ListWorkspaces,
-    MoveWorkspace,
-    Other(&'static str),
-}
-
-impl FailedCommand {
-    pub fn describe(self) -> &'static str {
-        match self {
-            Self::Prompt => "send prompt",
-            Self::ResumeSession => "resume session",
-            Self::ListWorkspaces => "list workspaces",
-            Self::MoveWorkspace => "move workspace",
-            Self::Other(name) => name,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum FilesystemCommand {
     IndexFiles { request_id: RequestId, root: PathBuf },
@@ -109,29 +70,30 @@ pub enum TerminalCommand {
 }
 
 pub enum CommandResult {
-    PromptAccepted,
-    AgentCommandAccepted,
-    ConfigOptionsUpdated { conversation_id: ConversationId, options: Vec<SessionConfigOption> },
-    ConfigOptionUpdateFailed { conversation_id: ConversationId, error: String },
-    AuthenticationCompleted { method_id: String },
-    AuthenticationFailed { method_id: String },
-    SessionsListed(ListSessionsResponse),
-    NewSessionCreated(NewSessionResponse),
-    PromptSearchResults(PromptSearchResponse),
-    PromptSearchFailed { query: String, error: String },
-    SessionPreviewLoaded(SessionPreviewResponse),
-    SessionPreviewFailed { session_id: String, error: String },
-    WorkspacesListed(WorkspaceListResponse),
-    WorkspaceListFailed { error: String },
-    WorkspaceMoved(WorkspaceMoveResponse),
-    WorkspaceMoveFailed { error: String },
+    Prompt(Result<PromptResponse, String>),
+    Cancel(Result<(), String>),
+    AuthenticateMcp(Result<(), String>),
+    ConfigOptionsUpdated { conversation_id: ConversationId, result: Result<SetSessionConfigOptionResponse, String> },
+    AuthenticationCompleted { method_id: String, result: Result<LoginAuthResponse, String> },
+    NewSession(Result<NewSessionResponse, String>),
+    ResumeSession { session_id: SessionId, result: Result<ResumeSessionResponse, String> },
+    SessionsListed(Result<ListSessionsResponse, String>),
+    PromptSearchResults { query: String, result: Result<PromptSearchResponse, String> },
+    SessionPreviewLoaded { session_id: String, result: Result<SessionPreviewResponse, String> },
+    WorkspacesListed(Result<WorkspaceListResponse, String>),
+    WorkspaceMoved(Result<WorkspaceMoveResponse, String>),
     FilesIndexed { request_id: RequestId, files: Vec<FileEntry> },
     GitDiff(GitDiffEvent),
     GitWatch(GitWatchEvent),
+    GitWatchStarted {
+        review_id: RequestId,
+        result: Result<Box<(clankerdiff_git::GitRepository, clankerdiff_watch::RepositoryWatcher)>, clankerdiff_watch::WatchError>,
+    },
     SubmissionPrepared(AttachmentOutcome),
     ThemesListed(Vec<String>),
     ReviewThemesListed(Vec<clankerdiff_ratatui::ThemeChoice>),
     ThemeApplied(Result<(Box<UiSettings>, Theme), ThemeApplicationError>),
     WorkspaceResolved { cwd: PathBuf, status: WorkspaceStatus },
-    Failed { command: FailedCommand, error: String },
+    BackgroundFailed(String),
+    TerminalFailed(String),
 }
