@@ -13,8 +13,8 @@ use crate::resolve::InitialSessionSelection;
 use crate::settings_args::SettingsSourceArgs;
 use crate::workspace::WorkspaceManager;
 use crate::workspace::testing::StdCopyCloner;
-use acp_utils::notifications::McpNotification;
-use acp_utils::testing::TestPeer;
+use acp_utils::notifications::{AuthMethodsUpdatedParams, McpNotification};
+use acp_utils::testing::{TestPeer, connect_pair, initialize_request};
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
 use aether_core::core::{AgentBuilder, AgentHandle, Prompt};
@@ -24,7 +24,7 @@ use aether_project::AgentCatalog;
 use aether_sessions::SessionStore;
 use aether_sessions::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent, last_agent_from_events};
 use agent_client_protocol::schema::v2::{InitializeResponse, SessionId, SessionUpdate, StateUpdate, StopReason};
-use agent_client_protocol::{Agent, Client, ConnectionTo};
+use agent_client_protocol::{Agent, Client, ConnectionTo, on_receive_notification};
 use futures::FutureExt;
 use llm::testing::FakeLlmProvider;
 use llm::{ChatMessage, Context, LlmResponse, SessionUsageEvent, StreamingModelProvider};
@@ -43,7 +43,6 @@ const CODER_REPLY: &str = "coder reply";
 /// pre-wired test client. Created via [`AcpTestHarness::start`] inside a
 /// `LocalSet`. The harness owns an `AcpState` and a temp-dir-backed
 /// [`SessionStore`] so tests can register fake-driven sessions without
-/// going through `new_session`.
 pub struct AcpTestHarness {
     pub client_cx: ConnectionTo<Agent>,
     pub peer: TestPeer,
@@ -57,7 +56,24 @@ pub struct AcpTestHarness {
     agent_cx: ConnectionTo<Client>,
     state: Arc<AcpState>,
     session_store: Arc<SessionStore>,
+    persistent_host: bool,
     _tmp: tempfile::TempDir,
+}
+
+#[derive(Default)]
+pub struct AcpTestHarnessBuilder {
+    persistent_host: bool,
+}
+
+impl AcpTestHarnessBuilder {
+    pub fn persistent_host(mut self) -> Self {
+        self.persistent_host = true;
+        self
+    }
+
+    pub async fn start(self) -> AcpTestHarness {
+        AcpTestHarness::start_with(self.persistent_host).await
+    }
 }
 
 pub struct FakeAgentSwitchingSession {
@@ -101,6 +117,12 @@ impl AcpTestHarness {
         gate
     }
 
+    pub fn elicit_during_prompt_expansion(&self) -> mpsc::UnboundedReceiver<rmcp::model::ElicitResult> {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        self.runtime_control.lock().unwrap().elicitation_results = Some(sender);
+        receiver
+    }
+
     pub fn live_runtime_count(&self) -> usize {
         self.runtime_control.lock().unwrap().agents.iter().filter(|sender| !sender.is_closed()).count()
     }
@@ -110,11 +132,45 @@ impl AcpTestHarness {
             let _ = disconnect.send(());
         }
         if let Some(done) = self.server_done.take() {
-            done.await.expect("server shutdown completes");
+            done.await.expect("connection cleanup completes");
         }
     }
 
+    pub fn builder() -> AcpTestHarnessBuilder {
+        AcpTestHarnessBuilder::default()
+    }
+
     pub async fn start() -> Self {
+        Self::builder().start().await
+    }
+
+    /// Connect a fresh initialized client to the same host and session store.
+    pub async fn reconnect(&mut self) {
+        assert!(self.persistent_host, "reconnection requires a persistent host");
+        assert!(self.disconnect.is_none(), "disconnect the current client before reconnecting");
+        let connection = connect_client(self.state.clone(), self.persistent_host).await;
+        self.client_cx = connection.client_cx;
+        self.agent_cx = connection.agent_cx;
+        self.peer = connection.peer;
+        self.initialize_response = connection.initialize_response;
+        self.auth_updates = connection.auth_updates;
+        self.disconnect = Some(connection.disconnect);
+        self.server_done = Some(connection.done);
+    }
+
+    /// Stop the connection and all host-owned session runtimes.
+    pub async fn shutdown(&mut self) {
+        self.disconnect().await;
+        if self.persistent_host {
+            self.state.shutdown_all().await;
+        }
+    }
+
+    pub fn stored_events(&self, session_id: &SessionId) -> Vec<SessionEvent> {
+        self.session_store.load(session_id.0.as_ref()).expect("stored session loads").1
+    }
+
+    async fn start_with(persistent_host: bool) -> Self {
         let tmp = tempfile::tempdir().expect("tempdir for session store");
         let session_store = Arc::new(SessionStore::from_path(tmp.path().to_path_buf()));
         let workspace_manager = Arc::new(WorkspaceManager::from_registry_path_with_cloner(
@@ -145,50 +201,21 @@ impl AcpTestHarness {
             Arc::new(FakeProviderLogin),
         ));
 
-        let (peer, client_builder) = TestPeer::new();
-        let (auth_tx, auth_updates) = mpsc::unbounded_channel();
-        let client_builder = client_builder.on_receive_notification(
-            async move |notification: acp_utils::notifications::AuthMethodsUpdatedParams, _cx| {
-                let _ = auth_tx.send(notification);
-                Ok(())
-            },
-            agent_client_protocol::on_receive_notification!(),
-        );
-        let pair = acp_utils::testing::connect_pair(acp_agent_builder(state.clone()), client_builder).await;
-        let initialize_response = pair
-            .client
-            .send_request(acp_utils::testing::initialize_request())
-            .block_task()
-            .await
-            .expect("initialize harness");
-        let (disconnect, disconnected) = oneshot::channel();
-        let (server_finished, server_done) = oneshot::channel();
-        let server_state = state.clone();
-        spawn_local(async move {
-            let _ = pair.agent_task.await;
-            server_state.shutdown_all().await;
-            let _ = server_finished.send(());
-        });
-        spawn_local(async move {
-            let _ = disconnected.await;
-            pair.client_task.abort();
-            let _ = pair.client_task.await;
-        });
-        let agent_cx = pair.agent;
-        let client_cx = pair.client;
+        let connection = connect_client(state.clone(), persistent_host).await;
         Self {
-            client_cx,
-            peer,
-            initialize_response,
-            disconnect: Some(disconnect),
-            server_done: Some(server_done),
-            auth_updates,
+            client_cx: connection.client_cx,
+            peer: connection.peer,
+            initialize_response: connection.initialize_response,
+            disconnect: Some(connection.disconnect),
+            server_done: Some(connection.done),
+            auth_updates: connection.auth_updates,
             resume_agent,
             runtime_control,
             oauth_store,
-            agent_cx,
+            agent_cx: connection.agent_cx,
             state,
             session_store,
+            persistent_host,
             _tmp: tmp,
         }
     }
@@ -279,6 +306,7 @@ impl AcpTestHarness {
         let model_spec: llm::catalog::LlmModel = "anthropic:claude-sonnet-4-5".parse().expect("test model parses");
         let mut specs = SessionAgents::new(AgentCatalog::empty(PathBuf::from("/tmp")));
         specs.set_default(AgentSpec::bare(&model_spec, None, Vec::new()));
+        self.runtime_control.lock().unwrap().agents.push(agent_tx.clone());
         let factory = Arc::new(StubRuntimeFactory {
             cwd: PathBuf::from("/tmp"),
             agent_parts: Mutex::new(Some(StubAgentParts { tx: agent_tx, rx: agent_rx, handle: agent_handle })),
@@ -469,6 +497,60 @@ impl FakeAcpAgent {
     }
 }
 
+struct HarnessConnection {
+    client_cx: ConnectionTo<Agent>,
+    agent_cx: ConnectionTo<Client>,
+    peer: TestPeer,
+    initialize_response: InitializeResponse,
+    auth_updates: mpsc::UnboundedReceiver<acp_utils::notifications::AuthMethodsUpdatedParams>,
+    disconnect: oneshot::Sender<()>,
+    done: oneshot::Receiver<()>,
+}
+
+async fn connect_client(state: Arc<AcpState>, persistent_host: bool) -> HarnessConnection {
+    let (peer, client_builder) = TestPeer::new();
+    let (auth_tx, auth_updates) = mpsc::unbounded_channel();
+    let client_builder = client_builder.on_receive_notification(
+        async move |notification: AuthMethodsUpdatedParams, _cx| {
+            let _ = auth_tx.send(notification);
+            Ok(())
+        },
+        on_receive_notification!(),
+    );
+    let pair = connect_pair(acp_agent_builder(state.clone()), client_builder).await;
+    let initialize_response =
+        pair.client.send_request(initialize_request()).block_task().await.expect("initialize harness");
+
+    let (disconnect, disconnected) = oneshot::channel();
+    let (finished, done) = oneshot::channel();
+
+    spawn_local(async move {
+        let _ = pair.agent_task.await;
+        if persistent_host {
+            state.detach_client().await.expect("detach client output");
+        } else {
+            state.shutdown_all().await;
+        }
+        let _ = finished.send(());
+    });
+
+    spawn_local(async move {
+        let _ = disconnected.await;
+        pair.client_task.abort();
+        let _ = pair.client_task.await;
+    });
+
+    HarnessConnection {
+        client_cx: pair.client,
+        agent_cx: pair.agent,
+        peer,
+        initialize_response,
+        auth_updates,
+        disconnect,
+        done,
+    }
+}
+
 /// Spawns each agent's runtime through the real [`AgentRuntime`] wiring, but
 /// backed by a [`FakeLlmProvider`] and an in-memory MCP server instead of a
 /// network LLM and external MCP processes.
@@ -483,6 +565,7 @@ struct FakeRuntimeControl {
     agents: Vec<mpsc::Sender<Command>>,
     pending: Option<(oneshot::Sender<()>, oneshot::Receiver<bool>)>,
     prompt_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
+    elicitation_results: Option<mpsc::UnboundedSender<rmcp::model::ElicitResult>>,
 }
 
 struct FakeAgentDef {
@@ -519,10 +602,15 @@ impl RuntimeFactory for FakeRuntimeFactory {
             let factory_name = server_name.clone();
             let prompt_name = prompt_name.clone();
             let gate = self.control.lock().unwrap().prompt_gate.clone();
+            let elicitation_results = self.control.lock().unwrap().elicitation_results.clone();
             let factory: ServerFactory = Box::new(move |_spec, _services| {
                 let prompt_name = prompt_name.clone();
                 let gate = gate.clone();
-                async move { FakePromptMcp::new(&prompt_name).with_gate(gate).into_dyn() }.boxed()
+                let elicitation_results = elicitation_results.clone();
+                async move {
+                    FakePromptMcp::new(&prompt_name).with_gate(gate).with_elicitation(elicitation_results).into_dyn()
+                }
+                .boxed()
             });
             mcp_builder = mcp_builder.register_in_memory_server(factory_name.clone(), factory).with_servers(vec![
                 McpServer::new(
@@ -595,8 +683,9 @@ impl RuntimeFactory for StubRuntimeFactory {
 }
 
 fn fake_agent(name: &str, server_name: &str, prompt_name: &str, reply: &str) -> (FakeAgentDef, FakeAcpAgent) {
-    let provider = FakeLlmProvider::new(vec![vec![LlmResponse::Start, LlmResponse::text(reply), LlmResponse::done()]])
-        .with_display_name(name);
+    let provider =
+        FakeLlmProvider::new(vec![vec![LlmResponse::Start, LlmResponse::text(reply), LlmResponse::done()]; 2])
+            .with_display_name(name);
     let captured_contexts = provider.captured_contexts();
     let def = FakeAgentDef {
         spec: fake_agent_spec(name),

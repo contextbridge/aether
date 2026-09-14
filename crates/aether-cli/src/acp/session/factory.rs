@@ -20,6 +20,7 @@ use super::agent_key::AgentKey;
 use super::agents::SessionAgents;
 use super::config::SessionConfigState;
 use super::model::{Modes, pick_default_model};
+use super::registry::SessionInputs;
 use super::runtime::{ProductionRuntimeFactory, RuntimeFactory};
 use crate::acp::protocol::mcp::map_acp_mcp_servers;
 use crate::resolve::{InitialSessionSelection, resolve_agent_from_catalog};
@@ -43,30 +44,17 @@ pub(crate) struct SessionFactory {
 pub(crate) struct CreatedSession {
     pub session_id: SessionId,
     pub handle: SessionHandle,
+    pub inputs: SessionInputs,
     pub config_options: Vec<acp::SessionConfigOption>,
 }
 
 pub(crate) struct PreparedSession {
     init: SessionActorInit,
     available: Vec<LlmModel>,
+    inputs: SessionInputs,
 }
 
 impl PreparedSession {
-    pub(crate) fn refresh_transcript(mut self) -> Result<Self, Error> {
-        let (meta, transcript) =
-            self.init.repository.load(&self.init.session_id.0).map_err(Error::into_internal_error)?;
-        let mut catalog =
-            SessionModeCatalog { specs: self.init.specs, modes: self.init.modes, available: self.available };
-        let resolved = resolve_loaded_session(&mut catalog, &meta, &transcript)?;
-        self.init.specs = catalog.specs;
-        self.init.modes = catalog.modes;
-        self.available = catalog.available;
-        self.init.active_agent = resolved.active_agent;
-        self.init.config = resolved.config;
-        self.init.transcript = transcript;
-        Ok(self)
-    }
-
     pub(crate) async fn start(self) -> Result<CreatedSession, Error> {
         let session_id = self.init.session_id.clone();
         let config_options = self.init.config.config_options(
@@ -78,7 +66,7 @@ impl PreparedSession {
             error!("Failed to start session actor: {e}");
             Error::internal_error()
         })?;
-        Ok(CreatedSession { session_id, handle, config_options })
+        Ok(CreatedSession { session_id, handle, config_options, inputs: self.inputs })
     }
 }
 
@@ -143,6 +131,7 @@ impl SessionFactory {
             error!("Failed to write session meta: {e}");
         }
 
+        let inputs = SessionInputs { cwd: args.cwd.clone().into_inner(), mcp_servers: args.mcp_servers.clone() };
         let runtime_factory = self.runtime_factory.clone().unwrap_or_else(|| {
             self.production_runtime_factory(
                 args.cwd.into_inner(),
@@ -154,6 +143,7 @@ impl SessionFactory {
         });
         Ok(self.prepare_session(
             SessionId::new(session_id),
+            inputs,
             runtime_factory,
             mode_catalog,
             resolved,
@@ -202,6 +192,7 @@ impl SessionFactory {
 
         let mut mode_catalog = self.load_mode_catalog(&cwd).await?;
         let resolved = resolve_loaded_session(&mut mode_catalog, &meta, &events)?;
+        let inputs = SessionInputs { cwd: cwd.clone(), mcp_servers: mcp_servers.clone() };
         let runtime_factory = self.runtime_factory.clone().unwrap_or_else(|| {
             self.production_runtime_factory(
                 cwd,
@@ -211,7 +202,7 @@ impl SessionFactory {
                 session_id.0.as_ref(),
             )
         });
-        Ok(self.prepare_session(session_id, runtime_factory, mode_catalog, resolved, events, replay, cx))
+        Ok(self.prepare_session(session_id, inputs, runtime_factory, mode_catalog, resolved, events, replay, cx))
     }
 
     fn production_runtime_factory(
@@ -233,6 +224,7 @@ impl SessionFactory {
     fn prepare_session(
         &self,
         session_id: SessionId,
+        inputs: SessionInputs,
         runtime_factory: Arc<dyn RuntimeFactory>,
         mode_catalog: SessionModeCatalog,
         resolved: ResolvedSession,
@@ -253,7 +245,7 @@ impl SessionFactory {
             modes: mode_catalog.modes,
             config: resolved.config,
         };
-        PreparedSession { init, available: mode_catalog.available }
+        PreparedSession { init, available: mode_catalog.available, inputs }
     }
 
     fn resolve_new_session(

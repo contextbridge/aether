@@ -23,7 +23,7 @@ use mcp_utils::client::{client_capabilities, client_capabilities_for};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, oneshot};
 use tokio::task::spawn_blocking;
 use tracing::{error, info};
 
@@ -34,6 +34,8 @@ use super::session::actor::{SessionActor, SessionActorInit};
 use super::session::config_setting::ConfigSetting;
 use super::session::factory::SessionFactory;
 use super::session::model::supports_prompt_audio;
+#[cfg(any(test, feature = "testing"))]
+use super::session::registry::SessionInputs;
 use super::session::{SessionRegistry, paginate_summaries};
 use crate::resolve::InitialSessionSelection;
 use crate::settings_args::SettingsSourceArgs;
@@ -45,7 +47,7 @@ pub(crate) trait ProviderLogin: Send + Sync {
     async fn login(&self, store: &dyn OAuthCredentialStorage) -> Result<(), llm::LlmError>;
 }
 
-/// Connection-scoped control plane owning one active session actor.
+/// Host control plane owning one active session actor independently of its client.
 pub(crate) struct AcpState {
     login: Arc<dyn ProviderLogin>,
     registry: SessionRegistry,
@@ -143,7 +145,7 @@ impl AcpState {
         self.registry.stop().await;
         let created = prepared.start().await?;
         let response = NewSessionResponse::new(created.session_id.clone()).config_options(created.config_options);
-        self.registry.register(&created.session_id, created.handle).await;
+        self.registry.register(&created.session_id, created.inputs, created.handle).await;
         Ok(response)
     }
 
@@ -162,14 +164,38 @@ impl AcpState {
         req: ResumeSessionRequest,
         cx: &ConnectionTo<Client>,
     ) -> Result<ResumeSessionResponse, Error> {
+        let replay = match &req.replay_from {
+            Some(acp::ReplayFrom::Start(_)) => true,
+            None => false,
+            Some(_) => return Err(Error::invalid_params()),
+        };
+
+        if let Some(active) = self.registry.active_session().await.filter(|active| active.session_id == req.session_id)
+        {
+            if active.inputs.cwd != req.cwd.0 || active.inputs.mcp_servers != req.mcp_servers {
+                return Err(Error::invalid_params().data("live session cwd and MCP servers cannot be changed"));
+            }
+
+            let sender =
+                self.registry.lookup(Some(req.session_id.0.as_ref())).await.ok_or_else(Error::internal_error)?;
+            let available = self.factory.available_models().await.to_vec();
+            let (config_tx, config_rx) = oneshot::channel();
+
+            sender
+                .send(SessionCommand::Attach { connection: cx.clone(), replay, available, reply: config_tx })
+                .await
+                .map_err(|_| Error::internal_error())?;
+
+            let options = config_rx.await.map_err(|_| Error::internal_error())?;
+            return Ok(ResumeSessionResponse::new().config_options(options));
+        }
+
         let mcp_capabilities = self.mcp_capabilities.lock().await.clone();
-        let reloading = self.registry.lookup(Some(req.session_id.0.as_ref())).await.is_some();
         let prepared = self.factory.prepare_resume(req, cx, mcp_capabilities).await?;
         self.registry.stop().await;
-        let prepared = if reloading { prepared.refresh_transcript()? } else { prepared };
         let created = prepared.start().await?;
         let response = ResumeSessionResponse::new().config_options(created.config_options);
-        self.registry.register(&created.session_id, created.handle).await;
+        self.registry.register(&created.session_id, created.inputs, created.handle).await;
         Ok(response)
     }
 
@@ -249,6 +275,7 @@ impl AcpState {
             })
             .await?;
 
+        self.registry.stop_matching(Some(&params.session_id)).await;
         info!("Moved session {} to workspace {}", params.session_id, response.new_cwd.display());
         Ok(response)
     }
@@ -365,7 +392,15 @@ impl AcpState {
         Ok(())
     }
 
-    /// Join the active actor after connection-scoped requests have been dropped.
+    /// Detach output without interrupting the active session's work.
+    pub(crate) async fn detach_client(&self) -> Result<(), Error> {
+        let Some(sender) = self.registry.lookup(None).await else { return Ok(()) };
+        let (reply, response) = oneshot::channel();
+        sender.send(SessionCommand::Detach { reply }).await.map_err(|_| Error::internal_error())?;
+        response.await.map_err(|_| Error::internal_error())
+    }
+
+    /// Join the active actor when its host is shutting down.
     pub(crate) async fn shutdown_all(&self) {
         self.registry.stop().await;
         if let Some(telemetry) = &self.telemetry {
@@ -378,7 +413,8 @@ impl AcpState {
         self.registry.stop().await;
         let id = init.session_id.clone();
         let handle = SessionActor::spawn(init).await.expect("test session actor spawns");
-        self.registry.register(&id, handle).await;
+        let inputs = SessionInputs { cwd: PathBuf::from("/tmp"), mcp_servers: Vec::new() };
+        self.registry.register(&id, inputs, handle).await;
     }
 
     async fn broadcast_auth_state(&self, cx: &ConnectionTo<Client>) {
