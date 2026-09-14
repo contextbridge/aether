@@ -7,16 +7,6 @@ use llm::{LlmResponse, testing::FakeLlmProvider};
 use std::sync::Arc;
 use tokio::{sync::Notify, task::LocalSet};
 
-async fn next_user_message(harness: &mut AcpTestHarness) -> agent_client_protocol::schema::v2::UserMessage {
-    loop {
-        match harness.peer.next_session_notification().await.update {
-            SessionUpdate::UserMessage(message) => return message,
-            SessionUpdate::StateUpdate(StateUpdate::Idle(_)) => panic!("missing user message"),
-            _ => {}
-        }
-    }
-}
-
 #[tokio::test(flavor = "current_thread")]
 async fn cancel_during_mcp_prompt_expansion_does_not_wait_for_the_server() {
     LocalSet::new()
