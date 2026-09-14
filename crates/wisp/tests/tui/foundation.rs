@@ -140,6 +140,16 @@ fn selected_file_is_sent_as_an_acp_resource_attachment() {
     };
     assert_eq!(text, "@context.txt ");
     assert!(matches!(content.as_deref(), Some([acp::ContentBlock::Resource(_)])));
+    let mut blocks = vec![acp::ContentBlock::from(text)];
+    blocks.extend(content.unwrap());
+    let expanded = acp_utils::content::map_content_blocks_to_text(blocks);
+    assert!(expanded.contains("attached context"), "the model receives the file contents");
+    app.acp_event(session_update(acp::SessionUpdate::UserMessage(
+        acp::UserMessage::new("attached-user").content(vec![acp::ContentBlock::from(expanded)]),
+    )));
+    app.draw();
+    app.assert_viewport_contains("@context.txt");
+    assert!(!app.conversation_text().contains("attached context"));
 }
 
 #[test]

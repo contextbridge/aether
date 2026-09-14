@@ -35,6 +35,19 @@ fn message_ids_isolate_replacement_clearing_and_chunks() {
 }
 
 #[test]
+fn remote_user_resources_render_as_references_not_file_contents() {
+    let mut conversation = Conversation::new();
+    let resource =
+        acp::ContentBlock::Resource(acp::EmbeddedResource::new(acp::EmbeddedResourceResource::TextResourceContents(
+            acp::TextResourceContents::new("file-body-sentinel", "file:///large.rs"),
+        )));
+    conversation.upsert_message(MessageRole::User, "user".into(), &MaybeUndefined::Value(vec![resource.clone()]));
+    assert_eq!(conversation.items()[0].text(), Some("[Resource: file:///large.rs]"));
+    conversation.append_message_chunk(MessageRole::User, &acp::ContentChunk::new(resource, "chunked"));
+    assert_eq!(conversation.items()[1].text(), Some("[Resource: file:///large.rs]"));
+}
+
+#[test]
 fn user_ack_adopts_only_the_explicit_optimistic_item() {
     let mut conversation = Conversation::new();
     conversation.append_user_content("same");
@@ -43,7 +56,10 @@ fn user_ack_adopts_only_the_explicit_optimistic_item() {
     conversation.upsert_message(MessageRole::User, "user".into(), &text("expanded prompt"));
     assert_eq!(conversation.items().len(), 2);
     assert_eq!(conversation.items()[0].text(), Some("same"));
-    assert_eq!(conversation.items()[1].text(), Some("expanded prompt"));
+    assert_eq!(conversation.items()[1].text(), Some("same"));
+    conversation.append_message_chunk(MessageRole::User, &acp::ContentChunk::new("expanded tail".into(), "user"));
+    assert_eq!(conversation.items()[1].text(), Some("same"));
+    assert_eq!(conversation.items()[1].message_id(), Some(&acp::MessageId::new("user")));
     conversation.clear();
     conversation.upsert_message(MessageRole::User, "user".into(), &text("replayed"));
     assert_eq!(conversation.items().len(), 1);

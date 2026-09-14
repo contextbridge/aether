@@ -47,7 +47,7 @@ impl MessageAccumulator {
 
 fn apply_user_event(ctx: &mut Context, event: &UserEvent) {
     match event {
-        UserEvent::Message { message_id, content } => {
+        UserEvent::Message { message_id, content, .. } => {
             ctx.add_message(ChatMessage::user_with_id(message_id.clone(), content.clone()));
         }
         UserEvent::ClearContext => ctx.clear_conversation(),

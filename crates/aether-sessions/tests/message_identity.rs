@@ -19,7 +19,8 @@ async fn live_context_and_reloaded_log_share_identities_and_message_boundaries()
         .await
         .unwrap();
 
-    let mut events = vec![SessionEvent::User(UserEvent::Message { message_id: user_id.clone(), content })];
+    let mut events =
+        vec![SessionEvent::User(UserEvent::Message { message_id: user_id.clone(), content, display_content: None })];
     events.extend(result.messages.iter().cloned().map(SessionEvent::Agent));
     let store = TestStore::new().session("identity", &events);
     let (_, loaded) = store.store().load("identity").unwrap();
@@ -77,7 +78,8 @@ async fn continuation_preserves_live_message_boundaries_and_ids() {
         .unwrap();
     let contexts = result.captured_contexts.lock().unwrap();
     assert_eq!(contexts[1].message_count(), 3);
-    let mut events = vec![SessionEvent::User(UserEvent::Message { message_id: user_id, content })];
+    let mut events =
+        vec![SessionEvent::User(UserEvent::Message { message_id: user_id, content, display_content: None })];
     events.extend(result.messages.into_iter().map(SessionEvent::Agent));
     let restored = context_from_events(&events);
     assert_eq!(restored.message_count(), 4);

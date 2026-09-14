@@ -9,6 +9,31 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[test]
+fn compact_display_is_persisted_without_replacing_model_context() {
+    let content = vec![ContentBlock::text("expanded instructions")];
+    let id = llm::MessageId::new();
+    let event = aether_sessions::SessionEvent::User(aether_sessions::UserEvent::Message {
+        message_id: id.clone(),
+        content: content.clone(),
+        display_content: Some(vec![ContentBlock::text("/plan")]),
+    });
+    let store = TestStore::new().session("display", std::slice::from_ref(&event));
+    let (_, events) = store.store().load("display").unwrap();
+    assert_eq!(events, vec![event]);
+    assert_eq!(events[0].user_content().as_deref(), Some("/plan"));
+    let reconstructed = aether_sessions::context_from_events(&events);
+    let llm::ChatMessage::User { message_id, content: restored, .. } = &reconstructed.messages()[0] else {
+        panic!("expected user message");
+    };
+    assert_eq!(message_id, &id);
+    assert_eq!(restored, &content);
+    assert_eq!(store.store().list()[0].title.as_deref(), Some("/plan"));
+    let preview = store.store().preview("display").unwrap();
+    assert_eq!(preview.transcript[0].text, "/plan");
+    assert_eq!(store.store().search_prompts("/plan", None).unwrap().results[0].prompt, "/plan");
+}
+
+#[test]
 fn append_and_load_roundtrip_preserves_metadata_and_persisted_events() {
     let store = TestStore::new();
     let meta = session_meta("session-1", DEFAULT_CREATED_AT);

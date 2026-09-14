@@ -1,5 +1,3 @@
-
-
 use agent_client_protocol::util::internal_error;
 use agent_client_protocol::{
     AcpAgent, AcpAgentConfig, ByteStreams, ConnectTo, Error, INCOMING_TRANSPORT_CLOSED_REASON, Role,

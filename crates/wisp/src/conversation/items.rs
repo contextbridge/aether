@@ -2,7 +2,7 @@ use super::TurnState;
 use super::plan_tracker::PlanTracker;
 use super::progress_indicator::ProgressIndicator;
 use super::tool_calls::{ToolCall, ToolStatus};
-use acp_utils::content::map_content_blocks_to_text;
+use acp_utils::content::{display_content_blocks, map_content_blocks_to_text};
 use acp_utils::notifications::SubAgentProgressParams;
 use agent_client_protocol::schema::{MaybeUndefined, v2 as acp};
 use std::collections::HashMap;
@@ -59,6 +59,7 @@ pub enum ConversationContent {
 pub struct ConversationItem {
     id: ConversationItemId,
     message_id: Option<acp::MessageId>,
+    preserve_user_display: bool,
     revision: Revision,
     replacement_revision: Revision,
     state: ItemState,
@@ -154,7 +155,9 @@ impl Conversation {
     /// `user_message` upsert adopts this item instead of appending another.
     pub fn append_pending_user_content(&mut self, text: impl Into<String>) -> ConversationItemId {
         let id = self.push(ItemState::Open, ConversationContent::User(TextItem { text: text.into() }));
-        self.pending_user = Some(self.items.len() - 1);
+        let index = self.items.len() - 1;
+        self.items[index].preserve_user_display = true;
+        self.pending_user = Some(index);
         id
     }
 
@@ -165,10 +168,13 @@ impl Conversation {
         content: &MaybeUndefined<Vec<acp::ContentBlock>>,
     ) {
         let index = self.message_slot(role, message_id);
+        if self.items[index].preserve_user_display {
+            return;
+        }
         let text = match content {
             MaybeUndefined::Undefined => return,
             MaybeUndefined::Null => String::new(),
-            MaybeUndefined::Value(blocks) => map_content_blocks_to_text(blocks.clone()),
+            MaybeUndefined::Value(blocks) => message_display_text(role, blocks),
         };
         let content = message_content(role, text);
         if self.items[index].content != content {
@@ -180,7 +186,10 @@ impl Conversation {
     pub fn append_message_chunk(&mut self, role: MessageRole, chunk: &acp::ContentChunk) {
         let index = self.message_slot(role, chunk.message_id.clone());
         let item = &mut self.items[index];
-        let text = map_content_blocks_to_text(vec![chunk.content.clone()]);
+        if item.preserve_user_display {
+            return;
+        }
+        let text = message_display_text(role, std::slice::from_ref(&chunk.content));
         match &mut item.content {
             ConversationContent::User(current) | ConversationContent::Assistant(current) => current.text.push_str(&text),
             ConversationContent::Tool(_) | ConversationContent::Notice(_) => return,
@@ -304,6 +313,7 @@ impl Conversation {
         self.items.push(ConversationItem {
             id,
             message_id: None,
+            preserve_user_display: false,
             revision: Revision(0),
             replacement_revision: Revision(0),
             state,
@@ -325,6 +335,14 @@ impl Conversation {
             item.state = state;
         }
     }
+}
+
+fn message_display_text(role: MessageRole, blocks: &[acp::ContentBlock]) -> String {
+    let blocks = match role {
+        MessageRole::User => display_content_blocks(blocks),
+        MessageRole::Assistant => blocks.to_vec(),
+    };
+    map_content_blocks_to_text(blocks)
 }
 
 fn message_content(role: MessageRole, text: String) -> ConversationContent {

@@ -1,6 +1,38 @@
 use super::support::*;
 
 #[test]
+fn completed_large_reply_keeps_its_tail_in_the_viewport() {
+    let mut ui = TestUi::new();
+    commit_overflowing_reply(&mut ui);
+    ui.assert_viewport_contains("finished reply");
+    let conversation = ui.conversation_text();
+    ui.draw();
+    assert_eq!(ui.conversation_text(), conversation);
+}
+
+#[test]
+fn expanded_user_acknowledgements_keep_the_submitted_display() {
+    for prompt in ["/review", "explain @large.rs"] {
+        let mut ui = TestUi::new();
+        ui.paste(prompt);
+        ui.key(key(KeyCode::Enter));
+        assert_command(&mut ui, |c| matches!(c, AgentCommand::Prompt { .. }), "submitted display");
+        let expanded = "expanded-content-sentinel\n".repeat(100);
+        ui.acp_event(session_update(acp::SessionUpdate::UserMessage(
+            acp::UserMessage::new("user").content(vec![acp::ContentBlock::from(expanded.clone())]),
+        )));
+        ui.acp_event(session_update(acp::SessionUpdate::UserMessageChunk(acp::ContentChunk::new(
+            acp::ContentBlock::from(expanded),
+            "user",
+        ))));
+        ui.draw();
+        ui.assert_viewport_contains(prompt);
+        assert!(!ui.conversation_text().contains("expanded-content-sentinel"));
+        ui.assert_history_not_contains("Transcript updated;");
+    }
+}
+
+#[test]
 fn committed_message_replacements_publish_a_corrected_transcript_once() {
     let mut ui = TestUi::new();
     commit_overflowing_reply(&mut ui);
@@ -22,6 +54,8 @@ fn committed_message_replacements_publish_a_corrected_transcript_once() {
 fn late_chunk_for_a_fully_committed_message_is_not_lost() {
     let mut ui = TestUi::new();
     commit_overflowing_reply(&mut ui);
+    ui.acp_event(wisp::testing::text_chunk_with_id("next-reply", &"later response\n\n".repeat(30)));
+    ui.draw();
     ui.assert_history_contains("finished reply");
     ui.acp_event(wisp::testing::text_chunk_with_id("overflow-reply", "\n\nlate appendix"));
     ui.draw();

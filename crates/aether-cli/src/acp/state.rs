@@ -275,6 +275,7 @@ impl AcpState {
     pub(crate) async fn route_prompt(&self, args: PromptRequest, responder: Responder<PromptResponse>) {
         info!("Received prompt for session: {:?}", args.session_id);
         let session_id = args.session_id.0.to_string();
+        let display_content = map_acp_to_content_blocks(acp_utils::content::display_content_blocks(&args.prompt));
         let content = map_acp_to_content_blocks(args.prompt);
 
         let Some(sender) = self.registry.lookup(Some(&session_id)).await else {
@@ -284,7 +285,7 @@ impl AcpState {
         };
 
         if let Err(SessionCommand::Prompt { responder, .. }) =
-            sender.send(SessionCommand::Prompt { content, responder }).await.map_err(|e| e.0)
+            sender.send(SessionCommand::Prompt { content, display_content, responder }).await.map_err(|e| e.0)
         {
             error!("Session actor channel closed for prompt: {session_id}");
             respond_err(responder, Error::internal_error());

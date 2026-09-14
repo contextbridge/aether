@@ -9,8 +9,11 @@ use super::events::{NotificationMode, project_agent_event};
 pub(crate) fn replay_to_client(events: &[SessionEvent], io: &SessionIo) {
     for event in events {
         match event {
-            SessionEvent::User(UserEvent::Message { message_id, content }) => {
-                io.send_update(SessionUpdate::UserMessage(map_user_message(message_id.as_str().into(), content)));
+            SessionEvent::User(UserEvent::Message { message_id, content, display_content }) => {
+                io.send_update(SessionUpdate::UserMessage(map_user_message(
+                    message_id.as_str().into(),
+                    display_content.as_deref().unwrap_or(content),
+                )));
             }
             SessionEvent::Agent(message) => project_agent_event(message, NotificationMode::Replay, io),
             SessionEvent::User(_) | SessionEvent::Control(_) => {}
@@ -33,6 +36,7 @@ mod tests {
             let events = vec![
                 SessionEvent::User(UserEvent::Message {
                     message_id: "user".into(),
+                    display_content: None,
                     content: vec![
                         llm::ContentBlock::text("hello"),
                         llm::ContentBlock::Image { data: "aW1n".into(), mime_type: "image/png".into() },

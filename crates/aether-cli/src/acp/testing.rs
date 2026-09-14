@@ -315,6 +315,7 @@ impl AcpTestHarness {
             &SessionEvent::User(UserEvent::Message {
                 message_id: llm::MessageId::new(),
                 content: vec![llm::ContentBlock::text(prompt)],
+                display_content: None,
             }),
         );
     }
@@ -322,7 +323,11 @@ impl AcpTestHarness {
     pub fn append_stored_user_blocks(&self, session_id: &str, blocks: Vec<llm::ContentBlock>) {
         self.append_stored_event(
             session_id,
-            &SessionEvent::User(UserEvent::Message { message_id: llm::MessageId::new(), content: blocks }),
+            &SessionEvent::User(UserEvent::Message {
+                message_id: llm::MessageId::new(),
+                content: blocks,
+                display_content: None,
+            }),
         );
     }
 
@@ -428,6 +433,19 @@ impl FakeAcpAgent {
         let seen = self.latest_conversation();
         let expected: Vec<String> = expected.iter().map(|t| (*t).to_string()).collect();
         assert_eq!(seen, expected, "{} conversation mismatch", self.name);
+    }
+
+    pub fn assert_saw_user_content(&self, expected: &[llm::ContentBlock]) {
+        let contexts = self.captured_contexts.lock().expect("captured contexts lock is healthy");
+        let latest = contexts.last().expect("agent should have run a turn");
+        assert!(
+            latest
+                .messages()
+                .iter()
+                .any(|message| { matches!(message, ChatMessage::User { content, .. } if content == expected) }),
+            "{} should have seen user content {expected:?}",
+            self.name
+        );
     }
 
     /// Asserts the agent never ran a turn (its LLM was never invoked).

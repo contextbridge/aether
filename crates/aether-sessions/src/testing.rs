@@ -34,7 +34,7 @@ pub fn user_message(text: &str) -> SessionEvent {
 
 /// A user message event carrying arbitrary content blocks (text, images, ...).
 pub fn user_message_with(content: Vec<ContentBlock>) -> SessionEvent {
-    SessionEvent::User(UserEvent::Message { message_id: MessageId::new(), content })
+    SessionEvent::User(UserEvent::Message { message_id: MessageId::new(), content, display_content: None })
 }
 
 /// The complete assistant text for `message_id`.

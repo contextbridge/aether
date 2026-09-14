@@ -31,6 +31,23 @@ pub fn map_user_content_block(block: &LlmContentBlock) -> acp::ContentBlock {
     }
 }
 
+pub fn display_content_blocks(blocks: &[acp::ContentBlock]) -> Vec<acp::ContentBlock> {
+    blocks
+        .iter()
+        .map(|block| match block {
+            acp::ContentBlock::Resource(resource) => {
+                let uri = match &resource.resource {
+                    acp::EmbeddedResourceResource::TextResourceContents(text) => &text.uri,
+                    acp::EmbeddedResourceResource::BlobResourceContents(blob) => &blob.uri,
+                    _ => return acp::ContentBlock::from("[Unknown resource type]"),
+                };
+                acp::ContentBlock::from(format!("[Resource: {uri}]"))
+            }
+            block => block.clone(),
+        })
+        .collect()
+}
+
 /// Converts ACP `ContentBlock` to plain text.
 ///
 /// Embedded resources (e.g., file attachments) are formatted with their URI

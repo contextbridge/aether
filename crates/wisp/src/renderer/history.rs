@@ -67,12 +67,6 @@ impl Renderer {
     /// terminal's native scrollback, advancing the commit point, and returns
     /// the live rows left over for the viewport to draw.
     ///
-    /// Sealed items commit whole, so an uncommitted sealed item can still
-    /// reflow on resize. The open streaming item at the end commits row by row
-    /// as it overflows. User messages commit whole, including optimistic echoes;
-    /// a changed agent acknowledgment uses the same correction boundary as any
-    /// other replacement. An open tool call redraws in place, so it and
-    /// everything after it stay live.
     pub(super) fn commit_overflow<B: Backend>(
         &mut self,
         terminal: &mut Terminal<B>,
@@ -98,11 +92,11 @@ impl Renderer {
                 self.item_suffix(item, previous, item_width, item_padding, app.spinner_tick(), commit.rows)?;
             let committed = commit.rows;
             let pending = rendered.as_slice();
-            let whole = item.state() == ItemState::Sealed || matches!(item.content(), ConversationContent::User(_));
-            let take = if whole {
+            let take = if streams_into_history(item) {
+                let available = pending.len().saturating_sub(usize::from(item.is_open()));
+                overflow.min(available)
+            } else if item.state() == ItemState::Sealed || matches!(item.content(), ConversationContent::User(_)) {
                 pending.len()
-            } else if streams_into_history(item) {
-                overflow.min(pending.len().saturating_sub(1))
             } else {
                 break;
             };
@@ -114,7 +108,7 @@ impl Renderer {
                     CommitPoint { item_index: commit.item_index, rows, width: item_width, padding: item_padding };
                 self.acknowledge_stream_rows(item, rows.saturating_sub(separator))
             })?;
-            if !whole {
+            if take < pending.len() || (item.is_open() && streams_into_history(item)) {
                 break;
             }
             self.stream_cache.remove(&item.id());

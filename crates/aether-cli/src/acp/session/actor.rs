@@ -42,7 +42,7 @@ const SESSION_COMMAND_CHANNEL_CAPACITY: usize = 50;
 /// A command routed to a single session's actor. The actor is the only consumer
 /// of these, so per-session state never needs an additional lock.
 pub(crate) enum SessionCommand {
-    Prompt { content: Vec<ContentBlock>, responder: Responder<PromptResponse> },
+    Prompt { content: Vec<ContentBlock>, display_content: Vec<ContentBlock>, responder: Responder<PromptResponse> },
     Cancel,
     SetConfig { setting: ConfigSetting, available: Vec<LlmModel>, responder: Responder<SetSessionConfigOptionResponse> },
     AuthenticateMcp { server_name: String },
@@ -134,6 +134,7 @@ enum TurnState {
     Idle,
     Preparing {
         responder: Box<Responder<PromptResponse>>,
+        display_content: Vec<ContentBlock>,
     },
     Running,
 }
@@ -193,7 +194,7 @@ impl SessionActor {
                             Ok(content) => actor.accept_prompt(content).await,
                             Err(error) => {
                                 error!("Prompt preparation task failed: {error}");
-                                if let TurnState::Preparing { responder } = std::mem::take(&mut actor.turn) {
+                                if let TurnState::Preparing { responder, .. } = std::mem::take(&mut actor.turn) {
                                     let _ = responder.respond_with_error(Error::internal_error());
                                 }
                             }
@@ -313,7 +314,9 @@ impl SessionActor {
             SessionCommand::Prompt { responder, .. } if !matches!(self.turn, TurnState::Idle) => {
                 let _ = responder.respond_with_error(Error::invalid_request());
             }
-            SessionCommand::Prompt { content, responder } => self.start_prompt(content, responder).await,
+            SessionCommand::Prompt { content, display_content, responder } => {
+                self.start_prompt(content, display_content, responder).await;
+            }
             SessionCommand::Cancel => self.cancel_turn().await,
             SessionCommand::SetConfig { setting, available, responder } => {
                 let result = if matches!(self.turn, TurnState::Idle) {
@@ -339,7 +342,12 @@ impl SessionActor {
         }
     }
 
-    async fn start_prompt(&mut self, content: Vec<ContentBlock>, responder: Responder<PromptResponse>) {
+    async fn start_prompt(
+        &mut self,
+        content: Vec<ContentBlock>,
+        display_content: Vec<ContentBlock>,
+        responder: Responder<PromptResponse>,
+    ) {
         if let Err(error) = validate_prompt_support(&self.config.effective_model(&self.modes), &content) {
             let _ = responder.respond_with_error(error);
             return;
@@ -347,7 +355,7 @@ impl SessionActor {
         match self.prepare_prompt_runtime().await {
             Ok(mcp) => {
                 self.preparation.spawn(async move { expand_slash_command_in_content(&mcp, content).await });
-                self.turn = TurnState::Preparing { responder: Box::new(responder) };
+                self.turn = TurnState::Preparing { responder: Box::new(responder), display_content };
             }
             Err(error) => {
                 error!("Prompt preparation failed: {error}");
@@ -362,7 +370,7 @@ impl SessionActor {
             if self.cancel.is_cancelled() {
                 self.finish_turn(Ok(acp::StopReason::Cancelled)).await;
             }
-        } else if let TurnState::Preparing { responder } = std::mem::take(&mut self.turn) {
+        } else if let TurnState::Preparing { responder, .. } = std::mem::take(&mut self.turn) {
             self.preparation.shutdown().await;
             let _ = responder.respond(PromptResponse::new());
             self.finish_turn(Ok(acp::StopReason::Cancelled)).await;
@@ -370,9 +378,14 @@ impl SessionActor {
     }
 
     async fn accept_prompt(&mut self, content: Vec<ContentBlock>) {
-        let TurnState::Preparing { responder, .. } = std::mem::take(&mut self.turn) else { return };
+        let TurnState::Preparing { responder, display_content } = std::mem::take(&mut self.turn) else { return };
         let message_id = llm::MessageId::new();
-        let event = SessionEvent::User(UserEvent::Message { message_id: message_id.clone(), content: content.clone() });
+        let user = map_user_message(message_id.to_string().into(), &display_content);
+        let event = SessionEvent::User(UserEvent::Message {
+            message_id: message_id.clone(),
+            display_content: (display_content != content).then_some(display_content),
+            content: content.clone(),
+        });
         if let Err(error) = self.repository.append_event(&self.io.session_id.0, &event) {
             error!("Failed to persist prompt: {error}");
             let _ = responder.respond_with_error(Error::internal_error());
@@ -380,7 +393,6 @@ impl SessionActor {
         }
         self.record_event(event);
         let _ = responder.respond(PromptResponse::new());
-        let user = map_user_message(message_id.to_string().into(), &content);
         self.io.send_update(acp::SessionUpdate::UserMessage(user));
         self.io.send_update(acp::SessionUpdate::StateUpdate(acp::StateUpdate::Running(acp::RunningStateUpdate::new())));
         self.turn = TurnState::Running;
