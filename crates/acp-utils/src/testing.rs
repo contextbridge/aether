@@ -222,7 +222,7 @@ where
     }
 }
 
-struct CaptureConnection<R: acp::Role>(oneshot::Sender<ConnectionTo<R>>);
+pub struct CaptureConnection<R: acp::Role>(pub oneshot::Sender<ConnectionTo<R>>);
 
 impl<R: acp::Role> RunWithConnectionTo<R> for CaptureConnection<R> {
     async fn run_with_connection_to(self, cx: ConnectionTo<R>) -> Result<(), acp::Error> {
