@@ -2594,9 +2594,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-core"
-version = "0.1.11"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "abae99e42673591c5c71a5ed42bf40182db16ed59e9937c479abe5823d12881a"
+checksum = "31dbbaeaa57636812c8b26935602414431b685e1551478cb34b961f7b8592f00"
 dependencies = [
  "clankerdiff-fingerprint",
  "clankerdiff-theme",
@@ -2608,9 +2608,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-fingerprint"
-version = "0.1.11"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "834d807e3f84c50dc11223092a696ac299cc7c7b6329ed4602761179fb8176de"
+checksum = "a3afb90da93d3139d4f21298a5ea3e24d78e48bb9267299b3ee5d2ef61de7ef8"
 dependencies = [
  "blake3",
  "serde",
@@ -2619,9 +2619,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-git"
-version = "0.1.11"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e04fa26831d4485ca5d1d75dddd4850e7176cecb655bfabbd41dcfbba4cdb39a"
+checksum = "b93d80d2de00a09121d7c7ea9e7fb6dc9cc8cb91daa4d8d1a71180d35b11e21b"
 dependencies = [
  "clankerdiff-core",
  "thiserror 2.0.20",
@@ -2630,9 +2630,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-markdown"
-version = "0.1.11"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08c0c6c7884b83d87a1f5d71bc464d793405bc88720d720229c10c8be380cd4e"
+checksum = "726ba64abb40461b8762b5b3fd7d9629220a378bb98582386c038a1e2f0561c8"
 dependencies = [
  "clankerdiff-core",
  "clankerdiff-fingerprint",
@@ -2643,9 +2643,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-ratatui"
-version = "0.1.11"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50d64c2bda4a7fff1336e9410b6c158997cff9070b5a9c6978b20636ca61298b"
+checksum = "f936eca5c6e3c1fd612a74ffe6f05030e0a70f099b19a23a52d76bc8bd704e31"
 dependencies = [
  "bitflags 2.13.2",
  "clankerdiff-core",
@@ -2663,9 +2663,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-syntax"
-version = "0.1.11"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca905de8a9967ea4a1802d2e6347eb98894f5a9726558fc3c847132b255ae932"
+checksum = "ecc5115179e3c86112ddef6aa7d27aa458ea4e5667655b8518a5e87892874fcb"
 dependencies = [
  "arborium-asm",
  "arborium-bash",
@@ -2740,9 +2740,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-theme"
-version = "0.1.11"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c338c69cfc2cc5e36de41ee3f07eb24b7d5aca1ac9b0aa9e735b6668ba363c07"
+checksum = "41a8a23a79a822a1ddba2fb0865689d3d14d78d74c4f3918159cad9abf17f979"
 dependencies = [
  "arborium-theme",
  "clankerdiff-fingerprint",
@@ -2753,9 +2753,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-watch"
-version = "0.1.11"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a3c49702456aadc84d979728ecb99a20a016081a0a561b8e536fb328062b9ac"
+checksum = "5f7d312db1aed2d7dd7038da6a945b7c90511fedc4bee097a858473d223089fa"
 dependencies = [
  "clankerdiff-core",
  "clankerdiff-git",
@@ -3098,7 +3098,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 3.0.5",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -3441,7 +3441,7 @@ checksum = "ad5208a115eaba24916f7456929832e310a81518c641f93fee4f89aa93aa3675"
 dependencies = [
  "cfg-if",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3596,7 +3596,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4556,7 +4556,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.5",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -6336,7 +6336,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls 0.23.44",
- "socket2 0.6.5",
+ "socket2 0.5.10",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -6375,9 +6375,9 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.5",
+ "socket2 0.5.10",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6892,7 +6892,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6962,7 +6962,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7863,10 +7863,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9196,7 +9196,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

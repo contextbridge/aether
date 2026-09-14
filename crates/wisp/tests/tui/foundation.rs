@@ -317,8 +317,15 @@ fn completed_tool_diff_is_themed_and_rendered_once() {
     let text = buffer_text(&conversation);
     assert_eq!(text.matches("old_name").count(), 1);
     assert_eq!(text.matches("new_name").count(), 1);
-    assert!(has_cell(&conversation, "-", |cell| cell.bg == removed_background));
-    assert!(has_cell(&conversation, "+", |cell| cell.bg == added_background));
+    let row_has_background = |row, background| {
+        (conversation.area.left()..conversation.area.right())
+            .filter_map(|x| conversation.cell((x, row)))
+            .any(|cell| cell.bg == background)
+    };
+    let removed_row = row_containing(&conversation, "old_name").expect("rendered removed diff row");
+    let added_row = row_containing(&conversation, "new_name").expect("rendered added diff row");
+    assert!(row_has_background(removed_row, removed_background));
+    assert!(row_has_background(added_row, added_background));
 }
 
 #[test]
