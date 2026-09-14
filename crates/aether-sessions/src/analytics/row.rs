@@ -263,7 +263,7 @@ impl EventProjection {
     fn from_context(event: &ContextEvent) -> Self {
         match event {
             ContextEvent::CompactionStarted { .. } => Self::new("agent", "context_compaction_started"),
-            ContextEvent::CompactionEnded { outcome } => Self {
+            ContextEvent::CompactionEnded { outcome, .. } => Self {
                 outcome: Some(match outcome {
                     aether_core::events::CompactionOutcome::Completed => "completed",
                     aether_core::events::CompactionOutcome::Failed { .. } => "failed",
@@ -321,6 +321,7 @@ mod tests {
             usage: ContextUsage { usage_ratio: Some(0.9), ..ContextUsage::default() },
         }));
         let compaction_ended = SessionEvent::Agent(AgentEvent::Context(ContextEvent::CompactionEnded {
+            compaction_id: "compaction".into(),
             outcome: aether_core::events::CompactionOutcome::Completed,
         }));
 

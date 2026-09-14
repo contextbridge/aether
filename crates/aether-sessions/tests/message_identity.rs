@@ -97,6 +97,9 @@ fn stored_user_and_summary_ids_survive_repeated_reconstruction() {
         &[user.clone(), assistant_text("answer", "answer"), summary.clone(), user_message("continue")],
     );
     let (_, loaded) = store.store().load("summary").unwrap();
+    assert_eq!(loaded[2], summary);
+    let wire = serde_json::to_value(&summary).unwrap();
+    assert_eq!(wire["data"]["event"]["compaction_id"], "compaction");
     let user_context = context_from_events(&loaded[..1]);
     let SessionEvent::User(UserEvent::Message { message_id, .. }) = user else { panic!("user") };
     assert_eq!(user_context.messages()[0].message_id(), Some(message_id));

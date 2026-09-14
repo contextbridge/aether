@@ -89,6 +89,7 @@ pub fn agent_switched(from: Option<&str>, to: Option<&str>) -> SessionEvent {
 /// A compaction result replacing `messages_removed` prior messages with `summary`.
 pub fn compaction_result(summary: &str, messages_removed: usize) -> SessionEvent {
     SessionEvent::Agent(AgentEvent::Context(ContextEvent::CompactionResult {
+        compaction_id: "compaction".into(),
         message_id: MessageId::new(),
         summary: summary.into(),
         messages_removed,
