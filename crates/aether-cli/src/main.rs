@@ -10,6 +10,7 @@ use aether_cli::settings::SettingsCommand;
 use aether_cli::show_prompt::{PromptArgs, run_prompt};
 use aether_project::{AgentCatalog, project_settings_path, user_settings_path};
 use clap::{Parser, Subcommand};
+use rustls::crypto::aws_lc_rs;
 use std::env::current_dir;
 use std::process::ExitCode;
 use tokio::runtime::Runtime;
@@ -80,6 +81,8 @@ enum Command {
 }
 
 fn main() -> ExitCode {
+    aws_lc_rs::default_provider().install_default().expect("failed to install the Rustls AWS-LC crypto provider");
+
     let cli = Cli::parse();
 
     if let Some(image) = cli.sandbox_image {

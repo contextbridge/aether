@@ -51,6 +51,7 @@ rmcp = { workspace = true, features = ["client", "elicitation", "server", "trans
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "net", "fs", "time", "signal"] }
 tokio-tungstenite = { workspace = true }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 tokio-util = { workspace = true, features = ["compat"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
