@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.2.3...aether-telemetry-v0.3.0) - 2026-09-14
+
+### Added
+
+- [**breaking**] Migrate to ACP 2.0 ([#460](https://github.com/contextbridge/aether/pull/460))
+
 ## [0.2.3](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.2.2...aether-telemetry-v0.2.3) - 2026-09-11
 
 ### Other

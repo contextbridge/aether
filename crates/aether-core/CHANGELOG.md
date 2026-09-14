@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.7.3...aether-agent-core-v0.8.0) - 2026-09-14
+
+### Added
+
+- [**breaking**] Migrate to ACP 2.0 ([#460](https://github.com/contextbridge/aether/pull/460))
+
 ## [0.7.3](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.7.2...aether-agent-core-v0.7.3) - 2026-09-11
 
 ### Added
