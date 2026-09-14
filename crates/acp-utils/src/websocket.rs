@@ -4,10 +4,10 @@ use std::{io, time::Duration};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
-use tokio::time::timeout;
+use tokio::time::{Instant, MissedTickBehavior, interval_at, timeout};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
-use tokio_tungstenite::tungstenite::{self, Message};
+use tokio_tungstenite::tungstenite::{self, Bytes, Message};
 use tokio_util::sync::PollSender;
 
 #[derive(Debug, Error)]
@@ -63,6 +63,7 @@ where
 }
 
 const WRITE_DEADLINE: Duration = Duration::from_secs(10);
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(20);
 
 impl<T: AsyncRead + AsyncWrite + Unpin> WebSocketTransport<T> {
     async fn run_socket_loop(
@@ -70,8 +71,13 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocketTransport<T> {
         mut to_rx: mpsc::Receiver<String>,
         from_tx: mpsc::Sender<io::Result<String>>,
     ) -> Result<(), WebSocketError> {
+        let mut keepalive = interval_at(Instant::now() + KEEPALIVE_INTERVAL, KEEPALIVE_INTERVAL);
+        keepalive.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             tokio::select! {
+                _ = keepalive.tick() => {
+                    self.write(Message::Ping(Bytes::new())).await?;
+                }
                 message = to_rx.recv() => {
                     let Some(text) = message else {
                         return self.finish_close().await;
