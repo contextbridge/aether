@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.1](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.5.0...aether-acp-utils-v0.5.1) - 2026-09-14
+
+### Fixed
+
+- *(aether-cli)* Set default TLS provider and make websocket client ping every 20s to avoid timeouts. ([#464](https://github.com/contextbridge/aether/pull/464))
+
 ## [0.5.0](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.4.3...aether-acp-utils-v0.5.0) - 2026-09-14
 
 ### Added

@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "aether-acp-utils"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "aether-acp-utils",
  "aether-llm",
@@ -62,7 +62,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-cli"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-cli",
@@ -88,7 +88,7 @@ dependencies = [
  "libc",
  "ratatui",
  "rmcp",
- "rustls 0.23.44",
+ "rustls 0.23.45",
  "schemars 1.2.2",
  "serde",
  "serde_json",
@@ -106,7 +106,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-core"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "aether-evals"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -274,7 +274,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-servers"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "aether-agent-core",
  "aether-auth",
@@ -337,7 +337,7 @@ dependencies = [
 
 [[package]]
 name = "aether-project"
-version = "0.5.43"
+version = "0.5.44"
 dependencies = [
  "aether-agent-core",
  "aether-doctest",
@@ -359,7 +359,7 @@ dependencies = [
 
 [[package]]
 name = "aether-schemas"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "aether-agent-cli",
  "aether-agent-core",
@@ -384,7 +384,7 @@ dependencies = [
 
 [[package]]
 name = "aether-sessions"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "aether-telemetry"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -445,7 +445,7 @@ dependencies = [
 
 [[package]]
 name = "aether-wisp"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "aether-acp-utils",
  "aether-utils",
@@ -1956,7 +1956,7 @@ dependencies = [
  "hyper-util",
  "pin-project-lite",
  "rustls 0.21.12",
- "rustls 0.23.44",
+ "rustls 0.23.45",
  "rustls-native-certs",
  "rustls-pki-types",
  "tokio",
@@ -2362,7 +2362,7 @@ dependencies = [
  "num",
  "pin-project-lite",
  "rand 0.10.2",
- "rustls 0.23.44",
+ "rustls 0.23.45",
  "rustls-native-certs",
  "rustls-pki-types",
  "serde",
@@ -4520,7 +4520,7 @@ dependencies = [
  "http 1.5.0",
  "hyper 1.11.1",
  "hyper-util",
- "rustls 0.23.44",
+ "rustls 0.23.45",
  "rustls-native-certs",
  "tokio",
  "tokio-rustls 0.26.5",
@@ -6338,7 +6338,7 @@ dependencies = [
  "quinn-proto",
  "quinn-udp",
  "rustc-hash",
- "rustls 0.23.44",
+ "rustls 0.23.45",
  "socket2 0.6.5",
  "thiserror 2.0.20",
  "tokio",
@@ -6360,7 +6360,7 @@ dependencies = [
  "rand_pcg",
  "ring",
  "rustc-hash",
- "rustls 0.23.44",
+ "rustls 0.23.45",
  "rustls-pki-types",
  "slab",
  "thiserror 2.0.20",
@@ -6715,7 +6715,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "quinn",
- "rustls 0.23.44",
+ "rustls 0.23.45",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -6756,7 +6756,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "quinn",
- "rustls 0.23.44",
+ "rustls 0.23.45",
  "rustls-pki-types",
  "rustls-platform-verifier",
  "serde",
@@ -6912,9 +6912,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.44"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6725596c3f2c3a0aef021139e145d4eafe314a6623e4680ca83852b2c67ab2ba"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "aws-lc-rs",
  "once_cell",
@@ -6958,7 +6958,7 @@ dependencies = [
  "jni",
  "log",
  "once_cell",
- "rustls 0.23.44",
+ "rustls 0.23.45",
  "rustls-native-certs",
  "rustls-platform-verifier-android",
  "rustls-webpki 0.103.15",
@@ -8149,7 +8149,7 @@ version = "0.26.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b0c85f2c3ef0b1cd58b36682f4b17aaa995f0e5db534d85692b4903abce21f67"
 dependencies = [
- "rustls 0.23.44",
+ "rustls 0.23.45",
  "tokio",
 ]
 
@@ -8173,7 +8173,7 @@ checksum = "17a073bfed563fa236697a068031408a93cd9522e08abf9933ead3e73411bd71"
 dependencies = [
  "futures-util",
  "log",
- "rustls 0.23.44",
+ "rustls 0.23.45",
  "rustls-pki-types",
  "tokio",
  "tokio-rustls 0.26.5",
@@ -8719,7 +8719,7 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.10.2",
- "rustls 0.23.44",
+ "rustls 0.23.45",
  "rustls-pki-types",
  "sha1 0.11.0",
  "thiserror 2.0.20",
