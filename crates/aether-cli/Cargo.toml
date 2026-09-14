@@ -1,6 +1,6 @@
 [package]
 name = "aether-agent-cli"
-version = "0.9.0"
+version = "0.9.1"
 edition = "2024"
 description = "CLI and ACP server for the Aether AI coding agent"
 license = "MIT"
@@ -34,16 +34,16 @@ testing = ["acp_utils/testing"]
 [dependencies]
 aether-auth = { path = "../aether-auth", version = "0.1.14", features = ["keyring"] }
 base64 = { workspace = true }
-aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.8.0" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.8.1" }
 aether-sessions = { workspace = true }
-aether-project = { path = "../aether-project", version = "0.5.43" }
-aether-telemetry = { path = "../aether-telemetry", version = "0.3.0" }
+aether-project = { path = "../aether-project", version = "0.5.44" }
+aether-telemetry = { path = "../aether-telemetry", version = "0.3.1" }
 llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.9.0" }
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.7.0" }
-mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.6.0" }
-wisp = { package = "aether-wisp", path = "../wisp", version = "0.7.0" }
+mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.6.1" }
+wisp = { package = "aether-wisp", path = "../wisp", version = "0.7.1" }
 ratatui = { workspace = true }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["agent", "websocket"], version = "0.5.0" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["agent", "websocket"], version = "0.5.1" }
 agent-client-protocol = { workspace = true }
 clankerdiff-core = { workspace = true }
 aether-lspd = { path = "../aether-lspd", version = "0.1.36" }
@@ -74,4 +74,4 @@ libc = { workspace = true }
 
 [dev-dependencies]
 aether-agent-cli = { path = ".", features = ["testing"] }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"], version = "0.5.0" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"], version = "0.5.1" }

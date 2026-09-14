@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.1](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.0...aether-agent-cli-v0.9.1) - 2026-09-14
+
+### Fixed
+
+- *(aether-cli)* Set default TLS provider and make websocket client ping every 20s to avoid timeouts. ([#464](https://github.com/contextbridge/aether/pull/464))
+
 ## [0.9.0](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.8.3...aether-agent-cli-v0.9.0) - 2026-09-14
 
 ### Added
