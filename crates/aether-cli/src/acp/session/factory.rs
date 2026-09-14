@@ -20,7 +20,6 @@ use super::agent_key::AgentKey;
 use super::agents::SessionAgents;
 use super::config::SessionConfigState;
 use super::model::{Modes, pick_default_model};
-use super::registry::SessionInputs;
 use super::runtime::{ProductionRuntimeFactory, RuntimeFactory};
 use crate::acp::protocol::mcp::map_acp_mcp_servers;
 use crate::resolve::{InitialSessionSelection, resolve_agent_from_catalog};
@@ -44,14 +43,12 @@ pub(crate) struct SessionFactory {
 pub(crate) struct CreatedSession {
     pub session_id: SessionId,
     pub handle: SessionHandle,
-    pub inputs: SessionInputs,
     pub config_options: Vec<acp::SessionConfigOption>,
 }
 
 pub(crate) struct PreparedSession {
     init: SessionActorInit,
     available: Vec<LlmModel>,
-    inputs: SessionInputs,
 }
 
 impl PreparedSession {
@@ -66,7 +63,7 @@ impl PreparedSession {
             error!("Failed to start session actor: {e}");
             Error::internal_error()
         })?;
-        Ok(CreatedSession { session_id, handle, config_options, inputs: self.inputs })
+        Ok(CreatedSession { session_id, handle, config_options })
     }
 }
 
@@ -102,6 +99,8 @@ impl SessionFactory {
         cx: &ConnectionTo<Client>,
         mcp_capabilities: ClientCapabilities,
     ) -> Result<PreparedSession, Error> {
+        let cwd = args.cwd.clone().into_inner();
+        let mcp_servers = args.mcp_servers.clone();
         // Inside a sandbox container the client sends the *host* cwd, but the
         // project is mounted at the container's working directory.
         if std::env::var("AETHER_INSIDE_SANDBOX").is_ok() {
@@ -131,7 +130,6 @@ impl SessionFactory {
             error!("Failed to write session meta: {e}");
         }
 
-        let inputs = SessionInputs { cwd: args.cwd.clone().into_inner(), mcp_servers: args.mcp_servers.clone() };
         let runtime_factory = self.runtime_factory.clone().unwrap_or_else(|| {
             self.production_runtime_factory(
                 args.cwd.into_inner(),
@@ -143,7 +141,8 @@ impl SessionFactory {
         });
         Ok(self.prepare_session(
             SessionId::new(session_id),
-            inputs,
+            cwd,
+            mcp_servers,
             runtime_factory,
             mode_catalog,
             resolved,
@@ -158,12 +157,8 @@ impl SessionFactory {
         args: ResumeSessionRequest,
         cx: &ConnectionTo<Client>,
         mcp_capabilities: ClientCapabilities,
+        replay: bool,
     ) -> Result<PreparedSession, Error> {
-        let replay = match args.replay_from {
-            Some(acp::ReplayFrom::Start(_)) => true,
-            None => false,
-            Some(_) => return Err(Error::invalid_params()),
-        };
         self.restore(args.session_id, args.cwd.into_inner(), args.mcp_servers, cx, mcp_capabilities, replay).await
     }
 
@@ -192,17 +187,26 @@ impl SessionFactory {
 
         let mut mode_catalog = self.load_mode_catalog(&cwd).await?;
         let resolved = resolve_loaded_session(&mut mode_catalog, &meta, &events)?;
-        let inputs = SessionInputs { cwd: cwd.clone(), mcp_servers: mcp_servers.clone() };
         let runtime_factory = self.runtime_factory.clone().unwrap_or_else(|| {
             self.production_runtime_factory(
-                cwd,
-                mcp_servers,
+                cwd.clone(),
+                mcp_servers.clone(),
                 mode_catalog.specs.catalog(),
                 mcp_capabilities,
                 session_id.0.as_ref(),
             )
         });
-        Ok(self.prepare_session(session_id, inputs, runtime_factory, mode_catalog, resolved, events, replay, cx))
+        Ok(self.prepare_session(
+            session_id,
+            cwd,
+            mcp_servers,
+            runtime_factory,
+            mode_catalog,
+            resolved,
+            events,
+            replay,
+            cx,
+        ))
     }
 
     fn production_runtime_factory(
@@ -224,7 +228,8 @@ impl SessionFactory {
     fn prepare_session(
         &self,
         session_id: SessionId,
-        inputs: SessionInputs,
+        cwd: PathBuf,
+        mcp_servers: Vec<acp::McpServer>,
         runtime_factory: Arc<dyn RuntimeFactory>,
         mode_catalog: SessionModeCatalog,
         resolved: ResolvedSession,
@@ -234,6 +239,8 @@ impl SessionFactory {
     ) -> PreparedSession {
         let init = SessionActorInit {
             session_id,
+            cwd,
+            mcp_servers,
             connection: cx.clone(),
             repository: self.session_store.clone(),
             oauth_credential_store: Arc::clone(&self.oauth_credential_store),
@@ -245,7 +252,7 @@ impl SessionFactory {
             modes: mode_catalog.modes,
             config: resolved.config,
         };
-        PreparedSession { init, available: mode_catalog.available, inputs }
+        PreparedSession { init, available: mode_catalog.available }
     }
 
     fn resolve_new_session(

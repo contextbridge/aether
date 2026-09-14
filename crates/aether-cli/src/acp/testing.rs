@@ -1,4 +1,3 @@
-use super::agent::acp_agent_builder;
 use super::fake_prompt_mcp::FakePromptMcp;
 use super::server::{AcpServer, ServerRunError};
 use super::session::actor::SessionActorInit;
@@ -15,7 +14,7 @@ use crate::settings_args::SettingsSourceArgs;
 use crate::workspace::WorkspaceManager;
 use crate::workspace::testing::StdCopyCloner;
 use acp_utils::notifications::{AuthMethodsUpdatedParams, McpNotification};
-use acp_utils::testing::{TestPeer, connect_pair, initialize_request};
+use acp_utils::testing::{TestPeer, duplex_pair, initialize_request};
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
 use aether_core::core::{AgentBuilder, AgentHandle, Prompt};
@@ -35,22 +34,18 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tokio::sync::{Semaphore, mpsc, oneshot};
-use tokio::task::{JoinHandle, spawn_local};
+use tokio::sync::{mpsc, oneshot, watch};
+use tokio::task::{JoinHandle, JoinSet};
+use tokio_util::sync::CancellationToken;
 
 const PLANNER_REPLY: &str = "planner reply";
 const CODER_REPLY: &str = "coder reply";
 
-/// In-memory ACP harness running the real `acp_agent_builder` against a
-/// pre-wired test client. Created via [`AcpTestHarness::start`] inside a
-/// `LocalSet`. The harness owns an `AcpState` and a temp-dir-backed
-/// [`SessionStore`] so tests can register fake-driven sessions without
 pub struct AcpTestHarness {
     pub client_cx: ConnectionTo<Agent>,
     pub peer: TestPeer,
     pub initialize_response: InitializeResponse,
-    disconnect: Option<oneshot::Sender<()>>,
-    server_done: Option<oneshot::Receiver<()>>,
+    connection: Option<HarnessConnectionTasks>,
     pub auth_updates: mpsc::UnboundedReceiver<acp_utils::notifications::AuthMethodsUpdatedParams>,
     resume_agent: FakeAcpAgent,
     runtime_control: Arc<Mutex<FakeRuntimeControl>>,
@@ -58,15 +53,14 @@ pub struct AcpTestHarness {
     agent_cx: ConnectionTo<Client>,
     state: Arc<AcpState>,
     session_store: Arc<SessionStore>,
-    persistent_host: bool,
     _tmp: tempfile::TempDir,
 }
 
 /// A real loopback listener backed by the harness's existing state and fake runtimes.
 pub struct AcpWebSocketTestServer {
     pub address: SocketAddr,
-    admission: Arc<Semaphore>,
-    shutdown: oneshot::Sender<()>,
+    detached: watch::Receiver<u64>,
+    shutdown: Option<oneshot::Sender<()>>,
     task: JoinHandle<Result<(), ServerRunError>>,
 }
 
@@ -75,42 +69,26 @@ impl AcpWebSocketTestServer {
         format!("ws://{}", self.address)
     }
 
-    /// Wait for a previously admitted connection to finish detaching its output.
-    pub async fn wait_until_detached(&self) {
-        drop(self.admission.acquire().await.expect("admission gate remains open"));
+    pub fn subscribe(&self) -> watch::Receiver<u64> {
+        self.detached.clone()
     }
 
-    pub async fn shutdown(self) {
-        let _ = self.shutdown.send(());
-        self.task.await.expect("listener task joins").expect("listener shuts down");
+    /// Join networking cleanup without shutting down the harness-owned host.
+    pub async fn shutdown(mut self) {
+        let _ = self.shutdown.take().expect("server is running").send(());
+        (&mut self.task).await.expect("listener task joins").expect("listener shuts down");
     }
 
     /// Drop the running server without executing the normal async shutdown path.
-    pub async fn abort(self) {
+    pub async fn abort(mut self) {
         self.task.abort();
-        assert!(self.task.await.expect_err("listener task is aborted").is_cancelled());
+        assert!((&mut self.task).await.expect_err("listener task is aborted").is_cancelled());
     }
 }
 
-#[derive(Default)]
-pub struct AcpTestHarnessBuilder {
-    persistent_host: bool,
-    remote_cwd: Option<PathBuf>,
-}
-
-impl AcpTestHarnessBuilder {
-    pub fn persistent_host(mut self) -> Self {
-        self.persistent_host = true;
-        self
-    }
-
-    pub fn remote_cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
-        self.remote_cwd = Some(cwd.into());
-        self
-    }
-
-    pub async fn start(self) -> AcpTestHarness {
-        AcpTestHarness::start_with(self.persistent_host, self.remote_cwd).await
+impl Drop for AcpWebSocketTestServer {
+    fn drop(&mut self) {
+        self.task.abort();
     }
 }
 
@@ -166,71 +144,56 @@ impl AcpTestHarness {
     }
 
     pub async fn disconnect(&mut self) {
-        if let Some(disconnect) = self.disconnect.take() {
-            let _ = disconnect.send(());
+        if let Some(connection) = self.connection.take() {
+            connection.shutdown().await;
         }
-        if let Some(done) = self.server_done.take() {
-            done.await.expect("connection cleanup completes");
-        }
-    }
-
-    pub fn builder() -> AcpTestHarnessBuilder {
-        AcpTestHarnessBuilder::default()
-    }
-
-    pub async fn start() -> Self {
-        Self::builder().start().await
     }
 
     /// Connect a fresh initialized client to the same host and session store.
     pub async fn reconnect(&mut self) {
-        assert!(self.persistent_host, "reconnection requires a persistent host");
-        assert!(self.disconnect.is_none(), "disconnect the current client before reconnecting");
-        let connection = connect_client(self.state.clone(), self.persistent_host).await;
+        assert!(self.connection.is_none(), "disconnect the current client before reconnecting");
+        assert!(!self.state.stop_token().is_cancelled(), "host is running");
+        let connection = connect_client(self.state.clone()).await;
         self.client_cx = connection.client_cx;
         self.agent_cx = connection.agent_cx;
         self.peer = connection.peer;
         self.initialize_response = connection.initialize_response;
         self.auth_updates = connection.auth_updates;
-        self.disconnect = Some(connection.disconnect);
-        self.server_done = Some(connection.done);
+        self.connection = Some(connection.tasks);
     }
 
     /// Move this persistent host from its in-memory connection to a real port-zero listener.
     pub async fn serve_websocket(&mut self) -> AcpWebSocketTestServer {
-        assert!(self.persistent_host, "a WebSocket listener requires a persistent host");
         self.disconnect().await;
-        let server = AcpServer::bind("127.0.0.1:0".parse().unwrap()).await.expect("bind test server");
+        self.listen_websocket().await
+    }
+
+    /// Listen without disconnecting any existing client.
+    pub async fn listen_websocket(&self) -> AcpWebSocketTestServer {
+        assert!(!self.state.stop_token().is_cancelled(), "host is running");
+        let server =
+            AcpServer::bind("127.0.0.1:0".parse().unwrap(), self.state.clone()).await.expect("bind test server");
         let address = server.local_addr().expect("listener address");
-        let admission = server.admission();
+        let detached = self.state.client_slot().subscribe();
         let (shutdown, stopped) = oneshot::channel();
-        let state = self.state.clone();
-        let task = tokio::spawn(async move {
-            let result = server
-                .run(state.clone(), async move {
-                    let _ = stopped.await;
-                    Ok(())
-                })
-                .await;
-            state.shutdown_all().await;
-            result
-        });
-        AcpWebSocketTestServer { address, admission, shutdown, task }
+        let task = tokio::spawn(server.run_until(async move {
+            let _ = stopped.await;
+            Ok(())
+        }));
+        AcpWebSocketTestServer { address, detached, shutdown: Some(shutdown), task }
     }
 
     /// Stop the connection and all host-owned session runtimes.
     pub async fn shutdown(&mut self) {
         self.disconnect().await;
-        if self.persistent_host {
-            self.state.shutdown_all().await;
-        }
+        self.state.shutdown_all().await;
     }
 
     pub fn stored_events(&self, session_id: &SessionId) -> Vec<SessionEvent> {
         self.session_store.load(session_id.0.as_ref()).expect("stored session loads").1
     }
 
-    async fn start_with(persistent_host: bool, remote_cwd: Option<PathBuf>) -> Self {
+    pub async fn start() -> Self {
         let tmp = tempfile::tempdir().expect("tempdir for session store");
         let session_store = Arc::new(SessionStore::from_path(tmp.path().to_path_buf()));
         let workspace_manager = Arc::new(WorkspaceManager::from_registry_path_with_cloner(
@@ -257,18 +220,17 @@ impl AcpTestHarness {
                 provider_connections: ProviderConnectionOverrides::default(),
                 telemetry: None,
                 runtime_factory: Some(runtime_factory),
-                remote_cwd,
+                cwd: PathBuf::from("/tmp"),
             },
             Arc::new(FakeProviderLogin),
         ));
 
-        let connection = connect_client(state.clone(), persistent_host).await;
+        let connection = connect_client(state.clone()).await;
         Self {
             client_cx: connection.client_cx,
             peer: connection.peer,
             initialize_response: connection.initialize_response,
-            disconnect: Some(connection.disconnect),
-            server_done: Some(connection.done),
+            connection: Some(connection.tasks),
             auth_updates: connection.auth_updates,
             resume_agent,
             runtime_control,
@@ -276,7 +238,6 @@ impl AcpTestHarness {
             agent_cx: connection.agent_cx,
             state,
             session_store,
-            persistent_host,
             _tmp: tmp,
         }
     }
@@ -375,6 +336,8 @@ impl AcpTestHarness {
 
         self.state
             .register_session(SessionActorInit {
+                cwd: PathBuf::from("/tmp"),
+                mcp_servers: Vec::new(),
                 session_id: id.clone(),
                 connection: self.agent_cx.clone(),
                 repository: self.session_store.clone(),
@@ -474,6 +437,8 @@ impl AcpTestHarness {
 
         self.state
             .register_session(SessionActorInit {
+                cwd: PathBuf::from("/tmp"),
+                mcp_servers: Vec::new(),
                 session_id: acp_session_id.clone(),
                 connection: self.agent_cx.clone(),
                 repository: self.session_store.clone(),
@@ -564,11 +529,24 @@ struct HarnessConnection {
     peer: TestPeer,
     initialize_response: InitializeResponse,
     auth_updates: mpsc::UnboundedReceiver<acp_utils::notifications::AuthMethodsUpdatedParams>,
-    disconnect: oneshot::Sender<()>,
-    done: oneshot::Receiver<()>,
+    tasks: HarnessConnectionTasks,
 }
 
-async fn connect_client(state: Arc<AcpState>, persistent_host: bool) -> HarnessConnection {
+struct HarnessConnectionTasks {
+    stop: CancellationToken,
+    tasks: JoinSet<Result<(), agent_client_protocol::Error>>,
+}
+
+impl HarnessConnectionTasks {
+    async fn shutdown(mut self) {
+        self.stop.cancel();
+        while let Some(result) = self.tasks.join_next().await {
+            result.expect("connection task joins").expect("connection cleanup completes");
+        }
+    }
+}
+
+async fn connect_client(state: Arc<AcpState>) -> HarnessConnection {
     let (peer, client_builder) = TestPeer::new();
     let (auth_tx, auth_updates) = mpsc::unbounded_channel();
     let client_builder = client_builder.on_receive_notification(
@@ -578,37 +556,30 @@ async fn connect_client(state: Arc<AcpState>, persistent_host: bool) -> HarnessC
         },
         on_receive_notification!(),
     );
-    let pair = connect_pair(acp_agent_builder(state.clone()), client_builder).await;
+    let (agent_transport, client_transport) = duplex_pair();
+    let (send_agent_connection, agent_ready) = oneshot::channel();
+    let (send_client_connection, client_ready) = oneshot::channel();
+    let stop = state.stop_token().child_token();
+    let mut tasks = JoinSet::new();
+    let agent_stop = stop.clone();
+    tasks.spawn_local(async move { state.serve_with(agent_transport, agent_stop, send_agent_connection).await });
+    tasks.spawn_local(async move {
+        client_builder
+            .with_runner(acp_utils::testing::CaptureConnection(send_client_connection))
+            .connect_to(client_transport)
+            .await
+    });
+    let agent_cx = agent_ready.await.expect("agent connection");
+    let client_cx = client_ready.await.expect("client connection");
     let initialize_response =
-        pair.client.send_request(initialize_request()).block_task().await.expect("initialize harness");
-
-    let (disconnect, disconnected) = oneshot::channel();
-    let (finished, done) = oneshot::channel();
-
-    spawn_local(async move {
-        let _ = pair.agent_task.await;
-        if persistent_host {
-            state.detach_client().await.expect("detach client output");
-        } else {
-            state.shutdown_all().await;
-        }
-        let _ = finished.send(());
-    });
-
-    spawn_local(async move {
-        let _ = disconnected.await;
-        pair.client_task.abort();
-        let _ = pair.client_task.await;
-    });
-
+        client_cx.send_request(initialize_request()).block_task().await.expect("initialize harness");
     HarnessConnection {
-        client_cx: pair.client,
-        agent_cx: pair.agent,
+        client_cx,
+        agent_cx,
         peer,
         initialize_response,
         auth_updates,
-        disconnect,
-        done,
+        tasks: HarnessConnectionTasks { stop, tasks },
     }
 }
 
@@ -744,9 +715,12 @@ impl RuntimeFactory for StubRuntimeFactory {
 }
 
 fn fake_agent(name: &str, server_name: &str, prompt_name: &str, reply: &str) -> (FakeAgentDef, FakeAcpAgent) {
-    let provider =
-        FakeLlmProvider::new(vec![vec![LlmResponse::Start, LlmResponse::text(reply), LlmResponse::done()]; 2])
-            .with_display_name(name);
+    const TURNS_BEFORE_AND_AFTER_REATTACH: usize = 2;
+    let provider = FakeLlmProvider::new(vec![
+        vec![LlmResponse::Start, LlmResponse::text(reply), LlmResponse::done()];
+        TURNS_BEFORE_AND_AFTER_REATTACH
+    ])
+    .with_display_name(name);
     let captured_contexts = provider.captured_contexts();
     let def = FakeAgentDef {
         spec: fake_agent_spec(name),

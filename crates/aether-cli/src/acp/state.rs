@@ -1,3 +1,4 @@
+use super::agent::acp_agent_builder;
 use super::protocol::notify;
 use acp_utils::notifications::{
     AetherCapabilities, AuthMethodsUpdatedParams, McpRequest, PromptSearchParams, PromptSearchResponse,
@@ -16,15 +17,17 @@ use agent_client_protocol::schema::v2::{
     SetSessionConfigOptionResponse,
 };
 use agent_client_protocol::util::internal_error;
-use agent_client_protocol::{Client, ConnectionTo, Error, Responder};
+use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Error, Responder};
 use llm::catalog::{LlmModel, ModelSpec};
 use llm::{ContentBlock, ProviderConnectionOverrides};
 use mcp_utils::client::{client_capabilities, client_capabilities_for};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{Mutex, oneshot};
+use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::{Mutex, oneshot, watch};
 use tokio::task::spawn_blocking;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use super::protocol::content::map_acp_to_content_blocks;
@@ -34,8 +37,6 @@ use super::session::actor::{SessionActor, SessionActorInit};
 use super::session::config_setting::ConfigSetting;
 use super::session::factory::SessionFactory;
 use super::session::model::supports_prompt_audio;
-#[cfg(any(test, feature = "testing"))]
-use super::session::registry::SessionInputs;
 use super::session::{SessionRegistry, paginate_summaries};
 use crate::resolve::InitialSessionSelection;
 use crate::settings_args::SettingsSourceArgs;
@@ -49,15 +50,17 @@ pub(crate) trait ProviderLogin: Send + Sync {
 
 /// Host control plane owning one active session actor independently of its client.
 pub(crate) struct AcpState {
+    client_slot: ClientSlot,
     login: Arc<dyn ProviderLogin>,
     registry: SessionRegistry,
+    stop: CancellationToken,
     session_store: Arc<SessionStore>,
     workspace_manager: Arc<WorkspaceManager>,
     oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
     factory: SessionFactory,
     telemetry: Option<Arc<TelemetryRuntime>>,
     mcp_capabilities: Mutex<rmcp::model::ClientCapabilities>,
-    remote_cwd: Option<PathBuf>,
+    cwd: PathBuf,
 }
 
 pub(crate) struct AcpStateConfig {
@@ -69,10 +72,86 @@ pub(crate) struct AcpStateConfig {
     pub(crate) provider_connections: ProviderConnectionOverrides,
     pub(crate) telemetry: Option<Arc<TelemetryRuntime>>,
     pub(crate) runtime_factory: Option<Arc<dyn super::session::runtime::RuntimeFactory>>,
-    pub(crate) remote_cwd: Option<PathBuf>,
+    pub(crate) cwd: PathBuf,
+}
+
+#[derive(Default)]
+pub(crate) struct ClientSlot {
+    occupied: AtomicBool,
+    generation: watch::Sender<u64>,
+}
+
+impl ClientSlot {
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn subscribe(&self) -> watch::Receiver<u64> {
+        self.generation.subscribe()
+    }
+}
+
+#[must_use = "the client must be released after serving or a failed handshake"]
+pub(crate) struct ClientGuard {
+    state: Option<Arc<AcpState>>,
+}
+
+impl ClientGuard {
+    pub(crate) async fn serve(
+        self,
+        transport: impl ConnectTo<Agent> + 'static,
+        stop: CancellationToken,
+    ) -> Result<(), Error> {
+        let state = self.state.as_ref().expect("attached client").clone();
+        state.serve_attached(transport, stop, self, agent_client_protocol::NullRun).await
+    }
+
+    pub(crate) async fn release(mut self) {
+        let state = self.state.as_ref().expect("attached client");
+        state.release_client().await;
+        self.state = None;
+    }
+}
+
+impl Drop for ClientGuard {
+    fn drop(&mut self) {
+        if let Some(state) = self.state.take() {
+            tokio::spawn(async move { state.release_client().await });
+        }
+    }
 }
 
 impl AcpState {
+    pub(crate) fn try_attach(self: &Arc<Self>) -> Option<ClientGuard> {
+        if self.stop.is_cancelled() {
+            return None;
+        }
+        self.client_slot.occupied.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).ok()?;
+        Some(ClientGuard { state: Some(self.clone()) })
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn client_slot(&self) -> &ClientSlot {
+        &self.client_slot
+    }
+
+    pub(crate) async fn serve(
+        self: &Arc<Self>,
+        transport: impl ConnectTo<Agent> + 'static,
+        stop: CancellationToken,
+    ) -> Result<(), Error> {
+        let guard = self.try_attach().ok_or_else(|| internal_error("client already attached"))?;
+        guard.serve(transport, stop).await
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) async fn serve_with(
+        self: &Arc<Self>,
+        transport: impl ConnectTo<Agent> + 'static,
+        stop: CancellationToken,
+        on_connected: oneshot::Sender<ConnectionTo<Client>>,
+    ) -> Result<(), Error> {
+        let guard = self.try_attach().ok_or_else(|| internal_error("client already attached"))?;
+        self.serve_attached(transport, stop, guard, acp_utils::testing::CaptureConnection(on_connected)).await
+    }
+
     pub(crate) fn new(config: AcpStateConfig) -> Self {
         Self::with_login(config, Arc::new(CodexLogin))
     }
@@ -88,15 +167,17 @@ impl AcpState {
             config.runtime_factory,
         );
         Self {
+            client_slot: ClientSlot::default(),
             login,
             registry: SessionRegistry::new(),
+            stop: CancellationToken::new(),
             session_store: config.session_store,
             workspace_manager: config.workspace_manager,
             oauth_credential_store: config.oauth_credential_store,
             factory,
             telemetry: config.telemetry,
             mcp_capabilities: Mutex::new(client_capabilities()),
-            remote_cwd: config.remote_cwd,
+            cwd: config.cwd,
         }
     }
 
@@ -113,18 +194,12 @@ impl AcpState {
             .mcp(McpCapabilities::new().stdio(acp::McpStdioCapabilities::new()).http(acp::McpHttpCapabilities::new()))
             .meta(Some(aether_capabilities.to_meta()));
 
-        let remote_meta = if let Some(cwd) = &self.remote_cwd {
-            let active = self.registry.active_session().await;
-            Some(
-                RemoteServerInfo {
-                    cwd: active.as_ref().map_or_else(|| cwd.clone(), |session| session.inputs.cwd.clone()),
-                    session_id: active.map(|session| session.session_id),
-                }
-                .to_meta(),
-            )
-        } else {
-            None
-        };
+        let session_id = self.registry.session_id().await;
+        let cwd = session_id
+            .as_ref()
+            .and_then(|id| self.session_store.session_cwd(id.0.as_ref()))
+            .unwrap_or_else(|| self.cwd.clone());
+        let remote_meta = Some(RemoteServerInfo { cwd, session_id }.to_meta());
         Ok(InitializeResponse::new(ProtocolVersion::V2, Implementation::new("Aether", "0.1.0"))
             .meta(remote_meta)
             .capabilities(AgentCapabilities::new().session(session_capabilities))
@@ -161,7 +236,7 @@ impl AcpState {
         self.registry.stop().await;
         let created = prepared.start().await?;
         let response = NewSessionResponse::new(created.session_id.clone()).config_options(created.config_options);
-        self.registry.register(&created.session_id, created.inputs, created.handle).await;
+        self.registry.register(&created.session_id, created.handle).await;
         Ok(response)
     }
 
@@ -186,32 +261,32 @@ impl AcpState {
             Some(_) => return Err(Error::invalid_params()),
         };
 
-        if let Some(active) = self.registry.active_session().await.filter(|active| active.session_id == req.session_id)
-        {
-            if active.inputs.cwd != req.cwd.0 || active.inputs.mcp_servers != req.mcp_servers {
-                return Err(Error::invalid_params().data("live session cwd and MCP servers cannot be changed"));
-            }
-
-            let sender =
-                self.registry.lookup(Some(req.session_id.0.as_ref())).await.ok_or_else(Error::internal_error)?;
+        if let Some(sender) = self.registry.lookup(Some(req.session_id.0.as_ref())).await {
             let available = self.factory.available_models().await.to_vec();
             let (config_tx, config_rx) = oneshot::channel();
 
             sender
-                .send(SessionCommand::Attach { connection: cx.clone(), replay, available, reply: config_tx })
+                .send(SessionCommand::Attach {
+                    connection: cx.clone(),
+                    cwd: req.cwd.into_inner(),
+                    mcp_servers: req.mcp_servers,
+                    replay,
+                    available,
+                    reply: config_tx,
+                })
                 .await
                 .map_err(|_| Error::internal_error())?;
 
-            let options = config_rx.await.map_err(|_| Error::internal_error())?;
+            let options = config_rx.await.map_err(|_| Error::internal_error())??;
             return Ok(ResumeSessionResponse::new().config_options(options));
         }
 
         let mcp_capabilities = self.mcp_capabilities.lock().await.clone();
-        let prepared = self.factory.prepare_resume(req, cx, mcp_capabilities).await?;
+        let prepared = self.factory.prepare_resume(req, cx, mcp_capabilities, replay).await?;
         self.registry.stop().await;
         let created = prepared.start().await?;
         let response = ResumeSessionResponse::new().config_options(created.config_options);
-        self.registry.register(&created.session_id, created.inputs, created.handle).await;
+        self.registry.register(&created.session_id, created.handle).await;
         Ok(response)
     }
 
@@ -408,16 +483,13 @@ impl AcpState {
         Ok(())
     }
 
-    /// Detach output without interrupting the active session's work.
-    pub(crate) async fn detach_client(&self) -> Result<(), Error> {
-        let Some(sender) = self.registry.lookup(None).await else { return Ok(()) };
-        let (reply, response) = oneshot::channel();
-        sender.send(SessionCommand::Detach { reply }).await.map_err(|_| Error::internal_error())?;
-        response.await.map_err(|_| Error::internal_error())
+    pub(super) fn stop_token(&self) -> CancellationToken {
+        self.stop.clone()
     }
 
     /// Join the active actor when its host is shutting down.
-    pub(crate) async fn shutdown_all(&self) {
+    pub(super) async fn shutdown_all(&self) {
+        self.stop.cancel();
         self.registry.stop().await;
         if let Some(telemetry) = &self.telemetry {
             telemetry.shutdown_or_log();
@@ -429,8 +501,46 @@ impl AcpState {
         self.registry.stop().await;
         let id = init.session_id.clone();
         let handle = SessionActor::spawn(init).await.expect("test session actor spawns");
-        let inputs = SessionInputs { cwd: PathBuf::from("/tmp"), mcp_servers: Vec::new() };
-        self.registry.register(&id, inputs, handle).await;
+        self.registry.register(&id, handle).await;
+    }
+
+    async fn serve_attached(
+        self: &Arc<Self>,
+        transport: impl ConnectTo<Agent> + 'static,
+        stop: CancellationToken,
+        guard: ClientGuard,
+        runner: impl agent_client_protocol::RunWithConnectionTo<Client> + 'static,
+    ) -> Result<(), Error> {
+        let result = acp_agent_builder(self.clone())
+            .with_runner(runner)
+            .connect_with(transport, async move |cx| {
+                tokio::select! {
+                    biased;
+                    () = stop.cancelled() => {},
+                    () = cx.incoming_closed() => {},
+                }
+                Ok(())
+            })
+            .await;
+        guard.release().await;
+        result
+    }
+
+    async fn release_client(&self) {
+        self.detach_client().await;
+        self.client_slot.generation.send_modify(|generation| {
+            *generation += 1;
+            self.client_slot.occupied.store(false, Ordering::Release);
+        });
+    }
+
+    /// Detach output without interrupting the active session's work.
+    async fn detach_client(&self) {
+        let Some(sender) = self.registry.lookup(None).await else { return };
+        let (reply, response) = oneshot::channel();
+        if sender.send(SessionCommand::Detach { reply }).await.is_ok() {
+            let _ = response.await;
+        }
     }
 
     async fn broadcast_auth_state(&self, cx: &ConnectionTo<Client>) {
@@ -583,7 +693,7 @@ mod tests {
             provider_connections: ProviderConnectionOverrides::default(),
             telemetry: None,
             runtime_factory: None,
-            remote_cwd: None,
+            cwd: PathBuf::from("/tmp"),
         })
     }
 

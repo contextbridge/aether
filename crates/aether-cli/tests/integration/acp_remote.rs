@@ -17,35 +17,33 @@ use tokio::{
 };
 
 #[tokio::test(flavor = "current_thread")]
-async fn initialize_remote_metadata_tracks_live_session_and_omits_stdio() {
+async fn initialize_remote_metadata_always_tracks_live_session() {
     LocalSet::new()
         .run_until(async {
-            let mut stdio = AcpTestHarness::start().await;
-            assert!(
-                acp_utils::notifications::RemoteServerInfo::from_meta(stdio.initialize_response.meta.as_ref())
-                    .is_none()
-            );
-            stdio.shutdown().await;
-
-            let mut harness = AcpTestHarness::builder().persistent_host().remote_cwd("/server/default").start().await;
+            let mut harness = AcpTestHarness::start().await;
             let info = acp_utils::notifications::RemoteServerInfo::from_meta(harness.initialize_response.meta.as_ref())
                 .unwrap();
-            assert_eq!(info.cwd, std::path::PathBuf::from("/server/default"));
+            assert_eq!(info.cwd, std::path::PathBuf::from("/tmp"));
             assert!(info.session_id.is_none());
             let session = harness.insert_agent_switching_session().await;
             let id = session.session_id().clone();
+            harness.append_stored_session_in(
+                id.0.as_ref(),
+                "2026-09-14T00:00:00Z",
+                std::path::Path::new("/server/workspace"),
+            );
             harness.disconnect().await;
             harness.reconnect().await;
             let info = acp_utils::notifications::RemoteServerInfo::from_meta(harness.initialize_response.meta.as_ref())
                 .unwrap();
-            assert_eq!(info.cwd, std::path::PathBuf::from("/tmp"));
+            assert_eq!(info.cwd, std::path::PathBuf::from("/server/workspace"));
             assert_eq!(info.session_id, Some(id.clone()));
             harness.client_cx.send_request(CloseSessionRequest::new(id)).block_task().await.unwrap();
             harness.disconnect().await;
             harness.reconnect().await;
             let info = acp_utils::notifications::RemoteServerInfo::from_meta(harness.initialize_response.meta.as_ref())
                 .unwrap();
-            assert_eq!(info.cwd, std::path::PathBuf::from("/server/default"));
+            assert_eq!(info.cwd, std::path::PathBuf::from("/tmp"));
             assert!(info.session_id.is_none());
             harness.shutdown().await;
         })
@@ -89,7 +87,7 @@ async fn same_id_resume_preserves_paused_turn() {
 async fn persistent_host_reattaches_to_original_paused_turn() {
     LocalSet::new()
         .run_until(async {
-            let mut harness = AcpTestHarness::builder().persistent_host().start().await;
+            let mut harness = AcpTestHarness::start().await;
             let (id, release) = start_paused_turn(&mut harness).await;
 
             harness.disconnect().await;
@@ -113,7 +111,7 @@ async fn persistent_host_reattaches_to_original_paused_turn() {
 async fn completed_while_detached_is_persisted_and_replayed() {
     LocalSet::new()
         .run_until(async {
-            let mut harness = AcpTestHarness::builder().persistent_host().start().await;
+            let mut harness = AcpTestHarness::start().await;
             let (id, release, completed) = start_observed_paused_turn(&mut harness).await;
             harness.disconnect().await;
             assert_no_ended_turn(&harness, &id);
@@ -159,13 +157,13 @@ async fn completed_while_detached_is_persisted_and_replayed() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn connection_scoped_disconnect_stops_paused_turn() {
+async fn explicit_shutdown_stops_paused_turn() {
     LocalSet::new()
         .run_until(async {
             let mut harness = AcpTestHarness::start().await;
             let (id, _release) = start_paused_turn(&mut harness).await;
 
-            harness.disconnect().await;
+            harness.shutdown().await;
             assert_stopped_turn(&harness, &id);
         })
         .await;
@@ -175,7 +173,7 @@ async fn connection_scoped_disconnect_stops_paused_turn() {
 async fn persistent_host_only_stops_paused_turn_on_explicit_shutdown() {
     LocalSet::new()
         .run_until(async {
-            let mut harness = AcpTestHarness::builder().persistent_host().start().await;
+            let mut harness = AcpTestHarness::start().await;
             let (id, _release) = start_paused_turn(&mut harness).await;
 
             harness.disconnect().await;
@@ -215,7 +213,7 @@ async fn pending_and_detached_elicitations_cancel_without_stopping_session() {
     LocalSet::new()
         .run_until(async {
             for detach_before_elicitation in [false, true] {
-                let mut harness = AcpTestHarness::builder().persistent_host().start().await;
+                let mut harness = AcpTestHarness::start().await;
                 let (started, release) = harness.pause_prompt_expansion();
                 let mut results = harness.elicit_during_prompt_expansion();
                 let session = harness.insert_agent_switching_session().await;
@@ -269,7 +267,7 @@ async fn pending_and_detached_elicitations_cancel_without_stopping_session() {
 async fn repeated_attachment_replays_history_and_preserves_config_and_mcp() {
     LocalSet::new()
         .run_until(async {
-            let mut harness = AcpTestHarness::builder().persistent_host().start().await;
+            let mut harness = AcpTestHarness::start().await;
             let session = harness.insert_agent_switching_session().await;
             let id = session.session_id().clone();
             harness

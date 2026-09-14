@@ -1,6 +1,5 @@
-use super::agent::acp_agent_builder;
-use super::state::AcpState;
-use super::{AcpArgs, AcpRunError, initialize_host};
+use super::state::{AcpState, ClientGuard};
+use super::{AcpArgs, AcpRunError, create_acp_state};
 use acp_utils::websocket::WebSocketTransport;
 use std::fs::canonicalize;
 use std::future::Future;
@@ -9,12 +8,15 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use thiserror::Error;
-use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 #[cfg(unix)]
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
+use tokio_tungstenite::tungstenite::{
+    handshake::server::{ErrorResponse, Request},
+    http::StatusCode,
+};
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 #[derive(clap::Args, Debug)]
@@ -56,27 +58,26 @@ pub async fn run_server(args: ServerArgs) -> Result<(), ServerRunError> {
         })
         .map_err(|source| ServerRunError::Workspace { path: args.cwd, source })?;
 
-    let server = AcpServer::bind(args.listen).await?;
-
-    let state = initialize_host(args.acp, &cwd, Some(cwd.clone()))?;
+    let state = Arc::new(create_acp_state(args.acp, &cwd)?);
     info!(address = %args.listen, cwd = %cwd.display(), "Starting Aether ACP WebSocket server");
-    let result = server.run(state.clone(), shutdown_signal()).await;
+    let result = serve(state.clone(), args.listen).await;
     state.shutdown_all().await;
     result
 }
 
-/// Owns the listener and its connection tasks. Dropping the server closes the
-/// listener and aborts connections; normal completion also joins those tasks.
+/// Owns networking, not session lifetime. Drop closes the listener and aborts
+/// connection tasks; explicit shutdown also waits for output detachment.
 pub(crate) struct AcpServer {
     listener: TcpListener,
-    admission: Arc<Semaphore>,
+    state: Arc<AcpState>,
     connections: JoinSet<()>,
+    stop: CancellationToken,
 }
 
 impl AcpServer {
-    pub(crate) async fn bind(address: SocketAddr) -> Result<Self, ServerRunError> {
+    pub(crate) async fn bind(address: SocketAddr, state: Arc<AcpState>) -> Result<Self, ServerRunError> {
         let listener = TcpListener::bind(address).await.map_err(|source| ServerRunError::Bind { address, source })?;
-        Ok(Self { listener, admission: Arc::new(Semaphore::new(1)), connections: JoinSet::new() })
+        Ok(Self { listener, stop: state.stop_token().child_token(), state, connections: JoinSet::new() })
     }
 
     #[cfg(any(test, feature = "testing"))]
@@ -84,53 +85,41 @@ impl AcpServer {
         self.listener.local_addr()
     }
 
-    #[cfg(any(test, feature = "testing"))]
-    pub(crate) fn admission(&self) -> Arc<Semaphore> {
-        self.admission.clone()
+    pub(crate) async fn run_until(
+        mut self,
+        stop: impl Future<Output = Result<(), ServerRunError>>,
+    ) -> Result<(), ServerRunError> {
+        let result = tokio::select! {
+            result = self.run() => result,
+            result = stop => result,
+        };
+        self.shutdown().await;
+        result
     }
 
-    pub(crate) async fn run(
-        mut self,
-        state: Arc<AcpState>,
-        shutdown: impl Future<Output = io::Result<()>>,
-    ) -> Result<(), ServerRunError> {
-        tokio::pin!(shutdown);
-        let result = loop {
+    async fn run(&mut self) -> Result<(), ServerRunError> {
+        loop {
             tokio::select! {
                 biased;
-                result = &mut shutdown => break result.map_err(ServerRunError::Signal),
+                () = self.stop.cancelled() => return Ok(()),
                 result = self.connections.join_next(), if !self.connections.is_empty() => {
                     if let Some(Err(error)) = result {
                         warn!(%error, "ACP connection task failed");
                     }
                 }
                 accepted = self.listener.accept() => {
-                    let (socket, peer) = match accepted {
-                        Ok(accepted) => accepted,
-                        Err(error) => break Err(ServerRunError::Accept(error)),
-                    };
-                    let permit = self.admission.clone().try_acquire_owned();
-                    let state = state.clone();
-                    self.connections.spawn(async move {
-                        match permit {
-                            Ok(permit) => {
-                                serve_connection(socket, state, peer).await;
-                                drop(permit);
-                            }
-                            Err(_) => {
-                                if let Err(error) = reject_connection(socket).await {
-                                    warn!(%peer, %error, "Failed to reject occupied ACP connection");
-                                }
-                            }
-                        }
-                    });
+                    let (socket, peer) = accepted.map_err(ServerRunError::Accept)?;
+                    self.accept(socket, peer);
                 }
             }
-        };
+        }
+    }
 
-        let Self { listener, mut connections, .. } = self;
-        drop(listener);
-        connections.abort_all();
+    /// Close admission and join all networking, leaving the host running.
+    pub(crate) async fn shutdown(self) {
+        self.stop.cancel();
+        drop(self.listener);
+        let mut connections = self.connections;
         while let Some(result) = connections.join_next().await {
             if let Err(error) = result
                 && !error.is_cancelled()
@@ -138,28 +127,57 @@ impl AcpServer {
                 warn!(%error, "ACP connection task failed during shutdown");
             }
         }
-        result
+    }
+
+    fn accept(&mut self, socket: TcpStream, peer: SocketAddr) {
+        let stop = self.stop.clone();
+        let guard = self.state.try_attach();
+        self.connections.spawn(serve_connection(socket, peer, guard, stop));
     }
 }
 
-async fn serve_connection(socket: TcpStream, state: Arc<AcpState>, peer: SocketAddr) {
-    let Ok(socket) = tokio_tungstenite::accept_async(socket).await else {
-        warn!(%peer, "ACP WebSocket handshake failed");
-        return;
+#[expect(clippy::result_large_err, reason = "tungstenite's handshake callback requires an HTTP error response")]
+async fn serve_connection(socket: TcpStream, peer: SocketAddr, guard: Option<ClientGuard>, stop: CancellationToken) {
+    let handshake = tokio::select! {
+        biased;
+        () = stop.cancelled() => {
+            if let Some(guard) = guard {
+                guard.release().await;
+            }
+            return;
+        },
+        result = tokio_tungstenite::accept_hdr_async(socket, |_request: &Request, response| {
+            if guard.is_some() {
+                Ok(response)
+            } else {
+                let mut error = ErrorResponse::new(Some("client already attached".to_string()));
+                *error.status_mut() = StatusCode::CONFLICT;
+                Err(error)
+            }
+        }) => result,
     };
-    if let Err(error) = acp_agent_builder(state.clone()).connect_to(WebSocketTransport::new(socket)).await {
+    let socket = match handshake {
+        Ok(socket) => socket,
+        Err(error) => {
+            warn!(%peer, %error, "ACP WebSocket handshake failed");
+            if let Some(guard) = guard {
+                guard.release().await;
+            }
+            return;
+        }
+    };
+    if let Err(error) =
+        guard.expect("successful handshake owns the client").serve(WebSocketTransport::new(socket), stop).await
+    {
         warn!(%peer, %error, "ACP connection failed");
     }
-    if let Err(error) = state.detach_client().await {
-        warn!(%peer, %error, "Failed to detach ACP client");
-    }
 }
 
-async fn reject_connection(mut socket: TcpStream) -> io::Result<()> {
-    socket
-        .write_all(b"HTTP/1.1 409 Conflict\r\nContent-Type: text/plain\r\nContent-Length: 23\r\nConnection: close\r\n\r\nclient already attached")
-        .await?;
-    socket.shutdown().await
+async fn serve(state: Arc<AcpState>, listen: SocketAddr) -> Result<(), ServerRunError> {
+    AcpServer::bind(listen, state)
+        .await?
+        .run_until(async { shutdown_signal().await.map_err(ServerRunError::Signal) })
+        .await
 }
 
 async fn shutdown_signal() -> io::Result<()> {

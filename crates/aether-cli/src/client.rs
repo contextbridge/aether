@@ -1,5 +1,6 @@
 use acp_utils::websocket::WebSocketTransport;
 use agent_client_protocol::schema::v2::SessionId;
+use std::path::PathBuf;
 use thiserror::Error;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite;
@@ -24,7 +25,7 @@ pub struct ClientArgs {
 
     /// Directory for client UI logs (default: /tmp/wisp-logs).
     #[arg(long)]
-    pub log_dir: Option<String>,
+    pub log_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Error)]

@@ -34,7 +34,7 @@ fn remote_client_parser_defaults_and_overrides() {
     .unwrap()
     .args;
     assert_eq!(args.session.as_deref(), Some("saved"));
-    assert_eq!(args.log_dir.as_deref(), Some("/tmp/client-logs"));
+    assert_eq!(args.log_dir.as_deref(), Some(std::path::Path::new("/tmp/client-logs")));
     let request = args.connection_request().unwrap();
     assert_eq!(request.uri().scheme_str(), Some("wss"));
     assert_eq!(request.uri().path_and_query().unwrap().as_str(), "/acp?target=build");
@@ -61,7 +61,7 @@ async fn remote_client_rejects_invalid_inputs_before_connecting() {
 async fn remote_client_reports_occupied_server_without_disturbing_owner() {
     LocalSet::new()
         .run_until(Box::pin(async {
-            let mut harness = AcpTestHarness::builder().persistent_host().remote_cwd("/server/default").start().await;
+            let mut harness = AcpTestHarness::start().await;
             let inserted = harness.insert_agent_switching_session().await;
             let id = inserted.session_id().clone();
             let server = harness.serve_websocket().await;
@@ -71,14 +71,19 @@ async fn remote_client_reports_occupied_server_without_disturbing_owner() {
             assert_eq!(session.response.session_id, id);
             assert!(matches!(run_client(args).await, Err(ClientRunError::ServerOccupied)));
             session.client.handle.prompt(PromptRequest::new(id.clone(), vec!["hello".into()])).await.unwrap();
+            let mut detached = server.subscribe();
+            let seen = *detached.borrow();
             session.client.handle.disconnect().await;
-            server.wait_until_detached().await;
+            detached.wait_for(|g| *g > seen).await.unwrap();
             let (socket, _) = tokio_tungstenite::connect_async(server.url()).await.unwrap();
             let session = wisp::Session::connect_remote_to(WebSocketTransport::new(socket), None).await.unwrap();
             assert_eq!(session.response.session_id, id);
+            let mut detached = server.subscribe();
+            let seen = *detached.borrow();
             session.client.handle.disconnect().await;
-            server.wait_until_detached().await;
+            detached.wait_for(|g| *g > seen).await.unwrap();
             server.shutdown().await;
+            harness.shutdown().await;
         }))
         .await;
 }
@@ -87,14 +92,16 @@ async fn remote_client_reports_occupied_server_without_disturbing_owner() {
 async fn remote_client_fresh_startup_then_live_and_saved_resume() {
     LocalSet::new()
         .run_until(Box::pin(async {
-            let mut harness = AcpTestHarness::builder().persistent_host().remote_cwd("/tmp").start().await;
+            let mut harness = AcpTestHarness::start().await;
             let server = harness.serve_websocket().await;
             let (socket, _) = tokio_tungstenite::connect_async(server.url()).await.unwrap();
             let session = wisp::Session::connect_remote_to(WebSocketTransport::new(socket), None).await.unwrap();
             let id = session.response.session_id.clone();
             assert_eq!(session.working_dir, std::path::PathBuf::from("/tmp"));
+            let mut detached = server.subscribe();
+            let seen = *detached.borrow();
             session.client.handle.disconnect().await;
-            server.wait_until_detached().await;
+            detached.wait_for(|g| *g > seen).await.unwrap();
             for saved in [false, true] {
                 let (socket, _) = tokio_tungstenite::connect_async(server.url()).await.unwrap();
                 let session =
@@ -105,10 +112,13 @@ async fn remote_client_fresh_startup_then_live_and_saved_resume() {
                 if !saved {
                     session.client.handle.request(CloseSessionRequest::new(id.clone())).await.unwrap();
                 }
+                let mut detached = server.subscribe();
+                let seen = *detached.borrow();
                 session.client.handle.disconnect().await;
-                server.wait_until_detached().await;
+                detached.wait_for(|g| *g > seen).await.unwrap();
             }
             server.shutdown().await;
+            harness.shutdown().await;
         }))
         .await;
 }
