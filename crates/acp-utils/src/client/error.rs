@@ -13,12 +13,4 @@ pub enum AcpClientError {
     /// `prompt`, etc.).
     #[error("ACP protocol error: {0}")]
     Protocol(#[source] agent_client_protocol::Error),
-
-    /// A restoration still owns the incoming replay stream.
-    #[error("an ACP restoration is still pending")]
-    RestorationPending,
-
-    /// The restoration was cancelled before its snapshot was committed.
-    #[error("ACP restoration was cancelled")]
-    RestorationCancelled,
 }

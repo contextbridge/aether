@@ -15,7 +15,6 @@ async fn plain_resume_forwards_target_updates_without_collecting_history() {
         let resume = fake.resume("one", false);
         let (request, responder) = fake.resumes.recv().await.unwrap();
         assert!(request.replay_from.is_none());
-        fake.send(running_notification("inactive"));
         fake.send(running_notification("one"));
         assert!(matches!(fake.client.event_rx.recv().await, Some(AcpEvent::SessionUpdate(notification)) if notification.session_id == SessionId::new("one")));
         responder.respond(ResumeSessionResponse::new()).unwrap();
@@ -26,7 +25,7 @@ async fn plain_resume_forwards_target_updates_without_collecting_history() {
 }
 
 #[tokio::test]
-async fn prompts_do_not_gate_requests_but_restorations_cannot_overlap() {
+async fn prompts_and_resumes_do_not_gate_requests() {
     LocalSet::new()
         .run_until(async {
             let mut fake = TurnTest::connect().await;
@@ -38,11 +37,14 @@ async fn prompts_do_not_gate_requests_but_restorations_cannot_overlap() {
             let (_, responder) = fake.resumes.recv().await.unwrap();
             assert!(fake.client.handle.request(ListSessionsRequest::new()).await.unwrap().sessions.is_empty());
             for replay in [false, true] {
-                fake.assert_resume_pending("other", replay).await;
+                let other = fake.resume("other", replay);
+                let (_, responder) = fake.resumes.recv().await.unwrap();
+                responder.respond(ResumeSessionResponse::new()).unwrap();
+                other.await.unwrap().unwrap();
             }
             responder.respond(ResumeSessionResponse::new()).unwrap();
             resume.await.unwrap().unwrap();
-            assert!(matches!(fake.client.event_rx.recv().await, Some(AcpEvent::SessionResumed(_))));
+            assert!(fake.client.event_rx.try_recv().is_err());
             first.accept().await;
             second.accept().await;
             fake.client.handle.disconnect().await;
@@ -100,14 +102,6 @@ impl TurnTest {
         spawn_local(async move {
             if replay { handle.resume_session_with_replay(request).await } else { handle.resume_session(request).await }
         })
-    }
-
-    async fn assert_resume_pending(&mut self, session: &str, replay: bool) {
-        let result = self.resume(session, replay).await.unwrap();
-        assert!(
-            matches!(result, Err(AcpClientError::RestorationPending)),
-            "expected pending restoration, got {result:?}"
-        );
     }
 
     fn send(&self, notification: UpdateSessionNotification) {

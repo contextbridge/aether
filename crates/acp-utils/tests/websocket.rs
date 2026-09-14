@@ -171,11 +171,8 @@ async fn final_turn_and_replay_events_are_delivered_before_buffered_close() -> R
                     .await?;
                 if replay {
                     client.handle.resume_session_with_replay(ResumeSessionRequest::new("session", "/tmp")).await?;
-                    let Some(AcpEvent::SessionResumed(snapshot)) = client.event_rx.recv().await else {
-                        return Err(TestError::Unexpected("expected replay snapshot before close"));
-                    };
-                    assert!(matches!(snapshot.replay.as_slice(), [AcpEvent::SessionUpdate(notification)]
-                    if **notification == idle_notification("session", Some(StopReason::EndTurn))));
+                    assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::SessionUpdate(notification))
+                    if *notification == idle_notification("session", Some(StopReason::EndTurn))));
                 } else {
                     client.handle.prompt(PromptRequest::new("session", vec![])).await?;
                     assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::SessionUpdate(notification))
