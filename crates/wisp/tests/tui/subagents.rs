@@ -318,7 +318,7 @@ mod progress_indicator_tests {
     #[test]
     fn compaction_active_shows_compacting_message() {
         let mut ui = TestUi::new();
-        ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        ui.acp_event(compaction_update("compaction", acp::CompactionStatus::InProgress));
         ui.draw();
         let viewport = ui.viewport_text();
         assert!(viewport.contains("Compacting context"), "{viewport}");
@@ -327,8 +327,8 @@ mod progress_indicator_tests {
     #[test]
     fn compaction_inactive_hides_indicator() {
         let mut ui = TestUi::new();
-        ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
-        ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: false }));
+        ui.acp_event(compaction_update("compaction", acp::CompactionStatus::InProgress));
+        ui.acp_event(compaction_update("compaction", acp::CompactionStatus::Completed));
         ui.draw();
         let viewport = ui.viewport_text();
         assert!(!viewport.contains("Compacting context"), "{viewport}");
@@ -338,7 +338,7 @@ mod progress_indicator_tests {
     fn compaction_during_prompt_shows_esc_hint() {
         let mut ui = TestUi::new();
         ui.submit("hello");
-        ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        ui.acp_event(compaction_update("compaction", acp::CompactionStatus::InProgress));
         ui.resize(120, 30);
         ui.draw();
         let full = ui.viewport_text();
@@ -414,7 +414,7 @@ mod progress_indicator_tests {
         ]));
         ui.key(key(KeyCode::Enter));
         let _ = ui.next_agent_command().unwrap();
-        ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        ui.acp_event(compaction_update("compaction", acp::CompactionStatus::InProgress));
         ui.draw();
         let viewport = ui.viewport_text();
         assert!(viewport.contains("Moving workspace"), "{viewport}");
@@ -425,7 +425,7 @@ mod progress_indicator_tests {
     fn compaction_precedence_over_agent_work() {
         let mut ui = TestUi::new();
         ui.submit("hello");
-        ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        ui.acp_event(compaction_update("compaction", acp::CompactionStatus::InProgress));
         ui.draw();
         let viewport = ui.viewport_text();
         assert!(viewport.contains("Compacting context"), "{viewport}");
@@ -442,7 +442,7 @@ mod progress_indicator_tests {
     #[test]
     fn wants_tick_true_during_compaction() {
         let mut app = make_app();
-        app.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        app.acp_event(compaction_update("compaction", acp::CompactionStatus::InProgress));
         assert!(app.app().wants_tick(), "wants_tick should be true during compaction");
     }
 
@@ -537,7 +537,7 @@ mod progress_indicator_tests {
     fn context_cleared_resets_progress_state() {
         let mut ui = TestUi::new();
         ui.submit("hello");
-        ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        ui.acp_event(compaction_update("compaction", acp::CompactionStatus::InProgress));
         ui.acp_event(AcpEvent::ContextCleared(ContextClearedParams {}));
 
         ui.draw();
@@ -551,7 +551,7 @@ mod progress_indicator_tests {
     fn new_session_resets_progress_state() {
         let mut ui = TestUi::new();
         ui.submit("hello");
-        ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        ui.acp_event(compaction_update("compaction", acp::CompactionStatus::InProgress));
         ui.complete_prompt(acp::StopReason::EndTurn);
         ui.type_text("/clear");
         ui.key(key(KeyCode::Tab));
@@ -567,7 +567,7 @@ mod progress_indicator_tests {
     fn session_loaded_resets_progress_state() {
         let mut ui = TestUi::new();
         ui.submit("hello");
-        ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        ui.acp_event(compaction_update("compaction", acp::CompactionStatus::InProgress));
         ui.complete_prompt(acp::StopReason::EndTurn);
         ui.begin_resume("loaded-session", "/tmp");
         ui.deliver_result(session_loaded("loaded-session", Vec::new()));

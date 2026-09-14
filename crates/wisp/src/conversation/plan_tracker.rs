@@ -1,4 +1,3 @@
-use acp_utils::AETHER_PLAN_ENTRY_CANCELLED_STATUS;
 use agent_client_protocol::schema::v2::{self as acp};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -99,11 +98,7 @@ impl PlanTracker {
 }
 
 fn terminal_status(status: &acp::PlanEntryStatus) -> bool {
-    match status {
-        acp::PlanEntryStatus::Completed => true,
-        acp::PlanEntryStatus::Other(value) => value == AETHER_PLAN_ENTRY_CANCELLED_STATUS,
-        _ => false,
-    }
+    matches!(status, acp::PlanEntryStatus::Completed | acp::PlanEntryStatus::Cancelled)
 }
 
 #[cfg(test)]
@@ -291,7 +286,7 @@ mod tests {
     fn a_new_plan_id_replaces_the_plan_and_restarts_its_grace_timers() {
         let mut tracker = PlanTracker::default();
         let now = Instant::now();
-        let cancelled = PlanEntryStatus::Other(AETHER_PLAN_ENTRY_CANCELLED_STATUS.into());
+        let cancelled = PlanEntryStatus::Cancelled;
 
         tracker.replace("a".into(), vec![entry("Task A", PlanEntryStatus::Completed)], now);
         tracker.replace(

@@ -2,10 +2,10 @@ pub(crate) use acp_utils::client::AcpEvent;
 pub(crate) use acp_utils::config_meta::SelectOptionMeta;
 pub(crate) use acp_utils::config_option_id::ConfigOptionId;
 pub(crate) use acp_utils::notifications::{
-    AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, McpNotification, McpServerAuthCapability,
-    McpServerStatus, McpServerStatusEntry, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn,
-    SubAgentEvent, SubAgentProgressParams, SubAgentToolRequest, SubAgentToolResult, WorkspaceEntry,
-    WorkspaceListResponse, WorkspaceMoveResponse,
+    AuthMethodsUpdatedParams, ContextClearedParams, McpNotification, McpServerAuthCapability, McpServerStatus,
+    McpServerStatusEntry, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn, SubAgentEvent,
+    SubAgentProgressParams, SubAgentToolRequest, SubAgentToolResult, WorkspaceEntry, WorkspaceListResponse,
+    WorkspaceMoveResponse,
 };
 pub(crate) use acp_utils::testing::test_connection;
 pub(crate) use agent_client_protocol::schema::v2::{
@@ -27,8 +27,8 @@ pub(crate) use wisp::app::ForegroundOperation;
 pub(crate) use wisp::command::{AgentCommand, Command, CommandResult, FilesystemCommand};
 pub(crate) use wisp::testing::{
     BackendEvent, CountingBackend, FakeGit, RecordingBackend, StreamContent, TestUi, TestUiBuilder, assert_buffer_eq,
-    buffer_text, chunk_message, has_cell, line_text, row_containing, row_text, rows_with_background, session_update,
-    text_chunk, thought_chunk, tool_completed,
+    buffer_text, chunk_message, compaction_update, has_cell, line_text, row_containing, row_text, rows_with_background,
+    session_update, text_chunk, thought_chunk, tool_completed,
 };
 
 pub(crate) use wisp::attachment::{AttachmentKind, PromptAttachment, build_attachments, classify_attachment};

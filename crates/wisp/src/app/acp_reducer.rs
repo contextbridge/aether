@@ -26,11 +26,6 @@ impl App {
                     self.on_session_update(&notification.update);
                 }
             }
-            AcpEvent::ContextCompaction(params) => {
-                if self.conversation.progress_indicator().accepts_activity() {
-                    self.conversation.turn_mut().set_compaction_active(params.active);
-                }
-            }
             AcpEvent::ContextCleared(_) => {
                 self.reset_conversation();
             }
@@ -162,6 +157,11 @@ impl App {
             self.observe_activity(update);
         }
         match update {
+            SessionUpdate::CompactionUpdate(update) => {
+                if self.conversation.progress_indicator().accepts_activity() {
+                    self.conversation.turn_mut().apply_compaction(update);
+                }
+            }
             SessionUpdate::StateUpdate(StateUpdate::Idle(idle)) if self.waiting_for_response() => {
                 let status = match idle.stop_reason {
                     Some(acp::StopReason::Cancelled) => ToolStatus::Error("cancelled".to_string()),
@@ -255,7 +255,7 @@ impl App {
     pub(super) fn finish_prompt(&mut self, terminal_status: &ToolStatus) {
         let was_in_flight = self.waiting_for_response();
         self.foreground.finish_prompt();
-        self.conversation.turn_mut().set_compaction_active(false);
+        self.conversation.turn_mut().clear_compactions();
         self.conversation.progress_indicator_mut().prompt_finished();
         self.conversation.finish_turn(terminal_status);
         if was_in_flight && matches!(terminal_status, ToolStatus::Success) {

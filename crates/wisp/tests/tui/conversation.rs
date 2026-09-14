@@ -446,12 +446,10 @@ fn tool_failed_status(id: &str) -> AcpEvent {
 fn completed_bash_tool_renders_the_command_with_shell_syntax_highlighting() {
     let mut ui = TestUi::with_dimensions(100, 15);
     ui.submit("run shell command");
-    let mut meta = serde_json::Map::new();
-    meta.insert(acp_utils::AETHER_TOOL_NAME_META_KEY.to_string(), "coding__bash".into());
     let tool = acp::ToolCallUpdate::new("bash-1")
         .title("Bash")
         .raw_input(serde_json::json!({"command": "if true; then echo $HOME; fi", "description": "Check shell syntax"}))
-        .meta(meta);
+        .name("coding__bash");
     ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(tool)));
     ui.acp_event(tool_completed_status("bash-1"));
 
@@ -481,17 +479,14 @@ fn completed_bash_tool_renders_the_command_with_shell_syntax_highlighting() {
 fn bash_tool_keeps_highlighting_after_title_and_display_metadata_updates() {
     let mut ui = TestUi::with_dimensions(100, 15);
     ui.submit("run shell command");
-    let mut tool_meta = serde_json::Map::new();
-    tool_meta.insert(acp_utils::AETHER_TOOL_NAME_META_KEY.to_string(), "coding__bash".into());
     let command = "cargo test";
     let tool = acp::ToolCallUpdate::new("bash-1")
         .title("Bash")
         .raw_input(serde_json::json!({"command": command}))
-        .meta(tool_meta);
+        .name("coding__bash");
     ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(tool)));
     let mut update_meta = serde_json::Map::new();
     update_meta.insert("display_value".to_string(), format!("{command} (exit 0)").into());
-    update_meta.insert(acp_utils::AETHER_TOOL_NAME_META_KEY.to_string(), "coding__bash".into());
     ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(
         acp::ToolCallUpdate::new("bash-1").title("Ran").status(acp::ToolCallStatus::Completed).meta(update_meta),
     )));
@@ -517,12 +512,10 @@ fn bash_tool_keeps_highlighting_after_title_and_display_metadata_updates() {
 fn non_bash_tool_with_a_command_argument_keeps_generic_rendering() {
     let mut ui = TestUi::with_dimensions(100, 15);
     ui.submit("run other command tool");
-    let mut meta = serde_json::Map::new();
-    meta.insert(acp_utils::AETHER_TOOL_NAME_META_KEY.to_string(), "other__execute".into());
     let tool = acp::ToolCallUpdate::new("other-1")
         .title("Execute")
         .raw_input(serde_json::json!({"command": "if true; then echo no; fi"}))
-        .meta(meta);
+        .name("other__execute");
     ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(tool)));
     ui.acp_event(tool_completed_status("other-1"));
 

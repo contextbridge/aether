@@ -1,4 +1,3 @@
-use acp_utils::AETHER_TOOL_NAME_META_KEY;
 use acp_utils::notifications::{SubAgentEvent, SubAgentProgressParams};
 use agent_client_protocol::schema::{MaybeUndefined, v2 as acp};
 
@@ -144,7 +143,7 @@ impl ToolCall {
     }
 
     fn kind(&self) -> ToolKind {
-        tool_kind(self.meta_str(AETHER_TOOL_NAME_META_KEY).unwrap_or_else(|| self.title()))
+        tool_kind(self.protocol.name.value().map_or_else(|| self.title(), String::as_str))
     }
 
     /// Re-derives the coarse status from the merged protocol update; `Undefined`
@@ -153,6 +152,7 @@ impl ToolCall {
         self.status = match self.protocol.status.value() {
             Some(acp::ToolCallStatus::Completed) => ToolStatus::Success,
             Some(acp::ToolCallStatus::Failed) => ToolStatus::Error("failed".to_string()),
+            Some(acp::ToolCallStatus::Cancelled) => ToolStatus::Error("cancelled".to_string()),
             _ => ToolStatus::Running,
         };
     }

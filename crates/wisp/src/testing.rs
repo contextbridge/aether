@@ -21,7 +21,6 @@ use crate::session::terminal::inline_viewport_height;
 use crate::session::workspace_status::WorkspaceStatus;
 use crate::settings::UiSettings;
 use crate::surfaces::composer::ComposerLayout;
-use acp_utils::AETHER_TOOL_NAME_META_KEY;
 use acp_utils::client::AcpEvent;
 use acp_utils::notifications::{
     AetherCapabilities, SubAgentEvent, SubAgentProgressParams, SubAgentToolRequest, SubAgentToolResult,
@@ -1661,6 +1660,10 @@ pub fn session_update(update: acp::SessionUpdate) -> AcpEvent {
     acp::UpdateSessionNotification::new(SessionId::new("test-session"), update).into()
 }
 
+pub fn compaction_update(id: &str, status: acp::CompactionStatus) -> AcpEvent {
+    session_update(acp::SessionUpdate::CompactionUpdate(acp::CompactionUpdate::new(id, status)))
+}
+
 pub fn text_chunk(text: &str) -> AcpEvent {
     text_chunk_with_id("assistant", text)
 }
@@ -1681,7 +1684,7 @@ pub fn thought_chunk(text: &str) -> AcpEvent {
 
 fn seed_bash_tool(id: &str) -> AcpEvent {
     let mut tool_call = ToolCallUpdate::new(id.to_string()).title(format!("Run {id}"));
-    tool_call.meta = MaybeUndefined::Value(seed_tool_meta("bash"));
+    tool_call.name = MaybeUndefined::Value("bash".into());
     tool_call.raw_input = MaybeUndefined::Value(json!({ "command": "cargo test --module writer" }));
     session_update(SessionUpdate::ToolCallUpdate(tool_call))
 }
@@ -1694,14 +1697,8 @@ fn seed_edit_tool(id: &str, turn: usize) -> AcpEvent {
 
 fn seed_spawn_tool(id: &str) -> AcpEvent {
     let mut tool_call = ToolCallUpdate::new(id.to_string()).title(format!("Spawning sub-agents ({id})"));
-    tool_call.meta = MaybeUndefined::Value(seed_tool_meta("spawn_subagent"));
+    tool_call.name = MaybeUndefined::Value("spawn_subagent".into());
     session_update(SessionUpdate::ToolCallUpdate(tool_call))
-}
-
-fn seed_tool_meta(tool_name: &str) -> acp::Meta {
-    let mut meta = serde_json::Map::new();
-    meta.insert(AETHER_TOOL_NAME_META_KEY.to_string(), json!(tool_name));
-    meta
 }
 
 pub fn text_diff(path: &str, old: &str, new: &str) -> acp::Diff {

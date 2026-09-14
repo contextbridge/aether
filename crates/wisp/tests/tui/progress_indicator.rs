@@ -1,5 +1,4 @@
 use acp_utils::client::AcpEvent;
-use acp_utils::notifications::ContextCompactionParams;
 use agent_client_protocol::schema::v2 as acp;
 
 use super::support::*;
@@ -72,7 +71,7 @@ fn updates_after_prompt_completion_do_not_restart_progress() {
     ui.acp_event(text_chunk("late chunk"));
     ui.acp_event(thought_chunk("late thought"));
     ui.acp_event(tool_call("late-tool", "Late tool"));
-    ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+    ui.acp_event(compaction_update("compaction", acp::CompactionStatus::InProgress));
 
     assert!(
         ui.app().conversation_items().iter().any(|item| item.text().is_some_and(|text| text.contains("late chunk")))
@@ -180,10 +179,10 @@ fn thought_upserts_replace_and_clear_only_the_ephemeral_preview() {
 #[test]
 fn hidden_agent_transition_discards_stale_reasoning() {
     let (mut ui, _) = progress_ui();
-    ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+    ui.acp_event(compaction_update("compaction", acp::CompactionStatus::InProgress));
     ui.acp_event(thought_chunk("stale reasoning"));
     ui.acp_event(text_chunk("answering"));
-    ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: false }));
+    ui.acp_event(compaction_update("compaction", acp::CompactionStatus::Completed));
     ui.acp_event(thought_chunk("fresh reasoning"));
 
     ui.assert_viewport_contains("fresh reasoning");

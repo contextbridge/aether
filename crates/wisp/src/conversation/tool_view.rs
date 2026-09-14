@@ -60,6 +60,11 @@ pub(crate) fn tool_lines(
                 }
                 Err(error) => tracing::debug!(%error, "Cannot render tool diff patch"),
             }
+        } else {
+            for change in &diff.changes {
+                let label = Line::styled(diff_change_label(change), Style::new().fg(theme.muted));
+                lines.extend(indent_lines(wrap_line(label, content_width), padding));
+            }
         }
     }
     if !tool.sub_agents.is_empty() {
@@ -67,6 +72,17 @@ pub(crate) fn tool_lines(
         lines.extend(sub_agent_tree_lines(&tool.sub_agents, content_width, spinner_tick, padding, theme, highlighter));
     }
     lines
+}
+
+fn diff_change_label(change: &acp::DiffChange) -> String {
+    match &change.operation {
+        acp::DiffChangeOperation::Add(change) => format!("A {}", change.path.0.display()),
+        acp::DiffChangeOperation::Delete(change) => format!("D {}", change.path.0.display()),
+        acp::DiffChangeOperation::Modify(change) => format!("M {}", change.path.0.display()),
+        acp::DiffChangeOperation::Move(change) => format!("R {} → {}", change.old_path.0.display(), change.path.0.display()),
+        acp::DiffChangeOperation::Copy(change) => format!("C {} → {}", change.old_path.0.display(), change.path.0.display()),
+        _ => "Unknown file change".into(),
+    }
 }
 
 /// Tree of sub-agents beneath a spawning tool, each with its recent tool calls.
