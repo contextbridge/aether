@@ -7,7 +7,7 @@ Sessions represent a conversation with an agent. Each session has its own messag
 
 ## How sessions work
 
-Sessions are managed by the agent, not the terminal UI. Local Aether startup asks the agent to create a new session. A [remote client](/aether/running/remote/) instead resumes the server's live session, creating one only when none is active. The agent stores the session state — messages, config, and context — and the UI renders it.
+Sessions are managed by the agent, not the terminal UI. Local Aether startup asks the agent to create a new session. A [remote client](/aether/running/remote/) either resumes the server's session (if one exists), or creates a new session.
 
 ## Starting a new session
 
@@ -24,14 +24,6 @@ This tells the agent to create a fresh session. The conversation history is clea
 ```
 
 This asks the agent for a list of previous sessions. A picker appears listing available sessions — type to fuzzy-search by title or path. When the terminal is wide enough, a preview panel shows each session's path, last-updated time, model, mode, tool-call count, and recent messages. Select one to restore it — the conversation history and configuration for that saved session are loaded from the agent.
-
-## Remote detach and reattachment
-
-Exiting `aether client` with the normal exit confirmation disconnects without cancelling or closing the session. Accepted work continues on the server. Run the same client command again to reattach to the same live runtime and session ID, including while a turn is running. The UI receives completed history, current configuration and running/idle state, then live updates. Partial chunks and pending dialogs are not guaranteed to return; pending interactions are cancelled rather than replayed.
-
-Escape retains its separate cancellation behavior. An unexpected connection loss exits without automatically reconnecting or retrying prompts. Reattach and inspect the transcript before resubmitting an uncertain prompt.
-
-Resuming the **live session** does not restart work. Selecting a **different saved session** deliberately stops the old runtime and restores saved conversation context. `/clear` is also deliberate replacement, not detach. After a server restart, use `aether client --session <session-id>` (with your server URL when needed) or `/resume` to choose saved history; interrupted tool execution cannot be restored.
 
 ## Session state
 
