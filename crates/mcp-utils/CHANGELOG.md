@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.6.3...aether-mcp-utils-v0.7.0) - 2026-09-14
+
+### Added
+
+- [**breaking**] Migrate to ACP 2.0 ([#460](https://github.com/contextbridge/aether/pull/460))
+
 ## [0.6.3](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.6.2...aether-mcp-utils-v0.6.3) - 2026-09-11
 
 ### Fixed

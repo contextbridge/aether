@@ -1,6 +1,6 @@
 [package]
 name = "aether-mcp-servers"
-version = "0.5.3"
+version = "0.6.0"
 edition = "2024"
 description = "Built-in MCP tool servers for the Aether AI agent framework"
 license = "MIT"
@@ -85,7 +85,7 @@ libc = { workspace = true }
 rmcp = { workspace = true, features = ["elicitation", "macros", "server"] }
 schemars = { workspace = true }
 clap = { workspace = true, features = ["env"] }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", default-features = false, version = "0.6.3" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", default-features = false, version = "0.7.0" }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.14" }
 aether-lspd = { path = "../aether-lspd", optional = true, version = "0.1.36" }
 futures = { workspace = true, optional = true }
@@ -109,16 +109,16 @@ tempfile = { workspace = true, optional = true }
 
 # subagents feature
 aether-auth = { path = "../aether-auth", optional = true, version = "0.1.14", features = ["keyring"] }
-aether-core = { package = "aether-agent-core", path = "../aether-core", optional = true, version = "0.7.3" }
-aether-project = { path = "../aether-project", optional = true, version = "0.5.42" }
-llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.8.3" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", optional = true, version = "0.8.0" }
+aether-project = { path = "../aether-project", optional = true, version = "0.5.43" }
+llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.9.0" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 aether-lspd = { path = "../aether-lspd", features = ["testing"], version = "0.1.36" }
 mcp-servers = { package = "aether-mcp-servers", path = ".", features = ["test-helpers"] }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", features = ["client"], version = "0.6.3" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", features = ["client"], version = "0.7.0" }
 
 [[bin]]
 name = "mcp-servers-stdio"

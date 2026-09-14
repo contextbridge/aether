@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0](https://github.com/contextbridge/aether/compare/aether-wisp-v0.6.3...aether-wisp-v0.7.0) - 2026-09-14
+
+### Added
+
+- Aether CLI supports running a local client and remote agent via websockets ([#463](https://github.com/contextbridge/aether/pull/463))
+- [**breaking**] Migrate to ACP 2.0 ([#460](https://github.com/contextbridge/aether/pull/460))
+- [**breaking**] Replace syntax highlighting and themes with clankerdiff ([#454](https://github.com/contextbridge/aether/pull/454))
+- *(acp-utils)* add WebSocket transport and reliable client lifecycle ([#452](https://github.com/contextbridge/aether/pull/452))
+
 ## [0.6.3](https://github.com/contextbridge/aether/compare/aether-wisp-v0.6.2...aether-wisp-v0.6.3) - 2026-09-11
 
 ### Other
