@@ -1,15 +1,13 @@
 #![cfg(feature = "testing")]
 
-use acp_utils::client::AcpEvent;
 use acp_utils::testing::{duplex_pair, idle_notification, running_notification};
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v2::{
     AgentCapabilities, AuthMethodId, CancelSessionNotification, ContentBlock, Implementation, InitializeRequest,
-    LoginAuthRequest, NewSessionRequest, NewSessionResponse, PromptCapabilities, PromptImageCapabilities,
-    PromptRequest, PromptResponse, ReplayFrom, ResumeSessionRequest, ResumeSessionResponse, SessionCapabilities,
-    SessionConfigId, SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption, SessionId,
-    SetSessionConfigOptionRequest, TextContent,
+    LoginAuthRequest, NewSessionResponse, PromptCapabilities, PromptImageCapabilities, PromptRequest, PromptResponse,
+    ReplayFrom, ResumeSessionRequest, ResumeSessionResponse, SessionCapabilities, SessionConfigId, SessionConfigOption,
+    SessionConfigOptionValue, SessionConfigSelectOption, SessionId, SetSessionConfigOptionRequest, TextContent,
 };
 use agent_client_protocol::schema::v2::{
     ContentChunk, SessionUpdate, StopReason, UpdateSessionNotification, UserMessage,
