@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.24](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.23...aether-llm-codegen-v0.2.24) - 2026-09-15
+
+### Added
+
+- support explicitly disabling model reasoning ([#477](https://github.com/contextbridge/aether/pull/477))
+
 ## [0.2.23](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.22...aether-llm-codegen-v0.2.23) - 2026-09-09
 
 ### Other

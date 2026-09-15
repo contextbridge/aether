@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.2](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.5.1...aether-acp-utils-v0.5.2) - 2026-09-15
+
+### Added
+
+- support explicitly disabling model reasoning ([#477](https://github.com/contextbridge/aether/pull/477))
+
+### Fixed
+
+- preserve acp websocket messages during bursts ([#469](https://github.com/contextbridge/aether/pull/469))
+
+### Other
+
+- release ([#466](https://github.com/contextbridge/aether/pull/466))
+
 ## [0.5.1](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.5.0...aether-acp-utils-v0.5.1) - 2026-09-14
 
 ### Fixed
