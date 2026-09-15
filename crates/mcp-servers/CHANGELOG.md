@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.2](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.6.1...aether-mcp-servers-v0.6.2) - 2026-09-15
+
+### Fixed
+
+- preserve text responses and safely truncate web fetch content ([#476](https://github.com/contextbridge/aether/pull/476))
+
+### Other
+
+- scheduled code-cleanup ([#451](https://github.com/contextbridge/aether/pull/451))
+- release ([#466](https://github.com/contextbridge/aether/pull/466))
+
 ## [0.6.1](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.6.0...aether-mcp-servers-v0.6.1) - 2026-09-14
 
 ### Other

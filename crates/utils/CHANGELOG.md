@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.15](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.14...aether-utils-v0.2.15) - 2026-09-15
+
+### Added
+
+- support explicitly disabling model reasoning ([#477](https://github.com/contextbridge/aether/pull/477))
+
 ## [0.2.14](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.13...aether-utils-v0.2.14) - 2026-08-27
 
 ### Other

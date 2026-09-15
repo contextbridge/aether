@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2](https://github.com/contextbridge/aether/compare/aether-sessions-v0.3.1...aether-sessions-v0.3.2) - 2026-09-15
+
+### Other
+
+- release ([#466](https://github.com/contextbridge/aether/pull/466))
+
 ## [0.3.1](https://github.com/contextbridge/aether/compare/aether-sessions-v0.3.0...aether-sessions-v0.3.1) - 2026-09-14
 
 ### Other
