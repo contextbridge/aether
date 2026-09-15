@@ -181,44 +181,47 @@ export const deferredToolsConfigCode = `{
 
 export const runHeadlessCode = `$ aether headless "refactor auth"`;
 export const runAcpCode = `$ aether acp`;
-export const rustLibraryCode = `use aether_core::core::{Prompt, agent};
-use aether_core::events::{AgentEvent, Command, MessageEvent, TurnEvent};
-use llm::{ProviderFactory, providers::anthropic::AnthropicProvider};
+export const rustLibraryCode = [
+  "use aether_core::core::{Prompt, agent};",
+  "use aether_core::events::{AgentEvent, Command, MessageEvent, TurnEvent};",
+  "use llm::{ProviderFactory, providers::anthropic::AnthropicProvider};",
+  "",
+  "let provider = AnthropicProvider::from_env()",
+  "    .await?",
+  '    .with_model("claude-sonnet-4-5");',
+  "",
+  "let (user_tx, mut agent_rx, handle) = agent(provider)",
+  '    .system_prompt(Prompt::text("You are a concise assistant."))',
+  "    .spawn()",
+  "    .await?;",
+  "",
+  'user_tx.send(Command::text("Review this diff")).await?;',
+  "",
+  "while let Some(message) = agent_rx.recv().await {",
+  "    match message {",
+  '        AgentEvent::Message(MessageEvent::Text { chunk, .. }) => print!("{chunk}"),',
+  "        AgentEvent::Turn(TurnEvent::Ended { .. }) => break,",
+  "        _ => {}",
+  "    }",
+  "}",
+  "",
+  "handle.await_completion().await;",
+].join("\n");
 
-let provider = AnthropicProvider::from_env()
-.await?
-.with_model("claude-sonnet-4-5");
-
-let (user_tx, mut agent_rx, handle) = agent(provider)
-.system_prompt(Prompt::text("You are a concise assistant."))
-.spawn()
-.await?;
-
-user_tx.send(Command::text("Review this diff")).await?;
-
-while let Some(message) = agent\*rx.recv().await {
-match message {
-AgentEvent::Message(MessageEvent::Text { chunk, .. }) => print!("{chunk}"),
-AgentEvent::Turn(TurnEvent::Ended { .. }) => break,
-
-- => {}
-  }
-  }
-
-handle.await_completion().await;`;
-
-export const typescriptLibraryCode = `import { AetherSession } from "@aether-agent/sdk";
-
-await using session = await AetherSession.start({
-cwd: process.cwd(),
-agent: "Build",
-});
-
-for await (const message of session.prompt("Review this diff")) {
-if (message.type === "session_update") {
-console.log(message.update);
-}
-}`;
+export const typescriptLibraryCode = [
+  'import { AetherSession } from "@aether-agent/sdk";',
+  "",
+  "await using session = await AetherSession.start({",
+  "  cwd: process.cwd(),",
+  '  agent: "Build",',
+  "});",
+  "",
+  'for await (const message of session.prompt("Review this diff")) {',
+  '  if (message.type === "session_update") {',
+  "    console.log(message.update);",
+  "  }",
+  "}",
+].join("\n");
 
 <Hero />
 
