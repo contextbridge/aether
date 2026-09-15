@@ -12,10 +12,10 @@ elif [[ "$IS_PULL_REQUEST" == "true" ]]; then
     number=$ISSUE_NUMBER
     if [[ $(jq -r '.comment.body' "$GITHUB_EVENT_PATH") == "/aether implement-plan" ]]; then
         task_kind=implement_plan
-        agent="Simple Builder"
+        agent="Complex Builder"
     else
         task_kind=pull_request_feedback
-        agent="Simple Builder"
+        agent="Complex Builder"
     fi
 else
     task_kind=issue
