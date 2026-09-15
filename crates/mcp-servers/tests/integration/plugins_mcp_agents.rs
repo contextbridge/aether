@@ -1,4 +1,4 @@
-use crate::common::{TestClient, TestResult, production_client_info, test_client_info, test_error};
+use crate::common::{TestClient, TestResult, create_test_files, production_client_info, test_client_info, test_error};
 use aether_auth::FakeOAuthCredentialStore;
 use aether_core::agent_spec::McpConfigSource;
 use aether_core::core::AgentDeps;
@@ -15,7 +15,6 @@ use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, DetailedTask, GetTaskParams,
     TaskPayload, TaskStatus,
 };
-use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -389,19 +388,6 @@ async fn call_subagent_through_manager(
         }
     }
     Err(test_error("MCP manager stopped before returning the tool result").into())
-}
-
-fn create_test_files(files: &[(&str, &str)]) -> TempDir {
-    let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    for (path, content) in files {
-        let full_path = temp_dir.path().join(path);
-        if let Some(parent) = full_path.parent() {
-            fs::create_dir_all(parent).unwrap_or_else(|_| panic!("Failed to create directory for {path}"));
-        }
-        fs::write(&full_path, content).unwrap_or_else(|_| panic!("Failed to write file {path}"));
-    }
-
-    temp_dir
 }
 
 fn create_project_with_invocable_agent() -> TempDir {

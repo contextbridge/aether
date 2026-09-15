@@ -11,185 +11,168 @@ use agent_client_protocol::schema::v2::{
 };
 use llm::{LlmResponse, testing::FakeLlmProvider};
 use std::sync::Arc;
-use tokio::{
-    sync::{Notify, mpsc, oneshot},
-    task::LocalSet,
-};
+use tokio::sync::{Notify, mpsc, oneshot};
+use tokio::task::LocalSet;
 
 #[tokio::test(flavor = "current_thread")]
 async fn initialize_remote_metadata_always_tracks_live_session() {
-    LocalSet::new()
-        .run_until(async {
-            let mut harness = AcpTestHarness::start().await;
-            let info = acp_utils::notifications::RemoteServerInfo::from_meta(harness.initialize_response.meta.as_ref())
-                .unwrap();
-            assert_eq!(info.cwd, std::path::PathBuf::from("/tmp"));
-            assert!(info.session_id.is_none());
-            let session = harness.insert_agent_switching_session().await;
-            let id = session.session_id().clone();
-            harness.append_stored_session_in(
-                id.0.as_ref(),
-                "2026-09-14T00:00:00Z",
-                std::path::Path::new("/server/workspace"),
-            );
-            harness.disconnect().await;
-            harness.reconnect().await;
-            let info = acp_utils::notifications::RemoteServerInfo::from_meta(harness.initialize_response.meta.as_ref())
-                .unwrap();
-            assert_eq!(info.cwd, std::path::PathBuf::from("/server/workspace"));
-            assert_eq!(info.session_id, Some(id.clone()));
-            harness.client_cx.send_request(CloseSessionRequest::new(id)).block_task().await.unwrap();
-            harness.disconnect().await;
-            harness.reconnect().await;
-            let info = acp_utils::notifications::RemoteServerInfo::from_meta(harness.initialize_response.meta.as_ref())
-                .unwrap();
-            assert_eq!(info.cwd, std::path::PathBuf::from("/tmp"));
-            assert!(info.session_id.is_none());
-            harness.shutdown().await;
-        })
-        .await;
+    AcpTestHarness::run(|mut harness| async move {
+        let info =
+            acp_utils::notifications::RemoteServerInfo::from_meta(harness.initialize_response.meta.as_ref()).unwrap();
+        assert_eq!(info.cwd, std::path::PathBuf::from("/tmp"));
+        assert!(info.session_id.is_none());
+        let session = harness.insert_agent_switching_session().await;
+        let id = session.session_id().clone();
+        harness.append_stored_session_in(
+            id.0.as_ref(),
+            "2026-09-14T00:00:00Z",
+            std::path::Path::new("/server/workspace"),
+        );
+        harness.disconnect().await;
+        harness.reconnect().await;
+        let info =
+            acp_utils::notifications::RemoteServerInfo::from_meta(harness.initialize_response.meta.as_ref()).unwrap();
+        assert_eq!(info.cwd, std::path::PathBuf::from("/server/workspace"));
+        assert_eq!(info.session_id, Some(id.clone()));
+        harness.client_cx.send_request(CloseSessionRequest::new(id)).block_task().await.unwrap();
+        harness.disconnect().await;
+        harness.reconnect().await;
+        let info =
+            acp_utils::notifications::RemoteServerInfo::from_meta(harness.initialize_response.meta.as_ref()).unwrap();
+        assert_eq!(info.cwd, std::path::PathBuf::from("/tmp"));
+        assert!(info.session_id.is_none());
+        harness.shutdown().await;
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn gated_turn_completes_without_resume() {
-    LocalSet::new()
-        .run_until(async {
-            let mut harness = AcpTestHarness::start().await;
-            let (id, release) = start_paused_turn(&mut harness).await;
-            finish_original_turn(&mut harness, &id, release).await;
-            harness.shutdown().await;
-        })
-        .await;
+    AcpTestHarness::run(|mut harness| async move {
+        let (id, release) = start_paused_turn(&mut harness).await;
+        finish_original_turn(&mut harness, &id, release).await;
+        harness.shutdown().await;
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn same_id_resume_preserves_paused_turn() {
-    LocalSet::new()
-        .run_until(async {
-            let mut harness = AcpTestHarness::start().await;
-            let (id, release) = start_paused_turn(&mut harness).await;
+    AcpTestHarness::run(|mut harness| async move {
+        let (id, release) = start_paused_turn(&mut harness).await;
 
-            resume(&harness, &id).await;
-            loop {
-                match harness.peer.next_session_notification().await.update {
-                    SessionUpdate::StateUpdate(StateUpdate::Running(_)) => break,
-                    SessionUpdate::StateUpdate(StateUpdate::Idle(_)) => panic!("reattachment lost running state"),
-                    _ => {}
-                }
+        resume(&harness, &id).await;
+        loop {
+            match harness.peer.next_session_notification().await.update {
+                SessionUpdate::StateUpdate(StateUpdate::Running(_)) => break,
+                SessionUpdate::StateUpdate(StateUpdate::Idle(_)) => panic!("reattachment lost running state"),
+                _ => {}
             }
-            finish_original_turn(&mut harness, &id, release).await;
-            harness.shutdown().await;
-        })
-        .await;
+        }
+        finish_original_turn(&mut harness, &id, release).await;
+        harness.shutdown().await;
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn persistent_host_reattaches_to_original_paused_turn() {
-    LocalSet::new()
-        .run_until(async {
-            let mut harness = AcpTestHarness::start().await;
-            let (id, release) = start_paused_turn(&mut harness).await;
+    AcpTestHarness::run(|mut harness| async move {
+        let (id, release) = start_paused_turn(&mut harness).await;
 
-            harness.disconnect().await;
-            assert_no_ended_turn(&harness, &id);
-            harness.reconnect().await;
-            resume(&harness, &id).await;
-            loop {
-                match harness.peer.next_session_notification().await.update {
-                    SessionUpdate::StateUpdate(StateUpdate::Running(_)) => break,
-                    SessionUpdate::StateUpdate(StateUpdate::Idle(_)) => panic!("reattachment lost running state"),
-                    _ => {}
-                }
+        harness.disconnect().await;
+        assert_no_ended_turn(&harness, &id);
+        harness.reconnect().await;
+        resume(&harness, &id).await;
+        loop {
+            match harness.peer.next_session_notification().await.update {
+                SessionUpdate::StateUpdate(StateUpdate::Running(_)) => break,
+                SessionUpdate::StateUpdate(StateUpdate::Idle(_)) => panic!("reattachment lost running state"),
+                _ => {}
             }
-            finish_original_turn(&mut harness, &id, release).await;
-            harness.shutdown().await;
-        })
-        .await;
+        }
+        finish_original_turn(&mut harness, &id, release).await;
+        harness.shutdown().await;
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn completed_while_detached_is_persisted_and_replayed() {
-    LocalSet::new()
-        .run_until(async {
-            let mut harness = AcpTestHarness::start().await;
-            let (id, release, completed) = start_observed_paused_turn(&mut harness).await;
-            harness.disconnect().await;
-            assert_no_ended_turn(&harness, &id);
-            release.notify_one();
-            completed.await.expect("original provider completes without a client");
-            harness.reconnect().await;
-            resume(&harness, &id).await;
-            let mut users = 0;
-            let mut responses = 0;
-            loop {
-                match harness.peer.next_session_notification().await.update {
-                    SessionUpdate::UserMessage(_) => users += 1,
-                    SessionUpdate::AgentMessage(message) => {
-                        assert!(message.content.value().unwrap().iter().any(
-                            |block| matches!(block, ContentBlock::Text(text) if text.text == "before gate after gate")
-                        ));
-                        responses += 1;
-                    }
-                    SessionUpdate::StateUpdate(StateUpdate::Idle(_)) => break,
-                    _ => {}
+    AcpTestHarness::run(|mut harness| async move {
+        let (id, release, completed) = start_observed_paused_turn(&mut harness).await;
+        harness.disconnect().await;
+        assert_no_ended_turn(&harness, &id);
+        release.notify_one();
+        completed.await.expect("original provider completes without a client");
+        harness.reconnect().await;
+        resume(&harness, &id).await;
+        let mut users = 0;
+        let mut responses = 0;
+        loop {
+            match harness.peer.next_session_notification().await.update {
+                SessionUpdate::UserMessage(_) => users += 1,
+                SessionUpdate::AgentMessage(message) => {
+                    assert!(message.content.value().unwrap().iter().any(
+                        |block| matches!(block, ContentBlock::Text(text) if text.text == "before gate after gate")
+                    ));
+                    responses += 1;
                 }
+                SessionUpdate::StateUpdate(StateUpdate::Idle(_)) => break,
+                _ => {}
             }
-            assert_eq!((users, responses), (1, 1));
-            assert_eq!(harness.live_runtime_count(), 1);
-            assert_eq!(
-                harness
-                    .stored_events(&id)
-                    .iter()
-                    .filter(|event| matches!(
-                        event,
-                        SessionEvent::Agent(AgentEvent::Message(MessageEvent::Text { is_complete: true, .. }))
-                    ))
-                    .count(),
-                1
-            );
-            assert!(harness.stored_events(&id).iter().any(|event| matches!(
-                event,
-                SessionEvent::Agent(AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Completed }))
-            )));
-            harness.shutdown().await;
-        })
-        .await;
+        }
+        assert_eq!((users, responses), (1, 1));
+        assert_eq!(harness.live_runtime_count(), 1);
+        assert_eq!(
+            harness
+                .stored_events(&id)
+                .iter()
+                .filter(|event| matches!(
+                    event,
+                    SessionEvent::Agent(AgentEvent::Message(MessageEvent::Text { is_complete: true, .. }))
+                ))
+                .count(),
+            1
+        );
+        assert!(harness.stored_events(&id).iter().any(|event| matches!(
+            event,
+            SessionEvent::Agent(AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Completed }))
+        )));
+        harness.shutdown().await;
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn explicit_shutdown_stops_paused_turn() {
-    LocalSet::new()
-        .run_until(async {
-            let mut harness = AcpTestHarness::start().await;
-            let (id, _release) = start_paused_turn(&mut harness).await;
+    AcpTestHarness::run(|mut harness| async move {
+        let (id, _release) = start_paused_turn(&mut harness).await;
 
-            harness.shutdown().await;
-            assert_stopped_turn(&harness, &id);
-        })
-        .await;
+        harness.shutdown().await;
+        assert_stopped_turn(&harness, &id);
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn persistent_host_only_stops_paused_turn_on_explicit_shutdown() {
-    LocalSet::new()
-        .run_until(async {
-            let mut harness = AcpTestHarness::start().await;
-            let (id, _release) = start_paused_turn(&mut harness).await;
+    AcpTestHarness::run(|mut harness| async move {
+        let (id, _release) = start_paused_turn(&mut harness).await;
 
-            harness.disconnect().await;
-            assert_no_ended_turn(&harness, &id);
-            harness.reconnect().await;
-            assert_no_ended_turn(&harness, &id);
-            harness.shutdown().await;
-            assert_stopped_turn(&harness, &id);
-        })
-        .await;
+        harness.disconnect().await;
+        assert_no_ended_turn(&harness, &id);
+        harness.reconnect().await;
+        assert_no_ended_turn(&harness, &id);
+        harness.shutdown().await;
+        assert_stopped_turn(&harness, &id);
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn invalid_live_resume_leaves_original_turn_running() {
-    LocalSet::new().run_until(async {
-        let mut harness = AcpTestHarness::start().await;
+    AcpTestHarness::run(|mut harness| async move {
         let (id, release) = start_paused_turn(&mut harness).await;
         for overrides in [
             serde_json::json!({"cwd": "/different-workspace"}),
@@ -205,7 +188,8 @@ async fn invalid_live_resume_leaves_original_turn_running() {
         }
         finish_original_turn(&mut harness, &id, release).await;
         harness.shutdown().await;
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -265,103 +249,99 @@ async fn pending_and_detached_elicitations_cancel_without_stopping_session() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn repeated_attachment_replays_history_and_preserves_config_and_mcp() {
-    LocalSet::new()
-        .run_until(async {
-            let mut harness = AcpTestHarness::start().await;
-            let session = harness.insert_agent_switching_session().await;
-            let id = session.session_id().clone();
-            harness
-                .client_cx
-                .send_request(PromptRequest::new(id.clone(), vec!["first prompt".into()]))
-                .block_task()
-                .await
-                .expect("first prompt accepted");
-            harness.expect_idle(&id, StopReason::EndTurn).await;
-            let configured = harness
-                .client_cx
-                .send_request(SetSessionConfigOptionRequest::new(id.clone(), "reasoning_effort", "high"))
-                .block_task()
-                .await
-                .expect("configure live session");
-            for cycle in 0..4 {
-                harness.disconnect().await;
-                harness.reconnect().await;
-                let mut request = ResumeSessionRequest::new(id.clone(), AbsolutePath::new("/tmp"));
-                if cycle < 3 {
-                    request = request.replay_from(ReplayFrom::Start(ReplayFromStart::new()));
-                }
-                let response = harness.client_cx.send_request(request).block_task().await.expect("reattach");
-                assert_eq!(response.config_options, configured.config_options);
-                let mut users = 0;
-                let mut agents = 0;
-                loop {
-                    match harness.peer.next_session_notification().await.update {
-                        SessionUpdate::UserMessage(_) => users += 1,
-                        SessionUpdate::AgentMessage(_) => agents += 1,
-                        SessionUpdate::StateUpdate(StateUpdate::Idle(_)) => break,
-                        SessionUpdate::StateUpdate(StateUpdate::Running(_)) => panic!("idle session reported running"),
-                        _ => {}
-                    }
-                }
-                assert_eq!((users, agents), if cycle < 3 { (1, 1) } else { (0, 0) });
-                harness.expect_mcp_server_status_exact(&["planner-mcp"]).await;
-                harness.expect_available_commands(&["plan"], &["edit"]).await;
+    AcpTestHarness::run(|mut harness| async move {
+        let session = harness.insert_agent_switching_session().await;
+        let id = session.session_id().clone();
+        harness
+            .client_cx
+            .send_request(PromptRequest::new(id.clone(), vec!["first prompt".into()]))
+            .block_task()
+            .await
+            .expect("first prompt accepted");
+        harness.expect_idle(&id, StopReason::EndTurn).await;
+        let configured = harness
+            .client_cx
+            .send_request(SetSessionConfigOptionRequest::new(id.clone(), "reasoning_effort", "high"))
+            .block_task()
+            .await
+            .expect("configure live session");
+        for cycle in 0..4 {
+            harness.disconnect().await;
+            harness.reconnect().await;
+            let mut request = ResumeSessionRequest::new(id.clone(), AbsolutePath::new("/tmp"));
+            if cycle < 3 {
+                request = request.replay_from(ReplayFrom::Start(ReplayFromStart::new()));
             }
-            harness
-                .client_cx
-                .send_request(PromptRequest::new(id.clone(), vec!["next prompt".into()]))
-                .block_task()
-                .await
-                .expect("next prompt accepted");
-            harness.expect_idle(&id, StopReason::EndTurn).await;
-            session.planner().assert_saw_exactly(&["first prompt", "planner reply", "next prompt"]);
-            harness.shutdown().await;
-        })
-        .await;
+            let response = harness.client_cx.send_request(request).block_task().await.expect("reattach");
+            assert_eq!(response.config_options, configured.config_options);
+            let mut users = 0;
+            let mut agents = 0;
+            loop {
+                match harness.peer.next_session_notification().await.update {
+                    SessionUpdate::UserMessage(_) => users += 1,
+                    SessionUpdate::AgentMessage(_) => agents += 1,
+                    SessionUpdate::StateUpdate(StateUpdate::Idle(_)) => break,
+                    SessionUpdate::StateUpdate(StateUpdate::Running(_)) => panic!("idle session reported running"),
+                    _ => {}
+                }
+            }
+            assert_eq!((users, agents), if cycle < 3 { (1, 1) } else { (0, 0) });
+            harness.expect_mcp_server_status_exact(&["planner-mcp"]).await;
+            harness.expect_available_commands(&["plan"], &["edit"]).await;
+        }
+        harness
+            .client_cx
+            .send_request(PromptRequest::new(id.clone(), vec!["next prompt".into()]))
+            .block_task()
+            .await
+            .expect("next prompt accepted");
+        harness.expect_idle(&id, StopReason::EndTurn).await;
+        session.planner().assert_saw_exactly(&["first prompt", "planner reply", "next prompt"]);
+        harness.shutdown().await;
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn new_and_restored_sessions_retain_their_client_mcp_inputs() {
-    LocalSet::new()
-        .run_until(async {
-            let mut harness = AcpTestHarness::start().await;
-            let servers = vec![
-                serde_json::from_value(serde_json::json!({
-                    "type": "http", "name": "client-mcp", "url": "http://localhost/mcp", "headers": []
-                }))
-                .unwrap(),
-            ];
-            let created = harness
-                .client_cx
-                .send_request(NewSessionRequest::new(AbsolutePath::new("/tmp")).mcp_servers(servers.clone()))
-                .block_task()
-                .await
-                .expect("create session with client MCP inputs");
-            for restore in [false, true] {
-                if restore {
-                    harness
-                        .client_cx
-                        .send_request(CloseSessionRequest::new(created.session_id.clone()))
-                        .block_task()
-                        .await
-                        .expect("close before saved restore");
-                }
-                let request = ResumeSessionRequest::new(created.session_id.clone(), AbsolutePath::new("/tmp"))
-                    .mcp_servers(servers.clone());
-                harness.client_cx.send_request(request).block_task().await.expect("matching inputs accepted");
-                assert!(
-                    harness
-                        .client_cx
-                        .send_request(ResumeSessionRequest::new(created.session_id.clone(), AbsolutePath::new("/tmp")))
-                        .block_task()
-                        .await
-                        .is_err(),
-                    "omitting client MCP configuration must not rebuild a live session"
-                );
+    AcpTestHarness::run(|mut harness| async move {
+        let servers = vec![
+            serde_json::from_value(serde_json::json!({
+                "type": "http", "name": "client-mcp", "url": "http://localhost/mcp", "headers": []
+            }))
+            .unwrap(),
+        ];
+        let created = harness
+            .client_cx
+            .send_request(NewSessionRequest::new(AbsolutePath::new("/tmp")).mcp_servers(servers.clone()))
+            .block_task()
+            .await
+            .expect("create session with client MCP inputs");
+        for restore in [false, true] {
+            if restore {
+                harness
+                    .client_cx
+                    .send_request(CloseSessionRequest::new(created.session_id.clone()))
+                    .block_task()
+                    .await
+                    .expect("close before saved restore");
             }
-            harness.shutdown().await;
-        })
-        .await;
+            let request = ResumeSessionRequest::new(created.session_id.clone(), AbsolutePath::new("/tmp"))
+                .mcp_servers(servers.clone());
+            harness.client_cx.send_request(request).block_task().await.expect("matching inputs accepted");
+            assert!(
+                harness
+                    .client_cx
+                    .send_request(ResumeSessionRequest::new(created.session_id.clone(), AbsolutePath::new("/tmp")))
+                    .block_task()
+                    .await
+                    .is_err(),
+                "omitting client MCP configuration must not rebuild a live session"
+            );
+        }
+        harness.shutdown().await;
+    })
+    .await;
 }
 
 async fn start_paused_turn(harness: &mut AcpTestHarness) -> (SessionId, Arc<Notify>) {

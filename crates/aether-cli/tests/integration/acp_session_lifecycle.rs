@@ -10,14 +10,12 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use llm::LlmResponse;
 use llm::testing::FakeLlmProvider;
-use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::Notify;
-use tokio::task::LocalSet;
 
 #[tokio::test(flavor = "current_thread")]
 async fn list_sessions_paginates_sorted_results() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         for index in 0..51 {
             harness
                 .append_stored_session(&format!("session-{index:02}"), &format!("2026-05-{:02}T00:00:00Z", index + 1));
@@ -38,7 +36,7 @@ async fn list_sessions_paginates_sorted_results() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn malformed_and_stale_list_cursors_are_rejected() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         let malformed =
             harness.client_cx.send_request(ListSessionsRequest::new().cursor("not-base64")).block_task().await;
         assert!(malformed.is_err());
@@ -59,7 +57,7 @@ async fn malformed_and_stale_list_cursors_are_rejected() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn terminal_list_cursor_returns_an_empty_page() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         harness.append_stored_session("last", "2026-05-01T00:00:00Z");
         let cursor = URL_SAFE_NO_PAD.encode(
             serde_json::json!({
@@ -77,7 +75,7 @@ async fn terminal_list_cursor_returns_an_empty_page() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn close_removes_idle_session_but_preserves_persisted_log() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         let fake = harness.insert_agent_switching_session().await;
         harness.append_stored_session("agent-switching-session", "2026-05-01T00:00:00Z");
         harness.append_stored_prompt("agent-switching-session", "persisted prompt");
@@ -104,7 +102,7 @@ async fn close_removes_idle_session_but_preserves_persisted_log() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn close_cancels_prompt_before_returning() {
-    with_harness(|mut harness| async move {
+    AcpTestHarness::run(|mut harness| async move {
         let release = Arc::new(Notify::new());
         let llm = FakeLlmProvider::new(vec![vec![LlmResponse::Start, LlmResponse::text("hello"), LlmResponse::done()]])
             .pause_turn_after(0, 1, Arc::clone(&release));
@@ -135,7 +133,7 @@ async fn close_cancels_prompt_before_returning() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn resume_replays_persisted_transcript_over_the_server_connection() {
-    with_harness(|mut harness| async move {
+    AcpTestHarness::run(|mut harness| async move {
         let session_id = "replay-session";
         harness.append_stored_session(session_id, "2026-05-01T00:00:00Z");
         harness.append_stored_prompt(session_id, "prior user");
@@ -165,7 +163,7 @@ async fn resume_replays_persisted_transcript_over_the_server_connection() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn resume_restores_transcript_without_replay_and_replaces_active_session() {
-    with_harness(|mut harness| async move {
+    AcpTestHarness::run(|mut harness| async move {
         let active = harness.insert_agent_switching_session().await;
         let session_id = SessionId::new("different-saved-session");
         harness.append_stored_session(session_id.0.as_ref(), "2026-05-01T00:00:00Z");
@@ -203,7 +201,7 @@ async fn resume_restores_transcript_without_replay_and_replaces_active_session()
 
 #[tokio::test(flavor = "current_thread")]
 async fn resume_and_close_reject_unknown_sessions() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         let resume = harness
             .client_cx
             .send_request(ResumeSessionRequest::new("missing", AbsolutePath::new("/tmp")))
@@ -219,7 +217,7 @@ async fn resume_and_close_reject_unknown_sessions() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn disconnect_during_startup_leaves_no_detached_runtime() {
-    with_harness(|mut harness| async move {
+    AcpTestHarness::run(|mut harness| async move {
         harness.append_stored_session("active", "2026-05-01T00:00:00Z");
         let mut pending = harness.pause_next_runtime();
         let resume =
@@ -244,19 +242,6 @@ async fn next_history(harness: &mut AcpTestHarness) -> SessionUpdate {
             return update;
         }
     }
-}
-
-async fn with_harness<F, Fut>(body: F)
-where
-    F: FnOnce(AcpTestHarness) -> Fut,
-    Fut: Future<Output = ()>,
-{
-    LocalSet::new()
-        .run_until(async move {
-            let harness = AcpTestHarness::start().await;
-            body(harness).await;
-        })
-        .await;
 }
 
 async fn list(harness: &AcpTestHarness, request: ListSessionsRequest) -> ListSessionsResponse {

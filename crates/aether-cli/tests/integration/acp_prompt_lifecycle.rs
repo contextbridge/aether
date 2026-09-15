@@ -9,23 +9,20 @@ use tokio::{sync::Notify, task::LocalSet};
 
 #[tokio::test(flavor = "current_thread")]
 async fn cancel_during_mcp_prompt_expansion_does_not_wait_for_the_server() {
-    LocalSet::new()
-        .run_until(async {
-            let mut harness = AcpTestHarness::start().await;
-            let (started, _release) = harness.pause_prompt_expansion();
-            let session = harness.insert_agent_switching_session().await;
-            let id = session.session_id().clone();
-            let prompt =
-                harness.client_cx.send_request(PromptRequest::new(id.clone(), vec!["/plan".into()])).block_task();
-            started.notified().await;
-            harness.client_cx.send_notification(CancelSessionNotification::new(id.clone())).unwrap();
-            prompt.await.unwrap();
-            harness.expect_idle(&id, StopReason::Cancelled).await;
-            session.planner().assert_never_ran();
-            harness.shutdown().await;
-            assert_eq!(harness.live_runtime_count(), 0);
-        })
-        .await;
+    AcpTestHarness::run(|mut harness| async move {
+        let (started, _release) = harness.pause_prompt_expansion();
+        let session = harness.insert_agent_switching_session().await;
+        let id = session.session_id().clone();
+        let prompt = harness.client_cx.send_request(PromptRequest::new(id.clone(), vec!["/plan".into()])).block_task();
+        started.notified().await;
+        harness.client_cx.send_notification(CancelSessionNotification::new(id.clone())).unwrap();
+        prompt.await.unwrap();
+        harness.expect_idle(&id, StopReason::Cancelled).await;
+        session.planner().assert_never_ran();
+        harness.shutdown().await;
+        assert_eq!(harness.live_runtime_count(), 0);
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -82,19 +79,17 @@ async fn provider_failure_after_acceptance_reports_error_and_idle() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn unknown_session_is_rejected_before_acceptance() {
-    LocalSet::new()
-        .run_until(async {
-            let harness = AcpTestHarness::start().await;
-            assert!(
-                harness
-                    .client_cx
-                    .send_request(PromptRequest::new("missing", vec!["hi".into()]))
-                    .block_task()
-                    .await
-                    .is_err()
-            );
-        })
-        .await;
+    AcpTestHarness::run(|harness| async move {
+        assert!(
+            harness
+                .client_cx
+                .send_request(PromptRequest::new("missing", vec!["hi".into()]))
+                .block_task()
+                .await
+                .is_err()
+        );
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]

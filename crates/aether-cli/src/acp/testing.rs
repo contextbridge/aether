@@ -31,11 +31,12 @@ use llm::{ChatMessage, Context, LlmResponse, SessionUsageEvent, StreamingModelPr
 use llm::{MessageId, ProviderConnectionOverrides};
 use mcp_utils::client::{InMemoryServerSpec, McpServer, McpTransport, ToolExposure};
 use std::collections::HashMap;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot, watch};
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::{JoinHandle, JoinSet, LocalSet};
 use tokio_util::sync::CancellationToken;
 
 const PLANNER_REPLY: &str = "planner reply";
@@ -191,6 +192,17 @@ impl AcpTestHarness {
 
     pub fn stored_events(&self, session_id: &SessionId) -> Vec<SessionEvent> {
         self.session_store.load(session_id.0.as_ref()).expect("stored session loads").1
+    }
+
+    /// Runs `body` with a fresh harness on the current-thread `LocalSet` the
+    /// host needs for its `spawn_local` tasks; tests must be annotated with
+    /// `#[tokio::test(flavor = "current_thread")]`.
+    pub async fn run<F, Fut>(body: F)
+    where
+        F: FnOnce(Self) -> Fut,
+        Fut: Future<Output = ()>,
+    {
+        LocalSet::new().run_until(Box::pin(async move { body(Self::start().await).await })).await;
     }
 
     pub async fn start() -> Self {

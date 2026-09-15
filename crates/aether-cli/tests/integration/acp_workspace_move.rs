@@ -7,12 +7,10 @@ use agent_client_protocol::schema::v2::{
     AbsolutePath, ListSessionsRequest, PromptRequest, ResumeSessionRequest, StopReason,
 };
 use std::fs;
-use std::future::Future;
-use tokio::task::LocalSet;
 
 #[tokio::test(flavor = "current_thread")]
 async fn workspace_list_registers_source_repo_and_marks_it_current() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
         let sub = repo.join("sub");
@@ -31,7 +29,7 @@ async fn workspace_list_registers_source_repo_and_marks_it_current() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn workspace_move_to_new_sibling_clones_changes_and_resets_source() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
         harness.append_stored_session_in("s1", "2026-05-01T00:00:00Z", &repo);
@@ -60,7 +58,7 @@ async fn workspace_move_to_new_sibling_clones_changes_and_resets_source() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn workspace_move_to_existing_clean_target_applies_changes() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
         let clone = clone_repo(&repo, tmp.path().join("clone"));
@@ -81,7 +79,7 @@ async fn workspace_move_to_existing_clean_target_applies_changes() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn workspace_move_to_existing_target_on_different_head_fails_actionably() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
         let clone = clone_repo(&repo, tmp.path().join("clone"));
@@ -104,7 +102,7 @@ async fn workspace_move_to_existing_target_on_different_head_fails_actionably() 
 
 #[tokio::test(flavor = "current_thread")]
 async fn workspace_move_to_dirty_target_fails_and_leaves_source_untouched() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
         let clone = clone_repo(&repo, tmp.path().join("clone"));
@@ -125,7 +123,7 @@ async fn workspace_move_to_dirty_target_fails_and_leaves_source_untouched() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn workspace_move_rejects_workspace_from_different_repository() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
         let other = init_repo(tmp.path(), "other");
@@ -142,7 +140,7 @@ async fn workspace_move_rejects_workspace_from_different_repository() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn workspace_move_rejects_invalid_new_names() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
         init_repo(tmp.path(), "taken");
@@ -158,7 +156,7 @@ async fn workspace_move_rejects_invalid_new_names() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn workspace_list_omits_deleted_workspaces() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
         harness.append_stored_session_in("s1", "2026-05-01T00:00:00Z", &repo);
@@ -180,7 +178,7 @@ async fn workspace_list_omits_deleted_workspaces() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn workspace_move_relocates_session_to_matching_subdirectory() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
         let sub = repo.join("sub");
@@ -201,7 +199,7 @@ async fn workspace_move_relocates_session_to_matching_subdirectory() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn live_workspace_move_stops_old_actor_and_allows_restore_in_new_cwd() {
-    with_harness(|mut harness| async move {
+    AcpTestHarness::run(|mut harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
         harness.append_stored_session_in("live", "2026-05-01T00:00:00Z", &repo);
@@ -244,7 +242,7 @@ async fn live_workspace_move_stops_old_actor_and_allows_restore_in_new_cwd() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn failed_and_unrelated_moves_preserve_live_actor() {
-    with_harness(|mut harness| async move {
+    AcpTestHarness::run(|mut harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
         harness.append_stored_session_in("other", "2026-05-01T00:00:00Z", &repo);
@@ -269,19 +267,6 @@ async fn failed_and_unrelated_moves_preserve_live_actor() {
         harness.shutdown().await;
     })
     .await;
-}
-
-async fn with_harness<F, Fut>(body: F)
-where
-    F: FnOnce(AcpTestHarness) -> Fut,
-    Fut: Future<Output = ()>,
-{
-    LocalSet::new()
-        .run_until(async move {
-            let harness = AcpTestHarness::start().await;
-            body(harness).await;
-        })
-        .await;
 }
 
 async fn list(harness: &AcpTestHarness, session_id: &str) -> WorkspaceListResponse {

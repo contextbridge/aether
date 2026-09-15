@@ -1,16 +1,18 @@
-use std::fs::read_to_string;
-
 use aether_evals::{Task, Transcript, Workspace};
 use internal_evals::{EvalAgent, EvalHarnessError};
 use serde_json::Value;
 
+#[path = "common/mod.rs"]
+mod common;
+use common::{lines, read_file};
+
 #[tokio::test]
 async fn find_bare_readme_pattern_matches_nested_basenames_eval() -> Result<(), EvalHarnessError> {
-    let workspace = FindTest::new()
-        .with_file_contents("README.md", "root docs\n")
-        .with_file_contents("docs/README.adoc", "nested docs\n")
-        .with_file_contents("docs/guide.md", "not a readme\n")
-        .workspace()?;
+    let workspace = Workspace::from_files([
+        ("README.md", "root docs\n"),
+        ("docs/README.adoc", "nested docs\n"),
+        ("docs/guide.md", "not a readme\n"),
+    ])?;
 
     let prompt = lines(&[
         "Use the coding MCP tools, not shell commands.",
@@ -34,12 +36,12 @@ async fn find_bare_readme_pattern_matches_nested_basenames_eval() -> Result<(), 
 
 #[tokio::test]
 async fn find_slash_pattern_is_relative_to_workspace_root_eval() -> Result<(), EvalHarnessError> {
-    let workspace = FindTest::new()
-        .with_file("lib.rs")
-        .with_file("crates/service/src/lib.rs")
-        .with_file("crates/cli/src/main.rs")
-        .with_file("examples/demo.rs")
-        .workspace()?;
+    let workspace = Workspace::from_files([
+        ("lib.rs", "contents for lib.rs\n"),
+        ("crates/service/src/lib.rs", "contents for crates/service/src/lib.rs\n"),
+        ("crates/cli/src/main.rs", "contents for crates/cli/src/main.rs\n"),
+        ("examples/demo.rs", "contents for examples/demo.rs\n"),
+    ])?;
     let prompt = lines(&[
         "Use the coding MCP tools to inventory this Rust workspace.",
         "List only Rust source files that are inside the crates directory; ignore Rust files at the workspace root or under examples.",
@@ -60,11 +62,11 @@ async fn find_slash_pattern_is_relative_to_workspace_root_eval() -> Result<(), E
 
 #[tokio::test]
 async fn find_hidden_case_insensitive_limited_search_eval() -> Result<(), EvalHarnessError> {
-    let workspace = FindTest::new()
-        .with_file(".aether/settings.json")
-        .with_file("CONFIG/SETTINGS.JSON")
-        .with_file("notes/settings.toml")
-        .workspace()?;
+    let workspace = Workspace::from_files([
+        (".aether/settings.json", "contents for .aether/settings.json\n"),
+        ("CONFIG/SETTINGS.JSON", "contents for CONFIG/SETTINGS.JSON\n"),
+        ("notes/settings.toml", "contents for notes/settings.toml\n"),
+    ])?;
     let prompt = lines(&[
         "Use exactly one coding__find call and no shell commands.",
         "Find settings JSON files in this workspace, including files in hidden directories and files whose names use different casing.",
@@ -110,35 +112,4 @@ fn assert_find_call_has_usize_arg(trace: &Transcript, key: &str, expected: u64) 
         }),
         "expected coding__find call with {key}={expected}"
     );
-}
-
-struct FindTest {
-    files: Vec<(String, String)>,
-}
-
-impl FindTest {
-    fn new() -> Self {
-        Self { files: Vec::new() }
-    }
-
-    fn with_file(self, path: &str) -> Self {
-        self.with_file_contents(path, &format!("contents for {path}\n"))
-    }
-
-    fn with_file_contents(mut self, path: &str, contents: &str) -> Self {
-        self.files.push((path.to_string(), contents.to_string()));
-        self
-    }
-
-    fn workspace(&self) -> Result<Workspace, EvalHarnessError> {
-        Ok(Workspace::from_files(self.files.iter().map(|(path, contents)| (path.as_str(), contents.as_str())))?)
-    }
-}
-
-fn lines(lines: &[&str]) -> String {
-    lines.join("\n")
-}
-
-fn read_file(workspace: &Workspace, path: &str) -> Result<String, EvalHarnessError> {
-    Ok(read_to_string(workspace.join(path))?)
 }

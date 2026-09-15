@@ -21,10 +21,6 @@ fn running_tool(id: &str, title: &str) -> AcpEvent {
     tool_call(id, title)
 }
 
-fn context_usage(used: u64, limit: u64) -> AcpEvent {
-    session_update(acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(used, limit)))
-}
-
 fn activity_row(ui: &mut TestUi, label: &str) -> String {
     let viewport = ui.viewport();
     let row = row_containing(&viewport, label).unwrap_or_else(|| panic!("activity row {label:?} not found"));

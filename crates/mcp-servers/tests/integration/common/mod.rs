@@ -4,6 +4,10 @@
 
 use aether_lspd::testing::TestProject;
 use mcp_servers::coding::CodingMcp;
+use mcp_servers::skills::{
+    SkillsMcp,
+    tools::{LoadSkillsInput, SkillRequest},
+};
 use mcp_utils::client::{McpClient, client_capabilities};
 use mcp_utils::testing::{ElicitationScript, connect};
 use rmcp::RoleClient;
@@ -254,5 +258,33 @@ pub async fn cleanup_daemon(project: &impl TestProject) {
         let _ = tokio::fs::remove_file(&sock).await;
         let _ = tokio::fs::remove_file(sock.with_extension("lock")).await;
         let _ = tokio::fs::remove_file(sock.with_extension("log")).await;
+    }
+}
+
+/// Creates files and directories (including parents) from `(path, content)`
+/// pairs inside a fresh temp dir.
+pub fn create_test_files(files: &[(&str, &str)]) -> TempDir {
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    for (path, content) in files {
+        let full_path = temp_dir.path().join(path);
+        if let Some(parent) = full_path.parent() {
+            create_dir_all(parent).unwrap_or_else(|_| panic!("Failed to create directory for {path}"));
+        }
+        std::fs::write(&full_path, content).unwrap_or_else(|_| panic!("Failed to write file {path}"));
+    }
+    temp_dir
+}
+
+/// A skills server serving the `skills` directory of `test_dir`.
+pub fn skills_server(test_dir: &Path) -> SkillsMcp {
+    SkillsMcp::new(&[test_dir.join("skills")])
+}
+
+pub fn load_skills_input(requests: &[(&str, Option<&str>)]) -> LoadSkillsInput {
+    LoadSkillsInput {
+        requests: requests
+            .iter()
+            .map(|(name, path)| SkillRequest { name: (*name).to_string(), path: path.map(str::to_string) })
+            .collect(),
     }
 }
