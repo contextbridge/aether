@@ -1,6 +1,6 @@
 Fetches content from a URL, extracts the main article content, and converts it to Markdown.
 
-Uses a readability algorithm to strip navigation, sidebars, footers, and other non-content elements, giving you clean article text instead of the full page.
+For HTML responses, uses a readability algorithm to strip navigation, sidebars, footers, and other non-content elements, giving you clean article text instead of the full page. Non-HTML responses, including plain text and Markdown, are returned without HTML conversion. Long content is truncated.
 
 ## Usage
 
