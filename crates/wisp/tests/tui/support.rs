@@ -181,6 +181,10 @@ pub(crate) fn tool_call(id: &str, title: &str) -> AcpEvent {
     session_update(acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(id.to_string()).title(title)))
 }
 
+pub(crate) fn context_usage(used: u64, limit: u64) -> AcpEvent {
+    session_update(acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(used, limit)))
+}
+
 pub(crate) fn tool_completed_with_diff(id: &str) -> AcpEvent {
     tool_completed_with_diff_contents(id, "fn old_name() {}\n", "fn new_name() {}\n")
 }

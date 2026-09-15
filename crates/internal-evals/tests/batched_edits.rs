@@ -1,6 +1,10 @@
 use aether_evals::{Task, Transcript, Workspace};
 use internal_evals::{EvalAgent, EvalHarnessError};
 
+#[path = "common/mod.rs"]
+mod common;
+use common::{file_contents, lines, read_file};
+
 #[tokio::test]
 async fn edit_file_multi_point_revision_in_single_call_eval() -> Result<(), EvalHarnessError> {
     let workspace =
@@ -52,16 +56,4 @@ async fn edit_plan_multi_point_revision_in_single_call_eval() -> Result<(), Eval
 #[track_caller]
 fn assert_single_edit_call(trace: &Transcript, tool: &str) {
     assert_eq!(trace.tool_call_count(tool), 1);
-}
-
-fn file_contents(lines: &[&str]) -> String {
-    format!("{}\n", lines.join("\n"))
-}
-
-fn lines(lines: &[&str]) -> String {
-    lines.join("\n")
-}
-
-fn read_file(workspace: &Workspace, path: &str) -> Result<String, EvalHarnessError> {
-    Ok(std::fs::read_to_string(workspace.join(path))?)
 }

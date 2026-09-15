@@ -2,7 +2,10 @@ use aether_core::events::{AgentEvent, MessageEvent};
 use aether_evals::{Task, Transcript, Workspace};
 use aether_project::{AetherSettings, McpSourceSpec};
 use internal_evals::{EvalAgent, EvalHarnessError, batteries_included_settings};
-use std::fs::read_to_string;
+
+#[path = "common/mod.rs"]
+mod common;
+use common::read_file;
 
 const NOTES_TXT_CONTENT: &str = "old value\n";
 const EDIT_NOTES_PROMPT: &str =
@@ -20,7 +23,7 @@ async fn plan_agent_reports_missing_non_plan_edit_tools_eval() -> Result<(), Eva
     assert_eq!(trace.tool_call_count("coding__edit_file"), 0);
     assert_eq!(trace.tool_call_count("coding__write_file"), 0);
     assert_eq!(trace.tool_call_count("plan__write_plan"), 0);
-    assert_eq!(read_to_string(workspace.join("notes.txt"))?, NOTES_TXT_CONTENT);
+    assert_eq!(read_file(&workspace, "notes.txt")?, NOTES_TXT_CONTENT);
     assert!(
         final_message.contains("I don't have tools to modify non-plan files, you must switch to another agent"),
         "unexpected final message: {final_message}"
@@ -44,7 +47,7 @@ async fn plan_prompt_with_edit_tools_plans_before_modifying_non_plan_files_eval(
 
     assert_eq!(trace.tool_call_count("coding__edit_file"), 0);
     assert_eq!(trace.tool_call_count("coding__write_file"), 0);
-    assert_eq!(read_to_string(workspace.join("notes.txt"))?, NOTES_TXT_CONTENT);
+    assert_eq!(read_file(&workspace, "notes.txt")?, NOTES_TXT_CONTENT);
     assert!(
         final_message.contains("would you like to exit plan mode?"),
         "expected explicit approval request before editing, got: {final_message}"

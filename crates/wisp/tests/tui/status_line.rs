@@ -57,10 +57,6 @@ fn type_and_submit(ui: &mut TestUi, text: &str) {
     ui.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 }
 
-fn context_usage(used: u64, limit: u64) -> AcpEvent {
-    session_update(acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(used, limit)))
-}
-
 #[test]
 fn every_builtin_renders_distinct_status_roles() -> Result<(), ThemeError> {
     for descriptor in ReviewTheme::catalog() {
