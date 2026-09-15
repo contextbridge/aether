@@ -43,7 +43,15 @@ impl FakeHttpClient {
 
     /// Scripts a 200 response whose body is `html` and whose `final_url` is `url`.
     pub fn with_html(self, url: &str, html: &str) -> Self {
-        self.with_response(url, HttpResponse { final_url: url.to_string(), status_code: 200, body: html.to_string() })
+        self.with_response(
+            url,
+            HttpResponse {
+                final_url: url.to_string(),
+                status_code: 200,
+                body: html.to_string(),
+                content_type: Some("text/html".to_string()),
+            },
+        )
     }
 
     /// Scripts a [`WebFetchError::Timeout`] carrying `timeout_ms` for `url`.
