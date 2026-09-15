@@ -59,8 +59,7 @@ If a server entry has a `command` and no `type`, it is treated as `"type": "stdi
         },
         "tasks": { "type": "in-memory" },
         "subagents": { "type": "in-memory" },
-        "survey": { "type": "in-memory" },
-        "plan": { "type": "in-memory" }
+        "review": { "type": "in-memory" }
       }
     }
     ```
@@ -194,8 +193,7 @@ When the authorization server does not advertise CIMD support, Aether falls back
 | `skills`    | Skill discovery, slash-command prompts, and rules                        | Required: repeat `--dir <path>`                                                                                         |
 | `tasks`     | Hierarchical task management                                             | Optional `--dir <base>` for persistent storage                                                                        |
 | `subagents` | Spawn child agents from loaded settings                                  | `--project-root <path>` (alias: `--dir`; defaults to the workspace root)                                              |
-| `survey`    | Structured human-in-the-loop questions                                   | No args                                                                                                               |
-| `plan`      | Plan prompt and markdown plan review                                     | Optional `--plans-dir <path>`, `--prompt-file <path>`, plus optional trailing submit command                          |
+| `review`    | Markdown artifact review through elicitation                             | Optional `--root-dir <path>`                                                                                         |
 
 <CardGrid>
   <LinkCard
@@ -219,14 +217,9 @@ When the authorization server does not advertise CIMD support, Aether falls back
     href="/aether/built-in-servers/subagents/"
   />
   <LinkCard
-    title="Survey"
-    description="Human-in-the-loop structured questions"
-    href="/aether/built-in-servers/survey/"
-  />
-  <LinkCard
-    title="Plan"
-    description="Plan-mode prompt and plan review workflow"
-    href="/aether/built-in-servers/plan/"
+    title="Review"
+    description="Markdown artifact review and contextual feedback"
+    href="/aether/built-in-servers/review/"
   />
 </CardGrid>
 
@@ -399,7 +392,7 @@ Tool names use `server__tool` with a double underscore. Patterns support exact n
 | `coding__read_file` | Only the `read_file` tool            |
 | `coding__web_*`     | `web_fetch` and `web_search`         |
 | `tasks__*`          | All task management tools            |
-| `plan__submit_plan` | Only the plan review tool            |
+| `review__review_artifact` | Only the Markdown review tool    |
 | `coding__bash`      | Only the coding server's `bash` tool |
 
 Wildcards are only valid at the end of a pattern.
@@ -435,7 +428,7 @@ MCP servers can attach tool annotations and you can filter tools based on those:
 }
 ```
 
-**Read-only tools plus explicit plan tools:**
+**Planner tools with explicit artifact writes and review:**
 
 ```json title=".aether/settings.json"
 {
@@ -447,7 +440,7 @@ MCP servers can attach tool annotations and you can filter tools based on those:
       "userInvocable": true,
       "mcps": [".aether/mcp.json"],
       "tools": {
-        "allow": [{ "readOnly": true }, "plan__*", "skills__*"],
+        "allow": [{ "readOnly": true }, "coding__write_file", "coding__edit_file", "review__review_artifact", "skills__*"],
         "deny": ["coding__web_*"]
       }
     }
