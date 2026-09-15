@@ -133,9 +133,9 @@ impl SettingsPane {
         }
     }
 
-    fn take_changes(&mut self) -> Vec<SettingsOutput> {
+    fn take_changes(&mut self) -> Option<Vec<SettingsOutput>> {
         match self {
-            Self::ServerStatus(_) | Self::ProviderLogin(_) | Self::Picker(_) => Vec::new(),
+            Self::ServerStatus(_) | Self::ProviderLogin(_) | Self::Picker(_) => Some(Vec::new()),
             Self::ModelSelector(pane) => pane.take_changes(),
         }
     }
@@ -371,11 +371,13 @@ impl SettingsOverlay {
         // Esc leaves the pane rather than the overlay, committing whatever the
         // pane batched up while it was open.
         let messages = match event {
-            UiEvent::Key(key) if is_press(key) && key.code == KeyCode::Esc => {
-                let mut messages = pane.take_changes();
-                messages.push(SettingsOutput::Close);
-                messages
-            }
+            UiEvent::Key(key) if is_press(key) && key.code == KeyCode::Esc => pane
+                .take_changes()
+                .map(|mut messages| {
+                    messages.push(SettingsOutput::Close);
+                    messages
+                })
+                .unwrap_or_default(),
             event => pane.on_ui_event(event),
         };
         self.apply(messages)

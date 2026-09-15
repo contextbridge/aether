@@ -138,6 +138,7 @@ struct ProviderConfig {
 struct ExplicitModel {
     id: &'static str,
     context_window: u32,
+    supports_reasoning_off: bool,
 }
 
 impl ProviderConfig {
@@ -291,14 +292,34 @@ const DYNAMIC_PROVIDERS: &[DynamicProviderConfig] = &[
 const CODEX_SUBSCRIPTION_CONTEXT_WINDOW: u32 = 272_000;
 
 const CODEX_SUBSCRIPTION_MODELS: &[ExplicitModel] = &[
-    ExplicitModel { id: "gpt-6-astra", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW },
-    ExplicitModel { id: "gpt-5.6-sol", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW },
-    ExplicitModel { id: "gpt-5.6-terra", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW },
-    ExplicitModel { id: "gpt-5.6-luna", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW },
-    ExplicitModel { id: "gpt-5.5", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW },
-    ExplicitModel { id: "gpt-5.4", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW },
-    ExplicitModel { id: "gpt-5.4-mini", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW },
-    ExplicitModel { id: "gpt-5.2", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW },
+    ExplicitModel {
+        id: "gpt-6-astra",
+        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
+        supports_reasoning_off: false,
+    },
+    ExplicitModel {
+        id: "gpt-5.6-sol",
+        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
+        supports_reasoning_off: false,
+    },
+    ExplicitModel {
+        id: "gpt-5.6-terra",
+        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
+        supports_reasoning_off: false,
+    },
+    ExplicitModel {
+        id: "gpt-5.6-luna",
+        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
+        supports_reasoning_off: false,
+    },
+    ExplicitModel { id: "gpt-5.5", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW, supports_reasoning_off: false },
+    ExplicitModel { id: "gpt-5.4", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW, supports_reasoning_off: false },
+    ExplicitModel {
+        id: "gpt-5.4-mini",
+        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
+        supports_reasoning_off: false,
+    },
+    ExplicitModel { id: "gpt-5.2", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW, supports_reasoning_off: false },
 ];
 
 #[derive(Debug, Clone)]
@@ -308,6 +329,7 @@ struct ModelInfo {
     display_name: String,
     context_window: u32,
     reasoning_levels: Vec<String>,
+    disabled_support: &'static str,
     input_modalities: Vec<String>,
     pricing: Option<CostData>,
     supports_prompt_caching: bool,
@@ -454,6 +476,7 @@ fn collect_models_from(
                 display_name: m.name.clone(),
                 context_window,
                 reasoning_levels,
+                disabled_support: disabled_support_for_model(cfg, m),
                 input_modalities,
                 supports_prompt_caching: m.cost.as_ref().is_some_and(CostData::has_prompt_caching),
                 pricing,
@@ -483,24 +506,61 @@ fn transport_for_model(cfg: &ProviderConfig, model: &ModelData) -> Result<Option
     }
 }
 
-fn reasoning_levels_for_model(cfg: &ProviderConfig, model: &ModelData) -> Result<Vec<String>, CodegenError> {
-    let Some(values) = model.reasoning_options.iter().find_map(|option| match option {
-        ReasoningOption::Effort { values } => Some(values),
-        ReasoningOption::Toggle | ReasoningOption::BudgetTokens => None,
-    }) else {
-        return Ok(cfg.fallback_reasoning_levels.iter().map(|level| (*level).to_string()).collect());
-    };
+fn disabled_support_for_model(cfg: &ProviderConfig, model: &ModelData) -> &'static str {
+    if !model.reasoning.unwrap_or(false) {
+        return "Unsupported";
+    }
+    if let Some(explicit) = cfg.explicit_model(&model.id) {
+        return if explicit.supports_reasoning_off { "Effort" } else { "Unsupported" };
+    }
+    if model.reasoning_options.iter().any(|option| {
+        matches!(option,
+            ReasoningOption::Effort { values } if values.iter().any(|value| value.as_deref() == Some("none"))
+        )
+    }) {
+        "Effort"
+    } else if model.reasoning_options.iter().any(|option| matches!(option, ReasoningOption::Toggle)) {
+        "Toggle"
+    } else {
+        "Unsupported"
+    }
+}
 
-    values
+fn reasoning_levels_for_model(cfg: &ProviderConfig, model: &ModelData) -> Result<Vec<String>, CodegenError> {
+    let values = model
+        .reasoning_options
         .iter()
-        .filter_map(|value| value.as_deref())
-        .filter(|value| !matches!(*value, "none" | "default"))
-        .map(|effort| {
-            effort.parse::<utils::ReasoningEffort>().map(|parsed| parsed.as_str().to_string()).map_err(|_| {
-                CodegenError::UnsupportedReasoningEffort { model_id: model.id.clone(), effort: effort.to_string() }
-            })
+        .filter_map(|option| match option {
+            ReasoningOption::Effort { values } => Some(values),
+            ReasoningOption::Toggle | ReasoningOption::BudgetTokens => None,
         })
-        .collect()
+        .collect::<Vec<_>>();
+    let mut levels = Vec::new();
+    if values.is_empty() {
+        levels.extend(cfg.fallback_reasoning_levels.iter().map(|level| (*level).to_string()));
+    } else {
+        for effort in values.into_iter().flatten().filter_map(|value| value.as_deref()) {
+            if matches!(effort, "none" | "default") {
+                continue;
+            }
+            let parsed =
+                effort.parse::<utils::ReasoningEffort>().ok().filter(|effort| effort.is_enabled()).ok_or_else(
+                    || CodegenError::UnsupportedReasoningEffort {
+                        model_id: model.id.clone(),
+                        effort: effort.to_string(),
+                    },
+                )?;
+            levels.push(parsed.as_str().to_string());
+        }
+    }
+    if disabled_support_for_model(cfg, model) != "Unsupported" {
+        levels.push("disabled".to_string());
+    }
+    Ok(utils::ReasoningEffort::selectable_levels()
+        .iter()
+        .filter(|level| levels.iter().any(|value| value == level.as_str()))
+        .map(|level| level.as_str().to_string())
+        .collect())
 }
 
 /// Returns true for "latest" alias IDs that just point to another model
@@ -737,6 +797,14 @@ fn emit_provider_impls(provider_models: &ProviderModels) -> TokenStream {
             grouped_arms(models, |m| m.context_window, |m| num_lit_with_underscores(m.context_window));
 
         let reasoning_levels_arms = emit_reasoning_levels_arms(models);
+        let disabled_support_arms = grouped_arms(
+            models,
+            |m| m.disabled_support,
+            |m| {
+                let variant = format_ident!("{}", m.disabled_support);
+                quote! { crate::reasoning::ReasoningDisabledSupport::#variant }
+            },
+        );
 
         let prompt_caching_arms = grouped_arms(
             models,
@@ -795,8 +863,13 @@ fn emit_provider_impls(provider_models: &ProviderModels) -> TokenStream {
                     match self { #reasoning_levels_arms }
                 }
 
+                #[allow(clippy::too_many_lines)]
+                pub fn reasoning_disabled_support(self) -> crate::reasoning::ReasoningDisabledSupport {
+                    match self { #disabled_support_arms }
+                }
+
                 pub fn supports_reasoning(self) -> bool {
-                    !self.reasoning_levels().is_empty()
+                    self.reasoning_levels().iter().any(|effort| effort.is_enabled())
                 }
 
                 #[allow(clippy::too_many_lines)]
@@ -981,6 +1054,10 @@ fn emit_llm_model_impl() -> TokenStream {
     let all_required_env_vars = emit_llm_all_required_env_vars();
     let oauth_provider_id = emit_llm_oauth_provider_id();
     let reasoning_levels = emit_llm_reasoning_levels();
+    let disabled_support = llm_delegate_with_dynamic_default(
+        "reasoning_disabled_support",
+        &quote! { crate::reasoning::ReasoningDisabledSupport::Unsupported },
+    );
     let supports_reasoning = emit_llm_supports_reasoning();
     let supports_prompt_caching = emit_llm_supports_prompt_caching();
     let pricing = emit_llm_pricing();
@@ -1000,6 +1077,48 @@ fn emit_llm_model_impl() -> TokenStream {
             #all_required_env_vars
             #oauth_provider_id
             #reasoning_levels
+            pub fn reasoning_disabled_support(&self) -> crate::reasoning::ReasoningDisabledSupport {
+                #disabled_support
+            }
+
+            /// Whether this model advertises an explicit off selection.
+            pub fn supports_reasoning_off(&self) -> bool {
+                self.reasoning_levels().contains(&ReasoningEffort::Disabled)
+            }
+
+            /// Whether the model's adapter implements its advertised disabling contract.
+            pub fn supports_reasoning_off_transport(&self) -> bool {
+                if !self.supports_reasoning_off() {
+                    return false;
+                }
+                match self.provider_enum() {
+                    Provider::Anthropic | Provider::OpenRouter | Provider::Openai | Provider::Codex | Provider::Gemini => true,
+                    Provider::Bedrock => self.transport().is_some(),
+                    Provider::DeepSeek | Provider::Moonshot | Provider::ZAi | Provider::AzureFoundry | Provider::Fireworks => {
+                        self.reasoning_disabled_support() == crate::reasoning::ReasoningDisabledSupport::Effort
+                    }
+                    Provider::Ollama | Provider::LlamaCpp => false,
+                }
+            }
+
+            /// Explicit choices executable by the current adapter. Default is always valid.
+            pub fn effective_reasoning_levels(&self) -> Vec<ReasoningEffort> {
+                self.reasoning_levels()
+                    .iter()
+                    .copied()
+                    .filter(|effort| *effort != ReasoningEffort::Disabled || self.supports_reasoning_off_transport())
+                    .collect()
+            }
+
+            pub fn validate_reasoning_effort(&self, effort: ReasoningEffort) -> Result<(), crate::catalog::ReasoningEffortError> {
+                let supported = self.effective_reasoning_levels();
+                if effort == ReasoningEffort::Default || supported.contains(&effort) {
+                    Ok(())
+                } else {
+                    Err(crate::catalog::ReasoningEffortError::Unsupported { model: self.to_string(), effort, supported })
+                }
+            }
+
             #supports_reasoning
             #supports_prompt_caching
             #pricing
@@ -1176,7 +1295,7 @@ fn emit_llm_supports_reasoning() -> TokenStream {
     quote! {
         /// Whether this model supports reasoning/extended thinking
         pub fn supports_reasoning(&self) -> bool {
-            !self.reasoning_levels().is_empty()
+            self.reasoning_levels().iter().any(|effort| effort.is_enabled())
         }
     }
 }
@@ -1456,7 +1575,7 @@ fn emit_provider_docs(ctx: &CodegenCtx) -> HashMap<String, String> {
         pushln(&mut doc, "|----------|------|---------|-----------|-------|-------|");
         for model in models {
             let ctx_str = format_context_window(model.context_window);
-            let reasoning = if model.reasoning_levels.is_empty() { "" } else { "yes" };
+            let reasoning = if model.reasoning_levels.iter().any(|level| level != "disabled") { "yes" } else { "" };
             let image = if model.input_modalities.contains(&"image".to_string()) { "yes" } else { "" };
             let audio = if model.input_modalities.contains(&"audio".to_string()) { "yes" } else { "" };
             pushln(
@@ -1468,6 +1587,12 @@ fn emit_provider_docs(ctx: &CodegenCtx) -> HashMap<String, String> {
             );
         }
 
+        for model in models.iter().filter(|model| model.disabled_support != "Unsupported") {
+            pushln(
+                &mut doc,
+                format!("Model `{}` advertises `disabled` reasoning (subject to adapter support).", model.model_id),
+            );
+        }
         push_transport_section(&mut doc, models);
 
         docs.insert(cfg.dev_id.to_string(), doc);
@@ -1766,7 +1891,7 @@ mod tests {
     }
 
     #[test]
-    fn build_rejects_unknown_reasoning_effort_metadata() {
+    fn generate_rejects_unknown_reasoning_effort_metadata() {
         let mut data = minimal_models_dev_json();
         anthropic_models(
             &mut data,
@@ -1778,11 +1903,9 @@ mod tests {
                 }
             }),
         );
-        let parsed: ModelsDevData = serde_json::from_value(data).unwrap();
-
-        let error = build_provider_models(&parsed).unwrap_err();
-
-        assert!(matches!(error, CodegenError::UnsupportedReasoningEffort { .. }));
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), serde_json::to_string(&data).unwrap()).unwrap();
+        assert!(matches!(generate(tmp.path()), Err(CodegenError::UnsupportedReasoningEffort { .. })));
     }
 
     #[test]
@@ -1975,6 +2098,76 @@ mod tests {
         let ollama_doc = &output.provider_docs["ollama"];
         assert!(ollama_doc.contains("`Ollama` LLM provider."));
         assert!(ollama_doc.contains("any model name at runtime"));
+    }
+
+    #[test]
+    fn generate_preserves_disabled_separately_from_default() {
+        let mut data = minimal_models_dev_json();
+        data["openai"]["models"]["gpt-5.4"]["reasoning_options"] = json!([
+            {"type": "effort", "values": [null, "default", "none", "low", "high"]}
+        ]);
+        anthropic_models(
+            &mut data,
+            json!({
+                "claude-toggle": {
+                    "id": "claude-toggle", "name": "Toggle", "tool_call": true, "reasoning": true,
+                    "reasoning_options": [{"type": "toggle"}, {"type": "effort", "values": ["low", "high"]}]
+                }
+            }),
+        );
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), serde_json::to_string(&data).unwrap()).unwrap();
+        let output = generate(tmp.path()).unwrap();
+        assert!(output.rust_source.contains("ReasoningEffort::Disabled"));
+        assert_default_is_not_capability(&output.rust_source);
+        assert!(output.provider_docs["openai"].contains("disabled"));
+        assert!(output.provider_docs["anthropic"].contains("disabled"));
+        assert!(!output.provider_docs["codex"].contains("disabled"));
+    }
+
+    #[test]
+    fn generate_reasoning_capability_edge_cases() {
+        let mut data = minimal_models_dev_json();
+        for (id, reasoning, options, disabled) in [
+            ("toggle", true, json!([{"type": "toggle"}]), true),
+            (
+                "both",
+                true,
+                json!([{"type": "toggle"}, {"type": "effort", "values": ["none", "high", "none", "low", "low"]}]),
+                true,
+            ),
+            ("defaults", true, json!([{"type": "effort", "values": [null, "default"]}]), false),
+            ("budget", true, json!([{"type": "budget_tokens"}]), false),
+            ("missing", true, json!([]), false),
+            ("plain", false, json!([{"type": "toggle"}]), false),
+        ] {
+            data["anthropic"]["models"] = json!({id: {"id": id, "name": id, "reasoning": reasoning, "tool_call": true, "reasoning_options": options}});
+            let tmp = NamedTempFile::new().unwrap();
+            std::fs::write(tmp.path(), serde_json::to_string(&data).unwrap()).unwrap();
+            let output = generate(tmp.path()).unwrap();
+            assert_eq!(output.provider_docs["anthropic"].contains("advertises `disabled`"), disabled, "{id}");
+            assert_default_is_not_capability(&output.rust_source);
+            if id == "both" {
+                assert!(output.rust_source.contains("ReasoningDisabledSupport::Effort"));
+                assert!(!output.rust_source.contains("ReasoningEffort::Disabled, ReasoningEffort::Disabled"));
+            }
+        }
+    }
+
+    fn assert_default_is_not_capability(source: &str) {
+        let file = syn::parse_file(source).unwrap();
+        for item in file.items {
+            if let syn::Item::Impl(implementation) = item {
+                for item in implementation.items {
+                    if let syn::ImplItem::Fn(method) = item
+                        && method.sig.ident == "reasoning_levels"
+                    {
+                        let body = method.block;
+                        assert!(!quote! { #body }.to_string().contains("ReasoningEffort :: Default"));
+                    }
+                }
+            }
+        }
     }
 
     fn build_from_value(data: &Value) -> ProviderModels {

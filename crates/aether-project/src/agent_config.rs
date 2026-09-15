@@ -17,7 +17,7 @@ pub struct AgentConfig {
     /// comma-separated alloy of specs to round-robin across turns.
     #[schemars(length(min = 1))]
     pub model: String,
-    /// Optional thinking budget for providers that support extended reasoning.
+    /// Reasoning level for the LLM. Uses provider default when not explicitly set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffort>,
     /// Sampling controls (`temperature`, `topP`, `maxTokens`) applied to this
@@ -79,4 +79,28 @@ fn require_agent_invocation_surface_schema(schema: &mut schemars::Schema) {
     }
     composed_schema.insert("allOf".to_string(), serde_json::json!([base_schema, invocation_surface_schema]));
     *schema = composed_schema.into();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn optional_reasoning_preserves_absence_and_explicit_default() {
+        let base = serde_json::json!({"name": "test", "description": "test", "model": "openai:gpt-5.4", "userInvocable": true});
+        let omitted: AgentConfig = serde_json::from_value(base.clone()).unwrap();
+        assert_eq!(omitted.reasoning_effort, None);
+        assert!(serde_json::to_value(omitted).unwrap().get("reasoningEffort").is_none());
+        for (value, expected) in
+            [(serde_json::Value::Null, None), (serde_json::json!("default"), Some(ReasoningEffort::Default))]
+        {
+            let mut input = base.clone();
+            input["reasoningEffort"] = value;
+            let config: AgentConfig = serde_json::from_value(input).unwrap();
+            assert_eq!(config.reasoning_effort, expected);
+            if expected.is_some() {
+                assert_eq!(serde_json::to_value(config).unwrap()["reasoningEffort"], "default");
+            }
+        }
+    }
 }

@@ -3,7 +3,7 @@ Manages the conversation state sent to an LLM provider.
 A `Context` bundles together three things:
 1. **Messages** -- the conversation history as a `Vec<`[`ChatMessage`]`>`
 2. **Tools** -- the tools available to the model as a `Vec<`[`ToolDefinition`]`>`
-3. **Configuration** -- optional [`ReasoningEffort`] and prompt cache key
+3. **Configuration** -- explicit [`ReasoningEffort`] (initially `Default`) and optional prompt cache key
 
 Pass a `Context` to [`StreamingModelProvider::stream_response`](crate::StreamingModelProvider::stream_response) to generate a response.
 

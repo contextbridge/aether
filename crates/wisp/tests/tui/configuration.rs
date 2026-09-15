@@ -69,32 +69,21 @@ fn elicitation_request_is_accepted_interactively() {
 
 #[test]
 fn tab_cycles_reasoning_effort_through_advertised_levels() {
-    let options = vec![reasoning_option("low", &["low", "medium", "high"])];
-    let mut app = TestUiBuilder::new().config_options(options).build();
-
-    app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    let cmd = app.next_agent_command().unwrap();
-    assert!(
-        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "reasoning_effort" && value == &acp::SessionConfigOptionValue::id("medium"))
-    );
-
-    app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    let cmd = app.next_agent_command().unwrap();
-    assert!(
-        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "reasoning_effort" && value == &acp::SessionConfigOptionValue::id("high"))
-    );
-
-    app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    let cmd = app.next_agent_command().unwrap();
-    assert!(
-        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "reasoning_effort" && value == &acp::SessionConfigOptionValue::id("none"))
-    );
-
-    app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    let cmd = app.next_agent_command().unwrap();
-    assert!(
-        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "reasoning_effort" && value == &acp::SessionConfigOptionValue::id("low"))
-    );
+    for (current, levels, expected_values) in [
+        ("default", ["default", "disabled", "low"], ["disabled", "low", "default", "disabled"]),
+        ("low", ["low", "medium", "high"], ["medium", "high", "default", "low"]),
+    ] {
+        let mut app = TestUiBuilder::new().config_options(vec![reasoning_option(current, &levels)]).build();
+        for expected in expected_values {
+            app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+            let cmd = app.next_agent_command().unwrap();
+            assert!(
+                matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. }
+                    if config_id == "reasoning_effort" && value == &acp::SessionConfigOptionValue::id(expected)),
+                "starting at {current}, expected {expected}, got {cmd:?}"
+            );
+        }
+    }
 }
 
 #[test]

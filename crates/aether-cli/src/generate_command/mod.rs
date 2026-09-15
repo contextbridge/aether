@@ -30,7 +30,6 @@ pub struct GenerateArgs {
     pub model_settings: ModelSettingsArgs,
 
     /// Reasoning effort for models that support extended thinking
-    /// (`minimal`, `low`, `medium`, `high`, `xhigh`, `max`).
     #[arg(long)]
     pub reasoning_effort: Option<ReasoningEffort>,
 
@@ -98,7 +97,7 @@ pub async fn run(args: GenerateArgs) -> Result<ExitCode, GenerateCommandError> {
 
     let mut context = Context::new(messages, vec![]);
     context.set_model_settings(args.model_settings.clone().into());
-    context.set_reasoning_effort(args.reasoning_effort);
+    context.set_reasoning_effort(args.reasoning_effort.unwrap_or_default());
 
     let mut stream = provider.stream_response(&context);
     let mut text = String::new();

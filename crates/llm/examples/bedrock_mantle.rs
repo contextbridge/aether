@@ -58,7 +58,7 @@ async fn main() -> ExitCode {
     println!("  prompt: {prompt}\n");
 
     let mut context = Context::new(vec![ChatMessage::user(prompt)], vec![calculator_tool()]);
-    context.set_reasoning_effort(Some(ReasoningEffort::Low));
+    context.set_reasoning_effort(ReasoningEffort::Low);
 
     let mut stream = provider.stream_response(&context);
     let mut saw_error = false;

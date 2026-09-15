@@ -25,6 +25,7 @@ pub(super) struct ModelSelector {
     original_models: BTreeSet<String>,
     reasoning_effort: Option<ReasoningEffort>,
     original_reasoning_effort: Option<ReasoningEffort>,
+    validation_error: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -118,6 +119,7 @@ impl ModelSelector {
             selected_models,
             reasoning_effort: reasoning,
             original_reasoning_effort: reasoning,
+            validation_error: None,
         }
     }
 
@@ -134,12 +136,11 @@ impl ModelSelector {
     }
 
     fn cycle_reasoning(&mut self, direction: Direction) {
-        let Some(levels) = self.focused_reasoning_levels() else {
-            return;
-        };
+        let levels = self.focused_reasoning_levels().unwrap_or_default();
+        self.validation_error = None;
         self.reasoning_effort = match direction {
             Direction::Forward => ReasoningEffort::cycle_within(self.reasoning_effort, &levels),
-            Direction::Backward => cycle_reasoning_back(self.reasoning_effort, &levels),
+            Direction::Backward => ReasoningEffort::cycle_within_back(self.reasoning_effort, &levels),
         };
     }
 
@@ -149,7 +150,13 @@ impl ModelSelector {
         let Some(effort) = self.reasoning_effort else {
             return;
         };
-        self.reasoning_effort = self.focused_reasoning_levels().map(|levels| effort.clamp_to(&levels));
+        if !effort.is_enabled() {
+            return;
+        }
+        self.reasoning_effort = self
+            .focused_reasoning_levels()
+            .filter(|levels| levels.iter().any(|effort| effort.is_enabled()))
+            .map(|levels| effort.clamp_to(&levels));
     }
 
     fn focused_reasoning_levels(&self) -> Option<Vec<ReasoningEffort>> {
@@ -186,7 +193,13 @@ impl ModelSelector {
             }
         }
         match self.items.on_nav_event(&event) {
-            Nav::Close => vec![SettingsOutput::Close],
+            Nav::Close => self
+                .take_changes()
+                .map(|mut changes| {
+                    changes.push(SettingsOutput::Close);
+                    changes
+                })
+                .unwrap_or_default(),
             Nav::Clicked => {
                 self.toggle_focused();
                 Vec::new()
@@ -207,6 +220,11 @@ impl ModelSelector {
         let view =
             ModelSelectorView::new(&self.selected_models, focused_value.as_deref(), self.reasoning_effort, theme);
         StatefulWidget::render(view, area, buf, &mut self.items);
+        if let Some(error) = &self.validation_error {
+            Paragraph::new(error.as_str())
+                .style(Style::new().fg(theme.warning))
+                .render(Rect::new(area.x, area.y + 2, area.width, 1), buf);
+        }
         None
     }
 }
@@ -220,11 +238,22 @@ impl ModelSelector {
             return Vec::new();
         }
 
-        let mut changes = vec![SettingsChange {
+        let reset_disabled = self.original_reasoning_effort == Some(ReasoningEffort::Disabled)
+            && self.reasoning_effort != Some(ReasoningEffort::Disabled);
+        let mut changes = Vec::new();
+        if reset_disabled {
+            changes.push(SettingsChange {
+                config_id: ConfigOptionId::ReasoningEffort.as_str().to_string(),
+                new_value: ReasoningEffort::Default.as_str().to_string(),
+            });
+        }
+        changes.push(SettingsChange {
             config_id: self.config_id.clone(),
             new_value: self.selected_models.iter().cloned().collect::<Vec<_>>().join(","),
-        }];
-        if self.reasoning_effort != self.original_reasoning_effort {
+        });
+        if self.reasoning_effort != self.original_reasoning_effort
+            && !(reset_disabled && self.reasoning_effort.unwrap_or_default() == ReasoningEffort::Default)
+        {
             changes.push(SettingsChange {
                 config_id: ConfigOptionId::ReasoningEffort.as_str().to_string(),
                 new_value: ReasoningEffort::config_str(self.reasoning_effort).to_string(),
@@ -356,18 +385,6 @@ fn build_rows(items: Vec<SettingsMenuValue>) -> Vec<ModelSelectorRow> {
 /// per provider, whose value carries this prefix.
 const UNAVAILABLE_VALUE_PREFIX: &str = "__unavailable:";
 
-fn cycle_reasoning_back(current: Option<ReasoningEffort>, levels: &[ReasoningEffort]) -> Option<ReasoningEffort> {
-    match current {
-        None => levels.last().copied(),
-        Some(effort) => levels
-            .iter()
-            .position(|&level| level == effort)
-            .and_then(|index| index.checked_sub(1))
-            .and_then(|index| levels.get(index))
-            .copied(),
-    }
-}
-
 fn provider(value: &SettingsMenuValue) -> (String, String) {
     if let Some(group) = &value.group {
         return (group.to_lowercase(), group.clone());
@@ -404,8 +421,17 @@ fn labeled(label: &str, value: &str, theme: &Theme) -> Line<'static> {
 }
 
 impl ModelSelector {
-    pub(crate) fn take_changes(&mut self) -> Vec<SettingsOutput> {
-        self.pending_changes().iter().map(message_for_change).collect()
+    pub(crate) fn take_changes(&mut self) -> Option<Vec<SettingsOutput>> {
+        let invalid = self.reasoning_effort == Some(ReasoningEffort::Disabled)
+            && self.items.entries().iter().filter_map(ModelSelectorRow::model).any(|value| {
+                self.selected_models.contains(&value.value)
+                    && !value.meta.reasoning_levels.contains(&ReasoningEffort::Disabled)
+            });
+        if invalid {
+            self.validation_error = Some("Cannot disable reasoning; choose Default or a supported level".to_string());
+            return None;
+        }
+        Some(self.pending_changes().iter().map(message_for_change).collect())
     }
 
     pub(crate) fn footer(&self) -> Vec<KeyHint> {

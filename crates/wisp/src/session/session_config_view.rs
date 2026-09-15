@@ -150,6 +150,7 @@ impl<'a> LocalConfigView<'a> {
         self.flattened_options(ConfigOptionId::ReasoningEffort)
             .into_iter()
             .filter_map(|option| option.value.parse().ok())
+            .filter(|effort| *effort != ReasoningEffort::Default)
             .collect()
     }
 

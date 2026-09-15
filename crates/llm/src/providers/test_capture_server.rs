@@ -61,6 +61,7 @@ impl CaptureServer {
         let (sender, receiver) = mpsc::unbounded_channel();
         let app = Router::new()
             .route("/responses", post(capture))
+            .route("/v1/messages", post(capture))
             .route("/chat/completions", post(capture))
             .route("/v1/chat/completions", post(capture))
             .with_state(Arc::new(CaptureState { sender, response: spec }));

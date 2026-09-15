@@ -175,7 +175,7 @@ impl Agent {
                 }
 
                 StreamEvent::Command(Command::AgentCommand(AgentCommand::SetReasoningEffort(effort))) => {
-                    self.context.set_reasoning_effort(effort);
+                    self.context.set_reasoning_effort(effort.unwrap_or_default());
                 }
 
                 StreamEvent::Command(Command::AgentCommand(AgentCommand::ReplaceConversation(messages))) => {

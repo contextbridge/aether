@@ -25,7 +25,7 @@ pub struct SelectOptionMeta {
 
 impl SelectOptionMeta {
     pub fn supports_reasoning(&self) -> bool {
-        !self.reasoning_levels.is_empty()
+        self.reasoning_levels.iter().any(|effort| effort.is_enabled())
     }
 }
 

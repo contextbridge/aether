@@ -135,6 +135,9 @@ impl StreamingModelProvider for GenericOpenAiProvider {
     }
 
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
+        if let Err(error) = crate::provider::validate_reasoning(context, self.model().as_ref()) {
+            return crate::provider::error_stream(error);
+        }
         let mut request = match build_chat_request(
             self.request_model.as_deref().unwrap_or(&self.model),
             context,
@@ -160,6 +163,30 @@ mod tests {
     use crate::providers::test_capture_server::CaptureServer;
 
     use crate::ChatMessage;
+
+    #[tokio::test]
+    async fn disabled_toggle_and_unknown_models_never_send_requests() {
+        use crate::testing::FakeHttpService;
+        let service = FakeHttpService::default();
+        let mut provider = GenericOpenAiProvider::new("key".to_string(), &DEEPSEEK).unwrap();
+        provider.client =
+            openai_client(AetherOpenAiConfig::new(OpenAIConfig::new(), ProviderAuthMode::None), service.clone());
+        for model in ["deepseek-v4-flash", "unknown"] {
+            provider = provider.with_model(model);
+            let mut context = Context::new(vec![], vec![]);
+            context.set_reasoning_effort(crate::ReasoningEffort::Disabled);
+            let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+            assert_eq!(responses.len(), 1);
+            let error = responses[0].as_ref().unwrap_err();
+            if model == "unknown" {
+                assert!(matches!(error, LlmError::ReasoningValidation(_)));
+            } else {
+                assert!(matches!(error, LlmError::UnsupportedDisableTransport { .. }));
+            }
+            assert!(!error.is_retryable());
+            assert!(service.take_requests().is_empty());
+        }
+    }
 
     #[test]
     fn azure_foundry_requires_a_configured_url() {

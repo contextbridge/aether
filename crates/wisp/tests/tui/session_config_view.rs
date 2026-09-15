@@ -5,6 +5,21 @@ use utils::ReasoningEffort;
 use wisp::session::session_config_view::{LocalConfigOption, LocalConfigView};
 
 #[test]
+fn control_states_survive_projection_without_default_becoming_a_capability() {
+    for effort in [ReasoningEffort::Default, ReasoningEffort::Disabled] {
+        let options = [LocalConfigOption::from_acp(SessionConfigOption::select(
+            "reasoning_effort",
+            "Reasoning",
+            effort.as_str(),
+            vec![option("default", "Default"), option("disabled", "Disabled"), option("low", "Low")],
+        ))];
+        let view = LocalConfigView::new(&options);
+        assert_eq!(view.reasoning_effort(), Some(effort));
+        assert_eq!(view.reasoning_levels(), vec![ReasoningEffort::Disabled, ReasoningEffort::Low]);
+    }
+}
+
+#[test]
 fn projects_v2_wire_ids_and_tolerates_unknown_categories() {
     let option: SessionConfigOption = serde_json::from_value(serde_json::json!({
         "configId": "model",

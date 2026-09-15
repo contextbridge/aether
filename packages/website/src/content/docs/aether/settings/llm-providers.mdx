@@ -264,14 +264,16 @@ The CLI equivalents are `--provider PROVIDER.url=...`, `--provider PROVIDER.auth
 
 Some providers support extended thinking. Set `reasoningEffort` on an agent to request a thinking budget:
 
-| Value      | Meaning                                                          |
-| ---------- | ---------------------------------------------------------------- |
-| `"minimal"` | Minimal or no thinking                                           |
-| `"low"`     | Minimal thinking                                                 |
-| `"medium"`  | Moderate thinking                                                |
-| `"high"`    | Extended thinking                                                |
-| `"xhigh"`   | High thinking budget for providers that expose additional levels |
-| `"max"`     | Maximum thinking budget for providers that expose a top level    |
+| Value        | Meaning                                                             |
+| ------------ | ------------------------------------------------------------------- |
+| `"default"`  | Adapter default; does not promise reasoning is disabled             |
+| `"disabled"` | Explicitly disable reasoning, only on supported models and adapters |
+| `"minimal"`  | Minimal enabled thinking                                            |
+| `"low"`      | Minimal thinking                                                    |
+| `"medium"`   | Moderate thinking                                                   |
+| `"high"`     | Extended thinking                                                   |
+| `"xhigh"`    | High thinking budget for providers that expose additional levels    |
+| `"max"`      | Maximum thinking budget for providers that expose a top level       |
 
 ```json title=".aether/settings.json"
 {
@@ -288,7 +290,9 @@ Some providers support extended thinking. Set `reasoningEffort` on an agent to r
 }
 ```
 
-Providers that do not support the requested effort ignore it or map it to their closest available setting.
+Omitting `reasoningEffort` (or setting it to null) leaves the authored setting unspecified. Once overrides are resolved, it uses `default`. An explicit `"reasoningEffort": "default"` overrides an inherited selection. `"reasoningEffort": "disabled"` must be supported by every model in an alloy and by its adapter; otherwise the request fails without silently enabling reasoning. The application spelling `none` is not accepted.
+
+Codex currently does not expose Disabled and retains Aether's Medium default. Generic toggle-only and Bedrock Converse disable encoders are not yet implemented, so their UI does not offer Disabled even when raw model metadata advertises a toggle.
 
 ## Alloying
 

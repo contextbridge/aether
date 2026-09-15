@@ -89,7 +89,7 @@ pub(crate) fn build_model_config_option(
                 };
                 let mut option = acp::SessionConfigSelectOption::new(value, name);
                 let meta = SelectOptionMeta {
-                    reasoning_levels: m.reasoning_levels().to_vec(),
+                    reasoning_levels: m.effective_reasoning_levels(),
                     supports_image: supports_prompt_image(m),
                     supports_audio: supports_prompt_audio(m),
                 };
@@ -120,9 +120,9 @@ fn build_reasoning_effort_config_option(
         return None;
     }
 
-    let current = current_effort.map_or("none".to_string(), |e| e.as_str().to_string());
+    let current = ReasoningEffort::config_str(current_effort).to_string();
 
-    let mut options = vec![acp::SessionConfigSelectOption::new("none", "None")];
+    let mut options = vec![acp::SessionConfigSelectOption::new("default", "Default")];
     options.extend(levels.iter().map(|e| {
         let value = e.as_str();
         let mut label = value.to_string();
