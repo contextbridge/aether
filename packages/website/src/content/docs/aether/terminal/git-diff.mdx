@@ -3,7 +3,7 @@ title: Git Diff View
 description: Review changes, stage, commit, and add inline comments with the two-pane diff viewer.
 ---
 
-Press `Ctrl+G` to open or close the git diff view. It shows changed files on the left and the diff on the right. By default the diff shows all changes relative to `HEAD` (both staged and unstaged); press `t` or `Tab` to cycle the scope between **Both**, **Unstaged**, and **Staged**. You can navigate hunks, stage and unstage files, create commits, discard changes, queue inline comments, and submit those comments back to the agent as a structured prompt.
+Press `Ctrl+G` to open or close the git diff view. It shows changed files on the left and the diff on the right. By default the diff shows all changes relative to `HEAD` (both staged and unstaged); press `S` to cycle the scope between **Both**, **Unstaged**, and **Staged**. You can navigate hunks, stage and unstage files, create commits, discard changes, queue inline comments, and submit those comments back to the agent as a structured prompt.
 
 ## Layout
 
@@ -19,29 +19,33 @@ Press `Ctrl+G` to open or close the git diff view. It shows changed files on the
 │                  │   }                        │
 │                  │                           │
 ├─────────────────┴───────────────────────────┤
-│ j/k move · space stage · t scope · C commit │
+│ j/k move · space stage · S scope · C commit │
 └─────────────────────────────────────────────┘
 ```
 
-The file-list header shows the active scope: `Git Diff · Both`, `Git Diff · Unstaged`, or `Git Diff · Staged`. The bottom help bar changes depending on which pane is focused.
+The file-list header shows the active scope: `Git Diff · Both`, `Git Diff · Unstaged`, or `Git Diff · Staged`. The bottom help bar changes depending on which pane is focused, and `?` opens a help overlay listing every binding.
 
 ## Navigation
 
 | Key | Action |
 | --- | --- |
+| `Tab` | Switch focus between the file list and the diff pane |
 | `h` / `←` | In the diff pane, focus the file list; in the file list, collapse the selected directory |
 | `l` / `→` or `Enter` | In the file list, expand/open the selected entry and focus the diff |
 | `j` / `↓` | Move down |
 | `k` / `↑` | Move up |
+| `Home` / `End` | Jump to the first / last entry |
 | `PageDown` / `PageUp` | Page through the diff pane |
-| `o` | Toggle between the hunk-diff view and the full-file view (in the diff pane) |
-| `<` / `>` | Resize the split panes |
+| `o` / `Enter` | Reveal one hidden context line in the diff pane; `O` reveals all |
+| `f` | Toggle between the hunk-diff view and the full-file view (in the diff pane) |
+| `v` | Cycle the diff view mode |
 | `r` | Refresh the diff |
+| `?` | Show the help overlay |
 | `Esc` / `Ctrl+G` | Close git diff view |
 
 ## Diff scope
 
-Press `t` or `Tab` to cycle what the diff shows:
+Press `S` to cycle what the diff shows:
 
 | Scope | Comparison | Includes untracked files |
 | --- | --- | --- |
@@ -60,9 +64,7 @@ The active scope is shown in the file-list header.
 | `A` | Unstage all changes |
 | `C` | Commit staged changes |
 
-`C` opens a commit-message composer at the bottom of the screen. Type a message and press `Enter` to create the commit, or `Esc` to cancel. You can only commit when at least one file is staged.
-
-When queued review comments exist, actions that would clear them — switching scope, refreshing, staging or unstaging, committing, and discarding — ask you to press the same key again to confirm.
+`C` opens a commit-message composer at the bottom of the screen. Type a message and press `Enter` to create the commit, or `Esc` to cancel. You can only commit when at least one file is staged. Queued review comments survive scope switches and refreshes; they are only submitted with `s` or dropped when you close the view.
 
 ## Discarding changes
 
@@ -73,6 +75,8 @@ Press `d` to discard changes to the selected file. A confirmation prompt appears
 | Key | Action |
 | --- | --- |
 | `c` | Add a comment at the current diff location |
+| `e` | Edit the comment under the cursor |
+| `x` | Delete the comment under the cursor |
 | `Enter` | Submit a comment while editing that comment |
 | `s` | Submit all queued comments to the agent (from the diff pane) |
 | `u` | Undo the last queued comment |

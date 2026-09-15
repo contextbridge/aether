@@ -49,14 +49,16 @@ Agents (LLM + model + tools) are defined in an `agents` array.
 
 #### Name
 
-Start with a `name`, and short `description`.
+Every agent requires a `name`, a short `description`, a `model`, and at least one invocation surface: `userInvocable: true` to expose it as a selectable mode, or `agentInvocable: true` to let other agents spawn it through the [subagents server](/aether/built-in-servers/subagents/).
 
-```json {4-5} title=".aether/settings.json"
+```json {4-7} title=".aether/settings.json"
 {
   "agents": [
     {
       "name": "Build",
-      "description": "Builds features and fixes bugs"
+      "description": "Builds features and fixes bugs",
+      "model": "anthropic:claude-sonnet-4-5-20250929",
+      "userInvocable": true
     }
   ]
 }
@@ -74,7 +76,8 @@ Set the LLM your agent uses via the `model` field using a string of the format `
       "name": "Build",
       "description": "Builds features and fixes bugs",
       "model": "zai:glm-5.1",
-      "reasoningEffort": "high"
+      "reasoningEffort": "high",
+      "userInvocable": true
     }
   ]
 }
@@ -82,7 +85,7 @@ Set the LLM your agent uses via the `model` field using a string of the format `
 
 If you selected a model with reasoning capabilities, use the `reasoningEffort` field to control it.
 
-```json {8} title=".aether/settings.json"
+```json {8-9} title=".aether/settings.json"
 {
   "agent": "Build",
   "agents": [
@@ -90,7 +93,8 @@ If you selected a model with reasoning capabilities, use the `reasoningEffort` f
       "name": "Build",
       "description": "Builds features and fixes bugs",
       "model": "zai:glm-5.1",
-      "reasoningEffort": "high" // minimal, low, medium, high, xhigh, or max
+      "reasoningEffort": "high", // minimal, low, medium, high, xhigh, or max
+      "userInvocable": true
     }
   ]
 }
@@ -100,13 +104,14 @@ If you selected a model with reasoning capabilities, use the `reasoningEffort` f
 
 Fine-tune sampling with `modelSettings` (`temperature`, `topP`, `maxTokens`) and override the model's advertised token limit with `contextWindow`. Any field you omit keeps the provider/model default.
 
-```json {7-11} title=".aether/settings.json"
+```json {9-12} title=".aether/settings.json"
 {
   "agents": [
     {
       "name": "Build",
       "description": "Builds features and fixes bugs",
       "model": "anthropic:claude-sonnet-4-5-20250929",
+      "userInvocable": true,
       "modelSettings": {
         "temperature": 0.2,
         "topP": 0.95,
@@ -126,7 +131,7 @@ Set your agent's system prompt via the `prompts` field, which is specified as an
 
 Prompt sources are concatenated in the order provided.
 
-```json {9-14} title=".aether/settings.json"
+```json {10-16} title=".aether/settings.json"
 {
   "agent": "Build",
   "agents": [
@@ -135,6 +140,7 @@ Prompt sources are concatenated in the order provided.
       "description": "Builds features and fixes bugs",
       "model": "zai:glm-5.1",
       "reasoningEffort": "high",
+      "userInvocable": true,
       "prompts": [
         "SYSTEM.md",
         { "type": "file", "path": "AGENTS.md", "optional": true },
@@ -155,7 +161,7 @@ See [Prompts](/aether/settings/system-prompts/) for source formats, path resolut
 
 Give your agent tools via the `mcps` field (Aether agents get tools exclusively via MCP). This example adds Aether's 1st-party in-memory "coding" server, which gives the agent fileystem + shell tools.
 
-```json {15-25} title=".aether/settings.json"
+```json {16-26} title=".aether/settings.json"
 {
   "agent": "Build",
   "agents": [
@@ -164,6 +170,7 @@ Give your agent tools via the `mcps` field (Aether agents get tools exclusively 
       "description": "Builds features and fixes bugs",
       "model": "zai:glm-5.1",
       "reasoningEffort": "high",
+      "userInvocable": true,
       "prompts": [
         "SYSTEM.md",
         { "type": "file", "path": "AGENTS.md", "optional": true },
@@ -188,7 +195,7 @@ Give your agent tools via the `mcps` field (Aether agents get tools exclusively 
 
 Aether can load `mcp.json` files. To enable progressive tool discovery and keep MCP schemas out of the model's initial context, set `deferTools: true`.
 
-```json {15-17} title=".aether/settings.json"
+```json {16} title=".aether/settings.json"
 {
   "agent": "Build",
   "agents": [
@@ -197,6 +204,7 @@ Aether can load `mcp.json` files. To enable progressive tool discovery and keep 
       "description": "Builds features and fixes bugs",
       "model": "zai:glm-5.1",
       "reasoningEffort": "high",
+      "userInvocable": true,
       "prompts": [
         "SYSTEM.md",
         { "type": "file", "path": "AGENTS.md", "optional": true },
