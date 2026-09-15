@@ -2,9 +2,14 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningEffort {
+    #[default]
+    Default,
+    Disabled,
     Minimal,
     Low,
     Medium,
@@ -16,6 +21,8 @@ pub enum ReasoningEffort {
 impl ReasoningEffort {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Default => "default",
+            Self::Disabled => "disabled",
             Self::Minimal => "minimal",
             Self::Low => "low",
             Self::Medium => "medium",
@@ -26,7 +33,15 @@ impl ReasoningEffort {
     }
 
     pub fn all() -> &'static [ReasoningEffort] {
-        &[Self::Minimal, Self::Low, Self::Medium, Self::High, Self::Xhigh, Self::Max]
+        &[Self::Default, Self::Disabled, Self::Minimal, Self::Low, Self::Medium, Self::High, Self::Xhigh, Self::Max]
+    }
+
+    pub fn selectable_levels() -> &'static [Self] {
+        &[Self::Disabled, Self::Minimal, Self::Low, Self::Medium, Self::High, Self::Xhigh, Self::Max]
+    }
+
+    pub fn is_enabled(self) -> bool {
+        matches!(self, Self::Minimal | Self::Low | Self::Medium | Self::High | Self::Xhigh | Self::Max)
     }
 
     /// Cycles through only the given `levels`, wrapping to `None` after the last.
@@ -36,7 +51,7 @@ impl ReasoningEffort {
             return None;
         }
         match current {
-            None => Some(levels[0]),
+            None | Some(Self::Default) => Some(levels[0]),
             Some(effort) => levels.iter().position(|&l| l == effort).and_then(|i| levels.get(i + 1)).copied(),
         }
     }
@@ -48,7 +63,7 @@ impl ReasoningEffort {
             return None;
         }
         match current {
-            None => Some(*levels.last().expect("levels is non-empty")),
+            None | Some(Self::Default) => Some(*levels.last().expect("levels is non-empty")),
             Some(effort) => levels
                 .iter()
                 .position(|&l| l == effort)
@@ -58,22 +73,29 @@ impl ReasoningEffort {
         }
     }
 
-    /// Returns `self` if it's in `levels`, otherwise the highest level ≤ self.
-    /// Falls back to the first element of `levels`. Panics if `levels` is empty.
     pub fn clamp_to(self, levels: &[Self]) -> Self {
-        levels.iter().rev().find(|&&l| l <= self).copied().unwrap_or(*levels.first().expect("levels must not be empty"))
+        if !self.is_enabled() {
+            return self;
+        }
+        levels
+            .iter()
+            .copied()
+            .filter(|level| level.is_enabled() && *level <= self)
+            .max()
+            .or_else(|| levels.iter().copied().filter(|level| level.is_enabled()).min())
+            .unwrap_or_default()
     }
 
     /// Converts `Option<ReasoningEffort>` to a config string value.
     pub fn config_str(effort: Option<Self>) -> &'static str {
-        effort.map_or("none", Self::as_str)
+        effort.unwrap_or_default().as_str()
     }
 
     /// Parse a string into an optional effort level.
-    /// Accepts "none" / "" as `None`, and supported effort names as `Some`.
+    /// Empty input clears the setting; explicit selections, including default, are retained.
     pub fn parse(s: &str) -> Result<Option<Self>, String> {
         match s {
-            "none" | "" => Ok(None),
+            "" => Ok(None),
             other => other.parse().map(Some),
         }
     }
@@ -90,6 +112,8 @@ impl FromStr for ReasoningEffort {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            "default" => Ok(Self::Default),
+            "disabled" => Ok(Self::Disabled),
             "minimal" => Ok(Self::Minimal),
             "low" => Ok(Self::Low),
             "medium" => Ok(Self::Medium),
@@ -104,6 +128,23 @@ impl FromStr for ReasoningEffort {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn control_states_cycle_and_clamp_deliberately() {
+        use ReasoningEffort::*;
+        let levels = [Disabled, Low, High];
+        assert_eq!(ReasoningEffort::cycle_within(Some(Default), &levels), Some(Disabled));
+        assert_eq!(ReasoningEffort::cycle_within(Some(Disabled), &levels), Some(Low));
+        assert_eq!(ReasoningEffort::cycle_within_back(Some(Default), &levels), Some(High));
+        assert_eq!(ReasoningEffort::cycle_within_back(Some(Disabled), &levels), None);
+        assert_eq!(Disabled.clamp_to(&[Low]), Disabled);
+        assert_eq!(Default.clamp_to(&[Low]), Default);
+        assert_eq!(Minimal.clamp_to(&[Disabled, Low]), Low);
+        assert_eq!(High.clamp_to(&[Disabled]), Default);
+        assert!(!Default.is_enabled());
+        assert!(!Disabled.is_enabled());
+        assert!(Minimal.is_enabled());
+    }
 
     #[test]
     fn display_roundtrip() {
@@ -127,18 +168,20 @@ mod tests {
     }
 
     #[test]
-    fn all_returns_six_variants() {
-        assert_eq!(ReasoningEffort::all().len(), 6);
+    fn all_returns_eight_variants() {
+        assert_eq!(ReasoningEffort::all().len(), 8);
     }
 
     #[test]
     fn parse_none_and_empty() {
-        assert_eq!(ReasoningEffort::parse("none").unwrap(), None);
+        assert!(ReasoningEffort::parse("none").is_err());
         assert_eq!(ReasoningEffort::parse("").unwrap(), None);
     }
 
     #[test]
     fn parse_valid_levels() {
+        assert_eq!(ReasoningEffort::parse("default").unwrap(), Some(ReasoningEffort::Default));
+        assert_eq!(ReasoningEffort::parse("disabled").unwrap(), Some(ReasoningEffort::Disabled));
         assert_eq!(ReasoningEffort::parse("high").unwrap(), Some(ReasoningEffort::High));
         assert_eq!(ReasoningEffort::parse("low").unwrap(), Some(ReasoningEffort::Low));
     }
@@ -150,7 +193,7 @@ mod tests {
 
     #[test]
     fn config_str_values() {
-        assert_eq!(ReasoningEffort::config_str(None), "none");
+        assert_eq!(ReasoningEffort::config_str(None), "default");
         assert_eq!(ReasoningEffort::config_str(Some(ReasoningEffort::Low)), "low");
         assert_eq!(ReasoningEffort::config_str(Some(ReasoningEffort::High)), "high");
     }

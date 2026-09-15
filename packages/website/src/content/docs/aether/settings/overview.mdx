@@ -80,7 +80,7 @@ Set the LLM your agent uses via the `model` field using a string of the format `
 }
 ```
 
-If you selected a model with reasoning capabilities, use the `reasoningEffort` field to control it.
+Use `reasoningEffort` to select reasoning behavior. Omission/null leaves the setting unspecified and resolves to the adapter default; explicit `"default"` preserves that behavior as an override. It does not mean reasoning is off. Select `"disabled"` to explicitly disable reasoning, only when the model and adapter support it. Unsupported disabling is rejected rather than changed to minimal thinking.
 
 ```json {8} title=".aether/settings.json"
 {
@@ -90,7 +90,7 @@ If you selected a model with reasoning capabilities, use the `reasoningEffort` f
       "name": "Build",
       "description": "Builds features and fixes bugs",
       "model": "zai:glm-5.1",
-      "reasoningEffort": "high" // minimal, low, medium, high, xhigh, or max
+      "reasoningEffort": "high" // default, disabled, minimal, low, medium, high, xhigh, or max (model-dependent)
     }
   ]
 }

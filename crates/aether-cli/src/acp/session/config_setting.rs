@@ -59,12 +59,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_reasoning_effort_none() {
-        let setting = ConfigSetting::parse("reasoning_effort", "none").unwrap();
-        assert_eq!(setting, ConfigSetting::ReasoningEffort(None));
-    }
-
-    #[test]
     fn parse_reasoning_effort_empty() {
         let setting = ConfigSetting::parse("reasoning_effort", "").unwrap();
         assert_eq!(setting, ConfigSetting::ReasoningEffort(None));

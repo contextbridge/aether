@@ -672,7 +672,7 @@ fn context_exact_boundary_86_percent_shows_error() {
 }
 
 #[test]
-fn reasoning_none_effort_shows_empty_bar() {
+fn reasoning_default_effort_shows_empty_bar() {
     let settings = UiSettings::default();
     let mut ui = make_ui(&settings, 120, 15);
     let options = vec![
@@ -680,9 +680,9 @@ fn reasoning_none_effort_shows_empty_bar() {
         acp::SessionConfigOption::select(
             "reasoning_effort",
             "Reasoning",
-            "none",
+            "default",
             vec![
-                acp::SessionConfigSelectOption::new("none", "None"),
+                acp::SessionConfigSelectOption::new("default", "Default"),
                 acp::SessionConfigSelectOption::new("low", "Low"),
                 acp::SessionConfigSelectOption::new("medium", "Medium"),
             ],
@@ -693,7 +693,7 @@ fn reasoning_none_effort_shows_empty_bar() {
     ui.draw();
 
     let text = ui.viewport_text();
-    assert!(text.contains("none"), "should show none reasoning effort, got:\n{text}");
+    assert!(text.contains("default"), "should show default reasoning effort, got:\n{text}");
     assert!(text.contains("[··]"), "should show empty slot bar with 2 levels, got:\n{text}");
 }
 

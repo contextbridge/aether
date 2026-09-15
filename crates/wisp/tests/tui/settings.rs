@@ -1934,7 +1934,7 @@ fn model_selector_shows_reasoning_bar_on_the_focused_row() {
     let mut ui = model_selector_ui(as_multi_select(option));
 
     let text = ui.viewport_text();
-    assert!(text.contains("none [···]"), "the focused reasoning model should show the effort bar inline:\n{text}");
+    assert!(text.contains("default [···]"), "the focused reasoning model should show the effort bar inline:\n{text}");
     assert_capability_columns_align(&text);
     let capability_column = capability_column_for(&text, "Opus");
 
@@ -1952,6 +1952,48 @@ fn model_selector_shows_reasoning_bar_on_the_focused_row() {
     let text = ui.viewport_text();
     assert!(!text.contains('■'), "a model without reasoning levels shows no bar:\n{text}");
     assert_eq!(capability_column_for(&text, "Opus"), capability_column, "columns must not move with focus:\n{text}");
+}
+
+#[test]
+fn model_selector_requires_explicit_choice_when_disabled_is_incompatible() {
+    let off_model = model(
+        "anthropic:opus",
+        "Anthropic / Opus",
+        SelectOptionMeta {
+            reasoning_levels: vec![ReasoningEffort::Disabled, ReasoningEffort::High],
+            ..Default::default()
+        },
+    );
+    let mandatory = model(
+        "codex:gpt",
+        "Codex / GPT",
+        SelectOptionMeta { reasoning_levels: vec![ReasoningEffort::High], ..Default::default() },
+    );
+    let mut ui = TestUiBuilder::new()
+        .config_options(vec![
+            as_multi_select(acp::SessionConfigOption::select(
+                "model",
+                "Model",
+                "anthropic:opus",
+                vec![off_model, mandatory],
+            )),
+            reasoning_option("disabled", &["default", "disabled", "high"]),
+        ])
+        .build();
+    open_first_config_option(&mut ui);
+    assert!(ui.viewport_text().contains("disabled [·]"));
+    ui.key(key(KeyCode::Enter));
+    ui.key(key(KeyCode::Down));
+    ui.key(key(KeyCode::Enter));
+    ui.key(key(KeyCode::Esc));
+    assert_no_commands(&mut ui, "incompatible Disabled must not commit");
+    let text = ui.viewport_text();
+    assert!(text.contains("Cannot disable reasoning"), "{text}");
+    ui.key(key(KeyCode::Tab));
+    ui.key(key(KeyCode::Esc));
+    let command = ui.next_agent_command().expect("explicit Default change");
+    assert!(matches!(command, AgentCommand::SetConfigOption { ref config_id, ref value, .. }
+        if config_id == "reasoning_effort" && value == &acp::SessionConfigOptionValue::id("default")));
 }
 
 #[test]

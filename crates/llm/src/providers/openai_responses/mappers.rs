@@ -59,7 +59,10 @@ impl ResponsesRequestPolicy {
 
     /// Effort to send, if any — an explicit request beats the provider default.
     fn effort(&self, context: &Context) -> Option<ReasoningEffort> {
-        context.reasoning_effort().or(self.default_effort)
+        match context.reasoning_effort() {
+            ReasoningEffort::Default => self.default_effort,
+            effort => Some(effort),
+        }
     }
 }
 
@@ -69,12 +72,15 @@ pub(crate) fn build_typed_request(
     policy: &ResponsesRequestPolicy,
 ) -> Result<CreateResponse> {
     let identity: Option<LlmModel> = format!("{}:{model}", policy.provider.parser_name()).parse().ok();
+    crate::provider::validate_reasoning(context, identity.as_ref())?;
     let context = context.filter_encrypted_reasoning(identity.as_ref());
     let (instructions, input) = map_messages(context.messages())?;
     let tools = if context.tools().is_empty() { None } else { Some(map_tools(context.tools(), policy.tool_strict)?) };
     let settings = context.model_settings();
-    let reasoning = (policy.always_include_reasoning || policy.effort(&context).is_some())
-        .then_some(Reasoning { effort: None, summary: Some(ReasoningSummary::Auto) });
+    let reasoning = (policy.always_include_reasoning || policy.effort(&context).is_some()).then_some(Reasoning {
+        effort: None,
+        summary: (context.reasoning_effort() != ReasoningEffort::Disabled).then_some(ReasoningSummary::Auto),
+    });
 
     let text = policy.text_verbosity.clone().map(|verbosity| ResponseTextParam {
         format: TextResponseFormatConfiguration::Text,
@@ -111,7 +117,18 @@ pub(crate) fn build_wire_request(
     // written onto the serialized body instead of the typed request. Safe because
     // `build_typed_request` emits `reasoning` whenever `policy.effort` is set.
     if let Some(effort) = effort {
-        body["reasoning"]["effort"] = effort.as_str().into();
+        let wire = match effort {
+            ReasoningEffort::Default => return Ok(body),
+            ReasoningEffort::Disabled if policy.provider == Provider::Codex => "disabled",
+            ReasoningEffort::Disabled => "none",
+            ReasoningEffort::Minimal => "minimal",
+            ReasoningEffort::Low => "low",
+            ReasoningEffort::Medium => "medium",
+            ReasoningEffort::High => "high",
+            ReasoningEffort::Xhigh => "xhigh",
+            ReasoningEffort::Max => "max",
+        };
+        body["reasoning"]["effort"] = wire.into();
     }
     Ok(body)
 }
@@ -351,9 +368,9 @@ mod tests {
 
     #[test]
     fn wire_request_carries_every_reasoning_effort() {
-        for effort in ReasoningEffort::all() {
+        for effort in ReasoningEffort::all().iter().filter(|effort| effort.is_enabled()) {
             let mut context = Context::new(vec![ChatMessage::user("Think")], vec![]);
-            context.set_reasoning_effort(Some(*effort));
+            context.set_reasoning_effort(*effort);
 
             let body = openai_body("gpt-5.6", &context);
             assert_eq!(body["reasoning"]["effort"], effort.as_str());

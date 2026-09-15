@@ -32,7 +32,7 @@ pub use provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider};
 pub use provider_connection::{
     ProviderAuthMode, ProviderConnectionConfig, ProviderConnectionOverride, ProviderConnectionOverrides,
 };
-pub use reasoning::ReasoningEffort;
+pub use reasoning::{ReasoningDisabledSupport, ReasoningEffort};
 pub use tools::*;
 pub use usage::{
     ContextUsage, LlmCallPurpose, ModelIdentity, ModelPricing, SessionUsageEvent, SessionUsageTotals, TokenUsage,

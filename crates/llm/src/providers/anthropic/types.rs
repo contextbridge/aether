@@ -36,15 +36,15 @@ pub struct Request {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Thinking {
-    #[serde(rename = "type")]
-    pub thinking_type: String,
-    pub budget_tokens: u32,
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum Thinking {
+    Enabled { budget_tokens: u32 },
+    Disabled,
 }
 
 impl Thinking {
     pub fn new(budget_tokens: u32) -> Self {
-        Self { thinking_type: "enabled".to_string(), budget_tokens }
+        Self::Enabled { budget_tokens }
     }
 }
 

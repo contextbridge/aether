@@ -57,6 +57,9 @@ impl StreamingModelProvider for OpenRouterProvider {
     }
 
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
+        if let Err(error) = crate::provider::validate_reasoning(context, self.model().as_ref()) {
+            return crate::provider::error_stream(error);
+        }
         let mut request = match build_chat_request(&self.model, context, None) {
             Ok(request) => request,
             Err(e) => return error_stream(e),
@@ -103,6 +106,39 @@ mod tests {
     use crate::{ChatMessage, LlmResponse, ProviderErrorKind};
 
     #[tokio::test]
+    async fn disabled_uses_unified_reasoning_without_conflicting_effort() {
+        let service = FakeHttpService::default();
+        service.route(Method::POST, OPENROUTER_URL, || response(200, OPENROUTER_FIXTURE));
+        let model = crate::LlmModel::all()
+            .iter()
+            .find(|model| {
+                model.provider_enum() == crate::catalog::Provider::OpenRouter && model.supports_reasoning_off()
+            })
+            .unwrap();
+        let provider = provider_with_service(&service).with_model(&model.model_id());
+        let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
+        context.set_reasoning_effort(crate::ReasoningEffort::Disabled);
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        assert!(responses.iter().all(Result::is_ok), "{responses:?}");
+        let body = request_bodies(&service).pop().unwrap();
+        assert_eq!(body["reasoning"], serde_json::json!({"effort": "none"}));
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[tokio::test]
+    async fn unknown_model_rejects_disabled_without_outbound_request() {
+        let service = FakeHttpService::default();
+        let provider = provider_with_service(&service).with_model("unknown-model");
+        let mut context = Context::new(vec![], vec![]);
+        context.set_reasoning_effort(crate::ReasoningEffort::Disabled);
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        assert_eq!(responses.len(), 1);
+        assert!(matches!(&responses[0], Err(LlmError::ReasoningValidation(_))));
+        assert!(!responses[0].as_ref().unwrap_err().is_retryable());
+        assert!(request_bodies(&service).is_empty());
+    }
+
+    #[tokio::test]
     async fn stream_response_propagates_prompt_cache_key_and_keeps_cache_control() {
         let service = FakeHttpService::default();
         service.route(Method::POST, OPENROUTER_URL, || response(200, OPENROUTER_FIXTURE));
@@ -110,7 +146,7 @@ mod tests {
         let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
         context.set_prompt_cache_key(Some("prefix-abc".to_string()));
         context.set_session_affinity_key(Some("conversation-abc".to_string()));
-        context.set_reasoning_effort(Some(crate::ReasoningEffort::High));
+        context.set_reasoning_effort(crate::ReasoningEffort::High);
 
         let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
         let body = request_bodies(&service).pop().unwrap();

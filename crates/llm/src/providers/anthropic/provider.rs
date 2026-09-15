@@ -1,7 +1,9 @@
 use super::mappers::{map_messages, map_tools};
 use super::streaming::process_anthropic_stream;
 use super::types::{Request, Thinking};
-use crate::provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider, get_context_window};
+use crate::provider::{
+    LlmResponseStream, ProviderFactory, StreamingModelProvider, error_stream, get_context_window, validate_reasoning,
+};
 use crate::providers::http::{anthropic_code, rejected};
 use crate::{Context, LlmError, ProviderAuthMode, ProviderConnectionConfig, ProviderError, ReasoningEffort, Result};
 use async_stream;
@@ -85,8 +87,9 @@ impl AnthropicProvider {
             request = request.with_tools(tools);
         }
 
-        if let Some(effort) = context.reasoning_effort() {
-            let budget_tokens = effort_to_budget_tokens(effort);
+        if context.reasoning_effort() == ReasoningEffort::Disabled {
+            request = request.with_thinking(Thinking::Disabled);
+        } else if let Some(budget_tokens) = effort_to_budget_tokens(context.reasoning_effort()) {
             request = request.with_thinking(Thinking::new(budget_tokens));
             // Anthropic requires temperature and top_p to be unset when thinking is enabled
             request.temperature = None;
@@ -186,6 +189,9 @@ impl StreamingModelProvider for AnthropicProvider {
     }
 
     fn stream_response<'a>(&self, context: &Context) -> LlmResponseStream {
+        if let Err(error) = validate_reasoning(context, self.model().as_ref()) {
+            return error_stream(error);
+        }
         let provider = self.clone();
         let context = context.clone();
 
@@ -230,14 +236,15 @@ fn build_client() -> Result<Client> {
     Client::builder().timeout(Duration::from_mins(1)).build().map_err(|e| LlmError::HttpClientCreation(e.to_string()))
 }
 
-fn effort_to_budget_tokens(effort: ReasoningEffort) -> u32 {
-    match effort {
+fn effort_to_budget_tokens(effort: ReasoningEffort) -> Option<u32> {
+    Some(match effort {
+        ReasoningEffort::Default | ReasoningEffort::Disabled => return None,
         // 1024 is the Anthropic API's minimum thinking budget.
         ReasoningEffort::Minimal | ReasoningEffort::Low => 1024,
         ReasoningEffort::Medium => 4096,
         ReasoningEffort::High | ReasoningEffort::Xhigh => 10240,
         ReasoningEffort::Max => 32768,
-    }
+    })
 }
 
 fn should_redact_header(name: &str) -> bool {
@@ -271,6 +278,40 @@ mod tests {
 
     fn create_test_provider() -> AnthropicProvider {
         AnthropicProvider::new(Some("test-api-key".to_string())).unwrap().with_model("claude-sonnet-4-5-20250929")
+    }
+
+    #[tokio::test]
+    async fn default_and_disabled_thinking_preserve_sampling_and_token_limit() {
+        use crate::providers::test_capture_server::CaptureServer;
+        let mut server =
+            CaptureServer::start_with_response(include_str!("../../../tests/fixtures/anthropic/01_minimal.sse")).await;
+        let model = crate::LlmModel::all()
+            .iter()
+            .find(|model| {
+                model.provider_enum() == crate::catalog::Provider::Anthropic && model.supports_reasoning_off()
+            })
+            .unwrap();
+        let provider = create_test_provider().with_model(&model.model_id()).with_base_url(&server.base_url);
+        for (effort, temperature) in [(ReasoningEffort::Default, 0.0), (ReasoningEffort::Disabled, 0.5)] {
+            let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
+            context.set_reasoning_effort(effort);
+            context.set_model_settings(crate::ModelSettings {
+                temperature: Some(temperature),
+                top_p: Some(0.5),
+                max_tokens: Some(128),
+            });
+            let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+            assert!(responses.iter().all(Result::is_ok), "{responses:?}");
+            let body = server.captured().await.body;
+            assert_eq!(body["max_tokens"], 128);
+            assert_eq!(body["top_p"], 0.5);
+            assert_eq!(body["temperature"], serde_json::json!(temperature));
+            if effort == ReasoningEffort::Disabled {
+                assert_eq!(body["thinking"], serde_json::json!({"type": "disabled"}));
+            } else {
+                assert!(body.get("thinking").is_none());
+            }
+        }
     }
 
     #[test]
@@ -384,41 +425,15 @@ mod tests {
         let provider = create_test_provider();
 
         let mut context = Context::new(vec![ChatMessage::user("Think hard")], vec![]);
-        context.set_reasoning_effort(Some(crate::ReasoningEffort::High));
+        context.set_reasoning_effort(crate::ReasoningEffort::High);
 
         let request = provider.build_request(&context).unwrap();
-        let thinking = request.thinking.expect("thinking should be set");
-        assert_eq!(thinking.thinking_type, "enabled");
-        assert_eq!(thinking.budget_tokens, 10240);
-        // Temperature must be unset when thinking is enabled
+        let Thinking::Enabled { budget_tokens } = request.thinking.unwrap() else {
+            panic!("expected enabled thinking")
+        };
+        assert_eq!(budget_tokens, 10240);
         assert!(request.temperature.is_none());
-        // max_tokens must exceed budget_tokens
-        assert!(request.max_tokens > thinking.budget_tokens);
-    }
-
-    #[test]
-    fn test_build_request_without_reasoning_effort_has_no_thinking() {
-        let provider = create_test_provider();
-        let context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
-
-        let request = provider.build_request(&context).unwrap();
-        assert!(request.thinking.is_none());
-    }
-
-    #[test]
-    fn test_build_request_applies_model_settings() {
-        let provider = create_test_provider();
-        let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
-        context.set_model_settings(crate::ModelSettings {
-            temperature: Some(0.0),
-            top_p: Some(0.5),
-            max_tokens: Some(256),
-        });
-
-        let request = provider.build_request(&context).unwrap();
-        assert_eq!(request.temperature, Some(0.0));
-        assert_eq!(request.top_p, Some(0.5));
-        assert_eq!(request.max_tokens, 256);
+        assert!(request.max_tokens > budget_tokens);
     }
 
     #[test]
@@ -426,7 +441,7 @@ mod tests {
         let provider = create_test_provider();
         let mut context = Context::new(vec![ChatMessage::user("Think")], vec![]);
         context.set_model_settings(crate::ModelSettings { temperature: Some(0.2), top_p: Some(0.9), max_tokens: None });
-        context.set_reasoning_effort(Some(crate::ReasoningEffort::High));
+        context.set_reasoning_effort(crate::ReasoningEffort::High);
 
         let request = provider.build_request(&context).unwrap();
         assert!(request.temperature.is_none());
@@ -439,16 +454,13 @@ mod tests {
 
         let mut context = Context::new(vec![ChatMessage::user("Hi")], vec![]);
         context.set_model_settings(crate::ModelSettings { max_tokens: Some(500), ..Default::default() });
-        context.set_reasoning_effort(Some(crate::ReasoningEffort::Low));
+        context.set_reasoning_effort(crate::ReasoningEffort::Low);
 
         let request = provider.build_request(&context).unwrap();
-        let thinking = request.thinking.as_ref().unwrap();
-        assert!(
-            request.max_tokens > thinking.budget_tokens,
-            "max_tokens ({}) should exceed budget_tokens ({})",
-            request.max_tokens,
-            thinking.budget_tokens
-        );
+        let Thinking::Enabled { budget_tokens } = request.thinking.unwrap() else {
+            panic!("expected enabled thinking")
+        };
+        assert!(request.max_tokens > budget_tokens);
     }
 
     #[test]

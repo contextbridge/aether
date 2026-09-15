@@ -113,8 +113,11 @@ impl SessionConfigState {
                     error!("Unknown model in set_session_config_option: {}", value);
                     return Err(Error::invalid_params());
                 };
+                let effort = spec.clamp_reasoning_effort(self.reasoning_effort);
+                spec.validate_reasoning_effort(effort)
+                    .map_err(|error| Error::invalid_params().data(error.to_string()))?;
                 self.pending = (self.active_model != *value).then(|| Pending::Model(value.clone()));
-                self.reasoning_effort = spec.clamp_reasoning_effort(self.reasoning_effort);
+                self.reasoning_effort = effort;
             }
             ConfigSetting::ReasoningEffort(effort) => {
                 let model_id = self.effective_model(modes);

@@ -187,6 +187,9 @@ impl StreamingModelProvider for BedrockProvider {
     }
 
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
+        if let Err(error) = crate::provider::validate_reasoning(context, self.model().as_ref()) {
+            return crate::provider::error_stream(error);
+        }
         let provider = self.clone();
         let context = context.clone();
 
@@ -312,6 +315,7 @@ mod tests {
     use std::sync::Arc;
     use tokio::net::TcpListener;
     use tokio::sync::{Mutex, oneshot};
+    use utils::ReasoningEffort;
 
     fn inference_profile_arn(model: &str) -> String {
         format!("arn:aws:bedrock:us-west-2:000000000000:inference-profile/{model}")
@@ -402,11 +406,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mantle_disabled_uses_none_without_summary() {
+        let model = LlmModel::all()
+            .iter()
+            .find(|model| {
+                model.provider_enum() == Provider::Bedrock
+                    && model.transport().is_some()
+                    && model.supports_reasoning_off()
+            })
+            .unwrap();
+        let mut server = CaptureServer::start_responses().await;
+        let provider = mantle_provider(&server).await.with_model(&model.model_id());
+        let mut context = hello_context();
+        context.set_reasoning_effort(ReasoningEffort::Disabled);
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        assert!(responses.iter().all(Result::is_ok), "{responses:?}");
+        let body = server.captured().await.body;
+        assert_eq!(body["reasoning"]["effort"], "none");
+        assert!(body["reasoning"]["summary"].is_null());
+    }
+
+    #[tokio::test]
+    async fn converse_disabled_is_a_non_retryable_transport_error() {
+        let model = LlmModel::all()
+            .iter()
+            .find(|model| {
+                model.provider_enum() == Provider::Bedrock
+                    && model.transport().is_none()
+                    && model.supports_reasoning_off()
+            })
+            .unwrap();
+        let provider =
+            BedrockProvider::new(ProviderConnectionConfig { auth_mode: ProviderAuthMode::None, ..Default::default() })
+                .await
+                .with_model(&model.model_id());
+        let mut context = hello_context();
+        context.set_reasoning_effort(crate::ReasoningEffort::Disabled);
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        assert_eq!(responses.len(), 1);
+        assert!(matches!(&responses[0], Err(LlmError::UnsupportedDisableTransport { .. })));
+        assert!(!responses[0].as_ref().unwrap_err().is_retryable());
+    }
+
+    #[tokio::test]
     async fn responses_shape_models_are_sent_to_the_responses_endpoint() {
         let mut server = CaptureServer::start_responses().await;
         let provider = mantle_provider(&server).await;
         let mut context = hello_context();
-        context.set_reasoning_effort(Some(crate::ReasoningEffort::Xhigh));
+        context.set_reasoning_effort(crate::ReasoningEffort::Xhigh);
 
         let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
         let captured = server.captured().await;

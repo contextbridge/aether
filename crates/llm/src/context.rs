@@ -14,7 +14,7 @@ pub struct Context {
     messages: Vec<ChatMessage>,
     tools: Vec<ToolDefinition>,
     #[serde(skip)]
-    reasoning_effort: Option<ReasoningEffort>,
+    reasoning_effort: ReasoningEffort,
     #[serde(skip)]
     model_settings: ModelSettings,
     #[serde(skip)]
@@ -28,7 +28,7 @@ impl Context {
         Self {
             messages,
             tools,
-            reasoning_effort: None,
+            reasoning_effort: ReasoningEffort::Default,
             model_settings: ModelSettings::default(),
             prompt_cache_key: None,
             session_affinity_key: None,
@@ -51,11 +51,11 @@ impl Context {
         self.session_affinity_key = key;
     }
 
-    pub fn reasoning_effort(&self) -> Option<ReasoningEffort> {
+    pub fn reasoning_effort(&self) -> ReasoningEffort {
         self.reasoning_effort
     }
 
-    pub fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffort>) {
+    pub fn set_reasoning_effort(&mut self, effort: ReasoningEffort) {
         self.reasoning_effort = effort;
     }
 
@@ -399,27 +399,31 @@ mod tests {
     }
 
     #[test]
-    fn test_reasoning_effort_default_is_none() {
+    fn test_reasoning_effort_initializes_to_default() {
         let ctx = create_test_context();
-        assert_eq!(ctx.reasoning_effort(), None);
+        assert_eq!(ctx.reasoning_effort(), ReasoningEffort::Default);
     }
 
     #[test]
     fn test_reasoning_effort_set_and_get() {
         let mut ctx = create_test_context();
-        ctx.set_reasoning_effort(Some(crate::ReasoningEffort::High));
-        assert_eq!(ctx.reasoning_effort(), Some(crate::ReasoningEffort::High));
+        ctx.set_reasoning_effort(crate::ReasoningEffort::High);
+        assert_eq!(ctx.reasoning_effort(), crate::ReasoningEffort::High);
 
-        ctx.set_reasoning_effort(None);
-        assert_eq!(ctx.reasoning_effort(), None);
+        ctx.set_reasoning_effort(ReasoningEffort::Default);
+        assert_eq!(ctx.reasoning_effort(), ReasoningEffort::Default);
     }
 
     #[test]
     fn test_reasoning_effort_preserved_through_compaction() {
         let mut ctx = create_test_context();
-        ctx.set_reasoning_effort(Some(crate::ReasoningEffort::Medium));
+        ctx.set_reasoning_effort(crate::ReasoningEffort::Disabled);
         let compacted = ctx.with_compacted_summary(MessageId::new(), "Summary");
-        assert_eq!(compacted.reasoning_effort(), Some(crate::ReasoningEffort::Medium));
+        assert_eq!(compacted.reasoning_effort(), crate::ReasoningEffort::Disabled);
+        assert_eq!(ctx.clone().reasoning_effort(), ReasoningEffort::Disabled);
+        assert_eq!(ctx.filter_encrypted_reasoning(None).reasoning_effort(), ReasoningEffort::Disabled);
+        ctx.replace_conversation(vec![]);
+        assert_eq!(ctx.reasoning_effort(), ReasoningEffort::Disabled);
     }
 
     #[test]

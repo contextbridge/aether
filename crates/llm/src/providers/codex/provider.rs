@@ -101,6 +101,9 @@ impl StreamingModelProvider for CodexProvider {
     }
 
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
+        if let Err(error) = crate::provider::validate_reasoning(context, self.model().as_ref()) {
+            return crate::provider::error_stream(error);
+        }
         let provider = self.clone();
         let context = context.clone();
 
@@ -130,6 +133,22 @@ mod tests {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use futures::StreamExt;
 
+    #[tokio::test]
+    async fn all_codex_models_reject_disabled_before_authentication() {
+        for model in
+            crate::LlmModel::all().iter().filter(|model| model.provider_enum() == crate::catalog::Provider::Codex)
+        {
+            assert!(!model.effective_reasoning_levels().contains(&crate::ReasoningEffort::Disabled));
+            let provider = CodexProvider::new(Arc::new(FakeOAuthCredentialStore::new())).with_model(&model.model_id());
+            let mut context = Context::new(vec![], vec![]);
+            context.set_reasoning_effort(crate::ReasoningEffort::Disabled);
+            let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+            assert_eq!(responses.len(), 1);
+            assert!(matches!(&responses[0], Err(LlmError::ReasoningValidation(_))));
+            assert!(!responses[0].as_ref().unwrap_err().is_retryable());
+        }
+    }
+
     #[test]
     fn context_window_uses_codex_subscription_limit() {
         let provider = create_test_provider();
@@ -154,7 +173,7 @@ mod tests {
                 serde_json::from_str(r#"{"type": "object", "properties": {"cmd": {"type": "string"}}}"#).unwrap(),
             )],
         );
-        context.set_reasoning_effort(Some(crate::ReasoningEffort::Max));
+        context.set_reasoning_effort(crate::ReasoningEffort::Max);
         context.set_prompt_cache_key(Some("session-abc".to_string()));
 
         let responses = provider.stream_response(&context).collect::<Vec<_>>().await;

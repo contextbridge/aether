@@ -7,6 +7,7 @@ pub mod types;
 
 use async_openai::types::chat::ChatCompletionStreamOptions;
 use schemars::Schema;
+use utils::ReasoningEffort;
 
 use crate::providers::openai::mappers::map_tools;
 use crate::{Context, LlmError};
@@ -57,7 +58,16 @@ pub(crate) fn build_chat_request(
         stream: Some(true),
         tools,
         stream_options: Some(ChatCompletionStreamOptions { include_usage: Some(true), include_obfuscation: None }),
-        reasoning_effort: context.reasoning_effort(),
+        reasoning_effort: match context.reasoning_effort() {
+            ReasoningEffort::Default => None,
+            ReasoningEffort::Disabled => Some("none"),
+            ReasoningEffort::Minimal => Some("minimal"),
+            ReasoningEffort::Low => Some("low"),
+            ReasoningEffort::Medium => Some("medium"),
+            ReasoningEffort::High => Some("high"),
+            ReasoningEffort::Xhigh => Some("xhigh"),
+            ReasoningEffort::Max => Some("max"),
+        },
         temperature: settings.temperature,
         top_p: settings.top_p,
         max_tokens: settings.max_tokens,

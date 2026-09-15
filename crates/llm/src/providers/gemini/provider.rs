@@ -80,6 +80,9 @@ impl StreamingModelProvider for GeminiProvider {
     }
 
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
+        if let Err(error) = crate::provider::validate_reasoning(context, self.model().as_ref()) {
+            return crate::provider::error_stream(error);
+        }
         let provider = self.clone();
         let context = context.clone();
 
@@ -120,6 +123,27 @@ mod tests {
     use super::*;
     use async_openai::config::Config;
     use reqwest::header::AUTHORIZATION;
+
+    #[tokio::test]
+    async fn disabled_uses_none_not_minimal() {
+        use crate::providers::test_capture_server::CaptureServer;
+        let model = crate::LlmModel::all()
+            .iter()
+            .find(|model| model.provider_enum() == crate::catalog::Provider::Gemini && model.supports_reasoning_off())
+            .unwrap();
+        let mut server = CaptureServer::start_chat_completions().await;
+        let provider =
+            GeminiProvider::new(None).with_model(&model.model_id()).with_connection(ProviderConnectionConfig {
+                base_url: Some(server.base_url.clone()),
+                auth_mode: ProviderAuthMode::None,
+                ..Default::default()
+            });
+        let mut context = Context::new(vec![crate::ChatMessage::user("Hello")], vec![]);
+        context.set_reasoning_effort(crate::ReasoningEffort::Disabled);
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        assert!(responses.iter().all(Result::is_ok), "{responses:?}");
+        assert_eq!(server.captured().await.body["reasoning_effort"], "none");
+    }
 
     #[test]
     fn test_provider_display_name() {

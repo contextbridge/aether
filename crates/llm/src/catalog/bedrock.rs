@@ -1,9 +1,9 @@
 use std::borrow::Cow;
 use std::str::FromStr;
 
-use crate::ReasoningEffort;
 use crate::catalog::transport::ModelTransport;
 use crate::catalog::{BedrockFoundationModel, ModelPricing};
+use crate::{ReasoningDisabledSupport, ReasoningEffort};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BedrockModel {
@@ -40,8 +40,15 @@ impl BedrockModel {
         }
     }
 
+    pub fn reasoning_disabled_support(&self) -> crate::reasoning::ReasoningDisabledSupport {
+        match self {
+            Self::Foundation(model) => model.reasoning_disabled_support(),
+            Self::Profile(_) => ReasoningDisabledSupport::Unsupported,
+        }
+    }
+
     pub fn supports_reasoning(&self) -> bool {
-        !self.reasoning_levels().is_empty()
+        self.reasoning_levels().iter().any(|effort| effort.is_enabled())
     }
 
     pub fn supports_prompt_caching(&self) -> bool {

@@ -99,6 +99,34 @@ mod tests {
     use tokio_stream::StreamExt;
 
     #[tokio::test]
+    async fn stream_response_distinguishes_default_disabled_and_low() {
+        for (effort, expected) in [
+            (ReasoningEffort::Default, None),
+            (ReasoningEffort::Disabled, Some("none")),
+            (ReasoningEffort::Low, Some("low")),
+        ] {
+            let mut server = CaptureServer::start_responses().await;
+            let provider = OpenAiProvider::from_env_with_connection(ProviderConnectionConfig {
+                base_url: Some(server.base_url.clone()),
+                auth_mode: ProviderAuthMode::None,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .with_model("gpt-5.4");
+            let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
+            context.set_reasoning_effort(effort);
+            let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+            assert!(responses.iter().all(Result::is_ok), "{responses:?}");
+            let body = server.captured().await.body;
+            assert_eq!(body["reasoning"]["effort"].as_str(), expected);
+            if effort == ReasoningEffort::Disabled {
+                assert!(body["reasoning"]["summary"].is_null());
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn stream_response_sends_max_effort_on_the_wire() {
         let mut server = CaptureServer::start_responses().await;
         let connection = ProviderConnectionConfig {
@@ -108,7 +136,7 @@ mod tests {
         };
         let provider = OpenAiProvider::from_env_with_connection(connection).await.unwrap().with_model("gpt-5.6");
         let mut context = Context::new(vec![ChatMessage::user("Think harder")], vec![]);
-        context.set_reasoning_effort(Some(ReasoningEffort::Max));
+        context.set_reasoning_effort(ReasoningEffort::Max);
         context.set_prompt_cache_key(Some("cache-key".to_string()));
 
         let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
