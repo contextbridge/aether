@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.8.2](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.8.1...aether-agent-core-v0.8.2) - 2026-09-16
+
+### Added
+
+- replace plan and survey with explicit artifact review ([#478](https://github.com/contextbridge/aether/pull/478))
+- support explicitly disabling model reasoning ([#477](https://github.com/contextbridge/aether/pull/477))
+
+### Fixed
+
+- replace deprecated rmcp info aliases ([#480](https://github.com/contextbridge/aether/pull/480))
+
+### Other
+
+- release ([#466](https://github.com/contextbridge/aether/pull/466))
+
 ## [0.8.1](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.8.0...aether-agent-core-v0.8.1) - 2026-09-14
 
 ### Other
