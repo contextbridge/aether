@@ -13,7 +13,7 @@ Allow tools annotated as read-only by their MCP server:
 Combine tool matchers with exact or trailing-`*` name patterns:
 
 ```json
-{ "allow": [{ "readOnly": true }, "plan__*"], "deny": ["coding__web_*"] }
+{ "allow": [{ "readOnly": true }, "coding__write_file", "coding__edit_file", "review__review_artifact"], "deny": ["coding__web_*"] }
 ```
 
 Deny always wins over allow:
