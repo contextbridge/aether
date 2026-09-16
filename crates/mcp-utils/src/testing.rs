@@ -113,7 +113,9 @@ mod tests {
     use super::connect;
     use rmcp::{
         ClientHandler, ServerHandler,
-        model::{ErrorData, Implementation, InitializeRequestParams, ProtocolVersion, ServerCapabilities, ServerInfo},
+        model::{
+            ErrorData, Implementation, InitializeRequestParams, ProtocolVersion, ServerCapabilities, ServerConfig,
+        },
         service::RequestContext,
     };
     use std::borrow::Cow;
@@ -152,8 +154,8 @@ mod tests {
     struct McpServer728;
 
     impl ServerHandler for McpServer728 {
-        fn get_info(&self) -> ServerInfo {
-            ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        fn get_info(&self) -> ServerConfig {
+            ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
                 .with_server_info(Implementation::new("modern-only", "1.0.0"))
                 .with_protocol_version(ProtocolVersion::V_2026_07_28)
         }
@@ -179,8 +181,8 @@ mod tests {
     struct McpServer618;
 
     impl ServerHandler for McpServer618 {
-        fn get_info(&self) -> ServerInfo {
-            ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        fn get_info(&self) -> ServerConfig {
+            ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
                 .with_server_info(Implementation::new("older-revision", "1.0.0"))
                 .with_protocol_version(ProtocolVersion::V_2025_06_18)
         }
@@ -194,8 +196,8 @@ mod tests {
     struct McpServer1125;
 
     impl ServerHandler for McpServer1125 {
-        fn get_info(&self) -> ServerInfo {
-            ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        fn get_info(&self) -> ServerConfig {
+            ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
                 .with_server_info(Implementation::new("legacy", "1.0.0"))
                 .with_protocol_version(ProtocolVersion::V_2025_11_25)
         }

@@ -9,7 +9,7 @@ use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{
         CallToolResponse, CancelTaskParams, CreateTaskResult, GetTaskParams, GetTaskResult, Implementation,
-        ServerCapabilities, ServerInfo, UpdateTaskParams,
+        ServerCapabilities, ServerConfig, UpdateTaskParams,
     },
     service::RequestContext,
     task_manager::{TaskContext, TaskExit, TaskManager, TaskOptions},
@@ -168,8 +168,8 @@ impl SubAgentsMcp {
 #[allow(clippy::unused_async_trait_impl)]
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for SubAgentsMcp {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().enable_tasks().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_tasks().build())
             .with_server_info(Implementation::new("subagents-mcp", "0.1.0"))
             .with_instructions(self.build_instructions())
     }

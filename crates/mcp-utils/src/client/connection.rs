@@ -9,7 +9,7 @@ use aether_auth::{OAuthCredentialStorage, create_auth_manager_from_store, perfor
 use llm::ToolAnnotations;
 use rmcp::{
     RoleClient, RoleServer, ServiceExt,
-    model::{ClientInfo, Tool as RmcpTool},
+    model::{ClientConfig, Tool as RmcpTool},
     serve_client_with_lifecycle,
     service::{DynService, RunningService},
     transport::{
@@ -68,7 +68,7 @@ impl From<&RmcpTool> for Tool {
 }
 
 pub(super) struct ConnectConfig {
-    pub client_info: ClientInfo,
+    pub client_info: ClientConfig,
     pub event_sender: mpsc::Sender<McpClientEvent>,
     pub tool_refresh_sender: mpsc::Sender<ToolListChangedRequest>,
     pub next_connection_generation: Arc<AtomicU64>,

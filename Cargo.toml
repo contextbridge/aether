@@ -50,7 +50,7 @@ agent-client-protocol = { version = "=2.1.0", features = ["unstable_protocol_v2"
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
 
 # MCP and API clients
-rmcp = { version = "^3.3.0", default-features = false }
+rmcp = { version = "^3.4.0", default-features = false }
 async-openai = { version = "^0.41.0", features = ["byot", "chat-completion", "responses"] }
 reqwest = { version = "^0.13.4", default-features = false, features = ["json", "query", "rustls", "http2", "stream"] }
 oauth2 = "5.0"

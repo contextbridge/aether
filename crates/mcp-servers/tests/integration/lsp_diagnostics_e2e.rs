@@ -12,13 +12,13 @@
 use crate::common::{call_tool, connect_lsp, has_errors, has_no_errors, poll_diagnostics, try_call_tool};
 use aether_lspd::testing::{CargoProject, TestProject};
 use rmcp::RoleClient;
-use rmcp::model::ClientInfo;
+use rmcp::model::ClientConfig;
 use rmcp::service::RunningService;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 async fn poll_workspace_diagnostics(
-    client: &RunningService<RoleClient, ClientInfo>,
+    client: &RunningService<RoleClient, ClientConfig>,
     predicate: impl Fn(&serde_json::Value) -> bool,
     timeout: Duration,
 ) -> serde_json::Value {

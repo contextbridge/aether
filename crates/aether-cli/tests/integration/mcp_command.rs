@@ -2,7 +2,7 @@ use mcp_servers::coding::tools::bash::{BashEnvironment, BashInput, execute_comma
 use mcp_utils::tool_gateway::{AETHER_MCP_IPC_SOCKET, UnixSocketMcpTransport, UnixSocketPath};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData, Implementation, ListToolsResult,
-    PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
+    PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
 };
 use rmcp::{RoleServer, ServerHandler, service::RequestContext};
 use serde_json::{Map, json};
@@ -15,8 +15,8 @@ use std::sync::Arc;
 struct FakeGateway;
 
 impl ServerHandler for FakeGateway {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("fake-gateway", "1.0.0"))
     }
 
