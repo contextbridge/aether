@@ -1,6 +1,6 @@
 use rmcp::model::{
     GetPromptRequestParams, GetPromptResponse, Implementation, ListPromptsResult, PaginatedRequestParams,
-    Prompt as McpPrompt, PromptMessage, Role, ServerCapabilities, ServerInfo,
+    Prompt as McpPrompt, PromptMessage, Role, ServerCapabilities, ServerConfig,
 };
 use rmcp::service::{DynService, RequestContext};
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
@@ -38,8 +38,8 @@ impl FakePromptMcp {
 }
 
 impl ServerHandler for FakePromptMcp {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_prompts().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_prompts().build())
             .with_server_info(Implementation::new("fake-prompt-mcp", "0.1.0"))
             .with_instructions("Fake MCP server exposing a single prompt for tests")
     }

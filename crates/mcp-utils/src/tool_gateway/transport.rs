@@ -170,7 +170,7 @@ mod tests {
     use super::*;
     use rmcp::ServerHandler;
     use rmcp::handler::server::router::tool::ToolRouter;
-    use rmcp::model::{ServerCapabilities, ServerInfo};
+    use rmcp::model::{ServerCapabilities, ServerConfig};
     use rmcp::{tool, tool_handler, tool_router};
 
     #[derive(Clone)]
@@ -184,8 +184,8 @@ mod tests {
     #[allow(clippy::unused_async_trait_impl)]
     #[tool_handler(router = self.tool_router)]
     impl ServerHandler for TestServer {
-        fn get_info(&self) -> ServerInfo {
-            ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        fn get_info(&self) -> ServerConfig {
+            ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
         }
     }
 
@@ -276,8 +276,8 @@ mod tests {
         #[allow(clippy::unused_async_trait_impl)]
         #[tool_handler(router = self.tool_router)]
         impl ServerHandler for SlowServer {
-            fn get_info(&self) -> ServerInfo {
-                ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            fn get_info(&self) -> ServerConfig {
+                ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             }
         }
 

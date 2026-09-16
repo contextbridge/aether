@@ -5,7 +5,7 @@ use rmcp::{
         CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ClientCapabilities,
         ContentBlock, CreateTaskResult, DetailedTask, DiscoverResult, GetTaskParams, GetTaskResult, Implementation,
         ListToolsResult, PaginatedRequestParams, ProgressNotificationParam, ProtocolVersion, ResultType,
-        ServerCapabilities, ServerInfo, Tool, UpdateTaskParams,
+        ServerCapabilities, ServerConfig, Tool, UpdateTaskParams,
     },
     service::{DynService, RequestContext},
 };
@@ -312,8 +312,8 @@ impl ServerHandler for FakeMcpServer {
         )))
     }
 
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().enable_tasks().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_tasks().build())
             .with_server_info(
                 Implementation::new("fake-mcp-server", "0.1.0").with_description("A fake MCP server for testing"),
             )

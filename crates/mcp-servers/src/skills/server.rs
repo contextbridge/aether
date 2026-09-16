@@ -7,7 +7,7 @@ use rmcp::{
     },
     model::{
         GetPromptRequestParams, GetPromptResponse, Implementation, ListPromptsResult, PaginatedRequestParams, Prompt,
-        PromptArgument, PromptMessage, Role, ServerCapabilities, ServerInfo,
+        PromptArgument, PromptMessage, Role, ServerCapabilities, ServerConfig,
     },
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -259,8 +259,8 @@ impl SkillsMcp {
 #[allow(clippy::unused_async_trait_impl)]
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for SkillsMcp {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_prompts().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_prompts().enable_tools().build())
             .with_server_info(Implementation::new("skills-mcp", "0.1.0"))
             .with_instructions(include_str!("./instructions.md"))
     }

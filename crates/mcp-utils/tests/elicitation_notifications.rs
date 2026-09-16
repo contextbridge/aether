@@ -1,7 +1,7 @@
 use mcp_utils::client::{McpClient, McpClientEvent, client_capabilities};
 use mcp_utils::testing::connect;
 use rmcp::ServerHandler;
-use rmcp::model::{ClientInfo, CustomNotification, Implementation, ServerNotification};
+use rmcp::model::{ClientConfig, CustomNotification, Implementation, ServerNotification};
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
@@ -13,7 +13,7 @@ impl ServerHandler for CompletionServer {}
 async fn custom_completion_notification_includes_the_source_server() {
     let (event_tx, mut event_rx) = mpsc::channel(1);
     let client = McpClient::new(
-        ClientInfo::new(client_capabilities(), Implementation::new("test-client", "1.0.0")),
+        ClientConfig::new(client_capabilities(), Implementation::new("test-client", "1.0.0")),
         "linear".to_string(),
         event_tx,
     );

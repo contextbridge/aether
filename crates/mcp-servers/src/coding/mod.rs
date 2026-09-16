@@ -11,7 +11,7 @@ use rmcp::{
         CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ContentBlock, CreateTaskResult,
         ElicitRequest, ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationSchema, EnumSchema,
         GetTaskParams, GetTaskResult, Implementation, InputRequest, InputRequests, InputRequiredResult,
-        ProgressNotificationParam, ServerCapabilities, ServerInfo, UpdateTaskParams,
+        ProgressNotificationParam, ServerCapabilities, ServerConfig, UpdateTaskParams,
     },
     service::RequestContext,
     task_manager::{TaskContext, TaskExit, TaskManager, TaskOptions},
@@ -137,9 +137,9 @@ fn build_rule_catalog(configured_rules_dirs: &[PathBuf]) -> aether_project::Prom
 #[allow(clippy::unused_async_trait_impl)]
 #[tool_handler(router = self.tool_router)]
 impl<T: CodingTools + 'static> ServerHandler for CodingMcp<T> {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         let instructions = self.build_instructions();
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().enable_tasks().build())
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_tasks().build())
             .with_server_info(Implementation::new("coding-mcp", "0.1.0"))
             .with_instructions(instructions)
     }

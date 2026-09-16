@@ -312,7 +312,7 @@ mod tests {
     use crate::testing::{FakeMcpServer, FakeMcpState, FakeTool, FakeToolResponse, connect};
     use futures::StreamExt;
     use rmcp::model::{
-        CallToolRequestParams, CallToolResult, ClientInfo, CreateTaskResult, DetailedTask, ElicitRequest,
+        CallToolRequestParams, CallToolResult, ClientConfig, CreateTaskResult, DetailedTask, ElicitRequest,
         ElicitRequestParams, Implementation, InputRequest, ProtocolVersion,
     };
     use serde_json::json;
@@ -349,7 +349,7 @@ mod tests {
             );
         let (event_tx, _event_rx) = mpsc::channel::<McpClientEvent>(4);
         let client = McpClient::new(
-            ClientInfo::new(client_capabilities(), Implementation::new("test-client", "0.1.0")),
+            ClientConfig::new(client_capabilities(), Implementation::new("test-client", "0.1.0")),
             "task-server".into(),
             event_tx,
         );
@@ -395,7 +395,7 @@ mod tests {
         let state = server.state();
         let (event_tx, _event_rx) = mpsc::channel::<McpClientEvent>(4);
         let client = McpClient::new(
-            ClientInfo::new(client_capabilities(), Implementation::new("test-client", "0.1.0")),
+            ClientConfig::new(client_capabilities(), Implementation::new("test-client", "0.1.0")),
             "task-server".into(),
             event_tx,
         );
@@ -468,7 +468,7 @@ mod tests {
             let state = server.state();
             let (event_tx, _event_rx) = mpsc::channel::<McpClientEvent>(4);
             let client = McpClient::new(
-                ClientInfo::new(client_capabilities(), Implementation::new("test-client", "0.1.0")),
+                ClientConfig::new(client_capabilities(), Implementation::new("test-client", "0.1.0")),
                 "task-server".into(),
                 event_tx,
             );
