@@ -3,7 +3,7 @@ use super::{App, ExitState, ForegroundOperation, Overlay, PromptPhase, Route};
 use crate::command::{AgentCommand, Command, TerminalCommand};
 use crate::conversation::tool_calls::ToolStatus;
 use crate::conversation::{ContextUsageDisplay, MessageRole};
-use crate::screens::plan_review::PlanReviewScreen;
+use crate::screens::artifact_review::ArtifactReviewScreen;
 use crate::surfaces::modal::ElicitationModal;
 use crate::surfaces::picker::CommandEntry;
 use crate::surfaces::session_picker::SessionPicker;
@@ -14,6 +14,7 @@ use agent_client_protocol::schema::v2::{
     self as acp, CreateElicitationRequest, ElicitationMode, SessionId, SessionUpdate, StateUpdate,
 };
 use std::time::Instant;
+use utils::artifact_review::ArtifactReviewElicitationMeta;
 
 impl App {
     #[allow(clippy::too_many_lines)]
@@ -21,7 +22,8 @@ impl App {
         match event {
             AcpEvent::SessionUpdate(notification) => {
                 if &notification.session_id == self.session.session_id()
-                    || matches!(self.foreground, ForegroundOperation::CreatingSession { .. }) {
+                    || matches!(self.foreground, ForegroundOperation::CreatingSession { .. })
+                {
                     self.on_session_update(&notification.update);
                 }
             }
@@ -31,8 +33,8 @@ impl App {
             AcpEvent::ElicitationRequest { params, responder } => {
                 let params = *params;
                 self.close_elicitation_owner();
-                if let Some(meta) = plan_review_meta(&params) {
-                    self.open_route(Route::PlanReview(Box::new(PlanReviewScreen::new(meta, responder))));
+                if let Some(meta) = artifact_review_meta(&params) {
+                    self.open_route(Route::ArtifactReview(Box::new(ArtifactReviewScreen::new(meta, responder))));
                     return;
                 }
                 // The settings overlay answers its own elicitations in place so
@@ -90,7 +92,9 @@ impl App {
     pub(super) fn on_resumed_session(&mut self, session_id: &SessionId, response: acp::ResumeSessionResponse) {
         match &self.foreground {
             ForegroundOperation::ResumingSession { session_id: expected, cwd }
-            | ForegroundOperation::LoadingWorkspaceSession { session_id: expected, cwd } if expected == session_id => {
+            | ForegroundOperation::LoadingWorkspaceSession { session_id: expected, cwd }
+                if expected == session_id =>
+            {
                 if self.session.working_dir() != cwd {
                     let cwd = cwd.clone();
                     self.session.set_working_dir(cwd.clone());
@@ -267,11 +271,9 @@ impl App {
     }
 }
 
-pub(super) fn plan_review_meta(
-    params: &CreateElicitationRequest,
-) -> Option<utils::plan_review::PlanReviewElicitationMeta> {
+pub(super) fn artifact_review_meta(params: &CreateElicitationRequest) -> Option<ArtifactReviewElicitationMeta> {
     if !matches!(params.mode, ElicitationMode::Form(_)) {
         return None;
     }
-    utils::plan_review::PlanReviewElicitationMeta::parse(params.meta.as_ref())
+    ArtifactReviewElicitationMeta::parse(params.meta.as_ref())
 }

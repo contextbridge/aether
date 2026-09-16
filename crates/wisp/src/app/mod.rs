@@ -270,7 +270,7 @@ impl App {
             }
             CommandResult::ReviewThemesListed(choices) => match &mut self.route {
                 Route::GitReview(screen) => screen.set_theme_choices(choices),
-                Route::PlanReview(screen) => screen.set_theme_choices(choices),
+                Route::ArtifactReview(screen) => screen.set_theme_choices(choices),
                 Route::Conversation => {}
             },
             CommandResult::ThemeApplied(result) => self.finish_theme_change(result),

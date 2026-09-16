@@ -1,3 +1,3 @@
 pub mod git_diff;
-pub mod plan_review;
+pub mod artifact_review;
 mod reviewer;

@@ -1,5 +1,5 @@
 use crate::screens::git_diff::GitDiffScreen;
-use crate::screens::plan_review::PlanReviewScreen;
+use crate::screens::artifact_review::ArtifactReviewScreen;
 use crate::settings::overlay::SettingsOverlay;
 use crate::surfaces::modal::ElicitationModal;
 use crate::surfaces::session_picker::SessionPicker;
@@ -9,7 +9,7 @@ use crate::surfaces::workspace_picker::WorkspacePicker;
 pub enum Route {
     Conversation,
     GitReview(Box<GitDiffScreen>),
-    PlanReview(Box<PlanReviewScreen>),
+    ArtifactReview(Box<ArtifactReviewScreen>),
 }
 
 impl Route {

@@ -65,7 +65,8 @@ pub enum GitReviewOutput {
 }
 
 #[derive(Debug)]
-pub enum PlanReviewOutput {
+pub enum ArtifactReviewOutput {
+    Approved,
     Outcome(ReviewOutcome),
     SetTheme(String),
 }
@@ -77,7 +78,7 @@ pub enum RootOutput {
     Settings(SettingsOutput),
     Elicitation(ElicitationOutput),
     GitReview(GitReviewOutput),
-    PlanReview(PlanReviewOutput),
+    ArtifactReview(ArtifactReviewOutput),
 }
 
 pub enum UiEvent {

@@ -8,12 +8,12 @@ use ratatui::{
     layout::{Position, Rect},
     style::{Color, Modifier, Style},
 };
-use utils::plan_review::PlanReviewElicitationMeta;
+use utils::artifact_review::{ArtifactFormat, ArtifactReviewElicitationMeta};
 use wisp::{
     command::GitWatchCommand,
     git_review::{DiffDocument, FileDiff, GitWatchEvent},
     renderer::DrawContext,
-    screens::{git_diff::GitDiffScreen, plan_review::PlanReviewScreen},
+    screens::{artifact_review::ArtifactReviewScreen, git_diff::GitDiffScreen},
     surfaces::elicitation::ElicitationResponder,
     theme::Theme,
     view::{generation::Generation, syntax::SyntaxHighlighter},
@@ -49,16 +49,24 @@ fn git_review_clears_underlying_content_only_inside_its_viewport() {
 }
 
 #[test]
-fn plan_review_clears_underlying_content_only_inside_its_viewport() {
+fn artifact_review_clears_underlying_content_only_inside_its_viewport() {
     for y in [0, 2] {
         for lines in [1, 60] {
             let markdown = format!("# Plan\n\n{}", "Implement this.\n\n".repeat(lines));
-            let mut screen = PlanReviewScreen::new(
-                PlanReviewElicitationMeta::new(&PathBuf::from("/workspace/plan.md"), &markdown),
+            let mut screen = ArtifactReviewScreen::new(
+                ArtifactReviewElicitationMeta::new(
+                    &PathBuf::from("/workspace/plan.md"),
+                    &markdown,
+                    ArtifactFormat::Markdown,
+                ),
                 ElicitationResponder::from_fn(|_| {}),
             );
             assert_opaque_viewport(Rect::new(3, y, 120, 24), |area, buffer, cx| {
                 screen.render(area, buffer, cx);
+            });
+            screen.on_ui_event(wisp::surfaces::input::UiEvent::Key(crossterm::event::KeyCode::Char('r').into()));
+            assert_opaque_viewport(Rect::new(3, y, 120, 24), |area, buffer, cx| {
+                assert_eq!(screen.render(area, buffer, cx), None);
             });
         }
     }
