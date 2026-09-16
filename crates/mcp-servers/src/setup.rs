@@ -1,7 +1,6 @@
 use crate::coding::tools::bash::BashEnvironment;
-use crate::plan::DEFAULT_PLANS_DIR;
 use crate::workspace_paths::resolve_path;
-use crate::{CodingMcp, CodingMcpArgs, DefaultCodingTools, PlanMcp, SkillsMcp, SubAgentsMcp, SurveyMcp, TasksMcp};
+use crate::{CodingMcp, CodingMcpArgs, DefaultCodingTools, ReviewMcp, SkillsMcp, SubAgentsMcp, TasksMcp};
 use aether_core::mcp::{McpBuilder, RuntimeServices};
 use futures::FutureExt;
 use mcp_utils::ServiceExt;
@@ -84,20 +83,14 @@ impl McpBuilderExt for McpBuilder {
             }),
         )
         .register_in_memory_server(
-            "survey",
-            Box::new(|_spec, _services| async move { SurveyMcp::new().into_dyn() }.boxed()),
-        )
-        .register_in_memory_server(
-            "plan",
+            "review",
             Box::new(|spec, services| {
                 async move {
-                    let default_plans_dir = services.root_dir.join(DEFAULT_PLANS_DIR);
-                    PlanMcp::from_args_with_base_dir(spec.args, default_plans_dir, &services.root_dir)
-                        .map_err(|error| {
-                            warn!("Failed to parse PlanMcp args: {error}, using defaults");
-                            error
+                    ReviewMcp::from_args_with_base_dir(spec.args, &services.root_dir)
+                        .inspect_err(|error| {
+                            warn!("Failed to parse ReviewMcp args: {error}, using workspace root");
                         })
-                        .unwrap_or_else(|_| PlanMcp::new())
+                        .unwrap_or_else(|_| ReviewMcp::new().with_root_dir(services.root_dir.clone()))
                         .into_dyn()
                 }
                 .boxed()

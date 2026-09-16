@@ -4,7 +4,7 @@ use crate::command::{AgentCommand, Command, FilesystemCommand};
 use crate::session::WorkspaceAccess;
 use crate::settings::overlay::{SettingsChange, SettingsOverlay};
 use crate::surfaces::input::{
-    ElicitationOutput, GitReviewOutput, PlanReviewOutput, ReviewOutcome, RootOutput, SessionPickerOutput,
+    ElicitationOutput, GitReviewOutput, ArtifactReviewOutput, ReviewOutcome, RootOutput, SessionPickerOutput,
     SettingsOutput, WorkspacePickerOutput,
 };
 use crate::surfaces::picker::CommandEntry;
@@ -132,8 +132,12 @@ impl App {
                 }
             },
             RootOutput::Elicitation(ElicitationOutput::Close) => self.close_active(),
-            RootOutput::PlanReview(PlanReviewOutput::SetTheme(value)) => self.apply_theme_change(&value),
-            RootOutput::PlanReview(PlanReviewOutput::Outcome(outcome)) => {
+            RootOutput::ArtifactReview(ArtifactReviewOutput::Approved) => {
+                self.notify("Artifact approved");
+                self.close_active();
+            }
+            RootOutput::ArtifactReview(ArtifactReviewOutput::SetTheme(value)) => self.apply_theme_change(&value),
+            RootOutput::ArtifactReview(ArtifactReviewOutput::Outcome(outcome)) => {
                 if let ReviewOutcome::Submitted(summary) = outcome {
                     self.notify(&summary);
                 }
@@ -160,7 +164,7 @@ impl App {
         if let Route::GitReview(screen) = &self.route {
             self.queue(Command::GitWatch(screen.close()));
         }
-        if matches!(route, Route::GitReview(_) | Route::PlanReview(_)) {
+        if matches!(route, Route::GitReview(_) | Route::ArtifactReview(_)) {
             self.queue(Command::Filesystem(FilesystemCommand::ListReviewThemes));
         }
         self.close_overlay();

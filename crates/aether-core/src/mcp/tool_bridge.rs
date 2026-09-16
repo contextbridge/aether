@@ -62,7 +62,11 @@ pub fn mcp_result_to_tool_call_result(
     } else {
         let (result_value, result_meta) = extract_result_and_meta(mcp_result.structured_content, &mcp_result.content);
         // YAML is ~18% more token-efficient than JSON for LLM consumption
-        let yaml = serde_yml::to_string(&result_value).unwrap_or_else(|_| result_value.to_string());
+        // serde_yml can add blank lines to block scalars; only use lossless YAML.
+        let yaml = serde_yml::to_string(&result_value)
+            .ok()
+            .filter(|yaml| serde_yml::from_str::<serde_json::Value>(yaml).is_ok_and(|decoded| decoded == result_value))
+            .unwrap_or_else(|| result_value.to_string());
         let result_str = maybe_spillover(&request.id, yaml, TOOL_RESULT_MAX_BYTES, &spillover_dir());
         Ok((
             ToolCallResult {
@@ -257,6 +261,19 @@ mod tests {
         }));
         assert!(meta.is_none());
         assert!(result.result.contains("not a valid ToolDisplayMeta"));
+    }
+
+    #[test]
+    fn structured_strings_preserve_trailing_whitespace() {
+        for text in ["", "plain", "line\n", "line\n\n", "line\n\n\n", "\n", "\n\n", "  line\n\n", "line\n  "] {
+            for value in
+                [json!(text), json!({"first": text, "last": "end"}), json!({"nested": [text]}), json!({"last": text})]
+            {
+                let (result, _) = call_structured(value.clone());
+                let decoded: serde_json::Value = serde_yml::from_str(&result.result).unwrap();
+                assert_eq!(decoded, value, "encoded result: {:?}", result.result);
+            }
+        }
     }
 
     #[test]

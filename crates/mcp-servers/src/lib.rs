@@ -33,11 +33,8 @@ pub mod tasks;
 #[cfg(feature = "subagents")]
 pub mod subagents;
 
-#[cfg(feature = "survey")]
-pub mod survey;
-
-#[cfg(feature = "plan")]
-pub mod plan;
+#[cfg(feature = "review")]
+pub mod review;
 
 // Re-export primary types for convenience
 #[cfg(feature = "coding")]
@@ -55,8 +52,5 @@ pub use tasks::{TasksMcp, TasksMcpArgs};
 #[cfg(feature = "subagents")]
 pub use subagents::{SubAgentsMcp, SubAgentsMcpArgs};
 
-#[cfg(feature = "survey")]
-pub use survey::SurveyMcp;
-
-#[cfg(feature = "plan")]
-pub use plan::{DEFAULT_PLAN_PROMPT, PlanMcp, PlanMcpArgs};
+#[cfg(feature = "review")]
+pub use review::{ReviewArtifactInput, ReviewArtifactOutput, ReviewMcp, ReviewMcpArgs};
