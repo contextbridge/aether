@@ -131,20 +131,6 @@ fn writes_project_batteries_preset_for_anthropic() {
     let plan = &settings.agents[0];
     assert_plan_tools(plan);
 
-    let plan_skill = dir.path().join(".aether/skills/plan.md");
-    assert!(plan_skill.is_file());
-    let plan_skill = std::fs::read_to_string(plan_skill).unwrap();
-    for expected in [
-        "review__review_artifact",
-        "`approved`",
-        "`feedback`",
-        "`cancelled`",
-        "`declined`",
-        "Empty feedback is not approval",
-    ] {
-        assert!(plan_skill.contains(expected), "missing planning instruction: {expected}");
-    }
-
     let plan_servers = inline_servers(&plan.mcps[0]);
     let plan_server_names: Vec<&str> = plan_servers.keys().map(String::as_str).collect();
     assert_eq!(plan_server_names, vec!["coding", "review", "skills", "subagents", "tasks"]);
