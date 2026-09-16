@@ -3,7 +3,7 @@ use super::{App, ExitState, ForegroundOperation, Overlay, PromptPhase, Route};
 use crate::command::{AgentCommand, Command, TerminalCommand};
 use crate::conversation::tool_calls::ToolStatus;
 use crate::conversation::{ContextUsageDisplay, MessageRole};
-use crate::screens::plan_review::PlanReviewScreen;
+use crate::screens::artifact_review::ArtifactReviewScreen;
 use crate::surfaces::modal::ElicitationModal;
 use crate::surfaces::picker::CommandEntry;
 use crate::surfaces::session_picker::SessionPicker;
@@ -31,8 +31,8 @@ impl App {
             AcpEvent::ElicitationRequest { params, responder } => {
                 let params = *params;
                 self.close_elicitation_owner();
-                if let Some(meta) = plan_review_meta(&params) {
-                    self.open_route(Route::PlanReview(Box::new(PlanReviewScreen::new(meta, responder))));
+                if let Some(meta) = artifact_review_meta(&params) {
+                    self.open_route(Route::ArtifactReview(Box::new(ArtifactReviewScreen::new(meta, responder))));
                     return;
                 }
                 // The settings overlay answers its own elicitations in place so
@@ -267,11 +267,11 @@ impl App {
     }
 }
 
-pub(super) fn plan_review_meta(
+pub(super) fn artifact_review_meta(
     params: &CreateElicitationRequest,
-) -> Option<utils::plan_review::PlanReviewElicitationMeta> {
+) -> Option<utils::artifact_review::ArtifactReviewElicitationMeta> {
     if !matches!(params.mode, ElicitationMode::Form(_)) {
         return None;
     }
-    utils::plan_review::PlanReviewElicitationMeta::parse(params.meta.as_ref())
+    utils::artifact_review::ArtifactReviewElicitationMeta::parse(params.meta.as_ref())
 }

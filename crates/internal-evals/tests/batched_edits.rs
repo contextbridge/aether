@@ -32,12 +32,11 @@ async fn edit_file_multi_point_revision_in_single_call_eval() -> Result<(), Eval
 async fn edit_plan_multi_point_revision_in_single_call_eval() -> Result<(), EvalHarnessError> {
     let workspace = Workspace::empty()?;
     let prompt = lines(&[
-        "Use the plan MCP tools.",
-        "First call plan__write_plan with planName 'feature' and this exact body:",
+        "Use coding filesystem tools to write docs/aether/plans/feature-plan.md with this exact body:",
         "# Feature",
         "Step one: scaffold",
         "Step two: wire it up",
-        "Then revise it by calling plan__edit_plan EXACTLY ONCE, passing both changes together in the edits array:",
+        "Then revise it by calling coding__edit_file EXACTLY ONCE, passing both changes together in the edits array:",
         "- change 'Step one: scaffold' to 'Step one: design'",
         "- change 'Step two: wire it up' to 'Step two: implement'",
     ]);
@@ -45,7 +44,7 @@ async fn edit_plan_multi_point_revision_in_single_call_eval() -> Result<(), Eval
 
     let trace = Transcript::from_stream(stream).await?;
 
-    assert_single_edit_call(&trace, "plan__edit_plan");
+    assert_single_edit_call(&trace, "coding__edit_file");
     assert_eq!(
         read_file(&workspace, "docs/aether/plans/feature-plan.md")?,
         lines(&["# Feature", "Step one: design", "Step two: implement"])

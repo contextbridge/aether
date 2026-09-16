@@ -1,0 +1,37 @@
+---
+title: Review
+---
+
+Review MCP opens any agent-authored Markdown artifact in Aether's Markdown review UI. It retains approval, requested changes, contextual line comments, themes, and cancellation.
+
+```json
+{
+  "servers": {
+    "review": { "type": "in-memory" }
+  }
+}
+```
+
+The only tool is `review__review_artifact`:
+
+```json
+{ "path": "docs/aether/plans/auth-refactor-plan.md", "format": "markdown" }
+```
+
+The agent creates and edits files with ordinary coding tools. Relative paths resolve against the Review server's agent-side workspace root; absolute paths refer to the agent machine. Review reads a regular UTF-8 file and sends its Markdown through MCP elicitation. Wisp renders the supplied Markdown and does not read the path locally.
+
+The server is stateless. On the response round it does not reread the source, so editing or deleting the file while the review is open does not alter that review. Results have one of four statuses:
+
+- `approved`: explicit approval without feedback; continue the requested workflow.
+- `feedback`: complete clankerdiff-formatted `feedback` without summarization; address it and request review again.
+- `cancelled` or `declined`: distinct outcomes that do not authorize continuation.
+
+Empty feedback is not approval. In Wisp, submitting without comments opens an **Approve and continue** confirmation. Press Enter to approve or Escape to return to review. Plain form clients choose `decision: approved | feedback`; approval cannot contain nonempty feedback. Approval does not expand the user's requested scope: a planning-only task ends with the plan, while a plan-then-build task can proceed to implementation.
+
+Plans and questions use the same workflow. For a question, write options and instructions into Markdown, then ask the user to answer through contextual or overall comments:
+
+```json
+{ "path": "docs/aether/questions/deployment-region.md", "format": "markdown" }
+```
+
+Structured Survey schemas and Plan's external submission command are intentionally not part of Review MCP.

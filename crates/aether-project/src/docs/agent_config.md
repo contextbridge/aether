@@ -10,7 +10,7 @@ A user-invocable agent with its own prompt and a read-only tool allowlist:
   "model": "anthropic:claude-sonnet-4-5-20250929",
   "userInvocable": true,
   "prompts": [".aether/REVIEW.md"],
-  "tools": { "allow": [{ "readOnly": true }, "plan__*"] }
+  "tools": { "allow": [{ "readOnly": true }, "review__review_artifact"] }
 }
 ```
 

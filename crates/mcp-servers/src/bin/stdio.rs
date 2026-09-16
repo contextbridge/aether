@@ -1,7 +1,6 @@
 use clap::Parser;
-use mcp_servers::plan::default_plans_dir;
 use mcp_servers::workspace_paths::{current_dir, resolve_path};
-use mcp_servers::{CodingMcp, CodingMcpArgs, PlanMcp, SkillsMcp, SubAgentsMcp, SurveyMcp, TasksMcp};
+use mcp_servers::{CodingMcp, CodingMcpArgs, ReviewMcp, SkillsMcp, SubAgentsMcp, TasksMcp};
 use mcp_utils::ServiceExt;
 use rmcp::ServerHandler;
 use rmcp::transport::io::stdio;
@@ -9,7 +8,7 @@ use rmcp::transport::io::stdio;
 #[derive(Parser)]
 #[command(name = "mcp-servers-stdio", about = "Run an MCP server over stdio")]
 struct Cli {
-    /// Which server to run: coding, skills, tasks, subagents, survey, plan
+    /// Which server to run: coding, skills, tasks, subagents, review
     #[arg(long)]
     server: String,
 
@@ -20,7 +19,7 @@ struct Cli {
 
 #[derive(Debug, thiserror::Error)]
 enum StdioError {
-    #[error("Unknown server: '{0}'. Available: coding, skills, tasks, subagents, survey, plan")]
+    #[error("Unknown server: '{0}'. Available: coding, skills, tasks, subagents, review")]
     UnknownServer(String),
     #[error("{0}")]
     ServerArgs(#[from] mcp_servers::error::ServerInitError),
@@ -65,12 +64,8 @@ async fn main() -> Result<(), StdioError> {
             let server = SubAgentsMcp::standalone_from_args(cli.args).map_err(StdioError::ServerArgs)?;
             serve_stdio(server).await
         }
-        "survey" => {
-            let server = SurveyMcp::from_args(cli.args).map_err(StdioError::ServerArgs)?;
-            serve_stdio(server).await
-        }
-        "plan" => {
-            let server = PlanMcp::from_args(cli.args, default_plans_dir()).map_err(StdioError::ServerArgs)?;
+        "review" => {
+            let server = ReviewMcp::from_args(cli.args).map_err(StdioError::ServerArgs)?;
             serve_stdio(server).await
         }
         other => Err(StdioError::UnknownServer(other.to_string())),

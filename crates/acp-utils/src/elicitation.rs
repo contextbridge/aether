@@ -283,20 +283,20 @@ mod tests {
     #[test]
     fn form_request_converts_with_session_scope_and_source_server() {
         let request = ElicitRequestParams::FormElicitationParams {
-            meta: Some(mcp::RequestMetaObject::from(Map::from_iter([("ui".to_string(), json!("planReview"))]))),
+            meta: Some(mcp::RequestMetaObject::from(Map::from_iter([("ui".to_string(), json!("artifactReview"))]))),
             message: "Review the plan".to_string(),
             requested_schema: rmcp::model::ElicitationSchema::builder().required_bool("approved").build().unwrap(),
         };
 
-        let converted = map_mcp_elicitation_request_to_acp("plan", &SessionId::new("session-1"), &request).unwrap();
+        let converted = map_mcp_elicitation_request_to_acp("review", &SessionId::new("session-1"), &request).unwrap();
 
         let ElicitationMode::Form(form) = converted.mode else { panic!("expected form mode") };
         let ElicitationScope::Session(scope) = form.scope else { panic!("expected session scope") };
         assert_eq!(&*scope.session_id.0, "session-1");
         assert!(form.requested_schema.properties.contains_key("approved"));
         assert_eq!(converted.message, "Review the plan");
-        assert_eq!(converted.meta.as_ref().and_then(|meta| meta.get("ui")), Some(&json!("planReview")));
-        assert_eq!(source_mcp_server_name(converted.meta.as_ref()), Some("plan"));
+        assert_eq!(converted.meta.as_ref().and_then(|meta| meta.get("ui")), Some(&json!("artifactReview")));
+        assert_eq!(source_mcp_server_name(converted.meta.as_ref()), Some("review"));
     }
 
     #[test]
