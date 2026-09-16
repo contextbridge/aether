@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.45](https://github.com/contextbridge/aether/compare/aether-project-v0.5.44...aether-project-v0.5.45) - 2026-09-16
+
+### Added
+
+- replace plan and survey with explicit artifact review ([#478](https://github.com/contextbridge/aether/pull/478))
+- support explicitly disabling model reasoning ([#477](https://github.com/contextbridge/aether/pull/477))
+
+### Other
+
+- release ([#466](https://github.com/contextbridge/aether/pull/466))
+
 ## [0.5.44](https://github.com/contextbridge/aether/compare/aether-project-v0.5.43...aether-project-v0.5.44) - 2026-09-14
 
 ### Other

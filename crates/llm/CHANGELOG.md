@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.2](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.1...aether-llm-v0.9.2) - 2026-09-16
+
+### Added
+
+- support explicitly disabling model reasoning ([#477](https://github.com/contextbridge/aether/pull/477))
+
 ## [0.9.1](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.0...aether-llm-v0.9.1) - 2026-09-14
 
 ### Other
