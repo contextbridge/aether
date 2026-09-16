@@ -14,12 +14,8 @@
     "subagents": {
       "type": "in-memory"
     },
-    "survey": {
+    "review": {
       "type": "in-memory"
-    },
-    "plan": {
-      "type": "in-memory",
-      "args": ["contextbridge", "plan"]
     },
     "chrome-devtools": {
       "command": "npx",

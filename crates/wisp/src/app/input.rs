@@ -71,7 +71,7 @@ impl App {
         }
         let actions: Vec<RootOutput> = match &mut self.route {
             Route::GitReview(screen) => screen.on_ui_event(event).into_iter().map(RootOutput::GitReview).collect(),
-            Route::PlanReview(screen) => screen.on_ui_event(event).into_iter().map(RootOutput::PlanReview).collect(),
+            Route::ArtifactReview(screen) => screen.on_ui_event(event).into_iter().map(RootOutput::ArtifactReview).collect(),
             Route::Conversation => {
                 return match event {
                     UiEvent::Key(key) => self.dispatch_key(key),
@@ -239,7 +239,7 @@ impl App {
         match &mut self.route {
             Route::Conversation => None,
             Route::GitReview(screen) => screen.render(area, buf, cx),
-            Route::PlanReview(screen) => screen.render(area, buf, cx),
+            Route::ArtifactReview(screen) => screen.render(area, buf, cx),
         }
     }
 
@@ -262,7 +262,7 @@ impl App {
             Some(_) => true,
             None => match self.route {
                 Route::Conversation => self.composer.has_open_overlay(),
-                Route::GitReview(_) | Route::PlanReview(_) => true,
+                Route::GitReview(_) | Route::ArtifactReview(_) => true,
             },
         }
     }

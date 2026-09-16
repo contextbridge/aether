@@ -25,7 +25,7 @@ dist = false
 workspace = true
 
 [features]
-default = ["coding", "skills", "tasks", "subagents", "plan"]
+default = ["coding", "skills", "tasks", "subagents", "review"]
 test-helpers = []
 file-ops = ["dep:thiserror"]
 coding = [
@@ -58,13 +58,12 @@ tasks = [
     "dep:tempfile",
     "dep:thiserror",
 ]
-plan = ["file-ops"]
+review = ["dep:thiserror"]
 subagents = [
     "coding",
     "skills",
     "tasks",
-    "survey",
-    "plan",
+    "review",
     "dep:aether-auth",
     "dep:aether-core",
     "dep:aether-project",
@@ -72,9 +71,8 @@ subagents = [
     "dep:futures",
     "dep:tracing",
 ]
-survey = []
-all = ["coding", "skills", "tasks", "subagents", "survey", "plan"]
-stdio = ["coding", "skills", "tasks", "survey", "subagents", "plan", "rmcp/transport-io"]
+all = ["coding", "skills", "tasks", "subagents", "review"]
+stdio = ["coding", "skills", "tasks", "subagents", "review", "rmcp/transport-io"]
 
 [dependencies]
 # Always required

@@ -1,6 +1,12 @@
+---
+name: plan
+description: Research, write, and submit an implementation plan for review.
+user-invocable: true
+---
+
 # Planner Instructions
 
-You are in "plan mode" right now. When the user asks you to solve a problem your job is to come up with an implementation plan that we can hand off to a junior engineer to implement. Don't modify files, outside of writing and updating a markdown plan file.
+You are in "plan mode" right now. When the user asks you to solve a problem your job is to come up with an implementation plan that we can hand off to a junior engineer to implement. Don't modify files, outside of writing and updating a markdown plan file. You exit "plan mode" once the user approves your plan.
 
 ## Workflow
 Always follow this workflow when creating a plan.
@@ -20,7 +26,7 @@ First you must:
 
 ### Step 3: Generate Implementation Plan
 
-Generate an implementation plan and save it with the `write_plan` tool. Choose a short stable `planName` such as `auth-refactor`; the MCP server stores it in the configured plans directory. Then present your plan to the user via the `submit_plan` tool using the same `planName`. It must include the following sections:
+Generate an implementation plan and save it with the `coding__write_file` tool in `docs/aether/plans`. Choose a short stable name such as `auth-refactor-plan.md`. Then present your plan to the user via the `review__review_artifact` tool using the plan path. It must include the following sections:
 
 **Overview**
 - Clear problem statement
@@ -52,16 +58,9 @@ A markdown table that lists:
 - Documentation updates needed
 - Follow-up tasks that may be spawned
 
-### Updating a plan
+### User Feedback
 
-The user may ask you to revise or update a plan based on feedback. Use the `edit_plan` tool with the plan's `planName` to update the plan file and call the `submit_plan` tool again.
-
-## Non-Plan Files
-
-If asked to edit, write, delete, or otherwise modify a non-plan file:
-
-1. If you have tools for creating or modifying non-plan files (e.g. `create_file`, `edit_file` etc), you may do so. But you must ensure the user has explicitly approved your plan or instructed you to exit plan mode before proceeding. If the user hasn't approved the plan and/or instructed you to exit plan mode, stop and output exactly: "I can't modify files in plan mode, would you like to exit plan mode?".
-2. If you do not have tools for creating or modifying non-plan files, stop and output exactly "I don't have tools to modify non-plan files, you must switch to another agent". 
+Request user feedback. If you have a tool to do so, use it.
 
 ## Task
 

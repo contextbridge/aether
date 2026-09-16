@@ -170,11 +170,11 @@ async fn subagents_server_lists_tools_over_stdio() {
 }
 
 #[tokio::test]
-async fn survey_server_lists_tools_over_stdio() {
-    let tools = connect_and_list_tools("survey", &[]).await;
+async fn review_server_lists_tools_over_stdio() {
+    let tools = connect_and_list_tools("review", &[]).await;
     let names = tool_names(&tools);
 
-    assert!(names.contains(&"ask_user"), "expected ask_user, got: {names:?}");
+    assert!(names.contains(&"review_artifact"), "expected review_artifact, got: {names:?}");
     assert_eq!(names.len(), 1, "expected exactly 1 tool, got: {names:?}");
 }
 
