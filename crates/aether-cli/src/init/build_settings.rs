@@ -14,6 +14,8 @@ const EXPLORER_AGENTS_PATH: &str = "agents/codebase-explorer/AGENTS.md";
 
 const AETHER_SKILL_MD: &str = include_str!("templates/skills/aether/SKILL.md");
 const AETHER_SKILL_PATH: &str = "skills/aether/SKILL.md";
+const PLAN_SKILL_MD: &str = include_str!("templates/skills/plan.md");
+const PLAN_SKILL_PATH: &str = "skills/plan.md";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 #[clap(rename_all = "kebab-case")]
@@ -66,19 +68,18 @@ fn build_batteries_included_plan_agent(
     let skills = skills_args(harnesses);
     AgentConfig {
         name: "Plan".to_string(),
-        description: format!("{display} planner (read-only except plan files)"),
+        description: format!("{display} planner (may write plan artifacts and request review)"),
         model,
         reasoning_effort,
         user_invocable: true,
         mcps: vec![mcps(vec![
-            ("plan", vec![]),
+            ("review", vec![]),
             ("coding", coding),
             ("skills", skills),
             ("subagents", vec![]),
             ("tasks", vec![]),
-            ("survey", vec![]),
         ])],
-        tools: read_only_coding_tools(),
+        tools: plan_tools(),
         ..AgentConfig::default()
     }
 }
@@ -102,7 +103,7 @@ fn build_batteries_included_build_agent(
             ("skills", skills),
             ("subagents", vec![]),
             ("tasks", vec![]),
-            ("survey", vec![]),
+            ("review", vec![]),
         ])],
         ..AgentConfig::default()
     }
@@ -196,6 +197,7 @@ fn batteries_included_preset(
             TemplateFile { path: SYSTEM_PATH, body: SYSTEM_MD },
             TemplateFile { path: EXPLORER_AGENTS_PATH, body: EXPLORER_AGENTS_MD },
             TemplateFile { path: AETHER_SKILL_PATH, body: AETHER_SKILL_MD },
+            TemplateFile { path: PLAN_SKILL_PATH, body: PLAN_SKILL_MD },
         ],
         settings: AetherSettings {
             prompts: batteries_prompts(scope, harnesses),
@@ -263,15 +265,23 @@ fn mcps(servers: Vec<(&str, Vec<String>)>) -> McpSourceSpec {
     McpSourceSpec::Inline { servers }
 }
 
+fn plan_tools() -> ToolFilter {
+    let mut tools = read_only_coding_tools();
+    tools.allow.extend([
+        ToolMatcher::name("coding__write_file"),
+        ToolMatcher::name("coding__edit_file"),
+        ToolMatcher::name("review__review_artifact"),
+    ]);
+    tools
+}
+
 fn read_only_coding_tools() -> ToolFilter {
     ToolFilter {
         allow: vec![
             ToolMatcher::read_only(),
-            ToolMatcher::name("plan__*"),
             ToolMatcher::name("skills__*"),
             ToolMatcher::name("subagents__*"),
             ToolMatcher::name("tasks__*"),
-            ToolMatcher::name("survey__*"),
         ],
         deny: vec![],
     }
