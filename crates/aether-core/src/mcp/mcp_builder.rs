@@ -293,6 +293,7 @@ impl McpBuilder {
     }
 
     pub async fn spawn(self) -> Result<McpSession, McpError> {
+        let identity = mcp_utils::request_context::AgentIdentity::new();
         let McpBuilder {
             servers,
             factories,
@@ -330,6 +331,7 @@ impl McpBuilder {
         let servers = resolve_servers(servers, &factories, &services).await?;
 
         let mut mcp_manager = McpManager::new(event_tx, oauth_handler_factory)
+            .with_identity(identity)
             .with_tool_filter(tool_filter)
             .with_snapshot_sender(snapshot_tx);
         if let Some(capabilities) = services.agent_deps.mcp_client_capabilities.clone() {
@@ -344,7 +346,7 @@ impl McpBuilder {
         mcp_manager = mcp_manager.with_root_dir(root_dir);
         let pending = mcp_manager.register_pending(servers).await?;
         let task = tokio::spawn(run_mcp_task(mcp_manager, manager_rx, pending));
-        let gateway = gateway_transport.map(|transport| transport.spawn(GatewayService::new(mcp.clone())));
+        let gateway = gateway_transport.map(|transport| transport.spawn(GatewayService::from_handle(mcp.clone())));
 
         Ok(McpSession { runtime: McpRuntime { mcp, handle: task, agent_sync_handle: None, gateway }, event_rx })
     }
@@ -356,7 +358,7 @@ async fn resolve_servers(
     services: &RuntimeServices,
 ) -> Result<Vec<RuntimeMcpServer>, McpError> {
     let mut resolved = Vec::with_capacity(servers.len());
-    for McpServer { name, transport, tool_exposure } in servers {
+    for McpServer { name, transport, tool_exposure, tools, aether_gateway } in servers {
         let transport = match transport {
             McpTransport::Stdio { command, args, env } => RuntimeMcpTransport::Stdio { command, args, env },
             McpTransport::Http(config) => RuntimeMcpTransport::Http(config),
@@ -368,7 +370,9 @@ async fn resolve_servers(
                 RuntimeMcpTransport::InMemory { server: factory(spec, services.clone()).await }
             }
         };
-        resolved.push(RuntimeMcpServer::new(name, transport, tool_exposure));
+        resolved.push(
+            RuntimeMcpServer::new(name, transport, tool_exposure).with_tools(tools).with_aether_gateway(aether_gateway),
+        );
     }
     Ok(resolved)
 }
@@ -513,6 +517,7 @@ mod tests {
                 args: Vec::new(),
                 env: HashMap::new(),
                 defer_tools: ToolExposure::ModelVisible,
+                tools: ToolFilter::default(),
             }),
         )]));
         let sources = vec![

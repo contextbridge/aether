@@ -14,6 +14,9 @@ pub use crate::file_ops::FileError;
 #[doc = include_str!("../docs/coding_error.md")]
 #[derive(Debug, Error)]
 pub enum CodingError {
+    #[error(transparent)]
+    AgentState(#[from] super::agent_state::AgentStateError),
+
     /// File operation errors (read, write, edit)
     #[error(transparent)]
     File(#[from] FileError),

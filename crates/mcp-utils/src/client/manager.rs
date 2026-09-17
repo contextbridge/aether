@@ -1,11 +1,11 @@
+use crate::request_context::{AgentIdentity, GatewayRequestContext};
 use llm::ToolDefinition;
 
 use super::{
     McpError, McpSnapshot, Result,
     config::{McpHttpConfig, ToolExposure},
     connection::{
-        ConnectConfig, McpConnectAttempt, McpConnectOutcome, McpServerConnection, Tool, authenticate_http,
-        connect_server,
+        ConnectConfig, McpConnectAttempt, McpConnectOutcome, McpServerConnection, authenticate_http, connect_server,
     },
     mcp_client::client_capabilities,
     naming::{create_namespaced_tool_name, split_on_server_name},
@@ -35,6 +35,7 @@ pub struct ToolListChangedRequest {
     server: String,
     generation: u64,
     peer: Peer<RoleClient>,
+    meta: Option<rmcp::model::RequestMetaObject>,
 }
 
 pub struct ToolListRefresh {
@@ -45,13 +46,16 @@ pub struct ToolListRefresh {
 
 impl ToolListChangedRequest {
     pub(crate) fn new(server: String, generation: u64, peer: Peer<RoleClient>) -> Self {
-        Self { server, generation, peer }
+        Self { server, generation, peer, meta: None }
+    }
+
+    pub(crate) fn with_meta(mut self, meta: Option<rmcp::model::RequestMetaObject>) -> Self {
+        self.meta = meta;
+        self
     }
 
     pub async fn refresh(self) -> ToolListRefresh {
-        let result = self
-            .peer
-            .list_all_tools()
+        let result = super::discovery::list_all_tools(&self.peer, self.meta)
             .await
             .map_err(|error| McpError::ToolDiscoveryFailed(format!("Failed to refresh tools: {error}")));
         ToolListRefresh { server: self.server, generation: self.generation, result }
@@ -62,6 +66,8 @@ pub struct RuntimeMcpServer {
     pub name: String,
     pub transport: RuntimeMcpTransport,
     pub tool_exposure: ToolExposure,
+    pub tools: ToolFilter,
+    pub aether_gateway: bool,
 }
 
 pub enum RuntimeMcpTransport {
@@ -72,7 +78,17 @@ pub enum RuntimeMcpTransport {
 
 impl RuntimeMcpServer {
     pub fn new(name: impl Into<String>, transport: RuntimeMcpTransport, tool_exposure: ToolExposure) -> Self {
-        Self { name: name.into(), transport, tool_exposure }
+        Self { name: name.into(), transport, tool_exposure, tools: ToolFilter::default(), aether_gateway: false }
+    }
+
+    pub fn with_tools(mut self, tools: ToolFilter) -> Self {
+        self.tools = tools;
+        self
+    }
+
+    pub fn with_aether_gateway(mut self, enabled: bool) -> Self {
+        self.aether_gateway = enabled;
+        self
     }
 
     pub fn with_exposure(mut self, exposure: ToolExposure) -> Self {
@@ -116,6 +132,7 @@ pub struct McpManager {
     servers: HashMap<String, ServerRecord>,
     catalog: ToolCatalog,
     tool_filter: ToolFilter,
+    identity: AgentIdentity,
     client_info: ClientConfig,
     event_sender: mpsc::Sender<McpClientEvent>,
     root_dir: PathBuf,
@@ -135,6 +152,7 @@ impl McpManager {
             servers: HashMap::new(),
             catalog: ToolCatalog::new(),
             tool_filter: ToolFilter::default(),
+            identity: AgentIdentity::new(),
             client_info: ClientConfig::new(client_capabilities(), Implementation::new("aether", "0.1.0")),
             event_sender,
             root_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -178,6 +196,11 @@ impl McpManager {
         self
     }
 
+    pub fn with_identity(mut self, identity: AgentIdentity) -> Self {
+        self.identity = identity;
+        self
+    }
+
     pub fn with_tool_filter(mut self, filter: ToolFilter) -> Self {
         self.tool_filter = filter;
         self
@@ -187,9 +210,25 @@ impl McpManager {
         &self.catalog
     }
 
-    pub async fn register_pending(&mut self, servers: Vec<RuntimeMcpServer>) -> Result<Vec<RuntimeMcpServer>> {
-        for server in &servers {
+    pub async fn register_pending(&mut self, mut servers: Vec<RuntimeMcpServer>) -> Result<Vec<RuntimeMcpServer>> {
+        for server in &mut servers {
+            if server.aether_gateway {
+                let RuntimeMcpTransport::Http(config) = &mut server.transport else {
+                    return Err(McpError::ConnectionFailed("aetherGateway requires HTTP".into()));
+                };
+                let context = GatewayRequestContext {
+                    identity: self.identity,
+                    execution_task: None,
+                    server_alias: server.name.clone(),
+                    agent_tools: self.tool_filter.clone(),
+                    server_tools: server.tools.clone(),
+                    defer_tools: server.tool_exposure.clone(),
+                };
+                context.validate().map_err(|error| McpError::ConnectionFailed(error.to_string()))?;
+                config.request_context = Some(Box::new(context));
+            }
             self.register_record(&server.name, ServerState::Connecting, None, server.tool_exposure.clone());
+            self.servers.get_mut(&server.name).expect("record just inserted").tools = server.tools.clone();
         }
 
         self.publish_snapshot();
@@ -460,7 +499,9 @@ impl McpManager {
             .filter(|description| !description.is_empty())
             .unwrap_or_else(|| name.to_string());
         let instructions = conn.instructions.clone();
-        let catalog_tools = tools.iter().map(Tool::from).collect::<Vec<_>>();
+        let server_filter = &self.servers.get(name).ok_or_else(|| McpError::ServerNotFound(name.to_string()))?.tools;
+        let catalog_tools =
+            tools.iter().filter(|tool| server_filter.is_tool_allowed(*tool)).cloned().collect::<Vec<_>>();
         let entry = ServerCatalogEntry::from_tools(
             name.to_string(),
             description,
@@ -481,7 +522,9 @@ impl McpManager {
 
     fn replace_catalog_tools(&mut self, name: &str, tools: &[RmcpTool]) -> Result<()> {
         let existing = self.catalog.server(name).cloned().ok_or_else(|| McpError::ServerNotFound(name.to_string()))?;
-        let catalog_tools = tools.iter().map(Tool::from).collect::<Vec<_>>();
+        let server_filter = &self.servers.get(name).ok_or_else(|| McpError::ServerNotFound(name.to_string()))?.tools;
+        let catalog_tools =
+            tools.iter().filter(|tool| server_filter.is_tool_allowed(*tool)).cloned().collect::<Vec<_>>();
         let entry = ServerCatalogEntry::from_tools(
             name.to_string(),
             existing.description().to_string(),
@@ -577,6 +620,7 @@ struct ServerRecord {
     state: ServerState,
     reauth_config: Option<McpHttpConfig>,
     oauth_challenge: Option<String>,
+    tools: ToolFilter,
 }
 
 enum ServerState {
@@ -601,7 +645,7 @@ impl From<&ServerState> for McpServerStatus {
 
 impl ServerRecord {
     fn new(state: ServerState, reauth_config: Option<McpHttpConfig>) -> Self {
-        Self { state, reauth_config, oauth_challenge: None }
+        Self { state, reauth_config, oauth_challenge: None, tools: ToolFilter::default() }
     }
 
     fn connection(&self) -> Option<&McpServerConnection> {

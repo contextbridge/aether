@@ -132,10 +132,31 @@ impl<T: Service<RoleServer>, U: Service<RoleClient>> TestClient<T, U> {
     }
 
     pub async fn call_raw<V: Serialize>(&self, tool: &str, args: V) -> TestResult<CallToolResult> {
+        self.call_raw_with_meta(tool, args, None).await
+    }
+
+    pub async fn call_raw_with_meta<V: Serialize>(
+        &self,
+        tool: &str,
+        args: V,
+        meta: Option<rmcp::model::RequestMetaObject>,
+    ) -> TestResult<CallToolResult> {
         let args = serde_json::to_value(args)?;
         let arguments =
             args.as_object().ok_or_else(|| test_error("tool arguments must serialize to a JSON object"))?.clone();
-        Ok(self.client.call_tool(CallToolRequestParams::new(tool.to_string()).with_arguments(arguments)).await?)
+        let params = CallToolRequestParams::new(tool.to_string()).with_arguments(arguments);
+        let Some(meta) = meta else { return Ok(self.client.call_tool(params).await?) };
+        let request = rmcp::model::ClientRequest::CallToolRequest(rmcp::model::Request::new(params));
+        let result = self
+            .client
+            .send_request_with_option(request, rmcp::service::PeerRequestOptions::default().with_meta(meta))
+            .await?
+            .await_response()
+            .await?;
+        match result {
+            rmcp::model::ServerResult::CallToolResult(result) => Ok(result),
+            _ => Err(test_error("expected completed tool result").into()),
+        }
     }
 
     pub fn raw(&self) -> &RunningService<RoleClient, U> {

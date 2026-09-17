@@ -21,6 +21,7 @@ pub struct McpClient {
     event_sender: mpsc::Sender<McpClientEvent>,
     tool_refresh_sender: Option<mpsc::Sender<ToolListChangedRequest>>,
     connection_generation: u64,
+    request_context: Option<crate::request_context::GatewayRequestContext>,
 }
 
 impl McpClient {
@@ -32,6 +33,7 @@ impl McpClient {
             event_sender,
             tool_refresh_sender: None,
             connection_generation: 0,
+            request_context: None,
         }
     }
 
@@ -43,6 +45,36 @@ impl McpClient {
         self.tool_refresh_sender = Some(sender);
         self.connection_generation = connection_generation;
         self
+    }
+
+    pub fn with_request_context(
+        mut self,
+        context: crate::request_context::GatewayRequestContext,
+    ) -> Result<Self, crate::request_context::RequestContextError> {
+        context.validate()?;
+        self.request_context = Some(context);
+        Ok(self)
+    }
+
+    pub fn request_meta(
+        &self,
+        mut meta: Option<rmcp::model::RequestMetaObject>,
+    ) -> Option<rmcp::model::RequestMetaObject> {
+        if let Some(context) = &self.request_context {
+            context.merge_into(meta.get_or_insert_default()).expect("context validated at construction");
+        }
+        meta
+    }
+
+    pub(crate) fn lifecycle_mode(&self) -> rmcp::ClientLifecycleMode {
+        if self.request_context.is_some() {
+            rmcp::ClientLifecycleMode::Auto {
+                preferred_versions: vec![rmcp::model::ProtocolVersion::V_2026_07_28],
+                legacy_version: None,
+            }
+        } else {
+            crate::protocol::client_lifecycle_mode()
+        }
     }
 
     pub fn server_name(&self) -> &str {
@@ -128,7 +160,8 @@ impl ClientHandler for McpClient {
         let Some(sender) = &self.tool_refresh_sender else {
             return;
         };
-        let request = ToolListChangedRequest::new(self.server_name.clone(), self.connection_generation, context.peer);
+        let request = ToolListChangedRequest::new(self.server_name.clone(), self.connection_generation, context.peer)
+            .with_meta(self.request_meta(None));
         if sender.send(request).await.is_err() {
             tracing::debug!(server = %self.server_name, "MCP tool refresh receiver closed");
         }

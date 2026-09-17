@@ -17,7 +17,6 @@ use rmcp::{
         streamable_http_client::StreamableHttpClientTransportConfig,
     },
 };
-use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -32,14 +31,6 @@ use tokio::{
     task::JoinHandle,
 };
 
-#[derive(Debug, Clone)]
-pub struct Tool {
-    pub name: String,
-    pub description: String,
-    pub parameters: Value,
-    pub annotations: Option<ToolAnnotations>,
-}
-
 pub(crate) fn convert_tool_annotations(annotations: &rmcp::model::ToolAnnotations) -> ToolAnnotations {
     ToolAnnotations {
         title: annotations.title.clone(),
@@ -47,23 +38,6 @@ pub(crate) fn convert_tool_annotations(annotations: &rmcp::model::ToolAnnotation
         destructive_hint: annotations.destructive_hint,
         idempotent_hint: annotations.idempotent_hint,
         open_world_hint: annotations.open_world_hint,
-    }
-}
-
-impl From<RmcpTool> for Tool {
-    fn from(tool: RmcpTool) -> Self {
-        Self::from(&tool)
-    }
-}
-
-impl From<&RmcpTool> for Tool {
-    fn from(tool: &RmcpTool) -> Self {
-        Self {
-            name: tool.name.to_string(),
-            description: tool.description.clone().unwrap_or_default().to_string(),
-            parameters: serde_json::Value::Object((*tool.input_schema).clone()),
-            annotations: tool.annotations.as_ref().map(convert_tool_annotations),
-        }
     }
 }
 
@@ -111,15 +85,15 @@ impl McpServerConnection {
         generation: u64,
     ) -> Result<Self> {
         let transport = StreamableHttpClientTransport::with_client(auth_client, config);
-        let client = serve_client_with_lifecycle(mcp_client, transport, client_lifecycle_mode())
+        let lifecycle = mcp_client.lifecycle_mode();
+        let client = serve_client_with_lifecycle(mcp_client, transport, lifecycle)
             .await
             .map_err(|e| McpError::ConnectionFailed(format!("reconnect failed for '{name}': {e}")))?;
         Ok(Self::from_parts(client, None, generation))
     }
 
     pub(super) async fn list_tools(&self) -> Result<Vec<RmcpTool>> {
-        self.client
-            .list_all_tools()
+        super::discovery::list_all_tools(&self.client, self.client.service().request_meta(None))
             .await
             .map_err(|e| McpError::ToolDiscoveryFailed(format!("Failed to list tools: {e}")))
     }
@@ -139,7 +113,7 @@ impl McpServerConnection {
 }
 
 pub(super) async fn connect_server(server: RuntimeMcpServer, ctx: &ConnectConfig) -> McpConnectAttempt {
-    let RuntimeMcpServer { name, transport, tool_exposure: _ } = server;
+    let RuntimeMcpServer { name, transport, .. } = server;
     let reauth_config = reauth_config_for(&transport, ctx.oauth_handler_factory.as_ref());
     let generation = ctx.next_connection_generation.fetch_add(1, Ordering::Relaxed);
     let mcp_client = McpClient::new(ctx.client_info.clone(), name.clone(), ctx.event_sender.clone())
@@ -199,6 +173,7 @@ pub async fn authenticate_http(
         let generation = ctx.next_connection_generation.fetch_add(1, Ordering::Relaxed);
         let mcp_client = McpClient::new(ctx.client_info.clone(), name.clone(), ctx.event_sender.clone())
             .with_tool_refresh(ctx.tool_refresh_sender.clone(), generation);
+        let mcp_client = contextual_client(mcp_client, &config)?;
         McpServerConnection::reconnect_with_auth(&name, config.transport.clone(), auth_client, mcp_client, generation)
             .await
     }
@@ -252,6 +227,15 @@ async fn connect_stdio(
     }
 }
 
+fn contextual_client(client: McpClient, config: &McpHttpConfig) -> Result<McpClient> {
+    match &config.request_context {
+        Some(context) => {
+            client.with_request_context(*context.clone()).map_err(|error| McpError::ConnectionFailed(error.to_string()))
+        }
+        None => Ok(client),
+    }
+}
+
 fn spawn_stderr_logger(server_name: String, stderr: ChildStderr) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
@@ -291,6 +275,11 @@ async fn connect_http(
     oauth_credential_store: Option<&Arc<dyn OAuthCredentialStorage>>,
     generation: u64,
 ) -> McpConnectOutcome {
+    let mcp_client = match contextual_client(mcp_client, &config) {
+        Ok(client) => client,
+        Err(error) => return McpConnectOutcome::Failed { error },
+    };
+    let lifecycle = mcp_client.lifecycle_mode();
     let conn_err = |e| McpError::ConnectionFailed(format!("HTTP MCP server {name}: {e}"));
     let oauth = config.resolved_oauth();
     let restored = if let (Some(store), Some(oauth)) = (oauth_credential_store, oauth.as_ref()) {
@@ -320,10 +309,10 @@ async fn connect_http(
         tracing::debug!("Using OAuth for server '{name}'");
         let auth_client = AuthClient::new(reqwest::Client::default(), manager);
         let transport = StreamableHttpClientTransport::with_client(auth_client, config.transport.clone());
-        serve_client_with_lifecycle(mcp_client, transport, client_lifecycle_mode()).await
+        serve_client_with_lifecycle(mcp_client, transport, lifecycle).await
     } else {
         let transport = StreamableHttpClientTransport::from_config(config.transport.clone());
-        serve_client_with_lifecycle(mcp_client, transport, client_lifecycle_mode()).await
+        serve_client_with_lifecycle(mcp_client, transport, lifecycle).await
     };
 
     match result {

@@ -1,7 +1,9 @@
 mod common;
 
+mod coding_agent_isolation;
 mod coding_mcp_tools;
 mod coding_permissions;
+mod coding_task_expiry;
 mod lsp_check_errors_contract;
 mod lsp_diagnostics_e2e;
 mod lsp_operations_e2e;

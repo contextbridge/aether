@@ -19,6 +19,15 @@ impl PromptRuleMatcher {
     /// Returns newly-matched rules for `file_path` and marks them as activated.
     /// Subsequent calls for the same rules return an empty `Vec`.
     pub fn get_matched_rules(&self, root_dir: &Path, file_path: &str) -> Vec<PromptFile> {
+        self.get_matched_rules_for(root_dir, file_path, &self.activated)
+    }
+
+    pub(crate) fn get_matched_rules_for(
+        &self,
+        root_dir: &Path,
+        file_path: &str,
+        activated: &Mutex<HashSet<String>>,
+    ) -> Vec<PromptFile> {
         let relative = make_relative(root_dir, file_path);
         let relative_path = relative.as_deref().unwrap_or(file_path);
         let matches = self.catalog.matching_rules(relative_path);
@@ -28,7 +37,7 @@ impl PromptRuleMatcher {
         }
 
         let mut result = Vec::new();
-        let mut activated = self.activated.lock().expect("lock poisoned");
+        let mut activated = activated.lock().expect("lock poisoned");
         for spec in matches {
             if activated.insert(spec.name.clone()) {
                 tracing::info!("Activating read rule '{}' triggered by read of '{}'", spec.name, file_path);

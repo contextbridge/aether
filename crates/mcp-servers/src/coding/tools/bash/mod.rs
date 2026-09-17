@@ -53,6 +53,11 @@ impl BashEnvironment {
         self
     }
 
+    pub fn with_overrides(mut self, environment: &Self) -> Self {
+        self.vars.extend(environment.vars.clone());
+        self
+    }
+
     pub fn with_path_prepend(self, directory: impl AsRef<Path>) -> Self {
         let directory = directory.as_ref().to_string_lossy().into_owned();
         let current = std::env::var("PATH").unwrap_or_default();

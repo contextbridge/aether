@@ -2,6 +2,9 @@
 
 pub mod error;
 
+#[cfg(all(feature = "coding", feature = "skills", feature = "review"))]
+pub mod execution_servers;
+
 #[cfg(feature = "coding")]
 pub(crate) mod search;
 

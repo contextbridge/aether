@@ -126,6 +126,28 @@ fn disconnected_servers_retain_status_without_exposing_tools_or_instructions() {
 }
 
 #[test]
+fn complete_mcp_definition_survives_catalog_namespacing() {
+    let value = json!({
+        "name":"issues__read", "description":"Read", "title":"Issue",
+        "inputSchema":{"type":"object"}, "outputSchema":{"type":"object","required":["id"]},
+        "annotations":{"readOnlyHint":true}, "_meta":{"vendor":{"key":"value"}}
+    });
+    let definition: Tool = serde_json::from_value(value).unwrap();
+    let mut catalog = ToolCatalog::new();
+    catalog.upsert_server(connected_entry(
+        "linear",
+        ToolExposure::deferred_all(),
+        std::slice::from_ref(&definition),
+        &ToolFilter::default(),
+    ));
+    let tool = catalog.tool("linear__issues__read").unwrap();
+    assert_eq!(tool.mcp_definition(), &definition);
+    let mut expected = definition;
+    expected.name = "linear__issues__read".into();
+    assert_eq!(tool.namespaced_mcp_definition(), expected);
+}
+
+#[test]
 fn replacement_preserves_server_position_and_removal_is_atomic() {
     let mut catalog = ToolCatalog::new();
     catalog.upsert_server(connected_entry("first", ToolExposure::ModelVisible, &[tool("old")], &ToolFilter::default()));

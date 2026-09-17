@@ -48,6 +48,17 @@ A remote server using a bearer token:
 }
 ```
 
+All configured HTTP headers are forwarded on each request, including custom ingress
+headers such as `X-aws-proxy-auth` and `X-aws-proxy-port`. Header values support
+`$VAR` and `${VAR}` expansion on the machine establishing the connection.
+`Authorization` is recognized case-insensitively; bearer tokens retain the existing
+OAuth-bypass behavior. Invalid names/values and case-insensitive duplicate names
+are rejected without including header values in the diagnostic.
+
+MCP-owned headers (`Mcp-*`) and transport-owned headers (`Accept`, `Content-Type`,
+`Content-Length`, `Transfer-Encoding`, `Host`, `Connection`, and `Last-Event-ID`)
+cannot be overridden in configuration.
+
 Set `"deferTools": true` to omit every tool on this server from the model-visible
 tool definitions and make it available through progressive `aether mcp` discovery.
 For selective deferral, set `deferTools` to an object with `include` and `exclude`

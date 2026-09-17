@@ -318,7 +318,9 @@ dependencies = [
  "aether-llm",
  "aether-utils",
  "async-stream",
+ "axum",
  "chrono",
+ "clap",
  "futures",
  "regex",
  "reqwest 0.13.5",
@@ -425,6 +427,26 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "aether-tool-server"
+version = "0.1.0"
+dependencies = [
+ "aether-mcp-servers",
+ "aether-mcp-utils",
+ "aether-utils",
+ "axum",
+ "clap",
+ "futures",
+ "reqwest 0.13.5",
+ "rmcp",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+ "uuid",
 ]
 
 [[package]]
@@ -6802,11 +6824,14 @@ dependencies = [
  "chrono",
  "futures",
  "http 1.5.0",
+ "http-body 1.1.0",
+ "http-body-util",
  "indexmap 2.14.2",
  "oauth2",
  "pastey",
  "pin-project-lite",
  "process-wrap",
+ "rand 0.10.2",
  "reqwest 0.13.5",
  "rmcp-macros",
  "schemars 1.2.2",
@@ -6817,6 +6842,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
+ "tower-service",
  "tracing",
  "url",
  "uuid",
@@ -8883,6 +8909,7 @@ dependencies = [
  "atomic",
  "getrandom 0.4.3",
  "js-sys",
+ "serde_core",
  "wasm-bindgen",
 ]
 

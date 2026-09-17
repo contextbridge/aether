@@ -1,6 +1,6 @@
 use crate::client::McpClient;
 use crate::client::call_tool::{CallToolError, ToolCallEvent};
-use crate::client::elicitation::{ElicitInputsError, elicit_inputs};
+use crate::client::elicitation::{ElicitInputsError, InputResponder, elicit_inputs};
 use async_stream::stream;
 use futures::future::{Either, select};
 use futures::{Stream, StreamExt, pin_mut};
@@ -13,6 +13,7 @@ use rmcp::service::{RunningService, ServiceError};
 use std::collections::HashSet;
 use std::future::Future;
 use std::pin::pin;
+use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::time::error::Elapsed;
@@ -50,7 +51,9 @@ pub(crate) struct TaskDriver<'a> {
     client: &'a RunningService<RoleClient, McpClient>,
     timeout: Duration,
     cancellation_token: CancellationToken,
+    responder: Option<Arc<dyn InputResponder>>,
     default_poll_interval: Duration,
+    meta: Option<rmcp::model::RequestMetaObject>,
 }
 
 impl<'a> TaskDriver<'a> {
@@ -60,7 +63,25 @@ impl<'a> TaskDriver<'a> {
         timeout: Duration,
         cancellation_token: CancellationToken,
     ) -> Self {
-        Self { client, server_name, timeout, cancellation_token, default_poll_interval: Duration::from_secs(1) }
+        Self {
+            client,
+            server_name,
+            timeout,
+            cancellation_token,
+            responder: None,
+            default_poll_interval: Duration::from_secs(1),
+            meta: client.service().request_meta(None),
+        }
+    }
+
+    pub(crate) fn with_responder(mut self, responder: Option<Arc<dyn InputResponder>>) -> Self {
+        self.responder = responder;
+        self
+    }
+
+    pub(crate) fn with_meta(mut self, meta: Option<rmcp::model::RequestMetaObject>) -> Self {
+        self.meta = self.client.service().request_meta(meta);
+        self
     }
 
     pub(crate) fn stream<T: Stream<Item = ProgressNotificationParam> + Send + 'a>(
@@ -107,8 +128,10 @@ impl<'a> TaskDriver<'a> {
                     return;
                 }
 
+                let mut params = GetTaskParams::new(task.task_id.clone());
+                params.meta = self.meta.clone();
                 let detailed_task = match bounds
-                    .run(self.client.get_task(GetTaskParams::new(task.task_id.clone())))
+                    .run(self.client.get_task(params))
                     .await
                 {
                     Ok(Ok(result)) => result.task,
@@ -182,24 +205,27 @@ impl<'a> TaskDriver<'a> {
             return Err(TaskErrorReason::RepeatedInput);
         }
 
-        let (responses, _) = elicit_inputs(self.client.service(), input_requests).await?;
+        let (responses, _) =
+            elicit_inputs(self.responder.as_deref().unwrap_or(self.client.service()), input_requests).await?;
         answered_input_keys.extend(responses.keys().cloned());
 
-        self.client.update_task(UpdateTaskParams::new(task_id, responses)).await.map_err(TaskErrorReason::Update)
+        let mut params = UpdateTaskParams::new(task_id, responses);
+        params.meta = self.meta.clone();
+        self.client.update_task(params).await.map_err(TaskErrorReason::Update)
     }
 
     async fn interrupted(&self, task: Task, interrupt: InterruptedReason) -> ToolCallEvent {
         match interrupt {
             InterruptedReason::TimedOut => self.cancel(task, TaskErrorReason::TimedOut { timeout: self.timeout }).await,
             InterruptedReason::Cancelled => {
-                cancel_server_task(self.client, self.server_name, &task.task_id).await;
+                cancel_server_task(self.client, self.server_name, &task.task_id, self.meta.clone()).await;
                 ToolCallEvent::Cancelled { task_id: Some(task.task_id) }
             }
         }
     }
 
     async fn cancel(&self, task: Task, reason: TaskErrorReason) -> ToolCallEvent {
-        cancel_server_task(self.client, self.server_name, &task.task_id).await;
+        cancel_server_task(self.client, self.server_name, &task.task_id, self.meta.clone()).await;
         self.fail(task, reason)
     }
 
@@ -221,8 +247,11 @@ pub(crate) async fn cancel_server_task(
     client: &RunningService<RoleClient, McpClient>,
     server_name: &str,
     task_id: &str,
+    meta: Option<rmcp::model::RequestMetaObject>,
 ) {
-    match timeout(Duration::from_secs(1), client.cancel_task(CancelTaskParams::new(task_id))).await {
+    let mut params = CancelTaskParams::new(task_id);
+    params.meta = client.service().request_meta(meta);
+    match timeout(Duration::from_secs(1), client.cancel_task(params)).await {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
             tracing::warn!(server = %server_name, %task_id, "Failed to cancel abandoned MCP task: {error}");

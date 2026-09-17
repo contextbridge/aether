@@ -1,0 +1,123 @@
+---
+title: Remote workspace tools
+description: Keep the agent harness local while running workspace tools on another machine.
+---
+
+`aether-tool-server` serves workspace tools over stateless MCP Streamable HTTP. Unlike [remote agent mode](/aether/running/remote/), this moves **tools**, not the agent, to the remote machine.
+
+| Harness machine | Remote machine |
+| --- | --- |
+| Agent loops, subagents, planning tasks, model credentials, session logs, UI | Coding and LSP, skills, review file reads, configured HTTP/stdio MCP backends |
+
+## Install and start
+
+Build and install from an Aether source checkout on the remote machine:
+
+```sh
+cargo install --path crates/aether-tool-server
+```
+
+Only this binary is needed remotely. It never starts an agent or requires model credentials. Install any language servers and third-party stdio executables your workspace needs separately.
+
+```json title="/etc/aether/remote-mcp.json"
+{
+  "servers": {
+    "coding": { "type": "in-memory", "args": ["--permission-mode", "auto"] },
+    "skills": { "type": "in-memory", "args": ["--dir", ".aether/skills"] },
+    "review": { "type": "in-memory" },
+    "linear": {
+      "type": "http",
+      "url": "https://mcp.linear.app/mcp",
+      "headers": { "Authorization": "Bearer $LINEAR_TOKEN" }
+    }
+  }
+}
+```
+
+```sh
+aether-tool-server serve --root-dir /workspace/repo \
+  --mcp-config /etc/aether/remote-mcp.json \
+  --listen 127.0.0.1:8080
+```
+
+`--mcp-config` is required and repeatable; later files replace earlier entries with the same name. Only `coding`, `skills`, and `review` are supported in-memory factories. Configure tasks and subagents on the harness instead. Invalid built-in arguments fail startup.
+
+The server exposes `/mcp` and a non-sensitive `/healthz`. Use a long-lived process: stateless HTTP does **not** mean execution state can move between replicas or survive process restarts.
+
+## Connect the harness
+
+For an SSH deployment, keep a tunnel open on the harness machine:
+
+```sh
+ssh -N -L 8080:127.0.0.1:8080 user@workspace-machine
+```
+
+Reference this MCP file from your agent's `mcps` settings:
+
+```json title=".aether/mcp.json (harness)"
+{
+  "servers": {
+    "vm_tools": {
+      "type": "http",
+      "url": "http://127.0.0.1:8080/mcp",
+      "aetherGateway": true,
+      "tools": { "allow": ["coding__*", "skills__*", "review__*", "linear__*"] },
+      "deferTools": { "include": ["linear__*"] }
+    },
+    "subagents": { "type": "in-memory" },
+    "tasks": { "type": "in-memory" }
+  }
+}
+```
+
+`aetherGateway: true` enables Aether's request identity/policy metadata and requires MCP protocol `2026-07-28`. Do not set it for ordinary third-party MCP servers.
+
+Each harness MCP runtime gets a distinct identity, including separate spawns of the same named subagent. Reconnecting within that runtime retains its identity. A file read by one agent does not authorize another agent to overwrite it; read-triggered rules are also delivered separately to each agent.
+
+## Names and policies
+
+Names retain both namespaces:
+
+- Backend tool: `read_file`
+- Remote aggregate tool: `coding__read_file`
+- Model tool through `vm_tools`: `vm_tools__coding__read_file`
+
+Two remote workspaces can coexist under different harness aliases. Backend aliases cannot contain `__`.
+
+A server entry's `tools` filter matches the names **advertised by that server**. The harness's `vm_tools.tools` therefore matches `coding__read_file`; `AgentSpec.tools` matches `vm_tools__coding__read_file`; the remote deployment's `linear.tools` matches Linear's own names. All three filters must allow a call. Empty allow lists are unrestricted, allow entries are OR alternatives, and deny wins. For example, an annotation matcher `{ "readOnly": true }` and the name pattern `coding__*` in the same allow list mean read-only tools **or all coding tools**.
+
+Put `deferTools` only on the harness gateway entry. Non-default deployment-level deferral is rejected. HTTP lists all allowed tools; the harness separates direct and deferred tools. The private remote CLI exposes only the permitted deferred subset. Guessing a denied tool name does not bypass its filter.
+
+## Remote paths, review, and composition
+
+Coding paths, LSP, skill directories, review file reads, stdio process working directories, and backend credentials resolve on the remote machine. `--root-dir` supplies a workspace root, **not a filesystem jail**. A review request for a remote file reads its bytes remotely and sends the artifact through the harness's normal review UI; the harness does not read that path locally.
+
+Within remote coding Bash, use the same installed executable for progressive discovery and calls:
+
+```sh
+aether-tool-server mcp --help
+aether-tool-server mcp linear --help
+aether-tool-server mcp linear <tool> --json '{"key":"value"}'
+```
+
+JSON stdin, pipelines, redirects, and command substitution use the same command implementation as local `aether mcp`. The Bash environment supplies a private Unix socket and request-scoped context. Never add identity/policy fields to model tool arguments or manually share the environment between agents.
+
+Nested approval/review can pause the shell while the harness responds, then resume that same execution. Foreground Bash stays foreground; background Bash uses MCP tasks. Remote composition can access **remote-owned tools only**: there is no callback endpoint or reverse access to harness-local tasks/subagents.
+
+## Deployment security
+
+- The raw listener has no authentication or TLS. Keep it behind an SSH/private tunnel or authenticating TLS ingress. Non-loopback binding requires explicit `--external-auth` acknowledgment.
+- Use repeatable `--allowed-host` for ingress hostnames. The default accepts loopback hostnames only. Present browser Origins are rejected; this is a CLI endpoint, not a permissive CORS service.
+- Requests default to a 4 MiB body limit, including chunked bodies. Override with `--max-request-body-bytes` for large edits.
+- Provision third-party credentials on the remote machine via its environment/configuration. Interactive remote OAuth onboarding and credential management are not provided. Keep model credentials on the harness.
+- Unrestricted Bash and third-party credentials share a Unix security domain. Tool filters and runtime IDs prevent accidental capability leakage; they are not authentication or isolation against hostile same-user processes. Use separate VMs/containers for separate tenants.
+
+For Lambda MicroVM ingress, configure the harness HTTP entry with `"headers": { "X-aws-proxy-auth": "$MICROVM_AUTH_TOKEN" }` and any required routing headers. MCP data-plane requests use this token, **not SigV4**. Token minting and renewal remain deployment responsibilities. Configured custom headers are expanded and validated; protocol-owned headers remain controlled by rmcp.
+
+## Lifetime and failure behavior
+
+Execution state lives in memory. Restarting loses read/rule state, pending reviews, task handles, and continuation handles. Old handles fail explicitly; agents must read existing files again before editing. There is no automatic retry of a possibly executed mutation or cross-replica task routing.
+
+Idle coding safety identities expire after one hour, with at most 1,024 admitted identities. Running operations retain their safety state. Task execution and interactive continuations are bounded to one hour. A disconnected client between foreground polls is not immediately observable; use explicit cancellation when possible. Graceful shutdown closes backend connections and the private socket and stops execution tasks.
+
+Only tools are aggregated. Remote skill tools work, but remote MCP prompt/resource aggregation and slash-command discovery are not included.

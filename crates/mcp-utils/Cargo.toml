@@ -26,6 +26,7 @@ workspace = true
 [features]
 default = ["client"]
 testing = ["client"]
+cli = ["dep:clap"]
 client = [
     "dep:aether-auth",
     "aether-auth/mcp",
@@ -37,6 +38,7 @@ client = [
 ]
 
 [dependencies]
+clap = { workspace = true, optional = true }
 chrono = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
@@ -55,9 +57,10 @@ serde_json = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, optional = true }
 thiserror = { workspace = true }
-uuid = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
+axum = { workspace = true }
 aether-doctest = { path = "../doctest" }
 rmcp = { workspace = true, features = ["macros"] }
 tempfile = { workspace = true }

@@ -1,3 +1,7 @@
+#[cfg(feature = "cli")]
+pub mod command;
+#[cfg(feature = "client")]
+pub mod service;
 mod transport;
 
 pub use transport::{UnixSocketMcpTransport, UnixSocketPath, UnixSocketServer, UnixSocketTransportError, connect};

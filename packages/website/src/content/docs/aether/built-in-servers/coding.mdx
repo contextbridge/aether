@@ -35,6 +35,12 @@ Permission modes:
 | `auto`         | File writes auto-execute; destructive bash commands ask for approval.                |
 | `always-ask`   | Every destructive tool — `write_file`, `edit_file`, `bash`, and `lsp_rename` — asks for approval; read-only tools are ungated. |
 
+## Remote workspace execution
+
+When served by [aether-tool-server](/aether/running/remote-tools/), file paths, Bash, and LSP resolve on the remote workspace, not the harness. Read-before-write tracking and read-triggered rule delivery are isolated per agent runtime; a parent reading a file does not authorize a child to overwrite it. Permission modes still use the harness's approval UI and never auto-approve because input capabilities are missing.
+
+Remote Bash uses `aether-tool-server mcp` for deferred remote-owned tools. Local Bash continues to use `aether mcp`. The remote CLI cannot access harness-local task or subagent tools. `--root-dir` is a path-resolution setting, not a filesystem sandbox.
+
 ## File operations
 
 | Tool         | Description                                          |

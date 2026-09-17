@@ -1,7 +1,9 @@
 pub mod config;
+pub mod discovery;
 pub mod error;
 pub mod manager;
 pub mod oauth_handler;
+pub mod runtime;
 
 mod call_tool;
 mod connection;
@@ -15,7 +17,9 @@ mod task;
 mod tool_catalog;
 mod tool_filter;
 
-pub use call_tool::{CallToolError, CallToolOptions, ToolCallEvent, call_tool};
+pub use call_tool::{
+    CallToolError, CallToolOptions, ToolCallEvent, call_tool, call_tool_once, call_tool_with_responder,
+};
 pub use config::{
     AETHER_OAUTH_CALLBACK_PORT, AETHER_OAUTH_CLIENT_METADATA_URL, DeferredToolRules, InMemoryServerConfig,
     InMemoryServerSpec, InMemoryType, McpConfig, McpHttpConfig, McpOAuthConfig, McpServer, McpServerConfig,
@@ -24,6 +28,7 @@ pub use config::{
 };
 pub use connection::{McpConnectAttempt, McpConnectOutcome, McpServerConnection};
 pub use connection_attempt_manager::McpConnectionAttemptManager;
+pub use elicitation::InputResponder;
 pub use error::{McpError, Result};
 pub use manager::{
     ElicitationRequest, McpClientEvent, McpConnectionDetails, McpManager, McpServerStatus, McpServerStatusEntry,

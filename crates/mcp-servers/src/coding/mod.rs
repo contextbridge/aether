@@ -1,4 +1,5 @@
 use aether_project::PromptCatalog;
+use agent_state::{AgentStateLease, CodingAgentState, CodingAgentStates};
 use clap::Parser;
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
@@ -19,11 +20,13 @@ use rmcp::{
 };
 use std::fmt::{Debug, Formatter, Write as _};
 use std::path::PathBuf;
-use std::{collections::HashSet, sync::Arc};
-use tokio::{fs::try_exists, sync::RwLock};
+use std::sync::Arc;
+use tokio::fs::try_exists;
 
+pub mod agent_state;
 pub mod default_tools;
 pub mod error;
+pub mod execution_scope;
 pub mod prompt_rule_matcher;
 pub mod tools;
 pub mod tools_trait;
@@ -47,11 +50,11 @@ use crate::{
     workspace_paths::WorkspacePaths,
 };
 use mcp_utils::server::mrtr::{input_requests_supported, parse_response};
-use mcp_utils::server::tasks::{BACKGROUND_TASK_TTL_MS, require_tasks_capability};
+use mcp_utils::server::tasks::{BACKGROUND_TASK_TTL_MS, require_tasks_capability, task_to_mrtr};
 
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename, truncate};
 use tools::ast_grep::{AstGrepInput, AstGrepOutput, perform_ast_grep};
-use tools::bash::{BashInput, BashOutput, validate_args};
+use tools::bash::{BashEnvironment, BashInput, BashOutput, validate_args};
 use tools::edit_file::{EditFileArgs, EditFileResponse, edit_file_contents};
 use tools::find::{FindInput, FindOutput, find_files};
 use tools::grep::{GrepInput, GrepOutput, perform_grep};
@@ -109,8 +112,8 @@ impl CodingMcpArgs {
 pub struct CodingMcp<T: CodingTools = DefaultCodingTools> {
     tool_router: ToolRouter<Self>,
     task_manager: TaskManager,
-    /// Track files that have been read to enforce read-before-edit safety
-    files_read: RwLock<HashSet<String>>,
+    bash_task_scope: Option<Arc<dyn execution_scope::BashTaskScope>>,
+    agent_states: CodingAgentStates,
     tools: Arc<T>,
     /// Optional LSP operations (enabled with `.with_lsp()`)
     lsp: Option<Arc<LspRegistry>>,
@@ -149,6 +152,16 @@ impl<T: CodingTools + 'static> ServerHandler for CodingMcp<T> {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        let state = self
+            .agent_states
+            .resolve(&context.meta)
+            .map_err(|error| ErrorData::invalid_params(error.to_string(), None))?;
+        if self.bash_task_scope.is_some()
+            && request.name == "bash"
+            && let Some(task_id) = &request.request_state
+        {
+            return task_to_mrtr(&self.task_manager, task_id, request.input_responses);
+        }
         let background_args = background_bash_args(&request);
         if let Some(args) = &background_args {
             require_tasks_capability(&context)?;
@@ -180,8 +193,26 @@ impl<T: CodingTools + 'static> ServerHandler for CodingMcp<T> {
                 .into());
             }
         }
-        if let Some(args) = background_args {
-            return Ok(CallToolResponse::Task(CreateTaskResult::new(self.create_background_bash_task(args))));
+        let remote_foreground = self.bash_task_scope.is_some() && request.name == "bash" && background_args.is_none();
+        let args = if remote_foreground {
+            Some(
+                serde_json::from_value::<BashInput>(serde_json::Value::Object(
+                    request.arguments.clone().unwrap_or_default(),
+                ))
+                .map_err(|_| ErrorData::invalid_params("invalid Bash arguments", None))?,
+            )
+        } else {
+            background_args
+        };
+        if let Some(args) = args {
+            validate_args(&args).map_err(|error| ErrorData::invalid_params(error.to_string(), None))?;
+            let task =
+                self.create_background_bash_task(args, state, bash_environment(&context.meta)?, context.meta.clone());
+            return if remote_foreground {
+                task_to_mrtr(&self.task_manager, &task.task_id, None)
+            } else {
+                Ok(CallToolResponse::Task(CreateTaskResult::new(task)))
+            };
         }
 
         self.tool_router.call(ToolCallContext::new(self, request, context)).await
@@ -272,7 +303,8 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
         Self {
             tool_router: Self::tool_router(),
             task_manager: TaskManager::new(),
-            files_read: RwLock::new(HashSet::new()),
+            bash_task_scope: None,
+            agent_states: CodingAgentStates::new(),
             tools: Arc::new(tools),
             lsp: None,
             web_fetcher: WebFetcher::new(),
@@ -282,6 +314,11 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
             configured_rules_dirs: Vec::new(),
             permission_mode: PermissionMode::AlwaysAllow,
         }
+    }
+
+    pub fn with_bash_task_scope(mut self, scope: Arc<dyn execution_scope::BashTaskScope>) -> Self {
+        self.bash_task_scope = Some(scope);
+        self
     }
 
     /// Enable LSP code intelligence for the given project root.
@@ -307,13 +344,25 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
         self
     }
 
+    /// Shared execution task storage, allowing an embedding runtime to shut down tasks.
+    pub fn task_manager(&self) -> TaskManager {
+        self.task_manager.clone()
+    }
+
     /// Set the permission mode controlling user approval for tool calls.
     pub fn with_permission_mode(mut self, mode: PermissionMode) -> Self {
         self.permission_mode = mode;
         self
     }
 
-    fn create_background_bash_task(&self, args: BashInput) -> rmcp::model::Task {
+    fn create_background_bash_task(
+        &self,
+        args: BashInput,
+        state: AgentStateLease,
+        environment: BashEnvironment,
+        meta: rmcp::model::RequestMetaObject,
+    ) -> rmcp::model::Task {
+        let scope = self.bash_task_scope.clone();
         let tools = Arc::clone(&self.tools);
         let cwd = self.root_dir.clone();
         let description = args.description.clone().unwrap_or_else(|| truncate(&args.command, 80));
@@ -321,9 +370,18 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
 
         self.task_manager.spawn(options, move |task_context: TaskContext| {
             Box::pin(async move {
+                let _state = state;
+                let environment = if let Some(scope) = scope {
+                    let context = mcp_utils::request_context::GatewayRequestContext::from_meta(Some(&meta))
+                        .map_err(|error| TaskExit::Error(ErrorData::invalid_params(error.to_string(), None)))?;
+                    scope.environment(task_context.clone(), context).map_err(TaskExit::Error)?
+                } else {
+                    environment
+                };
                 tokio::select! {
                     () = task_context.cancelled() => Err(TaskExit::Cancelled),
-                    result = tools.bash(args, Some(cwd)) => Ok(match result {
+                    () = tokio::time::sleep(std::time::Duration::from_millis(BACKGROUND_TASK_TTL_MS)) => Err(TaskExit::Cancelled),
+                    result = tools.bash(args, Some(cwd), environment) => Ok(match result {
                         Ok(output) => serde_json::to_value(output).map_or_else(
                             |error| CallToolResult::error(vec![ContentBlock::text(error.to_string())]),
                             CallToolResult::structured,
@@ -455,13 +513,17 @@ When using tools that take file paths, always use absolute paths from:
 
     /// Reads `args.file_path` (already resolved against the root directory),
     /// records it in the read set, and appends any matching read-rule reminders.
-    async fn read_and_track(&self, args: ReadFileArgs) -> Result<Json<ReadFileResult>, CodingError> {
+    async fn read_and_track(
+        &self,
+        args: ReadFileArgs,
+        state: &CodingAgentState,
+    ) -> Result<Json<ReadFileResult>, CodingError> {
         let file_path = args.file_path.clone();
         let mut result = self.tools.read_file(args).await?;
-        self.files_read.write().await.insert(file_path.clone());
+        state.files_read.write().await.insert(file_path.clone());
 
         let total_lines = result.total_lines;
-        let matched = self.read_rule_state.get_matched_rules(&self.root_dir, &file_path);
+        let matched = self.read_rule_state.get_matched_rules_for(&self.root_dir, &file_path, &state.activated_rules);
         for rule in &matched {
             write!(result.content, "\n\n<system-reminder>\n{}\n</system-reminder>", rule.body).unwrap();
         }
@@ -478,19 +540,19 @@ When using tools that take file paths, always use absolute paths from:
 
     /// Read-before-overwrite safety check: an existing file must have been read
     /// first, preventing accidental data loss.
-    async fn ensure_read_before_overwrite(&self, file_path: &str) -> Result<(), CodingError> {
+    async fn ensure_read_before_overwrite(&self, file_path: &str, state: &CodingAgentState) -> Result<(), CodingError> {
         let exists = try_exists(file_path)
             .await
             .map_err(|source| CodingError::ExistsCheckFailed { path: file_path.to_string(), source })?;
-        if exists && !self.files_read.read().await.contains(file_path) {
+        if exists && !state.files_read.read().await.contains(file_path) {
             return Err(CodingError::NotReadBeforeOverwrite(file_path.to_string()));
         }
         Ok(())
     }
 
     /// Read-before-edit safety check: a file must have been read before editing.
-    async fn ensure_read_before_edit(&self, file_path: &str) -> Result<(), CodingError> {
-        if !self.files_read.read().await.contains(file_path) {
+    async fn ensure_read_before_edit(&self, file_path: &str, state: &CodingAgentState) -> Result<(), CodingError> {
+        if !state.files_read.read().await.contains(file_path) {
             return Err(CodingError::NotReadBeforeEdit(file_path.to_string()));
         }
         Ok(())
@@ -548,7 +610,8 @@ When using tools that take file paths, always use absolute paths from:
         let Parameters(mut args) = request;
         args.file_path = self.resolve_file_arg(&args.file_path)?;
         notify_preview(&context, ToolDisplayMeta::new("Read file", basename(&args.file_path))).await;
-        self.read_and_track(args).await
+        let state = self.agent_states.resolve(&context.meta)?;
+        self.read_and_track(args, &state).await
     }
 
     #[doc = include_str!("tools/write_file/description.md")]
@@ -567,7 +630,8 @@ When using tools that take file paths, always use absolute paths from:
         args.file_path = self.resolve_file_arg(&args.file_path)?;
         notify_preview(&context, ToolDisplayMeta::new("Write file", basename(&args.file_path))).await;
 
-        self.ensure_read_before_overwrite(&args.file_path).await?;
+        let state = self.agent_states.resolve(&context.meta)?;
+        self.ensure_read_before_overwrite(&args.file_path, &state).await?;
 
         let response = self.tools.write_file(args).await?;
 
@@ -592,7 +656,8 @@ When using tools that take file paths, always use absolute paths from:
         args.file_path = self.resolve_file_arg(&args.file_path)?;
         notify_preview(&context, ToolDisplayMeta::new("Edit file", basename(&args.file_path))).await;
 
-        self.ensure_read_before_edit(&args.file_path).await?;
+        let state = self.agent_states.resolve(&context.meta)?;
+        self.ensure_read_before_edit(&args.file_path, &state).await?;
 
         let response = self.tools.edit_file(args).await?;
 
@@ -632,7 +697,9 @@ When using tools that take file paths, always use absolute paths from:
         notify_preview(&context, ToolDisplayMeta::new("Run command", truncate(&args.command, 40))).await;
 
         let cwd = self.root_dir.clone();
-        let result = self.tools.bash(args, Some(cwd)).await?;
+        let environment =
+            bash_environment(&context.meta).map_err(|error| CodingError::NotConfigured(error.message.into_owned()))?;
+        let result = self.tools.bash(args, Some(cwd), environment).await?;
         Ok(Json(result))
     }
 
@@ -804,6 +871,19 @@ fn decision_form(tool_name: &str, description: &str) -> ElicitRequestParams {
     }
 }
 
+fn bash_environment(meta: &rmcp::model::MetaObject) -> Result<BashEnvironment, ErrorData> {
+    use mcp_utils::request_context::{AETHER_MCP_REQUEST_CONTEXT, GatewayRequestContext, RequestContextError};
+    match GatewayRequestContext::from_meta(Some(meta)) {
+        Ok(context) => {
+            let serialized = serde_json::to_string(&context)
+                .map_err(|_| ErrorData::internal_error("failed to encode execution context", None))?;
+            Ok(BashEnvironment::new().with_var(AETHER_MCP_REQUEST_CONTEXT, serialized))
+        }
+        Err(RequestContextError::Missing) => Ok(BashEnvironment::new()),
+        Err(error) => Err(ErrorData::invalid_params(error.to_string(), None)),
+    }
+}
+
 fn background_bash_args(request: &CallToolRequestParams) -> Option<BashInput> {
     if request.name.as_ref() != "bash" {
         return None;
@@ -842,20 +922,20 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
     /// Read a file and track it in the read set (test helper, no MCP context needed).
     pub async fn test_read_file(&self, mut args: ReadFileArgs) -> Result<Json<ReadFileResult>, CodingError> {
         args.file_path = self.resolve_file_arg(&args.file_path)?;
-        self.read_and_track(args).await
+        self.read_and_track(args, &self.agent_states.local()).await
     }
 
     /// Write a file with read-before-write safety check (test helper, no MCP context needed).
     pub async fn test_write_file(&self, mut args: WriteFileArgs) -> Result<Json<WriteFileResponse>, CodingError> {
         args.file_path = self.resolve_file_arg(&args.file_path)?;
-        self.ensure_read_before_overwrite(&args.file_path).await?;
+        self.ensure_read_before_overwrite(&args.file_path, &self.agent_states.local()).await?;
         self.tools.write_file(args).await.map(Json)
     }
 
     /// Edit a file with read-before-edit safety check (test helper, no MCP context needed).
     pub async fn test_edit_file(&self, mut args: EditFileArgs) -> Result<Json<EditFileResponse>, CodingError> {
         args.file_path = self.resolve_file_arg(&args.file_path)?;
-        self.ensure_read_before_edit(&args.file_path).await?;
+        self.ensure_read_before_edit(&args.file_path, &self.agent_states.local()).await?;
         self.tools.edit_file(args).await.map(Json)
     }
 }

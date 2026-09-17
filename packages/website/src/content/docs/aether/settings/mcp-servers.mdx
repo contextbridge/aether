@@ -40,6 +40,12 @@ Aether accepts either `servers` or the `mcpServers` alias at the top level:
 
 If a server entry has a `command` and no `type`, it is treated as `"type": "stdio"`.
 
+## Server-level tool filters
+
+Each server entry accepts `tools: { "allow": [...], "deny": [...] }`. Patterns match tool names advertised by that server, before Aether adds its server namespace. Agent-level `tools` filters match the namespaced model names. Both must allow a tool for it to be listed or called; deferral does not bypass either filter. Empty allow means unrestricted, allow entries are OR alternatives, and deny wins. Name patterns support exact names and a trailing `*`; annotation predicates require matching annotations.
+
+For an Aether gateway named `vm_tools`, server filters match `coding__read_file`, while agent filters match `vm_tools__coding__read_file`. See [remote workspace tools](/aether/running/remote-tools/) for paired deployment configuration, remote CLI composition, and security boundaries.
+
 ## Server types
 
 <Tabs>
@@ -123,7 +129,8 @@ If a server entry has a `command` and no `type`, it is treated as `"type": "stdi
     |-------|------|-------------|
     | `type` | `"http"` | Required. |
     | `url` | `string` | Streamable HTTP endpoint URL. |
-    | `headers` | `object` | Optional headers. Aether currently forwards the `Authorization` header to the transport. |
+    | `headers` | `object` | Custom HTTP headers, including `Authorization` and proxy routing/authentication headers. Values support variable expansion; invalid names/values and protocol-owned headers are rejected. |
+    | `aetherGateway` | `boolean` | Enable Aether runtime identity and request policies for an [Aether remote tool server](/aether/running/remote-tools/). Default: `false`. |
     | `oauth` | `object` | Optional custom CIMD or pre-registered public OAuth client settings. See [OAuth clients](#oauth-clients). |
     | `deferTools` | `boolean \| object` | `true` proxies every tool; an object partitions tools with `include` and `exclude` patterns. |
 

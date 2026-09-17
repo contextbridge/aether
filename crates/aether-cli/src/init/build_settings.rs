@@ -258,6 +258,7 @@ fn mcps(servers: Vec<(&str, Vec<String>)>) -> McpSourceSpec {
                     args,
                     input: None,
                     defer_tools: ToolExposure::ModelVisible,
+                    tools: ToolFilter::default(),
                 }),
             )
         })

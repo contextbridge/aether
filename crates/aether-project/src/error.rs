@@ -1,5 +1,6 @@
 //! Error types for settings loading and validation.
 
+#[cfg(feature = "settings")]
 use aether_core::core::PromptSourceError;
 use thiserror::Error;
 
@@ -48,6 +49,7 @@ pub enum SettingsError {
 
     /// A prompt source on a specific agent failed validation.
     #[error("Agent '{agent}': {source}")]
+    #[cfg(feature = "settings")]
     AgentPromptSource {
         agent: String,
         #[source]
@@ -56,6 +58,7 @@ pub enum SettingsError {
 
     /// A prompt source failed validation outside an agent context.
     #[error(transparent)]
+    #[cfg(feature = "settings")]
     PromptSource(#[from] PromptSourceError),
 
     /// An agent has no prompts declared (neither inherited nor local).

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use super::error::CodingError;
 use super::tools::ast_grep::{AstGrepInput, AstGrepOutput, perform_ast_grep};
-use super::tools::bash::{BashInput, BashOutput};
+use super::tools::bash::{BashEnvironment, BashInput, BashOutput};
 use super::tools::edit_file::{EditFileArgs, EditFileResponse};
 use super::tools::find::{FindInput, FindOutput, find_files};
 use super::tools::grep::{GrepInput, GrepOutput, perform_grep};
@@ -25,11 +25,12 @@ pub trait CodingTools: Send + Sync {
     /// List files in a directory
     fn list_files(&self, args: ListFilesArgs) -> impl Future<Output = Result<ListFilesResult, CodingError>> + Send;
 
-    // Execute a bash command with an optional working directory
+    /// Execute a Bash command with explicit request-scoped environment overrides.
     fn bash(
         &self,
         args: BashInput,
         cwd: Option<PathBuf>,
+        environment: BashEnvironment,
     ) -> impl Future<Output = Result<BashOutput, CodingError>> + Send;
 
     /// Search file contents using regex patterns.

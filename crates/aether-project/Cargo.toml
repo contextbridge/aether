@@ -20,7 +20,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 workspace = true
 
 [dependencies]
-aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.8.2" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.8.2", optional = true }
 llm = { package = "aether-llm", path = "../llm", version = "0.9.2" }
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.7.2" }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.15" }
@@ -35,7 +35,14 @@ globset = { workspace = true }
 tempfile = { workspace = true, optional = true }
 
 [features]
-testing = ["dep:tempfile"]
+default = ["settings"]
+settings = ["dep:aether-core"]
+testing = ["dep:tempfile", "settings"]
+
+[[bin]]
+name = "aether-settings-schema"
+path = "src/bin/aether-settings-schema.rs"
+required-features = ["settings"]
 
 [dev-dependencies]
 aether-project = { package = "aether-project", path = ".", features = ["testing"] }

@@ -4,6 +4,8 @@ title: Review
 
 Review MCP opens any agent-authored Markdown artifact in Aether's Markdown review UI.
 
+With [remote workspace tools](/aether/running/remote-tools/), file sources are read on the remote machine relative to its workspace root. Their Markdown contents are presented by the harness's existing review UI, so no matching local file is needed. Approval, feedback, decline, and cancellation return to the originating tool call. Remote Bash can also invoke deferred review with `aether-tool-server mcp review review_artifact` and wait for the harness response without restarting the shell.
+
 ```json
 {
   "servers": {

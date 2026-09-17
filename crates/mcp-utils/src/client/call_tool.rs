@@ -1,7 +1,8 @@
 use crate::client::McpClient;
-use crate::client::elicitation::{ElicitInputsError, elicit_inputs};
+use crate::client::elicitation::{ElicitInputsError, InputResponder, elicit_inputs};
 use crate::client::mrtr::{AbortReason, MrtrAction, MrtrState};
-use crate::client::task::{TaskDriver, TaskErrorReason};
+use crate::client::task::{TaskDriver, TaskErrorReason, cancel_server_task};
+use crate::server::tasks::TASK_CONTINUATION_KEY;
 use async_stream::stream;
 use futures::Stream;
 use futures::StreamExt;
@@ -9,7 +10,7 @@ use futures::future::{Either, select};
 use rmcp::RoleClient;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ClientRequest, CreateTaskResult, InputRequests,
-    InputResponses, ProgressNotificationParam, Request, RequestMetaObject, ServerResult, Task,
+    InputRequiredResult, InputResponses, ProgressNotificationParam, Request, RequestMetaObject, ServerResult, Task,
 };
 use rmcp::service::{PeerRequestOptions, RequestHandle, RunningService, ServiceError};
 use std::pin::pin;
@@ -65,25 +66,71 @@ pub enum CallToolError {
     Unavailable { message: String },
 }
 
+/// Execute exactly one protocol round without consuming interactive input or tasks.
+pub async fn call_tool_once<F, Fut>(
+    client: &RunningService<RoleClient, McpClient>,
+    mut params: CallToolRequestParams,
+    mut options: CallToolOptions,
+    mut on_progress: F,
+) -> Result<CallToolResponse, CallToolError>
+where
+    F: FnMut(ProgressNotificationParam) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let mut meta = params.meta.take().unwrap_or_default();
+    if let Some(extra) = options.meta.take() {
+        meta.extend(extra);
+    }
+    options.meta = client.service().request_meta(Some(meta));
+    let handle = send_round(client, params, &options)
+        .await?
+        .ok_or_else(|| CallToolError::Unavailable { message: "tool call cancelled".into() })?;
+    let mut progress = client.service().progress_dispatcher.subscribe(handle.progress_token.clone()).await;
+    let response = await_response_or_cancel(handle, &options.cancel);
+    tokio::pin!(response);
+    loop {
+        tokio::select! {
+            result = &mut response => {
+                return result.ok_or_else(|| CallToolError::Unavailable { message: "tool call cancelled".into() })?
+                    .map_err(CallToolError::Call);
+            }
+            Some(notification) = progress.next() => on_progress(notification).await,
+        }
+    }
+}
+
 pub fn call_tool(
     client: Arc<RunningService<RoleClient, McpClient>>,
-    mut params: CallToolRequestParams,
+    params: CallToolRequestParams,
     options: CallToolOptions,
 ) -> impl Stream<Item = ToolCallEvent> {
+    call_tool_with_responder(client, params, options, None)
+}
+
+pub fn call_tool_with_responder(
+    client: Arc<RunningService<RoleClient, McpClient>>,
+    mut params: CallToolRequestParams,
+    mut options: CallToolOptions,
+    responder: Option<Arc<dyn InputResponder>>,
+) -> impl Stream<Item = ToolCallEvent> {
     stream! {
+        let mut meta = params.meta.take().unwrap_or_default();
+        if let Some(extra) = options.meta.take() {
+            meta.extend(extra);
+        }
+        options.meta = client.service().request_meta(Some(meta));
         let server_name = client.service().server_name().to_string();
         let mut mrtr_state = MrtrState::new(options.timeout);
+        let mut continuation = TaskContinuationGuard { client: client.clone(), meta: options.meta.clone(), task: None };
 
         loop {
-            let request = ClientRequest::CallToolRequest(Request::new(params.clone()));
-            let send = pin!(client.send_cancellable_request(request, peer_request_options(&options)));
-            let handle = match select(send, pin!(options.cancel.cancelled())).await {
-                Either::Left((Ok(handle), _)) => handle,
-                Either::Left((Err(e), _)) => {
-                    yield ToolCallEvent::Complete(Err(CallToolError::Send(e)));
+            let handle = match send_round(&client, params.clone(), &options).await {
+                Ok(Some(handle)) => handle,
+                Err(error) => {
+                    yield ToolCallEvent::Complete(Err(error));
                     return;
                 }
-                Either::Right(((), _)) => {
+                Ok(None) => {
                     yield ToolCallEvent::Cancelled { task_id: None };
                     return;
                 }
@@ -105,10 +152,12 @@ pub fn call_tool(
 
             match response {
                 Ok(CallToolResponse::Complete(result)) => {
+                    continuation.task = None;
                     yield ToolCallEvent::Complete(Ok(result));
                     return;
                 }
                 Ok(CallToolResponse::InputRequired(input_required)) => {
+                    continuation.observe(&input_required);
                     match mrtr_state.tick(input_required) {
                         MrtrAction::Poll { backoff, request_state } => {
                             let backoff = pin!(sleep(backoff));
@@ -120,7 +169,7 @@ pub fn call_tool(
                             params.request_state = Some(request_state);
                         }
                         MrtrAction::Elicit { input_requests, request_state } => {
-                            let elicit = pin!(elicit_input(client.service(), &mut mrtr_state, &server_name, input_requests));
+                            let elicit = pin!(elicit_input(responder.as_deref().unwrap_or(client.service()), &mut mrtr_state, &server_name, input_requests));
                             match select(elicit, pin!(options.cancel.cancelled())).await {
                                 Either::Left((Ok(responses), _)) => {
                                     params.input_responses = Some(responses);
@@ -147,7 +196,9 @@ pub fn call_tool(
                     }
                 }
                 Ok(CallToolResponse::Task(task)) => {
-                    let driver = TaskDriver::new(&server_name, client.as_ref(), options.timeout, options.cancel.clone());
+                    let driver = TaskDriver::new(&server_name, client.as_ref(), options.timeout, options.cancel.clone())
+                        .with_meta(options.meta.clone())
+                        .with_responder(responder.clone());
                     let mut events = Box::pin(driver.stream(task, progress));
                     while let Some(event) = events.next().await {
                         yield event;
@@ -164,6 +215,47 @@ pub fn call_tool(
                 }
             }
         }
+    }
+}
+
+struct TaskContinuationGuard {
+    client: Arc<RunningService<RoleClient, McpClient>>,
+    meta: Option<RequestMetaObject>,
+    task: Option<String>,
+}
+
+impl TaskContinuationGuard {
+    fn observe(&mut self, result: &InputRequiredResult) {
+        if let Some(task) =
+            result.meta.as_ref().and_then(|meta| meta.get(TASK_CONTINUATION_KEY)).and_then(serde_json::Value::as_str)
+        {
+            self.task = Some(task.to_string());
+        }
+    }
+}
+
+impl Drop for TaskContinuationGuard {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            let client = self.client.clone();
+            let meta = self.meta.clone();
+            tokio::spawn(async move {
+                cancel_server_task(&client, client.service().server_name(), &task, meta).await;
+            });
+        }
+    }
+}
+
+async fn send_round(
+    client: &RunningService<RoleClient, McpClient>,
+    params: CallToolRequestParams,
+    options: &CallToolOptions,
+) -> Result<Option<RequestHandle<RoleClient>>, CallToolError> {
+    let request = ClientRequest::CallToolRequest(Request::new(params));
+    let send = pin!(client.send_cancellable_request(request, peer_request_options(options)));
+    match select(send, pin!(options.cancel.cancelled())).await {
+        Either::Left((result, _)) => result.map(Some).map_err(CallToolError::Send),
+        Either::Right(((), _)) => Ok(None),
     }
 }
 
@@ -196,12 +288,12 @@ async fn await_tool_response(handle: RequestHandle<RoleClient>) -> Result<CallTo
 }
 
 async fn elicit_input(
-    client: &McpClient,
+    responder: &dyn InputResponder,
     mrtr_state: &mut MrtrState,
     server_name: &str,
     requests: InputRequests,
 ) -> Result<InputResponses, CallToolError> {
-    let (responses, results) = elicit_inputs(client, requests).await.map_err(|error| match error {
+    let (responses, results) = elicit_inputs(responder, requests).await.map_err(|error| match error {
         ElicitInputsError::UnsupportedInput => CallToolError::UnsupportedInput { server: server_name.to_string() },
         ElicitInputsError::Serialize(source) => {
             CallToolError::SerializeResponse { server: server_name.to_string(), source }

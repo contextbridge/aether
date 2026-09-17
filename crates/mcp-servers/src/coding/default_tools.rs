@@ -53,8 +53,14 @@ impl CodingTools for DefaultCodingTools {
         list_files(args).await.map_err(CodingError::from)
     }
 
-    async fn bash(&self, args: BashInput, cwd: Option<PathBuf>) -> Result<BashOutput, CodingError> {
-        execute_command(args, cwd.as_deref(), &self.bash_environment).await.map_err(CodingError::from)
+    async fn bash(
+        &self,
+        args: BashInput,
+        cwd: Option<PathBuf>,
+        environment: BashEnvironment,
+    ) -> Result<BashOutput, CodingError> {
+        let environment = self.bash_environment.clone().with_overrides(&environment);
+        execute_command(args, cwd.as_deref(), &environment).await.map_err(CodingError::from)
     }
 
     async fn grep(&self, args: GrepInput) -> Result<GrepOutput, CodingError> {

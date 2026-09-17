@@ -1,0 +1,27 @@
+[package]
+name = "aether-tool-server"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Remote workspace MCP tool server for Aether"
+
+[lints]
+workspace = true
+
+[dependencies]
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", features = ["client", "cli"] }
+mcp_servers = { package = "aether-mcp-servers", path = "../mcp-servers", default-features = false, features = ["coding", "skills", "review"] }
+utils = { package = "aether-utils", path = "../utils" }
+rmcp = { workspace = true, features = ["server", "transport-streamable-http-server"] }
+axum = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "signal", "net"] }
+tokio-util = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+futures = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+reqwest = { workspace = true }

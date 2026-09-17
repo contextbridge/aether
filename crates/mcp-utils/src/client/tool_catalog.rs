@@ -1,4 +1,6 @@
-use super::{ToolExposure, connection::Tool, naming::create_namespaced_tool_name, tool_filter::ToolFilter};
+use super::{
+    ToolExposure, connection::convert_tool_annotations, naming::create_namespaced_tool_name, tool_filter::ToolFilter,
+};
 use crate::status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
 use llm::ToolDefinition;
 use std::collections::BTreeMap;
@@ -39,6 +41,7 @@ pub struct CatalogTool {
     namespaced_name: String,
     local_name: String,
     definition: ToolDefinition,
+    mcp_definition: rmcp::model::Tool,
     exposure: ToolExposureKind,
     allowed: bool,
 }
@@ -161,7 +164,6 @@ impl ServerCatalogEntry {
         tools: &[rmcp::model::Tool],
         filter: &ToolFilter,
     ) -> Self {
-        let tools = tools.iter().map(Tool::from).collect::<Vec<_>>();
         Self::from_tools(
             name.into(),
             description.into(),
@@ -169,7 +171,7 @@ impl ServerCatalogEntry {
             status,
             auth_capability,
             exposure,
-            &tools,
+            tools,
             filter,
         )
     }
@@ -219,7 +221,7 @@ impl ServerCatalogEntry {
         status: McpServerStatus,
         auth_capability: McpServerAuthCapability,
         exposure: ToolExposure,
-        tools: &[Tool],
+        tools: &[rmcp::model::Tool],
         filter: &ToolFilter,
     ) -> Self {
         let catalog_tools = tools
@@ -227,11 +229,11 @@ impl ServerCatalogEntry {
             .map(|tool| {
                 let definition = ToolDefinition::new(
                     create_namespaced_tool_name(&name, &tool.name),
-                    tool.description.clone(),
-                    tool.parameters.clone(),
+                    tool.description.as_deref().unwrap_or_default().to_string(),
+                    serde_json::Value::Object((*tool.input_schema).clone()),
                 )
                 .with_server(name.clone())
-                .with_annotations(tool.annotations.clone());
+                .with_annotations(tool.annotations.as_ref().map(convert_tool_annotations));
                 let exposure_kind = if exposure.is_model_visible_tool(&tool.name) {
                     ToolExposureKind::ModelVisible
                 } else {
@@ -239,7 +241,8 @@ impl ServerCatalogEntry {
                 };
                 CatalogTool {
                     namespaced_name: definition.name.clone(),
-                    local_name: tool.name.clone(),
+                    local_name: tool.name.to_string(),
+                    mcp_definition: tool.clone(),
                     allowed: filter.is_tool_allowed(&definition),
                     definition,
                     exposure: exposure_kind,
@@ -283,6 +286,17 @@ impl CatalogTool {
     pub fn local_name(&self) -> &str {
         &self.local_name
     }
+    /// Complete backend-local MCP definition, without reducing schema or metadata.
+    pub fn mcp_definition(&self) -> &rmcp::model::Tool {
+        &self.mcp_definition
+    }
+
+    pub fn namespaced_mcp_definition(&self) -> rmcp::model::Tool {
+        let mut definition = self.mcp_definition.clone();
+        definition.name = self.namespaced_name.clone().into();
+        definition
+    }
+
     pub fn definition(&self) -> &ToolDefinition {
         &self.definition
     }

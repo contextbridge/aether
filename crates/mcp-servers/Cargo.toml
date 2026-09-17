@@ -66,6 +66,7 @@ subagents = [
     "review",
     "dep:aether-auth",
     "dep:aether-core",
+    "aether-project/settings",
     "dep:aether-project",
     "dep:llm",
     "dep:futures",
@@ -108,7 +109,7 @@ tempfile = { workspace = true, optional = true }
 # subagents feature
 aether-auth = { path = "../aether-auth", optional = true, version = "0.1.15", features = ["keyring"] }
 aether-core = { package = "aether-agent-core", path = "../aether-core", optional = true, version = "0.8.2" }
-aether-project = { path = "../aether-project", optional = true, version = "0.5.45" }
+aether-project = { path = "../aether-project", optional = true, version = "0.5.45", default-features = false }
 llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.9.2" }
 
 [dev-dependencies]

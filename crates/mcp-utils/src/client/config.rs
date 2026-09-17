@@ -1,4 +1,7 @@
+pub use crate::tool_exposure::{DeferredToolRules, ToolExposure};
+use crate::tool_policy::ToolFilter;
 use aether_auth::OAuthClientRegistration;
+use reqwest::header::{HeaderName, HeaderValue};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -6,7 +9,6 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroU16;
 use std::path::Path;
-use utils::matches_name_pattern;
 use utils::variables::{VarError, Vars};
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
@@ -42,6 +44,10 @@ pub struct StdioServerConfig {
     #[serde(default)]
     pub env: HashMap<String, String>,
 
+    /// Restricts tools by names advertised by this server and by annotations.
+    #[serde(default, skip_serializing_if = "ToolFilter::is_empty")]
+    pub tools: ToolFilter,
+
     /// Controls which tools are deferred from the model-visible tool definitions.
     #[serde(rename = "deferTools", alias = "proxy", default, skip_serializing_if = "ToolExposure::is_model_visible")]
     pub defer_tools: ToolExposure,
@@ -68,6 +74,10 @@ pub struct RemoteServerConfig {
     #[serde(rename = "type")]
     pub type_: RemoteType,
 
+    /// Opt into Aether gateway request context and its required protocol.
+    #[serde(rename = "aetherGateway", default, skip_serializing_if = "std::ops::Not::not")]
+    pub aether_gateway: bool,
+
     /// Base URL of the remote MCP server.
     pub url: String,
 
@@ -78,6 +88,10 @@ pub struct RemoteServerConfig {
     /// OAuth settings for a pre-registered public client.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth: Option<McpOAuthConfig>,
+
+    /// Restricts tools by names advertised by this server and by annotations.
+    #[serde(default, skip_serializing_if = "ToolFilter::is_empty")]
+    pub tools: ToolFilter,
 
     /// Controls which tools are deferred from the model-visible tool definitions.
     #[serde(rename = "deferTools", alias = "proxy", default, skip_serializing_if = "ToolExposure::is_model_visible")]
@@ -98,6 +112,10 @@ pub struct InMemoryServerConfig {
     /// Optional JSON input passed to the built-in server at startup.
     #[serde(default)]
     pub input: Option<Value>,
+
+    /// Restricts tools by names advertised by this server and by annotations.
+    #[serde(default, skip_serializing_if = "ToolFilter::is_empty")]
+    pub tools: ToolFilter,
 
     /// Controls which tools are deferred from the model-visible tool definitions.
     #[serde(rename = "deferTools", alias = "proxy", default, skip_serializing_if = "ToolExposure::is_model_visible")]
@@ -125,33 +143,13 @@ pub enum InMemoryType {
     InMemory,
 }
 
-/// Which of a server's tools are model-visible or deferred for progressive discovery.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(from = "ToolExposureConfig", into = "ToolExposureConfig")]
-#[schemars(with = "ToolExposureConfig")]
-pub enum ToolExposure {
-    #[default]
-    ModelVisible,
-    Deferred(DeferredToolRules),
-}
-
-#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct DeferredToolRules {
-    /// Tool names to defer. An empty list includes every tool.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub include: Vec<String>,
-
-    /// Tool names to keep model-visible. Exclude rules take precedence over include rules.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub exclude: Vec<String>,
-}
-
 #[derive(Debug, Clone)]
 pub struct McpServer {
     pub name: String,
     pub transport: McpTransport,
     pub tool_exposure: ToolExposure,
+    pub tools: ToolFilter,
+    pub aether_gateway: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -172,6 +170,7 @@ pub struct InMemoryServerSpec {
 pub struct McpHttpConfig {
     pub transport: StreamableHttpClientTransportConfig,
     pub oauth: Option<McpOAuthConfig>,
+    pub request_context: Option<Box<crate::request_context::GatewayRequestContext>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -214,85 +213,18 @@ impl McpHttpConfig {
 
 impl From<StreamableHttpClientTransportConfig> for McpHttpConfig {
     fn from(transport: StreamableHttpClientTransportConfig) -> Self {
-        Self { transport, oauth: None }
-    }
-}
-
-impl ToolExposure {
-    pub fn deferred_all() -> Self {
-        Self::Deferred(DeferredToolRules::default())
-    }
-
-    pub fn is_model_visible(&self) -> bool {
-        matches!(self, Self::ModelVisible)
-    }
-
-    pub fn has_deferred_tools(&self) -> bool {
-        matches!(self, Self::Deferred(_))
-    }
-
-    pub fn is_model_visible_tool(&self, tool_name: &str) -> bool {
-        match self {
-            Self::ModelVisible => true,
-            Self::Deferred(rules) => !rules.matches(tool_name),
-        }
-    }
-
-    /// Defer every tool, preserving any existing rules.
-    pub fn defer_all_tools(&mut self) {
-        if self.is_model_visible() {
-            *self = Self::deferred_all();
-        }
-    }
-}
-
-impl DeferredToolRules {
-    pub fn new(include: &[&str], exclude: &[&str]) -> Self {
-        Self {
-            include: include.iter().map(ToString::to_string).collect(),
-            exclude: exclude.iter().map(ToString::to_string).collect(),
-        }
-    }
-
-    fn matches(&self, tool_name: &str) -> bool {
-        let included =
-            self.include.is_empty() || self.include.iter().any(|pattern| matches_name_pattern(pattern, tool_name));
-        let excluded = self.exclude.iter().any(|pattern| matches_name_pattern(pattern, tool_name));
-        included && !excluded
-    }
-}
-
-/// The `deferTools` config field's wire shape: a boolean or an include/exclude object.
-#[derive(Deserialize, Serialize, JsonSchema)]
-#[serde(untagged)]
-enum ToolExposureConfig {
-    Enabled(bool),
-    Rules(DeferredToolRules),
-}
-
-impl From<ToolExposureConfig> for ToolExposure {
-    fn from(repr: ToolExposureConfig) -> Self {
-        match repr {
-            ToolExposureConfig::Enabled(false) => Self::ModelVisible,
-            ToolExposureConfig::Enabled(true) => Self::deferred_all(),
-            ToolExposureConfig::Rules(rules) => Self::Deferred(rules),
-        }
-    }
-}
-
-impl From<ToolExposure> for ToolExposureConfig {
-    fn from(exposure: ToolExposure) -> Self {
-        match exposure {
-            ToolExposure::ModelVisible => Self::Enabled(false),
-            ToolExposure::Deferred(rules) if rules == DeferredToolRules::default() => Self::Enabled(true),
-            ToolExposure::Deferred(rules) => Self::Rules(rules),
-        }
+        Self { transport, oauth: None, request_context: None }
     }
 }
 
 impl McpServer {
     pub fn new(name: impl Into<String>, transport: McpTransport, tool_exposure: ToolExposure) -> Self {
-        Self { name: name.into(), transport, tool_exposure }
+        Self { name: name.into(), transport, tool_exposure, tools: ToolFilter::default(), aether_gateway: false }
+    }
+
+    pub fn with_tools(mut self, tools: ToolFilter) -> Self {
+        self.tools = tools;
+        self
     }
 
     pub fn with_exposure(mut self, exposure: ToolExposure) -> Self {
@@ -315,6 +247,15 @@ pub enum ParseError {
 
     #[error("Variable expansion failed: {0}")]
     VarError(#[from] VarError),
+
+    #[error("aetherGateway requires the http transport")]
+    InvalidGatewayTransport,
+
+    #[error("Invalid HTTP header configuration")]
+    InvalidHeader,
+
+    #[error("HTTP header is controlled by the MCP transport")]
+    ReservedHeader,
 }
 
 impl McpConfig {
@@ -360,6 +301,14 @@ impl McpConfig {
 }
 
 impl McpServerConfig {
+    pub fn tools(&self) -> &ToolFilter {
+        match self {
+            Self::Stdio(config) => &config.tools,
+            Self::Remote(config) => &config.tools,
+            Self::InMemory(config) => &config.tools,
+        }
+    }
+
     pub fn defer_tools(&self) -> &ToolExposure {
         match self {
             McpServerConfig::Stdio(config) => &config.defer_tools,
@@ -378,12 +327,17 @@ impl McpServerConfig {
     }
 
     pub fn into_server(self, name: String, vars: &Vars, defer_all_tools: bool) -> Result<McpServer, ParseError> {
+        let tools = self.tools().clone();
+        let aether_gateway = matches!(&self, Self::Remote(config) if config.aether_gateway);
+        if matches!(&self, Self::Remote(config) if config.aether_gateway && config.type_ != RemoteType::Http) {
+            return Err(ParseError::InvalidGatewayTransport);
+        }
         let mut exposure = self.defer_tools().clone();
         if defer_all_tools {
             exposure.defer_all_tools();
         }
         let transport = self.into_transport(name.clone(), vars)?;
-        Ok(McpServer { name, transport, tool_exposure: exposure })
+        Ok(McpServer { name, transport, tool_exposure: exposure, tools, aether_gateway })
     }
 
     fn into_transport(self, name: String, vars: &Vars) -> Result<McpTransport, ParseError> {
@@ -398,17 +352,39 @@ impl McpServerConfig {
             }),
 
             McpServerConfig::Remote(RemoteServerConfig { url, headers, oauth, .. }) => {
-                let auth_header = headers.get("Authorization").map(|v| vars.expand(v)).transpose()?.map(|auth| {
-                    // rmcp adds `Bearer`  to the auth header.
-                    auth.split_once(' ')
-                        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("Bearer"))
-                        .map_or(auth.as_str(), |(_, rest)| rest)
-                        .to_string()
-                });
-
                 let mut transport = StreamableHttpClientTransportConfig::with_uri(vars.expand(&url)?);
-                if let Some(auth) = auth_header {
-                    transport = transport.auth_header(auth);
+                let mut seen = std::collections::HashSet::new();
+                for (name, value) in headers {
+                    let name = HeaderName::from_bytes(name.as_bytes()).map_err(|_| ParseError::InvalidHeader)?;
+                    if !seen.insert(name.clone()) {
+                        return Err(ParseError::InvalidHeader);
+                    }
+                    if name.as_str().starts_with("mcp-")
+                        || matches!(
+                            name.as_str(),
+                            "accept"
+                                | "content-type"
+                                | "content-length"
+                                | "transfer-encoding"
+                                | "host"
+                                | "connection"
+                                | "last-event-id"
+                        )
+                    {
+                        return Err(ParseError::ReservedHeader);
+                    }
+                    let expanded = vars.expand(&value)?;
+                    let mut value = HeaderValue::from_str(&expanded).map_err(|_| ParseError::InvalidHeader)?;
+                    value.set_sensitive(true);
+                    if name == reqwest::header::AUTHORIZATION {
+                        let auth = expanded
+                            .split_once(' ')
+                            .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("Bearer"))
+                            .map_or(expanded.as_str(), |(_, rest)| rest);
+                        transport = transport.auth_header(auth);
+                    } else {
+                        transport.custom_headers.insert(name, value);
+                    }
                 }
 
                 let oauth = oauth
@@ -424,7 +400,7 @@ impl McpServerConfig {
                     })
                     .transpose()?;
 
-                Ok(McpTransport::Http(McpHttpConfig { transport, oauth }))
+                Ok(McpTransport::Http(McpHttpConfig { transport, oauth, request_context: None }))
             }
 
             McpServerConfig::InMemory(InMemoryServerConfig { args, input, .. }) => {
