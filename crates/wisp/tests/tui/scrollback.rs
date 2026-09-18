@@ -143,9 +143,7 @@ fn clear_command_replaces_conversation_without_purging_native_scrollback() {
 
     commit_overflowing_reply(&mut ui);
 
-    ui.type_text("/clear");
-    ui.key(key(KeyCode::Tab));
-    assert_command(&mut ui, |c| matches!(c, AgentCommand::NewSession { .. }), "/clear");
+    assert!(matches!(ui.start_new_session(), AgentCommand::NewSession { .. }));
     ui.assert_history_contains("overflow-line-0");
 
     ui.deliver_result(new_session_created("fresh-session", Vec::new()));
@@ -159,9 +157,7 @@ fn session_switch_preserves_native_scrollback_without_purging() {
 
     commit_overflowing_reply(&mut ui);
 
-    ui.type_text("/resume");
-    ui.key(key(KeyCode::Tab));
-    assert_command(&mut ui, |c| matches!(c, AgentCommand::ListSessions), "/resume");
+    assert!(matches!(ui.open_session_picker(), AgentCommand::ListSessions));
     ui.deliver_result(sessions_listed(vec![session_info("other", "/tmp/elsewhere", "Other", "2025-01-01T00:00:00Z")]));
     ui.key(key(KeyCode::Enter));
     assert_command(&mut ui, |c| matches!(c, AgentCommand::ResumeSession { .. }), "resume");
@@ -179,9 +175,7 @@ fn successful_workspace_move_does_not_purge_native_scrollback() {
 
     commit_overflowing_reply(&mut ui);
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    assert_command(&mut ui, |c| matches!(c, AgentCommand::ListWorkspaces { .. }), "/move");
+    assert!(matches!(ui.open_workspace_picker(), AgentCommand::ListWorkspaces { .. }));
     ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
         workspace_entry("/home/user/code/other", false),
@@ -207,9 +201,7 @@ fn an_ordinary_render_does_not_purge() {
 fn a_new_session_request_that_fails_does_not_purge() {
     let mut app = TestUiBuilder::new().build();
 
-    app.type_text("/clear");
-    app.key(key(KeyCode::Tab));
-    assert!(matches!(app.next_agent_command(), Some(AgentCommand::NewSession { .. })));
+    assert!(matches!(app.start_new_session(), AgentCommand::NewSession { .. }));
 
     drain_commands(&mut app);
 }
@@ -218,9 +210,7 @@ fn a_new_session_request_that_fails_does_not_purge() {
 fn a_workspace_listing_failure_does_not_purge() {
     let mut app = make_app_with_workspace_move();
 
-    app.type_text("/move");
-    app.key(key(KeyCode::Tab));
-    assert!(matches!(app.next_agent_command(), Some(AgentCommand::ListWorkspaces { .. })));
+    assert!(matches!(app.open_workspace_picker(), AgentCommand::ListWorkspaces { .. }));
 
     app.deliver_result(workspace_list_failed("network error"));
 
@@ -231,9 +221,7 @@ fn a_workspace_listing_failure_does_not_purge() {
 fn a_workspace_move_failure_does_not_purge() {
     let mut app = make_app_with_workspace_move();
 
-    app.type_text("/move");
-    app.key(key(KeyCode::Tab));
-    assert!(matches!(app.next_agent_command(), Some(AgentCommand::ListWorkspaces { .. })));
+    assert!(matches!(app.open_workspace_picker(), AgentCommand::ListWorkspaces { .. }));
     app.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
         workspace_entry("/home/user/code/other", false),

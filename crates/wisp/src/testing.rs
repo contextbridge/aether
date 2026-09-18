@@ -1081,6 +1081,37 @@ where
         self.acp_event(acp::UpdateSessionNotification::new(session_id, update).into());
     }
 
+    /// Opens the settings overlay the way the `/settings` command does.
+    pub fn open_settings(&mut self) {
+        self.slash_command("/settings");
+    }
+
+    /// Starts a new session the way the `/clear` command does, returning the
+    /// `NewSession` command the app enqueues.
+    pub fn start_new_session(&mut self) -> AgentCommand {
+        self.slash_command("/clear");
+        self.next_agent_command().expect("/clear should enqueue a NewSession command")
+    }
+
+    /// Opens the session picker the way the `/resume` command does, returning
+    /// the `ListSessions` command the app enqueues.
+    pub fn open_session_picker(&mut self) -> AgentCommand {
+        self.slash_command("/resume");
+        self.next_agent_command().expect("/resume should enqueue a ListSessions command")
+    }
+
+    /// Opens the workspace picker the way the `/move` command does, returning
+    /// the `ListWorkspaces` command the app enqueues.
+    pub fn open_workspace_picker(&mut self) -> AgentCommand {
+        self.slash_command("/move");
+        self.next_agent_command().expect("/move should enqueue a ListWorkspaces command")
+    }
+
+    fn slash_command(&mut self, command: &str) {
+        self.type_text(command);
+        self.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    }
+
     pub fn tick(&mut self, now: Instant) {
         self.deliver(Message::Tick(now));
     }

@@ -36,6 +36,15 @@ fn create_temp_file(dir: &TempDir, name: &str, content: &[u8]) -> std::path::Pat
     p
 }
 
+/// Creates `name` with `content` on disk and in the fake filesystem, then
+/// pastes its path into the composer; returns the path for assertions.
+fn paste_created_file(app: &mut TestUi, dir: &TempDir, name: &str, content: &[u8]) -> std::path::PathBuf {
+    let path = create_temp_file(dir, name, content);
+    app.executor_mut().filesystem_mut().write_file(&path, content);
+    app.paste(path.to_str().unwrap());
+    path
+}
+
 fn image_model_config(current: &str, options: Vec<acp::SessionConfigSelectOption>) -> acp::SessionConfigOption {
     acp::SessionConfigOption::select(
         ConfigOptionId::Model.as_str().to_string(),
@@ -257,10 +266,7 @@ fn duplicate_dropped_media_not_added_twice() {
 fn media_only_submit_sends_with_content_blocks() {
     let mut app = make_app_with_prompt_capabilities(media_caps());
     let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
-
-    app.paste(img.to_str().unwrap());
+    paste_created_file(&mut app, &tmp, "photo.png", b"fake png data");
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
 
@@ -279,10 +285,7 @@ fn media_only_submit_sends_with_content_blocks() {
 fn submit_with_text_and_media_merges_both() {
     let mut app = make_app_with_prompt_capabilities(media_caps());
     let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
-
-    app.paste(img.to_str().unwrap());
+    paste_created_file(&mut app, &tmp, "photo.png", b"fake png data");
     app.type_text("describe this");
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
@@ -368,10 +371,7 @@ fn agent_rejects_image_when_capability_missing() {
     let caps = acp::PromptCapabilities::new().image(None).audio(acp::PromptAudioCapabilities::new());
     let mut app = make_app_with_prompt_capabilities(caps);
     let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
-
-    app.paste(img.to_str().unwrap());
+    paste_created_file(&mut app, &tmp, "photo.png", b"fake png data");
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
 
@@ -387,10 +387,7 @@ fn agent_rejects_audio_when_capability_missing() {
     let caps = acp::PromptCapabilities::new().image(acp::PromptImageCapabilities::new()).audio(None);
     let mut app = make_app_with_prompt_capabilities(caps);
     let tmp = TempDir::new().unwrap();
-    let audio = create_temp_file(&tmp, "note.wav", b"fake wav data");
-    app.executor_mut().filesystem_mut().write_file(&audio, b"fake wav data");
-
-    app.paste(audio.to_str().unwrap());
+    paste_created_file(&mut app, &tmp, "note.wav", b"fake wav data");
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
 
@@ -409,10 +406,7 @@ fn selected_model_rejects_image() {
     )];
     let mut app = make_app_with_caps_and_config(caps, config);
     let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
-
-    app.paste(img.to_str().unwrap());
+    paste_created_file(&mut app, &tmp, "photo.png", b"fake png data");
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
 
@@ -430,10 +424,7 @@ fn missing_model_metadata_rejects_media() {
         vec![image_model_config("unknown-model", vec![model_select_option("known-model", "Known", true, true)])];
     let mut app = make_app_with_caps_and_config(caps, config);
     let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
-
-    app.paste(img.to_str().unwrap());
+    paste_created_file(&mut app, &tmp, "photo.png", b"fake png data");
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
 
@@ -453,10 +444,7 @@ fn supported_media_sends_blocks() {
     )];
     let mut app = make_app_with_caps_and_config(caps, config);
     let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
-
-    app.paste(img.to_str().unwrap());
+    paste_created_file(&mut app, &tmp, "photo.png", b"fake png data");
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
 
@@ -523,9 +511,7 @@ fn clear_command_also_clears_pending_media() {
     let img = create_temp_file(&tmp, "photo.png", b"img");
 
     app.paste(img.to_str().unwrap());
-    app.type_text("/clear");
-    app.key(key(KeyCode::Tab));
-    let _ = app.next_agent_command().unwrap();
+    app.start_new_session();
 
     assert!(app.app().composer().pending_media().is_empty());
     assert!(app.app().composer().text().is_empty());
@@ -570,10 +556,7 @@ fn selected_model_rejects_audio() {
     )];
     let mut app = make_app_with_caps_and_config(caps, config);
     let tmp = TempDir::new().unwrap();
-    let audio = create_temp_file(&tmp, "note.wav", b"fake wav data");
-    app.executor_mut().filesystem_mut().write_file(&audio, b"fake wav data");
-
-    app.paste(audio.to_str().unwrap());
+    paste_created_file(&mut app, &tmp, "note.wav", b"fake wav data");
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
 
@@ -595,10 +578,7 @@ fn selected_model_rejects_image_grouped() {
     let config = vec![grouped_model_config("grouped:no-vision", groups)];
     let mut app = make_app_with_caps_and_config(caps, config);
     let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
-
-    app.paste(img.to_str().unwrap());
+    paste_created_file(&mut app, &tmp, "photo.png", b"fake png data");
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
 
@@ -620,10 +600,7 @@ fn selected_model_rejects_audio_grouped() {
     let config = vec![grouped_model_config("grouped:no-audio", groups)];
     let mut app = make_app_with_caps_and_config(caps, config);
     let tmp = TempDir::new().unwrap();
-    let audio = create_temp_file(&tmp, "note.wav", b"fake wav data");
-    app.executor_mut().filesystem_mut().write_file(&audio, b"fake wav data");
-
-    app.paste(audio.to_str().unwrap());
+    paste_created_file(&mut app, &tmp, "note.wav", b"fake wav data");
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
 
@@ -652,10 +629,7 @@ fn comma_separated_multi_model_rejects_image() {
     let config = vec![grouped_model_config("claude:sonnet,gpt:text-only", groups)];
     let mut app = make_app_with_caps_and_config(caps, config);
     let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
-
-    app.paste(img.to_str().unwrap());
+    paste_created_file(&mut app, &tmp, "photo.png", b"fake png data");
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
 
@@ -678,10 +652,7 @@ fn comma_separated_multi_model_sends_when_all_support_media() {
     let config = vec![grouped_model_config("claude:sonnet,deepseek:r1", groups)];
     let mut app = make_app_with_caps_and_config(caps, config);
     let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
-
-    app.paste(img.to_str().unwrap());
+    paste_created_file(&mut app, &tmp, "photo.png", b"fake png data");
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
 
@@ -700,10 +671,7 @@ fn rejection_preserves_text_and_placeholders_in_transcript() {
     let caps = acp::PromptCapabilities::new().image(None).audio(None);
     let mut app = make_app_with_prompt_capabilities(caps);
     let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
-
-    app.paste(img.to_str().unwrap());
+    paste_created_file(&mut app, &tmp, "photo.png", b"fake png data");
     app.type_text("describe this image");
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
@@ -724,10 +692,7 @@ fn sync_failure_preserves_text_and_placeholders_in_transcript() {
     let caps = media_caps();
     let mut app = make_failable_app_with_caps(caps);
     let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
-
-    app.paste(img.to_str().unwrap());
+    paste_created_file(&mut app, &tmp, "photo.png", b"fake png data");
     app.type_text("describe this");
     app.key(key(KeyCode::Enter));
     app.settle_tasks();

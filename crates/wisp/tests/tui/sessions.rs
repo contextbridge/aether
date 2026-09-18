@@ -14,23 +14,15 @@ fn remote_resume_preserves_server_path_without_local_resolution() {
     });
     assert!(!ui.take_commands().iter().any(|command| matches!(command, Command::ResolveWorkspace { .. })));
     ui.assert_viewport_contains(&format!("remote: {}", cwd.display()));
-    ui.type_text("/clear");
-    ui.key(key(KeyCode::Tab));
-    assert!(matches!(ui.next_agent_command(), Some(AgentCommand::NewSession { cwd: actual }) if actual == cwd));
+    assert!(matches!(ui.start_new_session(), AgentCommand::NewSession { cwd: actual } if actual == cwd));
 }
 
 #[test]
 fn clear_is_builtin_and_issues_new_session_command() {
     let mut app = make_app();
 
-    app.type_text("/clear");
-    app.key(key(KeyCode::Tab));
-
-    let cmd = app.next_agent_command();
-    assert!(
-        matches!(cmd, Some(AgentCommand::NewSession { .. })),
-        "expected NewSession command after /clear, got {cmd:?}"
-    );
+    let cmd = app.start_new_session();
+    assert!(matches!(cmd, AgentCommand::NewSession { .. }), "expected NewSession command after /clear, got {cmd:?}");
 }
 
 #[test]
@@ -44,9 +36,7 @@ fn clear_creates_new_session_and_resets_state() {
     ui.assert_viewport_contains("old message");
 
     let old_conversation = ui.app().conversation_id();
-    ui.type_text("/clear");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.start_new_session();
 
     ui.deliver_result(new_session_created("new-session", vec![select_option("model", "sonnet")]));
 
@@ -64,9 +54,7 @@ fn clear_restores_compatible_config_selections() {
     let options = vec![select_option("model", "opus"), mode_option("code", &["code", "plan", "ask"])];
     let mut app = TestUiBuilder::new().config_options(options).build();
 
-    app.type_text("/clear");
-    app.key(key(KeyCode::Tab));
-    let _ = app.next_agent_command().unwrap();
+    app.start_new_session();
 
     app.acp_event(AcpEvent::SessionUpdate(Box::new(acp::UpdateSessionNotification::new(
         "new-session",
@@ -88,23 +76,15 @@ fn clear_restores_compatible_config_selections() {
 fn resume_is_builtin_and_lists_sessions() {
     let mut app = make_app();
 
-    app.type_text("/resume");
-    app.key(key(KeyCode::Tab));
-
-    let cmd = app.next_agent_command();
-    assert!(
-        matches!(cmd, Some(AgentCommand::ListSessions)),
-        "expected ListSessions command after /resume, got {cmd:?}"
-    );
+    let cmd = app.open_session_picker();
+    assert!(matches!(cmd, AgentCommand::ListSessions), "expected ListSessions command after /resume, got {cmd:?}");
 }
 
 #[test]
 fn session_list_excludes_active_session() {
     let mut app = make_app();
 
-    app.type_text("/resume");
-    app.key(key(KeyCode::Tab));
-    let _ = app.next_agent_command().unwrap();
+    app.open_session_picker();
 
     app.deliver_result(sessions_listed(vec![
         session_info("test-session", "/tmp/current", "Current", "2025-01-01T00:00:00Z"),
@@ -118,9 +98,7 @@ fn session_list_excludes_active_session() {
 fn resume_loads_selected_session() {
     let mut app = make_app();
 
-    app.type_text("/resume");
-    app.key(key(KeyCode::Tab));
-    let _ = app.next_agent_command().unwrap();
+    app.open_session_picker();
 
     app.deliver_result(sessions_listed(vec![session_info("old", "/tmp/old", "Old Session", "2025-01-01T00:00:00Z")]));
 
@@ -137,9 +115,7 @@ fn resume_loads_selected_session() {
 fn empty_session_list_shows_no_sessions() {
     let mut ui = TestUi::new();
 
-    ui.type_text("/resume");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.open_session_picker();
 
     ui.deliver_result(sessions_listed(vec![]));
 
@@ -153,9 +129,7 @@ fn empty_session_list_shows_no_sessions() {
 fn esc_closes_session_picker() {
     let mut app = make_app();
 
-    app.type_text("/resume");
-    app.key(key(KeyCode::Tab));
-    let _ = app.next_agent_command().unwrap();
+    app.open_session_picker();
 
     app.deliver_result(sessions_listed(vec![session_info("old", "/tmp/old", "Old", "2025-01-01T00:00:00Z")]));
     assert!(app.app().has_session_picker());
@@ -168,9 +142,7 @@ fn esc_closes_session_picker() {
 fn new_session_send_failure_shows_transcript_error() {
     let mut app = TestUiBuilder::new().build();
 
-    app.type_text("/clear");
-    app.key(key(KeyCode::Tab));
-    assert!(matches!(app.next_command(), Some(Command::Agent(AgentCommand::NewSession { .. }))));
+    assert!(matches!(app.start_new_session(), AgentCommand::NewSession { .. }));
     app.deliver_result(CommandResult::NewSession(Err("send failed".to_string())));
 
     let messages: Vec<_> = message_texts(&app).collect();
@@ -184,9 +156,7 @@ fn new_session_send_failure_shows_transcript_error() {
 fn list_sessions_send_failure_shows_transcript_error() {
     let mut app = TestUiBuilder::new().build();
 
-    app.type_text("/resume");
-    app.key(key(KeyCode::Tab));
-    assert!(matches!(app.next_command(), Some(Command::Agent(AgentCommand::ListSessions))));
+    assert!(matches!(app.open_session_picker(), AgentCommand::ListSessions));
     app.deliver_result(CommandResult::SessionsListed(Err("send failed".to_string())));
 
     let messages: Vec<_> = message_texts(&app).collect();
@@ -200,9 +170,7 @@ fn list_sessions_send_failure_shows_transcript_error() {
 fn load_session_send_failure_cleans_up_buffer_and_shows_error() {
     let mut app = TestUiBuilder::new().build();
 
-    app.type_text("/resume");
-    app.key(key(KeyCode::Tab));
-    let _ = app.next_agent_command().unwrap();
+    app.open_session_picker();
 
     app.deliver_result(sessions_listed(vec![session_info("old", "/tmp/old", "Old Session", "2025-01-01T00:00:00Z")]));
     assert!(app.app().has_session_picker());
@@ -224,9 +192,7 @@ fn load_session_send_failure_cleans_up_buffer_and_shows_error() {
 fn session_preview_loaded_for_selected_session() {
     let mut app = make_app_with_session_preview();
 
-    app.type_text("/resume");
-    app.key(key(KeyCode::Tab));
-    let _ = app.next_agent_command().unwrap();
+    app.open_session_picker();
 
     app.deliver_result(sessions_listed(vec![
         session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z"),
@@ -244,9 +210,7 @@ fn session_preview_loaded_for_selected_session() {
 fn session_preview_updated_when_selection_changes() {
     let mut app = make_app_with_session_preview();
 
-    app.type_text("/resume");
-    app.key(key(KeyCode::Tab));
-    let _ = app.next_agent_command().unwrap();
+    app.open_session_picker();
 
     app.deliver_result(sessions_listed(vec![
         session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z"),
@@ -267,9 +231,7 @@ fn session_preview_updated_when_selection_changes() {
 fn stale_preview_does_not_replace_current() {
     let mut ui = TestUiBuilder::new().session_preview().build();
 
-    ui.type_text("/resume");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.open_session_picker();
 
     ui.deliver_result(sessions_listed(vec![
         session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z"),
@@ -294,9 +256,7 @@ fn stale_preview_does_not_replace_current() {
 fn session_preview_failure_shows_error() {
     let mut ui = TestUiBuilder::new().session_preview().dimensions(160, 15).build();
 
-    ui.type_text("/resume");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.open_session_picker();
 
     ui.deliver_result(sessions_listed(vec![session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z")]));
     let _ = ui.next_agent_command().unwrap();
@@ -315,9 +275,7 @@ fn session_preview_failure_shows_error() {
 fn loaded_session_replays_typed_notifications_in_order() {
     let mut ui = TestUi::new();
 
-    ui.type_text("/resume");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.open_session_picker();
 
     ui.deliver_result(sessions_listed(vec![session_info("loaded", "/tmp/loaded", "Loaded", "2025-01-01T00:00:00Z")]));
     ui.key(key(KeyCode::Enter));
@@ -354,9 +312,7 @@ fn loaded_session_replays_typed_notifications_in_order() {
 fn updates_from_the_abandoned_session_do_not_reach_the_loaded_one() {
     let mut ui = TestUi::new();
 
-    ui.type_text("/resume");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.open_session_picker();
 
     ui.deliver_result(sessions_listed(vec![session_info("loaded", "/tmp/loaded", "Loaded", "2025-01-01T00:00:00Z")]));
     ui.key(key(KeyCode::Enter));
@@ -378,9 +334,7 @@ fn loaded_session_uses_server_config_values() {
     let options = vec![select_option("model", "opus"), mode_option("plan", &["code", "plan", "ask"])];
     let mut app = TestUiBuilder::new().config_options(options).build();
 
-    app.type_text("/resume");
-    app.key(key(KeyCode::Tab));
-    let _ = app.next_agent_command().unwrap();
+    app.open_session_picker();
 
     app.deliver_result(sessions_listed(vec![session_info("loaded", "/tmp/loaded", "Loaded", "2025-01-01T00:00:00Z")]));
     app.key(key(KeyCode::Enter));
@@ -400,9 +354,7 @@ fn loaded_session_uses_server_config_values() {
 fn connection_closed_cancels_session_picker() {
     let mut app = make_app();
 
-    app.type_text("/resume");
-    app.key(key(KeyCode::Tab));
-    let _ = app.next_agent_command().unwrap();
+    app.open_session_picker();
 
     app.deliver_result(sessions_listed(vec![session_info("old", "/tmp/old", "Old", "2025-01-01T00:00:00Z")]));
     assert!(app.app().has_session_picker());
@@ -416,8 +368,7 @@ fn connection_closed_cancels_session_picker() {
 fn session_list_error_shows_in_transcript() {
     let mut app = make_app();
 
-    app.type_text("/resume");
-    app.key(key(KeyCode::Tab));
+    app.open_session_picker();
 
     app.deliver_result(CommandResult::SessionsListed(Err("list sessions failed".to_string())));
 
@@ -443,9 +394,7 @@ fn builtin_clear_appears_in_command_picker() {
 fn narrow_terminal_renders_session_picker_without_preview_pane() {
     let mut ui = TestUiBuilder::new().session_preview().dimensions(60, 15).build();
 
-    ui.type_text("/resume");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.open_session_picker();
 
     ui.deliver_result(sessions_listed(vec![session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z")]));
 
@@ -459,9 +408,7 @@ fn narrow_terminal_renders_session_picker_without_preview_pane() {
 fn composed_chars_do_not_filter_the_session_picker() {
     let mut ui = TestUi::with_dimensions(60, 15);
 
-    ui.type_text("/resume");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.open_session_picker();
     ui.deliver_result(sessions_listed(vec![
         session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z"),
         session_info("sess-2", "/tmp/two", "Session Two", "2025-01-02T00:00:00Z"),
@@ -489,9 +436,7 @@ fn composed_chars_do_not_filter_the_session_picker() {
 fn new_modal_replaces_session_picker() {
     let mut app = make_app();
 
-    app.type_text("/resume");
-    app.key(key(KeyCode::Tab));
-    let _ = app.next_agent_command().unwrap();
+    app.open_session_picker();
 
     app.deliver_result(sessions_listed(vec![session_info("old", "/tmp/old", "Old", "2025-01-01T00:00:00Z")]));
     assert!(app.app().has_session_picker());

@@ -178,8 +178,7 @@ fn plan_cleared_on_new_session() {
     ui.acp_event(plan_update(vec![plan_entry("Task", acp::PlanEntryStatus::Pending)]));
     assert!(ui.app().has_plan());
 
-    ui.type_text("/clear");
-    ui.key(key(KeyCode::Tab));
+    ui.start_new_session();
     ui.deliver_result(new_session_created("new-id", Vec::new()));
     assert!(!ui.app().has_plan());
 

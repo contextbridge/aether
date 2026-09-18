@@ -328,9 +328,7 @@ fn clear_replaces_the_conversation_once() {
     let mut app = make_app();
     let old_conversation = app.app().conversation_id();
 
-    app.type_text("/clear");
-    app.key(key(KeyCode::Tab));
-    let _ = app.next_agent_command().unwrap();
+    app.start_new_session();
 
     app.deliver_result(new_session_created("new-session", vec![select_option("model", "sonnet")]));
 

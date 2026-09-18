@@ -3,9 +3,7 @@ use super::support::*;
 #[test]
 fn remote_workspace_move_keeps_paths_server_side() {
     let mut ui = TestUiBuilder::new().remote_workspace().workspace_move().dimensions(120, 24).build();
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    assert!(matches!(ui.next_agent_command(), Some(AgentCommand::ListWorkspaces { .. })));
+    assert!(matches!(ui.open_workspace_picker(), AgentCommand::ListWorkspaces { .. }));
     ui.deliver_result(workspaces_listed(vec![workspace_entry("/server/next", false)]));
     ui.assert_viewport_contains("/server/next");
     ui.assert_viewport_not_contains("remote: /server/next");
@@ -20,10 +18,6 @@ fn remote_workspace_move_keeps_paths_server_side() {
     });
     ui.assert_viewport_contains("remote: /server/next");
     assert!(!ui.take_commands().iter().any(|command| matches!(command, Command::ResolveWorkspace { .. })));
-}
-
-fn make_ui_with_workspace_move() -> TestUi {
-    TestUiBuilder::new().workspace_move().build()
 }
 
 #[test]
@@ -41,7 +35,7 @@ fn workspace_move_command_hidden_without_capability() {
 
 #[test]
 fn workspace_move_command_visible_with_capability() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = make_app_with_workspace_move();
 
     ui.key(key(KeyCode::Char('/')));
     assert!(ui.app().composer().has_completion());
@@ -53,7 +47,7 @@ fn workspace_move_command_visible_with_capability() {
 
 #[test]
 fn workspace_move_command_rejected_when_prompt_in_flight() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = make_app_with_workspace_move();
 
     ui.submit("hello");
     let _ = ui.next_agent_command().unwrap();
@@ -70,14 +64,10 @@ fn workspace_move_command_rejected_when_prompt_in_flight() {
 
 #[test]
 fn workspace_move_command_rejected_when_already_listing() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = make_app_with_workspace_move();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
+    ui.open_workspace_picker();
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::ListingWorkspaces));
-
-    let list_cmd = ui.next_agent_command().unwrap();
-    assert!(matches!(list_cmd, AgentCommand::ListWorkspaces { .. }));
 
     ui.type_text("/move");
     ui.key(key(KeyCode::Tab));
@@ -93,12 +83,10 @@ fn workspace_move_command_rejected_when_already_listing() {
 
 #[test]
 fn workspace_list_send_failure_resets_state() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = make_app_with_workspace_move();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
+    ui.open_workspace_picker();
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::ListingWorkspaces));
-    let _ = ui.next_agent_command().unwrap();
 
     ui.deliver_result(CommandResult::WorkspacesListed(Err("send failed".into())));
 
@@ -111,12 +99,10 @@ fn workspace_list_send_failure_resets_state() {
 
 #[test]
 fn workspace_list_failed_event_resets_state() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = make_app_with_workspace_move();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
+    ui.open_workspace_picker();
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::ListingWorkspaces));
-    let _ = ui.next_agent_command().unwrap();
 
     ui.deliver_result(workspace_list_failed("network error"));
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::Idle));
@@ -131,12 +117,10 @@ fn workspace_list_failed_event_resets_state() {
 
 #[test]
 fn workspace_picker_opens_with_existing_workspaces() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = make_app_with_workspace_move();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
+    ui.open_workspace_picker();
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::ListingWorkspaces));
-    let _ = ui.next_agent_command().unwrap();
 
     ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
@@ -156,10 +140,8 @@ fn workspace_picker_opens_with_existing_workspaces() {
 
 #[test]
 fn double_ctrl_c_exits_over_workspace_picker() {
-    let mut ui = make_ui_with_workspace_move();
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    let mut ui = make_app_with_workspace_move();
+    ui.open_workspace_picker();
     ui.deliver_result(workspaces_listed(vec![workspace_entry("/tmp/sandbox", false)]));
     assert!(ui.app().has_modal());
     assert_ctrl_c_exits(&mut ui);
@@ -167,11 +149,9 @@ fn double_ctrl_c_exits_over_workspace_picker() {
 
 #[test]
 fn workspace_picker_shows_empty_state_when_no_workspaces() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = make_app_with_workspace_move();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.open_workspace_picker();
 
     ui.deliver_result(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::PickingWorkspace));
@@ -184,11 +164,9 @@ fn workspace_picker_shows_empty_state_when_no_workspaces() {
 
 #[test]
 fn workspace_picker_esc_closes_and_resets_state() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = make_app_with_workspace_move();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.open_workspace_picker();
 
     ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
@@ -204,11 +182,9 @@ fn workspace_picker_esc_closes_and_resets_state() {
 
 #[test]
 fn workspace_picker_enter_selects_existing_workspace() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = make_app_with_workspace_move();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.open_workspace_picker();
 
     ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
@@ -238,11 +214,9 @@ fn workspace_picker_enter_selects_existing_workspace() {
 
 #[test]
 fn workspace_picker_enter_selects_create_new_and_shows_naming_mode() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = make_app_with_workspace_move();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.open_workspace_picker();
 
     ui.deliver_result(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
 
@@ -258,11 +232,9 @@ fn workspace_picker_enter_selects_create_new_and_shows_naming_mode() {
 
 #[test]
 fn workspace_naming_new_esc_returns_to_list_mode() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = make_app_with_workspace_move();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.open_workspace_picker();
 
     ui.deliver_result(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
 
@@ -280,11 +252,9 @@ fn workspace_naming_new_esc_returns_to_list_mode() {
 
 #[test]
 fn workspace_naming_new_enter_with_name_emits_move_target() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = make_app_with_workspace_move();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.open_workspace_picker();
 
     ui.deliver_result(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
 
@@ -315,11 +285,9 @@ fn workspace_naming_new_enter_with_name_emits_move_target() {
 
 #[test]
 fn workspace_picker_filtering_hides_non_matching() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = make_app_with_workspace_move();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.open_workspace_picker();
 
     ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
@@ -343,11 +311,9 @@ fn workspace_picker_filtering_hides_non_matching() {
 
 #[test]
 fn workspace_move_success_updates_cwd_and_reloads_session() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = make_app_with_workspace_move();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.open_workspace_picker();
 
     ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
@@ -385,11 +351,9 @@ fn workspace_move_success_updates_cwd_and_reloads_session() {
 
 #[test]
 fn workspace_move_success_replays_loaded_session_updates() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = make_app_with_workspace_move();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.open_workspace_picker();
 
     ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
@@ -422,14 +386,12 @@ fn workspace_move_success_replays_loaded_session_updates() {
 
 #[test]
 fn workspace_move_load_session_failure_recovers() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = make_app_with_workspace_move();
     ui.submit("keep this transcript");
     ui.next_agent_command().unwrap();
     ui.complete_prompt(acp::StopReason::EndTurn);
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.open_workspace_picker();
 
     ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
@@ -461,11 +423,9 @@ fn workspace_move_load_session_failure_recovers() {
 
 #[test]
 fn workspace_move_server_side_load_failure_recovers() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = make_app_with_workspace_move();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.open_workspace_picker();
 
     ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
@@ -496,11 +456,9 @@ fn workspace_move_server_side_load_failure_recovers() {
 
 #[test]
 fn workspace_move_failed_event_resets_state() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = make_app_with_workspace_move();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.open_workspace_picker();
 
     ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
@@ -522,11 +480,9 @@ fn workspace_move_failed_event_resets_state() {
 
 #[test]
 fn workspace_move_send_failure_resets_state() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = make_app_with_workspace_move();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.open_workspace_picker();
 
     ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
@@ -548,11 +504,9 @@ fn workspace_move_send_failure_resets_state() {
 
 #[test]
 fn workspace_picker_renders_on_narrow_terminal() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = make_app_with_workspace_move();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.open_workspace_picker();
 
     ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
@@ -566,11 +520,9 @@ fn workspace_picker_renders_on_narrow_terminal() {
 
 #[test]
 fn workspace_move_picker_closes_when_connection_closes() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = make_app_with_workspace_move();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    ui.open_workspace_picker();
 
     ui.deliver_result(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),

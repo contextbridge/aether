@@ -348,10 +348,8 @@ mod progress_indicator_tests {
 
     #[test]
     fn workspace_moving_shows_progress() {
-        let mut ui = TestUiBuilder::new().workspace_move().build();
-        ui.type_text("/move");
-        ui.key(key(KeyCode::Tab));
-        let _ = ui.next_agent_command().unwrap();
+        let mut ui = make_app_with_workspace_move();
+        ui.open_workspace_picker();
         ui.deliver_result(workspaces_listed(vec![
             workspace_entry("/home/user/code/current", true),
             workspace_entry("/home/user/code/other", false),
@@ -367,10 +365,8 @@ mod progress_indicator_tests {
 
     #[test]
     fn workspace_loading_session_shows_progress() {
-        let mut ui = TestUiBuilder::new().workspace_move().build();
-        ui.type_text("/move");
-        ui.key(key(KeyCode::Tab));
-        let _ = ui.next_agent_command().unwrap();
+        let mut ui = make_app_with_workspace_move();
+        ui.open_workspace_picker();
         ui.deliver_result(workspaces_listed(vec![
             workspace_entry("/home/user/code/current", true),
             workspace_entry("/home/user/code/other", false),
@@ -385,10 +381,8 @@ mod progress_indicator_tests {
 
     #[test]
     fn workspace_move_failure_clears_indicator() {
-        let mut ui = TestUiBuilder::new().workspace_move().build();
-        ui.type_text("/move");
-        ui.key(key(KeyCode::Tab));
-        let _ = ui.next_agent_command().unwrap();
+        let mut ui = make_app_with_workspace_move();
+        ui.open_workspace_picker();
         ui.deliver_result(workspaces_listed(vec![
             workspace_entry("/home/user/code/current", true),
             workspace_entry("/home/user/code/other", false),
@@ -404,10 +398,8 @@ mod progress_indicator_tests {
 
     #[test]
     fn workspace_move_precedence_over_compaction() {
-        let mut ui = TestUiBuilder::new().workspace_move().build();
-        ui.type_text("/move");
-        ui.key(key(KeyCode::Tab));
-        let _ = ui.next_agent_command().unwrap();
+        let mut ui = make_app_with_workspace_move();
+        ui.open_workspace_picker();
         ui.deliver_result(workspaces_listed(vec![
             workspace_entry("/home/user/code/current", true),
             workspace_entry("/home/user/code/other", false),
@@ -449,9 +441,7 @@ mod progress_indicator_tests {
     #[test]
     fn wants_tick_true_during_workspace_move() {
         let mut app = make_app_with_workspace_move();
-        app.type_text("/move");
-        app.key(key(KeyCode::Tab));
-        let _ = app.next_agent_command().unwrap();
+        app.open_workspace_picker();
         app.deliver_result(workspaces_listed(vec![
             workspace_entry("/home/user/code/current", true),
             workspace_entry("/home/user/code/other", false),
@@ -553,8 +543,7 @@ mod progress_indicator_tests {
         ui.submit("hello");
         ui.acp_event(compaction_update("compaction", acp::CompactionStatus::InProgress));
         ui.complete_prompt(acp::StopReason::EndTurn);
-        ui.type_text("/clear");
-        ui.key(key(KeyCode::Tab));
+        ui.start_new_session();
         ui.deliver_result(new_session_created("new-session", Vec::new()));
 
         ui.draw();
@@ -579,10 +568,8 @@ mod progress_indicator_tests {
 
     #[test]
     fn workspace_list_failed_clears_indicator() {
-        let mut ui = TestUiBuilder::new().workspace_move().build();
-        ui.type_text("/move");
-        ui.key(key(KeyCode::Tab));
-        let _ = ui.next_agent_command().unwrap();
+        let mut ui = make_app_with_workspace_move();
+        ui.open_workspace_picker();
         ui.deliver_result(workspace_list_failed("network error"));
 
         ui.draw();

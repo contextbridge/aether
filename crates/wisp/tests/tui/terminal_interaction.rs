@@ -8,7 +8,7 @@ use wisp::command::{AgentCommand, Command, CommandResult, GitWatchCommand, Termi
 
 use super::support::{
     BooleanPropertySchema, ElicitationSchema, StringPropertySchema, TestUi, TestUiBuilder, accepted_content, acp,
-    block_on_local, buffer_text, form_elicitation, prompt_failed, with_elicitation,
+    block_on_local, buffer_text, form_elicitation, key, make_app, prompt_failed, with_elicitation,
 };
 
 /// Whether the app asked the terminal to ring the bell, draining whatever else
@@ -49,26 +49,13 @@ fn remote_pasted_paths_remain_text_and_settings_remain_local() {
         matches!(ui.next_agent_command(), Some(AgentCommand::Prompt { text, .. }) if text == "/server/screenshot.png")
     );
     ui.complete_prompt(acp::StopReason::EndTurn);
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.open_settings();
     assert!(ui.app().has_modal());
     assert!(
         ui.take_commands()
             .iter()
             .any(|command| matches!(command, Command::Filesystem(wisp::command::FilesystemCommand::ListThemes)))
     );
-}
-
-fn make_app() -> TestUi {
-    TestUiBuilder::new().build()
-}
-
-fn make_ui() -> TestUi {
-    TestUiBuilder::new().dimensions(80, 24).build()
-}
-
-fn key(code: KeyCode) -> KeyEvent {
-    KeyEvent::new(code, KeyModifiers::NONE)
 }
 
 /// The area navigation is drawn into: the whole inline viewport.
@@ -98,7 +85,7 @@ mod picker_click {
 
     #[test]
     fn session_picker_click_first_row_selects_index_zero() {
-        let mut ui = make_ui();
+        let mut ui = TestUi::with_dimensions(80, 24);
 
         // Open session picker with sessions
         let sessions = vec![
@@ -118,7 +105,7 @@ mod picker_click {
 
     #[test]
     fn session_picker_click_outside_row_range_is_clamped() {
-        let mut ui = make_ui();
+        let mut ui = TestUi::with_dimensions(80, 24);
 
         let sessions =
             vec![SessionInfo::new(SessionId::new("s1"), "/tmp"), SessionInfo::new(SessionId::new("s2"), "/tmp")];
@@ -135,7 +122,7 @@ mod picker_click {
 
     #[test]
     fn session_picker_click_with_filter_uses_visible_rows() {
-        let mut ui = make_ui();
+        let mut ui = TestUi::with_dimensions(80, 24);
 
         let mut session_a = SessionInfo::new(SessionId::new("aaa"), "/tmp");
         session_a.title = Some("Alpha Project".to_string());
@@ -171,7 +158,7 @@ mod picker_click {
             WorkspaceEntry { path: std::path::PathBuf::from("/tmp/ws2"), is_current: false },
             WorkspaceEntry { path: std::path::PathBuf::from("/tmp/ws3"), is_current: false },
         ];
-        let mut ui = make_ui();
+        let mut ui = TestUi::with_dimensions(80, 24);
         ui.deliver_result(workspaces_completed(WorkspaceListResponse { workspaces }));
 
         ui.draw();
@@ -185,7 +172,7 @@ mod picker_click {
         use acp_utils::notifications::{WorkspaceEntry, WorkspaceListResponse};
 
         let workspaces = vec![WorkspaceEntry { path: std::path::PathBuf::from("/tmp/ws1"), is_current: false }];
-        let mut ui = make_ui();
+        let mut ui = TestUi::with_dimensions(80, 24);
         ui.deliver_result(workspaces_completed(WorkspaceListResponse { workspaces }));
 
         ui.draw();
@@ -204,7 +191,7 @@ mod picker_click {
             WorkspaceEntry { path: std::path::PathBuf::from("/tmp/project-beta"), is_current: false },
             WorkspaceEntry { path: std::path::PathBuf::from("/tmp/other"), is_current: false },
         ];
-        let mut ui = make_ui();
+        let mut ui = TestUi::with_dimensions(80, 24);
         ui.deliver_result(workspaces_completed(WorkspaceListResponse { workspaces }));
 
         // Type filter: "beta"
@@ -415,7 +402,7 @@ mod event_routing {
 
     #[test]
     fn mouse_event_routes_to_topmost_surface() {
-        let mut ui = make_ui();
+        let mut ui = TestUi::with_dimensions(80, 24);
 
         // Open settings overlay
         ui.key(key(KeyCode::Char('/')));
@@ -450,8 +437,7 @@ mod event_routing {
         ];
         let mut ui = TestUiBuilder::new().config_options(opts).dimensions(80, 24).build();
 
-        ui.type_text("/settings");
-        ui.key(key(KeyCode::Tab));
+        ui.open_settings();
 
         ui.draw();
         assert!(ui.app().has_navigation());
@@ -471,8 +457,7 @@ mod event_routing {
         )];
         let mut ui = TestUiBuilder::new().config_options(opts).dimensions(80, 24).build();
 
-        ui.type_text("/settings");
-        ui.key(key(KeyCode::Tab));
+        ui.open_settings();
 
         ui.draw();
 
@@ -501,12 +486,6 @@ mod event_routing {
             ui
         }
 
-        fn open_settings(ui: &mut TestUi) {
-            ui.type_text("/settings");
-            ui.key(key(KeyCode::Tab));
-            ui.draw();
-        }
-
         let options = vec![SessionConfigOption::select(
             "model",
             "Model",
@@ -514,7 +493,8 @@ mod event_routing {
             vec![SessionConfigSelectOption::new("a", "Alpha"), SessionConfigSelectOption::new("b", "Beta")],
         )];
         let mut ui = settings_app(options, vec![], vec![]);
-        open_settings(&mut ui);
+        ui.open_settings();
+        ui.draw();
         let model_row = ui.viewport_row("Model:").ok_or("Model row in the settings menu")?;
         ui.terminal_event(click(10, model_row));
         ui.draw();
@@ -528,7 +508,8 @@ mod event_routing {
         let server = McpServerStatusEntry::new("linear", McpServerStatus::NeedsOAuth)
             .with_auth_capability(McpServerAuthCapability::OAuth);
         let mut ui = settings_app(vec![], vec![server], vec![]);
-        open_settings(&mut ui);
+        ui.open_settings();
+        ui.draw();
         let servers_row = ui.viewport_row("MCP Servers:").ok_or("MCP Servers row in the settings menu")?;
         ui.terminal_event(click(10, servers_row));
         ui.draw();
@@ -541,7 +522,8 @@ mod event_routing {
 
         let methods = vec![AuthMethod::Agent(AuthMethodAgent::new("codex", "Codex"))];
         let mut ui = settings_app(vec![], vec![], methods);
-        open_settings(&mut ui);
+        ui.open_settings();
+        ui.draw();
         let providers_row = ui.viewport_row("Provider Logins:").ok_or("Provider Logins row in the settings menu")?;
         ui.terminal_event(click(10, providers_row));
         ui.draw();
@@ -555,7 +537,7 @@ mod event_routing {
     }
     #[test]
     fn session_picker_scroll_changes_selection() {
-        let mut ui = make_ui();
+        let mut ui = TestUi::with_dimensions(80, 24);
         let current = SessionId::new("test-session");
         let sessions = vec![
             SessionInfo::new(SessionId::new("a"), "/tmp/a"),
@@ -593,7 +575,7 @@ mod event_routing {
 
     #[test]
     fn composer_overlay_scroll_and_click() {
-        let mut ui = make_ui();
+        let mut ui = TestUi::with_dimensions(80, 24);
         // Open command picker
         ui.key(key(KeyCode::Char('/')));
         assert!(ui.app().needs_mouse_capture());
@@ -611,7 +593,7 @@ mod event_routing {
         use acp_utils::notifications::{WorkspaceEntry, WorkspaceListResponse};
         use std::path::PathBuf;
 
-        let mut ui = make_ui();
+        let mut ui = TestUi::with_dimensions(80, 24);
         let workspaces = vec![
             WorkspaceEntry { path: PathBuf::from("/tmp/a"), is_current: false },
             WorkspaceEntry { path: PathBuf::from("/tmp/b"), is_current: false },
@@ -632,7 +614,7 @@ mod event_routing {
     #[test]
     fn form_modal_scroll_changes_field() {
         block_on_local(async {
-            let mut ui = make_ui();
+            let mut ui = TestUi::with_dimensions(80, 24);
             let schema = ElicitationSchema::new().property("field1", StringPropertySchema::new(), true).property(
                 "field2",
                 StringPropertySchema::new(),
@@ -658,7 +640,7 @@ mod event_routing {
         block_on_local(async {
             const QUESTIONS: usize = 40;
 
-            let mut ui = make_ui();
+            let mut ui = TestUi::with_dimensions(80, 24);
             let mut schema = ElicitationSchema::new();
             for index in 0..QUESTIONS {
                 schema = schema.property(format!("question_{index:02}"), BooleanPropertySchema::new(), false);
@@ -692,7 +674,7 @@ mod event_routing {
             let schema =
                 ElicitationSchema::new().property("choice", StringPropertySchema::new().enum_values(values), false);
 
-            let mut ui = make_ui();
+            let mut ui = TestUi::with_dimensions(80, 24);
             with_elicitation(&mut ui, form_elicitation("test", "Pick one", schema)).await;
 
             ui.draw();
@@ -716,7 +698,7 @@ mod event_routing {
     #[test]
     fn form_modal_click_answers_the_option_under_the_pointer() {
         block_on_local(async {
-            let mut ui = make_ui();
+            let mut ui = TestUi::with_dimensions(80, 24);
             let schema = ElicitationSchema::new()
                 .property("alpha", BooleanPropertySchema::new().default_value(false), false)
                 .property("bravo", BooleanPropertySchema::new().default_value(false), false);
@@ -745,7 +727,7 @@ mod event_routing {
     #[test]
     fn form_modal_click_hits_every_row_an_option_occupies() {
         block_on_local(async {
-            let mut ui = make_ui();
+            let mut ui = TestUi::with_dimensions(80, 24);
             let schema = ElicitationSchema::new().property(
                 "choice",
                 StringPropertySchema::new().enum_values(vec![
@@ -958,8 +940,7 @@ mod mouse_owning_surfaces {
         let mut ui = TestUiBuilder::new().config_options(opts).dimensions(80, 24).build();
 
         // Type /settings to open the settings overlay
-        ui.type_text("/settings");
-        ui.key(key(KeyCode::Tab));
+        ui.open_settings();
 
         assert!(ui.app().has_modal(), "settings overlay should be open after /settings+Tab");
 
@@ -970,7 +951,7 @@ mod mouse_owning_surfaces {
 
     #[test]
     fn session_picker_sets_surface_rect() {
-        let mut ui = make_ui();
+        let mut ui = TestUi::with_dimensions(80, 24);
         let current = SessionId::new("test-session");
         ui.deliver_result(sessions_completed(acp::ListSessionsResponse::new(vec![SessionInfo::new(
             SessionId::new("other"),

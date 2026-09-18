@@ -73,9 +73,7 @@ fn ctrl_c_confirmation_disarms_after_window() {
 #[test]
 fn double_ctrl_c_exits_over_session_picker() {
     let mut app = make_app();
-    app.type_text("/resume");
-    app.key(key(KeyCode::Tab));
-    let _ = app.next_agent_command().unwrap();
+    app.open_session_picker();
     app.deliver_result(sessions_listed(vec![session_info("other", "/tmp/elsewhere", "Other", "2025-01-01T00:00:00Z")]));
     assert_ctrl_c_exits(&mut app);
 }

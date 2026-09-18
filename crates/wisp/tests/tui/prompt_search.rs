@@ -23,10 +23,6 @@ fn make_app_with_prompt_search() -> TestUi {
     TestUiBuilder::new().prompt_search().build()
 }
 
-fn make_ui_with_prompt_search() -> TestUi {
-    TestUiBuilder::new().prompt_search().build()
-}
-
 fn prompt_search_result(prompt: &str, start: usize, end: usize) -> acp_utils::notifications::PromptSearchResult {
     prompt_search_result_with_cwd(prompt, start, end, std::path::PathBuf::from("/tmp/repo"))
 }
@@ -77,7 +73,7 @@ fn ctrl_r_opens_prompt_search_when_capability_is_enabled() {
 
 #[test]
 fn prompt_search_shows_loading_state_after_query() {
-    let mut ui = make_ui_with_prompt_search();
+    let mut ui = make_app_with_prompt_search();
     ui.key(ctrl('r'));
     ui.key(key(KeyCode::Char('h')));
 
@@ -95,7 +91,7 @@ fn prompt_search_shows_loading_state_after_query() {
 
 #[test]
 fn prompt_search_empty_query_renders_instruction() {
-    let mut ui = make_ui_with_prompt_search();
+    let mut ui = make_app_with_prompt_search();
     ui.key(ctrl('r'));
 
     ui.draw();
@@ -106,7 +102,7 @@ fn prompt_search_empty_query_renders_instruction() {
 
 #[test]
 fn prompt_search_shows_results_after_response() {
-    let mut ui = make_ui_with_prompt_search();
+    let mut ui = make_app_with_prompt_search();
     ui.key(ctrl('r'));
     ui.key(key(KeyCode::Char('h')));
     let _ = ui.next_agent_command().unwrap();
@@ -123,7 +119,7 @@ fn prompt_search_shows_results_after_response() {
 
 #[test]
 fn prompt_search_no_results_shows_no_matches() {
-    let mut ui = make_ui_with_prompt_search();
+    let mut ui = make_app_with_prompt_search();
     ui.key(ctrl('r'));
     ui.type_text("zzz");
     let _ = ui.next_agent_command().unwrap();
@@ -137,7 +133,7 @@ fn prompt_search_no_results_shows_no_matches() {
 
 #[test]
 fn prompt_search_shows_error_on_failure() {
-    let mut ui = make_ui_with_prompt_search();
+    let mut ui = make_app_with_prompt_search();
     ui.key(ctrl('r'));
     ui.key(key(KeyCode::Char('h')));
     let _ = ui.next_agent_command().unwrap();
@@ -230,7 +226,7 @@ fn prompt_search_escape_restores_multiline_draft() {
 
 #[test]
 fn prompt_search_up_and_down_change_selection() {
-    let mut ui = make_ui_with_prompt_search();
+    let mut ui = make_app_with_prompt_search();
     ui.key(ctrl('r'));
     ui.key(key(KeyCode::Char('h')));
     let _ = ui.next_agent_command().unwrap();
@@ -279,7 +275,7 @@ fn prompt_search_result_replacement_resets_selection_to_first() {
 
 #[test]
 fn prompt_search_stale_response_is_ignored() {
-    let mut ui = make_ui_with_prompt_search();
+    let mut ui = make_app_with_prompt_search();
     ui.key(ctrl('r'));
     ui.key(key(KeyCode::Char('h')));
     ui.key(key(KeyCode::Char('e')));
@@ -297,7 +293,7 @@ fn prompt_search_stale_response_is_ignored() {
 
 #[test]
 fn prompt_search_prefills_selected_result_with_cursor_at_match() {
-    let mut ui = make_ui_with_prompt_search();
+    let mut ui = make_app_with_prompt_search();
     ui.key(ctrl('r'));
     ui.key(key(KeyCode::Char('q')));
     let _ = ui.next_agent_command().unwrap();
@@ -331,7 +327,7 @@ fn prompt_search_paste_sanitizes_query() {
 
 #[test]
 fn prompt_search_backspace_to_empty_restores_draft_but_keeps_picker_open() {
-    let mut ui = make_ui_with_prompt_search();
+    let mut ui = make_app_with_prompt_search();
     ui.type_text("draft");
     ui.key(ctrl('r'));
     ui.key(key(KeyCode::Char('h')));
@@ -375,7 +371,7 @@ fn prompt_search_ctrl_r_does_not_open_during_composer_overlay() {
 
 #[test]
 fn prompt_search_unicode_query_is_accepted() {
-    let mut ui = make_ui_with_prompt_search();
+    let mut ui = make_app_with_prompt_search();
     ui.key(ctrl('r'));
     ui.key(key(KeyCode::Char('ñ')));
 
@@ -392,7 +388,7 @@ fn prompt_search_unicode_query_is_accepted() {
 
 #[test]
 fn prompt_search_rows_truncate_prompt_and_show_cwd_basename() {
-    let mut ui = make_ui_with_prompt_search();
+    let mut ui = make_app_with_prompt_search();
     ui.key(ctrl('r'));
     ui.type_text("quick");
     let _ = ui.next_agent_command().unwrap();
@@ -476,7 +472,7 @@ fn prompt_search_enter_preserves_cursor_after_manual_navigation() {
 
 #[test]
 fn prompt_search_identical_repeated_query_accepts_any_matching_response() {
-    let mut ui = make_ui_with_prompt_search();
+    let mut ui = make_app_with_prompt_search();
     ui.key(ctrl('r'));
 
     // Search for "xy", clear it, and type the identical query again. A response
@@ -523,7 +519,7 @@ fn prompt_search_send_failure_is_visible_in_picker() {
 
 #[test]
 fn prompt_search_stale_failure_is_accepted_for_current_query() {
-    let mut ui = make_ui_with_prompt_search();
+    let mut ui = make_app_with_prompt_search();
     ui.key(ctrl('r'));
     ui.key(key(KeyCode::Char('x')));
     let _ = ui.next_agent_command().unwrap();
@@ -542,7 +538,7 @@ fn prompt_search_stale_failure_is_accepted_for_current_query() {
 
 #[test]
 fn prompt_search_stale_failure_must_not_overwrite_newer_success() {
-    let mut ui = make_ui_with_prompt_search();
+    let mut ui = make_app_with_prompt_search();
     ui.key(ctrl('r'));
     ui.key(key(KeyCode::Char('x')));
     let _ = ui.next_agent_command().unwrap();
