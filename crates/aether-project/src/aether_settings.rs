@@ -496,10 +496,11 @@ impl TryFrom<&str> for AetherSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{agent_config, home, project, settings_agent};
+    use crate::testing::{agent_config, agent_json, agent_json_with, home, project, settings_agent};
     use crate::{AgentCatalog, McpFileSpec, McpSourceSpec, PromptSource};
     use aether_core::agent_spec::McpConfigSource;
     use aether_core::core::Prompt;
+    use serde_json::json;
     use std::collections::BTreeMap;
 
     #[test]
@@ -514,7 +515,7 @@ mod tests {
     #[allow(clippy::float_cmp)]
     fn parses_telemetry_camel_case_and_http_protobuf() {
         let config = AetherSettings::try_from(
-            r#"{
+            json!({
                 "telemetry": {
                     "serviceName": "aether-test",
                     "sampleRatio": 0.5,
@@ -532,8 +533,10 @@ mod tests {
                         "headers": { "authorization": "Bearer token" }
                     }
                 },
-                "agents": [{"name":"alpha","description":"Alpha","model":"anthropic:claude-sonnet-4-5","userInvocable":true}]
-            }"#,
+                "agents": [agent_json("alpha", "Alpha")]
+            })
+            .to_string()
+            .as_str(),
         )
         .unwrap();
 
@@ -554,10 +557,12 @@ mod tests {
     #[test]
     fn telemetry_with_no_enabled_signals_does_not_require_endpoint() {
         let config = AetherSettings::try_from(
-            r#"{
+            json!({
                 "telemetry": { "traces": { "enabled": false }, "metrics": { "enabled": false } },
-                "agents": [{"name":"alpha","description":"Alpha","model":"anthropic:claude-sonnet-4-5","userInvocable":true}]
-            }"#,
+                "agents": [agent_json("alpha", "Alpha")]
+            })
+            .to_string()
+            .as_str(),
         )
         .unwrap();
 
@@ -725,12 +730,9 @@ mod tests {
 
     #[test]
     fn settings_file_paths_are_project_relative() {
-        let dir = project()
-            .file("PROMPT.md", "Be helpful")
-            .file(
-                "nested/config.json",
-            r#"{"agents":[{"name":"alpha","description":"Alpha","model":"anthropic:claude-sonnet-4-5","userInvocable":true,"prompts":[{"type":"file","path":"PROMPT.md"}]}]}"#,
-        );
+        let config_json =
+            json!({ "agents": [agent_json_with("alpha", "Alpha", json!({ "prompts": ["PROMPT.md"] }))] }).to_string();
+        let dir = project().file("PROMPT.md", "Be helpful").file("nested/config.json", &config_json);
 
         let config = AetherSettings::load(
             dir.root(),
@@ -785,25 +787,21 @@ mod tests {
     fn load_default_merges_user_and_project_settings_with_project_winning() {
         let project = project();
         let home = home().settings(
-            r#"{
-                "agent":"shared",
-                "prompts":["USER.md"],
-                "agents":[
-                    {"name":"shared","description":"User shared","model":"anthropic:claude-sonnet-4-5","userInvocable":true},
-                    {"name":"user-only","description":"User only","model":"anthropic:claude-sonnet-4-5","userInvocable":true}
-                ]
-            }"#,
+            &json!({
+                "agent": "shared",
+                "prompts": ["USER.md"],
+                "agents": [agent_json("shared", "User shared"), agent_json("user-only", "User only")]
+            })
+            .to_string(),
         );
         project.write(
             ".aether/settings.json",
-            r#"{
-                "agent":"project-only",
-                "prompts":["PROJECT.md"],
-                "agents":[
-                    {"name":"shared","description":"Project shared","model":"anthropic:claude-sonnet-4-5","userInvocable":true},
-                    {"name":"project-only","description":"Project only","model":"anthropic:claude-sonnet-4-5","userInvocable":true}
-                ]
-            }"#,
+            &json!({
+                "agent": "project-only",
+                "prompts": ["PROJECT.md"],
+                "agents": [agent_json("shared", "Project shared"), agent_json("project-only", "Project only")]
+            })
+            .to_string(),
         );
 
         let aether_home = home.aether();
@@ -826,9 +824,7 @@ mod tests {
     #[test]
     fn load_default_uses_user_settings_when_project_settings_are_missing() {
         let project = project();
-        let home = home().settings(
-            r#"{"agents":[{"name":"user-only","description":"User only","model":"anthropic:claude-sonnet-4-5","userInvocable":true}]}"#,
-        );
+        let home = home().settings(&json!({ "agents": [agent_json("user-only", "User only")] }).to_string());
 
         let aether_home = home.aether();
         let config = load_default_from_home(project.root(), &aether_home).unwrap();
@@ -845,16 +841,14 @@ mod tests {
             .file(".aether/agents/user.md", "User instructions")
             .file(".aether/mcp/user.json", r#"{"servers":{}}"#)
             .settings(
-                r#"{
-                "agents":[{
-                    "name":"user-only",
-                    "description":"User only",
-                    "model":"anthropic:claude-sonnet-4-5",
-                    "userInvocable":true,
-                    "prompts":["agents/user.md"],
-                    "mcps":["mcp/user.json"]
-                }]
-            }"#,
+                &json!({
+                    "agents": [agent_json_with(
+                        "user-only",
+                        "User only",
+                        json!({ "prompts": ["agents/user.md"], "mcps": ["mcp/user.json"] }),
+                    )]
+                })
+                .to_string(),
             );
 
         let aether_home = home.aether();
@@ -878,7 +872,7 @@ mod tests {
         let home = home();
         let project = project().file(
             ".aether/settings.json",
-            r#"{"agents":[{"name":"project-only","description":"Project only","model":"anthropic:claude-sonnet-4-5","userInvocable":true}]}"#,
+            &json!({ "agents": [agent_json("project-only", "Project only")] }).to_string(),
         );
 
         let aether_home = home.aether();
@@ -1017,16 +1011,13 @@ mod tests {
     #[test]
     fn parses_top_level_prompt_and_mcp_defaults() {
         let config = AetherSettings::try_from(
-            r#"{
-                "prompts": [{"type":"file","path":"BASE.md"}],
-                "mcps": [{"type":"file","path":"mcp.json"}],
-                "agents": [{
-                    "name":"alpha",
-                    "description":"Alpha",
-                    "model":"anthropic:claude-sonnet-4-5",
-                    "userInvocable":true
-                }]
-            }"#,
+            json!({
+                "prompts": [{ "type": "file", "path": "BASE.md" }],
+                "mcps": [{ "type": "file", "path": "mcp.json" }],
+                "agents": [agent_json("alpha", "Alpha")]
+            })
+            .to_string()
+            .as_str(),
         )
         .unwrap();
 
@@ -1044,18 +1035,17 @@ mod tests {
     #[test]
     fn parses_and_serializes_string_shorthand_for_file_sources() {
         let config = AetherSettings::try_from(
-            r#"{
+            json!({
                 "prompts": ["BASE.md"],
                 "mcps": ["mcp.json"],
-                "agents": [{
-                    "name":"alpha",
-                    "description":"Alpha",
-                    "model":"anthropic:claude-sonnet-4-5",
-                    "userInvocable":true,
-                    "prompts":["AGENT.md"],
-                    "mcps":["agent-mcp.json"]
-                }]
-            }"#,
+                "agents": [agent_json_with(
+                    "alpha",
+                    "Alpha",
+                    json!({ "prompts": ["AGENT.md"], "mcps": ["agent-mcp.json"] }),
+                )]
+            })
+            .to_string()
+            .as_str(),
         )
         .unwrap();
 
@@ -1100,16 +1090,12 @@ mod tests {
     #[test]
     fn rejects_old_top_level_mcp_servers_field() {
         let err = AetherSettings::try_from(
-            r#"{
+            json!({
                 "mcpServers": ["mcp.json"],
-                "agents": [{
-                    "name":"alpha",
-                    "description":"Alpha",
-                    "model":"anthropic:claude-sonnet-4-5",
-                    "userInvocable":true,
-                    "prompts":[{"type":"file","path":"PROMPT.md"}]
-                }]
-            }"#,
+                "agents": [agent_json_with("alpha", "Alpha", json!({ "prompts": ["PROMPT.md"] }))]
+            })
+            .to_string()
+            .as_str(),
         )
         .unwrap_err();
 
@@ -1120,21 +1106,20 @@ mod tests {
     fn load_default_resolves_workspace_scoped_user_prompt_and_mcp_paths() {
         let project = project().file("AGENTS.md", "Agent instructions").file(".aether/mcp.json", r#"{"servers":{}}"#);
         let home = home().file(".aether/agents/planner/SYSTEM.md", "System instructions").settings(
-            r#"{
-                "agents":[{
-                    "name":"planner",
-                    "description":"Plans work",
-                    "model":"anthropic:claude-sonnet-4-5",
-                    "userInvocable":true,
-                    "prompts":[
-                        "agents/planner/SYSTEM.md",
-                        {"type":"file","path":"${WORKSPACE}/AGENTS.md"}
-                    ],
-                    "mcps":[
-                        {"type":"file","path":"${WORKSPACE}/.aether/mcp.json"}
-                    ]
-                }]
-            }"#,
+            &json!({
+                "agents": [agent_json_with(
+                    "planner",
+                    "Plans work",
+                    json!({
+                        "prompts": [
+                            "agents/planner/SYSTEM.md",
+                            { "type": "file", "path": "${WORKSPACE}/AGENTS.md" }
+                        ],
+                        "mcps": [{ "type": "file", "path": "${WORKSPACE}/.aether/mcp.json" }]
+                    }),
+                )]
+            })
+            .to_string(),
         );
 
         let aether_home = home.aether();
@@ -1162,15 +1147,14 @@ mod tests {
     fn workspace_scoped_paths_expand_in_project_settings_without_absolutizing_normal_relative_paths() {
         let project = project().file("PROJECT.md", "Project prompt").file("AGENTS.md", "Agent prompt").file(
             ".aether/settings.json",
-            r#"{
-                "agents":[{
-                    "name":"alpha",
-                    "description":"Alpha",
-                    "model":"anthropic:claude-sonnet-4-5",
-                    "userInvocable":true,
-                    "prompts":["PROJECT.md", {"type":"file","path":"${WORKSPACE}/AGENTS.md"}]
-                }]
-            }"#,
+            &json!({
+                "agents": [agent_json_with(
+                    "alpha",
+                    "Alpha",
+                    json!({ "prompts": ["PROJECT.md", { "type": "file", "path": "${WORKSPACE}/AGENTS.md" }] }),
+                )]
+            })
+            .to_string(),
         );
 
         let config = AetherSettings::load(
@@ -1190,15 +1174,9 @@ mod tests {
         let json_config = AetherSettings::load(
             project.root(),
             [AetherSettingsSource::Json(
-                r#"{
-                    "agents":[{
-                        "name":"alpha",
-                        "description":"Alpha",
-                        "model":"anthropic:claude-sonnet-4-5",
-                        "userInvocable":true,
-                        "prompts":["${WORKSPACE}/AGENTS.md"]
-                    }]
-                }"#
+                json!({
+                    "agents": [agent_json_with("alpha", "Alpha", json!({ "prompts": ["${WORKSPACE}/AGENTS.md"] }))]
+                })
                 .to_string(),
             )],
         )
@@ -1339,24 +1317,27 @@ mod tests {
 
     #[test]
     fn settings_round_trip_preserves_workspace_prefix_and_relative_paths() {
-        let original = r#"{"agents":[{
-            "name":"alpha",
-            "description":"Alpha",
-            "model":"anthropic:claude-sonnet-4-5",
-            "userInvocable":true,
-            "prompts":[
-                "AGENTS.md",
-                "${WORKSPACE}/SYSTEM.md",
-                {"type":"file","path":"${WORKSPACE}/.aether/rules.md","optional":true},
-                {"type":"glob","pattern":"${WORKSPACE}/.aether/rules/*.md"}
-            ],
-            "mcps":[
-                "mcp.json",
-                {"type":"file","path":"${WORKSPACE}/.aether/mcp.json","optional":true}
-            ]
-        }]}"#;
+        let original = json!({
+            "agents": [agent_json_with(
+                "alpha",
+                "Alpha",
+                json!({
+                    "prompts": [
+                        "AGENTS.md",
+                        "${WORKSPACE}/SYSTEM.md",
+                        { "type": "file", "path": "${WORKSPACE}/.aether/rules.md", "optional": true },
+                        { "type": "glob", "pattern": "${WORKSPACE}/.aether/rules/*.md" }
+                    ],
+                    "mcps": [
+                        "mcp.json",
+                        { "type": "file", "path": "${WORKSPACE}/.aether/mcp.json", "optional": true }
+                    ]
+                }),
+            )]
+        })
+        .to_string();
 
-        let settings = AetherSettings::try_from(original).unwrap();
+        let settings = AetherSettings::try_from(original.as_str()).unwrap();
         let reserialized = serde_json::to_string(&settings).unwrap();
         let reparsed = AetherSettings::try_from(reserialized.as_str()).unwrap();
 
@@ -1367,13 +1348,14 @@ mod tests {
     fn user_settings_relative_paths_absolutize_at_load_but_workspace_token_is_preserved() {
         let project = project().file("AGENTS.md", "agents");
         let home = home().file(".aether/agents/planner/SYSTEM.md", "system").settings(
-            r#"{"agents":[{
-                "name":"planner",
-                "description":"Plans",
-                "model":"anthropic:claude-sonnet-4-5",
-                "userInvocable":true,
-                "prompts":["agents/planner/SYSTEM.md", "${WORKSPACE}/AGENTS.md"]
-            }]}"#,
+            &json!({
+                "agents": [agent_json_with(
+                    "planner",
+                    "Plans",
+                    json!({ "prompts": ["agents/planner/SYSTEM.md", "${WORKSPACE}/AGENTS.md"] }),
+                )]
+            })
+            .to_string(),
         );
 
         let aether_home = home.aether();
@@ -1394,10 +1376,12 @@ mod tests {
     #[test]
     fn parses_credentials_store_keyring() {
         let config = AetherSettings::try_from(
-            r#"{
+            json!({
                 "credentialsStore": { "type": "keyring" },
-                "agents": [{"name":"alpha","description":"Alpha","model":"anthropic:claude-sonnet-4-5","userInvocable":true}]
-            }"#,
+                "agents": [agent_json("alpha", "Alpha")]
+            })
+            .to_string()
+            .as_str(),
         )
         .unwrap();
 
@@ -1407,10 +1391,12 @@ mod tests {
     #[test]
     fn parses_credentials_store_memory() {
         let config = AetherSettings::try_from(
-            r#"{
+            json!({
                 "credentialsStore": { "type": "memory" },
-                "agents": [{"name":"alpha","description":"Alpha","model":"anthropic:claude-sonnet-4-5","userInvocable":true}]
-            }"#,
+                "agents": [agent_json("alpha", "Alpha")]
+            })
+            .to_string()
+            .as_str(),
         )
         .unwrap();
 
@@ -1455,14 +1441,16 @@ mod tests {
     #[test]
     fn parses_credentials_store_encrypted_file_with_options() {
         let config = AetherSettings::try_from(
-            r#"{
+            json!({
                 "credentialsStore": {
                     "type": "encryptedFile",
                     "path": "/custom/creds.enc",
                     "passwordEnv": "MY_SECRET"
                 },
-                "agents": [{"name":"alpha","description":"Alpha","model":"anthropic:claude-sonnet-4-5","userInvocable":true}]
-            }"#,
+                "agents": [agent_json("alpha", "Alpha")]
+            })
+            .to_string()
+            .as_str(),
         )
         .unwrap();
 

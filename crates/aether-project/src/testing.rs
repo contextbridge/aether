@@ -6,12 +6,16 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use crate::{AgentConfig, PromptSource, SKILL_FILENAME};
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
 use llm::{ModelSettings, ProviderConnectionOverrides};
 use mcp_utils::client::ToolFilter;
+
+/// The model id every shared agent fixture resolves to.
+pub const DEFAULT_MODEL: &str = "anthropic:claude-sonnet-4-5";
 
 /// A temporary project directory for tests that need on-disk settings, prompts, or skills.
 pub fn project() -> TestProject {
@@ -28,10 +32,32 @@ pub fn settings_agent(name: &str, description: &str) -> AgentConfig {
     AgentConfig {
         name: name.to_string(),
         description: description.to_string(),
-        model: "anthropic:claude-sonnet-4-5".to_string(),
+        model: DEFAULT_MODEL.to_string(),
         user_invocable: true,
         ..AgentConfig::default()
     }
+}
+
+/// A `settings.json` agent object for `name` and `description`: the
+/// [`DEFAULT_MODEL`], user-invocable, with no prompts or MCPs.
+pub fn agent_json(name: &str, description: &str) -> Value {
+    json!({
+        "name": name,
+        "description": description,
+        "model": DEFAULT_MODEL,
+        "userInvocable": true,
+    })
+}
+
+/// [`agent_json`] merged with `extra` fields, e.g.
+/// `agent_json_with("planner", "Plans", json!({ "prompts": ["BASE.md"] }))`.
+pub fn agent_json_with(name: &str, description: &str, extra: Value) -> Value {
+    let Value::Object(extra) = extra else {
+        panic!("extra agent fields must be a JSON object, got {extra}");
+    };
+    let mut agent = agent_json(name, description);
+    agent.as_object_mut().expect("agent_json builds an object").extend(extra);
+    agent
 }
 
 /// A user-invocable [`AgentConfig`] named `name` whose prompt is the file `PROMPT.md`.
@@ -44,7 +70,7 @@ pub fn fake_spec(name: &str, exposure: AgentSpecExposure) -> AgentSpec {
     AgentSpec {
         name: name.to_string(),
         description: format!("{name} agent"),
-        model: "anthropic:claude-sonnet-4-5".to_string(),
+        model: DEFAULT_MODEL.to_string(),
         reasoning_effort: None,
         model_settings: ModelSettings::default(),
         context_window: None,
