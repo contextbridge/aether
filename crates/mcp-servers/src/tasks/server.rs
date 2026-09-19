@@ -9,8 +9,8 @@ use rmcp::{
     tool, tool_handler, tool_router,
 };
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use tempfile::TempDir;
-use tokio::sync::Mutex;
 
 use crate::error::ServerInitError;
 use crate::{
@@ -144,7 +144,7 @@ impl TasksMcp {
         request: Parameters<TaskCreateInput>,
     ) -> Result<Json<TaskCreateOutput>, TaskStoreError> {
         let Parameters(input) = request;
-        let mut store = self.task_store.lock().await;
+        let mut store = self.task_store.lock().expect("task store lock poisoned");
         store.init()?;
         execute_task_create(&input, &mut store).map(Json)
     }
@@ -161,7 +161,7 @@ impl TasksMcp {
         request: Parameters<TaskUpdateInput>,
     ) -> Result<Json<TaskUpdateOutput>, TaskStoreError> {
         let Parameters(input) = request;
-        let mut store = self.task_store.lock().await;
+        let mut store = self.task_store.lock().expect("task store lock poisoned");
         store.init()?;
         execute_task_update(input, &mut store).map(Json)
     }
@@ -170,7 +170,7 @@ impl TasksMcp {
     #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn task_list(&self, request: Parameters<TaskListInput>) -> Result<Json<TaskListOutput>, TaskStoreError> {
         let Parameters(input) = request;
-        let mut store = self.task_store.lock().await;
+        let mut store = self.task_store.lock().expect("task store lock poisoned");
         store.init()?;
         Ok(Json(execute_task_list(&input, &store)))
     }
@@ -179,7 +179,7 @@ impl TasksMcp {
     #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn task_get(&self, request: Parameters<TaskGetInput>) -> Result<Json<TaskGetOutput>, TaskStoreError> {
         let Parameters(input) = request;
-        let mut store = self.task_store.lock().await;
+        let mut store = self.task_store.lock().expect("task store lock poisoned");
         store.init()?;
         execute_task_get(input, &store).map(Json)
     }

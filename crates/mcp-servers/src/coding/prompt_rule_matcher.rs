@@ -1,24 +1,26 @@
+use aether_project::{PromptCatalog, PromptFile};
 use std::collections::HashSet;
 use std::path::Path;
-use std::sync::Mutex;
-
-use aether_project::{PromptCatalog, PromptFile};
 
 #[doc = include_str!("../docs/prompt_rule_matcher.md")]
 #[derive(Debug)]
 pub struct PromptRuleMatcher {
     catalog: PromptCatalog,
-    activated: Mutex<HashSet<String>>,
 }
 
 impl PromptRuleMatcher {
     pub fn new(catalog: PromptCatalog) -> Self {
-        Self { catalog, activated: Mutex::new(HashSet::new()) }
+        Self { catalog }
     }
 
     /// Returns newly-matched rules for `file_path` and marks them as activated.
     /// Subsequent calls for the same rules return an empty `Vec`.
-    pub fn get_matched_rules(&self, root_dir: &Path, file_path: &str) -> Vec<PromptFile> {
+    pub fn get_matched_rules(
+        &self,
+        root_dir: &Path,
+        file_path: &str,
+        activated: &mut HashSet<String>,
+    ) -> Vec<PromptFile> {
         let relative = make_relative(root_dir, file_path);
         let relative_path = relative.as_deref().unwrap_or(file_path);
         let matches = self.catalog.matching_rules(relative_path);
@@ -28,7 +30,6 @@ impl PromptRuleMatcher {
         }
 
         let mut result = Vec::new();
-        let mut activated = self.activated.lock().expect("lock poisoned");
         for spec in matches {
             if activated.insert(spec.name.clone()) {
                 tracing::info!("Activating read rule '{}' triggered by read of '{}'", spec.name, file_path);
@@ -37,11 +38,6 @@ impl PromptRuleMatcher {
         }
 
         result
-    }
-
-    /// Clear all activated rules (e.g. on context clear).
-    pub fn clear(&self) {
-        self.activated.lock().expect("lock poisoned").clear();
     }
 }
 
@@ -81,12 +77,13 @@ mod tests {
         let catalog = PromptCatalog::from_dir(skills_dir).unwrap();
         let state = PromptRuleMatcher::new(catalog);
         let root_dir = Path::new("/project");
+        let mut activated = HashSet::new();
 
-        let matched = state.get_matched_rules(root_dir, "/project/src/main.rs");
+        let matched = state.get_matched_rules(root_dir, "/project/src/main.rs", &mut activated);
         assert_eq!(matched.len(), 1);
         assert_eq!(matched[0].body, "Rust best practices.");
 
-        let matched2 = state.get_matched_rules(root_dir, "/project/src/lib.rs");
+        let matched2 = state.get_matched_rules(root_dir, "/project/src/lib.rs", &mut activated);
         assert!(matched2.is_empty());
     }
 
@@ -109,8 +106,9 @@ mod tests {
         let catalog = PromptCatalog::from_dir(skills_dir).unwrap();
         let state = PromptRuleMatcher::new(catalog);
         let root_dir = Path::new("/project");
+        let mut activated = HashSet::new();
 
-        let matched = state.get_matched_rules(root_dir, "/project/README.md");
+        let matched = state.get_matched_rules(root_dir, "/project/README.md", &mut activated);
         assert!(matched.is_empty());
     }
 
@@ -133,13 +131,14 @@ mod tests {
         let catalog = PromptCatalog::from_dir(skills_dir).unwrap();
         let state = PromptRuleMatcher::new(catalog);
         let root_dir = Path::new("/project");
+        let mut activated = HashSet::new();
 
-        let matched = state.get_matched_rules(root_dir, "/project/src/main.rs");
+        let matched = state.get_matched_rules(root_dir, "/project/src/main.rs", &mut activated);
         assert_eq!(matched.len(), 1);
 
-        state.clear();
+        activated.clear();
 
-        let matched2 = state.get_matched_rules(root_dir, "/project/src/main.rs");
+        let matched2 = state.get_matched_rules(root_dir, "/project/src/main.rs", &mut activated);
         assert_eq!(matched2.len(), 1);
     }
 
@@ -170,7 +169,8 @@ mod tests {
         let catalog = PromptCatalog::from_dir(skills_dir).unwrap();
         let state = PromptRuleMatcher::new(catalog);
         let root_dir = Path::new("/project");
-        let matched = state.get_matched_rules(root_dir, "/project/src/main.rs");
+        let mut activated = HashSet::new();
+        let matched = state.get_matched_rules(root_dir, "/project/src/main.rs", &mut activated);
         assert_eq!(matched.len(), 1);
         assert!(matched[0].body.contains("Follow Rust best practices"));
     }

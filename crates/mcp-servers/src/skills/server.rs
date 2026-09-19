@@ -116,10 +116,7 @@ impl SkillsMcp {
         prompt.path.file_name().is_some_and(|name| name == SKILL_FILENAME)
     }
 
-    async fn resolve_skill_file(
-        &self,
-        request: &SkillRequest,
-    ) -> Result<(PromptFile, PathBuf, String), SkillFileError> {
+    fn resolve_skill_file(&self, request: &SkillRequest) -> Result<(PromptFile, PathBuf, String), SkillFileError> {
         let prompt = self
             .catalog
             .find(&request.name)
@@ -213,7 +210,7 @@ impl SkillsMcp {
     async fn load_skill_file(&self, request: &SkillRequest, expander: &ShellExpander) -> SkillFile {
         let name = request.name.clone();
         let fallback_path = request.path.clone().unwrap_or_else(|| SKILL_FILENAME.to_string());
-        let (prompt, resolved_path, response_path) = match self.resolve_skill_file(request).await {
+        let (prompt, resolved_path, response_path) = match self.resolve_skill_file(request) {
             Ok(result) => result,
             Err(e) => {
                 return SkillFile {
