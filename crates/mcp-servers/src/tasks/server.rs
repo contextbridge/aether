@@ -9,7 +9,7 @@ use rmcp::{
     tool, tool_handler, tool_router,
 };
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 use crate::error::ServerInitError;
@@ -34,7 +34,6 @@ pub struct TasksMcpArgs {
 
 impl TasksMcpArgs {
     pub fn from_args(args: Vec<String>) -> Result<Self, ServerInitError> {
-        // Prepend a dummy program name since clap expects it
         let mut full_args = vec!["tasks-mcp".to_string()];
         full_args.extend(args);
 
@@ -45,11 +44,8 @@ impl TasksMcpArgs {
 #[doc = include_str!("../docs/tasks_mcp.md")]
 #[derive(Debug)]
 pub struct TasksMcp {
-    task_store: Mutex<TaskStore>,
+    storage: Arc<TaskStorage>,
     tool_router: ToolRouter<Self>,
-    /// Holds the temp directory alive for session-scoped storage.
-    /// Dropped (and cleaned up) when the server is dropped.
-    _temp_dir: Option<TempDir>,
 }
 
 impl Default for TasksMcp {
@@ -61,16 +57,15 @@ impl Default for TasksMcp {
 impl TasksMcp {
     /// Create a new session-scoped `TasksMcp` server.
     ///
-    /// Tasks are stored in a temporary directory and automatically cleaned up
-    /// when this server is dropped. Use [`Self::new_persistent`] for
-    /// cross-session storage.
+    /// Tasks are stored in a temporary directory and cleaned up after the server
+    /// is dropped and outstanding operations finish. Use [`Self::new_persistent`]
+    /// for cross-session storage.
     pub fn new() -> Self {
         let temp_dir = TempDir::with_prefix("aether-tasks-").expect("failed to create temp dir for task storage");
         let task_path = temp_dir.path().to_path_buf();
         Self {
-            task_store: Mutex::new(TaskStore::new(task_path)),
+            storage: Arc::new(TaskStorage { store: Mutex::new(TaskStore::new(task_path)), _temp_dir: Some(temp_dir) }),
             tool_router: Self::tool_router(),
-            _temp_dir: Some(temp_dir),
         }
     }
 
@@ -81,9 +76,11 @@ impl TasksMcp {
     pub fn new_persistent(base_dir: impl Into<PathBuf>) -> Self {
         let base_dir = base_dir.into();
         Self {
-            task_store: Mutex::new(TaskStore::new(base_dir.join(".aether-tasks"))),
+            storage: Arc::new(TaskStorage {
+                store: Mutex::new(TaskStore::new(base_dir.join(".aether-tasks"))),
+                _temp_dir: None,
+            }),
             tool_router: Self::tool_router(),
-            _temp_dir: None,
         }
     }
 
@@ -110,13 +107,13 @@ impl TasksMcp {
     #[cfg(test)]
     #[allow(clippy::used_underscore_binding)]
     fn is_session_scoped(&self) -> bool {
-        self._temp_dir.is_some()
+        self.storage._temp_dir.is_some()
     }
 
     #[cfg(test)]
     #[allow(clippy::used_underscore_binding)]
     fn temp_path(&self) -> Option<PathBuf> {
-        self._temp_dir.as_ref().map(|d| d.path().to_path_buf())
+        self.storage._temp_dir.as_ref().map(|d| d.path().to_path_buf())
     }
 }
 
@@ -144,9 +141,7 @@ impl TasksMcp {
         request: Parameters<TaskCreateInput>,
     ) -> Result<Json<TaskCreateOutput>, TaskStoreError> {
         let Parameters(input) = request;
-        let mut store = self.task_store.lock().expect("task store lock poisoned");
-        store.init()?;
-        execute_task_create(&input, &mut store).map(Json)
+        self.with_store(move |store| execute_task_create(&input, store)).await.map(Json)
     }
 
     #[doc = include_str!("./tools/update/description.md")]
@@ -161,28 +156,44 @@ impl TasksMcp {
         request: Parameters<TaskUpdateInput>,
     ) -> Result<Json<TaskUpdateOutput>, TaskStoreError> {
         let Parameters(input) = request;
-        let mut store = self.task_store.lock().expect("task store lock poisoned");
-        store.init()?;
-        execute_task_update(input, &mut store).map(Json)
+        self.with_store(move |store| execute_task_update(input, store)).await.map(Json)
     }
 
     #[doc = include_str!("./tools/list/description.md")]
     #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn task_list(&self, request: Parameters<TaskListInput>) -> Result<Json<TaskListOutput>, TaskStoreError> {
         let Parameters(input) = request;
-        let mut store = self.task_store.lock().expect("task store lock poisoned");
-        store.init()?;
-        Ok(Json(execute_task_list(&input, &store)))
+        self.with_store(move |store| Ok(execute_task_list(&input, store))).await.map(Json)
     }
 
     #[doc = include_str!("./tools/get/description.md")]
     #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn task_get(&self, request: Parameters<TaskGetInput>) -> Result<Json<TaskGetOutput>, TaskStoreError> {
         let Parameters(input) = request;
-        let mut store = self.task_store.lock().expect("task store lock poisoned");
-        store.init()?;
-        execute_task_get(input, &store).map(Json)
+        self.with_store(move |store| execute_task_get(input, store)).await.map(Json)
     }
+}
+
+impl TasksMcp {
+    async fn with_store<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&mut TaskStore) -> Result<T, TaskStoreError> + Send + 'static,
+    ) -> Result<T, TaskStoreError> {
+        let storage = Arc::clone(&self.storage);
+        tokio::task::spawn_blocking(move || {
+            let mut store = storage.store.lock().expect("task store lock poisoned");
+            store.init()?;
+            operation(&mut store)
+        })
+        .await?
+    }
+}
+
+#[derive(Debug)]
+struct TaskStorage {
+    store: Mutex<TaskStore>,
+    /// Keep session storage alive until outstanding blocking operations finish.
+    _temp_dir: Option<TempDir>,
 }
 
 #[cfg(test)]
