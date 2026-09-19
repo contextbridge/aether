@@ -10,13 +10,13 @@ use mcp_utils::client::McpConfig;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::io::{IsTerminal, Read as _, stdin};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use crate::credentials::oauth_credential_store_from_config;
 use crate::mcp_config_args::McpConfigArgs;
 use crate::output::OutputFormat;
+use crate::prompt::prompt_or_stdin;
 use crate::provider_connection_args::ProviderConnectionArgs;
 use crate::resolve::{AgentSelectionError, InitialSessionSelection, resolve_agent_from_settings};
 use crate::settings_args::SettingsSourceArgs;
@@ -230,20 +230,8 @@ impl RunConfig {
 }
 
 fn resolve_prompt(args: &HeadlessArgs) -> Result<String, CliError> {
-    match args.prompt.as_slice() {
-        args if !args.is_empty() => Ok(args.join(" ")),
-
-        _ if !stdin().is_terminal() => {
-            let mut buf = String::new();
-            stdin().read_to_string(&mut buf).map_err(CliError::IoError)?;
-
-            match buf.trim() {
-                "" => Err(CliError::NoPrompt),
-                s => Ok(s.to_string()),
-            }
-        }
-        _ => Err(CliError::NoPrompt),
-    }
+    let explicit = (!args.prompt.is_empty()).then(|| args.prompt.join(" "));
+    prompt_or_stdin(explicit).map_err(CliError::IoError)?.ok_or(CliError::NoPrompt)
 }
 
 fn map_selection_error(error: AgentSelectionError) -> CliError {

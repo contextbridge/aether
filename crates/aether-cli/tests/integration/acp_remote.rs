@@ -61,7 +61,7 @@ async fn same_id_resume_preserves_paused_turn() {
     AcpTestHarness::run(|mut harness| async move {
         let (id, release) = start_paused_turn(&mut harness).await;
 
-        resume(&harness, &id).await;
+        harness.resume_with_replay(&id).await;
         loop {
             match harness.peer.next_session_notification().await.update {
                 SessionUpdate::StateUpdate(StateUpdate::Running(_)) => break,
@@ -83,7 +83,7 @@ async fn persistent_host_reattaches_to_original_paused_turn() {
         harness.disconnect().await;
         assert_no_ended_turn(&harness, &id);
         harness.reconnect().await;
-        resume(&harness, &id).await;
+        harness.resume_with_replay(&id).await;
         loop {
             match harness.peer.next_session_notification().await.update {
                 SessionUpdate::StateUpdate(StateUpdate::Running(_)) => break,
@@ -106,7 +106,7 @@ async fn completed_while_detached_is_persisted_and_replayed() {
         release.notify_one();
         completed.await.expect("original provider completes without a client");
         harness.reconnect().await;
-        resume(&harness, &id).await;
+        harness.resume_with_replay(&id).await;
         let mut users = 0;
         let mut responses = 0;
         loop {
@@ -223,7 +223,7 @@ async fn pending_and_detached_elicitations_cancel_without_stopping_session() {
                 drop(pending);
                 assert!(prompt.await.is_err(), "disconnected prompt response is not retried");
                 harness.reconnect().await;
-                resume(&harness, &id).await;
+                harness.resume_with_replay(&id).await;
                 let mut completed = false;
                 loop {
                     let update = harness.peer.next_session_notification().await.update;
@@ -398,18 +398,6 @@ async fn start_observed_paused_turn(harness: &mut AcpTestHarness) -> (SessionId,
             _ => {}
         }
     }
-}
-
-async fn resume(harness: &AcpTestHarness, id: &SessionId) {
-    harness
-        .client_cx
-        .send_request(
-            ResumeSessionRequest::new(id.clone(), AbsolutePath::new("/tmp"))
-                .replay_from(ReplayFrom::Start(ReplayFromStart::new())),
-        )
-        .block_task()
-        .await
-        .expect("same-ID resume succeeds");
 }
 
 async fn finish_original_turn(harness: &mut AcpTestHarness, id: &SessionId, release: Arc<Notify>) {
