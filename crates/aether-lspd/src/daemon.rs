@@ -6,12 +6,12 @@ use std::fs::{create_dir_all, remove_file};
 use std::future::pending;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::net::UnixListener;
 use tokio::select;
 use tokio::spawn;
-use tokio::sync::{RwLock, oneshot};
+use tokio::sync::oneshot;
 use tokio::time::sleep;
 use uuid::Uuid;
 
@@ -58,8 +58,7 @@ impl LspDaemon {
     /// Main listener loop that handles connections and shutdown signals.
     async fn run_listener_loop(&self, mut shutdown_rx: oneshot::Receiver<()>) -> DaemonResult<()> {
         let listener = UnixListener::bind(&self.socket_path).map_err(DaemonError::BindFailed)?;
-        let client_count = Arc::new(AtomicUsize::new(0));
-        let last_activity = Arc::new(RwLock::new(Instant::now()));
+        let idle = Arc::new(IdleTracker::new());
 
         loop {
             select! {
@@ -75,16 +74,13 @@ impl LspDaemon {
                         Ok((stream, _)) => {
                             let client_id = Uuid::new_v4();
                             let registry = self.workspace_registry.clone();
-                            let client_count = Arc::clone(&client_count);
-                            let last_activity = Arc::clone(&last_activity);
+                            let idle = Arc::clone(&idle);
 
-                            client_count.fetch_add(1, Ordering::Relaxed);
-                            *last_activity.write().await = Instant::now();
+                            idle.client_connected();
 
                             spawn(async move {
                                 handle_client(stream, registry, client_id).await;
-                                client_count.fetch_sub(1, Ordering::Relaxed);
-                                *last_activity.write().await = Instant::now();
+                                idle.client_disconnected();
                                 tracing::debug!("Client {} handler complete", client_id);
                             });
                         }
@@ -94,7 +90,7 @@ impl LspDaemon {
                     }
                 }
 
-                () = check_idle_timeout(client_count.clone(), last_activity.clone(), self.idle_timeout) => {
+                () = check_idle_timeout(Arc::clone(&idle), self.idle_timeout) => {
                     tracing::info!("Idle timeout reached, shutting down");
                     return Ok(());
                 }
@@ -108,22 +104,49 @@ impl LspDaemon {
     }
 }
 
+struct IdleTracker {
+    started_at: Instant,
+    client_count: AtomicUsize,
+    last_activity_millis: AtomicU64,
+}
+
+impl IdleTracker {
+    fn new() -> Self {
+        Self { started_at: Instant::now(), client_count: AtomicUsize::new(0), last_activity_millis: AtomicU64::new(0) }
+    }
+
+    fn client_connected(&self) {
+        self.record_activity();
+        self.client_count.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn client_disconnected(&self) {
+        self.record_activity();
+        self.client_count.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    fn is_idle_for(&self, timeout: Duration) -> bool {
+        if self.client_count.load(Ordering::SeqCst) > 0 {
+            return false;
+        }
+
+        let now = elapsed_millis(self.started_at);
+        let last = self.last_activity_millis.load(Ordering::SeqCst);
+        Duration::from_millis(now.saturating_sub(last)) >= timeout
+    }
+
+    fn record_activity(&self) {
+        self.last_activity_millis.store(elapsed_millis(self.started_at), Ordering::SeqCst);
+    }
+}
+
 /// Wait until idle timeout is reached
-async fn check_idle_timeout(
-    client_count: Arc<AtomicUsize>,
-    last_activity: Arc<RwLock<Instant>>,
-    timeout: Option<Duration>,
-) {
-    check_idle_timeout_with_interval(client_count, last_activity, timeout, Duration::from_secs(10)).await;
+async fn check_idle_timeout(idle: Arc<IdleTracker>, timeout: Option<Duration>) {
+    check_idle_timeout_with_interval(idle, timeout, Duration::from_secs(10)).await;
 }
 
 /// Wait until idle timeout is reached, polling at a configurable interval.
-async fn check_idle_timeout_with_interval(
-    client_count: Arc<AtomicUsize>,
-    last_activity: Arc<RwLock<Instant>>,
-    timeout: Option<Duration>,
-    poll_interval: Duration,
-) {
+async fn check_idle_timeout_with_interval(idle: Arc<IdleTracker>, timeout: Option<Duration>, poll_interval: Duration) {
     let Some(timeout) = timeout else {
         pending::<()>().await;
         return;
@@ -132,16 +155,14 @@ async fn check_idle_timeout_with_interval(
     loop {
         sleep(poll_interval).await;
 
-        let count = client_count.load(Ordering::Relaxed);
-        if count > 0 {
-            continue;
-        }
-
-        let last = *last_activity.read().await;
-        if last.elapsed() >= timeout {
+        if idle.is_idle_for(timeout) {
             return;
         }
     }
+}
+
+fn elapsed_millis(started_at: Instant) -> u64 {
+    u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Returns `true` when all roots are non-existent and the list is non-empty.
@@ -195,34 +216,29 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn idle_timeout_none_never_completes() {
-        let client_count = Arc::new(AtomicUsize::new(0));
-        let last_activity = Arc::new(RwLock::new(Instant::now()));
+        let idle = Arc::new(IdleTracker::new());
 
-        let result = timeout(
-            Duration::from_millis(40),
-            check_idle_timeout_with_interval(client_count, last_activity, None, Duration::from_millis(5)),
-        )
-        .await;
+        let result =
+            timeout(Duration::from_millis(40), check_idle_timeout_with_interval(idle, None, Duration::from_millis(5)))
+                .await;
 
         assert!(result.is_err(), "None timeout should not complete");
     }
 
     #[tokio::test(start_paused = true)]
     async fn idle_timeout_completes_when_idle_elapsed() {
-        let client_count = Arc::new(AtomicUsize::new(0));
-        let stale_activity = Instant::now()
+        let started_at = Instant::now()
             .checked_sub(Duration::from_millis(50))
             .expect("subtracting from current instant should succeed");
-        let last_activity = Arc::new(RwLock::new(stale_activity));
+        let idle = Arc::new(IdleTracker {
+            started_at,
+            client_count: AtomicUsize::new(0),
+            last_activity_millis: AtomicU64::new(0),
+        });
 
         let result = timeout(
             Duration::from_millis(100),
-            check_idle_timeout_with_interval(
-                client_count,
-                last_activity,
-                Some(Duration::from_millis(10)),
-                Duration::from_millis(5),
-            ),
+            check_idle_timeout_with_interval(idle, Some(Duration::from_millis(10)), Duration::from_millis(5)),
         )
         .await;
 

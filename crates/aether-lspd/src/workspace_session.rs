@@ -145,7 +145,7 @@ async fn sync_document(
         AcquireAction::Reopen { file_path, content } => reopen_notifications(uri, &file_path, content),
         AcquireAction::Unchanged => return None,
         AcquireAction::MissingOnDisk => {
-            documents.forget_uri(uri).await;
+            documents.forget_uri(uri);
             diagnostics.forget_uri(uri).await;
             return None;
         }
@@ -164,7 +164,7 @@ async fn release_document(
     refresh: &RefreshQueue,
     uri: &Uri,
 ) {
-    match documents.release(uri).await {
+    match documents.release(uri) {
         ReleaseAction::Close => {
             transport.send_notification(close_notification(uri)).await;
         }
@@ -256,7 +256,7 @@ async fn run_session_events(
                 diagnostics.publish(params).await;
             }
             TransportEvent::FileWatcherBatch(batch) => {
-                let filtered = documents.filter_watcher_changes(batch.forwarded_changes).await;
+                let filtered = documents.filter_watcher_changes(batch.forwarded_changes);
                 let discovered = filter_supported_uris(batch.discovered_uris, supported_extensions.as_ref());
 
                 let mut refresh_uris = filter_supported_uris(
