@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.3](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.2...aether-agent-cli-v0.9.3) - 2026-09-19
+
+### Added
+
+- Start server with initial prompt and detached client ([#486](https://github.com/contextbridge/aether/pull/486))
+
+### Other
+
+- release ([#481](https://github.com/contextbridge/aether/pull/481))
+
 ## [0.9.2](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.1...aether-agent-cli-v0.9.2) - 2026-09-16
 
 ### Added
