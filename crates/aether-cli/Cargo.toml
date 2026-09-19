@@ -49,7 +49,7 @@ clankerdiff-core = { workspace = true }
 aether-lspd = { path = "../aether-lspd", version = "0.1.37" }
 rmcp = { workspace = true, features = ["client", "elicitation", "server", "transport-streamable-http-client-reqwest"] }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "net", "fs", "time", "signal"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "net", "fs", "time", "signal", "process"] }
 tokio-tungstenite = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 tokio-util = { workspace = true, features = ["compat"] }
@@ -74,4 +74,5 @@ libc = { workspace = true }
 
 [dev-dependencies]
 aether-agent-cli = { path = ".", features = ["testing"] }
+tokio = { workspace = true, features = ["test-util"] }
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"], version = "0.5.2" }

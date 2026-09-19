@@ -10,6 +10,7 @@ pub mod testing;
 
 pub use protocol::map_mcp_prompt_to_available_command;
 
+use crate::acp::server::DetachedArgs;
 use crate::acp::state::{AcpState, AcpStateConfig};
 use crate::credentials::oauth_credential_store_from_config;
 use crate::provider_connection_args::ProviderConnectionArgs;
@@ -150,7 +151,7 @@ pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
     info!("Starting Aether ACP server");
 
     let cwd = current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let state = Arc::new(create_acp_state(args, &cwd)?);
+    let state = Arc::new(create_acp_state(args, &cwd, DetachedArgs::default())?);
     let connect_result = state.serve(Stdio::new(), state.stop_token()).await;
     state.shutdown_all().await;
 
@@ -221,7 +222,7 @@ impl AcpRunConfig {
     }
 }
 
-fn create_acp_state(args: AcpArgs, cwd: &Path) -> Result<AcpState, AcpRunError> {
+fn create_acp_state(args: AcpArgs, cwd: &Path, detached: DetachedArgs) -> Result<AcpState, AcpRunError> {
     let config = AcpRunConfig::from_args(args)?;
     setup_logging(&config.log_dir);
 
@@ -253,6 +254,7 @@ fn create_acp_state(args: AcpArgs, cwd: &Path) -> Result<AcpState, AcpRunError> 
         telemetry,
         runtime_factory: None,
         cwd: cwd.to_path_buf(),
+        detached,
     }))
 }
 
