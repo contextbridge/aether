@@ -21,11 +21,12 @@ use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Error, Respo
 use llm::catalog::{LlmModel, ModelSpec};
 use llm::{ContentBlock, ProviderConnectionOverrides};
 use mcp_utils::client::{client_capabilities, client_capabilities_for};
+use rmcp::model::ClientCapabilities;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::{Mutex, mpsc, oneshot, watch};
+use std::sync::{Arc, OnceLock};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
@@ -60,7 +61,7 @@ pub(crate) struct AcpState {
     oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
     factory: SessionFactory,
     telemetry: Option<Arc<TelemetryRuntime>>,
-    mcp_capabilities: Mutex<rmcp::model::ClientCapabilities>,
+    mcp_capabilities: OnceLock<ClientCapabilities>,
     cwd: PathBuf,
 }
 
@@ -185,14 +186,14 @@ impl AcpState {
             oauth_credential_store: config.oauth_credential_store,
             factory,
             telemetry: config.telemetry,
-            mcp_capabilities: Mutex::new(client_capabilities()),
+            mcp_capabilities: OnceLock::new(),
             cwd: config.cwd,
         }
     }
 
     pub(crate) async fn initialize(&self, args: InitializeRequest) -> Result<InitializeResponse, Error> {
         info!("Received initialize request: {:?}", args);
-        *self.mcp_capabilities.lock().await = mcp_client_capabilities(&args.capabilities);
+        let _ = self.mcp_capabilities.set(mcp_client_capabilities(&args.capabilities));
         let auth_methods = build_auth_methods(self.oauth_credential_store.as_ref());
         let available = self.factory.available_models().await.to_vec();
         let prompt_capabilities = prompt_capabilities_for_models(&available);
@@ -265,7 +266,7 @@ impl AcpState {
         request: NewSessionRequest,
         connection: Option<&ConnectionTo<Client>>,
     ) -> Result<SpawnedSession, Error> {
-        let mcp_capabilities = self.mcp_capabilities.lock().await.clone();
+        let mcp_capabilities = self.mcp_capabilities();
         let prepared = self.factory.prepare_new(request, connection, mcp_capabilities).await?;
         self.registry.stop().await;
         let created = prepared.start().await?;
@@ -319,7 +320,7 @@ impl AcpState {
             return Ok(ResumeSessionResponse::new().config_options(options));
         }
 
-        let mcp_capabilities = self.mcp_capabilities.lock().await.clone();
+        let mcp_capabilities = self.mcp_capabilities();
         let prepared = self.factory.prepare_resume(req, cx, mcp_capabilities, replay).await?;
         self.registry.stop().await;
         let created = prepared.start().await?;
@@ -591,6 +592,10 @@ impl AcpState {
         let auth_methods = build_auth_methods(self.oauth_credential_store.as_ref());
         notify(cx, AuthMethodsUpdatedParams { auth_methods });
         self.broadcast_config_options().await;
+    }
+
+    fn mcp_capabilities(&self) -> ClientCapabilities {
+        self.mcp_capabilities.get().cloned().unwrap_or_else(client_capabilities)
     }
 
     async fn broadcast_config_options(&self) {

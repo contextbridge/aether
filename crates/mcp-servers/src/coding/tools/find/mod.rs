@@ -7,8 +7,9 @@ use serde::{Deserialize, Serialize};
 use std::{
     path::Path,
     sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
     },
 };
 
@@ -57,6 +58,7 @@ pub async fn find_files(args: FindInput) -> Result<FindOutput, FindError> {
     let path_matcher =
         Arc::new(PathGlobMatcher::new(&args.pattern, CaseSensitivity::from_optional(args.case_insensitive))?);
     let state = Arc::new(FindState::new(args.limit));
+    let (result_tx, result_rx) = mpsc::channel();
 
     let mut walker_builder = WalkBuilder::new(search_root);
     walker_builder.hidden(!args.include_hidden.unwrap_or(false)).git_ignore(true).follow_links(false);
@@ -64,6 +66,7 @@ pub async fn find_files(args: FindInput) -> Result<FindOutput, FindError> {
     walker_builder.build_parallel().run(|| {
         let path_matcher = path_matcher.clone();
         let state = state.clone();
+        let result_tx = result_tx.clone();
 
         Box::new(move |result| {
             if state.limit_reached() {
@@ -79,14 +82,15 @@ pub async fn find_files(args: FindInput) -> Result<FindOutput, FindError> {
             }
 
             if path_matcher.matches(entry.path(), search_root) {
-                state.push(entry.path().to_string_lossy().to_string());
+                state.push(&result_tx, entry.path().to_string_lossy().to_string());
             }
 
             if state.limit_reached() { WalkState::Quit } else { WalkState::Continue }
         })
     });
 
-    let (matches, truncated) = state.results()?;
+    drop(result_tx);
+    let (matches, truncated) = state.results(result_rx);
     let count = matches.len();
 
     let display_meta = ToolDisplayMeta::new(
@@ -101,52 +105,42 @@ pub async fn find_files(args: FindInput) -> Result<FindOutput, FindError> {
     Ok(FindOutput { matches, count, truncated, search_path: search_path.to_string(), meta: Some(display_meta.into()) })
 }
 
-/// Thread-safe accumulator for matches discovered during the parallel walk.
 struct FindState {
-    matches: Mutex<Vec<String>>,
+    match_count: AtomicUsize,
     limit: Option<usize>,
-    limit_reached: AtomicBool,
 }
 
 impl FindState {
     fn new(limit: Option<usize>) -> Self {
-        Self { matches: Mutex::new(Vec::new()), limit, limit_reached: AtomicBool::new(false) }
+        Self { match_count: AtomicUsize::new(0), limit }
     }
 
-    fn push(&self, path: String) {
+    fn push(&self, result_tx: &mpsc::Sender<String>, path: String) {
         if self.limit_reached() {
             return;
         }
 
-        let Ok(mut matches) = self.matches.lock() else {
-            return;
-        };
-
+        let index = self.match_count.fetch_add(1, Ordering::Relaxed);
         let capacity = self.capacity();
-        if matches.len() < capacity {
-            matches.push(path);
-        }
-        if matches.len() >= capacity {
-            self.limit_reached.store(true, Ordering::Release);
+        if index < capacity {
+            let _ = result_tx.send(path);
         }
     }
 
     fn limit_reached(&self) -> bool {
-        self.limit_reached.load(Ordering::Acquire)
+        self.match_count.load(Ordering::Relaxed) >= self.capacity()
     }
 
-    /// Sorted matches, capped to `limit`, plus whether the search truncated.
-    fn results(&self) -> Result<(Vec<String>, bool), FindError> {
-        let mut matches = self.matches.lock().map(|matches| matches.clone()).map_err(|_| FindError::LockFailed)?;
+    fn results(&self, result_rx: mpsc::Receiver<String>) -> (Vec<String>, bool) {
+        let mut matches: Vec<_> = result_rx.into_iter().collect();
         matches.sort();
         let truncated = self.limit.is_some_and(|limit| matches.len() > limit);
         if let Some(limit) = self.limit {
             matches.truncate(limit);
         }
-        Ok((matches, truncated))
+        (matches, truncated)
     }
 
-    /// One past `limit`, so a single extra match reveals the result was truncated.
     fn capacity(&self) -> usize {
         self.limit.map_or(usize::MAX, |limit| limit.saturating_add(1))
     }
@@ -231,6 +225,26 @@ mod tests {
 
         assert_eq!(result.count, 2);
         assert!(result.truncated);
+    }
+
+    #[tokio::test]
+    async fn test_exact_limit_does_not_report_truncation() {
+        let test = FindTest::new().with_file("one.rs").with_file("two.rs");
+        let result =
+            test.find_with(FindInput { pattern: "*.rs".to_string(), limit: Some(2), ..FindInput::default() }).await;
+
+        assert_eq!(result.count, 2);
+        assert!(!result.truncated);
+    }
+
+    #[tokio::test]
+    async fn test_zero_limit_without_matches_is_not_truncated() {
+        let result = FindTest::new()
+            .find_with(FindInput { pattern: "*.rs".to_string(), limit: Some(0), ..FindInput::default() })
+            .await;
+
+        assert_eq!(result.count, 0);
+        assert!(!result.truncated);
     }
 
     #[tokio::test]

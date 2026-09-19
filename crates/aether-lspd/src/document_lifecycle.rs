@@ -3,18 +3,12 @@ use lsp_types::{FileEvent, Uri};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use tokio::fs::read_to_string;
-use tokio::sync::RwLock;
 
 #[derive(Clone, Default)]
 pub(crate) struct DocumentLifecycle {
-    state: Arc<RwLock<DocumentState>>,
-}
-
-#[derive(Default)]
-struct DocumentState {
-    documents: HashMap<Uri, DocumentEntry>,
+    documents: Arc<Mutex<HashMap<Uri, DocumentEntry>>>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -42,8 +36,8 @@ impl DocumentLifecycle {
         Self::default()
     }
 
-    pub(crate) async fn forget_uri(&self, uri: &Uri) {
-        self.state.write().await.documents.remove(uri);
+    pub(crate) fn forget_uri(&self, uri: &Uri) {
+        self.documents.lock().unwrap_or_else(PoisonError::into_inner).remove(uri);
     }
 
     pub(crate) async fn acquire(&self, uri: &Uri) -> AcquireAction {
@@ -53,8 +47,8 @@ impl DocumentLifecycle {
         };
 
         let content_hash = hash_content(&content);
-        let mut state = self.state.write().await;
-        let entry = state.documents.entry(uri.clone()).or_default();
+        let mut documents = self.documents.lock().unwrap_or_else(PoisonError::into_inner);
+        let entry = documents.entry(uri.clone()).or_default();
         entry.open_holders += 1;
 
         if entry.open_holders == 1 {
@@ -70,9 +64,9 @@ impl DocumentLifecycle {
         }
     }
 
-    pub(crate) async fn release(&self, uri: &Uri) -> ReleaseAction {
-        let mut state = self.state.write().await;
-        let Some(entry) = state.documents.get_mut(uri) else {
+    pub(crate) fn release(&self, uri: &Uri) -> ReleaseAction {
+        let mut documents = self.documents.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(entry) = documents.get_mut(uri) else {
             return ReleaseAction::Unchanged;
         };
 
@@ -93,12 +87,12 @@ impl DocumentLifecycle {
         }
     }
 
-    pub(crate) async fn filter_watcher_changes(&self, changes: Vec<FileEvent>) -> Vec<FileEvent> {
-        let mut state = self.state.write().await;
+    pub(crate) fn filter_watcher_changes(&self, changes: Vec<FileEvent>) -> Vec<FileEvent> {
+        let mut documents = self.documents.lock().unwrap_or_else(PoisonError::into_inner);
         changes
             .into_iter()
             .filter_map(|change| {
-                if let Some(entry) = state.documents.get_mut(&change.uri)
+                if let Some(entry) = documents.get_mut(&change.uri)
                     && entry.open_holders > 0
                 {
                     entry.needs_refresh = true;
@@ -187,7 +181,7 @@ mod tests {
     async fn release_when_not_open_returns_unchanged() {
         let uri: Uri = "file:///test.rs".parse().unwrap();
         let lifecycle = DocumentLifecycle::new();
-        assert!(matches!(lifecycle.release(&uri).await, ReleaseAction::Unchanged));
+        assert!(matches!(lifecycle.release(&uri), ReleaseAction::Unchanged));
     }
 
     #[tokio::test]
@@ -199,8 +193,8 @@ mod tests {
         let lifecycle = DocumentLifecycle::new();
 
         assert!(matches!(lifecycle.acquire(&uri).await, AcquireAction::Open { .. }));
-        assert!(matches!(lifecycle.release(&uri).await, ReleaseAction::Close));
-        assert!(matches!(lifecycle.release(&uri).await, ReleaseAction::Unchanged));
+        assert!(matches!(lifecycle.release(&uri), ReleaseAction::Close));
+        assert!(matches!(lifecycle.release(&uri), ReleaseAction::Unchanged));
     }
 
     #[tokio::test]
@@ -218,7 +212,7 @@ mod tests {
             FileEvent { uri: uri.clone(), typ: lsp_types::FileChangeType::CHANGED },
             FileEvent { uri: other_uri.clone(), typ: lsp_types::FileChangeType::CHANGED },
         ];
-        let filtered = lifecycle.filter_watcher_changes(changes).await;
+        let filtered = lifecycle.filter_watcher_changes(changes);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].uri, other_uri);
     }
@@ -234,10 +228,9 @@ mod tests {
         assert!(matches!(lifecycle.acquire(&uri).await, AcquireAction::Open { .. }));
 
         let filtered = lifecycle
-            .filter_watcher_changes(vec![FileEvent { uri: uri.clone(), typ: lsp_types::FileChangeType::CHANGED }])
-            .await;
+            .filter_watcher_changes(vec![FileEvent { uri: uri.clone(), typ: lsp_types::FileChangeType::CHANGED }]);
         assert!(filtered.is_empty());
-        assert!(matches!(lifecycle.release(&uri).await, ReleaseAction::CloseAndRefresh));
+        assert!(matches!(lifecycle.release(&uri), ReleaseAction::CloseAndRefresh));
     }
 
     #[tokio::test]
@@ -252,11 +245,10 @@ mod tests {
         assert!(matches!(lifecycle.acquire(&uri).await, AcquireAction::Unchanged));
 
         let filtered = lifecycle
-            .filter_watcher_changes(vec![FileEvent { uri: uri.clone(), typ: lsp_types::FileChangeType::CHANGED }])
-            .await;
+            .filter_watcher_changes(vec![FileEvent { uri: uri.clone(), typ: lsp_types::FileChangeType::CHANGED }]);
         assert!(filtered.is_empty());
-        assert!(matches!(lifecycle.release(&uri).await, ReleaseAction::Unchanged));
-        assert!(matches!(lifecycle.release(&uri).await, ReleaseAction::CloseAndRefresh));
+        assert!(matches!(lifecycle.release(&uri), ReleaseAction::Unchanged));
+        assert!(matches!(lifecycle.release(&uri), ReleaseAction::CloseAndRefresh));
     }
 
     #[tokio::test]
@@ -269,7 +261,7 @@ mod tests {
 
         assert!(matches!(lifecycle.acquire(&uri).await, AcquireAction::Open { .. }));
         assert!(matches!(lifecycle.acquire(&uri).await, AcquireAction::Unchanged));
-        assert!(matches!(lifecycle.release(&uri).await, ReleaseAction::Unchanged));
+        assert!(matches!(lifecycle.release(&uri), ReleaseAction::Unchanged));
     }
 
     #[tokio::test]
@@ -282,7 +274,7 @@ mod tests {
 
         assert!(matches!(lifecycle.acquire(&uri).await, AcquireAction::Open { .. }));
         assert!(matches!(lifecycle.acquire(&uri).await, AcquireAction::Unchanged));
-        assert!(matches!(lifecycle.release(&uri).await, ReleaseAction::Unchanged));
-        assert!(matches!(lifecycle.release(&uri).await, ReleaseAction::Close));
+        assert!(matches!(lifecycle.release(&uri), ReleaseAction::Unchanged));
+        assert!(matches!(lifecycle.release(&uri), ReleaseAction::Close));
     }
 }

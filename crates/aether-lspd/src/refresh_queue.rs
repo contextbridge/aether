@@ -1,8 +1,8 @@
 use lsp_types::Uri;
 use std::collections::{HashSet, VecDeque};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Notify;
 
 #[derive(Clone)]
 pub(crate) struct RefreshQueue {
@@ -38,12 +38,12 @@ impl RefreshQueue {
         }
     }
 
-    pub(crate) async fn enqueue(&self, uris: Vec<Uri>) {
+    pub(crate) fn enqueue(&self, uris: Vec<Uri>) {
         if uris.is_empty() {
             return;
         }
 
-        let mut state = self.state.lock().await;
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let mut added = false;
         for uri in uris {
             if state.pending_set.insert(uri.clone()) {
@@ -63,10 +63,10 @@ impl RefreshQueue {
         self.wake.notify_one();
     }
 
-    pub(crate) async fn complete_bootstrap(&self) {
+    pub(crate) fn complete_bootstrap(&self) {
         let mut should_notify = false;
         {
-            let mut state = self.state.lock().await;
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             state.bootstrap_in_progress = false;
             if !state.active && state.pending_queue.is_empty() {
                 state.completed_generation = state.scheduled_generation;
@@ -81,12 +81,12 @@ impl RefreshQueue {
     }
 
     pub(crate) async fn wait_for_current_generation(&self, timeout: Duration) {
-        let target = self.state.lock().await.scheduled_generation;
+        let target = self.state.lock().unwrap_or_else(PoisonError::into_inner).scheduled_generation;
         let deadline = tokio::time::Instant::now() + timeout;
 
         loop {
             {
-                let state = self.state.lock().await;
+                let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
                 if state.completed_generation >= target {
                     return;
                 }
@@ -109,7 +109,7 @@ impl RefreshQueue {
             let wake = self.wake.notified();
             let mut should_notify = false;
             {
-                let mut state = self.state.lock().await;
+                let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
                 if state.shutdown {
                     return None;
                 }
@@ -135,9 +135,9 @@ impl RefreshQueue {
         }
     }
 
-    pub(crate) async fn shutdown(&self) {
+    pub(crate) fn shutdown(&self) {
         {
-            let mut state = self.state.lock().await;
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             state.shutdown = true;
         }
         self.wake.notify_waiters();
@@ -156,10 +156,10 @@ mod tests {
     #[tokio::test]
     async fn enqueue_deduplicates_uris() {
         let queue = RefreshQueue::new();
-        queue.complete_bootstrap().await;
+        queue.complete_bootstrap();
 
         let a = uri("file:///a.rs");
-        queue.enqueue(vec![a.clone(), a.clone()]).await;
+        queue.enqueue(vec![a.clone(), a.clone()]);
 
         assert_eq!(queue.recv().await, Some(a));
     }
@@ -167,11 +167,11 @@ mod tests {
     #[tokio::test]
     async fn wait_for_current_generation_resolves_when_drained() {
         let queue = RefreshQueue::new();
-        queue.complete_bootstrap().await;
+        queue.complete_bootstrap();
 
         let a = uri("file:///a.rs");
         let b = uri("file:///b.rs");
-        queue.enqueue(vec![a, b]).await;
+        queue.enqueue(vec![a, b]);
 
         let wait_queue = queue.clone();
         let waiter = tokio::spawn(async move {
@@ -194,7 +194,7 @@ mod tests {
         });
 
         tokio::task::yield_now().await;
-        queue.complete_bootstrap().await;
+        queue.complete_bootstrap();
 
         waiter.await.unwrap();
     }
@@ -202,10 +202,10 @@ mod tests {
     #[tokio::test]
     async fn shutdown_causes_recv_to_return_none() {
         let queue = RefreshQueue::new();
-        queue.complete_bootstrap().await;
+        queue.complete_bootstrap();
 
-        queue.enqueue(vec![uri("file:///a.rs")]).await;
-        queue.shutdown().await;
+        queue.enqueue(vec![uri("file:///a.rs")]);
+        queue.shutdown();
 
         assert_eq!(queue.recv().await, None);
     }
@@ -213,13 +213,13 @@ mod tests {
     #[tokio::test]
     async fn shutdown_wakes_waiting_receiver() {
         let queue = RefreshQueue::new();
-        queue.complete_bootstrap().await;
+        queue.complete_bootstrap();
 
         let wait_queue = queue.clone();
         let receiver = tokio::spawn(async move { wait_queue.recv().await });
 
         tokio::task::yield_now().await;
-        queue.shutdown().await;
+        queue.shutdown();
 
         assert_eq!(receiver.await.unwrap(), None);
     }

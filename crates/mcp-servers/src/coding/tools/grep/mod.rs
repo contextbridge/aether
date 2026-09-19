@@ -14,7 +14,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, mpsc};
 use tokio::task::spawn_blocking;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -102,27 +102,27 @@ pub struct GrepInput {
     pub multiline: Option<bool>,
 }
 
-/// Thread-safe state for parallel grep execution
+pub async fn perform_grep(args: GrepInput) -> Result<GrepOutput, GrepError> {
+    spawn_blocking(move || perform_grep_sync(args)).await.map_err(|error| GrepError::SearchFailed(error.to_string()))?
+}
+
 struct ParallelGrepState {
-    matches: Mutex<Vec<MatchData>>,
-    files_with_matches: Mutex<Vec<String>>,
-    file_counts: Mutex<Vec<GrepFileCount>>,
+    result_tx: mpsc::Sender<DirectoryResult>,
     total_items: AtomicUsize,
     max_items: usize,
     limit_reached: AtomicBool,
 }
 
 impl ParallelGrepState {
-    fn new(max_items: usize) -> Self {
-        Self {
-            matches: Mutex::new(Vec::new()),
-            files_with_matches: Mutex::new(Vec::new()),
-            file_counts: Mutex::new(Vec::new()),
-            total_items: AtomicUsize::new(0),
-            max_items,
-            limit_reached: AtomicBool::new(false),
-        }
+    fn new(max_items: usize, result_tx: mpsc::Sender<DirectoryResult>) -> Self {
+        Self { result_tx, total_items: AtomicUsize::new(0), max_items, limit_reached: AtomicBool::new(false) }
     }
+}
+
+enum DirectoryResult {
+    Matches(Vec<MatchData>),
+    File(String),
+    Count(GrepFileCount),
 }
 
 fn should_include_file(
@@ -135,7 +135,6 @@ fn should_include_file(
         return path_matcher.matches(path, search_root);
     }
 
-    // Check file type filter
     if let Some(ftype) = file_type {
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
             let extensions = extensions_for_type(ftype);
@@ -145,10 +144,6 @@ fn should_include_file(
     }
 
     true
-}
-
-pub async fn perform_grep(args: GrepInput) -> Result<GrepOutput, GrepError> {
-    spawn_blocking(move || perform_grep_sync(args)).await.map_err(|error| GrepError::SearchFailed(error.to_string()))?
 }
 
 fn perform_grep_sync(mut args: GrepInput) -> Result<GrepOutput, GrepError> {
@@ -298,7 +293,8 @@ fn search_directory(
     let walker = WalkBuilder::new(search_path).hidden(false).git_ignore(true).build_parallel();
 
     let max_items = args.head_limit.unwrap_or(usize::MAX);
-    let state = Arc::new(ParallelGrepState::new(max_items));
+    let (result_tx, result_rx) = mpsc::channel();
+    let state = Arc::new(ParallelGrepState::new(max_items, result_tx));
     let matcher = Arc::new(matcher);
     let path_matcher = Arc::new(path_matcher);
     let file_type = args.file_type.clone();
@@ -320,11 +316,15 @@ fn search_directory(
         })
     });
 
-    let mut results = SearchResults {
-        matches: state.matches.lock().unwrap().clone(),
-        files_with_matches: state.files_with_matches.lock().unwrap().clone(),
-        file_counts: state.file_counts.lock().unwrap().clone(),
-    };
+    drop(state);
+    let mut results = SearchResults::empty();
+    for result in result_rx {
+        match result {
+            DirectoryResult::Matches(batch) => results.matches.extend(batch),
+            DirectoryResult::File(result) => results.files_with_matches.push(result),
+            DirectoryResult::Count(result) => results.file_counts.push(result),
+        }
+    }
 
     results.matches.sort_by(|a, b| a.file.cmp(&b.file));
     results.files_with_matches.sort();
@@ -379,9 +379,7 @@ fn search_directory_entry(
                 if new_count >= state.max_items {
                     state.limit_reached.store(true, Ordering::Release);
                 }
-                if let Ok(mut matches) = state.matches.lock() {
-                    matches.extend(sink.matches);
-                }
+                let _ = state.result_tx.send(DirectoryResult::Matches(sink.matches));
             }
         }
         OutputMode::FilesWithMatches => {
@@ -391,9 +389,7 @@ fn search_directory_entry(
                 if new_count >= state.max_items {
                     state.limit_reached.store(true, Ordering::Release);
                 }
-                if let Ok(mut files) = state.files_with_matches.lock() {
-                    files.push(entry.path().to_string_lossy().to_string());
-                }
+                let _ = state.result_tx.send(DirectoryResult::File(entry.path().to_string_lossy().to_string()));
             }
         }
         OutputMode::Count => {
@@ -403,9 +399,10 @@ fn search_directory_entry(
                 if new_count >= state.max_items {
                     state.limit_reached.store(true, Ordering::Release);
                 }
-                if let Ok(mut counts) = state.file_counts.lock() {
-                    counts.push(GrepFileCount { file: entry.path().to_string_lossy().to_string(), count: sink.count });
-                }
+                let _ = state.result_tx.send(DirectoryResult::Count(GrepFileCount {
+                    file: entry.path().to_string_lossy().to_string(),
+                    count: sink.count,
+                }));
             }
         }
     }
