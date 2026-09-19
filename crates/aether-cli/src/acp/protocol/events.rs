@@ -366,7 +366,7 @@ mod tests {
                 );
                 let pair = acp_utils::testing::connect_pair(agent, client).await;
                 pair.client.send_request(acp_utils::testing::initialize_request()).block_task().await.unwrap();
-                let io = SessionIo::new(pair.agent, "session".into());
+                let io = SessionIo::new(Some(pair.agent), "session".into());
                 project_agent_event(event, NotificationMode::Live, &io);
                 rx.recv().await.unwrap()
             }),

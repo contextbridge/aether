@@ -22,6 +22,7 @@ use super::config::SessionConfigState;
 use super::model::{Modes, pick_default_model};
 use super::runtime::{ProductionRuntimeFactory, RuntimeFactory};
 use crate::acp::protocol::mcp::map_acp_mcp_servers;
+use crate::acp::server::DetachedArgs;
 use crate::resolve::{InitialSessionSelection, resolve_agent_from_catalog};
 use crate::settings_args::SettingsSourceArgs;
 use aether_sessions::{SessionStore, SessionStoreError};
@@ -36,6 +37,7 @@ pub(crate) struct SessionFactory {
     initial_selection: InitialSessionSelection,
     observer_factory: Option<DynObserverFactory>,
     runtime_factory: Option<Arc<dyn RuntimeFactory>>,
+    detached: DetachedArgs,
     available: OnceCell<Vec<LlmModel>>,
 }
 
@@ -68,6 +70,7 @@ impl PreparedSession {
 }
 
 impl SessionFactory {
+    #[expect(clippy::too_many_arguments, reason = "factory construction supplies all session dependencies")]
     pub(crate) fn new(
         settings_source: SettingsSourceArgs,
         provider_connections: ProviderConnectionOverrides,
@@ -76,6 +79,7 @@ impl SessionFactory {
         initial_selection: InitialSessionSelection,
         observer_factory: Option<DynObserverFactory>,
         runtime_factory: Option<Arc<dyn RuntimeFactory>>,
+        detached: DetachedArgs,
     ) -> Self {
         Self {
             settings_source,
@@ -85,6 +89,7 @@ impl SessionFactory {
             initial_selection,
             observer_factory,
             runtime_factory,
+            detached,
             available: OnceCell::new(),
         }
     }
@@ -96,7 +101,7 @@ impl SessionFactory {
     pub(crate) async fn prepare_new(
         &self,
         mut args: NewSessionRequest,
-        cx: &ConnectionTo<Client>,
+        cx: Option<&ConnectionTo<Client>>,
         mcp_capabilities: ClientCapabilities,
     ) -> Result<PreparedSession, Error> {
         let cwd = args.cwd.clone().into_inner();
@@ -205,7 +210,7 @@ impl SessionFactory {
             resolved,
             events,
             replay,
-            cx,
+            Some(cx),
         ))
     }
 
@@ -235,13 +240,13 @@ impl SessionFactory {
         resolved: ResolvedSession,
         transcript: Vec<SessionEvent>,
         replay: bool,
-        cx: &ConnectionTo<Client>,
+        cx: Option<&ConnectionTo<Client>>,
     ) -> PreparedSession {
         let init = SessionActorInit {
             session_id,
             cwd,
             mcp_servers,
-            connection: cx.clone(),
+            connection: cx.cloned(),
             repository: self.session_store.clone(),
             oauth_credential_store: Arc::clone(&self.oauth_credential_store),
             active_agent: resolved.active_agent,
@@ -251,6 +256,7 @@ impl SessionFactory {
             replay,
             modes: mode_catalog.modes,
             config: resolved.config,
+            detached: self.detached.clone(),
         };
         PreparedSession { init, available: mode_catalog.available }
     }

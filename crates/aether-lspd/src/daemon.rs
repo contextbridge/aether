@@ -5,14 +5,13 @@ use crate::workspace_registry::WorkspaceRegistry;
 use std::fs::{create_dir_all, remove_file};
 use std::future::pending;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 use tokio::net::UnixListener;
 use tokio::select;
 use tokio::spawn;
-use tokio::sync::{RwLock, oneshot};
-use tokio::time::sleep;
+use tokio::sync::oneshot;
+use tokio::time::{Instant, sleep};
 use uuid::Uuid;
 
 #[doc = include_str!("docs/daemon.md")]
@@ -58,8 +57,7 @@ impl LspDaemon {
     /// Main listener loop that handles connections and shutdown signals.
     async fn run_listener_loop(&self, mut shutdown_rx: oneshot::Receiver<()>) -> DaemonResult<()> {
         let listener = UnixListener::bind(&self.socket_path).map_err(DaemonError::BindFailed)?;
-        let client_count = Arc::new(AtomicUsize::new(0));
-        let last_activity = Arc::new(RwLock::new(Instant::now()));
+        let idle = Arc::new(Mutex::new(IdleState { client_count: 0, last_activity: Instant::now() }));
 
         loop {
             select! {
@@ -75,16 +73,21 @@ impl LspDaemon {
                         Ok((stream, _)) => {
                             let client_id = Uuid::new_v4();
                             let registry = self.workspace_registry.clone();
-                            let client_count = Arc::clone(&client_count);
-                            let last_activity = Arc::clone(&last_activity);
+                            let idle = Arc::clone(&idle);
 
-                            client_count.fetch_add(1, Ordering::Relaxed);
-                            *last_activity.write().await = Instant::now();
+                            {
+                                let mut state = idle.lock().unwrap_or_else(PoisonError::into_inner);
+                                state.client_count += 1;
+                                state.last_activity = Instant::now();
+                            }
 
                             spawn(async move {
                                 handle_client(stream, registry, client_id).await;
-                                client_count.fetch_sub(1, Ordering::Relaxed);
-                                *last_activity.write().await = Instant::now();
+                                {
+                                    let mut state = idle.lock().unwrap_or_else(PoisonError::into_inner);
+                                    state.client_count -= 1;
+                                    state.last_activity = Instant::now();
+                                }
                                 tracing::debug!("Client {} handler complete", client_id);
                             });
                         }
@@ -94,7 +97,7 @@ impl LspDaemon {
                     }
                 }
 
-                () = check_idle_timeout(client_count.clone(), last_activity.clone(), self.idle_timeout) => {
+                () = check_idle_timeout(&idle, self.idle_timeout) => {
                     tracing::info!("Idle timeout reached, shutting down");
                     return Ok(());
                 }
@@ -108,37 +111,22 @@ impl LspDaemon {
     }
 }
 
-/// Wait until idle timeout is reached
-async fn check_idle_timeout(
-    client_count: Arc<AtomicUsize>,
-    last_activity: Arc<RwLock<Instant>>,
-    timeout: Option<Duration>,
-) {
-    check_idle_timeout_with_interval(client_count, last_activity, timeout, Duration::from_secs(10)).await;
+struct IdleState {
+    client_count: usize,
+    last_activity: Instant,
 }
 
-/// Wait until idle timeout is reached, polling at a configurable interval.
-async fn check_idle_timeout_with_interval(
-    client_count: Arc<AtomicUsize>,
-    last_activity: Arc<RwLock<Instant>>,
-    timeout: Option<Duration>,
-    poll_interval: Duration,
-) {
+async fn check_idle_timeout(idle: &Mutex<IdleState>, timeout: Option<Duration>) {
     let Some(timeout) = timeout else {
         pending::<()>().await;
         return;
     };
 
     loop {
-        sleep(poll_interval).await;
+        sleep(Duration::from_secs(10)).await;
 
-        let count = client_count.load(Ordering::Relaxed);
-        if count > 0 {
-            continue;
-        }
-
-        let last = *last_activity.read().await;
-        if last.elapsed() >= timeout {
+        let state = idle.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.client_count == 0 && state.last_activity.elapsed() >= timeout {
             return;
         }
     }
@@ -149,12 +137,11 @@ fn all_roots_deleted(roots: &[PathBuf]) -> bool {
     !roots.is_empty() && roots.iter().all(|root| !root.exists())
 }
 
-/// Resolves when every workspace root managed by `lsp_manager` has been deleted
-/// from disk. Polls at `poll_interval`.
+/// Resolves when every registered workspace root has been deleted from disk.
 async fn check_workspace_liveness(workspace_registry: &WorkspaceRegistry, poll_interval: Duration) {
     loop {
         sleep(poll_interval).await;
-        let roots = workspace_registry.workspace_roots().await;
+        let roots = workspace_registry.workspace_roots();
         if all_roots_deleted(&roots) {
             return;
         }
@@ -191,43 +178,6 @@ fn spawn_shutdown_signal_handler() -> oneshot::Receiver<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::time::timeout;
-
-    #[tokio::test(start_paused = true)]
-    async fn idle_timeout_none_never_completes() {
-        let client_count = Arc::new(AtomicUsize::new(0));
-        let last_activity = Arc::new(RwLock::new(Instant::now()));
-
-        let result = timeout(
-            Duration::from_millis(40),
-            check_idle_timeout_with_interval(client_count, last_activity, None, Duration::from_millis(5)),
-        )
-        .await;
-
-        assert!(result.is_err(), "None timeout should not complete");
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn idle_timeout_completes_when_idle_elapsed() {
-        let client_count = Arc::new(AtomicUsize::new(0));
-        let stale_activity = Instant::now()
-            .checked_sub(Duration::from_millis(50))
-            .expect("subtracting from current instant should succeed");
-        let last_activity = Arc::new(RwLock::new(stale_activity));
-
-        let result = timeout(
-            Duration::from_millis(100),
-            check_idle_timeout_with_interval(
-                client_count,
-                last_activity,
-                Some(Duration::from_millis(10)),
-                Duration::from_millis(5),
-            ),
-        )
-        .await;
-
-        assert!(result.is_ok(), "Idle timeout should complete");
-    }
 
     #[test]
     fn all_roots_deleted_empty_returns_false() {

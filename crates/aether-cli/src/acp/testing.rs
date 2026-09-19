@@ -1,5 +1,5 @@
 use super::fake_prompt_mcp::FakePromptMcp;
-use super::server::{AcpServer, ServerRunError};
+use super::server::{AcpServer, DetachedArgs, ServerRunError};
 use super::session::actor::SessionActorInit;
 use super::session::agent_key::AgentKey;
 use super::session::agents::SessionAgents;
@@ -23,7 +23,10 @@ use aether_core::mcp::{ServerFactory, mcp};
 use aether_project::AgentCatalog;
 use aether_sessions::SessionStore;
 use aether_sessions::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent, last_agent_from_events};
-use agent_client_protocol::schema::v2::{InitializeResponse, SessionId, SessionUpdate, StateUpdate, StopReason};
+use agent_client_protocol::schema::v2::{
+    AbsolutePath, InitializeResponse, ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate,
+    StateUpdate, StopReason,
+};
 use agent_client_protocol::{Agent, Client, ConnectionTo, on_receive_notification};
 use futures::FutureExt;
 use llm::testing::FakeLlmProvider;
@@ -150,6 +153,11 @@ impl AcpTestHarness {
         }
     }
 
+    pub async fn start_unattached_session(&mut self, prompt: impl Into<String>) -> SessionId {
+        self.disconnect().await;
+        self.state.start_session(prompt.into()).await.expect("unattached session starts")
+    }
+
     /// Connect a fresh initialized client to the same host and session store.
     pub async fn reconnect(&mut self) {
         assert!(self.connection.is_none(), "disconnect the current client before reconnecting");
@@ -161,6 +169,25 @@ impl AcpTestHarness {
         self.initialize_response = connection.initialize_response;
         self.auth_updates = connection.auth_updates;
         self.connection = Some(connection.tasks);
+    }
+
+    pub async fn resume(&self, session_id: &SessionId) {
+        self.client_cx
+            .send_request(ResumeSessionRequest::new(session_id.clone(), AbsolutePath::new("/tmp")))
+            .block_task()
+            .await
+            .expect("session resumes");
+    }
+
+    pub async fn resume_with_replay(&self, session_id: &SessionId) {
+        self.client_cx
+            .send_request(
+                ResumeSessionRequest::new(session_id.clone(), AbsolutePath::new("/tmp"))
+                    .replay_from(ReplayFrom::Start(ReplayFromStart::new())),
+            )
+            .block_task()
+            .await
+            .expect("session resumes with replay");
     }
 
     /// Move this persistent host from its in-memory connection to a real port-zero listener.
@@ -205,7 +232,19 @@ impl AcpTestHarness {
         LocalSet::new().run_until(Box::pin(async move { body(Self::start().await).await })).await;
     }
 
+    pub async fn run_with_detached<F, Fut>(detached: DetachedArgs, body: F)
+    where
+        F: FnOnce(Self) -> Fut,
+        Fut: Future<Output = ()>,
+    {
+        LocalSet::new().run_until(Box::pin(async move { body(Self::start_with(detached).await).await })).await;
+    }
+
     pub async fn start() -> Self {
+        Self::start_with(DetachedArgs::default()).await
+    }
+
+    async fn start_with(detached: DetachedArgs) -> Self {
         let tmp = tempfile::tempdir().expect("tempdir for session store");
         let session_store = Arc::new(SessionStore::from_path(tmp.path().to_path_buf()));
         let workspace_manager = Arc::new(WorkspaceManager::from_registry_path_with_cloner(
@@ -233,6 +272,7 @@ impl AcpTestHarness {
                 telemetry: None,
                 runtime_factory: Some(runtime_factory),
                 cwd: PathBuf::from("/tmp"),
+                detached,
             },
             Arc::new(FakeProviderLogin),
         ));
@@ -351,7 +391,7 @@ impl AcpTestHarness {
                 cwd: PathBuf::from("/tmp"),
                 mcp_servers: Vec::new(),
                 session_id: id.clone(),
-                connection: self.agent_cx.clone(),
+                connection: Some(self.agent_cx.clone()),
                 repository: self.session_store.clone(),
                 oauth_credential_store: self.oauth_store.clone(),
                 active_agent: AgentKey::Default,
@@ -361,6 +401,7 @@ impl AcpTestHarness {
                 replay: false,
                 modes: Modes::default(),
                 config: SessionConfigState::with_selection(model.to_string(), None, None),
+                detached: DetachedArgs::default(),
             })
             .await;
     }
@@ -452,7 +493,7 @@ impl AcpTestHarness {
                 cwd: PathBuf::from("/tmp"),
                 mcp_servers: Vec::new(),
                 session_id: acp_session_id.clone(),
-                connection: self.agent_cx.clone(),
+                connection: Some(self.agent_cx.clone()),
                 repository: self.session_store.clone(),
                 oauth_credential_store: self.oauth_store.clone(),
                 active_agent: AgentKey::Named(initial_agent),
@@ -466,6 +507,7 @@ impl AcpTestHarness {
                     selected_mode,
                     None,
                 ),
+                detached: DetachedArgs::default(),
             })
             .await;
         FakeAgentSwitchingSession { session_id: acp_session_id, planner, coder }

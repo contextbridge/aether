@@ -27,6 +27,26 @@ async fn dropping_the_last_handle_closes_the_event_stream_and_transport() {
 }
 
 #[tokio::test]
+async fn concurrent_disconnects_wait_for_the_same_connection_closure() {
+    LocalSet::new()
+        .run_until(async {
+            let (agent_transport, client_transport) = duplex_pair();
+            let agent = FakeAgent::default().agent();
+            let server = spawn_local(agent.connect_to(agent_transport));
+            let mut client = connect_acp_client(client_transport, initialize_request()).await.unwrap();
+            let first = client.handle.clone();
+            let second = client.handle.clone();
+
+            tokio::join!(client.handle.disconnect(), first.disconnect(), second.disconnect());
+
+            assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::ConnectionClosed)));
+            assert!(client.event_rx.recv().await.is_none());
+            let _ = server.await.unwrap();
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn initialization_failure_releases_the_connection_while_initialize_is_held_open() {
     LocalSet::new()
         .run_until(async {

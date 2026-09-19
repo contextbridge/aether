@@ -2,7 +2,7 @@ use super::{assert_no_ended_turn, assert_stopped_turn, start_paused_turn};
 use acp_utils::client::{AcpClient, AcpEvent, connect_acp_client};
 use acp_utils::testing::initialize_request;
 use acp_utils::websocket::WebSocketTransport;
-use aether_cli::acp::server::{ServerArgs, ServerRunError, run_server};
+use aether_cli::acp::server::{DetachedArgs, ServerArgs, ServerRunError, run_server};
 use aether_cli::acp::testing::{AcpTestHarness, AcpWebSocketTestServer};
 use aether_core::events::{AgentEvent, MessageEvent, TurnEvent, TurnOutcome};
 use aether_sessions::{SessionEvent, UserEvent};
@@ -13,6 +13,7 @@ use agent_client_protocol::schema::v2::{
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
 use std::path::PathBuf;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::connect_async;
@@ -29,6 +30,10 @@ fn server_args_defaults_and_overrides() {
     let defaults = ServerCli::parse_from(["server"]).args;
     assert_eq!(defaults.listen, "127.0.0.1:8765".parse().unwrap());
     assert_eq!(defaults.cwd, PathBuf::from("."));
+    assert!(defaults.prompt.is_none());
+    assert!(defaults.detached.output.is_none());
+    assert!(defaults.detached.idle_after.is_none());
+    assert!(defaults.detached.on_idle.is_none());
     let args = ServerCli::parse_from([
         "server",
         "--listen",
@@ -39,12 +44,24 @@ fn server_args_defaults_and_overrides() {
         "Build",
         "--log-dir",
         "/logs",
+        "--prompt",
+        "start now",
+        "--output",
+        "json",
+        "--idle-after",
+        "300",
+        "--on-idle",
+        "echo idle",
     ])
     .args;
     assert_eq!(args.listen, "0.0.0.0:9000".parse().unwrap());
     assert_eq!(args.cwd, PathBuf::from("/workspace"));
     assert_eq!(args.acp.agent.as_deref(), Some("Build"));
     assert_eq!(args.acp.log_dir, Some(PathBuf::from("/logs")));
+    assert_eq!(args.prompt.as_deref(), Some("start now"));
+    assert_eq!(args.detached.output, Some(aether_cli::output::OutputFormat::Json));
+    assert_eq!(args.detached.idle_after, Some(300));
+    assert_eq!(args.detached.on_idle.as_deref(), Some("echo idle"));
     assert_eq!(ServerCli::parse_from(["server", "--cwd", "/other"]).args.cwd, PathBuf::from("/other"));
 }
 
@@ -58,6 +75,9 @@ fn server_args_reuse_acp_validation() {
         assert_eq!(ServerCli::try_parse_from(arguments).unwrap_err().kind(), clap::error::ErrorKind::ArgumentConflict);
     }
     assert!(ServerCli::try_parse_from(["server", "--listen", "not-an-address"]).is_err());
+    assert!(ServerCli::try_parse_from(["server", "--idle-after", "5s"]).is_err());
+    assert!(ServerCli::try_parse_from(["server", "--on-idle", "echo idle"]).is_err());
+    assert!(ServerCli::try_parse_from(["server", "--idle-after", "later", "--on-idle", "echo idle"]).is_err());
 }
 
 #[tokio::test]
@@ -68,6 +88,78 @@ async fn server_rejects_missing_and_non_directory_workspaces() {
         let args = ServerCli::parse_from(["server", "--cwd", path.to_str().unwrap()]).args;
         assert!(matches!(run_server(args).await, Err(ServerRunError::Workspace { .. })));
     }
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn unattached_session_manages_idle_command() {
+    let directory = tempfile::tempdir().unwrap();
+    let marker = directory.path().join("idle");
+    let detached =
+        DetachedArgs { output: None, idle_after: Some(10), on_idle: Some(format!("touch '{}'", marker.display())) };
+    AcpTestHarness::run_with_detached(detached, |mut harness| async move {
+        let id = harness.start_unattached_session("work independently").await;
+        harness.reconnect().await;
+        harness.resume(&id).await;
+        tokio::time::advance(Duration::from_secs(20)).await;
+        tokio::task::yield_now().await;
+        assert!(!marker.exists());
+
+        harness.disconnect().await;
+        tokio::time::advance(Duration::from_secs(5)).await;
+        harness.reconnect().await;
+        harness.resume(&id).await;
+        tokio::time::advance(Duration::from_secs(20)).await;
+        tokio::task::yield_now().await;
+        assert!(!marker.exists());
+
+        harness.disconnect().await;
+        tokio::time::advance(Duration::from_secs(10)).await;
+        while !marker.exists() {
+            tokio::task::yield_now().await;
+        }
+        harness.shutdown().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn server_can_start_and_prompt_a_session_before_a_client_attaches() {
+    AcpTestHarness::run(|mut harness| async move {
+        let id = harness.start_unattached_session("work independently").await;
+        harness.reconnect().await;
+        harness.resume(&id).await;
+        let completed = || {
+            harness.stored_events(&id).iter().any(|event| {
+                matches!(
+                    event,
+                    SessionEvent::Agent(AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Completed }))
+                )
+            })
+        };
+        if !completed() {
+            loop {
+                let notification = harness.peer.next_session_notification().await;
+                if notification.session_id == id
+                    && matches!(notification.update,
+                        SessionUpdate::StateUpdate(StateUpdate::Idle(ref idle))
+                            if idle.stop_reason == Some(StopReason::EndTurn))
+                {
+                    break;
+                }
+            }
+        }
+
+        let events = harness.stored_events(&id);
+        assert!(events.iter().any(|event| matches!(event,
+            SessionEvent::User(UserEvent::Message { content, .. })
+                if content == &vec![llm::ContentBlock::text("work independently")]
+        )));
+        assert!(events.iter().any(|event| matches!(event,
+            SessionEvent::Agent(AgentEvent::Message(MessageEvent::Text { chunk, .. })) if chunk == "resumed reply"
+        )));
+        harness.shutdown().await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -256,12 +348,7 @@ async fn dropping_running_server_closes_listener_and_active_connection() {
         assert!(TcpStream::connect(address).await.is_err());
         assert_no_ended_turn(&harness, &id);
         harness.reconnect().await;
-        harness
-            .client_cx
-            .send_request(ResumeSessionRequest::new(id.clone(), AbsolutePath::new("/tmp")))
-            .block_task()
-            .await
-            .unwrap();
+        harness.resume(&id).await;
 
         harness.shutdown().await;
         assert_stopped_turn(&harness, &id);

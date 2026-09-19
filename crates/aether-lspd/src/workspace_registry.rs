@@ -8,9 +8,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
-use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub(crate) struct WorkspaceKey {
@@ -39,10 +38,10 @@ impl WorkspaceRegistry {
     }
 
     /// Resolve a workspace/language pair and spawn its language server if needed.
-    pub(crate) async fn bind(&self, workspace_root: &Path, language: LanguageId) -> DaemonResult<WorkspaceBinding> {
+    pub(crate) fn bind(&self, workspace_root: &Path, language: LanguageId) -> DaemonResult<WorkspaceBinding> {
         let key = WorkspaceKey::new(workspace_root, language)?;
         let binding = WorkspaceBinding { key, language };
-        self.get_or_spawn(&binding).await?;
+        self.get_or_spawn(&binding)?;
         Ok(binding)
     }
 
@@ -57,11 +56,11 @@ impl WorkspaceRegistry {
         method: &str,
         params: Value,
     ) -> Result<Value, LspErrorResponse> {
-        let session = self.session(binding).await?;
+        let session = self.session(binding)?;
         let result = match self.call_session(&session, method, &params).await {
             Err(SessionCallError::TransportClosed) => {
                 session.mark_dead();
-                let session = self.session(binding).await?;
+                let session = self.session(binding)?;
                 self.call_session(&session, method, &params).await
             }
             result => result,
@@ -74,7 +73,7 @@ impl WorkspaceRegistry {
         binding: &WorkspaceBinding,
         uri: Option<&lsp_types::Uri>,
     ) -> Result<Value, LspErrorResponse> {
-        let session = self.session(binding).await?;
+        let session = self.session(binding)?;
         let Ok(diagnostics) = tokio::time::timeout(self.request_timeout, session.get_diagnostics(uri)).await else {
             session.declare_wedged();
             return Err(SessionCallError::TimedOut.into_response("diagnostics", self.request_timeout));
@@ -82,32 +81,37 @@ impl WorkspaceRegistry {
         serde_json::to_value(&diagnostics).map_err(|e| LspErrorResponse { code: -1, message: e.to_string() })
     }
 
-    pub(crate) async fn queue_diagnostic_refresh(
+    pub(crate) fn queue_diagnostic_refresh(
         &self,
         binding: &WorkspaceBinding,
         uri: lsp_types::Uri,
     ) -> Result<(), LspErrorResponse> {
-        let session = self.session(binding).await?;
-        session.queue_diagnostic_refresh(uri).await;
+        let session = self.session(binding)?;
+        session.queue_diagnostic_refresh(uri);
         Ok(())
     }
 
-    pub(crate) async fn workspace_roots(&self) -> Vec<PathBuf> {
-        self.sessions.read().await.keys().map(|key| key.workspace_root.clone()).collect()
+    pub(crate) fn workspace_roots(&self) -> Vec<PathBuf> {
+        self.sessions
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .keys()
+            .map(|key| key.workspace_root.clone())
+            .collect()
     }
 
     pub(crate) async fn shutdown(&self) {
-        let sessions: Vec<_> = self.sessions.read().await.values().cloned().collect();
+        let sessions: Vec<_> = self.sessions.read().unwrap_or_else(PoisonError::into_inner).values().cloned().collect();
         futures::future::join_all(sessions.iter().map(|s| s.shutdown())).await;
-        self.sessions.write().await.clear();
+        self.sessions.write().unwrap_or_else(PoisonError::into_inner).clear();
     }
 
-    async fn session(&self, binding: &WorkspaceBinding) -> Result<Arc<WorkspaceSession>, LspErrorResponse> {
-        self.get_or_spawn(binding).await.map_err(|e| LspErrorResponse { code: -1, message: e.to_string() })
+    fn session(&self, binding: &WorkspaceBinding) -> Result<Arc<WorkspaceSession>, LspErrorResponse> {
+        self.get_or_spawn(binding).map_err(|e| LspErrorResponse { code: -1, message: e.to_string() })
     }
 
-    async fn get_or_spawn(&self, binding: &WorkspaceBinding) -> DaemonResult<Arc<WorkspaceSession>> {
-        if let Some(session) = self.sessions.read().await.get(&binding.key)
+    fn get_or_spawn(&self, binding: &WorkspaceBinding) -> DaemonResult<Arc<WorkspaceSession>> {
+        if let Some(session) = self.sessions.read().unwrap_or_else(PoisonError::into_inner).get(&binding.key)
             && session.is_alive()
         {
             return Ok(Arc::clone(session));
@@ -117,7 +121,7 @@ impl WorkspaceRegistry {
             DaemonError::LspSpawnFailed(format!("No LSP configured for language: {:?}", binding.language))
         })?;
 
-        let mut sessions = self.sessions.write().await;
+        let mut sessions = self.sessions.write().unwrap_or_else(PoisonError::into_inner);
         if let Some(session) = sessions.get(&binding.key) {
             if session.is_alive() {
                 return Ok(Arc::clone(session));

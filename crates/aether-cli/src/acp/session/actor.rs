@@ -15,9 +15,12 @@ use llm::{ChatMessage, ContentBlock, ProviderConnectionOverrides};
 use mcp_utils::client::{ElicitationRequest, McpClientEvent, McpServerStatusEntry, cancel_result};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Arc;
+use tokio::process::Command as ProcessCommand;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::{JoinHandle, JoinSet};
+use tokio::time::{Duration, Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
@@ -33,7 +36,9 @@ use crate::acp::protocol::commands::map_mcp_prompt_to_available_command;
 use crate::acp::protocol::content::map_user_message;
 use crate::acp::protocol::events::{NotificationMode, project_agent_event};
 use crate::acp::protocol::replay::replay_to_client;
+use crate::acp::server::DetachedArgs;
 use crate::acp::state::validate_prompt_support;
+use crate::output::print_message;
 use crate::slash_commands::dedupe_commands_by_name;
 use aether_sessions::SessionStore;
 
@@ -46,7 +51,7 @@ pub(crate) enum SessionCommand {
     Prompt {
         content: Vec<ContentBlock>,
         display_content: Vec<ContentBlock>,
-        responder: Responder<PromptResponse>,
+        client_connection: ClientConnection,
     },
     Cancel,
     Attach {
@@ -71,6 +76,29 @@ pub(crate) enum SessionCommand {
     RefreshConfigOptions {
         available: Vec<LlmModel>,
     },
+}
+
+pub(crate) enum ClientConnection {
+    Attached(Box<Responder<PromptResponse>>),
+    Detached,
+}
+
+impl ClientConnection {
+    pub(crate) fn attached(responder: Responder<PromptResponse>) -> Self {
+        Self::Attached(Box::new(responder))
+    }
+
+    pub(crate) fn respond(self, response: PromptResponse) {
+        if let Self::Attached(responder) = self {
+            let _ = responder.respond(response);
+        }
+    }
+
+    pub(crate) fn respond_with_error(self, error: Error) {
+        if let Self::Attached(responder) = self {
+            let _ = responder.respond_with_error(error);
+        }
+    }
 }
 
 /// Handle the [`SessionRegistry`](crate::acp::session::registry::SessionRegistry) keeps
@@ -106,8 +134,8 @@ pub(crate) struct SessionIo {
 }
 
 impl SessionIo {
-    pub(crate) fn new(connection: ConnectionTo<Client>, session_id: SessionId) -> Self {
-        Self { connection: Some(connection), session_id }
+    pub(crate) fn new(connection: Option<ConnectionTo<Client>>, session_id: SessionId) -> Self {
+        Self { connection, session_id }
     }
 
     pub(crate) fn send_update(&self, update: acp::SessionUpdate) {
@@ -125,7 +153,7 @@ pub(crate) struct SessionActorInit {
     pub session_id: SessionId,
     pub cwd: PathBuf,
     pub mcp_servers: Vec<acp::McpServer>,
-    pub connection: ConnectionTo<Client>,
+    pub connection: Option<ConnectionTo<Client>>,
     pub repository: Arc<SessionStore>,
     pub oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
     pub active_agent: AgentKey,
@@ -135,6 +163,7 @@ pub(crate) struct SessionActorInit {
     pub replay: bool,
     pub modes: Modes,
     pub config: SessionConfigState,
+    pub detached: DetachedArgs,
 }
 
 /// The mutable per-session state. The actor loop is the only owner; all mutation
@@ -157,6 +186,9 @@ pub(crate) struct SessionActor {
     preparation: JoinSet<Vec<ContentBlock>>,
     command_refresh: Option<BoxFuture<'static, Result<Vec<acp::AvailableCommand>, SessionError>>>,
     authentications: FuturesUnordered<BoxFuture<'static, Result<(), SessionError>>>,
+    idle_commands: JoinSet<()>,
+    detached: DetachedArgs,
+    idle_deadline: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -164,7 +196,7 @@ enum TurnState {
     #[default]
     Idle,
     Preparing {
-        responder: Box<Responder<PromptResponse>>,
+        responder: ClientConnection,
         display_content: Vec<ContentBlock>,
     },
     Running,
@@ -199,76 +231,94 @@ impl SessionActor {
             preparation: JoinSet::new(),
             command_refresh: None,
             authentications: FuturesUnordered::new(),
+            idle_commands: JoinSet::new(),
+            detached: init.detached,
+            idle_deadline: None,
         };
+        actor.reset_idle_deadline();
         actor.ensure_active_running().await?;
         if init.replay {
             replay_to_client(&actor.transcript, &actor.io);
         }
-        let (cmd_tx, mut cmd_rx) = mpsc::channel(SESSION_COMMAND_CHANNEL_CAPACITY);
-        let join = tokio::spawn(async move {
-            if let Ok(runtime) = actor.active_runtime() {
-                send_mcp_server_status(&actor.io, runtime.mcp_server_statuses());
-            }
-            actor.refresh_available_commands();
-            let shutdown = actor.cancel.clone();
-            loop {
-                let runtime = actor.runtimes.get_mut(&actor.active_agent).expect("active runtime is running");
-                tokio::select! {
-                    biased;
-                    () = shutdown.cancelled() => {
-                        actor.cancel_turn().await;
-                        break;
+        let (cmd_tx, cmd_rx) = mpsc::channel(SESSION_COMMAND_CHANNEL_CAPACITY);
+        let join = tokio::spawn(actor.run(cmd_rx));
+
+        Ok(SessionHandle { cmd_tx, cancel, join })
+    }
+
+    async fn run(mut self, mut cmd_rx: mpsc::Receiver<SessionCommand>) {
+        if let Ok(runtime) = self.active_runtime() {
+            send_mcp_server_status(&self.io, runtime.mcp_server_statuses());
+        }
+        self.refresh_available_commands();
+        let shutdown = self.cancel.clone();
+        loop {
+            let runtime = self.runtimes.get_mut(&self.active_agent).expect("active runtime is running");
+            tokio::select! {
+                biased;
+                () = shutdown.cancelled() => {
+                    self.cancel_turn().await;
+                    break;
+                }
+                Some(cmd) = cmd_rx.recv() => {
+                    self.on_session_command(cmd).await;
+                }
+                () = sleep_until(self.idle_deadline.unwrap_or_else(Instant::now)),
+                    if self.idle_deadline.is_some() && matches!(self.turn, TurnState::Idle) =>
+                {
+                    self.idle_deadline = None;
+                    self.spawn_idle_command();
+                }
+                Some(result) = self.idle_commands.join_next(), if !self.idle_commands.is_empty() => {
+                    if let Err(error) = result {
+                        warn!(%error, "Idle command task failed");
                     }
-                    Some(cmd) = cmd_rx.recv() => {
-                        actor.on_session_command(cmd).await;
-                    }
-                    Some(content) = actor.preparation.join_next(), if !actor.preparation.is_empty() => {
-                        match content {
-                            Ok(content) => actor.accept_prompt(content).await,
-                            Err(error) => {
-                                error!("Prompt preparation task failed: {error}");
-                                if let TurnState::Preparing { responder, .. } = std::mem::take(&mut actor.turn) {
-                                    let _ = responder.respond_with_error(Error::internal_error());
-                                }
+                }
+                Some(content) = self.preparation.join_next(), if !self.preparation.is_empty() => {
+                    match content {
+                        Ok(content) => self.accept_prompt(content).await,
+                        Err(error) => {
+                            error!("Prompt preparation task failed: {error}");
+                            if let TurnState::Preparing { responder, .. } = self.take_turn() {
+                                responder.respond_with_error(Error::internal_error());
                             }
                         }
                     }
-                    Some(result) = actor.authentications.next(), if !actor.authentications.is_empty() => {
-                        if let Err(error) = result {
-                            error!("MCP server authentication failed: {error}");
-                        }
-                    }
-                    result = async { actor.command_refresh.as_mut().unwrap().await }, if actor.command_refresh.is_some() => {
-                        actor.command_refresh = None;
-                        match result {
-                            Ok(commands) => send_available_commands(&actor.io, commands),
-                            Err(error) => error!("Failed to refresh available commands: {error}"),
-                        }
-                    }
-                    Some(message) = runtime.agent_rx.recv() => {
-                        actor.record_agent_event(&message);
-                        if matches!(actor.turn, TurnState::Running)
-                            && let Some(outcome) = message.turn_outcome()
-                        {
-                            actor.finish_turn(turn_result(outcome)).await;
-                        }
-                    }
-                    Some(event) = runtime.event_rx.recv() => {
-                        let refresh_commands = matches!(event, McpClientEvent::ConnectionReady(_));
-                        on_mcp_client_event(&actor.io, event);
-                        if refresh_commands {
-                            actor.refresh_available_commands();
-                        }
-                    }
-                    else => break,
                 }
+                Some(result) = self.authentications.next(), if !self.authentications.is_empty() => {
+                    if let Err(error) = result {
+                        error!("MCP server authentication failed: {error}");
+                    }
+                }
+                result = async { self.command_refresh.as_mut().unwrap().await }, if self.command_refresh.is_some() => {
+                    self.command_refresh = None;
+                    match result {
+                        Ok(commands) => send_available_commands(&self.io, commands),
+                        Err(error) => error!("Failed to refresh available commands: {error}"),
+                    }
+                }
+                Some(message) = runtime.agent_rx.recv() => {
+                    self.record_agent_event(&message);
+                    if matches!(self.turn, TurnState::Running)
+                        && let Some(outcome) = message.turn_outcome()
+                    {
+                        self.finish_turn(turn_result(outcome)).await;
+                    }
+                }
+                Some(event) = runtime.event_rx.recv() => {
+                    let refresh_commands = matches!(event, McpClientEvent::ConnectionReady(_));
+                    on_mcp_client_event(&self.io, event);
+                    if refresh_commands {
+                        self.refresh_available_commands();
+                    }
+                }
+                else => break,
             }
-            for runtime in actor.runtimes.into_values() {
-                runtime.shutdown().await;
-            }
-        });
-
-        Ok(SessionHandle { cmd_tx, cancel, join })
+        }
+        self.idle_commands.shutdown().await;
+        for runtime in self.runtimes.into_values() {
+            runtime.shutdown().await;
+        }
     }
 
     fn refresh_available_commands(&mut self) {
@@ -339,15 +389,34 @@ impl SessionActor {
     fn record_event(&mut self, event: SessionEvent) {
         self.transcript.push(event);
     }
+
+    fn reset_idle_deadline(&mut self) {
+        self.idle_deadline = if self.io.connection.is_none() && matches!(self.turn, TurnState::Idle) {
+            self.detached.idle_after.and_then(|seconds| Instant::now().checked_add(Duration::from_secs(seconds)))
+        } else {
+            None
+        };
+    }
+
+    fn take_turn(&mut self) -> TurnState {
+        let turn = std::mem::take(&mut self.turn);
+        self.reset_idle_deadline();
+        turn
+    }
+
+    fn spawn_idle_command(&mut self) {
+        let Some(command) = self.detached.on_idle.clone() else { return };
+        self.idle_commands.spawn(run_idle_command(self.cwd.clone(), command));
+    }
 }
 
 impl SessionActor {
     async fn on_session_command(&mut self, cmd: SessionCommand) {
         match cmd {
-            SessionCommand::Prompt { responder, .. } if !matches!(self.turn, TurnState::Idle) => {
-                let _ = responder.respond_with_error(Error::invalid_request());
+            SessionCommand::Prompt { client_connection: responder, .. } if !matches!(self.turn, TurnState::Idle) => {
+                responder.respond_with_error(Error::invalid_request());
             }
-            SessionCommand::Prompt { content, display_content, responder } => {
+            SessionCommand::Prompt { content, display_content, client_connection: responder } => {
                 self.start_prompt(content, display_content, responder).await;
             }
             SessionCommand::Attach { connection, cwd, mcp_servers, replay, available, reply } => {
@@ -357,6 +426,7 @@ impl SessionActor {
                     return;
                 }
                 self.io.connection = Some(connection);
+                self.reset_idle_deadline();
                 if replay {
                     replay_to_client(&self.transcript, &self.io);
                 }
@@ -373,6 +443,7 @@ impl SessionActor {
             }
             SessionCommand::Detach { reply } => {
                 self.io.connection = None;
+                self.reset_idle_deadline();
                 let _ = reply.send(());
             }
             SessionCommand::Cancel => self.cancel_turn().await,
@@ -404,20 +475,20 @@ impl SessionActor {
         &mut self,
         content: Vec<ContentBlock>,
         display_content: Vec<ContentBlock>,
-        responder: Responder<PromptResponse>,
+        responder: ClientConnection,
     ) {
         if let Err(error) = validate_prompt_support(&self.config.effective_model(&self.modes), &content) {
-            let _ = responder.respond_with_error(error);
+            responder.respond_with_error(error);
             return;
         }
         match self.prepare_prompt_runtime().await {
             Ok(mcp) => {
                 self.preparation.spawn(async move { expand_slash_command_in_content(&mcp, content).await });
-                self.turn = TurnState::Preparing { responder: Box::new(responder), display_content };
+                self.turn = TurnState::Preparing { responder, display_content };
             }
             Err(error) => {
                 error!("Prompt preparation failed: {error}");
-                let _ = responder.respond_with_error(Error::internal_error());
+                responder.respond_with_error(Error::internal_error());
             }
         }
     }
@@ -428,15 +499,15 @@ impl SessionActor {
             if self.cancel.is_cancelled() {
                 self.finish_turn(Ok(acp::StopReason::Cancelled)).await;
             }
-        } else if let TurnState::Preparing { responder, .. } = std::mem::take(&mut self.turn) {
+        } else if let TurnState::Preparing { responder, .. } = self.take_turn() {
             self.preparation.shutdown().await;
-            let _ = responder.respond(PromptResponse::new());
+            responder.respond(PromptResponse::new());
             self.finish_turn(Ok(acp::StopReason::Cancelled)).await;
         }
     }
 
     async fn accept_prompt(&mut self, content: Vec<ContentBlock>) {
-        let TurnState::Preparing { responder, display_content } = std::mem::take(&mut self.turn) else { return };
+        let TurnState::Preparing { responder, display_content } = self.take_turn() else { return };
         let message_id = llm::MessageId::new();
         let user = map_user_message(message_id.to_string().into(), &display_content);
         let event = SessionEvent::User(UserEvent::Message {
@@ -446,11 +517,11 @@ impl SessionActor {
         });
         if let Err(error) = self.repository.append_event(&self.io.session_id.0, &event) {
             error!("Failed to persist prompt: {error}");
-            let _ = responder.respond_with_error(Error::internal_error());
+            responder.respond_with_error(Error::internal_error());
             return;
         }
         self.record_event(event);
-        let _ = responder.respond(PromptResponse::new());
+        responder.respond(PromptResponse::new());
         self.io.send_update(acp::SessionUpdate::UserMessage(user));
         self.io.send_update(acp::SessionUpdate::StateUpdate(acp::StateUpdate::Running(acp::RunningStateUpdate::new())));
         self.turn = TurnState::Running;
@@ -460,7 +531,7 @@ impl SessionActor {
     }
 
     async fn finish_turn(&mut self, result: Result<acp::StopReason, SessionError>) {
-        self.turn = TurnState::Idle;
+        self.take_turn();
         let reason = match result {
             Ok(reason) => {
                 info!("Turn completed, stop reason: {reason:?}");
@@ -549,6 +620,12 @@ impl SessionActor {
 
     fn record_agent_event(&mut self, message: &AgentEvent) {
         self.persist_event(SessionEvent::Agent(message.clone()));
+        if self.io.connection.is_none()
+            && let Some(format) = self.detached.output
+            && let Err(error) = print_message(format, message)
+        {
+            error!(%error, "Failed to serialize server event");
+        }
         forward_notification(&self.io, message);
     }
 
@@ -562,6 +639,19 @@ impl SessionActor {
         }
 
         self.record_event(event);
+    }
+}
+
+async fn run_idle_command(cwd: PathBuf, command: String) {
+    let mut process = ProcessCommand::new("sh");
+    process.arg("-c").arg(&command).current_dir(cwd).stdout(Stdio::null()).stderr(Stdio::inherit()).kill_on_drop(true);
+    match process.spawn() {
+        Ok(mut child) => {
+            if let Err(error) = child.wait().await {
+                warn!(%error, %command, "Failed to wait for idle command");
+            }
+        }
+        Err(error) => error!(%error, %command, "Failed to spawn idle command"),
     }
 }
 
@@ -816,7 +906,7 @@ mod tests {
         use tokio::task::LocalSet;
 
         fn dispatch_event(connection: &ConnectionTo<Client>, event: McpClientEvent) {
-            on_mcp_client_event(&SessionIo::new(connection.clone(), SessionId::new("session-1")), event);
+            on_mcp_client_event(&SessionIo::new(Some(connection.clone()), SessionId::new("session-1")), event);
         }
 
         #[tokio::test(flavor = "current_thread")]

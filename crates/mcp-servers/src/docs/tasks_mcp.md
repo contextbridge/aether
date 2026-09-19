@@ -4,7 +4,7 @@ Provides tools for creating, listing, and updating tasks organized into trees wi
 
 # Storage modes
 
-- **Session-scoped** (default via [`TasksMcp::new`]) -- Tasks are stored in a temporary directory that is automatically cleaned up when the server is dropped.
+- **Session-scoped** (default via [`TasksMcp::new`]) -- Tasks are stored in a temporary directory that is automatically cleaned up after the server is dropped and outstanding operations finish.
 - **Persistent** (via [`TasksMcp::new_persistent`] or `--dir` CLI flag) -- Tasks are stored in a specified directory and survive across sessions.
 
 # Construction

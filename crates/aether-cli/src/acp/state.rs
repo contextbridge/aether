@@ -13,25 +13,27 @@ use agent_client_protocol::schema::v2::{
     Implementation, InitializeRequest, InitializeResponse, ListSessionsRequest, ListSessionsResponse, LoginAuthRequest,
     LoginAuthResponse, LogoutAuthRequest, LogoutAuthResponse, McpCapabilities, NewSessionRequest, NewSessionResponse,
     PromptAudioCapabilities, PromptCapabilities, PromptEmbeddedContextCapabilities, PromptImageCapabilities,
-    PromptRequest, PromptResponse, ResumeSessionRequest, ResumeSessionResponse, SetSessionConfigOptionRequest,
-    SetSessionConfigOptionResponse,
+    PromptRequest, PromptResponse, ResumeSessionRequest, ResumeSessionResponse, SessionId,
+    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
 };
 use agent_client_protocol::util::internal_error;
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Error, Responder};
 use llm::catalog::{LlmModel, ModelSpec};
 use llm::{ContentBlock, ProviderConnectionOverrides};
 use mcp_utils::client::{client_capabilities, client_capabilities_for};
+use rmcp::model::ClientCapabilities;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::{Mutex, oneshot, watch};
+use std::sync::{Arc, OnceLock};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use super::protocol::content::map_acp_to_content_blocks;
-use super::session::actor::SessionCommand;
+use super::server::DetachedArgs;
+use super::session::actor::{ClientConnection, SessionCommand};
 #[cfg(any(test, feature = "testing"))]
 use super::session::actor::{SessionActor, SessionActorInit};
 use super::session::config_setting::ConfigSetting;
@@ -59,7 +61,7 @@ pub(crate) struct AcpState {
     oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
     factory: SessionFactory,
     telemetry: Option<Arc<TelemetryRuntime>>,
-    mcp_capabilities: Mutex<rmcp::model::ClientCapabilities>,
+    mcp_capabilities: OnceLock<ClientCapabilities>,
     cwd: PathBuf,
 }
 
@@ -73,6 +75,13 @@ pub(crate) struct AcpStateConfig {
     pub(crate) telemetry: Option<Arc<TelemetryRuntime>>,
     pub(crate) runtime_factory: Option<Arc<dyn super::session::runtime::RuntimeFactory>>,
     pub(crate) cwd: PathBuf,
+    pub(crate) detached: DetachedArgs,
+}
+
+struct SpawnedSession {
+    session_id: SessionId,
+    config_options: Vec<acp::SessionConfigOption>,
+    commands: mpsc::Sender<SessionCommand>,
 }
 
 #[derive(Default)]
@@ -165,6 +174,7 @@ impl AcpState {
             config.initial_selection,
             config.telemetry.as_ref().map(|runtime| runtime.observer_factory()),
             config.runtime_factory,
+            config.detached,
         );
         Self {
             client_slot: ClientSlot::default(),
@@ -176,14 +186,14 @@ impl AcpState {
             oauth_credential_store: config.oauth_credential_store,
             factory,
             telemetry: config.telemetry,
-            mcp_capabilities: Mutex::new(client_capabilities()),
+            mcp_capabilities: OnceLock::new(),
             cwd: config.cwd,
         }
     }
 
     pub(crate) async fn initialize(&self, args: InitializeRequest) -> Result<InitializeResponse, Error> {
         info!("Received initialize request: {:?}", args);
-        *self.mcp_capabilities.lock().await = mcp_client_capabilities(&args.capabilities);
+        let _ = self.mcp_capabilities.set(mcp_client_capabilities(&args.capabilities));
         let auth_methods = build_auth_methods(self.oauth_credential_store.as_ref());
         let available = self.factory.available_models().await.to_vec();
         let prompt_capabilities = prompt_capabilities_for_models(&available);
@@ -231,13 +241,42 @@ impl AcpState {
         req: NewSessionRequest,
         cx: &ConnectionTo<Client>,
     ) -> Result<NewSessionResponse, Error> {
-        let mcp_capabilities = self.mcp_capabilities.lock().await.clone();
-        let prepared = self.factory.prepare_new(req, cx, mcp_capabilities).await?;
+        let created = self.spawn_session(req, Some(cx)).await?;
+        Ok(NewSessionResponse::new(created.session_id).config_options(created.config_options))
+    }
+
+    pub(super) async fn start_session(&self, prompt: String) -> Result<SessionId, Error> {
+        let request = NewSessionRequest::new(acp::AbsolutePath::new(self.cwd.clone()));
+        let created = self.spawn_session(request, None).await?;
+        let content = vec![ContentBlock::text(prompt)];
+        created
+            .commands
+            .send(SessionCommand::Prompt {
+                content: content.clone(),
+                display_content: content,
+                client_connection: ClientConnection::Detached,
+            })
+            .await
+            .map_err(|_| Error::internal_error())?;
+        Ok(created.session_id)
+    }
+
+    async fn spawn_session(
+        &self,
+        request: NewSessionRequest,
+        connection: Option<&ConnectionTo<Client>>,
+    ) -> Result<SpawnedSession, Error> {
+        let mcp_capabilities = self.mcp_capabilities();
+        let prepared = self.factory.prepare_new(request, connection, mcp_capabilities).await?;
         self.registry.stop().await;
         let created = prepared.start().await?;
-        let response = NewSessionResponse::new(created.session_id.clone()).config_options(created.config_options);
+        let spawned = SpawnedSession {
+            session_id: created.session_id.clone(),
+            config_options: created.config_options,
+            commands: created.handle.command_sender(),
+        };
         self.registry.register(&created.session_id, created.handle).await;
-        Ok(response)
+        Ok(spawned)
     }
 
     pub(crate) async fn logout(
@@ -281,7 +320,7 @@ impl AcpState {
             return Ok(ResumeSessionResponse::new().config_options(options));
         }
 
-        let mcp_capabilities = self.mcp_capabilities.lock().await.clone();
+        let mcp_capabilities = self.mcp_capabilities();
         let prepared = self.factory.prepare_resume(req, cx, mcp_capabilities, replay).await?;
         self.registry.stop().await;
         let created = prepared.start().await?;
@@ -402,11 +441,17 @@ impl AcpState {
             return;
         };
 
-        if let Err(SessionCommand::Prompt { responder, .. }) =
-            sender.send(SessionCommand::Prompt { content, display_content, responder }).await.map_err(|e| e.0)
+        if let Err(SessionCommand::Prompt { client_connection: responder, .. }) = sender
+            .send(SessionCommand::Prompt {
+                content,
+                display_content,
+                client_connection: ClientConnection::attached(responder),
+            })
+            .await
+            .map_err(|e| e.0)
         {
             error!("Session actor channel closed for prompt: {session_id}");
-            respond_err(responder, Error::internal_error());
+            responder.respond_with_error(Error::internal_error());
         }
     }
 
@@ -547,6 +592,10 @@ impl AcpState {
         let auth_methods = build_auth_methods(self.oauth_credential_store.as_ref());
         notify(cx, AuthMethodsUpdatedParams { auth_methods });
         self.broadcast_config_options().await;
+    }
+
+    fn mcp_capabilities(&self) -> ClientCapabilities {
+        self.mcp_capabilities.get().cloned().unwrap_or_else(client_capabilities)
     }
 
     async fn broadcast_config_options(&self) {
@@ -702,6 +751,7 @@ mod tests {
             telemetry: None,
             runtime_factory: None,
             cwd: PathBuf::from("/tmp"),
+            detached: DetachedArgs::default(),
         })
     }
 

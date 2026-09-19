@@ -1,5 +1,7 @@
 use super::state::{AcpState, ClientGuard};
 use super::{AcpArgs, AcpRunError, create_acp_state};
+use crate::output::OutputFormat;
+use crate::prompt::prompt_or_stdin;
 use acp_utils::websocket::WebSocketTransport;
 use std::fs::canonicalize;
 use std::future::Future;
@@ -29,8 +31,30 @@ pub struct ServerArgs {
     #[arg(short = 'C', long, default_value = ".")]
     pub cwd: PathBuf,
 
+    /// Initial prompt to run.
+    #[arg(long)]
+    pub prompt: Option<String>,
+
+    #[command(flatten)]
+    pub detached: DetachedArgs,
+
     #[command(flatten)]
     pub acp: AcpArgs,
+}
+
+#[derive(clap::Args, Clone, Debug, Default)]
+pub struct DetachedArgs {
+    /// Output format for when no clients are attached.
+    #[arg(long)]
+    pub output: Option<OutputFormat>,
+
+    /// How many seconds to wait after the agent becomes idle before running the --on-idle command.
+    #[arg(long, requires = "on_idle")]
+    pub idle_after: Option<u64>,
+
+    /// Shell command to spawn when the agent becomes idle.
+    #[arg(long, requires = "idle_after")]
+    pub on_idle: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -45,6 +69,10 @@ pub enum ServerRunError {
     Accept(#[source] io::Error),
     #[error("Failed to listen for shutdown signals: {0}")]
     Signal(#[source] io::Error),
+    #[error("Failed to read the initial prompt from stdin: {0}")]
+    PromptStdin(#[source] io::Error),
+    #[error("Failed to start the initial session: {0}")]
+    InitialSession(#[source] agent_client_protocol::Error),
 }
 
 pub async fn run_server(args: ServerArgs) -> Result<(), ServerRunError> {
@@ -58,9 +86,19 @@ pub async fn run_server(args: ServerArgs) -> Result<(), ServerRunError> {
         })
         .map_err(|source| ServerRunError::Workspace { path: args.cwd, source })?;
 
-    let state = Arc::new(create_acp_state(args.acp, &cwd)?);
+    let prompt = prompt_or_stdin(args.prompt).map_err(ServerRunError::PromptStdin)?;
+    let state = Arc::new(create_acp_state(args.acp, &cwd, args.detached)?);
+    let server = AcpServer::bind(args.listen, state.clone()).await?;
     info!(address = %args.listen, cwd = %cwd.display(), "Starting Aether ACP WebSocket server");
-    let result = serve(state.clone(), args.listen).await;
+
+    let result = async {
+        if let Some(prompt) = prompt {
+            let session_id = state.start_session(prompt).await.map_err(ServerRunError::InitialSession)?;
+            info!(session_id = %session_id.0, "Started initial server session");
+        }
+        server.run_until(async { shutdown_signal().await.map_err(ServerRunError::Signal) }).await
+    }
+    .await;
     state.shutdown_all().await;
     result
 }
@@ -171,13 +209,6 @@ async fn serve_connection(socket: TcpStream, peer: SocketAddr, guard: Option<Cli
     {
         warn!(%peer, %error, "ACP connection failed");
     }
-}
-
-async fn serve(state: Arc<AcpState>, listen: SocketAddr) -> Result<(), ServerRunError> {
-    AcpServer::bind(listen, state)
-        .await?
-        .run_until(async { shutdown_signal().await.map_err(ServerRunError::Signal) })
-        .await
 }
 
 async fn shutdown_signal() -> io::Result<()> {

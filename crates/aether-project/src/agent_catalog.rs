@@ -281,9 +281,10 @@ fn parse_model(agent: &str, model: &str) -> Result<ModelSpec, SettingsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{fake_spec, project};
+    use crate::testing::{DEFAULT_MODEL, agent_json_with, fake_spec, project, settings_agent};
     use aether_core::agent_spec::AgentSpecExposure;
     use llm::ModelSettings;
+    use serde_json::json;
 
     fn create_test_catalog(project_root: PathBuf) -> AgentCatalog {
         let planner = fake_spec("planner", AgentSpecExposure::both());
@@ -351,7 +352,7 @@ mod tests {
         let catalog =
             AgentCatalog::empty(dir.root().to_path_buf()).with_provider_connections(overrides("https://runtime.test"));
 
-        let spec = catalog.default_spec(&"anthropic:claude-sonnet-4-5".parse().unwrap(), None);
+        let spec = catalog.default_spec(&DEFAULT_MODEL.parse().unwrap(), None);
 
         assert_eq!(spec.name, "__default__");
         assert_eq!(base_url(&spec).as_deref(), Some("https://runtime.test"));
@@ -362,19 +363,15 @@ mod tests {
         let dir = project().file("BASE.md", "Base instructions");
         let settings = AetherSettings {
             agents: vec![AgentConfig {
-                name: "planner".to_string(),
-                description: "Planner agent".to_string(),
-                model: "anthropic:claude-sonnet-4-5".to_string(),
-                user_invocable: true,
                 prompts: vec![crate::PromptSource::file("BASE.md")],
-                ..AgentConfig::default()
+                ..settings_agent("planner", "Planner agent")
             }],
             providers: overrides("https://settings.test"),
             ..AetherSettings::default()
         };
         let catalog = AgentCatalog::from_settings_or_empty(dir.root(), settings).unwrap();
 
-        let spec = catalog.default_spec(&"anthropic:claude-sonnet-4-5".parse().unwrap(), None);
+        let spec = catalog.default_spec(&DEFAULT_MODEL.parse().unwrap(), None);
 
         assert_eq!(base_url(&spec).as_deref(), Some("https://settings.test"));
     }
@@ -385,7 +382,7 @@ mod tests {
         let settings = AetherSettings { providers: overrides("https://settings.test"), ..AetherSettings::default() };
         let catalog = AgentCatalog::from_settings_or_empty(dir.root(), settings).unwrap();
 
-        let spec = catalog.default_spec(&"anthropic:claude-sonnet-4-5".parse().unwrap(), None);
+        let spec = catalog.default_spec(&DEFAULT_MODEL.parse().unwrap(), None);
 
         assert_eq!(base_url(&spec).as_deref(), Some("https://settings.test"));
     }
@@ -398,7 +395,7 @@ mod tests {
             .unwrap()
             .with_provider_connections(overrides("https://runtime.test"));
 
-        let spec = catalog.default_spec(&"anthropic:claude-sonnet-4-5".parse().unwrap(), None);
+        let spec = catalog.default_spec(&DEFAULT_MODEL.parse().unwrap(), None);
 
         assert_eq!(base_url(&spec).as_deref(), Some("https://runtime.test"));
     }
@@ -408,7 +405,7 @@ mod tests {
         let dir = project();
         let catalog = AgentCatalog::empty(dir.root().to_path_buf());
 
-        let spec = catalog.default_spec(&"anthropic:claude-sonnet-4-5".parse().unwrap(), None);
+        let spec = catalog.default_spec(&DEFAULT_MODEL.parse().unwrap(), None);
 
         assert_eq!(base_url(&spec), None);
     }
@@ -489,13 +486,10 @@ mod tests {
         let dir = project().file("BASE.md", "Base instructions");
         let config = AetherSettings {
             agents: vec![AgentConfig {
-                name: "planner".to_string(),
-                description: "Planner agent".to_string(),
                 model: "anthropic:claude-opus-4-6".to_string(),
                 reasoning_effort: Some(llm::ReasoningEffort::Xhigh),
-                user_invocable: true,
                 prompts: vec![crate::PromptSource::file("BASE.md")],
-                ..AgentConfig::default()
+                ..settings_agent("planner", "Planner agent")
             }],
             ..AetherSettings::default()
         };
@@ -511,13 +505,9 @@ mod tests {
 
         let config = AetherSettings {
             agents: vec![AgentConfig {
-                name: "planner".to_string(),
-                description: "Planner agent".to_string(),
-                model: "anthropic:claude-sonnet-4-5".to_string(),
                 context_window: Some(200_000),
-                user_invocable: true,
                 prompts: vec![crate::PromptSource::file("BASE.md")],
-                ..AgentConfig::default()
+                ..settings_agent("planner", "Planner agent")
             }],
             ..AetherSettings::default()
         };
@@ -532,18 +522,18 @@ mod tests {
     fn agent_model_settings_resolve_from_config_json() {
         let dir = project().file("BASE.md", "Base instructions");
 
-        let json = r#"{
-            "agents": [{
-                "name": "judge",
-                "description": "Judge agent",
-                "model": "anthropic:claude-sonnet-4-5",
-                "userInvocable": true,
-                "prompts": ["BASE.md"],
-                "modelSettings": { "temperature": 0, "topP": 0.9, "maxTokens": 1024 }
-            }]
-        }"#;
+        let json = json!({
+            "agents": [agent_json_with(
+                "judge",
+                "Judge agent",
+                json!({
+                    "prompts": ["BASE.md"],
+                    "modelSettings": { "temperature": 0, "topP": 0.9, "maxTokens": 1024 }
+                }),
+            )]
+        });
 
-        let config: AetherSettings = serde_json::from_str(json).unwrap();
+        let config: AetherSettings = serde_json::from_value(json).unwrap();
         let catalog = AgentCatalog::from_settings(dir.root(), config).unwrap();
         let spec = catalog.resolve("judge").unwrap();
 
@@ -556,14 +546,7 @@ mod tests {
     #[test]
     fn agent_context_window_rejects_zero() {
         let config = AetherSettings {
-            agents: vec![AgentConfig {
-                name: "planner".to_string(),
-                description: "Planner agent".to_string(),
-                model: "anthropic:claude-sonnet-4-5".to_string(),
-                context_window: Some(0),
-                user_invocable: true,
-                ..AgentConfig::default()
-            }],
+            agents: vec![AgentConfig { context_window: Some(0), ..settings_agent("planner", "Planner agent") }],
             ..AetherSettings::default()
         };
 
@@ -581,13 +564,7 @@ mod tests {
 
         let config = AetherSettings {
             prompts: vec![crate::PromptSource::file("BASE.md")],
-            agents: vec![AgentConfig {
-                name: "planner".to_string(),
-                description: "Planner agent".to_string(),
-                model: "anthropic:claude-sonnet-4-5".to_string(),
-                user_invocable: true,
-                ..AgentConfig::default()
-            }],
+            agents: vec![settings_agent("planner", "Planner agent")],
             ..AetherSettings::default()
         };
 
@@ -604,12 +581,8 @@ mod tests {
         let config = AetherSettings {
             prompts: vec![crate::PromptSource::file("BASE.md")],
             agents: vec![AgentConfig {
-                name: "planner".to_string(),
-                description: "Planner agent".to_string(),
-                model: "anthropic:claude-sonnet-4-5".to_string(),
-                user_invocable: true,
                 prompts: vec![crate::PromptSource::file("AGENT.md")],
-                ..AgentConfig::default()
+                ..settings_agent("planner", "Planner agent")
             }],
             ..AetherSettings::default()
         };
@@ -628,13 +601,7 @@ mod tests {
         let config = AetherSettings {
             prompts: vec![crate::PromptSource::file("BASE.md")],
             mcps: vec![McpSourceSpec::file("base-mcp.json")],
-            agents: vec![AgentConfig {
-                name: "planner".to_string(),
-                description: "Planner agent".to_string(),
-                model: "anthropic:claude-sonnet-4-5".to_string(),
-                user_invocable: true,
-                ..AgentConfig::default()
-            }],
+            agents: vec![settings_agent("planner", "Planner agent")],
             ..AetherSettings::default()
         };
 
@@ -653,12 +620,8 @@ mod tests {
             prompts: vec![crate::PromptSource::file("BASE.md")],
             mcps: vec![McpSourceSpec::file("base-mcp.json")],
             agents: vec![AgentConfig {
-                name: "planner".to_string(),
-                description: "Planner agent".to_string(),
-                model: "anthropic:claude-sonnet-4-5".to_string(),
-                user_invocable: true,
                 mcps: vec![McpSourceSpec::file("agent-mcp.json")],
-                ..AgentConfig::default()
+                ..settings_agent("planner", "Planner agent")
             }],
             ..AetherSettings::default()
         };
@@ -671,16 +634,8 @@ mod tests {
 
     #[test]
     fn missing_top_level_and_agent_prompts_still_errors() {
-        let config = AetherSettings {
-            agents: vec![AgentConfig {
-                name: "planner".to_string(),
-                description: "Planner agent".to_string(),
-                model: "anthropic:claude-sonnet-4-5".to_string(),
-                user_invocable: true,
-                ..AgentConfig::default()
-            }],
-            ..AetherSettings::default()
-        };
+        let config =
+            AetherSettings { agents: vec![settings_agent("planner", "Planner agent")], ..AetherSettings::default() };
 
         let err = AgentCatalog::from_settings(Path::new("/tmp"), config).unwrap_err();
 
