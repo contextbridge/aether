@@ -6,32 +6,24 @@ use std::path::Path;
 #[derive(Debug)]
 pub struct PromptRuleMatcher {
     catalog: PromptCatalog,
+    activated: HashSet<String>,
 }
 
 impl PromptRuleMatcher {
     pub fn new(catalog: PromptCatalog) -> Self {
-        Self { catalog }
+        Self { catalog, activated: HashSet::new() }
     }
 
     /// Returns newly-matched rules for `file_path` and marks them as activated.
     /// Subsequent calls for the same rules return an empty `Vec`.
-    pub fn get_matched_rules(
-        &self,
-        root_dir: &Path,
-        file_path: &str,
-        activated: &mut HashSet<String>,
-    ) -> Vec<PromptFile> {
+    pub fn get_matched_rules(&mut self, root_dir: &Path, file_path: &str) -> Vec<PromptFile> {
         let relative = make_relative(root_dir, file_path);
         let relative_path = relative.as_deref().unwrap_or(file_path);
         let matches = self.catalog.matching_rules(relative_path);
 
-        if matches.is_empty() {
-            return Vec::new();
-        }
-
         let mut result = Vec::new();
         for spec in matches {
-            if activated.insert(spec.name.clone()) {
+            if self.activated.insert(spec.name.clone()) {
                 tracing::info!("Activating read rule '{}' triggered by read of '{}'", spec.name, file_path);
                 result.push(spec.clone());
             }
@@ -39,18 +31,22 @@ impl PromptRuleMatcher {
 
         result
     }
-}
 
-/// Make an absolute file path relative to the root directory.
-fn make_relative(root_dir: &Path, file_path: &str) -> Option<String> {
-    let path = Path::new(file_path);
-    path.strip_prefix(root_dir).ok().map(|rel| rel.to_string_lossy().to_string())
+    /// Allow previously activated rules to fire again after a context reset.
+    pub fn clear(&mut self) {
+        self.activated.clear();
+    }
 }
 
 impl Default for PromptRuleMatcher {
     fn default() -> Self {
         Self::new(PromptCatalog::empty())
     }
+}
+
+fn make_relative(root_dir: &Path, file_path: &str) -> Option<String> {
+    let path = Path::new(file_path);
+    path.strip_prefix(root_dir).ok().map(|rel| rel.to_string_lossy().to_string())
 }
 
 #[cfg(test)]
@@ -75,15 +71,14 @@ mod tests {
         .unwrap();
 
         let catalog = PromptCatalog::from_dir(skills_dir).unwrap();
-        let state = PromptRuleMatcher::new(catalog);
+        let mut state = PromptRuleMatcher::new(catalog);
         let root_dir = Path::new("/project");
-        let mut activated = HashSet::new();
 
-        let matched = state.get_matched_rules(root_dir, "/project/src/main.rs", &mut activated);
+        let matched = state.get_matched_rules(root_dir, "/project/src/main.rs");
         assert_eq!(matched.len(), 1);
         assert_eq!(matched[0].body, "Rust best practices.");
 
-        let matched2 = state.get_matched_rules(root_dir, "/project/src/lib.rs", &mut activated);
+        let matched2 = state.get_matched_rules(root_dir, "/project/src/lib.rs");
         assert!(matched2.is_empty());
     }
 
@@ -104,11 +99,10 @@ mod tests {
         .unwrap();
 
         let catalog = PromptCatalog::from_dir(skills_dir).unwrap();
-        let state = PromptRuleMatcher::new(catalog);
+        let mut state = PromptRuleMatcher::new(catalog);
         let root_dir = Path::new("/project");
-        let mut activated = HashSet::new();
 
-        let matched = state.get_matched_rules(root_dir, "/project/README.md", &mut activated);
+        let matched = state.get_matched_rules(root_dir, "/project/README.md");
         assert!(matched.is_empty());
     }
 
@@ -129,16 +123,15 @@ mod tests {
         .unwrap();
 
         let catalog = PromptCatalog::from_dir(skills_dir).unwrap();
-        let state = PromptRuleMatcher::new(catalog);
+        let mut state = PromptRuleMatcher::new(catalog);
         let root_dir = Path::new("/project");
-        let mut activated = HashSet::new();
 
-        let matched = state.get_matched_rules(root_dir, "/project/src/main.rs", &mut activated);
+        let matched = state.get_matched_rules(root_dir, "/project/src/main.rs");
         assert_eq!(matched.len(), 1);
 
-        activated.clear();
+        state.clear();
 
-        let matched2 = state.get_matched_rules(root_dir, "/project/src/main.rs", &mut activated);
+        let matched2 = state.get_matched_rules(root_dir, "/project/src/main.rs");
         assert_eq!(matched2.len(), 1);
     }
 
@@ -167,10 +160,9 @@ mod tests {
         .unwrap();
 
         let catalog = PromptCatalog::from_dir(skills_dir).unwrap();
-        let state = PromptRuleMatcher::new(catalog);
+        let mut state = PromptRuleMatcher::new(catalog);
         let root_dir = Path::new("/project");
-        let mut activated = HashSet::new();
-        let matched = state.get_matched_rules(root_dir, "/project/src/main.rs", &mut activated);
+        let matched = state.get_matched_rules(root_dir, "/project/src/main.rs");
         assert_eq!(matched.len(), 1);
         assert!(matched[0].body.contains("Follow Rust best practices"));
     }

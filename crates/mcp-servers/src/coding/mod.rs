@@ -118,26 +118,10 @@ pub struct CodingMcp<T: CodingTools = DefaultCodingTools> {
     web_searcher: Option<WebSearcher<BraveSearchClient>>,
     /// Root directory used for path resolution and tool instructions.
     root_dir: PathBuf,
-    /// Read rules discovered from skill files (activated on file reads)
-    read_rule_matcher: prompt_rule_matcher::PromptRuleMatcher,
     /// Configured prompt directories used to build read rules.
     configured_rules_dirs: Vec<PathBuf>,
     /// Permission mode controlling user approval for tool calls
     permission_mode: PermissionMode,
-}
-
-#[derive(Default)]
-struct ReadState {
-    files_read: HashSet<String>,
-    activated_rules: HashSet<String>,
-}
-
-fn build_rule_catalog(configured_rules_dirs: &[PathBuf]) -> aether_project::PromptCatalog {
-    if configured_rules_dirs.is_empty() {
-        return aether_project::PromptCatalog::empty();
-    }
-
-    PromptCatalog::from_dirs(configured_rules_dirs)
 }
 
 #[allow(clippy::unused_async_trait_impl)]
@@ -284,7 +268,6 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
             web_fetcher: WebFetcher::new(),
             web_searcher: WebSearcher::try_new().ok(),
             root_dir: crate::workspace_paths::current_dir(),
-            read_rule_matcher: prompt_rule_matcher::PromptRuleMatcher::default(),
             configured_rules_dirs: Vec::new(),
             permission_mode: PermissionMode::AlwaysAllow,
         }
@@ -309,7 +292,7 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
     pub fn with_rules_dirs(mut self, rules_dirs: Vec<PathBuf>) -> Self {
         self.configured_rules_dirs = rules_dirs;
         let catalog = build_rule_catalog(&self.configured_rules_dirs);
-        self.read_rule_matcher = PromptRuleMatcher::new(catalog);
+        self.read_state.get_mut().expect("read state lock poisoned").rule_matcher = PromptRuleMatcher::new(catalog);
         self
     }
 
@@ -467,7 +450,7 @@ When using tools that take file paths, always use absolute paths from:
         let matched = {
             let mut state = self.read_state.lock().expect("read state lock poisoned");
             state.files_read.insert(file_path.clone());
-            self.read_rule_matcher.get_matched_rules(&self.root_dir, &file_path, &mut state.activated_rules)
+            state.rule_matcher.get_matched_rules(&self.root_dir, &file_path)
         };
 
         let total_lines = result.total_lines;
@@ -867,6 +850,20 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
         self.ensure_read_before_edit(&args.file_path)?;
         self.tools.edit_file(args).await.map(Json)
     }
+}
+
+#[derive(Default)]
+struct ReadState {
+    files_read: HashSet<String>,
+    rule_matcher: PromptRuleMatcher,
+}
+
+fn build_rule_catalog(configured_rules_dirs: &[PathBuf]) -> PromptCatalog {
+    if configured_rules_dirs.is_empty() {
+        return PromptCatalog::empty();
+    }
+
+    PromptCatalog::from_dirs(configured_rules_dirs)
 }
 
 #[cfg(test)]

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::read_to_string;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, mpsc};
 use tokio::task::spawn_blocking;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -155,7 +155,7 @@ fn search_directory(
     context_before: usize,
     context_after: usize,
 ) -> Vec<AstGrepMatch> {
-    let matches = Arc::new(Mutex::new(Vec::new()));
+    let (result_tx, result_rx) = mpsc::channel();
     let pattern = Arc::new(pattern);
     let path_matcher = Arc::new(path_matcher);
     let constraints = Arc::new(constraints.clone());
@@ -163,7 +163,7 @@ fn search_directory(
     walker.follow_links(false);
 
     walker.build_parallel().run(|| {
-        let matches = matches.clone();
+        let result_tx = result_tx.clone();
         let pattern = pattern.clone();
         let path_matcher = path_matcher.clone();
         let constraints = constraints.clone();
@@ -187,17 +187,16 @@ fn search_directory(
                 return WalkState::Continue;
             };
 
-            if !file_matches.is_empty()
-                && let Ok(mut matches) = matches.lock()
-            {
-                matches.extend(file_matches);
+            if !file_matches.is_empty() {
+                let _ = result_tx.send(file_matches);
             }
 
             WalkState::Continue
         })
     });
 
-    matches.lock().map(|matches| matches.clone()).unwrap_or_default()
+    drop(result_tx);
+    result_rx.into_iter().flatten().collect()
 }
 
 fn file_matches_filters(
