@@ -46,7 +46,7 @@ impl<R: ServiceRole> Transport<R> for InMemoryTransport<R> {
     }
 
     fn receive(&mut self) -> impl Future<Output = Option<RxJsonRpcMessage<R>>> + Send {
-        async move { self.rx.recv().await }
+        self.rx.recv()
     }
 
     fn close(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
