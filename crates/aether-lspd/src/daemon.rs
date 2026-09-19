@@ -175,7 +175,7 @@ fn all_roots_deleted(roots: &[PathBuf]) -> bool {
 async fn check_workspace_liveness(workspace_registry: &WorkspaceRegistry, poll_interval: Duration) {
     loop {
         sleep(poll_interval).await;
-        let roots = workspace_registry.workspace_roots().await;
+        let roots = workspace_registry.workspace_roots();
         if all_roots_deleted(&roots) {
             return;
         }

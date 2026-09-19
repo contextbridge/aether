@@ -78,8 +78,8 @@ impl WorkspaceSession {
         self.transport.request_raw(method, params).await
     }
 
-    pub(crate) async fn queue_diagnostic_refresh(&self, uri: Uri) {
-        self.refresh.enqueue(vec![uri]).await;
+    pub(crate) fn queue_diagnostic_refresh(&self, uri: Uri) {
+        self.refresh.enqueue(vec![uri]);
     }
 
     pub(crate) async fn ensure_document_open(&self, uri: &Uri) -> Option<u64> {
@@ -92,11 +92,11 @@ impl WorkspaceSession {
 
     pub(crate) async fn get_diagnostics(&self, uri: Option<&Uri>) -> Vec<PublishDiagnosticsParams> {
         self.sync_documents_for_diagnostics(uri).await;
-        self.diagnostics.get(uri).await
+        self.diagnostics.get(uri)
     }
 
     pub(crate) async fn shutdown(&self) {
-        self.refresh.shutdown().await;
+        self.refresh.shutdown();
         self.transport.shutdown().await;
     }
 
@@ -146,12 +146,12 @@ async fn sync_document(
         AcquireAction::Unchanged => return None,
         AcquireAction::MissingOnDisk => {
             documents.forget_uri(uri);
-            diagnostics.forget_uri(uri).await;
+            diagnostics.forget_uri(uri);
             return None;
         }
     };
 
-    let version_before = diagnostics.current_uri_version(uri).await;
+    let version_before = diagnostics.current_uri_version(uri);
     for notification in notifications {
         transport.send_notification(notification).await;
     }
@@ -170,7 +170,7 @@ async fn release_document(
         }
         ReleaseAction::CloseAndRefresh => {
             transport.send_notification(close_notification(uri)).await;
-            refresh.enqueue(vec![uri.clone()]).await;
+            refresh.enqueue(vec![uri.clone()]);
         }
         ReleaseAction::Unchanged => {}
     }
@@ -237,8 +237,8 @@ async fn bootstrap_workspace_refresh(
         .unwrap_or_default()
     };
 
-    refresh.enqueue(uris).await;
-    refresh.complete_bootstrap().await;
+    refresh.enqueue(uris);
+    refresh.complete_bootstrap();
 }
 
 async fn run_session_events(
@@ -253,7 +253,7 @@ async fn run_session_events(
     while let Some(event) = event_rx.recv().await {
         match event {
             TransportEvent::PublishedDiagnostics(params) => {
-                diagnostics.publish(params).await;
+                diagnostics.publish(params);
             }
             TransportEvent::FileWatcherBatch(batch) => {
                 let filtered = documents.filter_watcher_changes(batch.forwarded_changes);
@@ -264,7 +264,7 @@ async fn run_session_events(
                     supported_extensions.as_ref(),
                 );
                 refresh_uris.extend(discovered);
-                refresh.enqueue(refresh_uris).await;
+                refresh.enqueue(refresh_uris);
 
                 if filtered.is_empty() {
                     continue;
@@ -285,7 +285,7 @@ async fn run_session_events(
     }
 
     alive.store(false, Ordering::SeqCst);
-    refresh.shutdown().await;
+    refresh.shutdown();
 }
 
 fn filter_supported_uris(uris: Vec<Uri>, supported_extensions: &HashSet<String>) -> Vec<Uri> {
