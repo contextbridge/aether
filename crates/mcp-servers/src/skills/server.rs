@@ -17,7 +17,6 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::{fs, path::Path};
-use tokio::sync::RwLock;
 use utils::shell_expander::ShellExpander;
 use utils::substitution::substitute_parameters;
 
@@ -57,7 +56,7 @@ impl SkillsMcpArgs {
 #[doc = include_str!("../docs/skills_mcp.md")]
 #[derive(Clone)]
 pub struct SkillsMcp {
-    catalog: Arc<RwLock<PromptCatalog>>,
+    catalog: Arc<PromptCatalog>,
     tool_router: ToolRouter<Self>,
     root_dir: PathBuf,
 }
@@ -91,7 +90,7 @@ impl SkillsMcp {
         let catalog = PromptCatalog::from_dirs(prompt_dirs);
 
         Self {
-            catalog: Arc::new(RwLock::new(catalog)),
+            catalog: Arc::new(catalog),
             tool_router: Self::tool_router(),
             root_dir: crate::workspace_paths::current_dir(),
         }
@@ -121,11 +120,11 @@ impl SkillsMcp {
         &self,
         request: &SkillRequest,
     ) -> Result<(PromptFile, PathBuf, String), SkillFileError> {
-        let prompt = {
-            let catalog = self.catalog.read().await;
-            catalog.find(&request.name).cloned()
-        }
-        .ok_or_else(|| SkillFileError::SkillNotFound(request.name.clone()))?;
+        let prompt = self
+            .catalog
+            .find(&request.name)
+            .cloned()
+            .ok_or_else(|| SkillFileError::SkillNotFound(request.name.clone()))?;
 
         if !prompt.agent_invocable {
             return Err(SkillFileError::NotAgentInvocable(request.name.clone()));
@@ -270,8 +269,8 @@ impl ServerHandler for SkillsMcp {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, McpError> {
-        let catalog = self.catalog.read().await;
-        let prompts = catalog
+        let prompts = self
+            .catalog
             .slash_commands()
             .map(|s| {
                 let arguments = s.argument_hint.as_ref().map(|hint| {
@@ -290,8 +289,8 @@ impl ServerHandler for SkillsMcp {
         request: GetPromptRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<GetPromptResponse, McpError> {
-        let catalog = self.catalog.read().await;
-        let spec = catalog
+        let spec = self
+            .catalog
             .slash_commands()
             .find(|s| s.name == request.name.as_str())
             .ok_or_else(|| McpError::invalid_params(format!("Prompt '{}' not found", request.name), None))?;
@@ -321,8 +320,8 @@ impl SkillsMcp {
     #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn list_skills(&self, request: Parameters<ListSkillsInput>) -> Json<ListSkillsOutput> {
         let Parameters(_input) = request;
-        let catalog = self.catalog.read().await;
-        let mut skills: Vec<_> = catalog
+        let mut skills: Vec<_> = self
+            .catalog
             .skills()
             .map(|skill| SkillListItem {
                 name: skill.name.clone(),
