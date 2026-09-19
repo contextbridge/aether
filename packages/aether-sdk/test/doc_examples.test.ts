@@ -1,10 +1,15 @@
+import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const DOCS_DIR = path.resolve(import.meta.dirname, "../src/docs");
 const TEMP_EXAMPLE = path.resolve(import.meta.dirname, ".doc-example.ts");
+const TEMP_CONFIG = path.resolve(
+  import.meta.dirname,
+  ".doc-example.tsconfig.json",
+);
+const TSC = path.resolve(import.meta.dirname, "../node_modules/.bin/tsc");
 
 const docFiles = readdirSync(DOCS_DIR)
   .filter((name) => name.endsWith(".md"))
@@ -25,6 +30,7 @@ describe("documentation examples", () => {
         }
       } finally {
         rmSync(TEMP_EXAMPLE, { force: true });
+        rmSync(TEMP_CONFIG, { force: true });
       }
     },
   );
@@ -41,41 +47,14 @@ function extractTypeScriptSnippets(markdown: string): string[] {
 
 function assertTypechecks(source: string) {
   writeFileSync(TEMP_EXAMPLE, source);
-
-  const configPath = ts.findConfigFile(
-    import.meta.dirname,
-    ts.sys.fileExists,
-    "tsconfig.json",
+  writeFileSync(
+    TEMP_CONFIG,
+    JSON.stringify({
+      extends: "../tsconfig.json",
+      compilerOptions: { noEmit: true, rootDir: ".." },
+      files: [path.basename(TEMP_EXAMPLE)],
+    }),
   );
-  if (!configPath) throw new Error("tsconfig.json not found");
 
-  const config = ts.readConfigFile(configPath, ts.sys.readFile);
-  if (config.error)
-    throw new Error(
-      ts.flattenDiagnosticMessageText(config.error.messageText, "\n"),
-    );
-
-  const parsed = ts.parseJsonConfigFileContent(
-    config.config,
-    ts.sys,
-    path.dirname(configPath),
-    undefined,
-    configPath,
-  );
-  // Typecheck only: emit layout (outDir/rootDir) would reject the out-of-tree temp file.
-  const program = ts.createProgram({
-    rootNames: [TEMP_EXAMPLE],
-    options: { ...parsed.options, noEmit: true },
-  });
-  const diagnostics = ts.getPreEmitDiagnostics(program);
-
-  expect(formatDiagnostics(diagnostics)).toEqual("");
-}
-
-function formatDiagnostics(diagnostics: readonly ts.Diagnostic[]) {
-  return diagnostics
-    .map((diagnostic) =>
-      ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
-    )
-    .join("\n");
+  expect(() => execFileSync(TSC, ["--project", TEMP_CONFIG])).not.toThrow();
 }
