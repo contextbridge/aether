@@ -1,6 +1,6 @@
 [package]
 name = "aether-agent-cli"
-version = "0.9.3"
+version = "0.9.4"
 edition = "2024"
 description = "CLI and ACP server for the Aether AI coding agent"
 license = "MIT"
@@ -34,19 +34,19 @@ testing = ["acp_utils/testing"]
 [dependencies]
 aether-auth = { path = "../aether-auth", version = "0.1.15", features = ["keyring"] }
 base64 = { workspace = true }
-aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.8.2" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.8.3" }
 aether-sessions = { workspace = true }
-aether-project = { path = "../aether-project", version = "0.5.46" }
-aether-telemetry = { path = "../aether-telemetry", version = "0.3.2" }
+aether-project = { path = "../aether-project", version = "0.5.47" }
+aether-telemetry = { path = "../aether-telemetry", version = "0.3.3" }
 llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.9.2" }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.7.2" }
-mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.6.3" }
-wisp = { package = "aether-wisp", path = "../wisp", version = "0.7.2" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.7.3" }
+mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.6.4" }
+wisp = { package = "aether-wisp", path = "../wisp", version = "0.7.3" }
 ratatui = { workspace = true }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["agent", "websocket"], version = "0.5.2" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["agent", "websocket"], version = "0.5.3" }
 agent-client-protocol = { workspace = true }
 clankerdiff-core = { workspace = true }
-aether-lspd = { path = "../aether-lspd", version = "0.1.37" }
+aether-lspd = { path = "../aether-lspd", version = "0.1.38" }
 rmcp = { workspace = true, features = ["client", "elicitation", "server", "transport-streamable-http-client-reqwest"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "net", "fs", "time", "signal", "process"] }
@@ -75,4 +75,4 @@ libc = { workspace = true }
 [dev-dependencies]
 aether-agent-cli = { path = ".", features = ["testing"] }
 tokio = { workspace = true, features = ["test-util"] }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"], version = "0.5.2" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"], version = "0.5.3" }

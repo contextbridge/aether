@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.3](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.7.2...aether-mcp-utils-v0.7.3) - 2026-09-19
+
+### Other
+
+- simplify synchronization across services ([#488](https://github.com/contextbridge/aether/pull/488))
+
 ## [0.7.2](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.7.1...aether-mcp-utils-v0.7.2) - 2026-09-16
 
 ### Fixed

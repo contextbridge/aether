@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.4](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.6.3...aether-mcp-servers-v0.6.4) - 2026-09-19
+
+### Other
+
+- simplify synchronization across services ([#488](https://github.com/contextbridge/aether/pull/488))
+
 ## [0.6.3](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.6.2...aether-mcp-servers-v0.6.3) - 2026-09-19
 
 ### Other

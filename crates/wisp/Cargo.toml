@@ -1,6 +1,6 @@
 [package]
 name = "aether-wisp"
-version = "0.7.2"
+version = "0.7.3"
 edition = "2024"
 description = "A terminal UI for AI coding agents via the Agent Client Protocol (ACP)"
 license = "MIT"
@@ -56,7 +56,7 @@ clankerdiff-ratatui = { workspace = true }
 clankerdiff-git = { workspace = true }
 clankerdiff-watch = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.15" }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "agent"], version = "0.5.2" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "agent"], version = "0.5.3" }
 agent-client-protocol = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
@@ -78,6 +78,6 @@ url = { workspace = true }
 unicode-width = { workspace = true }
 
 [dev-dependencies]
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "testing"], version = "0.5.2" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "testing"], version = "0.5.3" }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
