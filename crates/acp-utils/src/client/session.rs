@@ -14,8 +14,9 @@ use agent_client_protocol::{
 };
 use std::future::Future;
 use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 #[derive(Clone)]
@@ -37,9 +38,10 @@ pub async fn connect_acp_client(
 ) -> Result<AcpClient, AcpClientError> {
     let (event_tx, event_rx) = mpsc::unbounded_channel();
     let (init_tx, init_rx) = oneshot::channel();
-    let events = ConnectionEvents(event_tx);
+    let closed = CancellationToken::new();
+    let events = ConnectionEvents { event_tx, closed: closed.clone() };
     let driver = tokio::spawn(run_client_connection(agent, init_request, init_tx, events));
-    let connection = Arc::new(ClientConnection { driver: Mutex::new(Some(driver)) });
+    let connection = Arc::new(ClientConnection { driver, closed });
     let (initialize_response, cx) = await_response(init_rx).await?;
     Ok(AcpClient { initialize_response, event_rx, handle: AcpClientHandle { cx, connection } })
 }
@@ -65,14 +67,10 @@ impl AcpClient {
 }
 
 impl AcpClientHandle {
-    /// Stop this connection and join its driver without sending session/cancel or session/close.
+    /// Stop this connection and wait for it to close without sending session/cancel or session/close.
     pub async fn disconnect(&self) {
-        let mut driver = self.connection.driver.lock().await;
-        if let Some(task) = driver.as_mut() {
-            task.abort();
-            let _ = task.await;
-        }
-        *driver = None;
+        self.connection.driver.abort();
+        self.connection.closed.cancelled().await;
     }
 
     pub fn prompt(
@@ -124,22 +122,25 @@ impl AcpClientHandle {
 }
 
 struct ClientConnection {
-    driver: Mutex<Option<JoinHandle<()>>>,
+    driver: JoinHandle<()>,
+    closed: CancellationToken,
 }
 
 impl Drop for ClientConnection {
     fn drop(&mut self) {
-        if let Some(driver) = self.driver.get_mut() {
-            driver.abort();
-        }
+        self.driver.abort();
     }
 }
 
-struct ConnectionEvents(mpsc::UnboundedSender<AcpEvent>);
+struct ConnectionEvents {
+    event_tx: mpsc::UnboundedSender<AcpEvent>,
+    closed: CancellationToken,
+}
 
 impl Drop for ConnectionEvents {
     fn drop(&mut self) {
-        let _ = self.0.send(AcpEvent::ConnectionClosed);
+        let _ = self.event_tx.send(AcpEvent::ConnectionClosed);
+        self.closed.cancel();
     }
 }
 
@@ -152,7 +153,7 @@ async fn run_client_connection(
     let connection_result = Client
         .v2()
         .name("wisp")
-        .with_handler(ClientHandlers(events.0.clone()))
+        .with_handler(ClientHandlers(events.event_tx.clone()))
         .connect_with(agent, async move |cx: V2ConnectionTo<acp::Agent>| {
             let result = cx.send_request(init_request).block_task().await.map_err(AcpClientError::Protocol);
             let _ = init_tx.send(result.map(|response| {
