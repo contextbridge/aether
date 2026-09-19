@@ -3,9 +3,8 @@ use rmcp::RoleServer;
 use rmcp::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
 use rmcp::transport::Transport;
 use std::future::Future;
-use std::sync::Arc;
 use thiserror::Error;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::mpsc;
 
 #[derive(Debug, Error)]
 pub enum InMemoryTransportError {
@@ -14,14 +13,14 @@ pub enum InMemoryTransportError {
 }
 
 /// In-memory transport for connecting `McpServer` and `McpClient` in tests
-pub struct InMemoryTransport<R: ServiceRole> {
-    tx: Arc<Mutex<mpsc::Sender<TxJsonRpcMessage<R>>>>,
-    rx: Arc<Mutex<mpsc::Receiver<RxJsonRpcMessage<R>>>>,
+pub struct InMemoryTransport<T: ServiceRole> {
+    tx: mpsc::Sender<TxJsonRpcMessage<T>>,
+    rx: mpsc::Receiver<RxJsonRpcMessage<T>>,
 }
 
-impl<R: ServiceRole> InMemoryTransport<R> {
-    fn new(tx: mpsc::Sender<TxJsonRpcMessage<R>>, rx: mpsc::Receiver<RxJsonRpcMessage<R>>) -> Self {
-        Self { tx: Arc::new(Mutex::new(tx)), rx: Arc::new(Mutex::new(rx)) }
+impl<T: ServiceRole> InMemoryTransport<T> {
+    fn new(tx: mpsc::Sender<TxJsonRpcMessage<T>>, rx: mpsc::Receiver<RxJsonRpcMessage<T>>) -> Self {
+        Self { tx, rx }
     }
 }
 
@@ -43,19 +42,11 @@ impl<R: ServiceRole> Transport<R> for InMemoryTransport<R> {
 
     fn send(&mut self, item: TxJsonRpcMessage<R>) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
         let tx = self.tx.clone();
-        async move {
-            let tx = tx.lock().await;
-            tx.send(item).await.map_err(|_| InMemoryTransportError::ChannelClosed)?;
-            Ok(())
-        }
+        async move { tx.send(item).await.map_err(|_| InMemoryTransportError::ChannelClosed) }
     }
 
     fn receive(&mut self) -> impl Future<Output = Option<RxJsonRpcMessage<R>>> + Send {
-        let rx = self.rx.clone();
-        async move {
-            let mut rx = rx.lock().await;
-            rx.recv().await
-        }
+        async move { self.rx.recv().await }
     }
 
     fn close(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
