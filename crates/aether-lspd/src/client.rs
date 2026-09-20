@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use futures::{SinkExt, StreamExt};
 use lsp_types::{
     CallHierarchyIncomingCall, CallHierarchyIncomingCallsParams, CallHierarchyItem, CallHierarchyOutgoingCall,
     CallHierarchyOutgoingCallsParams, CallHierarchyPrepareParams, DocumentSymbolParams, DocumentSymbolResponse,
@@ -25,7 +26,7 @@ use tokio::process::Command;
 use tokio::sync::{Mutex as AsyncMutex, oneshot};
 
 use crate::language_catalog::LanguageId;
-use crate::protocol::{DaemonRequest, DaemonResponse, InitializeRequest, read_frame, write_frame};
+use crate::protocol::{DaemonRequest, DaemonResponse, FrameWriter, InitializeRequest, frame_reader, frame_writer};
 use crate::socket_path::{ensure_socket_dir, log_file_path};
 
 #[doc = include_str!("docs/client_error.md")]
@@ -63,7 +64,7 @@ pub type ClientResult<T> = std::result::Result<T, ClientError>;
 
 #[doc = include_str!("docs/client.md")]
 pub struct LspClient {
-    writer: AsyncMutex<WriteHalf<UnixStream>>,
+    writer: AsyncMutex<FrameWriter<WriteHalf<UnixStream>, DaemonRequest>>,
     pending: PendingRequests,
     next_id: AtomicI64,
     reader_task: tokio::task::JoinHandle<()>,
@@ -237,7 +238,7 @@ impl LspClient {
 
     pub async fn disconnect(self) -> ClientResult<()> {
         let mut writer = self.writer.lock().await;
-        write_frame(&mut *writer, &DaemonRequest::Disconnect).await.map_err(ClientError::Io)
+        writer.send(DaemonRequest::Disconnect).await.map_err(ClientError::Io)
     }
 
     pub async fn call<P: Serialize, R: DeserializeOwned>(
@@ -263,25 +264,30 @@ impl LspClient {
 
 impl LspClient {
     async fn from_stream(stream: UnixStream, workspace_root: &Path, language: LanguageId) -> ClientResult<Self> {
-        let (mut reader, mut writer) = tokio::io::split(stream);
+        let (reader, writer) = tokio::io::split(stream);
+        let mut reader = frame_reader::<_, DaemonResponse>(reader);
+        let mut writer = frame_writer::<_, DaemonRequest>(writer);
 
         let initialize =
             DaemonRequest::Initialize(InitializeRequest { workspace_root: workspace_root.to_path_buf(), language });
 
-        write_frame(&mut writer, &initialize).await.map_err(ClientError::Io)?;
+        writer.send(initialize).await.map_err(ClientError::Io)?;
 
-        let response: Option<DaemonResponse> = read_frame(&mut reader).await.map_err(ClientError::Io)?;
-
-        match response {
-            Some(DaemonResponse::Initialized) => {}
-            Some(DaemonResponse::Error(err)) => {
-                return Err(ClientError::InitializationFailed(err.message));
-            }
-            Some(_) => {
-                return Err(ClientError::ProtocolError("Unexpected response to Initialize".into()));
-            }
+        let response = match reader.next().await {
+            Some(Ok(resp)) => resp,
+            Some(Err(err)) => return Err(ClientError::Io(err)),
             None => {
                 return Err(ClientError::ProtocolError("Connection closed during initialization".into()));
+            }
+        };
+
+        match response {
+            DaemonResponse::Initialized => {}
+            DaemonResponse::Error(err) => {
+                return Err(ClientError::InitializationFailed(err.message));
+            }
+            _ => {
+                return Err(ClientError::ProtocolError("Unexpected response to Initialize".into()));
             }
         }
 
@@ -301,7 +307,7 @@ impl LspClient {
 
         let write_result = {
             let mut writer = self.writer.lock().await;
-            write_frame(&mut *writer, &request).await
+            writer.send(request).await
         };
         if let Err(error) = write_result {
             if let Some(pending) = self.pending.lock().unwrap_or_else(PoisonError::into_inner).as_mut() {
@@ -322,11 +328,13 @@ impl Drop for LspClient {
 type PendingResult = Result<Value, ClientError>;
 type PendingRequests = Arc<Mutex<Option<HashMap<i64, oneshot::Sender<PendingResult>>>>>;
 
-async fn run_reader(mut reader: ReadHalf<UnixStream>, pending: PendingRequests) {
-    loop {
-        let response = match read_frame(&mut reader).await {
-            Ok(Some(response)) => response,
-            Ok(None) => break,
+async fn run_reader(
+    mut reader: crate::protocol::FrameReader<ReadHalf<UnixStream>, DaemonResponse>,
+    pending: PendingRequests,
+) {
+    while let Some(msg) = reader.next().await {
+        let response = match msg {
+            Ok(response) => response,
             Err(error) => {
                 tracing::debug!(%error, "Error reading daemon response");
                 break;
