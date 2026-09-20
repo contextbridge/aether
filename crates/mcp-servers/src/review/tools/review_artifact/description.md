@@ -1,24 +1,24 @@
-Use this tool to request feedback from the user. You submit markdown (or a markdown file), and the response user's line-level feedback is returned in the response.
+Use this tool to request feedback from the user on an artifact. Submit Markdown or HTML, and the user's review is returned in the response.
 
 ## Usage
 
 ```json
-{"source": {"type": "content", "content": "# Question\n\nShould we use Postgres or DynamoDB?"}, "title": "Choose a database"}
-{"source": {"type": "file", "path": "docs/aether/plans/feature.md"}}
+{"format": "markdown", "source": {"type": "content", "content": "# Question\n\nShould we use Postgres or DynamoDB?"}, "title": "Choose a database"}
+{"format": "markdown", "source": {"type": "file", "path": "docs/aether/plans/feature.md"}}
+{"format": "html", "source": {"type": "content", "content": "<main><h1>Ship faster</h1></main>"}, "title": "Landing page"}
+{"format": "html", "source": {"type": "file", "path": "site/index.html"}}
+{"format": "html", "source": {"type": "url", "url": "http://localhost:5173/settings"}, "title": "Settings page"}
 ```
 
-`source` is required and tagged by `type`:
+## Returns
 
-- `content` — include Markdown in `source.content`. No temporary file is created.
-- `file` — include an existing path in `source.path`. Relative paths resolve against the configured workspace root.
-- `title` — optional top-level display title for either source. Inline content defaults to `Review`.
-
-**Returns:** `approved` (no feedback) -- proceed, `feedback` -- address the user's feedback and call this tool again, or `cancelled`/`declined` (user didn't respond).
+`approved` — proceed. `feedback` — address the user's feedback and call this tool again. `cancelled`/`declined` — the user did not complete the review.
 
 ## Tips
 
 Call this tool when:
 
-- You write a plan file to the filesystem and want the user to give feedback on the plan.
-- You want feedback on something that materially affects the trajectory of the task at hand, e.g. there's multiple high level optinos the user should make a decision on (e.g. postgres vs mysql vs dynamoDB). 
-- If discussing code, it's often helpful to include markdown code fences and show the user high-level interfaces and/or schemas.
+- You write a plan or design document and want review before proceeding.
+- You generate an HTML artifact (landing page, email, report) and want element-level feedback.
+- You are iterating on a running web app and want the user to point at what to change.
+- A decision materially affects the task's trajectory, e.g. choosing between Postgres and `DynamoDB`.
