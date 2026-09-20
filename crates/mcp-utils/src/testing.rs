@@ -1,7 +1,6 @@
 use std::future::Future;
 
 use crate::protocol::client_lifecycle_mode;
-use crate::transport::create_in_memory_transport;
 use rmcp::{
     RoleClient, RoleServer, Service, serve_client_with_lifecycle, serve_server,
     service::{ClientInitializeError, RunningService, ServerInitializeError},
@@ -27,7 +26,7 @@ where
     U: Service<RoleClient>,
 {
     Box::pin(async move {
-        let (client_transport, server_transport) = create_in_memory_transport();
+        let (client_transport, server_transport) = tokio::io::duplex(64 * 1024);
 
         let (server_result, client_result) = tokio::join!(
             serve_server(server, server_transport),
