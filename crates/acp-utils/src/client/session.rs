@@ -1,6 +1,8 @@
 use super::error::AcpClientError;
 use super::event::AcpEvent;
-use crate::notifications::{AuthMethodsUpdatedParams, ContextClearedParams, McpNotification, SubAgentProgressParams};
+use crate::notifications::{
+    AuthMethodsUpdatedParams, ContextClearedParams, GitDiffEventPayload, McpNotification, SubAgentProgressParams,
+};
 use agent_client_protocol::schema::v2::{
     AuthMethod, CancelSessionNotification, CreateElicitationRequest, InitializeRequest, InitializeResponse,
     NewSessionRequest, NewSessionResponse, PermissionOptionId, PermissionOptionKind, PromptCapabilities, PromptRequest,
@@ -203,6 +205,8 @@ impl HandleDispatchFrom<acp::Agent> for ClientHandlers {
             .if_notification(async |params: ContextClearedParams| emit(AcpEvent::ContextCleared(params)))
             .await
             .if_notification(async |params: SubAgentProgressParams| emit(AcpEvent::SubAgentProgress(params)))
+            .await
+            .if_notification(async |params: GitDiffEventPayload| emit(AcpEvent::GitDiffEvent(params)))
             .await
             .if_notification(async |params: McpNotification| emit(AcpEvent::McpNotification(params)))
             .await
