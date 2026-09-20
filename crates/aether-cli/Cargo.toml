@@ -46,6 +46,8 @@ ratatui = { workspace = true }
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["agent", "websocket"], version = "0.5.2" }
 agent-client-protocol = { workspace = true }
 clankerdiff-core = { workspace = true }
+clankerdiff-protocol = { workspace = true }
+clankerdiff-server = { workspace = true }
 aether-lspd = { path = "../aether-lspd", version = "0.1.37" }
 rmcp = { workspace = true, features = ["client", "elicitation", "server", "transport-streamable-http-client-reqwest"] }
 thiserror = { workspace = true }
