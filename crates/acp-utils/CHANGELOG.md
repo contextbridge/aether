@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.3](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.5.2...aether-acp-utils-v0.5.3) - 2026-09-20
+
+### Other
+
+- use upstream ACP and tokio transports ([#492](https://github.com/contextbridge/aether/pull/492))
+- Move git diff backend out of wisp, into acp agent ([#489](https://github.com/contextbridge/aether/pull/489))
+- simplify synchronization across services ([#488](https://github.com/contextbridge/aether/pull/488))
+
 ## [0.5.2](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.5.1...aether-acp-utils-v0.5.2) - 2026-09-16
 
 ### Added

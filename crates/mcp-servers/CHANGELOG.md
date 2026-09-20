@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.4](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.6.3...aether-mcp-servers-v0.6.4) - 2026-09-20
+
+### Other
+
+- Extend artifact review MCP to support html artifacts with comment / annotation support ([#491](https://github.com/contextbridge/aether/pull/491))
+- use upstream ACP and tokio transports ([#492](https://github.com/contextbridge/aether/pull/492))
+- simplify synchronization across services ([#488](https://github.com/contextbridge/aether/pull/488))
+
 ## [0.6.3](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.6.2...aether-mcp-servers-v0.6.3) - 2026-09-19
 
 ### Other

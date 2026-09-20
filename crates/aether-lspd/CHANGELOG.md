@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.38](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.37...aether-lspd-v0.1.38) - 2026-09-20
+
+### Other
+
+- use upstream ACP and tokio transports ([#492](https://github.com/contextbridge/aether/pull/492))
+- simplify synchronization across services ([#488](https://github.com/contextbridge/aether/pull/488))
+
 ## [0.1.37](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.36...aether-lspd-v0.1.37) - 2026-09-16
 
 ### Other
