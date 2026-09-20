@@ -27,9 +27,10 @@ fn open_url(url: &str) -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 fn open_url(url: &str) -> Result<(), String> {
-    run("cmd", &["/C", "start", url])
+    run("cmd", &["/C", "start", "", url])
 }
 
+// Every other platform falls back to the caller's copy-URL affordance.
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn open_url(_url: &str) -> Result<(), String> {
     Err("Unsupported platform for opening URLs".to_string())
