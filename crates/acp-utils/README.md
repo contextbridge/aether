@@ -19,7 +19,7 @@ Utilities for the [Agent Client Protocol](https://agentclientprotocol.com/) (ACP
 - **`elicitation`** -- Typed conversion between MCP elicitation and native ACP `elicitation/create` messages
 - **`SessionUsageParams`** -- Token usage tracking notifications
 - **`McpNotification` / `McpRequest`** -- MCP message tunneling over ACP
-- **`TokioAcpAgent`** -- Tokio-native ACP transport
+- Agent subprocesses -- use upstream `agent_client_protocol::{AcpAgent, AcpAgentConfig, Stdio}`
 - **`AcpClientHandle`** -- Initialized, cloneable client for typed ACP v2 requests
 - **`AcpEvent`** -- Ordered notifications, including replay updates sent before the resume response
 
@@ -28,7 +28,6 @@ Utilities for the [Agent Client Protocol](https://agentclientprotocol.com/) (ACP
 | Feature | Description | Default |
 |---------|-------------|---------|
 | `client` | ACP client (for UIs connecting to agents) | yes |
-| `agent` | Tokio-native agent subprocess and Unix stdio transports | no |
 | `websocket` | Message-oriented WebSocket transport | no |
 | `testing` | Public in-memory ACP test peers and transport helpers (enables `client`) | no |
 

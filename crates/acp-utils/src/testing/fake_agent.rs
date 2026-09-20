@@ -160,7 +160,7 @@ impl FakeAgent {
     }
 
     pub async fn build(self) -> Result<crate::client::AcpClient, crate::client::AcpClientError> {
-        let (agent, client) = super::duplex_pair();
+        let (agent, client) = super::Channel::duplex();
         tokio::task::spawn_local(self.agent().connect_to(agent));
         crate::client::connect_acp_client(client, super::initialize_request()).await
     }

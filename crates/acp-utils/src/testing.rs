@@ -1,15 +1,10 @@
-//! Duplex-backed test harness for ACP connections.
-//!
-//! [`test_connection`] returns a full `(ConnectionTo<Client>, TestPeer)` pair
-//! over an in-memory duplex transport. Use it for integration-style tests that
-//! need to exercise the full serialize/dispatch path (so wire-format
-//! regressions like extension method-name typos surface in tests).
-//!
+//! In-memory test harness for ACP connections.
 
 mod fake_agent;
 pub use fake_agent::{FakeAgent, FakeAgentRequests};
 
 use crate::notifications::{GitDiffEventPayload, McpNotification};
+pub use agent_client_protocol::Channel;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v2::{
     CompleteElicitationNotification, CreateElicitationRequest, CreateElicitationResponse, ElicitationFormMode,
@@ -18,17 +13,13 @@ use agent_client_protocol::schema::v2::{
     StopReason, UpdateSessionNotification,
 };
 use agent_client_protocol::{
-    self as acp, Agent, ByteStreams, Client, ConnectionTo, HandleConnectionClose, HandleDispatchFrom, NullRun,
-    Responder, RunWithConnectionTo, V2Builder,
+    self as acp, Agent, Client, ConnectionTo, HandleConnectionClose, HandleDispatchFrom, NullRun, Responder,
+    RunWithConnectionTo, V2Builder,
 };
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use tokio::io::DuplexStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::spawn_local;
-use tokio_util::compat::{Compat, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
-
-pub type DuplexByteStreams = ByteStreams<Compat<DuplexStream>, Compat<DuplexStream>>;
 
 pub struct TestPeer {
     session_notifications: mpsc::UnboundedReceiver<UpdateSessionNotification>,
@@ -179,17 +170,6 @@ impl TestPeer {
     }
 }
 
-/// In-memory ACP transport pair: `(agent_transport, client_transport)`. Hand
-/// each half to a `connect_to` / `connect_with` call on the corresponding
-/// side. Must be used inside a `LocalSet` since the runners are `spawn_local`'d.
-pub fn duplex_pair() -> (DuplexByteStreams, DuplexByteStreams) {
-    let (agent_writer, client_reader) = tokio::io::duplex(4096);
-    let (client_writer, agent_reader) = tokio::io::duplex(4096);
-    let agent_transport = ByteStreams::new(agent_writer.compat_write(), agent_reader.compat());
-    let client_transport = ByteStreams::new(client_writer.compat_write(), client_reader.compat());
-    (agent_transport, client_transport)
-}
-
 /// Build a live `ConnectionTo<Client>` over an in-memory duplex transport with
 /// a peer on the other end. Must be called inside a `LocalSet`.
 pub async fn test_connection() -> (ConnectionTo<Client>, TestPeer) {
@@ -224,7 +204,7 @@ where
     Y: RunWithConnectionTo<Agent> + 'static,
     Z: HandleConnectionClose<Agent> + 'static,
 {
-    let (agent_transport, client_transport) = duplex_pair();
+    let (agent_transport, client_transport) = Channel::duplex();
     let (agent_tx, agent_rx) = oneshot::channel();
     let (client_tx, client_rx) = oneshot::channel();
     let agent_task =

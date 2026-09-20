@@ -6,7 +6,6 @@ pub mod workspace_status;
 
 use crate::error::AppError;
 use crate::session::workspace_status::WorkspaceStatus;
-use acp_utils::agent::TokioAcpAgent;
 use acp_utils::client::{AcpClient, AcpClientError, connect_acp_client};
 use acp_utils::notifications::{RemoteServerInfo, SessionPreviewParams};
 use agent_client_protocol::schema::ProtocolVersion;
@@ -14,7 +13,7 @@ use agent_client_protocol::schema::v2::{
     ClientCapabilities, ElicitationCapabilities, ElicitationFormCapabilities, ElicitationUrlCapabilities,
     Implementation, InitializeRequest, NewSessionRequest, NewSessionResponse, ResumeSessionRequest, SessionId,
 };
-use agent_client_protocol::{Client, ConnectTo};
+use agent_client_protocol::{AcpAgent, Client, ConnectTo};
 use std::env::current_dir;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -59,7 +58,7 @@ impl Session {
 
     pub async fn connect(agent_command: &str) -> Result<Self, AppError> {
         let working_dir = current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let agent = TokioAcpAgent::from_str(agent_command).map_err(AcpClientError::InvalidAgentCommand)?;
+        let agent = AcpAgent::from_str(agent_command).map_err(AcpClientError::InvalidAgentCommand)?;
         Self::connect_to(agent, working_dir).await
     }
 

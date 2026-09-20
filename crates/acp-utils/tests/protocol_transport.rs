@@ -1,14 +1,14 @@
 use acp_utils::notifications::{McpNotification, McpServerStatus, McpServerStatusEntry};
 use acp_utils::testing::{
-    TestPeer, duplex_pair, idle_notification, initialize_request, initialize_response, plan_notification,
-    running_notification, test_connection,
+    TestPeer, idle_notification, initialize_request, initialize_response, plan_notification, running_notification,
+    test_connection,
 };
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v2::{
     ContentBlock, ContentChunk, InitializeRequest, PlanEntry, PlanEntryPriority, PlanEntryStatus, SessionUpdate,
     StopReason, TextContent, UpdateSessionNotification,
 };
-use agent_client_protocol::{self as acp, Agent, ByteStreams, Client};
+use agent_client_protocol::{self as acp, Agent, ByteStreams, Channel, Client};
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::oneshot;
@@ -19,7 +19,7 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 async fn duplex_initialization_uses_v2_info() {
     LocalSet::new()
         .run_until(async {
-            let (agent_transport, client_transport) = duplex_pair();
+            let (agent_transport, client_transport) = Channel::duplex();
             let server = spawn_local(
                 Agent
                     .v2()

@@ -55,7 +55,7 @@ clankerdiff-core = { workspace = true }
 clankerdiff-ratatui = { workspace = true }
 clankerdiff-client = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.15" }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "agent"], version = "0.5.2" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client"], version = "0.5.2" }
 agent-client-protocol = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }

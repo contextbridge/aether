@@ -6,7 +6,6 @@ pub mod server;
 pub mod status;
 pub mod testing;
 pub mod tool_gateway;
-pub mod transport;
 
 #[cfg(feature = "client")]
 pub mod client;

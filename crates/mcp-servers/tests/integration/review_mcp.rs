@@ -3,7 +3,7 @@ use mcp_servers::review::{ArtifactFormat, ReviewMcp};
 use mcp_utils::{client::McpClient, testing::ElicitationScript};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, ElicitRequestParams, ElicitResult, ElicitationAction, InputRequest,
-    InputResponses,
+    InputResponses, RequestMetaObject,
 };
 use serde_json::{Value, json};
 use std::{fs, path::Path, path::PathBuf};
@@ -41,6 +41,14 @@ async fn reviews_inline_markdown_without_creating_a_file() -> TestResult {
         test.review_content("# Pick one\n\n- A\n- B", Some("Database choice")).await?,
         json!({"status": "approved"})
     );
+    let captured = test.script.as_ref().expect("scripted review client").captured();
+    let ElicitRequestParams::FormElicitationParams { meta: Some(meta), .. } = &captured[0].request else {
+        return Err(test_error("expected artifact metadata in the review UI request").into());
+    };
+    let meta = ArtifactReviewElicitationMeta::parse(Some(&meta.0))
+        .ok_or_else(|| test_error("invalid artifact metadata in the review UI request"))?;
+    assert_eq!(meta.title, "Database choice");
+    assert_eq!(meta.markdown, "# Pick one\n\n- A\n- B");
     assert!(test.root_is_empty()?);
     Ok(())
 }
@@ -103,7 +111,7 @@ struct ReviewTestBuilder {
 struct ReviewTest {
     root: TempDir,
     client: TestClient<ReviewMcp, McpClient>,
-    _script: Option<ElicitationScript>,
+    script: Option<ElicitationScript>,
 }
 
 struct ReviewRequest {
@@ -141,7 +149,7 @@ impl ReviewTestBuilder {
             },
         );
         let client = TestClient::start_with(|| review_mcp_at(root.path()), client).await?;
-        Ok(ReviewTest { root, client, _script: script })
+        Ok(ReviewTest { root, client, script })
     }
 }
 
@@ -196,7 +204,10 @@ impl ReviewRequest {
         let ElicitRequestParams::FormElicitationParams { meta, message, requested_schema } = &request.params else {
             return Err(test_error("expected form elicitation").into());
         };
-        let meta = meta.as_ref().ok_or_else(|| test_error("expected artifact metadata"))?;
+        let meta = meta
+            .as_ref()
+            .or_else(|| request.extensions.get::<RequestMetaObject>())
+            .ok_or_else(|| test_error("expected artifact metadata"))?;
         let meta = ArtifactReviewElicitationMeta::parse(Some(&meta.0))
             .ok_or_else(|| test_error("invalid artifact metadata"))?;
         Ok(Self { meta, message: message.clone(), schema: serde_json::to_value(requested_schema)? })
