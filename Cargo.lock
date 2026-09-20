@@ -47,6 +47,8 @@ dependencies = [
  "aether-utils",
  "agent-client-protocol",
  "async-trait",
+ "clankerdiff-core",
+ "clankerdiff-protocol",
  "futures",
  "rmcp",
  "schemars 1.2.2",
@@ -55,7 +57,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
- "tokio-tungstenite",
+ "tokio-tungstenite 0.30.0",
  "tokio-util",
  "tracing",
 ]
@@ -81,6 +83,8 @@ dependencies = [
  "async-trait",
  "base64 0.23.1",
  "clankerdiff-core",
+ "clankerdiff-protocol",
+ "clankerdiff-server",
  "clap",
  "crossterm",
  "dirs",
@@ -95,7 +99,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
- "tokio-tungstenite",
+ "tokio-tungstenite 0.30.0",
  "tokio-util",
  "tracing",
  "tracing-appender",
@@ -451,10 +455,10 @@ dependencies = [
  "aether-utils",
  "agent-client-protocol",
  "base64 0.23.1",
+ "clankerdiff-client",
  "clankerdiff-core",
  "clankerdiff-git",
  "clankerdiff-ratatui",
- "clankerdiff-watch",
  "clap",
  "crossterm",
  "futures",
@@ -467,7 +471,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
- "tokio-stream",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -2124,6 +2127,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
 dependencies = [
  "axum-core",
+ "base64 0.22.1",
  "bytes",
  "form_urlencoded",
  "futures-util",
@@ -2142,8 +2146,10 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "serde_urlencoded",
+ "sha1 0.10.7",
  "sync_wrapper",
  "tokio",
+ "tokio-tungstenite 0.29.0",
  "tower",
  "tower-layer",
  "tower-service",
@@ -2595,10 +2601,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "clankerdiff-core"
-version = "0.2.1"
+name = "clankerdiff-client"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb0be425c5d27ee8ba794d3cb71b322a1391acb3c733a9d253ed57ac134eefbd"
+checksum = "93f10a0134ed0e9d71b34a71a0d32d207f98f0a95471e3b1a7c62c45474161c9"
+dependencies = [
+ "async-channel",
+ "clankerdiff-core",
+ "clankerdiff-protocol",
+ "futures-util",
+ "gloo-timers",
+ "http 1.5.0",
+ "thiserror 2.0.20",
+ "tokio",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
+name = "clankerdiff-core"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52a9da144232fa19857c93bf84ac1550b32352ec6a2c7e45e90222768c07371c"
 dependencies = [
  "clankerdiff-fingerprint",
  "clankerdiff-theme",
@@ -2610,9 +2633,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-fingerprint"
-version = "0.2.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48b00f10ef6148fe3e47bdb85c0c5e5e437e2a6648beda978f93c16c90003734"
+checksum = "68004335fa8d71c2dd7081f05d697dee0866492bbf47b5e898666aaa4379f3d3"
 dependencies = [
  "blake3",
  "serde",
@@ -2621,9 +2644,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-git"
-version = "0.2.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b22df66b7110436812f0923373a157e1794a998ef3e7219421247fcdc685ac9"
+checksum = "3f4c40da1b4a46871181697700ba20d675d2c0161b7ac2a09aa9e75e904697d7"
 dependencies = [
  "clankerdiff-core",
  "thiserror 2.0.20",
@@ -2632,9 +2655,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-markdown"
-version = "0.2.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "376ece77d837622eebd136026285263585c0446c404155e3d3ffb436b15f07e3"
+checksum = "532412a831411198254a7b5cbbe052a7b2cf0700c46b5fac1bc202ad9592ebe7"
 dependencies = [
  "clankerdiff-core",
  "clankerdiff-fingerprint",
@@ -2644,12 +2667,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "clankerdiff-ratatui"
-version = "0.2.1"
+name = "clankerdiff-protocol"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d874ca756aabed23f92f74f0950cc97f07f04fcbfd31dc191e50d56a2beb399e"
+checksum = "36b0e41df9f53db5752702594ba8e46a9efc2d9776dee3fb99ceed5c5be0c0ba"
+dependencies = [
+ "async-channel",
+ "clankerdiff-core",
+ "clankerdiff-markdown",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "clankerdiff-ratatui"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f05b5448bf5bb12df0427a54a857291bc9f7b50a1f616a2fa1d3cfe56a0e441"
 dependencies = [
  "bitflags 2.13.2",
+ "clankerdiff-client",
  "clankerdiff-core",
  "clankerdiff-markdown",
  "clankerdiff-syntax",
@@ -2664,10 +2702,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "clankerdiff-syntax"
-version = "0.2.1"
+name = "clankerdiff-server"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ff2756eb3d158c029162aacaadf0f3a15cbb98efe32cce1fe699fcd80f5d740"
+checksum = "932304e41510695a2b8d6e44662a4cb1eabc5f42b106754444f6b21cf7e19d3c"
+dependencies = [
+ "axum",
+ "clankerdiff-core",
+ "clankerdiff-git",
+ "clankerdiff-protocol",
+ "clankerdiff-watch",
+ "futures-util",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "clankerdiff-syntax"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36fd3b6c370393feabdaa64ef97866568c878149de5e5ee5f389f90e7d2061f2"
 dependencies = [
  "arborium-asm",
  "arborium-bash",
@@ -2742,9 +2797,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-theme"
-version = "0.2.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2c8178bcf3213ac9175d2828142abdcc62c7c5d63d3d0aabfa8860eff3dc648"
+checksum = "eed24501f28c3b9f3efbba05a6012968f5a3299bafe499384dd97d7828bc0ca0"
 dependencies = [
  "arborium-theme",
  "clankerdiff-fingerprint",
@@ -2755,9 +2810,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-watch"
-version = "0.2.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0cad25ec91c62354e315f23891278013422c8146962b9203cbd5de65774e028"
+checksum = "28e5c3c1e473c2e89e6aa8713a58f01c08e5900cfde077afd99cd7f20e558d80"
 dependencies = [
  "clankerdiff-core",
  "clankerdiff-git",
@@ -4064,6 +4119,18 @@ dependencies = [
  "log",
  "regex-automata",
  "regex-syntax",
+]
+
+[[package]]
+name = "gloo-timers"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbb143cf96099802033e0d4f4963b19fd2e0b728bcf076cd9cf7f6634f092994"
+dependencies = [
+ "futures-channel",
+ "futures-core",
+ "js-sys",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -8161,7 +8228,18 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
- "tokio-util",
+]
+
+[[package]]
+name = "tokio-tungstenite"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f72a05e828585856dacd553fba484c242c46e391fb0e58917c942ee9202915c"
+dependencies = [
+ "futures-util",
+ "log",
+ "tokio",
+ "tungstenite 0.29.0",
 ]
 
 [[package]]
@@ -8176,7 +8254,7 @@ dependencies = [
  "rustls-pki-types",
  "tokio",
  "tokio-rustls 0.26.5",
- "tungstenite",
+ "tungstenite 0.30.0",
  "webpki-roots 0.26.11",
 ]
 
@@ -8190,6 +8268,7 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-sink",
+ "futures-util",
  "libc",
  "pin-project-lite",
  "tokio",
@@ -8705,6 +8784,22 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+
+[[package]]
+name = "tungstenite"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c01152af293afb9c7c2a57e4b559c5620b421f6d133261c60dd2d0cdb38e6b8"
+dependencies = [
+ "bytes",
+ "data-encoding",
+ "http 1.5.0",
+ "httparse",
+ "log",
+ "rand 0.9.5",
+ "sha1 0.10.7",
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "tungstenite"
