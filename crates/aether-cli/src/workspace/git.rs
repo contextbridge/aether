@@ -14,6 +14,13 @@ pub enum GitError {
     Io(#[from] std::io::Error),
 }
 
+pub fn current_ref(repo: &Path) -> Option<String> {
+    git(repo, &["branch", "--show-current"])
+        .ok()
+        .and_then(|output| trimmed(&output))
+        .or_else(|| git(repo, &["rev-parse", "--short", "HEAD"]).ok().and_then(|output| trimmed(&output)))
+}
+
 /// Resolves the root of the git working tree containing `path`.
 pub fn repo_root(path: &Path) -> Result<PathBuf, GitError> {
     let output = git(path, &["rev-parse", "--show-toplevel"])?;
@@ -127,6 +134,11 @@ fn git_output(args: &[&str], output: std::process::Output) -> Result<Output, Git
     }
 }
 
+fn trimmed(output: &Output) -> Option<String> {
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,5 +175,15 @@ mod tests {
         let a = init_repo(tmp.path(), "a");
         let b = init_repo(tmp.path(), "b");
         assert_ne!(root_commit_hash(&a).unwrap(), root_commit_hash(&b).unwrap());
+    }
+
+    #[test]
+    fn current_ref_reports_a_branch_and_none_outside_a_repository() {
+        let tmp = TempDir::new().unwrap();
+        let repo = init_repo(tmp.path(), "repo");
+        assert!(current_ref(&repo).is_some());
+
+        let outside = TempDir::new().unwrap();
+        assert_eq!(current_ref(outside.path()), None);
     }
 }

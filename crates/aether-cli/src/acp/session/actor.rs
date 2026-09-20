@@ -1,6 +1,7 @@
 use crate::acp::protocol::notify;
+use crate::acp::session::git_diff::GitDiffService;
 use acp_utils::elicitation;
-use acp_utils::notifications::McpNotification;
+use acp_utils::notifications::{GitDiffEventPayload, McpNotification};
 use aether_auth::OAuthCredentialStorage;
 use aether_core::events::{AgentCommand, AgentEvent, Command, MessageEvent, TurnOutcome};
 use aether_core::mcp::McpHandle;
@@ -8,6 +9,8 @@ use aether_sessions::model::{SessionControlEvent, SessionEvent, UserEvent, last_
 use aether_sessions::transcript::conversation_messages_from_events;
 use agent_client_protocol::schema::v2::{self as acp, PromptResponse, SessionId, SetSessionConfigOptionResponse};
 use agent_client_protocol::{Client, ConnectionTo, Error, Responder};
+use clankerdiff_protocol::client::ClientCommand;
+use clankerdiff_protocol::shared::{DocumentUpdate, Event};
 use futures::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use llm::catalog::LlmModel;
 use llm::parser::ModelProviderParser;
@@ -70,6 +73,10 @@ pub(crate) enum SessionCommand {
         available: Vec<LlmModel>,
         responder: Responder<SetSessionConfigOptionResponse>,
     },
+    GitDiff {
+        command: ClientCommand,
+    },
+    GitDiffClose,
     AuthenticateMcp {
         server_name: String,
     },
@@ -128,6 +135,7 @@ impl Drop for SessionHandle {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct SessionIo {
     connection: Option<ConnectionTo<Client>>,
     session_id: SessionId,
@@ -140,6 +148,10 @@ impl SessionIo {
 
     pub(crate) fn send_update(&self, update: acp::SessionUpdate) {
         self.send(acp::UpdateSessionNotification::new(self.session_id.clone(), update));
+    }
+
+    pub(crate) fn send_git_diff_event(&self, event: Event<DocumentUpdate>) {
+        self.send(GitDiffEventPayload { session_id: self.session_id.0.to_string(), event });
     }
 
     pub(crate) fn send(&self, notification: impl agent_client_protocol::JsonRpcNotification) {
@@ -170,6 +182,7 @@ pub(crate) struct SessionActorInit {
 /// is serialized through the command channel.
 pub(crate) struct SessionActor {
     io: SessionIo,
+    git_diff: GitDiffService,
     cwd: PathBuf,
     mcp_servers: Vec<acp::McpServer>,
     repository: Arc<SessionStore>,
@@ -213,8 +226,11 @@ async fn available_commands_for(mcp: McpHandle) -> Result<Vec<acp::AvailableComm
 impl SessionActor {
     pub(crate) async fn spawn(init: SessionActorInit) -> Result<SessionHandle, SessionError> {
         let cancel = CancellationToken::new();
+        let io = SessionIo::new(init.connection, init.session_id.clone());
+        let git_diff = GitDiffService::new(init.cwd.clone(), io.clone());
         let mut actor = SessionActor {
-            io: SessionIo::new(init.connection, init.session_id),
+            io,
+            git_diff,
             cwd: init.cwd,
             mcp_servers: init.mcp_servers,
             repository: init.repository,
@@ -258,6 +274,7 @@ impl SessionActor {
                 biased;
                 () = shutdown.cancelled() => {
                     self.cancel_turn().await;
+                    self.git_diff.close().await;
                     break;
                 }
                 Some(cmd) = cmd_rx.recv() => {
@@ -468,6 +485,8 @@ impl SessionActor {
                     );
                 }
             }
+            SessionCommand::GitDiff { command } => self.git_diff.command(command).await,
+            SessionCommand::GitDiffClose => self.git_diff.close().await,
         }
     }
 
