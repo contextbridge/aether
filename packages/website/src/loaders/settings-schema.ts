@@ -80,6 +80,7 @@ function renderReference(schema: JsonSchema): string {
 }
 
 function renderDef(name: string, def: JsonSchema): string {
+  def = flattenAllOf(def);
   const lines: string[] = [`## ${name}`, ""];
   if (def.description) {
     lines.push(def.description.trim(), "");
@@ -124,6 +125,27 @@ function renderDef(name: string, def: JsonSchema): string {
 
   lines.push(`Type: ${typeLabel(def)}`, "");
   return lines.join("\n");
+}
+
+// schemars transforms (e.g. AgentConfig's invocation-surface requirement) wrap
+// object schemas in `allOf` branches; merge the object branches back together so
+// the field table still renders.
+function flattenAllOf(def: JsonSchema): JsonSchema {
+  if (!Array.isArray(def.allOf)) return def;
+  const merged: JsonSchema = { ...def };
+  delete merged.allOf;
+  for (const branch of def.allOf) {
+    if (branch.properties) {
+      merged.properties = { ...merged.properties, ...branch.properties };
+    }
+    if (branch.required) {
+      merged.required = [...(merged.required ?? []), ...branch.required];
+    }
+    if (branch.anyOf) {
+      merged.anyOf = [...(merged.anyOf ?? []), ...branch.anyOf];
+    }
+  }
+  return merged;
 }
 
 function renderObjectTable(def: JsonSchema): string {

@@ -3,7 +3,7 @@ title: Git Diff View
 description: Review changes, stage, commit, and add inline comments with the two-pane diff viewer.
 ---
 
-Press `Ctrl+G` to open or close the git diff view. It shows changed files on the left and the diff on the right. By default the diff shows all changes relative to `HEAD` (both staged and unstaged); press `t` or `Tab` to cycle the scope between **Both**, **Unstaged**, and **Staged**. You can navigate hunks, stage and unstage files, create commits, discard changes, queue inline comments, and submit those comments back to the agent as a structured prompt.
+Press `Ctrl+G` to open or close the git diff view. It shows changed files on the left and the diff on the right. By default the diff shows all changes relative to `HEAD` (both staged and unstaged); press `S` to cycle the scope between **Both**, **Unstaged**, and **Staged**. You can navigate hunks, stage and unstage files, create commits, discard changes, queue inline comments, and submit those comments back to the agent as a structured prompt.
 
 ## Layout
 
@@ -19,7 +19,7 @@ Press `Ctrl+G` to open or close the git diff view. It shows changed files on the
 │                  │   }                        │
 │                  │                           │
 ├─────────────────┴───────────────────────────┤
-│ j/k move · space stage · t scope · C commit │
+│ j/k move · space stage · S scope · C commit │
 └─────────────────────────────────────────────┘
 ```
 
@@ -34,14 +34,14 @@ The file-list header shows the active scope: `Git Diff · Both`, `Git Diff · Un
 | `j` / `↓` | Move down |
 | `k` / `↑` | Move up |
 | `PageDown` / `PageUp` | Page through the diff pane |
-| `o` | Toggle between the hunk-diff view and the full-file view (in the diff pane) |
-| `<` / `>` | Resize the split panes |
+| `Tab` | Switch focus between the file list and the diff pane |
+| `f` | Toggle between the hunk-diff view and the full-file view (in the diff pane) |
 | `r` | Refresh the diff |
 | `Esc` / `Ctrl+G` | Close git diff view |
 
 ## Diff scope
 
-Press `t` or `Tab` to cycle what the diff shows:
+Press `S` to cycle what the diff shows:
 
 | Scope | Comparison | Includes untracked files |
 | --- | --- | --- |

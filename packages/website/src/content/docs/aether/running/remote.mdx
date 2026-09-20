@@ -13,7 +13,7 @@ Run the agent, tools, and checkout on one machine while using Aether's normal te
    aether server --cwd /workspace/project --agent Build
    ```
 
-   The default listener is `127.0.0.1:8765`. Settings are resolved on the server using its working directory. The service initializes shared dependencies immediately; the agent runtime starts when a client creates a session. Use an existing agent name from your settings, or select a model with `--model` instead.
+   The default listener is `127.0.0.1:8765`. Settings are resolved on the server using its working directory. The service initializes shared dependencies immediately; the agent runtime starts when a client creates a session, unless you pass `--prompt` to start one right away (see [Start with an initial prompt](#start-with-an-initial-prompt)). Use an existing agent name from your settings, or select a model with `--model` instead.
 
 2. On the **client machine**, leave a tunnel running:
 
@@ -64,6 +64,23 @@ aether client wss://agent.example/acp -H 'Authorization: Bearer ...'
 
 The client loads local Wisp UI settings, not local Aether project or provider settings. Provider/MCP credentials, workspace files, and session logs stay on the server. Browser-based OAuth flows needing server-local callbacks require suitable deployment connectivity; Aether does not tunnel those callbacks.
 
+## Start with an initial prompt
+
+The server can begin working before any client attaches. Pass `--prompt` (or pipe a prompt to the server's stdin) and the agent runtime starts immediately with a detached session:
+
+```bash
+echo "Triage the failing auth tests" | aether server --cwd /workspace/project --agent Build
+```
+
+| Server option                  | Meaning                                                                                                            |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `--prompt <PROMPT>`            | Initial prompt to run at startup. If omitted and stdin is not a TTY, the prompt is read from stdin.                 |
+| `--output <text\|pretty\|json>` | Event output format used while no client is attached (same formats as `aether headless`).                          |
+| `--idle-after <SECONDS>`       | Seconds to wait after the agent becomes idle before running `--on-idle`. Requires `--on-idle`.                      |
+| `--on-idle <COMMAND>`          | Shell command to spawn when the agent becomes idle, for example to send a notification. Requires `--idle-after`.    |
+
+This suits "cloud agent" deployments that begin headlessly: the turn runs to completion and its output is persisted while detached, and attaching with `aether client` later receives the full transcript and current state through the normal reattachment flow described below.
+
 ## Detach, cancel, and restore
 
 - **Exit the client:** disconnect only. The same live actor, agent runtime, MCP runtime, and session ID remain on the server.
@@ -74,13 +91,13 @@ The client loads local Wisp UI settings, not local Aether project or provider se
 
 An unexpected connection loss restores the terminal and exits with an error. There is **no automatic reconnect or prompt retry**. If a prompt's acceptance response was lost, reconnect and inspect the transcript before resubmitting: a retry could execute tools twice.
 
-Partial streamed chunks, intermediate tool states, and pending dialogs are not guaranteed to be recovered. Pending survey/plan-approval/other elicitation requests are cancelled on disconnect; requests first raised while detached are cancelled immediately. They are not queued for reattachment. Cancelling an interaction does not itself cancel the session—the agent/tool decides how to handle that result.
+Partial streamed chunks, intermediate tool states, and pending dialogs are not guaranteed to be recovered. Pending artifact-review and other elicitation requests are cancelled on disconnect; requests first raised while detached are cancelled immediately. They are not queued for reattachment. Cancelling an interaction does not itself cancel the session—the agent/tool decides how to handle that result.
 
 ## Remote workspace boundaries
 
 The status line labels the server path as `remote:`. Server paths are never resolved against your local checkout or HOME. Local Git review/watch, file picking/indexing, and path-based attachments are unavailable in remote mode. Pasted paths remain ordinary text rather than being read as local files; blocked attachment actions leave the composer usable.
 
-Chat, streamed tool output and diffs delivered through ACP, prompt search, configuration, server status, forms, plan review, `/clear`, and `/resume` remain available. Workspace operations stay server-side. Themes, Wisp settings, rendering, terminal bell, clipboard, and browser integration remain client-local features.
+Chat, streamed tool output and diffs delivered through ACP, prompt search, configuration, server status, forms, artifact review, `/clear`, and `/resume` remain available. Workspace operations stay server-side. Themes, Wisp settings, rendering, terminal bell, clipboard, and browser integration remain client-local features.
 
 ## Deployment and limitations
 

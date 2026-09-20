@@ -2,12 +2,45 @@
 title: Review
 ---
 
-Review MCP opens any agent-authored Markdown artifact in Aether's Markdown review UI.
+The `review` server lets an agent put a Markdown artifact in front of you and pause until you approve it or send feedback. It replaces Aether's former `plan` and `survey` servers and exposes a single MCP tool, `review_artifact`, with no prompts.
 
-```json
+## Configuration
+
+```json title=".aether/mcp.json"
 {
   "servers": {
     "review": { "type": "in-memory" }
   }
 }
 ```
+
+The standalone `mcp-servers-stdio --server review` binary takes `--root-dir`, which resolves relative artifact paths and defaults to the process working directory; the in-memory wiring defaults it to the workspace root.
+
+## `review_artifact`
+
+### Input
+
+| Field    | Type     | Description                                                                                                                                                             |
+| -------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `source` | `object` | Tagged by `type`. `{ "type": "file", "path": "..." }` reads an existing UTF-8 Markdown file; relative paths resolve against the root directory and the file is never modified. `{ "type": "content", "content": "..." }` sends Markdown directly without creating a file. |
+| `title`  | `string` | Optional label shown above the artifact.                                                                                                                                |
+
+### Elicitation flow
+
+The tool returns the artifact to the client as an MCP elicitation request, which Aether's terminal UI renders in its artifact review screen. Clients without elicitation support receive a tool error instead of a silent fallback. The form asks for a decision:
+
+| Field      | Type                   | Description                                                                        |
+| ---------- | ---------------------- | ---------------------------------------------------------------------------------- |
+| `decision` | `approved` or `feedback` | Approve the artifact as-is, or return it with feedback.                            |
+| `feedback` | `string`               | Optional feedback text. Approval requires empty feedback; feedback may be empty.   |
+
+### Output
+
+| Status      | Meaning                                       |
+| ----------- | --------------------------------------------- |
+| `approved`  | The artifact was approved without feedback.   |
+| `feedback`  | The artifact was returned with feedback.      |
+| `cancelled` | The review was cancelled.                     |
+| `declined`  | The user declined the review.                 |
+
+The server is stateless and read-only: it never creates or modifies files, and it does not reread a file source on the response round.
