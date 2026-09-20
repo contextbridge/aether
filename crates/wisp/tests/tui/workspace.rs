@@ -8,18 +8,22 @@ fn remote_workspace_move_keeps_paths_server_side() {
     assert!(matches!(ui.next_agent_command(), Some(AgentCommand::ListWorkspaces { .. })));
     ui.deliver_result(workspaces_listed(vec![workspace_entry("/server/next", false)]));
     ui.assert_viewport_contains("/server/next");
-    ui.assert_viewport_not_contains("remote: /server/next");
     ui.key(key(KeyCode::Enter));
     assert!(matches!(ui.next_agent_command(), Some(AgentCommand::MoveWorkspace { .. })));
     ui.deliver_result(workspace_moved("/server/next"));
     assert!(matches!(ui.next_agent_command(), Some(AgentCommand::ResumeSession { .. })));
-    assert!(!ui.take_commands().iter().any(|command| matches!(command, Command::ResolveWorkspace { .. })));
     ui.deliver_result(CommandResult::ResumeSession {
         session_id: "test-session".into(),
         result: Ok(acp::ResumeSessionResponse::new()),
     });
-    ui.assert_viewport_contains("remote: /server/next");
-    assert!(!ui.take_commands().iter().any(|command| matches!(command, Command::ResolveWorkspace { .. })));
+    assert!(
+        ui.take_commands()
+            .iter()
+            .any(|command| matches!(command, Command::Agent(AgentCommand::FetchWorkspaceStatus { .. }))),
+        "workspace move fetches agent-side status after resume"
+    );
+    ui.settle_tasks();
+    ui.assert_viewport_contains("/server/next");
 }
 
 fn make_ui_with_workspace_move() -> TestUi {
@@ -371,6 +375,10 @@ fn workspace_move_success_updates_cwd_and_reloads_session() {
         }
         other => panic!("expected LoadSession, got {other:?}"),
     }
+    assert!(
+        matches!(ui.next_agent_command(), Some(AgentCommand::FetchWorkspaceStatus { .. })),
+        "workspace move refreshes agent-side status after resume"
+    );
 
     ui.type_text("/clear");
     ui.key(key(KeyCode::Tab));
@@ -441,6 +449,7 @@ fn workspace_move_load_session_failure_recovers() {
 
     ui.deliver_result(workspace_moved("/home/user/code/other"));
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::LoadingWorkspaceSession { .. }));
+    let _ = ui.next_agent_command().unwrap();
     let _ = ui.next_agent_command().unwrap();
 
     ui.deliver_result(CommandResult::ResumeSession {

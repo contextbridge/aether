@@ -30,7 +30,7 @@ impl SessionModel {
         } = config;
         let workspace_status = match workspace_access {
             WorkspaceAccess::Local => workspace_status,
-            WorkspaceAccess::Remote => WorkspaceStatus::remote(&working_dir),
+            WorkspaceAccess::Remote => WorkspaceStatus::initial(&working_dir),
         };
         Self {
             workspace_access,
@@ -121,7 +121,7 @@ impl SessionModel {
 
     pub fn set_working_dir(&mut self, working_dir: PathBuf) {
         if self.workspace_access == WorkspaceAccess::Remote {
-            self.workspace_status = WorkspaceStatus::remote(&working_dir);
+            self.workspace_status = WorkspaceStatus::initial(&working_dir);
         }
         self.working_dir = working_dir;
     }

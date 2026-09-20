@@ -1,19 +1,12 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+use acp_utils::notifications::WorkspaceStatusResponse;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum WorkspaceAccess {
     #[default]
     Local,
     Remote,
-}
-
-impl WorkspaceAccess {
-    pub fn display_path(self, path: &Path) -> String {
-        match self {
-            Self::Local => home_relative_path(path),
-            Self::Remote => path.display().to_string(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,32 +20,13 @@ impl WorkspaceStatus {
         Self { display_dir: display_dir.into(), git_ref }
     }
 
-    pub fn remote(cwd: &Path) -> Self {
-        Self::new(format!("remote: {}", cwd.display()), None)
-    }
-
-    /// Creates the path portion of the status without touching the repository.
-    /// Git metadata is resolved by the runtime's `Command::ResolveWorkspace`
-    /// operation, keeping process execution outside session state.
     pub fn initial(cwd: &Path) -> Self {
-        Self::new(home_relative_path(cwd), None)
+        Self::new(cwd.display().to_string(), None)
     }
 }
 
-pub fn home_relative_path(path: &Path) -> String {
-    home_dir().map_or_else(|| path.display().to_string(), |home| home_relative_path_with_home(path, &home))
-}
-
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from)
-}
-
-fn home_relative_path_with_home(path: &Path, home: &Path) -> String {
-    if path == home {
-        return "~".to_string();
+impl From<WorkspaceStatusResponse> for WorkspaceStatus {
+    fn from(response: WorkspaceStatusResponse) -> Self {
+        Self::new(response.display_dir, response.git_ref)
     }
-    path.strip_prefix(home)
-        .ok()
-        .filter(|relative| !relative.as_os_str().is_empty())
-        .map_or_else(|| path.display().to_string(), |relative| format!("~/{}", relative.display()))
 }

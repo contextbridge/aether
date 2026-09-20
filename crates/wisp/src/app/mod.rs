@@ -250,15 +250,14 @@ impl App {
                 }
             }
             CommandResult::FilesIndexed { request_id, files } => self.composer.on_files_indexed(request_id, files),
-            CommandResult::GitDiff(event) => {
+            CommandResult::GitReview(state) => {
                 if let Route::GitReview(screen) = &mut self.route {
-                    screen.on_event(event);
+                    screen.install(&state);
                 }
             }
-            CommandResult::GitWatchStarted { .. } => {}
-            CommandResult::GitWatch(event) => {
+            CommandResult::GitReviewAction(result) => {
                 if let Route::GitReview(screen) = &mut self.route {
-                    screen.on_watch_event(event);
+                    screen.on_action_result(result);
                 }
             }
             CommandResult::SubmissionPrepared(outcome) => self.finish_submission(outcome),
@@ -300,10 +299,7 @@ impl App {
                 }
             }
             CommandResult::WorkspacesListed(Ok(response)) => {
-                self.open_overlay(Overlay::Workspaces(WorkspacePicker::new(
-                    response.workspaces,
-                    self.session.workspace_access(),
-                )));
+                self.open_overlay(Overlay::Workspaces(WorkspacePicker::new(response.workspaces)));
                 self.foreground = ForegroundOperation::PickingWorkspace;
             }
             CommandResult::WorkspacesListed(Err(error)) => {

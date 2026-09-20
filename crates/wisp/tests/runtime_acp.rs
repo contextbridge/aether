@@ -301,8 +301,14 @@ async fn remote_startup_creates_in_the_server_workspace() {
             assert_eq!(session.workspace_access, wisp::session::WorkspaceAccess::Remote);
             let handle = session.client.handle.clone();
             let (mut ui, _) = wisp::testing::TestUiBuilder::new().dimensions(120, 24).build_from_session(session);
-            assert!(ui.take_commands().is_empty(), "remote startup must not resolve the local workspace");
-            ui.assert_viewport_contains("remote: /remote-only/workspace");
+            assert!(
+                ui.take_commands().iter().any(|command| matches!(
+                    command,
+                    wisp::command::Command::Agent(wisp::command::AgentCommand::FetchWorkspaceStatus { .. })
+                )),
+                "remote startup fetches agent-side workspace status"
+            );
+            ui.assert_viewport_contains("/remote-only/workspace");
             handle.disconnect().await;
         })
         .await;
@@ -374,7 +380,13 @@ async fn remote_startup_resumes_selected_session_and_preserves_queued_replay() {
                 let (mut ui, mut events) =
                     wisp::testing::TestUiBuilder::new().dimensions(120, 24).build_from_session(session);
                 assert_eq!(ui.app().session_id(), &SessionId::new(selected));
-                assert!(ui.take_commands().is_empty());
+                assert!(
+                    ui.take_commands().iter().any(|command| matches!(
+                        command,
+                        wisp::command::Command::Agent(wisp::command::AgentCommand::FetchWorkspaceStatus { .. })
+                    )),
+                    "remote startup fetches agent-side workspace status"
+                );
                 let history = events.try_recv().expect("replay queued before response");
                 let state = events.try_recv().expect("state queued before response");
                 ui.acp_event(history);

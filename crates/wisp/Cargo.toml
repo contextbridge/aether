@@ -53,15 +53,13 @@ workspace = true
 [dependencies]
 clankerdiff-core = { workspace = true }
 clankerdiff-ratatui = { workspace = true }
-clankerdiff-git = { workspace = true }
-clankerdiff-watch = { workspace = true }
+clankerdiff-client = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.15" }
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "agent"], version = "0.5.2" }
 agent-client-protocol = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 futures = { workspace = true }
-tokio-stream = { workspace = true, features = ["sync"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "process", "time"] }
 clap = { workspace = true }
 tracing = { workspace = true }
@@ -79,5 +77,6 @@ unicode-width = { workspace = true }
 
 [dev-dependencies]
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "testing"], version = "0.5.2" }
+clankerdiff-git = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

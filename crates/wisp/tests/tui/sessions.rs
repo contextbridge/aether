@@ -12,8 +12,14 @@ fn remote_resume_preserves_server_path_without_local_resolution() {
         session_id: "saved".into(),
         result: Ok(acp::ResumeSessionResponse::new()),
     });
-    assert!(!ui.take_commands().iter().any(|command| matches!(command, Command::ResolveWorkspace { .. })));
-    ui.assert_viewport_contains(&format!("remote: {}", cwd.display()));
+    assert!(
+        ui.take_commands()
+            .iter()
+            .any(|command| matches!(command, Command::Agent(AgentCommand::FetchWorkspaceStatus { .. }))),
+        "remote resume fetches agent-side workspace status"
+    );
+    ui.settle_tasks();
+    ui.assert_viewport_contains(&cwd.display().to_string());
     ui.type_text("/clear");
     ui.key(key(KeyCode::Tab));
     assert!(matches!(ui.next_agent_command(), Some(AgentCommand::NewSession { cwd: actual }) if actual == cwd));

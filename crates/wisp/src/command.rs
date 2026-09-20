@@ -1,7 +1,7 @@
 use crate::attachment::{AttachmentOutcome, PromptAttachment};
-use crate::file_index::FileEntry;
 use crate::conversation::ConversationId;
-use crate::git_review::{DiffScope, GitDiffEvent, GitWatchEvent};
+use crate::file_index::FileEntry;
+use crate::git_review::{ClientState, DiffReviewEvent, ServerMessage};
 use crate::request::RequestId;
 use crate::session::workspace_status::WorkspaceStatus;
 use crate::settings::UiSettings;
@@ -11,36 +11,78 @@ use acp_utils::notifications::{
     WorkspaceMoveTarget,
 };
 use agent_client_protocol::schema::v2::{
-    ContentBlock, ListSessionsResponse, LoginAuthResponse, NewSessionResponse, PromptResponse,
-    ResumeSessionResponse, SetSessionConfigOptionResponse, SessionConfigOptionValue, SessionId,
+    ContentBlock, ListSessionsResponse, LoginAuthResponse, NewSessionResponse, PromptResponse, ResumeSessionResponse,
+    SessionConfigOptionValue, SessionId, SetSessionConfigOptionResponse,
 };
-use clankerdiff_ratatui::diff::RepositoryAction;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub enum Command {
     Agent(AgentCommand),
+    GitReview(GitReviewCommand),
     Filesystem(FilesystemCommand),
-    Git(GitCommand),
-    GitWatch(GitWatchCommand),
-    ResolveWorkspace { cwd: PathBuf },
     Terminal(TerminalCommand),
 }
 
 #[derive(Debug, Clone)]
 pub enum AgentCommand {
-    Prompt { session_id: SessionId, text: String, content: Option<Vec<ContentBlock>> },
-    Cancel { session_id: SessionId },
-    SetConfigOption { conversation_id: ConversationId, session_id: SessionId, config_id: String, value: SessionConfigOptionValue },
-    AuthenticateMcpServer { session_id: SessionId, server_name: String },
-    Authenticate { method_id: String },
+    Prompt {
+        session_id: SessionId,
+        text: String,
+        content: Option<Vec<ContentBlock>>,
+    },
+    Cancel {
+        session_id: SessionId,
+    },
+    SetConfigOption {
+        conversation_id: ConversationId,
+        session_id: SessionId,
+        config_id: String,
+        value: SessionConfigOptionValue,
+    },
+    AuthenticateMcpServer {
+        session_id: SessionId,
+        server_name: String,
+    },
+    Authenticate {
+        method_id: String,
+    },
     ListSessions,
-    ResumeSession { session_id: SessionId, cwd: PathBuf },
-    NewSession { cwd: PathBuf },
+    ResumeSession {
+        session_id: SessionId,
+        cwd: PathBuf,
+    },
+    NewSession {
+        cwd: PathBuf,
+    },
     SearchPrompts(PromptSearchParams),
-    SessionPreview { session_id: String },
-    ListWorkspaces { session_id: String },
-    MoveWorkspace { session_id: String, target: WorkspaceMoveTarget },
+    SessionPreview {
+        session_id: String,
+    },
+    ListWorkspaces {
+        session_id: String,
+    },
+    MoveWorkspace {
+        session_id: String,
+        target: WorkspaceMoveTarget,
+    },
+    FetchWorkspaceStatus {
+        session_id: String,
+        cwd: PathBuf,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum GitReviewCommand {
+    /// Starts a review client for the session, opening the agent-side server.
+    Open { session_id: String },
+    /// Applies one user action the review screen captured.
+    Event(DiffReviewEvent),
+    /// Feeds one agent-side live-protocol message into the review client.
+    Forward(ServerMessage),
+    /// Stops the review and tears down the agent-side server.
+    Close,
 }
 
 #[derive(Debug, Clone)]
@@ -50,18 +92,6 @@ pub enum FilesystemCommand {
     ListThemes,
     ListReviewThemes,
     ApplyTheme { settings: Box<UiSettings> },
-}
-
-#[derive(Debug, Clone)]
-pub enum GitCommand {
-    Apply { review_id: RequestId, action: RepositoryAction },
-}
-
-#[derive(Debug, Clone)]
-pub enum GitWatchCommand {
-    Open { review_id: RequestId, working_dir: PathBuf, scope: DiffScope },
-    Refresh { review_id: RequestId, scope: DiffScope },
-    Close { review_id: RequestId },
 }
 
 #[derive(Debug, Clone)]
@@ -83,12 +113,8 @@ pub enum CommandResult {
     WorkspacesListed(Result<WorkspaceListResponse, String>),
     WorkspaceMoved(Result<WorkspaceMoveResponse, String>),
     FilesIndexed { request_id: RequestId, files: Vec<FileEntry> },
-    GitDiff(GitDiffEvent),
-    GitWatch(GitWatchEvent),
-    GitWatchStarted {
-        review_id: RequestId,
-        result: Result<Box<(clankerdiff_git::GitRepository, clankerdiff_watch::RepositoryWatcher)>, clankerdiff_watch::WatchError>,
-    },
+    GitReview(Arc<ClientState>),
+    GitReviewAction(Result<(), String>),
     SubmissionPrepared(AttachmentOutcome),
     ThemesListed(Vec<String>),
     ReviewThemesListed(Vec<clankerdiff_ratatui::ThemeChoice>),
