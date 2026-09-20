@@ -12,7 +12,7 @@ use rmcp::{
 use std::result::Result;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::client::{ElicitationRequest, McpClientEvent, manager::ToolListChangedRequest};
+use crate::client::{ElicitationRequest, McpClientEvent, elicitation::with_meta, manager::ToolListChangedRequest};
 
 pub struct McpClient {
     client_info: ClientConfig,
@@ -96,9 +96,10 @@ impl ClientHandler for McpClient {
     async fn create_elicitation(
         &self,
         request: ElicitRequestParams,
-        _context: RequestContext<RoleClient>,
+        context: RequestContext<RoleClient>,
     ) -> Result<ElicitResult, ErrorData> {
-        Ok(self.dispatch_elicitation(request).await)
+        let meta = (!context.meta.is_empty()).then_some(context.meta);
+        Ok(self.dispatch_elicitation(with_meta(request, meta)).await)
     }
 
     async fn on_custom_notification(
