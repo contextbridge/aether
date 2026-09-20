@@ -14,7 +14,7 @@ use crate::settings_args::SettingsSourceArgs;
 use crate::workspace::WorkspaceManager;
 use crate::workspace::testing::StdCopyCloner;
 use acp_utils::notifications::{AuthMethodsUpdatedParams, McpNotification};
-use acp_utils::testing::{TestPeer, duplex_pair, initialize_request};
+use acp_utils::testing::{TestPeer, initialize_request};
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
 use aether_core::core::{AgentBuilder, AgentHandle, Prompt};
@@ -27,7 +27,7 @@ use agent_client_protocol::schema::v2::{
     AbsolutePath, InitializeResponse, ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate,
     StateUpdate, StopReason,
 };
-use agent_client_protocol::{Agent, Client, ConnectionTo, on_receive_notification};
+use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, on_receive_notification};
 use futures::FutureExt;
 use llm::testing::FakeLlmProvider;
 use llm::{ChatMessage, Context, LlmResponse, SessionUsageEvent, StreamingModelProvider};
@@ -610,7 +610,7 @@ async fn connect_client(state: Arc<AcpState>) -> HarnessConnection {
         },
         on_receive_notification!(),
     );
-    let (agent_transport, client_transport) = duplex_pair();
+    let (agent_transport, client_transport) = Channel::duplex();
     let (send_agent_connection, agent_ready) = oneshot::channel();
     let (send_client_connection, client_ready) = oneshot::channel();
     let stop = state.stop_token().child_token();
