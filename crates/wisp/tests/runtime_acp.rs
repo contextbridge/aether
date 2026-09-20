@@ -1,7 +1,6 @@
 #![cfg(feature = "testing")]
 
-use acp_utils::testing::{duplex_pair, idle_notification, running_notification};
-use agent_client_protocol::Responder;
+use acp_utils::testing::{idle_notification, running_notification};
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v2::{
     AgentCapabilities, AuthMethodId, CancelSessionNotification, ContentBlock, Implementation, InitializeRequest,
@@ -12,6 +11,7 @@ use agent_client_protocol::schema::v2::{
 use agent_client_protocol::schema::v2::{
     ContentChunk, SessionUpdate, StopReason, UpdateSessionNotification, UserMessage,
 };
+use agent_client_protocol::{Channel, Responder};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tokio::task::{LocalSet, spawn_local};
@@ -200,7 +200,7 @@ async fn remote_exit_joins_connection_without_cancel_or_close() {
                 })
                 .new_session_response(NewSessionResponse::new("new"))
                 .capture();
-            let (server, transport) = duplex_pair();
+            let (server, transport) = Channel::duplex();
             spawn_local(agent.agent().connect_to(server));
             let session = Session::connect_remote_to(transport, None).await.unwrap();
             let mut dispatcher = CommandDispatcher::new(session.client.handle.clone());
@@ -247,7 +247,7 @@ async fn remote_connection_loss_exits_with_error_without_resending() {
                 })
                 .new_session_response(NewSessionResponse::new("new"))
                 .capture();
-            let (server, transport) = duplex_pair();
+            let (server, transport) = Channel::duplex();
             let driver = spawn_local(agent.agent().connect_to(server));
             let session = Session::connect_remote_to(transport, None).await.unwrap();
             let mut dispatcher = CommandDispatcher::new(session.client.handle.clone());
@@ -291,7 +291,7 @@ async fn remote_startup_creates_in_the_server_workspace() {
                 .remote_server(&acp_utils::notifications::RemoteServerInfo { cwd: cwd.clone(), session_id: None })
                 .new_session_response(NewSessionResponse::new("created"))
                 .capture();
-            let (server, transport) = duplex_pair();
+            let (server, transport) = Channel::duplex();
             spawn_local(agent.agent().connect_to(server));
             let session = Session::connect_remote_to(transport, None).await.unwrap();
             assert_eq!(requests.new_session.recv().await.unwrap().cwd.0, cwd);
@@ -342,7 +342,7 @@ async fn remote_startup_resumes_selected_session_and_preserves_queued_replay() {
                         truncated: false,
                     })
                     .capture();
-                let (server, transport) = duplex_pair();
+                let (server, transport) = Channel::duplex();
                 spawn_local(agent.agent().connect_to(server));
                 let startup = spawn_local(Session::connect_remote_to(transport, requested.map(SessionId::new)));
                 let (request, responder) = requests.resume.recv().await.unwrap();
@@ -409,7 +409,7 @@ async fn remote_startup_rejects_missing_contract_without_creating_a_session() {
             let (agent, mut requests) = acp_utils::testing::FakeAgent::default()
                 .new_session_response(NewSessionResponse::new("must-not-create"))
                 .capture();
-            let (server, transport) = duplex_pair();
+            let (server, transport) = Channel::duplex();
             spawn_local(agent.agent().connect_to(server));
             assert!(matches!(
                 Session::connect_remote_to(transport, None).await,
@@ -431,7 +431,7 @@ async fn remote_startup_unknown_explicit_session_does_not_fall_back_to_live() {
                     session_id: Some("live".into()),
                 })
                 .capture();
-            let (server, transport) = duplex_pair();
+            let (server, transport) = Channel::duplex();
             spawn_local(agent.agent().connect_to(server));
             assert!(matches!(
                 Session::connect_remote_to(transport, Some("missing".into())).await,
@@ -465,7 +465,7 @@ async fn connect(capabilities: Option<SessionCapabilities>) -> (Session, Peer) {
         )]))
         .login_method("provider")
         .capture();
-    let (agent_transport, client_transport) = duplex_pair();
+    let (agent_transport, client_transport) = Channel::duplex();
     spawn_local(agent.agent().connect_to(agent_transport));
     let session = Session::connect_to(client_transport, PathBuf::from("/workspace")).await.unwrap();
     let created = requests.new_session.recv().await.unwrap();
