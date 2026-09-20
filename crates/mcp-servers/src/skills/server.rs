@@ -7,7 +7,7 @@ use rmcp::{
     },
     model::{
         GetPromptRequestParams, GetPromptResponse, Implementation, ListPromptsResult, PaginatedRequestParams, Prompt,
-        PromptArgument, PromptMessage, Role, ServerCapabilities, ServerInfo,
+        PromptArgument, PromptMessage, Role, ServerCapabilities, ServerConfig,
     },
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -17,7 +17,6 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::{fs, path::Path};
-use tokio::sync::RwLock;
 use utils::shell_expander::ShellExpander;
 use utils::substitution::substitute_parameters;
 
@@ -57,7 +56,7 @@ impl SkillsMcpArgs {
 #[doc = include_str!("../docs/skills_mcp.md")]
 #[derive(Clone)]
 pub struct SkillsMcp {
-    catalog: Arc<RwLock<PromptCatalog>>,
+    catalog: Arc<PromptCatalog>,
     tool_router: ToolRouter<Self>,
     root_dir: PathBuf,
 }
@@ -91,7 +90,7 @@ impl SkillsMcp {
         let catalog = PromptCatalog::from_dirs(prompt_dirs);
 
         Self {
-            catalog: Arc::new(RwLock::new(catalog)),
+            catalog: Arc::new(catalog),
             tool_router: Self::tool_router(),
             root_dir: crate::workspace_paths::current_dir(),
         }
@@ -117,15 +116,12 @@ impl SkillsMcp {
         prompt.path.file_name().is_some_and(|name| name == SKILL_FILENAME)
     }
 
-    async fn resolve_skill_file(
-        &self,
-        request: &SkillRequest,
-    ) -> Result<(PromptFile, PathBuf, String), SkillFileError> {
-        let prompt = {
-            let catalog = self.catalog.read().await;
-            catalog.find(&request.name).cloned()
-        }
-        .ok_or_else(|| SkillFileError::SkillNotFound(request.name.clone()))?;
+    fn resolve_skill_file(&self, request: &SkillRequest) -> Result<(PromptFile, PathBuf, String), SkillFileError> {
+        let prompt = self
+            .catalog
+            .find(&request.name)
+            .cloned()
+            .ok_or_else(|| SkillFileError::SkillNotFound(request.name.clone()))?;
 
         if !prompt.agent_invocable {
             return Err(SkillFileError::NotAgentInvocable(request.name.clone()));
@@ -214,7 +210,7 @@ impl SkillsMcp {
     async fn load_skill_file(&self, request: &SkillRequest, expander: &ShellExpander) -> SkillFile {
         let name = request.name.clone();
         let fallback_path = request.path.clone().unwrap_or_else(|| SKILL_FILENAME.to_string());
-        let (prompt, resolved_path, response_path) = match self.resolve_skill_file(request).await {
+        let (prompt, resolved_path, response_path) = match self.resolve_skill_file(request) {
             Ok(result) => result,
             Err(e) => {
                 return SkillFile {
@@ -259,8 +255,8 @@ impl SkillsMcp {
 #[allow(clippy::unused_async_trait_impl)]
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for SkillsMcp {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_prompts().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_prompts().enable_tools().build())
             .with_server_info(Implementation::new("skills-mcp", "0.1.0"))
             .with_instructions(include_str!("./instructions.md"))
     }
@@ -270,8 +266,8 @@ impl ServerHandler for SkillsMcp {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, McpError> {
-        let catalog = self.catalog.read().await;
-        let prompts = catalog
+        let prompts = self
+            .catalog
             .slash_commands()
             .map(|s| {
                 let arguments = s.argument_hint.as_ref().map(|hint| {
@@ -290,8 +286,8 @@ impl ServerHandler for SkillsMcp {
         request: GetPromptRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<GetPromptResponse, McpError> {
-        let catalog = self.catalog.read().await;
-        let spec = catalog
+        let spec = self
+            .catalog
             .slash_commands()
             .find(|s| s.name == request.name.as_str())
             .ok_or_else(|| McpError::invalid_params(format!("Prompt '{}' not found", request.name), None))?;
@@ -321,8 +317,8 @@ impl SkillsMcp {
     #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn list_skills(&self, request: Parameters<ListSkillsInput>) -> Json<ListSkillsOutput> {
         let Parameters(_input) = request;
-        let catalog = self.catalog.read().await;
-        let mut skills: Vec<_> = catalog
+        let mut skills: Vec<_> = self
+            .catalog
             .skills()
             .map(|skill| SkillListItem {
                 name: skill.name.clone(),

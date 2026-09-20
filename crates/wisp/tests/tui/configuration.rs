@@ -69,32 +69,21 @@ fn elicitation_request_is_accepted_interactively() {
 
 #[test]
 fn tab_cycles_reasoning_effort_through_advertised_levels() {
-    let options = vec![reasoning_option("low", &["low", "medium", "high"])];
-    let mut app = TestUiBuilder::new().config_options(options).build();
-
-    app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    let cmd = app.next_agent_command().unwrap();
-    assert!(
-        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "reasoning_effort" && value == "medium")
-    );
-
-    app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    let cmd = app.next_agent_command().unwrap();
-    assert!(
-        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "reasoning_effort" && value == "high")
-    );
-
-    app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    let cmd = app.next_agent_command().unwrap();
-    assert!(
-        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "reasoning_effort" && value == "none")
-    );
-
-    app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    let cmd = app.next_agent_command().unwrap();
-    assert!(
-        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "reasoning_effort" && value == "low")
-    );
+    for (current, levels, expected_values) in [
+        ("default", ["default", "disabled", "low"], ["disabled", "low", "default", "disabled"]),
+        ("low", ["low", "medium", "high"], ["medium", "high", "default", "low"]),
+    ] {
+        let mut app = TestUiBuilder::new().config_options(vec![reasoning_option(current, &levels)]).build();
+        for expected in expected_values {
+            app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+            let cmd = app.next_agent_command().unwrap();
+            assert!(
+                matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. }
+                    if config_id == "reasoning_effort" && value == &acp::SessionConfigOptionValue::id(expected)),
+                "starting at {current}, expected {expected}, got {cmd:?}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -105,19 +94,19 @@ fn shift_backtab_cycles_mode_option_and_wraps() {
     app.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
     let cmd = app.next_agent_command().unwrap();
     assert!(
-        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == "plan")
+        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == &acp::SessionConfigOptionValue::id("plan"))
     );
 
     app.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
     let cmd = app.next_agent_command().unwrap();
     assert!(
-        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == "ask")
+        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == &acp::SessionConfigOptionValue::id("ask"))
     );
 
     app.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
     let cmd = app.next_agent_command().unwrap();
     assert!(
-        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == "code")
+        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == &acp::SessionConfigOptionValue::id("code"))
     );
 }
 
@@ -129,13 +118,13 @@ fn shift_backtab_cycles_grouped_mode_options() {
     app.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
     let cmd = app.next_agent_command().unwrap();
     assert!(
-        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == "plan")
+        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == &acp::SessionConfigOptionValue::id("plan"))
     );
 
     app.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
     let cmd = app.next_agent_command().unwrap();
     assert!(
-        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == "review"),
+        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == &acp::SessionConfigOptionValue::id("review")),
         "cycling must cross group boundaries, not stop at the first group"
     );
 }
@@ -171,7 +160,10 @@ fn failed_config_update_shows_error_and_does_not_corrupt_state() {
     app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     let _ = app.next_agent_command().unwrap();
 
-    app.deliver_result(CommandResult::ConfigOptionUpdateFailed { error: "server error".to_string() });
+    app.deliver_result(CommandResult::ConfigOptionsUpdated {
+        conversation_id: app.app().conversation_id(),
+        result: Err("server error".to_string()),
+    });
 
     let messages: Vec<_> = message_texts(&app).collect();
     let has_error = messages.iter().any(|message| message.contains("Failed to update"));

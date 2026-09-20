@@ -2,27 +2,45 @@
 //! notifications.
 use std::path::PathBuf;
 
-use agent_client_protocol::schema::v1::{AuthMethod, Meta};
+use agent_client_protocol::schema::v2::{AuthMethod, Meta, SessionId};
 use agent_client_protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
+use clankerdiff_protocol::client::ClientCommand;
+use clankerdiff_protocol::shared::{DocumentUpdate, Event};
 pub use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize};
 
 pub use mcp_utils::status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
 
+use crate::meta::{from_meta, to_meta};
+
 pub const AETHER_META_NAMESPACE: &str = "contextbridge/aether";
+
+/// Remote host discovery, advertised on the initialize response only.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteServerInfo {
+    pub cwd: PathBuf,
+    pub session_id: Option<SessionId>,
+}
+
+impl RemoteServerInfo {
+    #[must_use]
+    pub fn to_meta(&self) -> Meta {
+        to_meta(&RemoteInitializationMeta { remote: Some(self.clone()) }, Some(AETHER_META_NAMESPACE))
+            .unwrap_or_default()
+    }
+
+    #[must_use]
+    pub fn from_meta(meta: Option<&Meta>) -> Option<Self> {
+        from_meta::<RemoteInitializationMeta>(meta, Some(AETHER_META_NAMESPACE)).remote
+    }
+}
 
 /// Parameters for `_aether/session_usage` notifications.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonRpcNotification)]
 #[notification(method = "_aether/session_usage")]
 pub struct SessionUsageParams {
     pub usage: llm::SessionUsageEvent,
-}
-
-/// Parameters for `_aether/context_compaction` notifications.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcNotification)]
-#[notification(method = "_aether/context_compaction")]
-pub struct ContextCompactionParams {
-    pub active: bool,
 }
 
 /// Parameters for `_aether/context_cleared` notifications.
@@ -168,12 +186,12 @@ impl SessionDisplayMeta {
 
     #[must_use]
     pub fn to_meta(&self) -> Meta {
-        to_aether_meta(self)
+        to_meta(self, Some(AETHER_META_NAMESPACE)).unwrap_or_default()
     }
 
     #[must_use]
     pub fn from_meta(meta: Option<&Meta>) -> Self {
-        from_aether_meta(meta)
+        from_meta(meta, Some(AETHER_META_NAMESPACE))
     }
 }
 
@@ -191,26 +209,53 @@ pub struct AetherCapabilities {
 impl AetherCapabilities {
     #[must_use]
     pub fn to_meta(self) -> Meta {
-        to_aether_meta(&self)
+        to_meta(&self, Some(AETHER_META_NAMESPACE)).unwrap_or_default()
     }
 
     #[must_use]
     pub fn from_meta(meta: Option<&Meta>) -> Self {
-        from_aether_meta(meta)
+        from_meta(meta, Some(AETHER_META_NAMESPACE))
     }
 }
 
-fn to_aether_meta<T: Serialize>(value: &T) -> Meta {
-    let mut meta = Meta::new();
-    meta.insert(AETHER_META_NAMESPACE.to_string(), serde_json::json!(value));
-    meta
+#[derive(Debug, Clone, Serialize, Deserialize, JsonRpcNotification)]
+#[notification(method = "_aether/git_diff")]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffCommandPayload {
+    pub session_id: String,
+    #[serde(flatten)]
+    pub command: ClientCommand,
 }
 
-fn from_aether_meta<T: DeserializeOwned + Default>(meta: Option<&Meta>) -> T {
-    meta.and_then(|m| m.get(AETHER_META_NAMESPACE))
-        .cloned()
-        .and_then(|value| serde_json::from_value(value).ok())
-        .unwrap_or_default()
+#[derive(Debug, Clone, Serialize, Deserialize, JsonRpcNotification)]
+#[notification(method = "_aether/git_diff_event")]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffEventPayload {
+    pub session_id: String,
+    #[serde(flatten)]
+    pub event: Event<DocumentUpdate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonRpcNotification)]
+#[notification(method = "_aether/git_diff_close")]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffClosePayload {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcRequest)]
+#[request(method = "_aether/workspace_status", response = WorkspaceStatusResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceStatusPayload {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceStatusResponse {
+    pub display_dir: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_ref: Option<String>,
 }
 
 /// Server→client MCP extension notifications (relay → wisp).
@@ -279,15 +324,29 @@ pub struct SubAgentToolError {
     pub name: String,
 }
 
+#[derive(Default, Serialize, Deserialize)]
+struct RemoteInitializationMeta {
+    remote: Option<RemoteServerInfo>,
+}
+
 #[cfg(test)]
 mod tests {
-    use agent_client_protocol::JsonRpcMessage;
-    use agent_client_protocol::schema::v1::AuthMethodAgent;
-
     use super::*;
+    use agent_client_protocol::JsonRpcMessage;
+    use agent_client_protocol::schema::v2::AuthMethodAgent;
 
     #[test]
     fn wire_method_names_are_prefixed() {
+        assert_eq!(
+            GitDiffCommandPayload { session_id: String::new(), command: ClientCommand::Cancel }.method(),
+            "_aether/git_diff"
+        );
+        assert_eq!(GitDiffClosePayload { session_id: String::new() }.method(), "_aether/git_diff_close");
+        assert_eq!(
+            GitDiffEventPayload { session_id: String::new(), event: Event::RequestResult(Ok(())) }.method(),
+            "_aether/git_diff_event"
+        );
+        assert_eq!(WorkspaceStatusPayload { session_id: String::new() }.method(), "_aether/workspace_status");
         assert_eq!(ContextClearedParams::default().method(), "_aether/context_cleared");
         assert_eq!(AuthMethodsUpdatedParams { auth_methods: vec![] }.method(), "_aether/auth_methods_updated");
         assert_eq!(McpNotification::ServerStatus { servers: vec![] }.method(), "_aether/mcp_event");
@@ -301,17 +360,6 @@ mod tests {
         let move_params =
             WorkspaceMoveParams { session_id: String::new(), target: WorkspaceMoveTarget::New { name: String::new() } };
         assert_eq!(move_params.method(), "_aether/workspace_move");
-    }
-
-    #[test]
-    fn context_compaction_params_roundtrip() {
-        for active in [true, false] {
-            let params = ContextCompactionParams { active };
-            let untyped = params.to_untyped_message().expect("serializable");
-            assert_eq!(untyped.method(), "_aether/context_compaction");
-            let parsed = ContextCompactionParams::parse_message(untyped.method(), untyped.params()).expect("roundtrip");
-            assert_eq!(parsed, params);
-        }
     }
 
     #[test]

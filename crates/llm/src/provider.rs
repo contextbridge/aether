@@ -2,9 +2,11 @@ use crate::LlmError;
 use crate::LlmModel;
 use crate::ProviderConnectionConfig;
 use crate::Result as LlmResult;
+use crate::catalog::ReasoningEffortError;
 use std::future::Future;
 use std::pin::Pin;
 use tokio_stream::{Stream, StreamExt};
+use utils::ReasoningEffort;
 
 use super::{Context, LlmResponse};
 
@@ -56,6 +58,28 @@ pub trait StreamingModelProvider: Send + Sync {
 pub fn get_context_window(provider: &str, model_id: &str) -> Option<u32> {
     let key = format!("{provider}:{model_id}");
     key.parse::<LlmModel>().ok().and_then(|m| m.context_window())
+}
+
+pub(crate) fn validate_reasoning(context: &Context, model: Option<&LlmModel>) -> LlmResult<()> {
+    if context.reasoning_effort() != ReasoningEffort::Disabled {
+        return Ok(());
+    }
+
+    let model = model.ok_or_else(|| ReasoningEffortError::Unsupported {
+        model: "unknown".to_string(),
+        effort: ReasoningEffort::Disabled,
+        supported: Vec::new(),
+    })?;
+
+    if !model.supports_reasoning_off() {
+        model.validate_reasoning_effort(ReasoningEffort::Disabled)?;
+    }
+
+    if !model.supports_reasoning_off_transport() {
+        return Err(LlmError::UnsupportedDisableTransport { model: model.to_string() });
+    }
+
+    Ok(())
 }
 
 /// Bridge a fallible request setup into an [`LlmResponseStream`].

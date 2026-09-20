@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.3.1...aether-telemetry-v0.3.2) - 2026-09-16
+
+### Other
+
+- release ([#466](https://github.com/contextbridge/aether/pull/466))
+
+## [0.3.1](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.3.0...aether-telemetry-v0.3.1) - 2026-09-14
+
+### Other
+
+- updated the following local packages: aether-agent-core, aether-agent-core
+
+## [0.3.0](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.2.3...aether-telemetry-v0.3.0) - 2026-09-14
+
+### Added
+
+- [**breaking**] Migrate to ACP 2.0 ([#460](https://github.com/contextbridge/aether/pull/460))
+
+## [0.2.3](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.2.2...aether-telemetry-v0.2.3) - 2026-09-11
+
+### Other
+
+- updated the following local packages: aether-llm, aether-agent-core, aether-agent-core
+
 ## [0.2.2](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.2.1...aether-telemetry-v0.2.2) - 2026-09-09
 
 ### Other

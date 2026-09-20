@@ -150,7 +150,7 @@ fn render_segment(
                 return Vec::new();
             }
             let effort = config.reasoning_effort();
-            let label = effort.map_or("none", ReasoningEffort::as_str);
+            let label = ReasoningEffort::config_str(effort);
             vec![styled(reasoning_bar(effort, &levels, label.len()), reasoning_color(effort, &levels, theme))]
         }
         StatusLineSegmentConfig::Context => model

@@ -9,7 +9,7 @@ use futures::future::{Either, select};
 use rmcp::RoleClient;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ClientRequest, CreateTaskResult, InputRequests,
-    InputResponses, ProgressNotificationParam, Request, RequestMetaObject, ServerResult, Task,
+    InputRequiredResult, InputResponses, ProgressNotificationParam, Request, RequestMetaObject, ServerResult, Task,
 };
 use rmcp::service::{PeerRequestOptions, RequestHandle, RunningService, ServiceError};
 use std::pin::pin;
@@ -191,6 +191,13 @@ async fn await_tool_response(handle: RequestHandle<RoleClient>) -> Result<CallTo
         ServerResult::CallToolResult(result) => Ok(CallToolResponse::Complete(result)),
         ServerResult::InputRequiredResult(result) => Ok(CallToolResponse::InputRequired(result)),
         ServerResult::CreateTaskResult(result) => Ok(CallToolResponse::Task(result)),
+        ServerResult::CustomResult(result)
+            if result.0.get("resultType").and_then(serde_json::Value::as_str) == Some("input_required")
+                && result.0.get("inputRequests").is_none()
+                && result.0.get("requestState").is_none() =>
+        {
+            Ok(CallToolResponse::InputRequired(InputRequiredResult::new(None, None)))
+        }
         _ => Err(ServiceError::UnexpectedResponse),
     }
 }

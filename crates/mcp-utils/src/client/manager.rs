@@ -16,7 +16,7 @@ use aether_auth::{OAuthCredentialStorage, OAuthHandler};
 use futures::future::join_all;
 use rmcp::{
     Peer, RoleClient, RoleServer,
-    model::{ClientCapabilities, ClientInfo, ElicitRequestParams, ElicitResult, Implementation, Tool as RmcpTool},
+    model::{ClientCapabilities, ClientConfig, ElicitRequestParams, ElicitResult, Implementation, Tool as RmcpTool},
     service::DynService,
 };
 use std::collections::{BTreeMap, HashMap};
@@ -116,7 +116,7 @@ pub struct McpManager {
     servers: HashMap<String, ServerRecord>,
     catalog: ToolCatalog,
     tool_filter: ToolFilter,
-    client_info: ClientInfo,
+    client_info: ClientConfig,
     event_sender: mpsc::Sender<McpClientEvent>,
     root_dir: PathBuf,
     oauth_handler_factory: Option<OAuthHandlerFactory>,
@@ -135,7 +135,7 @@ impl McpManager {
             servers: HashMap::new(),
             catalog: ToolCatalog::new(),
             tool_filter: ToolFilter::default(),
-            client_info: ClientInfo::new(client_capabilities(), Implementation::new("aether", "0.1.0")),
+            client_info: ClientConfig::new(client_capabilities(), Implementation::new("aether", "0.1.0")),
             event_sender,
             root_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             oauth_handler_factory,
@@ -661,7 +661,7 @@ mod tests {
     use rmcp::{
         Json, RoleServer, ServerHandler,
         handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-        model::{Implementation, ServerCapabilities, ServerInfo, Tool as RmcpTool},
+        model::{Implementation, ServerCapabilities, ServerConfig, Tool as RmcpTool},
         service::DynService,
         tool, tool_handler, tool_router,
         transport::streamable_http_client::StreamableHttpClientTransportConfig,
@@ -682,8 +682,8 @@ mod tests {
     #[allow(clippy::unused_async_trait_impl)]
     #[tool_handler(router = self.tool_router)]
     impl ServerHandler for TestServer {
-        fn get_info(&self) -> ServerInfo {
-            ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        fn get_info(&self) -> ServerConfig {
+            ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
                 .with_server_info(Implementation::new("test-server", "0.1.0").with_description("Test MCP server"))
                 .with_instructions("Test server instructions")
         }

@@ -1,9 +1,46 @@
 use mcp_servers::coding::error::WebFetchError;
-use mcp_servers::coding::tools::web_fetch::{HttpResponse, WebFetchInput, WebFetcher};
+use mcp_servers::coding::tools::web_fetch::{HttpResponse, WebFetchInput, WebFetchOutput, WebFetcher};
 use mcp_servers::testing::FakeHttpClient;
 
 fn html_page(title: &str, body: &str) -> String {
     format!("<html><head><title>{title}</title></head><body>{body}</body></html>")
+}
+
+#[tokio::test]
+async fn test_fetch_truncates_unicode_without_panicking() {
+    let result = WebFetchTest::new(html_page("Unicode", &format!("<p>{}</p>", "界".repeat(20_000)))).fetch().await;
+
+    assert!(result.truncated);
+    assert!(result.content.ends_with("[Content truncated...]"));
+    assert!(result.content.starts_with('界'));
+}
+
+#[tokio::test]
+async fn test_fetch_preserves_plain_text_documentation() {
+    let body = "<SYSTEM>Abridged documentation</SYSTEM>\n\n# Rust\n\n```rust\nVec<String>\n```\n";
+    let result = WebFetchTest::new(body)
+        .url("https://example.com/llms-small.txt")
+        .content_type(Some("text/plain; charset=utf-8"))
+        .fetch()
+        .await;
+
+    assert_eq!(result.content, body);
+    assert_eq!(result.title, None);
+    assert!(!result.truncated);
+}
+
+#[tokio::test]
+async fn test_fetch_html_content_types() {
+    for content_type in [None, Some("text/html; charset=utf-8"), Some("Text/HTML"), Some("application/xhtml+xml")] {
+        let result = WebFetchTest::new(html_page("HTML", "<h1>Heading</h1>"))
+            .url("https://example.com/page.txt")
+            .content_type(content_type)
+            .fetch()
+            .await;
+
+        assert!(result.content.contains("# Heading"), "{content_type:?}");
+        assert!(!result.content.contains("<h1>"));
+    }
 }
 
 #[tokio::test]
@@ -31,6 +68,7 @@ async fn test_fetch_with_redirect() {
             final_url: "https://example.com/html".to_string(),
             status_code: 200,
             body: html_page("Redirect Target", "<h1>Redirected</h1>"),
+            content_type: Some("text/html".to_string()),
         },
     ));
     let result = fetcher
@@ -136,4 +174,37 @@ async fn test_fetcher_reusable() {
     assert_eq!(result2.status_code, 200);
     assert!(result1.content.contains("Page 1"));
     assert!(result2.content.contains("Page 2"));
+}
+
+struct WebFetchTest {
+    response: HttpResponse,
+}
+
+impl WebFetchTest {
+    fn new(body: impl Into<String>) -> Self {
+        Self {
+            response: HttpResponse {
+                final_url: "https://example.com/".to_string(),
+                status_code: 200,
+                body: body.into(),
+                content_type: Some("text/html".to_string()),
+            },
+        }
+    }
+
+    fn url(mut self, url: &str) -> Self {
+        self.response.final_url = url.to_string();
+        self
+    }
+
+    fn content_type(mut self, content_type: Option<&str>) -> Self {
+        self.response.content_type = content_type.map(str::to_owned);
+        self
+    }
+
+    async fn fetch(self) -> WebFetchOutput {
+        let url = self.response.final_url.clone();
+        let client = FakeHttpClient::new().with_response(&url, self.response);
+        WebFetcher::with_client(client).fetch(WebFetchInput { url, prompt: None, timeout: None }).await.unwrap()
+    }
 }

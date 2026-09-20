@@ -19,9 +19,7 @@ pub enum StopReason {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum LlmResponse {
-    Start {
-        message_id: String,
-    },
+    Start,
     Text {
         chunk: String,
     },
@@ -56,10 +54,6 @@ pub enum LlmResponse {
 }
 
 impl LlmResponse {
-    pub fn start(message_id: &str) -> Self {
-        Self::Start { message_id: message_id.to_string() }
-    }
-
     pub fn text(chunk: &str) -> Self {
         Self::Text { chunk: chunk.to_string() }
     }

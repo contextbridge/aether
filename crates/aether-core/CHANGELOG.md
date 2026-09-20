@@ -4,6 +4,39 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.8.2](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.8.1...aether-agent-core-v0.8.2) - 2026-09-16
+
+### Added
+
+- replace plan and survey with explicit artifact review ([#478](https://github.com/contextbridge/aether/pull/478))
+- support explicitly disabling model reasoning ([#477](https://github.com/contextbridge/aether/pull/477))
+
+### Fixed
+
+- replace deprecated rmcp info aliases ([#480](https://github.com/contextbridge/aether/pull/480))
+
+### Other
+
+- release ([#466](https://github.com/contextbridge/aether/pull/466))
+
+## [0.8.1](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.8.0...aether-agent-core-v0.8.1) - 2026-09-14
+
+### Other
+
+- updated the following local packages: aether-acp-utils
+
+## [0.8.0](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.7.3...aether-agent-core-v0.8.0) - 2026-09-14
+
+### Added
+
+- [**breaking**] Migrate to ACP 2.0 ([#460](https://github.com/contextbridge/aether/pull/460))
+
+## [0.7.3](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.7.2...aether-agent-core-v0.7.3) - 2026-09-11
+
+### Added
+
+- Add additional cumulative cost components for sessions ([#448](https://github.com/contextbridge/aether/pull/448))
+
 ## [0.7.2](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.7.1...aether-agent-core-v0.7.2) - 2026-09-09
 
 ### Other

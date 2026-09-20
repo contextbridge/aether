@@ -1,4 +1,3 @@
-use crate::session::workspace_status::home_relative_path;
 use crate::view::edit_buffer::EditBuffer;
 use crate::view::filterable_list::FilterableList;
 use crate::theme::Theme;
@@ -23,6 +22,12 @@ pub struct PromptSearchPicker {
     results: FilterableList<PromptSearchResult>,
     loading: bool,
     error: Option<String>,
+}
+
+impl Default for PromptSearchPicker {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PromptSearchPicker {
@@ -154,7 +159,7 @@ impl PromptSearchPicker {
 }
 
 fn result_line(result: &PromptSearchResult, max_width: usize, theme: &Theme) -> Line<'static> {
-    let cwd_display = match home_relative_path(&result.cwd) {
+    let cwd_display = match result.cwd.display().to_string() {
         full if full.width() <= MAX_CWD_WIDTH => full,
         full => result
             .cwd

@@ -8,11 +8,10 @@ use std::{
     os::unix::fs::PermissionsExt,
     os::unix::net::UnixListener as StdUnixListener,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
 };
 use tokio::io::{ReadHalf, WriteHalf};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -103,8 +102,6 @@ impl UnixSocketMcpTransport {
         let Self { path, listener } = self;
         let cancellation = CancellationToken::new();
         let accept_cancellation = cancellation.clone();
-        let connections = Arc::new(Mutex::new(JoinSet::new()));
-        let accept_connections = Arc::clone(&connections);
         let task = tokio::spawn(async move {
             loop {
                 let accepted = tokio::select! {
@@ -114,7 +111,7 @@ impl UnixSocketMcpTransport {
                 let Ok((stream, _)) = accepted else { break };
                 let server = server.clone();
                 let connection_cancellation = accept_cancellation.clone();
-                accept_connections.lock().unwrap().spawn(async move {
+                tokio::spawn(async move {
                     match server.serve(stream).await {
                         Ok(running) => {
                             let service_cancellation = running.cancellation_token();
@@ -129,17 +126,16 @@ impl UnixSocketMcpTransport {
                 });
             }
         });
-        UnixSocketServer { path, cancellation, task, connections }
+        UnixSocketServer { path, cancellation, task }
     }
 }
 
-/// Owns the accept task, its connection tasks, and the session endpoint.
+/// Owns the accept task, connection cancellation, and the session endpoint.
 /// Dropping it cancels in-flight connections and removes the endpoint.
 pub struct UnixSocketServer {
     path: UnixSocketPath,
     cancellation: CancellationToken,
     task: JoinHandle<()>,
-    connections: Arc<Mutex<JoinSet<()>>>,
 }
 
 impl UnixSocketServer {
@@ -152,7 +148,6 @@ impl Drop for UnixSocketServer {
     fn drop(&mut self) {
         self.cancellation.cancel();
         self.task.abort();
-        self.connections.lock().unwrap().detach_all();
     }
 }
 
@@ -170,7 +165,7 @@ mod tests {
     use super::*;
     use rmcp::ServerHandler;
     use rmcp::handler::server::router::tool::ToolRouter;
-    use rmcp::model::{ServerCapabilities, ServerInfo};
+    use rmcp::model::{ServerCapabilities, ServerConfig};
     use rmcp::{tool, tool_handler, tool_router};
 
     #[derive(Clone)]
@@ -178,14 +173,14 @@ mod tests {
         tool_router: ToolRouter<Self>,
     }
 
-    #[tool_router]
+    #[tool_router(allow_empty)]
     impl TestServer {}
 
     #[allow(clippy::unused_async_trait_impl)]
     #[tool_handler(router = self.tool_router)]
     impl ServerHandler for TestServer {
-        fn get_info(&self) -> ServerInfo {
-            ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        fn get_info(&self) -> ServerConfig {
+            ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
         }
     }
 
@@ -242,6 +237,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn connected_client_can_list_empty_tools() {
+        let path = UnixSocketPath::new().unwrap();
+        let transport = UnixSocketMcpTransport::bind(path).unwrap();
+        let socket = transport.path().to_path_buf();
+        let _server = transport.spawn(TestServer { tool_router: TestServer::tool_router() });
+        let client = ().serve(connect(&socket).await.unwrap()).await.unwrap();
+
+        assert!(client.list_all_tools().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn dropping_server_cancels_in_flight_connections() {
         use rmcp::model::CallToolRequestParams;
         use tokio::sync::watch;
@@ -265,8 +271,8 @@ mod tests {
         #[allow(clippy::unused_async_trait_impl)]
         #[tool_handler(router = self.tool_router)]
         impl ServerHandler for SlowServer {
-            fn get_info(&self) -> ServerInfo {
-                ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            fn get_info(&self) -> ServerConfig {
+                ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             }
         }
 

@@ -1,7 +1,8 @@
-use crate::view::selection::{SelectionState, scroll_into_view};
 use crate::theme::Theme;
+use crate::view::selection::{SelectionState, scroll_into_view};
 use crate::view::widgets::{render_vertical_scrollbar, row_area, rows_and_track};
 use crate::view::wrap::{as_u16, fit_line};
+use clankerdiff_ratatui::theme::SelectionState as ThemeSelectionState;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -71,10 +72,8 @@ impl<'a> ListView<'a> {
         self.block(Block::bordered().title(title.into()).style(style))
     }
 
-    /// The chrome every settings pane shares: an inverted highlight and the
-    /// standard "nothing here" placeholder.
     pub fn pane(self, empty_message: &'a str) -> Self {
-        let highlight = Style::new().fg(self.theme.background).bg(self.theme.text_primary);
+        let highlight = self.theme.selection_style(ThemeSelectionState::Focused);
         self.empty_message(empty_message).highlight_style(highlight)
     }
 
@@ -141,7 +140,7 @@ impl StatefulWidget for ListView<'_> {
 
         let symbol_width = as_u16(highlight_symbol.map_or(0, str::width));
         let content_width = usize::from(rows_area.width.saturating_sub(symbol_width));
-        let highlight = highlight.unwrap_or_else(|| Style::new().fg(theme.text_primary).bg(theme.sidebar_bg));
+        let highlight = highlight.unwrap_or_else(|| theme.selection_style(ThemeSelectionState::Selected));
 
         for (drawn, index) in (offset..rows.len.min(offset + height)).enumerate() {
             let Some(whole) = row_area(rows_area, drawn) else {
@@ -213,8 +212,8 @@ fn visible_offset(offset: usize, selected: Option<usize>, len: usize, height: us
 #[cfg(test)]
 mod tests {
     use super::{ListView, visible_offset};
-    use crate::view::selection::SelectionState;
     use crate::theme::Theme;
+    use crate::view::selection::SelectionState;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::text::Line;

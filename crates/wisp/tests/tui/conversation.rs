@@ -254,7 +254,7 @@ fn stream_after_a_completed_tool_commits_incrementally() {
 }
 
 #[test]
-fn thought_chunks_drive_progress_activity_without_appending() {
+fn thought_chunks_preserve_identity_without_rendering_in_the_transcript() {
     let mut ui = TestUi::with_dimensions(120, 30);
     ui.submit("think hard");
 
@@ -264,12 +264,8 @@ fn thought_chunks_drive_progress_activity_without_appending() {
     }
 
     assert!(
-        ui.app()
-            .conversation_items()
-            .iter()
-            .filter_map(|item| item.text())
-            .all(|text| !text.contains("pondering-line")),
-        "thought chunks must not append conversation items"
+        ui.app().conversation_items().iter().all(|item| !item.text().is_some_and(|text| text.contains("pondering"))),
+        "thought chunks never become transcript items"
     );
     assert_eq!(ui.history_text().matches("pondering-line-0").count(), 0, "thought text must not reach scrollback");
 
@@ -403,18 +399,17 @@ fn cancelled_prompt_marks_running_tool_as_error() {
 }
 
 fn tool_call_with_raw(id: &str, title: &str, raw_input: serde_json::Value) -> AcpEvent {
-    session_update(acp::SessionUpdate::ToolCall(acp::ToolCall::new(id.to_string(), title).raw_input(raw_input)))
+    session_update(acp::SessionUpdate::ToolCallUpdate(
+        acp::ToolCallUpdate::new(id.to_string()).title(title).raw_input(raw_input),
+    ))
 }
 
 fn tool_call_update_with_raw(id: &str, raw_input: serde_json::Value) -> AcpEvent {
-    session_update(acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
-        id.to_string(),
-        acp::ToolCallUpdateFields::new().raw_input(raw_input),
-    )))
+    session_update(acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(id.to_string()).raw_input(raw_input)))
 }
 
 #[test]
-fn streamed_raw_input_fragments_accumulate_and_show_after_completion() {
+fn raw_input_updates_replace_and_show_after_completion() {
     let mut ui = TestUi::with_dimensions(80, 15);
     ui.submit("run tool");
     ui.acp_event(tool_call("tool-1", "Edit file"));
@@ -425,41 +420,37 @@ fn streamed_raw_input_fragments_accumulate_and_show_after_completion() {
     ui.draw();
 
     let viewport = ui.viewport_text();
-    assert!(viewport.contains("first second"), "streamed fragments must appear: {viewport}");
+    assert!(viewport.contains("second"), "replacement input must appear: {viewport}");
+    assert!(!viewport.contains("first"), "replaced input must disappear: {viewport}");
 }
 
 fn tool_call_update_with_display_value(id: &str, display_value: &str) -> AcpEvent {
     let mut meta = serde_json::Map::new();
     meta.insert("display_value".to_string(), serde_json::Value::String(display_value.to_string()));
-    session_update(acp::SessionUpdate::ToolCallUpdate(
-        acp::ToolCallUpdate::new(id.to_string(), acp::ToolCallUpdateFields::new()).meta(meta),
-    ))
+    session_update(acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(id.to_string()).meta(meta)))
 }
 
 fn tool_completed_status(id: &str) -> AcpEvent {
-    session_update(acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
-        id.to_string(),
-        acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Completed),
-    )))
+    session_update(acp::SessionUpdate::ToolCallUpdate(
+        acp::ToolCallUpdate::new(id.to_string()).status(acp::ToolCallStatus::Completed),
+    ))
 }
 
 fn tool_failed_status(id: &str) -> AcpEvent {
-    session_update(acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
-        id.to_string(),
-        acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Failed),
-    )))
+    session_update(acp::SessionUpdate::ToolCallUpdate(
+        acp::ToolCallUpdate::new(id.to_string()).status(acp::ToolCallStatus::Failed),
+    ))
 }
 
 #[test]
 fn completed_bash_tool_renders_the_command_with_shell_syntax_highlighting() {
     let mut ui = TestUi::with_dimensions(100, 15);
     ui.submit("run shell command");
-    let mut meta = serde_json::Map::new();
-    meta.insert(acp_utils::AETHER_TOOL_NAME_META_KEY.to_string(), "coding__bash".into());
-    let tool = acp::ToolCall::new("bash-1".to_string(), "Bash")
+    let tool = acp::ToolCallUpdate::new("bash-1")
+        .title("Bash")
         .raw_input(serde_json::json!({"command": "if true; then echo $HOME; fi", "description": "Check shell syntax"}))
-        .meta(meta);
-    ui.acp_event(session_update(acp::SessionUpdate::ToolCall(tool)));
+        .name("coding__bash");
+    ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(tool)));
     ui.acp_event(tool_completed_status("bash-1"));
 
     ui.draw();
@@ -488,21 +479,16 @@ fn completed_bash_tool_renders_the_command_with_shell_syntax_highlighting() {
 fn bash_tool_keeps_highlighting_after_title_and_display_metadata_updates() {
     let mut ui = TestUi::with_dimensions(100, 15);
     ui.submit("run shell command");
-    let mut tool_meta = serde_json::Map::new();
-    tool_meta.insert(acp_utils::AETHER_TOOL_NAME_META_KEY.to_string(), "coding__bash".into());
     let command = "cargo test";
-    let tool = acp::ToolCall::new("bash-1".to_string(), "Bash")
+    let tool = acp::ToolCallUpdate::new("bash-1")
+        .title("Bash")
         .raw_input(serde_json::json!({"command": command}))
-        .meta(tool_meta);
-    ui.acp_event(session_update(acp::SessionUpdate::ToolCall(tool)));
+        .name("coding__bash");
+    ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(tool)));
     let mut update_meta = serde_json::Map::new();
     update_meta.insert("display_value".to_string(), format!("{command} (exit 0)").into());
     ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(
-        acp::ToolCallUpdate::new(
-            "bash-1".to_string(),
-            acp::ToolCallUpdateFields::new().title("Ran").status(acp::ToolCallStatus::Completed),
-        )
-        .meta(update_meta),
+        acp::ToolCallUpdate::new("bash-1").title("Ran").status(acp::ToolCallStatus::Completed).meta(update_meta),
     )));
 
     ui.draw();
@@ -513,19 +499,24 @@ fn bash_tool_keeps_highlighting_after_title_and_display_metadata_updates() {
         "a finished bash call should read as completed: {viewport}"
     );
     assert_eq!(viewport.matches(command).count(), 1, "the command should render exactly once: {viewport}");
-    assert!(!has_cell(&ui.conversation(), "c", |cell| cell.bg == ui.app().theme().code_bg));
+    let conversation = ui.conversation();
+    let row = row_containing(&conversation, command).expect("command row");
+    let text = row_text(&conversation, row);
+    let start = u16::try_from(text[..text.find(command).unwrap()].width()).unwrap();
+    for offset in start..start + u16::try_from(command.width()).unwrap() {
+        assert_eq!(conversation[(conversation.area.left() + offset, row)].bg, Color::Reset);
+    }
 }
 
 #[test]
 fn non_bash_tool_with_a_command_argument_keeps_generic_rendering() {
     let mut ui = TestUi::with_dimensions(100, 15);
     ui.submit("run other command tool");
-    let mut meta = serde_json::Map::new();
-    meta.insert(acp_utils::AETHER_TOOL_NAME_META_KEY.to_string(), "other__execute".into());
-    let tool = acp::ToolCall::new("other-1".to_string(), "Execute")
+    let tool = acp::ToolCallUpdate::new("other-1")
+        .title("Execute")
         .raw_input(serde_json::json!({"command": "if true; then echo no; fi"}))
-        .meta(meta);
-    ui.acp_event(session_update(acp::SessionUpdate::ToolCall(tool)));
+        .name("other__execute");
+    ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(tool)));
     ui.acp_event(tool_completed_status("other-1"));
 
     ui.draw();
@@ -720,11 +711,11 @@ fn diff_not_rendered_while_tool_is_running() {
     ui.submit("run tool");
     ui.acp_event(tool_call("tool-1", "Edit file"));
 
-    let diff = acp::Diff::new("src/main.rs", "new content").old_text("old content");
-    let update = acp::ToolCallUpdate::new(
-        "tool-1".to_string(),
-        acp::ToolCallUpdateFields::new().content(vec![acp::ToolCallContent::Diff(diff)]),
+    let diff = acp::Diff::patch(
+        "diff --git a/src/main.rs b/src/main.rs\n--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1 +1 @@\n-old content\n+new content\n",
+        vec![acp::DiffChange::modify(acp::AbsolutePath::new("/src/main.rs"))],
     );
+    let update = acp::ToolCallUpdate::new("tool-1").content(vec![acp::ToolCallContent::Diff(diff)]);
     ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(update)));
 
     ui.draw();
@@ -741,13 +732,13 @@ fn diff_not_rendered_after_failed_status() {
     ui.submit("run tool");
     ui.acp_event(tool_call("tool-1", "Edit file"));
 
-    let diff = acp::Diff::new("src/main.rs", "new content").old_text("old content");
-    let update = acp::ToolCallUpdate::new(
-        "tool-1".to_string(),
-        acp::ToolCallUpdateFields::new()
-            .content(vec![acp::ToolCallContent::Diff(diff)])
-            .status(acp::ToolCallStatus::Failed),
+    let diff = acp::Diff::patch(
+        "diff --git a/src/main.rs b/src/main.rs\n--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1 +1 @@\n-old content\n+new content\n",
+        vec![acp::DiffChange::modify(acp::AbsolutePath::new("/src/main.rs"))],
     );
+    let update = acp::ToolCallUpdate::new("tool-1")
+        .content(vec![acp::ToolCallContent::Diff(diff)])
+        .status(acp::ToolCallStatus::Failed);
     ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(update)));
     ui.complete_prompt(acp::StopReason::EndTurn);
 

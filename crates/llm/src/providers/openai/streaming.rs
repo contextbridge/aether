@@ -32,8 +32,7 @@ pub fn process_completion_stream<E: Into<LlmError> + Send>(
     mut stream: impl Stream<Item = std::result::Result<CreateChatCompletionStreamResponse, E>> + Send + Unpin,
 ) -> impl Stream<Item = Result<LlmResponse>> + Send {
     async_stream::stream! {
-        let message_id = uuid::Uuid::new_v4().to_string();
-        yield Ok(LlmResponse::Start { message_id });
+        yield Ok(LlmResponse::Start);
 
         let mut collector = ToolCallCollector::<u32>::new();
         let mut last_stop_reason: Option<StopReason> = None;

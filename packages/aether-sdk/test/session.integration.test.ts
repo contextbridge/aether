@@ -6,9 +6,24 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { AetherSession, mcp, type AetherMessage, tool } from "../src/index.js";
+import {
+  AetherSession,
+  acp,
+  mcp,
+  type AetherMessage,
+  tool,
+} from "../src/index.js";
 import { sessionUsageFactory } from "./factories/sessionUsage.js";
 import { TRACE_CONTEXT } from "./traceContext.js";
+
+// Every fake-agent turn streams four session_update messages before the
+// terminal message ("result" or "usage").
+const SESSION_UPDATES = [
+  "session_update",
+  "session_update",
+  "session_update",
+  "session_update",
+] as const;
 
 const FAKE_AETHER = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -16,6 +31,140 @@ const FAKE_AETHER = path.resolve(
 );
 
 describe("AetherSession with a fake ACP agent", () => {
+  it("negotiates v2 and completes only after the raw idle update", async () => {
+    await using session = await AetherSession.start({
+      binaryPath: FAKE_AETHER,
+    });
+    expect(session.initializeResponse.protocolVersion).toBe(2);
+    const messages = await Array.fromAsync(session.prompt("hello"));
+    const updates = messages.filter((m) => m.type === "session_update");
+    expect(updates.map((m) => m.update.sessionUpdate)).toEqual([
+      "user_message",
+      "state_update",
+      "agent_message_chunk",
+      "state_update",
+    ]);
+    expect(updates.at(-1)?.update).toMatchObject({
+      sessionUpdate: "state_update",
+      state: "idle",
+      stopReason: "end_turn",
+    });
+    expect(messages.at(-1)).toEqual({
+      type: "result",
+      sessionId: session.sessionId,
+      stopReason: "end_turn",
+    });
+  });
+
+  it.each([
+    { FAKE_AETHER_IDLE_BEFORE_ACK: "1" },
+    { FAKE_AETHER_NO_STOP_REASON: "1" },
+    {
+      FAKE_AETHER_READY_IDLE: "1",
+      FAKE_AETHER_UNRELATED_IDLE: "1",
+      FAKE_AETHER_DUPLICATE_IDLE: "1",
+    },
+  ])("correlates completion across notification ordering: %j", async (env) => {
+    await using session = await AetherSession.start({
+      binaryPath: FAKE_AETHER,
+      env: { PATH: process.env.PATH, ...env },
+    });
+    for (const prompt of ["first", "second"]) {
+      const messages = await Array.fromAsync(session.prompt(prompt));
+      expect(messages.filter((m) => m.type === "result")).toEqual([
+        {
+          type: "result",
+          sessionId: session.sessionId,
+          stopReason: "end_turn",
+        },
+      ]);
+      const chunk = messages.find(
+        (m) =>
+          m.type === "session_update" &&
+          acp.SessionUpdate.isAgentMessageChunk(m.update),
+      );
+      expect(chunk).toBeDefined();
+    }
+  });
+
+  it.each([{}, { FAKE_AETHER_IDLE_BEFORE_ACK: "1" }])(
+    "keeps a prompt busy until cancellation reaches idle: %j",
+    async (env) => {
+      await using session = await AetherSession.start({
+        binaryPath: FAKE_AETHER,
+        env: {
+          PATH: process.env.PATH,
+          FAKE_AETHER_WAIT_FOR_CANCEL: "1",
+          ...env,
+        },
+      });
+      const messages: AetherMessage[] = [];
+      for await (const message of session.prompt("wait")) {
+        messages.push(message);
+        if (
+          message.type === "session_update" &&
+          acp.SessionUpdate.isStateUpdate(message.update) &&
+          acp.StateUpdate.isRunning(message.update)
+        ) {
+          expect(messages.some((m) => m.type === "result")).toBe(false);
+          await expect(
+            Array.fromAsync(session.prompt("overlap")),
+          ).rejects.toMatchObject({ code: "prompt_in_progress" });
+          await session.cancel();
+        }
+      }
+      expect(messages.at(-1)).toEqual({
+        type: "result",
+        sessionId: session.sessionId,
+        stopReason: "cancelled",
+      });
+    },
+  );
+
+  it("terminates post-acceptance failures with an error message and idle", async () => {
+    await using session = await AetherSession.start({
+      binaryPath: FAKE_AETHER,
+      env: { PATH: process.env.PATH, FAKE_AETHER_FAIL_AFTER_ACK: "1" },
+    });
+    const messages = await Array.fromAsync(session.prompt("fail"));
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        type: "session_update",
+        update: expect.objectContaining({
+          content: { type: "text", text: "Error: Fake post-ack failure" },
+        }),
+      }),
+    );
+    expect(messages.at(-1)).toMatchObject({
+      type: "result",
+      stopReason: "end_turn",
+    });
+  });
+
+  it("reports disconnection rather than silently ending an accepted turn", async () => {
+    await using session = await AetherSession.start({
+      binaryPath: FAKE_AETHER,
+      env: { PATH: process.env.PATH, FAKE_AETHER_DISCONNECT_AFTER_ACK: "1" },
+    });
+    await expect(
+      Array.fromAsync(session.prompt("disconnect")),
+    ).rejects.toMatchObject({ code: "process_exited" });
+  });
+
+  it("allows another prompt after a submission is rejected", async () => {
+    await using session = await AetherSession.start({
+      binaryPath: FAKE_AETHER,
+    });
+    await expect(
+      Array.fromAsync(session.prompt("reject-submission")),
+    ).rejects.toBeDefined();
+    const messages = await Array.fromAsync(session.prompt("retry"));
+    expect(messages.at(-1)).toMatchObject({
+      type: "result",
+      stopReason: "end_turn",
+    });
+  });
+
   it("rejects mutually exclusive settings sources", async () => {
     await expect(
       AetherSession.start({
@@ -168,7 +317,7 @@ describe("AetherSession with a fake ACP agent", () => {
     const types = messages.map((m) => m.type);
     expect(types.slice(0, -1).sort()).toEqual([
       "elicitation_complete",
-      "session_update",
+      ...SESSION_UPDATES,
     ]);
     expect(types.at(-1)).toBe("result");
     expect(requests).toMatchObject([
@@ -198,11 +347,13 @@ describe("AetherSession with a fake ACP agent", () => {
         messages.push(message);
       }
 
-      expect(messages.map((message) => message.type)).toEqual([
-        "session_update",
-        "usage",
-        "result",
-      ]);
+      expect(
+        messages
+          .slice(0, -1)
+          .map((message) => message.type)
+          .sort(),
+      ).toEqual([...SESSION_UPDATES, "usage"]);
+      expect(messages.at(-1)?.type).toBe("result");
 
       expect(messages.find((message) => message.type === "usage")).toEqual({
         type: "usage",
@@ -215,7 +366,7 @@ describe("AetherSession with a fake ACP agent", () => {
 
   it("ignores unknown ACP extension notifications", async () => {
     const notification = {
-      method: "example.com/status",
+      method: "_example.com/status",
       params: { status: "ready" },
     };
     const session = await AetherSession.start({
@@ -232,7 +383,7 @@ describe("AetherSession with a fake ACP agent", () => {
         messages.push(message);
       }
       expect(messages.map((message) => message.type)).toEqual([
-        "session_update",
+        ...SESSION_UPDATES,
         "result",
       ]);
     } finally {
@@ -276,8 +427,8 @@ describe("AetherSession with a fake ACP agent", () => {
       for await (const message of session.prompt("second"))
         second.push(message);
 
-      expect(first.map((m) => m.type)).toEqual(["session_update", "result"]);
-      expect(second.map((m) => m.type)).toEqual(["session_update", "result"]);
+      expect(first.map((m) => m.type)).toEqual([...SESSION_UPDATES, "result"]);
+      expect(second.map((m) => m.type)).toEqual([...SESSION_UPDATES, "result"]);
     } finally {
       await session.close();
     }
@@ -301,8 +452,8 @@ describe("AetherSession with a fake ACP agent", () => {
 
       const updateTexts = messages.flatMap((m) =>
         m.type === "session_update" &&
-        m.update.sessionUpdate === "agent_message_chunk" &&
-        m.update.content.type === "text"
+        acp.SessionUpdate.isAgentMessageChunk(m.update) &&
+        acp.ContentBlock.isText(m.update.content)
           ? [m.update.content.text]
           : [],
       );
@@ -338,8 +489,8 @@ describe("AetherSession with a fake ACP agent", () => {
 
       const updateTexts = second.flatMap((m) =>
         m.type === "session_update" &&
-        m.update.sessionUpdate === "agent_message_chunk" &&
-        m.update.content.type === "text"
+        acp.SessionUpdate.isAgentMessageChunk(m.update) &&
+        acp.ContentBlock.isText(m.update.content)
           ? [m.update.content.text]
           : [],
       );
@@ -358,7 +509,7 @@ describe("AetherSession with a fake ACP agent", () => {
     }
   });
 
-  it("releases promptInProgress when consumer breaks immediately after the result event", async () => {
+  it("releases the turn when consumer breaks immediately after the result event", async () => {
     const session = await AetherSession.start({
       binaryPath: FAKE_AETHER,
     });
@@ -372,7 +523,7 @@ describe("AetherSession with a fake ACP agent", () => {
       for await (const message of session.prompt("second")) {
         second.push(message);
       }
-      expect(second.map((m) => m.type)).toEqual(["session_update", "result"]);
+      expect(second.map((m) => m.type)).toEqual([...SESSION_UPDATES, "result"]);
     } finally {
       await session.close();
     }

@@ -1,22 +1,8 @@
-use crate::common::{TestClient, TestResult};
+use crate::common::{TestClient, TestResult, load_skills_input, skills_server};
 use mcp_servers::skills::SkillsMcp;
-use mcp_servers::skills::tools::{ListSkillsInput, LoadSkillsInput, SkillRequest};
+use mcp_servers::skills::tools::ListSkillsInput;
 use rmcp::ServerHandler;
-use std::path::Path;
 use tempfile::TempDir;
-
-fn build_server(test_dir: &Path) -> SkillsMcp {
-    SkillsMcp::new(&[test_dir.join("skills")])
-}
-
-fn load_skills_input(requests: &[(&str, Option<&str>)]) -> LoadSkillsInput {
-    LoadSkillsInput {
-        requests: requests
-            .iter()
-            .map(|(name, path)| SkillRequest { name: (*name).to_string(), path: path.map(str::to_string) })
-            .collect(),
-    }
-}
 
 #[tokio::test]
 async fn test_instructions_reference_list_skills_and_do_not_embed_catalog_entries() {
@@ -59,7 +45,7 @@ async fn test_full_lifecycle() -> TestResult {
         "---\ndescription: Curated skill\nagent-invocable: true\n---\n# Curated\n\nHand-written skill.",
     )?;
 
-    let mcp = TestClient::start(|| build_server(temp_dir.path())).await?;
+    let mcp = TestClient::start(|| skills_server(temp_dir.path())).await?;
 
     let parsed = mcp.call("list_skills", ListSkillsInput::default()).await?;
     let skills = parsed["skills"].as_array().unwrap();

@@ -1,5 +1,5 @@
 use aether_core::events::{AgentEvent, ContextEvent, LlmCallOutcome, MessageEvent, ModelEvent, ToolEvent, TurnEvent};
-use llm::ContentBlock;
+use llm::{ContentBlock, MessageId};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -17,7 +17,12 @@ pub struct SessionMeta {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum UserEvent {
-    Message { content: Vec<ContentBlock> },
+    Message {
+        message_id: MessageId,
+        content: Vec<ContentBlock>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display_content: Option<Vec<ContentBlock>>,
+    },
     ClearContext,
 }
 
@@ -46,8 +51,8 @@ impl SessionEvent {
 
     pub fn user_content(&self) -> Option<String> {
         match self {
-            Self::User(UserEvent::Message { content }) => {
-                let text = ContentBlock::join_text(content);
+            Self::User(UserEvent::Message { content, display_content, .. }) => {
+                let text = ContentBlock::join_text(display_content.as_deref().unwrap_or(content));
                 (!text.is_empty()).then_some(text)
             }
             Self::User(UserEvent::ClearContext) | Self::Agent(_) | Self::Control(_) => None,

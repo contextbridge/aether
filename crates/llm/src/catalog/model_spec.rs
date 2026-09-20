@@ -15,9 +15,9 @@ impl ModelSpec {
 
     /// Reasoning levels supported by every model in the spec.
     pub fn reasoning_levels(&self) -> Vec<ReasoningEffort> {
-        ReasoningEffort::all()
+        ReasoningEffort::selectable_levels()
             .iter()
-            .filter(|level| self.0.iter().all(|model| model.reasoning_levels().contains(level)))
+            .filter(|level| self.0.iter().all(|model| model.effective_reasoning_levels().contains(level)))
             .copied()
             .collect()
     }
@@ -32,7 +32,10 @@ impl ModelSpec {
     /// The nearest effort supported by every model in the spec, or `None`
     /// when the spec does not support reasoning at all.
     pub fn clamp_reasoning_effort(&self, effort: Option<ReasoningEffort>) -> Option<ReasoningEffort> {
-        let levels = self.reasoning_levels();
+        if effort.is_some_and(|effort| !effort.is_enabled()) {
+            return effort;
+        }
+        let levels: Vec<_> = self.reasoning_levels().into_iter().filter(|effort| effort.is_enabled()).collect();
         effort.filter(|_| !levels.is_empty()).map(|effort| effort.clamp_to(&levels))
     }
 }
@@ -122,17 +125,6 @@ impl std::error::Error for ReasoningEffortError {
     }
 }
 
-impl LlmModel {
-    pub fn validate_reasoning_effort(&self, effort: ReasoningEffort) -> Result<(), ReasoningEffortError> {
-        let supported = self.reasoning_levels();
-        if supported.contains(&effort) {
-            Ok(())
-        } else {
-            Err(ReasoningEffortError::Unsupported { model: self.to_string(), effort, supported: supported.to_vec() })
-        }
-    }
-}
-
 /// Validate `effort` against every model in a comma-separated model spec.
 pub fn validate_reasoning_effort(
     model_spec: &str,
@@ -148,6 +140,30 @@ pub fn validate_reasoning_effort(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn control_states_validate_and_clamp_without_enabling_disabled() {
+        for model in LlmModel::all() {
+            assert!(model.validate_reasoning_effort(ReasoningEffort::Default).is_ok());
+            assert_eq!(
+                model.validate_reasoning_effort(ReasoningEffort::Disabled).is_ok(),
+                model.supports_reasoning_off_transport()
+            );
+            assert_eq!(
+                model.supports_reasoning_off(),
+                model.reasoning_disabled_support() != crate::ReasoningDisabledSupport::Unsupported
+            );
+            assert!(!model.reasoning_levels().contains(&ReasoningEffort::Default));
+        }
+        for text in ["openai:gpt-4o-mini", "codex:gpt-5.4", "ollama:unknown", "openai:gpt-5.4,codex:gpt-5.4"] {
+            let spec: ModelSpec = text.parse().unwrap();
+            assert_eq!(spec.clamp_reasoning_effort(Some(ReasoningEffort::Disabled)), Some(ReasoningEffort::Disabled));
+            assert!(spec.validate_reasoning_effort(Some(ReasoningEffort::Disabled)).is_err());
+        }
+        let spec: ModelSpec = "openai:gpt-5.4,openai:gpt-5.1".parse().unwrap();
+        assert!(spec.reasoning_levels().contains(&ReasoningEffort::Disabled));
+        assert!(spec.validate_reasoning_effort(Some(ReasoningEffort::Disabled)).is_ok());
+    }
 
     #[test]
     fn parses_and_displays_alloyed_specs_canonically() {

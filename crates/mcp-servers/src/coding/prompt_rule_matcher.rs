@@ -1,36 +1,29 @@
+use aether_project::{PromptCatalog, PromptFile};
 use std::collections::HashSet;
 use std::path::Path;
-use std::sync::Mutex;
-
-use aether_project::{PromptCatalog, PromptFile};
 
 #[doc = include_str!("../docs/prompt_rule_matcher.md")]
 #[derive(Debug)]
 pub struct PromptRuleMatcher {
     catalog: PromptCatalog,
-    activated: Mutex<HashSet<String>>,
+    activated: HashSet<String>,
 }
 
 impl PromptRuleMatcher {
     pub fn new(catalog: PromptCatalog) -> Self {
-        Self { catalog, activated: Mutex::new(HashSet::new()) }
+        Self { catalog, activated: HashSet::new() }
     }
 
     /// Returns newly-matched rules for `file_path` and marks them as activated.
     /// Subsequent calls for the same rules return an empty `Vec`.
-    pub fn get_matched_rules(&self, root_dir: &Path, file_path: &str) -> Vec<PromptFile> {
+    pub fn get_matched_rules(&mut self, root_dir: &Path, file_path: &str) -> Vec<PromptFile> {
         let relative = make_relative(root_dir, file_path);
         let relative_path = relative.as_deref().unwrap_or(file_path);
         let matches = self.catalog.matching_rules(relative_path);
 
-        if matches.is_empty() {
-            return Vec::new();
-        }
-
         let mut result = Vec::new();
-        let mut activated = self.activated.lock().expect("lock poisoned");
         for spec in matches {
-            if activated.insert(spec.name.clone()) {
+            if self.activated.insert(spec.name.clone()) {
                 tracing::info!("Activating read rule '{}' triggered by read of '{}'", spec.name, file_path);
                 result.push(spec.clone());
             }
@@ -39,22 +32,21 @@ impl PromptRuleMatcher {
         result
     }
 
-    /// Clear all activated rules (e.g. on context clear).
-    pub fn clear(&self) {
-        self.activated.lock().expect("lock poisoned").clear();
+    /// Allow previously activated rules to fire again after a context reset.
+    pub fn clear(&mut self) {
+        self.activated.clear();
     }
-}
-
-/// Make an absolute file path relative to the root directory.
-fn make_relative(root_dir: &Path, file_path: &str) -> Option<String> {
-    let path = Path::new(file_path);
-    path.strip_prefix(root_dir).ok().map(|rel| rel.to_string_lossy().to_string())
 }
 
 impl Default for PromptRuleMatcher {
     fn default() -> Self {
         Self::new(PromptCatalog::empty())
     }
+}
+
+fn make_relative(root_dir: &Path, file_path: &str) -> Option<String> {
+    let path = Path::new(file_path);
+    path.strip_prefix(root_dir).ok().map(|rel| rel.to_string_lossy().to_string())
 }
 
 #[cfg(test)]
@@ -79,7 +71,7 @@ mod tests {
         .unwrap();
 
         let catalog = PromptCatalog::from_dir(skills_dir).unwrap();
-        let state = PromptRuleMatcher::new(catalog);
+        let mut state = PromptRuleMatcher::new(catalog);
         let root_dir = Path::new("/project");
 
         let matched = state.get_matched_rules(root_dir, "/project/src/main.rs");
@@ -107,7 +99,7 @@ mod tests {
         .unwrap();
 
         let catalog = PromptCatalog::from_dir(skills_dir).unwrap();
-        let state = PromptRuleMatcher::new(catalog);
+        let mut state = PromptRuleMatcher::new(catalog);
         let root_dir = Path::new("/project");
 
         let matched = state.get_matched_rules(root_dir, "/project/README.md");
@@ -131,7 +123,7 @@ mod tests {
         .unwrap();
 
         let catalog = PromptCatalog::from_dir(skills_dir).unwrap();
-        let state = PromptRuleMatcher::new(catalog);
+        let mut state = PromptRuleMatcher::new(catalog);
         let root_dir = Path::new("/project");
 
         let matched = state.get_matched_rules(root_dir, "/project/src/main.rs");
@@ -168,7 +160,7 @@ mod tests {
         .unwrap();
 
         let catalog = PromptCatalog::from_dir(skills_dir).unwrap();
-        let state = PromptRuleMatcher::new(catalog);
+        let mut state = PromptRuleMatcher::new(catalog);
         let root_dir = Path::new("/project");
         let matched = state.get_matched_rules(root_dir, "/project/src/main.rs");
         assert_eq!(matched.len(), 1);

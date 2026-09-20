@@ -1,7 +1,6 @@
 use aether_core::core::{AgentDeps, Prompt};
 use aether_core::events::{
-    AgentEvent, Command, CompactionOutcome, ContextEvent, LlmCallOutcome, MessageEvent, ModelEvent, ToolEvent,
-    TurnEvent, TurnOutcome,
+    AgentEvent, Command, ContextEvent, MessageEvent, ModelEvent, ToolEvent, TurnEvent, TurnOutcome,
 };
 use aether_core::mcp::McpHandle;
 use aether_telemetry::TelemetryRuntime;
@@ -15,7 +14,7 @@ use crate::telemetry::build_telemetry_runtime;
 
 use super::error::CliError;
 use super::{CliEventKind, RunConfig};
-use crate::output::OutputFormat;
+use crate::output::{OutputFormat, print_message};
 use crate::runtime::RuntimeBuilder;
 use crate::slash_commands::{expand_slash_command, parse_slash_command};
 
@@ -96,24 +95,6 @@ async fn stream_output(mut rx: mpsc::Receiver<AgentEvent>, format: OutputFormat,
     ExitCode::SUCCESS
 }
 
-fn print_message(format: OutputFormat, msg: &AgentEvent) -> Result<(), serde_json::Error> {
-    match format {
-        OutputFormat::Text => {
-            if let Some(text) = format_text(msg) {
-                if matches!(msg, AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Failed { .. } })) {
-                    eprintln!("{text}");
-                } else {
-                    println!("{text}");
-                }
-            }
-        }
-        OutputFormat::Pretty => println!("{}", serde_json::to_string_pretty(msg)?),
-        OutputFormat::Json => println!("{}", serde_json::to_string(msg)?),
-    }
-
-    Ok(())
-}
-
 fn should_emit(msg: &AgentEvent, include: &[CliEventKind]) -> bool {
     let Some(kind) = event_kind(msg) else { return false };
     include.is_empty() || include.contains(&kind)
@@ -158,156 +139,6 @@ fn event_kind(msg: &AgentEvent) -> Option<CliEventKind> {
     }
 }
 
-fn format_text(msg: &AgentEvent) -> Option<String> {
-    match msg {
-        AgentEvent::Message(MessageEvent::Text { chunk, is_complete: true, .. }) => Some(chunk.clone()),
-
-        AgentEvent::Message(MessageEvent::Thought { chunk, is_complete: true, .. }) => {
-            Some(format!("Thought: {chunk}"))
-        }
-
-        AgentEvent::Tool(ToolEvent::Call { request, .. }) => {
-            Some(format!("Tool call: {}({})", request.name, request.arguments))
-        }
-
-        AgentEvent::Tool(ToolEvent::Result { result, .. }) => {
-            Some(format!("Tool result [{}]: {}", result.name, result.result))
-        }
-
-        AgentEvent::Tool(ToolEvent::Error { error, .. }) => {
-            Some(format!("Tool error [{}]: {}", error.name, error.error))
-        }
-
-        AgentEvent::Tool(ToolEvent::TaskStatus { request, task_id, status, status_message }) => Some(format!(
-            "Task status [{}]: {} {}{}",
-            request.name,
-            task_id,
-            status,
-            status_message.as_deref().map(|message| format!(" - {message}")).unwrap_or_default()
-        )),
-        AgentEvent::Tool(ToolEvent::TaskCreated { request, task_id, .. }) => {
-            Some(format!("Tool deferred [{}]: task {}", request.name, task_id))
-        }
-        AgentEvent::Tool(ToolEvent::TaskCompleted { request, task_id, result, .. }) => {
-            Some(format!("Background task completed [{}]: {}: {}", request.name, task_id, result.result))
-        }
-        AgentEvent::Tool(ToolEvent::TaskFailed { request, task_id, error, .. }) => {
-            Some(format!("Background task failed [{}]: {}: {}", request.name, task_id, error.error))
-        }
-        AgentEvent::Tool(ToolEvent::TaskCancelled { request, task_id, .. }) => {
-            Some(format!("Background task cancelled [{}]: {task_id}", request.name))
-        }
-        AgentEvent::Turn(TurnEvent::Ended { outcome }) => Some(match outcome {
-            TurnOutcome::Completed => "Done".to_string(),
-            TurnOutcome::Cancelled => "Cancelled".to_string(),
-            TurnOutcome::Failed { error } => format!("Error: {error}"),
-        }),
-
-        AgentEvent::Turn(TurnEvent::AutoContinue { attempt, max_attempts }) => {
-            Some(format!("Continuing ({attempt}/{max_attempts})..."))
-        }
-
-        AgentEvent::Turn(event @ TurnEvent::RetryScheduled { .. }) => event
-            .retry_info()
-            .map(|retry| format!("Retrying ({}/{}) in {}ms", retry.attempt, retry.max_attempts, retry.delay_ms)),
-
-        AgentEvent::Turn(TurnEvent::LlmCallEnded {
-            outcome: LlmCallOutcome::Failed { error, will_retry: true, .. },
-            ..
-        }) => Some(format!("LLM call failed (will retry): {error}")),
-
-        AgentEvent::Model(ModelEvent::Switched { previous, new }) => {
-            Some(format!("Model switched: {previous} -> {new}"))
-        }
-
-        AgentEvent::Tool(ToolEvent::Progress { request, progress, total, message }) => {
-            let bar = match total {
-                Some(t) => format!("{progress}/{t}"),
-                None => format!("{progress}"),
-            };
-            let suffix = message.as_deref().map(|m| format!(" - {m}")).unwrap_or_default();
-            Some(format!("Tool progress [{}]: {bar}{suffix}", request.name))
-        }
-
-        AgentEvent::Tool(ToolEvent::DisplayUpdate { request, meta }) => {
-            Some(format!("Tool progress [{}]: {} - {}", request.name, meta.display.title, meta.display.value))
-        }
-
-        AgentEvent::Tool(ToolEvent::SubAgentProgress { payload, .. }) => match &payload.event {
-            AgentEvent::SessionUsage(_) => None,
-            event => {
-                format_text(event).map(|text| format!("Sub-agent {} [{}]: {text}", payload.agent_name, payload.task_id))
-            }
-        },
-
-        AgentEvent::Context(ContextEvent::CompactionStarted { message_count }) => {
-            Some(format!("Context compaction started ({message_count} messages)"))
-        }
-
-        AgentEvent::Context(ContextEvent::CompactionEnded { outcome }) => Some(match outcome {
-            CompactionOutcome::Completed => "Context compaction completed".to_string(),
-            CompactionOutcome::Failed { error } => format!("Context compaction failed: {error}"),
-            CompactionOutcome::Cancelled => "Context compaction cancelled".to_string(),
-        }),
-
-        AgentEvent::Context(ContextEvent::CompactionResult { summary, messages_removed }) => {
-            Some(format!("Context compacted: {messages_removed} messages removed. {summary}"))
-        }
-
-        AgentEvent::Context(ContextEvent::UsageUpdated { usage }) => Some(format_context_usage(usage)),
-
-        AgentEvent::Context(ContextEvent::Cleared) => Some("Context cleared".to_string()),
-
-        AgentEvent::SessionUsage(usage) => Some(format_session_usage(usage)),
-
-        AgentEvent::Turn(
-            TurnEvent::Started { .. }
-            | TurnEvent::LlmCallStarted { .. }
-            | TurnEvent::LlmCallEnded {
-                outcome:
-                    LlmCallOutcome::Completed { .. }
-                    | LlmCallOutcome::Cancelled
-                    | LlmCallOutcome::Failed { will_retry: false, .. },
-                ..
-            },
-        )
-        | AgentEvent::Tool(
-            ToolEvent::ExecutionStarted { .. } | ToolEvent::DefinitionsUpdated { .. } | ToolEvent::CallUpdate { .. },
-        )
-        | AgentEvent::Message(MessageEvent::Text { .. } | MessageEvent::Thought { .. }) => None,
-    }
-}
-
-fn format_context_usage(usage: &llm::ContextUsage) -> String {
-    match (usage.context_limit, usage.usage_ratio) {
-        (Some(limit), Some(ratio)) => {
-            format!("Context: {} / {limit} tokens ({:.1}%)", usage.input_tokens, ratio * 100.0)
-        }
-        _ => format!("Context: {} tokens", usage.input_tokens),
-    }
-}
-
-fn format_session_usage(usage: &llm::SessionUsageEvent) -> String {
-    let call_cost =
-        usage.estimated_cost.map_or_else(|| "unknown".to_string(), |cost| format!("${:.6}", cost.total_usd));
-    let totals = &usage.totals;
-    let cumulative_cost = if totals.is_fully_priced() {
-        format!("estimated total: ${:.6}", totals.estimated_usd)
-    } else {
-        format!("known subtotal: ${:.6}, {} unpriced calls", totals.estimated_usd, totals.unpriced_calls)
-    };
-    format!(
-        "Session usage #{} [{}]: {} in, {} out (call cost: {}, cumulative: {} tokens, {})",
-        usage.sequence,
-        usage.source.agent_name,
-        usage.tokens.input_tokens,
-        usage.tokens.output_tokens,
-        call_cost,
-        totals.tokens.total_tokens(),
-        cumulative_cost,
-    )
-}
-
 fn setup_tracing(verbose: bool) {
     use tracing_subscriber::Layer;
     use tracing_subscriber::filter::EnvFilter;
@@ -327,165 +158,6 @@ mod tests {
 
     use super::*;
     use llm::ContextUsage;
-
-    #[test]
-    fn format_text_formats_complete_text() {
-        assert_eq!(
-            format_text(&AgentEvent::text("id", "hello world", StreamState::Complete)),
-            Some("hello world".to_string())
-        );
-    }
-
-    #[test]
-    fn format_text_skips_incomplete_text() {
-        assert_eq!(format_text(&AgentEvent::text("id", "partial", StreamState::Partial)), None);
-    }
-
-    #[test]
-    fn format_text_formats_complete_thought() {
-        assert_eq!(
-            format_text(&AgentEvent::thought("id", "reasoning here", StreamState::Complete)),
-            Some("Thought: reasoning here".to_string())
-        );
-    }
-
-    #[test]
-    fn format_text_skips_incomplete_thought() {
-        assert_eq!(format_text(&AgentEvent::thought("id", "partial", StreamState::Partial)), None);
-    }
-
-    #[test]
-    fn format_text_formats_tool_call() {
-        let msg = AgentEvent::Tool(ToolEvent::Call {
-            request: llm::ToolCallRequest {
-                id: "tc1".to_string(),
-                name: "bash".to_string(),
-                arguments: r#"{"cmd":"ls"}"#.to_string(),
-            },
-        });
-        assert_eq!(format_text(&msg), Some(r#"Tool call: bash({"cmd":"ls"})"#.to_string()));
-    }
-
-    #[test]
-    fn format_text_skips_tool_call_updates() {
-        let msg =
-            AgentEvent::Tool(ToolEvent::CallUpdate { tool_call_id: "tc1".to_string(), chunk: "partial".to_string() });
-        assert_eq!(format_text(&msg), None);
-    }
-
-    #[test]
-    fn format_text_formats_tool_result() {
-        assert_eq!(format_text(&tool_result_msg()), Some("Tool result [bash]: ok".to_string()));
-    }
-
-    #[test]
-    fn format_text_formats_tool_error() {
-        let msg = AgentEvent::Tool(ToolEvent::Error {
-            error: llm::ToolCallError {
-                id: "tc1".to_string(),
-                name: "bash".to_string(),
-                arguments: None,
-                error: "not found".to_string(),
-            },
-        });
-        assert_eq!(format_text(&msg), Some("Tool error [bash]: not found".to_string()));
-    }
-
-    #[test]
-    fn format_text_formats_failed_turn() {
-        let msg = AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Failed { error: "boom".to_string() } });
-        assert_eq!(format_text(&msg), Some("Error: boom".to_string()));
-    }
-
-    #[test]
-    fn format_text_formats_cancelled_turn() {
-        let msg = AgentEvent::turn_ended(TurnOutcome::Cancelled);
-        assert_eq!(format_text(&msg), Some("Cancelled".to_string()));
-    }
-
-    #[test]
-    fn format_text_formats_retry_schedule() {
-        let msg = retry_scheduled(1, 10);
-        assert_eq!(format_text(&msg), Some("Retrying (1/3) in 10ms".to_string()));
-    }
-
-    #[test]
-    fn format_text_formats_llm_call_failure_that_will_retry() {
-        let msg = AgentEvent::Turn(TurnEvent::LlmCallEnded {
-            purpose: llm::LlmCallPurpose::Chat,
-            outcome: LlmCallOutcome::failed("overloaded", true),
-        });
-        assert_eq!(format_text(&msg), Some("LLM call failed (will retry): overloaded".to_string()));
-    }
-
-    #[test]
-    fn format_text_skips_terminal_llm_call_failure() {
-        let msg = AgentEvent::Turn(TurnEvent::LlmCallEnded {
-            purpose: llm::LlmCallPurpose::Chat,
-            outcome: LlmCallOutcome::failed("boom", false),
-        });
-        assert_eq!(format_text(&msg), None);
-    }
-
-    #[test]
-    fn format_text_skips_first_call_start() {
-        assert_eq!(format_text(&llm_call_started(0)), None);
-    }
-
-    #[test]
-    fn format_text_formats_auto_continue() {
-        let msg = AgentEvent::Turn(TurnEvent::AutoContinue { attempt: 2, max_attempts: 5 });
-        assert_eq!(format_text(&msg), Some("Continuing (2/5)...".to_string()));
-    }
-
-    #[test]
-    fn format_text_formats_model_switched() {
-        let msg =
-            AgentEvent::Model(ModelEvent::Switched { previous: "old-model".to_string(), new: "new-model".to_string() });
-        assert_eq!(format_text(&msg), Some("Model switched: old-model -> new-model".to_string()));
-    }
-
-    #[test]
-    fn format_text_renders_completed_turn() {
-        assert_eq!(format_text(&AgentEvent::turn_ended(TurnOutcome::Completed)), Some("Done".to_string()));
-    }
-
-    #[test]
-    fn format_text_formats_tool_progress_with_total() {
-        let msg = tool_progress(50.0, Some(100.0), Some("halfway"));
-        assert_eq!(format_text(&msg), Some("Tool progress [bash]: 50/100 - halfway".to_string()));
-    }
-
-    #[test]
-    fn format_text_formats_tool_progress_without_total() {
-        let msg = tool_progress(42.0, None, None);
-        assert_eq!(format_text(&msg), Some("Tool progress [bash]: 42".to_string()));
-    }
-
-    #[test]
-    fn format_text_formats_context_compaction_started() {
-        let msg = AgentEvent::Context(ContextEvent::CompactionStarted { message_count: 42 });
-        assert_eq!(format_text(&msg), Some("Context compaction started (42 messages)".to_string()));
-    }
-
-    #[test]
-    fn format_text_formats_context_compaction_result() {
-        let msg = AgentEvent::Context(ContextEvent::CompactionResult {
-            summary: "summary here".to_string(),
-            messages_removed: 10,
-        });
-        assert_eq!(format_text(&msg), Some("Context compacted: 10 messages removed. summary here".to_string()));
-    }
-
-    #[test]
-    fn format_text_formats_context_usage_update() {
-        assert_eq!(format_text(&usage_update()), Some("Context: 100000 / 200000 tokens (50.0%)".to_string()));
-    }
-
-    #[test]
-    fn format_text_formats_context_cleared() {
-        assert_eq!(format_text(&AgentEvent::Context(ContextEvent::Cleared)), Some("Context cleared".to_string()));
-    }
 
     #[test]
     fn event_kind_none_for_non_output_fragments() {
@@ -563,22 +235,41 @@ mod tests {
                 }),
                 CliEventKind::ToolError,
             ),
-            (AgentEvent::Turn(TurnEvent::AutoContinue { attempt: 1, max_attempts: 3 }), CliEventKind::AutoContinue),
+            (
+                AgentEvent::Turn(TurnEvent::AutoContinue {
+                    attempt: 1,
+                    max_attempts: 3,
+                    message_id: llm::MessageId::new(),
+                    content: vec![],
+                }),
+                CliEventKind::AutoContinue,
+            ),
             (
                 AgentEvent::Model(ModelEvent::Switched { previous: "a".to_string(), new: "b".to_string() }),
                 CliEventKind::ModelSwitched,
             ),
             (tool_progress(1.0, None, None), CliEventKind::ToolProgress),
             (
-                AgentEvent::Context(ContextEvent::CompactionStarted { message_count: 1 }),
+                AgentEvent::Context(ContextEvent::CompactionStarted {
+                    compaction_id: "compaction".into(),
+                    message_count: 1,
+                }),
                 CliEventKind::ContextCompactionStarted,
             ),
             (
-                AgentEvent::Context(ContextEvent::CompactionEnded { outcome: CompactionOutcome::Completed }),
+                AgentEvent::Context(ContextEvent::CompactionEnded {
+                    compaction_id: "compaction".into(),
+                    outcome: aether_core::events::CompactionOutcome::Completed,
+                }),
                 CliEventKind::ContextCompactionEnded,
             ),
             (
-                AgentEvent::Context(ContextEvent::CompactionResult { summary: "s".to_string(), messages_removed: 1 }),
+                AgentEvent::Context(ContextEvent::CompactionResult {
+                    compaction_id: "compaction".into(),
+                    message_id: llm::MessageId::new(),
+                    summary: "s".to_string(),
+                    messages_removed: 1,
+                }),
                 CliEventKind::ContextCompactionResult,
             ),
             (usage_update(), CliEventKind::ContextUsage),

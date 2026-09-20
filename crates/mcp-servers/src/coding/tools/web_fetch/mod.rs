@@ -46,7 +46,15 @@ impl<C: HttpClient> WebFetcher<C> {
 
         let response = self.client.fetch(&url, Duration::from_millis(timeout_ms)).await?;
 
-        let extracted = extract_content(&response.body, &url);
+        let is_html = response.content_type.as_deref().is_none_or(|content_type| {
+            let mime = content_type.split(';').next().unwrap_or_default().trim();
+            mime.eq_ignore_ascii_case("text/html") || mime.eq_ignore_ascii_case("application/xhtml+xml")
+        });
+        let extracted = if is_html {
+            extract_content(&response.body, &response.final_url)
+        } else {
+            ExtractedContent { title: None, markdown: response.body, byline: None }
+        };
         let (content, truncated) = if extracted.markdown.len() > MAX_CONTENT_LENGTH {
             (truncate_str(&extracted.markdown, MAX_CONTENT_LENGTH), true)
         } else {
@@ -132,7 +140,7 @@ fn truncate_str(content: &str, max_len: usize) -> String {
         return content.to_string();
     }
 
-    let truncated = &content[..max_len];
+    let truncated = &content[..content.floor_char_boundary(max_len)];
 
     if let Some(last_para) = truncated.rfind("\n\n") {
         format!("{}\n\n[Content truncated...]", &truncated[..last_para])
@@ -272,6 +280,7 @@ mod tests {
             final_url: "https://fallback.com/".to_string(),
             status_code: 404,
             body: "<h1>Not Found</h1>".to_string(),
+            content_type: Some("text/html".to_string()),
         });
         let result = WebFetcher::with_client(fake).fetch(input("https://any-url.com/")).await.unwrap();
         assert_eq!(result.status_code, 404);

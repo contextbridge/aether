@@ -1,11 +1,9 @@
 use acp_utils::notifications::{PromptSearchParams, PromptSearchResponse};
 use aether_cli::acp::testing::AcpTestHarness;
-use std::future::Future;
-use tokio::task::LocalSet;
 
 #[tokio::test(flavor = "current_thread")]
 async fn prompt_search_request_finds_user_prompt_history() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         harness.append_stored_session("s1", "2026-05-01T00:00:00Z");
         harness.append_stored_prompt("s1", "hello world");
 
@@ -23,7 +21,7 @@ async fn prompt_search_request_finds_user_prompt_history() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn prompt_search_request_searches_user_text_only() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         harness.append_stored_session("agent", "2026-05-01T00:00:00Z");
         harness.append_stored_agent_text("agent", "hello from agent");
         harness.append_stored_session("media", "2026-05-02T00:00:00Z");
@@ -49,7 +47,7 @@ async fn prompt_search_request_searches_user_text_only() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn prompt_search_request_uses_literal_smart_case_unicode_matching() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         harness.append_stored_session("lower", "2026-05-01T00:00:00Z");
         harness.append_stored_prompt("lower", "hello world");
         harness.append_stored_session("upper", "2026-05-02T00:00:00Z");
@@ -80,7 +78,7 @@ async fn prompt_search_request_uses_literal_smart_case_unicode_matching() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn prompt_search_request_limits_results_and_prompt_history() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         harness.append_stored_session("s1", "2026-06-01T00:00:00Z");
         for i in 0..105 {
             harness.append_stored_prompt("s1", &format!("match #{i}"));
@@ -99,7 +97,7 @@ async fn prompt_search_request_limits_results_and_prompt_history() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn prompt_search_request_with_empty_query_returns_no_results() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         harness.append_stored_session("s1", "2026-05-01T00:00:00Z");
         harness.append_stored_prompt("s1", "cached alpha");
 
@@ -108,19 +106,6 @@ async fn prompt_search_request_with_empty_query_returns_no_results() {
         assert!(!response.truncated);
     })
     .await;
-}
-
-async fn with_harness<F, Fut>(body: F)
-where
-    F: FnOnce(AcpTestHarness) -> Fut,
-    Fut: Future<Output = ()>,
-{
-    LocalSet::new()
-        .run_until(async move {
-            let harness = AcpTestHarness::start().await;
-            body(harness).await;
-        })
-        .await;
 }
 
 async fn search(harness: &AcpTestHarness, query: &str) -> PromptSearchResponse {

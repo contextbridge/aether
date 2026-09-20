@@ -1,5 +1,6 @@
-use crate::protocol::{DaemonRequest, DaemonResponse, ProtocolError, read_frame, write_frame};
+use crate::protocol::{DaemonRequest, DaemonResponse, ProtocolError, frame_reader, frame_writer};
 use crate::workspace_registry::{WorkspaceBinding, WorkspaceRegistry};
+use futures::{SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::io::{ReadHalf, WriteHalf, split};
 use tokio::net::UnixStream;
@@ -20,9 +21,10 @@ enum ConnectionState {
     Bound { binding: WorkspaceBinding },
 }
 
-async fn run_writer(mut writer: WriteHalf<UnixStream>, mut response_rx: mpsc::Receiver<DaemonResponse>) {
+async fn run_writer(writer: WriteHalf<UnixStream>, mut response_rx: mpsc::Receiver<DaemonResponse>) {
+    let mut writer = frame_writer::<_, DaemonResponse>(writer);
     while let Some(response) = response_rx.recv().await {
-        if let Err(err) = write_frame(&mut writer, &response).await {
+        if let Err(err) = writer.send(response).await {
             tracing::debug!(%err, "Error writing daemon response");
             break;
         }
@@ -30,18 +32,18 @@ async fn run_writer(mut writer: WriteHalf<UnixStream>, mut response_rx: mpsc::Re
 }
 
 async fn run_reader(
-    mut reader: ReadHalf<UnixStream>,
+    reader: ReadHalf<UnixStream>,
     registry: WorkspaceRegistry,
     client_id: uuid::Uuid,
     response_tx: mpsc::Sender<DaemonResponse>,
 ) {
     tracing::debug!("Client connected: {}", client_id);
     let mut state = ConnectionState::Uninitialized;
+    let mut reader = frame_reader::<_, DaemonRequest>(reader);
 
-    loop {
-        let request: Option<DaemonRequest> = match read_frame(&mut reader).await {
-            Ok(Some(request)) => Some(request),
-            Ok(None) => break,
+    while let Some(msg) = reader.next().await {
+        let request = match msg {
+            Ok(request) => request,
             Err(err) => {
                 tracing::debug!(%err, "Error reading client request");
                 break;
@@ -49,11 +51,11 @@ async fn run_reader(
         };
 
         match request {
-            Some(DaemonRequest::Ping) => {
+            DaemonRequest::Ping => {
                 let _ = response_tx.send(DaemonResponse::Pong).await;
             }
-            Some(DaemonRequest::Disconnect) => break,
-            Some(DaemonRequest::Initialize(init)) => match registry.bind(&init.workspace_root, init.language).await {
+            DaemonRequest::Disconnect => break,
+            DaemonRequest::Initialize(init) => match registry.bind(&init.workspace_root, init.language) {
                 Ok(binding) => {
                     state = ConnectionState::Bound { binding };
                     let _ = response_tx.send(DaemonResponse::Initialized).await;
@@ -62,7 +64,7 @@ async fn run_reader(
                     let _ = response_tx.send(DaemonResponse::Error(ProtocolError::new(err.to_string()))).await;
                 }
             },
-            Some(DaemonRequest::LspCall { client_id, method, params }) => {
+            DaemonRequest::LspCall { client_id, method, params } => {
                 let ConnectionState::Bound { binding } = &state else {
                     let _ = send_not_initialized(client_id, &response_tx).await;
                     continue;
@@ -71,7 +73,7 @@ async fn run_reader(
                 let result = registry.lsp_call(binding, &method, params).await;
                 let _ = response_tx.send(DaemonResponse::LspResult { client_id, result }).await;
             }
-            Some(DaemonRequest::GetDiagnostics { client_id, uri }) => {
+            DaemonRequest::GetDiagnostics { client_id, uri } => {
                 let ConnectionState::Bound { binding } = &state else {
                     let _ = send_not_initialized(client_id, &response_tx).await;
                     continue;
@@ -80,16 +82,15 @@ async fn run_reader(
                 let result = registry.get_diagnostics(binding, uri.as_ref()).await;
                 let _ = response_tx.send(DaemonResponse::LspResult { client_id, result }).await;
             }
-            Some(DaemonRequest::QueueDiagnosticRefresh { client_id, uri }) => {
+            DaemonRequest::QueueDiagnosticRefresh { client_id, uri } => {
                 let ConnectionState::Bound { binding } = &state else {
                     let _ = send_not_initialized(client_id, &response_tx).await;
                     continue;
                 };
 
-                let result = registry.queue_diagnostic_refresh(binding, uri).await.map(|()| Value::Null);
+                let result = registry.queue_diagnostic_refresh(binding, uri).map(|()| Value::Null);
                 let _ = response_tx.send(DaemonResponse::LspResult { client_id, result }).await;
             }
-            None => {}
         }
     }
 }

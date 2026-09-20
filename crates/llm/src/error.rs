@@ -5,6 +5,10 @@ use thiserror::Error;
 #[doc = include_str!("docs/llm_error.md")]
 #[derive(Debug, Error, Clone)]
 pub enum LlmError {
+    #[error(transparent)]
+    ReasoningValidation(#[from] crate::catalog::ReasoningEffortError),
+    #[error("Disabling reasoning is not implemented for model '{model}' on this transport")]
+    UnsupportedDisableTransport { model: String },
     /// Environment variable not set or invalid
     #[error("{0} environment variable not set")]
     MissingApiKey(String),

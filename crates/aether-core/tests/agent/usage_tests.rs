@@ -10,7 +10,7 @@ use tokio::sync::Notify;
 #[tokio::test]
 async fn provider_usage_emits_session_usage_before_call_end() {
     let events = test_agent()
-        .llm_responses(&[llm_response("msg").usage(11, 7).build()])
+        .llm_responses(&[llm_response().usage(11, 7).build()])
         .without_mcp()
         .user_text("hello")
         .run()
@@ -35,7 +35,7 @@ async fn provider_usage_emits_session_usage_before_call_end() {
 async fn priced_model_costs_each_call_and_keeps_totals_priced() {
     let events = test_agent()
         .model(priced_model())
-        .llm_responses(&[llm_response("a").usage(1_000, 500).build(), llm_response("b").usage(2_000, 100).build()])
+        .llm_responses(&[llm_response().usage(1_000, 500).build(), llm_response().usage(2_000, 100).build()])
         .without_mcp()
         .scenario(TestScenario::new().user_text("one").wait_for_turn_end().user_text("two").wait_for_turn_end())
         .run()
@@ -59,7 +59,7 @@ async fn priced_model_costs_each_call_and_keeps_totals_priced() {
 async fn usage_received_before_a_stream_error_survives_the_failed_turn() {
     let events = test_agent()
         .model(priced_model())
-        .llm_result_responses(&[llm_response("msg").usage(9, 1).build_with_error(ProviderError::api("HTTP 500"))])
+        .llm_result_responses(&[llm_response().usage(9, 1).build_with_error(ProviderError::api("HTTP 500"))])
         .without_mcp()
         .user_text("hello")
         .run()
@@ -80,7 +80,7 @@ async fn usage_received_before_cancellation_survives_the_cancelled_turn() {
     let release = Arc::new(Notify::new());
     let events = test_agent()
         .model(priced_model())
-        .llm_responses(&[llm_response("msg").usage(5, 3).text(&["never delivered"]).build()])
+        .llm_responses(&[llm_response().usage(5, 3).text(&["never delivered"]).build()])
         .without_mcp()
         .pause_turn_after(0, 2, release)
         .scenario(
@@ -105,8 +105,8 @@ async fn usage_received_before_cancellation_survives_the_cancelled_turn() {
 
 #[tokio::test]
 async fn retried_attempts_without_usage_add_nothing() {
-    let interrupted = llm_response("msg_1").build_interrupted(ProviderError::stream_interrupted("retry"));
-    let recovered = llm_response("msg_2").usage(3, 2).text(&["ok"]).build_results();
+    let interrupted = llm_response().build_interrupted(ProviderError::stream_interrupted("retry"));
+    let recovered = llm_response().usage(3, 2).text(&["ok"]).build_results();
 
     let events = test_agent()
         .llm_result_responses(&[interrupted, recovered])
@@ -128,8 +128,8 @@ async fn compaction_usage_is_recorded_once_before_the_compaction_call_ends() {
     let events = test_agent()
         .model(priced_model())
         .llm_responses(&[
-            llm_response("sum").usage(50, 10).text(&["summary"]).build(),
-            llm_response("msg").usage(20, 5).text(&["hello"]).build(),
+            llm_response().usage(50, 10).text(&["summary"]).build(),
+            llm_response().usage(20, 5).text(&["hello"]).build(),
         ])
         .without_mcp()
         .context_window_override(100)
@@ -183,8 +183,8 @@ async fn sub_agent_usage_is_folded_into_the_parent_totals_before_the_tool_result
     let events = test_agent()
         .fake_mcp_server("agents", server)
         .llm_responses(&[
-            llm_response("msg_1").tool_call("spawn-call", "agents__spawn", &[&arguments]).build(),
-            llm_response("msg_2").usage(1, 1).text(&["all done"]).build(),
+            llm_response().tool_call("spawn-call", "agents__spawn", &[&arguments]).build(),
+            llm_response().usage(1, 1).text(&["all done"]).build(),
         ])
         .user_text("delegate")
         .run()
@@ -230,13 +230,13 @@ async fn alloyed_usage_is_attributed_to_the_member_that_served_the_call() {
     let alloy = AlloyedModelProvider::new(vec![
         Box::new(
             FakeLlmProvider::new(vec![
-                llm_response("a").usage(1, 1).text(&["a"]).build(),
-                llm_response("c").usage(3, 3).text(&["c"]).build(),
+                llm_response().usage(1, 1).text(&["a"]).build(),
+                llm_response().usage(3, 3).text(&["c"]).build(),
             ])
             .with_model(first.clone()),
         ),
         Box::new(
-            FakeLlmProvider::new(vec![llm_response("b").usage(2, 2).text(&["b"]).build()]).with_model(second.clone()),
+            FakeLlmProvider::new(vec![llm_response().usage(2, 2).text(&["b"]).build()]).with_model(second.clone()),
         ),
     ]);
 

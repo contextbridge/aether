@@ -3,14 +3,14 @@ use acp_utils::notifications::{
 };
 use aether_cli::acp::testing::AcpTestHarness;
 use aether_cli::workspace::testing::{clone_repo, git, git_status, init_repo};
-use agent_client_protocol::schema::v1::ListSessionsRequest;
+use agent_client_protocol::schema::v2::{
+    AbsolutePath, ListSessionsRequest, PromptRequest, ResumeSessionRequest, StopReason,
+};
 use std::fs;
-use std::future::Future;
-use tokio::task::LocalSet;
 
 #[tokio::test(flavor = "current_thread")]
 async fn workspace_list_registers_source_repo_and_marks_it_current() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
         let sub = repo.join("sub");
@@ -29,7 +29,7 @@ async fn workspace_list_registers_source_repo_and_marks_it_current() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn workspace_move_to_new_sibling_clones_changes_and_resets_source() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
         harness.append_stored_session_in("s1", "2026-05-01T00:00:00Z", &repo);
@@ -51,14 +51,14 @@ async fn workspace_move_to_new_sibling_clones_changes_and_resets_source() {
         let sessions =
             harness.client_cx.send_request(ListSessionsRequest::new()).block_task().await.expect("list sessions");
         let session = sessions.sessions.iter().find(|s| s.session_id.0.as_ref() == "s1").expect("session exists");
-        assert_eq!(session.cwd, response.new_cwd);
+        assert_eq!(session.cwd.0, response.new_cwd);
     })
     .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn workspace_move_to_existing_clean_target_applies_changes() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
         let clone = clone_repo(&repo, tmp.path().join("clone"));
@@ -79,7 +79,7 @@ async fn workspace_move_to_existing_clean_target_applies_changes() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn workspace_move_to_existing_target_on_different_head_fails_actionably() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
         let clone = clone_repo(&repo, tmp.path().join("clone"));
@@ -94,7 +94,7 @@ async fn workspace_move_to_existing_target_on_different_head_fails_actionably() 
             .await
             .expect_err("move should fail");
 
-        assert!(error.message.contains("different commit"), "unexpected error: {}", error.message);
+        assert!(error.to_string().contains("different commit"), "unexpected error: {error}");
         assert_eq!(fs::read_to_string(repo.join("committed.txt")).unwrap(), "edited\n");
     })
     .await;
@@ -102,7 +102,7 @@ async fn workspace_move_to_existing_target_on_different_head_fails_actionably() 
 
 #[tokio::test(flavor = "current_thread")]
 async fn workspace_move_to_dirty_target_fails_and_leaves_source_untouched() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
         let clone = clone_repo(&repo, tmp.path().join("clone"));
@@ -115,7 +115,7 @@ async fn workspace_move_to_dirty_target_fails_and_leaves_source_untouched() {
             .await
             .expect_err("move should fail");
 
-        assert!(error.message.contains("uncommitted changes"), "unexpected error: {}", error.message);
+        assert!(error.to_string().contains("uncommitted changes"), "unexpected error: {error}");
         assert_eq!(fs::read_to_string(repo.join("committed.txt")).unwrap(), "edited\n");
     })
     .await;
@@ -123,7 +123,7 @@ async fn workspace_move_to_dirty_target_fails_and_leaves_source_untouched() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn workspace_move_rejects_workspace_from_different_repository() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
         let other = init_repo(tmp.path(), "other");
@@ -133,14 +133,14 @@ async fn workspace_move_rejects_workspace_from_different_repository() {
             .await
             .expect_err("move should fail");
 
-        assert!(error.message.contains("different repository"), "unexpected error: {}", error.message);
+        assert!(error.to_string().contains("different repository"), "unexpected error: {error}");
     })
     .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn workspace_move_rejects_invalid_new_names() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
         init_repo(tmp.path(), "taken");
@@ -156,7 +156,7 @@ async fn workspace_move_rejects_invalid_new_names() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn workspace_list_omits_deleted_workspaces() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
         harness.append_stored_session_in("s1", "2026-05-01T00:00:00Z", &repo);
@@ -178,7 +178,7 @@ async fn workspace_list_omits_deleted_workspaces() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn workspace_move_relocates_session_to_matching_subdirectory() {
-    with_harness(|harness| async move {
+    AcpTestHarness::run(|harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
         let sub = repo.join("sub");
@@ -197,17 +197,76 @@ async fn workspace_move_relocates_session_to_matching_subdirectory() {
     .await;
 }
 
-async fn with_harness<F, Fut>(body: F)
-where
-    F: FnOnce(AcpTestHarness) -> Fut,
-    Fut: Future<Output = ()>,
-{
-    LocalSet::new()
-        .run_until(async move {
-            let harness = AcpTestHarness::start().await;
-            body(harness).await;
-        })
-        .await;
+#[tokio::test(flavor = "current_thread")]
+async fn live_workspace_move_stops_old_actor_and_allows_restore_in_new_cwd() {
+    AcpTestHarness::run(|mut harness| async move {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = init_repo(tmp.path(), "repo");
+        harness.append_stored_session_in("live", "2026-05-01T00:00:00Z", &repo);
+        harness
+            .client_cx
+            .send_request(ResumeSessionRequest::new("live", AbsolutePath::new(repo)))
+            .block_task()
+            .await
+            .expect("restore source");
+        let moved = move_workspace(&harness, "live", WorkspaceMoveTarget::New { name: "moved".into() })
+            .await
+            .expect("move live workspace");
+        assert!(
+            harness
+                .client_cx
+                .send_request(PromptRequest::new("live", vec!["old actor".into()]))
+                .block_task()
+                .await
+                .is_err(),
+            "move must remove the old actor"
+        );
+        harness
+            .client_cx
+            .send_request(ResumeSessionRequest::new("live", AbsolutePath::new(moved.new_cwd)))
+            .block_task()
+            .await
+            .expect("restore moved session");
+        harness
+            .client_cx
+            .send_request(PromptRequest::new("live", vec!["new workspace".into()]))
+            .block_task()
+            .await
+            .expect("prompt restored actor");
+        harness.expect_idle(&"live".into(), StopReason::EndTurn).await;
+        harness.resume_agent().assert_saw(&["new workspace"]);
+        harness.shutdown().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn failed_and_unrelated_moves_preserve_live_actor() {
+    AcpTestHarness::run(|mut harness| async move {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = init_repo(tmp.path(), "repo");
+        harness.append_stored_session_in("other", "2026-05-01T00:00:00Z", &repo);
+        let active = harness.insert_agent_switching_session().await;
+        harness.append_stored_session_in(active.session_id().0.as_ref(), "2026-05-01T00:00:00Z", &repo);
+        assert!(
+            move_workspace(&harness, active.session_id().0.as_ref(), WorkspaceMoveTarget::New { name: "..".into() })
+                .await
+                .is_err()
+        );
+        move_workspace(&harness, "other", WorkspaceMoveTarget::New { name: "moved".into() })
+            .await
+            .expect("move unrelated saved session");
+        harness
+            .client_cx
+            .send_request(PromptRequest::new(active.session_id().clone(), vec!["still here".into()]))
+            .block_task()
+            .await
+            .expect("original actor still accepts prompts");
+        harness.expect_idle(active.session_id(), StopReason::EndTurn).await;
+        active.planner().assert_saw(&["still here"]);
+        harness.shutdown().await;
+    })
+    .await;
 }
 
 async fn list(harness: &AcpTestHarness, session_id: &str) -> WorkspaceListResponse {

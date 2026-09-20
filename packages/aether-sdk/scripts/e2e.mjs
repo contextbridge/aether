@@ -4,25 +4,25 @@
 // and report the result.
 //
 // Usage:
-//   node scripts/e2e.mjs [--bin <path>] [--cwd <path>] [--agent <name>]
+//   node scripts/e2e.mjs [--bin <path>] [--cwd <path>]
 //                        [--model <id>] [--reasoning-effort <level>]
 //                        [-- <prompt words...>]
 //
 // Defaults:
 //   --bin   <repo-root>/target/debug/aether
 //   --cwd   <repo-root>
+//   --model anthropic:claude-sonnet-4-6
 //   prompt  asks the agent to call weather__get_current for Tokyo
 //
 // Requires a real LLM API key (e.g. ANTHROPIC_API_KEY) in the environment;
-// aether will refuse to start without one. If --agent is passed, that agent's
-// tool filter in .aether/settings.json must allow `weather__*`.
+// The probe uses an isolated inline agent with only the weather tool enabled.
 
 import { parseArgs } from "node:util";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import { z } from "zod";
-import { AetherSession, tool } from "../dist/index.js";
+import { AetherSession, mcp, tool } from "../dist/index.js";
 
 const out = (s) => process.stdout.write(s);
 const err = (s) => process.stderr.write(s);
@@ -59,7 +59,6 @@ const { values, positionals } = parseArgs({
   options: {
     bin: { type: "string" },
     cwd: { type: "string" },
-    agent: { type: "string" },
     model: { type: "string" },
     "reasoning-effort": { type: "string" },
   },
@@ -79,32 +78,47 @@ if (!existsSync(binaryPath)) {
   process.exit(2);
 }
 
-const agentSelection = values.agent
-  ? { agent: values.agent }
-  : values.model
-    ? {
-        model: values.model,
-        ...(values["reasoning-effort"]
-          ? { reasoningEffort: values["reasoning-effort"] }
-          : {}),
-      }
-    : undefined;
+const agentSelection = {
+  model: values.model ?? "anthropic:claude-sonnet-4-6",
+  ...(values["reasoning-effort"]
+    ? { reasoningEffort: values["reasoning-effort"] }
+    : {}),
+};
 
 out(`> aether: ${binaryPath}\n`);
 out(`> cwd:    ${cwd}\n`);
-if (agentSelection) out(`> select: ${JSON.stringify(agentSelection)}\n`);
+out(`> select: ${JSON.stringify(agentSelection)}\n`);
 out(`> prompt: ${prompt}\n\n`);
 
+await using weather = await mcp({ name: "weather", tools: [getWeather] });
 await using session = await AetherSession.start({
   binaryPath,
   cwd,
-  ...(agentSelection ? { agent: agentSelection } : {}),
-  tools: { weather: [getWeather] },
+  agent: "sdk-e2e",
+  settings: {
+    agents: [
+      {
+        name: "sdk-e2e",
+        description: "SDK end-to-end tool probe",
+        ...agentSelection,
+        userInvocable: true,
+        prompts: [
+          {
+            type: "text",
+            text: "Use the provided weather tool to answer the user.",
+          },
+        ],
+        tools: { allow: ["weather__*"] },
+        mcps: [weather.spec],
+      },
+    ],
+  },
 });
 
 out(`> session: ${session.sessionId}\n\n`);
 
 let stopReason = null;
+let sawIdle = false;
 for await (const message of session.prompt(prompt)) {
   if (message.type === "session_update") {
     const update = message.update;
@@ -114,12 +128,24 @@ for await (const message of session.prompt(prompt)) {
     } else if (update.sessionUpdate === "agent_thought_chunk") {
       const c = update.content;
       if (c.type === "text") out(c.text);
-    } else if (update.sessionUpdate === "tool_call") {
-      out(`\n[tool_call] ${update.title ?? update.toolCallId}\n`);
     } else if (update.sessionUpdate === "tool_call_update") {
+      if (update.title) out(`\n[tool_call] ${update.title}\n`);
       if (update.status) out(`[tool_call] ${update.status}\n`);
+    } else if (
+      update.sessionUpdate === "state_update" &&
+      update.state === "idle"
+    ) {
+      sawIdle = true;
+    }
+    if (
+      (update.sessionUpdate === "agent_message_chunk" ||
+        update.sessionUpdate === "agent_thought_chunk") &&
+      !update.messageId
+    ) {
+      throw new Error("ACP v2 chunk missing messageId");
     }
   } else if (message.type === "result") {
+    if (!sawIdle) throw new Error("Result arrived before idle state_update");
     stopReason = message.stopReason;
   } else if (message.type === "error") {
     err(`\n[error] ${String(message.error)}\n`);
@@ -130,9 +156,8 @@ for await (const message of session.prompt(prompt)) {
 out(`\n\n> stop_reason:   ${stopReason ?? "<none>"}\n`);
 out(`> weather_calls: ${weatherCalls}\n`);
 if (
-  stopReason &&
-  stopReason !== "end_turn" &&
-  stopReason !== "max_turn_requests"
+  !stopReason ||
+  (stopReason !== "end_turn" && stopReason !== "max_turn_requests")
 ) {
   process.exitCode = 1;
 }

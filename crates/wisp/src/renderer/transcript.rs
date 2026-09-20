@@ -2,8 +2,9 @@ use std::rc::Rc;
 
 use crate::app::App;
 use crate::conversation::item_view::{ContentKind, content_kind, item_lines};
-use crate::conversation::{ConversationContent, ConversationItem, ItemState};
+use crate::conversation::{ConversationContent, ConversationItem};
 use crate::view::wrap::as_u16;
+use clankerdiff_ratatui::MarkdownStreamError;
 use ratatui::text::Line;
 
 use super::Renderer;
@@ -14,10 +15,10 @@ use super::stats::Lap;
 impl Renderer {
     /// The rendered rows native scrollback does not hold yet, from the commit
     /// point to the end of the conversation.
-    pub(super) fn live_lines(&mut self, app: &App, width: u16) -> Vec<Line<'static>> {
-        let lines = self.live_lines_inner(app, width);
+    pub(super) fn live_lines(&mut self, app: &App, width: u16) -> Result<Vec<Line<'static>>, MarkdownStreamError> {
+        let lines = self.live_lines_inner(app, width)?;
         self.stats.max_live_rows = self.stats.max_live_rows.max(lines.len());
-        lines
+        Ok(lines)
     }
 
     /// The rows of a run of items, with a blank line between runs of different
@@ -29,25 +30,21 @@ impl Renderer {
         width: u16,
         padding: usize,
         spinner_tick: usize,
-    ) -> Vec<Line<'static>> {
+    ) -> Result<Vec<Line<'static>>, MarkdownStreamError> {
         let mut lines = Vec::new();
         let mut previous = previous_kind;
         for item in items {
-            let kind = content_kind(item);
-            if previous.is_some_and(|value| value != kind) {
-                lines.push(Line::default());
-            }
-            lines.extend(self.cached_item_lines(item, width, padding, spinner_tick).iter().cloned());
-            previous = Some(kind);
+            lines.extend(self.item_suffix(item, previous, width, padding, spinner_tick, 0)?);
+            previous = Some(content_kind(item));
         }
-        lines
+        Ok(lines)
     }
 
-    fn live_lines_inner(&mut self, app: &App, width: u16) -> Vec<Line<'static>> {
+    fn live_lines_inner(&mut self, app: &App, width: u16) -> Result<Vec<Line<'static>>, MarkdownStreamError> {
         let items = app.conversation_items();
         let commit = self.native_history.commit;
         let Some(item) = items.get(commit.item_index) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let previous_kind = items.get(commit.item_index.wrapping_sub(1)).map(content_kind);
         if commit.rows == 0 {
@@ -62,16 +59,38 @@ impl Renderer {
 
         let (item_width, item_padding) = commit.dimensions(width, app.content_padding());
         let mut lines =
-            self.lines(std::slice::from_ref(item), previous_kind, item_width, item_padding, app.spinner_tick());
-        lines.drain(..commit.rows.min(lines.len()));
+            self.item_suffix(item, previous_kind, item_width, item_padding, app.spinner_tick(), commit.rows)?;
         lines.extend(self.lines(
             &items[commit.item_index + 1..],
             Some(content_kind(item)),
             width,
             app.content_padding(),
             app.spinner_tick(),
-        ));
-        lines
+        )?);
+        Ok(lines)
+    }
+
+    pub(super) fn item_suffix(
+        &mut self,
+        item: &ConversationItem,
+        previous: Option<ContentKind>,
+        width: u16,
+        padding: usize,
+        spinner: usize,
+        skip: usize,
+    ) -> Result<Vec<Line<'static>>, MarkdownStreamError> {
+        let separator = usize::from(previous.is_some_and(|kind| kind != content_kind(item)));
+        let mut lines = Vec::new();
+        if separator > skip {
+            lines.push(Line::default());
+        }
+        let skip = skip.saturating_sub(separator);
+        if streams_into_history(item) {
+            lines.extend(self.streaming_item_lines(item, width, padding, skip)?);
+        } else {
+            lines.extend(self.cached_item_lines(item, width, padding, spinner).iter().skip(skip).cloned());
+        }
+        Ok(lines)
     }
 
     /// One item's rendered rows, served from the per-frame cache whenever its
@@ -86,14 +105,8 @@ impl Renderer {
         padding: usize,
         spinner_tick: usize,
     ) -> Rc<[Line<'static>]> {
-        if streams_into_history(item) && item.is_open() {
-            return self.streaming_item_lines(item, width, padding);
-        }
         let shape = RenderShape { width, padding: as_u16(padding), theme: self.generation() };
-        let Self { theme, highlighter, render_cache, stats, stream_cache, .. } = self;
-        if !stream_cache.is_empty() && item.state() == ItemState::Sealed {
-            stream_cache.remove(&item.id());
-        }
+        let Self { theme, highlighter, render_cache, stats, .. } = self;
         let animated = matches!(item.content(), ConversationContent::Tool(_)) && item.is_open();
         let key = RenderKey {
             item_id: item.id(),

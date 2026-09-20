@@ -1,23 +1,25 @@
-use acp::Responder;
-use acp::schema::v1::{SessionUpdate, StopReason};
-use agent_client_protocol as acp;
-use agent_client_protocol::schema::v1::{CreateElicitationRequest, CreateElicitationResponse, SessionId};
-
 use crate::notifications::{
-    AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, McpNotification, SessionUsageParams,
-    SubAgentProgressParams,
+    AuthMethodsUpdatedParams, ContextClearedParams, GitDiffEventPayload, McpNotification, SubAgentProgressParams,
+};
+use agent_client_protocol::Responder;
+use agent_client_protocol::schema::v2::{
+    CreateElicitationRequest, CreateElicitationResponse, UpdateSessionNotification,
 };
 
 /// Events forwarded from the ACP connection to the main event loop.
 pub enum AcpEvent {
-    SessionUpdate { session_id: SessionId, update: Box<SessionUpdate> },
+    SessionUpdate(Box<UpdateSessionNotification>),
     ContextCleared(ContextClearedParams),
-    ContextCompaction(ContextCompactionParams),
     SubAgentProgress(SubAgentProgressParams),
-    SessionUsage(Box<SessionUsageParams>),
     AuthMethodsUpdated(AuthMethodsUpdatedParams),
     McpNotification(McpNotification),
+    GitDiffEvent(GitDiffEventPayload),
     ElicitationRequest { params: Box<CreateElicitationRequest>, responder: Responder<CreateElicitationResponse> },
-    PromptCompleted(StopReason),
     ConnectionClosed,
+}
+
+impl From<UpdateSessionNotification> for AcpEvent {
+    fn from(notification: UpdateSessionNotification) -> Self {
+        Self::SessionUpdate(Box::new(notification))
+    }
 }

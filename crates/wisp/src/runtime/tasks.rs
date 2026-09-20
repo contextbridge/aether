@@ -1,15 +1,15 @@
-use crate::command::{CommandResult, FailedCommand};
+use crate::command::CommandResult;
 use std::collections::HashMap;
 use std::future::Future;
+use std::task::{Context, Poll};
 use tokio::task::{AbortHandle, JoinError, JoinSet};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum ReadTask {
     AttachmentPreparation,
     FileIndex,
-    GitReview,
     ThemeList,
-    Workspace,
+    ReviewThemeList,
 }
 
 #[derive(Default)]
@@ -20,11 +20,7 @@ pub(super) struct TaskSupervisor {
 }
 
 impl TaskSupervisor {
-    pub(super) fn spawn_read(
-        &mut self,
-        key: ReadTask,
-        work: impl Future<Output = CommandResult> + Send + 'static,
-    ) {
+    pub(super) fn spawn_read(&mut self, key: ReadTask, work: impl Future<Output = CommandResult> + Send + 'static) {
         let handle = self.tasks.spawn(async move { TaskCompletion::Read(key, work.await) });
         if let Some(superseded) = self.reads.insert(key, handle) {
             superseded.abort();
@@ -35,45 +31,38 @@ impl TaskSupervisor {
         self.tasks.spawn(async move { TaskCompletion::Mutation(work.await) });
     }
 
-    pub(super) fn spawn_network(&mut self, work: impl Future<Output = CommandResult> + Send + 'static) {
-        let handle = self.tasks.spawn(async move { TaskCompletion::Network(work.await) });
-        self.network.push(handle);
+    pub(super) fn submit_network(&mut self, work: impl Future<Output = CommandResult> + Send + 'static) {
+        self.network.retain(|handle| !handle.is_finished());
+        self.network.push(self.tasks.spawn(async move { TaskCompletion::Mutation(work.await) }));
     }
 
     pub(super) fn is_empty(&self) -> bool {
         self.tasks.is_empty()
     }
 
-    pub(super) async fn next(&mut self) -> Option<CommandResult> {
+    pub(super) fn poll_result(&mut self, cx: &mut Context<'_>) -> Poll<Option<CommandResult>> {
         loop {
-            match self.tasks.join_next_with_id().await? {
-                Ok((id, TaskCompletion::Read(key, result))) => {
-                    let is_current = self.reads.get(&key).is_some_and(|handle| handle.id() == id);
-                    if is_current {
+            match std::task::ready!(self.tasks.poll_join_next_with_id(cx)) {
+                Some(Ok((id, TaskCompletion::Read(key, result)))) => {
+                    if self.reads.get(&key).is_some_and(|handle| handle.id() == id) {
                         self.reads.remove(&key);
-                        return Some(result);
+                        return Poll::Ready(Some(result));
                     }
                 }
-                Ok((_, TaskCompletion::Mutation(result) | TaskCompletion::Network(result))) => return Some(result),
-                Err(error) if error.is_cancelled() => {}
-                Err(error) => {
-                    return Some(CommandResult::Failed {
-                        command: FailedCommand::Other("run background task"),
-                        error: error.to_string(),
-                    });
-                }
+                Some(Ok((_, TaskCompletion::Mutation(result)))) => return Poll::Ready(Some(result)),
+                Some(Err(error)) if error.is_cancelled() => {}
+                Some(Err(error)) => return Poll::Ready(Some(CommandResult::BackgroundFailed(error.to_string()))),
+                None => return Poll::Ready(None),
             }
         }
     }
 
     pub(super) async fn shutdown(&mut self) {
-        for handle in self.reads.values() {
+        for handle in self.reads.values().chain(self.network.iter()) {
             handle.abort();
         }
         self.reads.clear();
-        for handle in self.network.drain(..) {
-            handle.abort();
-        }
+        self.network.clear();
         while let Some(result) = self.tasks.join_next().await {
             log_join_error(result);
         }
@@ -83,7 +72,6 @@ impl TaskSupervisor {
 enum TaskCompletion {
     Read(ReadTask, CommandResult),
     Mutation(CommandResult),
-    Network(CommandResult),
 }
 
 fn log_join_error(result: Result<TaskCompletion, JoinError>) {

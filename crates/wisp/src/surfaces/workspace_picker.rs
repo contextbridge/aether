@@ -1,9 +1,8 @@
 use crate::renderer::DrawContext;
-use crate::session::workspace_status::home_relative_path;
 use crate::surfaces::input::{Nav, UiEvent, WorkspacePickerOutput, is_press};
+use crate::theme::Theme;
 use crate::view::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::view::filterable_list::FilterableList;
-use crate::theme::Theme;
 use crate::view::widgets::TextInput;
 use acp_utils::notifications::{WorkspaceEntry, WorkspaceMoveTarget};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -41,8 +40,8 @@ impl WorkspacePicker {
             workspaces.into_iter().filter(|w| !w.is_current).map(WorkspaceRow::Existing).collect();
         rows.push(WorkspaceRow::CreateNew);
         Self {
-            rows: FilterableList::new(rows, |row| match row {
-                WorkspaceRow::Existing(entry) => home_relative_path(&entry.path),
+            rows: FilterableList::new(rows, move |row| match row {
+                WorkspaceRow::Existing(entry) => entry.path.display().to_string(),
                 WorkspaceRow::CreateNew => CREATE_NEW_LABEL.to_string(),
             }),
             parent_dir,
@@ -76,7 +75,7 @@ impl WorkspacePicker {
     fn render_list(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         self.rows.render_pane("Workspaces", "  (no matching workspaces)", area, buf, theme, |row| match row {
             WorkspaceRow::Existing(entry) => {
-                Line::styled(format!("  {}", home_relative_path(&entry.path)), Style::new().fg(theme.text_secondary))
+                Line::styled(format!("  {}", entry.path.display()), Style::new().fg(theme.text_secondary))
             }
             WorkspaceRow::CreateNew => Line::styled(format!("  {CREATE_NEW_LABEL}"), Style::new().fg(theme.info)),
         });
@@ -89,13 +88,13 @@ impl WorkspacePicker {
 
         if let Some(parent) = parent_dir {
             let hint = Line::from(Span::styled(
-                format!("  will be created in {}/", home_relative_path(parent)),
+                format!("  will be created in {}/", parent.display()),
                 Style::new().fg(theme.muted),
             ));
             Paragraph::new(vec![Line::raw(""), hint]).render(inner, buf);
         }
 
-        let field = Style::new().fg(theme.text_primary).bg(theme.sidebar_bg);
+        let field = theme.surface_style();
         TextInput::new(name)
             .prefix("  Name: ")
             .prefix_style(field)

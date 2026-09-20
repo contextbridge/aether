@@ -3,7 +3,7 @@ use rmcp::{
     ClientHandler, RoleClient,
     handler::client::progress::ProgressDispatcher,
     model::{
-        ClientCapabilities, ClientInfo, CustomNotification, ElicitRequestParams, ElicitResult, ElicitationAction,
+        ClientCapabilities, ClientConfig, CustomNotification, ElicitRequestParams, ElicitResult, ElicitationAction,
         ElicitationCapability, ErrorData, FormElicitationCapability, ProgressNotificationParam,
         UrlElicitationCapability,
     },
@@ -12,10 +12,10 @@ use rmcp::{
 use std::result::Result;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::client::{ElicitationRequest, McpClientEvent, manager::ToolListChangedRequest};
+use crate::client::{ElicitationRequest, McpClientEvent, elicitation::with_meta, manager::ToolListChangedRequest};
 
 pub struct McpClient {
-    client_info: ClientInfo,
+    client_info: ClientConfig,
     server_name: String,
     pub(crate) progress_dispatcher: ProgressDispatcher,
     event_sender: mpsc::Sender<McpClientEvent>,
@@ -24,7 +24,7 @@ pub struct McpClient {
 }
 
 impl McpClient {
-    pub fn new(client_info: ClientInfo, server_name: String, event_sender: mpsc::Sender<McpClientEvent>) -> Self {
+    pub fn new(client_info: ClientConfig, server_name: String, event_sender: mpsc::Sender<McpClientEvent>) -> Self {
         Self {
             client_info,
             server_name,
@@ -85,7 +85,7 @@ pub fn client_capabilities_for(form: bool, url: bool) -> ClientCapabilities {
 }
 
 impl ClientHandler for McpClient {
-    fn get_info(&self) -> ClientInfo {
+    fn get_info(&self) -> ClientConfig {
         self.client_info.clone()
     }
 
@@ -96,9 +96,10 @@ impl ClientHandler for McpClient {
     async fn create_elicitation(
         &self,
         request: ElicitRequestParams,
-        _context: RequestContext<RoleClient>,
+        context: RequestContext<RoleClient>,
     ) -> Result<ElicitResult, ErrorData> {
-        Ok(self.dispatch_elicitation(request).await)
+        let meta = (!context.meta.is_empty()).then_some(context.meta);
+        Ok(self.dispatch_elicitation(with_meta(request, meta)).await)
     }
 
     async fn on_custom_notification(
@@ -147,8 +148,8 @@ mod tests {
     use rmcp::model::{ElicitationSchema, Implementation};
     use std::collections::BTreeMap;
 
-    fn test_client_info() -> ClientInfo {
-        ClientInfo::new(client_capabilities(), Implementation::new("test", "0.1.0"))
+    fn test_client_info() -> ClientConfig {
+        ClientConfig::new(client_capabilities(), Implementation::new("test", "0.1.0"))
     }
 
     fn make_client(event_sender: mpsc::Sender<McpClientEvent>) -> McpClient {

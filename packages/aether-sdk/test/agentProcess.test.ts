@@ -79,6 +79,20 @@ describe("buildAetherAcpCommand()", () => {
     });
   });
 
+  it.each(["default", "disabled"] as const)(
+    "preserves explicit %s reasoning",
+    (reasoningEffort) => {
+      const command = buildAetherAcpCommand({
+        binaryPath: FAKE_AETHER,
+        model: "openai:gpt-5.4",
+        reasoningEffort,
+      });
+      expect(JSON.parse(command.args[2]!).reasoningEffort).toBe(
+        reasoningEffort,
+      );
+    },
+  );
+
   it("adds a trace-only context to ACP options JSON", () => {
     const command = buildAetherAcpCommand({
       binaryPath: FAKE_AETHER,

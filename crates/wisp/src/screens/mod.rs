@@ -1,4 +1,3 @@
-pub(crate) mod annotation;
 pub mod git_diff;
-pub mod plan_review;
-pub(crate) mod review;
+pub mod artifact_review;
+mod reviewer;

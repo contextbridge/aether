@@ -133,7 +133,9 @@ struct EventProjection {
 impl From<&SessionEvent> for EventProjection {
     fn from(event: &SessionEvent) -> Self {
         match event {
-            SessionEvent::User(UserEvent::Message { .. }) => Self::new("user", "user_message"),
+            SessionEvent::User(UserEvent::Message { message_id, .. }) => {
+                Self { message_id: Some(message_id.to_string()), ..Self::new("user", "user_message") }
+            }
             SessionEvent::User(UserEvent::ClearContext) => Self::new("user", "clear_context"),
             SessionEvent::Control(SessionControlEvent::AgentSwitched { .. }) => Self::new("control", "agent_switched"),
             SessionEvent::Agent(event) => Self::from(event),
@@ -145,10 +147,10 @@ impl From<&AgentEvent> for EventProjection {
     fn from(event: &AgentEvent) -> Self {
         match event {
             AgentEvent::Message(MessageEvent::Text { message_id, .. }) => {
-                Self { message_id: Some(message_id.clone()), ..Self::new("agent", "message_text") }
+                Self { message_id: Some(message_id.to_string()), ..Self::new("agent", "message_text") }
             }
             AgentEvent::Message(MessageEvent::Thought { message_id, .. }) => {
-                Self { message_id: Some(message_id.clone()), ..Self::new("agent", "message_thought") }
+                Self { message_id: Some(message_id.to_string()), ..Self::new("agent", "message_thought") }
             }
             AgentEvent::Tool(event) => Self::from_tool(event),
             AgentEvent::Turn(event) => Self::from_turn(event),
@@ -261,7 +263,7 @@ impl EventProjection {
     fn from_context(event: &ContextEvent) -> Self {
         match event {
             ContextEvent::CompactionStarted { .. } => Self::new("agent", "context_compaction_started"),
-            ContextEvent::CompactionEnded { outcome } => Self {
+            ContextEvent::CompactionEnded { outcome, .. } => Self {
                 outcome: Some(match outcome {
                     aether_core::events::CompactionOutcome::Completed => "completed",
                     aether_core::events::CompactionOutcome::Failed { .. } => "failed",
@@ -269,7 +271,9 @@ impl EventProjection {
                 }),
                 ..Self::new("agent", "context_compaction_ended")
             },
-            ContextEvent::CompactionResult { .. } => Self::new("agent", "context_compaction_result"),
+            ContextEvent::CompactionResult { message_id, .. } => {
+                Self { message_id: Some(message_id.to_string()), ..Self::new("agent", "context_compaction_result") }
+            }
             ContextEvent::UsageUpdated { usage } => Self {
                 usage_ratio: usage.usage_ratio,
                 context_limit: usage.context_limit.map(clamp_i64),
@@ -317,6 +321,7 @@ mod tests {
             usage: ContextUsage { usage_ratio: Some(0.9), ..ContextUsage::default() },
         }));
         let compaction_ended = SessionEvent::Agent(AgentEvent::Context(ContextEvent::CompactionEnded {
+            compaction_id: "compaction".into(),
             outcome: aether_core::events::CompactionOutcome::Completed,
         }));
 

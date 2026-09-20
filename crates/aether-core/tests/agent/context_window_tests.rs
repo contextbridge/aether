@@ -17,7 +17,7 @@ fn context_usage(events: &[AgentEvent]) -> ContextUsage {
 #[tokio::test]
 async fn context_window_override_supplies_unknown_provider_limit() {
     let events = test_agent()
-        .llm_responses(&[llm_response("msg").usage(100_000, 10).build()])
+        .llm_responses(&[llm_response().usage(100_000, 10).build()])
         .without_mcp()
         .provider_context_window(None)
         .context_window_override(200_000)
@@ -35,7 +35,7 @@ async fn context_window_override_supplies_unknown_provider_limit() {
 #[tokio::test]
 async fn context_window_override_beats_provider_limit() {
     let events = test_agent()
-        .llm_responses(&[llm_response("msg").usage(100_000, 10).build()])
+        .llm_responses(&[llm_response().usage(100_000, 10).build()])
         .without_mcp()
         .provider_context_window(Some(128_000))
         .context_window_override(200_000)
@@ -77,7 +77,7 @@ async fn spawn_applies_model_settings_to_context() {
     let settings = ModelSettings { temperature: Some(0.0), max_tokens: Some(64), ..Default::default() };
 
     let result = test_agent()
-        .llm_responses(&[llm_response("msg").usage(10, 10).build()])
+        .llm_responses(&[llm_response().usage(10, 10).build()])
         .model_settings(settings.clone())
         .user_text("hello")
         .run_with_context()

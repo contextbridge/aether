@@ -1,6 +1,6 @@
 # wisp
 
-A terminal interface for AI coding agents, built on the Agent Client Protocol (ACP).
+A terminal interface for AI coding agents, built on the Agent Client Protocol (ACP) v2.
 
 Wisp launches an ACP-compatible agent as a subprocess, streams markdown responses and tool activity, and provides built-in session management, file attachments, plan review, git review, and settings without leaving the terminal.
 
@@ -12,7 +12,7 @@ wisp                       # launches the default agent ("aether acp")
 wisp --agent "my-agent"    # launches a custom ACP agent
 ```
 
-The `--agent` flag accepts any shell command that speaks ACP over stdio.
+The `--agent` flag accepts any shell command that speaks ACP v2 over stdio.
 
 ## Keybindings
 
@@ -46,11 +46,11 @@ The connected agent may advertise additional commands.
 
 UI preferences are stored in `~/.wisp/settings.json`. Set `WISP_HOME` to use a different configuration directory. Supported settings include themes, content padding, status-line segments, and global keybindings.
 
-Place TextMate `.tmTheme` files in `~/.wisp/themes/` and select one in settings:
+Choose a Clankerdiff built-in theme in `/settings`, or place versioned Clankerdiff JSON theme files in `~/.wisp/themes/`. A built-ins use `{"source":"builtin","id":"sage"}`; custom uses the JSON filename:
 
 ```json
 {
-  "theme": { "file": "my-theme.tmTheme" },
+  "theme": { "source": "file", "file": "my-theme.json" },
   "keybindings": {
     "toggleGitDiff": "ctrl+d"
   }

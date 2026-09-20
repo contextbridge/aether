@@ -11,16 +11,17 @@ use rmcp::{
         CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ContentBlock, CreateTaskResult,
         ElicitRequest, ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationSchema, EnumSchema,
         GetTaskParams, GetTaskResult, Implementation, InputRequest, InputRequests, InputRequiredResult,
-        ProgressNotificationParam, ServerCapabilities, ServerInfo, UpdateTaskParams,
+        ProgressNotificationParam, ServerCapabilities, ServerConfig, UpdateTaskParams,
     },
     service::RequestContext,
     task_manager::{TaskContext, TaskExit, TaskManager, TaskOptions},
     tool, tool_handler, tool_router,
 };
+use std::collections::HashSet;
 use std::fmt::{Debug, Formatter, Write as _};
 use std::path::PathBuf;
-use std::{collections::HashSet, sync::Arc};
-use tokio::{fs::try_exists, sync::RwLock};
+use std::sync::{Arc, Mutex};
+use tokio::fs::try_exists;
 
 pub mod default_tools;
 pub mod error;
@@ -109,8 +110,7 @@ impl CodingMcpArgs {
 pub struct CodingMcp<T: CodingTools = DefaultCodingTools> {
     tool_router: ToolRouter<Self>,
     task_manager: TaskManager,
-    /// Track files that have been read to enforce read-before-edit safety
-    files_read: RwLock<HashSet<String>>,
+    read_state: Mutex<ReadState>,
     tools: Arc<T>,
     /// Optional LSP operations (enabled with `.with_lsp()`)
     lsp: Option<Arc<LspRegistry>>,
@@ -118,28 +118,18 @@ pub struct CodingMcp<T: CodingTools = DefaultCodingTools> {
     web_searcher: Option<WebSearcher<BraveSearchClient>>,
     /// Root directory used for path resolution and tool instructions.
     root_dir: PathBuf,
-    /// Read rules discovered from skill files (activated on file reads)
-    read_rule_state: prompt_rule_matcher::PromptRuleMatcher,
     /// Configured prompt directories used to build read rules.
     configured_rules_dirs: Vec<PathBuf>,
     /// Permission mode controlling user approval for tool calls
     permission_mode: PermissionMode,
 }
 
-fn build_rule_catalog(configured_rules_dirs: &[PathBuf]) -> aether_project::PromptCatalog {
-    if configured_rules_dirs.is_empty() {
-        return aether_project::PromptCatalog::empty();
-    }
-
-    PromptCatalog::from_dirs(configured_rules_dirs)
-}
-
 #[allow(clippy::unused_async_trait_impl)]
 #[tool_handler(router = self.tool_router)]
 impl<T: CodingTools + 'static> ServerHandler for CodingMcp<T> {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         let instructions = self.build_instructions();
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().enable_tasks().build())
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_tasks().build())
             .with_server_info(Implementation::new("coding-mcp", "0.1.0"))
             .with_instructions(instructions)
     }
@@ -272,13 +262,12 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
         Self {
             tool_router: Self::tool_router(),
             task_manager: TaskManager::new(),
-            files_read: RwLock::new(HashSet::new()),
+            read_state: Mutex::new(ReadState::default()),
             tools: Arc::new(tools),
             lsp: None,
             web_fetcher: WebFetcher::new(),
             web_searcher: WebSearcher::try_new().ok(),
             root_dir: crate::workspace_paths::current_dir(),
-            read_rule_state: prompt_rule_matcher::PromptRuleMatcher::default(),
             configured_rules_dirs: Vec::new(),
             permission_mode: PermissionMode::AlwaysAllow,
         }
@@ -303,7 +292,7 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
     pub fn with_rules_dirs(mut self, rules_dirs: Vec<PathBuf>) -> Self {
         self.configured_rules_dirs = rules_dirs;
         let catalog = build_rule_catalog(&self.configured_rules_dirs);
-        self.read_rule_state = PromptRuleMatcher::new(catalog);
+        self.read_state.get_mut().expect("read state lock poisoned").rule_matcher = PromptRuleMatcher::new(catalog);
         self
     }
 
@@ -458,10 +447,13 @@ When using tools that take file paths, always use absolute paths from:
     async fn read_and_track(&self, args: ReadFileArgs) -> Result<Json<ReadFileResult>, CodingError> {
         let file_path = args.file_path.clone();
         let mut result = self.tools.read_file(args).await?;
-        self.files_read.write().await.insert(file_path.clone());
+        let matched = {
+            let mut state = self.read_state.lock().expect("read state lock poisoned");
+            state.files_read.insert(file_path.clone());
+            state.rule_matcher.get_matched_rules(&self.root_dir, &file_path)
+        };
 
         let total_lines = result.total_lines;
-        let matched = self.read_rule_state.get_matched_rules(&self.root_dir, &file_path);
         for rule in &matched {
             write!(result.content, "\n\n<system-reminder>\n{}\n</system-reminder>", rule.body).unwrap();
         }
@@ -482,15 +474,15 @@ When using tools that take file paths, always use absolute paths from:
         let exists = try_exists(file_path)
             .await
             .map_err(|source| CodingError::ExistsCheckFailed { path: file_path.to_string(), source })?;
-        if exists && !self.files_read.read().await.contains(file_path) {
+        if exists && !self.read_state.lock().expect("read state lock poisoned").files_read.contains(file_path) {
             return Err(CodingError::NotReadBeforeOverwrite(file_path.to_string()));
         }
         Ok(())
     }
 
     /// Read-before-edit safety check: a file must have been read before editing.
-    async fn ensure_read_before_edit(&self, file_path: &str) -> Result<(), CodingError> {
-        if !self.files_read.read().await.contains(file_path) {
+    fn ensure_read_before_edit(&self, file_path: &str) -> Result<(), CodingError> {
+        if !self.read_state.lock().expect("read state lock poisoned").files_read.contains(file_path) {
             return Err(CodingError::NotReadBeforeEdit(file_path.to_string()));
         }
         Ok(())
@@ -592,7 +584,7 @@ When using tools that take file paths, always use absolute paths from:
         args.file_path = self.resolve_file_arg(&args.file_path)?;
         notify_preview(&context, ToolDisplayMeta::new("Edit file", basename(&args.file_path))).await;
 
-        self.ensure_read_before_edit(&args.file_path).await?;
+        self.ensure_read_before_edit(&args.file_path)?;
 
         let response = self.tools.edit_file(args).await?;
 
@@ -855,9 +847,23 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
     /// Edit a file with read-before-edit safety check (test helper, no MCP context needed).
     pub async fn test_edit_file(&self, mut args: EditFileArgs) -> Result<Json<EditFileResponse>, CodingError> {
         args.file_path = self.resolve_file_arg(&args.file_path)?;
-        self.ensure_read_before_edit(&args.file_path).await?;
+        self.ensure_read_before_edit(&args.file_path)?;
         self.tools.edit_file(args).await.map(Json)
     }
+}
+
+#[derive(Default)]
+struct ReadState {
+    files_read: HashSet<String>,
+    rule_matcher: PromptRuleMatcher,
+}
+
+fn build_rule_catalog(configured_rules_dirs: &[PathBuf]) -> PromptCatalog {
+    if configured_rules_dirs.is_empty() {
+        return PromptCatalog::empty();
+    }
+
+    PromptCatalog::from_dirs(configured_rules_dirs)
 }
 
 #[cfg(test)]

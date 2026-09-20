@@ -1,5 +1,6 @@
 use super::support::*;
 use utils::ReasoningEffort;
+use wisp::theme::{ThemeApplicationError, ThemeLoadError};
 
 fn server_status_entry(name: &str, status: McpServerStatus) -> McpServerStatusEntry {
     McpServerStatusEntry::new(name, status)
@@ -14,11 +15,14 @@ fn mcp_notification(servers: Vec<McpServerStatusEntry>) -> AcpEvent {
 }
 
 fn auth_complete(method_id: &str) -> CommandResult {
-    CommandResult::AuthenticationCompleted { method_id: method_id.to_string() }
+    CommandResult::AuthenticationCompleted {
+        method_id: method_id.to_string(),
+        result: Ok(acp::LoginAuthResponse::new()),
+    }
 }
 
 fn auth_failed(method_id: &str) -> CommandResult {
-    CommandResult::AuthenticationFailed { method_id: method_id.to_string() }
+    CommandResult::AuthenticationCompleted { method_id: method_id.to_string(), result: Err("login failed".into()) }
 }
 
 fn auth_method(id: &str, name: &str, description: Option<&str>) -> acp::AuthMethod {
@@ -867,10 +871,10 @@ fn settings_overlay_uses_borderless_modal_chrome_and_padded_highlights() {
     assert_eq!(footer_column, modal.x + 2);
 
     let highlighted_row = (modal.top()..modal.bottom())
-        .find(|&y| buffer.cell((modal.x + 2, y)).is_some_and(|cell| cell.bg == theme.text_primary))
+        .find(|&y| buffer.cell((modal.x + 2, y)).is_some_and(|cell| cell.bg == theme.accent))
         .expect("the selected settings row should be highlighted");
-    assert_eq!(buffer.cell((modal.x, highlighted_row)).unwrap().bg, theme.text_primary);
-    assert_eq!(buffer.cell((modal.x + 1, highlighted_row)).unwrap().bg, theme.text_primary);
+    assert_eq!(buffer.cell((modal.x, highlighted_row)).unwrap().bg, theme.accent);
+    assert_eq!(buffer.cell((modal.x + 1, highlighted_row)).unwrap().bg, theme.accent);
 }
 
 #[test]
@@ -979,7 +983,7 @@ fn settings_selecting_option_emits_config_option() {
     match cmd {
         AgentCommand::SetConfigOption { config_id, value, .. } => {
             assert_eq!(config_id, "model");
-            assert_eq!(value, "claude");
+            assert_eq!(value, acp::SessionConfigOptionValue::id("claude"));
         }
         other => panic!("expected SetConfigOption, got: {other:?}"),
     }
@@ -1050,7 +1054,7 @@ fn settings_multi_select_toggle_and_confirm() {
     match cmd {
         AgentCommand::SetConfigOption { config_id, value, .. } => {
             assert_eq!(config_id, "model");
-            assert!(value.contains("anthropic:opus"), "value: {value}");
+            assert_eq!(value, acp::SessionConfigOptionValue::id("anthropic:opus"));
         }
         other => panic!("expected SetConfigOption, got: {other:?}"),
     }
@@ -1108,7 +1112,10 @@ fn config_option_update_failed_shows_in_transcript() {
     ui.key(key(KeyCode::Tab));
     assert!(ui.app().has_modal());
 
-    ui.deliver_result(CommandResult::ConfigOptionUpdateFailed { error: "invalid model".to_string() });
+    ui.deliver_result(CommandResult::ConfigOptionsUpdated {
+        conversation_id: ui.app().conversation_id(),
+        result: Err("invalid model".to_string()),
+    });
 
     // Overlay should still be open
     assert!(ui.app().has_modal());
@@ -1186,7 +1193,7 @@ fn settings_theme_picker_opens_and_shows_default() {
 
     ui.draw();
     let viewport = ui.viewport_text();
-    assert!(viewport.contains("Default"), "Theme picker should show Default option:\n{viewport}");
+    assert!(viewport.contains("Sage"), "Theme picker should show Default option:\n{viewport}");
     assert!(viewport.contains("Theme"), "Theme picker should have Theme header:\n{viewport}");
 }
 
@@ -1201,7 +1208,7 @@ fn settings_theme_selection_returns_to_menu() {
 
     ui.draw();
     let viewport = ui.viewport_text();
-    assert!(viewport.contains("Theme: Default"), "Should return to menu with Default selected:\n{viewport}");
+    assert!(viewport.contains("Theme: Sage"), "Should return to menu with Default selected:\n{viewport}");
 }
 
 #[test]
@@ -1214,7 +1221,7 @@ fn settings_theme_empty_file_list_shows_only_default() {
 
     ui.draw();
     let viewport = ui.viewport_text();
-    assert!(viewport.contains("Default"), "Should show Default theme option:\n{viewport}");
+    assert!(viewport.contains("Sage"), "Should show Default theme option:\n{viewport}");
 }
 
 #[test]
@@ -1233,11 +1240,17 @@ fn opening_settings_requests_the_theme_list() {
 fn listed_themes_appear_in_the_theme_picker() {
     let mut ui = TestUiBuilder::new().build();
     open_settings(&mut ui);
-    ui.deliver_result(CommandResult::ThemesListed(vec!["dracula.tmTheme".to_string(), "kanagawa.tmTheme".to_string()]));
+    ui.deliver_result(CommandResult::ThemesListed(vec!["dracula.json".to_string(), "kanagawa.json".to_string()]));
 
     ui.key(key(KeyCode::Enter));
+    ui.type_text("dracula");
     let text = overlay_text(&mut ui);
     assert!(text.contains("dracula"), "theme picker should list dracula:\n{text}");
+    for _ in 0..7 {
+        ui.key(key(KeyCode::Backspace));
+    }
+    ui.type_text("kanagawa");
+    let text = overlay_text(&mut ui);
     assert!(text.contains("kanagawa"), "theme picker should list kanagawa:\n{text}");
 }
 
@@ -1245,25 +1258,79 @@ fn listed_themes_appear_in_the_theme_picker() {
 fn settings_menu_has_a_single_theme_row_after_themes_load() {
     let mut ui = TestUiBuilder::new().build();
     open_settings(&mut ui);
-    ui.deliver_result(CommandResult::ThemesListed(vec!["dracula.tmTheme".to_string()]));
+    ui.deliver_result(CommandResult::ThemesListed(vec!["dracula.json".to_string()]));
 
     let text = overlay_text(&mut ui);
     assert_eq!(text.matches("Theme:").count(), 1, "the theme row must be replaced, not duplicated:\n{text}");
 }
 
 #[test]
+fn invalid_startup_theme_is_visible_without_overwriting_the_selection() {
+    let settings = wisp::settings::UiSettings {
+        theme: wisp::settings::ThemeSettings::File { file: "../invalid.json".into() },
+        ..wisp::settings::UiSettings::default()
+    };
+    let mut ui = TestUiBuilder::new().settings(settings).dimensions(120, 15).build();
+    ui.draw();
+    assert!(ui.viewport_text().contains("Could not load selected theme"), "{}", ui.viewport_text());
+    assert_eq!(ui.app().ui_settings().theme.selection_id(), "file:../invalid.json");
+    assert_eq!(ui.app().theme().review().revision(), Theme::default().review().revision());
+}
+
+#[test]
+fn failed_queued_theme_retains_the_last_successful_selection() {
+    let mut ui = TestUiBuilder::new().build();
+    open_settings(&mut ui);
+    ui.deliver_result(CommandResult::ThemesListed(vec!["first.json".into(), "second.json".into()]));
+    select_theme(&mut ui, "first");
+    select_theme(&mut ui, "second");
+    let first = ui
+        .take_commands()
+        .into_iter()
+        .find_map(|command| match command {
+            Command::Filesystem(FilesystemCommand::ApplyTheme { settings, .. }) => Some(settings),
+            _ => None,
+        })
+        .expect("first change starts immediately");
+    let theme = Theme::from_review(clankerdiff_ratatui::theme::ReviewTheme::builtin("ayu-dark").unwrap());
+    ui.deliver_result(CommandResult::ThemeApplied(Ok((first, theme.clone()))));
+    let second = ui
+        .take_commands()
+        .into_iter()
+        .find_map(|command| match command {
+            Command::Filesystem(FilesystemCommand::ApplyTheme { settings, .. }) => Some(settings),
+            _ => None,
+        })
+        .expect("second change starts after the first completes");
+    assert_eq!(second.theme.selection_id(), "file:second.json");
+    ui.deliver_result(CommandResult::ThemeApplied(Err(ThemeApplicationError::Load(ThemeLoadError::Io(
+        std::io::Error::new(std::io::ErrorKind::NotFound, "theme missing"),
+    )))));
+    assert_eq!(ui.app().ui_settings().theme.selection_id(), "file:first.json");
+    assert_eq!(ui.app().theme().review().revision(), theme.review().revision());
+}
+
+#[test]
+fn malformed_theme_file_selections_are_rejected_during_deserialization() {
+    for file in ["../escape.json", "/absolute.json", "old.tmTheme", "", "nested/file.json"] {
+        let value = serde_json::json!({ "source": "file", "file": file });
+        assert!(serde_json::from_value::<wisp::settings::ThemeSettings>(value).is_err(), "accepted {file:?}");
+    }
+}
+
+#[test]
 fn rapid_theme_changes_settle_on_the_newest_choice() {
     let mut ui = TestUiBuilder::new().build();
     open_settings(&mut ui);
-    ui.deliver_result(CommandResult::ThemesListed(vec!["first.tmTheme".to_string(), "second.tmTheme".to_string()]));
+    ui.deliver_result(CommandResult::ThemesListed(vec!["first.json".to_string(), "second.json".to_string()]));
 
     select_theme(&mut ui, "first");
     select_theme(&mut ui, "second");
     settle_theme_tasks_newest_first(&mut ui);
 
     assert_eq!(
-        ui.app().ui_settings().theme.file.as_deref(),
-        Some("second.tmTheme"),
+        ui.app().ui_settings().theme.selection_id(),
+        "file:second.json",
         "a theme change that finishes late must not undo the one the user made after it"
     );
 }
@@ -1301,7 +1368,7 @@ fn theme_selection_keeps_overlay_open_and_refreshes_display() {
 
     ui.draw();
     let viewport = ui.viewport_text();
-    assert!(viewport.contains("Theme: Default"), "Theme should show Default after selection:\n{viewport}");
+    assert!(viewport.contains("Theme: Sage"), "Theme should show Default after selection:\n{viewport}");
 }
 
 #[test]
@@ -1469,7 +1536,7 @@ fn settle_theme_tasks_newest_first(ui: &mut TestUi) {
             return;
         }
         for settings in batch.into_iter().rev() {
-            ui.deliver_result(CommandResult::ThemeApplied { settings, theme: Theme::default(), error: None });
+            ui.deliver_result(CommandResult::ThemeApplied(Ok((settings, Theme::default()))));
         }
     }
 }
@@ -1867,7 +1934,7 @@ fn model_selector_shows_reasoning_bar_on_the_focused_row() {
     let mut ui = model_selector_ui(as_multi_select(option));
 
     let text = ui.viewport_text();
-    assert!(text.contains("none [···]"), "the focused reasoning model should show the effort bar inline:\n{text}");
+    assert!(text.contains("default [···]"), "the focused reasoning model should show the effort bar inline:\n{text}");
     assert_capability_columns_align(&text);
     let capability_column = capability_column_for(&text, "Opus");
 
@@ -1885,6 +1952,48 @@ fn model_selector_shows_reasoning_bar_on_the_focused_row() {
     let text = ui.viewport_text();
     assert!(!text.contains('■'), "a model without reasoning levels shows no bar:\n{text}");
     assert_eq!(capability_column_for(&text, "Opus"), capability_column, "columns must not move with focus:\n{text}");
+}
+
+#[test]
+fn model_selector_requires_explicit_choice_when_disabled_is_incompatible() {
+    let off_model = model(
+        "anthropic:opus",
+        "Anthropic / Opus",
+        SelectOptionMeta {
+            reasoning_levels: vec![ReasoningEffort::Disabled, ReasoningEffort::High],
+            ..Default::default()
+        },
+    );
+    let mandatory = model(
+        "codex:gpt",
+        "Codex / GPT",
+        SelectOptionMeta { reasoning_levels: vec![ReasoningEffort::High], ..Default::default() },
+    );
+    let mut ui = TestUiBuilder::new()
+        .config_options(vec![
+            as_multi_select(acp::SessionConfigOption::select(
+                "model",
+                "Model",
+                "anthropic:opus",
+                vec![off_model, mandatory],
+            )),
+            reasoning_option("disabled", &["default", "disabled", "high"]),
+        ])
+        .build();
+    open_first_config_option(&mut ui);
+    assert!(ui.viewport_text().contains("disabled [·]"));
+    ui.key(key(KeyCode::Enter));
+    ui.key(key(KeyCode::Down));
+    ui.key(key(KeyCode::Enter));
+    ui.key(key(KeyCode::Esc));
+    assert_no_commands(&mut ui, "incompatible Disabled must not commit");
+    let text = ui.viewport_text();
+    assert!(text.contains("Cannot disable reasoning"), "{text}");
+    ui.key(key(KeyCode::Tab));
+    ui.key(key(KeyCode::Esc));
+    let command = ui.next_agent_command().expect("explicit Default change");
+    assert!(matches!(command, AgentCommand::SetConfigOption { ref config_id, ref value, .. }
+        if config_id == "reasoning_effort" && value == &acp::SessionConfigOptionValue::id("default")));
 }
 
 #[test]
@@ -1965,7 +2074,9 @@ fn model_selector_toggles_only_what_the_query_left_visible() {
     ui.key(key(KeyCode::Esc));
 
     match ui.next_agent_command().expect("expected the filtered model to be committed") {
-        AgentCommand::SetConfigOption { value, .. } => assert_eq!(value, "openai:gpt-4o"),
+        AgentCommand::SetConfigOption { value, .. } => {
+            assert_eq!(value, acp::SessionConfigOptionValue::id("openai:gpt-4o"));
+        }
         other => panic!("expected SetConfigOption, got: {other:?}"),
     }
 }
@@ -2001,6 +2112,12 @@ fn configured_keybinding_replaces_the_default_chord() {
     ui.key(ctrl('d'));
     ui.draw();
     assert!(ui.viewport_text().contains("Git Diff"), "configured chord must open the git diff");
+    ui.key(ctrl('g'));
+    ui.draw();
+    assert!(ui.viewport_text().contains("Git Diff"), "the old chord remains unbound in review");
+    ui.key(ctrl('d'));
+    ui.draw();
+    assert!(!ui.viewport_text().contains("Git Diff"), "configured chord must close the git diff");
 }
 
 #[test]

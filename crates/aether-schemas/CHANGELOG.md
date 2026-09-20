@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.7](https://github.com/contextbridge/aether/compare/aether-schemas-v0.2.6...aether-schemas-v0.2.7) - 2026-09-19
+
+### Other
+
+- update Cargo.lock dependencies
+
+## [0.2.6](https://github.com/contextbridge/aether/compare/aether-schemas-v0.2.5...aether-schemas-v0.2.6) - 2026-09-16
+
+### Other
+
+- release ([#466](https://github.com/contextbridge/aether/pull/466))
+
+## [0.2.5](https://github.com/contextbridge/aether/compare/aether-schemas-v0.2.4...aether-schemas-v0.2.5) - 2026-09-14
+
+### Other
+
+- updated the following local packages: aether-agent-cli, aether-agent-core, aether-project, aether-evals
+
+## [0.2.4](https://github.com/contextbridge/aether/compare/aether-schemas-v0.2.3...aether-schemas-v0.2.4) - 2026-09-14
+
+### Other
+
+- update Cargo.lock dependencies
+
+## [0.2.3](https://github.com/contextbridge/aether/compare/aether-schemas-v0.2.2...aether-schemas-v0.2.3) - 2026-09-11
+
+### Other
+
+- update Cargo.lock dependencies
+
 ## [0.2.2](https://github.com/contextbridge/aether/compare/aether-schemas-v0.2.1...aether-schemas-v0.2.2) - 2026-09-09
 
 ### Other

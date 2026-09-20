@@ -50,8 +50,7 @@ pub fn process_compatible_stream<E: Into<LlmError> + Send>(
     mut stream: impl Stream<Item = std::result::Result<ChatCompletionStreamResponse, E>> + Send + Unpin,
 ) -> impl Stream<Item = Result<LlmResponse>> + Send {
     async_stream::stream! {
-        let message_id = uuid::Uuid::new_v4().to_string();
-        yield Ok(LlmResponse::Start { message_id });
+        yield Ok(LlmResponse::Start);
 
         let mut collector = ToolCallCollector::<i32>::new();
         let mut chunk_count: u32 = 0;
@@ -200,7 +199,7 @@ mod tests {
     async fn test_process_compatible_stream_yields_stream_interrupted_on_empty_input() {
         let events = run(vec![]).await;
 
-        assert!(matches!(events.first(), Some(Ok(LlmResponse::Start { .. }))), "expected leading Start event");
+        assert!(matches!(events.first(), Some(Ok(LlmResponse::Start))), "expected leading Start event");
         let last = events.last().expect("stream must yield at least one event");
         assert!(
             last.as_ref().err().and_then(LlmError::provider).map(|provider| provider.kind)
@@ -219,7 +218,7 @@ mod tests {
         )])
         .await;
 
-        assert!(matches!(events[0], LlmResponse::Start { .. }));
+        assert!(matches!(events[0], LlmResponse::Start));
         assert!(matches!(events[1], LlmResponse::Reasoning { ref chunk } if chunk == "thinking"));
         assert!(matches!(events.last(), Some(LlmResponse::Done { stop_reason: None })));
     }
@@ -362,7 +361,7 @@ mod tests {
 
         let events = run_ok(vec![response]).await;
 
-        assert!(matches!(events[0], LlmResponse::Start { .. }));
+        assert!(matches!(events[0], LlmResponse::Start));
         assert!(matches!(events.last(), Some(LlmResponse::Done { stop_reason: Some(StopReason::Length) })));
     }
 

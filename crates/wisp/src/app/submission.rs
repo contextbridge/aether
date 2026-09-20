@@ -1,43 +1,29 @@
-use super::App;
+use super::{App, ForegroundOperation};
+use crate::attachment::{AttachmentOutcome, PromptAttachment};
 use crate::command::{AgentCommand, Command, FilesystemCommand};
 use crate::session::session_config_view::LocalConfigView;
-use crate::attachment::{AttachmentOutcome, PromptAttachment};
 use acp_utils::config_option_id::ConfigOptionId;
-use agent_client_protocol::schema::v1 as acp;
-
-#[derive(Default)]
-pub(super) enum SubmissionState {
-    #[default]
-    Idle,
-    Preparing(String),
-}
-
-impl SubmissionState {
-    fn take(&mut self) -> Option<String> {
-        match std::mem::take(self) {
-            Self::Preparing(text) => Some(text),
-            Self::Idle => None,
-        }
-    }
-
-    pub(super) fn reset(&mut self) {
-        *self = Self::Idle;
-    }
-}
+use agent_client_protocol::schema::v2 as acp;
 
 impl App {
     pub(super) fn submit(&mut self) {
-        if self.composer.is_empty() || self.waiting_for_response() || !matches!(self.submission, SubmissionState::Idle) {
+        if self.composer.is_empty() || !self.can_start_foreground_operation() {
             return;
         }
 
         let mentions = self.composer.selected_mentions();
+        if self.session.workspace_access() == crate::session::WorkspaceAccess::Remote
+            && (!mentions.is_empty() || !self.composer.pending_media().is_empty())
+        {
+            self.notify("Path attachments are unavailable for remote workspaces; remove attachments before sending");
+            return;
+        }
         let (text, pending_media) = self.composer.take_submission();
         let mut all_attachments: Vec<PromptAttachment> =
             mentions.into_iter().map(|m| PromptAttachment { path: m.path, display_name: m.display_name }).collect();
         all_attachments.extend(pending_media);
 
-        self.submission = SubmissionState::Preparing(text);
+        self.foreground = ForegroundOperation::PreparingPrompt(text);
         if all_attachments.is_empty() {
             self.finish_submission(AttachmentOutcome {
                 blocks: Vec::new(),
@@ -50,18 +36,24 @@ impl App {
     }
 
     pub(super) fn finish_submission(&mut self, outcome: AttachmentOutcome) {
-        let Some(text) = self.submission.take() else {
+        let Some(text) = self.foreground.take_prepared_prompt() else {
             return;
         };
-        self.conversation.append_user_content(&text);
-        for placeholder in &outcome.placeholders {
-            self.conversation.append_user_content(placeholder);
+        let display = std::iter::once(text.as_str())
+            .chain(outcome.placeholders.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let media_error = self.media_support_error(&outcome.blocks);
+        if media_error.is_some() {
+            self.conversation.append_user_content(display);
+        } else {
+            self.conversation.append_pending_user_content(display);
         }
         for warning in &outcome.warnings {
             self.notify(warning);
         }
 
-        if let Some(message) = self.media_support_error(&outcome.blocks) {
+        if let Some(message) = media_error {
             self.notify(&message);
             return;
         }
@@ -77,10 +69,10 @@ impl App {
             return None;
         }
 
-        if requires_image && !self.session.prompt_capabilities().image {
+        if requires_image && self.session.prompt_capabilities().image.is_none() {
             return Some("ACP agent does not support image input.".to_string());
         }
-        if requires_audio && !self.session.prompt_capabilities().audio {
+        if requires_audio && self.session.prompt_capabilities().audio.is_none() {
             return Some("ACP agent does not support audio input.".to_string());
         }
 

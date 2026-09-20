@@ -1,5 +1,23 @@
 use super::support::*;
 
+#[test]
+fn remote_prompt_search_keeps_server_paths_and_accepts_results() {
+    let cwd = std::env::var_os("HOME").map_or_else(|| "/server".into(), std::path::PathBuf::from);
+    let mut ui = TestUiBuilder::new().remote_workspace().prompt_search().dimensions(160, 24).build();
+    ui.key(ctrl('r'));
+    ui.type_text("h");
+    assert!(matches!(ui.next_agent_command(), Some(AgentCommand::SearchPrompts(_))));
+    ui.deliver_result(prompt_search_completed(prompt_search_response(
+        "h",
+        vec![prompt_search_result_with_cwd("hello world", 0, 1, cwd.clone())],
+    )));
+    ui.assert_viewport_contains(&cwd.display().to_string());
+    ui.key(key(KeyCode::Enter));
+    assert_eq!(ui.app().composer().text(), "hello world");
+    ui.key(key(KeyCode::Enter));
+    assert!(matches!(ui.next_agent_command(), Some(AgentCommand::Prompt { text, .. }) if text == "hello world"));
+}
+
 fn make_app_with_prompt_search() -> TestUi {
     TestUiBuilder::new().prompt_search().build()
 }
@@ -26,6 +44,10 @@ fn prompt_search_result_with_cwd(
         match_start: start,
         match_end: end,
     }
+}
+
+fn prompt_search_completed(response: acp_utils::notifications::PromptSearchResponse) -> CommandResult {
+    CommandResult::PromptSearchResults { query: response.query.clone(), result: Ok(response) }
 }
 
 fn prompt_search_response(
@@ -88,7 +110,7 @@ fn prompt_search_shows_results_after_response() {
     ui.key(key(KeyCode::Char('h')));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.deliver_result(CommandResult::PromptSearchResults(prompt_search_response(
+    ui.deliver_result(prompt_search_completed(prompt_search_response(
         "h",
         vec![prompt_search_result("hello world", 0, 1)],
     )));
@@ -105,7 +127,7 @@ fn prompt_search_no_results_shows_no_matches() {
     ui.type_text("zzz");
     let _ = ui.next_agent_command().unwrap();
 
-    ui.deliver_result(CommandResult::PromptSearchResults(prompt_search_response("zzz", vec![])));
+    ui.deliver_result(prompt_search_completed(prompt_search_response("zzz", vec![])));
 
     ui.draw();
     let viewport = ui.viewport_text();
@@ -119,9 +141,9 @@ fn prompt_search_shows_error_on_failure() {
     ui.key(key(KeyCode::Char('h')));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.deliver_result(CommandResult::PromptSearchFailed {
+    ui.deliver_result(CommandResult::PromptSearchResults {
         query: "h".to_string(),
-        error: "connection refused".to_string(),
+        result: Err("connection refused".to_string()),
     });
 
     ui.draw();
@@ -137,7 +159,7 @@ fn prompt_search_enter_confirms_and_inserts_result() {
     app.key(key(KeyCode::Char('h')));
     let _ = app.next_agent_command().unwrap();
 
-    app.deliver_result(CommandResult::PromptSearchResults(prompt_search_response(
+    app.deliver_result(prompt_search_completed(prompt_search_response(
         "h",
         vec![prompt_search_result("hello world", 0, 5)],
     )));
@@ -156,7 +178,7 @@ fn prompt_search_enter_without_selection_restores_draft() {
     app.type_text("zzz");
     let _ = app.next_agent_command().unwrap();
 
-    app.deliver_result(CommandResult::PromptSearchResults(prompt_search_response("zzz", vec![])));
+    app.deliver_result(prompt_search_completed(prompt_search_response("zzz", vec![])));
 
     app.key(key(KeyCode::Enter));
 
@@ -172,7 +194,7 @@ fn prompt_search_escape_restores_draft() {
     app.key(key(KeyCode::Char('h')));
     let _ = app.next_agent_command().unwrap();
 
-    app.deliver_result(CommandResult::PromptSearchResults(prompt_search_response(
+    app.deliver_result(prompt_search_completed(prompt_search_response(
         "h",
         vec![prompt_search_result("hello world", 0, 5)],
     )));
@@ -212,7 +234,7 @@ fn prompt_search_up_and_down_change_selection() {
     ui.key(key(KeyCode::Char('h')));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.deliver_result(CommandResult::PromptSearchResults(prompt_search_response(
+    ui.deliver_result(prompt_search_completed(prompt_search_response(
         "h",
         vec![prompt_search_result("hello", 0, 1), prompt_search_result("hey", 0, 1)],
     )));
@@ -239,13 +261,13 @@ fn prompt_search_result_replacement_resets_selection_to_first() {
     app.key(key(KeyCode::Char('h')));
     let _ = app.next_agent_command().unwrap();
 
-    app.deliver_result(CommandResult::PromptSearchResults(prompt_search_response(
+    app.deliver_result(prompt_search_completed(prompt_search_response(
         "h",
         vec![prompt_search_result("first result", 0, 1), prompt_search_result("second result", 0, 1)],
     )));
     app.key(key(KeyCode::Down));
 
-    app.deliver_result(CommandResult::PromptSearchResults(prompt_search_response(
+    app.deliver_result(prompt_search_completed(prompt_search_response(
         "h",
         vec![prompt_search_result("replacement first", 0, 1), prompt_search_result("replacement second", 0, 1)],
     )));
@@ -262,15 +284,9 @@ fn prompt_search_stale_response_is_ignored() {
     ui.key(key(KeyCode::Char('e')));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.deliver_result(CommandResult::PromptSearchResults(prompt_search_response(
-        "he",
-        vec![prompt_search_result("hello", 0, 2)],
-    )));
+    ui.deliver_result(prompt_search_completed(prompt_search_response("he", vec![prompt_search_result("hello", 0, 2)])));
 
-    ui.deliver_result(CommandResult::PromptSearchResults(prompt_search_response(
-        "h",
-        vec![prompt_search_result("STALE", 0, 1)],
-    )));
+    ui.deliver_result(prompt_search_completed(prompt_search_response("h", vec![prompt_search_result("STALE", 0, 1)])));
 
     ui.draw();
     let viewport = ui.viewport_text();
@@ -285,7 +301,7 @@ fn prompt_search_prefills_selected_result_with_cursor_at_match() {
     ui.key(key(KeyCode::Char('q')));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.deliver_result(CommandResult::PromptSearchResults(prompt_search_response(
+    ui.deliver_result(prompt_search_completed(prompt_search_response(
         "q",
         vec![prompt_search_result("the quick brown fox", 4, 9)],
     )));
@@ -320,10 +336,7 @@ fn prompt_search_backspace_to_empty_restores_draft_but_keeps_picker_open() {
     ui.key(key(KeyCode::Char('h')));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.deliver_result(CommandResult::PromptSearchResults(prompt_search_response(
-        "h",
-        vec![prompt_search_result("hello", 0, 1)],
-    )));
+    ui.deliver_result(prompt_search_completed(prompt_search_response("h", vec![prompt_search_result("hello", 0, 1)])));
 
     ui.key(key(KeyCode::Backspace));
 
@@ -383,7 +396,7 @@ fn prompt_search_rows_truncate_prompt_and_show_cwd_basename() {
     ui.type_text("quick");
     let _ = ui.next_agent_command().unwrap();
 
-    ui.deliver_result(CommandResult::PromptSearchResults(prompt_search_response(
+    ui.deliver_result(prompt_search_completed(prompt_search_response(
         "quick",
         vec![prompt_search_result_with_cwd(
             "the quick brown fox jumps over the lazy dog",
@@ -426,7 +439,7 @@ fn prompt_search_enter_preserves_cursor_at_match_end() {
     app.key(key(KeyCode::Char('q')));
     let _ = app.next_agent_command().unwrap();
 
-    app.deliver_result(CommandResult::PromptSearchResults(prompt_search_response(
+    app.deliver_result(prompt_search_completed(prompt_search_response(
         "q",
         vec![prompt_search_result("the quick brown fox", 4, 9)],
     )));
@@ -446,7 +459,7 @@ fn prompt_search_enter_preserves_cursor_after_manual_navigation() {
     app.key(key(KeyCode::Char('h')));
     let _ = app.next_agent_command().unwrap();
 
-    app.deliver_result(CommandResult::PromptSearchResults(prompt_search_response(
+    app.deliver_result(prompt_search_completed(prompt_search_response(
         "h",
         vec![prompt_search_result("hello", 0, 1), prompt_search_result("hi there", 0, 1)],
     )));
@@ -475,7 +488,7 @@ fn prompt_search_identical_repeated_query_accepts_any_matching_response() {
     ui.key(key(KeyCode::Char('x')));
     ui.key(key(KeyCode::Char('y')));
 
-    ui.deliver_result(CommandResult::PromptSearchResults(prompt_search_response(
+    ui.deliver_result(prompt_search_completed(prompt_search_response(
         "xy",
         vec![prompt_search_result("xy history hit", 0, 2)],
     )));
@@ -494,7 +507,10 @@ fn prompt_search_send_failure_is_visible_in_picker() {
     let AgentCommand::SearchPrompts(_) = ui.next_agent_command().expect("search command should be recorded") else {
         panic!("expected a prompt search command");
     };
-    ui.deliver_result(CommandResult::PromptSearchFailed { query: "h".to_string(), error: "search failed".to_string() });
+    ui.deliver_result(CommandResult::PromptSearchResults {
+        query: "h".to_string(),
+        result: Err("search failed".to_string()),
+    });
 
     ui.draw();
     let viewport = ui.viewport_text();
@@ -511,7 +527,10 @@ fn prompt_search_stale_failure_is_accepted_for_current_query() {
     ui.key(key(KeyCode::Char('x')));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.deliver_result(CommandResult::PromptSearchFailed { query: "x".to_string(), error: "server error".to_string() });
+    ui.deliver_result(CommandResult::PromptSearchResults {
+        query: "x".to_string(),
+        result: Err("server error".to_string()),
+    });
 
     ui.draw();
     let viewport = ui.viewport_text();
@@ -530,12 +549,15 @@ fn prompt_search_stale_failure_must_not_overwrite_newer_success() {
     ui.key(key(KeyCode::Char('y')));
     let _ = ui.next_agent_command().unwrap();
 
-    ui.deliver_result(CommandResult::PromptSearchResults(prompt_search_response(
+    ui.deliver_result(prompt_search_completed(prompt_search_response(
         "xy",
         vec![prompt_search_result("fresh result for xy", 0, 2)],
     )));
 
-    ui.deliver_result(CommandResult::PromptSearchFailed { query: "x".to_string(), error: "stale error".to_string() });
+    ui.deliver_result(CommandResult::PromptSearchResults {
+        query: "x".to_string(),
+        result: Err("stale error".to_string()),
+    });
 
     ui.draw();
     let viewport = ui.viewport_text();

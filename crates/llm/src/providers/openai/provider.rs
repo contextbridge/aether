@@ -23,6 +23,9 @@ pub trait OpenAiChatProvider {
 
 impl<T: OpenAiChatProvider + Send + Sync> StreamingModelProvider for T {
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
+        if let Err(error) = crate::provider::validate_reasoning(context, None) {
+            return crate::provider::error_stream(error);
+        }
         let client = self.client().clone();
         let model = self.model().to_string();
         let messages = match map_messages(context.messages()) {

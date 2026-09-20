@@ -1,10 +1,10 @@
 use super::TurnState;
 use super::plan_tracker::PlanTracker;
 use super::progress_indicator::ProgressIndicator;
-use super::tool_calls::{ToolCall, ToolStatus, raw_input_fragment};
-use crate::view::markdown::{FenceLine, complete_lines_with_fences};
+use super::tool_calls::{ToolCall, ToolStatus};
+use acp_utils::content::{display_content_blocks, map_content_blocks_to_text};
 use acp_utils::notifications::SubAgentProgressParams;
-use agent_client_protocol::schema::v1 as acp;
+use agent_client_protocol::schema::{MaybeUndefined, v2 as acp};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -19,13 +19,22 @@ pub struct ConversationItemId(u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Revision(u64);
 
-/// `Sealed` marks an item whose rendering is final: it may enter the
-/// terminal's native scrollback, which can never be rewritten. An `Open` item
-/// may still redraw in place and must stay in the live viewport.
+impl Revision {
+    pub fn value(self) -> u64 {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ItemState {
     Open,
     Sealed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageRole {
+    User,
+    Assistant,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,7 +47,7 @@ pub struct Notice {
     pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ConversationContent {
     User(TextItem),
     Assistant(TextItem),
@@ -46,10 +55,13 @@ pub enum ConversationContent {
     Notice(Notice),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConversationItem {
     id: ConversationItemId,
+    message_id: Option<acp::MessageId>,
+    preserve_user_display: bool,
     revision: Revision,
+    replacement_revision: Revision,
     state: ItemState,
     content: ConversationContent,
 }
@@ -59,8 +71,17 @@ impl ConversationItem {
         self.id
     }
 
+    pub fn message_id(&self) -> Option<&acp::MessageId> {
+        self.message_id.as_ref()
+    }
+
     pub fn revision(&self) -> Revision {
         self.revision
+    }
+
+    /// Advances when a change can invalidate rows already committed to native history.
+    pub fn replacement_revision(&self) -> Revision {
+        self.replacement_revision
     }
 
     pub fn state(&self) -> ItemState {
@@ -89,6 +110,8 @@ pub struct Conversation {
     id: ConversationId,
     items: Vec<ConversationItem>,
     tool_index: HashMap<String, usize>,
+    message_index: HashMap<acp::MessageId, usize>,
+    pending_user: Option<usize>,
     next_item_id: u64,
     turn: TurnState,
     plan_tracker: PlanTracker,
@@ -107,6 +130,8 @@ impl Conversation {
             id: ConversationId(NEXT_CONVERSATION_ID.fetch_add(1, Ordering::Relaxed)),
             items: Vec::new(),
             tool_index: HashMap::new(),
+            message_index: HashMap::new(),
+            pending_user: None,
             next_item_id: 0,
             turn: TurnState::default(),
             plan_tracker: PlanTracker::default(),
@@ -123,99 +148,80 @@ impl Conversation {
     }
 
     pub fn append_user_content(&mut self, text: impl Into<String>) -> ConversationItemId {
-        self.seal_open_assistant();
         self.push(ItemState::Sealed, ConversationContent::User(TextItem { text: text.into() }))
     }
 
+    /// Echo a submitted prompt before the agent acknowledges it; the next
+    /// `user_message` upsert adopts this item instead of appending another.
+    pub fn append_pending_user_content(&mut self, text: impl Into<String>) -> ConversationItemId {
+        let id = self.push(ItemState::Open, ConversationContent::User(TextItem { text: text.into() }));
+        let index = self.items.len() - 1;
+        self.items[index].preserve_user_display = true;
+        self.pending_user = Some(index);
+        id
+    }
+
+    pub fn upsert_message(
+        &mut self,
+        role: MessageRole,
+        message_id: acp::MessageId,
+        content: &MaybeUndefined<Vec<acp::ContentBlock>>,
+    ) {
+        let index = self.message_slot(role, message_id);
+        if self.items[index].preserve_user_display {
+            return;
+        }
+        let text = match content {
+            MaybeUndefined::Undefined => return,
+            MaybeUndefined::Null => String::new(),
+            MaybeUndefined::Value(blocks) => message_display_text(role, blocks),
+        };
+        let content = message_content(role, text);
+        if self.items[index].content != content {
+            self.items[index].content = content;
+            self.items[index].changed(true);
+        }
+    }
+
+    pub fn append_message_chunk(&mut self, role: MessageRole, chunk: &acp::ContentChunk) {
+        let index = self.message_slot(role, chunk.message_id.clone());
+        let item = &mut self.items[index];
+        if item.preserve_user_display {
+            return;
+        }
+        let text = message_display_text(role, std::slice::from_ref(&chunk.content));
+        match &mut item.content {
+            ConversationContent::User(current) | ConversationContent::Assistant(current) => current.text.push_str(&text),
+            ConversationContent::Tool(_) | ConversationContent::Notice(_) => return,
+        }
+        if !text.is_empty() {
+            item.changed(!item.is_open() || role == MessageRole::User);
+        }
+    }
+
     pub fn append_notice(&mut self, text: impl Into<String>) -> ConversationItemId {
-        self.seal_open_assistant();
         self.push(ItemState::Sealed, ConversationContent::Notice(Notice { text: text.into() }))
     }
 
-    pub fn append_assistant_chunk(&mut self, chunk: &str) {
-        if chunk.is_empty() {
-            return;
-        }
-        let has_open_assistant = self.items.last().is_some_and(|item| {
-            item.state == ItemState::Open && matches!(item.content, ConversationContent::Assistant(_))
-        });
-        if !has_open_assistant {
-            self.push(ItemState::Open, ConversationContent::Assistant(TextItem { text: String::new() }));
-        }
-        if let Some(item) = self.items.last_mut()
-            && let ConversationContent::Assistant(text) = &mut item.content
-        {
-            text.text.push_str(chunk);
-            item.revision.bump();
-        }
-        while let Some(finalized_end) = self.items.last().and_then(|item| match &item.content {
-            ConversationContent::Assistant(text) => complete_lines_with_fences(&text.text)
-                .find(|(_, line)| matches!(line, FenceLine::Blank))
-                .map(|(offset, _)| offset),
-            _ => None,
-        }) {
-            let trailing = match self.items.last_mut() {
-                Some(ConversationItem { content: ConversationContent::Assistant(text), state, revision, .. }) => {
-                    let trailing = text.text.split_off(finalized_end);
-                    *state = ItemState::Sealed;
-                    revision.bump();
-                    trailing
-                }
-                _ => break,
-            };
-            if trailing.is_empty() {
-                break;
-            }
-            self.push(ItemState::Open, ConversationContent::Assistant(TextItem { text: trailing }));
-        }
-    }
-
-    pub fn finish_current_block(&mut self) {
-        self.seal_open_assistant();
-    }
-
-    pub fn on_tool_call(&mut self, tool_call: &acp::ToolCall) {
-        self.seal_open_assistant();
-        let id = tool_call.tool_call_id.0.to_string();
-        if let Some(&index) = self.tool_index.get(&id) {
-            if self.items[index].state == ItemState::Open
-                && let ConversationContent::Tool(current) = &mut self.items[index].content
-            {
-                if !tool_call.title.is_empty() {
-                    current.title.clone_from(&tool_call.title);
-                }
-                current.status = ToolStatus::Running;
-                current.raw_input = tool_call.raw_input.as_ref().map_or_else(String::new, raw_input_fragment);
-                self.items[index].revision.bump();
-            }
-            return;
-        }
-        let index = self.items.len();
-        self.tool_index.insert(id, index);
-        let item_id = self.next_id();
-        self.items.push(ConversationItem {
-            id: item_id,
-            revision: Revision(0),
-            state: ItemState::Open,
-            content: ConversationContent::Tool(ToolCall::from_acp(tool_call)),
-        });
-    }
-
     pub fn on_tool_call_update(&mut self, update: &acp::ToolCallUpdate) {
-        let Some(&index) = self.tool_index.get(update.tool_call_id.0.as_ref()) else {
-            return;
-        };
-        self.update_open_tool(index, |tool_call| tool_call.apply_update(update));
+        let index = self.tool_slot(&update.tool_call_id);
+        self.update_tool(index, |tool_call| tool_call.apply_update(update));
+    }
+
+    pub fn on_tool_call_content_chunk(&mut self, chunk: &acp::ToolCallContentChunk) {
+        let index = self.tool_slot(&chunk.tool_call_id);
+        self.update_tool(index, |tool_call| tool_call.append_content(chunk.content.clone()));
     }
 
     pub fn on_sub_agent_progress(&mut self, notification: &SubAgentProgressParams) {
         let Some(&index) = self.tool_index.get(&notification.parent_tool_id) else {
             return;
         };
-        self.update_open_tool(index, |tool_call| tool_call.apply_sub_agent_progress(notification));
+        self.update_tool(index, |tool_call| tool_call.apply_sub_agent_progress(notification));
     }
 
     pub fn finish_turn(&mut self, terminal_status: &ToolStatus) {
+        self.pending_user = None;
         for item in &mut self.items {
             if item.state != ItemState::Open {
                 continue;
@@ -224,7 +230,7 @@ impl Conversation {
                 tool_call.finalize(terminal_status);
             }
             item.state = ItemState::Sealed;
-            item.revision.bump();
+            item.changed(false);
         }
     }
 
@@ -232,6 +238,8 @@ impl Conversation {
         self.id = ConversationId(NEXT_CONVERSATION_ID.fetch_add(1, Ordering::Relaxed));
         self.items.clear();
         self.tool_index.clear();
+        self.message_index.clear();
+        self.pending_user = None;
         self.next_item_id = 0;
     }
 
@@ -272,39 +280,84 @@ impl Conversation {
         })
     }
 
-    fn push(&mut self, state: ItemState, content: ConversationContent) -> ConversationItemId {
-        let id = self.next_id();
-        self.items.push(ConversationItem { id, revision: Revision(0), state, content });
-        id
+    fn message_slot(&mut self, role: MessageRole, message_id: acp::MessageId) -> usize {
+        if let Some(&index) = self.message_index.get(&message_id) {
+            return index;
+        }
+        let index = if role == MessageRole::User { self.pending_user.take() } else { None }.unwrap_or_else(|| {
+            let index = self.items.len();
+            self.push(ItemState::Open, message_content(role, String::new()));
+            index
+        });
+        self.items[index].message_id = Some(message_id.clone());
+        self.message_index.insert(message_id, index);
+        index
     }
 
-    fn next_id(&mut self) -> ConversationItemId {
+    fn tool_slot(&mut self, id: &acp::ToolCallId) -> usize {
+        if let Some(&index) = self.tool_index.get(id.0.as_ref()) {
+            return index;
+        }
+        let index = self.items.len();
+        self.push(
+            ItemState::Open,
+            ConversationContent::Tool(ToolCall::from_update(&acp::ToolCallUpdate::new(id.clone()))),
+        );
+        self.tool_index.insert(id.to_string(), index);
+        index
+    }
+
+    fn push(&mut self, state: ItemState, content: ConversationContent) -> ConversationItemId {
         let id = ConversationItemId(self.next_item_id);
         self.next_item_id = self.next_item_id.saturating_add(1);
+        self.items.push(ConversationItem {
+            id,
+            message_id: None,
+            preserve_user_display: false,
+            revision: Revision(0),
+            replacement_revision: Revision(0),
+            state,
+            content,
+        });
         id
     }
 
-    fn seal_open_assistant(&mut self) {
-        if let Some(item) = self.items.last_mut()
-            && item.state == ItemState::Open
-            && matches!(item.content, ConversationContent::Assistant(_))
-        {
-            item.state = ItemState::Sealed;
-            item.revision.bump();
+    fn update_tool(&mut self, index: usize, apply: impl FnOnce(&mut ToolCall)) {
+        let item = &mut self.items[index];
+        if let ConversationContent::Tool(tool_call) = &mut item.content {
+            let previous = tool_call.clone();
+            apply(tool_call);
+            if *tool_call == previous {
+                return;
+            }
+            let state = if tool_call.rendering_final() { ItemState::Sealed } else { ItemState::Open };
+            item.changed(!item.is_open());
+            item.state = state;
         }
     }
+}
 
-    fn update_open_tool(&mut self, index: usize, apply: impl FnOnce(&mut ToolCall)) {
-        let item = &mut self.items[index];
-        if item.state == ItemState::Open
-            && let ConversationContent::Tool(tool_call) = &mut item.content
-        {
-            apply(tool_call);
-            if tool_call.rendering_final() {
-                item.state = ItemState::Sealed;
-            }
-            item.revision.bump();
+fn message_display_text(role: MessageRole, blocks: &[acp::ContentBlock]) -> String {
+    let blocks = match role {
+        MessageRole::User => display_content_blocks(blocks),
+        MessageRole::Assistant => blocks.to_vec(),
+    };
+    map_content_blocks_to_text(blocks)
+}
+
+fn message_content(role: MessageRole, text: String) -> ConversationContent {
+    match role {
+        MessageRole::User => ConversationContent::User(TextItem { text }),
+        MessageRole::Assistant => ConversationContent::Assistant(TextItem { text }),
+    }
+}
+
+impl ConversationItem {
+    fn changed(&mut self, replaces_history: bool) {
+        if replaces_history {
+            self.replacement_revision.bump();
         }
+        self.revision.bump();
     }
 }
 

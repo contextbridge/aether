@@ -17,7 +17,7 @@ fn make_failable_app_with_caps(prompt_capabilities: acp::PromptCapabilities) -> 
 }
 
 fn media_caps() -> acp::PromptCapabilities {
-    acp::PromptCapabilities::new().image(true).audio(true)
+    acp::PromptCapabilities::new().image(acp::PromptImageCapabilities::new()).audio(acp::PromptAudioCapabilities::new())
 }
 
 fn model_select_option(
@@ -66,6 +66,21 @@ fn make_select_group(
     options: Vec<acp::SessionConfigSelectOption>,
 ) -> acp::SessionConfigSelectGroup {
     acp::SessionConfigSelectGroup::new(acp::SessionConfigGroupId::new(id.to_string()), name.to_string(), options)
+}
+
+#[test]
+fn remote_paste_never_attaches_even_when_the_path_exists_locally() {
+    let tmp = TempDir::new().unwrap();
+    let image = create_temp_file(&tmp, "photo.png", b"client-only contents");
+    let mut ui = TestUiBuilder::new().remote_workspace().build();
+    ui.paste(image.to_str().unwrap());
+    assert!(ui.app().composer().pending_media().is_empty());
+    assert_eq!(ui.app().composer().text(), image.to_str().unwrap());
+    ui.key(key(KeyCode::Enter));
+    assert!(
+        matches!(ui.next_agent_command(), Some(AgentCommand::Prompt { text, content: None, .. }) if text == image.to_str().unwrap())
+    );
+    assert!(ui.take_commands().is_empty());
 }
 
 #[test]
@@ -350,7 +365,7 @@ fn attachment_chips_render_in_layout() {
 
 #[test]
 fn agent_rejects_image_when_capability_missing() {
-    let caps = acp::PromptCapabilities::new().image(false).audio(true);
+    let caps = acp::PromptCapabilities::new().image(None).audio(acp::PromptAudioCapabilities::new());
     let mut app = make_app_with_prompt_capabilities(caps);
     let tmp = TempDir::new().unwrap();
     let img = create_temp_file(&tmp, "photo.png", b"fake png data");
@@ -369,7 +384,7 @@ fn agent_rejects_image_when_capability_missing() {
 
 #[test]
 fn agent_rejects_audio_when_capability_missing() {
-    let caps = acp::PromptCapabilities::new().image(true).audio(false);
+    let caps = acp::PromptCapabilities::new().image(acp::PromptImageCapabilities::new()).audio(None);
     let mut app = make_app_with_prompt_capabilities(caps);
     let tmp = TempDir::new().unwrap();
     let audio = create_temp_file(&tmp, "note.wav", b"fake wav data");
@@ -385,7 +400,9 @@ fn agent_rejects_audio_when_capability_missing() {
 
 #[test]
 fn selected_model_rejects_image() {
-    let caps = acp::PromptCapabilities::new().image(true).audio(true);
+    let caps = acp::PromptCapabilities::new()
+        .image(acp::PromptImageCapabilities::new())
+        .audio(acp::PromptAudioCapabilities::new());
     let config = vec![image_model_config(
         "gpt:no-vision",
         vec![model_select_option("gpt:no-vision", "GPT No Vision", false, false)],
@@ -406,7 +423,9 @@ fn selected_model_rejects_image() {
 
 #[test]
 fn missing_model_metadata_rejects_media() {
-    let caps = acp::PromptCapabilities::new().image(true).audio(true);
+    let caps = acp::PromptCapabilities::new()
+        .image(acp::PromptImageCapabilities::new())
+        .audio(acp::PromptAudioCapabilities::new());
     let config =
         vec![image_model_config("unknown-model", vec![model_select_option("known-model", "Known", true, true)])];
     let mut app = make_app_with_caps_and_config(caps, config);
@@ -425,7 +444,9 @@ fn missing_model_metadata_rejects_media() {
 
 #[test]
 fn supported_media_sends_blocks() {
-    let caps = acp::PromptCapabilities::new().image(true).audio(true);
+    let caps = acp::PromptCapabilities::new()
+        .image(acp::PromptImageCapabilities::new())
+        .audio(acp::PromptAudioCapabilities::new());
     let config = vec![image_model_config(
         "claude:vision",
         vec![model_select_option("claude:vision", "Claude Vision", true, true)],
@@ -459,10 +480,7 @@ fn sync_prompt_failure_resets_busy_state() {
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
     let _ = app.next_agent_command().expect("prompt should be recorded before its completion fails");
-    app.deliver_result(CommandResult::Failed {
-        command: FailedCommand::Prompt,
-        error: "connection closed".to_string(),
-    });
+    app.deliver_result(CommandResult::Prompt(Err("connection closed".to_string())));
 
     assert!(!app.app().waiting_for_response(), "failed prompt should reset busy state");
     assert!(app.next_command().is_none(), "no follow-up prompt should be sent");
@@ -473,7 +491,7 @@ fn sync_prompt_failure_resets_busy_state() {
 
 #[test]
 fn text_only_submit_unaffected_by_media_capability_check() {
-    let caps = acp::PromptCapabilities::new().image(false).audio(false);
+    let caps = acp::PromptCapabilities::new().image(None).audio(None);
     let mut app = make_app_with_prompt_capabilities(caps);
 
     app.submit("hello");
@@ -543,7 +561,9 @@ fn paste_with_percent_decoded_file_uri() {
 
 #[test]
 fn selected_model_rejects_audio() {
-    let caps = acp::PromptCapabilities::new().image(true).audio(true);
+    let caps = acp::PromptCapabilities::new()
+        .image(acp::PromptImageCapabilities::new())
+        .audio(acp::PromptAudioCapabilities::new());
     let config = vec![image_model_config(
         "gpt:no-audio",
         vec![model_select_option("gpt:no-audio", "GPT No Audio", true, false)],
@@ -564,7 +584,9 @@ fn selected_model_rejects_audio() {
 
 #[test]
 fn selected_model_rejects_image_grouped() {
-    let caps = acp::PromptCapabilities::new().image(true).audio(true);
+    let caps = acp::PromptCapabilities::new()
+        .image(acp::PromptImageCapabilities::new())
+        .audio(acp::PromptAudioCapabilities::new());
     let groups = vec![make_select_group(
         "g1",
         "Group 1",
@@ -587,7 +609,9 @@ fn selected_model_rejects_image_grouped() {
 
 #[test]
 fn selected_model_rejects_audio_grouped() {
-    let caps = acp::PromptCapabilities::new().image(true).audio(true);
+    let caps = acp::PromptCapabilities::new()
+        .image(acp::PromptImageCapabilities::new())
+        .audio(acp::PromptAudioCapabilities::new());
     let groups = vec![make_select_group(
         "g1",
         "Group 1",
@@ -610,7 +634,9 @@ fn selected_model_rejects_audio_grouped() {
 
 #[test]
 fn comma_separated_multi_model_rejects_image() {
-    let caps = acp::PromptCapabilities::new().image(true).audio(true);
+    let caps = acp::PromptCapabilities::new()
+        .image(acp::PromptImageCapabilities::new())
+        .audio(acp::PromptAudioCapabilities::new());
     let groups = vec![
         make_select_group(
             "g1",
@@ -638,7 +664,9 @@ fn comma_separated_multi_model_rejects_image() {
 
 #[test]
 fn comma_separated_multi_model_sends_when_all_support_media() {
-    let caps = acp::PromptCapabilities::new().image(true).audio(true);
+    let caps = acp::PromptCapabilities::new()
+        .image(acp::PromptImageCapabilities::new())
+        .audio(acp::PromptAudioCapabilities::new());
     let groups = vec![
         make_select_group(
             "g1",
@@ -669,7 +697,7 @@ fn comma_separated_multi_model_sends_when_all_support_media() {
 
 #[test]
 fn rejection_preserves_text_and_placeholders_in_transcript() {
-    let caps = acp::PromptCapabilities::new().image(false).audio(false);
+    let caps = acp::PromptCapabilities::new().image(None).audio(None);
     let mut app = make_app_with_prompt_capabilities(caps);
     let tmp = TempDir::new().unwrap();
     let img = create_temp_file(&tmp, "photo.png", b"fake png data");
@@ -683,7 +711,10 @@ fn rejection_preserves_text_and_placeholders_in_transcript() {
     assert!(app.next_command().is_none(), "prompt should be blocked locally");
 
     let messages: Vec<_> = message_texts(&app).collect();
-    assert!(messages.iter().any(|msg| *msg == "describe this image"), "user text preserved in transcript");
+    assert!(
+        messages.iter().any(|msg| msg.contains("describe this image") && msg.contains("image attachment")),
+        "text and attachment share one user message"
+    );
     assert!(messages.iter().any(|msg| msg.contains("image attachment")), "media placeholder preserved in transcript");
     assert!(messages.iter().any(|msg| msg.contains("does not support image")), "error message shown");
 }
@@ -701,16 +732,16 @@ fn sync_failure_preserves_text_and_placeholders_in_transcript() {
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
     let _ = app.next_agent_command().expect("prompt should be recorded before its completion fails");
-    app.deliver_result(CommandResult::Failed {
-        command: FailedCommand::Prompt,
-        error: "connection closed".to_string(),
-    });
+    app.deliver_result(CommandResult::Prompt(Err("connection closed".to_string())));
 
     assert!(!app.app().waiting_for_response(), "failed prompt should reset busy state");
     assert!(app.next_command().is_none(), "no follow-up prompt should be sent");
 
     let messages: Vec<_> = message_texts(&app).collect();
-    assert!(messages.iter().any(|msg| *msg == "describe this"), "user text preserved in transcript");
+    assert!(
+        messages.iter().any(|msg| msg.contains("describe this") && msg.contains("image attachment")),
+        "text and attachment share one user message"
+    );
     assert!(messages.iter().any(|msg| msg.contains("image attachment")), "media placeholder preserved in transcript");
     assert!(messages.iter().any(|msg| msg.contains("Failed to send prompt")), "error message shown");
 }
@@ -741,11 +772,11 @@ fn text_of(block: &acp::ContentBlock) -> &str {
 
 fn mime_of(block: &acp::ContentBlock) -> &str {
     match block {
-        acp::ContentBlock::Image(image) => &image.mime_type,
-        acp::ContentBlock::Audio(audio) => &audio.mime_type,
+        acp::ContentBlock::Image(image) => image.mime_type.0.as_ref(),
+        acp::ContentBlock::Audio(audio) => audio.mime_type.0.as_ref(),
         acp::ContentBlock::Resource(resource) => match &resource.resource {
             acp::EmbeddedResourceResource::TextResourceContents(contents) => {
-                contents.mime_type.as_deref().unwrap_or("")
+                contents.mime_type.as_ref().map_or("", |mime| mime.0.as_ref())
             }
             _ => "",
         },
@@ -1011,7 +1042,7 @@ fn image_and_audio_blocks_carry_base64_of_the_file_bytes() {
 
     let decoded_image = match &outcome.blocks[0] {
         acp::ContentBlock::Image(image) => {
-            assert_eq!(image.mime_type, "image/png");
+            assert_eq!(image.mime_type.0.as_ref(), "image/png");
             BASE64.decode(&image.data).unwrap()
         }
         other => panic!("expected image block, got {other:?}"),
@@ -1020,7 +1051,7 @@ fn image_and_audio_blocks_carry_base64_of_the_file_bytes() {
 
     let decoded_audio = match &outcome.blocks[1] {
         acp::ContentBlock::Audio(audio) => {
-            assert_eq!(audio.mime_type, "audio/wav");
+            assert_eq!(audio.mime_type.0.as_ref(), "audio/wav");
             BASE64.decode(&audio.data).unwrap()
         }
         other => panic!("expected audio block, got {other:?}"),

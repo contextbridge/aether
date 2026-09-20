@@ -1,5 +1,5 @@
 use crate::theme::Theme;
-use agent_client_protocol::schema::v1::{PlanEntry, PlanEntryStatus};
+use agent_client_protocol::schema::v2::{PlanEntry, PlanEntryStatus};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -47,9 +47,16 @@ fn build_plan_lines(entries: &[PlanEntry], theme: &Theme) -> Vec<Line<'static>> 
 
     for entry in entries {
         let mut spans = Vec::new();
-        match entry.status {
+        match &entry.status {
             PlanEntryStatus::Completed => {
                 spans.push(Span::styled(format!("  {CHECKBOX_FILLED} "), Style::new().fg(theme.muted)));
+                spans.push(Span::styled(
+                    entry.content.clone(),
+                    Style::new().fg(theme.muted).add_modifier(Modifier::CROSSED_OUT),
+                ));
+            }
+            PlanEntryStatus::Cancelled => {
+                spans.push(Span::styled("  × ", Style::new().fg(theme.muted)));
                 spans.push(Span::styled(
                     entry.content.clone(),
                     Style::new().fg(theme.muted).add_modifier(Modifier::CROSSED_OUT),
@@ -73,7 +80,7 @@ fn build_plan_lines(entries: &[PlanEntry], theme: &Theme) -> Vec<Line<'static>> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v1::{PlanEntryPriority, PlanEntryStatus};
+    use agent_client_protocol::schema::v2::{PlanEntryPriority, PlanEntryStatus};
 
     fn test_theme() -> Theme {
         Theme::default()
@@ -81,6 +88,18 @@ mod tests {
 
     fn entry(content: &str, status: PlanEntryStatus) -> PlanEntry {
         PlanEntry::new(content.to_string(), PlanEntryPriority::Medium, status)
+    }
+
+    #[test]
+    fn native_cancelled_status_renders_as_terminal() {
+        let theme = Theme::default();
+        for (status, glyph) in [(PlanEntryStatus::Cancelled, "×"), (PlanEntryStatus::Other("future".into()), "☐")] {
+            let entries = vec![entry("Task", status)];
+            let area = Rect::new(0, 0, 30, 3);
+            let mut buffer = Buffer::empty(area);
+            PlanView::new(&entries, &theme).render(area, &mut buffer);
+            assert_eq!(buffer[(2, 2)].symbol(), glyph);
+        }
     }
 
     #[test]

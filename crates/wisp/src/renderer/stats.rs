@@ -16,6 +16,10 @@ pub struct RenderStats {
     /// moves; anything else rebuilding is wasted work.
     pub item_rebuilds: u64,
     pub markdown_bytes_parsed: u64,
+    pub markdown_bytes_scanned: u64,
+    pub markdown_prefix_bytes_copied: u64,
+    pub markdown_rows_generated: u64,
+    pub markdown_rows_materialized: u64,
     /// Largest live region any single render produced. Native scrollback commits
     /// are supposed to bound this to roughly the viewport height.
     pub max_live_rows: usize,

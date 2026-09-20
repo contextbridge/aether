@@ -1,9 +1,13 @@
 use crate::language_catalog::LanguageId;
 use lsp_types::Uri;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io;
+use std::marker::PhantomData;
 use std::path::PathBuf;
+use tokio_util::bytes::BytesMut;
+use tokio_util::codec::{Decoder, Encoder, FramedRead, FramedWrite, LengthDelimitedCodec};
 
 #[doc = include_str!("docs/protocol.md")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,47 +106,52 @@ pub const LSP_REQUEST_TIMED_OUT: i32 = -33001;
 /// exited or its transport shut down before responding.
 pub const LSP_TRANSPORT_CLOSED: i32 = -33002;
 
-/// Read a length-prefixed frame from an async reader
-pub(crate) async fn read_frame<R, T>(reader: &mut R) -> io::Result<Option<T>>
-where
-    R: tokio::io::AsyncReadExt + Unpin,
-    T: for<'de> Deserialize<'de>,
-{
-    let mut len_buf = [0u8; 4];
-    match reader.read_exact(&mut len_buf).await {
-        Ok(_) => {}
-        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(e) => return Err(e),
-    }
-
-    let len = u32::from_be_bytes(len_buf);
-
-    if len > MAX_MESSAGE_SIZE {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("Message too large: {len} bytes")));
-    }
-
-    let mut buf = vec![0u8; len as usize];
-    reader.read_exact(&mut buf).await?;
-
-    serde_json::from_slice(&buf).map(Some).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+fn invalid_data(err: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, err)
 }
 
-/// Write a length-prefixed frame to an async writer
-pub(crate) async fn write_frame<W, T>(writer: &mut W, message: &T) -> io::Result<()>
-where
-    W: tokio::io::AsyncWriteExt + Unpin,
-    T: Serialize,
-{
-    let json = serde_json::to_vec(message)?;
+pub(crate) struct JsonFrames<T>(LengthDelimitedCodec, PhantomData<fn() -> T>);
 
-    if json.len() > MAX_MESSAGE_SIZE as usize {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("Message too large: {} bytes", json.len())));
+impl<T> JsonFrames<T> {
+    pub(crate) fn new() -> Self {
+        Self(
+            LengthDelimitedCodec::builder()
+                .big_endian()
+                .length_field_type::<u32>()
+                .max_frame_length(MAX_MESSAGE_SIZE as usize)
+                .new_codec(),
+            PhantomData,
+        )
     }
+}
 
-    let len = u32::try_from(json.len()).unwrap_or(u32::MAX);
-    writer.write_all(&len.to_be_bytes()).await?;
-    writer.write_all(&json).await?;
-    writer.flush().await
+impl<T: DeserializeOwned> Decoder for JsonFrames<T> {
+    type Item = T;
+    type Error = io::Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> io::Result<Option<T>> {
+        self.0.decode(src)?.map(|b| serde_json::from_slice(&b).map_err(invalid_data)).transpose()
+    }
+}
+
+impl<T: Serialize> Encoder<T> for JsonFrames<T> {
+    type Error = io::Error;
+
+    fn encode(&mut self, item: T, dst: &mut BytesMut) -> io::Result<()> {
+        let json = serde_json::to_vec(&item).map_err(invalid_data)?;
+        self.0.encode(json.into(), dst)
+    }
+}
+
+pub(crate) type FrameReader<R, T> = FramedRead<R, JsonFrames<T>>;
+pub(crate) type FrameWriter<W, T> = FramedWrite<W, JsonFrames<T>>;
+
+pub(crate) fn frame_reader<R: tokio::io::AsyncRead, T: DeserializeOwned>(reader: R) -> FrameReader<R, T> {
+    FramedRead::new(reader, JsonFrames::new())
+}
+
+pub(crate) fn frame_writer<W: tokio::io::AsyncWrite, T: Serialize>(writer: W) -> FrameWriter<W, T> {
+    FramedWrite::new(writer, JsonFrames::new())
 }
 
 #[cfg(test)]
@@ -221,5 +230,23 @@ mod tests {
         let params = serde_json::json!({});
         let uri = extract_document_uri("textDocument/unknown", &params);
         assert!(uri.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_duplex_reads_multiple_back_to_back_frames() {
+        use futures::{SinkExt, StreamExt};
+
+        let (client_io, server_io) = tokio::io::duplex(1024);
+        let mut writer = frame_writer::<_, DaemonRequest>(client_io);
+        let mut reader = frame_reader::<_, DaemonRequest>(server_io);
+
+        writer.send(DaemonRequest::Ping).await.expect("send ping");
+        writer.send(DaemonRequest::Disconnect).await.expect("send disconnect");
+
+        let first = reader.next().await.expect("first frame").expect("decode first frame");
+        assert!(matches!(first, DaemonRequest::Ping));
+
+        let second = reader.next().await.expect("second frame").expect("decode second frame");
+        assert!(matches!(second, DaemonRequest::Disconnect));
     }
 }

@@ -7,10 +7,11 @@
 use crate::app::message::Message;
 use crate::app::{App, AppConfig};
 use crate::attachment::{AttachmentOutcome, PromptAttachment, build_attachments_with};
-use crate::command::{AgentCommand, Command, CommandResult, FilesystemCommand, GitCommand};
+use crate::command::{AgentCommand, Command, CommandResult, FilesystemCommand, GitReviewCommand};
 use crate::file_index::{FileEntry, MAX_INDEXED_FILES, file_entries};
 use crate::git_review::{
-    DiffDocument, DiffScope, FileDiff, FileStatus, GitDiffError, GitDiffEvent, StageState, build_untracked_file_diff,
+    ClientState, ConnectionState, DiffDocument, DiffReviewEvent, DiffScope, DiffSnapshot, FileDiff, FileStatus,
+    LIVE_PROTOCOL_VERSION, RemoteError, RemoteErrorCode, RepositoryAction, ServerEvent, StageState,
 };
 pub use crate::renderer::RenderStats;
 use crate::renderer::Renderer;
@@ -19,12 +20,14 @@ use crate::session::terminal::inline_viewport_height;
 use crate::session::workspace_status::WorkspaceStatus;
 use crate::settings::UiSettings;
 use crate::surfaces::composer::ComposerLayout;
-use acp_utils::AETHER_TOOL_NAME_META_KEY;
 use acp_utils::client::AcpEvent;
 use acp_utils::notifications::{
     AetherCapabilities, SubAgentEvent, SubAgentProgressParams, SubAgentToolRequest, SubAgentToolResult,
+    WorkspaceStatusResponse,
 };
-use agent_client_protocol::schema::v1::{self as acp, SessionId};
+use agent_client_protocol::schema::MaybeUndefined;
+use agent_client_protocol::schema::v2::{self as acp, SessionId, SessionUpdate, ToolCallUpdate};
+use clankerdiff_core::git_patch_from_texts;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
 use ratatui::buffer::{Buffer, Cell};
@@ -36,6 +39,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::sync::mpsc::UnboundedReceiver;
 
 /// A deterministic command runner for integration tests.
 ///
@@ -48,6 +52,9 @@ pub struct FakeExecutor {
     /// Commands not yet completed by `settle_tasks`.
     pending: VecDeque<Command>,
     git: FakeGit,
+    /// The review client's published state, or `None` when no review is attached.
+    published: Option<Arc<ClientState>>,
+    git_completion: Option<Result<(), String>>,
     filesystem: FakeFilesystem,
 }
 
@@ -63,11 +70,23 @@ impl FakeExecutor {
     }
 
     pub fn with_git(git: FakeGit) -> Self {
-        Self { available: VecDeque::new(), pending: VecDeque::new(), git, filesystem: FakeFilesystem::default() }
+        Self {
+            available: VecDeque::new(),
+            pending: VecDeque::new(),
+            git,
+            published: None,
+            git_completion: None,
+            filesystem: FakeFilesystem::default(),
+        }
     }
 
     pub fn git(&self) -> &FakeGit {
         &self.git
+    }
+
+    /// Whether a review client is currently attached to the fake runtime.
+    pub fn git_review_active(&self) -> bool {
+        self.published.is_some()
     }
 
     pub fn git_mut(&mut self) -> &mut FakeGit {
@@ -82,6 +101,10 @@ impl FakeExecutor {
         &mut self.filesystem
     }
 
+    pub fn next_git_review_state(&mut self) -> Option<Arc<ClientState>> {
+        self.sync_git_review()
+    }
+
     pub fn record(&mut self, commands: impl IntoIterator<Item = Command>) {
         for command in commands {
             self.available.push_back(command.clone());
@@ -91,11 +114,24 @@ impl FakeExecutor {
 
     fn complete(&mut self, command: Command) -> Option<CommandResult> {
         match command {
-            Command::ResolveWorkspace { cwd } => Some(CommandResult::WorkspaceResolved {
-                status: WorkspaceStatus::new(cwd.display().to_string(), None),
-                cwd,
-            }),
-            Command::Git(command) => Some(CommandResult::GitDiff(self.git.apply(command))),
+            Command::Agent(AgentCommand::FetchWorkspaceStatus { cwd, .. }) => {
+                let status = self.git.workspace_status();
+                Some(CommandResult::WorkspaceResolved { cwd: cwd.clone(), status: status.into() })
+            }
+            Command::GitReview(GitReviewCommand::Open { .. }) => {
+                self.git_completion = None;
+                self.published = Some(Arc::new(ClientState::default().apply(&ServerEvent::Initialize {
+                    protocol_version: LIVE_PROTOCOL_VERSION,
+                    repository_root: self.git.root().to_string_lossy().into_owned(),
+                })));
+                self.next_git_review_state().map(CommandResult::GitReview)
+            }
+            Command::GitReview(GitReviewCommand::Event(event)) => self.on_review_event(event),
+            Command::GitReview(GitReviewCommand::Close) => {
+                self.published = None;
+                self.git_completion = None;
+                None
+            }
             Command::Filesystem(FilesystemCommand::PrepareSubmission { attachments }) => {
                 Some(CommandResult::SubmissionPrepared(self.filesystem.build_attachments(&attachments)))
             }
@@ -103,6 +139,64 @@ impl FakeExecutor {
                 Some(CommandResult::FilesIndexed { request_id, files: self.filesystem.index_files(&root) })
             }
             _ => None,
+        }
+    }
+
+    fn on_review_event(&mut self, event: DiffReviewEvent) -> Option<CommandResult> {
+        match event {
+            DiffReviewEvent::SetScope(scope) => self.reload(scope),
+            DiffReviewEvent::Refresh => {
+                self.git_completion = Some(Ok(()));
+                self.next_git_review_state().map(CommandResult::GitReview)
+            }
+            DiffReviewEvent::RepositoryAction(action) => {
+                self.git_completion = Some(self.git.apply(action).map_err(|error| error.to_string()));
+                self.next_git_review_state().map(CommandResult::GitReview)
+            }
+            DiffReviewEvent::Cancel | DiffReviewEvent::SubmitReview(_) | DiffReviewEvent::CopyFormattedReview(_) => {
+                None
+            }
+        }
+    }
+
+    fn sync_git_review(&mut self) -> Option<Arc<ClientState>> {
+        let current = self.published.clone()?;
+        let scope = current.snapshot.as_ref().map_or(DiffScope::default(), |snapshot| snapshot.scope);
+        match self.git.load_diff(scope) {
+            Ok(snapshot) if current.snapshot.as_deref() != Some(&snapshot) => {
+                self.publish(&current, &ServerEvent::Document(Arc::new(snapshot)))
+            }
+            Ok(_) if current.error.is_some() => self.publish(&current, &ServerEvent::Health { error: None }),
+            Ok(_) => None,
+            Err(error) if current.error.as_ref() == Some(&error) => None,
+            Err(error) if current.snapshot.is_none() && !matches!(current.connection, ConnectionState::Failed(_)) => {
+                self.publish(&current, &ServerEvent::Error(error))
+            }
+            Err(error) => self.publish(&current, &ServerEvent::Health { error: Some(error) }),
+        }
+    }
+
+    fn publish(&mut self, current: &Arc<ClientState>, event: &ServerEvent) -> Option<Arc<ClientState>> {
+        let next = current.as_ref().clone().apply(event);
+        if &next == current.as_ref() {
+            return None;
+        }
+        let next = Arc::new(next);
+        self.published = Some(Arc::clone(&next));
+        Some(next)
+    }
+
+    fn reload(&mut self, scope: DiffScope) -> Option<CommandResult> {
+        let current = self.published.clone()?;
+        match self.git.load_diff(scope) {
+            Ok(snapshot) => {
+                self.git_completion = Some(Ok(()));
+                self.publish(&current, &ServerEvent::Document(Arc::new(snapshot))).map(CommandResult::GitReview)
+            }
+            Err(error) => {
+                self.git_completion = Some(Err(error.to_string()));
+                None
+            }
         }
     }
 
@@ -209,7 +303,6 @@ struct FakeGitState {
     files: BTreeMap<String, FakeGitFile>,
     commits: Vec<String>,
     is_repo: bool,
-    commit_error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -231,8 +324,8 @@ impl FakeGit {
         Self { state: std::sync::Arc::new(std::sync::Mutex::new(state)) }
     }
 
-    pub fn fail_next_commit(&mut self, error: impl Into<String>) {
-        self.state.lock().unwrap().commit_error = Some(error.into());
+    pub fn set_repository_available(&mut self, available: bool) {
+        self.state.lock().unwrap().is_repo = available;
     }
 
     pub fn root(&self) -> PathBuf {
@@ -306,14 +399,14 @@ impl FakeGit {
         true
     }
 
-    pub fn commit(&mut self, message: impl Into<String>) -> Result<(), String> {
+    pub fn commit(&mut self, message: impl Into<String>) -> Result<(), RemoteError> {
         let message = message.into();
         let mut state = self.state.lock().unwrap();
         if message.trim().is_empty() {
-            return Err("empty commit message".to_string());
+            return Err(git_error("commit message must not be empty"));
         }
         if !state.files.values().any(|file| file.staged_contents != file.committed_contents) {
-            return Err("nothing to commit".to_string());
+            return Err(git_error("git operation `commit` failed with status Some(1)"));
         }
         for file in state.files.values_mut() {
             if file.staged_contents != file.committed_contents {
@@ -340,124 +433,101 @@ impl FakeGit {
         self.state.lock().unwrap().files.get(path).and_then(status_of)
     }
 
-    fn load_diff(&self, scope: DiffScope) -> Result<DiffDocument, GitDiffError> {
+    pub fn apply(&mut self, action: RepositoryAction) -> Result<(), RemoteError> {
+        if !self.state.lock().unwrap().is_repo {
+            return Err(not_repository_error());
+        }
+        match action {
+            RepositoryAction::StagePaths(paths) => {
+                for path in paths {
+                    self.stage(path.as_str());
+                }
+                Ok(())
+            }
+            RepositoryAction::UnstagePaths(paths) => {
+                for path in paths {
+                    self.unstage(path.as_str());
+                }
+                Ok(())
+            }
+            RepositoryAction::StageAll => {
+                self.stage_all();
+                Ok(())
+            }
+            RepositoryAction::UnstageAll => {
+                self.unstage_all();
+                Ok(())
+            }
+            RepositoryAction::Commit { message } => self.commit(message),
+            RepositoryAction::Discard { path, status } => {
+                if status == FileStatus::Untracked {
+                    self.state.lock().unwrap().files.remove(path.as_str());
+                } else {
+                    self.discard(path.as_str());
+                }
+                Ok(())
+            }
+        }
+    }
+
+    pub fn workspace_status(&self) -> WorkspaceStatusResponse {
+        let state = self.state.lock().unwrap();
+        WorkspaceStatusResponse {
+            display_dir: state.root.to_string_lossy().into_owned(),
+            git_ref: Some("main".to_string()),
+        }
+    }
+
+    fn load_diff(&self, scope: DiffScope) -> Result<DiffSnapshot, RemoteError> {
         let state = self.state.lock().unwrap();
         if !state.is_repo {
-            return Err(GitDiffError::NotARepository);
+            return Err(not_repository_error());
         }
-
         let mut files = Vec::new();
         for file in state.files.values() {
-            let untracked = file.committed_contents.is_none() && file.staged_contents.is_none();
-            if untracked {
-                if scope.includes_untracked()
-                    && let Some(contents) = &file.contents
-                {
-                    files.push(build_untracked_file_diff(file.path.clone(), contents));
-                }
-                continue;
-            }
-
             let (old, new) = match scope {
                 DiffScope::Staged => (&file.committed_contents, &file.staged_contents),
-                DiffScope::Unstaged => {
-                    let old =
-                        if file.staged_contents.is_some() { &file.staged_contents } else { &file.committed_contents };
-                    (old, &file.contents)
-                }
+                DiffScope::Unstaged => (&file.staged_contents, &file.contents),
                 DiffScope::Both => (&file.committed_contents, &file.contents),
             };
             if old == new {
                 continue;
             }
-
-            let staged = status_of(file).map_or(StageState::Unstaged, |(_, stage)| stage);
             let binary = old.as_ref().is_some_and(|bytes| is_binary(bytes))
                 || new.as_ref().is_some_and(|bytes| is_binary(bytes));
-            if binary {
-                let status = match (old, new) {
-                    (None, Some(_)) => FileStatus::Added,
-                    (Some(_), None) => FileStatus::Deleted,
-                    _ => FileStatus::Modified,
-                };
-                files.push(FileDiff {
-                    old_path: (status != FileStatus::Added).then(|| file.path.clone()),
-                    path: file.path.clone(),
-                    status,
-                    staged,
-                    hunks: Vec::new(),
-                    binary: true,
-                });
-                continue;
-            }
-
-            let old_text = old.as_deref().map(bytes_to_text).transpose()?.unwrap_or_default();
-            let new_text = new.as_deref().map(bytes_to_text).transpose()?.unwrap_or_default();
-            let mut diff = FileDiff::from_texts(file.path.clone(), &old_text, &new_text);
-            diff.staged = staged;
+            let mut diff = if binary {
+                FileDiff::from_texts(file.path.clone(), "", "").map_err(|error| git_error(error.to_string()))?
+            } else {
+                let old_text = old.as_deref().map(String::from_utf8_lossy).unwrap_or_default();
+                let new_text = new.as_deref().map(String::from_utf8_lossy).unwrap_or_default();
+                FileDiff::from_texts(file.path.clone(), &old_text, &new_text)
+                    .map_err(|error| git_error(error.to_string()))?
+            };
+            diff.status = match (old, new) {
+                (None, Some(_)) if file.committed_contents.is_none() && file.staged_contents.is_none() => {
+                    FileStatus::Untracked
+                }
+                (None, Some(_)) => FileStatus::Added,
+                (Some(_), None) => FileStatus::Deleted,
+                _ => FileStatus::Modified,
+            };
+            diff.old_path = old.is_some().then(|| diff.path.clone());
+            diff.staged = status_of(file).map_or(StageState::Unstaged, |(_, stage)| stage);
+            diff.binary = binary;
+            diff = diff.with_sources(fake_source(old.as_deref()), fake_source(new.as_deref()));
             files.push(diff);
         }
-        files.sort_by(|left, right| left.path.cmp(&right.path));
-        Ok(DiffDocument { repo_root: state.root.clone(), files })
+        let document = DiffDocument { repo_root: state.root.to_string_lossy().into_owned(), files };
+        Ok(DiffSnapshot { scope, document: Arc::new(document) })
     }
+}
 
-    fn read_full_file(&self, path: &str) -> Result<String, GitDiffError> {
-        let state = self.state.lock().unwrap();
-        let Some(contents) = state.files.get(path).and_then(|file| {
-            file.contents.as_deref().or(file.staged_contents.as_deref()).or(file.committed_contents.as_deref())
-        }) else {
-            return Err(GitDiffError::CommandFailed { stderr: format!("Cannot read {path}: file not found") });
-        };
-        String::from_utf8(contents.to_vec())
-            .map_err(|error| GitDiffError::CommandFailed { stderr: format!("Cannot read {path}: {error}") })
-    }
+fn git_error(message: impl Into<String>) -> RemoteError {
+    RemoteError::new(RemoteErrorCode::Git, message)
+}
 
-    fn apply(&mut self, command: GitCommand) -> GitDiffEvent {
-        match command {
-            GitCommand::Load { request_id, scope, .. } => {
-                GitDiffEvent::Loaded { request_id, result: self.load_diff(scope) }
-            }
-            GitCommand::StageFiles { request_id, paths, .. } => {
-                for path in paths {
-                    self.stage(&path);
-                }
-                GitDiffEvent::ActionFinished { request_id, result: Ok(()) }
-            }
-            GitCommand::UnstageFiles { request_id, paths, .. } => {
-                for path in paths {
-                    self.unstage(&path);
-                }
-                GitDiffEvent::ActionFinished { request_id, result: Ok(()) }
-            }
-            GitCommand::StageAll { request_id, .. } => {
-                self.stage_all();
-                GitDiffEvent::ActionFinished { request_id, result: Ok(()) }
-            }
-            GitCommand::UnstageAll { request_id, .. } => {
-                self.unstage_all();
-                GitDiffEvent::ActionFinished { request_id, result: Ok(()) }
-            }
-            GitCommand::Commit { request_id, message, .. } => {
-                let error = self.state.lock().unwrap().commit_error.take();
-                let result = error.map_or_else(
-                    || self.commit(message).map_err(|stderr| GitDiffError::CommandFailed { stderr }),
-                    |stderr| Err(GitDiffError::CommandFailed { stderr }),
-                );
-                GitDiffEvent::ActionFinished { request_id, result }
-            }
-            GitCommand::DiscardFile { request_id, path, status, .. } => {
-                if status == FileStatus::Untracked {
-                    self.state.lock().unwrap().files.remove(&path);
-                } else {
-                    self.discard(&path);
-                }
-                GitDiffEvent::ActionFinished { request_id, result: Ok(()) }
-            }
-            GitCommand::LoadFullFile { request_id, path, .. } => {
-                GitDiffEvent::FullFileLoaded { request_id, result: self.read_full_file(&path), path }
-            }
-        }
-    }
+fn not_repository_error() -> RemoteError {
+    git_error("path is not inside a Git worktree")
 }
 
 fn status_of(file: &FakeGitFile) -> Option<(FileStatus, StageState)> {
@@ -486,14 +556,17 @@ fn status_of(file: &FakeGitFile) -> Option<(FileStatus, StageState)> {
     Some((status, stage))
 }
 
-fn is_binary(bytes: &[u8]) -> bool {
-    bytes.iter().take(8192).any(|byte| *byte == 0) || std::str::from_utf8(bytes).is_err()
+fn fake_source(bytes: Option<&[u8]>) -> clankerdiff_ratatui::diff::SourceResult {
+    use clankerdiff_ratatui::diff::{SourceDocument, SourceUnavailable};
+    match bytes {
+        None => Err(SourceUnavailable::Absent),
+        Some(bytes) if is_binary(bytes) => Err(SourceUnavailable::Binary),
+        Some(bytes) => SourceDocument::new(String::from_utf8_lossy(bytes)).map(std::sync::Arc::new),
+    }
 }
 
-fn bytes_to_text(bytes: &[u8]) -> Result<String, GitDiffError> {
-    std::str::from_utf8(bytes)
-        .map(str::to_string)
-        .map_err(|error| GitDiffError::CommandFailed { stderr: error.to_string() })
+fn is_binary(bytes: &[u8]) -> bool {
+    bytes.iter().take(8192).any(|byte| *byte == 0) || std::str::from_utf8(bytes).is_err()
 }
 
 /// Deterministic terminal wrapper used by focused golden tests.
@@ -832,7 +905,11 @@ where
 
     /// Draws one frame, like the event loop does after every input batch.
     pub fn draw(&mut self) {
-        self.renderer.draw(&mut self.terminal, &mut self.app).unwrap();
+        self.try_draw().unwrap();
+    }
+
+    pub fn try_draw(&mut self) -> Result<(), crate::error::RenderError<B::Error>> {
+        self.renderer.draw(&mut self.terminal, &mut self.app)
     }
 
     pub fn render_stats(&mut self) -> RenderStats {
@@ -851,14 +928,20 @@ where
     /// after each turn so scrollback commits exactly like a live session.
     pub fn seed_long_history(&mut self, turns: usize) {
         for turn in 0..turns {
-            self.acp_event(user_chunk(&format!(
-                "Turn {turn}: reconcile the writer path in module_{turn} and add a regression test."
+            let prompt = format!("Turn {turn}: reconcile the writer path in module_{turn} and add a regression test.");
+            self.submit(&prompt);
+            self.acp_event(session_update(acp::SessionUpdate::UserMessage(
+                acp::UserMessage::new(format!("seed-user-{turn}"))
+                    .content(vec![acp::ContentBlock::Text(acp::TextContent::new(prompt))]),
             )));
-            self.acp_event(thought_chunk(&format!(
-                "Reading module_{turn} to find the torn-update window before touching any call site."
-            )));
-            self.acp_event(text_chunk(SEED_PROSE));
-            self.acp_event(text_chunk(SEED_CODE_BLOCK));
+            self.acp_event(session_update(acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(
+                acp::ContentBlock::Text(acp::TextContent::new(format!(
+                    "Reading module_{turn} to find the torn-update window before touching any call site."
+                ))),
+                format!("seed-thought-{turn}"),
+            ))));
+            self.acp_event(text_chunk_with_id(&format!("seed-response-{turn}"), SEED_PROSE));
+            self.acp_event(text_chunk_with_id(&format!("seed-response-{turn}"), SEED_CODE_BLOCK));
             let bash = format!("seed-bash-{turn}");
             self.acp_event(seed_bash_tool(&bash));
             self.acp_event(tool_completed(&bash));
@@ -868,7 +951,7 @@ where
             if turn % 8 == 0 {
                 self.seed_sub_agent_tree(turn);
             }
-            self.acp_event(text_chunk(SEED_CLOSING));
+            self.acp_event(text_chunk_with_id(&format!("seed-closing-{turn}"), SEED_CLOSING));
             self.complete_prompt(acp::StopReason::EndTurn);
             self.draw();
         }
@@ -977,8 +1060,20 @@ where
         self.deliver(Message::Agent(Box::new(event)));
     }
 
+    pub fn begin_resume(&mut self, session_id: &str, cwd: &str) {
+        self.deliver_result(CommandResult::SessionsListed(Ok(acp::ListSessionsResponse::new(vec![
+            acp::SessionInfo::new(session_id.to_string(), cwd),
+        ]))));
+        self.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    }
+
     pub fn complete_prompt(&mut self, stop_reason: acp::StopReason) {
-        self.acp_event(AcpEvent::PromptCompleted(stop_reason));
+        self.deliver_result(CommandResult::Prompt(Ok(acp::PromptResponse::new())));
+        let session_id = self.app.session_id().clone();
+        let update = acp::SessionUpdate::StateUpdate(acp::StateUpdate::Idle(
+            acp::IdleStateUpdate::new().stop_reason(stop_reason),
+        ));
+        self.acp_event(acp::UpdateSessionNotification::new(session_id, update).into());
     }
 
     pub fn tick(&mut self, now: Instant) {
@@ -993,6 +1088,14 @@ where
         loop {
             let pending = self.executor.take_pending();
             if pending.is_empty() {
+                if let Some(state) = self.executor.next_git_review_state() {
+                    self.deliver_result(CommandResult::GitReview(state));
+                    continue;
+                }
+                if let Some(result) = self.executor.git_completion.take() {
+                    self.deliver_result(CommandResult::GitReviewAction(result));
+                    continue;
+                }
                 return;
             }
             if initial_batch {
@@ -1192,6 +1295,7 @@ pub struct TestUiBuilder {
     width: u16,
     height: u16,
     working_dir: Option<PathBuf>,
+    workspace_access: crate::session::WorkspaceAccess,
     capabilities: AetherCapabilities,
     prompt_capabilities: acp::PromptCapabilities,
     config_options: Vec<acp::SessionConfigOption>,
@@ -1209,6 +1313,7 @@ impl Default for TestUiBuilder {
             width: 40,
             height: 15,
             working_dir: None,
+            workspace_access: crate::session::WorkspaceAccess::Local,
             capabilities: AetherCapabilities::default(),
             prompt_capabilities: acp::PromptCapabilities::new(),
             config_options: Vec::new(),
@@ -1230,6 +1335,11 @@ impl TestUiBuilder {
     pub fn dimensions(mut self, width: u16, height: u16) -> Self {
         self.width = width;
         self.height = height;
+        self
+    }
+
+    pub fn remote_workspace(mut self) -> Self {
+        self.workspace_access = crate::session::WorkspaceAccess::Remote;
         self
     }
 
@@ -1295,8 +1405,19 @@ impl TestUiBuilder {
         self.finish()
     }
 
+    pub fn build_from_session(self, session: crate::session::Session) -> (TestUi, UnboundedReceiver<AcpEvent>) {
+        let (app, events, _) = App::from_session(session, self.settings.clone());
+        let mut ui = self.finish_with_app(app);
+        ui.executor.record(ui.app.take_commands());
+        (ui, events)
+    }
+
     fn finish(self) -> TestUi {
         let app = App::new(self.app_config());
+        self.finish_with_app(app)
+    }
+
+    fn finish_with_app(self, app: App) -> TestUi {
         TestUi {
             app,
             renderer: Renderer::new(),
@@ -1312,17 +1433,21 @@ impl TestUiBuilder {
             .clone()
             .unwrap_or_else(|| acp::SessionCapabilities::new().meta(Some(self.capabilities.clone().to_meta())));
         AppConfig {
-            session_id: SessionId::new("test-session"),
-            agent_name: "aether".to_string(),
-            prompt_capabilities: self.prompt_capabilities.clone(),
-            session_capabilities,
-            config_options: self.config_options.clone(),
-            auth_methods: self.auth_methods.clone(),
+            initialize_response: acp::InitializeResponse::new(
+                agent_client_protocol::schema::ProtocolVersion::V2,
+                acp::Implementation::new("aether", "test"),
+            )
+            .capabilities(
+                acp::AgentCapabilities::new().session(session_capabilities.prompt(self.prompt_capabilities.clone())),
+            )
+            .auth_methods(self.auth_methods.clone()),
+            session_response: acp::NewSessionResponse::new("test-session").config_options(self.config_options.clone()),
             workspace_status: self
                 .workspace_status
                 .clone()
                 .unwrap_or_else(|| WorkspaceStatus::new("~/code/demo", Some("main".to_string()))),
             working_dir: self.working_dir.clone().unwrap_or_else(|| PathBuf::from(".")),
+            workspace_access: self.workspace_access,
             settings: self.settings.clone(),
             browser_opener: {
                 let opened = self.opened_urls.clone();
@@ -1547,68 +1672,69 @@ fn reconcile(state: &mut State, incoming: Vec<Delta>) -> Outcome {
 ";
 
 pub fn session_update(update: acp::SessionUpdate) -> AcpEvent {
-    AcpEvent::SessionUpdate { session_id: SessionId::new("test-session"), update: Box::new(update) }
+    acp::UpdateSessionNotification::new(SessionId::new("test-session"), update).into()
 }
 
-fn user_chunk(text: &str) -> AcpEvent {
-    session_update(acp::SessionUpdate::UserMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
-        acp::TextContent::new(text),
-    ))))
+pub fn compaction_update(id: &str, status: acp::CompactionStatus) -> AcpEvent {
+    session_update(acp::SessionUpdate::CompactionUpdate(acp::CompactionUpdate::new(id, status)))
 }
 
 pub fn text_chunk(text: &str) -> AcpEvent {
-    session_update(acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
-        acp::TextContent::new(text),
-    ))))
+    text_chunk_with_id("assistant", text)
+}
+
+pub fn text_chunk_with_id(message_id: &str, text: &str) -> AcpEvent {
+    session_update(acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
+        acp::ContentBlock::Text(acp::TextContent::new(text)),
+        message_id.to_string(),
+    )))
 }
 
 pub fn thought_chunk(text: &str) -> AcpEvent {
-    session_update(acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
-        acp::TextContent::new(text),
-    ))))
+    session_update(acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(
+        acp::ContentBlock::Text(acp::TextContent::new(text)),
+        "thought",
+    )))
 }
 
 fn seed_bash_tool(id: &str) -> AcpEvent {
-    let mut tool_call = acp::ToolCall::new(id.to_string(), format!("Run {id}"));
-    tool_call.meta = Some(seed_tool_meta("bash"));
-    tool_call.raw_input = Some(json!({ "command": "cargo test --module writer" }));
-    session_update(acp::SessionUpdate::ToolCall(tool_call))
+    let mut tool_call = ToolCallUpdate::new(id.to_string()).title(format!("Run {id}"));
+    tool_call.name = MaybeUndefined::Value("bash".into());
+    tool_call.raw_input = MaybeUndefined::Value(json!({ "command": "cargo test --module writer" }));
+    session_update(SessionUpdate::ToolCallUpdate(tool_call))
 }
 
 fn seed_edit_tool(id: &str, turn: usize) -> AcpEvent {
-    session_update(acp::SessionUpdate::ToolCall(acp::ToolCall::new(
-        id.to_string(),
-        format!("Editing src/module_{turn}.rs"),
-    )))
+    session_update(SessionUpdate::ToolCallUpdate(
+        ToolCallUpdate::new(id.to_string()).title(format!("Editing src/module_{turn}.rs")),
+    ))
 }
 
 fn seed_spawn_tool(id: &str) -> AcpEvent {
-    let mut tool_call = acp::ToolCall::new(id.to_string(), format!("Spawning sub-agents ({id})"));
-    tool_call.meta = Some(seed_tool_meta("spawn_subagent"));
-    session_update(acp::SessionUpdate::ToolCall(tool_call))
+    let mut tool_call = ToolCallUpdate::new(id.to_string()).title(format!("Spawning sub-agents ({id})"));
+    tool_call.name = MaybeUndefined::Value("spawn_subagent".into());
+    session_update(SessionUpdate::ToolCallUpdate(tool_call))
 }
 
-fn seed_tool_meta(tool_name: &str) -> acp::Meta {
-    let mut meta = serde_json::Map::new();
-    meta.insert(AETHER_TOOL_NAME_META_KEY.to_string(), json!(tool_name));
-    meta
+pub fn text_diff(path: &str, old: &str, new: &str) -> acp::Diff {
+    let diff_text = git_patch_from_texts(path, Some(old), Some(new)).expect("valid text diff");
+    acp::Diff::new(vec![acp::DiffChange::modify(acp::AbsolutePath::new(path))])
+        .with_patch(diff_text.map(acp::DiffPatch::new))
 }
 
 pub fn tool_completed(id: &str) -> AcpEvent {
-    session_update(acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
-        id.to_string(),
-        acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Completed),
-    )))
+    session_update(acp::SessionUpdate::ToolCallUpdate(
+        acp::ToolCallUpdate::new(id.to_string()).status(acp::ToolCallStatus::Completed),
+    ))
 }
 
 fn seed_tool_diff(id: &str, turn: usize) -> AcpEvent {
-    let diff = acp::Diff::new(format!("src/module_{turn}.rs"), SEED_DIFF_AFTER).old_text(SEED_DIFF_BEFORE);
-    session_update(acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
-        id.to_string(),
-        acp::ToolCallUpdateFields::new()
+    let diff = text_diff(&format!("/src/module_{turn}.rs"), SEED_DIFF_BEFORE, SEED_DIFF_AFTER);
+    session_update(acp::SessionUpdate::ToolCallUpdate(
+        acp::ToolCallUpdate::new(id.to_string())
             .content(vec![acp::ToolCallContent::Diff(diff)])
             .status(acp::ToolCallStatus::Completed),
-    )))
+    ))
 }
 
 fn seed_sub_agent(parent: &str, task: &str, agent: &str, event: SubAgentEvent) -> AcpEvent {

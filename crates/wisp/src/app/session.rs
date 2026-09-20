@@ -1,15 +1,14 @@
 use super::config::build_theme_entries;
-use super::{App, Overlay, Route};
-use crate::command::{AgentCommand, Command, FilesystemCommand};
-use crate::session::workspace_status::home_relative_path;
+use super::{App, ForegroundOperation, Overlay, Route};
+use crate::command::{AgentCommand, Command, FilesystemCommand, GitReviewCommand};
 use crate::settings::overlay::{SettingsChange, SettingsOverlay};
 use crate::surfaces::input::{
-    ElicitationOutput, GitReviewOutput, PlanReviewOutput, ReviewOutcome, RootOutput, SessionPickerOutput,
+    ElicitationOutput, GitReviewOutput, ArtifactReviewOutput, ReviewOutcome, RootOutput, SessionPickerOutput,
     SettingsOutput, WorkspacePickerOutput,
 };
 use crate::surfaces::picker::CommandEntry;
 use acp_utils::notifications::AetherCapabilities;
-use agent_client_protocol::schema::v1::SessionId;
+use agent_client_protocol::schema::v2::SessionId;
 
 pub(super) fn builtin_commands(capabilities: &AetherCapabilities) -> Vec<CommandEntry> {
     let mut commands: Vec<CommandEntry> = [
@@ -41,6 +40,16 @@ impl App {
         self.composer.clear();
         match cmd.name.as_str() {
             "clear" => {
+                if !self.can_start_foreground_operation() {
+                    self.notify("Cannot clear while a prompt or session transition is in progress");
+                    return;
+                }
+                self.reset_conversation();
+                self.foreground = ForegroundOperation::CreatingSession {
+                    previous_selections: self.session.config_options().iter().filter_map(|option| {
+                        option.select().map(|select| (option.id.clone(), select.current_value.to_string()))
+                    }).collect(),
+                };
                 self.queue(Command::Agent(AgentCommand::NewSession { cwd: self.session.working_dir().to_path_buf() }));
             }
             "resume" => {
@@ -65,11 +74,11 @@ impl App {
     }
 
     fn begin_workspace_move(&mut self) {
-        if self.waiting_for_response() || !self.session.workspace_move_state().is_idle() {
+        if !self.can_start_foreground_operation() {
             self.notify("Cannot move workspace while a prompt is running or another move is in progress");
             return;
         }
-        self.session.begin_workspace_listing();
+        self.foreground = ForegroundOperation::ListingWorkspaces;
         self.queue(Command::Agent(AgentCommand::ListWorkspaces {
             session_id: self.session.session_id().0.to_string(),
         }));
@@ -85,7 +94,7 @@ impl App {
         match output {
             RootOutput::Session(output) => match output {
                 SessionPickerOutput::Close => self.close_active(),
-                SessionPickerOutput::Load { session_id, cwd } => self.load_session(&session_id, &cwd),
+                SessionPickerOutput::Resume { session_id, cwd } => self.resume_session(&session_id, &cwd),
                 SessionPickerOutput::Preview(session_id) => {
                     self.queue(Command::Agent(AgentCommand::SessionPreview { session_id }));
                 }
@@ -94,7 +103,7 @@ impl App {
                 WorkspacePickerOutput::Close => self.close_active(),
                 WorkspacePickerOutput::Move { target } => {
                     self.close_overlay();
-                    self.session.begin_workspace_move();
+                    self.foreground = ForegroundOperation::MovingWorkspace;
                     self.queue(Command::Agent(AgentCommand::MoveWorkspace {
                         session_id: self.session.session_id().0.to_string(),
                         target,
@@ -104,11 +113,7 @@ impl App {
             RootOutput::Settings(output) => match output {
                 SettingsOutput::Close => self.close_active(),
                 SettingsOutput::SetConfigOption { config_id, value } => {
-                    self.queue(Command::Agent(AgentCommand::SetConfigOption {
-                        session_id: self.session.session_id().clone(),
-                        config_id: config_id.clone(),
-                        value: value.clone(),
-                    }));
+                    self.set_config_option(&config_id, &value);
                     self.apply_settings_change(&SettingsChange { config_id, new_value: value });
                 }
                 SettingsOutput::SetTheme(value) => self.apply_theme_change(&value),
@@ -126,17 +131,23 @@ impl App {
                 }
             },
             RootOutput::Elicitation(ElicitationOutput::Close) => self.close_active(),
-            RootOutput::PlanReview(PlanReviewOutput::Outcome(outcome)) => {
+            RootOutput::ArtifactReview(ArtifactReviewOutput::Approved) => {
+                self.notify("Artifact approved");
+                self.close_active();
+            }
+            RootOutput::ArtifactReview(ArtifactReviewOutput::SetTheme(value)) => self.apply_theme_change(&value),
+            RootOutput::ArtifactReview(ArtifactReviewOutput::Outcome(outcome)) => {
                 if let ReviewOutcome::Submitted(summary) = outcome {
                     self.notify(&summary);
                 }
                 self.close_active();
             }
             RootOutput::GitReview(output) => match output {
+                GitReviewOutput::SetTheme(value) => self.apply_theme_change(&value),
                 GitReviewOutput::Outcome(ReviewOutcome::Cancelled) => self.close_active(),
                 GitReviewOutput::Outcome(ReviewOutcome::Submitted(prompt)) => self.submit_review(&prompt),
-                GitReviewOutput::Task(task) => {
-                    self.queue(Command::Git(task));
+                GitReviewOutput::Command(command) => {
+                    self.queue(Command::GitReview(command));
                 }
             },
         }
@@ -148,6 +159,12 @@ impl App {
     }
 
     pub(super) fn open_route(&mut self, route: Route) {
+        if let Route::GitReview(_) = &self.route {
+            self.queue(Command::GitReview(GitReviewCommand::Close));
+        }
+        if matches!(route, Route::GitReview(_) | Route::ArtifactReview(_)) {
+            self.queue(Command::Filesystem(FilesystemCommand::ListReviewThemes));
+        }
         self.close_overlay();
         self.route = route;
     }
@@ -156,7 +173,7 @@ impl App {
         if self.overlay.is_some() {
             self.close_overlay();
         } else {
-            self.route = Route::Conversation;
+            self.return_to_conversation();
         }
     }
 
@@ -169,7 +186,9 @@ impl App {
             }
         }
         self.overlay = None;
-        self.session.cancel_workspace_picking();
+        if matches!(self.foreground, ForegroundOperation::PickingWorkspace) {
+            self.foreground = ForegroundOperation::Idle;
+        }
     }
 
     pub(super) fn apply_settings_change(&mut self, change: &SettingsChange) {
@@ -179,29 +198,46 @@ impl App {
         self.session.update_config_option_value(&change.config_id, &change.new_value);
     }
 
-    fn load_session(&mut self, session_id: &SessionId, cwd: &std::path::Path) {
-        self.queue(Command::Agent(AgentCommand::LoadSession {
+    fn resume_session(&mut self, session_id: &SessionId, cwd: &std::path::Path) {
+        if !self.can_start_foreground_operation() {
+            self.notify("Cannot resume while a prompt or session transition is in progress");
+            return;
+        }
+        self.reset_conversation();
+        self.session.set_session(session_id.clone(), Vec::new());
+        self.foreground = ForegroundOperation::ResumingSession {
+            session_id: session_id.clone(), cwd: cwd.to_path_buf(),
+        };
+        self.queue(Command::Agent(AgentCommand::ResumeSession {
             session_id: session_id.clone(),
             cwd: cwd.to_path_buf(),
         }));
         self.return_to_conversation();
-        self.reset_conversation();
+    }
+
+    pub(super) fn resolve_workspace(&mut self, cwd: std::path::PathBuf) {
+        self.queue(Command::Agent(AgentCommand::FetchWorkspaceStatus {
+            session_id: self.session.session_id().0.to_string(),
+            cwd,
+        }));
     }
 
     pub(super) fn on_workspace_moved(&mut self, new_cwd: std::path::PathBuf) {
-        self.queue(Command::ResolveWorkspace { cwd: new_cwd.clone() });
         self.return_to_conversation();
-        self.reset_conversation();
-        self.notify(&format!("Moved to {}", home_relative_path(&new_cwd)));
-        self.session.begin_workspace_load();
+        self.notify(&format!("Moved to {}", new_cwd.display()));
         let session_id = self.session.session_id().clone();
-        self.queue(Command::Agent(AgentCommand::LoadSession { session_id, cwd: new_cwd.clone() }));
-        self.session.set_working_dir(new_cwd);
+        self.reset_conversation();
+        self.foreground = ForegroundOperation::LoadingWorkspaceSession {
+            session_id: session_id.clone(), cwd: new_cwd.clone(),
+        };
+        self.queue(Command::Agent(AgentCommand::ResumeSession { session_id, cwd: new_cwd.clone() }));
+        self.session.set_working_dir(new_cwd.clone());
+        self.resolve_workspace(new_cwd);
     }
 
     /// Sends the review the git-diff screen assembled as a normal prompt.
     pub(super) fn submit_review(&mut self, prompt: &str) {
-        if self.waiting_for_response() {
+        if !self.can_start_foreground_operation() {
             return;
         }
         self.conversation.append_notice(format!("[wisp] Submitted review of working tree diff.\n{prompt}"));
@@ -220,13 +256,13 @@ impl App {
                 continue;
             };
             if select.current_value != value {
-                self.queue(Command::Agent(AgentCommand::SetConfigOption {
-                    session_id: self.session.session_id().clone(),
-                    config_id: config_id.clone(),
-                    value: value.clone(),
-                }));
+                self.set_config_option(config_id, value);
             }
         }
+    }
+
+    pub(super) fn can_start_foreground_operation(&self) -> bool {
+        self.foreground.is_idle()
     }
 
     /// Adds a semantic notice for information outside the agent's own output.

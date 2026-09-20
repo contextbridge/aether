@@ -8,7 +8,7 @@ Start -> (Text | Reasoning | EncryptedReasoning | ToolRequest*)* -> Usage -> Don
 
 # Text generation
 
-- **`Start`** -- Stream opened, contains the `message_id`.
+- **`Start`** -- Stream opened.
 - **`Text`** -- A chunk of generated text.
 - **`Reasoning`** -- A chunk of the model's chain-of-thought reasoning (visible summary).
 - **`EncryptedReasoning`** -- Opaque encrypted reasoning content (model-specific, can be replayed to the same model in future turns).

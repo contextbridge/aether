@@ -36,4 +36,4 @@ export type {
   AgentTraceContext,
 } from "./generated/aether-acp-options.js";
 export type { AetherHeadlessCliOptions } from "./generated/aether-headless-options.js";
-export * as acp from "@agentclientprotocol/sdk";
+export * as acp from "@agentclientprotocol/sdk/experimental/v2";

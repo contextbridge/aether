@@ -4,7 +4,7 @@ The Aether CLI ships as a single binary, **`aether`**, with subcommands for each
 
 - `aether` — interactive TUI (default when run with no args)
 - `aether headless` — single-prompt headless run for scripting/CI
-- `aether acp` — [Agent Client Protocol (ACP)](https://agentclientprotocol.com/overview/introduction) server for editor/IDE integration (e.g. Zed)
+- `aether acp` — [Agent Client Protocol (ACP)](https://agentclientprotocol.com/overview/introduction) v2 server for compatible editor/IDE clients
 - `aether settings init --user|--project` — initialize user or project settings
 - `aether show-prompt` — print the fully-assembled system prompt (debugging)
 
@@ -97,7 +97,7 @@ Aether supports multiple LLM providers using a `provider:model` string format:
 
 ### Zed
 
-Add to your Zed `settings.json` (Main Menu → "Open Settings File"):
+For a Zed version with ACP v2 support, add to your `settings.json` (Main Menu → "Open Settings File"):
 
 ```json
 {

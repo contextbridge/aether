@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.46](https://github.com/contextbridge/aether/compare/aether-project-v0.5.45...aether-project-v0.5.46) - 2026-09-19
+
+### Other
+
+- scheduled code-cleanup ([#485](https://github.com/contextbridge/aether/pull/485))
+
+## [0.5.45](https://github.com/contextbridge/aether/compare/aether-project-v0.5.44...aether-project-v0.5.45) - 2026-09-16
+
+### Added
+
+- replace plan and survey with explicit artifact review ([#478](https://github.com/contextbridge/aether/pull/478))
+- support explicitly disabling model reasoning ([#477](https://github.com/contextbridge/aether/pull/477))
+
+### Other
+
+- release ([#466](https://github.com/contextbridge/aether/pull/466))
+
+## [0.5.44](https://github.com/contextbridge/aether/compare/aether-project-v0.5.43...aether-project-v0.5.44) - 2026-09-14
+
+### Other
+
+- updated the following local packages: aether-agent-core
+
+## [0.5.43](https://github.com/contextbridge/aether/compare/aether-project-v0.5.42...aether-project-v0.5.43) - 2026-09-14
+
+### Other
+
+- update Cargo.lock dependencies
+
+## [0.5.42](https://github.com/contextbridge/aether/compare/aether-project-v0.5.41...aether-project-v0.5.42) - 2026-09-11
+
+### Other
+
+- scheduled code-cleanup ([#446](https://github.com/contextbridge/aether/pull/446))
+
 ## [0.5.41](https://github.com/contextbridge/aether/compare/aether-project-v0.5.40...aether-project-v0.5.41) - 2026-09-09
 
 ### Other

@@ -4,6 +4,51 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.3](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.2...aether-agent-cli-v0.9.3) - 2026-09-19
+
+### Added
+
+- Start server with initial prompt and detached client ([#486](https://github.com/contextbridge/aether/pull/486))
+
+### Other
+
+- release ([#481](https://github.com/contextbridge/aether/pull/481))
+
+## [0.9.2](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.1...aether-agent-cli-v0.9.2) - 2026-09-16
+
+### Added
+
+- replace plan and survey with explicit artifact review ([#478](https://github.com/contextbridge/aether/pull/478))
+- support explicitly disabling model reasoning ([#477](https://github.com/contextbridge/aether/pull/477))
+
+### Fixed
+
+- replace deprecated rmcp info aliases ([#480](https://github.com/contextbridge/aether/pull/480))
+
+### Other
+
+- scheduled code-cleanup ([#451](https://github.com/contextbridge/aether/pull/451))
+- release ([#466](https://github.com/contextbridge/aether/pull/466))
+
+## [0.9.1](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.0...aether-agent-cli-v0.9.1) - 2026-09-14
+
+### Fixed
+
+- *(aether-cli)* Set default TLS provider and make websocket client ping every 20s to avoid timeouts. ([#464](https://github.com/contextbridge/aether/pull/464))
+
+## [0.9.0](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.8.3...aether-agent-cli-v0.9.0) - 2026-09-14
+
+### Added
+
+- Aether CLI supports running a local client and remote agent via websockets ([#463](https://github.com/contextbridge/aether/pull/463))
+- [**breaking**] Migrate to ACP 2.0 ([#460](https://github.com/contextbridge/aether/pull/460))
+
+## [0.8.3](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.8.2...aether-agent-cli-v0.8.3) - 2026-09-11
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.8.2](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.8.1...aether-agent-cli-v0.8.2) - 2026-09-09
 
 ### Other

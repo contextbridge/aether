@@ -7,7 +7,7 @@ Sessions represent a conversation with an agent. Each session has its own messag
 
 ## How sessions work
 
-Sessions are managed by the agent, not the terminal UI. When you start Aether, it asks the agent to create a new session. The agent stores the session state — messages, config, and context — and the UI renders it.
+Sessions are managed by the agent, not the terminal UI. Local Aether startup asks the agent to create a new session. A [remote client](/aether/running/remote/) either resumes the server's session (if one exists), or creates a new session.
 
 ## Starting a new session
 

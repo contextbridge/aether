@@ -79,7 +79,7 @@ async fn test_parallel_tool_calls() {
     ])
     .await;
 
-    assert!(matches!(events[0], LlmResponse::Start { .. }));
+    assert!(matches!(events[0], LlmResponse::Start));
 
     let mut tool_starts = 0;
     let mut tool_args = 0;

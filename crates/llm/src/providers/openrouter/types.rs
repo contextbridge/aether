@@ -36,11 +36,20 @@ pub(crate) struct OpenRouterChatRequest {
     cache_control: CacheControl,
     #[serde(skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<serde_json::Value>,
 }
 
 impl OpenRouterChatRequest {
-    pub(crate) fn from_compatible(request: CompatibleChatRequest, session_id: Option<&str>) -> Self {
+    pub(crate) fn from_compatible(mut request: CompatibleChatRequest, session_id: Option<&str>) -> Self {
+        let reasoning = if request.reasoning_effort == Some("none") {
+            request.reasoning_effort = None;
+            Some(serde_json::json!({"effort": "none"}))
+        } else {
+            None
+        };
         Self {
+            reasoning,
             request,
             usage: OpenRouterUsage { include: true },
             cache_control: CacheControl::ephemeral(),

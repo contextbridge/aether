@@ -8,8 +8,7 @@ Pre-built [MCP](https://modelcontextprotocol.io/) tool servers for Aether agents
 | `skills` | [`SkillsMcp`](src/skills/README.md) | Slash commands and reusable skill prompts |
 | `tasks` | [`TasksMcp`](src/tasks/README.md) | Hierarchical task management with dependencies |
 | `subagents` | [`SubAgentsMcp`](src/subagents/README.md) | Spawn concurrent sub-agents in the foreground or as an MCP Task |
-| `survey` | [`SurveyMcp`](src/survey/README.md) | Human-in-the-loop elicitation (ask the user questions) |
-| `plan` | [`PlanMcp`](src/plan/README.md) | Submit markdown plans for approval via native elicitation |
+| `review` | [`ReviewMcp`](src/review/README.md) | Review agent-authored Markdown via native elicitation |
 
 ## Table of Contents
 
@@ -35,8 +34,7 @@ Key entry points:
 - [`TasksMcp`](tasks::TasksMcp) -- hierarchical task management
 - [`SkillsMcp`](skills::SkillsMcp) -- skill prompts and slash commands
 - [`SubAgentsMcp`](subagents::SubAgentsMcp) -- sub-agent orchestration
-- [`SurveyMcp`](survey::SurveyMcp) -- structured user input collection
-- [`PlanMcp`](plan::PlanMcp) -- plan review and approval workflow
+- [`ReviewMcp`](review::ReviewMcp) -- Markdown artifact review and feedback workflow
 - [`McpBuilderExt`] -- register all servers in one call
 
 ## Using with Aether (mcp.json)
@@ -61,7 +59,7 @@ These servers use Aether's `in-memory` transport type -- they run inside your ag
       "type": "in-memory",
       "args": ["--project-root", "."]
     },
-    "plan": {
+    "review": {
       "type": "in-memory"
     }
   }
@@ -78,6 +76,7 @@ Each server key must match a factory registered with `McpBuilder::register_in_me
 | `skills` | `--dir <path>` (repeatable) | required | Prompt directories to scan |
 | `tasks` | `--dir <path>` | `.` | Base directory for task storage (creates `.aether-tasks/` inside) |
 | `subagents` | `--project-root <path>` (alias: `--dir`) | `.` | Project root containing optional `.aether/settings.json` authored agents |
+| `review` | `--root-dir <path>` | workspace root | Base for relative artifact paths |
 
 To register factories and load the config:
 
@@ -141,18 +140,16 @@ let server = CodingMcp::new()
 - [`SkillsMcp`](src/skills/README.md)
 - [`TasksMcp`](src/tasks/README.md)
 - [`SubAgentsMcp`](src/subagents/README.md)
-- [`SurveyMcp`](src/survey/README.md)
-- [`PlanMcp`](src/plan/README.md)
+- [`ReviewMcp`](src/review/README.md)
 
 ---
 
 ## Feature Flags
 
-- **`default`** -- coding, skills, tasks, subagents, and plan servers
+- **`default`** -- coding, skills, tasks, subagents, and review servers
 - **`coding`** -- file ops, bash, LSP, web tools
 - **`skills`** -- slash commands and prompts
 - **`tasks`** -- task tracking (no dependency on `coding`)
-- **`subagents`** -- sub-agent spawning (implies `coding`, `skills`, `tasks`, `survey`, `plan`)
-- **`survey`** -- structured human elicitation tooling
-- **`plan`** -- markdown plan submission and approval workflow
+- **`subagents`** -- sub-agent spawning (implies `coding`, `skills`, `tasks`, `review`)
+- **`review`** -- Markdown artifact review through elicitation
 - **`all`** -- explicit alias enabling all built-in servers

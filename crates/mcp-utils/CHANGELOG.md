@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.2](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.7.1...aether-mcp-utils-v0.7.2) - 2026-09-16
+
+### Fixed
+
+- replace deprecated rmcp info aliases ([#480](https://github.com/contextbridge/aether/pull/480))
+
+## [0.7.1](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.7.0...aether-mcp-utils-v0.7.1) - 2026-09-14
+
+### Other
+
+- updated the following local packages: aether-llm
+
+## [0.7.0](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.6.3...aether-mcp-utils-v0.7.0) - 2026-09-14
+
+### Added
+
+- [**breaking**] Migrate to ACP 2.0 ([#460](https://github.com/contextbridge/aether/pull/460))
+
+## [0.6.3](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.6.2...aether-mcp-utils-v0.6.3) - 2026-09-11
+
+### Fixed
+
+- allow empty test router with rmcp 3.3 ([#449](https://github.com/contextbridge/aether/pull/449))
+
 ## [0.6.2](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.6.1...aether-mcp-utils-v0.6.2) - 2026-09-09
 
 ### Other

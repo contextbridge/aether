@@ -1,7 +1,7 @@
 use crate::{LlmError, LlmResponse, StopReason};
 
-pub fn llm_response(message_id: &str) -> LlmResponseBuilder {
-    LlmResponseBuilder::new(message_id)
+pub fn llm_response() -> LlmResponseBuilder {
+    LlmResponseBuilder::new()
 }
 
 /// A turn whose call fails before the provider emits any frames.
@@ -13,9 +13,15 @@ pub struct LlmResponseBuilder {
     chunks: Vec<LlmResponse>,
 }
 
+impl Default for LlmResponseBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LlmResponseBuilder {
-    pub fn new(message_id: &str) -> Self {
-        Self { chunks: vec![LlmResponse::start(message_id)] }
+    pub fn new() -> Self {
+        Self { chunks: vec![LlmResponse::Start] }
     }
 
     pub fn text(mut self, chunks: &[&str]) -> Self {
@@ -96,12 +102,12 @@ mod tests {
 
     #[test]
     fn build_with_stop_reason_preserves_response_chunks() {
-        let response = llm_response("message").text(&["hello"]).usage(10, 2).build_with_stop_reason(StopReason::Length);
+        let response = llm_response().text(&["hello"]).usage(10, 2).build_with_stop_reason(StopReason::Length);
 
         assert!(matches!(
             response.as_slice(),
             [
-                LlmResponse::Start { .. },
+                LlmResponse::Start,
                 LlmResponse::Text { .. },
                 LlmResponse::Usage { .. },
                 LlmResponse::Done { stop_reason: Some(StopReason::Length) },
@@ -111,12 +117,12 @@ mod tests {
 
     #[test]
     fn reasoning_appends_reasoning_frames() {
-        let frames = llm_response("message").reasoning(&["thinking", "harder"]).text(&["answer"]).build();
+        let frames = llm_response().reasoning(&["thinking", "harder"]).text(&["answer"]).build();
 
         assert!(matches!(
             frames.as_slice(),
             [
-                LlmResponse::Start { .. },
+                LlmResponse::Start,
                 LlmResponse::Reasoning { .. },
                 LlmResponse::Reasoning { .. },
                 LlmResponse::Text { .. },
@@ -127,30 +133,29 @@ mod tests {
 
     #[test]
     fn build_results_wraps_success_frames_in_ok() {
-        let results = llm_response("message").text(&["hi"]).build_results();
+        let results = llm_response().text(&["hi"]).build_results();
 
         assert!(matches!(
             results.as_slice(),
-            [Ok(LlmResponse::Start { .. }), Ok(LlmResponse::Text { .. }), Ok(LlmResponse::Done { .. })]
+            [Ok(LlmResponse::Start), Ok(LlmResponse::Text { .. }), Ok(LlmResponse::Done { .. })]
         ));
     }
 
     #[test]
     fn build_with_error_surfaces_error_before_done() {
-        let results = llm_response("message").usage(9, 1).build_with_error(ProviderError::api("HTTP 500"));
+        let results = llm_response().usage(9, 1).build_with_error(ProviderError::api("HTTP 500"));
 
         assert!(matches!(
             results.as_slice(),
-            [Ok(LlmResponse::Start { .. }), Ok(LlmResponse::Usage { .. }), Err(_), Ok(LlmResponse::Done { .. }),]
+            [Ok(LlmResponse::Start), Ok(LlmResponse::Usage { .. }), Err(_), Ok(LlmResponse::Done { .. }),]
         ));
     }
 
     #[test]
     fn build_interrupted_ends_with_error_and_no_done() {
-        let results =
-            llm_response("message").text(&["partial"]).build_interrupted(ProviderError::stream_interrupted("boom"));
+        let results = llm_response().text(&["partial"]).build_interrupted(ProviderError::stream_interrupted("boom"));
 
-        assert!(matches!(results.as_slice(), [Ok(LlmResponse::Start { .. }), Ok(LlmResponse::Text { .. }), Err(_)]));
+        assert!(matches!(results.as_slice(), [Ok(LlmResponse::Start), Ok(LlmResponse::Text { .. }), Err(_)]));
     }
 
     #[test]

@@ -4,12 +4,12 @@ use super::{
     manager::{RuntimeMcpServer, RuntimeMcpTransport, ToolListChangedRequest},
     mcp_client::McpClient,
 };
-use crate::{client::OAuthHandlerContext, protocol::client_lifecycle_mode, transport::create_in_memory_transport};
+use crate::{client::OAuthHandlerContext, protocol::client_lifecycle_mode};
 use aether_auth::{OAuthCredentialStorage, create_auth_manager_from_store, perform_oauth_flow};
 use llm::ToolAnnotations;
 use rmcp::{
     RoleClient, RoleServer, ServiceExt,
-    model::{ClientInfo, Tool as RmcpTool},
+    model::{ClientConfig, Tool as RmcpTool},
     serve_client_with_lifecycle,
     service::{DynService, RunningService},
     transport::{
@@ -68,7 +68,7 @@ impl From<&RmcpTool> for Tool {
 }
 
 pub(super) struct ConnectConfig {
-    pub client_info: ClientInfo,
+    pub client_info: ClientConfig,
     pub event_sender: mpsc::Sender<McpClientEvent>,
     pub tool_refresh_sender: mpsc::Sender<ToolListChangedRequest>,
     pub next_connection_generation: Arc<AtomicU64>,
@@ -364,7 +364,7 @@ async fn serve_in_memory(
     mcp_client: McpClient,
     label: &str,
 ) -> Result<(RunningService<RoleClient, McpClient>, JoinHandle<()>)> {
-    let (client_transport, server_transport) = create_in_memory_transport();
+    let (client_transport, server_transport) = tokio::io::duplex(64 * 1024);
 
     let server_handle = tokio::spawn(async move {
         match server.serve(server_transport).await {

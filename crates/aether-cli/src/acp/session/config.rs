@@ -1,10 +1,12 @@
-use agent_client_protocol::schema::v1 as acp;
+use aether_auth::OAuthCredentialStorage;
+use agent_client_protocol::Error;
+use agent_client_protocol::schema::v2::SessionConfigOption;
 use llm::ReasoningEffort;
 use llm::catalog::{LlmModel, validate_reasoning_effort};
 use tracing::error;
 
 use super::config_setting::ConfigSetting;
-use super::model::{Modes, parse_available_spec};
+use super::model::{Modes, get_all_models, parse_available_spec};
 
 #[derive(Debug)]
 pub(crate) enum Switch {
@@ -33,6 +35,22 @@ pub(crate) struct SessionConfigState {
 }
 
 impl SessionConfigState {
+    pub(crate) fn config_options(
+        &self,
+        modes: &Modes,
+        available: &[LlmModel],
+        credential_store: &dyn OAuthCredentialStorage,
+    ) -> Vec<SessionConfigOption> {
+        modes.config_options(
+            available,
+            self.selected_mode.as_deref(),
+            &self.effective_model(modes),
+            self.reasoning_effort,
+            &get_all_models(available),
+            credential_store,
+        )
+    }
+
     pub(crate) fn with_selection(
         active_model: String,
         selected_mode: Option<String>,
@@ -77,12 +95,12 @@ impl SessionConfigState {
         modes: &Modes,
         available: &[LlmModel],
         setting: &ConfigSetting,
-    ) -> Result<(), acp::Error> {
+    ) -> Result<(), Error> {
         match setting {
             ConfigSetting::Mode(value) => {
                 let Some((_mode_model, mode_reasoning_effort)) = modes.resolve(value) else {
                     error!("Unknown or invalid mode: {}", value);
-                    return Err(acp::Error::invalid_params());
+                    return Err(Error::invalid_params());
                 };
 
                 self.pending =
@@ -93,16 +111,19 @@ impl SessionConfigState {
             ConfigSetting::Model(value) => {
                 let Some(spec) = parse_available_spec(available, value) else {
                     error!("Unknown model in set_session_config_option: {}", value);
-                    return Err(acp::Error::invalid_params());
+                    return Err(Error::invalid_params());
                 };
+                let effort = spec.clamp_reasoning_effort(self.reasoning_effort);
+                spec.validate_reasoning_effort(effort)
+                    .map_err(|error| Error::invalid_params().data(error.to_string()))?;
                 self.pending = (self.active_model != *value).then(|| Pending::Model(value.clone()));
-                self.reasoning_effort = spec.clamp_reasoning_effort(self.reasoning_effort);
+                self.reasoning_effort = effort;
             }
             ConfigSetting::ReasoningEffort(effort) => {
                 let model_id = self.effective_model(modes);
                 if let Err(error) = validate_reasoning_effort(&model_id, *effort) {
                     error!("Invalid reasoning effort in set_session_config_option: {error}");
-                    return Err(acp::Error::invalid_params());
+                    return Err(Error::invalid_params());
                 }
                 self.reasoning_effort = *effort;
             }

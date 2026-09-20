@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.2](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.1...aether-llm-v0.9.2) - 2026-09-16
+
+### Added
+
+- support explicitly disabling model reasoning ([#477](https://github.com/contextbridge/aether/pull/477))
+
+## [0.9.1](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.0...aether-llm-v0.9.1) - 2026-09-14
+
+### Other
+
+- Update models ([#462](https://github.com/contextbridge/aether/pull/462))
+
+## [0.9.0](https://github.com/contextbridge/aether/compare/aether-llm-v0.8.3...aether-llm-v0.9.0) - 2026-09-14
+
+### Added
+
+- [**breaking**] Migrate to ACP 2.0 ([#460](https://github.com/contextbridge/aether/pull/460))
+
+## [0.8.3](https://github.com/contextbridge/aether/compare/aether-llm-v0.8.2...aether-llm-v0.8.3) - 2026-09-11
+
+### Added
+
+- Add additional cumulative cost components for sessions ([#448](https://github.com/contextbridge/aether/pull/448))
+
 ## [0.8.2](https://github.com/contextbridge/aether/compare/aether-llm-v0.8.1...aether-llm-v0.8.2) - 2026-09-09
 
 ### Fixed

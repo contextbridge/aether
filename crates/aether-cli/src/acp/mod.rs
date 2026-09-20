@@ -1,21 +1,28 @@
 pub(crate) mod agent;
+#[cfg(any(test, feature = "testing"))]
 pub(crate) mod fake_prompt_mcp;
 pub(crate) mod protocol;
+pub mod server;
 pub(crate) mod session;
 pub(crate) mod state;
-pub(crate) mod stdio;
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
 pub use protocol::map_mcp_prompt_to_available_command;
 
-use crate::acp::agent::acp_agent_builder;
+use crate::acp::server::DetachedArgs;
 use crate::acp::state::{AcpState, AcpStateConfig};
-use crate::acp::stdio::Stdio;
+use crate::credentials::oauth_credential_store_from_config;
 use crate::provider_connection_args::ProviderConnectionArgs;
+use crate::resolve::InitialSessionSelection;
 use crate::settings_args::{ConflictingSettingsSources, SettingsSourceArgs};
+use crate::telemetry::build_telemetry_runtime;
+use crate::workspace::WorkspaceManager;
 use aether_project::AetherSettings;
+use aether_sessions::SessionStore;
 use aether_telemetry::{AgentTraceContext, TelemetryInitError};
 use agent_client_protocol as acp;
+use agent_client_protocol::Stdio;
 use llm::catalog::{ReasoningEffortError, validate_reasoning_effort};
 use llm::{ProviderConnectionOverride, ProviderConnectionOverrides, ReasoningEffort};
 use std::collections::BTreeMap;
@@ -31,13 +38,8 @@ use tracing::{info, warn};
 use tracing_appender::rolling::daily;
 use tracing_subscriber::EnvFilter;
 
-use crate::credentials::oauth_credential_store_from_config;
-use crate::resolve::InitialSessionSelection;
-use crate::telemetry::build_telemetry_runtime;
-use crate::workspace::WorkspaceManager;
 use aether_auth::OAuthError;
 use aether_project::SettingsError;
-use aether_sessions::SessionStore;
 
 #[derive(clap::Args, Debug)]
 pub struct AcpArgs {
@@ -63,7 +65,12 @@ pub struct AcpArgs {
     pub model: Option<String>,
 
     /// Initial reasoning effort for an explicit model session. Requires `--model` and is mutually exclusive with `--agent`.
-    #[clap(long, value_name = "minimal|low|medium|high|xhigh|max", requires = "model", conflicts_with = "agent")]
+    #[clap(
+        long,
+        value_name = "default|disabled|minimal|low|medium|high|xhigh|max",
+        requires = "model",
+        conflicts_with = "agent"
+    )]
     pub reasoning_effort: Option<ReasoningEffort>,
 
     #[command(flatten)]
@@ -143,41 +150,9 @@ pub enum AcpOptionsJsonError {
 pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
     info!("Starting Aether ACP server");
 
-    let config = AcpRunConfig::from_args(args)?;
-    setup_logging(&config.log_dir);
-
-    let initial_selection = if let Some(agent) = config.agent.clone() {
-        InitialSessionSelection::agent(agent)
-    } else if let Some(model) = config.model.clone() {
-        InitialSessionSelection::model(model, config.reasoning_effort)
-    } else {
-        InitialSessionSelection::default()
-    };
-    let session_store = Arc::new(SessionStore::new().map_err(AcpRunError::SessionStore)?);
-    let workspace_manager = Arc::new(WorkspaceManager::new().map_err(AcpRunError::WorkspaceManager)?);
     let cwd = current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let settings = config.settings_source.load_settings(&cwd)?;
-    let telemetry = match build_telemetry_runtime(settings.telemetry.as_ref(), config.trace_context) {
-        Ok(telemetry) => telemetry,
-        Err(error @ TelemetryInitError::InvalidTraceContext(_)) => return Err(AcpRunError::Telemetry(error)),
-        Err(error) => {
-            warn!("Telemetry disabled: {error}");
-            None
-        }
-    };
-    let oauth_credential_store = oauth_credential_store_from_config(settings.credentials_store)?;
-    let state = Arc::new(AcpState::new(AcpStateConfig {
-        session_store,
-        workspace_manager,
-        oauth_credential_store,
-        initial_selection,
-        settings_source: config.settings_source,
-        provider_connections: config.provider_connections,
-        telemetry,
-        runtime_factory: None,
-    }));
-
-    let connect_result = acp_agent_builder(state.clone()).connect_to(Stdio::new()).await;
+    let state = Arc::new(create_acp_state(args, &cwd, DetachedArgs::default())?);
+    let connect_result = state.serve(Stdio::new(), state.stop_token()).await;
     state.shutdown_all().await;
 
     match connect_result {
@@ -245,6 +220,42 @@ impl AcpRunConfig {
         }
         Ok(())
     }
+}
+
+fn create_acp_state(args: AcpArgs, cwd: &Path, detached: DetachedArgs) -> Result<AcpState, AcpRunError> {
+    let config = AcpRunConfig::from_args(args)?;
+    setup_logging(&config.log_dir);
+
+    let initial_selection = if let Some(agent) = config.agent.clone() {
+        InitialSessionSelection::agent(agent)
+    } else if let Some(model) = config.model.clone() {
+        InitialSessionSelection::model(model, config.reasoning_effort)
+    } else {
+        InitialSessionSelection::default()
+    };
+
+    let settings = config.settings_source.load_settings(cwd)?;
+    let telemetry = match build_telemetry_runtime(settings.telemetry.as_ref(), config.trace_context) {
+        Ok(telemetry) => telemetry,
+        Err(error @ TelemetryInitError::InvalidTraceContext(_)) => return Err(AcpRunError::Telemetry(error)),
+        Err(error) => {
+            warn!("Telemetry disabled: {error}");
+            None
+        }
+    };
+
+    Ok(AcpState::new(AcpStateConfig {
+        session_store: Arc::new(SessionStore::new().map_err(AcpRunError::SessionStore)?),
+        workspace_manager: Arc::new(WorkspaceManager::new().map_err(AcpRunError::WorkspaceManager)?),
+        oauth_credential_store: oauth_credential_store_from_config(settings.credentials_store)?,
+        initial_selection,
+        settings_source: config.settings_source,
+        provider_connections: config.provider_connections,
+        telemetry,
+        runtime_factory: None,
+        cwd: cwd.to_path_buf(),
+        detached,
+    }))
 }
 
 fn setup_logging(log_dir: &Path) {

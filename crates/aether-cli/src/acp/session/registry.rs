@@ -1,44 +1,58 @@
-use agent_client_protocol::schema::v1::SessionId;
-use std::collections::HashMap;
+use agent_client_protocol::schema::v2::SessionId;
 use tokio::sync::{Mutex, mpsc};
 
-use super::actor::{ConfigSnapshot, SessionCommand, SessionHandle};
+use super::actor::{SessionCommand, SessionHandle};
 
+/// One live top-level session, not the saved-conversation store.
+/// Lifecycle requests join the old actor before registering its replacement.
 pub(crate) struct SessionRegistry {
-    sessions: Mutex<HashMap<String, SessionHandle>>,
+    active: Mutex<Option<Entry>>,
 }
 
 impl SessionRegistry {
     pub(crate) fn new() -> Self {
-        Self { sessions: Mutex::new(HashMap::new()) }
+        Self { active: Mutex::new(None) }
     }
 
     pub(crate) async fn register(&self, session_id: &SessionId, handle: SessionHandle) {
-        if let Some(old) = self.sessions.lock().await.insert(session_id.0.to_string(), handle) {
-            old.cancel();
+        let mut active = self.active.lock().await;
+        assert!(active.is_none(), "previous session must be joined before registration");
+        *active = Some(Entry { session_id: session_id.clone(), handle });
+    }
+
+    pub(crate) async fn session_id(&self) -> Option<SessionId> {
+        self.active.lock().await.as_ref().map(|entry| entry.session_id.clone())
+    }
+
+    pub(crate) async fn lookup(&self, session_id: Option<&str>) -> Option<mpsc::Sender<SessionCommand>> {
+        self.active
+            .lock()
+            .await
+            .as_ref()
+            .filter(|entry| entry.matches(session_id))
+            .map(|entry| entry.handle.command_sender())
+    }
+
+    pub(crate) async fn stop(&self) {
+        self.stop_matching(None).await;
+    }
+
+    pub(crate) async fn stop_matching(&self, session_id: Option<&str>) {
+        let mut active = self.active.lock().await;
+        if let Some(entry) = active.as_mut().filter(|entry| entry.matches(session_id)) {
+            entry.handle.shutdown().await;
+            *active = None;
         }
     }
+}
 
-    pub(crate) async fn remove(&self, session_id: &str) -> Option<SessionHandle> {
-        self.sessions.lock().await.remove(session_id)
-    }
+struct Entry {
+    session_id: SessionId,
+    handle: SessionHandle,
+}
 
-    pub(crate) async fn lookup(&self, session_id: &str) -> Option<(mpsc::Sender<SessionCommand>, ConfigSnapshot)> {
-        let sessions = self.sessions.lock().await;
-        let handle = sessions.get(session_id)?;
-        Some((handle.command_sender(), handle.config_snapshot()))
-    }
-
-    pub(crate) async fn shutdown_all(&self) {
-        let handles: Vec<SessionHandle> = self.sessions.lock().await.drain().map(|(_, handle)| handle).collect();
-        for handle in &handles {
-            handle.cancel();
-        }
-        futures::future::join_all(handles.into_iter().map(SessionHandle::join)).await;
-    }
-
-    pub(crate) async fn config_snapshots(&self) -> Vec<(String, ConfigSnapshot)> {
-        let sessions = self.sessions.lock().await;
-        sessions.iter().map(|(id, handle)| (id.clone(), handle.config_snapshot())).collect()
+impl Entry {
+    fn matches(&self, id: Option<&str>) -> bool {
+        id.is_none_or(|requested| self.session_id.0.as_ref() == requested)
     }
 }

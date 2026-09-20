@@ -64,7 +64,7 @@ yourself in a `finally` block.
 | ----------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `agent`           | Mode name from `.aether/settings.json` (e.g. `planner`).                                                                      |
 | `model`           | Direct model id (e.g. `anthropic:claude-sonnet-4-5`).                                                                         |
-| `reasoningEffort` | `"low"`, `"medium"`, `"high"`, `"xhigh"`.                                                                                     |
+| `reasoningEffort` | `"default"`, `"disabled"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"` (model-dependent).                  |
 | `settings`        | Inline Aether settings object using the `.aether/settings.json` shape. SDK-hosted tools live here under `mcps`.               |
 | `settingsFile`    | Path to an alternate settings JSON file.                                                                                      |
 | `cwd`             | Working directory for the spawned `aether acp` process.                                                                       |
@@ -72,6 +72,8 @@ yourself in a `finally` block.
 | `providers`       | Provider connection overrides, keyed by provider (for example `{ bedrock: { url: "http://127.0.0.1:8787", auth: "none" } }`). |
 | `traceContext`    | A remote W3C `traceparent` with optional `tracestate`, or a standalone `traceId` for root spans without a parent.             |
 | `abortSignal`     | Cancel the active session and tear the subprocess down.                                                                       |
+
+Omit `reasoningEffort` to use resolved defaults, or set `reasoningEffort: "default"` as an explicit adapter-default selection. Default does not promise reasoning is off (Codex retains Aether's Medium policy). `reasoningEffort: "disabled"` requests actual disabling, requires support from every selected model and adapter, and is forwarded unchanged. Unsupported disabling is rejected, never mapped to Minimal. Authored settings also accept null as unspecified; the old application value `none` is not accepted.
 
 `agent` and `model` are mutually exclusive. `settings` and `settingsFile` are
 mutually exclusive. These are forwarded to the spawned `aether acp` process as

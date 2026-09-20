@@ -4,11 +4,15 @@
 
 use aether_lspd::testing::TestProject;
 use mcp_servers::coding::CodingMcp;
+use mcp_servers::skills::{
+    SkillsMcp,
+    tools::{LoadSkillsInput, SkillRequest},
+};
 use mcp_utils::client::{McpClient, client_capabilities};
 use mcp_utils::testing::{ElicitationScript, connect};
 use rmcp::RoleClient;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ClientCapabilities, ClientInfo, ElicitResult, Implementation,
+    CallToolRequestParams, CallToolResult, ClientCapabilities, ClientConfig, ElicitResult, Implementation,
 };
 use rmcp::service::RunningService;
 use rmcp::{RoleServer, Service};
@@ -25,14 +29,14 @@ const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
-pub fn test_client_info() -> ClientInfo {
-    ClientInfo::new(ClientCapabilities::default(), Implementation::new("test-client", "0.1.0"))
+pub fn test_client_info() -> ClientConfig {
+    ClientConfig::new(ClientCapabilities::default(), Implementation::new("test-client", "0.1.0"))
 }
 
 /// Client info declaring the same capabilities `McpManager` advertises in
 /// production: form + url elicitation and MCP tasks.
-pub fn production_client_info() -> ClientInfo {
-    ClientInfo::new(client_capabilities(), Implementation::new("test-client", "0.1.0"))
+pub fn production_client_info() -> ClientConfig {
+    ClientConfig::new(client_capabilities(), Implementation::new("test-client", "0.1.0"))
 }
 
 /// An `McpClient` whose elicitation events go nowhere; elicitation-dependent
@@ -98,13 +102,13 @@ impl CodingWorkspace {
 }
 
 /// Generic test client wrapping a connected MCP server.
-pub struct TestClient<T: Service<RoleServer>, U: Service<RoleClient> = ClientInfo> {
+pub struct TestClient<T: Service<RoleServer>, U: Service<RoleClient> = ClientConfig> {
     _server_handle: RunningService<RoleServer, T>,
     client: RunningService<RoleClient, U>,
 }
 
-impl<T: Service<RoleServer>> TestClient<T, ClientInfo> {
-    /// Connect a default test `ClientInfo` to a server built by `configure`.
+impl<T: Service<RoleServer>> TestClient<T, ClientConfig> {
+    /// Connect a default test `ClientConfig` to a server built by `configure`.
     pub async fn start(configure: impl FnOnce() -> T) -> TestResult<Self> {
         let (server_handle, client) = connect(configure(), test_client_info()).await?;
         Ok(Self { _server_handle: server_handle, client })
@@ -141,13 +145,13 @@ impl<T: Service<RoleServer>, U: Service<RoleClient>> TestClient<T, U> {
 
 pub async fn connect_lsp(
     project: &impl TestProject,
-) -> (RunningService<RoleServer, CodingMcp>, RunningService<RoleClient, ClientInfo>) {
+) -> (RunningService<RoleServer, CodingMcp>, RunningService<RoleClient, ClientConfig>) {
     let server = CodingMcp::new().with_lsp(project.root().to_path_buf());
     connect(server, test_client_info()).await.expect("Failed to connect")
 }
 
 pub async fn call_tool_error(
-    client: &RunningService<RoleClient, ClientInfo>,
+    client: &RunningService<RoleClient, ClientConfig>,
     name: &str,
     args: serde_json::Value,
 ) -> String {
@@ -166,7 +170,7 @@ pub async fn call_tool_error(
 }
 
 pub async fn call_tool(
-    client: &RunningService<RoleClient, ClientInfo>,
+    client: &RunningService<RoleClient, ClientConfig>,
     name: &str,
     args: serde_json::Value,
 ) -> serde_json::Value {
@@ -174,7 +178,7 @@ pub async fn call_tool(
 }
 
 pub async fn try_call_tool(
-    client: &RunningService<RoleClient, ClientInfo>,
+    client: &RunningService<RoleClient, ClientConfig>,
     name: &str,
     args: serde_json::Value,
 ) -> Option<serde_json::Value> {
@@ -201,7 +205,7 @@ pub async fn try_call_tool(
 }
 
 pub async fn poll_diagnostics(
-    client: &RunningService<RoleClient, ClientInfo>,
+    client: &RunningService<RoleClient, ClientConfig>,
     file_path: Option<&str>,
     predicate: impl Fn(&serde_json::Value) -> bool,
 ) -> serde_json::Value {
@@ -213,7 +217,7 @@ pub async fn poll_diagnostics(
 }
 
 pub async fn poll_lsp_tool(
-    client: &RunningService<RoleClient, ClientInfo>,
+    client: &RunningService<RoleClient, ClientConfig>,
     tool_name: &str,
     args: serde_json::Value,
     predicate: impl Fn(&serde_json::Value) -> bool,
@@ -254,5 +258,33 @@ pub async fn cleanup_daemon(project: &impl TestProject) {
         let _ = tokio::fs::remove_file(&sock).await;
         let _ = tokio::fs::remove_file(sock.with_extension("lock")).await;
         let _ = tokio::fs::remove_file(sock.with_extension("log")).await;
+    }
+}
+
+/// Creates files and directories (including parents) from `(path, content)`
+/// pairs inside a fresh temp dir.
+pub fn create_test_files(files: &[(&str, &str)]) -> TempDir {
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    for (path, content) in files {
+        let full_path = temp_dir.path().join(path);
+        if let Some(parent) = full_path.parent() {
+            create_dir_all(parent).unwrap_or_else(|_| panic!("Failed to create directory for {path}"));
+        }
+        std::fs::write(&full_path, content).unwrap_or_else(|_| panic!("Failed to write file {path}"));
+    }
+    temp_dir
+}
+
+/// A skills server serving the `skills` directory of `test_dir`.
+pub fn skills_server(test_dir: &Path) -> SkillsMcp {
+    SkillsMcp::new(&[test_dir.join("skills")])
+}
+
+pub fn load_skills_input(requests: &[(&str, Option<&str>)]) -> LoadSkillsInput {
+    LoadSkillsInput {
+        requests: requests
+            .iter()
+            .map(|(name, path)| SkillRequest { name: (*name).to_string(), path: path.map(str::to_string) })
+            .collect(),
     }
 }

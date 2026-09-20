@@ -98,7 +98,7 @@ pub(crate) struct CompatibleChatRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_options: Option<ChatCompletionStreamOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning_effort: Option<crate::ReasoningEffort>,
+    pub reasoning_effort: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -284,12 +284,13 @@ mod tests {
     use super::*;
     use crate::providers::openai_compatible::build_chat_request;
     use crate::types::IsoString;
-    use crate::{Context, ModelSettings, ToolCallRequest, ToolDefinition};
+    use crate::{AssistantReasoning, Context, MessageId, ModelSettings, ToolCallRequest, ToolDefinition};
 
     fn assistant_with_tool_call(reasoning_content: Option<&str>) -> ChatMessage {
         ChatMessage::Assistant {
+            message_id: MessageId::new(),
             content: String::new(),
-            reasoning: crate::AssistantReasoning {
+            reasoning: AssistantReasoning {
                 summary_text: reasoning_content.map(ToString::to_string),
                 encrypted_content: None,
             },

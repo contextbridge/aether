@@ -172,10 +172,6 @@ pub enum FindError {
     /// Glob filter errors
     #[error(transparent)]
     Glob(#[from] GlobError),
-
-    /// Failed to lock results (mutex poisoned)
-    #[error("Failed to lock results")]
-    LockFailed,
 }
 
 /// Errors related to list files operations

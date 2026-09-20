@@ -1,80 +1,126 @@
-use std::path::PathBuf;
+use agent_client_protocol::schema::{MaybeUndefined, v2 as acp};
+use wisp::conversation::{Conversation, ConversationContent, ToolCall};
 
-use wisp::git_review::{
-    DiffDocument, DiffScope, FileDiff, FileStatus, PatchLineKind, StageState, parse_porcelain_status,
-    parse_unified_diff,
-};
+const PATCH: &str = "diff --git a/workspace/src/lib.rs b/workspace/src/lib.rs\n--- a/workspace/src/lib.rs\n+++ b/workspace/src/lib.rs\n@@ -1 +1 @@\n-before\n+after\n";
 
 #[test]
-fn acp_texts_normalize_into_canonical_numbered_lines() {
-    let file = FileDiff::from_texts("src/lib.rs", "before\nkeep\n", "after\nkeep\nnew\n");
-
-    assert_eq!(file.status, FileStatus::Modified);
-    assert_eq!(file.old_path.as_deref(), Some("src/lib.rs"));
-    let lines = &file.hunks[0].lines;
-    assert_eq!(lines[0].kind, PatchLineKind::HunkHeader);
-    assert_eq!(lines[1].old_line_no, Some(1));
-    assert_eq!(lines[1].new_line_no, None);
-    assert_eq!(lines[1].kind, PatchLineKind::Removed);
-    assert_eq!(lines[2].old_line_no, None);
-    assert_eq!(lines[2].new_line_no, Some(1));
-    assert_eq!(lines[2].kind, PatchLineKind::Added);
-    assert_eq!(lines.last().and_then(|line| line.new_line_no), Some(3));
+fn text_diff_fixture_uses_v2_metadata_and_preserves_patch_content() {
+    let diff = wisp::testing::text_diff("/workspace/file with \"quotes\".rs", "before", "after");
+    assert_eq!(diff.changes, vec![acp::DiffChange::modify(path("/workspace/file with \"quotes\".rs"))]);
+    let patch = diff.patch.expect("changed content has a patch");
+    assert_eq!(patch.format, acp::DiffPatchFormat::GitPatch);
+    assert!(patch.text.contains("\\ No newline at end of file"));
+    let wire = serde_json::to_value(wisp::testing::text_diff("/workspace/file.rs", "old\n", "new\n")).unwrap();
+    assert_eq!(wire["changes"][0]["operation"], "modify");
+    assert_eq!(wire["patch"]["format"], "git_patch");
 }
 
 #[test]
-fn git_output_normalizes_rename_binary_and_untracked_files() {
-    let diff = concat!(
-        "diff --git a/old.txt b/new.txt\n",
-        "similarity index 100%\n",
-        "rename from old.txt\n",
-        "rename to new.txt\n",
-        "diff --git a/image.png b/image.png\n",
-        "index 123..456\n",
-        "Binary files a/image.png and b/image.png differ\n",
+fn text_diff_fixture_omits_patch_for_unchanged_content() {
+    let diff = wisp::testing::text_diff("/workspace/file.rs", "same", "same");
+    assert!(diff.patch.is_none());
+}
+
+#[test]
+fn acp_diff_preserves_patch_and_absolute_change_paths() {
+    let conversation =
+        conversation_with_diff(acp::Diff::patch(PATCH, vec![acp::DiffChange::modify(path("/workspace/src/lib.rs"))]));
+    let diff = tool(&conversation).diffs().next().unwrap();
+    assert_eq!(diff.patch.as_ref().unwrap().text, PATCH);
+    assert_eq!(diff.patch.as_ref().unwrap().format, acp::DiffPatchFormat::GitPatch);
+    assert_eq!(diff.changes, [acp::DiffChange::modify(path("/workspace/src/lib.rs"))]);
+}
+
+#[test]
+fn patchless_diff_lists_all_changes_without_fabricating_sources() {
+    let diff = acp::Diff::new(vec![
+        acp::DiffChange::add(path("/workspace/new.rs")),
+        acp::DiffChange::delete(path("/workspace/old.rs")),
+        acp::DiffChange::modify(path("/workspace/changed.rs")),
+        acp::DiffChange::move_file(path("/workspace/from.rs"), path("/workspace/to.rs")),
+        acp::DiffChange::copy(path("/workspace/source.rs"), path("/workspace/copy.rs")),
+    ]);
+    let mut ui = ui_with_diff(diff);
+    for label in [
+        "A /workspace/new.rs",
+        "D /workspace/old.rs",
+        "M /workspace/changed.rs",
+        "R /workspace/from.rs → /workspace/to.rs",
+        "C /workspace/source.rs → /workspace/copy.rs",
+    ] {
+        ui.assert_conversation_contains(label);
+    }
+}
+
+#[test]
+fn unknown_changes_and_patch_formats_are_displayable_without_parsing() {
+    let diff = serde_json::from_value(serde_json::json!({
+        "changes": [{"operation": "_future", "path": "/workspace/unknown"}],
+        "patch": {"format": "_future", "text": "future patch"}
+    }))
+    .unwrap();
+    let mut ui = ui_with_diff(diff);
+    ui.assert_conversation_contains("Unknown file change");
+}
+
+#[test]
+fn diff_content_replacement_and_null_drop_stale_previews() {
+    let mut conversation =
+        conversation_with_diff(acp::Diff::patch(PATCH, vec![acp::DiffChange::modify(path("/workspace/a"))]));
+    conversation.on_tool_call_content_chunk(&acp::ToolCallContentChunk::new(
+        "edit",
+        acp::ToolCallContent::Diff(acp::Diff::new(vec![acp::DiffChange::add(path("/workspace/b"))])),
+    ));
+    assert_eq!(tool(&conversation).diffs().count(), 2);
+    conversation.on_tool_call_update(&acp::ToolCallUpdate::new("edit"));
+    assert_eq!(tool(&conversation).diffs().count(), 2);
+    conversation.on_tool_call_update(&acp::ToolCallUpdate::new("edit").content(vec![]));
+    assert!(tool(&conversation).diffs().next().is_none());
+    conversation.on_tool_call_content_chunk(&acp::ToolCallContentChunk::new(
+        "edit",
+        acp::ToolCallContent::Diff(acp::Diff::new(vec![])),
+    ));
+    conversation.on_tool_call_update(&acp::ToolCallUpdate::new("edit").content(MaybeUndefined::Null));
+    assert!(tool(&conversation).diffs().next().is_none());
+}
+
+#[test]
+fn unknown_patch_format_is_not_rendered_as_a_git_patch() {
+    let diff = serde_json::from_value(serde_json::json!({
+        "changes": [{"operation": "modify", "path": "/workspace/src/lib.rs"}],
+        "patch": {"format": "_future", "text": PATCH}
+    }))
+    .unwrap();
+    let mut ui = ui_with_diff(diff);
+    ui.assert_conversation_contains("M /workspace/src/lib.rs");
+    ui.assert_conversation_not_contains("before");
+    ui.assert_conversation_not_contains("after");
+}
+
+fn ui_with_diff(diff: acp::Diff) -> wisp::testing::TestUi {
+    let mut ui = wisp::testing::TestUi::with_dimensions(100, 30);
+    ui.acp_event(wisp::testing::session_update(acp::SessionUpdate::ToolCallUpdate(
+        acp::ToolCallUpdate::new("edit")
+            .title("Edit files")
+            .status(acp::ToolCallStatus::Completed)
+            .content(vec![acp::ToolCallContent::Diff(diff)]),
+    )));
+    ui
+}
+
+fn path(value: &str) -> acp::AbsolutePath {
+    acp::AbsolutePath::new(value)
+}
+
+fn tool(conversation: &Conversation) -> &ToolCall {
+    let ConversationContent::Tool(tool) = conversation.items()[0].content() else { panic!("tool item") };
+    tool
+}
+
+fn conversation_with_diff(diff: acp::Diff) -> Conversation {
+    let mut conversation = Conversation::new();
+    conversation.on_tool_call_update(
+        &acp::ToolCallUpdate::new("edit").title("Edit files").content(vec![acp::ToolCallContent::Diff(diff)]),
     );
-    let document = DiffDocument::from_git_output(
-        PathBuf::from("/repo"),
-        diff,
-        "R  old.txt\0new.txt\0?? notes.txt\0",
-        [("notes.txt".to_string(), b"hello\n".to_vec())],
-        DiffScope::Both,
-    )
-    .unwrap();
-
-    assert_eq!(document.files.len(), 3);
-    assert_eq!(document.files[0].path, "image.png");
-    assert!(document.files[0].binary);
-    assert_eq!(document.files[1].status, FileStatus::Renamed);
-    assert_eq!(document.files[1].old_path.as_deref(), Some("old.txt"));
-    assert_eq!(document.files[1].staged, StageState::Staged);
-    assert_eq!(document.files[2].status, FileStatus::Untracked);
-    assert_eq!(document.files[2].staged, StageState::Unstaged);
-}
-
-#[test]
-fn porcelain_status_distinguishes_staged_partial_and_unstaged() {
-    let status = parse_porcelain_status("M  staged.rs\0MM partial.rs\0 M unstaged.rs\0");
-
-    assert_eq!(status["staged.rs"], StageState::Staged);
-    assert_eq!(status["partial.rs"], StageState::PartiallyStaged);
-    assert_eq!(status["unstaged.rs"], StageState::Unstaged);
-}
-
-#[test]
-fn unified_parser_accepts_single_line_hunk_ranges() {
-    let files = parse_unified_diff(concat!(
-        "diff --git a/a.txt b/a.txt\n",
-        "index 111..222\n",
-        "--- a/a.txt\n",
-        "+++ b/a.txt\n",
-        "@@ -1 +1 @@\n",
-        "-old\n",
-        "+new\n",
-    ))
-    .unwrap();
-
-    assert_eq!(files[0].hunks[0].old_count, 1);
-    assert_eq!(files[0].hunks[0].new_count, 1);
-    assert_eq!(files[0].hunks[0].lines[1].text, "old");
+    conversation
 }

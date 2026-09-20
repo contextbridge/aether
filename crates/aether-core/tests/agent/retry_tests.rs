@@ -27,10 +27,10 @@ fn has_failed_turn(messages: &[AgentEvent]) -> bool {
 async fn deferred_event_after_retry_clears_pending_tool_and_cancels_task() -> Result<(), Box<dyn Error>> {
     let arguments = serde_json::json!({}).to_string();
     let attempts = vec![
-        llm_response("msg_1")
+        llm_response()
             .tool_call("deferred-call", "tasks__deferred", &[&arguments])
             .build_interrupted(ProviderError::stream_interrupted("retry after tool call")),
-        llm_response("msg_2").text(&["recovered"]).build_results(),
+        llm_response().text(&["recovered"]).build_results(),
     ];
 
     let now = chrono::Utc::now().to_rfc3339();
@@ -76,7 +76,7 @@ async fn retries_then_succeeds_on_third_attempt() -> Result<(), Box<dyn Error>> 
                 .with_request_id(Some("req-1".to_string())),
         ),
         failed_call(ProviderError::server("boom 2").with_http_status(503)),
-        llm_response("msg_3").text(&["ok"]).build_results(),
+        llm_response().text(&["ok"]).build_results(),
     ];
 
     let result = test_agent()
@@ -219,9 +219,7 @@ async fn retry_disabled_surfaces_retryable_error_immediately() -> Result<(), Box
 async fn mid_stream_interrupts_consume_retry_budget() -> Result<(), Box<dyn Error>> {
     let attempts: Vec<_> = (0..6)
         .map(|i| {
-            llm_response(&format!("m{i}"))
-                .text(&["partial"])
-                .build_interrupted(ProviderError::stream_interrupted(format!("boom {i}")))
+            llm_response().text(&["partial"]).build_interrupted(ProviderError::stream_interrupted(format!("boom {i}")))
         })
         .collect();
 
@@ -254,7 +252,7 @@ async fn mid_stream_interrupts_consume_retry_budget() -> Result<(), Box<dyn Erro
 #[tokio::test(start_paused = true)]
 async fn rate_limited_error_is_retried() -> Result<(), Box<dyn Error>> {
     let attempts =
-        vec![failed_call(ProviderError::rate_limit("slow down")), llm_response("msg_2").text(&["ok"]).build_results()];
+        vec![failed_call(ProviderError::rate_limit("slow down")), llm_response().text(&["ok"]).build_results()];
 
     let result = test_agent()
         .retry_config(fast_retry(5))
@@ -276,7 +274,7 @@ async fn cancel_during_retry_wait_aborts_pending_retry() -> Result<(), Box<dyn E
 
     let attempts = vec![
         failed_call(ProviderError::server("boom").with_http_status(503)),
-        llm_response("msg_2").text(&["should not see this"]).build_results(),
+        llm_response().text(&["should not see this"]).build_results(),
     ];
 
     // Long retry delay; with virtual time it never elapses unless we advance.

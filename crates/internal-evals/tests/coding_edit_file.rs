@@ -1,7 +1,9 @@
-use std::fs::read_to_string;
-
 use aether_evals::{Task, Transcript, Workspace};
 use internal_evals::{EvalAgent, EvalHarnessError};
+
+#[path = "common/mod.rs"]
+mod common;
+use common::{file_contents, lines, read_file};
 
 #[tokio::test]
 async fn edit_file_replaces_first_match_by_default_eval() -> Result<(), EvalHarnessError> {
@@ -89,16 +91,4 @@ async fn edit_file_pattern_not_found_leaves_file_unchanged_eval() -> Result<(), 
 fn assert_read_then_single_edit(trace: &Transcript) {
     assert!(trace.tool_called("coding__read_file"));
     assert_eq!(trace.tool_call_count("coding__edit_file"), 1);
-}
-
-fn file_contents(lines: &[&str]) -> String {
-    format!("{}\n", lines.join("\n"))
-}
-
-fn lines(lines: &[&str]) -> String {
-    lines.join("\n")
-}
-
-fn read_file(workspace: &Workspace, path: &str) -> Result<String, EvalHarnessError> {
-    Ok(read_to_string(workspace.join(path))?)
 }

@@ -34,6 +34,9 @@ pub enum TaskStoreError {
 
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+
+    #[error("Task store worker failed: {0}")]
+    Worker(#[from] tokio::task::JoinError),
 }
 
 /// Renders the error as the text content of an errored MCP tool result.

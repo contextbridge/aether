@@ -1,83 +1,88 @@
 use crate::attachment::{AttachmentOutcome, PromptAttachment};
+use crate::conversation::ConversationId;
 use crate::file_index::FileEntry;
-use crate::git_review::{DiffScope, FileStatus, GitDiffEvent};
+use crate::git_review::{ClientState, DiffReviewEvent, ServerMessage};
 use crate::request::RequestId;
 use crate::session::workspace_status::WorkspaceStatus;
 use crate::settings::UiSettings;
-use crate::theme::Theme;
-use acp_utils::client::LoadedSession;
+use crate::theme::{Theme, ThemeApplicationError};
 use acp_utils::notifications::{
-    PromptSearchParams, PromptSearchResponse, SessionPreviewResponse, WorkspaceListResponse, WorkspaceMoveTarget,
-    WorkspaceMoveResponse,
+    PromptSearchParams, PromptSearchResponse, SessionPreviewResponse, WorkspaceListResponse, WorkspaceMoveResponse,
+    WorkspaceMoveTarget,
 };
-use agent_client_protocol::schema::v1::{
-    ContentBlock, ListSessionsResponse, NewSessionResponse, SessionConfigOption, SessionId,
+use agent_client_protocol::schema::v2::{
+    ContentBlock, ListSessionsResponse, LoginAuthResponse, NewSessionResponse, PromptResponse, ResumeSessionResponse,
+    SessionConfigOptionValue, SessionId, SetSessionConfigOptionResponse,
 };
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub enum Command {
     Agent(AgentCommand),
+    GitReview(GitReviewCommand),
     Filesystem(FilesystemCommand),
-    Git(GitCommand),
-    ResolveWorkspace { cwd: PathBuf },
     Terminal(TerminalCommand),
 }
 
 #[derive(Debug, Clone)]
 pub enum AgentCommand {
-    Prompt { session_id: SessionId, text: String, content: Option<Vec<ContentBlock>> },
-    Cancel { session_id: SessionId },
-    SetConfigOption { session_id: SessionId, config_id: String, value: String },
-    AuthenticateMcpServer { session_id: SessionId, server_name: String },
-    Authenticate { method_id: String },
+    Prompt {
+        session_id: SessionId,
+        text: String,
+        content: Option<Vec<ContentBlock>>,
+    },
+    Cancel {
+        session_id: SessionId,
+    },
+    SetConfigOption {
+        conversation_id: ConversationId,
+        session_id: SessionId,
+        config_id: String,
+        value: SessionConfigOptionValue,
+    },
+    AuthenticateMcpServer {
+        session_id: SessionId,
+        server_name: String,
+    },
+    Authenticate {
+        method_id: String,
+    },
     ListSessions,
-    LoadSession { session_id: SessionId, cwd: PathBuf },
-    NewSession { cwd: PathBuf },
+    ResumeSession {
+        session_id: SessionId,
+        cwd: PathBuf,
+    },
+    NewSession {
+        cwd: PathBuf,
+    },
     SearchPrompts(PromptSearchParams),
-    SessionPreview { session_id: String },
-    ListWorkspaces { session_id: String },
-    MoveWorkspace { session_id: String, target: WorkspaceMoveTarget },
+    SessionPreview {
+        session_id: String,
+    },
+    ListWorkspaces {
+        session_id: String,
+    },
+    MoveWorkspace {
+        session_id: String,
+        target: WorkspaceMoveTarget,
+    },
+    FetchWorkspaceStatus {
+        session_id: String,
+        cwd: PathBuf,
+    },
 }
 
-impl AgentCommand {
-    pub(crate) fn failure(&self) -> FailedCommand {
-        match self {
-            Self::Prompt { .. } => FailedCommand::Prompt,
-            Self::LoadSession { .. } => FailedCommand::LoadSession,
-            Self::ListWorkspaces { .. } => FailedCommand::ListWorkspaces,
-            Self::MoveWorkspace { .. } => FailedCommand::MoveWorkspace,
-            Self::Cancel { .. } => FailedCommand::Other("cancel"),
-            Self::SetConfigOption { .. } => FailedCommand::Other("set config option"),
-            Self::AuthenticateMcpServer { .. } => FailedCommand::Other("authenticate MCP server"),
-            Self::Authenticate { .. } => FailedCommand::Other("authenticate provider"),
-            Self::ListSessions => FailedCommand::Other("list sessions"),
-            Self::NewSession { .. } => FailedCommand::Other("create new session"),
-            Self::SearchPrompts(_) => FailedCommand::Other("search prompts"),
-            Self::SessionPreview { .. } => FailedCommand::Other("preview session"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FailedCommand {
-    Prompt,
-    LoadSession,
-    ListWorkspaces,
-    MoveWorkspace,
-    Other(&'static str),
-}
-
-impl FailedCommand {
-    pub fn describe(self) -> &'static str {
-        match self {
-            Self::Prompt => "send prompt",
-            Self::LoadSession => "load session",
-            Self::ListWorkspaces => "list workspaces",
-            Self::MoveWorkspace => "move workspace",
-            Self::Other(name) => name,
-        }
-    }
+#[derive(Debug, Clone)]
+pub enum GitReviewCommand {
+    /// Starts a review client for the session, opening the agent-side server.
+    Open { session_id: String },
+    /// Applies one user action the review screen captured.
+    Event(DiffReviewEvent),
+    /// Feeds one agent-side live-protocol message into the review client.
+    Forward(ServerMessage),
+    /// Stops the review and tears down the agent-side server.
+    Close,
 }
 
 #[derive(Debug, Clone)]
@@ -85,19 +90,8 @@ pub enum FilesystemCommand {
     IndexFiles { request_id: RequestId, root: PathBuf },
     PrepareSubmission { attachments: Vec<PromptAttachment> },
     ListThemes,
-    ApplyTheme { settings: Box<UiSettings>, value: String },
-}
-
-#[derive(Debug, Clone)]
-pub enum GitCommand {
-    Load { request_id: RequestId, working_dir: PathBuf, repo_root: Option<PathBuf>, scope: DiffScope },
-    StageFiles { request_id: RequestId, repo_root: PathBuf, paths: Vec<String> },
-    UnstageFiles { request_id: RequestId, repo_root: PathBuf, paths: Vec<String> },
-    StageAll { request_id: RequestId, repo_root: PathBuf },
-    UnstageAll { request_id: RequestId, repo_root: PathBuf },
-    Commit { request_id: RequestId, repo_root: PathBuf, message: String },
-    DiscardFile { request_id: RequestId, repo_root: PathBuf, path: String, status: FileStatus },
-    LoadFullFile { request_id: RequestId, repo_root: PathBuf, path: String },
+    ListReviewThemes,
+    ApplyTheme { settings: Box<UiSettings> },
 }
 
 #[derive(Debug, Clone)]
@@ -106,27 +100,26 @@ pub enum TerminalCommand {
 }
 
 pub enum CommandResult {
-    AgentCommandAccepted,
-    ConfigOptionsUpdated(Vec<SessionConfigOption>),
-    ConfigOptionUpdateFailed { error: String },
-    AuthenticationCompleted { method_id: String },
-    AuthenticationFailed { method_id: String },
-    SessionsListed(ListSessionsResponse),
-    SessionLoaded(LoadedSession),
-    NewSessionCreated(NewSessionResponse),
-    PromptSearchResults(PromptSearchResponse),
-    PromptSearchFailed { query: String, error: String },
-    SessionPreviewLoaded(SessionPreviewResponse),
-    SessionPreviewFailed { session_id: String, error: String },
-    WorkspacesListed(WorkspaceListResponse),
-    WorkspaceListFailed { error: String },
-    WorkspaceMoved(WorkspaceMoveResponse),
-    WorkspaceMoveFailed { error: String },
+    Prompt(Result<PromptResponse, String>),
+    Cancel(Result<(), String>),
+    AuthenticateMcp(Result<(), String>),
+    ConfigOptionsUpdated { conversation_id: ConversationId, result: Result<SetSessionConfigOptionResponse, String> },
+    AuthenticationCompleted { method_id: String, result: Result<LoginAuthResponse, String> },
+    NewSession(Result<NewSessionResponse, String>),
+    ResumeSession { session_id: SessionId, result: Result<ResumeSessionResponse, String> },
+    SessionsListed(Result<ListSessionsResponse, String>),
+    PromptSearchResults { query: String, result: Result<PromptSearchResponse, String> },
+    SessionPreviewLoaded { session_id: String, result: Result<SessionPreviewResponse, String> },
+    WorkspacesListed(Result<WorkspaceListResponse, String>),
+    WorkspaceMoved(Result<WorkspaceMoveResponse, String>),
     FilesIndexed { request_id: RequestId, files: Vec<FileEntry> },
-    GitDiff(GitDiffEvent),
+    GitReview(Arc<ClientState>),
+    GitReviewAction(Result<(), String>),
     SubmissionPrepared(AttachmentOutcome),
     ThemesListed(Vec<String>),
-    ThemeApplied { settings: Box<UiSettings>, theme: Theme, error: Option<String> },
+    ReviewThemesListed(Vec<clankerdiff_ratatui::ThemeChoice>),
+    ThemeApplied(Result<(Box<UiSettings>, Theme), ThemeApplicationError>),
     WorkspaceResolved { cwd: PathBuf, status: WorkspaceStatus },
-    Failed { command: FailedCommand, error: String },
+    BackgroundFailed(String),
+    TerminalFailed(String),
 }

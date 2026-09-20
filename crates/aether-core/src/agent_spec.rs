@@ -293,17 +293,17 @@ mod tests {
 
     #[test]
     fn mixed_allow_entries_are_ored() {
-        let filter = ToolFilter { allow: vec![ToolMatcher::read_only(), ToolMatcher::name("plan__*")], deny: vec![] };
+        let filter = ToolFilter { allow: vec![ToolMatcher::read_only(), ToolMatcher::name("review__*")], deny: vec![] };
         let tools = vec![
             make_annotated_tool(
                 "coding__grep",
                 ToolAnnotations { read_only_hint: Some(true), ..ToolAnnotations::default() },
             ),
-            make_tool("plan__write_plan"),
+            make_tool("review__review_artifact"),
             make_tool("coding__bash"),
         ];
         let names: Vec<_> = filter.apply(tools).into_iter().map(|tool| tool.name).collect();
-        assert_eq!(names, vec!["coding__grep", "plan__write_plan"]);
+        assert_eq!(names, vec!["coding__grep", "review__review_artifact"]);
     }
 
     #[test]

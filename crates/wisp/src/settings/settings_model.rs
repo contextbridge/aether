@@ -1,19 +1,8 @@
-use super::UiSettings;
+use super::{ThemeSettings, UiSettings};
 
 pub(crate) struct SettingsModel {
     ui: UiSettings,
     theme: ThemeApplication,
-}
-
-#[derive(Default)]
-struct ThemeApplication {
-    in_flight: bool,
-    queued: Option<String>,
-}
-
-pub(crate) struct ThemeChangeRequest {
-    pub(crate) settings: UiSettings,
-    pub(crate) value: String,
 }
 
 impl SettingsModel {
@@ -25,29 +14,33 @@ impl SettingsModel {
         &self.ui
     }
 
-    pub(crate) fn request_theme_change(&mut self, value: String) -> Option<ThemeChangeRequest> {
+    pub(crate) fn request_theme_change(&mut self, selection: ThemeSettings) -> Option<UiSettings> {
         if self.theme.in_flight {
-            self.theme.queued = Some(value);
+            self.theme.queued = Some(selection);
             None
         } else {
-            Some(self.start_theme_change(value))
+            Some(self.start_theme_change(selection))
         }
     }
 
-    pub(crate) fn finish_theme_change(&mut self, settings: UiSettings) -> Option<ThemeChangeRequest> {
+    pub(crate) fn finish_theme_change(&mut self, settings: Option<UiSettings>) -> Option<UiSettings> {
         self.theme.in_flight = false;
-        if let Some(value) = self.theme.queued.take() {
-            Some(self.start_theme_change(value))
-        } else {
+        if let Some(settings) = settings {
             self.ui = settings;
-            None
         }
+        self.theme.queued.take().map(|selection| self.start_theme_change(selection))
     }
 
-    fn start_theme_change(&mut self, value: String) -> ThemeChangeRequest {
+    fn start_theme_change(&mut self, selection: ThemeSettings) -> UiSettings {
         let mut settings = self.ui.clone();
-        settings.theme.file = (!value.is_empty()).then(|| value.clone());
+        settings.theme = selection;
         self.theme.in_flight = true;
-        ThemeChangeRequest { settings, value }
+        settings
     }
+}
+
+#[derive(Default)]
+struct ThemeApplication {
+    in_flight: bool,
+    queued: Option<ThemeSettings>,
 }

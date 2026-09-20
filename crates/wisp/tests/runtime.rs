@@ -1,13 +1,18 @@
 #![cfg(feature = "testing")]
 
-use acp_utils::client::AcpClientHandle;
-use agent_client_protocol::schema::v1::SessionId;
+use acp_utils::client::{AcpClientError, AcpClientHandle, connect_acp_client};
+use acp_utils::testing::FakeAgent;
+use agent_client_protocol::schema::ProtocolVersion;
+use agent_client_protocol::schema::v2::{Implementation, InitializeRequest, InitializeResponse, SessionId};
+use agent_client_protocol::{self as acp, Agent, Channel};
+use std::sync::Arc;
 use tempfile::TempDir;
-use wisp::command::{AgentCommand, Command, CommandResult, FailedCommand, GitCommand};
+use tokio::task::{JoinError, LocalSet, spawn_local};
+use wisp::command::{AgentCommand, Command, CommandResult, GitReviewCommand};
 use wisp::file_index::index_files_with_limit;
-use wisp::git_review::{DiffScope, GitDiffError, GitDiffEvent};
-use wisp::request::RequestId;
+use wisp::git_review::{DiffScope, DocumentUpdate, Event, FileDiff, FileEntry, LIVE_PROTOCOL_VERSION, ServerMessage};
 use wisp::runtime::CommandDispatcher;
+use wisp::session::workspace_status::WorkspaceStatus;
 
 #[test]
 fn file_index_limit_counts_only_indexed_files() {
@@ -21,61 +26,137 @@ fn file_index_limit_counts_only_indexed_files() {
 }
 
 #[tokio::test]
-async fn closed_agent_connection_becomes_a_reducer_visible_failure() {
-    let mut dispatcher = CommandDispatcher::new(AcpClientHandle::detached());
+async fn closed_agent_connection_becomes_a_reducer_visible_failure() -> Result<(), TestError> {
+    let mut dispatcher = CommandDispatcher::new(disconnected_client().await?);
 
     let result = dispatcher.dispatch(Command::Agent(AgentCommand::Cancel { session_id: SessionId::new("session") }));
 
-    assert!(result.is_none());
-    assert!(dispatcher.has_pending_tasks());
-    assert!(matches!(
-        dispatcher.next_result().await,
-        Some(CommandResult::Failed { command: FailedCommand::Other("cancel"), .. })
-    ));
+    assert!(matches!(result, Some(CommandResult::Cancel(Err(_)))));
+    assert!(!dispatcher.has_pending_tasks());
+    assert!(dispatcher.next_result().await.is_none());
     dispatcher.shutdown().await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn supervised_git_reads_report_completion() {
-    let mut dispatcher = CommandDispatcher::new(AcpClientHandle::detached());
-    let outside_repository = TempDir::new().unwrap();
-    let request_id = RequestId::from(7);
+async fn theme_load_failure_is_returned_as_a_typed_result() -> Result<(), TestError> {
+    use wisp::command::FilesystemCommand;
+    use wisp::settings::{ThemeSettings, UiSettings};
+    use wisp::theme::{ThemeApplicationError, ThemeLoadError};
 
-    assert!(
-        dispatcher
-            .dispatch(Command::Git(GitCommand::Load {
-                request_id,
-                working_dir: outside_repository.path().to_path_buf(),
-                repo_root: None,
-                scope: DiffScope::Both,
-            }))
-            .is_none()
-    );
-    assert!(dispatcher.has_pending_tasks());
-
-    assert!(matches!(
-        dispatcher.next_result().await,
-        Some(CommandResult::GitDiff(GitDiffEvent::Loaded {
-            request_id: actual,
-            result: Err(GitDiffError::NotARepository),
-        })) if actual == request_id
+    let mut dispatcher = CommandDispatcher::new(disconnected_client().await?);
+    dispatcher.dispatch(Command::Filesystem(FilesystemCommand::ApplyTheme {
+        settings: Box::new(UiSettings {
+            theme: ThemeSettings::File { file: "../invalid.json".into() },
+            ..UiSettings::default()
+        }),
+    }));
+    assert!(matches!(dispatcher.next_result().await,
+        Some(CommandResult::ThemeApplied(Err(ThemeApplicationError::Load(ThemeLoadError::InvalidFile(file)))))
+        if file == "../invalid.json"
     ));
     assert!(!dispatcher.has_pending_tasks());
+    Ok(())
 }
 
 #[tokio::test]
-async fn superseded_workspace_reads_are_cancelled() {
-    let mut dispatcher = CommandDispatcher::new(AcpClientHandle::detached());
-    let first = TempDir::new().unwrap();
-    let second = TempDir::new().unwrap();
-    let second_path = second.path().to_path_buf();
+async fn workspace_status_falls_back_to_the_session_path_without_an_agent() -> Result<(), TestError> {
+    let mut dispatcher = CommandDispatcher::new(disconnected_client().await?);
+    let first = TempDir::new()?;
+    let second = TempDir::new()?;
 
-    dispatcher.dispatch(Command::ResolveWorkspace { cwd: first.path().to_path_buf() });
-    dispatcher.dispatch(Command::ResolveWorkspace { cwd: second_path.clone() });
+    for cwd in [first.path(), second.path()] {
+        dispatcher.dispatch(Command::Agent(AgentCommand::FetchWorkspaceStatus {
+            session_id: "s".to_string(),
+            cwd: cwd.to_path_buf(),
+        }));
+    }
 
-    assert!(matches!(
-        dispatcher.next_result().await,
-        Some(CommandResult::WorkspaceResolved { cwd, .. }) if cwd == second_path
-    ));
+    let mut resolved = Vec::new();
+    while resolved.len() < 2 {
+        let Some(CommandResult::WorkspaceResolved { cwd, status }) = dispatcher.next_result().await else {
+            panic!("expected workspace status");
+        };
+        assert_eq!(status, WorkspaceStatus::initial(&cwd));
+        resolved.push(cwd);
+    }
+    assert!(resolved.contains(&second.path().to_path_buf()));
     assert!(!dispatcher.has_pending_tasks());
+    Ok(())
+}
+
+#[tokio::test]
+async fn git_review_publishes_the_agents_document() -> Result<(), TestError> {
+    LocalSet::new()
+        .run_until(async {
+            let client = FakeAgent::default().build().await?;
+            let mut dispatcher = CommandDispatcher::new(client.handle.clone());
+
+            dispatcher.dispatch(Command::GitReview(GitReviewCommand::Open { session_id: "s1".to_string() }));
+            for message in git_diff_messages() {
+                dispatcher.dispatch(Command::GitReview(GitReviewCommand::Forward(message)));
+            }
+
+            let snapshot = loop {
+                if let Some(CommandResult::GitReview(state)) = dispatcher.next_result().await
+                    && let Some(snapshot) = state.snapshot.clone()
+                {
+                    break snapshot;
+                }
+            };
+            assert!(
+                snapshot.document.files.iter().any(|file| file.path.as_str() == "changed.txt"),
+                "the published snapshot must carry the agent's document"
+            );
+
+            dispatcher.shutdown().await;
+            Ok::<(), TestError>(())
+        })
+        .await
+}
+
+/// The live-protocol messages a server sends for an initialization and its first
+/// document, fed straight into the review client's transport.
+fn git_diff_messages() -> Vec<ServerMessage> {
+    vec![
+        Event::Initialize { protocol_version: LIVE_PROTOCOL_VERSION, repository_root: "/repo".to_string() },
+        Event::Document(DocumentUpdate {
+            scope: DiffScope::Both,
+            repo_root: "/repo".to_string(),
+            files: vec![FileEntry::Changed(Arc::new(FileDiff::from_texts("changed.txt", "", "edited\n").unwrap()))],
+        }),
+    ]
+}
+
+#[derive(Debug, thiserror::Error)]
+enum TestError {
+    #[error(transparent)]
+    Client(#[from] AcpClientError),
+    #[error(transparent)]
+    Join(#[from] JoinError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+async fn disconnected_client() -> Result<AcpClientHandle, TestError> {
+    LocalSet::new()
+        .run_until(async {
+            let (agent_transport, client_transport) = Channel::duplex();
+            let agent = Agent.v2().on_receive_request(
+                async |_: InitializeRequest, responder, _cx| {
+                    responder.respond(InitializeResponse::new(ProtocolVersion::V2, Implementation::new("fake", "1")))
+                },
+                acp::on_receive_request!(),
+            );
+            let server = spawn_local(agent.connect_to(agent_transport));
+            let client = connect_acp_client(
+                client_transport,
+                InitializeRequest::new(ProtocolVersion::V2, Implementation::new("wisp", "1")),
+            )
+            .await?;
+            client.handle.disconnect().await;
+            let _ = server.await?;
+            Ok(client.handle)
+        })
+        .await
 }

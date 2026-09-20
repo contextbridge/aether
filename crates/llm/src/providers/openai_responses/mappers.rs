@@ -59,7 +59,10 @@ impl ResponsesRequestPolicy {
 
     /// Effort to send, if any — an explicit request beats the provider default.
     fn effort(&self, context: &Context) -> Option<ReasoningEffort> {
-        context.reasoning_effort().or(self.default_effort)
+        match context.reasoning_effort() {
+            ReasoningEffort::Default => self.default_effort,
+            effort => Some(effort),
+        }
     }
 }
 
@@ -69,12 +72,15 @@ pub(crate) fn build_typed_request(
     policy: &ResponsesRequestPolicy,
 ) -> Result<CreateResponse> {
     let identity: Option<LlmModel> = format!("{}:{model}", policy.provider.parser_name()).parse().ok();
+    crate::provider::validate_reasoning(context, identity.as_ref())?;
     let context = context.filter_encrypted_reasoning(identity.as_ref());
     let (instructions, input) = map_messages(context.messages())?;
     let tools = if context.tools().is_empty() { None } else { Some(map_tools(context.tools(), policy.tool_strict)?) };
     let settings = context.model_settings();
-    let reasoning = (policy.always_include_reasoning || policy.effort(&context).is_some())
-        .then_some(Reasoning { effort: None, summary: Some(ReasoningSummary::Auto) });
+    let reasoning = (policy.always_include_reasoning || policy.effort(&context).is_some()).then_some(Reasoning {
+        effort: None,
+        summary: (context.reasoning_effort() != ReasoningEffort::Disabled).then_some(ReasoningSummary::Auto),
+    });
 
     let text = policy.text_verbosity.clone().map(|verbosity| ResponseTextParam {
         format: TextResponseFormatConfiguration::Text,
@@ -111,7 +117,18 @@ pub(crate) fn build_wire_request(
     // written onto the serialized body instead of the typed request. Safe because
     // `build_typed_request` emits `reasoning` whenever `policy.effort` is set.
     if let Some(effort) = effort {
-        body["reasoning"]["effort"] = effort.as_str().into();
+        let wire = match effort {
+            ReasoningEffort::Default => return Ok(body),
+            ReasoningEffort::Disabled if policy.provider == Provider::Codex => "disabled",
+            ReasoningEffort::Disabled => "none",
+            ReasoningEffort::Minimal => "minimal",
+            ReasoningEffort::Low => "low",
+            ReasoningEffort::Medium => "medium",
+            ReasoningEffort::High => "high",
+            ReasoningEffort::Xhigh => "xhigh",
+            ReasoningEffort::Max => "max",
+        };
+        body["reasoning"]["effort"] = wire.into();
     }
     Ok(body)
 }
@@ -238,8 +255,8 @@ mod tests {
     use super::*;
     use crate::types::IsoString;
     use crate::{
-        AssistantReasoning, ContentBlock, EncryptedReasoningContent, LlmError, ToolCallError, ToolCallRequest,
-        ToolCallResult,
+        AssistantReasoning, ContentBlock, EncryptedReasoningContent, LlmError, MessageId, ToolCallError,
+        ToolCallRequest, ToolCallResult,
     };
 
     fn openai_request(model: &str, context: &Context) -> Result<CreateResponse> {
@@ -284,6 +301,7 @@ mod tests {
             vec![
                 ChatMessage::user("Search for rust"),
                 ChatMessage::Assistant {
+                    message_id: crate::MessageId::new(),
                     content: String::new(),
                     reasoning: AssistantReasoning::default(),
                     timestamp: IsoString::now(),
@@ -338,6 +356,7 @@ mod tests {
     fn build_request_rejects_audio_content() {
         let context = Context::new(
             vec![ChatMessage::User {
+                message_id: MessageId::new(),
                 content: vec![ContentBlock::Audio { data: "YXVkaW8=".to_string(), mime_type: "audio/wav".to_string() }],
                 timestamp: IsoString::now(),
             }],
@@ -349,9 +368,9 @@ mod tests {
 
     #[test]
     fn wire_request_carries_every_reasoning_effort() {
-        for effort in ReasoningEffort::all() {
+        for effort in ReasoningEffort::all().iter().filter(|effort| effort.is_enabled()) {
             let mut context = Context::new(vec![ChatMessage::user("Think")], vec![]);
-            context.set_reasoning_effort(Some(*effort));
+            context.set_reasoning_effort(*effort);
 
             let body = openai_body("gpt-5.6", &context);
             assert_eq!(body["reasoning"]["effort"], effort.as_str());
@@ -405,6 +424,7 @@ mod tests {
         let messages = vec![
             ChatMessage::user("Read foo.rs"),
             ChatMessage::Assistant {
+                message_id: MessageId::new(),
                 content: "I'll read that file.".to_string(),
                 reasoning: AssistantReasoning::default(),
                 timestamp: IsoString::now(),
@@ -421,6 +441,7 @@ mod tests {
                 result: "fn main() {}".to_string(),
             })),
             ChatMessage::Assistant {
+                message_id: MessageId::new(),
                 content: "Here's the file content.".to_string(),
                 reasoning: AssistantReasoning::default(),
                 timestamp: IsoString::now(),
@@ -473,6 +494,7 @@ mod tests {
     #[test]
     fn map_messages_handles_summary() {
         let messages = vec![ChatMessage::Summary {
+            message_id: MessageId::new(),
             content: "User asked about Rust.".to_string(),
             timestamp: IsoString::now(),
             messages_compacted: 5,
@@ -498,6 +520,7 @@ mod tests {
         let messages = vec![
             ChatMessage::user("Hello"),
             ChatMessage::Assistant {
+                message_id: MessageId::new(),
                 content: "Hi".to_string(),
                 reasoning: AssistantReasoning::default(),
                 timestamp: IsoString::now(),
@@ -551,6 +574,7 @@ mod tests {
     #[test]
     fn map_messages_includes_encrypted_reasoning_item() {
         let messages = vec![ChatMessage::Assistant {
+            message_id: MessageId::new(),
             content: "thinking done".to_string(),
             reasoning: AssistantReasoning::from_parts(
                 "summary".to_string(),
@@ -579,6 +603,7 @@ mod tests {
     #[test]
     fn map_messages_skips_reasoning_item_without_encrypted_content() {
         let messages = vec![ChatMessage::Assistant {
+            message_id: MessageId::new(),
             content: "no encrypted".to_string(),
             reasoning: AssistantReasoning::from_parts("just a summary".to_string(), None),
             timestamp: IsoString::now(),
@@ -594,6 +619,7 @@ mod tests {
     #[test]
     fn map_messages_with_audio_errors() {
         let messages = vec![ChatMessage::User {
+            message_id: MessageId::new(),
             content: vec![ContentBlock::Audio { data: "YXVkaW8=".to_string(), mime_type: "audio/wav".to_string() }],
             timestamp: IsoString::now(),
         }];

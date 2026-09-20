@@ -10,8 +10,7 @@ pub fn process_anthropic_stream<T: Stream<Item = Result<String>> + Send + Sync +
     stream: T,
 ) -> impl Stream<Item = Result<LlmResponse>> + Send {
     async_stream::stream! {
-        let message_id = uuid::Uuid::new_v4().to_string();
-        yield Ok(LlmResponse::Start { message_id });
+        yield Ok(LlmResponse::Start);
 
         let mut active_tool_calls: HashMap<String, (String, String)> = HashMap::new();
         let mut index_to_id: HashMap<u32, String> = HashMap::new();
@@ -232,7 +231,7 @@ mod tests {
             responses.push(result.unwrap());
         }
 
-        assert!(matches!(responses[0], LlmResponse::Start { .. }));
+        assert!(matches!(responses[0], LlmResponse::Start));
         assert!(matches!(responses[1], LlmResponse::Text { ref chunk } if chunk == "Hello"));
         assert!(matches!(responses[2], LlmResponse::Text { ref chunk } if chunk == " world"));
         assert!(matches!(
@@ -261,7 +260,7 @@ mod tests {
             responses.push(result.unwrap());
         }
 
-        assert!(matches!(responses[0], LlmResponse::Start { .. }));
+        assert!(matches!(responses[0], LlmResponse::Start));
         assert!(
             matches!(responses[1], LlmResponse::ToolRequestStart { ref id, ref name } if id == "tool_123" && name == "search")
         );
@@ -334,7 +333,7 @@ mod tests {
             responses.push(result.unwrap());
         }
 
-        assert!(matches!(responses[0], LlmResponse::Start { .. }));
+        assert!(matches!(responses[0], LlmResponse::Start));
         assert!(matches!(responses[1], LlmResponse::Reasoning { ref chunk } if chunk == "Let me think"));
         assert!(matches!(responses[2], LlmResponse::Reasoning { ref chunk } if chunk == " about this"));
         assert!(matches!(responses[3], LlmResponse::Text { ref chunk } if chunk == "Here is my answer"));

@@ -84,10 +84,8 @@
           {
             "readOnly": true
           },
-          "plan__*",
           "skills__*",
-          "tasks__*",
-          "survey__*"
+          "tasks__*"
         ],
         "deny": ["subagents__*"]
       }

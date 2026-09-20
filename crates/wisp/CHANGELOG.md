@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.2](https://github.com/contextbridge/aether/compare/aether-wisp-v0.7.1...aether-wisp-v0.7.2) - 2026-09-16
+
+### Added
+
+- replace plan and survey with explicit artifact review ([#478](https://github.com/contextbridge/aether/pull/478))
+- support explicitly disabling model reasoning ([#477](https://github.com/contextbridge/aether/pull/477))
+
+### Other
+
+- scheduled code-cleanup ([#451](https://github.com/contextbridge/aether/pull/451))
+
+## [0.7.1](https://github.com/contextbridge/aether/compare/aether-wisp-v0.7.0...aether-wisp-v0.7.1) - 2026-09-14
+
+### Other
+
+- updated the following local packages: aether-acp-utils, aether-acp-utils
+
+## [0.7.0](https://github.com/contextbridge/aether/compare/aether-wisp-v0.6.3...aether-wisp-v0.7.0) - 2026-09-14
+
+### Added
+
+- Aether CLI supports running a local client and remote agent via websockets ([#463](https://github.com/contextbridge/aether/pull/463))
+- [**breaking**] Migrate to ACP 2.0 ([#460](https://github.com/contextbridge/aether/pull/460))
+- [**breaking**] Replace syntax highlighting and themes with clankerdiff ([#454](https://github.com/contextbridge/aether/pull/454))
+- *(acp-utils)* add WebSocket transport and reliable client lifecycle ([#452](https://github.com/contextbridge/aether/pull/452))
+
+## [0.6.3](https://github.com/contextbridge/aether/compare/aether-wisp-v0.6.2...aether-wisp-v0.6.3) - 2026-09-11
+
+### Other
+
+- update Cargo.lock dependencies
+
 ## [0.6.2](https://github.com/contextbridge/aether/compare/aether-wisp-v0.6.1...aether-wisp-v0.6.2) - 2026-09-09
 
 ### Fixed

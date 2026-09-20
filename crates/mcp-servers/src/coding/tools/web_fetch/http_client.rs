@@ -1,3 +1,4 @@
+use reqwest::header::CONTENT_TYPE;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
@@ -60,6 +61,7 @@ pub struct HttpResponse {
     pub final_url: String,
     pub status_code: u16,
     pub body: String,
+    pub content_type: Option<String>,
 }
 
 /// Trait for HTTP clients that can fetch web content
@@ -99,9 +101,11 @@ impl HttpClient for ReqwestClient {
 
         let final_url = response.url().to_string();
         let status_code = response.status().as_u16();
+        let content_type =
+            response.headers().get(CONTENT_TYPE).and_then(|value| value.to_str().ok()).map(str::to_owned);
 
         let body = response.text().await.map_err(|e| WebFetchError::RequestFailed(e.to_string()))?;
 
-        Ok(HttpResponse { final_url, status_code, body })
+        Ok(HttpResponse { final_url, status_code, body, content_type })
     }
 }

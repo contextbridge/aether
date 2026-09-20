@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.3](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.6.2...aether-mcp-servers-v0.6.3) - 2026-09-19
+
+### Other
+
+- release ([#481](https://github.com/contextbridge/aether/pull/481))
+
+## [0.6.2](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.6.1...aether-mcp-servers-v0.6.2) - 2026-09-16
+
+### Added
+
+- replace plan and survey with explicit artifact review ([#478](https://github.com/contextbridge/aether/pull/478))
+
+### Fixed
+
+- replace deprecated rmcp info aliases ([#480](https://github.com/contextbridge/aether/pull/480))
+- preserve text responses and safely truncate web fetch content ([#476](https://github.com/contextbridge/aether/pull/476))
+
+### Other
+
+- scheduled code-cleanup ([#451](https://github.com/contextbridge/aether/pull/451))
+- release ([#466](https://github.com/contextbridge/aether/pull/466))
+
+## [0.6.1](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.6.0...aether-mcp-servers-v0.6.1) - 2026-09-14
+
+### Other
+
+- updated the following local packages: aether-agent-core, aether-project
+
+## [0.6.0](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.5.3...aether-mcp-servers-v0.6.0) - 2026-09-14
+
+### Added
+
+- [**breaking**] Migrate to ACP 2.0 ([#460](https://github.com/contextbridge/aether/pull/460))
+
+## [0.5.3](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.5.2...aether-mcp-servers-v0.5.3) - 2026-09-11
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.5.2](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.5.1...aether-mcp-servers-v0.5.2) - 2026-09-09
 
 ### Fixed

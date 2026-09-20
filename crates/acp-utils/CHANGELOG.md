@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.2](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.5.1...aether-acp-utils-v0.5.2) - 2026-09-16
+
+### Added
+
+- replace plan and survey with explicit artifact review ([#478](https://github.com/contextbridge/aether/pull/478))
+- support explicitly disabling model reasoning ([#477](https://github.com/contextbridge/aether/pull/477))
+
+### Fixed
+
+- preserve acp websocket messages during bursts ([#469](https://github.com/contextbridge/aether/pull/469))
+
+### Other
+
+- release ([#466](https://github.com/contextbridge/aether/pull/466))
+
+## [0.5.1](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.5.0...aether-acp-utils-v0.5.1) - 2026-09-14
+
+### Fixed
+
+- *(aether-cli)* Set default TLS provider and make websocket client ping every 20s to avoid timeouts. ([#464](https://github.com/contextbridge/aether/pull/464))
+
+## [0.5.0](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.4.3...aether-acp-utils-v0.5.0) - 2026-09-14
+
+### Added
+
+- Aether CLI supports running a local client and remote agent via websockets ([#463](https://github.com/contextbridge/aether/pull/463))
+- [**breaking**] Migrate to ACP 2.0 ([#460](https://github.com/contextbridge/aether/pull/460))
+- *(acp-utils)* add WebSocket transport and reliable client lifecycle ([#452](https://github.com/contextbridge/aether/pull/452))
+
+## [0.4.3](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.4.2...aether-acp-utils-v0.4.3) - 2026-09-11
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.4.2](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.4.1...aether-acp-utils-v0.4.2) - 2026-09-09
 
 ### Other

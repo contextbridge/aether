@@ -1,8 +1,9 @@
 use super::config::cycle_reasoning_option;
 use super::{App, ExitState, Overlay, Route};
-use crate::command::{AgentCommand, Command};
+use crate::command::{AgentCommand, Command, GitReviewCommand};
 use crate::renderer::DrawContext;
 use crate::screens::git_diff::GitDiffScreen;
+use crate::session::WorkspaceAccess;
 use crate::session::session_config_view::LocalConfigView;
 use crate::surfaces::composer::ComposerOutcome;
 use crate::surfaces::dropped_files::parse_dropped_file_paths;
@@ -61,9 +62,16 @@ impl App {
             self.dispatch_outputs(actions);
             return;
         }
+        if let UiEvent::Key(key) = &event
+            && self.ui.keybindings.toggle_git_diff.matches(*key)
+            && matches!(&self.route, Route::GitReview(screen) if screen.is_browsing())
+        {
+            self.close_active();
+            return;
+        }
         let actions: Vec<RootOutput> = match &mut self.route {
             Route::GitReview(screen) => screen.on_ui_event(event).into_iter().map(RootOutput::GitReview).collect(),
-            Route::PlanReview(screen) => screen.on_ui_event(event).into_iter().map(RootOutput::PlanReview).collect(),
+            Route::ArtifactReview(screen) => screen.on_ui_event(event).into_iter().map(RootOutput::ArtifactReview).collect(),
             Route::Conversation => {
                 return match event {
                     UiEvent::Key(key) => self.dispatch_key(key),
@@ -114,9 +122,11 @@ impl App {
         }
 
         if self.ui.keybindings.toggle_git_diff.matches(key) {
-            let (screen, task) = GitDiffScreen::new(self.session.working_dir().to_path_buf());
+            let screen = GitDiffScreen::new();
             self.open_route(Route::GitReview(Box::new(screen)));
-            self.queue(Command::Git(task));
+            self.queue(Command::GitReview(GitReviewCommand::Open {
+                session_id: self.session.session_id().0.to_string(),
+            }));
             return;
         }
 
@@ -163,6 +173,8 @@ impl App {
                 self.composer.insert_char(character);
                 if opens_command_picker {
                     self.composer.open_command_picker(self.available_commands.clone());
+                } else if self.session.workspace_access() == WorkspaceAccess::Remote {
+                    self.notify("File picker is unavailable for remote workspaces");
                 } else {
                     let command = self.composer.open_file_picker(self.session.working_dir());
                     self.queue(Command::Filesystem(command));
@@ -191,11 +203,7 @@ impl App {
 
     fn apply_config_cycle(&mut self, next: Option<(String, String)>) {
         if let Some((id, value)) = next {
-            self.queue(Command::Agent(AgentCommand::SetConfigOption {
-                session_id: self.session.session_id().clone(),
-                config_id: id.clone(),
-                value: value.clone(),
-            }));
+            self.set_config_option(&id, &value);
             self.session.update_config_option_value(&id, &value);
         }
     }
@@ -217,7 +225,8 @@ impl App {
             self.apply_composer_outcome(outcome);
             return;
         }
-        let added = parse_dropped_file_paths(text).is_some_and(|paths| self.composer.add_dropped_media(paths));
+        let added = self.session.workspace_access() == WorkspaceAccess::Local
+            && parse_dropped_file_paths(text).is_some_and(|paths| self.composer.add_dropped_media(paths));
         if !added {
             self.composer.insert_paste(text);
         }
@@ -228,7 +237,7 @@ impl App {
         match &mut self.route {
             Route::Conversation => None,
             Route::GitReview(screen) => screen.render(area, buf, cx),
-            Route::PlanReview(screen) => screen.render(area, buf, cx),
+            Route::ArtifactReview(screen) => screen.render(area, buf, cx),
         }
     }
 
@@ -251,7 +260,7 @@ impl App {
             Some(_) => true,
             None => match self.route {
                 Route::Conversation => self.composer.has_open_overlay(),
-                Route::GitReview(_) | Route::PlanReview(_) => true,
+                Route::GitReview(_) | Route::ArtifactReview(_) => true,
             },
         }
     }

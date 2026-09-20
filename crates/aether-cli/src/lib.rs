@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 
 pub mod acp;
+pub mod client;
 pub mod credentials;
 pub mod error;
 pub mod generate_command;
@@ -9,6 +10,7 @@ pub mod init;
 pub mod mcp_command;
 pub mod mcp_config_args;
 pub mod output;
+pub(crate) mod prompt;
 pub mod provider_connection_args;
 pub mod resolve;
 pub mod runtime;

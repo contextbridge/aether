@@ -5,6 +5,7 @@
 
 mod support;
 
+mod artifact_review;
 mod attachments;
 mod canonical_conversation;
 mod composer;
@@ -15,10 +16,10 @@ mod foundation;
 mod frame;
 mod git_diff;
 mod perf;
-mod plan_review;
 mod plans;
 mod progress_indicator;
 mod prompt_search;
+mod review_rendering;
 mod scrollback;
 mod session_config_view;
 mod sessions;

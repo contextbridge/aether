@@ -3,7 +3,7 @@ use aether_core::core::Prompt;
 use aether_project::{AetherSettings, AgentCatalog, McpSourceSpec, PromptSource};
 use llm::catalog::Provider;
 use llm::{LlmModel, ReasoningEffort};
-use mcp_servers::{CodingMcpArgs, PlanMcpArgs, SkillsMcpArgs, SubAgentsMcpArgs, TasksMcpArgs};
+use mcp_servers::{CodingMcpArgs, ReviewMcpArgs, SkillsMcpArgs, SubAgentsMcpArgs, TasksMcpArgs};
 use mcp_utils::client::McpServerConfig;
 use mcp_utils::client::ToolMatcher;
 use std::collections::BTreeMap;
@@ -129,12 +129,12 @@ fn writes_project_batteries_preset_for_anthropic() {
     assert_eq!(settings.agents[1].reasoning_effort, Some(ReasoningEffort::High));
 
     let plan = &settings.agents[0];
-    assert_read_only_coding_tools(plan);
+    assert_plan_tools(plan);
 
     let plan_servers = inline_servers(&plan.mcps[0]);
     let plan_server_names: Vec<&str> = plan_servers.keys().map(String::as_str).collect();
-    assert_eq!(plan_server_names, vec!["coding", "plan", "skills", "subagents", "survey", "tasks"]);
-    assert!(!plan.tools.deny.iter().any(|tool| matches!(tool, ToolMatcher::Name(name) if name.starts_with("plan__"))));
+    assert_eq!(plan_server_names, vec!["coding", "review", "skills", "subagents", "tasks"]);
+    assert!(plan.tools.allow.contains(&ToolMatcher::name("review__review_artifact")));
 
     let explore = &settings.agents[2];
     assert!(explore.agent_invocable);
@@ -305,8 +305,7 @@ fn every_inline_mcp_in_init_presets_parses_its_args() {
                             "skills" => SkillsMcpArgs::from_args(args).map(|_| ()),
                             "subagents" => SubAgentsMcpArgs::from_args(args).map(|_| ()),
                             "tasks" => TasksMcpArgs::from_args(args).map(|_| ()),
-                            "plan" => PlanMcpArgs::from_args(args).map(|_| ()),
-                            "survey" => Ok(()),
+                            "review" => ReviewMcpArgs::from_args(args).map(|_| ()),
                             other => {
                                 panic!("preset references unknown in-memory MCP `{other}`; add a parse check")
                             }
@@ -340,16 +339,30 @@ fn unsupported_provider_returns_error_without_writing_files() {
     assert!(!dir.path().join("SYSTEM.md").exists(), "no SYSTEM.md should be written");
 }
 
+fn assert_plan_tools(agent: &aether_project::AgentConfig) {
+    assert_eq!(
+        agent.tools.allow,
+        vec![
+            ToolMatcher::read_only(),
+            ToolMatcher::name("skills__*"),
+            ToolMatcher::name("subagents__*"),
+            ToolMatcher::name("tasks__*"),
+            ToolMatcher::name("coding__write_file"),
+            ToolMatcher::name("coding__edit_file"),
+            ToolMatcher::name("review__review_artifact"),
+        ]
+    );
+    assert!(agent.tools.deny.is_empty());
+}
+
 fn assert_read_only_coding_tools(agent: &aether_project::AgentConfig) {
     assert_eq!(
         agent.tools.allow,
         vec![
             ToolMatcher::read_only(),
-            ToolMatcher::name("plan__*"),
             ToolMatcher::name("skills__*"),
             ToolMatcher::name("subagents__*"),
             ToolMatcher::name("tasks__*"),
-            ToolMatcher::name("survey__*"),
         ]
     );
     assert!(agent.tools.deny.is_empty());

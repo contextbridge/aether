@@ -1,6 +1,6 @@
 [package]
 name = "aether-mcp-servers"
-version = "0.5.2"
+version = "0.6.3"
 edition = "2024"
 description = "Built-in MCP tool servers for the Aether AI agent framework"
 license = "MIT"
@@ -25,7 +25,7 @@ dist = false
 workspace = true
 
 [features]
-default = ["coding", "skills", "tasks", "subagents", "plan"]
+default = ["coding", "skills", "tasks", "subagents", "review"]
 test-helpers = []
 file-ops = ["dep:thiserror"]
 coding = [
@@ -58,13 +58,12 @@ tasks = [
     "dep:tempfile",
     "dep:thiserror",
 ]
-plan = ["file-ops"]
+review = ["dep:thiserror"]
 subagents = [
     "coding",
     "skills",
     "tasks",
-    "survey",
-    "plan",
+    "review",
     "dep:aether-auth",
     "dep:aether-core",
     "dep:aether-project",
@@ -72,9 +71,8 @@ subagents = [
     "dep:futures",
     "dep:tracing",
 ]
-survey = []
-all = ["coding", "skills", "tasks", "subagents", "survey", "plan"]
-stdio = ["coding", "skills", "tasks", "survey", "subagents", "plan", "rmcp/transport-io"]
+all = ["coding", "skills", "tasks", "subagents", "review"]
+stdio = ["coding", "skills", "tasks", "subagents", "review", "rmcp/transport-io"]
 
 [dependencies]
 # Always required
@@ -85,9 +83,9 @@ libc = { workspace = true }
 rmcp = { workspace = true, features = ["elicitation", "macros", "server"] }
 schemars = { workspace = true }
 clap = { workspace = true, features = ["env"] }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", default-features = false, version = "0.6.2" }
-utils = { package = "aether-utils", path = "../utils", version = "0.2.14" }
-aether-lspd = { path = "../aether-lspd", optional = true, version = "0.1.35" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", default-features = false, version = "0.7.2" }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.15" }
+aether-lspd = { path = "../aether-lspd", optional = true, version = "0.1.37" }
 futures = { workspace = true, optional = true }
 globset = { workspace = true, optional = true }
 grep = { workspace = true, optional = true }
@@ -108,17 +106,17 @@ url = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
 
 # subagents feature
-aether-auth = { path = "../aether-auth", optional = true, version = "0.1.13", features = ["keyring"] }
-aether-core = { package = "aether-agent-core", path = "../aether-core", optional = true, version = "0.7.2" }
-aether-project = { path = "../aether-project", optional = true, version = "0.5.41" }
-llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.8.2" }
+aether-auth = { path = "../aether-auth", optional = true, version = "0.1.15", features = ["keyring"] }
+aether-core = { package = "aether-agent-core", path = "../aether-core", optional = true, version = "0.8.2" }
+aether-project = { path = "../aether-project", optional = true, version = "0.5.46" }
+llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.9.2" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
-aether-lspd = { path = "../aether-lspd", features = ["testing"], version = "0.1.35" }
+aether-lspd = { path = "../aether-lspd", features = ["testing"], version = "0.1.37" }
 mcp-servers = { package = "aether-mcp-servers", path = ".", features = ["test-helpers"] }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", features = ["client"], version = "0.6.2" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", features = ["client"], version = "0.7.2" }
 
 [[bin]]
 name = "mcp-servers-stdio"
