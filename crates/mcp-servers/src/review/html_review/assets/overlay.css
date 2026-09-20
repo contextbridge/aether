@@ -6,44 +6,37 @@
   --aether-color-danger: #f87171;
   --aether-color-on-accent: #fff;
 
-  --aether-color-text: #e6e6ef;
-  --aether-color-text-secondary: #c9c9db;
-  --aether-color-text-muted: #8a8aa3;
+  --aether-color-text: #f7f8f8;
+  --aether-color-text-secondary: #b4b8bf;
+  --aether-color-text-muted: #8a8f98;
 
-  --aether-color-surface: #0e0e15;
-  --aether-color-surface-raised: #12121a;
-  --aether-color-surface-card: #16161f;
-  --aether-color-surface-control: #1a1a26;
-  --aether-color-surface-control-hover: #22222f;
-  --aether-color-scrim: rgb(10 10 15 / 94%);
+  --aether-color-surface: #111213;
+  --aether-color-surface-card: #171819;
+  --aether-color-surface-control: #1d1e20;
+  --aether-color-surface-control-hover: #26272a;
+  --aether-color-scrim: rgb(13 14 17 / 92%);
 
-  --aether-color-border: #23232f;
-  --aether-color-border-control: #2a2a3a;
-  --aether-shadow-panel: 0 8px 24px rgb(0 0 0 / 45%);
+  --aether-color-border: #23252a;
+  --aether-color-border-control: #2f3136;
+  --aether-shadow-panel: -8px 0 24px rgb(0 0 0 / 35%);
 
   --aether-font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --aether-font-size: 16px;
-  --aether-font-weight-label: 600;
-  --aether-line-height: 24px;
+  --aether-font-size: 13px;
+  --aether-font-weight-label: 500;
+  --aether-line-height: 20px;
   --aether-line-height-tight: 16px;
-  --aether-letter-spacing-label: 0.08em;
 
   --aether-space-1: 8px;
-  --aether-space-2: 16px;
-  --aether-space-3: 24px;
-  --aether-space-4: 32px;
+  --aether-space-2: 12px;
+  --aether-space-3: 16px;
 
-  --aether-size-panel-width: 320px;
-  --aether-size-control-height: 32px;
-  --aether-size-input-min-height: 56px;
-  --aether-size-summary-min-height: 48px;
+  --aether-size-panel-width: 340px;
+  --aether-size-control-height: 26px;
 
-  --aether-radius: 8px;
-  --aether-radius-lg: 16px;
+  --aether-radius: 6px;
   --aether-border-width: 1px;
   --aether-outline-width: 2px;
   --aether-outline-offset: 2px;
-  --aether-opacity-dim: 0.5;
 
   /* int32 max: the artifact is arbitrary HTML, so only the largest z-index browsers accept is guaranteed to win */
   --aether-z-overlay: 2147483647;
@@ -56,6 +49,7 @@
   pointer-events: none;
   color-scheme: dark;
   font: var(--aether-font-size) / var(--aether-line-height) var(--aether-font-family);
+  -webkit-font-smoothing: antialiased;
 }
 
 [data-aether-hover],
@@ -65,18 +59,26 @@
 
 [data-aether-hover] {
   outline: var(--aether-outline-width) solid var(--aether-color-accent) !important;
-  cursor: crosshair;
+}
+
+/* One cursor for the whole page while comment mode is on, instead of flickering element by element. */
+html[data-aether-armed],
+html[data-aether-armed] * {
+  cursor: crosshair !important;
 }
 
 [data-aether-commented] {
   outline: var(--aether-outline-width) dashed var(--aether-color-accent-soft) !important;
 }
 
+/* Reserve space beside the page so the dock reflows content instead of covering it. */
+html[data-aether-review] {
+  margin-right: var(--aether-size-panel-width) !important;
+}
+
 .aether-panel {
   position: absolute;
-  top: var(--aether-space-2);
-  right: var(--aether-space-2);
-  bottom: var(--aether-space-2);
+  inset: 0 0 0 auto;
   display: flex;
   flex-direction: column;
   width: var(--aether-size-panel-width);
@@ -84,58 +86,87 @@
   pointer-events: auto;
   color: var(--aether-color-text);
   background: var(--aether-color-surface);
-  border: var(--aether-border-width) solid var(--aether-color-border);
-  border-radius: var(--aether-radius-lg);
+  border-left: var(--aether-border-width) solid var(--aether-color-border);
   box-shadow: var(--aether-shadow-panel);
 }
 
 .aether-head,
 .aether-foot {
   display: flex;
+  flex: none;
   align-items: center;
   gap: var(--aether-space-1);
   padding: var(--aether-space-1) var(--aether-space-2);
-  background: var(--aether-color-surface-raised);
 }
 
 .aether-head {
   justify-content: space-between;
+  min-height: 40px;
   border-bottom: var(--aether-border-width) solid var(--aether-color-border);
 }
 
+.aether-head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--aether-space-1);
+}
+
+.aether-arm {
+  padding: 0 var(--aether-space-1);
+}
+
+.aether-arm[aria-pressed="true"] {
+  color: var(--aether-color-on-accent);
+  background: var(--aether-color-accent);
+  border-color: var(--aether-color-accent);
+}
+
+.aether-arm[aria-pressed="true"]:hover {
+  background: var(--aether-color-accent-hover);
+}
+
 .aether-foot {
+  padding: var(--aether-space-2);
   border-top: var(--aether-border-width) solid var(--aether-color-border);
 }
 
-.aether-title,
-.aether-count,
-.aether-empty {
+.aether-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--aether-color-text-muted);
 }
 
-.aether-title,
 .aether-count {
-  font-size: var(--aether-font-size);
-  line-height: var(--aether-line-height-tight);
-}
-
-.aether-title {
-  font-weight: var(--aether-font-weight-label);
-  letter-spacing: var(--aether-letter-spacing-label);
-  text-transform: uppercase;
+  font-size: 12px;
+  color: var(--aether-color-text-muted);
 }
 
 .aether-empty {
-  margin: var(--aether-space-2);
-  font-style: italic;
+  padding: var(--aether-space-3);
+  font-size: 12px;
+  text-align: center;
+  color: var(--aether-color-text-muted);
 }
 
 .aether-list {
   flex: 1;
   margin: 0;
-  padding: 0 var(--aether-space-2);
+  padding: var(--aether-space-1) var(--aether-space-2);
   overflow-y: auto;
   list-style: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--aether-color-border-control) transparent;
+}
+
+.aether-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.aether-list::-webkit-scrollbar-thumb {
+  background: var(--aether-color-border-control);
+  border-radius: 4px;
 }
 
 .aether-card {
@@ -146,37 +177,59 @@
   border-radius: var(--aether-radius);
 }
 
+.aether-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-bottom: 6px;
+}
+
+.aether-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 18px;
+  height: 18px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--aether-color-text-secondary);
+  background: var(--aether-color-surface-control);
+  border: var(--aether-border-width) solid var(--aether-color-border);
+  border-radius: 5px;
+}
+
+.aether-tag {
+  flex: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--aether-color-text-muted);
+}
+
 .aether-anchor {
-  display: block;
-  margin-bottom: var(--aether-space-1);
   overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  font-size: 12px;
   line-height: var(--aether-line-height-tight);
   color: var(--aether-color-text-secondary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .aether-card-foot {
   display: flex;
   justify-content: flex-end;
-  margin-top: var(--aether-space-1);
-}
-
-.aether-stale {
-  opacity: var(--aether-opacity-dim);
-}
-
-.aether-stale .aether-anchor {
-  text-decoration: line-through;
+  margin-top: 4px;
 }
 
 .aether-input {
   display: block;
   box-sizing: border-box;
   width: 100%;
-  min-height: var(--aether-size-input-min-height);
-  padding: var(--aether-space-1);
-  resize: vertical;
+  padding: 6px 8px;
+  resize: none;
+  overflow: hidden;
   font: inherit;
   color: var(--aether-color-text);
   background: var(--aether-color-surface);
@@ -184,9 +237,22 @@
   border-radius: var(--aether-radius);
 }
 
+.aether-input::placeholder {
+  color: var(--aether-color-text-muted);
+}
+
+.aether-input:focus {
+  outline: none;
+  border-color: var(--aether-color-accent);
+}
+
+.aether-comment {
+  min-height: 34px;
+}
+
 .aether-summary {
   width: calc(100% - var(--aether-space-2) * 2);
-  min-height: var(--aether-size-summary-min-height);
+  min-height: 34px;
   margin: var(--aether-space-2) var(--aether-space-2) 0;
 }
 
@@ -196,22 +262,44 @@
   justify-content: center;
   box-sizing: border-box;
   height: var(--aether-size-control-height);
-  padding: 0 var(--aether-space-2);
+  padding: 0 10px;
   font: inherit;
+  font-size: 12px;
+  font-weight: var(--aether-font-weight-label);
   line-height: var(--aether-line-height-tight);
   cursor: pointer;
-  color: var(--aether-color-text);
+  color: var(--aether-color-text-secondary);
   background: var(--aether-color-surface-control);
   border: var(--aether-border-width) solid var(--aether-color-border-control);
   border-radius: var(--aether-radius);
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
 }
 
 .aether-btn:hover {
+  color: var(--aether-color-text);
   background: var(--aether-color-surface-control-hover);
 }
 
+.aether-btn:focus-visible {
+  outline: 2px solid var(--aether-color-accent);
+  outline-offset: 1px;
+}
+
 .aether-delete {
+  width: 22px;
+  padding: 0;
+  font-size: 14px;
+  color: var(--aether-color-text-muted);
+  background: transparent;
+  border-color: transparent;
+}
+
+.aether-delete:hover {
   color: var(--aether-color-danger);
+  background: var(--aether-color-surface-control);
 }
 
 .aether-submit,
@@ -226,6 +314,7 @@
 }
 
 .aether-submit:hover {
+  color: var(--aether-color-on-accent);
   background: var(--aether-color-accent-hover);
 }
 
@@ -236,9 +325,12 @@
   align-items: center;
   justify-content: center;
   padding: var(--aether-space-3);
-  pointer-events: auto;
+  font-size: var(--aether-font-size);
   text-align: center;
+  color: var(--aether-color-text);
+  pointer-events: auto;
   background: var(--aether-color-scrim);
+  backdrop-filter: blur(4px);
 }
 
 .aether-status[hidden],

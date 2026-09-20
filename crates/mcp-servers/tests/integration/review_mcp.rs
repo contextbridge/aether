@@ -97,6 +97,14 @@ async fn html_content_request_emits_a_url_elicitation_and_serves_the_artifact() 
     assert!(document.contains(html), "the artifact is served verbatim");
     assert!(document.contains(&format!("data-token=\"{}\"", review.token)), "the overlay carries the submit token");
     assert!(document.contains("attachShadow"), "the overlay script is appended");
+    assert!(
+        document.contains("data-mode=\"document\""),
+        "a static artifact opts into comment mode, so hovering and clicking annotate from the start"
+    );
+    assert!(
+        document.contains("hidden: true"),
+        "the status scrim must start hidden, otherwise it swallows every click on the page"
+    );
     Ok(())
 }
 
@@ -183,6 +191,7 @@ async fn html_file_source_serves_the_document_and_its_sibling_assets() -> TestRe
     let document = reqwest::get(&review.url).await?.error_for_status()?.text().await?;
     assert!(document.contains(html), "the artifact is served verbatim");
     assert!(document.contains("attachShadow"), "the overlay is appended");
+    assert!(document.contains("data-mode=\"document\""), "a file artifact is a static document too");
 
     let logo = reqwest::get(review.origin().join("logo.svg")?).await?.error_for_status()?;
     assert_eq!(logo.headers()[CONTENT_TYPE], "image/svg+xml");
@@ -201,6 +210,7 @@ async fn html_url_source_proxies_the_app_and_injects_the_overlay() -> TestResult
     let page = reqwest::get(&review.url).await?.error_for_status()?.text().await?;
     assert!(page.contains("<h1>Dashboard: billing</h1>"), "the app's page is proxied: {page}");
     assert!(page.contains("attachShadow"), "the overlay is injected into the app's HTML");
+    assert!(page.contains("data-mode=\"app\""), "a live app stays interactive until the reviewer annotates on purpose");
 
     let script = reqwest::get(review.origin().join("/app.js")?).await?.error_for_status()?;
     assert_eq!(script.headers()[CONTENT_TYPE], "text/javascript");
