@@ -3,8 +3,8 @@ use acp::schema::v2::{
     PromptRequest,
 };
 use acp_utils::client::{AcpClientError, AcpEvent, connect_acp_client};
-use acp_utils::testing::{FakeAgent, duplex_pair, initialize_request};
-use agent_client_protocol::{self as acp, Agent};
+use acp_utils::testing::{FakeAgent, initialize_request};
+use agent_client_protocol::{self as acp, Agent, Channel};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::{LocalSet, spawn_local};
 
@@ -12,7 +12,7 @@ use tokio::task::{LocalSet, spawn_local};
 async fn dropping_the_last_handle_closes_the_event_stream_and_transport() {
     LocalSet::new()
         .run_until(async {
-            let (agent_transport, client_transport) = duplex_pair();
+            let (agent_transport, client_transport) = Channel::duplex();
             let agent = FakeAgent::default().agent();
             let server = spawn_local(agent.connect_to(agent_transport));
             let mut client = connect_acp_client(client_transport, initialize_request()).await.unwrap();
@@ -30,7 +30,7 @@ async fn dropping_the_last_handle_closes_the_event_stream_and_transport() {
 async fn concurrent_disconnects_wait_for_the_same_connection_closure() {
     LocalSet::new()
         .run_until(async {
-            let (agent_transport, client_transport) = duplex_pair();
+            let (agent_transport, client_transport) = Channel::duplex();
             let agent = FakeAgent::default().agent();
             let server = spawn_local(agent.connect_to(agent_transport));
             let mut client = connect_acp_client(client_transport, initialize_request()).await.unwrap();
@@ -51,7 +51,7 @@ async fn initialization_failure_releases_the_connection_while_initialize_is_held
     LocalSet::new()
         .run_until(async {
             for failure in ["caller dropped", "rejected", "eof"] {
-                let (agent_transport, client_transport) = duplex_pair();
+                let (agent_transport, client_transport) = Channel::duplex();
                 let (init_tx, mut init_rx) = unbounded_channel();
                 let agent = Agent.v2().on_receive_request(
                     async move |_: InitializeRequest, responder, _cx| {
@@ -90,7 +90,7 @@ async fn ordinary_requests_fail_on_disconnect_and_eof_even_with_retained_handles
     LocalSet::new()
         .run_until(async {
             for disconnect in [true, false] {
-                let (agent_transport, client_transport) = duplex_pair();
+                let (agent_transport, client_transport) = Channel::duplex();
                 let (agent, mut requests) = FakeAgent::default().hold_list_sessions(true).capture();
                 let server = spawn_local(agent.agent().connect_to(agent_transport));
                 let mut client = connect_acp_client(client_transport, initialize_request()).await.unwrap();
@@ -123,7 +123,7 @@ async fn ordinary_requests_fail_on_disconnect_and_eof_even_with_retained_handles
 async fn disconnect_drops_connection_before_the_ui_releases_a_pending_approval() {
     LocalSet::new()
         .run_until(async {
-            let (agent_transport, client_transport) = duplex_pair();
+            let (agent_transport, client_transport) = Channel::duplex();
             let (agent, mut requests) = FakeAgent::default().capture();
             let server = spawn_local(agent.agent().connect_to(agent_transport));
             let mut client = connect_acp_client(client_transport, initialize_request()).await.unwrap();

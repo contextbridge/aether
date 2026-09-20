@@ -46,7 +46,6 @@ dependencies = [
  "aether-mcp-utils",
  "aether-utils",
  "agent-client-protocol",
- "async-trait",
  "clankerdiff-core",
  "clankerdiff-protocol",
  "futures",

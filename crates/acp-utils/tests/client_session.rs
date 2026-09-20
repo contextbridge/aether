@@ -3,7 +3,7 @@ use acp_utils::client::{AcpClient, AcpClientError, AcpEvent, connect_acp_client}
 use acp_utils::notifications::{
     PromptSearchParams, PromptSearchResponse, SessionPreviewParams, SessionPreviewResponse,
 };
-use acp_utils::testing::{FakeAgent, duplex_pair};
+use acp_utils::testing::FakeAgent;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v2::{
     CancelSessionNotification, CloseSessionRequest, ContentBlock, ContentChunk, Implementation, ListSessionsRequest,
@@ -11,7 +11,7 @@ use agent_client_protocol::schema::v2::{
     ResumeSessionRequest, SessionId, SessionInfo, SessionUpdate, SetSessionConfigOptionRequest,
     SetSessionConfigOptionResponse, StopReason, TextContent, UpdateSessionNotification,
 };
-use agent_client_protocol::{self as acp, Client, ConnectTo};
+use agent_client_protocol::{self as acp, Channel, Client, ConnectTo};
 use std::path::PathBuf;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::task::{LocalSet, spawn_local};
@@ -346,7 +346,7 @@ enum TestError {
 }
 
 async fn connect_test_agent(agent: impl ConnectTo<Client> + 'static) -> Result<AcpClient, TestError> {
-    let (agent_transport, client_transport) = duplex_pair();
+    let (agent_transport, client_transport) = Channel::duplex();
     spawn_local(async move {
         let _ = agent.connect_to(agent_transport).await;
     });

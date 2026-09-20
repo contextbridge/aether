@@ -13,8 +13,5 @@ pub mod websocket;
 #[cfg(feature = "client")]
 pub mod client;
 
-#[cfg(feature = "agent")]
-pub mod agent;
-
 #[cfg(feature = "testing")]
 pub mod testing;

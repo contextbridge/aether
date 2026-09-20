@@ -3,8 +3,8 @@ use acp::schema::v2::{
     ResumeSessionResponse, SessionId, UpdateSessionNotification,
 };
 use acp_utils::client::{AcpClient, AcpClientError, AcpEvent, connect_acp_client};
-use acp_utils::testing::{duplex_pair, initialize_request, running_notification};
-use agent_client_protocol::{self as acp, Client, ConnectionTo, Responder};
+use acp_utils::testing::{initialize_request, running_notification};
+use agent_client_protocol::{self as acp, Channel, Client, ConnectionTo, Responder};
 use tokio::sync::mpsc;
 use tokio::task::{LocalSet, spawn_local};
 
@@ -73,7 +73,7 @@ struct TurnTest {
 
 impl TurnTest {
     async fn connect() -> Self {
-        let (agent_transport, client_transport) = duplex_pair();
+        let (agent_transport, client_transport) = Channel::duplex();
         let (agent, mut requests) = acp_utils::testing::FakeAgent::default().sessions(vec![]).capture();
         spawn_local(agent.agent().connect_to(agent_transport));
         let client = connect_acp_client(client_transport, initialize_request()).await.unwrap();
