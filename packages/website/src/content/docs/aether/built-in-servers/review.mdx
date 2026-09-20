@@ -2,7 +2,10 @@
 title: Review
 ---
 
-Review MCP opens any agent-authored Markdown artifact in Aether's Markdown review UI.
+Review MCP opens agent-authored artifacts for human review. It supports:
+
+- **Markdown** (`format: "markdown"`) opens in Aether's in-terminal Markdown review UI.
+- **HTML** (`format: "html"`) opens in your browser with an annotation overlay for element-level comments.
 
 ```json
 {
@@ -10,4 +13,23 @@ Review MCP opens any agent-authored Markdown artifact in Aether's Markdown revie
     "review": { "type": "in-memory" }
   }
 }
+```
+
+## Markdown
+
+Submit Markdown inline or as a file path:
+
+```json
+{"format": "markdown", "source": {"type": "content", "content": "# Plan\n\nShip it."}}
+{"format": "markdown", "source": {"type": "file", "path": "docs/aether/plans/feature.md"}}
+```
+
+## HTML
+
+Submit HTML inline, as a file path, or as the URL of a web app already running on your machine. A file's relative URLs resolve against its directory, so sibling images, stylesheets and scripts load in the review:
+
+```json
+{"format": "html", "source": {"type": "content", "content": "<main><h1>Ship faster</h1></main>"}, "title": "Landing page"}
+{"format": "html", "source": {"type": "file", "path": "site/index.html"}}
+{"format": "html", "source": {"type": "url", "url": "http://localhost:5173/settings"}}
 ```

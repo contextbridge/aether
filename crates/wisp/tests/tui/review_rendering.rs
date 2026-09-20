@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Position, Rect},
     style::{Color, Modifier, Style},
 };
-use utils::artifact_review::{ArtifactFormat, ArtifactReviewElicitationMeta};
+use utils::artifact_review::ArtifactReviewElicitationMeta;
 use wisp::{
     git_review::{ClientState, DiffDocument, DiffSnapshot, FileDiff},
     renderer::DrawContext,
@@ -48,9 +48,9 @@ fn artifact_review_clears_underlying_content_only_inside_its_viewport() {
             let markdown = format!("# Plan\n\n{}", "Implement this.\n\n".repeat(lines));
             let mut screen = ArtifactReviewScreen::new(
                 ArtifactReviewElicitationMeta::new(
-                    &PathBuf::from("/workspace/plan.md"),
+                    Some(PathBuf::from("/workspace/plan.md")),
+                    "Review /workspace/plan.md",
                     &markdown,
-                    ArtifactFormat::Markdown,
                 ),
                 ElicitationResponder::from_fn(|_| {}),
             );
