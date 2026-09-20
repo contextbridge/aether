@@ -10,6 +10,7 @@ mod registry;
 pub mod testing;
 
 use git::GitError;
+pub(crate) use git::current_ref;
 use registry::{RegistryError, WorkspaceRegistry};
 
 /// Manages the workspaces of a repository: listing the known clones and

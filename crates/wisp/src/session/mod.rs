@@ -53,7 +53,7 @@ impl Session {
         } else {
             client.handle.new_session(NewSessionRequest::new(working_dir.clone())).await?
         };
-        let workspace_status = WorkspaceStatus::remote(&working_dir);
+        let workspace_status = WorkspaceStatus::initial(&working_dir);
         Ok(Self { client, response, working_dir, workspace_status, workspace_access: WorkspaceAccess::Remote })
     }
 

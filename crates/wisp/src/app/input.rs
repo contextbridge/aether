@@ -1,6 +1,6 @@
 use super::config::cycle_reasoning_option;
 use super::{App, ExitState, Overlay, Route};
-use crate::command::{AgentCommand, Command};
+use crate::command::{AgentCommand, Command, GitReviewCommand};
 use crate::renderer::DrawContext;
 use crate::screens::git_diff::GitDiffScreen;
 use crate::session::WorkspaceAccess;
@@ -117,18 +117,16 @@ impl App {
             && self.session.capabilities().prompt_search
             && !self.composer.has_completion()
         {
-            self.composer.open_prompt_search(self.session.workspace_access());
+            self.composer.open_prompt_search();
             return;
         }
 
         if self.ui.keybindings.toggle_git_diff.matches(key) {
-            if self.session.workspace_access() == WorkspaceAccess::Remote {
-                self.notify("Git review is unavailable for remote workspaces");
-                return;
-            }
-            let (screen, task) = GitDiffScreen::new(self.session.working_dir().to_path_buf());
+            let screen = GitDiffScreen::new();
             self.open_route(Route::GitReview(Box::new(screen)));
-            self.queue(Command::GitWatch(task));
+            self.queue(Command::GitReview(GitReviewCommand::Open {
+                session_id: self.session.session_id().0.to_string(),
+            }));
             return;
         }
 

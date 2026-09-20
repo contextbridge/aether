@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use agent_client_protocol::schema::v2::{AuthMethod, Meta, SessionId};
 use agent_client_protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
+use clankerdiff_protocol::client::ClientCommand;
+use clankerdiff_protocol::shared::{DocumentUpdate, Event};
 pub use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 use serde::{Deserialize, Serialize};
 
@@ -216,6 +218,46 @@ impl AetherCapabilities {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonRpcNotification)]
+#[notification(method = "_aether/git_diff")]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffCommandPayload {
+    pub session_id: String,
+    #[serde(flatten)]
+    pub command: ClientCommand,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonRpcNotification)]
+#[notification(method = "_aether/git_diff_event")]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffEventPayload {
+    pub session_id: String,
+    #[serde(flatten)]
+    pub event: Event<DocumentUpdate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonRpcNotification)]
+#[notification(method = "_aether/git_diff_close")]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffClosePayload {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcRequest)]
+#[request(method = "_aether/workspace_status", response = WorkspaceStatusResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceStatusPayload {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceStatusResponse {
+    pub display_dir: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_ref: Option<String>,
+}
+
 /// Server→client MCP extension notifications (relay → wisp).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcNotification)]
 #[notification(method = "_aether/mcp_event")]
@@ -289,13 +331,22 @@ struct RemoteInitializationMeta {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use agent_client_protocol::JsonRpcMessage;
     use agent_client_protocol::schema::v2::AuthMethodAgent;
 
-    use super::*;
-
     #[test]
     fn wire_method_names_are_prefixed() {
+        assert_eq!(
+            GitDiffCommandPayload { session_id: String::new(), command: ClientCommand::Cancel }.method(),
+            "_aether/git_diff"
+        );
+        assert_eq!(GitDiffClosePayload { session_id: String::new() }.method(), "_aether/git_diff_close");
+        assert_eq!(
+            GitDiffEventPayload { session_id: String::new(), event: Event::RequestResult(Ok(())) }.method(),
+            "_aether/git_diff_event"
+        );
+        assert_eq!(WorkspaceStatusPayload { session_id: String::new() }.method(), "_aether/workspace_status");
         assert_eq!(ContextClearedParams::default().method(), "_aether/context_cleared");
         assert_eq!(AuthMethodsUpdatedParams { auth_methods: vec![] }.method(), "_aether/auth_methods_updated");
         assert_eq!(McpNotification::ServerStatus { servers: vec![] }.method(), "_aether/mcp_event");

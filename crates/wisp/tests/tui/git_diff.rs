@@ -1,5 +1,6 @@
 use unicode_width::UnicodeWidthStr;
-use wisp::command::GitCommand;
+use wisp::command::{AgentCommand, GitReviewCommand};
+use wisp::git_review::{DiffReviewEvent, RepositoryAction};
 
 use super::support::*;
 
@@ -24,6 +25,16 @@ fn open_patch(ui: &mut TestUi) {
     ui.key(key(KeyCode::Enter));
     ui.settle_tasks();
     ui.draw();
+}
+
+fn take_repository_action(ui: &mut TestUi) -> RepositoryAction {
+    ui.take_commands()
+        .into_iter()
+        .find_map(|command| match command {
+            Command::GitReview(GitReviewCommand::Event(DiffReviewEvent::RepositoryAction(action))) => Some(action),
+            _ => None,
+        })
+        .expect("repository action")
 }
 
 #[test]
@@ -121,7 +132,7 @@ fn retained_watch_snapshot_survives_a_later_failure_while_editing() {
     ui.type_text("unfinished feedback");
     ui.executor_mut().git_mut().write_file("lib.rs", "fn retained_edit() {}\n");
     // Coalescing may skip a successful event before delivering the next failure.
-    let _ = ui.executor_mut().next_git_watch_event().expect("changed snapshot");
+    let _ = ui.executor_mut().next_git_review_state().expect("changed snapshot");
     ui.executor_mut().git_mut().set_repository_available(false);
     ui.settle_tasks();
     ui.draw();
@@ -151,18 +162,16 @@ fn manual_refresh_installs_the_latest_watcher_state() {
 }
 
 #[test]
-fn background_snapshots_follow_scope_changes_and_reject_old_scope_updates() {
+fn background_snapshots_follow_scope_changes() {
     let mut git = changed_git("lib.rs", "fn original() {}\n", "fn staged_version() {}\n");
     git.stage_all();
     git.write_file("lib.rs", "fn working_version() {}\n");
     let mut ui = open_diff(git, 160);
     ui.executor_mut().git_mut().write_file("lib.rs", "fn external_version() {}\n");
-    let stale = ui.executor_mut().next_git_watch_event().expect("changed snapshot");
     for _ in 0..2 {
         ui.key(key(KeyCode::Char('S')));
         ui.settle_tasks();
     }
-    ui.deliver_result(CommandResult::GitWatch(stale));
     ui.draw();
     ui.assert_viewport_contains("Git Diff · Staged");
     ui.assert_viewport_contains("staged_version");
@@ -178,8 +187,8 @@ fn background_updates_during_a_repository_action_do_not_lose_the_latest_snapshot
     let mut ui = open_diff(changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n"), 160);
     ui.key(key(KeyCode::Char('a')));
     ui.executor_mut().git_mut().write_file("lib.rs", "fn external_version() {}\n");
-    let event = ui.executor_mut().next_git_watch_event().expect("changed snapshot");
-    ui.deliver_result(CommandResult::GitWatch(event));
+    let state = ui.executor_mut().next_git_review_state().expect("changed snapshot");
+    ui.deliver_result(CommandResult::GitReview(state));
     ui.settle_tasks();
     ui.draw();
     ui.assert_viewport_contains("external_version");
@@ -193,23 +202,16 @@ fn background_updates_during_a_repository_action_do_not_lose_the_latest_snapshot
 fn action_completion_does_not_refresh_or_install_a_snapshot() {
     let mut ui = open_diff(changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n"), 160);
     ui.key(key(KeyCode::Char('a')));
-    let commands = ui.take_commands();
-    let (review_id, action) = commands
-        .into_iter()
-        .find_map(|command| match command {
-            Command::Git(GitCommand::Apply { review_id, action }) => Some((review_id, action)),
-            _ => None,
-        })
-        .expect("stage action");
+    let action = take_repository_action(&mut ui);
     ui.executor_mut().git_mut().apply(action).expect("stage file");
     ui.executor_mut().git_mut().write_file("lib.rs", "fn watcher_only() {}\n");
-    ui.deliver_result(CommandResult::GitDiff(GitDiffEvent { review_id, result: Ok(()) }));
+    ui.deliver_result(CommandResult::GitReviewAction(Ok(())));
     assert!(ui.take_commands().is_empty(), "action completion must not request a refresh");
     ui.draw();
     ui.assert_viewport_contains("fn new()");
     ui.assert_viewport_not_contains("watcher_only");
-    let event = ui.executor_mut().next_git_watch_event().expect("watcher update");
-    ui.deliver_result(CommandResult::GitWatch(event));
+    let state = ui.executor_mut().next_git_review_state().expect("watcher update");
+    ui.deliver_result(CommandResult::GitReview(state));
     ui.draw();
     ui.assert_viewport_contains("watcher_only");
     ui.key(key(KeyCode::Char('A')));
@@ -221,28 +223,21 @@ fn action_completion_does_not_refresh_or_install_a_snapshot() {
 fn a_snapshot_does_not_complete_an_in_flight_action() {
     let mut ui = open_diff(changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n"), 160);
     ui.key(key(KeyCode::Char('a')));
-    let commands = ui.take_commands();
-    let (review_id, action) = commands
-        .into_iter()
-        .find_map(|command| match command {
-            Command::Git(GitCommand::Apply { review_id, action }) => Some((review_id, action)),
-            _ => None,
-        })
-        .expect("stage action");
+    let action = take_repository_action(&mut ui);
     ui.executor_mut().git_mut().apply(action).expect("stage file");
-    let event = ui.executor_mut().next_git_watch_event().expect("index changed");
-    ui.deliver_result(CommandResult::GitWatch(event));
+    let state = ui.executor_mut().next_git_review_state().expect("index changed");
+    ui.deliver_result(CommandResult::GitReview(state));
     ui.key(key(KeyCode::Char('A')));
     ui.settle_tasks();
     assert_eq!(ui.executor().git().status("lib.rs"), Some((FileStatus::Modified, StageState::Staged)));
-    ui.deliver_result(CommandResult::GitDiff(GitDiffEvent { review_id, result: Ok(()) }));
+    ui.deliver_result(CommandResult::GitReviewAction(Ok(())));
     ui.key(key(KeyCode::Char('A')));
     ui.settle_tasks();
     assert_eq!(ui.executor().git().status("lib.rs"), Some((FileStatus::Modified, StageState::Unstaged)));
 }
 
 #[test]
-fn initial_watch_completion_while_help_is_open_does_not_leave_review_loading() {
+fn initial_watch_document_while_help_is_open_does_not_leave_review_loading() {
     let git = changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n");
     let mut ui = TestUiBuilder::new().working_dir("/workspace").dimensions(160, 15).git(git).build();
     ui.key(ctrl('g'));
@@ -254,23 +249,19 @@ fn initial_watch_completion_while_help_is_open_does_not_leave_review_loading() {
 }
 
 #[test]
-fn closing_review_stops_its_watch_and_reopening_rejects_old_events() {
+fn closing_review_stops_its_watch_and_reopening_starts_fresh() {
     let mut ui = open_diff(changed_git("lib.rs", "fn old() {}\n", "fn new() {}\n"), 160);
-    let old_id = ui.executor().git_watch_id().expect("active watch");
-    ui.executor_mut().git_mut().write_file("lib.rs", "fn stale_edit() {}\n");
-    let stale = ui.executor_mut().next_git_watch_event().expect("changed snapshot");
+    assert!(ui.executor().git_review_active());
     ui.key(key(KeyCode::Esc));
     ui.settle_tasks();
-    assert!(ui.executor().git_watch_id().is_none());
+    assert!(!ui.executor().git_review_active());
     ui.executor_mut().git_mut().write_file("lib.rs", "fn current_edit() {}\n");
-    assert!(ui.executor_mut().next_git_watch_event().is_none());
+    assert!(ui.executor_mut().next_git_review_state().is_none());
     ui.key(ctrl('g'));
     ui.settle_tasks();
-    assert_ne!(ui.executor().git_watch_id(), Some(old_id));
-    ui.deliver_result(CommandResult::GitWatch(stale));
+    assert!(ui.executor().git_review_active());
     ui.draw();
     ui.assert_viewport_contains("current_edit");
-    ui.assert_viewport_not_contains("stale_edit");
 }
 
 #[test]
@@ -551,7 +542,7 @@ fn escape_closes_the_library_review_with_queued_comments() {
     ui.key(key(KeyCode::Esc));
     ui.draw();
     assert!(!ui.viewport_text().contains("Git Diff"));
-    assert!(ui.next_agent_command().is_none(), "cancel does not submit feedback");
+    assert!(!matches!(ui.next_agent_command(), Some(AgentCommand::Prompt { .. })), "cancel does not submit feedback");
 }
 
 #[test]
@@ -586,32 +577,15 @@ fn modified_key_events_do_not_trigger_git_actions() {
 }
 
 #[test]
-fn old_review_completions_cannot_finish_a_new_reviews_action() {
+fn repository_actions_still_work_after_reopening_the_review() {
     let mut ui = open_diff(changed_git("file.rs", "fn old() {}\n", "fn new() {}\n"), 120);
-    let old_id = ui.executor().git_watch_id().expect("old review");
     ui.key(key(KeyCode::Esc));
     ui.settle_tasks();
     ui.key(ctrl('g'));
     ui.settle_tasks();
-    let review_id = ui.executor().git_watch_id().expect("new review");
-    assert_ne!(old_id, review_id);
     ui.key(key(KeyCode::Char('a')));
-    let commands = ui.take_commands();
-    let action = commands
-        .into_iter()
-        .find_map(|command| match command {
-            Command::Git(GitCommand::Apply { action, .. }) => Some(action),
-            _ => None,
-        })
-        .expect("stage action");
-    ui.executor_mut().git_mut().apply(action).unwrap();
-    let event = ui.executor_mut().next_git_watch_event().expect("staged snapshot");
-    ui.deliver_result(CommandResult::GitWatch(event));
-    ui.deliver_result(CommandResult::GitDiff(GitDiffEvent { review_id: old_id, result: Ok(()) }));
-    ui.key(key(KeyCode::Char('A')));
     ui.settle_tasks();
     assert_eq!(ui.executor().git().status("file.rs"), Some((FileStatus::Modified, StageState::Staged)));
-    ui.deliver_result(CommandResult::GitDiff(GitDiffEvent { review_id, result: Ok(()) }));
     ui.key(key(KeyCode::Char('A')));
     ui.settle_tasks();
     assert_eq!(ui.executor().git().status("file.rs"), Some((FileStatus::Modified, StageState::Unstaged)));

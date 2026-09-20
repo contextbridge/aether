@@ -79,12 +79,10 @@ async fn run_event_loop(
 
             acp_event = event_rx.recv() => {
                 let event = acp_event.unwrap_or(AcpEvent::ConnectionClosed);
-                let commands = app.update(Message::Agent(Box::new(event)));
-                dispatch_commands(dispatcher, app, commands);
+                handle_acp_event(dispatcher, app, event);
                 for _ in 1..MAX_ACP_EVENTS_PER_FRAME {
                     let Ok(event) = event_rx.try_recv() else { break };
-                    let commands = app.update(Message::Agent(Box::new(event)));
-                    dispatch_commands(dispatcher, app, commands);
+                    handle_acp_event(dispatcher, app, event);
                 }
             }
 
@@ -108,6 +106,11 @@ async fn run_event_loop(
         }
         renderer.draw(session.terminal_mut(), app)?;
     }
+}
+
+fn handle_acp_event(dispatcher: &mut CommandDispatcher, app: &mut App, event: AcpEvent) {
+    let commands = app.update(Message::Agent(Box::new(event)));
+    dispatch_commands(dispatcher, app, commands);
 }
 
 fn dispatch_commands(dispatcher: &mut CommandDispatcher, app: &mut App, commands: Vec<Command>) {

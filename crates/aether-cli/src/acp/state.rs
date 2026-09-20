@@ -1,9 +1,10 @@
 use super::agent::acp_agent_builder;
 use super::protocol::notify;
 use acp_utils::notifications::{
-    AetherCapabilities, AuthMethodsUpdatedParams, McpRequest, PromptSearchParams, PromptSearchResponse,
-    RemoteServerInfo, SessionDisplayMeta, SessionPreviewParams, SessionPreviewResponse, WorkspaceListParams,
-    WorkspaceListResponse, WorkspaceMoveParams, WorkspaceMoveResponse,
+    AetherCapabilities, AuthMethodsUpdatedParams, GitDiffClosePayload, GitDiffCommandPayload, McpRequest,
+    PromptSearchParams, PromptSearchResponse, RemoteServerInfo, SessionDisplayMeta, SessionPreviewParams,
+    SessionPreviewResponse, WorkspaceListParams, WorkspaceListResponse, WorkspaceMoveParams, WorkspaceMoveResponse,
+    WorkspaceStatusPayload, WorkspaceStatusResponse,
 };
 use aether_auth::OAuthCredentialStorage;
 use aether_telemetry::TelemetryRuntime;
@@ -42,7 +43,7 @@ use super::session::model::supports_prompt_audio;
 use super::session::{SessionRegistry, paginate_summaries};
 use crate::resolve::InitialSessionSelection;
 use crate::settings_args::SettingsSourceArgs;
-use crate::workspace::{WorkspaceError, WorkspaceManager};
+use crate::workspace::{WorkspaceError, WorkspaceManager, current_ref};
 use aether_sessions::{SessionStore, SessionStoreError};
 
 #[async_trait::async_trait]
@@ -392,6 +393,35 @@ impl AcpState {
         .await
     }
 
+    pub(crate) async fn workspace_status(
+        &self,
+        params: &WorkspaceStatusPayload,
+    ) -> Result<WorkspaceStatusResponse, Error> {
+        self.run_workspace_request(params.session_id.clone(), |_session_store, _manager, cwd| {
+            let display_dir = utils::home_relative_path(&cwd);
+            Ok(WorkspaceStatusResponse { display_dir, git_ref: current_ref(&cwd) })
+        })
+        .await
+    }
+
+    pub(crate) async fn git_diff(&self, params: GitDiffCommandPayload) {
+        let command = SessionCommand::GitDiff { command: params.command };
+        if self.send_command(&params.session_id, command).await.is_err() {
+            tracing::warn!("git diff command dropped: session {} is gone", params.session_id);
+        }
+    }
+
+    pub(crate) async fn git_diff_close(&self, params: &GitDiffClosePayload) {
+        let _ = self.send_command(&params.session_id, SessionCommand::GitDiffClose).await;
+    }
+
+    async fn send_command(&self, session_id: &str, command: SessionCommand) -> Result<(), Error> {
+        let Some(sender) = self.registry.lookup(Some(session_id)).await else {
+            return Err(Error::invalid_params());
+        };
+        sender.send(command).await.map_err(|_| Error::internal_error())
+    }
+
     /// Moves the session's uncommitted changes to the target workspace, then
     /// relocates the stored session to the target directory.
     pub(crate) async fn workspace_move(&self, params: &WorkspaceMoveParams) -> Result<WorkspaceMoveResponse, Error> {
@@ -458,14 +488,7 @@ impl AcpState {
     pub(crate) async fn cancel(&self, args: CancelSessionNotification) -> Result<(), Error> {
         info!("Received cancel for session: {:?}", args.session_id);
         let session_id = args.session_id.0.to_string();
-        let Some(sender) = self.registry.lookup(Some(&session_id)).await else {
-            error!("Session not found for cancel: {session_id}");
-            return Err(Error::invalid_params());
-        };
-        sender.send(SessionCommand::Cancel).await.map_err(|_| {
-            error!("Session actor channel closed for cancel: {session_id}");
-            Error::internal_error()
-        })
+        self.send_command(&session_id, SessionCommand::Cancel).await
     }
 
     /// Route a config change to its session actor. Discovers available models
@@ -515,14 +538,7 @@ impl AcpState {
         info!("Received MCP ext request: {:?}", request);
         match request {
             McpRequest::Authenticate { session_id, server_name } => {
-                let Some(sender) = self.registry.lookup(Some(&session_id)).await else {
-                    error!("Session not found for authenticate_mcp_server: {session_id}");
-                    return Err(Error::invalid_params());
-                };
-                sender.send(SessionCommand::AuthenticateMcp { server_name }).await.map_err(|_| {
-                    error!("Session actor channel closed for MCP auth: {session_id}");
-                    Error::internal_error()
-                })?;
+                self.send_command(&session_id, SessionCommand::AuthenticateMcp { server_name }).await?;
             }
         }
         Ok(())

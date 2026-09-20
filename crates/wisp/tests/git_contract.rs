@@ -10,8 +10,7 @@ use git_repo::Repo;
 use clankerdiff_git::GitRepository;
 use clankerdiff_ratatui::diff::{PatchLineKind, RepoPath, RepositoryAction};
 use tempfile::TempDir;
-use wisp::git_review::{DiffDocument, DiffScope, FileDiff, FileStatus, StageState};
-use wisp::runtime::resolve_workspace_status;
+use wisp::git_review::{DiffDocument, DiffScope, FileDiff, FileStatus, RemoteErrorCode, StageState};
 
 fn file<'a>(document: &'a DiffDocument, path: &str) -> &'a FileDiff {
     document
@@ -33,7 +32,7 @@ async fn real_and_fake_git_report_the_same_non_repository_errors() {
     let real = GitRepository::discover(&root).await.unwrap_err();
     let fake = fake.apply(RepositoryAction::StageAll).unwrap_err();
     assert_eq!(fake.to_string(), real.to_string());
-    assert_eq!(std::mem::discriminant(&fake), std::mem::discriminant(&real));
+    assert_eq!(fake.code, RemoteErrorCode::Git);
 }
 
 #[tokio::test]
@@ -46,7 +45,6 @@ async fn real_and_fake_git_report_the_same_commit_errors() {
         let real = repository.apply(action.clone()).await.unwrap_err();
         let fake = fake.apply(action).unwrap_err();
         assert_eq!(fake.to_string(), real.to_string());
-        assert_eq!(std::mem::discriminant(&fake), std::mem::discriminant(&real));
     }
 }
 
@@ -143,19 +141,4 @@ async fn renames_and_binary_files_survive_parsing() {
 
     let binary = file(&document, "image.bin");
     assert!(binary.binary, "binary change must be flagged");
-}
-
-#[tokio::test]
-async fn workspace_status_reports_the_current_branch() {
-    let repo = Repo::init();
-    repo.write("file.txt", "content\n");
-    repo.git(&["add", "-A"]);
-    repo.git(&["commit", "-m", "init"]);
-
-    let status = resolve_workspace_status(&repo.root).await;
-    assert_eq!(status.git_ref.as_deref(), Some("main"));
-
-    let outside = TempDir::new().unwrap();
-    let status = resolve_workspace_status(outside.path()).await;
-    assert_eq!(status.git_ref, None, "a non-repository must resolve without a git ref");
 }

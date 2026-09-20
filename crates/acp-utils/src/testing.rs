@@ -9,7 +9,7 @@
 mod fake_agent;
 pub use fake_agent::{FakeAgent, FakeAgentRequests};
 
-use crate::notifications::McpNotification;
+use crate::notifications::{GitDiffEventPayload, McpNotification};
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v2::{
     CompleteElicitationNotification, CreateElicitationRequest, CreateElicitationResponse, ElicitationFormMode,
@@ -33,6 +33,7 @@ pub type DuplexByteStreams = ByteStreams<Compat<DuplexStream>, Compat<DuplexStre
 pub struct TestPeer {
     session_notifications: mpsc::UnboundedReceiver<UpdateSessionNotification>,
     mcp_notifications: mpsc::UnboundedReceiver<McpNotification>,
+    git_diff_notifications: mpsc::UnboundedReceiver<GitDiffEventPayload>,
     elicitation_requests: mpsc::UnboundedReceiver<CreateElicitationRequest>,
     elicitation_completions: mpsc::UnboundedReceiver<CompleteElicitationNotification>,
     elicitation_responses: Arc<Mutex<VecDeque<CreateElicitationResponse>>>,
@@ -43,6 +44,7 @@ impl TestPeer {
     pub fn new() -> (Self, V2Builder<Client, impl HandleDispatchFrom<Agent>, NullRun>) {
         let (sn_tx, sn_rx) = mpsc::unbounded_channel::<UpdateSessionNotification>();
         let (mcp_tx, mcp_rx) = mpsc::unbounded_channel::<McpNotification>();
+        let (git_diff_tx, git_diff_rx) = mpsc::unbounded_channel::<GitDiffEventPayload>();
         let (el_tx, el_rx) = mpsc::unbounded_channel::<CreateElicitationRequest>();
         let (complete_tx, complete_rx) = mpsc::unbounded_channel::<CompleteElicitationNotification>();
         let elicitation_responses: Arc<Mutex<VecDeque<CreateElicitationResponse>>> =
@@ -67,6 +69,16 @@ impl TestPeer {
                 {
                     let tx = mcp_tx;
                     async move |n: McpNotification, _cx| {
+                        let _ = tx.send(n);
+                        Ok(())
+                    }
+                },
+                acp::on_receive_notification!(),
+            )
+            .on_receive_notification(
+                {
+                    let tx = git_diff_tx;
+                    async move |n: GitDiffEventPayload, _cx| {
                         let _ = tx.send(n);
                         Ok(())
                     }
@@ -109,6 +121,7 @@ impl TestPeer {
         let peer = Self {
             session_notifications: sn_rx,
             mcp_notifications: mcp_rx,
+            git_diff_notifications: git_diff_rx,
             elicitation_requests: el_rx,
             elicitation_completions: complete_rx,
             elicitation_responses,
@@ -123,6 +136,10 @@ impl TestPeer {
 
     pub async fn next_mcp_notification(&mut self) -> McpNotification {
         self.mcp_notifications.recv().await.expect("peer channel closed")
+    }
+
+    pub async fn next_git_diff_notification(&mut self) -> GitDiffEventPayload {
+        self.git_diff_notifications.recv().await.expect("peer channel closed")
     }
 
     pub async fn next_elicitation_request(&mut self) -> CreateElicitationRequest {

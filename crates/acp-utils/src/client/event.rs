@@ -1,4 +1,6 @@
-use crate::notifications::{AuthMethodsUpdatedParams, ContextClearedParams, McpNotification, SubAgentProgressParams};
+use crate::notifications::{
+    AuthMethodsUpdatedParams, ContextClearedParams, GitDiffEventPayload, McpNotification, SubAgentProgressParams,
+};
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::v2::{
     CreateElicitationRequest, CreateElicitationResponse, UpdateSessionNotification,
@@ -11,6 +13,7 @@ pub enum AcpEvent {
     SubAgentProgress(SubAgentProgressParams),
     AuthMethodsUpdated(AuthMethodsUpdatedParams),
     McpNotification(McpNotification),
+    GitDiffEvent(GitDiffEventPayload),
     ElicitationRequest { params: Box<CreateElicitationRequest>, responder: Responder<CreateElicitationResponse> },
     ConnectionClosed,
 }

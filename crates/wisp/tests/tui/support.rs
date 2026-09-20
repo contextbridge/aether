@@ -35,7 +35,7 @@ pub(crate) use wisp::attachment::{AttachmentKind, PromptAttachment, build_attach
 pub(crate) use wisp::conversation::tool_calls::ToolStatus;
 pub(crate) use wisp::conversation::{ConversationContent, ItemState};
 pub(crate) use wisp::file_index::index_files;
-pub(crate) use wisp::git_review::{FileStatus, GitDiffEvent, StageState};
+pub(crate) use wisp::git_review::{FileStatus, StageState};
 pub(crate) use wisp::renderer::DrawContext;
 pub(crate) use wisp::session::session_config_view::LocalConfigOption;
 pub(crate) use wisp::settings::overlay::SettingsOverlay;

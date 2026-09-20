@@ -4,7 +4,7 @@ use ratatui::TerminalOptions;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use wisp::app::ForegroundOperation;
-use wisp::command::{AgentCommand, Command, CommandResult, GitWatchCommand, TerminalCommand};
+use wisp::command::{AgentCommand, Command, CommandResult, TerminalCommand};
 
 use super::support::{
     BooleanPropertySchema, ElicitationSchema, StringPropertySchema, TestUi, TestUiBuilder, accepted_content, acp,
@@ -27,16 +27,27 @@ fn workspaces_completed(response: acp_utils::notifications::WorkspaceListRespons
 
 #[test]
 fn remote_checkout_actions_are_blocked_without_losing_text() {
-    for key in [KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL), key(KeyCode::Char('@'))] {
-        let mut ui = TestUiBuilder::new().remote_workspace().dimensions(120, 24).build();
-        ui.type_text("draft");
-        ui.key(key);
-        assert!(!ui.app().full_screen_active());
-        assert!(!ui.app().composer().has_completion());
-        assert!(ui.take_commands().is_empty());
-        ui.assert_conversation_contains("unavailable for remote workspaces");
-        assert!(ui.app().composer().text().starts_with("draft"));
-    }
+    let mut ui = TestUiBuilder::new().remote_workspace().dimensions(120, 24).build();
+    ui.type_text("draft");
+    ui.key(key(KeyCode::Char('@')));
+    assert!(!ui.app().full_screen_active());
+    assert!(!ui.app().composer().has_completion());
+    assert!(ui.take_commands().is_empty());
+    ui.assert_conversation_contains("unavailable for remote workspaces");
+    assert!(ui.app().composer().text().starts_with("draft"));
+}
+
+#[test]
+fn remote_git_review_opens() {
+    use wisp::command::GitReviewCommand;
+    let mut ui = TestUiBuilder::new().remote_workspace().dimensions(120, 24).build();
+    ui.key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+    assert!(
+        ui.take_commands().iter().any(|command| matches!(command, Command::GitReview(GitReviewCommand::Open { .. })))
+    );
+    ui.settle_tasks();
+    ui.draw();
+    assert!(ui.viewport_text().contains("Git Diff"));
 }
 
 #[test]
@@ -795,12 +806,11 @@ fn screen_rows(ui: &mut TestUi) -> Vec<String> {
 }
 
 mod screen_mouse {
-    use std::sync::Arc;
-
     use super::*;
-    use clankerdiff_git::RepositorySnapshot;
+    use clankerdiff_client::ConnectionState;
     use clankerdiff_ratatui::diff::DiffScope;
-    use wisp::git_review::{DiffDocument, FileDiff, GitWatchEvent};
+    use std::sync::Arc;
+    use wisp::git_review::{ClientState, DiffDocument, DiffSnapshot, FileDiff};
     use wisp::renderer::DrawContext;
     use wisp::screens::git_diff::GitDiffScreen;
     use wisp::surfaces::input::{MouseAction, UiEvent};
@@ -808,8 +818,8 @@ mod screen_mouse {
     use wisp::view::generation::Generation;
     use wisp::view::syntax::SyntaxHighlighter;
 
-    fn make_test_document() -> RepositorySnapshot {
-        RepositorySnapshot {
+    fn make_test_document() -> DiffSnapshot {
+        DiffSnapshot {
             scope: DiffScope::Both,
             document: Arc::new(DiffDocument {
                 repo_root: "/tmp/repo".into(),
@@ -841,18 +851,13 @@ mod screen_mouse {
     }
 
     fn open_screen() -> GitDiffScreen {
-        let (mut screen, task) = GitDiffScreen::new(std::path::PathBuf::from("/tmp/repo"));
-        let GitWatchCommand::Open { review_id, .. } = task else {
-            panic!("opening Git review must load its document");
+        let mut screen = GitDiffScreen::new();
+        let state = ClientState {
+            connection: ConnectionState::Connected,
+            snapshot: Some(Arc::new(make_test_document())),
+            ..ClientState::default()
         };
-        screen.on_watch_event(GitWatchEvent {
-            review_id,
-            result: Ok(clankerdiff_watch::RepositoryState {
-                snapshot: std::sync::Arc::new(make_test_document()),
-                error: None,
-            }),
-        });
-        screen.on_event(wisp::git_review::GitDiffEvent { review_id, result: Ok(()) });
+        screen.install(&state);
         screen
     }
 

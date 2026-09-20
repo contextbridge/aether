@@ -1,7 +1,6 @@
 use super::config::build_theme_entries;
 use super::{App, ForegroundOperation, Overlay, Route};
-use crate::command::{AgentCommand, Command, FilesystemCommand};
-use crate::session::WorkspaceAccess;
+use crate::command::{AgentCommand, Command, FilesystemCommand, GitReviewCommand};
 use crate::settings::overlay::{SettingsChange, SettingsOverlay};
 use crate::surfaces::input::{
     ElicitationOutput, GitReviewOutput, ArtifactReviewOutput, ReviewOutcome, RootOutput, SessionPickerOutput,
@@ -147,10 +146,9 @@ impl App {
                 GitReviewOutput::SetTheme(value) => self.apply_theme_change(&value),
                 GitReviewOutput::Outcome(ReviewOutcome::Cancelled) => self.close_active(),
                 GitReviewOutput::Outcome(ReviewOutcome::Submitted(prompt)) => self.submit_review(&prompt),
-                GitReviewOutput::Task(task) => {
-                    self.queue(Command::Git(task));
+                GitReviewOutput::Command(command) => {
+                    self.queue(Command::GitReview(command));
                 }
-                GitReviewOutput::Watch(command) => self.queue(Command::GitWatch(command)),
             },
         }
     }
@@ -161,8 +159,8 @@ impl App {
     }
 
     pub(super) fn open_route(&mut self, route: Route) {
-        if let Route::GitReview(screen) = &self.route {
-            self.queue(Command::GitWatch(screen.close()));
+        if let Route::GitReview(_) = &self.route {
+            self.queue(Command::GitReview(GitReviewCommand::Close));
         }
         if matches!(route, Route::GitReview(_) | Route::ArtifactReview(_)) {
             self.queue(Command::Filesystem(FilesystemCommand::ListReviewThemes));
@@ -218,26 +216,23 @@ impl App {
     }
 
     pub(super) fn resolve_workspace(&mut self, cwd: std::path::PathBuf) {
-        if self.session.workspace_access() == WorkspaceAccess::Local {
-            self.queue(Command::ResolveWorkspace { cwd });
-        }
-    }
-
-    pub(super) fn workspace_display_path(&self, cwd: &std::path::Path) -> String {
-        self.session.workspace_access().display_path(cwd)
+        self.queue(Command::Agent(AgentCommand::FetchWorkspaceStatus {
+            session_id: self.session.session_id().0.to_string(),
+            cwd,
+        }));
     }
 
     pub(super) fn on_workspace_moved(&mut self, new_cwd: std::path::PathBuf) {
-        self.resolve_workspace(new_cwd.clone());
         self.return_to_conversation();
-        self.notify(&format!("Moved to {}", self.workspace_display_path(&new_cwd)));
+        self.notify(&format!("Moved to {}", new_cwd.display()));
         let session_id = self.session.session_id().clone();
         self.reset_conversation();
         self.foreground = ForegroundOperation::LoadingWorkspaceSession {
             session_id: session_id.clone(), cwd: new_cwd.clone(),
         };
         self.queue(Command::Agent(AgentCommand::ResumeSession { session_id, cwd: new_cwd.clone() }));
-        self.session.set_working_dir(new_cwd);
+        self.session.set_working_dir(new_cwd.clone());
+        self.resolve_workspace(new_cwd);
     }
 
     /// Sends the review the git-diff screen assembled as a normal prompt.

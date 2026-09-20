@@ -1,6 +1,6 @@
 use super::session::builtin_commands;
 use super::{App, ExitState, ForegroundOperation, Overlay, PromptPhase, Route};
-use crate::command::{AgentCommand, Command, TerminalCommand};
+use crate::command::{AgentCommand, Command, GitReviewCommand, TerminalCommand};
 use crate::conversation::tool_calls::ToolStatus;
 use crate::conversation::{ContextUsageDisplay, MessageRole};
 use crate::screens::artifact_review::ArtifactReviewScreen;
@@ -58,6 +58,9 @@ impl App {
                 }
             }
             AcpEvent::McpNotification(notification) => self.on_mcp_notification(&notification),
+            AcpEvent::GitDiffEvent(params) => {
+                self.queue(Command::GitReview(GitReviewCommand::Forward(params.event)));
+            }
             AcpEvent::AuthMethodsUpdated(params) => {
                 self.session.set_auth_methods(&params.auth_methods);
                 if let Some(Overlay::Settings(overlay)) = self.overlay.as_mut() {
@@ -105,7 +108,7 @@ impl App {
         }
         self.session.update_config_options(response.config_options);
         if matches!(self.foreground, ForegroundOperation::LoadingWorkspaceSession { .. }) {
-            self.notify(&format!("Moved to {}", self.workspace_display_path(self.session.working_dir())));
+            self.notify(&format!("Moved to {}", self.session.working_dir().display()));
         }
         self.return_to_conversation();
         self.foreground = ForegroundOperation::Idle;

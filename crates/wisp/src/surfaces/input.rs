@@ -1,4 +1,4 @@
-use crate::command::{GitCommand, GitWatchCommand};
+use crate::command::GitReviewCommand;
 use crate::view::filterable_list::FilterableList;
 use crate::view::selection::Direction;
 use acp_utils::notifications::WorkspaceMoveTarget;
@@ -60,8 +60,7 @@ pub enum ReviewOutcome {
 pub enum GitReviewOutput {
     SetTheme(String),
     Outcome(ReviewOutcome),
-    Task(GitCommand),
-    Watch(GitWatchCommand),
+    Command(GitReviewCommand),
 }
 
 #[derive(Debug)]

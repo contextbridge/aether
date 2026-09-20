@@ -368,9 +368,9 @@ impl Composer {
         matches!(self.overlay, Some(Overlay::PromptSearch { .. }))
     }
 
-    pub fn open_prompt_search(&mut self, workspace_access: crate::session::WorkspaceAccess) {
+    pub fn open_prompt_search(&mut self) {
         let draft = self.buffer.text().to_string();
-        self.overlay = Some(Overlay::PromptSearch { picker: PromptSearchPicker::new(workspace_access), draft });
+        self.overlay = Some(Overlay::PromptSearch { picker: PromptSearchPicker::new(), draft });
     }
 
     /// Closes the search, restoring the draft it replaced unless the user

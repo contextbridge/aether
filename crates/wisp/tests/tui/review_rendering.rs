@@ -1,8 +1,8 @@
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
+use std::sync::Arc;
 
-use clankerdiff_git::RepositorySnapshot;
+use clankerdiff_client::ConnectionState;
 use clankerdiff_ratatui::diff::DiffScope;
-use clankerdiff_watch::RepositoryState;
 use ratatui::{
     buffer::{Buffer, Cell},
     layout::{Position, Rect},
@@ -10,8 +10,7 @@ use ratatui::{
 };
 use utils::artifact_review::{ArtifactFormat, ArtifactReviewElicitationMeta};
 use wisp::{
-    command::GitWatchCommand,
-    git_review::{DiffDocument, FileDiff, GitWatchEvent},
+    git_review::{ClientState, DiffDocument, DiffSnapshot, FileDiff},
     renderer::DrawContext,
     screens::{artifact_review::ArtifactReviewScreen, git_diff::GitDiffScreen},
     surfaces::elicitation::ElicitationResponder,
@@ -24,23 +23,17 @@ fn git_review_clears_underlying_content_only_inside_its_viewport() {
     for y in [0, 2] {
         for lines in [1, 60] {
             let new = "fn added() {}\n".repeat(lines);
-            let (mut screen, command) = GitDiffScreen::new(PathBuf::from("/workspace"));
-            let GitWatchCommand::Open { review_id, .. } = command else {
-                panic!("opening review must load the repository");
+            let mut screen = GitDiffScreen::new();
+            let document = DiffDocument {
+                repo_root: "/workspace".into(),
+                files: vec![FileDiff::from_texts("src/lib.rs", "", &new).unwrap()],
             };
-            screen.on_watch_event(GitWatchEvent {
-                review_id,
-                result: Ok(RepositoryState {
-                    snapshot: Arc::new(RepositorySnapshot {
-                        scope: DiffScope::Both,
-                        document: Arc::new(DiffDocument {
-                            repo_root: "/workspace".into(),
-                            files: vec![FileDiff::from_texts("src/lib.rs", "", &new).unwrap()],
-                        }),
-                    }),
-                    error: None,
-                }),
-            });
+            let state = ClientState {
+                connection: ConnectionState::Connected,
+                snapshot: Some(Arc::new(DiffSnapshot { scope: DiffScope::Both, document: Arc::new(document) })),
+                ..ClientState::default()
+            };
+            screen.install(&state);
             assert_opaque_viewport(Rect::new(3, y, 120, 24), |area, buffer, cx| {
                 screen.render(area, buffer, cx);
             });

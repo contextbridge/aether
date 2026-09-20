@@ -1,6 +1,7 @@
 use super::state::AcpState;
 use acp_utils::notifications::{
-    McpRequest, PromptSearchParams, SessionPreviewParams, WorkspaceListParams, WorkspaceMoveParams,
+    GitDiffClosePayload, GitDiffCommandPayload, McpRequest, PromptSearchParams, SessionPreviewParams,
+    WorkspaceListParams, WorkspaceMoveParams, WorkspaceStatusPayload,
 };
 use agent_client_protocol::schema::v2::{
     CancelSessionNotification, CloseSessionRequest, InitializeRequest, ListSessionsRequest, LoginAuthRequest,
@@ -27,7 +28,7 @@ impl HandleDispatchFrom<Client> for AcpHandlers {
         cx: ConnectionTo<Client>,
     ) -> Result<Handled<Dispatch>, acp::Error> {
         let state = &self.0;
-        MatchDispatchFrom::new(message, &cx)
+        let matcher = MatchDispatchFrom::new(message, &cx)
             .if_request(async |req: InitializeRequest, responder| {
                 let state = state.clone();
                 spawn_response(&cx, responder, async move { state.initialize(req).await })
@@ -80,28 +81,59 @@ impl HandleDispatchFrom<Client> for AcpHandlers {
                 })
             })
             .await
+            .if_notification(async |notification: CancelSessionNotification| {
+                let _ = state.cancel(notification).await;
+                Ok(())
+            })
+            .await;
+        self.handle_extensions(matcher, &cx).await
+    }
+
+    fn describe_chain(&self) -> impl std::fmt::Debug {
+        "AcpHandlers"
+    }
+}
+
+impl AcpHandlers {
+    async fn handle_extensions(
+        &self,
+        matcher: MatchDispatchFrom<Client>,
+        cx: &ConnectionTo<Client>,
+    ) -> Result<Handled<Dispatch>, acp::Error> {
+        let state = &self.0;
+        matcher
             .if_request(async |req: PromptSearchParams, responder| {
                 let state = state.clone();
-                spawn_response(&cx, responder, async move { state.search_prompts(&req) })
+                spawn_response(cx, responder, async move { state.search_prompts(&req) })
             })
             .await
             .if_request(async |req: SessionPreviewParams, responder| {
                 let state = state.clone();
-                spawn_response(&cx, responder, async move { state.session_preview(&req) })
+                spawn_response(cx, responder, async move { state.session_preview(&req) })
             })
             .await
             .if_request(async |req: WorkspaceListParams, responder| {
                 let state = state.clone();
-                spawn_response(&cx, responder, async move { state.workspace_list(&req).await })
+                spawn_response(cx, responder, async move { state.workspace_list(&req).await })
             })
             .await
             .if_request(async |req: WorkspaceMoveParams, responder| {
                 let state = state.clone();
-                spawn_response(&cx, responder, async move { state.workspace_move(&req).await })
+                spawn_response(cx, responder, async move { state.workspace_move(&req).await })
             })
             .await
-            .if_notification(async |notification: CancelSessionNotification| {
-                let _ = state.cancel(notification).await;
+            .if_request(async |req: WorkspaceStatusPayload, responder| {
+                let state = state.clone();
+                spawn_response(cx, responder, async move { state.workspace_status(&req).await })
+            })
+            .await
+            .if_notification(async |params: GitDiffCommandPayload| {
+                state.git_diff(params).await;
+                Ok(())
+            })
+            .await
+            .if_notification(async |params: GitDiffClosePayload| {
+                state.git_diff_close(&params).await;
                 Ok(())
             })
             .await
@@ -111,10 +143,6 @@ impl HandleDispatchFrom<Client> for AcpHandlers {
             })
             .await
             .done()
-    }
-
-    fn describe_chain(&self) -> impl std::fmt::Debug {
-        "AcpHandlers"
     }
 }
 
