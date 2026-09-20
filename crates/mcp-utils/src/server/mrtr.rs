@@ -4,8 +4,24 @@ use serde::de::DeserializeOwned;
 pub const ELICITATION_UNSUPPORTED: &str = "This tool needs to ask the user for input, but the connected client does not support \
      interactive input (MCP elicitation over protocol 2026-07-28 or newer).";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ElicitationMode {
+    Form,
+    Url,
+}
+
 pub fn input_requests_supported(capabilities: Option<&ClientCapabilities>, requests: &InputRequests) -> bool {
     requests.values().all(|request| capabilities.is_some_and(|capabilities| supports_input(capabilities, request)))
+}
+
+pub fn elicitation_supported(capabilities: Option<&ClientCapabilities>, mode: ElicitationMode) -> bool {
+    let Some(elicitation) = capabilities.and_then(|capabilities| capabilities.elicitation.as_ref()) else {
+        return false;
+    };
+    match mode {
+        ElicitationMode::Form => elicitation.form.is_some() || elicitation.url.is_none(),
+        ElicitationMode::Url => elicitation.url.is_some(),
+    }
 }
 
 /// Deserialize one keyed response from a complete MRTR response batch.
@@ -29,16 +45,12 @@ fn supports_input(capabilities: &ClientCapabilities, request: &InputRequest) -> 
 
 fn supports_elicitation(capabilities: &ClientCapabilities, params: &ElicitRequestParams) -> bool {
     #[allow(unreachable_patterns)]
-    match params {
-        ElicitRequestParams::FormElicitationParams { .. } => capabilities
-            .elicitation
-            .as_ref()
-            .is_some_and(|elicitation| elicitation.form.is_some() || elicitation.url.is_none()),
-        ElicitRequestParams::UrlElicitationParams { .. } => {
-            capabilities.elicitation.as_ref().is_some_and(|elicitation| elicitation.url.is_some())
-        }
-        _ => false,
-    }
+    let mode = match params {
+        ElicitRequestParams::FormElicitationParams { .. } => ElicitationMode::Form,
+        ElicitRequestParams::UrlElicitationParams { .. } => ElicitationMode::Url,
+        _ => return false,
+    };
+    elicitation_supported(Some(capabilities), mode)
 }
 
 #[cfg(test)]

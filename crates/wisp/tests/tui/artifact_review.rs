@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
-use utils::artifact_review::{ArtifactFormat, ArtifactReviewElicitationMeta};
+use utils::artifact_review::ArtifactReviewElicitationMeta;
 use wisp::{
     screens::artifact_review::ArtifactReviewScreen,
     surfaces::{elicitation::ElicitationResponder, input::UiEvent},
@@ -21,7 +21,7 @@ fn screen(markdown: &str) -> (ArtifactReviewScreen, Responses) {
     let responder = ElicitationResponder::from_fn(move |response| output.lock().unwrap().push(response));
     (
         ArtifactReviewScreen::new(
-            ArtifactReviewElicitationMeta::new(&PathBuf::from("/tmp/plan.md"), markdown, ArtifactFormat::Markdown),
+            ArtifactReviewElicitationMeta::new(Some(PathBuf::from("/tmp/plan.md")), "Review /tmp/plan.md", markdown),
             responder,
         ),
         responses,
@@ -159,7 +159,7 @@ fn approval_closes_the_route_and_notifies_the_user() {
     block_on_local(async {
         let mut app = make_app();
         let meta =
-            ArtifactReviewElicitationMeta::new(&PathBuf::from("/tmp/plan.md"), "# Plan", ArtifactFormat::Markdown)
+            ArtifactReviewElicitationMeta::new(Some(PathBuf::from("/tmp/plan.md")), "Review /tmp/plan.md", "# Plan")
                 .to_json()
                 .unwrap();
         with_elicitation(&mut app, form_elicitation("review", "Review artifact", ElicitationSchema::new()).meta(meta))
@@ -178,9 +178,9 @@ fn double_ctrl_c_exits_over_artifact_review() {
     block_on_local(async {
         let mut app = make_app();
         let meta = ArtifactReviewElicitationMeta::new(
-            &PathBuf::from("/tmp/plan.md"),
+            Some(PathBuf::from("/tmp/plan.md")),
+            "Review /tmp/plan.md",
             "# Plan\nbody",
-            ArtifactFormat::Markdown,
         )
         .to_json()
         .unwrap();

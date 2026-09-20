@@ -6,7 +6,7 @@ use mcp_utils::client::{
     CallToolOptions, CancellationToken, InMemoryServerSpec, McpConnectionDetails, McpServer, McpTransport,
     ToolCallEvent, ToolExposure, ToolFilter,
 };
-use mcp_utils::testing::ElicitationScript;
+use mcp_utils::testing::{ElicitationScript, UrlElicitationHandler, url_elicitation_handler};
 use rmcp::model::{CreateTaskResult, ElicitResult, ProgressNotificationParam};
 use rmcp::{RoleServer, ServerHandler, service::DynService};
 use serde_json::Value;
@@ -26,6 +26,7 @@ pub struct McpTestBuilder {
     servers: Vec<McpServer>,
     factories: Vec<(String, ServerFactory)>,
     elicitation_responses: Vec<ElicitResult>,
+    on_url_elicitation: Option<UrlElicitationHandler>,
     trace_context: Option<TraceContext>,
     tool_timeout: Duration,
     tool_filter: ToolFilter,
@@ -117,6 +118,15 @@ impl McpTestBuilder {
         self
     }
 
+    pub fn on_url_elicitation<T, Fut>(mut self, handler: T) -> Self
+    where
+        T: Fn(String, String) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.on_url_elicitation = Some(url_elicitation_handler(handler));
+        self
+    }
+
     pub fn trace_context(mut self, trace_context: TraceContext) -> Self {
         self.trace_context = Some(trace_context);
         self
@@ -147,7 +157,11 @@ impl McpTestBuilder {
             mcp: runtime.handle().clone(),
             runtime,
             snapshot,
-            elicitations: ElicitationScript::spawn(event_rx, self.elicitation_responses),
+            elicitations: ElicitationScript::spawn_with_url_handler(
+                event_rx,
+                self.elicitation_responses,
+                self.on_url_elicitation,
+            ),
             deferred_tools: tokio::sync::Mutex::new(VecDeque::new()),
             cancel_tokens: Mutex::new(HashMap::new()),
             trace_context: self.trace_context,

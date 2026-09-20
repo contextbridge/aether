@@ -1,4 +1,4 @@
-use super::tools::{ReviewArtifactInput, ReviewArtifactOutput, execute_review_artifact};
+use super::tools::{ReviewArtifactInput, ReviewArtifactOutput, ReviewArtifactTool};
 use crate::error::ServerInitError;
 use crate::workspace_paths::{current_dir, resolve_path};
 use clap::Parser;
@@ -6,7 +6,7 @@ use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::{
         router::tool::ToolRouter,
-        tool::{InputResponses, schema_for_output},
+        tool::{InputResponses, RequestState, schema_for_output},
         wrapper::Parameters,
     },
     model::{CallToolResponse, Implementation, ServerCapabilities, ServerConfig},
@@ -14,6 +14,7 @@ use rmcp::{
     tool, tool_handler, tool_router,
 };
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "review-mcp")]
@@ -35,7 +36,7 @@ impl ReviewMcpArgs {
 #[derive(Clone)]
 pub struct ReviewMcp {
     tool_router: ToolRouter<Self>,
-    root_dir: PathBuf,
+    review_artifact: Arc<ReviewArtifactTool>,
 }
 
 #[tool_router]
@@ -64,10 +65,10 @@ impl ReviewMcp {
         &self,
         request: Parameters<ReviewArtifactInput>,
         responses: InputResponses,
+        request_state: RequestState,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
-        let Parameters(input) = request;
-        execute_review_artifact(&self.root_dir, input, responses, &context).await
+        self.review_artifact.execute(request.0, responses, request_state, &context).await
     }
 }
 
@@ -83,7 +84,7 @@ impl ServerHandler for ReviewMcp {
 
 impl ReviewMcp {
     fn at_root(root_dir: PathBuf) -> Self {
-        Self { tool_router: Self::tool_router(), root_dir }
+        Self { tool_router: Self::tool_router(), review_artifact: Arc::new(ReviewArtifactTool::new(root_dir)) }
     }
 }
 

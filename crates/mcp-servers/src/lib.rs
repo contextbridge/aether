@@ -53,4 +53,6 @@ pub use tasks::{TasksMcp, TasksMcpArgs};
 pub use subagents::{SubAgentsMcp, SubAgentsMcpArgs};
 
 #[cfg(feature = "review")]
-pub use review::{ReviewArtifactInput, ReviewArtifactOutput, ReviewArtifactSource, ReviewMcp, ReviewMcpArgs};
+pub use review::{
+    DocumentSource, HtmlAnnotation, HtmlSource, ReviewArtifactInput, ReviewArtifactOutput, ReviewMcp, ReviewMcpArgs,
+};

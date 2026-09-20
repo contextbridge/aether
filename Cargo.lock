@@ -290,6 +290,7 @@ dependencies = [
  "aether-utils",
  "ast-grep-core",
  "ast-grep-language",
+ "axum",
  "chrono",
  "clap",
  "dom_smoothie",
@@ -309,8 +310,11 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-util",
+ "tower-http",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -4474,6 +4478,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-range-header"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9171a2ea8a68358193d15dd5d70c1c10a2afc3e7e4c5bc92bc9f025cebd7359c"
+
+[[package]]
 name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8380,10 +8390,19 @@ checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
 dependencies = [
  "bitflags 2.13.2",
  "bytes",
+ "futures-core",
  "futures-util",
  "http 1.5.0",
  "http-body 1.1.0",
+ "http-body-util",
+ "http-range-header",
+ "httpdate",
+ "mime",
+ "mime_guess",
+ "percent-encoding",
  "pin-project-lite",
+ "tokio",
+ "tokio-util",
  "tower",
  "tower-layer",
  "tower-service",

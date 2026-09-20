@@ -7,7 +7,7 @@ use rmcp::{
 };
 
 #[cfg(feature = "client")]
-pub use elicitation_script::{CapturedElicitation, ElicitationScript};
+pub use elicitation_script::{CapturedElicitation, ElicitationScript, UrlElicitationHandler, url_elicitation_handler};
 #[cfg(all(feature = "client", any(test, feature = "testing")))]
 pub use fake_mcp::{
     CapturedTaskUpdate, CapturedToolCall, FakeMcpServer, FakeMcpState, FakeTool, FakeToolResponse, fake_mcp,
@@ -51,11 +51,15 @@ pub enum ConnectError {
 #[cfg(feature = "client")]
 mod elicitation_script {
     use crate::client::McpClientEvent;
+    use futures::future::BoxFuture;
     use rmcp::model::{ElicitRequestParams, ElicitResult, ElicitationAction};
     use std::collections::VecDeque;
+    use std::future::Future;
     use std::sync::{Arc, Mutex, PoisonError};
     use tokio::sync::mpsc;
     use tokio::task::JoinHandle;
+
+    pub type UrlElicitationHandler = Arc<dyn Fn(String, String) -> BoxFuture<'static, ()> + Send + Sync>;
 
     /// Scripts the user's side of elicitation round trips: answers each
     /// incoming request with the next queued response (Cancel once the queue
@@ -63,6 +67,14 @@ mod elicitation_script {
     pub struct ElicitationScript {
         captured: Arc<Mutex<Vec<CapturedElicitation>>>,
         task: JoinHandle<()>,
+    }
+
+    pub fn url_elicitation_handler<F, Fut>(handler: F) -> UrlElicitationHandler
+    where
+        F: Fn(String, String) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        Arc::new(move |url, id| Box::pin(handler(url, id)))
     }
 
     #[derive(Clone)]
@@ -73,23 +85,35 @@ mod elicitation_script {
 
     impl ElicitationScript {
         pub fn spawn(
+            event_rx: mpsc::Receiver<McpClientEvent>,
+            responses: impl IntoIterator<Item = ElicitResult>,
+        ) -> Self {
+            Self::spawn_with_url_handler(event_rx, responses, None)
+        }
+
+        pub fn spawn_with_url_handler(
             mut event_rx: mpsc::Receiver<McpClientEvent>,
             responses: impl IntoIterator<Item = ElicitResult>,
+            on_url: Option<UrlElicitationHandler>,
         ) -> Self {
             let mut responses = responses.into_iter().collect::<VecDeque<_>>();
             let captured = Arc::new(Mutex::new(Vec::new()));
             let recorder = Arc::clone(&captured);
             let task = tokio::spawn(async move {
                 while let Some(event) = event_rx.recv().await {
-                    if let McpClientEvent::Elicitation(event) = event {
-                        recorder
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .push(CapturedElicitation { server_name: event.server_name, request: event.request });
-                        let response =
-                            responses.pop_front().unwrap_or_else(|| ElicitResult::new(ElicitationAction::Cancel));
-                        let _ = event.response_sender.send(response);
+                    let McpClientEvent::Elicitation(event) = event else { continue };
+                    recorder
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .push(CapturedElicitation { server_name: event.server_name, request: event.request.clone() });
+                    if let (Some(on_url), ElicitRequestParams::UrlElicitationParams { url, elicitation_id, .. }) =
+                        (&on_url, event.request)
+                    {
+                        on_url(url, elicitation_id).await;
                     }
+                    let response =
+                        responses.pop_front().unwrap_or_else(|| ElicitResult::new(ElicitationAction::Cancel));
+                    let _ = event.response_sender.send(response);
                 }
             });
             Self { captured, task }

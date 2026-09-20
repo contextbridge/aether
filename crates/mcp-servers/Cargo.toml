@@ -58,7 +58,7 @@ tasks = [
     "dep:tempfile",
     "dep:thiserror",
 ]
-review = ["dep:thiserror"]
+review = ["dep:thiserror", "dep:axum", "dep:uuid", "dep:reqwest", "dep:tokio-util", "dep:tower-http", "tokio/net"]
 subagents = [
     "coding",
     "skills",
@@ -101,6 +101,10 @@ chrono = { workspace = true, optional = true }
 htmd = { workspace = true, optional = true }
 dom_smoothie = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }
+tower-http = { workspace = true, optional = true, features = ["fs"] }
 
 # tasks feature
 tempfile = { workspace = true, optional = true }
@@ -113,6 +117,8 @@ llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.9
 
 [dev-dependencies]
 tempfile = { workspace = true }
+axum = { workspace = true }
+reqwest = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 aether-lspd = { path = "../aether-lspd", features = ["testing"], version = "0.1.37" }
 mcp-servers = { package = "aether-mcp-servers", path = ".", features = ["test-helpers"] }
