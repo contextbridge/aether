@@ -76,8 +76,8 @@ base64 = { workspace = true }
 mime_guess = { workspace = true }
 url = { workspace = true }
 unicode-width = { workspace = true }
+tempfile = { workspace = true }
 
 [dev-dependencies]
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "testing"], version = "0.5.2" }
 serde_json = { workspace = true }
-tempfile = { workspace = true }

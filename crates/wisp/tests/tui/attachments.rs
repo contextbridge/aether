@@ -1,21 +1,6 @@
 use super::support::*;
 use std::path::{Path, PathBuf};
 
-fn make_app_with_prompt_capabilities(prompt_capabilities: acp::PromptCapabilities) -> TestUi {
-    TestUiBuilder::new().prompt_capabilities(prompt_capabilities).build()
-}
-
-fn make_app_with_caps_and_config(
-    prompt_capabilities: acp::PromptCapabilities,
-    config_options: Vec<acp::SessionConfigOption>,
-) -> TestUi {
-    TestUiBuilder::new().prompt_capabilities(prompt_capabilities).config_options(config_options).build()
-}
-
-fn make_failable_app_with_caps(prompt_capabilities: acp::PromptCapabilities) -> TestUi {
-    TestUiBuilder::new().prompt_capabilities(prompt_capabilities).build()
-}
-
 fn media_caps() -> acp::PromptCapabilities {
     acp::PromptCapabilities::new().image(acp::PromptImageCapabilities::new()).audio(acp::PromptAudioCapabilities::new())
 }
@@ -28,12 +13,6 @@ fn model_select_option(
 ) -> acp::SessionConfigSelectOption {
     acp::SessionConfigSelectOption::new(value.to_string(), name.to_string())
         .meta(SelectOptionMeta { reasoning_levels: vec![], supports_image, supports_audio }.into_meta())
-}
-
-fn create_temp_file(dir: &TempDir, name: &str, content: &[u8]) -> std::path::PathBuf {
-    let p = dir.path().join(name);
-    std::fs::write(&p, content).unwrap();
-    p
 }
 
 fn image_model_config(current: &str, options: Vec<acp::SessionConfigSelectOption>) -> acp::SessionConfigOption {
@@ -70,9 +49,8 @@ fn make_select_group(
 
 #[test]
 fn remote_paste_never_attaches_even_when_the_path_exists_locally() {
-    let tmp = TempDir::new().unwrap();
-    let image = create_temp_file(&tmp, "photo.png", b"client-only contents");
-    let mut ui = TestUiBuilder::new().remote_workspace().build();
+    let mut ui = TestUiBuilder::new().remote_workspace().temp_file("photo.png", b"client-only contents").build();
+    let image = ui.temp_file("photo.png");
     ui.paste(image.to_str().unwrap());
     assert!(ui.app().composer().pending_media().is_empty());
     assert_eq!(ui.app().composer().text(), image.to_str().unwrap());
@@ -85,9 +63,8 @@ fn remote_paste_never_attaches_even_when_the_path_exists_locally() {
 
 #[test]
 fn paste_image_path_adds_pending_media() {
-    let mut app = make_app();
-    let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png");
+    let mut app = TestUiBuilder::new().temp_file("photo.png", b"fake png").build();
+    let img = app.temp_file("photo.png");
 
     app.paste(img.to_str().unwrap());
 
@@ -98,9 +75,8 @@ fn paste_image_path_adds_pending_media() {
 
 #[test]
 fn paste_audio_path_adds_pending_media() {
-    let mut app = make_app();
-    let tmp = TempDir::new().unwrap();
-    let audio = create_temp_file(&tmp, "note.wav", b"fake wav");
+    let mut app = TestUiBuilder::new().temp_file("note.wav", b"fake wav").build();
+    let audio = app.temp_file("note.wav");
 
     app.paste(audio.to_str().unwrap());
 
@@ -120,9 +96,8 @@ fn paste_ordinary_text_inserts_as_text() {
 
 #[test]
 fn paste_non_media_file_falls_back_to_text() {
-    let mut app = make_app();
-    let tmp = TempDir::new().unwrap();
-    let txt = create_temp_file(&tmp, "readme.txt", b"hello");
+    let mut app = TestUiBuilder::new().temp_file("readme.txt", b"hello").build();
+    let txt = app.temp_file("readme.txt");
 
     app.paste(txt.to_str().unwrap());
 
@@ -133,9 +108,7 @@ fn paste_non_media_file_falls_back_to_text() {
 #[test]
 fn paste_nonexistent_path_remains_as_text() {
     let mut app = make_app();
-    let tmp = TempDir::new().unwrap();
-    let missing = tmp.path().join("photo.png");
-    let input = missing.to_str().unwrap();
+    let input = "/nonexistent/path/to/photo.png";
 
     app.paste(input);
 
@@ -146,11 +119,9 @@ fn paste_nonexistent_path_remains_as_text() {
 #[test]
 fn paste_nonexistent_file_uri_remains_as_text() {
     let mut app = make_app();
-    let tmp = TempDir::new().unwrap();
-    let missing = tmp.path().join("note.wav");
-    let uri = format!("file://{}", missing.display());
+    let uri = "file:///nonexistent/path/to/note.wav";
 
-    app.paste(&uri);
+    app.paste(uri);
 
     assert!(app.app().composer().pending_media().is_empty());
     assert_eq!(app.app().composer().text(), uri);
@@ -158,12 +129,20 @@ fn paste_nonexistent_file_uri_remains_as_text() {
 
 #[test]
 fn paste_directory_path_remains_as_text() {
-    let mut app = make_app();
-    let tmp = TempDir::new().unwrap();
+    let mut app = TestUiBuilder::new().temp_dir("assets.png").build();
     // A directory with a media-like extension is the dangerous case.
-    let dir = tmp.path().join("assets.png");
-    std::fs::create_dir(&dir).unwrap();
-    let input = dir.to_str().unwrap();
+    let input = app.temp_file("assets.png");
+
+    app.paste(input.to_str().unwrap());
+
+    assert!(app.app().composer().pending_media().is_empty());
+    assert_eq!(app.app().composer().text(), input.to_str().unwrap());
+}
+
+#[test]
+fn paste_multiple_nonexistent_paths_remain_as_text() {
+    let mut app = make_app();
+    let input = "/nonexistent/path/to/a.png\n/nonexistent/path/to/b.wav";
 
     app.paste(input);
 
@@ -172,24 +151,9 @@ fn paste_directory_path_remains_as_text() {
 }
 
 #[test]
-fn paste_multiple_nonexistent_paths_remain_as_text() {
-    let mut app = make_app();
-    let tmp = TempDir::new().unwrap();
-    let a = tmp.path().join("a.png");
-    let b = tmp.path().join("b.wav");
-    let input = format!("{}\n{}", a.display(), b.display());
-
-    app.paste(&input);
-
-    assert!(app.app().composer().pending_media().is_empty());
-    assert_eq!(app.app().composer().text(), input);
-}
-
-#[test]
 fn paste_existing_regular_file_becomes_media_and_clears_text() {
-    let mut app = make_app();
-    let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png");
+    let mut app = TestUiBuilder::new().temp_file("photo.png", b"fake png").build();
+    let img = app.temp_file("photo.png");
 
     app.paste(img.to_str().unwrap());
 
@@ -200,10 +164,9 @@ fn paste_existing_regular_file_becomes_media_and_clears_text() {
 
 #[test]
 fn paste_mixed_valid_and_missing_media_keeps_text_and_adds_nothing() {
-    let mut app = make_app();
-    let tmp = TempDir::new().unwrap();
-    let valid = create_temp_file(&tmp, "photo.png", b"img");
-    let missing = tmp.path().join("gone.wav");
+    let mut app = TestUiBuilder::new().temp_file("photo.png", b"img").build();
+    let valid = app.temp_file("photo.png");
+    let missing = app.temp_root().join("gone.wav");
     let input = format!("{}\n{}", valid.display(), missing.display());
 
     app.paste(&input);
@@ -214,11 +177,9 @@ fn paste_mixed_valid_and_missing_media_keeps_text_and_adds_nothing() {
 
 #[test]
 fn paste_mixed_valid_media_and_directory_keeps_text_and_adds_nothing() {
-    let mut app = make_app();
-    let tmp = TempDir::new().unwrap();
-    let valid = create_temp_file(&tmp, "photo.png", b"img");
-    let dir = tmp.path().join("clips.png");
-    std::fs::create_dir(&dir).unwrap();
+    let mut app = TestUiBuilder::new().temp_file("photo.png", b"img").temp_dir("clips.png").build();
+    let valid = app.temp_file("photo.png");
+    let dir = app.temp_file("clips.png");
     let input = format!("{}\n{}", valid.display(), dir.display());
 
     app.paste(&input);
@@ -229,10 +190,9 @@ fn paste_mixed_valid_media_and_directory_keeps_text_and_adds_nothing() {
 
 #[test]
 fn paste_multiple_dropped_files_adds_all() {
-    let mut app = make_app();
-    let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "a.png", b"img");
-    let audio = create_temp_file(&tmp, "b.wav", b"audio");
+    let mut app = TestUiBuilder::new().temp_file("a.png", b"img").temp_file("b.wav", b"audio").build();
+    let img = app.temp_file("a.png");
+    let audio = app.temp_file("b.wav");
     let input = format!("{}\n{}", img.display(), audio.display());
 
     app.paste(&input);
@@ -242,9 +202,8 @@ fn paste_multiple_dropped_files_adds_all() {
 
 #[test]
 fn duplicate_dropped_media_not_added_twice() {
-    let mut app = make_app();
-    let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"img");
+    let mut app = TestUiBuilder::new().temp_file("photo.png", b"img").build();
+    let img = app.temp_file("photo.png");
     let path_str = img.to_str().unwrap().to_string();
 
     app.paste(&path_str);
@@ -255,10 +214,9 @@ fn duplicate_dropped_media_not_added_twice() {
 
 #[test]
 fn media_only_submit_sends_with_content_blocks() {
-    let mut app = make_app_with_prompt_capabilities(media_caps());
-    let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
+    let mut app =
+        TestUiBuilder::new().prompt_capabilities(media_caps()).temp_file("photo.png", b"fake png data").build();
+    let img = app.temp_file("photo.png");
 
     app.paste(img.to_str().unwrap());
     app.key(key(KeyCode::Enter));
@@ -277,10 +235,9 @@ fn media_only_submit_sends_with_content_blocks() {
 
 #[test]
 fn submit_with_text_and_media_merges_both() {
-    let mut app = make_app_with_prompt_capabilities(media_caps());
-    let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
+    let mut app =
+        TestUiBuilder::new().prompt_capabilities(media_caps()).temp_file("photo.png", b"fake png data").build();
+    let img = app.temp_file("photo.png");
 
     app.paste(img.to_str().unwrap());
     app.type_text("describe this");
@@ -299,9 +256,8 @@ fn submit_with_text_and_media_merges_both() {
 
 #[test]
 fn submit_clears_pending_media() {
-    let mut app = make_app_with_prompt_capabilities(media_caps());
-    let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png");
+    let mut app = TestUiBuilder::new().prompt_capabilities(media_caps()).temp_file("photo.png", b"fake png").build();
+    let img = app.temp_file("photo.png");
 
     app.paste(img.to_str().unwrap());
     app.key(key(KeyCode::Enter));
@@ -314,10 +270,9 @@ fn submit_clears_pending_media() {
 
 #[test]
 fn backspace_on_empty_composer_removes_last_dropped_media() {
-    let mut app = make_app();
-    let tmp = TempDir::new().unwrap();
-    let img1 = create_temp_file(&tmp, "a.png", b"a");
-    let img2 = create_temp_file(&tmp, "b.png", b"b");
+    let mut app = TestUiBuilder::new().temp_file("a.png", b"a").temp_file("b.png", b"b").build();
+    let img1 = app.temp_file("a.png");
+    let img2 = app.temp_file("b.png");
 
     app.paste(img1.to_str().unwrap());
     app.paste(img2.to_str().unwrap());
@@ -333,9 +288,8 @@ fn backspace_on_empty_composer_removes_last_dropped_media() {
 
 #[test]
 fn backspace_does_not_remove_media_when_text_present() {
-    let mut app = make_app();
-    let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"img");
+    let mut app = TestUiBuilder::new().temp_file("photo.png", b"img").build();
+    let img = app.temp_file("photo.png");
 
     app.paste(img.to_str().unwrap());
     app.type_text("x");
@@ -347,9 +301,8 @@ fn backspace_does_not_remove_media_when_text_present() {
 
 #[test]
 fn attachment_chips_render_in_layout() {
-    let mut app = make_app();
-    let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"img");
+    let mut app = TestUiBuilder::new().temp_file("photo.png", b"img").build();
+    let img = app.temp_file("photo.png");
 
     app.paste(img.to_str().unwrap());
 
@@ -366,10 +319,8 @@ fn attachment_chips_render_in_layout() {
 #[test]
 fn agent_rejects_image_when_capability_missing() {
     let caps = acp::PromptCapabilities::new().image(None).audio(acp::PromptAudioCapabilities::new());
-    let mut app = make_app_with_prompt_capabilities(caps);
-    let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
+    let mut app = TestUiBuilder::new().prompt_capabilities(caps).temp_file("photo.png", b"fake png data").build();
+    let img = app.temp_file("photo.png");
 
     app.paste(img.to_str().unwrap());
     app.key(key(KeyCode::Enter));
@@ -385,10 +336,8 @@ fn agent_rejects_image_when_capability_missing() {
 #[test]
 fn agent_rejects_audio_when_capability_missing() {
     let caps = acp::PromptCapabilities::new().image(acp::PromptImageCapabilities::new()).audio(None);
-    let mut app = make_app_with_prompt_capabilities(caps);
-    let tmp = TempDir::new().unwrap();
-    let audio = create_temp_file(&tmp, "note.wav", b"fake wav data");
-    app.executor_mut().filesystem_mut().write_file(&audio, b"fake wav data");
+    let mut app = TestUiBuilder::new().prompt_capabilities(caps).temp_file("note.wav", b"fake wav data").build();
+    let audio = app.temp_file("note.wav");
 
     app.paste(audio.to_str().unwrap());
     app.key(key(KeyCode::Enter));
@@ -407,10 +356,12 @@ fn selected_model_rejects_image() {
         "gpt:no-vision",
         vec![model_select_option("gpt:no-vision", "GPT No Vision", false, false)],
     )];
-    let mut app = make_app_with_caps_and_config(caps, config);
-    let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
+    let mut app = TestUiBuilder::new()
+        .prompt_capabilities(caps)
+        .config_options(config)
+        .temp_file("photo.png", b"fake png data")
+        .build();
+    let img = app.temp_file("photo.png");
 
     app.paste(img.to_str().unwrap());
     app.key(key(KeyCode::Enter));
@@ -428,10 +379,12 @@ fn missing_model_metadata_rejects_media() {
         .audio(acp::PromptAudioCapabilities::new());
     let config =
         vec![image_model_config("unknown-model", vec![model_select_option("known-model", "Known", true, true)])];
-    let mut app = make_app_with_caps_and_config(caps, config);
-    let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
+    let mut app = TestUiBuilder::new()
+        .prompt_capabilities(caps)
+        .config_options(config)
+        .temp_file("photo.png", b"fake png data")
+        .build();
+    let img = app.temp_file("photo.png");
 
     app.paste(img.to_str().unwrap());
     app.key(key(KeyCode::Enter));
@@ -451,10 +404,12 @@ fn supported_media_sends_blocks() {
         "claude:vision",
         vec![model_select_option("claude:vision", "Claude Vision", true, true)],
     )];
-    let mut app = make_app_with_caps_and_config(caps, config);
-    let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
+    let mut app = TestUiBuilder::new()
+        .prompt_capabilities(caps)
+        .config_options(config)
+        .temp_file("photo.png", b"fake png data")
+        .build();
+    let img = app.temp_file("photo.png");
 
     app.paste(img.to_str().unwrap());
     app.key(key(KeyCode::Enter));
@@ -472,9 +427,9 @@ fn supported_media_sends_blocks() {
 
 #[test]
 fn sync_prompt_failure_resets_busy_state() {
-    let mut app = make_failable_app_with_caps(media_caps());
-    let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
+    let mut app =
+        TestUiBuilder::new().prompt_capabilities(media_caps()).temp_file("photo.png", b"fake png data").build();
+    let img = app.temp_file("photo.png");
 
     app.paste(img.to_str().unwrap());
     app.key(key(KeyCode::Enter));
@@ -492,7 +447,7 @@ fn sync_prompt_failure_resets_busy_state() {
 #[test]
 fn text_only_submit_unaffected_by_media_capability_check() {
     let caps = acp::PromptCapabilities::new().image(None).audio(None);
-    let mut app = make_app_with_prompt_capabilities(caps);
+    let mut app = TestUiBuilder::new().prompt_capabilities(caps).build();
 
     app.submit("hello");
 
@@ -518,9 +473,8 @@ fn submit_is_blocked_when_composer_empty_without_media() {
 
 #[test]
 fn clear_command_also_clears_pending_media() {
-    let mut app = make_app();
-    let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"img");
+    let mut app = TestUiBuilder::new().temp_file("photo.png", b"img").build();
+    let img = app.temp_file("photo.png");
 
     app.paste(img.to_str().unwrap());
     app.type_text("/clear");
@@ -533,9 +487,8 @@ fn clear_command_also_clears_pending_media() {
 
 #[test]
 fn paste_with_file_uri_parses_correctly() {
-    let mut app = make_app();
-    let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "image.png", b"img");
+    let mut app = TestUiBuilder::new().temp_file("image.png", b"img").build();
+    let img = app.temp_file("image.png");
     let uri = format!("file://{}", img.display());
 
     app.paste(&uri);
@@ -546,9 +499,8 @@ fn paste_with_file_uri_parses_correctly() {
 
 #[test]
 fn paste_with_percent_decoded_file_uri() {
-    let mut app = make_app();
-    let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "my image.png", b"png");
+    let mut app = TestUiBuilder::new().temp_file("my image.png", b"png").build();
+    let img = app.temp_file("my image.png");
     let unencoded_path = img.to_str().unwrap();
     let encoded_path = unencoded_path.replace(' ', "%20");
     let uri = format!("file://{encoded_path}");
@@ -568,10 +520,12 @@ fn selected_model_rejects_audio() {
         "gpt:no-audio",
         vec![model_select_option("gpt:no-audio", "GPT No Audio", true, false)],
     )];
-    let mut app = make_app_with_caps_and_config(caps, config);
-    let tmp = TempDir::new().unwrap();
-    let audio = create_temp_file(&tmp, "note.wav", b"fake wav data");
-    app.executor_mut().filesystem_mut().write_file(&audio, b"fake wav data");
+    let mut app = TestUiBuilder::new()
+        .prompt_capabilities(caps)
+        .config_options(config)
+        .temp_file("note.wav", b"fake wav data")
+        .build();
+    let audio = app.temp_file("note.wav");
 
     app.paste(audio.to_str().unwrap());
     app.key(key(KeyCode::Enter));
@@ -593,10 +547,12 @@ fn selected_model_rejects_image_grouped() {
         vec![model_select_option("grouped:no-vision", "No Vision", false, true)],
     )];
     let config = vec![grouped_model_config("grouped:no-vision", groups)];
-    let mut app = make_app_with_caps_and_config(caps, config);
-    let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
+    let mut app = TestUiBuilder::new()
+        .prompt_capabilities(caps)
+        .config_options(config)
+        .temp_file("photo.png", b"fake png data")
+        .build();
+    let img = app.temp_file("photo.png");
 
     app.paste(img.to_str().unwrap());
     app.key(key(KeyCode::Enter));
@@ -618,10 +574,12 @@ fn selected_model_rejects_audio_grouped() {
         vec![model_select_option("grouped:no-audio", "No Audio", true, false)],
     )];
     let config = vec![grouped_model_config("grouped:no-audio", groups)];
-    let mut app = make_app_with_caps_and_config(caps, config);
-    let tmp = TempDir::new().unwrap();
-    let audio = create_temp_file(&tmp, "note.wav", b"fake wav data");
-    app.executor_mut().filesystem_mut().write_file(&audio, b"fake wav data");
+    let mut app = TestUiBuilder::new()
+        .prompt_capabilities(caps)
+        .config_options(config)
+        .temp_file("note.wav", b"fake wav data")
+        .build();
+    let audio = app.temp_file("note.wav");
 
     app.paste(audio.to_str().unwrap());
     app.key(key(KeyCode::Enter));
@@ -650,10 +608,12 @@ fn comma_separated_multi_model_rejects_image() {
         ),
     ];
     let config = vec![grouped_model_config("claude:sonnet,gpt:text-only", groups)];
-    let mut app = make_app_with_caps_and_config(caps, config);
-    let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
+    let mut app = TestUiBuilder::new()
+        .prompt_capabilities(caps)
+        .config_options(config)
+        .temp_file("photo.png", b"fake png data")
+        .build();
+    let img = app.temp_file("photo.png");
 
     app.paste(img.to_str().unwrap());
     app.key(key(KeyCode::Enter));
@@ -676,10 +636,12 @@ fn comma_separated_multi_model_sends_when_all_support_media() {
         make_select_group("g2", "Reasoning", vec![model_select_option("deepseek:r1", "DeepSeek R1", true, true)]),
     ];
     let config = vec![grouped_model_config("claude:sonnet,deepseek:r1", groups)];
-    let mut app = make_app_with_caps_and_config(caps, config);
-    let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
+    let mut app = TestUiBuilder::new()
+        .prompt_capabilities(caps)
+        .config_options(config)
+        .temp_file("photo.png", b"fake png data")
+        .build();
+    let img = app.temp_file("photo.png");
 
     app.paste(img.to_str().unwrap());
     app.key(key(KeyCode::Enter));
@@ -698,10 +660,8 @@ fn comma_separated_multi_model_sends_when_all_support_media() {
 #[test]
 fn rejection_preserves_text_and_placeholders_in_transcript() {
     let caps = acp::PromptCapabilities::new().image(None).audio(None);
-    let mut app = make_app_with_prompt_capabilities(caps);
-    let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
+    let mut app = TestUiBuilder::new().prompt_capabilities(caps).temp_file("photo.png", b"fake png data").build();
+    let img = app.temp_file("photo.png");
 
     app.paste(img.to_str().unwrap());
     app.type_text("describe this image");
@@ -722,10 +682,8 @@ fn rejection_preserves_text_and_placeholders_in_transcript() {
 #[test]
 fn sync_failure_preserves_text_and_placeholders_in_transcript() {
     let caps = media_caps();
-    let mut app = make_failable_app_with_caps(caps);
-    let tmp = TempDir::new().unwrap();
-    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
+    let mut app = TestUiBuilder::new().prompt_capabilities(caps).temp_file("photo.png", b"fake png data").build();
+    let img = app.temp_file("photo.png");
 
     app.paste(img.to_str().unwrap());
     app.type_text("describe this");
@@ -999,10 +957,9 @@ fn unsupported_extension_text_is_embedded_as_resource() {
 
 #[test]
 fn multi_attachment_preserves_order_with_truncated_text_between_media() {
-    let dir = TempDir::new().unwrap();
-    let img = create_temp_file(&dir, "photo.png", b"png bytes");
-    let big = create_temp_file(&dir, "big.txt", &vec![b'a'; ONE_MIB + 5]);
-    let wav = create_temp_file(&dir, "note.wav", b"wav bytes");
+    let (_img_dir, img) = write_temp("photo.png", b"png bytes");
+    let (_big_dir, big) = write_temp("big.txt", &vec![b'a'; ONE_MIB + 5]);
+    let (_wav_dir, wav) = write_temp("note.wav", b"wav bytes");
     let attachments = vec![
         PromptAttachment { path: img, display_name: "photo.png".to_string() },
         PromptAttachment { path: big, display_name: "big.txt".to_string() },

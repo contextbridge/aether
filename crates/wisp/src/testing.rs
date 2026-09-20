@@ -41,6 +41,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tempfile::TempDir;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 /// A deterministic command runner for integration tests.
@@ -820,6 +821,7 @@ pub struct TestUi<B: Backend = TestBackend> {
     terminal: Terminal<B>,
     executor: FakeExecutor,
     opened_urls: Arc<Mutex<Vec<String>>>,
+    temp: TempFiles,
 }
 
 impl<B: Backend> TestUi<B>
@@ -838,6 +840,7 @@ where
             terminal: test_terminal(backend),
             executor: FakeExecutor::new(),
             opened_urls: builder.opened_urls.clone(),
+            temp: TempFiles::default(),
         }
     }
 
@@ -846,6 +849,22 @@ where
     /// commands it emits still reach the fake runtime.
     pub fn app(&self) -> &App {
         &self.app
+    }
+
+    /// Path of a file or directory registered through [`TestUiBuilder::temp_file`]
+    /// or [`TestUiBuilder::temp_dir`].
+    pub fn temp_file(&self, name: &str) -> PathBuf {
+        assert!(
+            self.temp.contains(name),
+            "no temp file or directory named {name:?}; register it with TestUiBuilder::temp_file"
+        );
+        self.temp.root_path().join(name)
+    }
+
+    /// Root of the scenario's private temp directory, for building paths that
+    /// deliberately do not exist on disk.
+    pub fn temp_root(&self) -> PathBuf {
+        self.temp.root_path()
     }
 
     /// Delivers one message through the public application boundary and records
@@ -1294,6 +1313,51 @@ where
     }
 }
 
+/// Real files under a private temp directory, mirrored into the scenario's
+/// [`FakeFilesystem`]: registered paths pass on-disk existence checks (which the
+/// composer performs while handling pastes) while their bytes resolve from
+/// memory when attachments are read back at submit time.
+#[derive(Default)]
+struct TempFiles {
+    dir: Option<TempDir>,
+    files: BTreeMap<String, Vec<u8>>,
+    directories: BTreeSet<String>,
+}
+
+impl TempFiles {
+    fn write(&mut self, name: &str, contents: &[u8]) {
+        std::fs::write(self.root().join(name), contents).expect("write temp file");
+        self.files.insert(name.to_string(), contents.to_vec());
+    }
+
+    fn create_dir(&mut self, name: &str) {
+        std::fs::create_dir(self.root().join(name)).expect("create temp dir");
+        self.directories.insert(name.to_string());
+    }
+
+    fn contains(&self, name: &str) -> bool {
+        self.files.contains_key(name) || self.directories.contains(name)
+    }
+
+    fn root(&mut self) -> &Path {
+        self.dir.get_or_insert_with(|| TempDir::new().expect("create temp directory")).path()
+    }
+
+    fn root_path(&self) -> PathBuf {
+        self.dir.as_ref().expect("no temp files registered on the builder").path().to_path_buf()
+    }
+
+    fn mirror_into(&self, filesystem: &mut FakeFilesystem) {
+        let Some(dir) = &self.dir else { return };
+        for (name, contents) in &self.files {
+            filesystem.write_file(dir.path().join(name), contents);
+        }
+        for name in &self.directories {
+            filesystem.create_dir(dir.path().join(name));
+        }
+    }
+}
+
 /// Builds a [`TestUi`]: the terminal dimensions plus every app-scenario option
 /// a test cares about. Defaults match a plain `make_app()`-style scenario.
 pub struct TestUiBuilder {
@@ -1310,6 +1374,7 @@ pub struct TestUiBuilder {
     workspace_status: Option<WorkspaceStatus>,
     git: FakeGit,
     opened_urls: Arc<Mutex<Vec<String>>>,
+    temp: TempFiles,
 }
 
 impl Default for TestUiBuilder {
@@ -1328,6 +1393,7 @@ impl Default for TestUiBuilder {
             workspace_status: None,
             git: FakeGit::default(),
             opened_urls: Arc::new(Mutex::new(Vec::new())),
+            temp: TempFiles::default(),
         }
     }
 }
@@ -1350,6 +1416,21 @@ impl TestUiBuilder {
 
     pub fn working_dir(mut self, working_dir: impl Into<PathBuf>) -> Self {
         self.working_dir = Some(working_dir.into());
+        self
+    }
+
+    /// Writes `contents` to `name` inside the scenario's private temp directory
+    /// and mirrors it into the fake filesystem: the path passes real on-disk
+    /// existence checks, and reads resolve from memory at submit time.
+    pub fn temp_file(mut self, name: &str, contents: &[u8]) -> Self {
+        self.temp.write(name, contents);
+        self
+    }
+
+    /// Creates an empty directory `name` inside the scenario's private temp
+    /// directory, mirrored into the fake filesystem.
+    pub fn temp_dir(mut self, name: &str) -> Self {
+        self.temp.create_dir(name);
         self
     }
 
@@ -1423,12 +1504,15 @@ impl TestUiBuilder {
     }
 
     fn finish_with_app(self, app: App) -> TestUi {
+        let mut executor = FakeExecutor::with_git(self.git);
+        self.temp.mirror_into(executor.filesystem_mut());
         TestUi {
             app,
             renderer: Renderer::new(),
             terminal: test_terminal(TestBackend::new(self.width, self.height)),
-            executor: FakeExecutor::with_git(self.git),
+            executor,
             opened_urls: self.opened_urls,
+            temp: self.temp,
         }
     }
 
