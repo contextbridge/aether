@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.16](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.15...aether-utils-v0.2.16) - 2026-09-20
+
+### Other
+
+- Extend artifact review MCP to support html artifacts with comment / annotation support ([#491](https://github.com/contextbridge/aether/pull/491))
+- Move git diff backend out of wisp, into acp agent ([#489](https://github.com/contextbridge/aether/pull/489))
+
 ## [0.2.15](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.14...aether-utils-v0.2.15) - 2026-09-16
 
 ### Added

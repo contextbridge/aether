@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.4](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.3...aether-agent-cli-v0.9.4) - 2026-09-20
+
+### Other
+
+- use upstream ACP and tokio transports ([#492](https://github.com/contextbridge/aether/pull/492))
+- Move git diff backend out of wisp, into acp agent ([#489](https://github.com/contextbridge/aether/pull/489))
+- simplify synchronization across services ([#488](https://github.com/contextbridge/aether/pull/488))
+
 ## [0.9.3](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.2...aether-agent-cli-v0.9.3) - 2026-09-19
 
 ### Added

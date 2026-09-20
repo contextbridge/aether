@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3](https://github.com/contextbridge/aether/compare/aether-sessions-v0.3.2...aether-sessions-v0.3.3) - 2026-09-20
+
+### Other
+
+- updated the following local packages: aether-utils, aether-acp-utils, aether-agent-core, aether-llm
+
 ## [0.3.2](https://github.com/contextbridge/aether/compare/aether-sessions-v0.3.1...aether-sessions-v0.3.2) - 2026-09-16
 
 ### Other
