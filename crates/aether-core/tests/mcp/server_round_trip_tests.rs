@@ -21,7 +21,11 @@ async fn artifact_review_round_trips_complete_feedback_through_the_production_ex
             .build()
             .await;
         let result = test
-            .call("review", "review_artifact", json!({"source": {"type": "file", "path": "plan.md"}}))
+            .call(
+                "review",
+                "review_artifact",
+                json!({"format": "markdown", "source": {"type": "file", "path": "plan.md"}}),
+            )
             .await
             .result
             .expect("review completes");
@@ -47,7 +51,11 @@ async fn artifact_review_round_trips_approval_and_cancellation_through_the_produ
             .build()
             .await;
         let result = test
-            .call("review", "review_artifact", json!({"source": {"type": "file", "path": "plan.md"}}))
+            .call(
+                "review",
+                "review_artifact",
+                json!({"format": "markdown", "source": {"type": "file", "path": "plan.md"}}),
+            )
             .await
             .result
             .expect("review completes");
@@ -55,6 +63,55 @@ async fn artifact_review_round_trips_approval_and_cancellation_through_the_produ
         assert_eq!(output, json!({"status": status}));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "# Plan");
     }
+}
+
+#[tokio::test]
+async fn artifact_review_round_trips_html_annotations_through_the_production_executor() {
+    let root = tempfile::tempdir().unwrap();
+    let submission = json!({
+        "status": "feedback",
+        "feedback": "Tighten the hero.",
+        "annotations": [{"element": "<h1>", "excerpt": "Ship faster", "comment": "Make this larger."}]
+    });
+    let browser = submission.clone();
+    let test = McpTestBuilder::new()
+        .server("review", review_mcp_at(root.path()))
+        .on_url_elicitation(move |url, token| {
+            let body = browser.clone();
+            async move { submit_in_browser(&url, &token, body).await }
+        })
+        .elicitation_response(ElicitResult::new(ElicitationAction::Accept))
+        .build()
+        .await;
+
+    let result = test
+        .call(
+            "review",
+            "review_artifact",
+            json!({
+                "format": "html",
+                "title": "Landing page",
+                "source": {"type": "content", "content": "<main><h1>Ship faster</h1></main>"}
+            }),
+        )
+        .await
+        .result
+        .expect("review completes");
+
+    let output: serde_json::Value = serde_yml::from_str(&result.result).unwrap();
+    assert_eq!(output, submission);
+    assert_eq!(test.elicitations().len(), 1);
+}
+
+async fn submit_in_browser(url: &str, token: &str, body: serde_json::Value) {
+    reqwest::Client::new()
+        .post(format!("{url}submit?token={token}"))
+        .json(&body)
+        .send()
+        .await
+        .expect("submit review")
+        .error_for_status()
+        .expect("submit accepted");
 }
 
 fn review_mcp_at(root: &Path) -> ReviewMcp {
