@@ -1,15 +1,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub const ARTIFACT_REVIEW_UI_KIND: &str = "artifactReview";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum ArtifactFormat {
-    Markdown,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -58,34 +52,12 @@ pub struct ArtifactReviewElicitationMeta {
     pub ui: String,
     pub path: Option<PathBuf>,
     pub title: String,
-    pub format: ArtifactFormat,
     pub markdown: String,
 }
 
 impl ArtifactReviewElicitationMeta {
-    pub fn new(path: &Path, markdown: &str, format: ArtifactFormat) -> Self {
-        Self {
-            ui: ARTIFACT_REVIEW_UI_KIND.to_string(),
-            path: Some(path.to_path_buf()),
-            title: format!("Review {}", path.display()),
-            format,
-            markdown: markdown.to_string(),
-        }
-    }
-
-    pub fn inline(title: &str, markdown: &str, format: ArtifactFormat) -> Self {
-        Self {
-            ui: ARTIFACT_REVIEW_UI_KIND.to_string(),
-            path: None,
-            title: title.to_string(),
-            format,
-            markdown: markdown.to_string(),
-        }
-    }
-
-    pub fn with_title(mut self, title: String) -> Self {
-        self.title = title;
-        self
+    pub fn new(path: Option<PathBuf>, title: impl Into<String>, markdown: impl Into<String>) -> Self {
+        Self { ui: ARTIFACT_REVIEW_UI_KIND.to_string(), path, title: title.into(), markdown: markdown.into() }
     }
 
     pub fn to_json(&self) -> Result<Map<String, Value>, serde_json::Error> {
@@ -126,6 +98,7 @@ impl TryFrom<ReviewForm> for ArtifactReviewSubmission {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn submission_fields_match_the_serialized_contract() {
@@ -144,8 +117,7 @@ mod tests {
 
     #[test]
     fn metadata_round_trips() {
-        let meta =
-            ArtifactReviewElicitationMeta::new(Path::new("docs/question.md"), "# Question", ArtifactFormat::Markdown);
+        let meta = ArtifactReviewElicitationMeta::new(Some(PathBuf::from("docs/question.md")), "Review", "# Question");
         let parsed = ArtifactReviewElicitationMeta::parse(Some(&meta.to_json().expect("serialize"))).expect("parse");
         assert_eq!(parsed, meta);
         assert_eq!(parsed.ui, "artifactReview");
