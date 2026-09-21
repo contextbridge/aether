@@ -161,26 +161,17 @@ pub fn execute_task_update(input: TaskUpdateInput, store: &mut TaskStore) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
-
-    fn setup() -> (TempDir, TaskStore) {
-        let temp_dir = TempDir::new().unwrap();
-        let root = temp_dir.path().join(".aether-tasks");
-        let mut store = TaskStore::new(root);
-        store.init().unwrap();
-        (temp_dir, store)
-    }
+    use crate::testing::TestTaskStore;
 
     #[test]
     fn test_update_title() {
-        let (_temp, mut store) = setup();
-
-        let task = store.create_tree("Original", None).unwrap();
+        let mut tasks = TestTaskStore::new();
+        let task = tasks.root_task("Original");
 
         let input =
             TaskUpdateInput { id: task.id.to_string(), title: Some("Updated title".to_string()), ..Default::default() };
 
-        let output = execute_task_update(input, &mut store).unwrap();
+        let output = execute_task_update(input, tasks.store_mut()).unwrap();
 
         assert_eq!(output.status, "success");
         assert_eq!(output.task.title, "Updated title");
@@ -189,14 +180,13 @@ mod tests {
 
     #[test]
     fn test_update_status() {
-        let (_temp, mut store) = setup();
-
-        let task = store.create_tree("Task", None).unwrap();
+        let mut tasks = TestTaskStore::new();
+        let task = tasks.root_task("Task");
 
         let input =
             TaskUpdateInput { id: task.id.to_string(), status: Some(TaskStatus::InProgress), ..Default::default() };
 
-        let output = execute_task_update(input, &mut store).unwrap();
+        let output = execute_task_update(input, tasks.store_mut()).unwrap();
 
         assert_eq!(output.task.status, TaskStatus::InProgress);
         assert_eq!(output.changes, vec!["status"]);
@@ -204,9 +194,8 @@ mod tests {
 
     #[test]
     fn test_update_multiple_fields() {
-        let (_temp, mut store) = setup();
-
-        let task = store.create_tree("Task", None).unwrap();
+        let mut tasks = TestTaskStore::new();
+        let task = tasks.root_task("Task");
 
         let input = TaskUpdateInput {
             id: task.id.to_string(),
@@ -217,7 +206,7 @@ mod tests {
             ..Default::default()
         };
 
-        let output = execute_task_update(input, &mut store).unwrap();
+        let output = execute_task_update(input, tasks.store_mut()).unwrap();
 
         assert_eq!(output.changes.len(), 4);
         assert!(output.changes.contains(&"title".to_string()));
@@ -228,7 +217,7 @@ mod tests {
 
     #[test]
     fn test_update_nonexistent_task() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
         let input = TaskUpdateInput {
             id: "at-nonexistent".to_string(),
@@ -236,15 +225,14 @@ mod tests {
             ..Default::default()
         };
 
-        let result = execute_task_update(input, &mut store);
+        let result = execute_task_update(input, tasks.store_mut());
         assert!(result.is_err());
     }
 
     #[test]
     fn test_update_with_invalid_deps() {
-        let (_temp, mut store) = setup();
-
-        let task = store.create_tree("Task", None).unwrap();
+        let mut tasks = TestTaskStore::new();
+        let task = tasks.root_task("Task");
 
         let input = TaskUpdateInput {
             id: task.id.to_string(),
@@ -252,15 +240,14 @@ mod tests {
             ..Default::default()
         };
 
-        let result = execute_task_update(input, &mut store);
+        let result = execute_task_update(input, tasks.store_mut());
         assert!(result.is_err());
     }
 
     #[test]
     fn test_complete_task() {
-        let (_temp, mut store) = setup();
-
-        let task = store.create_tree("Task to complete", None).unwrap();
+        let mut tasks = TestTaskStore::new();
+        let task = tasks.root_task("Task to complete");
 
         let input = TaskUpdateInput {
             id: task.id.to_string(),
@@ -269,7 +256,7 @@ mod tests {
             ..Default::default()
         };
 
-        let output = execute_task_update(input, &mut store).unwrap();
+        let output = execute_task_update(input, tasks.store_mut()).unwrap();
 
         assert_eq!(output.task.status, TaskStatus::Completed);
         assert!(output.message.contains("Completed task"));
@@ -277,13 +264,16 @@ mod tests {
 
     #[test]
     fn test_complete_unblocks_dependent() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
-        let root = store.create_tree("Root", None).unwrap();
-        let sub1 = store.add_subtask(&root.id, "Subtask 1").unwrap();
-        let sub2 = store.add_subtask(&root.id, "Subtask 2").unwrap();
+        let root = tasks.root_task("Root");
+        let sub1 = tasks.subtask(&root.id, "Subtask 1");
+        let sub2 = tasks.subtask(&root.id, "Subtask 2");
 
-        store.update(&sub2.id, TaskUpdate { deps: Some(vec![sub1.id.clone()]), ..Default::default() }).unwrap();
+        tasks
+            .store_mut()
+            .update(&sub2.id, TaskUpdate { deps: Some(vec![sub1.id.clone()]), ..Default::default() })
+            .unwrap();
 
         let input = TaskUpdateInput {
             id: sub1.id.to_string(),
@@ -292,7 +282,7 @@ mod tests {
             ..Default::default()
         };
 
-        let output = execute_task_update(input, &mut store).unwrap();
+        let output = execute_task_update(input, tasks.store_mut()).unwrap();
 
         assert_eq!(output.newly_ready.len(), 1);
         assert_eq!(output.newly_ready[0].id, sub2.id.to_string());
@@ -301,9 +291,8 @@ mod tests {
 
     #[test]
     fn test_complete_with_flat_fields() {
-        let (_temp, mut store) = setup();
-
-        let task = store.create_tree("Research task", None).unwrap();
+        let mut tasks = TestTaskStore::new();
+        let task = tasks.root_task("Research task");
 
         let input = TaskUpdateInput {
             id: task.id.to_string(),
@@ -315,7 +304,7 @@ mod tests {
             ..Default::default()
         };
 
-        let output = execute_task_update(input, &mut store).unwrap();
+        let output = execute_task_update(input, tasks.store_mut()).unwrap();
 
         assert_eq!(output.task.status, TaskStatus::Completed);
         assert!(output.changes.contains(&"summary".to_string()));

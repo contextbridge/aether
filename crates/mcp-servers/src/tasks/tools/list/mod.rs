@@ -135,26 +135,20 @@ fn build_filter_description(input: &TaskListInput) -> String {
 mod tests {
     use super::*;
     use crate::tasks::TaskUpdate;
-    use tempfile::TempDir;
-
-    fn setup() -> (TempDir, TaskStore) {
-        let temp_dir = TempDir::new().unwrap();
-        let root = temp_dir.path().join(".aether-tasks");
-        let mut store = TaskStore::new(root);
-        store.init().unwrap();
-        (temp_dir, store)
-    }
+    use crate::testing::TestTaskStore;
 
     #[test]
     fn test_list_all_tasks() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
-        let root = store.create_tree("Root", None).unwrap();
-        store.add_subtask(&root.id, "Subtask 1").unwrap();
-        store.add_subtask(&root.id, "Subtask 2").unwrap();
+        let root = tasks.root_task("Root");
+        tasks.subtask(&root.id, "Subtask 1");
+        tasks.subtask(&root.id, "Subtask 2");
 
-        let output =
-            execute_task_list(&TaskListInput { assignee: None, status: None, tree_id: None, ready_only: None }, &store);
+        let output = execute_task_list(
+            &TaskListInput { assignee: None, status: None, tree_id: None, ready_only: None },
+            tasks.store(),
+        );
 
         assert_eq!(output.count, 3);
         assert!(output.message.contains("Found 3 tasks"));
@@ -162,18 +156,18 @@ mod tests {
 
     #[test]
     fn test_list_by_tree() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
-        let root1 = store.create_tree("Root 1", None).unwrap();
-        store.add_subtask(&root1.id, "Subtask 1.1").unwrap();
+        let root1 = tasks.root_task("Root 1");
+        tasks.subtask(&root1.id, "Subtask 1.1");
 
-        let root2 = store.create_tree("Root 2", None).unwrap();
-        store.add_subtask(&root2.id, "Subtask 2.1").unwrap();
-        store.add_subtask(&root2.id, "Subtask 2.2").unwrap();
+        let root2 = tasks.root_task("Root 2");
+        tasks.subtask(&root2.id, "Subtask 2.1");
+        tasks.subtask(&root2.id, "Subtask 2.2");
 
         let output = execute_task_list(
             &TaskListInput { assignee: None, status: None, tree_id: Some(root2.id.to_string()), ready_only: None },
-            &store,
+            tasks.store(),
         );
 
         assert_eq!(output.count, 3);
@@ -182,18 +176,24 @@ mod tests {
 
     #[test]
     fn test_list_by_assignee() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
-        let root = store.create_tree("Root", None).unwrap();
-        let sub1 = store.add_subtask(&root.id, "Task 1").unwrap();
-        let sub2 = store.add_subtask(&root.id, "Task 2").unwrap();
+        let root = tasks.root_task("Root");
+        let sub1 = tasks.subtask(&root.id, "Task 1");
+        let sub2 = tasks.subtask(&root.id, "Task 2");
 
-        store.update(&sub1.id, TaskUpdate { assignee: Some("worker-1".to_string()), ..Default::default() }).unwrap();
-        store.update(&sub2.id, TaskUpdate { assignee: Some("worker-2".to_string()), ..Default::default() }).unwrap();
+        tasks
+            .store_mut()
+            .update(&sub1.id, TaskUpdate { assignee: Some("worker-1".to_string()), ..Default::default() })
+            .unwrap();
+        tasks
+            .store_mut()
+            .update(&sub2.id, TaskUpdate { assignee: Some("worker-2".to_string()), ..Default::default() })
+            .unwrap();
 
         let output = execute_task_list(
             &TaskListInput { assignee: Some("worker-1".to_string()), status: None, tree_id: None, ready_only: None },
-            &store,
+            tasks.store(),
         );
 
         assert_eq!(output.count, 1);
@@ -202,12 +202,15 @@ mod tests {
 
     #[test]
     fn test_list_by_status() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
-        let root = store.create_tree("Root", None).unwrap();
-        let sub = store.add_subtask(&root.id, "Subtask").unwrap();
+        let root = tasks.root_task("Root");
+        let sub = tasks.subtask(&root.id, "Subtask");
 
-        store.update(&sub.id, TaskUpdate { status: Some(TaskStatus::InProgress), ..Default::default() }).unwrap();
+        tasks
+            .store_mut()
+            .update(&sub.id, TaskUpdate { status: Some(TaskStatus::InProgress), ..Default::default() })
+            .unwrap();
 
         let output = execute_task_list(
             &TaskListInput {
@@ -216,7 +219,7 @@ mod tests {
                 tree_id: None,
                 ready_only: None,
             },
-            &store,
+            tasks.store(),
         );
 
         assert_eq!(output.count, 1);
@@ -225,22 +228,26 @@ mod tests {
 
     #[test]
     fn test_list_ready_only() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
-        let root = store.create_tree("Root", None).unwrap();
-        let sub1 = store.add_subtask(&root.id, "Subtask 1").unwrap();
-        let sub2 = store.add_subtask(&root.id, "Subtask 2").unwrap();
+        let root = tasks.root_task("Root");
+        let sub1 = tasks.subtask(&root.id, "Subtask 1");
+        let sub2 = tasks.subtask(&root.id, "Subtask 2");
 
-        store.update(&sub2.id, TaskUpdate { deps: Some(vec![sub1.id.clone()]), ..Default::default() }).unwrap();
+        tasks
+            .store_mut()
+            .update(&sub2.id, TaskUpdate { deps: Some(vec![sub1.id.clone()]), ..Default::default() })
+            .unwrap();
 
         let output = execute_task_list(
             &TaskListInput { assignee: None, status: None, tree_id: None, ready_only: Some(true) },
-            &store,
+            tasks.store(),
         );
 
         assert_eq!(output.count, 2);
 
-        store
+        tasks
+            .store_mut()
             .update(
                 &sub1.id,
                 TaskUpdate {
@@ -253,7 +260,7 @@ mod tests {
 
         let output = execute_task_list(
             &TaskListInput { assignee: None, status: None, tree_id: None, ready_only: Some(true) },
-            &store,
+            tasks.store(),
         );
 
         assert_eq!(output.count, 2);
@@ -263,10 +270,12 @@ mod tests {
 
     #[test]
     fn test_list_empty() {
-        let (_temp, store) = setup();
+        let tasks = TestTaskStore::new();
 
-        let output =
-            execute_task_list(&TaskListInput { assignee: None, status: None, tree_id: None, ready_only: None }, &store);
+        let output = execute_task_list(
+            &TaskListInput { assignee: None, status: None, tree_id: None, ready_only: None },
+            tasks.store(),
+        );
 
         assert_eq!(output.count, 0);
         assert!(output.message.contains("No tasks found"));
@@ -274,7 +283,7 @@ mod tests {
 
     #[test]
     fn test_list_nonexistent_tree() {
-        let (_temp, store) = setup();
+        let tasks = TestTaskStore::new();
 
         let output = execute_task_list(
             &TaskListInput {
@@ -283,7 +292,7 @@ mod tests {
                 tree_id: Some("at-nonexistent".to_string()),
                 ready_only: None,
             },
-            &store,
+            tasks.store(),
         );
 
         assert_eq!(output.count, 0);

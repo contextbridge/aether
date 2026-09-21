@@ -104,20 +104,12 @@ pub fn execute_task_create(input: &TaskCreateInput, store: &mut TaskStore) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TestTaskStore;
     use serde_json::json;
-    use tempfile::TempDir;
-
-    fn setup() -> (TempDir, TaskStore) {
-        let temp_dir = TempDir::new().unwrap();
-        let root = temp_dir.path().join(".aether-tasks");
-        let mut store = TaskStore::new(root);
-        store.init().unwrap();
-        (temp_dir, store)
-    }
 
     #[test]
     fn test_create_root_task() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
         let input = TaskCreateInput {
             title: "Research AI agents".to_string(),
@@ -127,7 +119,7 @@ mod tests {
             deps: None,
         };
 
-        let output = execute_task_create(&input, &mut store).unwrap();
+        let output = execute_task_create(&input, tasks.store_mut()).unwrap();
 
         assert_eq!(output.status, "success");
         assert_eq!(output.task.title, "Research AI agents");
@@ -137,7 +129,7 @@ mod tests {
 
     #[test]
     fn test_create_subtask() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
         let root_input = TaskCreateInput {
             title: "Root task".to_string(),
@@ -146,7 +138,7 @@ mod tests {
             assignee: None,
             deps: None,
         };
-        let root = execute_task_create(&root_input, &mut store).unwrap();
+        let root = execute_task_create(&root_input, tasks.store_mut()).unwrap();
 
         let sub_input = TaskCreateInput {
             title: "Subtask 1".to_string(),
@@ -156,7 +148,7 @@ mod tests {
             deps: None,
         };
 
-        let output = execute_task_create(&sub_input, &mut store).unwrap();
+        let output = execute_task_create(&sub_input, tasks.store_mut()).unwrap();
 
         assert_eq!(output.status, "success");
         assert_eq!(output.task.title, "Subtask 1");
@@ -166,10 +158,10 @@ mod tests {
 
     #[test]
     fn test_create_with_deps() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
-        let root = store.create_tree("Root", None).unwrap();
-        let sub1 = store.add_subtask(&root.id, "Subtask 1").unwrap();
+        let root = tasks.root_task("Root");
+        let sub1 = tasks.subtask(&root.id, "Subtask 1");
 
         let input = TaskCreateInput {
             title: "Subtask 2".to_string(),
@@ -179,7 +171,7 @@ mod tests {
             deps: Some(vec![sub1.id.to_string()]),
         };
 
-        let output = execute_task_create(&input, &mut store).unwrap();
+        let output = execute_task_create(&input, tasks.store_mut()).unwrap();
 
         assert_eq!(output.task.deps, vec![sub1.id.to_string()]);
     }
@@ -210,15 +202,15 @@ mod tests {
 
     #[test]
     fn test_description_can_be_omitted_for_root_task() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
         let input: TaskCreateInput = serde_json::from_value(json!({
             "title": "Root without description"
         }))
         .unwrap();
 
-        let output = execute_task_create(&input, &mut store).unwrap();
-        let created = store.get(&TaskId::from(output.task.id.as_str())).unwrap();
+        let output = execute_task_create(&input, tasks.store_mut()).unwrap();
+        let created = tasks.store().get(&TaskId::from(output.task.id.as_str())).unwrap();
 
         assert_eq!(output.task.title, "Root without description");
         assert_eq!(output.task.parent, None);
@@ -227,9 +219,8 @@ mod tests {
 
     #[test]
     fn test_description_can_be_omitted_for_subtask() {
-        let (_temp, mut store) = setup();
-
-        let root = store.create_tree("Root", None).unwrap();
+        let mut tasks = TestTaskStore::new();
+        let root = tasks.root_task("Root");
 
         let input: TaskCreateInput = serde_json::from_value(json!({
             "title": "Subtask without description",
@@ -237,8 +228,8 @@ mod tests {
         }))
         .unwrap();
 
-        let output = execute_task_create(&input, &mut store).unwrap();
-        let created = store.get(&TaskId::from(output.task.id.as_str())).unwrap();
+        let output = execute_task_create(&input, tasks.store_mut()).unwrap();
+        let created = tasks.store().get(&TaskId::from(output.task.id.as_str())).unwrap();
 
         assert_eq!(output.task.title, "Subtask without description");
         assert_eq!(output.task.parent, Some(root.id.to_string()));
@@ -247,7 +238,7 @@ mod tests {
 
     #[test]
     fn test_create_with_empty_parent_id_treated_as_root() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
         let input: TaskCreateInput = serde_json::from_value(json!({
             "title": "Root from empty parent_id",
@@ -256,7 +247,7 @@ mod tests {
         }))
         .unwrap();
 
-        let output = execute_task_create(&input, &mut store).unwrap();
+        let output = execute_task_create(&input, tasks.store_mut()).unwrap();
 
         assert_eq!(output.task.parent, None);
         assert!(output.message.contains("task tree"));
@@ -264,7 +255,7 @@ mod tests {
 
     #[test]
     fn test_create_with_whitespace_parent_id_treated_as_root() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
         let input: TaskCreateInput = serde_json::from_value(json!({
             "title": "Root from whitespace parent_id",
@@ -273,7 +264,7 @@ mod tests {
         }))
         .unwrap();
 
-        let output = execute_task_create(&input, &mut store).unwrap();
+        let output = execute_task_create(&input, tasks.store_mut()).unwrap();
 
         assert_eq!(output.task.parent, None);
         assert!(output.message.contains("task tree"));
@@ -281,7 +272,7 @@ mod tests {
 
     #[test]
     fn test_create_with_invalid_parent() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
         let input = TaskCreateInput {
             title: "Orphan".to_string(),
@@ -291,7 +282,7 @@ mod tests {
             deps: None,
         };
 
-        let result = execute_task_create(&input, &mut store);
+        let result = execute_task_create(&input, tasks.store_mut());
         assert!(result.is_err());
     }
 
@@ -323,7 +314,7 @@ mod tests {
 
     #[test]
     fn test_output_uses_camel_case() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
         let input = TaskCreateInput {
             title: "Test camelCase output".to_string(),
@@ -333,7 +324,7 @@ mod tests {
             deps: None,
         };
 
-        let output = execute_task_create(&input, &mut store).unwrap();
+        let output = execute_task_create(&input, tasks.store_mut()).unwrap();
         let json = serde_json::to_string(&output).unwrap();
 
         // Verify output uses camelCase field names

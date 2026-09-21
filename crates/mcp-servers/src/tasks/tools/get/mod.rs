@@ -45,23 +45,15 @@ pub fn execute_task_get(input: TaskGetInput, store: &TaskStore) -> Result<TaskGe
 mod tests {
     use super::*;
     use crate::tasks::types::{TaskStatus, TaskUpdate};
-    use tempfile::TempDir;
-
-    fn setup() -> (TempDir, TaskStore) {
-        let temp_dir = TempDir::new().unwrap();
-        let root = temp_dir.path().join(".aether-tasks");
-        let mut store = TaskStore::new(root);
-        store.init().unwrap();
-        (temp_dir, store)
-    }
+    use crate::testing::TestTaskStore;
 
     #[test]
     fn test_get_root_task() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
-        let created = store.create_tree("Research topic", Some("Detailed description")).unwrap();
+        let created = tasks.store_mut().create_tree("Research topic", Some("Detailed description")).unwrap();
 
-        let output = execute_task_get(TaskGetInput { id: created.id.to_string() }, &store).unwrap();
+        let output = execute_task_get(TaskGetInput { id: created.id.to_string() }, tasks.store()).unwrap();
 
         assert_eq!(output.status, "success");
         assert_eq!(output.task.id.to_string(), created.id.to_string());
@@ -73,12 +65,12 @@ mod tests {
 
     #[test]
     fn test_get_subtask() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
-        let root = store.create_tree("Root", None).unwrap();
-        let subtask = store.add_subtask(&root.id, "Subtask 1").unwrap();
+        let root = tasks.root_task("Root");
+        let subtask = tasks.subtask(&root.id, "Subtask 1");
 
-        let output = execute_task_get(TaskGetInput { id: subtask.id.to_string() }, &store).unwrap();
+        let output = execute_task_get(TaskGetInput { id: subtask.id.to_string() }, tasks.store()).unwrap();
 
         assert_eq!(output.task.id.to_string(), subtask.id.to_string());
         assert_eq!(output.task.title, "Subtask 1");
@@ -87,11 +79,11 @@ mod tests {
 
     #[test]
     fn test_get_task_with_flat_fields() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
+        let task = tasks.root_task("Task to complete");
 
-        let task = store.create_tree("Task to complete", None).unwrap();
-
-        store
+        tasks
+            .store_mut()
             .update(
                 &task.id,
                 TaskUpdate {
@@ -106,7 +98,7 @@ mod tests {
             )
             .unwrap();
 
-        let output = execute_task_get(TaskGetInput { id: task.id.to_string() }, &store).unwrap();
+        let output = execute_task_get(TaskGetInput { id: task.id.to_string() }, tasks.store()).unwrap();
 
         assert_eq!(output.task.status, TaskStatus::Completed);
         assert_eq!(output.task.summary, Some("Found the answer".to_string()));
@@ -118,24 +110,27 @@ mod tests {
 
     #[test]
     fn test_get_task_with_deps() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
-        let root = store.create_tree("Root", None).unwrap();
-        let sub1 = store.add_subtask(&root.id, "Subtask 1").unwrap();
-        let sub2 = store.add_subtask(&root.id, "Subtask 2").unwrap();
+        let root = tasks.root_task("Root");
+        let sub1 = tasks.subtask(&root.id, "Subtask 1");
+        let sub2 = tasks.subtask(&root.id, "Subtask 2");
 
-        store.update(&sub2.id, TaskUpdate { deps: Some(vec![sub1.id.clone()]), ..Default::default() }).unwrap();
+        tasks
+            .store_mut()
+            .update(&sub2.id, TaskUpdate { deps: Some(vec![sub1.id.clone()]), ..Default::default() })
+            .unwrap();
 
-        let output = execute_task_get(TaskGetInput { id: sub2.id.to_string() }, &store).unwrap();
+        let output = execute_task_get(TaskGetInput { id: sub2.id.to_string() }, tasks.store()).unwrap();
 
         assert_eq!(output.task.deps, vec![sub1.id.clone()]);
     }
 
     #[test]
     fn test_get_nonexistent_task() {
-        let (_temp, store) = setup();
+        let tasks = TestTaskStore::new();
 
-        let result = execute_task_get(TaskGetInput { id: "at-nonexistent".to_string() }, &store);
+        let result = execute_task_get(TaskGetInput { id: "at-nonexistent".to_string() }, tasks.store());
 
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), TaskStoreError::NotFound { .. }));
