@@ -9,11 +9,15 @@ use aether_lspd::LspClient;
 use aether_lspd::testing::configure_fake_server;
 use lsp_types::Hover;
 use lsp_types::PublishDiagnosticsParams;
+use std::path::PathBuf;
 use std::sync::Once;
 use std::time::{Duration, Instant};
 
 #[allow(dead_code)]
 static FAKE_SERVER_ENV: Once = Once::new();
+
+#[allow(dead_code)]
+static TS_FALLBACK_ENV: Once = Once::new();
 
 #[allow(dead_code)]
 pub fn use_fake_rust_server() {
@@ -29,6 +33,23 @@ pub fn use_fake_rust_server() {
 pub fn use_fake_rust_server_with_args(extra_args: &[&str]) {
     FAKE_SERVER_ENV.call_once(|| unsafe {
         configure_fake_server(LanguageId::Rust, extra_args);
+    });
+}
+
+/// Point the TypeScript-native slot at a fake server that dies during
+/// `initialize` and the legacy `typescript-language-server` slot at a healthy
+/// fake, so tests can exercise the spawn-time fallback between the two.
+#[allow(dead_code)]
+pub fn use_crashing_native_ts_server() {
+    TS_FALLBACK_ENV.call_once(|| unsafe {
+        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/common/fake_lsp_server.py");
+        let script = script.to_string_lossy().into_owned();
+        let crashing = serde_json::to_string(&[script.as_str(), "--crash-on", "initialize"]).unwrap();
+        let healthy = serde_json::to_string(&[script.as_str()]).unwrap();
+        std::env::set_var("AETHER_LSPD_SERVER_COMMAND_TYPESCRIPT_NATIVE", "python3");
+        std::env::set_var("AETHER_LSPD_SERVER_ARGS_TYPESCRIPT_NATIVE", crashing);
+        std::env::set_var("AETHER_LSPD_SERVER_COMMAND_TYPESCRIPT_LANGUAGE_SERVER", "python3");
+        std::env::set_var("AETHER_LSPD_SERVER_ARGS_TYPESCRIPT_LANGUAGE_SERVER", healthy);
     });
 }
 

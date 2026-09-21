@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 const DIAGNOSTICS_TIMEOUT: Duration = Duration::from_secs(20);
 const BACKGROUND_REFRESH_TIMEOUT: Duration = Duration::from_secs(20);
@@ -35,6 +35,15 @@ pub(crate) struct WorkspaceSession {
     refresh: RefreshQueue,
     alive: Arc<AtomicBool>,
     pull_support: PullSupport,
+    status: watch::Receiver<ServerStatus>,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum ServerStatus {
+    #[default]
+    Starting,
+    Ready,
+    Dead,
 }
 
 impl WorkspaceSession {
@@ -51,6 +60,7 @@ impl WorkspaceSession {
         let alive = Arc::new(AtomicBool::new(true));
 
         let pull_support = PullSupport::default();
+        let (status_tx, status) = watch::channel(ServerStatus::Starting);
         let session = Self {
             transport,
             documents,
@@ -58,6 +68,7 @@ impl WorkspaceSession {
             refresh,
             alive: Arc::clone(&alive),
             pull_support: pull_support.clone(),
+            status,
         };
         let supported_extensions = Arc::new(supported_extensions);
 
@@ -69,6 +80,7 @@ impl WorkspaceSession {
             Arc::clone(&supported_extensions),
             event_rx,
             alive,
+            status_tx,
         ));
 
         tokio::spawn(run_background_refresh_worker(
@@ -112,6 +124,34 @@ impl WorkspaceSession {
     pub(crate) async fn shutdown(&self) {
         self.refresh.shutdown();
         self.transport.shutdown().await;
+    }
+
+    /// Wait for the server to finish `initialize`, returning false when it
+    /// dies or stalls first.
+    pub(crate) async fn wait_until_ready(&self, timeout: Duration) -> bool {
+        let mut status = self.status.clone();
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            match *status.borrow() {
+                ServerStatus::Ready => return true,
+                ServerStatus::Dead => return false,
+                ServerStatus::Starting => {}
+            }
+
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+
+            tokio::select! {
+                changed = status.changed() => {
+                    if changed.is_err() {
+                        return false;
+                    }
+                }
+                () = tokio::time::sleep(remaining) => return false,
+            }
+        }
     }
 
     /// Whether the language server behind this session is still usable.
@@ -305,6 +345,7 @@ async fn bootstrap_workspace_refresh(
     refresh.complete_bootstrap();
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_session_events(
     transport: ProcessTransport,
     documents: DocumentLifecycle,
@@ -313,9 +354,13 @@ async fn run_session_events(
     supported_extensions: Arc<HashSet<String>>,
     mut event_rx: mpsc::Receiver<TransportEvent>,
     alive: Arc<AtomicBool>,
+    status_tx: watch::Sender<ServerStatus>,
 ) {
     while let Some(event) = event_rx.recv().await {
         match event {
+            TransportEvent::Initialized => {
+                status_tx.send_replace(ServerStatus::Ready);
+            }
             TransportEvent::PublishedDiagnostics(params) => {
                 diagnostics.publish(params);
             }
@@ -352,6 +397,7 @@ async fn run_session_events(
     }
 
     alive.store(false, Ordering::SeqCst);
+    status_tx.send_replace(ServerStatus::Dead);
     refresh.shutdown();
 }
 

@@ -35,6 +35,7 @@ pub(crate) struct ProcessTransport {
 }
 
 pub(crate) enum TransportEvent {
+    Initialized,
     PublishedDiagnostics(lsp_types::PublishDiagnosticsParams),
     DiagnosticRefreshRequested,
     FileWatcherBatch(FileWatcherBatch),
@@ -158,6 +159,8 @@ impl ProcessTransportActor {
             let _ = self.event_tx.send(TransportEvent::Closed).await;
             return;
         }
+
+        let _ = self.event_tx.send(TransportEvent::Initialized).await;
 
         loop {
             tokio::select! {

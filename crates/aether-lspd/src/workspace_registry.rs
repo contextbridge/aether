@@ -41,10 +41,10 @@ impl WorkspaceRegistry {
     }
 
     /// Resolve a workspace/language pair and spawn its language server if needed.
-    pub(crate) fn bind(&self, workspace_root: &Path, language: LanguageId) -> DaemonResult<WorkspaceBinding> {
+    pub(crate) async fn bind(&self, workspace_root: &Path, language: LanguageId) -> DaemonResult<WorkspaceBinding> {
         let key = WorkspaceKey::new(workspace_root, language)?;
         let binding = WorkspaceBinding { key, language };
-        self.get_or_spawn(&binding)?;
+        self.get_or_spawn(&binding).await?;
         Ok(binding)
     }
 
@@ -59,11 +59,11 @@ impl WorkspaceRegistry {
         method: &str,
         params: Value,
     ) -> Result<Value, LspErrorResponse> {
-        let session = self.session(binding)?;
+        let session = self.session(binding).await?;
         let result = match self.call_session(&session, method, &params).await {
             Err(SessionCallError::TransportClosed) => {
                 session.mark_dead();
-                let session = self.session(binding)?;
+                let session = self.session(binding).await?;
                 self.call_session(&session, method, &params).await
             }
             result => result,
@@ -76,7 +76,7 @@ impl WorkspaceRegistry {
         binding: &WorkspaceBinding,
         uri: Option<&lsp_types::Uri>,
     ) -> Result<Value, LspErrorResponse> {
-        let session = self.session(binding)?;
+        let session = self.session(binding).await?;
         let Ok(diagnostics) = tokio::time::timeout(self.request_timeout, session.get_diagnostics(uri)).await else {
             session.declare_wedged();
             return Err(SessionCallError::TimedOut.into_response("diagnostics", self.request_timeout));
@@ -84,12 +84,12 @@ impl WorkspaceRegistry {
         serde_json::to_value(&diagnostics).map_err(|e| LspErrorResponse { code: -1, message: e.to_string() })
     }
 
-    pub(crate) fn queue_diagnostic_refresh(
+    pub(crate) async fn queue_diagnostic_refresh(
         &self,
         binding: &WorkspaceBinding,
         uri: lsp_types::Uri,
     ) -> Result<(), LspErrorResponse> {
-        let session = self.session(binding)?;
+        let session = self.session(binding).await?;
         session.queue_diagnostic_refresh(uri);
         Ok(())
     }
@@ -109,11 +109,11 @@ impl WorkspaceRegistry {
         self.sessions.write().unwrap_or_else(PoisonError::into_inner).clear();
     }
 
-    fn session(&self, binding: &WorkspaceBinding) -> Result<Arc<WorkspaceSession>, LspErrorResponse> {
-        self.get_or_spawn(binding).map_err(|e| LspErrorResponse { code: -1, message: e.to_string() })
+    async fn session(&self, binding: &WorkspaceBinding) -> Result<Arc<WorkspaceSession>, LspErrorResponse> {
+        self.get_or_spawn(binding).await.map_err(|e| LspErrorResponse { code: -1, message: e.to_string() })
     }
 
-    fn get_or_spawn(&self, binding: &WorkspaceBinding) -> DaemonResult<Arc<WorkspaceSession>> {
+    async fn get_or_spawn(&self, binding: &WorkspaceBinding) -> DaemonResult<Arc<WorkspaceSession>> {
         if let Some(session) = self.sessions.read().unwrap_or_else(PoisonError::into_inner).get(&binding.key)
             && session.is_alive()
         {
@@ -123,20 +123,28 @@ impl WorkspaceRegistry {
         let config = resolved_config_for_language(binding.language).ok_or_else(|| {
             DaemonError::LspSpawnFailed(format!("No LSP configured for language: {:?}", binding.language))
         })?;
-
-        match self.spawn_session(binding, &config) {
-            Ok(session) => Ok(session),
-            Err(err)
-                if server_kind_for_language(binding.language) == Some(ServerKind::TypeScriptNative)
-                    && matches!(err, DaemonError::LspSpawnFailed(_)) =>
-            {
-                tracing::warn!(%err, "tsc LSP unavailable, falling back to typescript-language-server");
-                let legacy = legacy_typescript_config()
-                    .ok_or_else(|| DaemonError::LspSpawnFailed("No fallback LSP configured for TypeScript".into()))?;
-                self.spawn_session(binding, &legacy)
-            }
-            Err(err) => Err(err),
+        if server_kind_for_language(binding.language) != Some(ServerKind::TypeScriptNative) {
+            return self.spawn_session(binding, &config);
         }
+
+        // An old `tsc` (pre-7) starts fine but never answers `initialize`, so a
+        // failed handshake must trigger the fallback just like a failed spawn.
+        let spawned = self.spawn_session(binding, &config);
+        let ready = match &spawned {
+            Ok(session) => session.wait_until_ready(NATIVE_TYPESCRIPT_INIT_TIMEOUT).await,
+            Err(_) => false,
+        };
+        if ready {
+            return spawned;
+        }
+
+        tracing::warn!("tsc LSP unavailable, falling back to typescript-language-server");
+        if let Ok(session) = &spawned {
+            session.declare_wedged();
+        }
+        let legacy = legacy_typescript_config()
+            .ok_or_else(|| DaemonError::LspSpawnFailed("No fallback LSP configured for TypeScript".into()))?;
+        self.spawn_session(binding, &legacy)
     }
 
     fn spawn_session(&self, binding: &WorkspaceBinding, config: &LspConfig) -> DaemonResult<Arc<WorkspaceSession>> {
@@ -201,6 +209,7 @@ impl WorkspaceKey {
 const LSP_CONTENT_MODIFIED: i32 = -32801;
 const TRANSIENT_RETRY_LIMIT: u32 = 3;
 const TRANSIENT_RETRY_DELAY: Duration = Duration::from_millis(500);
+const NATIVE_TYPESCRIPT_INIT_TIMEOUT: Duration = Duration::from_secs(15);
 
 enum SessionCallError {
     Lsp(LspErrorResponse),
