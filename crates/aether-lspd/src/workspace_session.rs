@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -133,68 +133,66 @@ impl WorkspaceSession {
     }
 
     async fn sync_documents_for_diagnostics(&self, uri: Option<&Uri>) {
-        if let Some(uri) = uri {
-            let version_before = self.ensure_document_open(uri).await;
-            if version_before.is_some() && self.pull_document_diagnostics(uri).await {
-                self.close_document(uri).await;
-                return;
-            }
+        let Some(uri) = uri else {
+            self.refresh.wait_for_current_generation(BACKGROUND_REFRESH_TIMEOUT).await;
+            return;
+        };
+
+        let version_before = self.ensure_document_open(uri).await;
+        let pulled = version_before.is_some()
+            && pull_diagnostics(&self.transport, &self.diagnostics, &self.pull_support, uri).await;
+        if !pulled {
             if let Some(version_before) = version_before {
                 self.diagnostics.wait_for_uri_fresh(uri, version_before, DIAGNOSTICS_TIMEOUT).await;
             } else {
                 self.refresh.wait_for_current_generation(DIAGNOSTICS_TIMEOUT).await;
             }
-            self.close_document(uri).await;
-            return;
         }
-
-        self.refresh.wait_for_current_generation(BACKGROUND_REFRESH_TIMEOUT).await;
+        self.close_document(uri).await;
     }
+}
 
-    async fn pull_document_diagnostics(&self, uri: &Uri) -> bool {
-        if self.pull_support.is_unsupported() {
+async fn pull_diagnostics(
+    transport: &ProcessTransport,
+    diagnostics: &DiagnosticsStore,
+    pull_support: &PullSupport,
+    uri: &Uri,
+) -> bool {
+    if pull_support.is_unsupported() {
+        return false;
+    }
+    let params = serde_json::json!({"textDocument": {"uri": uri}});
+    let value = match transport.request_raw(DocumentDiagnosticRequest::METHOD, params).await {
+        Ok(value) => value,
+        Err(TransportError::Lsp(err)) if err.code == METHOD_NOT_FOUND => {
+            pull_support.mark_unsupported();
             return false;
         }
-        let params = serde_json::json!({"textDocument": {"uri": uri}});
-        match self.transport.request_raw(DocumentDiagnosticRequest::METHOD, params).await {
-            Ok(value) => match serde_json::from_value::<DocumentDiagnosticReportResult>(value) {
-                Ok(report) => {
-                    self.pull_support.mark_supported();
-                    match convert_pull_report(report) {
-                        Some(pulled) => {
-                            self.diagnostics.publish(PublishDiagnosticsParams {
-                                uri: uri.clone(),
-                                diagnostics: pulled.primary,
-                                version: None,
-                            });
-                            for (related_uri, related_diagnostics) in pulled.related {
-                                self.diagnostics.publish(PublishDiagnosticsParams {
-                                    uri: related_uri,
-                                    diagnostics: related_diagnostics,
-                                    version: None,
-                                });
-                            }
-                            true
-                        }
-                        None => false,
-                    }
-                }
-                Err(err) => {
-                    tracing::debug!(%err, "Ignoring malformed pull diagnostics report");
-                    false
-                }
-            },
-            Err(TransportError::Lsp(err)) if err.code == METHOD_NOT_FOUND => {
-                self.pull_support.mark_unsupported();
-                false
-            }
-            Err(TransportError::Lsp(err)) => {
-                tracing::debug!(code = err.code, "Pull diagnostics failed, using push cache");
-                false
-            }
-            Err(TransportError::Closed) => false,
+        Err(TransportError::Lsp(err)) => {
+            tracing::debug!(code = err.code, "Pull diagnostics failed, using push cache");
+            return false;
         }
+        Err(TransportError::Closed) => return false,
+    };
+    let report = match serde_json::from_value::<DocumentDiagnosticReportResult>(value) {
+        Ok(report) => report,
+        Err(err) => {
+            tracing::debug!(%err, "Ignoring malformed pull diagnostics report");
+            return false;
+        }
+    };
+    let Some(pulled) = convert_pull_report(report) else {
+        return false;
+    };
+    diagnostics.publish(PublishDiagnosticsParams { uri: uri.clone(), diagnostics: pulled.primary, version: None });
+    for (related_uri, related_diagnostics) in pulled.related {
+        diagnostics.publish(PublishDiagnosticsParams {
+            uri: related_uri,
+            diagnostics: related_diagnostics,
+            version: None,
+        });
     }
+    true
 }
 
 async fn sync_document(
@@ -260,41 +258,12 @@ async fn refresh_uri(
     uri: &Uri,
 ) {
     let sync_result = sync_document(transport, documents, diagnostics, uri).await;
-    if sync_result.is_some() {
-        best_effort_pull(transport, diagnostics, pull_support, uri).await;
-    }
     if let Some(version_before) = sync_result {
+        pull_diagnostics(transport, diagnostics, pull_support, uri).await;
         diagnostics.wait_for_uri_fresh(uri, version_before, DIAGNOSTICS_TIMEOUT).await;
     }
 
     release_document(transport, documents, refresh, uri).await;
-}
-
-async fn best_effort_pull(
-    transport: &ProcessTransport,
-    diagnostics: &DiagnosticsStore,
-    pull_support: &PullSupport,
-    uri: &Uri,
-) {
-    if pull_support.is_unsupported() {
-        return;
-    }
-    let params = serde_json::json!({"textDocument": {"uri": uri}});
-    let Ok(value) = transport.request_raw(DocumentDiagnosticRequest::METHOD, params).await else {
-        return;
-    };
-    let Ok(report) = serde_json::from_value::<DocumentDiagnosticReportResult>(value) else { return };
-    pull_support.mark_supported();
-    if let Some(pulled) = convert_pull_report(report) {
-        diagnostics.publish(PublishDiagnosticsParams { uri: uri.clone(), diagnostics: pulled.primary, version: None });
-        for (related_uri, related_diagnostics) in pulled.related {
-            diagnostics.publish(PublishDiagnosticsParams {
-                uri: related_uri,
-                diagnostics: related_diagnostics,
-                version: None,
-            });
-        }
-    }
 }
 
 async fn bootstrap_workspace_refresh(
@@ -436,20 +405,18 @@ fn close_notification(uri: &Uri) -> LspNotification {
 
 const METHOD_NOT_FOUND: i32 = -32601;
 
+/// Whether the session's server has rejected `textDocument/diagnostic`, making
+/// further pull probes pointless.
 #[derive(Clone, Default)]
-struct PullSupport(Arc<AtomicU8>);
+struct PullSupport(Arc<AtomicBool>);
 
 impl PullSupport {
     fn is_unsupported(&self) -> bool {
-        self.0.load(Ordering::SeqCst) == 2
-    }
-
-    fn mark_supported(&self) {
-        self.0.store(1, Ordering::SeqCst);
+        self.0.load(Ordering::SeqCst)
     }
 
     fn mark_unsupported(&self) {
-        self.0.store(2, Ordering::SeqCst);
+        self.0.store(true, Ordering::SeqCst);
     }
 }
 
