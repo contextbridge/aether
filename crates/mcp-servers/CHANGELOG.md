@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.5](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.6.4...aether-mcp-servers-v0.6.5) - 2026-09-21
+
+### Fixed
+
+- use bytes consistently for read file truncation ([#502](https://github.com/contextbridge/aether/pull/502))
+
+### Other
+
+- *(read_file)* inline format args in truncation branch ([#501](https://github.com/contextbridge/aether/pull/501))
+- scheduled code-cleanup ([#497](https://github.com/contextbridge/aether/pull/497))
+
 ## [0.6.4](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.6.3...aether-mcp-servers-v0.6.4) - 2026-09-20
 
 ### Other

@@ -1,6 +1,6 @@
 [package]
 name = "aether-schemas"
-version = "0.2.8"
+version = "0.2.9"
 edition = "2024"
 description = "Schema generation utilities for Aether SDK codegen"
 license = "MIT"
@@ -15,11 +15,11 @@ dist = false
 workspace = true
 
 [dependencies]
-aether-cli = { package = "aether-agent-cli", path = "../aether-cli", version = "0.9.4" }
-aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.8.3" }
-aether-evals = { path = "../aether-evals", version = "0.3.8" }
-aether-project = { path = "../aether-project", version = "0.5.47" }
-llm = { package = "aether-llm", path = "../llm", version = "0.9.3" }
+aether-cli = { package = "aether-agent-cli", path = "../aether-cli", version = "0.9.5" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.8.4" }
+aether-evals = { path = "../aether-evals", version = "0.3.9" }
+aether-project = { path = "../aether-project", version = "0.5.48" }
+llm = { package = "aether-llm", path = "../llm", version = "0.9.4" }
 schemars = { workspace = true }
 serde_json = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.16" }

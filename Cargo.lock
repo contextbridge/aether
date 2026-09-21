@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "aether-acp-utils"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "aether-acp-utils",
  "aether-llm",
@@ -63,7 +63,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-cli"
-version = "0.9.4"
+version = "0.9.5"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-cli",
@@ -109,7 +109,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-core"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -177,7 +177,7 @@ dependencies = [
 
 [[package]]
 name = "aether-evals"
-version = "0.3.8"
+version = "0.3.9"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -196,7 +196,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "aether-auth",
  "aether-doctest",
@@ -278,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-servers"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "aether-agent-core",
  "aether-auth",
@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-utils"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
  "aether-auth",
  "aether-doctest",
@@ -345,7 +345,7 @@ dependencies = [
 
 [[package]]
 name = "aether-project"
-version = "0.5.47"
+version = "0.5.48"
 dependencies = [
  "aether-agent-core",
  "aether-doctest",
@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "aether-schemas"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "aether-agent-cli",
  "aether-agent-core",
@@ -392,7 +392,7 @@ dependencies = [
 
 [[package]]
 name = "aether-sessions"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -412,7 +412,7 @@ dependencies = [
 
 [[package]]
 name = "aether-telemetry"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -453,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "aether-wisp"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
  "aether-acp-utils",
  "aether-utils",
@@ -1959,7 +1959,7 @@ dependencies = [
  "hyper 0.14.32",
  "hyper 1.11.1",
  "hyper-rustls 0.24.2",
- "hyper-rustls 0.27.9",
+ "hyper-rustls 0.27.10",
  "hyper-util",
  "pin-project-lite",
  "rustls 0.21.12",
@@ -2365,7 +2365,7 @@ dependencies = [
  "http-body-util",
  "hyper 1.11.1",
  "hyper-named-pipe",
- "hyper-rustls 0.27.9",
+ "hyper-rustls 0.27.10",
  "hyper-util",
  "hyperlocal",
  "log",
@@ -3543,9 +3543,9 @@ dependencies = [
 
 [[package]]
 name = "dom_smoothie"
-version = "0.18.1"
+version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90cea52c49b95c4d1011fa998aa1b558f5ade4fabc051827b3c00df0f6112486"
+checksum = "1afbed996f0bcb119c068504c7c504d625700d58c8bd862d6f66abd7ae7d3859"
 dependencies = [
  "dom_query",
  "flagset",
@@ -4590,9 +4590,9 @@ dependencies = [
 
 [[package]]
 name = "hyper-rustls"
-version = "0.27.9"
+version = "0.27.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33ca68d021ef39cf6463ab54c1d0f5daf03377b70561305bb89a8f83aab66e0f"
+checksum = "dfa8e654703247911e29c23fbeaa261834bd9bb74efba2f9acddc37bfb127f53"
 dependencies = [
  "http 1.5.0",
  "hyper 1.11.1",
@@ -5256,9 +5256,9 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "libredox"
-version = "0.1.24"
+version = "0.1.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6480ccc157a1389bb2e4891b24751b0f798ba640d22386f23143fbcc89da195a"
+checksum = "61ff90caf6077a803a240f62fdbe88645a890bbca49ef8174c3cb0404362171d"
 dependencies = [
  "libc",
 ]
@@ -6003,9 +6003,9 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pest"
-version = "2.9.1"
+version = "2.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d45aeb61b4bf818e12d4205f2466f8c4748f85f4fce0146d1c03d69d753f0ad"
+checksum = "45d3aca230fad2e6f6317ca0a72724338c4960cb97168a85cdee66df4a9a21a8"
 dependencies = [
  "memchr",
  "ucd-trie",
@@ -6013,9 +6013,9 @@ dependencies = [
 
 [[package]]
 name = "pest_derive"
-version = "2.9.1"
+version = "2.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89cc5a242e25ed4e7704d0be240f2cfbe20a8c27e7e252d94835be93d92dc39f"
+checksum = "284b60557f2c4a2e72ad3f2d34d42685a2fa4a6a61d0d2a10c0ae2a5e916c2cf"
 dependencies = [
  "pest",
  "pest_generator",
@@ -6023,9 +6023,9 @@ dependencies = [
 
 [[package]]
 name = "pest_generator"
-version = "2.9.1"
+version = "2.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7abf21475cc3820fe4b2ca2dc2142902f67a02189f3b5b3a229f4febc01a43e5"
+checksum = "1d9d1f08a115309ee99268cf85e5228e0e56aa9caf8841ec12866b6be07c3109"
 dependencies = [
  "pest",
  "pest_meta",
@@ -6036,9 +6036,9 @@ dependencies = [
 
 [[package]]
 name = "pest_meta"
-version = "2.9.1"
+version = "2.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adba4db388f687393c18c51348d44a41d870ca9df71a2c98172ea3035dc6936e"
+checksum = "ed93ba1a9ffcca32130a5188701c81c0c49cf00d4b7c5007d5148951d743adcb"
 dependencies = [
  "pest",
 ]
@@ -6784,7 +6784,7 @@ dependencies = [
  "http-body 1.1.0",
  "http-body-util",
  "hyper 1.11.1",
- "hyper-rustls 0.27.9",
+ "hyper-rustls 0.27.10",
  "hyper-util",
  "js-sys",
  "log",
@@ -6824,7 +6824,7 @@ dependencies = [
  "http-body 1.1.0",
  "http-body-util",
  "hyper 1.11.1",
- "hyper-rustls 0.27.9",
+ "hyper-rustls 0.27.10",
  "hyper-util",
  "js-sys",
  "log",
