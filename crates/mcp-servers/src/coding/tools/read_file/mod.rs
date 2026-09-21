@@ -64,7 +64,8 @@ pub async fn read_file_contents(args: ReadFileArgs) -> Result<ReadFileResult, Fi
         .map(|(i, line)| {
             let line_num = offset + i;
             if line.len() > MAX_LINE_LENGTH {
-                format!("{:5}\t{}... [truncated, {} chars total]", line_num, &line[..MAX_LINE_LENGTH], line.len())
+                let prefix = &line[..line.floor_char_boundary(MAX_LINE_LENGTH)];
+                format!("{line_num:5}\t{prefix}... [truncated, {} chars total]", line.chars().count())
             } else {
                 format!("{line_num:5}\t{line}")
             }
@@ -168,6 +169,26 @@ mod tests {
         assert!(!lines[0].contains("truncated"));
         assert!(lines[1].contains("truncated"));
         assert!(lines[1].contains("2500 chars total"));
+    }
+
+    #[tokio::test]
+    async fn test_read_file_multibyte_line_truncation() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_path = temp_dir.path().join("test_multibyte_truncation.txt");
+        let long_line = "─".repeat(1000);
+
+        fs::write(&test_path, &long_line).unwrap();
+
+        let result = read_file_contents(ReadFileArgs {
+            file_path: test_path.to_string_lossy().to_string(),
+            offset: None,
+            limit: None,
+        })
+        .await
+        .unwrap();
+
+        assert!(result.content.contains("truncated"));
+        assert!(result.content.contains("1000 chars total"));
     }
 
     #[tokio::test]
