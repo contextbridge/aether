@@ -5,9 +5,12 @@ pub use cargo_project::{CargoProject, TestProject};
 pub use daemon_harness::DaemonHarness;
 
 use aether_lspd::LanguageId;
+use aether_lspd::LspClient;
 use aether_lspd::testing::configure_fake_server;
 use lsp_types::Hover;
+use lsp_types::PublishDiagnosticsParams;
 use std::sync::Once;
+use std::time::{Duration, Instant};
 
 #[allow(dead_code)]
 static FAKE_SERVER_ENV: Once = Once::new();
@@ -47,4 +50,32 @@ pub fn hover_text(hover: Option<Hover>) -> String {
             .join("\n"),
         lsp_types::HoverContents::Markup(markup) => markup.value,
     }
+}
+
+/// Poll diagnostics until `predicate` holds, then return the satisfying result.
+#[allow(dead_code)]
+pub async fn poll_diagnostics(
+    client: &LspClient,
+    uri: Option<lsp_types::Uri>,
+    predicate: impl Fn(&[PublishDiagnosticsParams]) -> bool,
+    timeout: Duration,
+) -> Vec<PublishDiagnosticsParams> {
+    let start = Instant::now();
+    let mut last = Vec::new();
+
+    while start.elapsed() < timeout {
+        let diagnostics = client.get_diagnostics(uri.clone()).await.expect("Failed to get diagnostics");
+        if predicate(&diagnostics) {
+            return diagnostics;
+        }
+        last = diagnostics;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    panic!("diagnostics timed out after {timeout:?}. Last result: {last:?}");
+}
+
+#[allow(dead_code)]
+pub fn diagnostic_count(diagnostics: &[PublishDiagnosticsParams]) -> usize {
+    diagnostics.iter().map(|params| params.diagnostics.len()).sum()
 }

@@ -59,11 +59,18 @@ def diagnostics_for(text):
     ]
 
 
+def suppresses_push(uri):
+    return "pushless" in uri
+
+
 def rejects_pull(uri):
     return "pullless" in uri
 
 
 def publish(uri, text):
+    if suppresses_push(uri):
+        return
+
     write_message(
         {
             "jsonrpc": "2.0",
