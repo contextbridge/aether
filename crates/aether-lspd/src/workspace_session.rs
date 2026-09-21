@@ -8,16 +8,20 @@ use ignore::WalkBuilder;
 use lsp_types::notification::{
     DidChangeWatchedFiles, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument, Notification,
 };
+use lsp_types::request::DocumentDiagnosticRequest;
+use lsp_types::request::Request as _;
 use lsp_types::{
-    DidChangeWatchedFilesParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
+    Diagnostic, DidChangeWatchedFilesParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DidSaveTextDocumentParams, DocumentDiagnosticReport, DocumentDiagnosticReportKind, DocumentDiagnosticReportResult,
     PublishDiagnosticsParams, TextDocumentIdentifier, TextDocumentItem, Uri,
 };
 use serde_json::Value;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -30,6 +34,7 @@ pub(crate) struct WorkspaceSession {
     diagnostics: DiagnosticsStore,
     refresh: RefreshQueue,
     alive: Arc<AtomicBool>,
+    pull_support: PullSupport,
 }
 
 impl WorkspaceSession {
@@ -45,7 +50,15 @@ impl WorkspaceSession {
         let refresh = RefreshQueue::new();
         let alive = Arc::new(AtomicBool::new(true));
 
-        let session = Self { transport, documents, diagnostics, refresh, alive: Arc::clone(&alive) };
+        let pull_support = PullSupport::default();
+        let session = Self {
+            transport,
+            documents,
+            diagnostics,
+            refresh,
+            alive: Arc::clone(&alive),
+            pull_support: pull_support.clone(),
+        };
         let supported_extensions = Arc::new(supported_extensions);
 
         tokio::spawn(run_session_events(
@@ -63,6 +76,7 @@ impl WorkspaceSession {
             session.documents.clone(),
             session.diagnostics.clone(),
             session.refresh.clone(),
+            pull_support.clone(),
         ));
 
         tokio::spawn(bootstrap_workspace_refresh(
@@ -121,6 +135,10 @@ impl WorkspaceSession {
     async fn sync_documents_for_diagnostics(&self, uri: Option<&Uri>) {
         if let Some(uri) = uri {
             let version_before = self.ensure_document_open(uri).await;
+            if version_before.is_some() && self.pull_document_diagnostics(uri).await {
+                self.close_document(uri).await;
+                return;
+            }
             if let Some(version_before) = version_before {
                 self.diagnostics.wait_for_uri_fresh(uri, version_before, DIAGNOSTICS_TIMEOUT).await;
             } else {
@@ -131,6 +149,51 @@ impl WorkspaceSession {
         }
 
         self.refresh.wait_for_current_generation(BACKGROUND_REFRESH_TIMEOUT).await;
+    }
+
+    async fn pull_document_diagnostics(&self, uri: &Uri) -> bool {
+        if self.pull_support.is_unsupported() {
+            return false;
+        }
+        let params = serde_json::json!({"textDocument": {"uri": uri}});
+        match self.transport.request_raw(DocumentDiagnosticRequest::METHOD, params).await {
+            Ok(value) => match serde_json::from_value::<DocumentDiagnosticReportResult>(value) {
+                Ok(report) => {
+                    self.pull_support.mark_supported();
+                    match convert_pull_report(report) {
+                        Some(pulled) => {
+                            self.diagnostics.publish(PublishDiagnosticsParams {
+                                uri: uri.clone(),
+                                diagnostics: pulled.primary,
+                                version: None,
+                            });
+                            for (related_uri, related_diagnostics) in pulled.related {
+                                self.diagnostics.publish(PublishDiagnosticsParams {
+                                    uri: related_uri,
+                                    diagnostics: related_diagnostics,
+                                    version: None,
+                                });
+                            }
+                            true
+                        }
+                        None => false,
+                    }
+                }
+                Err(err) => {
+                    tracing::debug!(%err, "Ignoring malformed pull diagnostics report");
+                    false
+                }
+            },
+            Err(TransportError::Lsp(err)) if err.code == METHOD_NOT_FOUND => {
+                self.pull_support.mark_unsupported();
+                false
+            }
+            Err(TransportError::Lsp(err)) => {
+                tracing::debug!(code = err.code, "Pull diagnostics failed, using push cache");
+                false
+            }
+            Err(TransportError::Closed) => false,
+        }
     }
 }
 
@@ -181,9 +244,10 @@ async fn run_background_refresh_worker(
     documents: DocumentLifecycle,
     diagnostics: DiagnosticsStore,
     refresh: RefreshQueue,
+    pull_support: PullSupport,
 ) {
     while let Some(uri) = refresh.recv().await {
-        refresh_uri(&transport, &documents, &diagnostics, &refresh, &uri).await;
+        refresh_uri(&transport, &documents, &diagnostics, &refresh, &pull_support, &uri).await;
     }
 }
 
@@ -192,14 +256,45 @@ async fn refresh_uri(
     documents: &DocumentLifecycle,
     diagnostics: &DiagnosticsStore,
     refresh: &RefreshQueue,
+    pull_support: &PullSupport,
     uri: &Uri,
 ) {
     let sync_result = sync_document(transport, documents, diagnostics, uri).await;
+    if sync_result.is_some() {
+        best_effort_pull(transport, diagnostics, pull_support, uri).await;
+    }
     if let Some(version_before) = sync_result {
         diagnostics.wait_for_uri_fresh(uri, version_before, DIAGNOSTICS_TIMEOUT).await;
     }
 
     release_document(transport, documents, refresh, uri).await;
+}
+
+async fn best_effort_pull(
+    transport: &ProcessTransport,
+    diagnostics: &DiagnosticsStore,
+    pull_support: &PullSupport,
+    uri: &Uri,
+) {
+    if pull_support.is_unsupported() {
+        return;
+    }
+    let params = serde_json::json!({"textDocument": {"uri": uri}});
+    let Ok(value) = transport.request_raw(DocumentDiagnosticRequest::METHOD, params).await else {
+        return;
+    };
+    let Ok(report) = serde_json::from_value::<DocumentDiagnosticReportResult>(value) else { return };
+    pull_support.mark_supported();
+    if let Some(pulled) = convert_pull_report(report) {
+        diagnostics.publish(PublishDiagnosticsParams { uri: uri.clone(), diagnostics: pulled.primary, version: None });
+        for (related_uri, related_diagnostics) in pulled.related {
+            diagnostics.publish(PublishDiagnosticsParams {
+                uri: related_uri,
+                diagnostics: related_diagnostics,
+                version: None,
+            });
+        }
+    }
 }
 
 async fn bootstrap_workspace_refresh(
@@ -280,6 +375,9 @@ async fn run_session_events(
                         .await;
                 }
             }
+            TransportEvent::DiagnosticRefreshRequested => {
+                refresh.enqueue(documents.open_uris());
+            }
             TransportEvent::Closed => break,
         }
     }
@@ -336,6 +434,54 @@ fn close_notification(uri: &Uri) -> LspNotification {
     LspNotification { method: DidCloseTextDocument::METHOD.to_string(), params: serde_json::to_value(&params).unwrap() }
 }
 
+const METHOD_NOT_FOUND: i32 = -32601;
+
+#[derive(Clone, Default)]
+struct PullSupport(Arc<AtomicU8>);
+
+impl PullSupport {
+    fn is_unsupported(&self) -> bool {
+        self.0.load(Ordering::SeqCst) == 2
+    }
+
+    fn mark_supported(&self) {
+        self.0.store(1, Ordering::SeqCst);
+    }
+
+    fn mark_unsupported(&self) {
+        self.0.store(2, Ordering::SeqCst);
+    }
+}
+
+struct PulledDiagnostics {
+    primary: Vec<Diagnostic>,
+    related: Vec<(Uri, Vec<Diagnostic>)>,
+}
+
+fn convert_pull_report(report: DocumentDiagnosticReportResult) -> Option<PulledDiagnostics> {
+    match report {
+        DocumentDiagnosticReportResult::Report(DocumentDiagnosticReport::Full(report)) => Some(PulledDiagnostics {
+            primary: report.full_document_diagnostic_report.items,
+            related: flatten_related(report.related_documents),
+        }),
+        DocumentDiagnosticReportResult::Report(DocumentDiagnosticReport::Unchanged(_)) => None,
+        DocumentDiagnosticReportResult::Partial(partial) => {
+            Some(PulledDiagnostics { primary: Vec::new(), related: flatten_related(partial.related_documents) })
+        }
+    }
+}
+
+fn flatten_related(related: Option<HashMap<Uri, DocumentDiagnosticReportKind>>) -> Vec<(Uri, Vec<Diagnostic>)> {
+    related
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(uri, kind)| match kind {
+            DocumentDiagnosticReportKind::Full(report) => Some((uri, report.items)),
+            DocumentDiagnosticReportKind::Unchanged(_) => None,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,5 +505,43 @@ mod tests {
         assert_eq!(notifications[0].method, DidCloseTextDocument::METHOD);
         assert_eq!(notifications[1].method, DidOpenTextDocument::METHOD);
         assert_eq!(notifications[2].method, DidSaveTextDocument::METHOD);
+    }
+
+    #[test]
+    fn convert_pull_report_full_with_items() {
+        let related_uri: Uri = "file:///workspace/other.ts".parse().unwrap();
+        let value = serde_json::json!({
+            "kind": "full",
+            "items": [{"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 5}}, "severity": 1, "message": "boom"}],
+            "relatedDocuments": {
+                related_uri.as_str(): {"kind": "full", "items": [{"range": {"start": {"line": 1, "character": 0}, "end": {"line": 1, "character": 2}}, "message": "related"}]},
+                "file:///workspace/stale.ts": {"kind": "unchanged", "resultId": "abc"}
+            }
+        });
+        let report: DocumentDiagnosticReportResult = serde_json::from_value(value).unwrap();
+        let pulled = convert_pull_report(report).unwrap();
+
+        assert_eq!(pulled.primary.len(), 1);
+        assert_eq!(pulled.primary[0].message, "boom");
+        assert_eq!(pulled.related.len(), 1);
+        assert_eq!(pulled.related[0].0, related_uri);
+    }
+
+    #[test]
+    fn convert_pull_report_full_empty_clears_stale_errors() {
+        let value = serde_json::json!({"kind": "full", "items": []});
+        let report: DocumentDiagnosticReportResult = serde_json::from_value(value).unwrap();
+        let pulled = convert_pull_report(report).unwrap();
+
+        assert!(pulled.primary.is_empty());
+        assert!(pulled.related.is_empty());
+    }
+
+    #[test]
+    fn convert_pull_report_unchanged_keeps_cache() {
+        let value = serde_json::json!({"kind": "unchanged", "resultId": "abc"});
+        let report: DocumentDiagnosticReportResult = serde_json::from_value(value).unwrap();
+
+        assert!(convert_pull_report(report).is_none());
     }
 }

@@ -1,6 +1,9 @@
 use crate::error::{DaemonError, DaemonResult};
 use crate::language_catalog::LanguageId;
-use crate::language_catalog::{ServerKind, metadata_for, resolved_config_for_language, server_kind_for_language};
+use crate::language_catalog::{
+    LspConfig, ServerKind, legacy_typescript_config, metadata_for, resolved_config_for_language,
+    server_kind_for_language,
+};
 use crate::process_transport::TransportError;
 use crate::protocol::{LSP_REQUEST_TIMED_OUT, LSP_TRANSPORT_CLOSED, LspErrorResponse, extract_document_uri};
 use crate::workspace_session::WorkspaceSession;
@@ -121,6 +124,22 @@ impl WorkspaceRegistry {
             DaemonError::LspSpawnFailed(format!("No LSP configured for language: {:?}", binding.language))
         })?;
 
+        match self.spawn_session(binding, &config) {
+            Ok(session) => Ok(session),
+            Err(err)
+                if server_kind_for_language(binding.language) == Some(ServerKind::TypeScriptNative)
+                    && matches!(err, DaemonError::LspSpawnFailed(_)) =>
+            {
+                tracing::warn!(%err, "tsc LSP unavailable, falling back to typescript-language-server");
+                let legacy = legacy_typescript_config()
+                    .ok_or_else(|| DaemonError::LspSpawnFailed("No fallback LSP configured for TypeScript".into()))?;
+                self.spawn_session(binding, &legacy)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    fn spawn_session(&self, binding: &WorkspaceBinding, config: &LspConfig) -> DaemonResult<Arc<WorkspaceSession>> {
         let mut sessions = self.sessions.write().unwrap_or_else(PoisonError::into_inner);
         if let Some(session) = sessions.get(&binding.key) {
             if session.is_alive() {
@@ -133,7 +152,7 @@ impl WorkspaceRegistry {
             &binding.key.workspace_root,
             &config.command,
             &config.args,
-            supported_extensions(&config),
+            supported_extensions(config),
         )?);
         sessions.insert(binding.key.clone(), Arc::clone(&session));
         Ok(session)

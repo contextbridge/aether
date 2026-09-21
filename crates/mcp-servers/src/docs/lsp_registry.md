@@ -4,7 +4,7 @@ The registry connects to a shared `aether-lspd` daemon that manages LSP servers 
 
 # Architecture
 
-1. A single `aether-lspd` daemon runs per machine, managing LSP servers (rust-analyzer, typescript-language-server, etc.).
+1. A single `aether-lspd` daemon runs per machine, managing LSP servers (rust-analyzer, `tsc --lsp` with a typescript-language-server fallback, etc.).
 2. The registry lazily connects to the daemon on first access for each language.
 3. Connections are cached and reused for subsequent requests.
 

@@ -1,5 +1,5 @@
 //! End-to-end tests for LSP operations (hover, definition, references, document symbols)
-//! through the MCP tool layer, using TypeScript projects with typescript-language-server.
+//! through the MCP tool layer, using TypeScript projects with `tsc --lsp`.
 //!
 //! Requirements:
 //! - `npm` must be installed (the test project installs pinned TypeScript tooling locally)

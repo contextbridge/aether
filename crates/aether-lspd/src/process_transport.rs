@@ -3,12 +3,14 @@ use crate::file_watcher::{FileWatcherBatch, FileWatcherHandle};
 use crate::path_to_uri;
 use crate::protocol::{LspErrorResponse, LspNotification};
 use lsp_types::notification::{DidChangeWatchedFiles, Initialized, Notification, PublishDiagnostics};
-use lsp_types::request::{Initialize, RegisterCapability, Request, UnregisterCapability, WorkDoneProgressCreate};
+use lsp_types::request::{
+    Initialize, RegisterCapability, Request, UnregisterCapability, WorkDoneProgressCreate, WorkspaceDiagnosticRefresh,
+};
 use lsp_types::{
-    CallHierarchyClientCapabilities, ClientCapabilities, DidChangeWatchedFilesClientCapabilities,
-    GeneralClientCapabilities, GotoCapability, HoverClientCapabilities, InitializeParams, MarkupKind,
-    PublishDiagnosticsClientCapabilities, RegistrationParams, TextDocumentClientCapabilities,
-    WorkspaceClientCapabilities, WorkspaceFolder,
+    CallHierarchyClientCapabilities, ClientCapabilities, DiagnosticClientCapabilities,
+    DiagnosticWorkspaceClientCapabilities, DidChangeWatchedFilesClientCapabilities, GeneralClientCapabilities,
+    GotoCapability, HoverClientCapabilities, InitializeParams, MarkupKind, PublishDiagnosticsClientCapabilities,
+    RegistrationParams, TextDocumentClientCapabilities, WorkspaceClientCapabilities, WorkspaceFolder,
 };
 use lsp_types::{DocumentSymbolClientCapabilities, DynamicRegistrationClientCapabilities};
 #[cfg(unix)]
@@ -34,6 +36,7 @@ pub(crate) struct ProcessTransport {
 
 pub(crate) enum TransportEvent {
     PublishedDiagnostics(lsp_types::PublishDiagnosticsParams),
+    DiagnosticRefreshRequested,
     FileWatcherBatch(FileWatcherBatch),
     Closed,
 }
@@ -213,36 +216,7 @@ impl ProcessTransportActor {
         let root_uri =
             crate::path_to_uri(root_path).map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
 
-        let capabilities = ClientCapabilities {
-            general: Some(GeneralClientCapabilities::default()),
-            text_document: Some(TextDocumentClientCapabilities {
-                publish_diagnostics: Some(PublishDiagnosticsClientCapabilities {
-                    related_information: Some(true),
-                    ..Default::default()
-                }),
-                definition: Some(GotoCapability { dynamic_registration: Some(false), link_support: Some(true) }),
-                implementation: Some(GotoCapability { dynamic_registration: Some(false), link_support: Some(true) }),
-                references: Some(DynamicRegistrationClientCapabilities { dynamic_registration: Some(false) }),
-                hover: Some(HoverClientCapabilities {
-                    dynamic_registration: Some(false),
-                    content_format: Some(vec![MarkupKind::Markdown, MarkupKind::PlainText]),
-                }),
-                document_symbol: Some(DocumentSymbolClientCapabilities {
-                    hierarchical_document_symbol_support: Some(true),
-                    ..Default::default()
-                }),
-                call_hierarchy: Some(CallHierarchyClientCapabilities { dynamic_registration: Some(false) }),
-                ..Default::default()
-            }),
-            workspace: Some(WorkspaceClientCapabilities {
-                did_change_watched_files: Some(DidChangeWatchedFilesClientCapabilities {
-                    dynamic_registration: Some(true),
-                    relative_pattern_support: Some(false),
-                }),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
+        let capabilities = base_client_capabilities();
 
         let params = InitializeParams {
             process_id: Some(std::process::id()),
@@ -287,6 +261,10 @@ impl ProcessTransportActor {
                     }
                     WorkDoneProgressCreate::METHOD => {
                         let _ = self.send_ok_response(&id).await;
+                    }
+                    WorkspaceDiagnosticRefresh::METHOD => {
+                        let _ = self.send_ok_response(&id).await;
+                        let _ = self.event_tx.send(TransportEvent::DiagnosticRefreshRequested).await;
                     }
                     _ => {
                         let response = serde_json::json!({
@@ -467,4 +445,54 @@ async fn write_lsp_message(stdin: &mut ChildStdin, msg: &Value) -> std::io::Resu
     stdin.write_all(header.as_bytes()).await?;
     stdin.write_all(content.as_bytes()).await?;
     stdin.flush().await
+}
+
+pub(crate) fn base_client_capabilities() -> ClientCapabilities {
+    ClientCapabilities {
+        general: Some(GeneralClientCapabilities::default()),
+        text_document: Some(TextDocumentClientCapabilities {
+            publish_diagnostics: Some(PublishDiagnosticsClientCapabilities {
+                related_information: Some(true),
+                ..Default::default()
+            }),
+            diagnostic: Some(DiagnosticClientCapabilities {
+                dynamic_registration: None,
+                related_document_support: Some(true),
+            }),
+            definition: Some(GotoCapability { dynamic_registration: Some(false), link_support: Some(true) }),
+            implementation: Some(GotoCapability { dynamic_registration: Some(false), link_support: Some(true) }),
+            references: Some(DynamicRegistrationClientCapabilities { dynamic_registration: Some(false) }),
+            hover: Some(HoverClientCapabilities {
+                dynamic_registration: Some(false),
+                content_format: Some(vec![MarkupKind::Markdown, MarkupKind::PlainText]),
+            }),
+            document_symbol: Some(DocumentSymbolClientCapabilities {
+                hierarchical_document_symbol_support: Some(true),
+                ..Default::default()
+            }),
+            call_hierarchy: Some(CallHierarchyClientCapabilities { dynamic_registration: Some(false) }),
+            ..Default::default()
+        }),
+        workspace: Some(WorkspaceClientCapabilities {
+            did_change_watched_files: Some(DidChangeWatchedFilesClientCapabilities {
+                dynamic_registration: Some(true),
+                relative_pattern_support: Some(false),
+            }),
+            diagnostic: Some(DiagnosticWorkspaceClientCapabilities { refresh_support: Some(true) }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base_capabilities_advertise_pull_diagnostics() {
+        let value = serde_json::to_value(base_client_capabilities()).unwrap();
+        assert_eq!(value["textDocument"]["diagnostic"]["relatedDocumentSupport"], true);
+        assert_eq!(value["workspace"]["diagnostic"]["refreshSupport"], true);
+    }
 }

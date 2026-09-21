@@ -146,6 +146,11 @@ while True:
                 "result": {
                     "capabilities": {
                         "hoverProvider": True,
+                        "diagnosticProvider": {
+                            "identifier": "fake",
+                            "interFileDependencies": False,
+                            "workspaceDiagnostics": False,
+                        },
                     }
                 },
             }
@@ -306,6 +311,29 @@ while True:
                         ]
                     }
                 },
+            }
+        )
+    elif method == "textDocument/diagnostic":
+        uri = params["textDocument"]["uri"]
+        state = document(uri)
+        text = state.get("text", "")
+        diagnostics = []
+        if "error" in text.lower():
+            diagnostics.append(
+                {
+                    "range": {
+                        "start": {"line": 0, "character": 0},
+                        "end": {"line": 0, "character": 5},
+                    },
+                    "severity": 1,
+                    "message": "error token",
+                }
+            )
+        write_message(
+            {
+                "jsonrpc": "2.0",
+                "id": message["id"],
+                "result": {"kind": "full", "items": diagnostics},
             }
         )
     elif method == "shutdown":
