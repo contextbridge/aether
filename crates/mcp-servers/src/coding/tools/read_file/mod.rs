@@ -64,8 +64,8 @@ pub async fn read_file_contents(args: ReadFileArgs) -> Result<ReadFileResult, Fi
         .map(|(i, line)| {
             let line_num = offset + i;
             if line.len() > MAX_LINE_LENGTH {
-                let end = line.floor_char_boundary(MAX_LINE_LENGTH);
-                format!("{:5}\t{}... [truncated, {} chars total]", line_num, &line[..end], line.chars().count())
+                let prefix = &line[..line.floor_char_boundary(MAX_LINE_LENGTH)];
+                format!("{line_num:5}\t{prefix}... [truncated, {} chars total]", line.chars().count())
             } else {
                 format!("{line_num:5}\t{line}")
             }
