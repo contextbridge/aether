@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-const MAX_LINE_LENGTH: usize = 2000;
+const MAX_LINE_BYTES: usize = 2000;
 const DEFAULT_LINE_LIMIT: usize = 2000;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -63,9 +63,9 @@ pub async fn read_file_contents(args: ReadFileArgs) -> Result<ReadFileResult, Fi
         .enumerate()
         .map(|(i, line)| {
             let line_num = offset + i;
-            if line.len() > MAX_LINE_LENGTH {
-                let prefix = &line[..line.floor_char_boundary(MAX_LINE_LENGTH)];
-                format!("{line_num:5}\t{prefix}... [truncated, {} chars total]", line.chars().count())
+            if line.len() > MAX_LINE_BYTES {
+                let prefix = &line[..line.floor_char_boundary(MAX_LINE_BYTES)];
+                format!("{line_num:5}\t{prefix}... [truncated, {} bytes total]", line.len())
             } else {
                 format!("{line_num:5}\t{line}")
             }
@@ -168,7 +168,7 @@ mod tests {
         assert!(lines[0].contains("short"));
         assert!(!lines[0].contains("truncated"));
         assert!(lines[1].contains("truncated"));
-        assert!(lines[1].contains("2500 chars total"));
+        assert!(lines[1].contains("2500 bytes total"));
     }
 
     #[tokio::test]
@@ -187,8 +187,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(result.content.contains("truncated"));
-        assert!(result.content.contains("1000 chars total"));
+        assert_eq!(result.content, format!("    1\t{}... [truncated, 3000 bytes total]", "─".repeat(666)));
     }
 
     #[tokio::test]
