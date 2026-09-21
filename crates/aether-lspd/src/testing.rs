@@ -195,7 +195,6 @@ edition = "2021"
 }
 
 const TYPESCRIPT_PACKAGE: &str = "typescript@7.0.2";
-const TYPESCRIPT_LANGUAGE_SERVER_PACKAGE: &str = "typescript-language-server@5.2.0";
 
 /// A temporary Node.js/TypeScript project for testing.
 pub struct NodeProject {
@@ -251,18 +250,8 @@ impl NodeProject {
         Ok(())
     }
 
-    pub fn new_with_legacy_server(name: &str) -> Result<Self, TestProjectError> {
-        let project = Self::new(name)?;
-        project.install_package(TYPESCRIPT_LANGUAGE_SERVER_PACKAGE)?;
-        Ok(project)
-    }
-
     fn install_typescript(&self) -> Result<(), TestProjectError> {
-        self.install_package(TYPESCRIPT_PACKAGE)
-    }
-
-    fn install_package(&self, package: &str) -> Result<(), TestProjectError> {
-        let args = ["install", "--save-dev", "--no-audit", "--no-fund", "--prefer-offline", package];
+        let args = ["install", "--save-dev", "--no-audit", "--no-fund", "--prefer-offline", TYPESCRIPT_PACKAGE];
         let output = Command::new("npm").args(args).current_dir(self.root()).output()?;
 
         if !output.status.success() {
