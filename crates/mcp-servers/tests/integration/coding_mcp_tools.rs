@@ -30,7 +30,7 @@ async fn read_file_truncates_lines_and_applies_default_limit() -> TestResult {
         .client
         .call("read_file", ReadFileArgs { file_path: long_path.to_string_lossy().into(), ..Default::default() })
         .await?;
-    assert!(result["content"].as_str().unwrap().contains("[truncated, 2500 chars total]"));
+    assert!(result["content"].as_str().unwrap().contains("[truncated, 2500 bytes total]"));
     let content = (1..=2001).map(|line| format!("Line {line}")).collect::<Vec<_>>().join("\n");
     let capped_path = workspace.write("capped.txt", &content)?;
     let result = workspace
