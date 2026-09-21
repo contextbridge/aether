@@ -294,53 +294,45 @@ fn write_task_to_file(task: &Task, path: &PathBuf) -> Result<(), TaskStoreError>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
-
-    fn setup() -> (TempDir, TaskStore) {
-        let temp_dir = TempDir::new().unwrap();
-        let root = temp_dir.path().join(".aether-tasks");
-        let mut store = TaskStore::new(root);
-        store.init().unwrap();
-        (temp_dir, store)
-    }
+    use crate::testing::TestTaskStore;
 
     #[test]
     fn test_create_tree() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
-        let task = store.create_tree("Research topic X", Some("Detailed description")).unwrap();
+        let task = tasks.store_mut().create_tree("Research topic X", Some("Detailed description")).unwrap();
 
         assert!(task.id.is_root());
         assert_eq!(task.title, "Research topic X");
         assert_eq!(task.description, Some("Detailed description".to_string()));
         assert_eq!(task.status, TaskStatus::Pending);
 
-        let file_path = store.active_dir().join(task.id.filename());
+        let file_path = tasks.store().active_dir().join(task.id.filename());
         assert!(file_path.exists());
     }
 
     #[test]
     fn test_add_subtask() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
-        let root = store.create_tree("Root task", None).unwrap();
-        let subtask = store.add_subtask(&root.id, "Subtask 1").unwrap();
+        let root = tasks.root_task("Root task");
+        let subtask = tasks.subtask(&root.id, "Subtask 1");
 
         assert!(!subtask.id.is_root());
         assert_eq!(subtask.parent, Some(root.id.clone()));
         assert_eq!(subtask.title, "Subtask 1");
 
-        let tree = store.get_tree(&root.id).unwrap();
+        let tree = tasks.store().get_tree(&root.id).unwrap();
         assert_eq!(tree.len(), 2);
     }
 
     #[test]
     fn test_update_task() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
+        let task = tasks.root_task("Original title");
 
-        let task = store.create_tree("Original title", None).unwrap();
-
-        let updated = store
+        let updated = tasks
+            .store_mut()
             .update(
                 &task.id,
                 TaskUpdate {
@@ -359,11 +351,11 @@ mod tests {
 
     #[test]
     fn test_complete_task_with_summary() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
+        let task = tasks.root_task("Task to complete");
 
-        let task = store.create_tree("Task to complete", None).unwrap();
-
-        let completed = store
+        let completed = tasks
+            .store_mut()
             .update(
                 &task.id,
                 TaskUpdate {
@@ -380,18 +372,22 @@ mod tests {
 
     #[test]
     fn test_get_ready() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
-        let root = store.create_tree("Root", None).unwrap();
-        let subtask1 = store.add_subtask(&root.id, "Subtask 1").unwrap();
-        let subtask2 = store.add_subtask(&root.id, "Subtask 2").unwrap();
+        let root = tasks.root_task("Root");
+        let subtask1 = tasks.subtask(&root.id, "Subtask 1");
+        let subtask2 = tasks.subtask(&root.id, "Subtask 2");
 
-        store.update(&subtask2.id, TaskUpdate { deps: Some(vec![subtask1.id.clone()]), ..Default::default() }).unwrap();
+        tasks
+            .store_mut()
+            .update(&subtask2.id, TaskUpdate { deps: Some(vec![subtask1.id.clone()]), ..Default::default() })
+            .unwrap();
 
-        let ready = store.get_ready();
+        let ready = tasks.store().get_ready();
         assert_eq!(ready.len(), 2);
 
-        store
+        tasks
+            .store_mut()
             .update(
                 &subtask1.id,
                 TaskUpdate {
@@ -402,7 +398,7 @@ mod tests {
             )
             .unwrap();
 
-        let ready = store.get_ready();
+        let ready = tasks.store().get_ready();
         assert_eq!(ready.len(), 2);
 
         let ready_ids: Vec<_> = ready.iter().map(|t| t.id.as_str()).collect();
@@ -411,11 +407,12 @@ mod tests {
 
     #[test]
     fn test_archive_tree() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
-        let root = store.create_tree("Completed research", None).unwrap();
-        store.add_subtask(&root.id, "Subtask").unwrap();
+        let root = tasks.root_task("Completed research");
+        tasks.subtask(&root.id, "Subtask");
 
+        let store = tasks.store_mut();
         let active_file = store.active_dir().join(root.id.filename());
         assert!(active_file.exists());
 
@@ -431,84 +428,83 @@ mod tests {
 
     #[test]
     fn test_persistence() {
-        let temp_dir = TempDir::new().unwrap();
-        let root = temp_dir.path().join(".aether-tasks");
+        let mut tasks = TestTaskStore::new();
 
-        let task_id = {
-            let mut store = TaskStore::new(root.clone());
-            store.init().unwrap();
+        let task = tasks.root_task("Persistent task");
+        tasks.subtask(&task.id, "Subtask 1");
+        tasks.subtask(&task.id, "Subtask 2");
 
-            let task = store.create_tree("Persistent task", None).unwrap();
-            store.add_subtask(&task.id, "Subtask 1").unwrap();
-            store.add_subtask(&task.id, "Subtask 2").unwrap();
-            task.id
-        };
+        tasks.reopen();
 
-        let mut store = TaskStore::new(root);
-        store.init().unwrap();
+        assert_eq!(tasks.store().len(), 3);
 
-        assert_eq!(store.len(), 3);
-
-        let tree = store.get_tree(&task_id).unwrap();
+        let tree = tasks.store().get_tree(&task.id).unwrap();
         assert_eq!(tree.len(), 3);
     }
 
     #[test]
     fn test_list_by_assignee() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
-        let root = store.create_tree("Root", None).unwrap();
+        let root = tasks.root_task("Root");
 
-        store
+        tasks
+            .store_mut()
             .update(&root.id, TaskUpdate { assignee: Some("orchestrator".to_string()), ..Default::default() })
             .unwrap();
 
-        let subtask = store.add_subtask(&root.id, "Worker task").unwrap();
-        store.update(&subtask.id, TaskUpdate { assignee: Some("worker-1".to_string()), ..Default::default() }).unwrap();
+        let subtask = tasks.subtask(&root.id, "Worker task");
+        tasks
+            .store_mut()
+            .update(&subtask.id, TaskUpdate { assignee: Some("worker-1".to_string()), ..Default::default() })
+            .unwrap();
 
-        assert_eq!(store.list_by_assignee("orchestrator").len(), 1);
-        assert_eq!(store.list_by_assignee("worker-1").len(), 1);
-        assert_eq!(store.list_by_assignee("unknown").len(), 0);
+        assert_eq!(tasks.store().list_by_assignee("orchestrator").len(), 1);
+        assert_eq!(tasks.store().list_by_assignee("worker-1").len(), 1);
+        assert_eq!(tasks.store().list_by_assignee("unknown").len(), 0);
     }
 
     #[test]
     fn test_list_by_status() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
-        let root = store.create_tree("Root", None).unwrap();
-        let subtask = store.add_subtask(&root.id, "Subtask").unwrap();
+        let root = tasks.root_task("Root");
+        let subtask = tasks.subtask(&root.id, "Subtask");
 
-        assert_eq!(store.list_by_status(TaskStatus::Pending).len(), 2);
+        assert_eq!(tasks.store().list_by_status(TaskStatus::Pending).len(), 2);
 
-        store.update(&subtask.id, TaskUpdate { status: Some(TaskStatus::InProgress), ..Default::default() }).unwrap();
+        tasks
+            .store_mut()
+            .update(&subtask.id, TaskUpdate { status: Some(TaskStatus::InProgress), ..Default::default() })
+            .unwrap();
 
-        assert_eq!(store.list_by_status(TaskStatus::Pending).len(), 1);
-        assert_eq!(store.list_by_status(TaskStatus::InProgress).len(), 1);
+        assert_eq!(tasks.store().list_by_status(TaskStatus::Pending).len(), 1);
+        assert_eq!(tasks.store().list_by_status(TaskStatus::InProgress).len(), 1);
     }
 
     #[test]
     fn test_error_task_not_found() {
-        let (_temp, store) = setup();
+        let tasks = TestTaskStore::new();
 
-        let result = store.get(&TaskId::from("at-nonexistent"));
+        let result = tasks.store().get(&TaskId::from("at-nonexistent"));
         assert!(result.is_none());
     }
 
     #[test]
     fn test_error_parent_not_found() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
 
-        let result = store.add_subtask(&TaskId::from("at-nonexistent"), "Orphan");
+        let result = tasks.store_mut().add_subtask(&TaskId::from("at-nonexistent"), "Orphan");
         assert!(matches!(result, Err(TaskStoreError::ParentNotFound { .. })));
     }
 
     #[test]
     fn test_error_dependency_not_found() {
-        let (_temp, mut store) = setup();
+        let mut tasks = TestTaskStore::new();
+        let task = tasks.root_task("Task");
 
-        let task = store.create_tree("Task", None).unwrap();
-
-        let result = store
+        let result = tasks
+            .store_mut()
             .update(&task.id, TaskUpdate { deps: Some(vec![TaskId::from("at-nonexistent")]), ..Default::default() });
 
         assert!(matches!(result, Err(TaskStoreError::DependencyNotFound { .. })));
@@ -516,11 +512,8 @@ mod tests {
 
     #[test]
     fn test_init_is_idempotent() {
-        let temp_dir = TempDir::new().unwrap();
-        let root = temp_dir.path().join(".aether-tasks");
-
-        let mut store = TaskStore::new(root);
-        store.init().unwrap();
+        let mut tasks = TestTaskStore::new();
+        let store = tasks.store_mut();
 
         let task = store.create_tree("Test task", None).unwrap();
         assert_eq!(store.len(), 1);
