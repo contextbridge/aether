@@ -93,19 +93,14 @@ pub async fn read_file_contents(args: ReadFileArgs) -> Result<ReadFileResult, Fi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use tempfile::TempDir;
+    use crate::testing::TestWorkspace;
 
     #[tokio::test]
     async fn test_read_file_with_defaults() {
-        let temp_dir = TempDir::new().unwrap();
-        let test_path = temp_dir.path().join("test_read_defaults.txt");
-        let test_content = "line 1\nline 2\nline 3";
-
-        fs::write(&test_path, test_content).unwrap();
+        let workspace = TestWorkspace::new().file("test_read_defaults.txt", "line 1\nline 2\nline 3");
 
         let result = read_file_contents(ReadFileArgs {
-            file_path: test_path.to_string_lossy().to_string(),
+            file_path: workspace.path_string("test_read_defaults.txt"),
             offset: None,
             limit: None,
         })
@@ -124,14 +119,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_with_offset_and_limit() {
-        let temp_dir = TempDir::new().unwrap();
-        let test_path = temp_dir.path().join("test_offset_limit.txt");
-        let test_content = "line 1\nline 2\nline 3\nline 4\nline 5";
-
-        fs::write(&test_path, test_content).unwrap();
+        let workspace = TestWorkspace::new().file("test_offset_limit.txt", "line 1\nline 2\nline 3\nline 4\nline 5");
 
         let result = read_file_contents(ReadFileArgs {
-            file_path: test_path.to_string_lossy().to_string(),
+            file_path: workspace.path_string("test_offset_limit.txt"),
             offset: Some(2),
             limit: Some(2),
         })
@@ -147,16 +138,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_line_truncation() {
-        let temp_dir = TempDir::new().unwrap();
-        let test_path = temp_dir.path().join("test_truncation.txt");
-        let short_line = "short";
         let long_line = "x".repeat(2500);
-        let test_content = format!("{short_line}\n{long_line}");
-
-        fs::write(&test_path, &test_content).unwrap();
+        let workspace = TestWorkspace::new().file("test_truncation.txt", format!("short\n{long_line}"));
 
         let result = read_file_contents(ReadFileArgs {
-            file_path: test_path.to_string_lossy().to_string(),
+            file_path: workspace.path_string("test_truncation.txt"),
             offset: None,
             limit: None,
         })
@@ -173,14 +159,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_multibyte_line_truncation() {
-        let temp_dir = TempDir::new().unwrap();
-        let test_path = temp_dir.path().join("test_multibyte_truncation.txt");
         let long_line = "─".repeat(1000);
-
-        fs::write(&test_path, &long_line).unwrap();
+        let workspace = TestWorkspace::new().file("test_multibyte_truncation.txt", long_line);
 
         let result = read_file_contents(ReadFileArgs {
-            file_path: test_path.to_string_lossy().to_string(),
+            file_path: workspace.path_string("test_multibyte_truncation.txt"),
             offset: None,
             limit: None,
         })
@@ -192,19 +175,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_default_limit() {
-        let temp_dir = TempDir::new().unwrap();
-        let test_path = temp_dir.path().join("test_default_limit.txt");
-        // Create file with more than DEFAULT_LINE_LIMIT lines
-        let mut lines = Vec::new();
-        for i in 1..=2500 {
-            lines.push(format!("Line {i}"));
-        }
-        let test_content = lines.join("\n");
-
-        fs::write(&test_path, &test_content).unwrap();
+        let test_content: String = (1..=2500).map(|i| format!("Line {i}")).collect::<Vec<_>>().join("\n");
+        let workspace = TestWorkspace::new().file("test_default_limit.txt", test_content);
 
         let result = read_file_contents(ReadFileArgs {
-            file_path: test_path.to_string_lossy().to_string(),
+            file_path: workspace.path_string("test_default_limit.txt"),
             offset: None,
             limit: None,
         })
@@ -221,14 +196,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_invalid_offset() {
-        let temp_dir = TempDir::new().unwrap();
-        let test_path = temp_dir.path().join("test_invalid_offset.txt");
-        let test_content = "line 1";
-
-        fs::write(&test_path, test_content).unwrap();
+        let workspace = TestWorkspace::new().file("test_invalid_offset.txt", "line 1");
 
         let result = read_file_contents(ReadFileArgs {
-            file_path: test_path.to_string_lossy().to_string(),
+            file_path: workspace.path_string("test_invalid_offset.txt"),
             offset: Some(0),
             limit: None,
         })
@@ -239,11 +210,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_nonexistent() {
-        let temp_dir = TempDir::new().unwrap();
-        let nonexistent_path = temp_dir.path().join("nonexistent_file_xyz123.txt");
+        let workspace = TestWorkspace::new();
 
         let result = read_file_contents(ReadFileArgs {
-            file_path: nonexistent_path.to_string_lossy().to_string(),
+            file_path: workspace.path_string("nonexistent_file_xyz123.txt"),
             offset: None,
             limit: None,
         })

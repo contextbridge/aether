@@ -437,8 +437,7 @@ fn build_grep_output(results: SearchResults, output_mode: OutputMode, pattern: &
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use tempfile::TempDir;
+    use crate::testing::TestWorkspace;
 
     fn input(pattern: &str) -> GrepInput {
         GrepInput {
@@ -457,14 +456,11 @@ mod tests {
         }
     }
 
-    fn create_test_dir() -> TempDir {
-        let dir = TempDir::new().expect("Failed to create temp dir");
-        let p = dir.path();
-        fs::write(p.join("test.rs"), "fn main() {\n    println!(\"Hello, world!\");\n    let x = 42;\n}").unwrap();
-        fs::write(p.join("script.py"), "def hello():\n    print(\"Hello, world!\")\n    x = 42\n").unwrap();
-        fs::write(p.join("app.js"), "function hello() {\n    console.log(\"Hello, world!\");\n    const x = 42;\n}")
-            .unwrap();
-        dir
+    fn test_workspace() -> TestWorkspace {
+        TestWorkspace::new()
+            .file("test.rs", "fn main() {\n    println!(\"Hello, world!\");\n    let x = 42;\n}\n")
+            .file("script.py", "def hello():\n    print(\"Hello, world!\")\n    x = 42\n")
+            .file("app.js", "function hello() {\n    console.log(\"Hello, world!\");\n    const x = 42;\n}\n")
     }
 
     fn unwrap_content(output: GrepOutput) -> GrepContentOutput {
@@ -494,14 +490,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_type_and_glob_filtering() {
-        let temp_dir = create_test_dir();
-        let path = temp_dir.path().to_str().unwrap().to_string();
+        let workspace = test_workspace();
 
         let cases: Vec<(Option<String>, Option<String>, &str)> =
             vec![(Some("rust".into()), None, "test.rs"), (None, Some("*.py".into()), "script.py")];
         for (file_type, glob, expected_file) in cases {
             let mut args = input("hello");
-            args.path = Some(path.clone());
+            args.path = Some(workspace.root_string());
             args.file_type = file_type;
             args.glob = glob;
             args.output_mode = Some(OutputMode::Content);
@@ -519,9 +514,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_files_with_matches_output() {
-        let temp_dir = create_test_dir();
+        let workspace = test_workspace();
         let mut args = input("hello");
-        args.path = Some(temp_dir.path().to_str().unwrap().to_string());
+        args.path = Some(workspace.root_string());
         args.output_mode = Some(OutputMode::FilesWithMatches);
         args.case_insensitive = Some(true);
 
@@ -533,9 +528,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_count_output() {
-        let temp_dir = create_test_dir();
+        let workspace = test_workspace();
         let mut args = input("hello");
-        args.path = Some(temp_dir.path().to_str().unwrap().to_string());
+        args.path = Some(workspace.root_string());
         args.output_mode = Some(OutputMode::Count);
         args.case_insensitive = Some(true);
 
@@ -547,9 +542,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_head_limit() {
-        let temp_dir = create_test_dir();
+        let workspace = test_workspace();
         let mut args = input("hello");
-        args.path = Some(temp_dir.path().to_str().unwrap().to_string());
+        args.path = Some(workspace.root_string());
         args.output_mode = Some(OutputMode::Content);
         args.case_insensitive = Some(true);
         args.line_numbers = Some(true);
@@ -561,12 +556,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_multiline_mode() {
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let file = temp_dir.path().join("multiline.txt");
-        fs::write(&file, "start\nmiddle content\nend").unwrap();
+        let workspace = TestWorkspace::new().file("multiline.txt", "start\nmiddle content\nend");
 
         let mut args = input(r"start.*end");
-        args.path = Some(file.to_str().unwrap().to_string());
+        args.path = Some(workspace.path_string("multiline.txt"));
         args.output_mode = Some(OutputMode::Content);
         args.line_numbers = Some(true);
         args.multiline = Some(true);
@@ -577,12 +570,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_context_lines() {
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let file = temp_dir.path().join("context.txt");
-        fs::write(&file, "line 1\nline 2\ntarget\nline 4\nline 5").unwrap();
+        let workspace = TestWorkspace::new().file("context.txt", "line 1\nline 2\ntarget\nline 4\nline 5");
 
         let mut args = input("target");
-        args.path = Some(file.to_str().unwrap().to_string());
+        args.path = Some(workspace.path_string("context.txt"));
         args.output_mode = Some(OutputMode::Content);
         args.line_numbers = Some(true);
         args.context_before = Some(1);
@@ -637,8 +628,8 @@ mod tests {
 
     #[tokio::test]
     async fn empty_path_treated_as_cwd() {
-        let temp_dir = create_test_dir();
-        let _guard = std::env::set_current_dir(temp_dir.path());
+        let workspace = test_workspace();
+        let _guard = std::env::set_current_dir(workspace.root());
 
         let mut args = input("hello");
         args.path = Some(String::new());
