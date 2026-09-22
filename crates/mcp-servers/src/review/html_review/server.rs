@@ -76,7 +76,10 @@ impl ReviewServer {
                 let page = render_document(&html, &token, OverlayMode::Document);
                 let router = Router::new().route("/", get(move || std::future::ready(Html(page.clone()))));
                 let router = match assets {
-                    Some(directory) => router.fallback_service(ServeDir::new(directory)),
+                    Some(directory) => router.fallback_service(
+                        ServeDir::new(directory)
+                            .not_found_service(Router::new().fallback(|| async { StatusCode::NOT_FOUND })),
+                    ),
                     None => router,
                 };
                 (format!("http://127.0.0.1:{port}/"), router)

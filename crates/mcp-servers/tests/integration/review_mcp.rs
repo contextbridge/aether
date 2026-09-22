@@ -196,6 +196,9 @@ async fn html_file_source_serves_the_document_and_its_sibling_assets() -> TestRe
     let logo = reqwest::get(review.origin().join("logo.svg")?).await?.error_for_status()?;
     assert_eq!(logo.headers()[CONTENT_TYPE], "image/svg+xml");
     assert_eq!(logo.text().await?, "<svg></svg>", "relative URLs resolve against the file's directory");
+
+    let missing = reqwest::get(review.origin().join("missing.svg")?).await?;
+    assert_eq!(missing.status(), 404, "missing sibling assets return not found");
     Ok(())
 }
 
