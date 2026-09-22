@@ -35,6 +35,8 @@ fn chunk(
         system_fingerprint: None,
         usage: None,
         service_tier: None,
+        obfuscation: None,
+        moderation: None,
     }
 }
 
