@@ -292,8 +292,14 @@ const DYNAMIC_PROVIDERS: &[DynamicProviderConfig] = &[
 const CODEX_SUBSCRIPTION_CONTEXT_WINDOW: u32 = 272_000;
 
 const CODEX_SUBSCRIPTION_MODELS: &[ExplicitModel] = &[
+    ExplicitModel { id: "gpt-6-sol", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW, supports_reasoning_off: false },
     ExplicitModel {
         id: "gpt-6-astra",
+        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
+        supports_reasoning_off: false,
+    },
+    ExplicitModel {
+        id: "gpt-6-luna",
         context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
         supports_reasoning_off: false,
     },
@@ -1696,7 +1702,9 @@ mod tests {
         let models = build_from_value(&data);
         let window = |id: &str| models["codex"].iter().find(|model| model.model_id == id).unwrap().context_window;
         for model_id in [
+            "gpt-6-sol",
             "gpt-6-astra",
+            "gpt-6-luna",
             "gpt-5.6-sol",
             "gpt-5.6-terra",
             "gpt-5.6-luna",
