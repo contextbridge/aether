@@ -17,31 +17,22 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tower_http::services::ServeDir;
+use url::Position;
 use uuid::Uuid;
 
 const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
+const SHELL_PATH: &str = "/__aether__/";
+const SUBMIT_PATH: &str = "/__aether__/submit";
 
-const OVERLAY_CSS: &str = include_str!("assets/overlay.css");
-const OVERLAY_JS: &str = include_str!("assets/overlay.js");
+const PICKER_CSS: &str = include_str!("assets/picker.css");
+const PANEL_CSS: &str = include_str!("assets/panel.css");
+const PANEL_HTML: &str = include_str!("assets/panel.html");
+const PICKER_JS: &str = include_str!("assets/picker.js");
+const SHELL_JS: &str = include_str!("assets/shell.js");
 
 pub enum Artifact {
     Document { html: String, assets: Option<PathBuf> },
     App(Url),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OverlayMode {
-    Document,
-    App,
-}
-
-impl OverlayMode {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Document => "document",
-            Self::App => "app",
-        }
-    }
 }
 
 #[derive(Clone, Default)]
@@ -71,9 +62,9 @@ impl ReviewServer {
         let port = listener.local_addr()?.port();
         let token = Uuid::new_v4().simple().to_string();
 
-        let (url, router): (String, Router<Arc<ServerState>>) = match artifact {
+        let (router, app_src, origin): (Router<Arc<ServerState>>, String, Option<String>) = match artifact {
             Artifact::Document { html, assets } => {
-                let page = render_document(&html, &token, OverlayMode::Document);
+                let page = inject_picker(&html);
                 let router = Router::new().route("/", get(move || std::future::ready(Html(page.clone()))));
                 let router = match assets {
                     Some(directory) => router.fallback_service(
@@ -82,13 +73,14 @@ impl ReviewServer {
                     ),
                     None => router,
                 };
-                (format!("http://127.0.0.1:{port}/"), router)
+                (router, "/".to_string(), None)
             }
             Artifact::App(target) => {
-                let query = target.query().map_or_else(String::new, |query| format!("?{query}"));
-                let proxy = Proxy::new(target.origin().ascii_serialization(), token.clone())?;
+                let app_src = target[Position::BeforePath..].to_string();
+                let origin = target.origin().ascii_serialization();
+                let proxy = Proxy::new(origin.clone())?;
                 let router = Router::new().fallback(move |request: Request| proxy.clone().forward(request));
-                (format!("http://127.0.0.1:{port}{}{query}", target.path()), router)
+                (router, app_src, Some(origin))
             }
         };
 
@@ -99,15 +91,19 @@ impl ReviewServer {
             result: Mutex::new(Some(result_tx)),
             shutdown: shutdown.clone(),
         });
-        let router =
-            router.route("/submit", post(serve_submit)).layer(DefaultBodyLimit::max(MAX_BODY_BYTES)).with_state(state);
+        let shell = render_shell(&token, &app_src, origin.as_deref());
+        let router = router
+            .route(SHELL_PATH, get(move || std::future::ready(Html(shell.clone()))))
+            .route(SUBMIT_PATH, post(serve_submit))
+            .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+            .with_state(state);
 
         let listener = tokio::net::TcpListener::from_std(listener)?;
         let handle = tokio::spawn(async move {
             let _ = axum::serve(listener, router).with_graceful_shutdown(shutdown.cancelled_owned()).await;
         });
 
-        Ok(Self { url, token, result_rx, handle })
+        Ok(Self { url: format!("http://127.0.0.1:{port}{SHELL_PATH}"), token, result_rx, handle })
     }
 
     pub fn url(&self) -> &str {
@@ -149,14 +145,13 @@ struct ServerState {
 struct Proxy {
     client: reqwest::Client,
     origin: String,
-    token: String,
 }
 
 impl Proxy {
-    fn new(origin: String, token: String) -> io::Result<Self> {
+    fn new(origin: String) -> io::Result<Self> {
         let client =
             reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().map_err(io::Error::other)?;
-        Ok(Self { client, origin, token })
+        Ok(Self { client, origin })
     }
 
     async fn forward(self, request: Request) -> Response {
@@ -188,13 +183,16 @@ impl Proxy {
         let Ok(bytes) = response.bytes().await else {
             return StatusCode::BAD_GATEWAY.into_response();
         };
-        let body = if is_html {
-            Body::from(render_document(&String::from_utf8_lossy(&bytes), &self.token, OverlayMode::App))
-        } else {
-            Body::from(bytes)
-        };
+        let body =
+            if is_html { Body::from(inject_picker(&String::from_utf8_lossy(&bytes))) } else { Body::from(bytes) };
 
-        let stripped = [header::CONTENT_LENGTH, header::CONTENT_ENCODING, header::CONTENT_SECURITY_POLICY];
+        let stripped = [
+            header::CONTENT_LENGTH,
+            header::CONTENT_ENCODING,
+            header::CONTENT_SECURITY_POLICY,
+            // The app is framed by the shell now, so its own framing policy would blank the review.
+            header::X_FRAME_OPTIONS,
+        ];
         let mut builder = Response::builder().status(status);
         for (name, value) in &headers {
             if !is_hop_by_hop(name) && !stripped.contains(name) {
@@ -227,14 +225,27 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
     matches!(name.as_str(), "connection" | "keep-alive" | "transfer-encoding" | "upgrade" | "te" | "trailer")
 }
 
-fn render_document(html: &str, token: &str, mode: OverlayMode) -> String {
-    let mode = mode.as_str();
-    let injection = format!(
-        "<style id=\"aether-review-style\">{OVERLAY_CSS}</style>\
-         <script data-token=\"{token}\" data-mode=\"{mode}\">{OVERLAY_JS}</script>"
-    );
+fn render_shell(token: &str, app_src: &str, origin: Option<&str>) -> String {
+    let app_src = escape_attribute(app_src);
+    let origin = origin.map_or_else(String::new, |origin| format!(" data-origin=\"{}\"", escape_attribute(origin)));
+    format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+         <title>Review</title><style>{PICKER_CSS}{PANEL_CSS}</style></head>\
+         <body><iframe class=\"aether-app\" src=\"{app_src}\" title=\"Reviewed app\"></iframe>\
+         {PANEL_HTML}\
+         <script data-token=\"{token}\"{origin}>{SHELL_JS}</script></body></html>"
+    )
+}
+
+fn inject_picker(html: &str) -> String {
+    let injection = format!("<style>{PICKER_CSS}</style><script>{PICKER_JS}</script>");
     match html.to_ascii_lowercase().rfind("</body") {
         Some(index) => format!("{}{}{}", &html[..index], injection, &html[index..]),
         None => format!("{html}{injection}"),
     }
+}
+
+fn escape_attribute(value: &str) -> String {
+    value.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;")
 }

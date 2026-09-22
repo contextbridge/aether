@@ -58,7 +58,16 @@ tasks = [
     "dep:tempfile",
     "dep:thiserror",
 ]
-review = ["dep:thiserror", "dep:axum", "dep:uuid", "dep:reqwest", "dep:tokio-util", "dep:tower-http", "tokio/net"]
+review = [
+    "dep:thiserror",
+    "dep:axum",
+    "dep:uuid",
+    "dep:reqwest",
+    "dep:tokio-util",
+    "dep:tower-http",
+    "dep:url",
+    "tokio/net",
+]
 subagents = [
     "coding",
     "skills",

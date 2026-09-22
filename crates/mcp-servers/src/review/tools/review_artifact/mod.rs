@@ -58,11 +58,16 @@ pub enum HtmlSource {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(tag = "status", rename_all = "lowercase")]
 pub enum ReviewArtifactOutput {
-    Approved,
+    Approved {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+    },
     Feedback {
         feedback: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         annotations: Vec<HtmlAnnotation>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
     },
     Cancelled,
     Declined,
@@ -74,6 +79,8 @@ pub struct HtmlAnnotation {
     pub element: String,
     pub excerpt: String,
     pub comment: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 pub struct ReviewArtifactTool {
@@ -217,9 +224,9 @@ impl TryFrom<ElicitResult> for ReviewArtifactOutput {
                     McpError::invalid_params(format!("invalid accepted review response: {error}"), None)
                 })?;
                 Ok(match submission {
-                    ArtifactReviewSubmission::Approved => Self::Approved,
+                    ArtifactReviewSubmission::Approved => Self::Approved { url: None },
                     ArtifactReviewSubmission::Feedback { feedback } => {
-                        Self::Feedback { feedback, annotations: Vec::new() }
+                        Self::Feedback { feedback, annotations: Vec::new(), url: None }
                     }
                 })
             }

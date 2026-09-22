@@ -16,10 +16,12 @@ check:
 # Run tests with nextest
 test *PKGS:
     cargo nextest run --no-tests pass --all-features {{ if PKGS == "" { "--workspace --exclude internal-evals" } else { PKGS } }}
+    node --test crates/mcp-servers/tests/browser_review.test.cjs
 
 # Run tests with nextest's CI profile and JUnit output
 test-ci *PKGS:
     cargo nextest run --no-tests pass --profile ci --all-features {{ if PKGS == "" { "--workspace --exclude internal-evals" } else { PKGS } }}
+    node --test crates/mcp-servers/tests/browser_review.test.cjs
 
 # Run real LLM evals from the dedicated eval crate against a fresh sandbox image
 evals *ARGS: build-sandbox

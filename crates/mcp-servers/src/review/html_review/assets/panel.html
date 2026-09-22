@@ -1,0 +1,34 @@
+<template id="aether-panel-template">
+  <div class="aether-panel">
+    <div class="aether-head">
+      <span class="aether-title">Review</span>
+      <div class="aether-head-actions">
+        <span class="aether-count"></span>
+        <button type="button" class="aether-btn aether-arm"></button>
+      </div>
+    </div>
+    <textarea class="aether-input aether-summary" placeholder="Summary (optional)"></textarea>
+    <p class="aether-notice" hidden>This page is outside the review.</p>
+    <p class="aether-empty"></p>
+    <ol class="aether-list"></ol>
+    <div class="aether-foot">
+      <button type="button" class="aether-btn aether-submit"></button>
+      <button type="button" class="aether-btn aether-cancel">Cancel</button>
+    </div>
+  </div>
+  <div class="aether-status" hidden></div>
+</template>
+
+<template id="aether-card-template">
+  <li class="aether-card">
+    <div class="aether-card-head">
+      <span class="aether-badge"></span>
+      <span class="aether-tag"></span>
+      <span class="aether-anchor"></span>
+    </div>
+    <textarea class="aether-input aether-comment" placeholder="Leave a comment…" rows="1"></textarea>
+    <div class="aether-card-foot">
+      <button type="button" class="aether-btn aether-delete" title="Delete comment">×</button>
+    </div>
+  </li>
+</template>

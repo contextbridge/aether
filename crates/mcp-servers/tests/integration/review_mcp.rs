@@ -85,26 +85,34 @@ async fn malformed_inputs_are_rejected() -> TestResult {
 }
 
 #[tokio::test]
-async fn html_content_request_emits_a_url_elicitation_and_serves_the_artifact() -> TestResult {
+async fn html_url_elicitation_opens_the_shell_and_serves_the_document() -> TestResult {
     let test = review_test().build().await?;
     let html = "<main><h1>Ship faster</h1></main>";
     let review = test.request_url(html_content(html, Some("Landing page"))).await?;
 
-    assert!(review.url.starts_with("http://127.0.0.1:"), "loopback url: {}", review.url);
+    assert!(review.url.ends_with("/__aether__/"), "the elicitation url is the shell: {}", review.url);
     assert!(review.message.contains("Landing page"), "{}", review.message);
 
-    let document = reqwest::get(&review.url).await?.error_for_status()?.text().await?;
+    let shell = review.page(&review.url).await?;
+    assert!(shell.contains(&format!("data-token=\"{}\"", review.token)), "the shell carries the submit token");
+    assert!(!shell.contains("data-origin"), "a static document has no upstream origin to report URLs against");
+    assert!(shell.contains("src=\"/\""), "the shell frames the artifact at the proxy root");
+    assert!(shell.contains("aether-panel-template"), "the shell ships the panel markup");
+    assert!(
+        shell.contains(r#"class="aether-status" hidden"#),
+        "the status scrim must start hidden, otherwise it swallows every click"
+    );
+    // A frame is a replaced element: positioned with insets alone it keeps its intrinsic 300x150 box.
+    let frame = shell.split(".aether-app {").nth(1).and_then(|rule| rule.split('}').next()).unwrap_or_default();
+    assert!(
+        frame.contains("width:") && frame.contains("height:"),
+        "the app frame needs an explicit size, otherwise the app renders in a tiny box: {frame}"
+    );
+
+    let document = review.page("/").await?;
     assert!(document.contains(html), "the artifact is served verbatim");
-    assert!(document.contains(&format!("data-token=\"{}\"", review.token)), "the overlay carries the submit token");
-    assert!(document.contains("attachShadow"), "the overlay script is appended");
-    assert!(
-        document.contains("data-mode=\"document\""),
-        "a static artifact opts into comment mode, so hovering and clicking annotate from the start"
-    );
-    assert!(
-        document.contains("hidden: true"),
-        "the status scrim must start hidden, otherwise it swallows every click on the page"
-    );
+    assert!(document.contains("data-aether-hover"), "the picker is injected into the document");
+    assert!(!document.contains("aether-panel"), "only the picker stylesheet reaches the artifact");
     Ok(())
 }
 
@@ -188,12 +196,11 @@ async fn html_file_source_serves_the_document_and_its_sibling_assets() -> TestRe
     let test = review_test().file("site/pricing.html", html).file("site/logo.svg", "<svg></svg>").build().await?;
     let review = test.request_url(html_file(test.path("site/pricing.html"))).await?;
 
-    let document = reqwest::get(&review.url).await?.error_for_status()?.text().await?;
+    let document = review.page("/").await?;
     assert!(document.contains(html), "the artifact is served verbatim");
-    assert!(document.contains("attachShadow"), "the overlay is appended");
-    assert!(document.contains("data-mode=\"document\""), "a file artifact is a static document too");
+    assert!(document.contains("data-aether-hover"), "the picker is injected");
 
-    let logo = reqwest::get(review.origin().join("logo.svg")?).await?.error_for_status()?;
+    let logo = review.get("logo.svg").await?.error_for_status()?;
     assert_eq!(logo.headers()[CONTENT_TYPE], "image/svg+xml");
     assert_eq!(logo.text().await?, "<svg></svg>", "relative URLs resolve against the file's directory");
 
@@ -203,19 +210,27 @@ async fn html_file_source_serves_the_document_and_its_sibling_assets() -> TestRe
 }
 
 #[tokio::test]
-async fn html_url_source_proxies_the_app_and_injects_the_overlay() -> TestResult {
+async fn html_url_source_proxies_the_app_through_a_shell_and_injects_the_picker() -> TestResult {
     let app = upstream_app().await?;
     let test = review_test().build().await?;
     let args = html_url(&format!("{}/dashboard?tab=billing", app.origin));
     let review = test.request_url(args.clone()).await?;
-    assert!(review.url.ends_with("/dashboard?tab=billing"), "the app's path and query are kept: {}", review.url);
+    assert!(review.url.ends_with("/__aether__/"), "the elicitation url is the shell: {}", review.url);
 
-    let page = reqwest::get(&review.url).await?.error_for_status()?.text().await?;
+    let shell = review.page(&review.url).await?;
+    assert!(shell.contains(&format!("data-token=\"{}\"", review.token)), "the shell carries the submit token");
+    assert!(
+        shell.contains(&format!("data-origin=\"{}\"", app.origin)),
+        "the shell carries the upstream origin so the browser can build absolute URLs: {shell}"
+    );
+    assert!(shell.contains("src=\"/dashboard?tab=billing\""), "the shell frames the app's path and query: {shell}");
+
+    let page = review.page("dashboard?tab=billing").await?;
     assert!(page.contains("<h1>Dashboard: billing</h1>"), "the app's page is proxied: {page}");
-    assert!(page.contains("attachShadow"), "the overlay is injected into the app's HTML");
-    assert!(page.contains("data-mode=\"app\""), "a live app stays interactive until the reviewer annotates on purpose");
+    assert!(page.contains("data-aether-hover"), "the picker is injected into the app's HTML");
+    assert!(!page.contains("aether-panel"), "only the picker stylesheet reaches the app: {page}");
 
-    let script = reqwest::get(review.origin().join("/app.js")?).await?.error_for_status()?;
+    let script = review.get("app.js").await?.error_for_status()?;
     assert_eq!(script.headers()[CONTENT_TYPE], "text/javascript");
     assert_eq!(script.text().await?, "console.log('app')", "non-HTML responses pass through untouched");
 
@@ -403,8 +418,18 @@ impl UrlReview {
         Url::parse(&self.url).expect("review url").join("/").expect("origin")
     }
 
+    /// GET a path relative to the review server; absolute URLs are used as-is.
+    async fn get(&self, target: &str) -> TestResult<reqwest::Response> {
+        Ok(reqwest::get(self.origin().join(target)?).await?)
+    }
+
+    /// GET a page and read its body.
+    async fn page(&self, target: &str) -> TestResult<String> {
+        Ok(self.get(target).await?.error_for_status()?.text().await?)
+    }
+
     fn submit_url(&self, token: &str) -> Url {
-        let mut url = self.origin().join("submit").expect("submit url");
+        let mut url = self.origin().join("__aether__/submit").expect("submit url");
         url.set_query(Some(&format!("token={token}")));
         url
     }
