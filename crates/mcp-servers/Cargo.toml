@@ -26,7 +26,7 @@ workspace = true
 
 [features]
 default = ["coding", "skills", "tasks", "subagents", "review"]
-test-helpers = []
+test-helpers = ["dep:tempfile"]
 file-ops = ["dep:thiserror"]
 coding = [
     "file-ops",

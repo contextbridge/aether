@@ -329,8 +329,7 @@ fn context_counts(args: &AstGrepInput) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use tempfile::TempDir;
+    use crate::testing::TestWorkspace;
 
     fn input(pattern: &str, path: &Path) -> AstGrepInput {
         AstGrepInput {
@@ -348,10 +347,9 @@ mod tests {
 
     #[tokio::test]
     async fn finds_rust_function_pattern() {
-        let temp = TempDir::new().unwrap();
-        fs::write(temp.path().join("lib.rs"), "fn foo() {}\nfn bar() { let x = 1; }\n").unwrap();
+        let workspace = TestWorkspace::new().file("lib.rs", "fn foo() {}\nfn bar() { let x = 1; }\n");
 
-        let result = perform_ast_grep(input("fn $NAME() { $$$BODY }", temp.path())).await.unwrap();
+        let result = perform_ast_grep(input("fn $NAME() { $$$BODY }", workspace.root())).await.unwrap();
 
         assert_eq!(result.count, 2);
         assert!(result.matches.iter().any(|m| m.text == "fn foo() {}"));
@@ -360,10 +358,9 @@ mod tests {
 
     #[tokio::test]
     async fn returns_metavariable_captures() {
-        let temp = TempDir::new().unwrap();
-        fs::write(temp.path().join("lib.rs"), "fn foo() {}\n").unwrap();
+        let workspace = TestWorkspace::new().file("lib.rs", "fn foo() {}\n");
 
-        let result = perform_ast_grep(input("fn $NAME() {}", temp.path())).await.unwrap();
+        let result = perform_ast_grep(input("fn $NAME() {}", workspace.root())).await.unwrap();
 
         assert_eq!(result.matches[0].captures[0].name, "NAME");
         assert_eq!(result.matches[0].captures[0].text, "foo");
@@ -371,11 +368,9 @@ mod tests {
 
     #[tokio::test]
     async fn filters_directory_by_language() {
-        let temp = TempDir::new().unwrap();
-        fs::write(temp.path().join("lib.rs"), "fn foo() {}\n").unwrap();
-        fs::write(temp.path().join("test.py"), "fn fake() {}\n").unwrap();
+        let workspace = TestWorkspace::new().file("lib.rs", "fn foo() {}\n").file("test.py", "fn fake() {}\n");
 
-        let result = perform_ast_grep(input("fn $NAME() {}", temp.path())).await.unwrap();
+        let result = perform_ast_grep(input("fn $NAME() {}", workspace.root())).await.unwrap();
 
         assert_eq!(result.count, 1);
         assert!(result.matches[0].file.ends_with("lib.rs"));
@@ -383,12 +378,9 @@ mod tests {
 
     #[tokio::test]
     async fn applies_glob_filter() {
-        let temp = TempDir::new().unwrap();
-        fs::create_dir(temp.path().join("src")).unwrap();
-        fs::create_dir(temp.path().join("tests")).unwrap();
-        fs::write(temp.path().join("src/lib.rs"), "fn src_fn() {}\n").unwrap();
-        fs::write(temp.path().join("tests/lib.rs"), "fn test_fn() {}\n").unwrap();
-        let mut args = input("fn $NAME() {}", temp.path());
+        let workspace =
+            TestWorkspace::new().file("src/lib.rs", "fn src_fn() {}\n").file("tests/lib.rs", "fn test_fn() {}\n");
+        let mut args = input("fn $NAME() {}", workspace.root());
         args.glob = Some("src/**/*.rs".to_string());
         let result = perform_ast_grep(args).await.unwrap();
         assert_eq!(result.count, 1);
@@ -397,8 +389,8 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_language_returns_error() {
-        let temp = TempDir::new().unwrap();
-        let mut args = input("fn $NAME() {}", temp.path());
+        let workspace = TestWorkspace::new();
+        let mut args = input("fn $NAME() {}", workspace.root());
         args.language = "not-a-language".to_string();
         let result = perform_ast_grep(args).await;
         assert!(matches!(result, Err(AstGrepError::UnsupportedLanguage(_))));
@@ -406,17 +398,16 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_pattern_returns_error() {
-        let temp = TempDir::new().unwrap();
-        let result = perform_ast_grep(input("", temp.path())).await;
+        let workspace = TestWorkspace::new();
+        let result = perform_ast_grep(input("", workspace.root())).await;
 
         assert!(matches!(result, Err(AstGrepError::InvalidPattern(_))));
     }
 
     #[tokio::test]
     async fn head_limit_truncates_results() {
-        let temp = TempDir::new().unwrap();
-        fs::write(temp.path().join("lib.rs"), "fn a() {}\nfn b() {}\n").unwrap();
-        let mut args = input("fn $NAME() {}", temp.path());
+        let workspace = TestWorkspace::new().file("lib.rs", "fn a() {}\nfn b() {}\n");
+        let mut args = input("fn $NAME() {}", workspace.root());
         args.head_limit = Some(1);
         let result = perform_ast_grep(args).await.unwrap();
         assert_eq!(result.count, 1);
@@ -425,9 +416,8 @@ mod tests {
 
     #[tokio::test]
     async fn head_limit_zero_returns_no_matches_but_truncated() {
-        let temp = TempDir::new().unwrap();
-        fs::write(temp.path().join("lib.rs"), "fn a() {}\n").unwrap();
-        let mut args = input("fn $NAME() {}", temp.path());
+        let workspace = TestWorkspace::new().file("lib.rs", "fn a() {}\n");
+        let mut args = input("fn $NAME() {}", workspace.root());
         args.head_limit = Some(0);
         let result = perform_ast_grep(args).await.unwrap();
         assert_eq!(result.count, 0);
@@ -443,18 +433,15 @@ mod tests {
 
     #[tokio::test]
     async fn explicit_unreadable_file_returns_error() {
-        let temp = TempDir::new().unwrap();
-        let file = temp.path().join("invalid.rs");
-        fs::write(&file, [0xff, 0xfe, 0x00, 0x01]).unwrap();
-        let result = perform_ast_grep(input("fn $NAME() {}", &file)).await;
+        let workspace = TestWorkspace::new().file("invalid.rs", [0xff_u8, 0xfe, 0x00, 0x01]);
+        let result = perform_ast_grep(input("fn $NAME() {}", &workspace.path("invalid.rs"))).await;
         assert!(matches!(result, Err(AstGrepError::ReadFailed { .. })));
     }
 
     #[tokio::test]
     async fn range_is_one_based_and_byte_offsets_are_zero_based() {
-        let temp = TempDir::new().unwrap();
-        fs::write(temp.path().join("lib.rs"), "\nfn foo() {}\n").unwrap();
-        let result = perform_ast_grep(input("fn $NAME() {}", temp.path())).await.unwrap();
+        let workspace = TestWorkspace::new().file("lib.rs", "\nfn foo() {}\n");
+        let result = perform_ast_grep(input("fn $NAME() {}", workspace.root())).await.unwrap();
         let range = &result.matches[0].range;
 
         assert_eq!(range.start_line, 2);
@@ -464,10 +451,9 @@ mod tests {
 
     #[tokio::test]
     async fn directory_search_skips_hidden_files() {
-        let temp = TempDir::new().unwrap();
-        fs::write(temp.path().join("visible.rs"), "fn visible() {}\n").unwrap();
-        fs::write(temp.path().join(".hidden.rs"), "fn hidden() {}\n").unwrap();
-        let result = perform_ast_grep(input("fn $NAME() {}", temp.path())).await.unwrap();
+        let workspace =
+            TestWorkspace::new().file("visible.rs", "fn visible() {}\n").file(".hidden.rs", "fn hidden() {}\n");
+        let result = perform_ast_grep(input("fn $NAME() {}", workspace.root())).await.unwrap();
 
         assert_eq!(result.count, 1);
         assert_eq!(result.matches[0].text, "fn visible() {}");
@@ -475,13 +461,13 @@ mod tests {
 
     #[tokio::test]
     async fn directory_search_respects_gitignore() {
-        let temp = TempDir::new().unwrap();
-        fs::create_dir(temp.path().join(".git")).unwrap();
-        fs::write(temp.path().join(".gitignore"), "ignored.rs\n").unwrap();
-        fs::write(temp.path().join("included.rs"), "fn included() {}\n").unwrap();
-        fs::write(temp.path().join("ignored.rs"), "fn ignored() {}\n").unwrap();
+        let workspace = TestWorkspace::new()
+            .dir(".git")
+            .file(".gitignore", "ignored.rs\n")
+            .file("included.rs", "fn included() {}\n")
+            .file("ignored.rs", "fn ignored() {}\n");
 
-        let result = perform_ast_grep(input("fn $NAME() {}", temp.path())).await.unwrap();
+        let result = perform_ast_grep(input("fn $NAME() {}", workspace.root())).await.unwrap();
 
         assert_eq!(result.count, 1);
         assert_eq!(result.matches[0].text, "fn included() {}");
@@ -489,9 +475,8 @@ mod tests {
 
     #[tokio::test]
     async fn includes_context_lines() {
-        let temp = TempDir::new().unwrap();
-        fs::write(temp.path().join("lib.rs"), "before\nfn foo() {}\nafter\n").unwrap();
-        let mut args = input("fn $NAME() {}", temp.path());
+        let workspace = TestWorkspace::new().file("lib.rs", "before\nfn foo() {}\nafter\n");
+        let mut args = input("fn $NAME() {}", workspace.root());
         args.context_around = Some(1);
 
         let result = perform_ast_grep(args).await.unwrap();
@@ -502,10 +487,9 @@ mod tests {
 
     #[tokio::test]
     async fn filters_matches_by_constraint() {
-        let temp = TempDir::new().unwrap();
-        fs::write(temp.path().join("lib.rs"), "use crossterm::execute;\nuse serde::Serialize;\n").unwrap();
+        let workspace = TestWorkspace::new().file("lib.rs", "use crossterm::execute;\nuse serde::Serialize;\n");
 
-        let mut args = input("use $CRATE;", temp.path());
+        let mut args = input("use $CRATE;", workspace.root());
         args.constraints = Some(HashMap::from([("CRATE".to_string(), "^crossterm".to_string())]));
 
         let result = perform_ast_grep(args).await.unwrap();
@@ -516,10 +500,9 @@ mod tests {
 
     #[tokio::test]
     async fn constraint_with_no_matches_returns_empty() {
-        let temp = TempDir::new().unwrap();
-        fs::write(temp.path().join("lib.rs"), "fn foo() {}\n").unwrap();
+        let workspace = TestWorkspace::new().file("lib.rs", "fn foo() {}\n");
 
-        let mut args = input("fn $NAME() {}", temp.path());
+        let mut args = input("fn $NAME() {}", workspace.root());
         args.constraints = Some(HashMap::from([("NAME".to_string(), "^bar".to_string())]));
 
         let result = perform_ast_grep(args).await.unwrap();
@@ -529,10 +512,9 @@ mod tests {
 
     #[tokio::test]
     async fn constraint_on_missing_capture_returns_empty() {
-        let temp = TempDir::new().unwrap();
-        fs::write(temp.path().join("lib.rs"), "fn foo() {}\n").unwrap();
+        let workspace = TestWorkspace::new().file("lib.rs", "fn foo() {}\n");
 
-        let mut args = input("fn $NAME() {}", temp.path());
+        let mut args = input("fn $NAME() {}", workspace.root());
         args.constraints = Some(HashMap::from([("MISSING".to_string(), ".*".to_string())]));
 
         let result = perform_ast_grep(args).await.unwrap();
@@ -542,10 +524,9 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_constraint_regex_returns_error() {
-        let temp = TempDir::new().unwrap();
-        fs::write(temp.path().join("lib.rs"), "fn foo() {}\n").unwrap();
+        let workspace = TestWorkspace::new().file("lib.rs", "fn foo() {}\n");
 
-        let mut args = input("fn $NAME() {}", temp.path());
+        let mut args = input("fn $NAME() {}", workspace.root());
         args.constraints = Some(HashMap::from([("NAME".to_string(), "(".to_string())]));
 
         let result = perform_ast_grep(args).await;
@@ -555,10 +536,9 @@ mod tests {
 
     #[tokio::test]
     async fn multiple_constraints_all_must_match() {
-        let temp = TempDir::new().unwrap();
-        fs::write(temp.path().join("lib.rs"), "fn alpha() {}\nfn beta() {}\n").unwrap();
+        let workspace = TestWorkspace::new().file("lib.rs", "fn alpha() {}\nfn beta() {}\n");
 
-        let mut args = input("fn $NAME() {}", temp.path());
+        let mut args = input("fn $NAME() {}", workspace.root());
         args.constraints =
             Some(HashMap::from([("NAME".to_string(), "^a".to_string()), ("NAME".to_string(), "lpha".to_string())]));
 

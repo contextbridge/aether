@@ -56,13 +56,13 @@ pub async fn edit_file_contents(args: EditFileArgs) -> Result<EditFileResponse, 
 mod tests {
     use super::*;
     use crate::file_ops::EditFailureKind;
+    use crate::testing::TestWorkspace;
     use std::fs;
-    use tempfile::TempDir;
 
     #[tokio::test]
     async fn edit_file_nonexistent_returns_not_found() {
-        let temp_dir = TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("missing.txt");
+        let workspace = TestWorkspace::new();
+        let file_path = workspace.path("missing.txt");
 
         let result = edit_file_contents(EditFileArgs {
             file_path: file_path.to_string_lossy().to_string(),
@@ -75,9 +75,8 @@ mod tests {
 
     #[tokio::test]
     async fn edit_file_existing_file_without_match_returns_edits_failed() -> Result<(), Box<dyn std::error::Error>> {
-        let temp_dir = TempDir::new()?;
-        let file_path = temp_dir.path().join("sample.txt");
-        fs::write(&file_path, "hello world")?;
+        let workspace = TestWorkspace::new().file("sample.txt", "hello world");
+        let file_path = workspace.path("sample.txt");
 
         let result = edit_file_contents(EditFileArgs {
             file_path: file_path.to_string_lossy().to_string(),
@@ -94,10 +93,9 @@ mod tests {
 
     #[tokio::test]
     async fn edit_file_produces_file_diff_with_full_contents() {
-        let temp_dir = TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("lines.txt");
         let original = "line1\nline2\nline3\nline4\n";
-        fs::write(&file_path, original).unwrap();
+        let workspace = TestWorkspace::new().file("lines.txt", original);
+        let file_path = workspace.path("lines.txt");
 
         let result = edit_file_contents(EditFileArgs {
             file_path: file_path.to_string_lossy().to_string(),
@@ -116,9 +114,8 @@ mod tests {
 
     #[tokio::test]
     async fn edit_file_applies_batch_in_one_call() {
-        let temp_dir = TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("lines.txt");
-        fs::write(&file_path, "alpha\nbeta\ngamma\n").unwrap();
+        let workspace = TestWorkspace::new().file("lines.txt", "alpha\nbeta\ngamma\n");
+        let file_path = workspace.path("lines.txt");
 
         let result = edit_file_contents(EditFileArgs {
             file_path: file_path.to_string_lossy().to_string(),
