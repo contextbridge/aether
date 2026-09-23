@@ -360,6 +360,7 @@ mod tests {
         assert!(LlmModel::ALL_REQUIRED_ENV_VARS.contains(&"ANTHROPIC_API_KEY"));
         assert!(LlmModel::ALL_REQUIRED_ENV_VARS.contains(&"ZAI_API_KEY"));
         assert!(LlmModel::ALL_REQUIRED_ENV_VARS.contains(&"DEEPSEEK_API_KEY"));
+        assert!(LlmModel::ALL_REQUIRED_ENV_VARS.contains(&"XIAOMI_API_KEY"));
     }
 
     #[test]
