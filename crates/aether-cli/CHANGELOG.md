@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.6](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.5...aether-agent-cli-v0.9.6) - 2026-09-23
+
+### Added
+
+- *(llm)* add Xiaomi provider ([#505](https://github.com/contextbridge/aether/pull/505))
+
 ## [0.9.5](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.4...aether-agent-cli-v0.9.5) - 2026-09-21
 
 ### Other

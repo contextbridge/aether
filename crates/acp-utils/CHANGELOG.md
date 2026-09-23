@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.5](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.5.4...aether-acp-utils-v0.5.5) - 2026-09-23
+
+### Other
+
+- updated the following local packages: aether-llm, aether-mcp-utils
+
 ## [0.5.4](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.5.3...aether-acp-utils-v0.5.4) - 2026-09-21
 
 ### Other

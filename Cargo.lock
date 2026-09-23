@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "aether-acp-utils"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "aether-acp-utils",
  "aether-llm",
@@ -63,7 +63,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-cli"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-cli",
@@ -109,7 +109,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-core"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -177,7 +177,7 @@ dependencies = [
 
 [[package]]
 name = "aether-evals"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -196,7 +196,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm"
-version = "0.9.4"
+version = "0.9.5"
 dependencies = [
  "aether-auth",
  "aether-doctest",
@@ -237,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm-codegen"
-version = "0.2.25"
+version = "0.2.26"
 dependencies = [
  "aether-utils",
  "prettyplease",
@@ -278,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-servers"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "aether-agent-core",
  "aether-auth",
@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-utils"
-version = "0.7.4"
+version = "0.7.5"
 dependencies = [
  "aether-auth",
  "aether-doctest",
@@ -345,7 +345,7 @@ dependencies = [
 
 [[package]]
 name = "aether-project"
-version = "0.5.48"
+version = "0.5.49"
 dependencies = [
  "aether-agent-core",
  "aether-doctest",
@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "aether-schemas"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "aether-agent-cli",
  "aether-agent-core",
@@ -392,7 +392,7 @@ dependencies = [
 
 [[package]]
 name = "aether-sessions"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -412,7 +412,7 @@ dependencies = [
 
 [[package]]
 name = "aether-telemetry"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -453,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "aether-wisp"
-version = "0.7.4"
+version = "0.7.5"
 dependencies = [
  "aether-acp-utils",
  "aether-utils",
@@ -4957,9 +4957,9 @@ dependencies = [
 
 [[package]]
 name = "instability"
-version = "0.3.13"
+version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bf84e73fa6f27f299dec58e13223cf70db80da872eb921d4f6138342a0eabc8"
+checksum = "4c3b5acc1e2fd9375041a388da33d1eb8aed5f7a8c0dd3543e3ea2805adfbe20"
 dependencies = [
  "darling 0.24.1",
  "indoc",
@@ -5318,9 +5318,9 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "lru"
-version = "0.18.4"
+version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff9840bcc50b71349309900da0ce7279aa336ae71d73250b07998932c7d97c25"
+checksum = "ef9ac18847474e638e3702b76c65d4eb93428471a74778ef0f1be711717f89b5"
 dependencies = [
  "hashbrown 0.17.1",
 ]
@@ -6340,9 +6340,9 @@ dependencies = [
 
 [[package]]
 name = "process-wrap"
-version = "10.0.0"
+version = "10.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e3f4237d0e4741eb50bc5584db701f1299c85fa31ff0274dd6445e79dc42d12"
+checksum = "1f21b97672d2dc848e7b25701ab4535618b92f4861c13cc3f7f7bed52ad3c8da"
 dependencies = [
  "futures",
  "indexmap 2.14.2",
