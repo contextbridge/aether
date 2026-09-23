@@ -329,6 +329,8 @@ mod tests {
                     arguments: String::new(),
                     status: None,
                     namespace: None,
+                    caller: None,
+                    r#async: None,
                 }),
             }),
             function_call_delta(r#"{"path":"#),

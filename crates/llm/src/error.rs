@@ -356,6 +356,7 @@ mod tests {
                 r#type: None,
                 param: None,
                 code: Some("server_error".to_string()),
+                misalignment: None,
             },
         };
         let error = LlmError::from(async_openai::error::OpenAIError::ApiError(response));

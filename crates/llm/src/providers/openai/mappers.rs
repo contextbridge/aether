@@ -98,17 +98,22 @@ fn map_user_content(parts: Vec<ContentBlock>) -> Result<ChatCompletionRequestUse
 fn map_user_content_part(part: ContentBlock) -> Result<ChatCompletionRequestUserMessageContentPart> {
     match part {
         ContentBlock::Text { text } => {
-            Ok(ChatCompletionRequestUserMessageContentPart::Text(ChatCompletionRequestMessageContentPartText { text }))
+            Ok(ChatCompletionRequestUserMessageContentPart::Text(ChatCompletionRequestMessageContentPartText {
+                text,
+                prompt_cache_breakpoint: None,
+            }))
         }
         ContentBlock::Image { data, mime_type } => {
             Ok(ChatCompletionRequestUserMessageContentPart::ImageUrl(ChatCompletionRequestMessageContentPartImage {
                 image_url: ImageUrl { url: format!("data:{mime_type};base64,{data}"), detail: None },
+                prompt_cache_breakpoint: None,
             }))
         }
         ContentBlock::Audio { data, mime_type } => {
             let format = map_audio_format(&mime_type)?;
             Ok(ChatCompletionRequestUserMessageContentPart::InputAudio(ChatCompletionRequestMessageContentPartAudio {
                 input_audio: InputAudio { data, format },
+                prompt_cache_breakpoint: None,
             }))
         }
     }

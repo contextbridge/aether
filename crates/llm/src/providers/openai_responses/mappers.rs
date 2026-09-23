@@ -80,6 +80,8 @@ pub(crate) fn build_typed_request(
     let reasoning = (policy.always_include_reasoning || policy.effort(&context).is_some()).then_some(Reasoning {
         effort: None,
         summary: (context.reasoning_effort() != ReasoningEffort::Disabled).then_some(ReasoningSummary::Auto),
+        mode: None,
+        context: None,
     });
 
     let text = policy.text_verbosity.clone().map(|verbosity| ResponseTextParam {
@@ -138,13 +140,17 @@ pub(crate) fn map_user_content_for_responses(parts: &[ContentBlock]) -> Result<E
     for part in parts {
         match part {
             ContentBlock::Text { text } => {
-                items.push(InputContent::InputText(InputTextContent { text: text.clone() }));
+                items.push(InputContent::InputText(InputTextContent {
+                    text: text.clone(),
+                    prompt_cache_breakpoint: None,
+                }));
             }
             ContentBlock::Image { .. } => {
                 items.push(InputContent::InputImage(InputImageContent {
                     detail: ImageDetail::Auto,
                     file_id: None,
                     image_url: Some(part.as_data_uri().expect("image content always has a data URI")),
+                    prompt_cache_breakpoint: None,
                 }));
             }
             ContentBlock::Audio { .. } => {
@@ -197,24 +203,32 @@ pub(crate) fn map_messages(messages: &[ChatMessage]) -> Result<(Option<String>, 
                         namespace: None,
                         id: None,
                         status: None,
+                        caller: None,
+                        r#async: None,
                     })));
                 }
             }
             ChatMessage::ToolCallResult(result) => match result {
                 Ok(r) => {
                     items.push(InputItem::Item(Item::FunctionCallOutput(FunctionCallOutputItemParam {
-                        call_id: r.id.clone(),
+                        call_id: Some(r.id.clone()),
                         output: FunctionCallOutput::Text(r.result.clone()),
                         id: None,
                         status: None,
+                        name: None,
+                        namespace: None,
+                        caller: None,
                     })));
                 }
                 Err(e) => {
                     items.push(InputItem::Item(Item::FunctionCallOutput(FunctionCallOutputItemParam {
-                        call_id: e.id.clone(),
+                        call_id: Some(e.id.clone()),
                         output: FunctionCallOutput::Text(format!("Error: {}", e.error)),
                         id: None,
                         status: None,
+                        name: None,
+                        namespace: None,
+                        caller: None,
                     })));
                 }
             },
@@ -241,6 +255,9 @@ pub(crate) fn map_tools(tools: &[ToolDefinition], strict: Option<bool>) -> Resul
                 parameters: Some(tool.parameters.clone()),
                 strict,
                 defer_loading: None,
+                r#async: None,
+                output_schema: None,
+                allowed_callers: None,
             }))
         })
         .collect()
@@ -466,7 +483,7 @@ mod tests {
         // Verify the function_call_output item
         let fco = &items[3];
         if let InputItem::Item(Item::FunctionCallOutput(out)) = fco {
-            assert_eq!(out.call_id, "call_1");
+            assert_eq!(out.call_id.as_deref(), Some("call_1"));
             assert!(matches!(&out.output, FunctionCallOutput::Text(t) if t == "fn main() {}"));
         } else {
             panic!("Expected FunctionCallOutput, got {fco:?}");
