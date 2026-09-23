@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.26](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.25...aether-llm-codegen-v0.2.26) - 2026-09-23
+
+### Added
+
+- *(llm)* add Xiaomi provider ([#505](https://github.com/contextbridge/aether/pull/505))
+- add Codex GPT-6 subscription models ([#513](https://github.com/contextbridge/aether/pull/513))
+
 ## [0.2.25](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.24...aether-llm-codegen-v0.2.25) - 2026-09-20
 
 ### Other

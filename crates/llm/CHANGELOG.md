@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.5](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.4...aether-llm-v0.9.5) - 2026-09-23
+
+### Added
+
+- *(llm)* add Xiaomi provider ([#505](https://github.com/contextbridge/aether/pull/505))
+- add Codex GPT-6 subscription models ([#513](https://github.com/contextbridge/aether/pull/513))
+
+### Other
+
+- *(deps)* bump async-openai from 0.41.3 to 0.42.0 ([#510](https://github.com/contextbridge/aether/pull/510))
+
 ## [0.9.4](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.3...aether-llm-v0.9.4) - 2026-09-21
 
 ### Other

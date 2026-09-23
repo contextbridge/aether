@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.6](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.6.5...aether-mcp-servers-v0.6.6) - 2026-09-23
+
+### Other
+
+- *(deps)* bump tower-http from 0.6.11 to 0.7.1 ([#509](https://github.com/contextbridge/aether/pull/509))
+- scheduled code-cleanup ([#506](https://github.com/contextbridge/aether/pull/506))
+
 ## [0.6.5](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.6.4...aether-mcp-servers-v0.6.5) - 2026-09-21
 
 ### Fixed
