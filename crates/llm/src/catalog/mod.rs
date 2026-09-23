@@ -101,12 +101,21 @@ mod tests {
     }
 
     #[test]
-    fn codex_astra_is_available_with_subscription_context_window() {
-        let model: LlmModel = "codex:gpt-6-astra".parse().unwrap();
-
-        assert_eq!(model.model_id(), "gpt-6-astra");
-        assert_eq!(model.context_window(), Some(272_000));
-        assert_eq!(model.oauth_provider_id(), Some("codex"));
+    fn codex_gpt6_models_are_available_with_subscription_metadata() {
+        let expected_levels = &[
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::Xhigh,
+            ReasoningEffort::Max,
+        ];
+        for id in ["gpt-6-sol", "gpt-6-astra", "gpt-6-luna"] {
+            let model: LlmModel = format!("codex:{id}").parse().unwrap();
+            assert_eq!(model.model_id(), id);
+            assert_eq!(model.context_window(), Some(272_000));
+            assert_eq!(model.reasoning_levels(), expected_levels);
+            assert_eq!(model.oauth_provider_id(), Some("codex"));
+        }
     }
 
     #[test]
