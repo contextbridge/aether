@@ -52,25 +52,19 @@ fn make_relative(root_dir: &Path, file_path: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TestWorkspace;
     use aether_project::PromptCatalog;
+
+    const RUST_RULES_SKILL: &str = "---\ndescription: Rust conventions\ntriggers:\n  read:\n    - \"**/*.rs\"\n---\n";
+
+    fn workspace_with_rust_rules(body: &str) -> TestWorkspace {
+        TestWorkspace::new().file("rust-rules/SKILL.md", format!("{RUST_RULES_SKILL}{body}\n"))
+    }
 
     #[test]
     fn returns_matched_rules_and_deduplicates() {
-        use std::fs;
-        use tempfile::TempDir;
-
-        let temp = TempDir::new().unwrap();
-        let skills_dir = temp.path();
-
-        let rust_dir = skills_dir.join("rust-rules");
-        fs::create_dir_all(&rust_dir).unwrap();
-        fs::write(
-            rust_dir.join("SKILL.md"),
-            "---\ndescription: Rust conventions\ntriggers:\n  read:\n    - \"**/*.rs\"\n---\nRust best practices.\n",
-        )
-        .unwrap();
-
-        let catalog = PromptCatalog::from_dir(skills_dir).unwrap();
+        let workspace = workspace_with_rust_rules("Rust best practices.");
+        let catalog = PromptCatalog::from_dir(workspace.root()).unwrap();
         let mut state = PromptRuleMatcher::new(catalog);
         let root_dir = Path::new("/project");
 
@@ -84,21 +78,8 @@ mod tests {
 
     #[test]
     fn returns_empty_for_non_matching_files() {
-        use std::fs;
-        use tempfile::TempDir;
-
-        let temp = TempDir::new().unwrap();
-        let skills_dir = temp.path();
-
-        let rust_dir = skills_dir.join("rust-rules");
-        fs::create_dir_all(&rust_dir).unwrap();
-        fs::write(
-            rust_dir.join("SKILL.md"),
-            "---\ndescription: Rust conventions\ntriggers:\n  read:\n    - \"**/*.rs\"\n---\nRust rules.\n",
-        )
-        .unwrap();
-
-        let catalog = PromptCatalog::from_dir(skills_dir).unwrap();
+        let workspace = workspace_with_rust_rules("Rust rules.");
+        let catalog = PromptCatalog::from_dir(workspace.root()).unwrap();
         let mut state = PromptRuleMatcher::new(catalog);
         let root_dir = Path::new("/project");
 
@@ -108,21 +89,8 @@ mod tests {
 
     #[test]
     fn clear_activated_allows_rematching() {
-        use std::fs;
-        use tempfile::TempDir;
-
-        let temp = TempDir::new().unwrap();
-        let skills_dir = temp.path();
-
-        let rust_dir = skills_dir.join("rust-rules");
-        fs::create_dir_all(&rust_dir).unwrap();
-        fs::write(
-            rust_dir.join("SKILL.md"),
-            "---\ndescription: Rust conventions\ntriggers:\n  read:\n    - \"**/*.rs\"\n---\nRust rules.\n",
-        )
-        .unwrap();
-
-        let catalog = PromptCatalog::from_dir(skills_dir).unwrap();
+        let workspace = workspace_with_rust_rules("Rust rules.");
+        let catalog = PromptCatalog::from_dir(workspace.root()).unwrap();
         let mut state = PromptRuleMatcher::new(catalog);
         let root_dir = Path::new("/project");
 
@@ -137,29 +105,10 @@ mod tests {
 
     #[test]
     fn from_catalog_builds_rules() {
-        use std::fs;
-        use tempfile::TempDir;
+        let workspace = workspace_with_rust_rules("Follow Rust best practices.")
+            .file("commit/SKILL.md", "---\ndescription: Commit\nuser-invocable: true\n---\nCommit message.\n");
 
-        let temp = TempDir::new().unwrap();
-        let skills_dir = temp.path();
-
-        let rust_dir = skills_dir.join("rust-rules");
-        fs::create_dir_all(&rust_dir).unwrap();
-        fs::write(
-            rust_dir.join("SKILL.md"),
-            "---\ndescription: Rust conventions\ntriggers:\n  read:\n    - \"**/*.rs\"\n---\nFollow Rust best practices.\n",
-        )
-        .unwrap();
-
-        let commit_dir = skills_dir.join("commit");
-        fs::create_dir_all(&commit_dir).unwrap();
-        fs::write(
-            commit_dir.join("SKILL.md"),
-            "---\ndescription: Commit\nuser-invocable: true\n---\nCommit message.\n",
-        )
-        .unwrap();
-
-        let catalog = PromptCatalog::from_dir(skills_dir).unwrap();
+        let catalog = PromptCatalog::from_dir(workspace.root()).unwrap();
         let mut state = PromptRuleMatcher::new(catalog);
         let root_dir = Path::new("/project");
         let matched = state.get_matched_rules(root_dir, "/project/src/main.rs");

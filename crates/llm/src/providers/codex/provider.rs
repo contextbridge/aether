@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tracing::debug;
 
 const CODEX_API_BASE: &str = "https://chatgpt.com/backend-api/codex";
-const CODEX_CLIENT_VERSION: &str = "0.153.4";
+const CODEX_CLIENT_VERSION: &str = "0.155.0";
 
 #[derive(Clone)]
 pub struct CodexProvider {
@@ -162,9 +162,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stream_response_sends_supported_protocol_version_for_gpt_5_6_luna() {
+    async fn stream_response_sends_supported_protocol_version_for_gpt_6_luna() {
         let mut server = CaptureServer::start_responses().await;
-        let provider = server_backed_provider(&server).with_model("gpt-5.6-luna");
+        let provider = server_backed_provider(&server).with_model("gpt-6-luna");
         let mut context = Context::new(
             vec![ChatMessage::system("You are helpful"), ChatMessage::user("Think harder")],
             vec![ToolDefinition::new(
@@ -182,7 +182,7 @@ mod tests {
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
         assert_eq!(captured.body["reasoning"]["effort"], "max");
         assert!(captured.body["reasoning"].get("context").is_none());
-        assert_eq!(captured.body["model"], "gpt-5.6-luna");
+        assert_eq!(captured.body["model"], "gpt-6-luna");
         assert_eq!(captured.body["instructions"], "You are helpful");
         assert_eq!(captured.body["tools"].as_array().unwrap().len(), 1);
         assert!(captured.body.get("parallel_tool_calls").is_none());
@@ -191,7 +191,7 @@ mod tests {
         assert_eq!(captured.body["store"], false);
         assert_eq!(captured.body["stream"], true);
         assert_eq!(captured.headers["chatgpt-account-id"], "account-1");
-        assert_eq!(captured.headers["version"], "0.153.4");
+        assert_eq!(captured.headers["version"], "0.155.0");
         assert_eq!(captured.headers["accept"], "text/event-stream");
         assert!(captured.headers.get("x-openai-internal-codex-responses-lite").is_none());
         assert!(captured.headers.get("OpenAI-Beta").is_none());

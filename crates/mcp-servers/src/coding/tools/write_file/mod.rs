@@ -48,13 +48,13 @@ pub async fn write_file_contents(args: WriteFileArgs) -> Result<WriteFileRespons
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TestWorkspace;
     use std::fs;
-    use tempfile::TempDir;
 
     #[tokio::test]
     async fn write_file_produces_file_diff_with_no_old_text() {
-        let temp_dir = TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("new_file.rs");
+        let workspace = TestWorkspace::new();
+        let file_path = workspace.path("new_file.rs");
 
         let content = "fn main() {\n    println!(\"Hello\");\n}\n";
         let result = write_file_contents(WriteFileArgs {
@@ -76,8 +76,8 @@ mod tests {
 
     #[tokio::test]
     async fn write_file_file_diff_has_correct_path() {
-        let temp_dir = TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("test.rs");
+        let workspace = TestWorkspace::new();
+        let file_path = workspace.path("test.rs");
 
         let result = write_file_contents(WriteFileArgs {
             file_path: file_path.to_string_lossy().to_string(),
@@ -92,8 +92,8 @@ mod tests {
 
     #[tokio::test]
     async fn write_file_handles_empty_content() {
-        let temp_dir = TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("empty.txt");
+        let workspace = TestWorkspace::new();
+        let file_path = workspace.path("empty.txt");
 
         let result = write_file_contents(WriteFileArgs {
             file_path: file_path.to_string_lossy().to_string(),
@@ -109,9 +109,8 @@ mod tests {
 
     #[tokio::test]
     async fn write_file_overwrites_existing_file() {
-        let temp_dir = TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("existing.txt");
-        fs::write(&file_path, "old content").unwrap();
+        let workspace = TestWorkspace::new().file("existing.txt", "old content");
+        let file_path = workspace.path("existing.txt");
 
         let new_content = "new content\nsecond line\n";
         let result = write_file_contents(WriteFileArgs {

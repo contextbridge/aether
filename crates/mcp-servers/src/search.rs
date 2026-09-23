@@ -93,24 +93,21 @@ impl Sink for HasMatch {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
-    use tempfile::TempDir;
+    use crate::testing::TestWorkspace;
 
     use super::*;
 
     #[tokio::test]
     async fn excludes_dependencies_and_filters_extensions() {
-        let directory = TempDir::new().unwrap();
-        fs::write(directory.path().join("component.tsx"), "export const Needle = 1;").unwrap();
-        fs::write(directory.path().join("ignored.rs"), "Needle").unwrap();
-        fs::create_dir(directory.path().join("node_modules")).unwrap();
-        fs::write(directory.path().join("node_modules/ignored.tsx"), "Needle").unwrap();
+        let workspace = TestWorkspace::new()
+            .file("component.tsx", "export const Needle = 1;")
+            .file("ignored.rs", "Needle")
+            .file("node_modules/ignored.tsx", "Needle");
 
-        let files = find_files_containing(directory.path().to_path_buf(), "needle".to_string(), vec!["ts", "tsx"], 100)
+        let files = find_files_containing(workspace.root().to_path_buf(), "needle".to_string(), vec!["ts", "tsx"], 100)
             .await
             .unwrap();
 
-        assert_eq!(files, vec![directory.path().join("component.tsx")]);
+        assert_eq!(files, vec![workspace.path("component.tsx")]);
     }
 }
