@@ -6,6 +6,7 @@ pub mod bedrock;
 #[cfg(feature = "codex")]
 pub mod codex;
 pub mod gemini;
+pub mod generic;
 pub(crate) mod http;
 pub mod local;
 pub mod openai;

@@ -9,11 +9,11 @@ This is the primary entry point for creating providers from user-supplied model 
 
 # Built-in providers
 
-[`Default::default()`](ModelProviderParser::default) registers all built-in providers: `anthropic`, `openai`, `openrouter`, `gemini`, `ollama`, `llamacpp`, `deepseek`, `moonshot`, `zai`, and (with feature flags) `bedrock` and `codex`.
+[`Default::default()`](ModelProviderParser::default) registers all built-in providers: `anthropic`, `openai`, `openrouter`, `gemini`, `ollama`, `llamacpp`, `deepseek`, `moonshot`, `xiaomi`, `zai`, and (with feature flags) `bedrock` and `codex`.
 
 # Custom providers
 
-Register additional providers with [`with_provider`](ModelProviderParser::with_provider) (for types implementing [`ProviderFactory`]) or [`with_openai_provider`](ModelProviderParser::with_openai_provider) (for OpenAI-compatible APIs).
+Register additional providers with [`with_provider`](ModelProviderParser::with_provider) (for types implementing [`ProviderFactory`]) or [`with_generic_provider`](ModelProviderParser::with_generic_provider) (for endpoints described by a [`ProviderConfig`](crate::providers::generic::ProviderConfig)).
 
 # Example
 

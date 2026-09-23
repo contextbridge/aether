@@ -1,7 +1,6 @@
 #![doc = include_str!(concat!(env!("OUT_DIR"), "/docs/openai_compatible.md"))]
 
 pub mod config;
-pub mod generic;
 pub mod streaming;
 pub mod types;
 

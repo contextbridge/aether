@@ -7,18 +7,17 @@ Each submodule implements [`StreamingModelProvider`](crate::StreamingModelProvid
 | Module | Provider | Env var | Feature flag |
 |--------|----------|---------|-------------|
 | [`anthropic`] | Anthropic (Claude) | `ANTHROPIC_API_KEY` | -- |
-| [`openai`] | `OpenAI` (GPT) | `OPENAI_API_KEY` | -- |
 | [`openrouter`] | `OpenRouter` | `OPENROUTER_API_KEY` | -- |
 | [`gemini`] | Google Gemini | `GEMINI_API_KEY` | -- |
 | [`local::ollama`] | Ollama | -- (local) | -- |
 | [`local::llama_cpp`] | llama.cpp | -- (local) | -- |
-| [`openai_compatible`] | `DeepSeek`, Fireworks AI, Microsoft Foundry, Moonshot, ZAI | varies | -- |
+| [`generic`] | `OpenAI`, Xiaomi `MiMo`, `DeepSeek`, Fireworks AI, Microsoft Foundry, Moonshot, ZAI | varies | -- |
 | [`bedrock`] | AWS Bedrock | AWS credentials | `bedrock` |
 | [`codex`] | `OpenAI` Codex (OAuth) | -- (OAuth) | `codex` |
 
-# OpenAI-compatible providers
+# Generic providers
 
-The [`openai_compatible`] module provides a shared [`GenericOpenAiProvider`](openai_compatible::generic::GenericOpenAiProvider) that works with any `OpenAI`-compatible API. `DeepSeek`, Fireworks AI, Microsoft Foundry, Moonshot, and ZAI use this with pre-configured [`ProviderConfig`](openai_compatible::generic::ProviderConfig) constants.
+The [`generic`] module provides a shared [`GenericProvider`](generic::GenericProvider) for API-key-backed endpoints that speak either the `OpenAI` Chat Completions or Responses wire format. `OpenAI`, Xiaomi `MiMo`, `DeepSeek`, Fireworks AI, Microsoft Foundry, Moonshot, and ZAI are pre-configured [`ProviderConfig`](generic::ProviderConfig) constants; a new provider on either format is one more constant.
 
 # Adding a new provider
 

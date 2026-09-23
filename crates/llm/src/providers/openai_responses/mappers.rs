@@ -1,61 +1,69 @@
 use async_openai::types::responses::{
     CreateResponse, EasyInputContent, EasyInputMessage, FunctionCallOutput, FunctionCallOutputItemParam, FunctionTool,
     FunctionToolCall, ImageDetail, IncludeEnum, InputContent, InputImageContent, InputItem, InputParam,
-    InputTextContent, Item, MessageType, Reasoning, ReasoningItem, ReasoningSummary, ResponseTextParam, Role,
-    TextResponseFormatConfiguration, Tool, Verbosity,
+    InputTextContent, Item, MessageType, Reasoning, ReasoningItem, ReasoningItemContent, ReasoningSummary,
+    ReasoningTextContent, ResponseTextParam, Role, TextResponseFormatConfiguration, Tool, Verbosity,
 };
 
+use schemars::Schema;
+
 use crate::catalog::Provider;
+use crate::providers::openai_compatible::PromptCacheKeySource;
+use crate::tool_schema::normalize_for_xiaomi;
 use crate::{ChatMessage, ContentBlock, Context, LlmError, LlmModel, ReasoningEffort, Result, ToolDefinition};
 
 /// The per-provider decisions that shape an otherwise identical Responses request.
-pub(crate) struct ResponsesRequestPolicy {
+pub struct ResponsesRequestPolicy {
     /// Provider that owns the model — decides whose encrypted reasoning may be
     /// replayed from earlier turns.
-    pub provider: Provider,
+    pub(crate) provider: Provider,
     /// Send `reasoning` even when no effort was requested.
-    pub always_include_reasoning: bool,
+    always_include_reasoning: bool,
     /// Effort applied when the caller did not request one.
-    pub default_effort: Option<ReasoningEffort>,
-    pub text_verbosity: Option<Verbosity>,
+    default_effort: Option<ReasoningEffort>,
+    text_verbosity: Option<Verbosity>,
     /// `strict` sent on every function tool. The Responses API defaults this to
     /// `true`, which rejects tool schemas that omit `additionalProperties`, so
     /// `None` and `Some(false)` are not interchangeable.
-    pub tool_strict: Option<bool>,
+    tool_strict: Option<bool>,
+    tool_schema_transform: Option<fn(&mut Schema)>,
+    reasoning_format: ReasoningFormat,
+    prompt_cache_key: PromptCacheKeySource,
 }
 
 impl ResponsesRequestPolicy {
-    pub const fn openai() -> Self {
-        Self {
-            provider: Provider::Openai,
-            always_include_reasoning: false,
-            default_effort: None,
-            text_verbosity: None,
-            tool_strict: Some(false),
-        }
-    }
+    pub const OPENAI: Self = Self {
+        provider: Provider::Openai,
+        always_include_reasoning: false,
+        default_effort: None,
+        text_verbosity: None,
+        tool_strict: Some(false),
+        tool_schema_transform: None,
+        reasoning_format: ReasoningFormat::Encrypted,
+        prompt_cache_key: PromptCacheKeySource::Prefix,
+    };
+
+    pub const XIAOMI: Self = Self {
+        provider: Provider::Xiaomi,
+        tool_schema_transform: Some(normalize_for_xiaomi),
+        reasoning_format: ReasoningFormat::PlainText,
+        prompt_cache_key: PromptCacheKeySource::Omit,
+        ..Self::OPENAI
+    };
 
     #[cfg(feature = "codex")]
-    pub const fn codex() -> Self {
-        Self {
-            provider: Provider::Codex,
-            always_include_reasoning: true,
-            default_effort: Some(ReasoningEffort::Medium),
-            text_verbosity: Some(Verbosity::Medium),
-            tool_strict: None,
-        }
-    }
+    pub const CODEX: Self = Self {
+        provider: Provider::Codex,
+        always_include_reasoning: true,
+        default_effort: Some(ReasoningEffort::Medium),
+        text_verbosity: Some(Verbosity::Medium),
+        tool_strict: None,
+        ..Self::OPENAI
+    };
 
     #[cfg(feature = "bedrock")]
-    pub const fn mantle() -> Self {
-        Self {
-            provider: Provider::Bedrock,
-            always_include_reasoning: true,
-            default_effort: None,
-            text_verbosity: None,
-            tool_strict: None,
-        }
-    }
+    pub const MANTLE: Self =
+        Self { provider: Provider::Bedrock, always_include_reasoning: true, tool_strict: None, ..Self::OPENAI };
 
     /// Effort to send, if any — an explicit request beats the provider default.
     fn effort(&self, context: &Context) -> Option<ReasoningEffort> {
@@ -66,6 +74,16 @@ impl ResponsesRequestPolicy {
     }
 }
 
+/// How a provider exposes reasoning and expects it back on later turns.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReasoningFormat {
+    /// Opaque encrypted items replayed only to the model that produced them,
+    /// alongside human-readable summaries.
+    Encrypted,
+    /// Raw reasoning text, streamed and replayed as-is with no summaries.
+    PlainText,
+}
+
 pub(crate) fn build_typed_request(
     model: &str,
     context: &Context,
@@ -74,12 +92,14 @@ pub(crate) fn build_typed_request(
     let identity: Option<LlmModel> = format!("{}:{model}", policy.provider.parser_name()).parse().ok();
     crate::provider::validate_reasoning(context, identity.as_ref())?;
     let context = context.filter_encrypted_reasoning(identity.as_ref());
-    let (instructions, input) = map_messages(context.messages())?;
-    let tools = if context.tools().is_empty() { None } else { Some(map_tools(context.tools(), policy.tool_strict)?) };
+    let encrypted = policy.reasoning_format == ReasoningFormat::Encrypted;
+    let (instructions, input) = map_messages(context.messages(), policy.reasoning_format)?;
+    let tools = if context.tools().is_empty() { None } else { Some(map_tools(context.tools(), policy)?) };
     let settings = context.model_settings();
     let reasoning = (policy.always_include_reasoning || policy.effort(&context).is_some()).then_some(Reasoning {
         effort: None,
-        summary: (context.reasoning_effort() != ReasoningEffort::Disabled).then_some(ReasoningSummary::Auto),
+        summary: (encrypted && context.reasoning_effort() != ReasoningEffort::Disabled)
+            .then_some(ReasoningSummary::Auto),
         mode: None,
         context: None,
     });
@@ -100,9 +120,9 @@ pub(crate) fn build_typed_request(
         temperature: settings.temperature,
         top_p: settings.top_p,
         reasoning,
-        include: Some(vec![IncludeEnum::ReasoningEncryptedContent]),
+        include: encrypted.then_some(vec![IncludeEnum::ReasoningEncryptedContent]),
         text,
-        prompt_cache_key: context.prompt_cache_key().map(String::from),
+        prompt_cache_key: policy.prompt_cache_key.resolve(&context).map(String::from),
         ..Default::default()
     })
 }
@@ -165,7 +185,10 @@ pub(crate) fn map_user_content_for_responses(parts: &[ContentBlock]) -> Result<E
 ///
 /// Returns `(system_prompt, input_items)` — the system prompt is extracted
 /// separately since the Responses API carries it as `instructions`.
-pub(crate) fn map_messages(messages: &[ChatMessage]) -> Result<(Option<String>, Vec<InputItem>)> {
+fn map_messages(
+    messages: &[ChatMessage],
+    reasoning_format: ReasoningFormat,
+) -> Result<(Option<String>, Vec<InputItem>)> {
     let mut system_prompt = None;
     let mut items = Vec::new();
 
@@ -186,7 +209,22 @@ pub(crate) fn map_messages(messages: &[ChatMessage]) -> Result<(Option<String>, 
                 if !content.is_empty() {
                     items.push(easy_message(Role::Assistant, content.clone()));
                 }
-                if let Some(encrypted) = &reasoning.encrypted_content {
+                if reasoning_format == ReasoningFormat::PlainText
+                    && let Some(text) = &reasoning.summary_text
+                {
+                    items.push(InputItem::Item(Item::Reasoning(ReasoningItem {
+                        id: None,
+                        summary: vec![],
+                        encrypted_content: None,
+                        content: Some(vec![ReasoningItemContent::ReasoningText(ReasoningTextContent {
+                            text: text.clone(),
+                        })]),
+                        status: None,
+                    })));
+                }
+                if reasoning_format == ReasoningFormat::Encrypted
+                    && let Some(encrypted) = &reasoning.encrypted_content
+                {
                     items.push(InputItem::Item(Item::Reasoning(ReasoningItem {
                         id: Some(encrypted.id.clone()),
                         summary: vec![],
@@ -245,15 +283,25 @@ pub(crate) fn map_messages(messages: &[ChatMessage]) -> Result<(Option<String>, 
 }
 
 /// Map internal `ToolDefinition`s to async-openai `Tool` types.
-pub(crate) fn map_tools(tools: &[ToolDefinition], strict: Option<bool>) -> Result<Vec<Tool>> {
+fn map_tools(tools: &[ToolDefinition], policy: &ResponsesRequestPolicy) -> Result<Vec<Tool>> {
     tools
         .iter()
         .map(|tool| {
+            let parameters = match policy.tool_schema_transform {
+                Some(transform) => {
+                    let mut schema = Schema::try_from(tool.parameters.clone()).map_err(|error| {
+                        LlmError::ToolParameterParsing { tool_name: tool.name.clone(), error: error.to_string() }
+                    })?;
+                    transform(&mut schema);
+                    schema.into()
+                }
+                None => tool.parameters.clone(),
+            };
             Ok(Tool::Function(FunctionTool {
                 name: tool.name.clone(),
                 description: Some(tool.description.clone()),
-                parameters: Some(tool.parameters.clone()),
-                strict,
+                parameters: Some(parameters),
+                strict: policy.tool_strict,
                 defer_loading: None,
                 r#async: None,
                 output_schema: None,
@@ -277,11 +325,11 @@ mod tests {
     };
 
     fn openai_request(model: &str, context: &Context) -> Result<CreateResponse> {
-        build_typed_request(model, context, &ResponsesRequestPolicy::openai())
+        build_typed_request(model, context, &ResponsesRequestPolicy::OPENAI)
     }
 
     fn openai_body(model: &str, context: &Context) -> serde_json::Value {
-        build_wire_request(model, context, &ResponsesRequestPolicy::openai()).unwrap()
+        build_wire_request(model, context, &ResponsesRequestPolicy::OPENAI).unwrap()
     }
 
     #[test]
@@ -407,7 +455,7 @@ mod tests {
     fn a_provider_default_effort_always_ships_with_a_reasoning_object() {
         let context = Context::new(vec![ChatMessage::user("Hi")], vec![]);
 
-        let body = build_wire_request("gpt-5.5", &context, &ResponsesRequestPolicy::codex()).unwrap();
+        let body = build_wire_request("gpt-5.5", &context, &ResponsesRequestPolicy::CODEX).unwrap();
 
         assert_eq!(body["reasoning"]["effort"], "medium");
         assert_eq!(body["reasoning"]["summary"], "auto");
@@ -418,10 +466,8 @@ mod tests {
     fn tool_strict_is_sent_verbatim_per_policy() {
         let tools = vec![ToolDefinition::new("read_file", "Read a file", serde_json::json!({ "type": "object" }))];
 
-        let openai =
-            serde_json::to_value(map_tools(&tools, ResponsesRequestPolicy::openai().tool_strict).unwrap()).unwrap();
-        let codex =
-            serde_json::to_value(map_tools(&tools, ResponsesRequestPolicy::codex().tool_strict).unwrap()).unwrap();
+        let openai = serde_json::to_value(map_tools(&tools, &ResponsesRequestPolicy::OPENAI).unwrap()).unwrap();
+        let codex = serde_json::to_value(map_tools(&tools, &ResponsesRequestPolicy::CODEX).unwrap()).unwrap();
 
         assert_eq!(openai[0]["strict"], false);
         assert!(codex[0].get("strict").is_none(), "{codex}");
@@ -431,7 +477,7 @@ mod tests {
     fn map_messages_extracts_system_prompt() {
         let messages = vec![ChatMessage::system("You are helpful"), ChatMessage::user("Hello")];
 
-        let (system, items) = map_messages(&messages).unwrap();
+        let (system, items) = map_messages(&messages, ReasoningFormat::Encrypted).unwrap();
         assert_eq!(system, Some("You are helpful".to_string()));
         assert_eq!(items.len(), 1);
     }
@@ -466,7 +512,7 @@ mod tests {
             },
         ];
 
-        let (system, items) = map_messages(&messages).unwrap();
+        let (system, items) = map_messages(&messages, ReasoningFormat::Encrypted).unwrap();
         assert!(system.is_none());
         assert_eq!(items.len(), 5); // user + assistant msg + function_call + function_call_output + assistant msg
 
@@ -499,7 +545,7 @@ mod tests {
             error: "command failed".to_string(),
         }))];
 
-        let (_, items) = map_messages(&messages).unwrap();
+        let (_, items) = map_messages(&messages, ReasoningFormat::Encrypted).unwrap();
         assert_eq!(items.len(), 1);
         if let InputItem::Item(Item::FunctionCallOutput(out)) = &items[0] {
             assert!(matches!(&out.output, FunctionCallOutput::Text(t) if t.contains("Error: command failed")));
@@ -517,7 +563,7 @@ mod tests {
             messages_compacted: 5,
         }];
 
-        let (_, items) = map_messages(&messages).unwrap();
+        let (_, items) = map_messages(&messages, ReasoningFormat::Encrypted).unwrap();
         assert_eq!(items.len(), 1);
         if let InputItem::EasyMessage(msg) = &items[0] {
             assert_eq!(msg.role, Role::User);
@@ -555,7 +601,7 @@ mod tests {
             })),
         ];
 
-        let (_, items) = map_messages(&messages).unwrap();
+        let (_, items) = map_messages(&messages, ReasoningFormat::Encrypted).unwrap();
         // EasyMessage items serialize with "type": "message"
         let json = serde_json::to_value(&items[0]).unwrap();
         assert_eq!(json["role"], "user");
@@ -577,7 +623,7 @@ mod tests {
             serde_json::from_str(r#"{"type": "object", "properties": {"path": {"type": "string"}}}"#).unwrap(),
         )];
 
-        let mapped = map_tools(&tools, None).unwrap();
+        let mapped = map_tools(&tools, &ResponsesRequestPolicy::OPENAI).unwrap();
         assert_eq!(mapped.len(), 1);
         if let Tool::Function(f) = &mapped[0] {
             assert_eq!(f.name, "read_file");
@@ -605,7 +651,7 @@ mod tests {
             tool_calls: vec![],
         }];
 
-        let (_, items) = map_messages(&messages).unwrap();
+        let (_, items) = map_messages(&messages, ReasoningFormat::Encrypted).unwrap();
         // Should have: easy_message (text) + reasoning item = 2
         assert_eq!(items.len(), 2);
 
@@ -627,7 +673,7 @@ mod tests {
             tool_calls: vec![],
         }];
 
-        let (_, items) = map_messages(&messages).unwrap();
+        let (_, items) = map_messages(&messages, ReasoningFormat::Encrypted).unwrap();
         // Only the text message, no reasoning item
         assert_eq!(items.len(), 1);
         assert!(matches!(&items[0], InputItem::EasyMessage(_)));
@@ -641,6 +687,6 @@ mod tests {
             timestamp: IsoString::now(),
         }];
 
-        assert!(matches!(map_messages(&messages), Err(LlmError::UnsupportedContent(_))));
+        assert!(matches!(map_messages(&messages, ReasoningFormat::Encrypted), Err(LlmError::UnsupportedContent(_))));
     }
 }

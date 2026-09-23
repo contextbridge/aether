@@ -20,8 +20,12 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use llm::{LlmResponse, TokenUsage};
+use llm::LlmResponse;
+use llm::TokenUsage;
+use llm::providers::openai_compatible::streaming::process_compatible_stream;
+use llm::providers::openai_compatible::types::ChatCompletionStreamResponse;
 use serde_json::Value;
+use tokio_stream::StreamExt;
 
 /// Resolve `tests/fixtures/{provider}/{scenario}.sse` relative to the crate
 /// manifest directory.
@@ -55,6 +59,29 @@ pub fn parse_sse_data_lines(bytes: &[u8]) -> Vec<String> {
         .filter(|s| !s.is_empty() && *s != "[DONE]")
         .map(str::to_string)
         .collect()
+}
+
+pub async fn parse_compatible_fixture(provider: &str, scenario: &str) -> Vec<LlmResponse> {
+    let bytes = read_fixture(provider, scenario);
+    let lines = parse_sse_data_lines(&bytes);
+    let chunks: Vec<ChatCompletionStreamResponse> = lines
+        .into_iter()
+        .filter_map(|line| match serde_json::from_str(&line) {
+            Ok(chunk) => Some(chunk),
+            Err(e) => {
+                eprintln!("{provider}/{scenario}: skipping unparseable line: {e}\n  line: {line}");
+                None
+            }
+        })
+        .collect();
+
+    let stream = tokio_stream::iter(chunks.into_iter().map(Ok::<_, std::io::Error>));
+    let mut processed = Box::pin(process_compatible_stream(stream));
+    let mut events = Vec::new();
+    while let Some(event) = processed.next().await {
+        events.push(event.expect("stream item should not error"));
+    }
+    events
 }
 
 /// Find the first `LlmResponse::Usage` in a list of parsed events.

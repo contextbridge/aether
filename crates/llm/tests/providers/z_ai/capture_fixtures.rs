@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use crate::providers::common::{post_json_capture, require_env, write_fixture};
 
 const MODEL: &str = "GLM-4.6";
-// Subscription / coding endpoint, matching `providers::openai_compatible::generic::ZAI`.
+// Subscription / coding endpoint, matching `providers::generic::ZAI`.
 const URL: &str = "https://api.z.ai/api/coding/paas/v4/chat/completions";
 
 #[tokio::test]
