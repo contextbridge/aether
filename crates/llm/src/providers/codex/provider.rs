@@ -43,7 +43,7 @@ impl CodexProvider {
     }
 
     fn build_wire_request(&self, context: &Context) -> Result<serde_json::Value> {
-        build_wire_request(&self.model, context, &ResponsesRequestPolicy::codex())
+        build_wire_request(&self.model, context, &ResponsesRequestPolicy::CODEX)
     }
 
     async fn build_headers(&self) -> Result<HeaderMap> {

@@ -174,6 +174,7 @@ context.set_model_settings(ModelSettings {
 | Anthropic | `anthropic:claude-sonnet-4-5-20250929` | `ANTHROPIC_API_KEY` |
 | `OpenAI` | `openai:gpt-4o` | `OPENAI_API_KEY` |
 | `OpenRouter` | `openrouter:moonshotai/kimi-k2` | `OPENROUTER_API_KEY` |
+| Xiaomi | `xiaomi:mimo-v2.6-pro` | `XIAOMI_API_KEY` |
 | ZAI | `zai:GLM-4.6` | `ZAI_API_KEY` |
 | AWS Bedrock | `bedrock:us.anthropic.claude-sonnet-4-5-20250929-v1:0` | AWS credentials |
 | Ollama | `ollama:llama3.2` | None (local) |

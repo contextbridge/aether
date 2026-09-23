@@ -187,6 +187,7 @@ mod tests {
             ("gemini:gemini-2.5-pro", Some("GEMINI_API_KEY")),
             ("openrouter:anthropic/claude-opus-4.6", Some("OPENROUTER_API_KEY")),
             ("zai:glm-4.5", Some("ZAI_API_KEY")),
+            ("xiaomi:mimo-v2.6-pro", Some("XIAOMI_API_KEY")),
             ("codex:gpt-5.5", None),
             ("bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0", None),
         ];
@@ -196,6 +197,15 @@ mod tests {
         }
         assert_eq!(LlmModel::Ollama("foo".into()).required_env_var(), None);
         assert_eq!(LlmModel::LlamaCpp("foo".into()).required_env_var(), None);
+    }
+
+    #[test]
+    fn xiaomi_models_parse_with_catalog_metadata() {
+        let model: LlmModel = "xiaomi:mimo-v2.6-pro".parse().unwrap();
+        assert_eq!(model.model_id(), "mimo-v2.6-pro");
+        assert_eq!(model.context_window(), Some(1_048_576));
+        assert_eq!(model.provider_display_name(), "Xiaomi");
+        assert!(model.supports_reasoning());
     }
 
     #[test]

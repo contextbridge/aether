@@ -262,6 +262,7 @@ const PROVIDERS: &[ProviderConfig] = &[
     },
     ProviderConfig::standard("openai", "Openai", "openai", "OpenAI", Some("OPENAI_API_KEY")),
     ProviderConfig::standard("openrouter", "OpenRouter", "openrouter", "OpenRouter", Some("OPENROUTER_API_KEY")),
+    ProviderConfig::standard("xiaomi", "Xiaomi", "xiaomi", "Xiaomi", Some("XIAOMI_API_KEY")),
     ProviderConfig {
         extra_source_ids: &["zai-coding-plan"],
         ..ProviderConfig::openai_compatible("zai", "ZAi", "zai", "ZAI", "ZAI_API_KEY")
@@ -1065,6 +1066,7 @@ fn emit_llm_model_impl() -> TokenStream {
         &quote! { crate::reasoning::ReasoningDisabledSupport::Unsupported },
     );
     let supports_reasoning = emit_llm_supports_reasoning();
+    let supports_reasoning_off_transport = emit_llm_supports_reasoning_off_transport();
     let supports_prompt_caching = emit_llm_supports_prompt_caching();
     let pricing = emit_llm_pricing();
     let modality_methods = ["image", "audio"].iter().map(|m| emit_llm_supports_modality(m));
@@ -1092,20 +1094,7 @@ fn emit_llm_model_impl() -> TokenStream {
                 self.reasoning_levels().contains(&ReasoningEffort::Disabled)
             }
 
-            /// Whether the model's adapter implements its advertised disabling contract.
-            pub fn supports_reasoning_off_transport(&self) -> bool {
-                if !self.supports_reasoning_off() {
-                    return false;
-                }
-                match self.provider_enum() {
-                    Provider::Anthropic | Provider::OpenRouter | Provider::Openai | Provider::Codex | Provider::Gemini => true,
-                    Provider::Bedrock => self.transport().is_some(),
-                    Provider::DeepSeek | Provider::Moonshot | Provider::ZAi | Provider::AzureFoundry | Provider::Fireworks => {
-                        self.reasoning_disabled_support() == crate::reasoning::ReasoningDisabledSupport::Effort
-                    }
-                    Provider::Ollama | Provider::LlamaCpp => false,
-                }
-            }
+            #supports_reasoning_off_transport
 
             /// Explicit choices executable by the current adapter. Default is always valid.
             pub fn effective_reasoning_levels(&self) -> Vec<ReasoningEffort> {
@@ -1302,6 +1291,38 @@ fn emit_llm_supports_reasoning() -> TokenStream {
         /// Whether this model supports reasoning/extended thinking
         pub fn supports_reasoning(&self) -> bool {
             self.reasoning_levels().iter().any(|effort| effort.is_enabled())
+        }
+    }
+}
+
+fn emit_llm_supports_reasoning_off_transport() -> TokenStream {
+    let variants = |filter: fn(&ProviderConfig) -> bool| {
+        let pats = PROVIDERS.iter().filter(|cfg| filter(cfg)).map(|cfg| {
+            let v = format_ident!("{}", cfg.enum_name);
+            quote! { Provider::#v }
+        });
+        quote! { #(#pats)|* }
+    };
+    let effort_only = variants(|cfg| cfg.uses_openai_compatible_api);
+    let model_transport = variants(|cfg| cfg.use_model_transport);
+    let always = variants(|cfg| !cfg.uses_openai_compatible_api && !cfg.use_model_transport);
+    let dynamic = DYNAMIC_PROVIDERS.iter().map(|d| {
+        let v = format_ident!("{}", d.enum_name);
+        quote! { Provider::#v }
+    });
+    quote! {
+        pub fn supports_reasoning_off_transport(&self) -> bool {
+            if !self.supports_reasoning_off() {
+                return false;
+            }
+            match self.provider_enum() {
+                #always => true,
+                #model_transport => self.transport().is_some(),
+                #effort_only => {
+                    self.reasoning_disabled_support() == crate::reasoning::ReasoningDisabledSupport::Effort
+                }
+                #(#dynamic)|* => false,
+            }
         }
     }
 }

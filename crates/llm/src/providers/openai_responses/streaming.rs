@@ -53,8 +53,8 @@ pub enum ResponsesStreamEvent {
     FunctionCallArgumentsDelta(ResponsesFunctionCallArgumentsDeltaEvent),
     #[serde(rename = "response.function_call_arguments.done")]
     FunctionCallArgumentsDone(ResponsesFunctionCallArgumentsDoneEvent),
-    #[serde(rename = "response.reasoning_summary_text.delta")]
-    ReasoningSummaryTextDelta(ResponsesTextDeltaEvent),
+    #[serde(rename = "response.reasoning_summary_text.delta", alias = "response.reasoning_text.delta")]
+    ReasoningTextDelta(ResponsesTextDeltaEvent),
     #[serde(rename = "response.completed")]
     Completed(ResponsesCompletedEvent),
     #[serde(rename = "response.incomplete")]
@@ -225,7 +225,8 @@ fn process_event(
         }
         ResponsesStreamEvent::OutputItemAdded(e) => {
             if let OutputItem::FunctionCall(call) = e.item {
-                let tool_responses = tool_collector.handle_delta(e.output_index, call.id, Some(call.name), None);
+                let tool_responses =
+                    tool_collector.handle_delta(e.output_index, Some(call.call_id), Some(call.name), None);
                 responses.extend(tool_responses.into_iter().map(Ok));
             }
         }
@@ -238,7 +239,7 @@ fn process_event(
                 responses.push(Ok(LlmResponse::ToolRequestComplete { tool_call: tc }));
             }
         }
-        ResponsesStreamEvent::ReasoningSummaryTextDelta(e) if !e.delta.is_empty() => {
+        ResponsesStreamEvent::ReasoningTextDelta(e) if !e.delta.is_empty() => {
             responses.push(Ok(LlmResponse::Reasoning { chunk: e.delta }));
         }
         ResponsesStreamEvent::OutputItemDone(e) => {
@@ -275,7 +276,7 @@ fn process_event(
         }
         ResponsesStreamEvent::Ignored
         | ResponsesStreamEvent::OutputTextDelta(_)
-        | ResponsesStreamEvent::ReasoningSummaryTextDelta(_) => {}
+        | ResponsesStreamEvent::ReasoningTextDelta(_) => {}
     }
 
     responses
@@ -344,7 +345,7 @@ mod tests {
 
         assert!(matches!(responses[0], LlmResponse::Start));
         assert!(
-            matches!(&responses[1], LlmResponse::ToolRequestStart { id, name } if id == "fc_1" && name == "read_file")
+            matches!(&responses[1], LlmResponse::ToolRequestStart { id, name } if id == "call_1" && name == "read_file")
         );
         assert!(matches!(responses[2], LlmResponse::ToolRequestArg { .. }));
         assert!(matches!(responses[3], LlmResponse::ToolRequestArg { .. }));
@@ -352,7 +353,7 @@ mod tests {
         let tc = responses.iter().find(|r| matches!(r, LlmResponse::ToolRequestComplete { .. }));
         assert!(tc.is_some());
         if let LlmResponse::ToolRequestComplete { tool_call } = tc.unwrap() {
-            assert_eq!(tool_call.id, "fc_1");
+            assert_eq!(tool_call.id, "call_1");
             assert_eq!(tool_call.name, "read_file");
             assert_eq!(tool_call.arguments, r#"{"path":"foo.rs"}"#);
         }
@@ -701,7 +702,7 @@ mod tests {
     }
 
     fn reasoning_delta(delta: &str) -> ResponsesStreamEvent {
-        ResponsesStreamEvent::ReasoningSummaryTextDelta(ResponsesTextDeltaEvent { delta: delta.to_string() })
+        ResponsesStreamEvent::ReasoningTextDelta(ResponsesTextDeltaEvent { delta: delta.to_string() })
     }
 
     fn function_call_delta(delta: &str) -> ResponsesStreamEvent {

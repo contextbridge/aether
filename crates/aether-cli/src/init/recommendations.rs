@@ -77,6 +77,7 @@ pub(crate) fn recommended_for_provider(provider: Provider) -> Option<ProviderRec
         | Provider::Fireworks
         | Provider::Gemini
         | Provider::Moonshot
+        | Provider::Xiaomi
         | Provider::Ollama
         | Provider::LlamaCpp => None,
     }
@@ -114,6 +115,7 @@ mod tests {
         assert!(recommended_for_provider(Provider::Fireworks).is_none());
         assert!(recommended_for_provider(Provider::DeepSeek).is_none());
         assert!(recommended_for_provider(Provider::Moonshot).is_none());
+        assert!(recommended_for_provider(Provider::Xiaomi).is_none());
     }
 
     #[test]

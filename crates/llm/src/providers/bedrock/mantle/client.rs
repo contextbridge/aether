@@ -57,7 +57,7 @@ impl MantleClient {
         context: &Context,
     ) -> Result<ResponsesConnection> {
         let url = self.endpoint(transport)?;
-        let body = build_wire_request(model, context, &ResponsesRequestPolicy::mantle())?;
+        let body = build_wire_request(model, context, &ResponsesRequestPolicy::MANTLE)?;
 
         debug!(model, url, auth = %self.auth, "Sending Bedrock Mantle responses request");
 

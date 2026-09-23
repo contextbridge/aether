@@ -7,9 +7,8 @@ use crate::providers::codex::CodexProvider;
 use crate::providers::{
     anthropic::AnthropicProvider,
     gemini::GeminiProvider,
+    generic::{self, GenericProvider},
     local::{llama_cpp::LlamaCppProvider, ollama::OllamaProvider},
-    openai::OpenAiProvider,
-    openai_compatible::generic::{self, GenericOpenAiProvider},
     openrouter::OpenRouterProvider,
 };
 use crate::{
@@ -44,11 +43,10 @@ impl Default for ModelProviderParser {
             .with_provider::<GeminiProvider>("gemini")
             .with_provider::<OpenRouterProvider>("openrouter")
             .with_provider::<OllamaProvider>("ollama")
-            .with_provider::<LlamaCppProvider>("llamacpp")
-            .with_provider::<OpenAiProvider>("openai");
+            .with_provider::<LlamaCppProvider>("llamacpp");
 
         for config in generic::BUILT_INS {
-            parser = parser.with_openai_provider(config);
+            parser = parser.with_generic_provider(config);
         }
 
         #[cfg(feature = "bedrock")]
@@ -97,17 +95,13 @@ impl ModelProviderParser {
         self
     }
 
-    pub fn with_openai_provider(mut self, config: &'static generic::ProviderConfig) -> Self {
+    pub fn with_generic_provider(mut self, config: &'static generic::ProviderConfig) -> Self {
         self.factories.insert(
             config.provider.parser_name().to_string(),
             Box::new(move |model: &str, connection: ProviderConnectionConfig| {
                 let model = model.to_string();
                 Box::pin(async move {
-                    Ok(
-                        Box::new(
-                            GenericOpenAiProvider::from_env_with_connection(config, connection)?.with_model(&model),
-                        ) as _,
-                    )
+                    Ok(Box::new(GenericProvider::from_env_with_connection(config, connection)?.with_model(&model)) as _)
                 })
             }),
         );
