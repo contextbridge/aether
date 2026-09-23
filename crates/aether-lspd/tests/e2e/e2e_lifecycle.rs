@@ -1,31 +1,8 @@
-use crate::common::{CargoProject, DaemonHarness, TestProject, hover_text, use_fake_rust_server};
+use crate::common::{
+    CargoProject, DaemonHarness, TestProject, diagnostic_count, hover_text, poll_diagnostics, use_fake_rust_server,
+};
 use aether_lspd::{LanguageId, LspClient, lockfile_path, socket_path};
-use lsp_types::PublishDiagnosticsParams;
-use std::time::{Duration, Instant};
-
-async fn poll_workspace_diagnostics(
-    client: &LspClient,
-    predicate: impl Fn(&[PublishDiagnosticsParams]) -> bool,
-    timeout: Duration,
-) -> Vec<PublishDiagnosticsParams> {
-    let start = Instant::now();
-    let mut last = Vec::new();
-
-    while start.elapsed() < timeout {
-        let diagnostics = client.get_diagnostics(None).await.expect("Failed to get workspace diagnostics");
-        if predicate(&diagnostics) {
-            return diagnostics;
-        }
-        last = diagnostics;
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-
-    panic!("workspace diagnostics timed out after {timeout:?}. Last result: {last:?}");
-}
-
-fn workspace_error_count(diagnostics: &[PublishDiagnosticsParams]) -> usize {
-    diagnostics.iter().map(|params| params.diagnostics.len()).sum()
-}
+use std::time::Duration;
 
 #[tokio::test]
 async fn daemon_persists_after_client_disconnect() {
@@ -102,15 +79,11 @@ async fn workspace_bootstrap_diagnostics_are_available_without_explicit_open() {
     let harness = DaemonHarness::spawn(&root, LanguageId::Rust).await.expect("Failed to spawn daemon");
     let client = harness.connect().await.expect("Failed to connect client");
 
-    let diagnostics = poll_workspace_diagnostics(
-        &client,
-        |diagnostics| workspace_error_count(diagnostics) > 0,
-        Duration::from_secs(10),
-    )
-    .await;
+    let diagnostics =
+        poll_diagnostics(&client, None, |diagnostics| diagnostic_count(diagnostics) > 0, Duration::from_secs(10)).await;
 
     assert_eq!(diagnostics.len(), 1);
-    assert_eq!(workspace_error_count(&diagnostics), 1);
+    assert_eq!(diagnostic_count(&diagnostics), 1);
 
     harness.kill().await.expect("Failed to kill daemon");
 }
@@ -126,20 +99,15 @@ async fn workspace_diagnostics_refresh_after_external_edit_without_explicit_open
     let client = harness.connect().await.expect("Failed to connect client");
     let main_rs = project.root().join("src/main.rs");
 
-    let initial =
-        poll_workspace_diagnostics(&client, |diagnostics| diagnostics.len() == 1, Duration::from_secs(10)).await;
-    assert_eq!(workspace_error_count(&initial), 0);
+    let initial = poll_diagnostics(&client, None, |diagnostics| diagnostics.len() == 1, Duration::from_secs(10)).await;
+    assert_eq!(diagnostic_count(&initial), 0);
 
     std::fs::write(&main_rs, "fn main() { let error = 1; }\n").expect("Failed to write file");
 
-    let refreshed = poll_workspace_diagnostics(
-        &client,
-        |diagnostics| workspace_error_count(diagnostics) > 0,
-        Duration::from_secs(10),
-    )
-    .await;
+    let refreshed =
+        poll_diagnostics(&client, None, |diagnostics| diagnostic_count(diagnostics) > 0, Duration::from_secs(10)).await;
     assert_eq!(refreshed.len(), 1);
-    assert_eq!(workspace_error_count(&refreshed), 1);
+    assert_eq!(diagnostic_count(&refreshed), 1);
 
     harness.kill().await.expect("Failed to kill daemon");
 }

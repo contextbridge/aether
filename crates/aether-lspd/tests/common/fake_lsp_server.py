@@ -3,6 +3,7 @@ import argparse
 import sys
 
 docs = {}
+rejected_pull_count = 0
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--wedge-on", action="append", default=[])
@@ -43,19 +44,32 @@ def read_message():
     return json.loads(body.decode("utf-8"))
 
 
+def diagnostics_for(text):
+    if "error" not in text.lower():
+        return []
+    return [
+        {
+            "range": {
+                "start": {"line": 0, "character": 0},
+                "end": {"line": 0, "character": 5},
+            },
+            "severity": 1,
+            "message": "error token",
+        }
+    ]
+
+
+def suppresses_push(uri):
+    return "pushless" in uri
+
+
+def rejects_pull(uri):
+    return "pullless" in uri
+
+
 def publish(uri, text):
-    diagnostics = []
-    if "error" in text.lower():
-        diagnostics.append(
-            {
-                "range": {
-                    "start": {"line": 0, "character": 0},
-                    "end": {"line": 0, "character": 5},
-                },
-                "severity": 1,
-                "message": "error token",
-            }
-        )
+    if suppresses_push(uri):
+        return
 
     write_message(
         {
@@ -63,7 +77,7 @@ def publish(uri, text):
             "method": "textDocument/publishDiagnostics",
             "params": {
                 "uri": uri,
-                "diagnostics": diagnostics,
+                "diagnostics": diagnostics_for(text),
             },
         }
     )
@@ -146,6 +160,11 @@ while True:
                 "result": {
                     "capabilities": {
                         "hoverProvider": True,
+                        "diagnosticProvider": {
+                            "identifier": "fake",
+                            "interFileDependencies": False,
+                            "workspaceDiagnostics": False,
+                        },
                     }
                 },
             }
@@ -194,7 +213,7 @@ while True:
                 "result": {
                     "contents": {
                         "kind": "plaintext",
-                        "value": f"open_count={state['open_count']}; text={state['text']}",
+                        "value": f"open_count={state['open_count']}; text={state['text']}; rejections={rejected_pull_count}",
                     }
                 },
             }
@@ -305,6 +324,29 @@ while True:
                             }
                         ]
                     }
+                },
+            }
+        )
+    elif method == "textDocument/diagnostic":
+        uri = params["textDocument"]["uri"]
+        if rejects_pull(uri):
+            rejected_pull_count += 1
+            write_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": message["id"],
+                    "error": {"code": -32601, "message": "Method not found"},
+                }
+            )
+            continue
+        state = document(uri)
+        write_message(
+            {
+                "jsonrpc": "2.0",
+                "id": message["id"],
+                "result": {
+                    "kind": "full",
+                    "items": diagnostics_for(state.get("text", "")),
                 },
             }
         )
