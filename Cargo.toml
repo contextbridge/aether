@@ -62,7 +62,7 @@ url = "2.5"
 axum = "0.8.9"
 http = "1.5.0"
 tower = "0.5.3"
-tower-http = "0.6.11"
+tower-http = "0.7.1"
 
 # LSP types - shared across packages
 lsp-types = "0.97"
