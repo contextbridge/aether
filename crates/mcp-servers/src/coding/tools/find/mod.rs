@@ -149,12 +149,24 @@ impl FindState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::{self, File};
-    use tempfile::TempDir;
+    use crate::testing::TestWorkspace;
+
+    async fn find(workspace: &TestWorkspace, pattern: &str) -> FindOutput {
+        find_with(workspace, FindInput { pattern: pattern.to_string(), ..FindInput::default() }).await
+    }
+
+    async fn find_with(workspace: &TestWorkspace, input: FindInput) -> FindOutput {
+        find_result(workspace, input).await.unwrap()
+    }
+
+    async fn find_result(workspace: &TestWorkspace, input: FindInput) -> Result<FindOutput, FindError> {
+        find_files(FindInput { path: Some(workspace.root_string()), ..input }).await
+    }
 
     #[tokio::test]
     async fn test_exact_pattern_match() {
-        let result = FindTest::new().with_file("test.rs").find("**/test.rs").await;
+        let workspace = TestWorkspace::new().file("test.rs", "");
+        let result = find(&workspace, "**/test.rs").await;
 
         assert_eq!(result.count, 1);
         assert!(result.matches[0].ends_with("test.rs"));
@@ -162,14 +174,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_glob_wildcard_pattern() {
-        let result = FindTest::new()
-            .with_file("test.rs")
-            .with_file("main.rs")
-            .with_file("lib.rs")
-            .with_file("notes.txt")
-            .with_file("subdir/nested.rs")
-            .find("**/*.rs")
-            .await;
+        let workspace = TestWorkspace::new()
+            .file("test.rs", "")
+            .file("main.rs", "")
+            .file("lib.rs", "")
+            .file("notes.txt", "")
+            .file("subdir/nested.rs", "");
+        let result = find(&workspace, "**/*.rs").await;
 
         assert_eq!(result.count, 4);
         assert!(
@@ -182,7 +193,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_bare_exact_filename_matches_any_depth() {
-        let result = FindTest::new().with_file("justfile").with_file("subdir/justfile").find("justfile").await;
+        let workspace = TestWorkspace::new().file("justfile", "").file("subdir/justfile", "");
+        let result = find(&workspace, "justfile").await;
 
         assert_eq!(result.count, 2);
         assert!(result.matches.iter().any(|p| p.ends_with("justfile")));
@@ -191,7 +203,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_bare_prefix_glob_matches_basename() {
-        let result = FindTest::new().with_file("README.md").with_file("docs/README.adoc").find("README*").await;
+        let workspace = TestWorkspace::new().file("README.md", "").file("docs/README.adoc", "");
+        let result = find(&workspace, "README*").await;
         assert_eq!(result.count, 2);
         assert!(result.matches.iter().any(|p| p.ends_with("README.md")));
         assert!(result.matches.iter().any(|p| p.ends_with("docs/README.adoc")));
@@ -199,11 +212,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_bare_glob_matches_nested_files() {
-        let result = FindTest::new()
-            .with_file("tsconfig.base.json")
-            .with_file("packages/foo/tsconfig.json")
-            .find("tsconfig*.json")
-            .await;
+        let workspace = TestWorkspace::new().file("tsconfig.base.json", "").file("packages/foo/tsconfig.json", "");
+        let result = find(&workspace, "tsconfig*.json").await;
         assert_eq!(result.count, 2);
         assert!(result.matches.iter().any(|p| p.ends_with("tsconfig.base.json")));
         assert!(result.matches.iter().any(|p| p.ends_with("packages/foo/tsconfig.json")));
@@ -211,17 +221,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_relative_path_pattern_matches_relative_to_search_root() {
-        let result =
-            FindTest::new().with_file("crates/example/src/lib.rs").with_file("lib.rs").find("crates/**/*.rs").await;
+        let workspace = TestWorkspace::new().file("crates/example/src/lib.rs", "").file("lib.rs", "");
+        let result = find(&workspace, "crates/**/*.rs").await;
         assert_eq!(result.count, 1);
         assert!(result.matches[0].ends_with("crates/example/src/lib.rs"));
     }
 
     #[tokio::test]
     async fn test_limit_truncates_results() {
-        let test = FindTest::new().with_file("one.rs").with_file("two.rs").with_file("three.rs");
+        let workspace = TestWorkspace::new().file("one.rs", "").file("two.rs", "").file("three.rs", "");
         let result =
-            test.find_with(FindInput { pattern: "*.rs".to_string(), limit: Some(2), ..FindInput::default() }).await;
+            find_with(&workspace, FindInput { pattern: "*.rs".to_string(), limit: Some(2), ..FindInput::default() })
+                .await;
 
         assert_eq!(result.count, 2);
         assert!(result.truncated);
@@ -229,9 +240,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_exact_limit_does_not_report_truncation() {
-        let test = FindTest::new().with_file("one.rs").with_file("two.rs");
+        let workspace = TestWorkspace::new().file("one.rs", "").file("two.rs", "");
         let result =
-            test.find_with(FindInput { pattern: "*.rs".to_string(), limit: Some(2), ..FindInput::default() }).await;
+            find_with(&workspace, FindInput { pattern: "*.rs".to_string(), limit: Some(2), ..FindInput::default() })
+                .await;
 
         assert_eq!(result.count, 2);
         assert!(!result.truncated);
@@ -239,9 +251,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_zero_limit_without_matches_is_not_truncated() {
-        let result = FindTest::new()
-            .find_with(FindInput { pattern: "*.rs".to_string(), limit: Some(0), ..FindInput::default() })
-            .await;
+        let result = find_with(
+            &TestWorkspace::new(),
+            FindInput { pattern: "*.rs".to_string(), limit: Some(0), ..FindInput::default() },
+        )
+        .await;
 
         assert_eq!(result.count, 0);
         assert!(!result.truncated);
@@ -249,9 +263,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_limit_not_reached_returns_all_matches() {
-        let test = FindTest::new().with_file("one.rs").with_file("two.rs");
+        let workspace = TestWorkspace::new().file("one.rs", "").file("two.rs", "");
         let result =
-            test.find_with(FindInput { pattern: "*.rs".to_string(), limit: Some(10), ..FindInput::default() }).await;
+            find_with(&workspace, FindInput { pattern: "*.rs".to_string(), limit: Some(10), ..FindInput::default() })
+                .await;
 
         assert_eq!(result.count, 2);
         assert!(!result.truncated);
@@ -259,9 +274,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_zero_limit_detects_truncation_without_returning_matches() {
-        let test = FindTest::new().with_file("one.rs");
+        let workspace = TestWorkspace::new().file("one.rs", "");
         let result =
-            test.find_with(FindInput { pattern: "*.rs".to_string(), limit: Some(0), ..FindInput::default() }).await;
+            find_with(&workspace, FindInput { pattern: "*.rs".to_string(), limit: Some(0), ..FindInput::default() })
+                .await;
 
         assert_eq!(result.count, 0);
         assert!(result.truncated);
@@ -269,20 +285,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_hidden_files_are_skipped_by_default() {
-        let result = FindTest::new().with_file(".aether/settings.json").find("settings.json").await;
+        let workspace = TestWorkspace::new().file(".aether/settings.json", "");
+        let result = find(&workspace, "settings.json").await;
         assert_eq!(result.count, 0);
     }
 
     #[tokio::test]
     async fn test_include_hidden_finds_hidden_files() {
-        let test = FindTest::new().with_file(".aether/settings.json");
-        let result = test
-            .find_with(FindInput {
-                pattern: "settings.json".to_string(),
-                include_hidden: Some(true),
-                ..FindInput::default()
-            })
-            .await;
+        let workspace = TestWorkspace::new().file(".aether/settings.json", "");
+        let result = find_with(
+            &workspace,
+            FindInput { pattern: "settings.json".to_string(), include_hidden: Some(true), ..FindInput::default() },
+        )
+        .await;
 
         assert_eq!(result.count, 1);
         assert!(result.matches[0].ends_with(".aether/settings.json"));
@@ -290,14 +305,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_case_insensitive_matching() {
-        let test = FindTest::new().with_file("README.md");
-        let result = test
-            .find_with(FindInput {
-                pattern: "readme*".to_string(),
-                case_insensitive: Some(true),
-                ..FindInput::default()
-            })
-            .await;
+        let workspace = TestWorkspace::new().file("README.md", "");
+        let result = find_with(
+            &workspace,
+            FindInput { pattern: "readme*".to_string(), case_insensitive: Some(true), ..FindInput::default() },
+        )
+        .await;
 
         assert_eq!(result.count, 1);
         assert!(result.matches[0].ends_with("README.md"));
@@ -317,7 +330,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_validation_error_empty_pattern() {
-        let result = FindTest::new().find_result(FindInput { pattern: String::new(), ..FindInput::default() }).await;
+        let result =
+            find_result(&TestWorkspace::new(), FindInput { pattern: String::new(), ..FindInput::default() }).await;
         assert!(matches!(result, Err(FindError::Glob(_))));
     }
 
@@ -330,47 +344,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_results_are_sorted() {
-        let result = FindTest::new().with_file("c.rs").with_file("a.rs").with_file("b.rs").find("**/*.rs").await;
+        let result = find_result(
+            &TestWorkspace::new().file("c.rs", "").file("a.rs", "").file("b.rs", ""),
+            FindInput { pattern: "**/*.rs".to_string(), ..FindInput::default() },
+        )
+        .await
+        .unwrap();
         let sorted: Vec<String> = {
             let mut v = result.matches.clone();
             v.sort();
             v
         };
         assert_eq!(result.matches, sorted);
-    }
-
-    struct FindTest {
-        temp_dir: TempDir,
-    }
-
-    impl FindTest {
-        fn new() -> Self {
-            Self { temp_dir: TempDir::new().unwrap() }
-        }
-
-        fn with_file(self, path: &str) -> Self {
-            let file_path = self.temp_dir.path().join(path);
-            if let Some(parent) = file_path.parent() {
-                fs::create_dir_all(parent).unwrap();
-            }
-            File::create(file_path).unwrap();
-            self
-        }
-
-        async fn find(&self, pattern: &str) -> FindOutput {
-            self.find_with(FindInput { pattern: pattern.to_string(), ..FindInput::default() }).await
-        }
-
-        async fn find_with(&self, input: FindInput) -> FindOutput {
-            self.find_result(input).await.unwrap()
-        }
-
-        async fn find_result(&self, input: FindInput) -> Result<FindOutput, FindError> {
-            find_files(FindInput { path: Some(self.path_string()), ..input }).await
-        }
-
-        fn path_string(&self) -> String {
-            self.temp_dir.path().to_string_lossy().to_string()
-        }
     }
 }

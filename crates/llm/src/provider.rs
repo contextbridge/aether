@@ -160,9 +160,12 @@ mod tests {
 
     #[test]
     fn lookup_context_window_openrouter_model() {
-        // OpenRouter Qwen models should resolve from catalog
-        let result = get_context_window("openrouter", "anthropic/claude-opus-4");
-        assert_eq!(result, Some(200_000));
+        let model = LlmModel::all()
+            .iter()
+            .find(|model| model.provider() == "openrouter" && model.context_window().is_some())
+            .expect("OpenRouter catalog should contain a model with a context window");
+
+        assert_eq!(get_context_window(model.provider(), &model.model_id()), model.context_window());
     }
 
     #[test]

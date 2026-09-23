@@ -116,24 +116,15 @@ pub async fn list_files(args: ListFilesArgs) -> Result<ListFilesResult, ListFile
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use std::os::unix::fs::symlink;
-    use tempfile::TempDir;
+    use crate::testing::TestWorkspace;
 
     #[tokio::test]
     async fn list_files_reports_symlink_for_directory_symlink() {
-        let temp_dir = TempDir::new().unwrap();
-        let sub_dir = temp_dir.path().join("real_dir");
-        fs::create_dir(&sub_dir).unwrap();
-        let link_path = temp_dir.path().join("link_dir");
-        symlink(&sub_dir, &link_path).unwrap();
+        let workspace = TestWorkspace::new().dir("real_dir").symlink("real_dir", "link_dir");
 
-        let result = list_files(ListFilesArgs {
-            path: Some(temp_dir.path().to_string_lossy().to_string()),
-            include_hidden: Some(true),
-        })
-        .await
-        .unwrap();
+        let result = list_files(ListFilesArgs { path: Some(workspace.root_string()), include_hidden: Some(true) })
+            .await
+            .unwrap();
 
         let file_info =
             result.files.iter().find(|file| file.name == "link_dir").expect("directory symlink should be returned");
@@ -142,18 +133,11 @@ mod tests {
 
     #[tokio::test]
     async fn list_files_reports_symlink_type() {
-        let temp_dir = TempDir::new().unwrap();
-        let target_path = temp_dir.path().join("target.txt");
-        let link_path = temp_dir.path().join("link.txt");
-        fs::write(&target_path, "hello").unwrap();
-        symlink(&target_path, &link_path).unwrap();
+        let workspace = TestWorkspace::new().file("target.txt", "hello").symlink("target.txt", "link.txt");
 
-        let result = list_files(ListFilesArgs {
-            path: Some(temp_dir.path().to_string_lossy().to_string()),
-            include_hidden: Some(true),
-        })
-        .await
-        .unwrap();
+        let result = list_files(ListFilesArgs { path: Some(workspace.root_string()), include_hidden: Some(true) })
+            .await
+            .unwrap();
 
         let file_info = result.files.iter().find(|file| file.name == "link.txt").expect("symlink should be returned");
         assert!(matches!(file_info.file_type, FileType::Symlink));
