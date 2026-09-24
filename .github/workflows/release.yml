@@ -427,3 +427,64 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
           persist-credentials: false
           submodules: recursive
+
+  bump-ts-packages:
+    needs:
+      - plan
+      - publish-npm
+    runs-on: "ubuntu-22.04"
+    environment: ci
+    permissions:
+      contents: read
+    steps:
+      - name: Generate ContextBridge app token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.CB_PR_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.CB_PR_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: contextbridge
+          repositories: aether
+          permission-contents: write
+          permission-pull-requests: write
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          cache: false
+      - name: Bump TypeScript packages to the released CLI
+        id: bump
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          cli_version="${TAG#aether-agent-cli-v}"
+          echo "cli_version=$cli_version" >> "$GITHUB_OUTPUT"
+          pnpm --filter @aether-agent/sdk add "@aether-agent/cli@^$cli_version" --lockfile-only
+          if ! git diff --quiet packages/aether-sdk/package.json; then
+            (cd packages/aether-sdk && npm version patch --no-git-tag-version)
+            (cd packages/aether-evals && npm version patch --no-git-tag-version)
+          fi
+      - name: Open TypeScript packages bump PR
+        id: pr
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          branch: release-ts/bump
+          title: "chore(deps): update TypeScript packages for Aether ${{ steps.bump.outputs.cli_version }}"
+          commit-message: "chore(deps): update TypeScript packages for Aether ${{ steps.bump.outputs.cli_version }}"
+          body: |
+            Points `@aether-agent/sdk` at `@aether-agent/cli@^${{ steps.bump.outputs.cli_version }}` and patch-bumps `@aether-agent/sdk` and `@aether-agent/evals`.
+
+            Auto-merges once checks pass.
+          add-paths: |
+            packages/aether-sdk/package.json
+            packages/aether-evals/package.json
+            pnpm-lock.yaml
+      - name: Enable auto-merge
+        if: steps.pr.outputs.pull-request-operation == 'created'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.pull-request-number }}
+        run: gh pr merge --auto --squash "$PR_NUMBER"

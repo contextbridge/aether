@@ -1,9 +1,12 @@
-name: Release SDK
+name: Release TypeScript packages
 
 on:
   push:
-    tags:
-      - "aether-sdk-v*"
+    branches: [main]
+    paths:
+      - "packages/aether-sdk/package.json"
+      - "packages/aether-evals/package.json"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -39,9 +42,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build
+      - name: Build SDK
         run: pnpm sdk:build
 
+      - name: Build evals
+        run: pnpm evals:build
+
+      # pnpm -r publishes the SDK before evals, stops on the first failure, and skips versions already on npm.
       - name: Publish
-        run: npm publish --access public --provenance
-        working-directory: packages/aether-sdk
+        run: pnpm -r --filter @aether-agent/sdk --filter @aether-agent/evals publish --access public --provenance --no-git-checks
