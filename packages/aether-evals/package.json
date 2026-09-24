@@ -1,6 +1,6 @@
 {
   "name": "@aether-agent/evals",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Evaluation harness for the Aether agent SDK",
   "repository": {
     "type": "git",
