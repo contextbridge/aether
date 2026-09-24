@@ -18,7 +18,7 @@ The `subagents` server lets one agent delegate work to other configured agents. 
 }
 ```
 
-`--project-root` loads `.aether/settings.json` from that directory. `--dir` is accepted as an alias. When omitted, the built-in in-memory server uses the workspace root; the standalone `mcp-servers-stdio --server subagents` binary defaults to the current directory.
+`--project-root` (alias `--dir`) sets the workspace root child agents use to resolve their resource paths (`${WORKSPACE}` resolves there). It does not change which agents are available: the built-in in-memory server uses the agent registry already loaded by the host Aether process. The standalone `mcp-servers-stdio --server subagents` binary, by contrast, loads `.aether/settings.json` from `--project-root` to build its agent registry (defaulting to the current directory).
 
 ## Available sub-agents
 

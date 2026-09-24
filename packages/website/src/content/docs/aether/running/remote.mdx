@@ -64,6 +64,22 @@ aether client wss://agent.example/acp -H 'Authorization: Bearer ...'
 
 The client loads local Wisp UI settings, not local Aether project or provider settings. Provider/MCP credentials, workspace files, and session logs stay on the server. Browser-based OAuth flows needing server-local callbacks require suitable deployment connectivity; Aether does not tunnel those callbacks.
 
+## Start with an initial prompt
+
+`aether server` can start work before any client attaches. Pass `--prompt` (or pipe the prompt in via stdin when stdin is not a TTY) and the server immediately creates a session and runs it:
+
+```bash
+aether server --cwd /workspace/project --agent Build \
+  --prompt "Fix the failing tests, then summarize what you changed"
+```
+
+The turn keeps running server-side while you are detached, and attaching with `aether client` resumes that session. While no client is attached, events stream to stdout in the format selected by `--output` (`text`, `pretty`, or `json`). `--idle-after <seconds>` and `--on-idle <command>` (required together) spawn a shell command once the agent has been idle for the given number of seconds:
+
+```bash
+aether server --prompt "Refactor the auth module" \
+  --idle-after 120 --on-idle "notify-send 'Aether is idle'"
+```
+
 ## Detach, cancel, and restore
 
 - **Exit the client:** disconnect only. The same live actor, agent runtime, MCP runtime, and session ID remain on the server.
