@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.8.6](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.8.5...aether-agent-core-v0.8.6) - 2026-09-24
+
+### Other
+
+- updated the following local packages: aether-llm, aether-mcp-utils, aether-acp-utils
+
 ## [0.8.5](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.8.4...aether-agent-core-v0.8.5) - 2026-09-23
 
 ### Added

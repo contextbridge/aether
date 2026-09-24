@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.27](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.26...aether-llm-codegen-v0.2.27) - 2026-09-24
+
+### Fixed
+
+- route Bedrock US GPT-6 profiles through Runtime Responses ([#517](https://github.com/contextbridge/aether/pull/517))
+
 ## [0.2.26](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.25...aether-llm-codegen-v0.2.26) - 2026-09-23
 
 ### Added

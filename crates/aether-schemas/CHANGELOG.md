@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.11](https://github.com/contextbridge/aether/compare/aether-schemas-v0.2.10...aether-schemas-v0.2.11) - 2026-09-24
+
+### Other
+
+- updated the following local packages: aether-llm, aether-agent-core, aether-project, aether-agent-cli, aether-evals
+
 ## [0.2.10](https://github.com/contextbridge/aether/compare/aether-schemas-v0.2.9...aether-schemas-v0.2.10) - 2026-09-23
 
 ### Other
