@@ -201,7 +201,7 @@ impl StreamingModelProvider for BedrockProvider {
             warn!(
                 model = %self.model,
                 inference_profile_arn = %arn,
-                "Ignoring inferenceProfileArn: this model is served by the Responses API, which has no inference profiles"
+                "Ignoring inferenceProfileArn: Responses requests use the selected model ID"
             );
         }
 

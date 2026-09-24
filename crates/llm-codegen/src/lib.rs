@@ -424,6 +424,16 @@ fn build_provider_models(data: &ModelsDevData) -> Result<ProviderModels, Codegen
             }
         }
 
+        if cfg.dev_id == "amazon-bedrock" {
+            for model in &mut models {
+                if model.model_id.starts_with("us.openai.gpt-6-") && model.transport.is_none() {
+                    model.transport = Some(TransportInfo::OpenAiResponses {
+                        base_url_template: "https://bedrock-runtime.${AWS_REGION}.amazonaws.com/openai/v1".to_string(),
+                    });
+                }
+            }
+        }
+
         models.sort_by(|a, b| a.model_id.cmp(&b.model_id));
         provider_models.insert(cfg.dev_id, models);
     }
@@ -2127,6 +2137,48 @@ mod tests {
         let ollama_doc = &output.provider_docs["ollama"];
         assert!(ollama_doc.contains("`Ollama` LLM provider."));
         assert!(ollama_doc.contains("any model name at runtime"));
+    }
+
+    #[test]
+    fn generate_routes_only_existing_us_gpt_6_profiles_to_runtime() {
+        let mut data = minimal_models_dev_json();
+        let mut models = serde_json::Map::new();
+        for name in ["luna", "sol", "astra"] {
+            for prefix in ["us", "global"] {
+                let id = format!("{prefix}.openai.gpt-6-{name}");
+                models.insert(
+                    id.clone(),
+                    json!({
+                        "id": id, "name": format!("GPT-6 {name} ({prefix})"), "tool_call": true,
+                        "limit": {"context": 1_050_000, "output": 128_000}
+                    }),
+                );
+            }
+        }
+        models.insert(
+            "openai.gpt-6-astra".to_string(),
+            json!({
+                "id": "openai.gpt-6-astra", "name": "GPT-6 Astra", "tool_call": true,
+                "provider": {"api": "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1", "shape": "responses"}
+            }),
+        );
+        insert_models(&mut data, "amazon-bedrock", serde_json::Value::Object(models));
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), serde_json::to_string(&data).unwrap()).unwrap();
+        let docs = generate(tmp.path()).unwrap().provider_docs.remove("amazon-bedrock").unwrap();
+
+        for name in ["luna", "sol", "astra"] {
+            let id = format!("openai.gpt-6-{name}");
+            assert!(docs.contains(&format!(
+                "| `us.{id}` | `https://bedrock-runtime.${{AWS_REGION}}.amazonaws.com/openai/v1` | `responses` |"
+            )));
+            assert!(!docs.contains(&format!("| `global.{id}` | `https://bedrock-runtime.")));
+        }
+        assert!(docs.contains(
+            "| `openai.gpt-6-astra` | `https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1` | `responses` |"
+        ));
+        assert!(!docs.contains("| `openai.gpt-6-luna` |"));
+        assert!(!docs.contains("| `openai.gpt-6-sol` |"));
     }
 
     #[test]
