@@ -215,7 +215,7 @@ cat schema.json | aether generate --model zai:glm-5.1 --prompt-file -
 | `--temperature`      | `number`                                      | Sampling temperature.                                                    |
 | `--top-p`            | `number`                                      | Nucleus sampling probability mass.                                       |
 | `--max-tokens`       | `number`                                      | Upper bound on generated tokens.                                         |
-| `--reasoning-effort` | `minimal \| low \| medium \| high \| xhigh \| max` | Reasoning effort for models that support extended thinking.              |
+| `--reasoning-effort` | `default \| disabled \| minimal \| low \| medium \| high \| xhigh \| max` | Reasoning effort for models that support extended thinking. `disabled` requires model and adapter support; unsupported disabling is rejected. |
 | `--output`           | `text \| pretty \| json`                      | Output format. `text` prints the raw response; `json`/`pretty` wrap it as `{ "text": "<response>", "model": "<model>" }`. Defaults to `text`. |
 
 See [Getting Started](/getting-started/overview/) and [Settings](/aether/settings/overview/#agents) for project scaffolding details.

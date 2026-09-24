@@ -193,7 +193,7 @@ When the authorization server does not advertise CIMD support, Aether falls back
 | `skills`    | Skill discovery, slash-command prompts, and rules                        | Required: repeat `--dir <path>`                                                                                         |
 | `tasks`     | Hierarchical task management                                             | Optional `--dir <base>` for persistent storage                                                                        |
 | `subagents` | Spawn child agents from loaded settings                                  | `--project-root <path>` (alias: `--dir`; defaults to the workspace root)                                              |
-| `review`    | Markdown artifact review through elicitation                             | Optional `--root-dir <path>`                                                                                         |
+| `review`    | Markdown and HTML artifact review through elicitation                    | Optional `--root-dir <path>`                                                                                          |
 
 <CardGrid>
   <LinkCard
@@ -218,7 +218,7 @@ When the authorization server does not advertise CIMD support, Aether falls back
   />
   <LinkCard
     title="Review"
-    description="Markdown artifact review and contextual feedback"
+    description="Markdown & HTML artifact review and contextual feedback"
     href="/aether/built-in-servers/review/"
   />
 </CardGrid>
@@ -304,7 +304,7 @@ Multiple MCP sources are loaded in order after settings resolution. Server names
 Tools can be deferred in two ways:
 
 1. Set `"deferTools": true` on a server entry to defer every tool, or use a `deferTools` object with `include` and `exclude` rules.
-2. Reference a file source with `{ "type": "file", "path": "...", "deferTools": true }`, which defers every tool loaded from that file.
+2. Reference a file source with `{ "type": "file", "path": "...", "deferTools": true }`, which defers every tool loaded from that file. Servers in that file that already declare their own `deferTools` rules keep those rules.
 
 `deferTools` and `optional` can be combined: `{ "type": "file", "path": "${WORKSPACE}/.aether/external-mcp.json", "deferTools": true, "optional": true }`.
 
@@ -392,7 +392,7 @@ Tool names use `server__tool` with a double underscore. Patterns support exact n
 | `coding__read_file` | Only the `read_file` tool            |
 | `coding__web_*`     | `web_fetch` and `web_search`         |
 | `tasks__*`          | All task management tools            |
-| `review__review_artifact` | Only the Markdown review tool    |
+| `review__review_artifact` | Only the artifact review tool       |
 | `coding__bash`      | Only the coding server's `bash` tool |
 
 Wildcards are only valid at the end of a pattern.

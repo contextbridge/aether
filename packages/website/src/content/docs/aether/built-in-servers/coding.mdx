@@ -25,7 +25,7 @@ Supported args:
 | `--root-dir <path>`                                | Workspace root. Users don't need to set this as Aether sets this automatically. |
 | `--rules-dir <path>`                               | Directory to load Rules from. Repeatable.                                       |
 | `--permission-mode always-allow\|auto\|always-ask` | Approval behavior for destructive tools. Default is `always-allow`.               |
-| `--disable-lsp`                                    | Do not attach LSP-backed coding tools.                                          |
+| `--disable-lsp`                                    | Run without LSP integration. The `lsp_*` tools remain listed but fail when invoked.                                             |
 
 Permission modes:
 
@@ -69,7 +69,7 @@ Because `bash` spawns real subprocesses, it composes with [deferred (proxied) to
 
 ## LSP tools inside `coding`
 
-Unless `--disable-lsp` is set, Aether wires LSP-backed tools into the `coding` server.
+Unless `--disable-lsp` is set, Aether wires LSP-backed tools into the `coding` server. With `--disable-lsp`, the `lsp_*` tools are still advertised but every call returns an "LSP not configured" error.
 
 | Tool                   | Description                                                               |
 | ---------------------- | ------------------------------------------------------------------------- |
