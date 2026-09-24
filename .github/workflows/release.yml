@@ -461,7 +461,8 @@ jobs:
         run: |
           cli_version="${TAG#aether-agent-cli-v}"
           echo "cli_version=$cli_version" >> "$GITHUB_OUTPUT"
-          pnpm --filter @aether-agent/sdk add "@aether-agent/cli@^$cli_version" --lockfile-only
+          npm pkg set --prefix packages/aether-sdk "dependencies.@aether-agent/cli=^$cli_version"
+          pnpm install --lockfile-only
           if ! git diff --quiet packages/aether-sdk/package.json; then
             (cd packages/aether-sdk && npm version patch --no-git-tag-version)
             (cd packages/aether-evals && npm version patch --no-git-tag-version)
