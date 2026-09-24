@@ -6,13 +6,7 @@ use crate::providers::openai_responses::mappers::{ResponsesRequestPolicy, build_
 use crate::providers::openai_responses::transport::{ResponsesConnection, send};
 use crate::{Context, LlmError, Result};
 
-/// Transport for Bedrock models that serve the `OpenAI` Responses API rather than
-/// the Converse API.
-///
-/// The endpoint is not fixed: each model's catalog entry carries its own
-/// template (the `gpt-oss` models are served from `/v1` while the rest use
-/// `/openai/v1`), so the URL is resolved per request from the model's
-/// [`ModelTransport`].
+/// Transport for Bedrock models served through the `OpenAI` Responses API.
 #[derive(Clone)]
 pub struct MantleClient {
     http: reqwest::Client,
@@ -59,7 +53,7 @@ impl MantleClient {
         let url = self.endpoint(transport)?;
         let body = build_wire_request(model, context, &ResponsesRequestPolicy::MANTLE)?;
 
-        debug!(model, url, auth = %self.auth, "Sending Bedrock Mantle responses request");
+        debug!(model, url, auth = %self.auth, "Sending Bedrock responses request");
 
         let encoded = serde_json::to_vec(&body)?;
         let headers = self.auth.headers("POST", &url, &encoded).await?;

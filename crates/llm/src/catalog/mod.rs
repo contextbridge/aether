@@ -252,6 +252,10 @@ mod tests {
             ("openai.gpt-5.6-luna", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
             ("openai.gpt-5.6-sol", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
             ("openai.gpt-5.6-terra", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
+            ("openai.gpt-6-astra", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
+            ("us.openai.gpt-6-luna", "https://bedrock-runtime.${AWS_REGION}.amazonaws.com/openai/v1"),
+            ("us.openai.gpt-6-sol", "https://bedrock-runtime.${AWS_REGION}.amazonaws.com/openai/v1"),
+            ("us.openai.gpt-6-astra", "https://bedrock-runtime.${AWS_REGION}.amazonaws.com/openai/v1"),
             ("openai.gpt-5.5", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
             ("openai.gpt-5.4", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
             ("xai.grok-4.3", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
@@ -271,7 +275,14 @@ mod tests {
 
     #[test]
     fn converse_models_and_profiles_declare_no_transport_override() {
-        for id in ["anthropic.claude-opus-5", "amazon.nova-lite-v1:0", "us.anthropic.claude-future-model-v99:0"] {
+        for id in [
+            "anthropic.claude-opus-5",
+            "amazon.nova-lite-v1:0",
+            "us.anthropic.claude-future-model-v99:0",
+            "global.openai.gpt-6-luna",
+            "global.openai.gpt-6-sol",
+            "global.openai.gpt-6-astra",
+        ] {
             let model: LlmModel = format!("bedrock:{id}").parse().unwrap();
             assert_eq!(model.transport(), None, "{id}");
         }
