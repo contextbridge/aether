@@ -48,7 +48,7 @@ agent-client-protocol = { workspace = true }
 clankerdiff-core = { workspace = true }
 clankerdiff-protocol = { workspace = true }
 clankerdiff-server = { workspace = true }
-aether-lspd = { path = "../aether-lspd", version = "0.1.38" }
+aether-lspd = { path = "../aether-lspd", version = "0.1.39" }
 rmcp = { workspace = true, features = ["client", "elicitation", "server", "transport-streamable-http-client-reqwest"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "net", "fs", "time", "signal", "process"] }
