@@ -1,6 +1,6 @@
 [package]
 name = "aether-agent-cli"
-version = "0.9.7"
+version = "0.9.8"
 edition = "2024"
 description = "CLI and ACP server for the Aether AI coding agent"
 license = "MIT"
@@ -40,7 +40,7 @@ aether-project = { path = "../aether-project", version = "0.5.50" }
 aether-telemetry = { path = "../aether-telemetry", version = "0.3.6" }
 llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.9.6" }
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.7.6" }
-mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.6.7" }
+mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.6.8" }
 wisp = { package = "aether-wisp", path = "../wisp", version = "0.7.6" }
 ratatui = { workspace = true }
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["websocket"], version = "0.5.6" }
