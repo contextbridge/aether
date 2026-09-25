@@ -90,13 +90,13 @@ aether server --prompt "Refactor the auth module" \
 
 An unexpected connection loss restores the terminal and exits with an error. There is **no automatic reconnect or prompt retry**. If a prompt's acceptance response was lost, reconnect and inspect the transcript before resubmitting: a retry could execute tools twice.
 
-Partial streamed chunks, intermediate tool states, and pending dialogs are not guaranteed to be recovered. Pending survey/plan-approval/other elicitation requests are cancelled on disconnect; requests first raised while detached are cancelled immediately. They are not queued for reattachment. Cancelling an interaction does not itself cancel the session—the agent/tool decides how to handle that result.
+Partial streamed chunks, intermediate tool states, and pending dialogs are not guaranteed to be recovered. Pending elicitation requests (such as artifact review or permission dialogs) are cancelled on disconnect; requests first raised while detached are cancelled immediately. They are not queued for reattachment. Cancelling an interaction does not itself cancel the session—the agent/tool decides how to handle that result.
 
 ## Remote workspace boundaries
 
 The status line labels the server path as `remote:`. Server paths are never resolved against your local checkout or HOME. Local Git review/watch, file picking/indexing, and path-based attachments are unavailable in remote mode. Pasted paths remain ordinary text rather than being read as local files; blocked attachment actions leave the composer usable.
 
-Chat, streamed tool output and diffs delivered through ACP, prompt search, configuration, server status, forms, plan review, `/clear`, and `/resume` remain available. Workspace operations stay server-side. Themes, Wisp settings, rendering, terminal bell, clipboard, and browser integration remain client-local features.
+Chat, streamed tool output and diffs delivered through ACP, prompt search, configuration, server status, forms, artifact review, `/clear`, and `/resume` remain available. Workspace operations stay server-side. Themes, Wisp settings, rendering, terminal bell, clipboard, and browser integration remain client-local features.
 
 ## Deployment and limitations
 
