@@ -5,7 +5,7 @@ description: Run Aether as an Agent Client Protocol server for editors.
 
 import { Steps } from "@astrojs/starlight/components";
 
-Aether can run as an [Agent Client Protocol v2](https://agentclientprotocol.com/protocol/v2/migration) server. Editors that speak draft ACP v2 can start `aether acp`, create sessions, select Aether agents, stream tool progress, and handle MCP elicitation such as plan review and survey forms.
+Aether can run as an [Agent Client Protocol v2](https://agentclientprotocol.com/protocol/v2/migration) server. Editors that speak draft ACP v2 can start `aether acp`, create sessions, select Aether agents, stream tool progress, and handle MCP elicitation such as artifact review and permission requests.
 
 ## Zed setup
 
@@ -115,4 +115,4 @@ If the agent does not start, cannot find settings, or tools fail to initialize, 
 
 ## Relationship to the terminal UI
 
-Running plain `aether` starts onboarding if needed and then launches Aether's terminal UI. That UI is backed by the same ACP server path used by editors, so agent selection, MCP tools, elicitation, plan review, and model configuration behave consistently across the terminal and editor integrations.
+Running plain `aether` starts onboarding if needed and then launches Aether's terminal UI. That UI is backed by the same ACP server path used by editors, so agent selection, MCP tools, elicitation, artifact review, and model configuration behave consistently across the terminal and editor integrations.
