@@ -9,6 +9,7 @@ mod web_fetch;
 #[cfg(feature = "tasks")]
 mod task_store;
 
+mod skills;
 mod workspace;
 
 #[cfg(feature = "coding")]
@@ -17,4 +18,5 @@ pub use web_fetch::FakeHttpClient;
 #[cfg(feature = "tasks")]
 pub use task_store::TestTaskStore;
 
+pub use skills::{SkillBuilder, skill};
 pub use workspace::TestWorkspace;

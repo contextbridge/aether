@@ -355,25 +355,16 @@ impl SkillsMcp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TestWorkspace;
     use rmcp::ServerHandler;
-    use tempfile::TempDir;
 
-    fn create_skill(prompt_dir: &Path, name: &str, content: &str, aux_files: &[(&str, &str)]) {
-        let skill_dir = prompt_dir.join(name);
-        fs::create_dir_all(&skill_dir).unwrap();
-        fs::write(skill_dir.join(SKILL_FILENAME), content).unwrap();
-        for (path, content) in aux_files {
-            let full_path = skill_dir.join(path);
-            if let Some(parent) = full_path.parent() {
-                fs::create_dir_all(parent).unwrap();
-            }
-            fs::write(full_path, content).unwrap();
-        }
+    fn server(workspace: &TestWorkspace) -> SkillsMcp {
+        SkillsMcp::new(&[workspace.root().to_path_buf()])
     }
 
-    fn create_flat_prompt(prompt_dir: &Path, name: &str, content: &str) {
-        fs::create_dir_all(prompt_dir).unwrap();
-        fs::write(prompt_dir.join(format!("{name}.md")), content).unwrap();
+    fn server_with_dirs(dirs: &[&TestWorkspace]) -> SkillsMcp {
+        let dirs = dirs.iter().map(|dir| dir.root().to_path_buf()).collect::<Vec<_>>();
+        SkillsMcp::new(&dirs)
     }
 
     async fn load(server: &SkillsMcp, name: &str, path: Option<&str>) -> SkillFile {
@@ -429,32 +420,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_skills_only_returns_agent_invocable_sorted_by_name() {
-        let temp_dir = TempDir::new().unwrap();
-        create_skill(
-            temp_dir.path(),
-            "zeta",
-            "---\ndescription: Zeta\nagent-invocable: true\ntags:\n  - systems\n---\n# Zeta",
-            &[],
-        );
-        create_skill(
-            temp_dir.path(),
-            "user-only",
-            "---\ndescription: User only\nuser-invocable: true\nagent-invocable: false\n---\n# User only",
-            &[],
-        );
-        create_flat_prompt(
-            temp_dir.path(),
-            "flat-agent",
-            "---\nname: alpha-flat\ndescription: Flat skill\nagent-invocable: true\ntags:\n  - flat\n---\n# Flat",
-        );
-        create_flat_prompt(
-            temp_dir.path(),
-            "rule-only",
-            "---\ndescription: Rule only\nagent-invocable: false\ntriggers:\n  read:\n    - \"**/*.rs\"\n---\n# Rule",
-        );
+        let workspace = TestWorkspace::new()
+            .skill("zeta", |s| s.description("Zeta").tag("systems").body("# Zeta"))
+            .skill("user-only", |s| {
+                s.description("User only").user_invocable(true).agent_invocable(false).body("# User only")
+            })
+            .flat_prompt("flat-agent", |s| s.name("alpha-flat").description("Flat skill").tag("flat").body("# Flat"))
+            .flat_prompt("rule-only", |s| {
+                s.description("Rule only").agent_invocable(false).read_trigger("**/*.rs").body("# Rule")
+            });
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
-        let Json(output) = server.list_skills(Parameters(ListSkillsInput::default())).await;
+        let Json(output) = server(&workspace).list_skills(Parameters(ListSkillsInput::default())).await;
 
         assert_eq!(output.status, "success");
         assert_eq!(output.count, 2);
@@ -478,22 +454,11 @@ mod tests {
 
     #[test]
     fn test_get_info_instructions_reference_list_skills_and_do_not_embed_skill_names() {
-        let temp_dir = TempDir::new().unwrap();
-        create_skill(
-            temp_dir.path(),
-            "unique-instructions-skill-a",
-            "---\ndescription: A\nagent-invocable: true\n---\n# A",
-            &[],
-        );
-        create_skill(
-            temp_dir.path(),
-            "unique-instructions-skill-b",
-            "---\ndescription: B\nagent-invocable: true\n---\n# B",
-            &[],
-        );
+        let workspace = TestWorkspace::new()
+            .skill("unique-instructions-skill-a", |s| s.description("A").body("# A"))
+            .skill("unique-instructions-skill-b", |s| s.description("B").body("# B"));
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
-        let info = ServerHandler::get_info(&server);
+        let info = ServerHandler::get_info(&server(&workspace));
         let instructions = info.instructions.expect("skills server should provide instructions");
 
         assert!(instructions.contains("list_skills"));
@@ -504,16 +469,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_skills_rejects_non_agent_invocable_directory_prompt() {
-        let temp_dir = TempDir::new().unwrap();
-        create_skill(
-            temp_dir.path(),
-            "user-only",
-            "---\ndescription: User-only prompt\nuser-invocable: true\nagent-invocable: false\n---\n# User only",
-            &[],
-        );
+        let workspace = TestWorkspace::new().skill("user-only", |s| {
+            s.description("User-only prompt").user_invocable(true).agent_invocable(false).body("# User only")
+        });
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
-        let result = load(&server, "user-only", None).await;
+        let result = load(&server(&workspace), "user-only", None).await;
 
         assert!(result.content.is_none());
         assert!(result.error.as_deref().unwrap().contains("not agent-invocable"));
@@ -521,15 +481,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_skills_rejects_non_agent_invocable_flat_prompt() {
-        let temp_dir = TempDir::new().unwrap();
-        create_flat_prompt(
-            temp_dir.path(),
-            "rule-only",
-            "---\ndescription: Rule-only prompt\nagent-invocable: false\ntriggers:\n  read:\n    - \"**/*.rs\"\n---\n# Rule",
-        );
+        let workspace = TestWorkspace::new().flat_prompt("rule-only", |s| {
+            s.description("Rule-only prompt").agent_invocable(false).read_trigger("**/*.rs").body("# Rule")
+        });
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
-        let result = load(&server, "rule-only", None).await;
+        let result = load(&server(&workspace), "rule-only", None).await;
 
         assert!(result.content.is_none());
         assert!(result.error.as_deref().unwrap().contains("not agent-invocable"));
@@ -537,16 +493,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_skill_file_root() {
-        let temp_dir = TempDir::new().unwrap();
-        create_skill(
-            temp_dir.path(),
-            "test-skill",
-            "---\ndescription: Test\nagent-invocable: true\n---\n# Test\n\nContent here.",
-            &[],
-        );
+        let workspace =
+            TestWorkspace::new().skill("test-skill", |s| s.description("Test").body("# Test\n\nContent here."));
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
-        let result = load(&server, "test-skill", None).await;
+        let result = load(&server(&workspace), "test-skill", None).await;
 
         assert_eq!(result.name, "test-skill");
         assert_eq!(result.path, "SKILL.md");
@@ -557,16 +507,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_skill_file_by_frontmatter_name() {
-        let temp_dir = TempDir::new().unwrap();
-        create_skill(
-            temp_dir.path(),
-            "dir-name",
-            "---\nname: custom-name\ndescription: Test\nagent-invocable: true\n---\n# Test\n\nContent here.",
-            &[],
-        );
+        let workspace = TestWorkspace::new()
+            .skill("dir-name", |s| s.name("custom-name").description("Test").body("# Test\n\nContent here."));
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
-        let result = load(&server, "custom-name", None).await;
+        let result = load(&server(&workspace), "custom-name", None).await;
 
         assert_eq!(result.name, "custom-name");
         assert_eq!(result.path, "SKILL.md");
@@ -577,15 +521,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_flat_prompt_by_frontmatter_name() {
-        let temp_dir = TempDir::new().unwrap();
-        create_flat_prompt(
-            temp_dir.path(),
-            "rule-file",
-            "---\nname: rust-rules\ndescription: Rust rules\nagent-invocable: true\ntriggers:\n  read:\n    - \"**/*.rs\"\n---\nUse Rust conventions.",
-        );
+        let workspace = TestWorkspace::new().flat_prompt("rule-file", |s| {
+            s.name("rust-rules").description("Rust rules").read_trigger("**/*.rs").body("Use Rust conventions.")
+        });
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
-        let result = load(&server, "rust-rules", None).await;
+        let result = load(&server(&workspace), "rust-rules", None).await;
 
         assert_eq!(result.name, "rust-rules");
         assert_eq!(result.path, "rule-file.md");
@@ -596,15 +536,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_flat_prompt_file() {
-        let temp_dir = TempDir::new().unwrap();
-        create_flat_prompt(
-            temp_dir.path(),
-            "rust-rules",
-            "---\ndescription: Rust rules\nagent-invocable: true\ntriggers:\n  read:\n    - \"**/*.rs\"\n---\nUse Rust conventions.",
-        );
+        let workspace = TestWorkspace::new().flat_prompt("rust-rules", |s| {
+            s.description("Rust rules").read_trigger("**/*.rs").body("Use Rust conventions.")
+        });
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
-        let result = load(&server, "rust-rules", None).await;
+        let result = load(&server(&workspace), "rust-rules", None).await;
 
         assert_eq!(result.path, "rust-rules.md");
         let content = result.content.expect("flat prompt content should exist");
@@ -615,15 +551,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_flat_prompt_rejects_relative_path_reads() {
-        let temp_dir = TempDir::new().unwrap();
-        create_flat_prompt(
-            temp_dir.path(),
-            "rust-rules",
-            "---\ndescription: Rust rules\nagent-invocable: true\ntriggers:\n  read:\n    - \"**/*.rs\"\n---\nUse Rust conventions.",
-        );
+        let workspace = TestWorkspace::new().flat_prompt("rust-rules", |s| {
+            s.description("Rust rules").read_trigger("**/*.rs").body("Use Rust conventions.")
+        });
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
-        let result = load(&server, "rust-rules", Some("details.md")).await;
+        let result = load(&server(&workspace), "rust-rules", Some("details.md")).await;
 
         assert!(result.content.is_none());
         assert!(result.available_files.is_empty());
@@ -632,16 +564,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_skill_file_auxiliary() {
-        let temp_dir = TempDir::new().unwrap();
-        create_skill(
-            temp_dir.path(),
-            "test-skill",
-            "---\ndescription: Test\nagent-invocable: true\n---\n# Test",
-            &[("traits.md", "# Traits content")],
-        );
+        let workspace = TestWorkspace::new()
+            .skill("test-skill", |s| s.description("Test").body("# Test"))
+            .file("test-skill/traits.md", "# Traits content");
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
-        let result = load(&server, "test-skill", Some("traits.md")).await;
+        let result = load(&server(&workspace), "test-skill", Some("traits.md")).await;
 
         assert_eq!(result.path, "traits.md");
         assert_eq!(result.content.unwrap(), "# Traits content");
@@ -650,16 +577,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_skill_file_nested() {
-        let temp_dir = TempDir::new().unwrap();
-        create_skill(
-            temp_dir.path(),
-            "test-skill",
-            "---\ndescription: Test\nagent-invocable: true\n---\n# Test",
-            &[("references/REF.md", "# Reference")],
-        );
+        let workspace = TestWorkspace::new()
+            .skill("test-skill", |s| s.description("Test").body("# Test"))
+            .file("test-skill/references/REF.md", "# Reference");
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
-        let result = load(&server, "test-skill", Some("references/REF.md")).await;
+        let result = load(&server(&workspace), "test-skill", Some("references/REF.md")).await;
 
         assert_eq!(result.path, "references/REF.md");
         assert_eq!(result.content.unwrap(), "# Reference");
@@ -667,54 +589,41 @@ mod tests {
 
     #[tokio::test]
     async fn test_reject_absolute_path() {
-        let temp_dir = TempDir::new().unwrap();
-        create_skill(temp_dir.path(), "test-skill", "---\ndescription: Test\nagent-invocable: true\n---\n# Test", &[]);
+        let workspace = TestWorkspace::new().skill("test-skill", |s| s.description("Test").body("# Test"));
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
-        let result = load(&server, "test-skill", Some("/etc/passwd")).await;
+        let result = load(&server(&workspace), "test-skill", Some("/etc/passwd")).await;
 
         assert!(result.error.unwrap().contains("Absolute paths"));
     }
 
     #[tokio::test]
     async fn test_reject_traversal() {
-        let temp_dir = TempDir::new().unwrap();
-        create_skill(temp_dir.path(), "test-skill", "---\ndescription: Test\nagent-invocable: true\n---\n# Test", &[]);
+        let workspace = TestWorkspace::new().skill("test-skill", |s| s.description("Test").body("# Test"));
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
-        let result = load(&server, "test-skill", Some("../other-skill/SKILL.md")).await;
+        let result = load(&server(&workspace), "test-skill", Some("../other-skill/SKILL.md")).await;
 
         assert!(result.error.unwrap().contains("traversal"));
     }
 
     #[tokio::test]
     async fn test_reject_directory() {
-        let temp_dir = TempDir::new().unwrap();
-        create_skill(temp_dir.path(), "test-skill", "---\ndescription: Test\nagent-invocable: true\n---\n# Test", &[]);
+        let workspace = TestWorkspace::new().skill("test-skill", |s| s.description("Test").body("# Test"));
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
-        let result = load(&server, "test-skill", Some(".")).await;
+        let result = load(&server(&workspace), "test-skill", Some(".")).await;
 
         assert!(result.error.unwrap().contains("directory"));
     }
 
     #[tokio::test]
     async fn test_available_files() {
-        let temp_dir = TempDir::new().unwrap();
-        create_skill(
-            temp_dir.path(),
-            "test-skill",
-            "---\ndescription: Test\nagent-invocable: true\n---\n# Test",
-            &[
-                ("traits.md", "# Traits"),
-                ("error-handling.md", "# Errors"),
-                ("references/REF.md", "# Ref"),
-                (".hidden", "should be ignored"),
-            ],
-        );
+        let workspace = TestWorkspace::new()
+            .skill("test-skill", |s| s.description("Test").body("# Test"))
+            .file("test-skill/traits.md", "# Traits")
+            .file("test-skill/error-handling.md", "# Errors")
+            .file("test-skill/references/REF.md", "# Ref")
+            .file("test-skill/.hidden", "should be ignored");
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
-        let result = load(&server, "test-skill", None).await;
+        let result = load(&server(&workspace), "test-skill", None).await;
 
         assert_eq!(result.available_files.len(), 3);
         assert!(result.available_files.contains(&"error-handling.md".to_string()));
@@ -725,43 +634,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_skill_not_found() {
-        let temp_dir = TempDir::new().unwrap();
-        fs::create_dir_all(temp_dir.path().join("skills")).unwrap();
+        let workspace = TestWorkspace::new();
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
-        let result = load(&server, "nonexistent", None).await;
+        let result = load(&server(&workspace), "nonexistent", None).await;
 
         assert!(result.error.unwrap().contains("not found"));
     }
 
     #[tokio::test]
     async fn test_file_not_found() {
-        let temp_dir = TempDir::new().unwrap();
-        create_skill(temp_dir.path(), "test-skill", "---\ndescription: Test\nagent-invocable: true\n---\n# Test", &[]);
+        let workspace = TestWorkspace::new().skill("test-skill", |s| s.description("Test").body("# Test"));
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
-        let result = load(&server, "test-skill", Some("nonexistent.md")).await;
+        let result = load(&server(&workspace), "test-skill", Some("nonexistent.md")).await;
 
         assert!(result.error.unwrap().contains("not found"));
     }
 
     #[tokio::test]
     async fn test_batch_requests() {
-        let temp_dir = TempDir::new().unwrap();
-        create_skill(
-            temp_dir.path(),
-            "rust",
-            "---\ndescription: Rust skill\nagent-invocable: true\n---\n# Rust\n\nSee [traits](./traits.md).",
-            &[("traits.md", "# Traits")],
-        );
-        create_skill(
-            temp_dir.path(),
-            "python",
-            "---\ndescription: Python skill\nagent-invocable: true\n---\n# Python",
-            &[],
-        );
+        let workspace = TestWorkspace::new()
+            .skill("rust", |s| s.description("Rust skill").body("# Rust\n\nSee [traits](./traits.md)."))
+            .file("rust/traits.md", "# Traits")
+            .skill("python", |s| s.description("Python skill").body("# Python"));
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
+        let server = server(&workspace);
         let expander = ShellExpander::new();
         let requests = vec![
             SkillRequest { name: "rust".to_string(), path: None },
@@ -793,10 +689,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_mixed_success_failure() {
-        let temp_dir = TempDir::new().unwrap();
-        create_skill(temp_dir.path(), "exists", "---\ndescription: Exists\nagent-invocable: true\n---\n# Exists", &[]);
+        let workspace = TestWorkspace::new().skill("exists", |s| s.description("Exists").body("# Exists"));
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
+        let server = server(&workspace);
         let expander = ShellExpander::new();
         let requests = vec![
             SkillRequest { name: "exists".to_string(), path: None },
@@ -823,25 +718,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_multi_dir_last_wins() {
-        let dir_a = TempDir::new().unwrap();
-        let dir_b = TempDir::new().unwrap();
-        create_skill(dir_a.path(), "rust", "---\ndescription: Rust A\nagent-invocable: true\n---\n# From A", &[]);
-        create_skill(dir_b.path(), "rust", "---\ndescription: Rust B\nagent-invocable: true\n---\n# From B", &[]);
+        let dir_a = TestWorkspace::new().skill("rust", |s| s.description("Rust A").body("# From A"));
+        let dir_b = TestWorkspace::new().skill("rust", |s| s.description("Rust B").body("# From B"));
 
-        let server = SkillsMcp::new(&[dir_a.path().to_path_buf(), dir_b.path().to_path_buf()]);
-        let result = load(&server, "rust", None).await;
+        let result = load(&server_with_dirs(&[&dir_a, &dir_b]), "rust", None).await;
 
         assert!(result.content.as_ref().unwrap().contains("From B"));
     }
 
     #[tokio::test]
     async fn test_multi_dir_union() {
-        let dir_a = TempDir::new().unwrap();
-        let dir_b = TempDir::new().unwrap();
-        create_skill(dir_a.path(), "rust", "---\ndescription: Rust\nagent-invocable: true\n---\n# Rust", &[]);
-        create_skill(dir_b.path(), "python", "---\ndescription: Python\nagent-invocable: true\n---\n# Python", &[]);
+        let dir_a = TestWorkspace::new().skill("rust", |s| s.description("Rust").body("# Rust"));
+        let dir_b = TestWorkspace::new().skill("python", |s| s.description("Python").body("# Python"));
 
-        let server = SkillsMcp::new(&[dir_a.path().to_path_buf(), dir_b.path().to_path_buf()]);
+        let server = server_with_dirs(&[&dir_a, &dir_b]);
 
         let rust = load(&server, "rust", None).await;
         assert!(rust.content.is_some());
@@ -854,12 +744,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_multi_dir_missing_skills_subdir() {
-        let dir_a = TempDir::new().unwrap();
-        let dir_b = TempDir::new().unwrap();
-        create_skill(dir_b.path(), "rust", "---\ndescription: Rust\nagent-invocable: true\n---\n# Rust", &[]);
+        let dir_a = TestWorkspace::new();
+        let dir_b = TestWorkspace::new().skill("rust", |s| s.description("Rust").body("# Rust"));
 
-        let server = SkillsMcp::new(&[dir_a.path().to_path_buf(), dir_b.path().to_path_buf()]);
-        let result = load(&server, "rust", None).await;
+        let result = load(&server_with_dirs(&[&dir_a, &dir_b]), "rust", None).await;
 
         assert!(result.content.is_some());
         assert!(result.error.is_none());
@@ -867,16 +755,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_skill_file_expands_shell_interp() {
-        let temp_dir = TempDir::new().unwrap();
-        create_skill(
-            temp_dir.path(),
-            "test-skill",
-            "---\ndescription: Test\nagent-invocable: true\n---\nvalue: !`echo ok`",
-            &[],
-        );
+        let workspace = TestWorkspace::new().skill("test-skill", |s| s.description("Test").body("value: !`echo ok`"));
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
-        let result = load(&server, "test-skill", None).await;
+        let result = load(&server(&workspace), "test-skill", None).await;
 
         let content = result.content.expect("content should be present");
         assert!(content.contains("value: ok"), "expected expanded marker in: {content}");
@@ -886,16 +767,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_skill_file_propagates_shell_failure() {
-        let temp_dir = TempDir::new().unwrap();
-        create_skill(
-            temp_dir.path(),
-            "test-skill",
-            "---\ndescription: Test\nagent-invocable: true\n---\n!`exit 1`",
-            &[],
-        );
+        let workspace = TestWorkspace::new().skill("test-skill", |s| s.description("Test").body("!`exit 1`"));
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
-        let result = load(&server, "test-skill", None).await;
+        let result = load(&server(&workspace), "test-skill", None).await;
 
         let content = result.content.expect("content should be present");
         assert!(!content.contains("!`"), "failed command marker should be removed");

@@ -5,6 +5,8 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
+use super::skills::{SKILL_FILENAME, SkillBuilder};
+
 /// A temporary workspace directory on the real filesystem.
 ///
 /// Builder methods create files and directories eagerly so each test reads as
@@ -45,6 +47,18 @@ impl TestWorkspace {
     pub fn symlink(self, target: impl AsRef<Path>, link: impl AsRef<Path>) -> Self {
         symlink(self.join(target), self.join(link)).expect("failed to create symlink");
         self
+    }
+
+    /// Writes a directory skill: `<name>/SKILL.md` with content built by `configure`.
+    pub fn skill(self, name: &str, configure: impl FnOnce(SkillBuilder) -> SkillBuilder) -> Self {
+        let content = configure(SkillBuilder::new()).content();
+        self.file(format!("{name}/{SKILL_FILENAME}"), content)
+    }
+
+    /// Writes a flat prompt file: `<name>.md` with content built by `configure`.
+    pub fn flat_prompt(self, name: &str, configure: impl FnOnce(SkillBuilder) -> SkillBuilder) -> Self {
+        let content = configure(SkillBuilder::new()).content();
+        self.file(format!("{name}.md"), content)
     }
 
     pub fn root(&self) -> &Path {

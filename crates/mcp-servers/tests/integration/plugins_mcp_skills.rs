@@ -1,5 +1,6 @@
-use crate::common::{TestClient, TestResult, create_test_files, load_skills_input, skills_server};
+use crate::common::{TestClient, TestResult, load_skills_input, skills_server};
 use mcp_servers::skills::tools::ListSkillsInput;
+use mcp_servers::testing::{TestWorkspace, skill};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use utils::MarkdownFile;
@@ -11,16 +12,13 @@ pub struct TestFrontmatter {
 
 #[tokio::test]
 async fn test_load_from_nested_directories() {
-    let test_files = vec![
-        ("skill-1/SKILL.md", "---\ndescription: First skill\n---\nThis is skill 1 content"),
-        ("skill-2/SKILL.md", "---\ndescription: Second skill\n---\nThis is skill 2 content"),
-        ("illegal-flat-skill.md", "This should be ignored"),
-    ];
-
-    let temp_dir = create_test_files(&test_files);
+    let workspace = TestWorkspace::new()
+        .skill("skill-1", |s| s.description("First skill").body("This is skill 1 content"))
+        .skill("skill-2", |s| s.description("Second skill").body("This is skill 2 content"))
+        .file("illegal-flat-skill.md", "This should be ignored");
 
     let skills_with_dirs: Vec<(PathBuf, MarkdownFile<TestFrontmatter>)> =
-        MarkdownFile::from_nested_dirs(temp_dir.path(), "SKILL.md").await.expect("Failed to load skills");
+        MarkdownFile::from_nested_dirs(workspace.root(), "SKILL.md").await.expect("Failed to load skills");
 
     assert_eq!(skills_with_dirs.len(), 2);
 
@@ -39,23 +37,24 @@ async fn test_load_from_nested_directories() {
 
 #[tokio::test]
 async fn test_load_skills_tool() -> TestResult {
-    let test_files = vec![
-        (
+    let workspace = TestWorkspace::new()
+        .file(
             "skills/skill-1/SKILL.md",
-            "---\ndescription: First skill for testing\nagent-invocable: true\n---\n# Skill 1\n\nThis is the content for skill 1.",
-        ),
-        (
+            skill()
+                .description("First skill for testing")
+                .body("# Skill 1\n\nThis is the content for skill 1.")
+                .content(),
+        )
+        .file(
             "skills/skill-2/SKILL.md",
-            "---\ndescription: Second skill\nagent-invocable: true\n---\n# Skill 2\n\nThis is the content for skill 2.",
-        ),
-        (
+            skill().description("Second skill").body("# Skill 2\n\nThis is the content for skill 2.").content(),
+        )
+        .file(
             "skills/skill-3/SKILL.md",
-            "---\ndescription: Third skill\nagent-invocable: true\n---\n# Skill 3\n\nThis is skill 3.",
-        ),
-    ];
+            skill().description("Third skill").body("# Skill 3\n\nThis is skill 3.").content(),
+        );
 
-    let temp_dir = create_test_files(&test_files);
-    let mcp = TestClient::start(|| skills_server(temp_dir.path())).await?;
+    let mcp = TestClient::start(|| skills_server(workspace.root())).await?;
 
     let parsed =
         mcp.call("get_skills", load_skills_input(&[("skill-1", None), ("skill-2", None), ("skill-3", None)])).await?;
@@ -77,24 +76,22 @@ async fn test_load_skills_tool() -> TestResult {
 
 #[tokio::test]
 async fn test_list_skills_only_returns_agent_invocable_entries() -> TestResult {
-    let test_files = vec![
-        ("skills/zeta/SKILL.md", "---\ndescription: Zeta\nagent-invocable: true\ntags:\n  - systems\n---\n# Zeta"),
-        (
+    let workspace = TestWorkspace::new()
+        .file("skills/zeta/SKILL.md", skill().description("Zeta").tag("systems").body("# Zeta").content())
+        .file(
             "skills/user-only/SKILL.md",
-            "---\ndescription: User only\nuser-invocable: true\nagent-invocable: false\n---\n# User only",
-        ),
-        (
+            skill().description("User only").user_invocable(true).agent_invocable(false).body("# User only").content(),
+        )
+        .file(
             "skills/flat-agent.md",
-            "---\nname: alpha-flat\ndescription: Flat skill\nagent-invocable: true\ntags:\n  - flat\n---\n# Flat",
-        ),
-        (
+            skill().name("alpha-flat").description("Flat skill").tag("flat").body("# Flat").content(),
+        )
+        .file(
             "skills/rule-only.md",
-            "---\ndescription: Rule only\nagent-invocable: false\ntriggers:\n  read:\n    - \"**/*.rs\"\n---\n# Rule",
-        ),
-    ];
+            skill().description("Rule only").agent_invocable(false).read_trigger("**/*.rs").body("# Rule").content(),
+        );
 
-    let temp_dir = create_test_files(&test_files);
-    let mcp = TestClient::start(|| skills_server(temp_dir.path())).await?;
+    let mcp = TestClient::start(|| skills_server(workspace.root())).await?;
 
     let parsed = mcp.call("list_skills", ListSkillsInput::default()).await?;
 
@@ -113,16 +110,11 @@ async fn test_list_skills_only_returns_agent_invocable_entries() -> TestResult {
 
 #[tokio::test]
 async fn test_load_skills_with_missing() -> TestResult {
-    let test_files = vec![
-        ("skills/skill-1/SKILL.md", "---\ndescription: First skill\nagent-invocable: true\n---\n# Skill 1\n\nContent."),
-        (
-            "skills/skill-2/SKILL.md",
-            "---\ndescription: Second skill\nagent-invocable: true\n---\n# Skill 2\n\nContent.",
-        ),
-    ];
+    let workspace = TestWorkspace::new()
+        .file("skills/skill-1/SKILL.md", skill().description("First skill").body("# Skill 1\n\nContent.").content())
+        .file("skills/skill-2/SKILL.md", skill().description("Second skill").body("# Skill 2\n\nContent.").content());
 
-    let temp_dir = create_test_files(&test_files);
-    let mcp = TestClient::start(|| skills_server(temp_dir.path())).await?;
+    let mcp = TestClient::start(|| skills_server(workspace.root())).await?;
 
     let parsed = mcp
         .call("get_skills", load_skills_input(&[("skill-1", None), ("nonexistent-skill", None), ("skill-2", None)]))
@@ -147,20 +139,18 @@ async fn test_load_skills_with_missing() -> TestResult {
 
 #[tokio::test]
 async fn test_get_skills_rejects_non_agent_invocable_prompts() -> TestResult {
-    let test_files = vec![
-        ("skills/allowed/SKILL.md", "---\ndescription: Allowed\nagent-invocable: true\n---\n# Allowed"),
-        (
+    let workspace = TestWorkspace::new()
+        .file("skills/allowed/SKILL.md", skill().description("Allowed").body("# Allowed").content())
+        .file(
             "skills/user-only/SKILL.md",
-            "---\ndescription: User only\nuser-invocable: true\nagent-invocable: false\n---\n# User only",
-        ),
-        (
+            skill().description("User only").user_invocable(true).agent_invocable(false).body("# User only").content(),
+        )
+        .file(
             "skills/rule-only.md",
-            "---\ndescription: Rule only\nagent-invocable: false\ntriggers:\n  read:\n    - \"**/*.rs\"\n---\n# Rule",
-        ),
-    ];
+            skill().description("Rule only").agent_invocable(false).read_trigger("**/*.rs").body("# Rule").content(),
+        );
 
-    let temp_dir = create_test_files(&test_files);
-    let mcp = TestClient::start(|| skills_server(temp_dir.path())).await?;
+    let mcp = TestClient::start(|| skills_server(workspace.root())).await?;
 
     let parsed = mcp
         .call("get_skills", load_skills_input(&[("allowed", None), ("user-only", None), ("rule-only", None)]))
@@ -184,17 +174,15 @@ async fn test_get_skills_rejects_non_agent_invocable_prompts() -> TestResult {
 
 #[tokio::test]
 async fn test_load_auxiliary_file() -> TestResult {
-    let test_files = vec![
-        (
+    let workspace = TestWorkspace::new()
+        .file(
             "skills/test-skill/SKILL.md",
-            "---\ndescription: Test skill\nagent-invocable: true\n---\n# Main\n\nSee [traits](./traits.md).",
-        ),
-        ("skills/test-skill/traits.md", "# Traits\n\nTraits content here."),
-        ("skills/test-skill/references/REF.md", "# Reference\n\nReference content."),
-    ];
+            skill().description("Test skill").body("# Main\n\nSee [traits](./traits.md).").content(),
+        )
+        .file("skills/test-skill/traits.md", "# Traits\n\nTraits content here.")
+        .file("skills/test-skill/references/REF.md", "# Reference\n\nReference content.");
 
-    let temp_dir = create_test_files(&test_files);
-    let mcp = TestClient::start(|| skills_server(temp_dir.path())).await?;
+    let mcp = TestClient::start(|| skills_server(workspace.root())).await?;
 
     let parsed = mcp.call("get_skills", load_skills_input(&[("test-skill", None)])).await?;
     let file = &parsed["files"][0];
@@ -214,10 +202,10 @@ async fn test_load_auxiliary_file() -> TestResult {
 
 #[tokio::test]
 async fn test_reject_traversal() -> TestResult {
-    let test_files = vec![("skills/test-skill/SKILL.md", "---\ndescription: Test\nagent-invocable: true\n---\n# Test")];
+    let workspace =
+        TestWorkspace::new().file("skills/test-skill/SKILL.md", skill().description("Test").body("# Test").content());
 
-    let temp_dir = create_test_files(&test_files);
-    let mcp = TestClient::start(|| skills_server(temp_dir.path())).await?;
+    let mcp = TestClient::start(|| skills_server(workspace.root())).await?;
 
     let parsed = mcp.call("get_skills", load_skills_input(&[("test-skill", Some("../other-skill/SKILL.md"))])).await?;
     let file = &parsed["files"][0];
@@ -228,10 +216,10 @@ async fn test_reject_traversal() -> TestResult {
 
 #[tokio::test]
 async fn test_reject_absolute_path() -> TestResult {
-    let test_files = vec![("skills/test-skill/SKILL.md", "---\ndescription: Test\nagent-invocable: true\n---\n# Test")];
+    let workspace =
+        TestWorkspace::new().file("skills/test-skill/SKILL.md", skill().description("Test").body("# Test").content());
 
-    let temp_dir = create_test_files(&test_files);
-    let mcp = TestClient::start(|| skills_server(temp_dir.path())).await?;
+    let mcp = TestClient::start(|| skills_server(workspace.root())).await?;
 
     let parsed = mcp.call("get_skills", load_skills_input(&[("test-skill", Some("/etc/passwd"))])).await?;
     let file = &parsed["files"][0];
@@ -242,8 +230,8 @@ async fn test_reject_absolute_path() -> TestResult {
 
 #[tokio::test]
 async fn list_skills_input_schema_has_properties_object() -> TestResult {
-    let temp_dir = create_test_files(&[]);
-    let mcp = TestClient::start(|| skills_server(temp_dir.path())).await?;
+    let workspace = TestWorkspace::new();
+    let mcp = TestClient::start(|| skills_server(workspace.root())).await?;
 
     let tools = mcp.raw().peer().list_all_tools().await?;
     let tool = tools.into_iter().find(|tool| tool.name.as_ref() == "list_skills").expect("list_skills tool present");
