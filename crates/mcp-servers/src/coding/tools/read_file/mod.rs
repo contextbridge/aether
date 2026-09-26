@@ -1,8 +1,8 @@
 use crate::file_ops::{FileError, read_text_file};
-use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 
 const MAX_LINE_BYTES: usize = 2000;
 const DEFAULT_LINE_LIMIT: usize = 2000;

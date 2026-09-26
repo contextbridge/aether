@@ -12,7 +12,7 @@ use lsp_types::DocumentSymbolResponse;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
+use utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 
 use crate::lsp::common::{LocationResult, enrich_locations, for_each_document_symbol, path_to_uri, uri_to_path};
 use crate::lsp::error::LspError;

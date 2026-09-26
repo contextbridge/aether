@@ -13,7 +13,7 @@ use lsp_types::GotoDefinitionResponse;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
+use utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 
 use crate::lsp::common::{LocationResult, uri_to_path};
 use crate::lsp::error::LspError;
