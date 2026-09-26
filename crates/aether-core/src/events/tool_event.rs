@@ -1,9 +1,9 @@
 use super::SubAgentProgressPayload;
 use llm::types::IsoString;
 use llm::{ChatMessage, ContentBlock, MessageId, ToolCallError, ToolCallRequest, ToolCallResult, ToolDefinition};
-use mcp_utils::display_meta::ToolResultMeta;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use utils::display_meta::ToolResultMeta;
 
 /// Tool call lifecycle events.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
