@@ -2,10 +2,10 @@ use mcp_utils::client::{
     CatalogTool, DeferredToolRules, PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME, ServerCatalogEntry, ToolAnnotationMatcher,
     ToolCatalog, ToolExposure, ToolExposureKind, ToolFilter, ToolMatcher, ToolRoute,
 };
-use mcp_utils::status::{McpServerAuthCapability, McpServerStatus};
 use rmcp::model::{Tool, ToolAnnotations};
 use serde_json::json;
 use std::sync::Arc;
+use utils::mcp_status::{McpServerAuthCapability, McpServerStatus};
 
 fn tool(name: &str) -> Tool {
     let schema = json!({

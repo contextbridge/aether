@@ -26,8 +26,8 @@ pub use connection::{McpConnectAttempt, McpConnectOutcome, McpServerConnection};
 pub use connection_attempt_manager::McpConnectionAttemptManager;
 pub use error::{McpError, Result};
 pub use manager::{
-    ElicitationRequest, McpClientEvent, McpConnectionDetails, McpManager, McpServerStatus, McpServerStatusEntry,
-    OAuthHandlerContext, OAuthHandlerFactory, RuntimeMcpServer, RuntimeMcpTransport,
+    ElicitationRequest, McpClientEvent, McpConnectionDetails, McpManager, OAuthHandlerContext, OAuthHandlerFactory,
+    RuntimeMcpServer, RuntimeMcpTransport,
 };
 pub use mcp_client::{McpClient, cancel_result, client_capabilities, client_capabilities_for};
 pub use mcp_snapshot::McpSnapshot;

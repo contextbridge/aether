@@ -27,7 +27,7 @@ use std::sync::{Arc, atomic::AtomicU64};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
-pub use crate::status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
+use utils::mcp_status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
 
 pub type OAuthHandlerFactory = Arc<dyn Fn(OAuthHandlerContext) -> Result<Arc<dyn OAuthHandler>> + Send + Sync>;
 
@@ -655,7 +655,6 @@ mod tests {
     use crate::client::config::{McpHttpConfig, ToolExposure};
     use crate::client::connection::{McpConnectAttempt, McpConnectOutcome};
     use crate::client::{McpSnapshot, OAuthHandlerFactory, ToolRoute};
-    use crate::status::McpServerAuthCapability;
     use aether_auth::{OAuthError, OAuthHandler};
     use futures::future::BoxFuture;
     use rmcp::{
@@ -673,6 +672,7 @@ mod tests {
         sync::{Arc, Mutex},
     };
     use tokio::sync::{mpsc, watch};
+    use utils::mcp_status::McpServerAuthCapability;
 
     #[derive(Clone)]
     struct TestServer {
