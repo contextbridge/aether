@@ -1,30 +1,21 @@
 use mcp_servers::coding::CodingMcp;
 use mcp_servers::coding::tools::read_file::ReadFileArgs;
-use std::fs;
-use tempfile::TempDir;
+use mcp_servers::testing::TestWorkspace;
 
 #[tokio::test]
 async fn test_read_file_meta_includes_matched_rule_names_from_configured_rules_dirs() {
-    let temp_dir = TempDir::new().unwrap();
-    let root = temp_dir.path();
-
-    let rules_dir = root.join(".claude").join("rules");
-    fs::create_dir_all(&rules_dir).unwrap();
-    fs::write(
-        rules_dir.join("writing-rust.md"),
-        "---\ndescription: Rust conventions\npaths:\n  - \"src/**/*.rs\"\n---\nRust best practices.\n",
-    )
-    .unwrap();
-
-    let src_dir = root.join("src");
-    fs::create_dir_all(&src_dir).unwrap();
-    let rs_file = src_dir.join("main.rs");
-    fs::write(&rs_file, "fn main() {}\n").unwrap();
-
-    let mcp = CodingMcp::new().with_rules_dirs(vec![rules_dir]).with_root_dir(root.to_path_buf());
+    let workspace = TestWorkspace::new()
+        .file(
+            ".claude/rules/writing-rust.md",
+            "---\ndescription: Rust conventions\npaths:\n  - \"src/**/*.rs\"\n---\nRust best practices.\n",
+        )
+        .file("src/main.rs", "fn main() {}\n");
+    let mcp = CodingMcp::new()
+        .with_rules_dirs(vec![workspace.path(".claude/rules")])
+        .with_root_dir(workspace.root().to_path_buf());
 
     let result = mcp
-        .test_read_file(ReadFileArgs { file_path: rs_file.to_string_lossy().to_string(), offset: None, limit: None })
+        .test_read_file(ReadFileArgs { file_path: workspace.path_string("src/main.rs"), offset: None, limit: None })
         .await
         .unwrap();
 
@@ -43,26 +34,16 @@ async fn test_read_file_meta_includes_matched_rule_names_from_configured_rules_d
 
 #[tokio::test]
 async fn test_read_file_does_not_auto_load_rules_without_rules_dirs() {
-    let temp_dir = TempDir::new().unwrap();
-    let root = temp_dir.path();
-
-    let skill_dir = root.join(".aether").join("skills").join("writing-rust");
-    fs::create_dir_all(&skill_dir).unwrap();
-    fs::write(
-        skill_dir.join("SKILL.md"),
-        "---\ndescription: Rust conventions\ntriggers:\n  read:\n    - \"**/*.rs\"\n---\nRust best practices.\n",
-    )
-    .unwrap();
-
-    let src_dir = root.join("src");
-    fs::create_dir_all(&src_dir).unwrap();
-    let rs_file = src_dir.join("main.rs");
-    fs::write(&rs_file, "fn main() {}\n").unwrap();
-
-    let mcp = CodingMcp::new().with_root_dir(root.to_path_buf());
+    let workspace = TestWorkspace::new()
+        .file(
+            ".aether/skills/writing-rust/SKILL.md",
+            "---\ndescription: Rust conventions\ntriggers:\n  read:\n    - \"**/*.rs\"\n---\nRust best practices.\n",
+        )
+        .file("src/main.rs", "fn main() {}\n");
+    let mcp = CodingMcp::new().with_root_dir(workspace.root().to_path_buf());
 
     let result = mcp
-        .test_read_file(ReadFileArgs { file_path: rs_file.to_string_lossy().to_string(), offset: None, limit: None })
+        .test_read_file(ReadFileArgs { file_path: workspace.path_string("src/main.rs"), offset: None, limit: None })
         .await
         .unwrap();
 

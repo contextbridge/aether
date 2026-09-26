@@ -1,6 +1,7 @@
 use crate::common::{TestClient, TestResult, scripted_mcp_client, silent_mcp_client, test_error};
 use axum::{Router, extract::Query, http::header::CONTENT_TYPE, response::Html, routing::get};
 use mcp_servers::review::ReviewMcp;
+use mcp_servers::testing::TestWorkspace;
 use mcp_utils::{client::McpClient, testing::ElicitationScript};
 use reqwest::Url;
 use rmcp::model::{
@@ -10,7 +11,6 @@ use rmcp::model::{
 use rmcp::service::PeerRequestOptions;
 use serde_json::{Value, json};
 use std::{collections::HashMap, fs, path::Path, path::PathBuf};
-use tempfile::TempDir;
 use tokio::task::JoinHandle;
 use utils::artifact_review::ArtifactReviewElicitationMeta;
 
@@ -251,9 +251,8 @@ async fn explicit_approval_returns_approved_without_feedback() -> TestResult {
 
 #[tokio::test]
 async fn clients_without_elicitation_support_are_rejected() -> TestResult {
-    let root = TempDir::new()?;
-    fs::write(root.path().join("valid.md"), "# Valid")?;
-    let mcp = TestClient::start(|| review_mcp_at(root.path())).await?;
+    let workspace = TestWorkspace::new().file("valid.md", "# Valid");
+    let mcp = TestClient::start(|| review_mcp_at(workspace.root())).await?;
 
     let result = mcp.call_raw("review_artifact", markdown_file("valid.md")).await?;
 
@@ -267,12 +266,12 @@ fn review_test() -> ReviewTestBuilder {
 
 #[derive(Default)]
 struct ReviewTestBuilder {
-    files: Vec<(PathBuf, Vec<u8>)>,
+    workspace: TestWorkspace,
     response: Option<ElicitResult>,
 }
 
 struct ReviewTest {
-    root: TempDir,
+    workspace: TestWorkspace,
     client: TestClient<ReviewMcp, McpClient>,
     script: Option<ElicitationScript>,
 }
@@ -297,8 +296,8 @@ struct UpstreamApp {
 }
 
 impl ReviewTestBuilder {
-    fn file(mut self, path: impl Into<PathBuf>, content: impl AsRef<[u8]>) -> Self {
-        self.files.push((path.into(), content.as_ref().to_vec()));
+    fn file(mut self, path: impl AsRef<Path>, content: impl AsRef<[u8]>) -> Self {
+        self.workspace = self.workspace.file(path, content);
         self
     }
 
@@ -308,15 +307,6 @@ impl ReviewTestBuilder {
     }
 
     async fn build(self) -> TestResult<ReviewTest> {
-        let root = TempDir::new()?;
-        for (relative_path, content) in self.files {
-            let path = root.path().join(relative_path);
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::write(path, content)?;
-        }
-
         let (client, script) = self.response.map_or_else(
             || (silent_mcp_client("review-test-server"), None),
             |response| {
@@ -324,14 +314,14 @@ impl ReviewTestBuilder {
                 (client, Some(script))
             },
         );
-        let client = TestClient::start_with(|| review_mcp_at(root.path()), client).await?;
-        Ok(ReviewTest { root, client, script })
+        let client = TestClient::start_with(|| review_mcp_at(self.workspace.root()), client).await?;
+        Ok(ReviewTest { workspace: self.workspace, client, script })
     }
 }
 
 impl ReviewTest {
     fn path(&self, relative_path: impl AsRef<Path>) -> PathBuf {
-        self.root.path().join(relative_path)
+        self.workspace.path(relative_path)
     }
 
     fn remove(&self, relative_path: impl AsRef<Path>) -> TestResult {
@@ -340,7 +330,7 @@ impl ReviewTest {
     }
 
     fn root_is_empty(&self) -> TestResult<bool> {
-        Ok(fs::read_dir(self.root.path())?.next().is_none())
+        Ok(fs::read_dir(self.workspace.root())?.next().is_none())
     }
 
     /// The first MRTR round of a Markdown review.

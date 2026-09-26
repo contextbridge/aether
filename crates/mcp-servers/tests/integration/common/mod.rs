@@ -8,6 +8,7 @@ use mcp_servers::skills::{
     SkillsMcp,
     tools::{LoadSkillsInput, SkillRequest},
 };
+use mcp_servers::testing::TestWorkspace;
 use mcp_utils::client::{McpClient, client_capabilities};
 use mcp_utils::testing::{ElicitationScript, connect};
 use rmcp::RoleClient;
@@ -20,7 +21,6 @@ use serde::Serialize;
 use std::fs::{create_dir_all, read_to_string};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use tempfile::{TempDir, tempdir};
 use tokio::sync::mpsc;
 
 /// Default timeout for polling operations (60 seconds).
@@ -60,7 +60,7 @@ pub fn test_error(message: impl Into<String>) -> std::io::Error {
 
 /// An isolated workspace connected to a `CodingMcp` through the public MCP protocol.
 pub struct CodingWorkspace {
-    root: TempDir,
+    workspace: TestWorkspace,
     pub client: TestClient<CodingMcp>,
 }
 
@@ -74,17 +74,17 @@ impl CodingWorkspace {
     }
 
     async fn start(configure: impl FnOnce(&Path) -> CodingMcp) -> TestResult<Self> {
-        let root = tempdir()?;
-        let client = TestClient::start(|| configure(root.path())).await?;
-        Ok(Self { root, client })
+        let workspace = TestWorkspace::new();
+        let client = TestClient::start(|| configure(workspace.root())).await?;
+        Ok(Self { workspace, client })
     }
 
     pub fn root(&self) -> &Path {
-        self.root.path()
+        self.workspace.root()
     }
 
     pub fn path(&self, relative_path: impl AsRef<Path>) -> PathBuf {
-        self.root.path().join(relative_path)
+        self.workspace.path(relative_path)
     }
 
     pub fn write(&self, relative_path: impl AsRef<Path>, content: &str) -> TestResult<PathBuf> {
@@ -262,17 +262,9 @@ pub async fn cleanup_daemon(project: &impl TestProject) {
 }
 
 /// Creates files and directories (including parents) from `(path, content)`
-/// pairs inside a fresh temp dir.
-pub fn create_test_files(files: &[(&str, &str)]) -> TempDir {
-    let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    for (path, content) in files {
-        let full_path = temp_dir.path().join(path);
-        if let Some(parent) = full_path.parent() {
-            create_dir_all(parent).unwrap_or_else(|_| panic!("Failed to create directory for {path}"));
-        }
-        std::fs::write(&full_path, content).unwrap_or_else(|_| panic!("Failed to write file {path}"));
-    }
-    temp_dir
+/// pairs inside a fresh temp workspace.
+pub fn create_test_files(files: &[(&str, &str)]) -> TestWorkspace {
+    files.iter().fold(TestWorkspace::new(), |workspace, (path, content)| workspace.file(path, content))
 }
 
 /// A skills server serving the `skills` directory of `test_dir`.
