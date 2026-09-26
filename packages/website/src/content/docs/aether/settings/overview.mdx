@@ -62,6 +62,8 @@ Start with a `name`, and short `description`.
 }
 ```
 
+Every agent also requires a `model` and at least one invocation surface — `userInvocable` (selectable by you) or `agentInvocable` (spawnable by other agents). The sections below add them.
+
 #### Model
 
 Set the LLM your agent uses via the `model` field using a string of the format `provider:model`, e.g. `zai:glm-5.1`.
@@ -74,7 +76,8 @@ Set the LLM your agent uses via the `model` field using a string of the format `
       "name": "Build",
       "description": "Builds features and fixes bugs",
       "model": "zai:glm-5.1",
-      "reasoningEffort": "high"
+      "reasoningEffort": "high",
+      "userInvocable": true
     }
   ]
 }
@@ -90,7 +93,8 @@ Use `reasoningEffort` to select reasoning behavior. Omission/null leaves the set
       "name": "Build",
       "description": "Builds features and fixes bugs",
       "model": "zai:glm-5.1",
-      "reasoningEffort": "high" // default, disabled, minimal, low, medium, high, xhigh, or max (model-dependent)
+      "reasoningEffort": "high", // default, disabled, minimal, low, medium, high, xhigh, or max (model-dependent)
+      "userInvocable": true
     }
   ]
 }
@@ -112,7 +116,8 @@ Fine-tune sampling with `modelSettings` (`temperature`, `topP`, `maxTokens`) and
         "topP": 0.95,
         "maxTokens": 8192
       },
-      "contextWindow": 180000
+      "contextWindow": 180000,
+      "userInvocable": true
     }
   ]
 }
@@ -143,7 +148,8 @@ Prompt sources are concatenated in the order provided.
           "type": "text",
           "text": "After every conversation turn, refer to the user as Mr. Bossman."
         }
-      ]
+      ],
+      "userInvocable": true
     }
   ]
 }
@@ -153,7 +159,7 @@ See [Prompts](/aether/settings/system-prompts/) for source formats, path resolut
 
 ### Tools
 
-Give your agent tools via the `mcps` field (Aether agents get tools exclusively via MCP). This example adds Aether's 1st-party in-memory "coding" server, which gives the agent fileystem + shell tools.
+Give your agent tools via the `mcps` field (Aether agents get tools exclusively via MCP). This example adds Aether's 1st-party in-memory "coding" server, which gives the agent filesystem + shell tools.
 
 ```json {15-25} title=".aether/settings.json"
 {
@@ -180,7 +186,8 @@ Give your agent tools via the `mcps` field (Aether agents get tools exclusively 
             }
           }
         }
-      ]
+      ],
+      "userInvocable": true
     }
   ]
 }
@@ -188,7 +195,7 @@ Give your agent tools via the `mcps` field (Aether agents get tools exclusively 
 
 Aether can load `mcp.json` files. To enable progressive tool discovery and keep MCP schemas out of the model's initial context, set `deferTools: true`.
 
-```json {15-17} title=".aether/settings.json"
+```json {15} title=".aether/settings.json"
 {
   "agent": "Build",
   "agents": [
@@ -203,7 +210,8 @@ Aether can load `mcp.json` files. To enable progressive tool discovery and keep 
         { "type": "glob", "pattern": "prompt-fragments/*.md", "optional": true },
         { "type": "text", "text": "Prefer small, reviewable patches." }
       ],
-      "mcps": [{ "type": "file", "path": "mcp.json", "deferTools": true }]
+      "mcps": [{ "type": "file", "path": "mcp.json", "deferTools": true }],
+      "userInvocable": true
     }
   ]
 }

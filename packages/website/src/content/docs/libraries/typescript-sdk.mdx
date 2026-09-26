@@ -115,7 +115,7 @@ for await (const event of runHeadless({
 
 ### Options
 
-`AetherHeadlessOptions` mirrors the [headless CLI flags](/aether/running/headless/#flags) plus SDK process controls:
+`AetherHeadlessOptions` mirrors most of the [headless CLI flags](/aether/running/headless/#flags) (`mcpConfig` is not available — headless runs take their MCP servers from settings), plus SDK process controls:
 
 | Option         | Description                                                                                                                                          |
 | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -223,7 +223,7 @@ scope exit.
 
 ### Per-agent tools
 
-A spec on the top-level `mcps` is available to every agent. Put it on a single
+A spec on the top-level `mcps` is inherited by every agent that doesn't declare its own `mcps`. Put it on a single
 agent's `mcps` instead to scope those tools to that agent.
 
 ```ts

@@ -70,6 +70,8 @@ Each root task tree is stored in one JSONL file when persistent storage is enabl
 | `treeId`    | `string`  | Only return tasks in one tree, identified by its root task ID.                       |
 | `readyOnly` | `boolean` | Only return tasks that are ready to start (pending with all dependencies completed).  |
 
+Only one filter is applied per call. If several are provided, the first match in this priority order wins: `readyOnly` → `treeId` → `assignee` → `status`. With no filters, all active tasks are returned.
+
 ## Examples
 
 Create a root task:
@@ -127,6 +129,8 @@ Complete a task and attach handoff context:
 | `blockers`  | Unresolved blockers.                    |
 | `filesRead` | Files examined.                         |
 | `resources` | External resources referenced.          |
+
+The result includes the updated task, a `changes` list of the fields that were modified, and — when completing a task that others depended on — `newlyReady`: the tasks that just became ready to start.
 
 ## Input names
 

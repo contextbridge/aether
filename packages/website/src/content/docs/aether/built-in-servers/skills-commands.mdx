@@ -14,7 +14,7 @@ A single markdown artifact can be a user prompt, an agent skill, a read-triggere
 
 ## Configuration
 
-Aether's project scaffold wires `skills` to `.aether/skills`:
+Aether's project scaffold wires `skills` to `${AETHER_HOME}/skills` and `${WORKSPACE}/.aether/skills` (plus harness directories such as `.claude/skills` when a harness integration is selected):
 
 ```json title=".aether/mcp.json"
 {
@@ -27,7 +27,7 @@ Aether's project scaffold wires `skills` to `.aether/skills`:
 }
 ```
 
-`--dir` is repeatable. On name collision, the last directory wins.
+`--dir` is required and repeatable. On name collision, the last directory wins. `--notes-dir` is still accepted but ignored.
 
 ## Directory shape
 

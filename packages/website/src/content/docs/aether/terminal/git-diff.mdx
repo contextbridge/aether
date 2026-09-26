@@ -36,10 +36,16 @@ The file-list header shows the active scope: `Git Diff · Both`, `Git Diff · Un
 | `PageDown` / `PageUp` | Page through the diff pane |
 | `o` | Toggle between the diff and the source view of the selected file |
 | `f` | Toggle full-file context (show the entire file instead of just the hunks) |
+| `Enter` (diff pane) | Reveal the next collapsed context gap |
+| `O` | Reveal all collapsed context gaps in the file |
 | `v` | Cycle the diff layout: auto, unified, or split |
+| `←` / `→` (split layout) | Move the cursor to the old / new side |
+| `Tab` | Switch focus between the file list and the diff pane |
+| `Home` / `End` | Jump to the first / last entry |
+| `t` | Open the diff theme picker |
 | `?` | Show help |
 | `r` | Refresh the diff |
-| `Esc` / `Ctrl+G` | Close git diff view |
+| `Esc` / `Ctrl+G` | Close git diff view. `Esc` first cancels whatever is open — a comment draft, the commit composer, the theme picker, or help — before closing the view |
 
 ## Diff scope
 
