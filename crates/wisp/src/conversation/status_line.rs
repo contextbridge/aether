@@ -1,4 +1,3 @@
-use crate::conversation::ContextUsageDisplay;
 use crate::session::session_config_view::{LocalConfigOption, LocalConfigView};
 use crate::session::workspace_status::WorkspaceStatus;
 use crate::settings::{ResolvedStatusLineSettings, StatusLineSegmentConfig, StatusLineStyle};
@@ -6,6 +5,7 @@ use crate::view::reasoning_bar::{reasoning_bar, reasoning_color, slot_bar};
 use crate::theme::Theme;
 use crate::view::wrap::{truncate_spans, truncate_to_width};
 use acp_utils::config_option_id::ConfigOptionId;
+use agent_client_protocol::schema::v2 as acp;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
@@ -27,6 +27,31 @@ pub struct StatusLineModel<'a> {
     pub unhealthy_servers: usize,
     pub waiting_for_response: bool,
     pub exit_confirmation: bool,
+}
+
+/// Context-window usage as the status line displays it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContextUsageDisplay {
+    pub used_tokens: u32,
+    pub limit_tokens: u32,
+}
+
+impl ContextUsageDisplay {
+    pub fn used_ratio(self) -> f64 {
+        if self.limit_tokens == 0 {
+            return 0.0;
+        }
+        (f64::from(self.used_tokens) / f64::from(self.limit_tokens)).clamp(0.0, 1.0)
+    }
+}
+
+impl From<&acp::UsageUpdate> for ContextUsageDisplay {
+    fn from(usage: &acp::UsageUpdate) -> Self {
+        Self {
+            used_tokens: u32::try_from(usage.used).unwrap_or(u32::MAX),
+            limit_tokens: u32::try_from(usage.size).unwrap_or(u32::MAX),
+        }
+    }
 }
 
 /// The bottom status bar: workspace on the left, session state on the right.

@@ -22,8 +22,8 @@ use crate::settings::UiSettings;
 use crate::surfaces::composer::ComposerLayout;
 use acp_utils::client::AcpEvent;
 use acp_utils::notifications::{
-    AetherCapabilities, SubAgentEvent, SubAgentProgressParams, SubAgentToolRequest, SubAgentToolResult,
-    WorkspaceStatusResponse,
+    AetherCapabilities, ContextClearedParams, SubAgentEvent, SubAgentProgressParams, SubAgentToolRequest,
+    SubAgentToolResult, WorkspaceStatusResponse,
 };
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::v2::{self as acp, SessionId, SessionUpdate, ToolCallUpdate};
@@ -1675,6 +1675,10 @@ pub fn session_update(update: acp::SessionUpdate) -> AcpEvent {
     acp::UpdateSessionNotification::new(SessionId::new("test-session"), update).into()
 }
 
+pub fn context_cleared() -> AcpEvent {
+    AcpEvent::ContextCleared(ContextClearedParams { session_id: SessionId::new("test-session") })
+}
+
 pub fn compaction_update(id: &str, status: acp::CompactionStatus) -> AcpEvent {
     session_update(acp::SessionUpdate::CompactionUpdate(acp::CompactionUpdate::new(id, status)))
 }
@@ -1691,9 +1695,13 @@ pub fn text_chunk_with_id(message_id: &str, text: &str) -> AcpEvent {
 }
 
 pub fn thought_chunk(text: &str) -> AcpEvent {
+    thought_chunk_with_id("thought", text)
+}
+
+pub fn thought_chunk_with_id(message_id: &str, text: &str) -> AcpEvent {
     session_update(acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(
         acp::ContentBlock::Text(acp::TextContent::new(text)),
-        "thought",
+        message_id.to_string(),
     )))
 }
 
@@ -1739,6 +1747,7 @@ fn seed_tool_diff(id: &str, turn: usize) -> AcpEvent {
 
 fn seed_sub_agent(parent: &str, task: &str, agent: &str, event: SubAgentEvent) -> AcpEvent {
     AcpEvent::SubAgentProgress(SubAgentProgressParams {
+        session_id: SessionId::new("test-session"),
         parent_tool_id: parent.to_string(),
         task_id: task.to_string(),
         agent_name: agent.to_string(),

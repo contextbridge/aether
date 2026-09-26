@@ -65,7 +65,7 @@ fn workspace_move_command_rejected_when_prompt_in_flight() {
     ui.type_text("/move");
     ui.key(key(KeyCode::Tab));
 
-    assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::Prompt(_)));
+    assert!(ui.app().waiting_for_response());
     ui.draw();
     let viewport = ui.viewport_text();
     assert!(viewport.lines().any(|l| l.contains("Cannot move") && l.contains("workspace")), "{viewport}");

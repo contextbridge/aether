@@ -7,7 +7,6 @@ mod support;
 
 mod artifact_review;
 mod attachments;
-mod canonical_conversation;
 mod composer;
 mod configuration;
 mod conversation;

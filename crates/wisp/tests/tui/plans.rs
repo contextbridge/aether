@@ -164,7 +164,7 @@ fn plan_cleared_on_context_cleared() {
     ui.acp_event(plan_update(vec![plan_entry("Task", acp::PlanEntryStatus::Pending)]));
     assert!(ui.app().has_plan());
 
-    ui.acp_event(AcpEvent::ContextCleared(ContextClearedParams::default()));
+    ui.acp_event(context_cleared());
     assert!(!ui.app().has_plan());
 
     ui.draw();

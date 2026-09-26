@@ -132,7 +132,7 @@ fn context_clear_does_not_purge_native_scrollback() {
 
     commit_overflowing_reply(&mut ui);
 
-    ui.acp_event(AcpEvent::ContextCleared(ContextClearedParams::default()));
+    ui.acp_event(context_cleared());
 
     ui.assert_history_contains("overflow-line-0");
 }

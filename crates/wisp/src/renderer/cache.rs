@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::conversation::{ConversationItemId, Revision};
+use acp_utils::conversation::{ConversationItemId, Revision};
 use crate::view::generation::Generation;
 use ratatui::text::Line;
 

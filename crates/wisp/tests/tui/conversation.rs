@@ -144,7 +144,7 @@ fn context_clear_discards_conversation_retained_in_the_live_viewport() {
     ui.draw();
     ui.assert_viewport_contains("old retained message");
 
-    ui.acp_event(AcpEvent::ContextCleared(ContextClearedParams::default()));
+    ui.acp_event(context_cleared());
     ui.draw();
 
     let viewport = ui.viewport_text();
@@ -263,11 +263,10 @@ fn thought_chunks_preserve_identity_without_rendering_in_the_transcript() {
         ui.draw();
     }
 
-    assert!(
-        ui.app().conversation_items().iter().all(|item| !item.text().is_some_and(|text| text.contains("pondering"))),
-        "thought chunks never become transcript items"
-    );
-    assert_eq!(ui.history_text().matches("pondering-line-0").count(), 0, "thought text must not reach scrollback");
+    let thoughts =
+        ui.app().conversation_items().iter().filter(|item| matches!(item.content(), ConversationContent::Thought(_)));
+    assert_eq!(thoughts.count(), 1, "every chunk extends the same thought");
+    assert!(!ui.conversation_text().contains("pondering-line-0"), "the transcript never renders the thought");
 
     let status = ui.viewport_text();
     assert!(status.contains("pondering-line-29"), "the progress band should preview the latest thought:\n{status}");
@@ -392,9 +391,10 @@ fn cancelled_prompt_marks_running_tool_as_error() {
 
     app.complete_prompt(acp::StopReason::Cancelled);
 
-    let cancelled = app.app().conversation_items().iter().any(|item| {
-        matches!(item.content(), ConversationContent::Tool(tool) if tool.status == ToolStatus::Error("cancelled".to_string()))
-    });
+    let cancelled =
+        app.app().conversation_items().iter().any(
+            |item| matches!(item.content(), ConversationContent::Tool(tool) if tool.status == ToolStatus::Cancelled),
+        );
     assert!(cancelled, "expected cancelled tool in {:?}", app.app().conversation_items());
 }
 

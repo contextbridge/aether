@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::conversation::item_view::{content_width, indent_lines};
-use crate::conversation::{ConversationItem, Revision};
+use acp_utils::conversation::{ConversationItem, Revision};
 use crate::view::markdown::layout_options;
 use crate::view::wrap::as_u16;
 use clankerdiff_ratatui::markdown::MarkdownStream;

@@ -1,11 +1,12 @@
 use crate::theme::Theme;
 use crate::view::wrap::tail_to_width;
-use agent_client_protocol::schema::v2::MessageId;
+use acp_utils::conversation::{Activity, Conversation, ConversationContent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
+use std::borrow::Cow;
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 
@@ -47,123 +48,53 @@ impl ProgressPhase {
     }
 }
 
+impl From<Activity> for ProgressPhase {
+    fn from(activity: Activity) -> Self {
+        match activity {
+            Activity::Idle => Self::Idle,
+            Activity::Thinking => Self::Thinking,
+            Activity::Responding => Self::Responding,
+            Activity::RequiresAction => Self::RequiresAction,
+            Activity::Working => Self::Working,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ProgressIndicator {
     phase: ProgressPhase,
-    agent_phase: ProgressPhase,
     interruptible: bool,
-    accepts_activity: bool,
     now: Instant,
     phase_started_at: Instant,
     thought: String,
-    thought_message_id: Option<MessageId>,
 }
 
 impl Default for ProgressIndicator {
     fn default() -> Self {
         let now = Instant::now();
-        Self {
-            phase: ProgressPhase::Idle,
-            agent_phase: ProgressPhase::Idle,
-            interruptible: false,
-            accepts_activity: true,
-            now,
-            phase_started_at: now,
-            thought: String::new(),
-            thought_message_id: None,
-        }
+        Self { phase: ProgressPhase::Idle, interruptible: false, now, phase_started_at: now, thought: String::new() }
     }
 }
 
 impl ProgressIndicator {
-    pub(crate) fn accepts_activity(&self) -> bool {
-        self.accepts_activity
-    }
-
-    pub(crate) fn prompt_started(&mut self) {
-        self.thought.clear();
-        self.thought_message_id = None;
-        self.accepts_activity = true;
-        self.set_agent_phase(ProgressPhase::Thinking);
-    }
-
-    pub(crate) fn response_started(&mut self) {
-        self.set_agent_phase(ProgressPhase::Responding);
-    }
-
-    pub(crate) fn requires_action(&mut self) {
-        self.set_agent_phase(ProgressPhase::RequiresAction);
-    }
-
-    pub(crate) fn tool_activity(&mut self) {
-        self.set_agent_phase(ProgressPhase::Working);
-    }
-
-    pub(crate) fn prompt_finished(&mut self) {
-        self.thought.clear();
-        self.thought_message_id = None;
-        self.set_agent_phase(ProgressPhase::Idle);
-        self.accepts_activity = false;
-    }
-
-    pub(crate) fn refresh(&mut self, override_phase: Option<ProgressPhase>, interruptible: bool) {
-        let phase = override_phase.unwrap_or(self.agent_phase);
+    pub(crate) fn refresh(
+        &mut self,
+        conversation: &Conversation,
+        override_phase: Option<ProgressPhase>,
+        interruptible: bool,
+    ) {
+        let phase = override_phase.unwrap_or_else(|| conversation.activity().into());
         if phase != self.phase {
             self.phase_started_at = self.now;
         }
         self.phase = phase;
         self.interruptible = interruptible;
-    }
-
-    pub(crate) fn replace_thought(&mut self, message_id: &MessageId, text: &str) {
-        if text.is_empty() && self.thought_message_id.as_ref() != Some(message_id) {
-            return;
-        }
-        self.thought.clear();
-        self.thought_message_id = None;
-        if !text.is_empty() {
-            self.record_thought(message_id, text);
-        }
-    }
-
-    pub(crate) fn record_thought(&mut self, message_id: &MessageId, chunk: &str) {
-        if !self.accepts_activity {
-            return;
-        }
-        if self.thought_message_id.as_ref() != Some(message_id) {
-            self.thought.clear();
-            self.thought_message_id = Some(message_id.clone());
-        }
-        self.set_agent_phase(ProgressPhase::Thinking);
-        for character in chunk.chars() {
-            if character.is_whitespace() {
-                if !self.thought.is_empty() && !self.thought.ends_with(' ') {
-                    self.thought.push(' ');
-                }
-            } else {
-                self.thought.push(character);
-            }
-        }
-        let excess = self.thought.chars().count().saturating_sub(THOUGHT_TAIL_CAPACITY);
-        if excess > 0 {
-            let cut = self.thought.char_indices().nth(excess).map_or(self.thought.len(), |(index, _)| index);
-            self.thought.drain(..cut);
-        }
+        self.thought = streaming_thought(conversation)
+            .map_or_else(String::new, |thought| collapsed_tail(&thought, THOUGHT_TAIL_CAPACITY));
     }
 
     pub(crate) fn on_tick(&mut self, now: Instant) {
         self.now = now;
-    }
-
-    fn set_agent_phase(&mut self, phase: ProgressPhase) {
-        if phase != ProgressPhase::Idle && !self.accepts_activity {
-            return;
-        }
-        if self.agent_phase == ProgressPhase::Thinking && phase != ProgressPhase::Thinking {
-            self.thought.clear();
-            self.thought_message_id = None;
-        }
-        self.agent_phase = phase;
     }
 
     pub fn is_active(&self) -> bool {
@@ -241,6 +172,35 @@ impl Widget for ProgressIndicatorView<'_> {
         lines.truncate(height);
         Paragraph::new(lines).render(area, buf);
     }
+}
+
+fn streaming_thought(conversation: &Conversation) -> Option<Cow<'_, str>> {
+    let item = conversation.items().last().filter(|item| item.is_open())?;
+    match item.content() {
+        ConversationContent::Thought(_) if conversation.activity() == Activity::Thinking => item.text(),
+        _ => None,
+    }
+}
+
+fn collapsed_tail(text: &str, capacity: usize) -> String {
+    let mut reversed = Vec::with_capacity(capacity);
+    let mut pending_space = false;
+    for character in text.chars().rev() {
+        if reversed.len() >= capacity {
+            break;
+        }
+        if character.is_whitespace() {
+            pending_space = true;
+            continue;
+        }
+        if pending_space {
+            reversed.push(' ');
+            pending_space = false;
+        }
+        reversed.push(character);
+    }
+    reversed.truncate(capacity);
+    reversed.into_iter().rev().collect()
 }
 
 fn format_elapsed(elapsed: Duration) -> String {

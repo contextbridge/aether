@@ -3,6 +3,7 @@ use unicode_width::UnicodeWidthStr;
 
 fn sub_agent_progress(parent_tool_id: &str, task_id: &str, agent_name: &str, event: SubAgentEvent) -> AcpEvent {
     AcpEvent::SubAgentProgress(SubAgentProgressParams {
+        session_id: SessionId::new("test-session"),
         parent_tool_id: parent_tool_id.to_string(),
         task_id: task_id.to_string(),
         agent_name: agent_name.to_string(),
@@ -108,9 +109,29 @@ fn sub_agent_context_cleared_removes_state() {
 
     assert!(app.app().is_agent_busy());
 
-    app.acp_event(AcpEvent::ContextCleared(acp_utils::notifications::ContextClearedParams {}));
+    app.acp_event(context_cleared());
 
     assert!(!app.app().is_agent_busy());
+}
+
+#[test]
+fn sub_agent_progress_and_clears_for_another_session_are_ignored() {
+    let mut app = make_app();
+    app.acp_event(tool_call("parent-1", "spawn_subagent"));
+    let other_session = SessionId::new("other-session");
+
+    app.acp_event(AcpEvent::SubAgentProgress(SubAgentProgressParams {
+        session_id: other_session.clone(),
+        parent_tool_id: "parent-1".to_string(),
+        task_id: "task-a".to_string(),
+        agent_name: "explorer".to_string(),
+        event: SubAgentEvent::Done,
+    }));
+    app.acp_event(AcpEvent::ContextCleared(ContextClearedParams { session_id: other_session }));
+
+    let items = app.app().conversation_items();
+    assert_eq!(items.len(), 1, "another session's clear leaves this conversation alone");
+    assert!(matches!(items[0].content(), ConversationContent::Tool(tool) if tool.sub_agents.is_empty()));
 }
 
 #[test]
@@ -538,7 +559,7 @@ mod progress_indicator_tests {
         let mut ui = TestUi::new();
         ui.submit("hello");
         ui.acp_event(compaction_update("compaction", acp::CompactionStatus::InProgress));
-        ui.acp_event(AcpEvent::ContextCleared(ContextClearedParams {}));
+        ui.acp_event(context_cleared());
 
         ui.draw();
         let viewport = ui.viewport_text();

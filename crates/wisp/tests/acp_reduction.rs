@@ -1,10 +1,10 @@
 #![cfg(feature = "testing")]
 
 use acp_utils::client::AcpEvent;
+use acp_utils::conversation::{ConversationContent, ToolStatus};
 use acp_utils::testing::{idle_notification, plan_notification, running_notification};
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::v2 as acp;
-use wisp::conversation::tool_calls::ToolStatus;
 use wisp::testing::{TestUi, session_update, text_chunk_with_id, tool_completed};
 
 #[test]
@@ -190,7 +190,7 @@ fn tool_and_plan_updates_are_upserts_and_chunks_append() {
         .conversation_items()
         .iter()
         .filter_map(|item| match item.content() {
-            wisp::conversation::ConversationContent::Tool(tool) => Some(tool),
+            ConversationContent::Tool(tool) => Some(tool),
             _ => None,
         })
         .collect();
@@ -250,7 +250,7 @@ fn seeded_history_uses_distinct_message_ids_and_finishes_each_turn() {
         .app()
         .conversation_items()
         .iter()
-        .filter(|item| matches!(item.content(), wisp::conversation::ConversationContent::User(_)))
+        .filter(|item| matches!(item.content(), ConversationContent::User(_)))
         .collect();
     assert_eq!(users.len(), 3);
     assert_ne!(users[0].message_id(), users[1].message_id());
