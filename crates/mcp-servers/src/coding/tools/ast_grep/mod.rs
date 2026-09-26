@@ -4,7 +4,6 @@ use ast_grep_core::Doc;
 use ast_grep_core::matcher::{NodeMatch, Pattern};
 use ast_grep_language::{Language, LanguageExt, SupportLang};
 use ignore::{WalkBuilder, WalkState};
-use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -13,6 +12,7 @@ use std::fs::read_to_string;
 use std::path::Path;
 use std::sync::{Arc, mpsc};
 use tokio::task::spawn_blocking;
+use utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

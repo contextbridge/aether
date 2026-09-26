@@ -11,7 +11,7 @@ use reqwest::Url;
 use std::time::Duration;
 
 use crate::coding::error::WebFetchError;
-use mcp_utils::display_meta::{ToolDisplayMeta, truncate};
+use utils::display_meta::{ToolDisplayMeta, truncate};
 
 /// HTTP client for fetching web content and converting to markdown.
 #[derive(Debug, Clone)]

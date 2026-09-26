@@ -6,7 +6,7 @@ use std::{collections::BTreeMap, path::Path, process::Stdio, time::Duration};
 use tokio::process::Command;
 
 use crate::coding::error::BashError;
-use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, truncate};
+use utils::display_meta::{ToolDisplayMeta, ToolResultMeta, truncate};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

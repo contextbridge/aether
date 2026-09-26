@@ -8,13 +8,13 @@ use aether_core::{
 };
 use futures::FutureExt;
 use llm::{ContentBlock, MessageId};
-use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
+use utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 
 /// Reference to a file artifact discovered or modified by a sub-agent
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

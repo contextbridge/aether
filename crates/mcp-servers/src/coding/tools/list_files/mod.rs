@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 
 use crate::coding::error::ListFilesError;
-use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
+use utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

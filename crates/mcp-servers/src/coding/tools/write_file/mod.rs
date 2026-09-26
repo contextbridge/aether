@@ -1,8 +1,8 @@
 use crate::file_ops::{FileError, write_text_file};
-use mcp_utils::display_meta::{FileDiff, ToolDisplayMeta, ToolResultMeta, basename};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use utils::display_meta::{FileDiff, ToolDisplayMeta, ToolResultMeta, basename};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

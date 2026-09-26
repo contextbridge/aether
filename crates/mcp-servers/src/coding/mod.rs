@@ -50,7 +50,6 @@ use crate::{
 use mcp_utils::server::mrtr::{input_requests_supported, parse_response};
 use mcp_utils::server::tasks::{BACKGROUND_TASK_TTL_MS, require_tasks_capability};
 
-use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename, truncate};
 use tools::ast_grep::{AstGrepInput, AstGrepOutput, perform_ast_grep};
 use tools::bash::{BashInput, BashOutput, validate_args};
 use tools::edit_file::{EditFileArgs, EditFileResponse, edit_file_contents};
@@ -62,6 +61,7 @@ use tools::web_fetch::{WebFetchInput, WebFetchOutput, WebFetcher};
 use tools::web_search::search_client::BraveSearchClient;
 use tools::web_search::{WebSearchInput, WebSearchOutput, WebSearcher};
 use tools::write_file::{WriteFileArgs, WriteFileResponse, write_file_contents};
+use utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename, truncate};
 
 #[doc = include_str!("../docs/permission_mode.md")]
 #[derive(Debug, Clone, Default, PartialEq, clap::ValueEnum)]

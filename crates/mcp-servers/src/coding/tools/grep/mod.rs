@@ -9,13 +9,13 @@ use grep::{
     searcher::{BinaryDetection, Searcher, SearcherBuilder},
 };
 use ignore::{WalkBuilder, WalkState};
-use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use tokio::task::spawn_blocking;
+use utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
