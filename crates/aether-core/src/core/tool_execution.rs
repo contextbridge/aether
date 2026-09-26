@@ -2,9 +2,9 @@ use crate::events::{SubAgentProgressPayload, TaskOutcome, TaskOutcomeState, Tool
 use crate::mcp::tool_bridge::{convert_tool_result, map_task_result_to_outcome};
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
 use mcp_utils::client::{CancellationToken, ToolCallEvent};
-use mcp_utils::display_meta::ToolResultMeta;
 use rmcp::model::ProgressNotificationParam;
 use std::collections::HashMap;
+use utils::display_meta::ToolResultMeta;
 
 #[derive(Default)]
 pub(super) struct ToolExecutions {

@@ -6,12 +6,12 @@ use mcp_utils::client::{
     DeferredToolRules, ElicitingOAuthHandler, McpClientEvent, McpManager, OAuthHandlerContext, OAuthHandlerFactory,
     RuntimeMcpServer, RuntimeMcpTransport, ToolExposure,
 };
-use mcp_utils::status::{McpServerAuthCapability, McpServerStatus};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use utils::mcp_status::{McpServerAuthCapability, McpServerStatus};
 
 struct FailingHttpEndpoint {
     uri: String,
