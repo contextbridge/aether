@@ -82,7 +82,14 @@ Microsoft Foundry uses the OpenAI v1 Chat Completions API with API-key authentic
       "requestModel": "production-coding-deployment"
     }
   },
-  "agents": [{ "model": "azure-foundry:gpt-5.5", "userInvocable": true }]
+  "agents": [
+    {
+      "name": "Build",
+      "description": "Builds features and fixes bugs",
+      "model": "azure-foundry:gpt-5.5",
+      "userInvocable": true
+    }
+  ]
 }
 ```
 
@@ -99,7 +106,14 @@ Fireworks uses `https://api.fireworks.ai/inference/v1` by default. Serverless ca
       "requestModel": "accounts/acme/deployments/coding-prod"
     }
   },
-  "agents": [{ "model": "fireworks:accounts/fireworks/models/glm-5p1", "userInvocable": true }]
+  "agents": [
+    {
+      "name": "Build",
+      "description": "Builds features and fixes bugs",
+      "model": "fireworks:accounts/fireworks/models/glm-5p3",
+      "userInvocable": true
+    }
+  ]
 }
 ```
 

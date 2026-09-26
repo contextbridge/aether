@@ -2,10 +2,12 @@
 title: Review
 ---
 
-Review MCP opens agent-authored artifacts for human review. It supports:
+Review MCP opens agent-authored artifacts for human review via its single tool, `review_artifact`. It supports:
 
 - **Markdown** (`format: "markdown"`) opens in Aether's in-terminal Markdown review UI.
 - **HTML** (`format: "html"`) opens in your browser with an annotation overlay for element-level comments.
+
+Relative file paths resolve against the workspace root. Override the root with the `--root-dir <path>` arg (rarely needed — Aether sets it automatically):
 
 ```json
 {
@@ -33,3 +35,16 @@ Submit HTML inline, as a file path, or as the URL of a web app already running o
 {"format": "html", "source": {"type": "file", "path": "site/index.html"}}
 {"format": "html", "source": {"type": "url", "url": "http://localhost:5173/settings"}}
 ```
+
+## Result
+
+The tool blocks until the reviewer responds, then returns a `status`:
+
+| Status      | Payload                                                                                  |
+| ----------- | ---------------------------------------------------------------------------------------- |
+| `approved`  | —                                                                                        |
+| `feedback`  | `feedback` (text) plus optional `annotations` — `{ element, excerpt, comment }` per HTML element comment |
+| `cancelled` | The reviewer dismissed the review without deciding                                        |
+| `declined`  | The client refused the review request                                                    |
+
+Markdown review uses MCP form elicitation and HTML review uses URL elicitation; clients that don't support the required elicitation mode receive an `ELICITATION_UNSUPPORTED` error.

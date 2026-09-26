@@ -17,10 +17,11 @@ aether headless "Explain the settings loader in this project"
 aether headless [OPTIONS] [PROMPT]...
 ```
 
-If prompt words are provided, Aether joins them with spaces. If no prompt is provided and stdin is not a TTY, Aether reads stdin, trims it, and uses that as the prompt.
+If prompt words are provided, Aether joins them with spaces and stdin is ignored. If no prompt is provided and stdin is not a TTY, Aether reads stdin, trims it, and uses that as the prompt.
 
 ```bash
-git diff --staged | aether headless "Review these changes"
+# Prompt comes from the piped diff:
+git diff --staged | aether headless
 ```
 
 ## Agent selection
@@ -100,7 +101,7 @@ aether headless --model bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0 \
 
   </TabItem>
   <TabItem label="json">
-    Newline-delimited `AgentEvent` JSON. Each stdout line has a top-level `category` discriminator and a nested event with a `type` discriminator.
+    Newline-delimited `AgentEvent` JSON. Each stdout line has a top-level `category` discriminator and a nested event. Most nested events carry their own `type` discriminator; `session_usage` events carry the usage payload directly.
 
     ```bash
     aether headless --output json --events text,tool_call,tool_result,turn_ended \
