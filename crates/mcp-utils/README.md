@@ -13,13 +13,6 @@ Utilities for the [Model Context Protocol](https://modelcontextprotocol.io/) (MC
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
-## Key Types
-
-- **`McpServerStatus`** -- Tracks server connection state (`Connected`, `Failed`, `NeedsOAuth`)
-- **`ToolCatalog`** -- The per-agent, I/O-free view of MCP servers, tools, exposure, filtering, instructions, and route authorization
-- **`ToolDisplayMeta` / `ToolResultMeta`** -- Metadata for rendering tool calls and results in UIs
-
-
 ## Feature Flags
 
 | Feature | Description | Default |

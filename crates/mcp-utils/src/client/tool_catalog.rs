@@ -1,7 +1,7 @@
 use super::{ToolExposure, connection::Tool, naming::create_namespaced_tool_name, tool_filter::ToolFilter};
-use crate::status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
 use llm::ToolDefinition;
 use std::collections::BTreeMap;
+use utils::mcp_status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
 
 pub const PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME: &str = "progressive-discovery";
 

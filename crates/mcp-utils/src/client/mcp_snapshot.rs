@@ -43,7 +43,7 @@ impl McpSnapshot {
         self.catalog.model_instructions()
     }
 
-    pub fn server_statuses(&self) -> Vec<crate::status::McpServerStatusEntry> {
+    pub fn server_statuses(&self) -> Vec<utils::mcp_status::McpServerStatusEntry> {
         self.catalog.server_statuses()
     }
 
