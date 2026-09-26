@@ -71,7 +71,7 @@ async fn prompt_completion_follows_session_updates_on_the_event_stream() {
                 SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::from("final answer"), "answer")),
             )).unwrap();
             cx.send_notification(acp_utils::testing::idle_notification(request.session_id, Some(StopReason::EndTurn))).unwrap();
-            responder.respond(PromptResponse::new()).unwrap();
+            responder.respond(PromptResponse::new("user-message")).unwrap();
             prompt.await.expect("prompt succeeds");
 
             assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::SessionUpdate(_))));
@@ -125,6 +125,8 @@ async fn replay_updates_precede_the_resume_response() -> Result<(), TestError> {
                 .build()
                 .await?;
 
+            client.handle.resume_session(ResumeSessionRequest::new("saved", "/remote")).await?;
+            assert!(client.event_rx.try_recv().is_err(), "plain resume must request no history");
             client
                 .handle
                 .resume_session(
@@ -132,8 +134,6 @@ async fn replay_updates_precede_the_resume_response() -> Result<(), TestError> {
                         .replay_from(ReplayFrom::Start(ReplayFromStart::new())),
                 )
                 .await?;
-            assert!(client.event_rx.try_recv().is_err(), "plain resume must request no history");
-            client.handle.resume_session_with_replay(ResumeSessionRequest::new("saved", "/remote")).await?;
 
             let replay = [client.event_rx.try_recv()?, client.event_rx.try_recv()?, client.event_rx.try_recv()?];
             let [
@@ -208,15 +208,18 @@ async fn initialized_client_manages_typed_sessions_and_streams_replay() -> Resul
             assert_eq!(listed.sessions.len(), 1);
             assert_eq!(listed.sessions[0].session_id, SessionId::new("listed"));
 
-            client.handle.resume_session_with_replay(ResumeSessionRequest::new("listed", "/tmp/project")).await?;
+            client
+                .handle
+                .resume_session(
+                    ResumeSessionRequest::new("listed", "/tmp/project")
+                        .replay_from(ReplayFrom::Start(ReplayFromStart::new())),
+                )
+                .await?;
             for id in ["other", "listed", "listed"] {
                 assert!(matches!(client.event_rx.try_recv()?, AcpEvent::SessionUpdate(notification) if notification.session_id == SessionId::new(id)));
             }
 
-            client
-                .handle
-                .resume_session(ResumeSessionRequest::new("listed", "/tmp/project"))
-                .await?;
+            client.handle.resume_session(ResumeSessionRequest::new("listed", "/tmp/project")).await?;
             let search = client
                 .handle
                 .request(PromptSearchParams { query: "hello".to_string(), limit: Some(10) })
@@ -299,7 +302,7 @@ async fn permission_with_no_options_is_cancelled() {
                 .await
                 .unwrap();
             assert_eq!(response.outcome, RequestPermissionOutcome::Cancelled);
-            responder.respond(PromptResponse::new()).unwrap();
+            responder.respond(PromptResponse::new("user-message")).unwrap();
             prompt.await.unwrap();
             client.handle.disconnect().await;
         })

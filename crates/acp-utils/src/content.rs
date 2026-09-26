@@ -1,6 +1,9 @@
 use agent_client_protocol::schema::v2 as acp;
+#[cfg(not(target_family = "wasm"))]
 use llm::ContentBlock as LlmContentBlock;
+use std::borrow::Cow;
 
+#[cfg(not(target_family = "wasm"))]
 pub fn map_acp_to_content_blocks(blocks: Vec<acp::ContentBlock>) -> Vec<LlmContentBlock> {
     blocks
         .into_iter()
@@ -12,13 +15,12 @@ pub fn map_acp_to_content_blocks(blocks: Vec<acp::ContentBlock>) -> Vec<LlmConte
             acp::ContentBlock::Audio(audio) => {
                 LlmContentBlock::Audio { data: audio.data, mime_type: audio.mime_type.to_string() }
             }
-            acp::ContentBlock::ResourceLink(link) => LlmContentBlock::text(format!("[Resource: {}]", link.uri)),
-            acp::ContentBlock::Resource(resource) => LlmContentBlock::text(format_embedded_resource(&resource)),
-            _ => LlmContentBlock::text("[Unknown content]"),
+            block => LlmContentBlock::text(block_text(&block).into_owned()),
         })
         .collect()
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub fn map_user_content_block(block: &LlmContentBlock) -> acp::ContentBlock {
     match block {
         LlmContentBlock::Text { text } => acp::ContentBlock::from(text.clone()),
@@ -52,16 +54,8 @@ pub fn display_content_blocks(blocks: &[acp::ContentBlock]) -> Vec<acp::ContentB
 ///
 /// Embedded resources (e.g., file attachments) are formatted with their URI
 /// and content for inclusion in the agent's context.
-pub fn map_content_blocks_to_text(blocks: Vec<acp::ContentBlock>) -> String {
-    map_acp_to_content_blocks(blocks)
-        .into_iter()
-        .map(|block| match block {
-            LlmContentBlock::Text { text } => text,
-            LlmContentBlock::Image { .. } => "[Image content]".to_string(),
-            LlmContentBlock::Audio { .. } => "[Audio content]".to_string(),
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+pub fn map_content_blocks_to_text(blocks: &[acp::ContentBlock]) -> String {
+    blocks.iter().map(block_text).collect::<Vec<_>>().join("\n")
 }
 
 /// Formats an embedded resource as text for inclusion in agent context.
@@ -77,6 +71,17 @@ pub fn format_embedded_resource(resource: &acp::EmbeddedResource) -> String {
     }
 }
 
+fn block_text(block: &acp::ContentBlock) -> Cow<'_, str> {
+    match block {
+        acp::ContentBlock::Text(text) => Cow::Borrowed(&text.text),
+        acp::ContentBlock::Image(_) => Cow::Borrowed("[Image content]"),
+        acp::ContentBlock::Audio(_) => Cow::Borrowed("[Audio content]"),
+        acp::ContentBlock::ResourceLink(link) => Cow::Owned(format!("[Resource: {}]", link.uri)),
+        acp::ContentBlock::Resource(resource) => Cow::Owned(format_embedded_resource(resource)),
+        _ => Cow::Borrowed("[Unknown content]"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,7 +94,7 @@ mod tests {
         ];
         let converted = map_acp_to_content_blocks(media.clone());
         assert_eq!(converted.iter().map(map_user_content_block).collect::<Vec<_>>(), media);
-        assert_eq!(map_content_blocks_to_text(media), "[Image content]\n[Audio content]");
+        assert_eq!(map_content_blocks_to_text(&media), "[Image content]\n[Audio content]");
         let resources = vec![
             acp::ContentBlock::ResourceLink(acp::ResourceLink::new("readme", "file://readme")),
             acp::ContentBlock::Resource(acp::EmbeddedResource::new(
@@ -108,7 +113,7 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        assert_eq!(text, map_content_blocks_to_text(resources));
+        assert_eq!(text, map_content_blocks_to_text(&resources));
     }
 
     #[test]
@@ -144,7 +149,7 @@ mod tests {
             )),
         ];
 
-        let result = map_content_blocks_to_text(blocks);
+        let result = map_content_blocks_to_text(&blocks);
 
         assert!(result.contains("Check this file:"));
         assert!(result.contains("<file uri=\"file://src/lib.rs\">"));
@@ -159,19 +164,19 @@ mod tests {
             acp::ContentBlock::Text(acp::TextContent::new("World")),
         ];
 
-        assert_eq!(map_content_blocks_to_text(blocks), "Hello\nWorld");
+        assert_eq!(map_content_blocks_to_text(&blocks), "Hello\nWorld");
     }
 
     #[test]
     fn test_map_content_blocks_empty() {
-        assert_eq!(map_content_blocks_to_text(vec![]), "");
+        assert_eq!(map_content_blocks_to_text(&[]), "");
     }
 
     #[test]
     fn test_map_content_blocks_resource_link() {
         let blocks = vec![acp::ContentBlock::ResourceLink(acp::ResourceLink::new("readme.md", "file://readme.md"))];
 
-        let result = map_content_blocks_to_text(blocks);
+        let result = map_content_blocks_to_text(&blocks);
         assert_eq!(result, "[Resource: file://readme.md]");
     }
 }

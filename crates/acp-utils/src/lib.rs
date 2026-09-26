@@ -3,6 +3,9 @@
 pub mod config_meta;
 pub mod config_option_id;
 pub mod content;
+#[cfg(feature = "client")]
+pub mod conversation;
+#[cfg(not(target_family = "wasm"))]
 pub mod elicitation;
 pub mod meta;
 pub mod notifications;
