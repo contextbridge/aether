@@ -1,5 +1,5 @@
 use crate::attachment::{AttachmentOutcome, PromptAttachment};
-use crate::conversation::ConversationId;
+use acp_utils::conversation::ConversationId;
 use crate::file_index::FileEntry;
 use crate::git_review::{ClientState, DiffReviewEvent, ServerMessage};
 use crate::request::RequestId;

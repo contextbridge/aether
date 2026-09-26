@@ -8,12 +8,12 @@ use aether_core::events::{AgentCommand, AgentEvent, Command};
 use aether_core::mcp::{McpHandle, McpRuntime};
 use llm::{ChatMessage, SessionUsageEvent};
 use mcp_utils::client::{
-    ElicitingOAuthHandler, McpClientEvent, McpConnectionDetails, McpError, McpServer, McpServerStatusEntry,
-    OAuthHandlerFactory,
+    ElicitingOAuthHandler, McpClientEvent, McpConnectionDetails, McpError, McpServer, OAuthHandlerFactory,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
+use utils::mcp_status::McpServerStatusEntry;
 
 pub(crate) struct AgentRuntime {
     pub(crate) agent_rx: mpsc::Receiver<AgentEvent>,

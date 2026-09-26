@@ -45,9 +45,9 @@ impl App {
             .join("\n");
         let media_error = self.media_support_error(&outcome.blocks);
         if media_error.is_some() {
-            self.conversation.append_user_content(display);
+            self.conversation.append_user_content(vec![display.into()]);
         } else {
-            self.conversation.append_pending_user_content(display);
+            self.conversation.append_pending_user_content(vec![display.into()]);
         }
         for warning in &outcome.warnings {
             self.notify(warning);

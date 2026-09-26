@@ -1,0 +1,37 @@
+[package]
+name = "aether-acp-wasm"
+version = "0.1.0"
+edition = "2024"
+description = "Browser ACP client for the Aether AI agent framework, compiled to wasm"
+license = "MIT"
+repository = "https://github.com/contextbridge/aether"
+readme = "README.md"
+publish = false
+
+[package.metadata.dist]
+dist = false
+
+[lib]
+name = "acp_wasm"
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+acp-utils = { package = "aether-acp-utils", path = "../acp-utils" }
+agent-client-protocol = { workspace = true }
+futures = { workspace = true }
+js-sys = { workspace = true }
+serde = { workspace = true }
+serde-wasm-bindgen = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+web-sys = { workspace = true, features = ["BinaryType", "CloseEvent", "Event", "MessageEvent", "WebSocket"] }
+
+[target.'cfg(target_family = "wasm")'.dev-dependencies]
+acp-utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"] }
+serde_json = { workspace = true }
+wasm-bindgen-test = { workspace = true }

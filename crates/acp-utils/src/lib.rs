@@ -3,6 +3,8 @@
 pub mod config_meta;
 pub mod config_option_id;
 pub mod content;
+pub mod conversation;
+#[cfg(not(target_family = "wasm"))]
 pub mod elicitation;
 pub mod meta;
 pub mod notifications;

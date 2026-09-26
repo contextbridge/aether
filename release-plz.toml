@@ -10,3 +10,8 @@ semver_check = false
 name = "internal-evals"
 release = false
 publish = false
+
+[[package]]
+name = "aether-acp-wasm"
+release = false
+publish = false

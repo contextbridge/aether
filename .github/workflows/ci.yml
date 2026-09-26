@@ -112,6 +112,32 @@ jobs:
       - name: Test evals
         run: pnpm evals:test
 
+  wasm:
+    name: Wasm
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # No mold RUSTFLAGS here: they would also reach the wasm32 linker, which rejects `-fuse-ld`.
+    env:
+      WASM_PACK_VERSION: "0.15.0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install wasm-pack
+        run: |
+          release="wasm-pack-v${WASM_PACK_VERSION}-x86_64-unknown-linux-musl"
+          curl -sSfL "https://github.com/wasm-bindgen/wasm-pack/releases/download/v${WASM_PACK_VERSION}/${release}.tar.gz" \
+            | tar xz --strip-components=1 -C "$HOME/.cargo/bin" "${release}/wasm-pack"
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check and test wasm
+        run: just wasm-check wasm-test
+
   docs:
     name: Docs
     runs-on: ubuntu-latest

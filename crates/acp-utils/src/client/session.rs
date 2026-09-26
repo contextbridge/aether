@@ -14,10 +14,10 @@ use agent_client_protocol::util::MatchDispatchFrom;
 use agent_client_protocol::{
     self as acp, Client, ConnectTo, ConnectionTo, Dispatch, HandleDispatchFrom, Handled, V2ConnectionTo,
 };
+use futures::future::{AbortHandle, abortable};
 use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
-use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -42,8 +42,11 @@ pub async fn connect_acp_client(
     let (init_tx, init_rx) = oneshot::channel();
     let closed = CancellationToken::new();
     let events = ConnectionEvents { event_tx, closed: closed.clone() };
-    let driver = tokio::spawn(run_client_connection(agent, init_request, init_tx, events));
-    let connection = Arc::new(ClientConnection { driver, closed });
+    let (driver, abort) = abortable(run_client_connection(agent, init_request, init_tx, events));
+    spawn(async move {
+        let _ = driver.await;
+    });
+    let connection = Arc::new(ClientConnection { abort, closed });
     let (initialize_response, cx) = await_response(init_rx).await?;
     Ok(AcpClient { initialize_response, event_rx, handle: AcpClientHandle { cx, connection } })
 }
@@ -71,7 +74,7 @@ impl AcpClient {
 impl AcpClientHandle {
     /// Stop this connection and wait for it to close without sending session/cancel or session/close.
     pub async fn disconnect(&self) {
-        self.connection.driver.abort();
+        self.connection.abort.abort();
         self.connection.closed.cancelled().await;
     }
 
@@ -124,13 +127,13 @@ impl AcpClientHandle {
 }
 
 struct ClientConnection {
-    driver: JoinHandle<()>,
+    abort: AbortHandle,
     closed: CancellationToken,
 }
 
 impl Drop for ClientConnection {
     fn drop(&mut self) {
-        self.driver.abort();
+        self.abort.abort();
     }
 }
 
@@ -218,6 +221,16 @@ impl HandleDispatchFrom<acp::Agent> for ClientHandlers {
     fn describe_chain(&self) -> impl std::fmt::Debug {
         "ClientHandlers"
     }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn spawn(future: impl Future<Output = ()> + Send + 'static) {
+    tokio::spawn(future);
+}
+
+#[cfg(target_family = "wasm")]
+fn spawn(future: impl Future<Output = ()> + 'static) {
+    wasm_bindgen_futures::spawn_local(future);
 }
 
 async fn await_response<T>(receiver: oneshot::Receiver<Result<T, AcpClientError>>) -> Result<T, AcpClientError> {

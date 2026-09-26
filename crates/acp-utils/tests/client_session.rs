@@ -71,7 +71,7 @@ async fn prompt_completion_follows_session_updates_on_the_event_stream() {
                 SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::from("final answer"), "answer")),
             )).unwrap();
             cx.send_notification(acp_utils::testing::idle_notification(request.session_id, Some(StopReason::EndTurn))).unwrap();
-            responder.respond(PromptResponse::new()).unwrap();
+            responder.respond(PromptResponse::new("user-message")).unwrap();
             prompt.await.expect("prompt succeeds");
 
             assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::SessionUpdate(_))));
@@ -299,7 +299,7 @@ async fn permission_with_no_options_is_cancelled() {
                 .await
                 .unwrap();
             assert_eq!(response.outcome, RequestPermissionOutcome::Cancelled);
-            responder.respond(PromptResponse::new()).unwrap();
+            responder.respond(PromptResponse::new("user-message")).unwrap();
             prompt.await.unwrap();
             client.handle.disconnect().await;
         })

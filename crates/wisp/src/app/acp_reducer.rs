@@ -1,18 +1,14 @@
 use super::session::builtin_commands;
-use super::{App, ExitState, ForegroundOperation, Overlay, PromptPhase, Route};
+use super::{App, ExitState, ForegroundOperation, Overlay, Route};
 use crate::command::{AgentCommand, Command, GitReviewCommand, TerminalCommand};
-use crate::conversation::tool_calls::ToolStatus;
-use crate::conversation::{ContextUsageDisplay, MessageRole};
 use crate::screens::artifact_review::ArtifactReviewScreen;
 use crate::surfaces::modal::ElicitationModal;
 use crate::surfaces::picker::CommandEntry;
 use crate::surfaces::session_picker::SessionPicker;
 use acp_utils::client::AcpEvent;
+use acp_utils::conversation::TurnFinished;
 use acp_utils::notifications::McpNotification;
-use agent_client_protocol::schema::MaybeUndefined;
-use agent_client_protocol::schema::v2::{
-    self as acp, CreateElicitationRequest, ElicitationMode, SessionId, SessionUpdate, StateUpdate,
-};
+use agent_client_protocol::schema::v2::{self as acp, CreateElicitationRequest, ElicitationMode, SessionId, SessionUpdate};
 use std::time::Instant;
 use utils::artifact_review::ArtifactReviewElicitationMeta;
 
@@ -68,11 +64,7 @@ impl App {
                 }
             }
             AcpEvent::ConnectionClosed => self.on_connection_closed(),
-            AcpEvent::SubAgentProgress(progress) => {
-                if self.conversation.progress_indicator().accepts_activity() {
-                    self.conversation.on_sub_agent_progress(&progress);
-                }
-            }
+            AcpEvent::SubAgentProgress(progress) => self.conversation.apply_sub_agent_progress(&progress),
         }
     }
 
@@ -115,7 +107,9 @@ impl App {
     }
 
     pub(super) fn on_new_session(&mut self, session_id: SessionId, config_options: Vec<acp::SessionConfigOption>) {
-        if !matches!(self.foreground, ForegroundOperation::Idle | ForegroundOperation::CreatingSession { .. }) {
+        if !matches!(self.foreground, ForegroundOperation::CreatingSession { .. })
+            && !self.can_start_foreground_operation()
+        {
             return;
         }
         let previous_selections = match std::mem::take(&mut self.foreground) {
@@ -143,6 +137,7 @@ impl App {
     fn on_connection_closed(&mut self) {
         self.close_elicitation_owner();
         self.return_to_conversation();
+        self.conversation.connection_closed();
         self.foreground = ForegroundOperation::Idle;
         self.commands.retain(|command| !matches!(command, Command::Terminal(TerminalCommand::RingBell)));
         self.exit_state = ExitState::ConnectionLost;
@@ -159,44 +154,12 @@ impl App {
     }
 
     fn on_session_update(&mut self, update: &SessionUpdate) {
-        if matches!(update, SessionUpdate::StateUpdate(StateUpdate::Running(_))) && self.foreground.is_idle() {
-            self.foreground = ForegroundOperation::Prompt(PromptPhase::Running);
-            self.conversation.progress_indicator_mut().prompt_started();
-        }
-        if self.waiting_for_response() {
-            self.observe_activity(update);
+        if let Some(TurnFinished { stop_reason }) = self.conversation.apply_update(update)
+            && stop_reason != Some(acp::StopReason::Cancelled)
+        {
+            self.queue(Command::Terminal(TerminalCommand::RingBell));
         }
         match update {
-            SessionUpdate::CompactionUpdate(update) => {
-                if self.conversation.progress_indicator().accepts_activity() {
-                    self.conversation.turn_mut().apply_compaction(update);
-                }
-            }
-            SessionUpdate::StateUpdate(StateUpdate::Idle(idle)) if self.waiting_for_response() => {
-                let status = match idle.stop_reason {
-                    Some(acp::StopReason::Cancelled) => ToolStatus::Error("cancelled".to_string()),
-                    _ => ToolStatus::Success,
-                };
-                self.finish_prompt(&status);
-            }
-            SessionUpdate::UserMessage(message) => {
-                self.conversation.upsert_message(MessageRole::User, message.message_id.clone(), &message.content);
-            }
-            SessionUpdate::AgentMessage(message) => {
-                self.conversation.upsert_message(MessageRole::Assistant, message.message_id.clone(), &message.content);
-            }
-            SessionUpdate::UserMessageChunk(chunk) => {
-                self.conversation.append_message_chunk(MessageRole::User, chunk);
-            }
-            SessionUpdate::AgentMessageChunk(chunk) => {
-                self.conversation.append_message_chunk(MessageRole::Assistant, chunk);
-            }
-            SessionUpdate::ToolCallContentChunk(chunk) => {
-                self.conversation.on_tool_call_content_chunk(chunk);
-            }
-            SessionUpdate::ToolCallUpdate(update) => {
-                self.conversation.on_tool_call_update(update);
-            }
             SessionUpdate::AvailableCommandsUpdate(update) => {
                 let agent_commands: Vec<_> = update
                     .available_commands
@@ -222,54 +185,8 @@ impl App {
                     overlay.update_config_options(self.session.config_options());
                 }
             }
-            SessionUpdate::PlanUpdate(plan) => {
-                self.conversation.plan_tracker_mut().apply_update(plan, Instant::now());
-            }
-            SessionUpdate::UsageUpdate(usage) => {
-                self.conversation.turn_mut().set_context_usage(Some(ContextUsageDisplay {
-                    used_tokens: u32::try_from(usage.used).unwrap_or(u32::MAX),
-                    limit_tokens: u32::try_from(usage.size).unwrap_or(u32::MAX),
-                }));
-            }
+            SessionUpdate::PlanUpdate(plan) => self.plan_tracker.apply_update(plan, Instant::now()),
             _ => {}
-        }
-    }
-
-    fn observe_activity(&mut self, update: &SessionUpdate) {
-        let indicator = self.conversation.progress_indicator_mut();
-        match update {
-            SessionUpdate::AgentMessageChunk(_) | SessionUpdate::StateUpdate(StateUpdate::Running(_)) => {
-                indicator.response_started();
-            }
-            SessionUpdate::StateUpdate(StateUpdate::RequiresAction(_)) => indicator.requires_action(),
-            SessionUpdate::ToolCallUpdate(_) => indicator.tool_activity(),
-            SessionUpdate::AgentThoughtChunk(chunk) => {
-                if let acp::ContentBlock::Text(text) = &chunk.content
-                    && !text.text.is_empty()
-                {
-                    indicator.record_thought(&chunk.message_id, &text.text);
-                }
-            }
-            SessionUpdate::AgentThought(message) => match &message.content {
-                MaybeUndefined::Undefined => {}
-                MaybeUndefined::Null => indicator.replace_thought(&message.message_id, ""),
-                MaybeUndefined::Value(blocks) => {
-                    let text = acp_utils::content::map_content_blocks_to_text(blocks.clone());
-                    indicator.replace_thought(&message.message_id, &text);
-                }
-            },
-            _ => {}
-        }
-    }
-
-    pub(super) fn finish_prompt(&mut self, terminal_status: &ToolStatus) {
-        let was_in_flight = self.waiting_for_response();
-        self.foreground.finish_prompt();
-        self.conversation.turn_mut().clear_compactions();
-        self.conversation.progress_indicator_mut().prompt_finished();
-        self.conversation.finish_turn(terminal_status);
-        if was_in_flight && matches!(terminal_status, ToolStatus::Success) {
-            self.queue(Command::Terminal(TerminalCommand::RingBell));
         }
     }
 }

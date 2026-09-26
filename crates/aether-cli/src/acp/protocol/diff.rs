@@ -1,6 +1,6 @@
 use agent_client_protocol::schema::v2::{AbsolutePath, Diff, DiffChange, DiffFileType, DiffPatch};
 use clankerdiff_core::git_patch_from_texts;
-use mcp_utils::display_meta::FileDiff;
+use utils::display_meta::FileDiff;
 
 /// Convert full text snapshots into Git patch
 pub fn map_file_diff(diff: &FileDiff) -> Option<Diff> {

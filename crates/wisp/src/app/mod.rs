@@ -2,10 +2,9 @@ use crate::Session;
 use crate::app::keybindings::Keybindings;
 use crate::app::message::Message;
 use crate::command::{AgentCommand, Command, CommandResult};
-use crate::conversation::items::{Conversation, ConversationItem};
+use crate::conversation::plan_tracker::PlanTracker;
 use crate::conversation::progress_indicator::{ProgressIndicator, ProgressPhase};
-use crate::conversation::status_line::StatusLineModel;
-use crate::conversation::tool_calls::ToolStatus;
+use crate::conversation::status_line::{ContextUsageDisplay, StatusLineModel};
 use crate::session::WorkspaceAccess;
 use crate::session::platform::{BrowserOpener, ClipboardWriter, default_browser_opener, default_clipboard_writer};
 use crate::session::session_config_view::LocalConfigOption;
@@ -20,6 +19,7 @@ use crate::surfaces::workspace_picker::WorkspacePicker;
 use crate::theme::Theme;
 use crate::view::generation::Generation;
 use acp_utils::client::AcpEvent;
+use acp_utils::conversation::{Conversation, ConversationId, ConversationItem};
 use acp_utils::notifications::AetherCapabilities;
 use agent_client_protocol::schema::v2::PlanEntry;
 use agent_client_protocol::schema::v2::{self as acp};
@@ -41,7 +41,7 @@ mod keybindings;
 mod session;
 mod submission;
 use config::build_theme_entries;
-pub use foreground::{ForegroundOperation, PromptPhase};
+pub use foreground::ForegroundOperation;
 use input::CTRL_C_CONFIRM_WINDOW;
 use session::builtin_commands;
 
@@ -69,6 +69,9 @@ pub struct App {
     route: Route,
     overlay: Option<Overlay>,
     conversation: Conversation,
+    plan_tracker: PlanTracker,
+    progress: ProgressIndicator,
+    spinner_tick: usize,
     composer: Composer,
     exit_state: ExitState,
     /// What the event loop still owes the outside world.
@@ -151,7 +154,10 @@ impl App {
             available_commands: initial_commands,
             route: Route::Conversation,
             overlay: None,
-            conversation: Conversation::default(),
+            conversation: Conversation::new(),
+            plan_tracker: PlanTracker::default(),
+            progress: ProgressIndicator::default(),
+            spinner_tick: 0,
             composer: Composer::new(),
             exit_state: ExitState::Idle,
             commands: VecDeque::new(),
@@ -187,12 +193,10 @@ impl App {
     #[allow(clippy::too_many_lines)]
     pub fn on_command_result(&mut self, result: CommandResult) {
         match result {
-            CommandResult::Prompt(Ok(_)) => self.foreground.accept_prompt(),
+            CommandResult::Prompt(Ok(_)) => self.conversation.accept_prompt(),
             CommandResult::Prompt(Err(error)) => {
-                if self.waiting_for_response() {
-                    self.finish_prompt(&ToolStatus::Error(format!("failed: {error}")));
-                }
-                self.foreground.reject_prompt();
+                self.conversation.reject_prompt(&error);
+                self.foreground.drop_prepared_prompt();
                 self.notify(&format!("Failed to send prompt: {error}"));
             }
             CommandResult::Cancel(result) | CommandResult::AuthenticateMcp(result) => {
@@ -314,8 +318,7 @@ impl App {
     }
 
     fn start_prompt(&mut self, text: String, content: Option<Vec<acp::ContentBlock>>) {
-        self.foreground = ForegroundOperation::Prompt(PromptPhase::Submitting);
-        self.conversation.progress_indicator_mut().prompt_started();
+        self.conversation.start_prompt();
         self.queue(Command::Agent(AgentCommand::Prompt {
             session_id: self.session.session_id().clone(),
             text,
@@ -343,11 +346,11 @@ impl App {
         {
             self.exit_state = ExitState::Idle;
         }
-        if self.conversation.progress_indicator().is_active() {
-            self.conversation.turn_mut().advance_spinner();
+        if self.progress.is_active() {
+            self.spinner_tick = self.spinner_tick.wrapping_add(1);
         }
-        self.conversation.progress_indicator_mut().on_tick(now);
-        self.conversation.plan_tracker_mut().on_tick(now);
+        self.progress.on_tick(now);
+        self.plan_tracker.on_tick(now);
     }
 
     pub fn wants_tick(&self) -> bool {
@@ -360,10 +363,10 @@ impl App {
                     | ForegroundOperation::LoadingWorkspaceSession { .. }
             )
             || self.conversation.any_running()
-            || self.conversation.turn().is_compaction_active()
-            || self.conversation.progress_indicator().is_active()
+            || self.conversation.is_compacting()
+            || self.progress.is_active()
             || self.exit_state.is_confirming()
-            || self.conversation.plan_tracker().has_completed_in_grace_period()
+            || self.plan_tracker.has_completed_in_grace_period()
     }
 
     pub fn has_navigation(&self) -> bool {
@@ -406,7 +409,7 @@ impl App {
         self.conversation.items()
     }
 
-    pub fn conversation_id(&self) -> crate::conversation::ConversationId {
+    pub fn conversation_id(&self) -> ConversationId {
         self.conversation.id()
     }
 
@@ -438,7 +441,7 @@ impl App {
             workspace: self.session.workspace_status(),
             agent_name: self.session.agent_name(),
             content_padding: self.ui.content_padding,
-            context_usage: self.conversation.turn().context_usage(),
+            context_usage: self.conversation.context_usage().map(ContextUsageDisplay::from),
             unhealthy_servers: self.session.unhealthy_server_count(),
             waiting_for_response: self.waiting_for_response(),
             exit_confirmation: self.exit_state.is_confirming(),
@@ -460,7 +463,7 @@ impl App {
 
     /// A prompt is outstanding, so the agent owes us a reply.
     pub fn waiting_for_response(&self) -> bool {
-        self.foreground.prompt_in_flight()
+        self.conversation.waiting_for_response()
     }
 
     /// Either the prompt or one of its tool calls is still running.
@@ -469,7 +472,7 @@ impl App {
     }
 
     pub fn progress_indicator(&self) -> &ProgressIndicator {
-        self.conversation.progress_indicator()
+        &self.progress
     }
 
     /// Test seam: the status line reads this through
@@ -479,37 +482,35 @@ impl App {
     }
 
     pub(crate) fn spinner_tick(&self) -> usize {
-        self.conversation.turn().spinner_tick()
+        self.spinner_tick
     }
 
     pub fn plan_entries(&self) -> Vec<PlanEntry> {
-        self.conversation.plan_tracker().current_entries()
+        self.plan_tracker.current_entries()
     }
 
     /// Reaches past the renderer for the integration tests, which assert on the
     /// state a frame is drawn from rather than on the frame.
     pub fn has_plan(&self) -> bool {
-        self.conversation.plan_tracker().has_entries()
+        self.plan_tracker.has_entries()
     }
 
     /// Drops all conversation state atomically before starting a new session.
     fn reset_conversation(&mut self) {
-        // The spinner phase is cosmetic and survives, so a swap does not make
-        // the indicator visibly jump.
-        self.conversation.reset_feature_state();
-        self.foreground.clear_conversation();
         self.conversation.clear();
+        self.plan_tracker.clear();
+        self.foreground.drop_prepared_prompt();
     }
 
     fn refresh_progress(&mut self) {
         let override_phase = match self.foreground {
             ForegroundOperation::MovingWorkspace => Some(ProgressPhase::MovingWorkspace),
             ForegroundOperation::LoadingWorkspaceSession { .. } => Some(ProgressPhase::LoadingSession),
-            _ if self.conversation.turn().is_compaction_active() => Some(ProgressPhase::Compacting),
+            _ if self.conversation.is_compacting() => Some(ProgressPhase::Compacting),
             _ => None,
         };
         let interruptible = self.is_agent_busy();
-        self.conversation.progress_indicator_mut().refresh(override_phase, interruptible);
+        self.progress.refresh(self.conversation.activity(), override_phase, interruptible);
     }
 
     fn return_to_conversation(&mut self) {

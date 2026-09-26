@@ -301,6 +301,26 @@ mod tests {
     }
 
     #[test]
+    fn plan_updates_replace_the_plan_and_unknown_content_is_ignored() {
+        let mut tracker = PlanTracker::default();
+        let now = Instant::now();
+        let update = |content| acp::PlanUpdate::new(content);
+        tracker.apply_update(&update(acp::PlanUpdateContent::items("a", vec![entry("one", PlanEntryStatus::Pending)])), now);
+        tracker.apply_update(&update(acp::PlanUpdateContent::items("b", vec![entry("two", PlanEntryStatus::InProgress)])), now);
+        assert_eq!(tracker.visible_entries(now).iter().map(|e| e.content.as_str()).collect::<Vec<_>>(), ["two"]);
+
+        tracker.apply_update(
+            &update(acp::PlanUpdateContent::Other(acp::OtherPlanUpdateContent::new(
+                "future",
+                "b",
+                std::collections::BTreeMap::new(),
+            ))),
+            now,
+        );
+        assert_eq!(tracker.visible_entries(now).len(), 1);
+    }
+
+    #[test]
     fn clear_removes_all_entries_and_timestamps() {
         let mut tracker = PlanTracker::default();
         let now = Instant::now();

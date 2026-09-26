@@ -1,6 +1,8 @@
 use agent_client_protocol::schema::v2 as acp;
+#[cfg(not(target_family = "wasm"))]
 use llm::ContentBlock as LlmContentBlock;
 
+#[cfg(not(target_family = "wasm"))]
 pub fn map_acp_to_content_blocks(blocks: Vec<acp::ContentBlock>) -> Vec<LlmContentBlock> {
     blocks
         .into_iter()
@@ -19,6 +21,7 @@ pub fn map_acp_to_content_blocks(blocks: Vec<acp::ContentBlock>) -> Vec<LlmConte
         .collect()
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub fn map_user_content_block(block: &LlmContentBlock) -> acp::ContentBlock {
     match block {
         LlmContentBlock::Text { text } => acp::ContentBlock::from(text.clone()),
@@ -53,12 +56,15 @@ pub fn display_content_blocks(blocks: &[acp::ContentBlock]) -> Vec<acp::ContentB
 /// Embedded resources (e.g., file attachments) are formatted with their URI
 /// and content for inclusion in the agent's context.
 pub fn map_content_blocks_to_text(blocks: Vec<acp::ContentBlock>) -> String {
-    map_acp_to_content_blocks(blocks)
+    blocks
         .into_iter()
         .map(|block| match block {
-            LlmContentBlock::Text { text } => text,
-            LlmContentBlock::Image { .. } => "[Image content]".to_string(),
-            LlmContentBlock::Audio { .. } => "[Audio content]".to_string(),
+            acp::ContentBlock::Text(text) => text.text,
+            acp::ContentBlock::Image(_) => "[Image content]".to_string(),
+            acp::ContentBlock::Audio(_) => "[Audio content]".to_string(),
+            acp::ContentBlock::ResourceLink(link) => format!("[Resource: {}]", link.uri),
+            acp::ContentBlock::Resource(resource) => format_embedded_resource(&resource),
+            _ => "[Unknown content]".to_string(),
         })
         .collect::<Vec<_>>()
         .join("\n")

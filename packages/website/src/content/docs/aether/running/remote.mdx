@@ -98,6 +98,28 @@ The status line labels the server path as `remote:`. Server paths are never reso
 
 Chat, streamed tool output and diffs delivered through ACP, prompt search, configuration, server status, forms, artifact review, `/clear`, and `/resume` remain available. Workspace operations stay server-side. Themes, Wisp settings, rendering, terminal bell, clipboard, and browser integration remain client-local features.
 
+## Browser client
+
+`@aether-agent/browser` is an ACP client for web pages, compiled to WebAssembly from the same client code `aether client` uses. It is not published to npm yet; build it from the repository with `pnpm browser:build` (requires `wasm-pack`).
+
+```ts
+import init, { AetherClient } from "@aether-agent/browser";
+
+await init();
+const client = await AetherClient.connect("ws://127.0.0.1:8765", (event) => {
+  if (event.type === "conversation_changed") console.log(event.conversation.items);
+});
+const { sessionId } = await client.newSession({ cwd: "/workspace/project" });
+await client.prompt({ sessionId, prompt: [{ type: "text", text: "Summarize this repository" }] });
+```
+
+`client.initializeResponse` carries the server's working directory and live session under `_meta["contextbridge/aether"].remote`; resume that session with `client.resumeSession({ sessionId, cwd }, true)` to replay its history. Events, including elicitation requests with their `respond` callback, arrive through the `connect` callback. Each session's updates are also reduced into a conversation, with the same messages, tool calls, sub-agents, plan and turn state the terminal client shows, and delivered as `conversation_changed` snapshots.
+
+- **HTTPS pages need `wss://`.** Browsers block `ws://` sockets from pages served over `https://`, and the raw server has no TLS. Put an authenticating TLS gateway in front of `aether server`. Browsers cannot add custom headers to a WebSocket handshake, so the gateway must authenticate with cookies, the URL, or WebSocket subprotocols rather than `-H`-style headers. Offer subprotocols with `AetherClient.connect(url, onEvent, { protocols })`; the gateway must select one of them, since `aether server` selects none.
+- **One client at a time.** Browsers hide the HTTP status of a rejected handshake, so the server's `409 Conflict` surfaces only as a `connect_failed` error.
+- **Close codes.** A `connection_closed` event, and a `connect_failed` error for a socket that closed before initialization, carry the WebSocket close `code` and `reason` as `close`.
+- **No automatic reconnect.** After a `connection_closed` event, connect again and resume the session with replay. As with the terminal client, disconnecting does not stop a running turn, and pending elicitations are cancelled.
+
 ## Deployment and limitations
 
 - One live top-level session and **one attached client** at a time. A second connection receives HTTP `409 Conflict` and cannot take over the first.

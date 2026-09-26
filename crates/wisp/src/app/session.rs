@@ -262,7 +262,7 @@ impl App {
     }
 
     pub(super) fn can_start_foreground_operation(&self) -> bool {
-        self.foreground.is_idle()
+        self.foreground.is_idle() && self.conversation.turn().is_idle()
     }
 
     /// Adds a semantic notice for information outside the agent's own output.

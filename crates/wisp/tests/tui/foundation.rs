@@ -711,6 +711,6 @@ fn fitting_content_stays_visible_in_a_small_viewport() {
     ui.resize(40, 15);
     ui.draw();
 
-    assert!(ui.app().conversation_items().iter().any(|item| item.text() == Some("queued while small")));
+    assert!(ui.app().conversation_items().iter().any(|item| item.text().as_deref() == Some("queued while small")));
     assert!(ui.viewport_text().contains("queued while small"));
 }

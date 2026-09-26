@@ -13,7 +13,7 @@ use agent_client_protocol::schema::v2::{
     ToolCallContent, ToolCallStatus, ToolCallUpdate, UsageUpdate,
 };
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
-use mcp_utils::display_meta::{PlanMetaStatus, ToolResultMeta};
+use utils::display_meta::{PlanMetaStatus, ToolResultMeta};
 
 /// Sends updates in delivery order.
 pub(crate) fn project_agent_event(msg: &AgentEvent, mode: NotificationMode, io: &SessionIo) {
@@ -343,9 +343,9 @@ mod tests {
     use agent_client_protocol::Client;
     use agent_client_protocol::schema::v2::TextContent;
     use llm::{ContextUsage, ToolCallRequest};
-    use mcp_utils::display_meta::{PlanMeta, PlanMetaEntry, ToolDisplayMeta};
     use serde_json::json;
     use tokio::sync::mpsc::unbounded_channel;
+    use utils::display_meta::{PlanMeta, PlanMetaEntry, ToolDisplayMeta};
 
     fn forwarded<N: agent_client_protocol::JsonRpcNotification + Send + 'static>(event: &AgentEvent) -> N {
         tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(
@@ -592,7 +592,7 @@ mod tests {
 
     #[test]
     fn test_result_with_result_meta_sets_meta() -> Result<(), String> {
-        use mcp_utils::display_meta::ToolDisplayMeta;
+        use utils::display_meta::ToolDisplayMeta;
 
         let result = ToolCallResult {
             id: "call_1".to_string(),
@@ -645,7 +645,7 @@ mod tests {
 
     #[test]
     fn test_plan_notification_none_when_no_plan_or_no_meta() {
-        use mcp_utils::display_meta::ToolDisplayMeta;
+        use utils::display_meta::ToolDisplayMeta;
 
         let meta: ToolResultMeta = ToolDisplayMeta::new("Read file", "main.rs").into();
         assert!(try_extract_plan_notification(Some(&meta)).is_none());
@@ -654,7 +654,7 @@ mod tests {
 
     #[test]
     fn test_display_update_emits_meta_update() -> Result<(), String> {
-        use mcp_utils::display_meta::ToolDisplayMeta;
+        use utils::display_meta::ToolDisplayMeta;
 
         let meta = ToolResultMeta::from(ToolDisplayMeta::new("Read file", "main.rs"));
 
@@ -689,7 +689,7 @@ mod tests {
 
     #[test]
     fn test_sub_agent_tool_result_includes_display_fields() {
-        use mcp_utils::display_meta::ToolDisplayMeta;
+        use utils::display_meta::ToolDisplayMeta;
 
         let event = AgentEvent::Tool(ToolEvent::Result {
             result: ToolCallResult {

@@ -59,7 +59,7 @@ struct PendingPrompt {
 
 impl PendingPrompt {
     async fn accept(self) {
-        self.responder.respond(PromptResponse::new()).unwrap();
+        self.responder.respond(PromptResponse::new("user-message")).unwrap();
         self.result.await.unwrap().unwrap();
     }
 }

@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::app::App;
 use crate::conversation::item_view::{ContentKind, content_kind, item_lines};
-use crate::conversation::{ConversationContent, ConversationItem};
+use acp_utils::conversation::{ConversationContent, ConversationItem};
 use crate::view::wrap::as_u16;
 use clankerdiff_ratatui::MarkdownStreamError;
 use ratatui::text::Line;
@@ -122,8 +122,8 @@ impl Renderer {
         }
         stats.item_rebuilds += 1;
         stats.ns_item_rebuild += lap.ns();
-        if let ConversationContent::Assistant(text) = item.content() {
-            stats.markdown_bytes_parsed += text.text.len() as u64;
+        if let (ConversationContent::Assistant(_), Some(text)) = (item.content(), item.text()) {
+            stats.markdown_bytes_parsed += text.len() as u64;
         }
         lines
     }

@@ -6,10 +6,9 @@ use agent_client_protocol::schema::v2::{AuthMethod, Meta, SessionId};
 use agent_client_protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use clankerdiff_protocol::client::ClientCommand;
 use clankerdiff_protocol::shared::{DocumentUpdate, Event};
-pub use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 use serde::{Deserialize, Serialize};
-
-pub use mcp_utils::status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
+pub use utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
+pub use utils::mcp_status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
 
 use crate::meta::{from_meta, to_meta};
 
@@ -37,6 +36,7 @@ impl RemoteServerInfo {
 }
 
 /// Parameters for `_aether/session_usage` notifications.
+#[cfg(not(target_family = "wasm"))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonRpcNotification)]
 #[notification(method = "_aether/session_usage")]
 pub struct SessionUsageParams {

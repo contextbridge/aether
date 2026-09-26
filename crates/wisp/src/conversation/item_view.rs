@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
 use super::tool_view::tool_lines;
-use super::{ConversationContent, ConversationItem};
+use acp_utils::conversation::{ConversationContent, ConversationItem};
 
 /// Which of the four transcript content kinds an item holds, driving the blank
 /// line inserted between runs of different kinds.
@@ -27,17 +27,19 @@ pub(crate) fn item_lines(
     theme: &Theme,
     highlighter: &mut SyntaxHighlighter,
 ) -> Vec<Line<'static>> {
-    if item.text().is_some_and(str::is_empty) {
+    let content_width = content_width(width, padding);
+    if let ConversationContent::Tool(tool) = item.content() {
+        return tool_lines(tool, content_width, padding, spinner_tick, theme, highlighter);
+    }
+    let text = item.text().unwrap_or_default();
+    if text.is_empty() {
         return Vec::new();
     }
-    let content_width = content_width(width, padding);
     match item.content() {
-        ConversationContent::User(text) => user_block_lines(&text.text, width, padding, theme),
-        ConversationContent::Assistant(text) => {
-            indent_lines(render_markdown(&text.text, content_width, theme, highlighter), padding)
+        ConversationContent::Assistant(_) => {
+            indent_lines(render_markdown(&text, content_width, theme, highlighter), padding)
         }
-        ConversationContent::Notice(notice) => user_block_lines(&notice.text, width, padding, theme),
-        ConversationContent::Tool(tool) => tool_lines(tool, content_width, padding, spinner_tick, theme, highlighter),
+        _ => user_block_lines(&text, width, padding, theme),
     }
 }
 

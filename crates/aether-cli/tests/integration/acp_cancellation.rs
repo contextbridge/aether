@@ -29,7 +29,7 @@ async fn cancel_mid_stream_interrupts_prompt() {
                 .block_task()
                 .await
                 .unwrap();
-            assert_eq!(serde_json::to_value(response).unwrap(), serde_json::json!({}));
+            assert_eq!(serde_json::to_value(&response).unwrap(), serde_json::json!({"messageId": response.message_id}));
             loop {
                 if let SessionUpdate::AgentMessageChunk(chunk) = harness.peer.next_session_notification().await.update
                     && let ContentBlock::Text(text) = chunk.content

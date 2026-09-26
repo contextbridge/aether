@@ -1,16 +1,17 @@
-use acp_utils::notifications::{SubAgentEvent, SubAgentProgressParams};
+use crate::notifications::{SubAgentEvent, SubAgentProgressParams};
 use agent_client_protocol::schema::{MaybeUndefined, v2 as acp};
-
-pub const SUB_AGENT_VISIBLE_TOOL_LIMIT: usize = 3;
+use serde::Serialize;
 
 /// A tracked tool call within a sub-agent.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SubAgentToolCall {
     pub id: String,
     pub name: String,
     pub raw_input: String,
     pub display_value: Option<String>,
     pub status: ToolStatus,
+    #[serde(skip)]
     kind: ToolKind,
 }
 
@@ -21,7 +22,8 @@ impl SubAgentToolCall {
 }
 
 /// Per-sub-agent state: tracks its tool calls in arrival order.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SubAgentState {
     pub task_id: String,
     pub agent_name: String,
@@ -52,20 +54,19 @@ impl SubAgentState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// A tool call as the merge of every update the agent sent for it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolCall {
     pub status: ToolStatus,
     pub sub_agents: Vec<SubAgentState>,
+    #[serde(rename = "toolCall")]
     protocol: Box<acp::ToolCallUpdate>,
 }
 
 impl ToolCall {
-    pub fn from_update(update: &acp::ToolCallUpdate) -> Self {
-        let mut tool = Self {
-            status: ToolStatus::Running,
-            sub_agents: Vec::new(),
-            protocol: Box::new(update.clone()),
-        };
+    pub(super) fn from_update(update: &acp::ToolCallUpdate) -> Self {
+        let mut tool = Self { status: ToolStatus::Running, sub_agents: Vec::new(), protocol: Box::new(update.clone()) };
         tool.refresh_status();
         tool
     }
@@ -93,23 +94,23 @@ impl ToolCall {
         })
     }
 
-    pub fn apply_update(&mut self, update: &acp::ToolCallUpdate) {
+    pub(super) fn apply_update(&mut self, update: &acp::ToolCallUpdate) {
         self.protocol.apply_update(update.clone());
         self.refresh_status();
     }
 
-    pub fn append_content(&mut self, content: acp::ToolCallContent) {
+    pub(super) fn append_content(&mut self, content: acp::ToolCallContent) {
         match &mut self.protocol.content {
             MaybeUndefined::Value(items) => items.push(content),
             value => *value = MaybeUndefined::Value(vec![content]),
         }
     }
 
-    pub(crate) fn apply_sub_agent_progress(&mut self, notification: &SubAgentProgressParams) {
+    pub(super) fn apply_sub_agent_progress(&mut self, notification: &SubAgentProgressParams) {
         apply_sub_agent_progress(&mut self.sub_agents, notification);
     }
 
-    pub(crate) fn finalize(&mut self, terminal_status: &ToolStatus) {
+    pub(super) fn finalize(&mut self, terminal_status: &ToolStatus) {
         if self.status == ToolStatus::Running {
             self.status = terminal_status.clone();
         }
@@ -127,7 +128,7 @@ impl ToolCall {
         bash_command(self.kind(), &self.raw_input())
     }
 
-    pub(crate) fn is_running(&self) -> bool {
+    pub(super) fn is_running(&self) -> bool {
         self.status == ToolStatus::Running
             || self.sub_agents.iter().any(|agent| {
                 !agent.done || agent.tool_calls.iter().any(|call| matches!(call.status, ToolStatus::Running))
@@ -138,7 +139,7 @@ impl ToolCall {
     /// status and every spawned sub-agent has finished. A background
     /// spawn completes before its agents start reporting, so an empty tree on
     /// a completed spawner means "not yet", not "none".
-    pub(crate) fn rendering_final(&self) -> bool {
+    pub(super) fn rendering_final(&self) -> bool {
         !self.is_running() && (self.kind() != ToolKind::SpawnSubagent || !self.sub_agents.is_empty())
     }
 
@@ -162,7 +163,8 @@ impl ToolCall {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ToolStatus {
     Running,
     Success,

@@ -55,6 +55,34 @@ sqlx-check:
 doc-check *PKGS:
     RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --all-features {{ if PKGS == "" { "--workspace --examples" } else { PKGS } }}
 
+# Lint the browser ACP client (aether-acp-wasm) for wasm32
+wasm-check:
+    cargo clippy -p aether-acp-wasm --target wasm32-unknown-unknown -- -D warnings
+
+# Run the browser ACP client's wasm tests in Node against a fake agent, then build and type-check its npm package
+wasm-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="$(mktemp -d)"
+    mkfifo "$dir/url"
+    cargo run -q -p aether-acp-utils --example fake_agent_ws --features testing,websocket > "$dir/url" &
+    server=$!
+    disown "$server"
+    trap 'kill "$server" 2>/dev/null || true; rm -rf "$dir"' EXIT
+    exec 3< "$dir/url"
+    read -r FAKE_AGENT_WS_URL <&3
+    export FAKE_AGENT_WS_URL
+    wasm-pack test --node crates/acp-wasm
+    pnpm browser:build
+    pnpm browser:typecheck
+    pnpm playground:typecheck
+    pnpm playground:test
+
+# Build the browser client and serve its React playground; connect it to a running `aether server`
+playground:
+    pnpm browser:build
+    pnpm playground:dev
+
 # Regenerate the AetherSettings JSON Schema consumed by the website and SDK
 gen-schema:
     cargo run -q -p aether-project --bin aether-settings-schema > packages/website/src/data/aether-settings.schema.json
@@ -76,7 +104,7 @@ sdk-e2e *ARGS:
     pnpm sdk:e2e {{ARGS}}
 
 # Run all CI checks
-ci: fmt-check lint test-ci doc-check sqlx-check
+ci: fmt-check lint test-ci doc-check sqlx-check wasm-check
     pnpm fmt-check
     pnpm sdk:typecheck
     pnpm sdk:test

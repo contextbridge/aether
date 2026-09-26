@@ -342,7 +342,9 @@ impl SocketPairBuilder {
             server.send(Message::Text(response.to_string().into())).await?;
             let request = receive_json(&mut server).await?;
             let notification = |update| json!({"jsonrpc": "2.0", "method": "session/update", "params": update});
-            let response = json!({"jsonrpc": "2.0", "id": request["id"], "result": {}});
+            let result =
+                if request["method"] == "session/prompt" { json!({"messageId": "user-message"}) } else { json!({}) };
+            let response = json!({"jsonrpc": "2.0", "id": request["id"], "result": result});
             for message in
                 before.into_iter().map(notification).chain([response]).chain(after.into_iter().map(notification))
             {
@@ -411,7 +413,7 @@ fn streaming_elicitation_agent(
 ) -> V2Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
     test_agent().on_receive_request(
         async move |request: PromptRequest, responder, cx| {
-            responder.respond(PromptResponse::new())?;
+            responder.respond(PromptResponse::new("user-message"))?;
             cx.send_notification(running_notification(request.session_id.clone()))?;
             for &text in chunks {
                 cx.send_notification(UpdateSessionNotification::new(

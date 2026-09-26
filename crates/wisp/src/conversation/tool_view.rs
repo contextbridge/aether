@@ -1,6 +1,7 @@
 use crate::theme::Theme;
 use crate::view::syntax::SyntaxHighlighter;
 use crate::view::wrap::{as_u16, truncate_to_width, wrap_line};
+use acp_utils::conversation::{SubAgentState, ToolCall, ToolStatus};
 use agent_client_protocol::schema::v2 as acp;
 use clankerdiff_ratatui::diff::{RepoPath, parse_git_diff_with_path_mapper};
 use clankerdiff_ratatui::{DiffPreviewOptions, render_diff_preview};
@@ -9,8 +10,8 @@ use ratatui::text::{Line, Span};
 
 use super::item_view::indent_lines;
 use super::progress_indicator::spinner_frame;
-use super::tool_calls::{SUB_AGENT_VISIBLE_TOOL_LIMIT, SubAgentState, ToolCall, ToolStatus};
 
+const SUB_AGENT_VISIBLE_TOOL_LIMIT: usize = 3;
 const MAX_TOOL_ARG_WIDTH: usize = 200;
 
 /// One tool call's rendered rows: status line, diff preview, and the tree of

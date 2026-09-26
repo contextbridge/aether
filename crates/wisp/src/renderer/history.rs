@@ -1,5 +1,5 @@
 use crate::app::App;
-use crate::conversation::{ConversationContent, ConversationId, ConversationItem, ItemState};
+use acp_utils::conversation::{ConversationContent, ConversationId, ConversationItem, ItemState};
 use crate::error::RenderError;
 use crate::view::wrap::{as_u16, wrap_line};
 use clankerdiff_ratatui::MarkdownCommitError;

@@ -58,7 +58,7 @@ fn clear_creates_new_session_and_resets_state() {
 
     assert_ne!(ui.app().conversation_id(), old_conversation);
     assert!(!ui.app().conversation_items().iter().any(|item| {
-        matches!(item.content(), ConversationContent::Notice(notice) if notice.text.contains("New session created"))
+        matches!(item.content(), ConversationContent::Notice(notice) if notice.contains("New session created"))
     }));
     ui.draw();
     let viewport = ui.viewport_text();

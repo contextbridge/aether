@@ -180,11 +180,11 @@ async fn resume_restores_transcript_without_replay_and_replaces_active_session()
             .block_task()
             .await
             .expect("prompt on resumed session succeeds");
-        assert_eq!(serde_json::to_value(prompt).unwrap(), serde_json::json!({}));
         loop {
             let notification = harness.peer.next_session_notification().await;
             match notification.update {
                 SessionUpdate::UserMessage(message) => {
+                    assert_eq!(message.message_id, prompt.message_id);
                     assert!(matches!(&message.content.value().unwrap()[0], ContentBlock::Text(text) if text.text == "next prompt"));
                     break;
                 }
