@@ -58,7 +58,7 @@ async fn mode_switch_routes_next_prompt_to_target_agent_and_refreshes_ui_state()
         harness.expect_available_commands(&["edit"], &["plan"]).await;
 
         let response = prompt.await.expect("prompt succeeds");
-        assert_eq!(serde_json::to_value(response).unwrap(), serde_json::json!({}));
+        assert_eq!(serde_json::to_value(&response).unwrap(), serde_json::json!({"messageId": response.message_id}));
         harness.expect_idle(fake.session_id(), StopReason::EndTurn).await;
         fake.coder().assert_saw_exactly(&["implement it"]);
         fake.planner().assert_never_ran();

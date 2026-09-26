@@ -82,6 +82,7 @@ pub struct AcpArgs {
 
 #[derive(Clone, Debug, Default, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(rename = "AetherAcpOptions")]
 pub struct AcpOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_dir: Option<PathBuf>,

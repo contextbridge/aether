@@ -14,8 +14,8 @@ use clankerdiff_protocol::shared::{DocumentUpdate, Event};
 use futures::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use llm::catalog::LlmModel;
 use llm::parser::ModelProviderParser;
-use llm::{ChatMessage, ContentBlock, ProviderConnectionOverrides};
-use mcp_utils::client::{ElicitationRequest, McpClientEvent, McpServerStatusEntry, cancel_result};
+use llm::{ChatMessage, ContentBlock, MessageId, ProviderConnectionOverrides};
+use mcp_utils::client::{ElicitationRequest, McpClientEvent, cancel_result};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -26,6 +26,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Duration, Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
+use utils::mcp_status::McpServerStatusEntry;
 
 use super::agent_key::AgentKey;
 use super::agents::SessionAgents;
@@ -146,12 +147,16 @@ impl SessionIo {
         Self { connection, session_id }
     }
 
+    pub(crate) fn session_id(&self) -> &SessionId {
+        &self.session_id
+    }
+
     pub(crate) fn send_update(&self, update: acp::SessionUpdate) {
         self.send(acp::UpdateSessionNotification::new(self.session_id.clone(), update));
     }
 
     pub(crate) fn send_git_diff_event(&self, event: Event<DocumentUpdate>) {
-        self.send(GitDiffEventPayload { session_id: self.session_id.0.to_string(), event });
+        self.send(GitDiffEventPayload { session_id: self.session_id.clone(), event });
     }
 
     pub(crate) fn send(&self, notification: impl agent_client_protocol::JsonRpcNotification) {
@@ -210,6 +215,7 @@ enum TurnState {
     Idle,
     Preparing {
         responder: ClientConnection,
+        message_id: llm::MessageId,
         display_content: Vec<ContentBlock>,
     },
     Running,
@@ -503,7 +509,7 @@ impl SessionActor {
         match self.prepare_prompt_runtime().await {
             Ok(mcp) => {
                 self.preparation.spawn(async move { expand_slash_command_in_content(&mcp, content).await });
-                self.turn = TurnState::Preparing { responder, display_content };
+                self.turn = TurnState::Preparing { responder, message_id: MessageId::new(), display_content };
             }
             Err(error) => {
                 error!("Prompt preparation failed: {error}");
@@ -518,16 +524,15 @@ impl SessionActor {
             if self.cancel.is_cancelled() {
                 self.finish_turn(Ok(acp::StopReason::Cancelled)).await;
             }
-        } else if let TurnState::Preparing { responder, .. } = self.take_turn() {
+        } else if let TurnState::Preparing { responder, message_id, .. } = self.take_turn() {
             self.preparation.shutdown().await;
-            responder.respond(PromptResponse::new());
+            responder.respond(PromptResponse::new(message_id.to_string()));
             self.finish_turn(Ok(acp::StopReason::Cancelled)).await;
         }
     }
 
     async fn accept_prompt(&mut self, content: Vec<ContentBlock>) {
-        let TurnState::Preparing { responder, display_content } = self.take_turn() else { return };
-        let message_id = llm::MessageId::new();
+        let TurnState::Preparing { responder, message_id, display_content } = self.take_turn() else { return };
         let user = map_user_message(message_id.to_string().into(), &display_content);
         let event = SessionEvent::User(UserEvent::Message {
             message_id: message_id.clone(),
@@ -540,7 +545,7 @@ impl SessionActor {
             return;
         }
         self.record_event(event);
-        responder.respond(PromptResponse::new());
+        responder.respond(PromptResponse::new(message_id.to_string()));
         self.io.send_update(acp::SessionUpdate::UserMessage(user));
         self.io.send_update(acp::SessionUpdate::StateUpdate(acp::StateUpdate::Running(acp::RunningStateUpdate::new())));
         self.turn = TurnState::Running;
@@ -923,6 +928,7 @@ mod tests {
         use rmcp::model::ElicitRequestParams;
         use tokio::sync::oneshot;
         use tokio::task::LocalSet;
+        use utils::mcp_status::McpServerStatus;
 
         fn dispatch_event(connection: &ConnectionTo<Client>, event: McpClientEvent) {
             on_mcp_client_event(&SessionIo::new(Some(connection.clone()), SessionId::new("session-1")), event);
@@ -933,10 +939,8 @@ mod tests {
             LocalSet::new()
                 .run_until(async {
                     let (cx, mut peer) = test_connection().await;
-                    let servers = vec![mcp_utils::client::McpServerStatusEntry::new(
-                        "github",
-                        mcp_utils::client::McpServerStatus::Connected { tool_count: 1 },
-                    )];
+                    let servers =
+                        vec![McpServerStatusEntry::new("github", McpServerStatus::Connected { tool_count: 1 })];
 
                     dispatch_event(&cx, McpClientEvent::ServerStatusesChanged(servers));
 
@@ -951,11 +955,9 @@ mod tests {
             LocalSet::new()
                 .run_until(async {
                     let (cx, mut peer) = test_connection().await;
-                    let servers = vec![mcp_utils::client::McpServerStatusEntry::new(
+                    let servers = vec![McpServerStatusEntry::new(
                         "github",
-                        mcp_utils::client::McpServerStatus::Failed {
-                            error: "authentication timed out after 3 minutes".to_string(),
-                        },
+                        McpServerStatus::Failed { error: "authentication timed out after 3 minutes".to_string() },
                     )];
 
                     dispatch_event(&cx, McpClientEvent::ServerStatusesChanged(servers));
@@ -991,10 +993,8 @@ mod tests {
             LocalSet::new()
                 .run_until(async {
                     let (cx, mut peer) = test_connection().await;
-                    let servers = vec![mcp_utils::client::McpServerStatusEntry::new(
-                        "github",
-                        mcp_utils::client::McpServerStatus::Connected { tool_count: 1 },
-                    )];
+                    let servers =
+                        vec![McpServerStatusEntry::new("github", McpServerStatus::Connected { tool_count: 1 })];
                     dispatch_event(&cx, McpClientEvent::ServerStatusesChanged(servers));
 
                     let McpNotification::ServerStatus { servers } = peer.next_mcp_notification().await;
