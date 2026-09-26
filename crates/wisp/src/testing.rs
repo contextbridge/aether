@@ -1068,7 +1068,7 @@ where
     }
 
     pub fn complete_prompt(&mut self, stop_reason: acp::StopReason) {
-        self.deliver_result(CommandResult::Prompt(Ok(acp::PromptResponse::new())));
+        self.deliver_result(CommandResult::Prompt(Ok(acp::PromptResponse::new("user-message"))));
         let session_id = self.app.session_id().clone();
         let update = acp::SessionUpdate::StateUpdate(acp::StateUpdate::Idle(
             acp::IdleStateUpdate::new().stop_reason(stop_reason),

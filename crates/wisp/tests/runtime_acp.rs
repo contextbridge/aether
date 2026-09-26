@@ -91,7 +91,7 @@ async fn accepted_turn_finishes_the_ui_only_after_matching_live_idle() {
                     dispatcher.dispatch(command);
                 }
                 let (_, responder) = peer.prompt.recv().await.unwrap();
-                responder.respond(PromptResponse::new()).unwrap();
+                responder.respond(PromptResponse::new("user-message")).unwrap();
                 ui.deliver_result(dispatcher.next_result().await.unwrap());
                 assert!(ui.app().waiting_for_response(), "acceptance is not completion");
                 if reason == Some(StopReason::Cancelled) {
@@ -167,7 +167,7 @@ async fn runtime_replays_sequentially_without_owning_turn_policy() {
             }));
             let (request, responder) = peer.prompt.recv().await.unwrap();
             assert_eq!(request.prompt, vec![ContentBlock::Text(TextContent::new("hello"))]);
-            responder.respond(PromptResponse::new()).unwrap();
+            responder.respond(PromptResponse::new("user-message")).unwrap();
             assert!(matches!(dispatcher.next_result().await, Some(CommandResult::Prompt(Ok(_)))));
             dispatcher.dispatch(Command::Agent(AgentCommand::ResumeSession {
                 session_id: "other".into(),
@@ -210,7 +210,7 @@ async fn remote_exit_joins_connection_without_cancel_or_close() {
                 dispatcher.dispatch(command);
             }
             let (_, responder) = requests.prompt.recv().await.unwrap();
-            responder.respond(PromptResponse::new()).unwrap();
+            responder.respond(PromptResponse::new("user-message")).unwrap();
             ui.deliver_result(dispatcher.next_result().await.unwrap());
             ui.acp_event(running_notification("new").into());
             assert!(ui.app().waiting_for_response());
