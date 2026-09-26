@@ -1,29 +1,19 @@
 use crate::common::{TestClient, TestResult, load_skills_input, skills_server};
 use mcp_servers::skills::SkillsMcp;
 use mcp_servers::skills::tools::ListSkillsInput;
+use mcp_servers::testing::TestWorkspace;
 use rmcp::ServerHandler;
-use tempfile::TempDir;
 
 #[tokio::test]
 async fn test_instructions_reference_list_skills_and_do_not_embed_catalog_entries() {
-    let temp_dir = TempDir::new().unwrap();
-    let skills_dir = temp_dir.path().join("skills");
-    std::fs::create_dir_all(&skills_dir).unwrap();
+    let workspace = TestWorkspace::new()
+        .file(
+            "skills/agent-skill/SKILL.md",
+            "---\ndescription: Agent skill\nagent-invocable: true\nagent_authored: true\n---\nContent.\n",
+        )
+        .file("skills/human-skill/SKILL.md", "---\ndescription: Human skill\nagent-invocable: true\n---\nContent.\n");
 
-    let agent_dir = skills_dir.join("agent-skill");
-    std::fs::create_dir_all(&agent_dir).unwrap();
-    std::fs::write(
-        agent_dir.join("SKILL.md"),
-        "---\ndescription: Agent skill\nagent-invocable: true\nagent_authored: true\n---\nContent.\n",
-    )
-    .unwrap();
-
-    let human_dir = skills_dir.join("human-skill");
-    std::fs::create_dir_all(&human_dir).unwrap();
-    std::fs::write(human_dir.join("SKILL.md"), "---\ndescription: Human skill\nagent-invocable: true\n---\nContent.\n")
-        .unwrap();
-
-    let server = SkillsMcp::new(&[skills_dir]);
+    let server = SkillsMcp::new(&[workspace.path("skills")]);
     let info = server.get_info();
     let instructions = info.instructions.unwrap();
 
@@ -36,16 +26,12 @@ async fn test_instructions_reference_list_skills_and_do_not_embed_catalog_entrie
 
 #[tokio::test]
 async fn test_full_lifecycle() -> TestResult {
-    let temp_dir = TempDir::new()?;
-
-    let skills_dir = temp_dir.path().join("skills").join("curated");
-    std::fs::create_dir_all(&skills_dir)?;
-    std::fs::write(
-        skills_dir.join("SKILL.md"),
+    let workspace = TestWorkspace::new().file(
+        "skills/curated/SKILL.md",
         "---\ndescription: Curated skill\nagent-invocable: true\n---\n# Curated\n\nHand-written skill.",
-    )?;
+    );
 
-    let mcp = TestClient::start(|| skills_server(temp_dir.path())).await?;
+    let mcp = TestClient::start(|| skills_server(workspace.root())).await?;
 
     let parsed = mcp.call("list_skills", ListSkillsInput::default()).await?;
     let skills = parsed["skills"].as_array().unwrap();
