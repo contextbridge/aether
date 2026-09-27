@@ -1,0 +1,22 @@
+{
+  "name": "@aether-agent/schema-codegen",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Compiles the JSON Schemas Aether's Rust schema emitters print into TypeScript declarations",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/contextbridge/aether.git",
+    "directory": "packages/schema-codegen"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.mjs"
+    }
+  },
+  "dependencies": {
+    "json-schema-to-typescript": "^15.0.4",
+    "prettier": "^3.9.6"
+  }
+}
