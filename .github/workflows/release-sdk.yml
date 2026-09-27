@@ -6,6 +6,7 @@ on:
     paths:
       - "packages/aether-sdk/package.json"
       - "packages/aether-evals/package.json"
+      - "packages/aether-browser/package.json"
   workflow_dispatch:
 
 permissions:
@@ -48,6 +49,9 @@ jobs:
       - name: Build evals
         run: pnpm evals:build
 
+      - name: Build browser client
+        run: pnpm browser:build
+
       # pnpm -r publishes the SDK before evals, stops on the first failure, and skips versions already on npm.
       - name: Publish
-        run: pnpm -r --filter @aether-agent/sdk --filter @aether-agent/evals publish --access public --provenance --no-git-checks
+        run: pnpm -r --filter @aether-agent/sdk --filter @aether-agent/evals --filter @aether-agent/browser publish --access public --provenance --no-git-checks

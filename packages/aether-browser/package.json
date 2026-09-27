@@ -1,7 +1,6 @@
 {
   "name": "@aether-agent/browser",
   "version": "0.1.0",
-  "private": true,
   "description": "Browser ACP client for aether server, compiled to WebAssembly",
   "repository": {
     "type": "git",
@@ -17,8 +16,12 @@
     },
     "./browser_bg.wasm": "./pkg/browser_bg.wasm"
   },
+  "files": [
+    "pkg",
+    "README.md"
+  ],
   "scripts": {
-    "build": "wasm-pack build --target web --no-pack --out-dir pkg --out-name browser && pnpm generate:types",
+    "build": "wasm-pack build --target web --no-pack --out-dir pkg --out-name browser && rm pkg/.gitignore && pnpm generate:types",
     "generate:types": "node scripts/generate-types.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

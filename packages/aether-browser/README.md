@@ -20,10 +20,10 @@ A ACP client for `aether server`, that runs in the browser. It is written in Rus
    aether server --cwd /workspace/project --agent Build
    ```
 
-2. Build the package (requires [`wasm-pack`](https://github.com/wasm-bindgen/wasm-pack)); it is not published to npm yet, and the output lands in `pkg/`:
+2. Install the package:
 
    ```bash
-   pnpm browser:build
+   pnpm add @aether-agent/browser @agentclientprotocol/sdk
    ```
 
 3. Connect from the page, then resume the server's live session or start one in its working directory:
