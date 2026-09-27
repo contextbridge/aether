@@ -98,6 +98,7 @@ const toolResult: AgentEvent = {
   event: {
     type: "result",
     result: { id: "1", name: "write", arguments: "{}", result: "ok" },
+    result_meta: null,
   },
 };
 const done: AgentEvent = turnEnded();

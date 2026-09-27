@@ -69,18 +69,9 @@ describe("FakeAgent", () => {
       event: {
         type: "usage_updated",
         usage: {
-          input_tokens: 200,
-          output_tokens: 20,
-          cache_read_tokens: 50,
-          cache_creation_tokens: 0,
-          reasoning_tokens: 7,
           usage_ratio: 0.5,
           context_limit: 200_000,
-          total_input_tokens: 3000,
-          total_output_tokens: 600,
-          total_cache_read_tokens: 50,
-          total_cache_creation_tokens: 0,
-          total_reasoning_tokens: 7,
+          input_tokens: 200,
         },
       },
     };
@@ -101,8 +92,11 @@ describe("FakeAgent", () => {
     const result = await Transcript.fromStream(agent.run(new Task("t")));
 
     expect(result.events.map((event) => event.category)).toContain("context");
-    expect(result.usage().total_input_tokens).toBe(3000);
-    expect(result.usage().total_output_tokens).toBe(600);
+    expect(result.usage()).toEqual({
+      usage_ratio: 0.5,
+      context_limit: 200_000,
+      input_tokens: 200,
+    });
   });
 });
 

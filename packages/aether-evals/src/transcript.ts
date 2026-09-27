@@ -72,18 +72,9 @@ export class Transcript {
 }
 
 const ZERO_USAGE: ContextUsage = {
-  input_tokens: 0,
-  output_tokens: 0,
-  cache_read_tokens: null,
-  cache_creation_tokens: null,
-  reasoning_tokens: null,
   usage_ratio: null,
   context_limit: null,
-  total_input_tokens: 0,
-  total_output_tokens: 0,
-  total_cache_read_tokens: 0,
-  total_cache_creation_tokens: 0,
-  total_reasoning_tokens: 0,
+  input_tokens: 0,
 };
 
 export function isTerminalEvent(event: AgentEvent): boolean {

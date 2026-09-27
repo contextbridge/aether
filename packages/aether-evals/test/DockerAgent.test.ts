@@ -15,6 +15,7 @@ describe("DockerAgent", () => {
             name: "weather",
             description: "Get the weather",
             parameters: { type: "object" },
+            server: null,
           },
         ],
       },
