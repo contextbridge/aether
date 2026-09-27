@@ -4,8 +4,10 @@ import { buildAetherCliCommand } from "./agentProcess.js";
 import { splitLines, streamCommand } from "./childProcess.js";
 import { assertOptionInvariants, compactCliOptions } from "./cliOptions.js";
 import { AetherSdkError } from "./errors.js";
-import type { AetherHeadlessCliOptions } from "./generated/aether-headless-options.js";
-import type { AgentEvent } from "./generated/eval-types.js";
+import type {
+  AetherHeadlessCliOptions,
+  AgentEvent,
+} from "./generated/types.js";
 import { resolveEnv } from "./processEnv.js";
 
 export type HeadlessEventKind = NonNullable<

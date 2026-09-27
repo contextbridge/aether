@@ -29,11 +29,5 @@ export type {
 export type { AetherSdkErrorCode } from "./errors.js";
 export { runCommand } from "./childProcess.js";
 export { resolveEnv } from "./processEnv.js";
-export type * from "./generated/eval-types.js";
-export type * from "./generated/aether-settings.js";
-export type {
-  AetherAcpOptions,
-  AgentTraceContext,
-} from "./generated/aether-acp-options.js";
-export type { AetherHeadlessCliOptions } from "./generated/aether-headless-options.js";
+export type * from "./generated/types.js";
 export * as acp from "@agentclientprotocol/sdk/experimental/v2";

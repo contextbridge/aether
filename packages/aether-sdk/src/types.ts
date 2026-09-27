@@ -4,8 +4,7 @@ import type {
   ToolAnnotations,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { z } from "zod";
-import type { ReasoningEffort } from "./generated/aether-settings.js";
-import type { SessionUsageEvent } from "./generated/eval-types.js";
+import type { ReasoningEffort, SessionUsageEvent } from "./generated/types.js";
 
 export type AgentSelection =
   | { agent: string; model?: never; reasoningEffort?: never }
