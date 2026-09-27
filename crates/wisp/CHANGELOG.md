@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.7](https://github.com/contextbridge/aether/compare/aether-wisp-v0.7.6...aether-wisp-v0.7.7) - 2026-09-27
+
+### Added
+
+- Add a browser client package that connects to an aether server over a websocket.  ([#529](https://github.com/contextbridge/aether/pull/529))
+
 ## [0.7.6](https://github.com/contextbridge/aether/compare/aether-wisp-v0.7.5...aether-wisp-v0.7.6) - 2026-09-24
 
 ### Other

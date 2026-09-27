@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.8.7](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.8.6...aether-agent-core-v0.8.7) - 2026-09-27
+
+### Added
+
+- Add a browser client package that connects to an aether server over a websocket.  ([#529](https://github.com/contextbridge/aether/pull/529))
+
 ## [0.8.6](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.8.5...aether-agent-core-v0.8.6) - 2026-09-24
 
 ### Other
