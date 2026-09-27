@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.12](https://github.com/contextbridge/aether/compare/aether-evals-v0.3.11...aether-evals-v0.3.12) - 2026-09-27
+
+### Other
+
+- updated the following local packages: aether-agent-core, aether-project, aether-llm
+
 ## [0.3.11](https://github.com/contextbridge/aether/compare/aether-evals-v0.3.10...aether-evals-v0.3.11) - 2026-09-24
 
 ### Other

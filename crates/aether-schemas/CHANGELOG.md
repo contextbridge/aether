@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.12](https://github.com/contextbridge/aether/compare/aether-schemas-v0.2.11...aether-schemas-v0.2.12) - 2026-09-27
+
+### Added
+
+- Add a browser client package that connects to an aether server over a websocket.  ([#529](https://github.com/contextbridge/aether/pull/529))
+
 ## [0.2.11](https://github.com/contextbridge/aether/compare/aether-schemas-v0.2.10...aether-schemas-v0.2.11) - 2026-09-24
 
 ### Other

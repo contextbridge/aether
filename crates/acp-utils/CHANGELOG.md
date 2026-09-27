@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.7](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.5.6...aether-acp-utils-v0.5.7) - 2026-09-27
+
+### Added
+
+- Add a browser client package that connects to an aether server over a websocket.  ([#529](https://github.com/contextbridge/aether/pull/529))
+
 ## [0.5.6](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.5.5...aether-acp-utils-v0.5.6) - 2026-09-24
 
 ### Other
