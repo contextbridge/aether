@@ -55,9 +55,16 @@ sqlx-check:
 doc-check *PKGS:
     RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --all-features {{ if PKGS == "" { "--workspace --examples" } else { PKGS } }}
 
-# Regenerate the AetherSettings JSON Schema consumed by the website and SDK
-gen-schema:
-    cargo run -q -p aether-project --bin aether-settings-schema > packages/website/src/data/aether-settings.schema.json
+# Lint the browser ACP client (@aether-agent/browser) for wasm32
+wasm-check:
+    cargo clippy -p aether-browser --target wasm32-unknown-unknown -- -D warnings
+
+# Run the browser ACP client's wasm tests in Node against a fake agent
+wasm-test: (fake-agent "wasm-pack" "test" "--node" "packages/aether-browser")
+
+# Serve a fake agent on the `aether server` port, so the playground runs without a model
+fake-agent *ARGS:
+    cargo run -q -p aether-acp-utils --features testing,websocket --example fake_agent_server -- {{ARGS}}
 
 # Install Node dependencies for the TypeScript SDK
 sdk-install:
@@ -76,10 +83,12 @@ sdk-e2e *ARGS:
     pnpm sdk:e2e {{ARGS}}
 
 # Run all CI checks
-ci: fmt-check lint test-ci doc-check sqlx-check
+ci: fmt-check lint test-ci doc-check sqlx-check wasm-check wasm-test
     pnpm fmt-check
     pnpm sdk:typecheck
     pnpm sdk:test
+    pnpm browser:build
+    pnpm browser:typecheck
 
 # Initialize or update cargo-dist configuration and CI workflows
 dist-init:

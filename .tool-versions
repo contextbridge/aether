@@ -4,3 +4,4 @@ cargo-dist 0.31.0
 git-cliff 2.12.0
 nodejs 24.15.0
 pnpm 10.28.0
+aqua:wasm-bindgen/wasm-pack 0.15.0
