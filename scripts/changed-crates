@@ -9,15 +9,15 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 dirs=""
 for f in "$@"; do
     case "$f" in
-        crates/*/*)
-            dir=$(echo "$f" | cut -d/ -f2)
+        crates/*/* | packages/*/*)
+            dir=$(echo "$f" | cut -d/ -f1-2)
             dirs="$dirs $dir"
             ;;
     esac
 done
 
 echo "$dirs" | tr ' ' '\n' | sort -u | sed '/^$/d' | while read -r dir; do
-    toml="$REPO_ROOT/crates/$dir/Cargo.toml"
+    toml="$REPO_ROOT/$dir/Cargo.toml"
     if [ -f "$toml" ]; then
         pkg=$(grep '^name' "$toml" | head -1 | sed 's/.*= *"//;s/".*//')
         printf -- '-p %s ' "$pkg"
