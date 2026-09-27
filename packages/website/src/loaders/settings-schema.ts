@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Loader, LoaderContext } from "astro/loaders";
@@ -10,9 +9,7 @@ import type { Loader, LoaderContext } from "astro/loaders";
  * and `///` doc comments) is the source of truth.
  */
 export function settingsSchemaLoader(): Loader {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const root = resolve(here, "../../../..");
-  const snapshotPath = resolve(here, "../data/aether-settings.schema.json");
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 
   return {
     name: "aether-settings-schema",
@@ -21,10 +18,9 @@ export function settingsSchemaLoader(): Loader {
       parseData,
       renderMarkdown,
       generateDigest,
-      watcher,
       logger,
     }: LoaderContext) {
-      const schema = generateSchema(root, snapshotPath);
+      const schema = generateSchema(root);
       const body = renderReference(schema);
       const id = "aether/settings/reference";
       const digest = generateDigest(body);
@@ -42,29 +38,19 @@ export function settingsSchemaLoader(): Loader {
       const rendered = await renderMarkdown(body);
       store.set({ id, data, body, rendered, digest });
       logger.info("Generated settings reference from AetherSettings schema");
-
-      watcher?.add(snapshotPath);
     },
   };
 }
 
 type JsonSchema = Record<string, any>;
 
-function generateSchema(root: string, snapshotPath: string): JsonSchema {
-  if (existsSync(snapshotPath)) {
-    return JSON.parse(readFileSync(snapshotPath, "utf8")) as JsonSchema;
-  }
-
+function generateSchema(root: string): JsonSchema {
   const schemaText = execFileSync(
     "cargo",
     ["run", "-q", "-p", "aether-project", "--bin", "aether-settings-schema"],
     { cwd: root, encoding: "utf8" },
   );
-
-  const schema = JSON.parse(schemaText) as JsonSchema;
-  mkdirSync(dirname(snapshotPath), { recursive: true });
-  writeFileSync(snapshotPath, `${JSON.stringify(schema, null, 2)}\n`);
-  return schema;
+  return JSON.parse(schemaText) as JsonSchema;
 }
 
 function renderReference(schema: JsonSchema): string {
