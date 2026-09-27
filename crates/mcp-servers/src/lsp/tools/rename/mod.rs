@@ -1,9 +1,9 @@
 //! LSP-powered rename refactoring tool
 
 use lsp_types::{DocumentChangeOperation, DocumentChanges, OneOf, ResourceOp, WorkspaceEdit};
-use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 
 use crate::lsp::common::uri_to_path;
 use crate::lsp::error::LspError;

@@ -6,12 +6,11 @@ pub mod workspace_status;
 
 use crate::error::AppError;
 use crate::session::workspace_status::WorkspaceStatus;
-use acp_utils::client::{AcpClient, AcpClientError, connect_acp_client};
+use acp_utils::client::{AcpClient, AcpClientError, connect_acp_client, initialize_request};
 use acp_utils::notifications::{RemoteServerInfo, SessionPreviewParams};
-use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v2::{
-    ClientCapabilities, ElicitationCapabilities, ElicitationFormCapabilities, ElicitationUrlCapabilities,
-    Implementation, InitializeRequest, NewSessionRequest, NewSessionResponse, ResumeSessionRequest, SessionId,
+    Implementation, NewSessionRequest, NewSessionResponse, ReplayFrom, ReplayFromStart, ResumeSessionRequest,
+    SessionId,
 };
 use agent_client_protocol::{AcpAgent, Client, ConnectTo};
 use std::env::current_dir;
@@ -34,7 +33,7 @@ impl Session {
         transport: impl ConnectTo<Client> + 'static,
         requested_session: Option<SessionId>,
     ) -> Result<Self, AppError> {
-        let client = connect_acp_client(transport, initialize_request()).await?;
+        let client = connect_acp_client(transport, initialize_request(client_info())).await?;
         let remote = RemoteServerInfo::from_meta(client.initialize_response.meta.as_ref())
             .ok_or(AppError::MissingRemoteContract)?;
         let (selected, working_dir) = match (requested_session, remote.session_id) {
@@ -46,7 +45,10 @@ impl Session {
         };
         let response = if let Some(id) = selected {
             let resumed = client.handle
-                .resume_session_with_replay(ResumeSessionRequest::new(id.clone(), working_dir.clone()))
+                .resume_session(
+                    ResumeSessionRequest::new(id.clone(), working_dir.clone())
+                        .replay_from(ReplayFrom::Start(ReplayFromStart::new())),
+                )
                 .await?;
             NewSessionResponse::new(id).config_options(resumed.config_options)
         } else {
@@ -64,7 +66,7 @@ impl Session {
 
     pub async fn connect_to(agent: impl ConnectTo<Client> + 'static, working_dir: PathBuf) -> Result<Self, AppError> {
         let workspace_status = WorkspaceStatus::initial(&working_dir);
-        let client = connect_acp_client(agent, initialize_request()).await?;
+        let client = connect_acp_client(agent, initialize_request(client_info())).await?;
         let session_response = client.handle.new_session(NewSessionRequest::new(working_dir.clone())).await?;
 
         Ok(Self {
@@ -77,13 +79,6 @@ impl Session {
     }
 }
 
-fn initialize_request() -> InitializeRequest {
-    InitializeRequest::new(ProtocolVersion::V2, Implementation::new("wisp", env!("CARGO_PKG_VERSION")))
-        .capabilities(client_capabilities())
-}
-
-fn client_capabilities() -> ClientCapabilities {
-    ClientCapabilities::new().elicitation(
-        ElicitationCapabilities::new().form(ElicitationFormCapabilities::new()).url(ElicitationUrlCapabilities::new()),
-    )
+fn client_info() -> Implementation {
+    Implementation::new("wisp", env!("CARGO_PKG_VERSION"))
 }

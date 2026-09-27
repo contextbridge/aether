@@ -28,7 +28,7 @@ use crate::{
     workspace_paths::{WorkspacePaths, resolve_path},
 };
 use aether_project::{PromptCatalog, PromptFile, SKILL_FILENAME};
-use mcp_utils::display_meta::ToolDisplayMeta;
+use utils::display_meta::ToolDisplayMeta;
 
 /// CLI arguments for `SkillsMcp` server
 #[derive(Debug, Clone, Parser)]

@@ -1,13 +1,17 @@
 #![doc = include_str!("../README.md")]
 
 pub mod artifact_review;
+pub mod display_meta;
 pub mod markdown_file;
+pub mod mcp_status;
 pub mod name_pattern;
 pub mod path;
 pub mod reasoning;
 pub mod resource_path;
+pub mod schema_document;
 pub mod serde_helpers;
 pub mod settings;
+#[cfg(not(target_family = "wasm"))]
 pub mod shell_expander;
 pub mod substitution;
 pub mod variables;

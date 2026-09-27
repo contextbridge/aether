@@ -378,14 +378,12 @@ mod tests {
     use super::*;
     use aether_auth::{FakeOAuthCredentialStore, OAuthCredentialStorage};
     use futures::FutureExt;
+    use mcp_utils::client::{McpServerConfig, McpTransport, StdioServerConfig, StdioType, ToolExposure};
     use mcp_utils::testing::FakeMcpServer;
-    use mcp_utils::{
-        client::{McpServerConfig, McpTransport, StdioServerConfig, StdioType, ToolExposure},
-        status::McpServerStatus,
-    };
     use std::collections::{BTreeMap, HashMap};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
+    use utils::mcp_status::McpServerStatus;
 
     fn write_config_file(name: &str, json: &str) -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();

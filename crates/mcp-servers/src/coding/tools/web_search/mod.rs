@@ -12,7 +12,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use crate::coding::error::WebSearchError;
-use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
+use utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 
 const DEFAULT_COUNT: u32 = 10;
 const MAX_COUNT: u32 = 20;

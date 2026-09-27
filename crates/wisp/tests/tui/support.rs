@@ -17,6 +17,7 @@ pub(crate) use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub(crate) use ratatui::buffer::{Buffer, Cell};
 pub(crate) use ratatui::layout::Position;
 pub(crate) use ratatui::style::{Color, Modifier};
+use std::borrow::Cow;
 pub(crate) use std::fmt::Write as FmtWrite;
 pub(crate) use std::io::Write as IoWrite;
 pub(crate) use std::sync::Arc;
@@ -27,13 +28,12 @@ pub(crate) use wisp::app::ForegroundOperation;
 pub(crate) use wisp::command::{AgentCommand, Command, CommandResult, FilesystemCommand};
 pub(crate) use wisp::testing::{
     BackendEvent, CountingBackend, FakeGit, RecordingBackend, StreamContent, TestUi, TestUiBuilder, assert_buffer_eq,
-    buffer_text, chunk_message, compaction_update, has_cell, line_text, row_containing, row_text, rows_with_background,
-    session_update, text_chunk, thought_chunk, tool_completed,
+    buffer_text, chunk_message, compaction_update, context_cleared, has_cell, line_text, row_containing, row_text,
+    rows_with_background, session_update, text_chunk, thought_chunk, thought_chunk_with_id, tool_completed,
 };
 
+pub(crate) use acp_utils::conversation::{ConversationContent, ConversationItem, ItemState, ToolStatus};
 pub(crate) use wisp::attachment::{AttachmentKind, PromptAttachment, build_attachments, classify_attachment};
-pub(crate) use wisp::conversation::tool_calls::ToolStatus;
-pub(crate) use wisp::conversation::{ConversationContent, ItemState};
 pub(crate) use wisp::file_index::index_files;
 pub(crate) use wisp::git_review::{FileStatus, StageState};
 pub(crate) use wisp::renderer::DrawContext;
@@ -99,10 +99,9 @@ pub(crate) fn accepted_content(response: &CreateElicitationResponse) -> serde_js
     }
 }
 
-pub(crate) fn message_texts(app: &TestUi) -> impl Iterator<Item = &str> {
+pub(crate) fn message_texts(app: &TestUi) -> impl Iterator<Item = String> + '_ {
     app.app().conversation_items().iter().filter_map(|item| match item.content() {
-        ConversationContent::User(text) => Some(text.text.as_str()),
-        ConversationContent::Notice(notice) => Some(notice.text.as_str()),
+        ConversationContent::User(_) | ConversationContent::Notice(_) => item.text().map(Cow::into_owned),
         _ => None,
     })
 }

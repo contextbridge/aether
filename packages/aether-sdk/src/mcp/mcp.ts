@@ -1,5 +1,5 @@
 import { AetherSdkError } from "../errors.js";
-import type { McpSourceSpecObject } from "../generated/aether-settings.js";
+import type { McpSourceSpecObject } from "../generated/types.js";
 import type { SdkMcpToolDefinition } from "../types.js";
 import { LocalMcpServerHost, LocalMcpServerInfo } from "./localMcpServer.js";
 

@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use super::common::{TaskSummary, task_result_meta};
 use crate::tasks::task_store::{TaskStore, TaskStoreError};
 use crate::tasks::types::{TaskId, TaskUpdate};
-use mcp_utils::display_meta::ToolResultMeta;
+use utils::display_meta::ToolResultMeta;
 
 fn empty_string_as_none<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where

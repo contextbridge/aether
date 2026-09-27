@@ -1,5 +1,5 @@
 use crate::app::App;
-use crate::conversation::{ConversationContent, ConversationId, ConversationItem, ItemState};
+use acp_utils::conversation::{ConversationContent, ConversationId, ConversationItem, ItemState};
 use crate::error::RenderError;
 use crate::view::wrap::{as_u16, wrap_line};
 use clankerdiff_ratatui::MarkdownCommitError;
@@ -9,7 +9,7 @@ use ratatui::text::{Line, Text};
 use ratatui::widgets::{Paragraph, Widget};
 
 use super::Renderer;
-use crate::conversation::item_view::content_kind;
+use crate::conversation::item_view::{content_kind, kind_before};
 
 /// The native-scrollback cursor: how much of which conversation the terminal's
 /// real scrollback already holds.
@@ -86,8 +86,9 @@ impl Renderer {
                 break;
             };
             let (item_width, item_padding) = commit.dimensions(width, app.content_padding());
-            let previous = items.get(commit.item_index.wrapping_sub(1)).map(content_kind);
-            let separator = usize::from(previous.is_some_and(|kind| kind != content_kind(item)));
+            let previous = kind_before(items, commit.item_index);
+            let separator =
+                usize::from(content_kind(item).is_some_and(|kind| previous.is_some_and(|previous| previous != kind)));
             let rendered =
                 self.item_suffix(item, previous, item_width, item_padding, app.spinner_tick(), commit.rows)?;
             let committed = commit.rows;
@@ -95,7 +96,9 @@ impl Renderer {
             let take = if streams_into_history(item) {
                 let available = pending.len().saturating_sub(usize::from(item.is_open()));
                 overflow.min(available)
-            } else if item.state() == ItemState::Sealed || matches!(item.content(), ConversationContent::User(_)) {
+            } else if item.state() == ItemState::Sealed
+                || matches!(item.content(), ConversationContent::User(_) | ConversationContent::Thought(_))
+            {
                 pending.len()
             } else {
                 break;

@@ -43,23 +43,20 @@ impl App {
             .chain(outcome.placeholders.iter().map(String::as_str))
             .collect::<Vec<_>>()
             .join("\n");
+        let echo = vec![display.into()];
         let media_error = self.media_support_error(&outcome.blocks);
         if media_error.is_some() {
-            self.conversation.append_user_content(display);
+            self.conversation.append_user_content(echo);
         } else {
-            self.conversation.append_pending_user_content(display);
+            let content = (!outcome.blocks.is_empty()).then_some(outcome.blocks);
+            self.start_prompt(text, content, Some(echo));
         }
         for warning in &outcome.warnings {
             self.notify(warning);
         }
-
         if let Some(message) = media_error {
             self.notify(&message);
-            return;
         }
-
-        let content = (!outcome.blocks.is_empty()).then_some(outcome.blocks);
-        self.start_prompt(text, content);
     }
     fn media_support_error(&self, blocks: &[acp::ContentBlock]) -> Option<String> {
         let requires_image = blocks.iter().any(|block| matches!(block, acp::ContentBlock::Image(_)));

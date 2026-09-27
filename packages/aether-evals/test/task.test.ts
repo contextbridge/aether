@@ -129,6 +129,7 @@ const TOOL_RESULT: AgentEvent = {
       arguments: '{"city":"Tokyo"}',
       result: "sunny",
     },
+    result_meta: null,
   },
 };
 

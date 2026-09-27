@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use super::common::{TaskSummary, task_result_meta};
 use crate::tasks::task_store::{TaskStore, TaskStoreError};
 use crate::tasks::types::{TaskId, TaskStatus, TaskUpdate};
-use mcp_utils::display_meta::ToolResultMeta;
+use utils::display_meta::ToolResultMeta;
 
 /// Input for the `task_update` tool
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]

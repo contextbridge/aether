@@ -241,7 +241,7 @@ impl App {
             return;
         }
         self.conversation.append_notice(format!("[wisp] Submitted review of working tree diff.\n{prompt}"));
-        self.start_prompt(prompt.to_string(), None);
+        self.start_prompt(prompt.to_string(), None, None);
         self.close_active();
     }
 
@@ -262,7 +262,7 @@ impl App {
     }
 
     pub(super) fn can_start_foreground_operation(&self) -> bool {
-        self.foreground.is_idle()
+        self.foreground.is_idle() && self.conversation.turn().is_idle()
     }
 
     /// Adds a semantic notice for information outside the agent's own output.

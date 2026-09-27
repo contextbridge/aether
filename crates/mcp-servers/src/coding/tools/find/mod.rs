@@ -1,7 +1,6 @@
 use crate::coding::error::FindError;
 use crate::coding::tools::glob_filter::{CaseSensitivity, PathGlobMatcher};
 use ignore::{WalkBuilder, WalkState};
-use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -12,6 +11,7 @@ use std::{
         mpsc,
     },
 };
+use utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

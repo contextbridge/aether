@@ -67,6 +67,7 @@ pub struct RunConfig {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(rename = "AetherHeadlessCliOptions")]
 pub struct HeadlessOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,

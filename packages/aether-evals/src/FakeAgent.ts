@@ -46,6 +46,7 @@ export class FakeAgent implements Agent {
             arguments: "{}",
             result,
           },
+          result_meta: null,
         },
       },
       {

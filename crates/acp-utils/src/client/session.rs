@@ -3,21 +3,23 @@ use super::event::AcpEvent;
 use crate::notifications::{
     AuthMethodsUpdatedParams, ContextClearedParams, GitDiffEventPayload, McpNotification, SubAgentProgressParams,
 };
+use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v2::{
-    AuthMethod, CancelSessionNotification, CreateElicitationRequest, InitializeRequest, InitializeResponse,
+    AuthMethod, CancelSessionNotification, ClientCapabilities, CreateElicitationRequest, ElicitationCapabilities,
+    ElicitationFormCapabilities, ElicitationUrlCapabilities, Implementation, InitializeRequest, InitializeResponse,
     NewSessionRequest, NewSessionResponse, PermissionOptionId, PermissionOptionKind, PromptCapabilities, PromptRequest,
-    PromptResponse, ReplayFrom, ReplayFromStart, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, ResumeSessionRequest, ResumeSessionResponse, SelectedPermissionOutcome,
-    SessionCapabilities, UpdateSessionNotification,
+    PromptResponse, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    ResumeSessionRequest, ResumeSessionResponse, SelectedPermissionOutcome, SessionCapabilities,
+    UpdateSessionNotification,
 };
 use agent_client_protocol::util::MatchDispatchFrom;
 use agent_client_protocol::{
     self as acp, Client, ConnectTo, ConnectionTo, Dispatch, HandleDispatchFrom, Handled, V2ConnectionTo,
 };
+use futures::future::{AbortHandle, abortable};
 use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
-use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -42,10 +44,19 @@ pub async fn connect_acp_client(
     let (init_tx, init_rx) = oneshot::channel();
     let closed = CancellationToken::new();
     let events = ConnectionEvents { event_tx, closed: closed.clone() };
-    let driver = tokio::spawn(run_client_connection(agent, init_request, init_tx, events));
-    let connection = Arc::new(ClientConnection { driver, closed });
+    let (driver, abort) = abortable(run_client_connection(agent, init_request, init_tx, events));
+    spawn(async move {
+        let _ = driver.await;
+    });
+    let connection = Arc::new(ClientConnection { abort, closed });
     let (initialize_response, cx) = await_response(init_rx).await?;
     Ok(AcpClient { initialize_response, event_rx, handle: AcpClientHandle { cx, connection } })
+}
+
+pub fn initialize_request(info: Implementation) -> InitializeRequest {
+    InitializeRequest::new(ProtocolVersion::V2, info).capabilities(ClientCapabilities::new().elicitation(
+        ElicitationCapabilities::new().form(ElicitationFormCapabilities::new()).url(ElicitationUrlCapabilities::new()),
+    ))
 }
 
 impl AcpClient {
@@ -71,7 +82,7 @@ impl AcpClient {
 impl AcpClientHandle {
     /// Stop this connection and wait for it to close without sending session/cancel or session/close.
     pub async fn disconnect(&self) {
-        self.connection.driver.abort();
+        self.connection.abort.abort();
         self.connection.closed.cancelled().await;
     }
 
@@ -80,14 +91,6 @@ impl AcpClientHandle {
         request: PromptRequest,
     ) -> impl Future<Output = Result<PromptResponse, AcpClientError>> + Send + use<> {
         self.request(request)
-    }
-
-    /// Request history as ordinary session updates, preceding the resume response.
-    pub fn resume_session_with_replay(
-        &self,
-        request: ResumeSessionRequest,
-    ) -> impl Future<Output = Result<ResumeSessionResponse, AcpClientError>> + Send + use<> {
-        self.request(request.replay_from(ReplayFrom::Start(ReplayFromStart::new())))
     }
 
     pub fn new_session(
@@ -106,12 +109,11 @@ impl AcpClientHandle {
         async move { sent.block_task().await.map_err(AcpClientError::Protocol) }
     }
 
-    /// Resume a session without requesting history.
     pub fn resume_session(
         &self,
         request: ResumeSessionRequest,
     ) -> impl Future<Output = Result<ResumeSessionResponse, AcpClientError>> + Send + use<> {
-        self.request(request.replay_from(None))
+        self.request(request)
     }
 
     pub fn cancel(&self, request: CancelSessionNotification) -> Result<(), AcpClientError> {
@@ -124,13 +126,13 @@ impl AcpClientHandle {
 }
 
 struct ClientConnection {
-    driver: JoinHandle<()>,
+    abort: AbortHandle,
     closed: CancellationToken,
 }
 
 impl Drop for ClientConnection {
     fn drop(&mut self) {
-        self.driver.abort();
+        self.abort.abort();
     }
 }
 
@@ -154,7 +156,7 @@ async fn run_client_connection(
 ) {
     let connection_result = Client
         .v2()
-        .name("wisp")
+        .name(&init_request.info.name)
         .with_handler(ClientHandlers(events.event_tx.clone()))
         .connect_with(agent, async move |cx: V2ConnectionTo<acp::Agent>| {
             let result = cx.send_request(init_request).block_task().await.map_err(AcpClientError::Protocol);
@@ -218,6 +220,16 @@ impl HandleDispatchFrom<acp::Agent> for ClientHandlers {
     fn describe_chain(&self) -> impl std::fmt::Debug {
         "ClientHandlers"
     }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn spawn(future: impl Future<Output = ()> + Send + 'static) {
+    tokio::spawn(future);
+}
+
+#[cfg(target_family = "wasm")]
+fn spawn(future: impl Future<Output = ()> + 'static) {
+    wasm_bindgen_futures::spawn_local(future);
 }
 
 async fn await_response<T>(receiver: oneshot::Receiver<Result<T, AcpClientError>>) -> Result<T, AcpClientError> {

@@ -1,6 +1,6 @@
 use acp::schema::v2::{
-    CloseSessionRequest, ListSessionsRequest, PromptRequest, PromptResponse, ResumeSessionRequest,
-    ResumeSessionResponse, SessionId, UpdateSessionNotification,
+    CloseSessionRequest, ListSessionsRequest, PromptRequest, PromptResponse, ReplayFrom, ReplayFromStart,
+    ResumeSessionRequest, ResumeSessionResponse, SessionId, UpdateSessionNotification,
 };
 use acp_utils::client::{AcpClient, AcpClientError, AcpEvent, connect_acp_client};
 use acp_utils::testing::{initialize_request, running_notification};
@@ -59,7 +59,7 @@ struct PendingPrompt {
 
 impl PendingPrompt {
     async fn accept(self) {
-        self.responder.respond(PromptResponse::new()).unwrap();
+        self.responder.respond(PromptResponse::new("user-message")).unwrap();
         self.result.await.unwrap().unwrap();
     }
 }
@@ -98,10 +98,9 @@ impl TurnTest {
         replay: bool,
     ) -> tokio::task::JoinHandle<Result<ResumeSessionResponse, AcpClientError>> {
         let handle = self.client.handle.clone();
-        let request = ResumeSessionRequest::new(session.to_owned(), "/tmp");
-        spawn_local(async move {
-            if replay { handle.resume_session_with_replay(request).await } else { handle.resume_session(request).await }
-        })
+        let request = ResumeSessionRequest::new(session.to_owned(), "/tmp")
+            .replay_from(replay.then(|| ReplayFrom::Start(ReplayFromStart::new())));
+        spawn_local(async move { handle.resume_session(request).await })
     }
 
     fn send(&self, notification: UpdateSessionNotification) {

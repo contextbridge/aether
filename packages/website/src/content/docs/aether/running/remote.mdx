@@ -98,6 +98,10 @@ The status line labels the server path as `remote:`. Server paths are never reso
 
 Chat, streamed tool output and diffs delivered through ACP, prompt search, configuration, server status, forms, artifact review, `/clear`, and `/resume` remain available. Workspace operations stay server-side. Themes, Wisp settings, rendering, terminal bell, clipboard, and browser integration remain client-local features.
 
+## Browser client
+
+`@aether-agent/browser` is an ACP client for web pages, compiled to WebAssembly from the same client code `aether client` uses. It is not published to npm yet; build it from the repository with `pnpm browser:build` (requires `wasm-pack`). Its [README](https://github.com/contextbridge/aether/tree/main/packages/aether-browser#readme) has a quickstart.
+
 ## Deployment and limitations
 
 - One live top-level session and **one attached client** at a time. A second connection receives HTTP `409 Conflict` and cannot take over the first.

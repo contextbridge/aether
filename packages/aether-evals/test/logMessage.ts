@@ -1,7 +1,9 @@
 import type { AgentEvent } from "@aether-agent/sdk";
 
 export function eventName(event: AgentEvent): string {
-  return `${event.category}:${event.event.type}`;
+  return event.category === "session_usage"
+    ? event.category
+    : `${event.category}:${event.event.type}`;
 }
 
 export function logMessage(message: AgentEvent): void {
@@ -24,5 +26,5 @@ export function logMessage(message: AgentEvent): void {
     }
   }
 
-  process.stderr.write(`\n[${message.category}:${message.event.type}]\n`);
+  process.stderr.write(`\n[${eventName(message)}]\n`);
 }

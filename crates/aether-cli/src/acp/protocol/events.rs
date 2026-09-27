@@ -13,7 +13,7 @@ use agent_client_protocol::schema::v2::{
     ToolCallContent, ToolCallStatus, ToolCallUpdate, UsageUpdate,
 };
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
-use mcp_utils::display_meta::{PlanMetaStatus, ToolResultMeta};
+use utils::display_meta::{PlanMetaStatus, ToolResultMeta};
 
 /// Sends updates in delivery order.
 pub(crate) fn project_agent_event(msg: &AgentEvent, mode: NotificationMode, io: &SessionIo) {
@@ -31,13 +31,16 @@ pub(crate) fn project_agent_event(msg: &AgentEvent, mode: NotificationMode, io: 
     match msg {
         AgentEvent::Tool(ToolEvent::SubAgentProgress { request, payload }) => {
             io.send(SubAgentProgressParams {
+                session_id: io.session_id().clone(),
                 parent_tool_id: request.id.clone(),
                 task_id: payload.task_id.clone(),
                 agent_name: payload.agent_name.clone(),
                 event: to_sub_agent_event(&payload.event),
             });
         }
-        AgentEvent::Context(ContextEvent::Cleared) => io.send(ContextClearedParams::default()),
+        AgentEvent::Context(ContextEvent::Cleared) => {
+            io.send(ContextClearedParams { session_id: io.session_id().clone() });
+        }
         AgentEvent::SessionUsage(usage) => io.send(SessionUsageParams { usage: usage.clone() }),
         _ => {}
     }
@@ -343,9 +346,9 @@ mod tests {
     use agent_client_protocol::Client;
     use agent_client_protocol::schema::v2::TextContent;
     use llm::{ContextUsage, ToolCallRequest};
-    use mcp_utils::display_meta::{PlanMeta, PlanMetaEntry, ToolDisplayMeta};
     use serde_json::json;
     use tokio::sync::mpsc::unbounded_channel;
+    use utils::display_meta::{PlanMeta, PlanMetaEntry, ToolDisplayMeta};
 
     fn forwarded<N: agent_client_protocol::JsonRpcNotification + Send + 'static>(event: &AgentEvent) -> N {
         tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(
@@ -379,6 +382,7 @@ mod tests {
             payload: Box::new(SubAgentProgressPayload { task_id: "task".into(), agent_name: "worker".into(), event }),
         });
         let params: SubAgentProgressParams = forwarded(&event);
+        assert_eq!(params.session_id.0.as_ref(), "session");
         params.event
     }
 
@@ -536,7 +540,8 @@ mod tests {
 
     #[test]
     fn test_context_cleared_maps_to_agent_notification() {
-        let _: ContextClearedParams = forwarded(&AgentEvent::Context(ContextEvent::Cleared));
+        let cleared: ContextClearedParams = forwarded(&AgentEvent::Context(ContextEvent::Cleared));
+        assert_eq!(cleared.session_id.0.as_ref(), "session");
     }
 
     #[test]
@@ -592,7 +597,7 @@ mod tests {
 
     #[test]
     fn test_result_with_result_meta_sets_meta() -> Result<(), String> {
-        use mcp_utils::display_meta::ToolDisplayMeta;
+        use utils::display_meta::ToolDisplayMeta;
 
         let result = ToolCallResult {
             id: "call_1".to_string(),
@@ -645,7 +650,7 @@ mod tests {
 
     #[test]
     fn test_plan_notification_none_when_no_plan_or_no_meta() {
-        use mcp_utils::display_meta::ToolDisplayMeta;
+        use utils::display_meta::ToolDisplayMeta;
 
         let meta: ToolResultMeta = ToolDisplayMeta::new("Read file", "main.rs").into();
         assert!(try_extract_plan_notification(Some(&meta)).is_none());
@@ -654,7 +659,7 @@ mod tests {
 
     #[test]
     fn test_display_update_emits_meta_update() -> Result<(), String> {
-        use mcp_utils::display_meta::ToolDisplayMeta;
+        use utils::display_meta::ToolDisplayMeta;
 
         let meta = ToolResultMeta::from(ToolDisplayMeta::new("Read file", "main.rs"));
 
@@ -689,7 +694,7 @@ mod tests {
 
     #[test]
     fn test_sub_agent_tool_result_includes_display_fields() {
-        use mcp_utils::display_meta::ToolDisplayMeta;
+        use utils::display_meta::ToolDisplayMeta;
 
         let event = AgentEvent::Tool(ToolEvent::Result {
             result: ToolCallResult {

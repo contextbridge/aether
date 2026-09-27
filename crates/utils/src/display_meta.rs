@@ -1,17 +1,9 @@
-//! Display metadata for tool responses.
-//!
-//! This module provides types for generating human-readable display metadata
-//! that can be sent alongside tool results via the MCP `_meta` field.
-
 use std::path::Path;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Human-readable display metadata for a tool operation.
-///
-/// Contains a pre-computed `title` (e.g., "Read file") and `value`
-/// (e.g., "Cargo.toml, 156 lines") that consumers render directly.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct ToolDisplayMeta {
     pub title: String,
@@ -24,8 +16,7 @@ impl ToolDisplayMeta {
     }
 }
 
-/// Full file contents for a diff, sent as metadata so the ACP layer
-/// can emit a first-class `ToolCallContent::Diff`.
+/// Full file contents for a diff
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct FileDiff {
     pub path: String,
@@ -60,9 +51,6 @@ pub enum PlanMetaStatus {
 }
 
 /// Typed wrapper for the MCP `_meta` field on tool results.
-///
-/// Wraps a [`ToolDisplayMeta`] so that tool output structs can use
-/// `Option<ToolResultMeta>` instead of `Option<serde_json::Value>`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct ToolResultMeta {
     pub display: ToolDisplayMeta,
@@ -79,29 +67,24 @@ impl From<ToolDisplayMeta> for ToolResultMeta {
 }
 
 impl ToolResultMeta {
-    /// Create a new metadata wrapper with just display info.
     pub fn new(display: ToolDisplayMeta) -> Self {
         Self { display, file_diff: None, plan: None }
     }
 
-    /// Create a metadata wrapper with a plan.
     pub fn with_plan(display: ToolDisplayMeta, plan: PlanMeta) -> Self {
         Self { display, file_diff: None, plan: Some(plan) }
     }
 
-    /// Create a metadata wrapper with a file diff.
     pub fn with_file_diff(display: ToolDisplayMeta, file_diff: FileDiff) -> Self {
         Self { display, file_diff: Some(file_diff), plan: None }
     }
 }
 
-/// Extract a lowercased file extension from a path, for use as a syntax hint.
 pub fn extension_hint(path: &str) -> String {
     Path::new(path).extension().and_then(|ext| ext.to_str()).unwrap_or("").to_lowercase()
 }
 
 impl ToolResultMeta {
-    /// Convert this metadata wrapper into an ACP-compatible meta map.
     pub fn into_map(self) -> serde_json::Map<String, serde_json::Value> {
         match serde_json::to_value(self).expect("ToolResultMeta should serialize") {
             serde_json::Value::Object(map) => map,
@@ -109,15 +92,11 @@ impl ToolResultMeta {
         }
     }
 
-    /// Deserialize metadata wrapper from an ACP-compatible meta map.
     pub fn from_map(map: &serde_json::Map<String, serde_json::Value>) -> Option<Self> {
         serde_json::from_value(serde_json::Value::Object(map.clone())).ok()
     }
 }
 
-/// Helper to truncate a string for display purposes.
-///
-/// Truncates the string to `max_length` characters, adding "..." if truncated.
 pub fn truncate(s: &str, max_length: usize) -> String {
     if s.chars().count() <= max_length {
         s.to_string()
@@ -128,7 +107,6 @@ pub fn truncate(s: &str, max_length: usize) -> String {
     }
 }
 
-/// Extract the filename from a path, handling both Unix and Windows separators.
 pub fn basename(path: &str) -> String {
     let platform_basename = std::path::Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path);
 

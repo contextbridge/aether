@@ -1,6 +1,7 @@
 use crate::theme::Theme;
 use crate::view::syntax::SyntaxHighlighter;
 use crate::view::wrap::{as_u16, truncate_to_width, wrap_line};
+use acp_utils::conversation::{SubAgentState, ToolCall, ToolStatus};
 use agent_client_protocol::schema::v2 as acp;
 use clankerdiff_ratatui::diff::{RepoPath, parse_git_diff_with_path_mapper};
 use clankerdiff_ratatui::{DiffPreviewOptions, render_diff_preview};
@@ -9,8 +10,8 @@ use ratatui::text::{Line, Span};
 
 use super::item_view::indent_lines;
 use super::progress_indicator::spinner_frame;
-use super::tool_calls::{SUB_AGENT_VISIBLE_TOOL_LIMIT, SubAgentState, ToolCall, ToolStatus};
 
+const SUB_AGENT_VISIBLE_TOOL_LIMIT: usize = 3;
 const MAX_TOOL_ARG_WIDTH: usize = 200;
 
 /// One tool call's rendered rows: status line, diff preview, and the tree of
@@ -24,18 +25,18 @@ pub(crate) fn tool_lines(
     highlighter: &mut SyntaxHighlighter,
 ) -> Vec<Line<'static>> {
     let parsed_command = tool.bash_command();
-    let bash_command = visible_bash_command(parsed_command.as_deref(), tool.display_value(), &tool.status);
+    let bash_command = visible_bash_command(parsed_command.as_deref(), tool.display_value(), tool.status);
     let detail = bash_command.map_or_else(
-        || tool_detail(tool.display_value(), &tool.raw_input(), &tool.status),
-        |command| bash_tool_detail(command, tool.display_value(), &tool.status),
+        || tool_detail(tool.display_value(), &tool.raw_input(), tool.status),
+        |command| bash_tool_detail(command, tool.display_value(), tool.status),
     );
     let prefix = Line::from(vec![
         Span::raw(" ".repeat(padding)),
-        status_glyph(&tool.status, spinner_tick, theme),
+        status_glyph(tool.status, spinner_tick, theme),
         Span::raw(" "),
         Span::styled(tool.title().to_string(), Style::new().fg(theme.text_primary)),
     ]);
-    let suffix = tool_suffix(detail, &tool.status, theme);
+    let suffix = tool_suffix(detail, tool.status, tool.error.as_deref(), theme);
     let mut lines = tool_line(prefix, suffix, bash_command, content_width, padding + 2, theme, highlighter);
     for diff in tool.diffs().filter(|_| tool.status == ToolStatus::Success) {
         if let Some(patch) = &diff.patch
@@ -106,7 +107,7 @@ fn sub_agent_tree_lines(
         let done = if agent.done { ToolStatus::Success } else { ToolStatus::Running };
         lines.push(Line::from(vec![
             Span::raw(format!("{pad}  ")),
-            status_glyph(&done, spinner_tick, theme),
+            status_glyph(done, spinner_tick, theme),
             Span::raw(format!(" {}", agent.agent_name)),
         ]));
 
@@ -121,17 +122,17 @@ fn sub_agent_tree_lines(
             let branch = if index + 1 == visible.len() { "  └─ " } else { "  ├─ " };
             let parsed_command = tool.bash_command();
             let bash_command =
-                visible_bash_command(parsed_command.as_deref(), tool.display_value.as_deref(), &tool.status);
+                visible_bash_command(parsed_command.as_deref(), tool.display_value.as_deref(), tool.status);
             let detail = bash_command.map_or_else(
-                || tool_detail(tool.display_value.as_deref(), &tool.raw_input, &tool.status),
-                |command| bash_tool_detail(command, tool.display_value.as_deref(), &tool.status),
+                || tool_detail(tool.display_value.as_deref(), &tool.raw_input, tool.status),
+                |command| bash_tool_detail(command, tool.display_value.as_deref(), tool.status),
             );
             let prefix = Line::from(vec![
                 Span::raw(format!("{pad}{branch}")),
-                status_glyph(&tool.status, spinner_tick, theme),
+                status_glyph(tool.status, spinner_tick, theme),
                 Span::raw(format!(" {}", tool.name)),
             ]);
-            let suffix = tool_suffix(detail, &tool.status, theme);
+            let suffix = tool_suffix(detail, tool.status, None, theme);
             lines.extend(tool_line(prefix, suffix, bash_command, content_width, padding + 6, theme, highlighter));
         }
     }
@@ -140,11 +141,11 @@ fn sub_agent_tree_lines(
 }
 
 /// Status marker for a tool call: a spinner while running, then a verdict.
-fn status_glyph(status: &ToolStatus, spinner_tick: usize, theme: &Theme) -> Span<'static> {
+fn status_glyph(status: ToolStatus, spinner_tick: usize, theme: &Theme) -> Span<'static> {
     let (glyph, color) = match status {
         ToolStatus::Running => (spinner_frame(spinner_tick), theme.info),
         ToolStatus::Success => ("✓", theme.success),
-        ToolStatus::Error(_) => ("✗", theme.error),
+        ToolStatus::Cancelled | ToolStatus::Failed => ("✗", theme.error),
     };
     Span::styled(glyph, Style::new().fg(color))
 }
@@ -152,7 +153,7 @@ fn status_glyph(status: &ToolStatus, spinner_tick: usize, theme: &Theme) -> Span
 /// The trailing detail on a tool line: the agent's own summary when it supplied
 /// one, otherwise the raw arguments. A running tool shows nothing until it has
 /// something to report.
-fn tool_detail(display_value: Option<&str>, raw_input: &str, status: &ToolStatus) -> String {
+fn tool_detail(display_value: Option<&str>, raw_input: &str, status: ToolStatus) -> String {
     match display_value.filter(|value| !value.is_empty()) {
         Some(value) => format!(" ({value})"),
         None if matches!(status, ToolStatus::Running) => String::new(),
@@ -163,12 +164,12 @@ fn tool_detail(display_value: Option<&str>, raw_input: &str, status: &ToolStatus
 fn visible_bash_command<'a>(
     command: Option<&'a str>,
     display_value: Option<&str>,
-    status: &ToolStatus,
+    status: ToolStatus,
 ) -> Option<&'a str> {
     command.filter(|_| !matches!(status, ToolStatus::Running) || display_value.is_some_and(|value| !value.is_empty()))
 }
 
-fn bash_tool_detail(command: &str, display_value: Option<&str>, status: &ToolStatus) -> String {
+fn bash_tool_detail(command: &str, display_value: Option<&str>, status: ToolStatus) -> String {
     if matches!(status, ToolStatus::Running) {
         return String::new();
     }
@@ -179,10 +180,16 @@ fn bash_tool_detail(command: &str, display_value: Option<&str>, status: &ToolSta
 }
 
 /// The muted detail and, on failure, the error cause that trail a tool line.
-fn tool_suffix(detail: String, status: &ToolStatus, theme: &Theme) -> Vec<Span<'static>> {
+fn tool_suffix(detail: String, status: ToolStatus, error: Option<&str>, theme: &Theme) -> Vec<Span<'static>> {
     let mut suffix = vec![Span::styled(detail, Style::new().fg(theme.muted))];
-    if let ToolStatus::Error(cause) = status {
-        suffix.push(Span::styled(format!(" {cause}"), Style::new().fg(theme.error)));
+    let cause = match (status, error) {
+        (ToolStatus::Running | ToolStatus::Success, _) => None,
+        (ToolStatus::Cancelled, _) => Some(" cancelled".to_string()),
+        (ToolStatus::Failed, None) => Some(" failed".to_string()),
+        (ToolStatus::Failed, Some(reason)) => Some(format!(" failed: {reason}")),
+    };
+    if let Some(cause) = cause {
+        suffix.push(Span::styled(cause, Style::new().fg(theme.error)));
     }
     suffix
 }

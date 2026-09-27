@@ -24,7 +24,7 @@ mod transcript;
 use std::collections::HashMap;
 
 use crate::app::App;
-use crate::conversation::{ConversationId, ConversationItemId};
+use acp_utils::conversation::{ConversationId, ConversationItemId};
 use crate::error::RenderError;
 use crate::theme::Theme;
 use crate::view::generation::Generation;

@@ -1,9 +1,7 @@
 #![doc = include_str!("../README.md")]
 
-pub mod display_meta;
 mod protocol;
 pub mod server;
-pub mod status;
 pub mod testing;
 pub mod tool_gateway;
 

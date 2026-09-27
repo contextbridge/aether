@@ -7,11 +7,11 @@ use crate::lsp::diagnostics::{DiagnosticCounts, FormattedDiagnostic, count_by_se
 use crate::lsp::error::LspError;
 use crate::lsp::registry::LspRegistry;
 use lsp_types::Diagnostic;
-use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 
 /// Input payload for the `lsp_check_errors` tool.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

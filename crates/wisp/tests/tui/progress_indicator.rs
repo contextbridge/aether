@@ -112,7 +112,7 @@ fn reasoning_is_ephemeral_and_scoped_to_thinking() {
 
     ui.acp_event(text_chunk("answering"));
     ui.assert_viewport_not_contains("first thought");
-    ui.acp_event(thought_chunk("fresh reasoning"));
+    ui.acp_event(thought_chunk_with_id("fresh", "fresh reasoning"));
     ui.tick(t0 + Duration::from_millis(200));
     ui.assert_viewport_contains("fresh reasoning");
     ui.assert_viewport_not_contains("first thought");
@@ -137,7 +137,6 @@ fn thought_upserts_replace_and_clear_only_the_ephemeral_preview() {
             }))
             .unwrap(),
         ));
-        assert!(ui.app().conversation_items().iter().all(|item| item.message_id().is_none()));
         if expected.is_empty() {
             ui.assert_viewport_not_contains("reasoning");
         } else {
@@ -179,7 +178,7 @@ fn hidden_agent_transition_discards_stale_reasoning() {
     ui.acp_event(thought_chunk("stale reasoning"));
     ui.acp_event(text_chunk("answering"));
     ui.acp_event(compaction_update("compaction", acp::CompactionStatus::Completed));
-    ui.acp_event(thought_chunk("fresh reasoning"));
+    ui.acp_event(thought_chunk_with_id("fresh", "fresh reasoning"));
 
     ui.assert_viewport_contains("fresh reasoning");
     ui.assert_viewport_not_contains("stale reasoning");

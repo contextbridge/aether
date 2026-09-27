@@ -1,5 +1,4 @@
-import type { AetherAcpOptions } from "./generated/aether-acp-options.js";
-import type { SessionUsageEvent } from "./generated/eval-types.js";
+import type { AetherAcpOptions, SessionUsageEvent } from "./generated/types.js";
 import { addAbortListener } from "node:events";
 import path from "node:path";
 import * as acp from "@agentclientprotocol/sdk/experimental/v2";

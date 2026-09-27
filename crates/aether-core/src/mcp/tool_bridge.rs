@@ -1,14 +1,12 @@
 use std::path::{Path, PathBuf};
 
 use crate::events::{TaskOutcome, TaskOutcomeState};
-use mcp_utils::{
-    client::{CallToolError, SERVERNAME_DELIMITER},
-    display_meta::ToolResultMeta,
-};
+use mcp_utils::client::{CallToolError, SERVERNAME_DELIMITER};
 use rmcp::model::{CallToolRequestParams, CallToolResult, Task};
 use serde_json;
 
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
+use utils::display_meta::ToolResultMeta;
 
 /// Maximum bytes for a tool result before spilling to disk.
 /// ~50K tokens at ~4 bytes/token.
@@ -174,10 +172,10 @@ fn extract_result_meta(value: &mut serde_json::Value) -> Option<ToolResultMeta> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mcp_utils::display_meta::PlanMetaStatus;
     use rmcp::model::{CallToolResult as McpCallToolResult, ContentBlock};
     use serde::Serialize;
     use serde_json::json;
+    use utils::display_meta::PlanMetaStatus;
 
     fn req() -> ToolCallRequest {
         ToolCallRequest { id: "call_123".into(), name: "test_tool".into(), arguments: "{}".into() }

@@ -1,22 +1,31 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum McpServerStatus {
     Connecting,
-    Connected { tool_count: usize },
+    Connected {
+        tool_count: usize,
+    },
     Authenticating,
-    Failed { error: String },
+    Failed {
+        error: String,
+    },
+    #[serde(rename = "needs_oauth")]
     NeedsOAuth,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum McpServerAuthCapability {
     #[default]
     Unavailable,
     OAuth,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct McpServerStatusEntry {
     pub name: String,
     pub status: McpServerStatus,

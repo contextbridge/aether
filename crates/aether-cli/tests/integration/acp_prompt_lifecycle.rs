@@ -111,10 +111,13 @@ async fn acceptance_precedes_streaming_and_idle_completes_the_turn() {
                 .block_task()
                 .await
                 .unwrap();
-            assert_eq!(serde_json::to_value(response).unwrap(), serde_json::json!({}));
+            assert_eq!(serde_json::to_value(&response).unwrap(), serde_json::json!({"messageId": response.message_id}));
             loop {
                 match harness.peer.next_session_notification().await.update {
-                    SessionUpdate::UserMessage(_) => break,
+                    SessionUpdate::UserMessage(message) => {
+                        assert_eq!(message.message_id, response.message_id);
+                        break;
+                    }
                     SessionUpdate::AvailableCommandsUpdate(_) | SessionUpdate::ConfigOptionUpdate(_) => {}
                     update => panic!("unexpected update before user acknowledgement: {update:?}"),
                 }

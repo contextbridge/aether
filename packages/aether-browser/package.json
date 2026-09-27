@@ -1,0 +1,33 @@
+{
+  "name": "@aether-agent/browser",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser ACP client for aether server, compiled to WebAssembly",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/contextbridge/aether.git",
+    "directory": "packages/aether-browser"
+  },
+  "type": "module",
+  "types": "./pkg/browser.d.ts",
+  "exports": {
+    ".": {
+      "types": "./pkg/browser.d.ts",
+      "import": "./pkg/browser.js"
+    },
+    "./browser_bg.wasm": "./pkg/browser_bg.wasm"
+  },
+  "scripts": {
+    "build": "wasm-pack build --target web --no-pack --out-dir pkg --out-name browser && pnpm generate:types",
+    "generate:types": "node scripts/generate-types.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "peerDependencies": {
+    "@agentclientprotocol/sdk": "^1.5.0"
+  },
+  "devDependencies": {
+    "@aether-agent/schema-codegen": "workspace:*",
+    "@agentclientprotocol/sdk": "^1.5.0",
+    "typescript": "^7.0.2"
+  }
+}

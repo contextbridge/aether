@@ -8,7 +8,7 @@ use aether_core::events::{AgentEvent, MessageEvent, TurnEvent, TurnOutcome};
 use aether_sessions::{SessionEvent, UserEvent};
 use agent_client_protocol::schema::v2::{
     AbsolutePath, CancelSessionNotification, CloseSessionRequest, ContentBlock, NewSessionRequest, PromptRequest,
-    ResumeSessionRequest, SessionId, SessionUpdate, StateUpdate, StopReason,
+    ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate, StateUpdate, StopReason,
 };
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
@@ -457,11 +457,9 @@ async fn connect(server: &AcpWebSocketTestServer, id: &SessionId) -> AcpClient {
     request.headers_mut().insert("x-test-gateway", "opaque-value".parse().unwrap());
     let (socket, _) = connect_async(request).await.unwrap();
     let client = connect_acp_client(WebSocketTransport::new(socket), initialize_request()).await.unwrap();
-    client
-        .handle
-        .resume_session_with_replay(ResumeSessionRequest::new(id.clone(), AbsolutePath::new("/tmp")))
-        .await
-        .unwrap();
+    let request = ResumeSessionRequest::new(id.clone(), AbsolutePath::new("/tmp"))
+        .replay_from(ReplayFrom::Start(ReplayFromStart::new()));
+    client.handle.resume_session(request).await.unwrap();
     client
 }
 

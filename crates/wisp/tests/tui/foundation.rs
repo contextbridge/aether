@@ -142,7 +142,7 @@ fn selected_file_is_sent_as_an_acp_resource_attachment() {
     assert!(matches!(content.as_deref(), Some([acp::ContentBlock::Resource(_)])));
     let mut blocks = vec![acp::ContentBlock::from(text)];
     blocks.extend(content.unwrap());
-    let expanded = acp_utils::content::map_content_blocks_to_text(blocks);
+    let expanded = acp_utils::content::map_content_blocks_to_text(&blocks);
     assert!(expanded.contains("attached context"), "the model receives the file contents");
     app.acp_event(session_update(acp::SessionUpdate::UserMessage(
         acp::UserMessage::new("attached-user").content(vec![acp::ContentBlock::from(expanded)]),
@@ -711,6 +711,6 @@ fn fitting_content_stays_visible_in_a_small_viewport() {
     ui.resize(40, 15);
     ui.draw();
 
-    assert!(ui.app().conversation_items().iter().any(|item| item.text() == Some("queued while small")));
+    assert!(ui.app().conversation_items().iter().any(|item| item.text().as_deref() == Some("queued while small")));
     assert!(ui.viewport_text().contains("queued while small"));
 }

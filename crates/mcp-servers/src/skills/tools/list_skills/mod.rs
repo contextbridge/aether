@@ -1,6 +1,6 @@
-use mcp_utils::display_meta::ToolResultMeta;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use utils::display_meta::ToolResultMeta;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

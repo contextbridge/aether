@@ -74,6 +74,7 @@ mod tests {
     use super::*;
     use crate::events::{CompactionOutcome, LlmCallOutcome};
     use llm::{ContextUsage, LlmCallPurpose};
+    use utils::display_meta::ToolDisplayMeta;
 
     #[test]
     fn serializes_nested_event_contract() {
@@ -102,7 +103,7 @@ mod tests {
             AgentEvent::SessionUsage(llm::testing::session_usage_event(1, llm::TokenUsage::new(1, 2))),
             AgentEvent::Tool(ToolEvent::DisplayUpdate {
                 request: llm::ToolCallRequest { id: "call".into(), name: "read".into(), arguments: "{}".into() },
-                meta: mcp_utils::display_meta::ToolDisplayMeta::new("Read file", "main.rs").into(),
+                meta: ToolDisplayMeta::new("Read file", "main.rs").into(),
             }),
             AgentEvent::Tool(ToolEvent::SubAgentProgress {
                 request: llm::ToolCallRequest { id: "call".into(), name: "spawn".into(), arguments: "{}".into() },

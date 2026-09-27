@@ -226,7 +226,10 @@ fn streamed_thought_preserves_content_without_rendering_it() {
         ui.acp_event(thought_chunk(&chunk));
         ui.draw();
 
-        assert!(ui.app().conversation_items().iter().all(|item| !item.text().is_some_and(|t| t.contains("step"))));
+        assert_eq!(
+            ui.app().conversation_items().last().and_then(ConversationItem::text).as_deref(),
+            Some(seen.as_str())
+        );
         assert!(!ui.history_text().contains("Considering step"));
         assert!(ui.viewport_text().contains(seen.split_whitespace().last().unwrap()));
         assert!(ui.app().progress_indicator().is_active(), "streaming thought must keep the progress band active");

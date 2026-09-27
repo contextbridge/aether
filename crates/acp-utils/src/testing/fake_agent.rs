@@ -1,11 +1,12 @@
-use super::{idle_notification, initialize_response};
+use super::{idle_notification, initialize_response, running_notification};
 use crate::notifications::{SessionPreviewParams, SessionPreviewResponse};
 use agent_client_protocol::schema::v2::{
     AgentCapabilities, CancelSessionNotification, CloseSessionRequest, CloseSessionResponse, CompactionStatus,
-    CompactionUpdate, ContentChunk, Implementation, InitializeRequest, InitializeResponse, ListSessionsRequest,
+    CompactionUpdate, ContentChunk, CreateElicitationRequest, ElicitationFormMode, ElicitationSchema,
+    ElicitationSessionScope, Implementation, InitializeRequest, InitializeResponse, ListSessionsRequest,
     ListSessionsResponse, LoginAuthRequest, LoginAuthResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
     PromptResponse, ResumeSessionRequest, ResumeSessionResponse, SessionId, SessionInfo, SessionUpdate,
-    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, UpdateSessionNotification,
+    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, StopReason, UpdateSessionNotification,
 };
 use agent_client_protocol::util::MatchDispatchFrom;
 use agent_client_protocol::{
@@ -23,6 +24,7 @@ pub struct FakeAgent {
     hold_list_sessions: bool,
     replay: Vec<UpdateSessionNotification>,
     live: Vec<UpdateSessionNotification>,
+    turn: Option<Turn>,
     capture: Option<Capture>,
 }
 
@@ -52,6 +54,7 @@ impl Default for FakeAgent {
             hold_list_sessions: false,
             replay: Vec::new(),
             live: Vec::new(),
+            turn: None,
             capture: None,
         }
     }
@@ -102,6 +105,15 @@ impl FakeAgent {
     }
     pub fn live_message(mut self, session_id: &str, text: &str) -> Self {
         self.live.push(message(session_id, text));
+        self
+    }
+    pub fn prompt_reply(mut self, text: &str) -> Self {
+        self.turn = Some(Turn::Reply(text.into()));
+        self
+    }
+
+    pub fn prompt_elicitation(mut self, message: &str) -> Self {
+        self.turn = Some(Turn::Elicit(message.into()));
         self
     }
     pub fn compaction(mut self, session_id: &str, compaction_id: &str, status: CompactionStatus) -> Self {
@@ -248,10 +260,10 @@ impl HandleDispatchFrom<Client> for FakeAgent {
             .if_request(async |request: PromptRequest, responder| {
                 if let Some(capture) = &self.capture {
                     let _ = capture.prompt.send((request, responder));
-                } else {
-                    responder.respond(PromptResponse::new())?;
+                    return Ok(());
                 }
-                Ok(())
+                responder.respond(PromptResponse::new("user-message"))?;
+                self.run_turn(request.session_id, &cx)
             })
             .await
             .if_request(async |request: ResumeSessionRequest, responder| self.resume(request, responder, &cx))
@@ -295,6 +307,43 @@ impl FakeAgent {
         }
         Ok(())
     }
+
+    fn run_turn(&self, session_id: SessionId, cx: &ConnectionTo<Client>) -> Result<(), acp::Error> {
+        let Some(turn) = &self.turn else {
+            return Ok(());
+        };
+        cx.send_notification(running_notification(session_id.clone()))?;
+        match turn {
+            Turn::Reply(text) => {
+                cx.send_notification(message(&session_id.0, text))?;
+                cx.send_notification(idle_notification(session_id, Some(StopReason::EndTurn)))
+            }
+            Turn::Elicit(prompt) => {
+                let request = CreateElicitationRequest::new(
+                    ElicitationFormMode::new(
+                        ElicitationSessionScope::new(session_id.clone()),
+                        ElicitationSchema::new(),
+                    ),
+                    prompt.clone(),
+                );
+                let connection = cx.clone();
+                cx.spawn(async move {
+                    let echo = match connection.send_request(request).block_task().await {
+                        Ok(response) => serde_json::to_string(&response),
+                        Err(error) => serde_json::to_string(&error),
+                    }
+                    .map_err(acp::Error::into_internal_error)?;
+                    connection.send_notification(message(&session_id.0, &echo))?;
+                    connection.send_notification(idle_notification(session_id, Some(StopReason::EndTurn)))
+                })
+            }
+        }
+    }
+}
+
+enum Turn {
+    Reply(String),
+    Elicit(String),
 }
 
 struct Capture {
