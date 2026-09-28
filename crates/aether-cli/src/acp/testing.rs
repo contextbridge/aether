@@ -1,10 +1,11 @@
 use super::fake_prompt_mcp::FakePromptMcp;
-use super::server::{AcpServer, DetachedArgs, ServerRunError};
+use super::server::{AcpServer, ServerRunError};
 use super::session::actor::SessionActorInit;
 use super::session::agent_key::AgentKey;
 use super::session::agents::SessionAgents;
 use super::session::config::SessionConfigState;
 use super::session::error::SessionError;
+use super::session::hooks::SessionHooks;
 use super::session::model::{Modes, ValidatedMode};
 use super::session::runtime::{AgentRuntime, RuntimeFactory};
 use super::state::{AcpState, AcpStateConfig};
@@ -232,19 +233,19 @@ impl AcpTestHarness {
         LocalSet::new().run_until(Box::pin(async move { body(Self::start().await).await })).await;
     }
 
-    pub async fn run_with_detached<F, Fut>(detached: DetachedArgs, body: F)
+    pub async fn run_with_hooks<F, Fut>(hooks: SessionHooks, body: F)
     where
         F: FnOnce(Self) -> Fut,
         Fut: Future<Output = ()>,
     {
-        LocalSet::new().run_until(Box::pin(async move { body(Self::start_with(detached).await).await })).await;
+        LocalSet::new().run_until(Box::pin(async move { body(Self::start_with(hooks).await).await })).await;
     }
 
     pub async fn start() -> Self {
-        Self::start_with(DetachedArgs::default()).await
+        Self::start_with(SessionHooks::default()).await
     }
 
-    async fn start_with(detached: DetachedArgs) -> Self {
+    async fn start_with(hooks: SessionHooks) -> Self {
         let tmp = tempfile::tempdir().expect("tempdir for session store");
         let session_store = Arc::new(SessionStore::from_path(tmp.path().to_path_buf()));
         let workspace_manager = Arc::new(WorkspaceManager::from_registry_path_with_cloner(
@@ -272,7 +273,7 @@ impl AcpTestHarness {
                 telemetry: None,
                 runtime_factory: Some(runtime_factory),
                 cwd: PathBuf::from("/tmp"),
-                detached,
+                hooks,
             },
             Arc::new(FakeProviderLogin),
         ));
@@ -401,7 +402,7 @@ impl AcpTestHarness {
                 replay: false,
                 modes: Modes::default(),
                 config: SessionConfigState::with_selection(model.to_string(), None, None),
-                detached: DetachedArgs::default(),
+                hooks: SessionHooks::default(),
             })
             .await;
     }
@@ -507,7 +508,7 @@ impl AcpTestHarness {
                     selected_mode,
                     None,
                 ),
-                detached: DetachedArgs::default(),
+                hooks: SessionHooks::default(),
             })
             .await;
         FakeAgentSwitchingSession { session_id: acp_session_id, planner, coder }

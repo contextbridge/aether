@@ -444,7 +444,7 @@ fn get_transcript_line(message: &AgentEvent, max_payload_chars: usize) -> Option
         AgentEvent::Tool(ToolEvent::Error { error, .. }) => {
             Some(format!("[tool-error] {}: {}", error.name, truncate_chars(&error.error, max_payload_chars)))
         }
-        AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Failed { error } }) => {
+        AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Failed { error, .. } }) => {
             Some(format!("[error] {}", truncate_chars(error, max_payload_chars)))
         }
         AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Cancelled }) => Some("[cancelled]".to_string()),

@@ -19,10 +19,10 @@ use super::actor::{SessionActor, SessionActorInit, SessionHandle};
 use super::agent_key::AgentKey;
 use super::agents::SessionAgents;
 use super::config::SessionConfigState;
+use super::hooks::SessionHooks;
 use super::model::{Modes, pick_default_model};
 use super::runtime::{ProductionRuntimeFactory, RuntimeFactory};
 use crate::acp::protocol::mcp::map_acp_mcp_servers;
-use crate::acp::server::DetachedArgs;
 use crate::resolve::{InitialSessionSelection, resolve_agent_from_catalog};
 use crate::settings_args::SettingsSourceArgs;
 use aether_sessions::{SessionStore, SessionStoreError};
@@ -37,7 +37,7 @@ pub(crate) struct SessionFactory {
     initial_selection: InitialSessionSelection,
     observer_factory: Option<DynObserverFactory>,
     runtime_factory: Option<Arc<dyn RuntimeFactory>>,
-    detached: DetachedArgs,
+    hooks: SessionHooks,
     available: OnceCell<Vec<LlmModel>>,
 }
 
@@ -79,7 +79,7 @@ impl SessionFactory {
         initial_selection: InitialSessionSelection,
         observer_factory: Option<DynObserverFactory>,
         runtime_factory: Option<Arc<dyn RuntimeFactory>>,
-        detached: DetachedArgs,
+        hooks: SessionHooks,
     ) -> Self {
         Self {
             settings_source,
@@ -89,7 +89,7 @@ impl SessionFactory {
             initial_selection,
             observer_factory,
             runtime_factory,
-            detached,
+            hooks,
             available: OnceCell::new(),
         }
     }
@@ -256,7 +256,7 @@ impl SessionFactory {
             replay,
             modes: mode_catalog.modes,
             config: resolved.config,
-            detached: self.detached.clone(),
+            hooks: self.hooks.clone(),
         };
         PreparedSession { init, available: mode_catalog.available }
     }

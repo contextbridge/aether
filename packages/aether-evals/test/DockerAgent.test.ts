@@ -33,7 +33,7 @@ describe("DockerAgent", () => {
 
   it.each([
     { status: "completed" } as const,
-    { status: "failed", error: "boom" } as const,
+    { status: "failed", message_id: "error-1", error: "boom" } as const,
     { status: "cancelled" } as const,
   ])("stops at a $status turn outcome", async (outcome) => {
     const ended: AgentEvent = {

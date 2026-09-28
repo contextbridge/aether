@@ -48,9 +48,9 @@ describe("Transcript", () => {
 
   it("records failed terminal turns", async () => {
     const trace = await Transcript.fromStream(
-      new FakeAgent([turnEnded({ status: "failed", error: "boom" })]).run(
-        new Task("do the thing"),
-      ),
+      new FakeAgent([
+        turnEnded({ status: "failed", message_id: "error-1", error: "boom" }),
+      ]).run(new Task("do the thing")),
     );
 
     expect(trace.events.at(-1)).toMatchObject({

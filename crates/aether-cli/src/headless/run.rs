@@ -180,10 +180,7 @@ mod tests {
     #[test]
     fn should_emit_empty_filter_rejects_non_output_events() {
         assert!(should_emit(&tool_call_msg(), &[]));
-        assert!(should_emit(
-            &AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Failed { error: "e".to_string() } }),
-            &[]
-        ));
+        assert!(should_emit(&AgentEvent::turn_ended(TurnOutcome::failed("e")), &[]));
         assert!(should_emit(&AgentEvent::turn_ended(TurnOutcome::Completed), &[]));
         assert!(!should_emit(&AgentEvent::text("id", "x", StreamState::Partial), &[]));
         assert!(!should_emit(
@@ -320,7 +317,7 @@ mod tests {
     #[tokio::test]
     async fn stream_output_failed_turn_exits_with_failure() {
         let (tx, rx) = mpsc::channel(4);
-        tx.send(AgentEvent::turn_ended(TurnOutcome::Failed { error: "boom".to_string() })).await.unwrap();
+        tx.send(AgentEvent::turn_ended(TurnOutcome::failed("boom"))).await.unwrap();
         let code = stream_output(rx, OutputFormat::Text, &[]).await;
         assert_eq!(code, ExitCode::FAILURE);
     }

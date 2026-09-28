@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(AgentEvent::Turn(TurnEvent::Ended { outcome })) => {
                 match outcome {
                     TurnOutcome::Completed => println!("Agent finished processing"),
-                    TurnOutcome::Failed { error } => eprintln!("Error: {error}"),
+                    TurnOutcome::Failed { error, .. } => eprintln!("Error: {error}"),
                     TurnOutcome::Cancelled => println!("Processing cancelled"),
                 }
                 break;

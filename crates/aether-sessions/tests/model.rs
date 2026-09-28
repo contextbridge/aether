@@ -64,7 +64,7 @@ fn last_session_usage_picks_the_latest_sample_from_a_partial_log() {
     let events = vec![
         SessionEvent::Agent(AgentEvent::SessionUsage(session_usage(1, 5))),
         SessionEvent::Agent(AgentEvent::SessionUsage(session_usage(2, 9))),
-        turn_ended(TurnOutcome::Failed { error: "boom".into() }),
+        turn_ended(TurnOutcome::failed("boom")),
     ];
 
     let last = last_session_usage(&events).expect("usage was logged before the failure");

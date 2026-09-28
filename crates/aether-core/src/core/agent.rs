@@ -394,7 +394,7 @@ impl Agent {
         self.finish_chat_call(outcome).await;
 
         if !will_retry {
-            self.finish_turn(TurnOutcome::Failed { error: error_message }).await;
+            self.finish_turn(TurnOutcome::failed(error_message)).await;
             return;
         }
 
@@ -518,7 +518,7 @@ impl Agent {
 
             Error { message } => {
                 self.finish_chat_call(LlmCallOutcome::failed(message.clone(), false)).await;
-                self.finish_turn(TurnOutcome::Failed { error: message }).await;
+                self.finish_turn(TurnOutcome::failed(message)).await;
             }
 
             Usage { tokens: sample } => {
