@@ -25,13 +25,31 @@ impl App {
                 let Some(action) = MouseAction::from_event(mouse.kind) else { return };
                 UiEvent::Mouse(action, (mouse.column, mouse.row))
             }
+            Event::FocusLost => {
+                self.swallow_next_click = true;
+                return;
+            }
             Event::Resize(width, _) => {
                 self.composer.on_resize(width);
                 return;
             }
-            _ => return,
+            Event::FocusGained => return,
         };
+        if self.is_refocusing_click(&event) {
+            return;
+        }
         self.on_ui_event(event);
+    }
+
+    fn is_refocusing_click(&mut self, event: &UiEvent) -> bool {
+        match event {
+            UiEvent::Mouse(MouseAction::Click, _) => std::mem::take(&mut self.swallow_next_click),
+            UiEvent::Key(_) | UiEvent::Paste(_) => {
+                self.swallow_next_click = false;
+                false
+            }
+            UiEvent::Mouse(..) => false,
+        }
     }
 
     fn on_ui_event(&mut self, event: UiEvent) {
@@ -71,7 +89,9 @@ impl App {
         }
         let actions: Vec<RootOutput> = match &mut self.route {
             Route::GitReview(screen) => screen.on_ui_event(event).into_iter().map(RootOutput::GitReview).collect(),
-            Route::ArtifactReview(screen) => screen.on_ui_event(event).into_iter().map(RootOutput::ArtifactReview).collect(),
+            Route::ArtifactReview(screen) => {
+                screen.on_ui_event(event).into_iter().map(RootOutput::ArtifactReview).collect()
+            }
             Route::Conversation => {
                 return match event {
                     UiEvent::Key(key) => self.dispatch_key(key),

@@ -3,8 +3,8 @@
 
 use crossterm::cursor::MoveTo;
 use crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, KeyboardEnhancementFlags,
-    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange,
+    EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
@@ -61,6 +61,7 @@ impl TerminalSession {
         };
         let mut session = Self { terminal, keyboard_enhancement: false, bracketed_paste: false, mouse_capture: false };
         session.try_keyboard_enhancement();
+        let _ = execute!(io::stdout(), EnableFocusChange);
         // A failure here drops the session, which undoes the modes that landed
         // and restores ratatui before the error propagates.
         session.apply_bracketed_paste()?;
@@ -143,6 +144,7 @@ impl TerminalSession {
             let _ = execute!(io::stdout(), DisableBracketedPaste);
             self.bracketed_paste = false;
         }
+        let _ = execute!(io::stdout(), DisableFocusChange);
         if self.keyboard_enhancement {
             let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
             self.keyboard_enhancement = false;

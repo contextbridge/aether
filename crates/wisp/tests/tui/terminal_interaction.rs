@@ -1003,3 +1003,58 @@ mod mouse_owning_surfaces {
         assert!(ui.app().needs_mouse_capture());
     }
 }
+
+mod refocus_click {
+    use agent_client_protocol::schema::v2::{AuthMethod, AuthMethodAgent};
+    use crossterm::event::Event;
+
+    use super::*;
+
+    fn codex_logged_in_via_browser() -> (TestUi, u16) {
+        let methods = vec![AuthMethod::Agent(AuthMethodAgent::new("codex", "Codex"))];
+        let mut ui = TestUiBuilder::new().auth_methods(methods).dimensions(80, 24).build();
+        ui.type_text("/settings");
+        ui.key(key(KeyCode::Tab));
+        ui.draw();
+
+        let providers_row = ui.viewport_row("Provider Logins:").expect("Provider Logins row in the settings menu");
+        ui.terminal_event(click(10, providers_row));
+        ui.draw();
+
+        let codex_row = ui.viewport_row("Codex").expect("Codex row in the provider pane");
+        ui.terminal_event(click(10, codex_row));
+        ui.terminal_event(Event::FocusLost);
+        ui.deliver_result(CommandResult::AuthenticationCompleted {
+            method_id: "codex".into(),
+            result: Ok(acp::LoginAuthResponse::new()),
+        });
+        ui.draw();
+        ui.take_commands();
+        (ui, codex_row)
+    }
+
+    #[test]
+    fn click_after_refocusing_can_log_in_again() {
+        let (mut ui, codex_row) = codex_logged_in_via_browser();
+        ui.terminal_event(Event::FocusGained);
+        ui.terminal_event(click(10, codex_row));
+        ui.terminal_event(click(10, codex_row));
+        assert_eq!(authenticate_count(&mut ui), 1);
+    }
+
+    #[test]
+    fn click_after_refocusing_from_the_keyboard_is_not_swallowed() {
+        let (mut ui, codex_row) = codex_logged_in_via_browser();
+        ui.terminal_event(Event::FocusGained);
+        ui.key(key(KeyCode::Up));
+        ui.terminal_event(click(10, codex_row));
+        assert_eq!(authenticate_count(&mut ui), 1);
+    }
+
+    fn authenticate_count(ui: &mut TestUi) -> usize {
+        ui.take_commands()
+            .into_iter()
+            .filter(|command| matches!(command, Command::Agent(AgentCommand::Authenticate { .. })))
+            .count()
+    }
+}
