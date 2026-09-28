@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.8](https://github.com/contextbridge/aether/compare/aether-sessions-v0.3.7...aether-sessions-v0.3.8) - 2026-09-28
+
+### Other
+
+- Fix/aether server logs when detached ([#531](https://github.com/contextbridge/aether/pull/531))
+
 ## [0.3.7](https://github.com/contextbridge/aether/compare/aether-sessions-v0.3.6...aether-sessions-v0.3.7) - 2026-09-27
 
 ### Other

@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.9](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.8...aether-agent-cli-v0.9.9) - 2026-09-28
+
+### Other
+
+- Fix/aether server logs when detached ([#531](https://github.com/contextbridge/aether/pull/531))
+
 ## [0.9.8](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.7...aether-agent-cli-v0.9.8) - 2026-09-27
 
 ### Added

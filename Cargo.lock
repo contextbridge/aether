@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "aether-acp-utils"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "aether-acp-utils",
  "aether-llm",
@@ -62,7 +62,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-cli"
-version = "0.9.8"
+version = "0.9.9"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-cli",
@@ -108,7 +108,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-core"
-version = "0.8.7"
+version = "0.8.8"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -198,7 +198,7 @@ dependencies = [
 
 [[package]]
 name = "aether-evals"
-version = "0.3.12"
+version = "0.3.13"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -217,7 +217,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm"
-version = "0.9.7"
+version = "0.9.8"
 dependencies = [
  "aether-auth",
  "aether-doctest",
@@ -299,7 +299,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-servers"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "aether-agent-core",
  "aether-auth",
@@ -340,7 +340,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-utils"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "aether-auth",
  "aether-doctest",
@@ -366,7 +366,7 @@ dependencies = [
 
 [[package]]
 name = "aether-project"
-version = "0.5.51"
+version = "0.5.52"
 dependencies = [
  "aether-agent-core",
  "aether-doctest",
@@ -388,7 +388,7 @@ dependencies = [
 
 [[package]]
 name = "aether-schemas"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "aether-agent-cli",
  "aether-agent-core",
@@ -411,7 +411,7 @@ dependencies = [
 
 [[package]]
 name = "aether-sessions"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -431,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "aether-telemetry"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -472,7 +472,7 @@ dependencies = [
 
 [[package]]
 name = "aether-wisp"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "aether-acp-utils",
  "aether-utils",
@@ -1986,7 +1986,7 @@ dependencies = [
  "rustls-native-certs",
  "rustls-pki-types",
  "tokio",
- "tokio-rustls 0.26.5",
+ "tokio-rustls 0.26.6",
  "tower",
  "tracing",
 ]
@@ -4658,7 +4658,7 @@ dependencies = [
  "rustls 0.23.45",
  "rustls-native-certs",
  "tokio",
- "tokio-rustls 0.26.5",
+ "tokio-rustls 0.26.6",
  "tower-service",
  "webpki-roots 1.0.9",
 ]
@@ -6853,7 +6853,7 @@ dependencies = [
  "serde_urlencoded",
  "sync_wrapper",
  "tokio",
- "tokio-rustls 0.26.5",
+ "tokio-rustls 0.26.6",
  "tower",
  "tower-http 0.6.11",
  "tower-service",
@@ -6895,7 +6895,7 @@ dependencies = [
  "serde_urlencoded",
  "sync_wrapper",
  "tokio",
- "tokio-rustls 0.26.5",
+ "tokio-rustls 0.26.6",
  "tokio-util",
  "tower",
  "tower-http 0.6.11",
@@ -6923,9 +6923,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "3.4.1"
+version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b6317cd8c13e3ec9033cf2aa5aa92cd743f0f4f8a93cddc42ea0ae6ce3b8898"
+checksum = "fae7019994ae0fe4ada40b732f798f3ff26f0f04facb1477f1bf37eb4f18a2d3"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -6955,9 +6955,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "3.4.1"
+version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2ee366004e5f87c103be91c6c09337811517ae8d2f919ece9da7c21444b85c5"
+checksum = "c7e66877136e969d5a2d561ee5841b17717a0619aebd64abb47a2a2f46e34683"
 dependencies = [
  "darling 0.24.1",
  "proc-macro2",
@@ -8287,9 +8287,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-rustls"
-version = "0.26.5"
+version = "0.26.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0c85f2c3ef0b1cd58b36682f4b17aaa995f0e5db534d85692b4903abce21f67"
+checksum = "c9cc2678c2cdd569ef8215e2afd7954ada2ae20b4fdd2c5fe6139a3b02d105db"
 dependencies = [
  "rustls 0.23.45",
  "tokio",
@@ -8329,7 +8329,7 @@ dependencies = [
  "rustls 0.23.45",
  "rustls-pki-types",
  "tokio",
- "tokio-rustls 0.26.5",
+ "tokio-rustls 0.26.6",
  "tungstenite 0.30.0",
  "webpki-roots 0.26.11",
 ]
