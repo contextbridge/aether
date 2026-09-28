@@ -74,6 +74,7 @@ pub struct App {
     spinner_tick: usize,
     composer: Composer,
     exit_state: ExitState,
+    swallow_next_click: bool,
     /// What the event loop still owes the outside world.
     commands: VecDeque<Command>,
     foreground: ForegroundOperation,
@@ -160,6 +161,7 @@ impl App {
             spinner_tick: 0,
             composer: Composer::new(),
             exit_state: ExitState::Idle,
+            swallow_next_click: false,
             commands: VecDeque::new(),
             foreground: ForegroundOperation::Idle,
             browser_opener,
