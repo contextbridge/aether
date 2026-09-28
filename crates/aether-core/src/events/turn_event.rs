@@ -8,7 +8,13 @@ use serde::{Deserialize, Serialize};
 pub enum TurnOutcome {
     Completed,
     Cancelled,
-    Failed { error: String },
+    Failed { message_id: MessageId, error: String },
+}
+
+impl TurnOutcome {
+    pub fn failed(error: impl Into<String>) -> Self {
+        Self::Failed { message_id: MessageId::new(), error: error.into() }
+    }
 }
 
 /// How a single LLM call ended.
