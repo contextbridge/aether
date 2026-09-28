@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.9](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.6.8...aether-mcp-servers-v0.6.9) - 2026-09-28
+
+### Other
+
+- Fix/aether server logs when detached ([#531](https://github.com/contextbridge/aether/pull/531))
+
 ## [0.6.8](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.6.7...aether-mcp-servers-v0.6.8) - 2026-09-27
 
 ### Added

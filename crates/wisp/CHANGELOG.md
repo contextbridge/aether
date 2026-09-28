@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.8](https://github.com/contextbridge/aether/compare/aether-wisp-v0.7.7...aether-wisp-v0.7.8) - 2026-09-28
+
+### Fixed
+
+- *(wisp)* Accidential re-trigger of OAuth flow due to terminal mouse… ([#532](https://github.com/contextbridge/aether/pull/532))
+
 ## [0.7.7](https://github.com/contextbridge/aether/compare/aether-wisp-v0.7.6...aether-wisp-v0.7.7) - 2026-09-27
 
 ### Added

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.13](https://github.com/contextbridge/aether/compare/aether-evals-v0.3.12...aether-evals-v0.3.13) - 2026-09-28
+
+### Other
+
+- Fix/aether server logs when detached ([#531](https://github.com/contextbridge/aether/pull/531))
+
 ## [0.3.12](https://github.com/contextbridge/aether/compare/aether-evals-v0.3.11...aether-evals-v0.3.12) - 2026-09-27
 
 ### Other

@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.8.8](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.8.7...aether-agent-core-v0.8.8) - 2026-09-28
+
+### Other
+
+- Fix/aether server logs when detached ([#531](https://github.com/contextbridge/aether/pull/531))
+
 ## [0.8.7](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.8.6...aether-agent-core-v0.8.7) - 2026-09-27
 
 ### Added
