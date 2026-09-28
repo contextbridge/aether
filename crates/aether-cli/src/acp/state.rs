@@ -33,12 +33,12 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use super::protocol::content::map_acp_to_content_blocks;
-use super::server::DetachedArgs;
 use super::session::actor::{ClientConnection, SessionCommand};
 #[cfg(any(test, feature = "testing"))]
 use super::session::actor::{SessionActor, SessionActorInit};
 use super::session::config_setting::ConfigSetting;
 use super::session::factory::SessionFactory;
+use super::session::hooks::SessionHooks;
 use super::session::model::supports_prompt_audio;
 use super::session::{SessionRegistry, paginate_summaries};
 use crate::resolve::InitialSessionSelection;
@@ -76,7 +76,7 @@ pub(crate) struct AcpStateConfig {
     pub(crate) telemetry: Option<Arc<TelemetryRuntime>>,
     pub(crate) runtime_factory: Option<Arc<dyn super::session::runtime::RuntimeFactory>>,
     pub(crate) cwd: PathBuf,
-    pub(crate) detached: DetachedArgs,
+    pub(crate) hooks: SessionHooks,
 }
 
 struct SpawnedSession {
@@ -175,7 +175,7 @@ impl AcpState {
             config.initial_selection,
             config.telemetry.as_ref().map(|runtime| runtime.observer_factory()),
             config.runtime_factory,
-            config.detached,
+            config.hooks,
         );
         Self {
             client_slot: ClientSlot::default(),
@@ -767,7 +767,7 @@ mod tests {
             telemetry: None,
             runtime_factory: None,
             cwd: PathBuf::from("/tmp"),
-            detached: DetachedArgs::default(),
+            hooks: SessionHooks::default(),
         })
     }
 

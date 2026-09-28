@@ -23,7 +23,7 @@ use std::sync::Arc;
 use tokio::process::Command as ProcessCommand;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::{JoinHandle, JoinSet};
-use tokio::time::{Duration, Instant, sleep_until};
+use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use utils::mcp_status::McpServerStatusEntry;
@@ -33,6 +33,7 @@ use super::agents::SessionAgents;
 use super::config::{SessionConfigState, Switch};
 use super::config_setting::ConfigSetting;
 use super::error::SessionError;
+use super::hooks::SessionHooks;
 use super::model::Modes;
 use super::runtime::{AgentRuntime, RuntimeFactory};
 use super::slash_commands::{expand_slash_command_in_content, send_available_commands};
@@ -40,7 +41,6 @@ use crate::acp::protocol::commands::map_mcp_prompt_to_available_command;
 use crate::acp::protocol::content::map_user_message;
 use crate::acp::protocol::events::{NotificationMode, project_agent_event};
 use crate::acp::protocol::replay::replay_to_client;
-use crate::acp::server::DetachedArgs;
 use crate::acp::state::validate_prompt_support;
 use crate::output::print_message;
 use crate::slash_commands::dedupe_commands_by_name;
@@ -180,7 +180,7 @@ pub(crate) struct SessionActorInit {
     pub replay: bool,
     pub modes: Modes,
     pub config: SessionConfigState,
-    pub detached: DetachedArgs,
+    pub hooks: SessionHooks,
 }
 
 /// The mutable per-session state. The actor loop is the only owner; all mutation
@@ -205,7 +205,7 @@ pub(crate) struct SessionActor {
     command_refresh: Option<BoxFuture<'static, Result<Vec<acp::AvailableCommand>, SessionError>>>,
     authentications: FuturesUnordered<BoxFuture<'static, Result<(), SessionError>>>,
     idle_commands: JoinSet<()>,
-    detached: DetachedArgs,
+    hooks: SessionHooks,
     idle_deadline: Option<Instant>,
 }
 
@@ -254,7 +254,7 @@ impl SessionActor {
             command_refresh: None,
             authentications: FuturesUnordered::new(),
             idle_commands: JoinSet::new(),
-            detached: init.detached,
+            hooks: init.hooks,
             idle_deadline: None,
         };
         actor.reset_idle_deadline();
@@ -325,7 +325,7 @@ impl SessionActor {
                     if matches!(self.turn, TurnState::Running)
                         && let Some(outcome) = message.turn_outcome()
                     {
-                        self.finish_turn(turn_result(outcome)).await;
+                        self.finish_turn(Ok(stop_reason(outcome))).await;
                     }
                 }
                 Some(event) = runtime.event_rx.recv() => {
@@ -415,7 +415,7 @@ impl SessionActor {
 
     fn reset_idle_deadline(&mut self) {
         self.idle_deadline = if self.io.connection.is_none() && matches!(self.turn, TurnState::Idle) {
-            self.detached.idle_after.and_then(|seconds| Instant::now().checked_add(Duration::from_secs(seconds)))
+            self.hooks.idle.as_ref().and_then(|idle| Instant::now().checked_add(idle.after))
         } else {
             None
         };
@@ -428,8 +428,8 @@ impl SessionActor {
     }
 
     fn spawn_idle_command(&mut self) {
-        let Some(command) = self.detached.on_idle.clone() else { return };
-        self.idle_commands.spawn(run_idle_command(self.cwd.clone(), command));
+        let Some(idle) = &self.hooks.idle else { return };
+        self.idle_commands.spawn(run_idle_command(self.cwd.clone(), idle.command.clone()));
     }
 }
 
@@ -644,8 +644,7 @@ impl SessionActor {
 
     fn record_agent_event(&mut self, message: &AgentEvent) {
         self.persist_event(SessionEvent::Agent(message.clone()));
-        if self.io.connection.is_none()
-            && let Some(format) = self.detached.output
+        if let Some(format) = self.hooks.echo
             && let Err(error) = print_message(format, message)
         {
             error!(%error, "Failed to serialize server event");
@@ -679,11 +678,14 @@ async fn run_idle_command(cwd: PathBuf, command: String) {
     }
 }
 
-fn turn_result(outcome: &TurnOutcome) -> Result<acp::StopReason, SessionError> {
+fn stop_reason(outcome: &TurnOutcome) -> acp::StopReason {
     match outcome {
-        TurnOutcome::Completed => Ok(acp::StopReason::EndTurn),
-        TurnOutcome::Cancelled => Ok(acp::StopReason::Cancelled),
-        TurnOutcome::Failed { error } => Err(SessionError::TurnFailed(error.clone())),
+        TurnOutcome::Completed => acp::StopReason::EndTurn,
+        TurnOutcome::Failed { error, .. } => {
+            error!("Turn failed: {error}");
+            acp::StopReason::EndTurn
+        }
+        TurnOutcome::Cancelled => acp::StopReason::Cancelled,
     }
 }
 

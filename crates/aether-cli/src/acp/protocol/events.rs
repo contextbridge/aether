@@ -141,10 +141,16 @@ pub fn map_agent_event_to_notification(msg: &AgentEvent, mode: NotificationMode)
                 acp::CompactionStatus::Cancelled,
             ))),
         },
+        AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Failed { message_id, error } }) => {
+            Some(SessionUpdate::AgentMessage(
+                acp::AgentMessage::new(MessageId::new(message_id.as_str()))
+                    .content(vec![ContentBlock::from(format!("Error: {error}"))]),
+            ))
+        }
         AgentEvent::Context(ContextEvent::Cleared)
         | AgentEvent::Turn(
             TurnEvent::Started { .. }
-            | TurnEvent::Ended { outcome: TurnOutcome::Completed | TurnOutcome::Cancelled | TurnOutcome::Failed { .. } }
+            | TurnEvent::Ended { outcome: TurnOutcome::Completed | TurnOutcome::Cancelled }
             | TurnEvent::RetryScheduled { .. }
             | TurnEvent::LlmCallStarted { .. }
             | TurnEvent::LlmCallEnded { .. }

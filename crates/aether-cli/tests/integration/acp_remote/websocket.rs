@@ -2,8 +2,10 @@ use super::{assert_no_ended_turn, assert_stopped_turn, start_paused_turn};
 use acp_utils::client::{AcpClient, AcpEvent, connect_acp_client};
 use acp_utils::testing::initialize_request;
 use acp_utils::websocket::WebSocketTransport;
-use aether_cli::acp::server::{DetachedArgs, ServerArgs, ServerRunError, run_server};
+use aether_cli::acp::server::{ServerArgs, ServerRunError, run_server};
 use aether_cli::acp::testing::{AcpTestHarness, AcpWebSocketTestServer};
+use aether_cli::acp::{IdleHook, SessionHooks};
+use aether_cli::output::OutputFormat;
 use aether_core::events::{AgentEvent, MessageEvent, TurnEvent, TurnOutcome};
 use aether_sessions::{SessionEvent, UserEvent};
 use agent_client_protocol::schema::v2::{
@@ -31,9 +33,9 @@ fn server_args_defaults_and_overrides() {
     assert_eq!(defaults.listen, "127.0.0.1:8765".parse().unwrap());
     assert_eq!(defaults.cwd, PathBuf::from("."));
     assert!(defaults.prompt.is_none());
-    assert!(defaults.detached.output.is_none());
-    assert!(defaults.detached.idle_after.is_none());
-    assert!(defaults.detached.on_idle.is_none());
+    assert_eq!(defaults.output, OutputFormat::Text);
+    assert!(defaults.idle_after.is_none());
+    assert!(defaults.on_idle.is_none());
     let args = ServerCli::parse_from([
         "server",
         "--listen",
@@ -59,9 +61,9 @@ fn server_args_defaults_and_overrides() {
     assert_eq!(args.acp.agent.as_deref(), Some("Build"));
     assert_eq!(args.acp.log_dir, Some(PathBuf::from("/logs")));
     assert_eq!(args.prompt.as_deref(), Some("start now"));
-    assert_eq!(args.detached.output, Some(aether_cli::output::OutputFormat::Json));
-    assert_eq!(args.detached.idle_after, Some(300));
-    assert_eq!(args.detached.on_idle.as_deref(), Some("echo idle"));
+    assert_eq!(args.output, OutputFormat::Json);
+    assert_eq!(args.idle_after, Some(300));
+    assert_eq!(args.on_idle.as_deref(), Some("echo idle"));
     assert_eq!(ServerCli::parse_from(["server", "--cwd", "/other"]).args.cwd, PathBuf::from("/other"));
 }
 
@@ -94,9 +96,9 @@ async fn server_rejects_missing_and_non_directory_workspaces() {
 async fn unattached_session_manages_idle_command() {
     let directory = tempfile::tempdir().unwrap();
     let marker = directory.path().join("idle");
-    let detached =
-        DetachedArgs { output: None, idle_after: Some(10), on_idle: Some(format!("touch '{}'", marker.display())) };
-    AcpTestHarness::run_with_detached(detached, |mut harness| async move {
+    let idle = IdleHook { after: Duration::from_secs(10), command: format!("touch '{}'", marker.display()) };
+    let hooks = SessionHooks { echo: None, idle: Some(idle) };
+    AcpTestHarness::run_with_hooks(hooks, |mut harness| async move {
         let id = harness.start_unattached_session("work independently").await;
         harness.reconnect().await;
         harness.resume(&id).await;

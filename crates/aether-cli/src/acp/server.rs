@@ -1,5 +1,5 @@
 use super::state::{AcpState, ClientGuard};
-use super::{AcpArgs, AcpRunError, create_acp_state};
+use super::{AcpArgs, AcpRunError, IdleHook, SessionHooks, create_acp_state};
 use crate::output::OutputFormat;
 use crate::prompt::prompt_or_stdin;
 use acp_utils::websocket::WebSocketTransport;
@@ -9,6 +9,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream};
 #[cfg(unix)]
@@ -35,18 +36,9 @@ pub struct ServerArgs {
     #[arg(long)]
     pub prompt: Option<String>,
 
-    #[command(flatten)]
-    pub detached: DetachedArgs,
-
-    #[command(flatten)]
-    pub acp: AcpArgs,
-}
-
-#[derive(clap::Args, Clone, Debug, Default)]
-pub struct DetachedArgs {
-    /// Output format for when no clients are attached.
-    #[arg(long)]
-    pub output: Option<OutputFormat>,
+    /// Format for agent events written to stdout/stderr.
+    #[arg(long, default_value = "text")]
+    pub output: OutputFormat,
 
     /// How many seconds to wait after the agent becomes idle before running the --on-idle command.
     #[arg(long, requires = "on_idle")]
@@ -55,6 +47,9 @@ pub struct DetachedArgs {
     /// Shell command to spawn when the agent becomes idle.
     #[arg(long, requires = "idle_after")]
     pub on_idle: Option<String>,
+
+    #[command(flatten)]
+    pub acp: AcpArgs,
 }
 
 #[derive(Debug, Error)]
@@ -87,7 +82,14 @@ pub async fn run_server(args: ServerArgs) -> Result<(), ServerRunError> {
         .map_err(|source| ServerRunError::Workspace { path: args.cwd, source })?;
 
     let prompt = prompt_or_stdin(args.prompt).map_err(ServerRunError::PromptStdin)?;
-    let state = Arc::new(create_acp_state(args.acp, &cwd, args.detached)?);
+    let hooks = SessionHooks {
+        echo: Some(args.output),
+        idle: args
+            .idle_after
+            .zip(args.on_idle)
+            .map(|(seconds, command)| IdleHook { after: Duration::from_secs(seconds), command }),
+    };
+    let state = Arc::new(create_acp_state(args.acp, &cwd, hooks)?);
     let server = AcpServer::bind(args.listen, state.clone()).await?;
     info!(address = %args.listen, cwd = %cwd.display(), "Starting Aether ACP WebSocket server");
 

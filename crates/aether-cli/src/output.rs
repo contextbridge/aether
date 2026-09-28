@@ -68,7 +68,7 @@ fn format_text(message: &AgentEvent) -> Option<String> {
         AgentEvent::Turn(TurnEvent::Ended { outcome }) => Some(match outcome {
             TurnOutcome::Completed => "Done".to_string(),
             TurnOutcome::Cancelled => "Cancelled".to_string(),
-            TurnOutcome::Failed { error } => format!("Error: {error}"),
+            TurnOutcome::Failed { error, .. } => format!("Error: {error}"),
         }),
         AgentEvent::Turn(TurnEvent::AutoContinue { attempt, max_attempts, .. }) => {
             Some(format!("Continuing ({attempt}/{max_attempts})..."))
@@ -233,9 +233,7 @@ mod tests {
     #[test]
     fn format_text_formats_turn_outcomes() {
         assert_eq!(
-            format_text(&AgentEvent::Turn(TurnEvent::Ended {
-                outcome: TurnOutcome::Failed { error: "boom".to_string() }
-            })),
+            format_text(&AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::failed("boom") })),
             Some("Error: boom".to_string())
         );
         assert_eq!(format_text(&AgentEvent::turn_ended(TurnOutcome::Cancelled)), Some("Cancelled".to_string()));

@@ -6,6 +6,7 @@ pub(crate) mod config_setting;
 pub(crate) mod error;
 pub(crate) mod factory;
 pub(crate) mod git_diff;
+pub(crate) mod hooks;
 pub(crate) mod model;
 mod pagination;
 pub(crate) mod registry;

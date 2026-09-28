@@ -1,7 +1,8 @@
 use aether_cli::acp::testing::AcpTestHarness;
 use aether_core::core::agent;
 use agent_client_protocol::schema::v2::{
-    CancelSessionNotification, ContentBlock, PromptRequest, SessionId, SessionUpdate, StateUpdate, StopReason,
+    CancelSessionNotification, CloseSessionRequest, ContentBlock, MessageId, PromptRequest, SessionId, SessionUpdate,
+    StateUpdate, StopReason,
 };
 use llm::{LlmResponse, testing::FakeLlmProvider};
 use std::sync::Arc;
@@ -78,6 +79,42 @@ async fn provider_failure_after_acceptance_reports_error_and_idle() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn failed_turn_is_reported_once_under_a_stable_id_and_kept_out_of_resumed_history() {
+    LocalSet::new()
+        .run_until(async {
+            let provider = FakeLlmProvider::new(vec![vec![LlmResponse::Error { message: "provider failed".into() }]]);
+            let (tx, rx, handle) = agent(provider).spawn().await.unwrap();
+            let mut harness = AcpTestHarness::start().await;
+            let id = SessionId::new("failed-turn");
+            harness.append_stored_session(&id.0, "2026-05-01T00:00:00Z");
+            harness.insert_stub_session(tx, rx, handle, id.clone(), "fake:fake").await;
+
+            harness
+                .client_cx
+                .send_request(PromptRequest::new(id.clone(), vec!["hi".into()]))
+                .block_task()
+                .await
+                .unwrap();
+            let live = error_message_ids(&mut harness, &id).await;
+            assert_eq!(live.len(), 1, "live turn reports the failure once");
+
+            harness.client_cx.send_request(CloseSessionRequest::new(id.clone())).block_task().await.unwrap();
+            harness.resume_with_replay(&id).await;
+            harness
+                .client_cx
+                .send_request(PromptRequest::new(id.clone(), vec!["again".into()]))
+                .block_task()
+                .await
+                .unwrap();
+            let replayed = error_message_ids(&mut harness, &id).await;
+            assert_eq!(replayed, live, "replay reports the failure once, under its live id");
+
+            harness.resume_agent().assert_saw_exactly(&["hi", "again"]);
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn unknown_session_is_rejected_before_acceptance() {
     AcpTestHarness::run(|harness| async move {
         assert!(
@@ -148,4 +185,25 @@ async fn acceptance_precedes_streaming_and_idle_completes_the_turn() {
             }
         })
         .await;
+}
+
+async fn error_message_ids(harness: &mut AcpTestHarness, id: &SessionId) -> Vec<MessageId> {
+    let mut ids = Vec::new();
+    loop {
+        let notification = harness.peer.next_session_notification().await;
+        if notification.session_id != *id {
+            continue;
+        }
+        match notification.update {
+            SessionUpdate::AgentMessage(message)
+                if message.content.value().into_iter().flatten().any(
+                    |block| matches!(block, ContentBlock::Text(text) if text.text.contains("provider failed")),
+                ) =>
+            {
+                ids.push(message.message_id);
+            }
+            SessionUpdate::StateUpdate(StateUpdate::Idle(_)) => return ids,
+            _ => {}
+        }
+    }
 }

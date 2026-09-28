@@ -10,8 +10,6 @@ pub enum SessionError {
     Persistence(#[from] aether_sessions::SessionStoreError),
     #[error("agent command channel is closed")]
     CommandChannelClosed,
-    #[error("{0}")]
-    TurnFailed(String),
     #[error("MCP operation failed: {0}")]
     McpOperation(#[from] aether_core::mcp::McpHandleError),
     #[error("model configuration failed: {0}")]
