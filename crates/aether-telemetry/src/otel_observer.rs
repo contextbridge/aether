@@ -211,7 +211,7 @@ impl TurnState {
                 }
                 span.end_ok();
             }
-            TurnOutcome::Failed { error } => span.end_error(None, error.clone()),
+            TurnOutcome::Failed { error, .. } => span.end_error(None, error.clone()),
             TurnOutcome::Cancelled => span.end_error(Some(ErrorKind::Cancelled), TURN_CANCEL_MESSAGE),
         }
     }

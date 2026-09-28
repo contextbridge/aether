@@ -262,7 +262,7 @@ impl AgentExecutor {
 
                     AgentEvent::Turn(TurnEvent::Ended { outcome }) => match outcome {
                         TurnOutcome::Completed => return Ok(final_output),
-                        TurnOutcome::Failed { error } => return Err(format!("Agent error: {error}")),
+                        TurnOutcome::Failed { error, .. } => return Err(format!("Agent error: {error}")),
                         TurnOutcome::Cancelled => return Err("Agent cancelled".to_string()),
                     },
 

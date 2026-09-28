@@ -163,7 +163,7 @@ Use `aether-agent-core` as a Rust library to build your own agent in ~25 lines. 
                    if !is_complete { print!("{chunk}"); io::stdout().flush()?; }
                }
                Some(AgentEvent::Turn(TurnEvent::Ended { outcome })) => {
-                   if let TurnOutcome::Failed { error } = outcome { eprintln!("Error: {error}"); }
+                   if let TurnOutcome::Failed { error, .. } = outcome { eprintln!("Error: {error}"); }
                    break;
                }
                _ => {}
