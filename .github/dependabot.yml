@@ -2,6 +2,15 @@ version: 2
 updates:
   - package-ecosystem: cargo
     groups:
+      opentelemetry:
+        patterns:
+          - "opentelemetry*"
+      aws-smithy:
+        patterns:
+          - "aws-smithy-*"
+      gloo:
+        patterns:
+          - "gloo-*"
       cargo-minor-patch:
         update-types:
           - minor
