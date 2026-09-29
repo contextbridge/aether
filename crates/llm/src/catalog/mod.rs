@@ -109,7 +109,7 @@ mod tests {
             ReasoningEffort::Xhigh,
             ReasoningEffort::Max,
         ];
-        for id in ["gpt-6-sol", "gpt-6-astra", "gpt-6-luna"] {
+        for id in ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna"] {
             let model: LlmModel = format!("codex:{id}").parse().unwrap();
             assert_eq!(model.model_id(), id);
             assert_eq!(model.context_window(), Some(272_000));
