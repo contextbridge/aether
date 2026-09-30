@@ -248,7 +248,9 @@ while True:
                 "jsonrpc": "2.0",
                 "id": message["id"],
                 "result": [
-                    make_symbol("example_fn", 12, uri, 0, "module"),
+                    symbol
+                    for symbol in [make_symbol("example_fn", 12, uri, 0, "module")]
+                    if params.get("query", "").lower() in symbol["name"].lower()
                 ],
             }
         )
