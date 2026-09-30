@@ -6,10 +6,6 @@ Error types for all coding tool operations.
 
 - **`File`** -- File read, write, or edit failures ([`FileError`]).
 - **`Bash`** -- Shell command execution failures ([`BashError`]).
-- **`Grep`** -- Regex search failures ([`GrepError`]).
-- **`AstGrep`** -- Structural AST search failures ([`AstGrepError`]).
-- **`Find`** -- Glob-based file discovery failures ([`FindError`]).
-- **`ListFiles`** -- Directory listing failures ([`ListFilesError`]).
 - **`WebFetch`** -- URL fetch failures ([`WebFetchError`]).
 - **`WebSearch`** -- Web search API failures ([`WebSearchError`]).
 - **`Lsp`** -- LSP code-intelligence tool failures ([`LspError`]).
@@ -22,10 +18,5 @@ Error types for all coding tool operations.
 
 - [`FileError`] -- `NotFound`, `ReadFailed`, `WriteFailed`, `CreateDirFailed`, `InvalidOffset`, `PatternNotFound`, `Io`.
 - [`BashError`] -- `Forbidden`, `TimeoutTooLarge`, `SpawnFailed`.
-- [`GlobError`] -- `InvalidPattern`, `BuildFailed` (shared by the search tools).
-- [`GrepError`] -- `Glob`, `InvalidRegex`, `SearchFailed`, `PathNotFound`.
-- [`AstGrepError`] -- `PathNotFound`, `Glob`, `UnsupportedLanguage`, `InvalidPattern`, `ReadFailed`, `SearchFailed`.
-- [`FindError`] -- `PathNotFound`, `InvalidGlobPattern`, `LockFailed`.
-- [`ListFilesError`] -- `ReadDirFailed`, `ReadEntryFailed`, `MetadataFailed`.
 - [`WebFetchError`] -- `InvalidUrl`, `RequestFailed`, `Timeout`, `ResponseTooLarge`, `ParseFailed`.
 - [`WebSearchError`] -- `InvalidQuery`, `ApiError`, `RateLimited`, `Timeout`, `ConfigError`, `ParseError`.

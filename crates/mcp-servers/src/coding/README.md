@@ -1,6 +1,6 @@
 # CodingMcp
 
-File operations, code search, bash execution, LSP integration, and web tools. This is the workhorse server for coding tasks.
+File operations, bash execution, LSP code intelligence, and web tools. This is the workhorse server for coding tasks.
 
 **Flags:** `--root-dir <path>` (optional workspace root), `--rules-dir <path>` (repeatable read-rule directories), and `--disable-lsp` (disable LSP-backed tools and daemon connections)
 
@@ -11,7 +11,6 @@ File operations, code search, bash execution, LSP integration, and web tools. Th
 
 - [Tools](#tools)
   - [File Operations](#file-operations)
-  - [Search](#search)
   - [Bash](#bash)
   - [Web](#web)
   - [LSP (Language Server Protocol)](#lsp-language-server-protocol)
@@ -28,17 +27,10 @@ File operations, code search, bash execution, LSP integration, and web tools. Th
 | `read_file` | Read a file with optional line offset and limit. Returns content with line numbers. Max 2000 lines by default. |
 | `write_file` | Write content to a file. Creates parent directories automatically. File must be read first (safety check). |
 | `edit_file` | Find-and-replace in a file. Matches exact strings, supports `replace_all`. File must be read first. |
-| `list_files` | List files and directories at a path with metadata (size, type, permissions, modified time). |
-
-### Search
-
-| Tool | Description |
-|------|-------------|
-| `grep` | Search file contents with regex. Supports glob filters, file type filters, context lines, case-insensitive mode, and multiline matching. Output modes: `Content`, `FilesWithMatches`, `Count`. |
-| `ast_grep` | Search code with ast-grep structural AST patterns. Supports language aliases, glob filters, context lines, captures, and result limits. |
-| `find` | Find files by glob pattern. Bare patterns like `README*`, `justfile`, and `*.rs` match basenames recursively; patterns containing `/` match paths relative to the search path. Limited searches stop early and set `truncated` when more matches exist. |
 
 ### Bash
+
+Use shell commands through `bash` for text search, file discovery, structural search, and directory listings.
 
 | Tool | Description |
 |------|-------------|

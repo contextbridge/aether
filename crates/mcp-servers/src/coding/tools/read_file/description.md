@@ -17,7 +17,7 @@ Output format: `    1\tline content` (line number, tab, content)
 
 - Read the whole file by omitting `offset`/`limit` — use them only for large files
 - Read multiple files in parallel when you need several
-- Use `list_files` for directories, not this tool
+- Use shell commands through `bash` for directory listings, not this tool
 
 ## Safety
 

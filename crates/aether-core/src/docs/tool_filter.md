@@ -1,7 +1,7 @@
 Allow specific tools by name:
 
 ```json
-{ "allow": ["read_file", "grep", "find"] }
+{ "allow": ["coding__read_file", "coding__bash", "coding__lsp_*"] }
 ```
 
 Allow tools annotated as read-only by their MCP server:

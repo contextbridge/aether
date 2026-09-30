@@ -1,4 +1,4 @@
-The primary MCP tool server for coding workflows. Provides file I/O, shell execution, regex search, structural AST search, glob-based file discovery, LSP code intelligence, and web fetch/search -- all exposed as MCP tools that an agent can invoke.
+The primary MCP tool server for coding workflows. Provides file I/O, shell execution, LSP code intelligence, and web fetch/search -- all exposed as MCP tools that an agent can invoke.
 
 # Construction
 
@@ -30,12 +30,9 @@ let server = CodingMcp::with_tools(my_custom_tools);
 - `read_file` -- Read file contents with optional offset/limit
 - `write_file` -- Write content to a file (creates parent dirs)
 - `edit_file` -- String replacement in an existing file
-- `list_files` -- List directory contents with metadata
 
-**Shell & search:**
+**Shell:**
 - `bash` -- Execute shell commands (with background process support) 
-- `grep` -- Regex search across files with glob filters
-- `find` -- Find files by glob pattern. Bare patterns like `README*`, `justfile`, and `*.rs` match basenames recursively; slash-containing patterns like `crates/**/*.rs` match paths relative to the search path. Limited searches stop early and set `truncated` when more matches exist.
 
 **Web:**
 - `web_fetch` -- Fetch a URL and extract text content

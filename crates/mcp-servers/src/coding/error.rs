@@ -22,22 +22,6 @@ pub enum CodingError {
     #[error(transparent)]
     Bash(#[from] BashError),
 
-    /// Grep search errors
-    #[error(transparent)]
-    Grep(#[from] GrepError),
-
-    /// ast-grep structural search errors
-    #[error(transparent)]
-    AstGrep(#[from] AstGrepError),
-
-    /// Find file errors
-    #[error(transparent)]
-    Find(#[from] FindError),
-
-    /// List files errors
-    #[error(transparent)]
-    ListFiles(#[from] ListFilesError),
-
     /// Web fetch errors
     #[error(transparent)]
     WebFetch(#[from] WebFetchError),
@@ -96,98 +80,6 @@ pub enum BashError {
     /// Failed to spawn process
     #[error("Failed to execute command '{command}': {reason}")]
     SpawnFailed { command: String, reason: String },
-}
-
-/// Errors related to building glob filters, shared across search tools
-#[derive(Debug, Error)]
-pub enum GlobError {
-    /// Invalid glob pattern
-    #[error("Invalid glob pattern '{pattern}': {reason}")]
-    InvalidPattern { pattern: String, reason: String },
-
-    /// Failed to build glob set
-    #[error("Failed to build glob set: {0}")]
-    BuildFailed(#[source] globset::Error),
-}
-
-/// Errors related to grep search operations
-#[derive(Debug, Error)]
-pub enum GrepError {
-    /// Glob filter errors
-    #[error(transparent)]
-    Glob(#[from] GlobError),
-
-    /// Invalid regex pattern
-    #[error("Invalid regex pattern: {0}")]
-    InvalidRegex(#[source] grep::regex::Error),
-
-    /// Search error during file processing
-    #[error("Search error: {0}")]
-    SearchFailed(String),
-
-    /// Search path does not exist
-    #[error("Search path does not exist: {0}")]
-    PathNotFound(String),
-}
-
-/// Errors related to ast-grep structural search operations
-#[derive(Debug, Error)]
-pub enum AstGrepError {
-    /// Search path does not exist
-    #[error("Search path does not exist: {0}")]
-    PathNotFound(String),
-
-    /// Glob filter errors
-    #[error(transparent)]
-    Glob(#[from] GlobError),
-
-    /// Unsupported ast-grep language
-    #[error("Unsupported ast-grep language: {0}")]
-    UnsupportedLanguage(String),
-
-    /// Invalid ast-grep pattern
-    #[error("Invalid ast-grep pattern: {0}")]
-    InvalidPattern(String),
-
-    /// Invalid regex in a capture constraint
-    #[error("Invalid regex for constraint '{name}': {reason}")]
-    InvalidConstraintRegex { name: String, reason: String },
-
-    /// Failed to read file
-    #[error("Failed to read file '{path}': {reason}")]
-    ReadFailed { path: String, reason: String },
-
-    /// Search failed during ast-grep processing
-    #[error("Search error: {0}")]
-    SearchFailed(String),
-}
-
-/// Errors related to find file operations
-#[derive(Debug, Error)]
-pub enum FindError {
-    /// Search path does not exist
-    #[error("Search path does not exist: {0}")]
-    PathNotFound(String),
-
-    /// Glob filter errors
-    #[error(transparent)]
-    Glob(#[from] GlobError),
-}
-
-/// Errors related to list files operations
-#[derive(Debug, Error)]
-pub enum ListFilesError {
-    /// Failed to read directory
-    #[error("Failed to read directory: {0}")]
-    ReadDirFailed(#[source] io::Error),
-
-    /// Failed to read directory entry
-    #[error("Failed to read entry: {0}")]
-    ReadEntryFailed(#[source] io::Error),
-
-    /// Failed to read metadata
-    #[error("Failed to read metadata: {0}")]
-    MetadataFailed(#[source] io::Error),
 }
 
 /// Errors related to web fetch operations

@@ -1,4 +1,4 @@
-Abstraction layer for file I/O, shell, and search operations used by [`CodingMcp`](crate::CodingMcp).
+Abstraction layer for file I/O and shell operations used by [`CodingMcp`](crate::CodingMcp).
 
 Implement this trait to provide a custom backend -- for example, a sandboxed filesystem, remote execution, or an in-memory fake for testing. LSP operations are handled separately via [`LspRegistry`](crate::lsp::LspRegistry).
 
@@ -9,14 +9,7 @@ Implement this trait to provide a custom backend -- for example, a sandboxed fil
 - **`read_file`** -- Read a file's contents with optional offset and line limit.
 - **`write_file`** -- Write content to a file, creating parent directories as needed.
 - **`edit_file`** -- Replace a string pattern in an existing file.
-- **`list_files`** -- List directory entries with metadata (size, type, modified time).
 - **`bash`** -- Execute a shell command, returning stdout/stderr and exit code. Supports background execution.
-
-**Provided** (default implementations using standalone functions):
-
-- **`grep`** -- Regex search across files. Delegates to [`perform_grep`](crate::coding::tools::grep::perform_grep).
-- **`ast_grep`** -- Structural AST search across files. Delegates to [`perform_ast_grep`](crate::coding::tools::ast_grep::perform_ast_grep).
-- **`find`** -- Glob-based file discovery. Bare patterns match basenames recursively; slash-containing patterns match paths relative to the search path. Limited searches stop early and set `truncated` when more matches exist. Delegates to [`find_files`](crate::coding::tools::find::find_files).
 
 # See also
 

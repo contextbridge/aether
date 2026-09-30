@@ -7,8 +7,6 @@ use lsp_types::{DocumentSymbol, DocumentSymbolResponse, Location};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::search::DEPENDENCY_DIRS;
-
 use super::error::LspError;
 
 /// A location in source code (file path with range)
@@ -101,6 +99,9 @@ pub fn find_document_symbol_line(response: &DocumentSymbolResponse, symbol: &str
     });
     line
 }
+
+/// Directory names belonging to dependencies or build output rather than project source.
+const DEPENDENCY_DIRS: &[&str] = &["node_modules", ".pnpm", "target"];
 
 fn visit_nested_document_symbol(
     symbol: &DocumentSymbol,

@@ -33,12 +33,6 @@ coding = [
     "dep:aether-project",
     "dep:aether-lspd",
     "dep:futures",
-    "dep:globset",
-    "dep:grep",
-    "dep:ignore",
-    "dep:ast-grep-core",
-    "dep:ast-grep-language",
-    "dep:regex",
     "dep:tracing",
     "dep:thiserror",
     "dep:lsp-types",
@@ -50,7 +44,6 @@ coding = [
 ]
 skills = [
     "dep:aether-project",
-    "dep:regex",
     "dep:tracing",
 ]
 tasks = [
@@ -87,12 +80,6 @@ mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", default-featu
 utils = { package = "aether-utils", path = "../utils", version = "0.2.17" }
 aether-lspd = { path = "../aether-lspd", optional = true, version = "0.1.40" }
 futures = { workspace = true, optional = true }
-globset = { workspace = true, optional = true }
-grep = { workspace = true, optional = true }
-ignore = { workspace = true, optional = true }
-ast-grep-core = { workspace = true, optional = true }
-ast-grep-language = { workspace = true, optional = true }
-regex = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
 lsp-types = { workspace = true, optional = true }

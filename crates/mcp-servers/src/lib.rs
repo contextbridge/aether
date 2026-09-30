@@ -2,9 +2,6 @@
 
 pub mod error;
 
-#[cfg(feature = "coding")]
-pub(crate) mod search;
-
 pub mod workspace_paths;
 
 #[cfg(any(test, feature = "test-helpers"))]
