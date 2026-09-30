@@ -1,28 +1,22 @@
 use super::support::*;
 use unicode_width::UnicodeWidthStr;
 
-fn sub_agent_progress(parent_tool_id: &str, task_id: &str, agent_name: &str, event: SubAgentEvent) -> AcpEvent {
-    AcpEvent::SubAgentProgress(SubAgentProgressParams {
-        session_id: SessionId::new("test-session"),
-        parent_tool_id: parent_tool_id.to_string(),
-        task_id: task_id.to_string(),
-        agent_name: agent_name.to_string(),
-        event,
-    })
-}
-
 fn sub_agent_tool_call(parent_id: &str, task_id: &str, agent: &str, tool_id: &str, name: &str, args: &str) -> AcpEvent {
-    sub_agent_progress(
+    let raw_input: serde_json::Value = serde_json::from_str(args).expect("tool arguments are JSON");
+    sub_agent_tool_update(
         parent_id,
         task_id,
         agent,
-        SubAgentEvent::ToolCall {
-            request: SubAgentToolRequest {
-                id: tool_id.to_string(),
-                name: name.to_string(),
-                arguments: args.to_string(),
-            },
-        },
+        acp::ToolCallUpdate::new(tool_id.to_string()).title(name).name(name).raw_input(raw_input),
+    )
+}
+
+fn sub_agent_tool_completed(parent_id: &str, task_id: &str, agent: &str, tool_id: &str) -> AcpEvent {
+    sub_agent_tool_update(
+        parent_id,
+        task_id,
+        agent,
+        acp::ToolCallUpdate::new(tool_id.to_string()).status(acp::ToolCallStatus::Completed),
     )
 }
 
@@ -52,14 +46,7 @@ fn spawn_tool_seals_only_after_its_sub_agents_finish() {
     app.acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", "{}"));
     assert_eq!(tool_state(&app), ItemState::Open, "an active sub-agent keeps the parent redrawable");
 
-    app.acp_event(sub_agent_progress(
-        "parent-1",
-        "task-a",
-        "explorer",
-        SubAgentEvent::ToolResult {
-            result: SubAgentToolResult { id: "c1".to_string(), name: "grep".to_string(), result_meta: None },
-        },
-    ));
+    app.acp_event(sub_agent_tool_completed("parent-1", "task-a", "explorer", "c1"));
     app.acp_event(sub_agent_done("parent-1", "task-a", "explorer"));
 
     assert_eq!(tool_state(&app), ItemState::Sealed, "rendering is final once every sub-agent has finished");
@@ -183,14 +170,7 @@ fn completed_sub_agent_bash_tool_renders_a_highlighted_command() {
         "coding__bash",
         r#"{"command":"if true; then echo $HOME; fi"}"#,
     ));
-    ui.acp_event(sub_agent_progress(
-        "parent-1",
-        "task-a",
-        "builder",
-        SubAgentEvent::ToolResult {
-            result: SubAgentToolResult { id: "bash-1".to_string(), name: "bash".to_string(), result_meta: None },
-        },
-    ));
+    ui.acp_event(sub_agent_tool_completed("parent-1", "task-a", "builder", "bash-1"));
 
     ui.draw();
 
@@ -220,14 +200,7 @@ fn sub_agent_drain_includes_sub_agents_in_history_items() {
 
     // Add, complete, and mark done a sub-agent
     app.acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", "{}"));
-    app.acp_event(sub_agent_progress(
-        "parent-1",
-        "task-a",
-        "explorer",
-        SubAgentEvent::ToolResult {
-            result: SubAgentToolResult { id: "c1".to_string(), name: "grep".to_string(), result_meta: None },
-        },
-    ));
+    app.acp_event(sub_agent_tool_completed("parent-1", "task-a", "explorer", "c1"));
     app.acp_event(sub_agent_done("parent-1", "task-a", "explorer"));
 
     // End prompt to finalize everything
@@ -245,7 +218,7 @@ fn sub_agent_drain_includes_sub_agents_in_history_items() {
     assert_eq!(sub_agents[0].agent_name, "explorer");
     assert!(sub_agents[0].done);
     assert_eq!(sub_agents[0].tool_calls.len(), 1);
-    assert_eq!(sub_agents[0].tool_calls[0].name, "grep");
+    assert_eq!(sub_agents[0].tool_calls[0].title(), "grep");
 }
 
 #[test]

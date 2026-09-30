@@ -4,8 +4,7 @@ pub(crate) use acp_utils::config_option_id::ConfigOptionId;
 pub(crate) use acp_utils::notifications::{
     AuthMethodsUpdatedParams, ContextClearedParams, McpNotification, McpServerAuthCapability, McpServerStatus,
     McpServerStatusEntry, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn, SubAgentEvent,
-    SubAgentProgressParams, SubAgentToolRequest, SubAgentToolResult, WorkspaceEntry, WorkspaceListResponse,
-    WorkspaceMoveResponse,
+    SubAgentProgressParams, WorkspaceEntry, WorkspaceListResponse, WorkspaceMoveResponse,
 };
 pub(crate) use acp_utils::testing::test_connection;
 pub(crate) use agent_client_protocol::schema::v2::{
@@ -29,7 +28,8 @@ pub(crate) use wisp::command::{AgentCommand, Command, CommandResult, FilesystemC
 pub(crate) use wisp::testing::{
     BackendEvent, CountingBackend, FakeGit, RecordingBackend, StreamContent, TestUi, TestUiBuilder, assert_buffer_eq,
     buffer_text, chunk_message, compaction_update, context_cleared, has_cell, line_text, row_containing, row_text,
-    rows_with_background, session_update, text_chunk, thought_chunk, thought_chunk_with_id, tool_completed,
+    rows_with_background, session_update, sub_agent_progress, sub_agent_tool_update, text_chunk, thought_chunk,
+    thought_chunk_with_id, tool_completed,
 };
 
 pub(crate) use acp_utils::conversation::{ConversationContent, ConversationItem, ItemState, ToolStatus};

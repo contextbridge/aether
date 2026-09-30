@@ -24,20 +24,13 @@ pub(crate) fn tool_lines(
     theme: &Theme,
     highlighter: &mut SyntaxHighlighter,
 ) -> Vec<Line<'static>> {
-    let parsed_command = tool.bash_command();
-    let bash_command = visible_bash_command(parsed_command.as_deref(), tool.display_value(), tool.status);
-    let detail = bash_command.map_or_else(
-        || tool_detail(tool.display_value(), &tool.raw_input(), tool.status),
-        |command| bash_tool_detail(command, tool.display_value(), tool.status),
-    );
     let prefix = Line::from(vec![
         Span::raw(" ".repeat(padding)),
         status_glyph(tool.status, spinner_tick, theme),
         Span::raw(" "),
         Span::styled(tool.title().to_string(), Style::new().fg(theme.text_primary)),
     ]);
-    let suffix = tool_suffix(detail, tool.status, tool.error.as_deref(), theme);
-    let mut lines = tool_line(prefix, suffix, bash_command, content_width, padding + 2, theme, highlighter);
+    let mut lines = tool_line(tool, prefix, content_width, padding + 2, theme, highlighter);
     for diff in tool.diffs().filter(|_| tool.status == ToolStatus::Success) {
         if let Some(patch) = &diff.patch
             && patch.format == acp::DiffPatchFormat::GitPatch
@@ -120,20 +113,12 @@ fn sub_agent_tree_lines(
         let visible: Vec<_> = agent.tool_calls.iter().skip(hidden).collect();
         for (index, tool) in visible.iter().enumerate() {
             let branch = if index + 1 == visible.len() { "  └─ " } else { "  ├─ " };
-            let parsed_command = tool.bash_command();
-            let bash_command =
-                visible_bash_command(parsed_command.as_deref(), tool.display_value.as_deref(), tool.status);
-            let detail = bash_command.map_or_else(
-                || tool_detail(tool.display_value.as_deref(), &tool.raw_input, tool.status),
-                |command| bash_tool_detail(command, tool.display_value.as_deref(), tool.status),
-            );
             let prefix = Line::from(vec![
                 Span::raw(format!("{pad}{branch}")),
                 status_glyph(tool.status, spinner_tick, theme),
-                Span::raw(format!(" {}", tool.name)),
+                Span::raw(format!(" {}", tool.title())),
             ]);
-            let suffix = tool_suffix(detail, tool.status, None, theme);
-            lines.extend(tool_line(prefix, suffix, bash_command, content_width, padding + 6, theme, highlighter));
+            lines.extend(tool_line(tool, prefix, content_width, padding + 6, theme, highlighter));
         }
     }
 
@@ -197,14 +182,19 @@ fn tool_suffix(detail: String, status: ToolStatus, error: Option<&str>, theme: &
 /// One tool line — glyph, title, highlighted bash command, detail — wrapped,
 /// with continuation rows aligned under the title.
 fn tool_line(
+    tool: &ToolCall,
     mut line: Line<'static>,
-    suffix: Vec<Span<'static>>,
-    command: Option<&str>,
     width: u16,
     continuation_padding: usize,
     theme: &Theme,
     highlighter: &mut SyntaxHighlighter,
 ) -> Vec<Line<'static>> {
+    let command = visible_bash_command(tool.bash_command(), tool.display_value(), tool.status);
+    let detail = command.map_or_else(
+        || tool_detail(tool.display_value(), &tool.raw_input(), tool.status),
+        |command| bash_tool_detail(command, tool.display_value(), tool.status),
+    );
+    let suffix = tool_suffix(detail, tool.status, tool.error.as_deref(), theme);
     let command_lines = command.map(|command| highlighter.highlight(command, "bash", theme));
     if let Some(command_lines) = &command_lines
         && let Some(first) = command_lines.first()
