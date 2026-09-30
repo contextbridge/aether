@@ -1,9 +1,5 @@
 use crate::common::{CodingWorkspace, TestResult, test_error};
-use mcp_servers::coding::tools::ast_grep::AstGrepInput;
 use mcp_servers::coding::tools::bash::BashInput;
-use mcp_servers::coding::tools::find::FindInput;
-use mcp_servers::coding::tools::grep::GrepInput;
-use mcp_servers::coding::tools::list_files::ListFilesArgs;
 use mcp_servers::coding::tools::read_file::ReadFileArgs;
 use std::fs::canonicalize;
 
@@ -118,55 +114,15 @@ async fn test_bash_pwd_uses_workspace_root() -> TestResult {
 }
 
 #[tokio::test]
-async fn test_list_files_tool() -> TestResult {
+async fn coding_tool_catalog_uses_bash_for_search_and_directory_listings() -> TestResult {
     let workspace = CodingWorkspace::new().await?;
-    workspace.write("file1.txt", "content1")?;
-    workspace.write("file2.rs", "fn main() {}")?;
-    std::fs::create_dir(workspace.path("subdir"))?;
-    workspace.write(".hidden_file", "hidden content")?;
-    let parsed = workspace.client.call("list_files", ListFilesArgs::default()).await?;
-    assert_eq!(parsed["totalCount"], 3);
-    let names: Vec<&str> = parsed["files"]
-        .as_array()
-        .ok_or_else(|| test_error("Files should be an array"))?
-        .iter()
-        .map(|f| f["name"].as_str().unwrap())
-        .collect();
-    assert!(names.contains(&"file1.txt") && names.contains(&"file2.rs") && names.contains(&"subdir"));
-    let parsed =
-        workspace.client.call("list_files", ListFilesArgs { include_hidden: Some(true), ..Default::default() }).await?;
-    assert_eq!(parsed["totalCount"], 4);
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_grep_and_find_use_workspace_root_when_no_path_given() -> TestResult {
-    let workspace = CodingWorkspace::new().await?;
-    workspace.write("root_only.txt", "needle\n")?;
-    workspace.write("other.rs", "fn main() {}\n")?;
-    let parsed =
-        workspace.client.call("grep", GrepInput { pattern: "needle".to_string(), ..Default::default() }).await?;
-    assert!(
-        parsed["matches"].as_array().unwrap().iter().any(|m| m["file"].as_str().unwrap().ends_with("root_only.txt"))
-    );
-    let parsed = workspace.client.call("find", FindInput { pattern: "*.rs".to_string(), ..Default::default() }).await?;
-    assert_eq!(parsed["searchPath"], workspace.root().to_str().unwrap());
-    assert!(parsed["matches"].as_array().unwrap().iter().any(|m| m.as_str().unwrap().ends_with("other.rs")));
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_ast_grep_uses_workspace_root_when_no_path_given() -> TestResult {
-    let workspace = CodingWorkspace::new().await?;
-    workspace.write("lib.rs", "fn target() {}\nfn other() {}\n")?;
-    let parsed = workspace
-        .client
-        .call(
-            "ast_grep",
-            AstGrepInput { language: "rs".to_string(), pattern: "fn $NAME() {}".to_string(), ..Default::default() },
-        )
-        .await?;
-    assert_eq!(parsed["searchPath"], workspace.root().to_str().unwrap());
-    assert!(parsed["matches"].as_array().unwrap().iter().any(|m| m["text"] == "fn target() {}"));
+    let catalog = workspace.client.raw().list_tools(None).await?;
+    let names: Vec<_> = catalog.tools.iter().map(|tool| tool.name.as_ref()).collect();
+    for retained in ["bash", "read_file", "write_file", "edit_file", "lsp_workspace_search"] {
+        assert!(names.contains(&retained), "missing tool {retained}: {names:?}");
+    }
+    for removed in ["find", "grep", "ast_grep", "list_files"] {
+        assert!(!names.contains(&removed), "unexpected removed tool {removed}: {names:?}");
+    }
     Ok(())
 }

@@ -2,12 +2,8 @@ use std::future::Future;
 use std::path::PathBuf;
 
 use super::error::CodingError;
-use super::tools::ast_grep::{AstGrepInput, AstGrepOutput, perform_ast_grep};
 use super::tools::bash::{BashInput, BashOutput};
 use super::tools::edit_file::{EditFileArgs, EditFileResponse};
-use super::tools::find::{FindInput, FindOutput, find_files};
-use super::tools::grep::{GrepInput, GrepOutput, perform_grep};
-use super::tools::list_files::{ListFilesArgs, ListFilesResult};
 use super::tools::read_file::{ReadFileArgs, ReadFileResult};
 use super::tools::write_file::{WriteFileArgs, WriteFileResponse};
 
@@ -22,27 +18,10 @@ pub trait CodingTools: Send + Sync {
     /// Edit a file using string replacement
     fn edit_file(&self, args: EditFileArgs) -> impl Future<Output = Result<EditFileResponse, CodingError>> + Send;
 
-    /// List files in a directory
-    fn list_files(&self, args: ListFilesArgs) -> impl Future<Output = Result<ListFilesResult, CodingError>> + Send;
-
     // Execute a bash command with an optional working directory
     fn bash(
         &self,
         args: BashInput,
         cwd: Option<PathBuf>,
     ) -> impl Future<Output = Result<BashOutput, CodingError>> + Send;
-
-    /// Search file contents using regex patterns.
-    fn grep(&self, args: GrepInput) -> impl Future<Output = Result<GrepOutput, CodingError>> + Send {
-        async move { perform_grep(args).await.map_err(CodingError::from) }
-    }
-
-    fn ast_grep(&self, args: AstGrepInput) -> impl Future<Output = Result<AstGrepOutput, CodingError>> + Send {
-        async move { perform_ast_grep(args).await.map_err(CodingError::from) }
-    }
-
-    /// Find files by glob pattern. Bare patterns match basenames recursively; slash-containing patterns match paths relative to the search path. Limited searches stop early and set `truncated` when more matches exist.
-    fn find(&self, args: FindInput) -> impl Future<Output = Result<FindOutput, CodingError>> + Send {
-        async move { find_files(args).await.map_err(CodingError::from) }
-    }
 }

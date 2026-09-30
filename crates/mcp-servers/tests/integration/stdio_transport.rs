@@ -99,7 +99,10 @@ async fn coding_server_lists_tools_over_stdio() {
     let tools = connect_and_list_tools("coding", &[]).await;
     let names = tool_names(&tools);
 
-    assert!(names.contains(&"grep"), "expected grep tool, got: {names:?}");
+    assert!(names.contains(&"bash"), "expected bash tool, got: {names:?}");
+    for removed in ["find", "grep", "ast_grep", "list_files"] {
+        assert!(!names.contains(&removed), "unexpected removed tool {removed}, got: {names:?}");
+    }
     assert!(names.contains(&"read_file"), "expected read_file tool, got: {names:?}");
 
     // LSP tools should be in the coding server too
@@ -117,7 +120,10 @@ async fn coding_server_accepts_rules_dir_over_stdio() {
     let tools = connect_and_list_tools("coding", &["--", "--rules-dir", tmp.path().to_str().unwrap()]).await;
     let names = tool_names(&tools);
 
-    assert!(names.contains(&"grep"), "expected grep tool, got: {names:?}");
+    assert!(names.contains(&"bash"), "expected bash tool, got: {names:?}");
+    for removed in ["find", "grep", "ast_grep", "list_files"] {
+        assert!(!names.contains(&removed), "unexpected removed tool {removed}, got: {names:?}");
+    }
     assert!(names.contains(&"read_file"), "expected read_file tool, got: {names:?}");
 }
 

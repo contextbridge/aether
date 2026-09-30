@@ -1,10 +1,8 @@
 use super::error::CodingError;
 use super::tools::bash::{BashEnvironment, execute_command};
 use super::{
-    AstGrepInput, AstGrepOutput, BashInput, BashOutput, EditFileArgs, EditFileResponse, FindInput, FindOutput,
-    GrepInput, GrepOutput, ListFilesArgs, ListFilesResult, ReadFileArgs, ReadFileResult, WriteFileArgs,
-    WriteFileResponse, edit_file_contents, find_files, list_files, perform_ast_grep, perform_grep, read_file_contents,
-    tools_trait::CodingTools, write_file_contents,
+    BashInput, BashOutput, EditFileArgs, EditFileResponse, ReadFileArgs, ReadFileResult, WriteFileArgs,
+    WriteFileResponse, edit_file_contents, read_file_contents, tools_trait::CodingTools, write_file_contents,
 };
 use std::path::PathBuf;
 
@@ -49,23 +47,7 @@ impl CodingTools for DefaultCodingTools {
         edit_file_contents(args).await.map_err(CodingError::from)
     }
 
-    async fn list_files(&self, args: ListFilesArgs) -> Result<ListFilesResult, CodingError> {
-        list_files(args).await.map_err(CodingError::from)
-    }
-
     async fn bash(&self, args: BashInput, cwd: Option<PathBuf>) -> Result<BashOutput, CodingError> {
         execute_command(args, cwd.as_deref(), &self.bash_environment).await.map_err(CodingError::from)
-    }
-
-    async fn grep(&self, args: GrepInput) -> Result<GrepOutput, CodingError> {
-        perform_grep(args).await.map_err(CodingError::from)
-    }
-
-    async fn ast_grep(&self, args: AstGrepInput) -> Result<AstGrepOutput, CodingError> {
-        perform_ast_grep(args).await.map_err(CodingError::from)
-    }
-
-    async fn find(&self, args: FindInput) -> Result<FindOutput, CodingError> {
-        find_files(args).await.map_err(CodingError::from)
     }
 }

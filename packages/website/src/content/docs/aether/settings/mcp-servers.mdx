@@ -189,7 +189,7 @@ When the authorization server does not advertise CIMD support, Aether falls back
 
 | Server      | Purpose                                                                  | Args                                                                                                                  |
 | ----------- | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
-| `coding`    | File I/O, bash, grep/find, web fetch/search, and LSP-backed coding tools | `--root-dir <path>`, repeat `--rules-dir <path>`, `--permission-mode always-allow\|auto\|always-ask`, `--disable-lsp` |
+| `coding`    | File I/O, bash, web fetch/search, and LSP-backed coding tools | `--root-dir <path>`, repeat `--rules-dir <path>`, `--permission-mode always-allow\|auto\|always-ask`, `--disable-lsp` |
 | `skills`    | Skill discovery, slash-command prompts, and rules                        | Required: repeat `--dir <path>`                                                                                         |
 | `tasks`     | Hierarchical task management                                             | Optional `--dir <base>` for persistent storage                                                                        |
 | `subagents` | Spawn child agents from loaded settings                                  | `--project-root <path>` (alias: `--dir`; defaults to the workspace root)                                              |

@@ -50,12 +50,8 @@ use crate::{
 use mcp_utils::server::mrtr::{input_requests_supported, parse_response};
 use mcp_utils::server::tasks::{BACKGROUND_TASK_TTL_MS, require_tasks_capability};
 
-use tools::ast_grep::{AstGrepInput, AstGrepOutput, perform_ast_grep};
 use tools::bash::{BashInput, BashOutput, validate_args};
 use tools::edit_file::{EditFileArgs, EditFileResponse, edit_file_contents};
-use tools::find::{FindInput, FindOutput, find_files};
-use tools::grep::{GrepInput, GrepOutput, perform_grep};
-use tools::list_files::{ListFilesArgs, ListFilesResult, list_files};
 use tools::read_file::{ReadFileArgs, ReadFileResult, read_file_contents};
 use tools::web_fetch::{WebFetchInput, WebFetchOutput, WebFetcher};
 use tools::web_search::search_client::BraveSearchClient;
@@ -332,13 +328,11 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
         let mut base = String::from(
             r"# Coding MCP Server
 
-File I/O, search, shell, and optional LSP code intelligence tools for coding workflows.
+File I/O, shell, and optional LSP code intelligence tools for coding workflows.
 
 ## Quick Reference
 
-- **Text patterns** (TODOs, logs, strings): `grep`
-- **Structural code patterns** (AST search): `ast_grep`
-- **File names** (find *.test.ts): `find`
+- **Search and directory listings**: run shell commands with `bash`
 - **Read/write/edit** files: `read_file`, `write_file`, `edit_file`
 - **Shell commands**: `bash`
 ",
@@ -488,48 +482,6 @@ When using tools that take file paths, always use absolute paths from:
         Ok(())
     }
 
-    #[doc = include_str!("tools/grep/description.md")]
-    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
-    pub async fn grep(
-        &self,
-        request: Parameters<GrepInput>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<Json<GrepOutput>, CodingError> {
-        let Parameters(mut args) = request;
-        let normalized_path = self.workspace_paths().resolve_dir(args.path.as_deref());
-        args.path = Some(normalized_path.to_string_lossy().to_string());
-        notify_preview(&context, ToolDisplayMeta::new("Grep", format!("'{}'", args.pattern))).await;
-        self.tools.grep(args).await.map(Json)
-    }
-
-    #[doc = include_str!("tools/ast_grep/description.md")]
-    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
-    pub async fn ast_grep(
-        &self,
-        request: Parameters<AstGrepInput>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<Json<AstGrepOutput>, CodingError> {
-        let Parameters(mut args) = request;
-        let normalized_path = self.workspace_paths().resolve_dir(args.path.as_deref());
-        args.path = Some(normalized_path.to_string_lossy().to_string());
-        notify_preview(&context, ToolDisplayMeta::new("AST grep", format!("'{}'", args.pattern))).await;
-        self.tools.ast_grep(args).await.map(Json)
-    }
-
-    #[doc = include_str!("tools/find/description.md")]
-    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
-    pub async fn find(
-        &self,
-        request: Parameters<FindInput>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<Json<FindOutput>, CodingError> {
-        let Parameters(mut args) = request;
-        let normalized_path = self.workspace_paths().resolve_dir(args.path.as_deref());
-        args.path = Some(normalized_path.to_string_lossy().to_string());
-        notify_preview(&context, ToolDisplayMeta::new("Find", format!("'{}'", args.pattern))).await;
-        self.tools.find(args).await.map(Json)
-    }
-
     #[doc = include_str!("tools/read_file/description.md")]
     #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn read_file(
@@ -591,21 +543,6 @@ When using tools that take file paths, always use absolute paths from:
         self.spawn_diagnostic_refresh(&response.file_path);
 
         Ok(Json(response))
-    }
-
-    #[doc = include_str!("tools/list_files/description.md")]
-    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
-    pub async fn list_files(
-        &self,
-        request: Parameters<ListFilesArgs>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<Json<ListFilesResult>, CodingError> {
-        let Parameters(mut args) = request;
-        let normalized_path = self.workspace_paths().resolve_dir(args.path.as_deref());
-        let preview_value = basename(&normalized_path.to_string_lossy());
-        args.path = Some(normalized_path.to_string_lossy().to_string());
-        notify_preview(&context, ToolDisplayMeta::new("List files", preview_value)).await;
-        self.tools.list_files(args).await.map(Json)
     }
 
     #[doc = include_str!("tools/bash/description.md")]

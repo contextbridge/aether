@@ -1,6 +1,6 @@
 ---
 title: Coding Tools
-description: File operations, bash, search, web, and LSP-backed coding tools.
+description: File operations, bash, web, and LSP-backed coding tools.
 ---
 
 The `coding` server provides tools for reading and writing files, running shell commands, searching codebases, fetching web content, and using LSP-backed code intelligence. See [Tools](/aether/settings/mcp-servers/) for settings.
@@ -42,17 +42,10 @@ Permission modes:
 | `read_file`  | Read a file with optional line range.                |
 | `write_file` | Write content to a file, creating or overwriting it. |
 | `edit_file`  | Exact string replacement within a file.              |
-| `list_files` | List directory contents with metadata.               |
-
-## Search
-
-| Tool   | Description                                                                                |
-| ------ | ------------------------------------------------------------------------------------------ |
-| `grep` | Regex search across files with context, file type filters, glob filters, and output modes. |
-| `ast_grep` | Structural AST search using ast-grep patterns for functions, calls, and syntax shapes.      |
-| `find` | Find files by glob pattern.                                                                |
 
 ## Bash
+
+Use shell commands through `bash` for text search, file discovery, structural search, and directory listings.
 
 | Tool                   | Description                                                                                     |
 | ---------------------- | ----------------------------------------------------------------------------------------------- |

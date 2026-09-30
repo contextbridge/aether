@@ -104,8 +104,6 @@ glob = "0.3"
 globset = "0.4"
 grep = "0.4.1"
 ignore = "0.4"
-ast-grep-core = "0.45"
-ast-grep-language = "0.45"
 
 # Terminal UI
 clankerdiff-core = { version = "0.3.2" }

@@ -1,4 +1,4 @@
-Code navigation powered by a LSP server. **Prefer this over `grep` and `find`**.
+Code navigation powered by a LSP server. **Prefer this over shell-based text and file searches**.
 
 ## Operations
 

@@ -38,7 +38,7 @@ Only agents with `agentInvocable: true` can be spawned. The server advertises av
     },
     {
       "name": "Explorer",
-      "description": "Read-only codebase exploration agent",
+      "description": "Codebase exploration agent",
       "model": "deepseek:deepseek-v4-flash",
       "agentInvocable": true,
       "prompts": [".aether/agents/explorer/EXPLORER.md"],
@@ -46,8 +46,7 @@ Only agents with `agentInvocable: true` can be spawned. The server advertises av
       "tools": {
         "allow": [
           "coding__read_file",
-          "coding__find",
-          "coding__grep",
+          "coding__bash",
           "coding__lsp_*"
         ]
       }
