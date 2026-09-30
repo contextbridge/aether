@@ -91,8 +91,8 @@ impl SessionEvent {
                 | AgentEvent::Model(ModelEvent::Switched { .. })
                 | AgentEvent::SessionUsage(_) => true,
                 AgentEvent::Tool(
-                    ToolEvent::CallUpdate { .. }
-                    | ToolEvent::ExecutionStarted { .. }
+                    ToolEvent::InputStarted { .. }
+                    | ToolEvent::InputDelta { .. }
                     | ToolEvent::Progress { .. }
                     | ToolEvent::DisplayUpdate { .. }
                     | ToolEvent::SubAgentProgress { .. }

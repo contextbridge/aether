@@ -136,7 +136,7 @@ mod tests {
         .unwrap();
         writeln!(
             file,
-            r#"{{"kind":"agent","data":{{"category":"tool","event":{{"type":"call_update","tool_call_id":"1","chunk":"x"}}}}}}"#
+            r#"{{"kind":"agent","data":{{"category":"tool","event":{{"type":"input_delta","id":"1","chunk":"x"}}}}}}"#
         )
         .unwrap();
         writeln!(
