@@ -62,17 +62,18 @@ async fn lsp_check_errors_returns_typescript_installation_instructions_when_serv
     let workspace = CodingWorkspace::new_with_lsp().await.expect("create workspace");
     workspace.write("package.json", "{}\n").expect("write package.json");
     let index_ts = workspace.write("index.ts", "const value: string = 1;\n").expect("write TypeScript file");
+    workspace.write("node_modules/.bin/tsc", "not executable\n").expect("write unavailable language server");
     workspace
         .write("node_modules/.bin/typescript-language-server", "not executable\n")
-        .expect("write unavailable language server");
+        .expect("write unavailable fallback server");
 
     let error =
         call_tool_error(workspace.client.raw(), "lsp_check_errors", serde_json::json!({ "filePath": index_ts })).await;
 
     assert!(error.contains("Permission denied"), "{error}");
-    assert!(error.contains("TypeScript language server"), "{error}");
-    assert!(error.contains("npm install --save-dev typescript typescript-language-server"), "{error}");
-    assert!(error.contains("npm install --global typescript typescript-language-server"), "{error}");
+    assert!(error.contains("TypeScript native language server (tsc)"), "{error}");
+    assert!(error.contains("npm install --save-dev typescript@^7"), "{error}");
+    assert!(error.contains("npm install --global typescript@^7"), "{error}");
 }
 
 #[tokio::test]

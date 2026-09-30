@@ -55,7 +55,7 @@ async fn run_reader(
                 let _ = response_tx.send(DaemonResponse::Pong).await;
             }
             DaemonRequest::Disconnect => break,
-            DaemonRequest::Initialize(init) => match registry.bind(&init.workspace_root, init.language) {
+            DaemonRequest::Initialize(init) => match registry.bind(&init.workspace_root, init.language).await {
                 Ok(binding) => {
                     state = ConnectionState::Bound { binding };
                     let _ = response_tx.send(DaemonResponse::Initialized).await;
@@ -88,7 +88,7 @@ async fn run_reader(
                     continue;
                 };
 
-                let result = registry.queue_diagnostic_refresh(binding, uri).map(|()| Value::Null);
+                let result = registry.queue_diagnostic_refresh(binding, uri).await.map(|()| Value::Null);
                 let _ = response_tx.send(DaemonResponse::LspResult { client_id, result }).await;
             }
         }

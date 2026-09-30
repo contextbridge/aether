@@ -87,6 +87,7 @@ impl LanguageId {
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub(crate) enum ServerKind {
     RustAnalyzer,
+    TypeScriptNative,
     TypeScriptLanguageServer,
     Pyright,
     Gopls,
@@ -97,6 +98,7 @@ impl ServerKind {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::RustAnalyzer => "rust-analyzer",
+            Self::TypeScriptNative => "tsc",
             Self::TypeScriptLanguageServer => "typescript-language-server",
             Self::Pyright => "pyright-langserver",
             Self::Gopls => "gopls",
@@ -107,6 +109,7 @@ impl ServerKind {
     pub(crate) fn env_key(self) -> &'static str {
         match self {
             Self::RustAnalyzer => "RUST_ANALYZER",
+            Self::TypeScriptNative => "TYPESCRIPT_NATIVE",
             Self::TypeScriptLanguageServer => "TYPESCRIPT_LANGUAGE_SERVER",
             Self::Pyright => "PYRIGHT",
             Self::Gopls => "GOPLS",
@@ -176,6 +179,16 @@ const SERVER_SPECS: &[ServerSpec] = &[
         installation_instructions: None,
     },
     ServerSpec {
+        kind: ServerKind::TypeScriptNative,
+        command: "tsc",
+        display_name: "TypeScript native language server (tsc)",
+        args: &["--lsp", "--stdio"],
+        installation_instructions: Some(
+            "Install TypeScript 7+ in this workspace with `npm install --save-dev typescript@^7`, or \
+             install it globally with `npm install --global typescript@^7`, then retry.",
+        ),
+    },
+    ServerSpec {
         kind: ServerKind::TypeScriptLanguageServer,
         command: "typescript-language-server",
         display_name: "TypeScript language server",
@@ -242,7 +255,7 @@ const LANGUAGE_SPECS: &[LanguageSpec] = &[
             aliases: &["javascript", "js"],
             extensions: &["js", "mjs"],
         },
-        server_kind: Some(ServerKind::TypeScriptLanguageServer),
+        server_kind: Some(ServerKind::TypeScriptNative),
     },
     LanguageSpec {
         metadata: LanguageMetadata {
@@ -251,7 +264,7 @@ const LANGUAGE_SPECS: &[LanguageSpec] = &[
             aliases: &["javascript", "js", "javascriptreact", "jsx"],
             extensions: &["jsx"],
         },
-        server_kind: Some(ServerKind::TypeScriptLanguageServer),
+        server_kind: Some(ServerKind::TypeScriptNative),
     },
     LanguageSpec {
         metadata: LanguageMetadata {
@@ -260,7 +273,7 @@ const LANGUAGE_SPECS: &[LanguageSpec] = &[
             aliases: &["typescript", "ts"],
             extensions: &["ts"],
         },
-        server_kind: Some(ServerKind::TypeScriptLanguageServer),
+        server_kind: Some(ServerKind::TypeScriptNative),
     },
     LanguageSpec {
         metadata: LanguageMetadata {
@@ -269,7 +282,7 @@ const LANGUAGE_SPECS: &[LanguageSpec] = &[
             aliases: &["typescript", "ts", "typescriptreact", "tsx"],
             extensions: &["tsx"],
         },
-        server_kind: Some(ServerKind::TypeScriptLanguageServer),
+        server_kind: Some(ServerKind::TypeScriptNative),
     },
     LanguageSpec {
         metadata: LanguageMetadata {
@@ -488,10 +501,28 @@ pub(crate) fn socket_identity_for_language(id: LanguageId) -> &'static str {
     server_kind_for_language(id).map_or_else(|| id.as_str(), ServerKind::as_str)
 }
 
+pub(crate) fn legacy_typescript_config() -> Option<LspConfig> {
+    let server = SERVER_SPECS.iter().find(|server| server.kind == ServerKind::TypeScriptLanguageServer)?;
+    let mut config = LspConfig::new(server.command)
+        .with_args(server.args.iter().map(|arg| (*arg).to_string()).collect())
+        .with_languages(vec![
+            LanguageId::JavaScript,
+            LanguageId::JavaScriptReact,
+            LanguageId::TypeScript,
+            LanguageId::TypeScriptReact,
+        ]);
+    apply_env_overrides(&mut config, ServerKind::TypeScriptLanguageServer);
+    Some(config)
+}
+
 pub(crate) fn resolved_config_for_language(language: LanguageId) -> Option<LspConfig> {
     let mut config = get_config_for_language(language)?.clone();
     let server_kind = server_kind_for_language(language)?;
+    apply_env_overrides(&mut config, server_kind);
+    Some(config)
+}
 
+fn apply_env_overrides(config: &mut LspConfig, server_kind: ServerKind) {
     let command_key = format!("AETHER_LSPD_SERVER_COMMAND_{}", server_kind.env_key());
     if let Some(command) = std::env::var_os(command_key) {
         config.command = command.to_string_lossy().into_owned();
@@ -503,8 +534,6 @@ pub(crate) fn resolved_config_for_language(language: LanguageId) -> Option<LspCo
     {
         config.args = parsed;
     }
-
-    Some(config)
 }
 
 pub(crate) fn from_extension(ext: &str) -> Option<LanguageId> {
@@ -566,8 +595,27 @@ mod tests {
     fn typescript_server_metadata_has_installation_instructions() {
         let metadata = server_metadata_for_language(LanguageId::TypeScript).unwrap();
 
-        assert_eq!(metadata.display_name, "TypeScript language server");
-        assert!(metadata.installation_instructions.unwrap().contains("npm install --save-dev"));
+        assert_eq!(metadata.display_name, "TypeScript native language server (tsc)");
+        assert!(metadata.installation_instructions.unwrap().contains("typescript@^7"));
+    }
+
+    #[test]
+    fn native_and_legacy_have_distinct_socket_identities() {
+        assert_ne!(ServerKind::TypeScriptNative.as_str(), ServerKind::TypeScriptLanguageServer.as_str());
+        assert_eq!(ServerKind::TypeScriptNative.as_str(), "tsc");
+    }
+
+    #[test]
+    fn typescript_family_uses_native_server() {
+        for language in
+            [LanguageId::JavaScript, LanguageId::JavaScriptReact, LanguageId::TypeScript, LanguageId::TypeScriptReact]
+        {
+            assert_eq!(server_kind_for_language(language), Some(ServerKind::TypeScriptNative));
+            assert_eq!(socket_identity_for_language(language), "tsc");
+        }
+        let legacy = legacy_typescript_config().unwrap();
+        assert_eq!(legacy.command, "typescript-language-server");
+        assert_eq!(legacy.args, vec!["--stdio".to_string()]);
     }
 
     #[test]
@@ -705,7 +753,8 @@ mod tests {
 
         let ts_config = get_config_for_language(LanguageId::TypeScript);
         assert!(ts_config.is_some());
-        assert_eq!(ts_config.unwrap().command, "typescript-language-server");
+        assert_eq!(ts_config.unwrap().command, "tsc");
+        assert_eq!(ts_config.unwrap().args, vec!["--lsp".to_string(), "--stdio".to_string()]);
 
         let plaintext_config = get_config_for_language(LanguageId::PlainText);
         assert!(plaintext_config.is_none());

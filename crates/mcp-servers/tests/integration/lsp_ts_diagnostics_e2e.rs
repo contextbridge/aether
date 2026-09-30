@@ -1,7 +1,7 @@
 //! End-to-end tests for LSP diagnostics through the MCP tool layer (TypeScript).
 //!
 //! These tests verify the full pipeline:
-//!   file edits → LSP daemon → typescript-language-server diagnostics → queryable via `lsp_check_errors`
+//!   file edits → LSP daemon → `tsc --lsp` diagnostics → queryable via `lsp_check_errors`
 //!
 //! Requirements:
 //! - `npm` must be installed (the test project installs pinned TypeScript tooling locally)

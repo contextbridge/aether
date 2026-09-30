@@ -40,6 +40,16 @@ impl DocumentLifecycle {
         self.documents.lock().unwrap_or_else(PoisonError::into_inner).remove(uri);
     }
 
+    pub(crate) fn open_uris(&self) -> Vec<Uri> {
+        self.documents
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|(_, entry)| entry.open_holders > 0)
+            .map(|(uri, _)| uri.clone())
+            .collect()
+    }
+
     pub(crate) async fn acquire(&self, uri: &Uri) -> AcquireAction {
         let file_path = uri_to_path(uri);
         let Ok(content) = read_to_string(&file_path).await else {
@@ -276,5 +286,23 @@ mod tests {
         assert!(matches!(lifecycle.acquire(&uri).await, AcquireAction::Unchanged));
         assert!(matches!(lifecycle.release(&uri), ReleaseAction::Unchanged));
         assert!(matches!(lifecycle.release(&uri), ReleaseAction::Close));
+    }
+
+    #[tokio::test]
+    async fn open_uris_lists_only_open_documents() {
+        let temp = TempDir::new().unwrap();
+        let open_path = temp.path().join("open.rs");
+        let closed_path = temp.path().join("closed.rs");
+        std::fs::write(&open_path, "fn main() {}\n").unwrap();
+        std::fs::write(&closed_path, "fn main() {}\n").unwrap();
+        let open_uri = uri_for(&open_path);
+        let closed_uri = uri_for(&closed_path);
+        let lifecycle = DocumentLifecycle::new();
+
+        assert!(matches!(lifecycle.acquire(&open_uri).await, AcquireAction::Open { .. }));
+        assert!(matches!(lifecycle.acquire(&closed_uri).await, AcquireAction::Open { .. }));
+        assert!(matches!(lifecycle.release(&closed_uri), ReleaseAction::Close));
+
+        assert_eq!(lifecycle.open_uris(), vec![open_uri]);
     }
 }
