@@ -21,7 +21,7 @@ async fn user_cancel_does_not_report_foreground_tool_as_background_task() {
         .scenario(
             TestScenario::new()
                 .user_text("start foreground tool")
-                .wait_for(|event| matches!(event, AgentEvent::Tool(ToolEvent::ExecutionStarted { tool_id, .. }) if tool_id == "foreground-call"))
+                .wait_for(|event| matches!(event, AgentEvent::Tool(ToolEvent::Call { request }) if request.id == "foreground-call"))
                 .cancel()
                 .wait_for_turn_end()
                 .user_text("continue")

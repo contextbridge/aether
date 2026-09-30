@@ -107,8 +107,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Some(
                 AgentEvent::Tool(
-                    ToolEvent::CallUpdate { .. }
-                    | ToolEvent::ExecutionStarted { .. }
+                    ToolEvent::InputStarted { .. }
+                    | ToolEvent::InputDelta { .. }
                     | ToolEvent::DefinitionsUpdated { .. }
                     | ToolEvent::SubAgentProgress { .. }
                     | ToolEvent::DisplayUpdate { .. }

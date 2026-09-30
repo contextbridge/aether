@@ -12,9 +12,9 @@ use llm::{ProviderError, StopReason};
 
 #[tokio::test]
 async fn tool_call_turn_emits_full_trace() -> Result<(), Box<dyn Error>> {
-    let tool_request = serde_json::json!({ "a": 3, "b": 5 });
+    let arguments = serde_json::json!({ "a": 3, "b": 5 }).to_string();
     let llm_responses = [
-        llm_response().tool_call("call_1", "test__add_numbers", &[&tool_request.to_string()]).build(),
+        llm_response().tool_call("call_1", "test__add_numbers", &[&arguments]).build(),
         llm_response().text(&["The sum is 8"]).build(),
     ];
 
@@ -59,16 +59,14 @@ async fn tool_call_turn_emits_full_trace() -> Result<(), Box<dyn Error>> {
         );
     }
 
-    let tool_call = trace.position(|e| matches!(e, AgentEvent::Tool(ToolEvent::Call { .. })));
-    let tool_exec = trace.position(
-        |e| matches!(e, AgentEvent::Tool(ToolEvent::ExecutionStarted { tool_id, tool_name }) if tool_id == "call_1" && tool_name == "test__add_numbers"),
+    let tool_call = trace.position(
+        |e| matches!(e, AgentEvent::Tool(ToolEvent::Call { request }) if request.id == "call_1" && request.name == "test__add_numbers" && request.arguments == arguments),
     );
     let tool_result = trace.position(|e| matches!(e, AgentEvent::Tool(ToolEvent::Result { .. })));
     let turn_ended = trace.position(|e| matches!(e, AgentEvent::Turn(TurnEvent::Ended { .. })));
 
     assert!(call_starts[0] < tool_call);
-    assert!(tool_call < tool_exec);
-    assert!(tool_exec < tool_result);
+    assert!(tool_call < tool_result);
     assert!(tool_result < call_starts[1]);
     assert!(call_ends[1] < turn_ended);
 

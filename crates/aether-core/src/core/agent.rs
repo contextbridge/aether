@@ -494,12 +494,11 @@ impl Agent {
             }
 
             ToolRequestStart { id, name } => {
-                let request = ToolCallRequest { id, name, arguments: String::new() };
-                self.emit(AgentEvent::Tool(ToolEvent::Call { request })).await;
+                self.emit(AgentEvent::Tool(ToolEvent::InputStarted { id, name })).await;
             }
 
             ToolRequestArg { id, chunk } => {
-                self.emit(AgentEvent::Tool(ToolEvent::CallUpdate { tool_call_id: id, chunk })).await;
+                self.emit(AgentEvent::Tool(ToolEvent::InputDelta { id, chunk })).await;
             }
 
             ToolRequestComplete { tool_call } => {
@@ -540,11 +539,7 @@ impl Agent {
 
         let tool_id = tool_call.id.clone();
         tracing::debug!("Tool execution started: {} ({})", tool_call.name, tool_id);
-        self.emit(AgentEvent::Tool(ToolEvent::ExecutionStarted {
-            tool_id: tool_id.clone(),
-            tool_name: tool_call.name.clone(),
-        }))
-        .await;
+        self.emit(AgentEvent::Tool(ToolEvent::Call { request: tool_call.clone() })).await;
 
         let Some(mcp) = self.mcp.clone() else {
             let stream = futures::stream::once(async {

@@ -125,7 +125,7 @@ async fn failed_mcp_command_submission_completes_the_tool_with_an_error() -> Res
 }
 
 #[tokio::test]
-async fn test_tool_request_arg_emits_tool_call_update() -> Result<(), Box<dyn Error>> {
+async fn streamed_tool_input_is_followed_by_the_complete_call() -> Result<(), Box<dyn Error>> {
     let tool_request = json!({ "a": 3, "b": 5 });
     let request_json = tool_request.to_string();
     let (arg_chunk_1, arg_chunk_2) = split_json_in_half(&request_json);
@@ -136,31 +136,30 @@ async fn test_tool_request_arg_emits_tool_call_update() -> Result<(), Box<dyn Er
 
     let messages = test_agent().llm_responses(&llm_responses).user_text("3+5 = ?").run().await?;
 
-    let tool_call_count = messages
-        .iter()
-        .filter(|message| {
-            matches!(
-                message,
-                AgentEvent::Tool(ToolEvent::Call { request, .. })
-                    if request.id == "call_1" && request.name == "test__add_numbers"
-            )
-        })
-        .count();
-    assert_eq!(tool_call_count, 1, "only one start ToolCall should be emitted");
-
-    let update_chunks: Vec<String> = messages
+    let tool_input: Vec<&ToolEvent> = messages
         .iter()
         .filter_map(|message| match message {
-            AgentEvent::Tool(ToolEvent::CallUpdate { tool_call_id, chunk, .. }) if tool_call_id == "call_1" => {
-                Some(chunk.clone())
-            }
+            AgentEvent::Tool(
+                event @ (ToolEvent::InputStarted { .. } | ToolEvent::InputDelta { .. } | ToolEvent::Call { .. }),
+            ) => Some(event),
             _ => None,
         })
         .collect();
-
-    assert_eq!(update_chunks.len(), 2);
-    assert_eq!(update_chunks[0], arg_chunk_1);
-    assert_eq!(update_chunks[1], arg_chunk_2);
+    assert_eq!(
+        tool_input,
+        [
+            &ToolEvent::InputStarted { id: "call_1".into(), name: "test__add_numbers".into() },
+            &ToolEvent::InputDelta { id: "call_1".into(), chunk: arg_chunk_1.into() },
+            &ToolEvent::InputDelta { id: "call_1".into(), chunk: arg_chunk_2.into() },
+            &ToolEvent::Call {
+                request: llm::ToolCallRequest {
+                    id: "call_1".into(),
+                    name: "test__add_numbers".into(),
+                    arguments: request_json.clone(),
+                },
+            },
+        ]
+    );
 
     assert!(messages.iter().any(|message| {
         matches!(

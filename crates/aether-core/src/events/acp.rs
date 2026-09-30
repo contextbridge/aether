@@ -1,7 +1,3 @@
-pub fn parse_tool_call_chunk(chunk: &str) -> serde_json::Value {
-    serde_json::from_str(chunk).unwrap_or_else(|_| serde_json::Value::String(chunk.to_string()))
-}
-
 pub fn mcp_tool_name(namespaced_name: &str) -> &str {
     namespaced_name.split("__").last().unwrap_or(namespaced_name)
 }

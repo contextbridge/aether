@@ -47,16 +47,13 @@ async fn queued_text_suppresses_intermediate_done_between_turns() {
 }
 
 #[tokio::test]
-async fn user_message_during_tool_execution_is_queued() {
+async fn user_message_during_tool_input_streaming_is_queued() {
     let request_json = serde_json::json!({ "a": 2, "b": 3 }).to_string();
     let turns = vec![
         llm_response().tool_call("call_1", "test__add_numbers", &[&request_json]).build(),
         llm_response().text(&["done"]).build(),
     ];
 
-    // Pause turn 1 right after ToolRequestStart (chunk index 1). At that point the
-    // agent has populated `active_requests` and emitted `ToolCall`, so `is_busy()`
-    // returns true even though no real tool work has begun.
     let release = Arc::new(Notify::new());
     let result = test_agent()
         .llm_responses(&turns)
@@ -64,7 +61,7 @@ async fn user_message_during_tool_execution_is_queued() {
         .scenario(
             TestScenario::new()
                 .user_text("add 2 and 3")
-                .wait_for(|m| matches!(m, AgentEvent::Tool(ToolEvent::Call { request, .. }) if request.id == "call_1"))
+                .wait_for(|m| matches!(m, AgentEvent::Tool(ToolEvent::InputStarted { id, .. }) if id == "call_1"))
                 .user_text("now add 10 and 20")
                 .perform(move || release.notify_one())
                 .wait_for_turn_end(),
