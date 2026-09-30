@@ -476,36 +476,44 @@ fn completed_bash_tool_renders_the_command_with_shell_syntax_highlighting() {
 }
 
 #[test]
-fn bash_tool_keeps_highlighting_after_title_and_display_metadata_updates() {
+fn completed_bash_tool_shows_its_command_once_followed_by_the_exit_status() {
     let mut ui = TestUi::with_dimensions(100, 15);
     ui.submit("run shell command");
-    let command = "cargo test";
-    let tool = acp::ToolCallUpdate::new("bash-1")
-        .title("Bash")
-        .raw_input(serde_json::json!({"command": command}))
-        .name("coding__bash");
-    ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(tool)));
-    let mut update_meta = serde_json::Map::new();
-    update_meta.insert("display_value".to_string(), format!("{command} (exit 0)").into());
-    ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(
-        acp::ToolCallUpdate::new("bash-1").title("Ran").status(acp::ToolCallStatus::Completed).meta(update_meta),
-    )));
+    ran_bash_tool(&mut ui, "cargo test", "cargo test (exit 2)");
 
     ui.draw();
 
     let viewport = ui.viewport_text();
-    assert!(
-        viewport.contains("Ran cargo test (exit 0)") && !viewport.contains("Run command"),
-        "a finished bash call should read as completed: {viewport}"
-    );
-    assert_eq!(viewport.matches(command).count(), 1, "the command should render exactly once: {viewport}");
-    let conversation = ui.conversation();
-    let row = row_containing(&conversation, command).expect("command row");
-    let text = row_text(&conversation, row);
-    let start = u16::try_from(text[..text.find(command).unwrap()].width()).unwrap();
-    for offset in start..start + u16::try_from(command.width()).unwrap() {
-        assert_eq!(conversation[(conversation.area.left() + offset, row)].bg, Color::Reset);
-    }
+    assert!(viewport.contains("Ran cargo test (exit 2)"), "{viewport}");
+    assert_eq!(viewport.matches("cargo test").count(), 1, "the summary must not repeat the command: {viewport}");
+}
+
+#[test]
+fn completed_multiline_bash_tool_shows_the_full_command_instead_of_its_truncated_summary() {
+    let command = "python3 - <<'PY'\nfrom pathlib import Path\nprint(Path.cwd())\nPY";
+    let mut ui = TestUi::with_dimensions(100, 15);
+    ui.submit("run shell command");
+    ran_bash_tool(&mut ui, command, "python3 - <<'PY' from pathlib import ... (exit 0)");
+
+    ui.draw();
+
+    let viewport = ui.viewport_text();
+    assert!(viewport.contains("Ran python3 - <<'PY' (exit 0)"), "{viewport}");
+    assert!(command.lines().all(|line| viewport.contains(line)), "every command line should render: {viewport}");
+    assert!(!viewport.contains("..."), "the truncated summary must not render: {viewport}");
+}
+
+fn ran_bash_tool(ui: &mut TestUi, command: &str, display_value: &str) {
+    ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(
+        acp::ToolCallUpdate::new("bash-1")
+            .title("Bash")
+            .name("coding__bash")
+            .raw_input(serde_json::json!({ "command": command })),
+    )));
+    ui.acp_event(tool_call_update_with_display_value("bash-1", display_value));
+    ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(
+        acp::ToolCallUpdate::new("bash-1").title("Ran").status(acp::ToolCallStatus::Completed),
+    )));
 }
 
 #[test]

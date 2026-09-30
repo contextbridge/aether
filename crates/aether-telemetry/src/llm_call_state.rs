@@ -53,47 +53,22 @@ impl LlmCallState {
         self.output.push(chunk);
     }
 
-    pub(crate) fn record_tool_call_start(&mut self, tool_call: &ToolCallRequest) {
+    pub(crate) fn record_tool_input_started(&mut self, id: &str, name: &str) {
         self.record_output_chunk();
-        if let Some(tool_calls) = &mut self.tool_calls {
-            tool_calls.push(tool_call.clone());
-        }
         self.span.add_event(
             GENAI_TOOL_CALL_START_EVENT,
-            vec![
-                KeyValue::new(TOOL_CALL_ID, tool_call.id.clone()),
-                KeyValue::new(TOOL_CALL_NAME, tool_call.name.clone()),
-            ],
+            vec![KeyValue::new(TOOL_CALL_ID, id.to_string()), KeyValue::new(TOOL_CALL_NAME, name.to_string())],
         );
     }
 
-    pub(crate) fn record_tool_call_update(&mut self, tool_call_id: &str, chunk: &str) {
+    pub(crate) fn record_tool_input_delta(&mut self) {
         self.record_output_chunk();
-        if let Some(tool_call) = self
-            .tool_calls
-            .as_mut()
-            .and_then(|tool_calls| tool_calls.iter_mut().find(|tool_call| tool_call.id == tool_call_id))
-        {
-            tool_call.arguments.push_str(chunk);
-        }
     }
 
-    pub(crate) fn record_output_chunk(&mut self) {
-        let now = Instant::now();
-        match self.chunk_timing {
-            ChunkTiming::Disabled => return,
-            ChunkTiming::AwaitingFirst => {
-                let elapsed = self.start.elapsed().as_secs_f64();
-                self.span.set_attribute(KeyValue::new(GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK, elapsed));
-                self.metrics.time_to_first_chunk.record(elapsed, &self.metric_attributes);
-            }
-            ChunkTiming::Streaming { last_chunk } => {
-                self.metrics
-                    .time_per_output_chunk
-                    .record(now.duration_since(last_chunk).as_secs_f64(), &self.metric_attributes);
-            }
+    pub(crate) fn record_tool_call(&mut self, tool_call: &ToolCallRequest) {
+        if let Some(tool_calls) = &mut self.tool_calls {
+            tool_calls.push(tool_call.clone());
         }
-        self.chunk_timing = ChunkTiming::Streaming { last_chunk: now };
     }
 
     pub(crate) fn finish(mut self, outcome: &LlmCallOutcome) {
@@ -140,6 +115,24 @@ impl LlmCallState {
             LlmCallOutcome::Failed { error, .. } => self.fail(ErrorKind::LlmError, error.clone()),
             LlmCallOutcome::Cancelled => self.cancel(),
         }
+    }
+
+    fn record_output_chunk(&mut self) {
+        let now = Instant::now();
+        match self.chunk_timing {
+            ChunkTiming::Disabled => return,
+            ChunkTiming::AwaitingFirst => {
+                let elapsed = self.start.elapsed().as_secs_f64();
+                self.span.set_attribute(KeyValue::new(GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK, elapsed));
+                self.metrics.time_to_first_chunk.record(elapsed, &self.metric_attributes);
+            }
+            ChunkTiming::Streaming { last_chunk } => {
+                self.metrics
+                    .time_per_output_chunk
+                    .record(now.duration_since(last_chunk).as_secs_f64(), &self.metric_attributes);
+            }
+        }
+        self.chunk_timing = ChunkTiming::Streaming { last_chunk: now };
     }
 
     fn record_response_start(&mut self, message_id: &str) {

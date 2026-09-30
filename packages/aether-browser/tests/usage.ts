@@ -6,11 +6,13 @@ import init, {
   type ConversationItem,
   type Elicitation,
   type RemoteServerInfo,
+  type SubAgentEvent,
 } from "@aether-agent/browser";
 import type {
   CreateElicitationRequest,
   PromptResponse,
   SessionUpdate,
+  ToolCallUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2";
 
 export async function usage(url: string): Promise<string> {
@@ -47,6 +49,18 @@ export function errorCode(
 
 export function closeCode(error: AetherClientError): number | undefined {
   return error.close?.code;
+}
+
+export function subAgentToolCallId(event: SubAgentEvent): string | undefined {
+  switch (event.type) {
+    case "started":
+    case "done":
+      return undefined;
+    case "tool_call_update": {
+      const update: ToolCallUpdate = event;
+      return update.toolCallId;
+    }
+  }
 }
 
 function onEvent(event: AetherClientEvent): void {

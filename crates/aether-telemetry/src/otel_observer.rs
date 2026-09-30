@@ -127,8 +127,6 @@ struct TurnState {
     output: ContentBuffer,
     chat_call: Option<LlmCallState>,
     compaction_call: Option<LlmCallState>,
-    /// Tool-call arguments streamed before execution starts, keyed by call id.
-    streamed_arguments: HashMap<String, ContentBuffer>,
     /// Spans of currently executing tools, keyed by call id.
     executing_tools: HashMap<String, SpanGuard>,
 }
@@ -141,7 +139,6 @@ impl TurnState {
             output: ContentBuffer::new(capture_output),
             chat_call: None,
             compaction_call: None,
-            streamed_arguments: HashMap::new(),
             executing_tools: HashMap::new(),
         }
     }
@@ -185,13 +182,17 @@ impl TurnState {
             AgentEvent::Message(MessageEvent::Text { chunk, is_complete: true, .. }) => {
                 self.output.push(chunk);
             }
-            AgentEvent::Tool(ToolEvent::Call { request, .. }) => self.on_tool_call(request, instrumentation),
-            AgentEvent::Tool(ToolEvent::CallUpdate { tool_call_id, chunk, .. }) => {
-                self.on_tool_call_update(tool_call_id, chunk);
+            AgentEvent::Tool(ToolEvent::InputStarted { id, name }) => {
+                if let Some(chat) = &mut self.chat_call {
+                    chat.record_tool_input_started(id, name);
+                }
             }
-            AgentEvent::Tool(ToolEvent::ExecutionStarted { tool_id, tool_name }) => {
-                self.on_tool_execution_started(tool_id, tool_name, instrumentation);
+            AgentEvent::Tool(ToolEvent::InputDelta { .. }) => {
+                if let Some(chat) = &mut self.chat_call {
+                    chat.record_tool_input_delta();
+                }
             }
+            AgentEvent::Tool(ToolEvent::Call { request }) => self.on_tool_call(request, instrumentation),
             AgentEvent::Tool(ToolEvent::Result { result, .. }) => self.on_tool_result(result, instrumentation),
             AgentEvent::Tool(ToolEvent::Error { error, .. }) => self.on_tool_error(error),
             _ => {}
@@ -287,47 +288,29 @@ impl TurnState {
 
     fn on_tool_call(&mut self, request: &ToolCallRequest, instrumentation: &OtelInstrumentation) {
         if let Some(chat) = &mut self.chat_call {
-            chat.record_tool_call_start(request);
+            chat.record_tool_call(request);
         }
-        let mut arguments = ContentBuffer::new(instrumentation.content.tool_calls);
-        arguments.set(&request.arguments);
-        self.streamed_arguments.insert(request.id.clone(), arguments);
-    }
-
-    fn on_tool_call_update(&mut self, tool_call_id: &str, chunk: &str) {
-        if let Some(chat) = &mut self.chat_call {
-            chat.record_tool_call_update(tool_call_id, chunk);
-        }
-        if let Some(arguments) = self.streamed_arguments.get_mut(tool_call_id) {
-            arguments.push(chunk);
-        }
-    }
-
-    fn on_tool_execution_started(&mut self, tool_id: &str, tool_name: &str, instrumentation: &OtelInstrumentation) {
         let mut attributes = vec![
             KeyValue::new(semconv::GEN_AI_OPERATION_NAME, "execute_tool"),
-            KeyValue::new(semconv::GEN_AI_TOOL_NAME, tool_name.to_string()),
-            KeyValue::new(semconv::GEN_AI_TOOL_CALL_ID, tool_id.to_string()),
+            KeyValue::new(semconv::GEN_AI_TOOL_NAME, request.name.clone()),
+            KeyValue::new(semconv::GEN_AI_TOOL_CALL_ID, request.id.clone()),
             KeyValue::new(semconv::MCP_METHOD_NAME, "tools/call"),
             // The server sees the tool without our namespacing prefix, so this
             // is what joins this span to the server's span for the same call.
-            KeyValue::new(semconv::MCP_TOOL_NAME, mcp_tool_name(tool_name).to_string()),
+            KeyValue::new(semconv::MCP_TOOL_NAME, mcp_tool_name(&request.name).to_string()),
         ];
-        let arguments = self.streamed_arguments.remove(tool_id);
-
-        if let Some(text) = arguments.as_ref().and_then(ContentBuffer::get) {
-            attributes.push(KeyValue::new(semconv::GEN_AI_TOOL_CALL_ARGUMENTS, text.to_string()));
+        if instrumentation.content.tool_calls && !request.arguments.is_empty() {
+            attributes.push(KeyValue::new(semconv::GEN_AI_TOOL_CALL_ARGUMENTS, request.arguments.clone()));
         }
 
-        let builder = SpanBuilder::from_name(format!("execute_tool {tool_name}"))
+        let builder = SpanBuilder::from_name(format!("execute_tool {}", request.name))
             .with_kind(SpanKind::Client)
             .with_attributes(attributes);
         let context = instrumentation.start_span(builder, Some(self.span.context()));
-        self.executing_tools.insert(tool_id.to_string(), SpanGuard::new(context, TOOL_CANCEL_MESSAGE));
+        self.executing_tools.insert(request.id.clone(), SpanGuard::new(context, TOOL_CANCEL_MESSAGE));
     }
 
     fn on_tool_result(&mut self, result: &ToolCallResult, instrumentation: &OtelInstrumentation) {
-        self.streamed_arguments.remove(&result.id);
         let Some(mut span) = self.executing_tools.remove(&result.id) else { return };
 
         if instrumentation.content.tool_calls {
@@ -338,7 +321,6 @@ impl TurnState {
     }
 
     fn on_tool_error(&mut self, error: &ToolCallError) {
-        self.streamed_arguments.remove(&error.id);
         if let Some(mut span) = self.executing_tools.remove(&error.id) {
             span.end_error(Some(ErrorKind::ToolError), error.error.clone());
         }

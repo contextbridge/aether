@@ -67,6 +67,15 @@ impl AgentEvent {
             _ => None,
         }
     }
+
+    pub fn is_stream_delta(&self) -> bool {
+        matches!(
+            self,
+            Self::Message(
+                MessageEvent::Text { is_complete: false, .. } | MessageEvent::Thought { is_complete: false, .. }
+            ) | Self::Tool(ToolEvent::InputDelta { .. })
+        )
+    }
 }
 
 #[cfg(test)]
@@ -196,5 +205,25 @@ mod tests {
         assert_eq!(AgentEvent::turn_ended(TurnOutcome::Completed).turn_outcome(), Some(&TurnOutcome::Completed));
         assert_eq!(AgentEvent::text("m", "text", StreamState::Complete).turn_outcome(), None);
         assert_eq!(AgentEvent::Turn(TurnEvent::Started { content: vec![] }).turn_outcome(), None);
+    }
+
+    #[test]
+    fn only_partial_chunks_and_tool_input_deltas_are_stream_deltas() {
+        let deltas = [
+            AgentEvent::text("m", "par", StreamState::Partial),
+            AgentEvent::thought("m", "par", StreamState::Partial),
+            AgentEvent::Tool(ToolEvent::InputDelta { id: "call".into(), chunk: "{".into() }),
+        ];
+        let complete = [
+            AgentEvent::text("m", "partial", StreamState::Complete),
+            AgentEvent::thought("m", "partial", StreamState::Complete),
+            AgentEvent::Tool(ToolEvent::InputStarted { id: "call".into(), name: "read".into() }),
+            AgentEvent::Tool(ToolEvent::Call {
+                request: llm::ToolCallRequest { id: "call".into(), name: "read".into(), arguments: "{}".into() },
+            }),
+            AgentEvent::turn_ended(TurnOutcome::Completed),
+        ];
+        assert!(deltas.iter().all(AgentEvent::is_stream_delta));
+        assert!(!complete.iter().any(AgentEvent::is_stream_delta));
     }
 }

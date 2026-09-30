@@ -5,7 +5,7 @@ mod turn;
 
 pub use activity::Activity;
 pub use items::{ConversationContent, ConversationId, ConversationItem, ConversationItemId, ItemState, Revision};
-pub use tool_calls::{SubAgentState, SubAgentToolCall, ToolCall, ToolStatus};
+pub use tool_calls::{SubAgentState, ToolCall, ToolStatus};
 pub use turn::{TurnFinished, TurnInProgress, TurnPhase};
 
 use crate::client::AcpEvent;

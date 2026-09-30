@@ -14,7 +14,7 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
-use llm::{LlmCallPurpose, ModelIdentity, ModelPricing, TokenUsage};
+use llm::{LlmCallPurpose, ModelIdentity, ModelPricing, TokenUsage, ToolCallRequest};
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::trace::v1::Span;
@@ -152,9 +152,12 @@ async fn propagated_mcp_context_connects_parent_tool_server_and_child_agent_span
         let factory = runtime.observer_factory();
         let mut parent = factory.agent(Some("PatchWaveFix"), None);
         parent.on_event(&AgentEvent::Turn(TurnEvent::Started { content: vec![] }));
-        parent.on_event(&AgentEvent::Tool(ToolEvent::ExecutionStarted {
-            tool_id: "call_1".to_string(),
-            tool_name: "subagents__spawn_subagent".to_string(),
+        parent.on_event(&AgentEvent::Tool(ToolEvent::Call {
+            request: ToolCallRequest {
+                id: "call_1".to_string(),
+                name: "subagents__spawn_subagent".to_string(),
+                arguments: "{}".to_string(),
+            },
         }));
         let outbound = parent.tool_trace_context("call_1").expect("outbound tool span provides propagation context");
 

@@ -84,7 +84,7 @@ pub fn map_event_names(events: &[AgentEvent]) -> Vec<String> {
                 };
                 Some(format!("call_ended:{purpose:?}:{outcome}"))
             }
-            AgentEvent::Tool(ToolEvent::ExecutionStarted { .. }) => Some("tool_execution_started".to_string()),
+            AgentEvent::Tool(ToolEvent::Call { .. }) => Some("tool_call".to_string()),
             AgentEvent::Tool(ToolEvent::DefinitionsUpdated { .. }) => Some("tool_definitions".to_string()),
             _ => None,
         })

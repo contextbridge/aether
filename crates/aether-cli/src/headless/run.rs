@@ -130,12 +130,11 @@ fn event_kind(msg: &AgentEvent) -> Option<CliEventKind> {
         AgentEvent::Turn(TurnEvent::RetryScheduled { .. }) => Some(CliEventKind::LlmRetryScheduled),
         AgentEvent::Turn(TurnEvent::LlmCallStarted { .. }) => Some(CliEventKind::LlmCallStarted),
         AgentEvent::Turn(TurnEvent::LlmCallEnded { .. }) => Some(CliEventKind::LlmCallEnded),
-        AgentEvent::Tool(ToolEvent::ExecutionStarted { .. }) => Some(CliEventKind::ToolExecutionStarted),
         AgentEvent::Tool(ToolEvent::DefinitionsUpdated { .. }) => Some(CliEventKind::ToolDefinitionsUpdated),
         AgentEvent::Message(
             MessageEvent::Text { is_complete: false, .. } | MessageEvent::Thought { is_complete: false, .. },
         )
-        | AgentEvent::Tool(ToolEvent::CallUpdate { .. }) => None,
+        | AgentEvent::Tool(ToolEvent::InputStarted { .. } | ToolEvent::InputDelta { .. }) => None,
     }
 }
 
@@ -164,10 +163,11 @@ mod tests {
         assert_eq!(event_kind(&AgentEvent::text("id", "x", StreamState::Partial)), None);
         assert_eq!(event_kind(&AgentEvent::thought("id", "x", StreamState::Partial)), None);
         assert_eq!(
-            event_kind(&AgentEvent::Tool(ToolEvent::CallUpdate {
-                tool_call_id: "tc1".to_string(),
-                chunk: "x".to_string(),
-            })),
+            event_kind(&AgentEvent::Tool(ToolEvent::InputStarted { id: "tc1".to_string(), name: "bash".to_string() })),
+            None,
+        );
+        assert_eq!(
+            event_kind(&AgentEvent::Tool(ToolEvent::InputDelta { id: "tc1".to_string(), chunk: "x".to_string() })),
             None,
         );
     }
@@ -184,7 +184,7 @@ mod tests {
         assert!(should_emit(&AgentEvent::turn_ended(TurnOutcome::Completed), &[]));
         assert!(!should_emit(&AgentEvent::text("id", "x", StreamState::Partial), &[]));
         assert!(!should_emit(
-            &AgentEvent::Tool(ToolEvent::CallUpdate { tool_call_id: "tc1".to_string(), chunk: "x".to_string() }),
+            &AgentEvent::Tool(ToolEvent::InputDelta { id: "tc1".to_string(), chunk: "x".to_string() }),
             &[],
         ));
     }
@@ -285,13 +285,6 @@ mod tests {
                     outcome: aether_core::events::LlmCallOutcome::Cancelled,
                 }),
                 CliEventKind::LlmCallEnded,
-            ),
-            (
-                AgentEvent::Tool(ToolEvent::ExecutionStarted {
-                    tool_id: "tc1".to_string(),
-                    tool_name: "bash".to_string(),
-                }),
-                CliEventKind::ToolExecutionStarted,
             ),
             (AgentEvent::Tool(ToolEvent::DefinitionsUpdated { tools: vec![] }), CliEventKind::ToolDefinitionsUpdated),
         ];

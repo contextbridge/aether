@@ -17,7 +17,7 @@ mod trace_context;
 mod turn_event;
 mod user_message;
 
-pub use acp::{humanize_tool_name, mcp_tool_name, parse_tool_call_chunk};
+pub use acp::{humanize_tool_name, mcp_tool_name};
 pub use agent_event::AgentEvent;
 pub use compaction_id::CompactionId;
 pub use context_event::{CompactionOutcome, ContextEvent};

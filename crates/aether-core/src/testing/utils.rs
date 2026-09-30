@@ -37,7 +37,7 @@ pub fn content_events(events: Vec<AgentEvent>) -> Vec<AgentEvent> {
                 event,
                 AgentEvent::Turn(
                     TurnEvent::Started { .. } | TurnEvent::LlmCallStarted { .. } | TurnEvent::LlmCallEnded { .. }
-                ) | AgentEvent::Tool(ToolEvent::ExecutionStarted { .. } | ToolEvent::DefinitionsUpdated { .. })
+                ) | AgentEvent::Tool(ToolEvent::DefinitionsUpdated { .. })
             )
         })
         .collect()

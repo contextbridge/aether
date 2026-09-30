@@ -12,8 +12,6 @@ pub trait AgentObserver: Send {
     fn on_system_prompt(&mut self, _prompt: &str) {}
 
     /// Trace context to propagate to whatever executes `tool_id`, available once
-    /// the observer has seen that tool's
-    /// [`ExecutionStarted`](crate::events::ToolEvent::ExecutionStarted).
     fn tool_trace_context(&self, _tool_id: &str) -> Option<TraceContext> {
         None
     }

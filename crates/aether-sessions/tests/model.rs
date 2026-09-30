@@ -3,7 +3,7 @@ use aether_core::events::{
     TurnEvent, TurnOutcome,
 };
 use aether_sessions::model::last_session_usage;
-use aether_sessions::testing::{agent_switched, turn_ended, user_message};
+use aether_sessions::testing::{agent_switched, tool_call, turn_ended, user_message};
 use aether_sessions::{SessionEvent, UserEvent, last_agent_from_events};
 use llm::testing::session_usage_event;
 use llm::{LlmCallPurpose, SessionUsageEvent, TokenUsage};
@@ -57,6 +57,20 @@ fn persisted_event_policy_covers_representative_variants() {
     assert!(usage.is_persisted());
     assert!(!partial.is_persisted());
     assert!(!sub_agent_progress.is_persisted());
+}
+
+#[test]
+fn only_the_complete_tool_call_is_persisted() {
+    let started = SessionEvent::Agent(AgentEvent::Tool(ToolEvent::InputStarted {
+        id: "bash".into(),
+        name: "coding__bash".into(),
+    }));
+    let delta =
+        SessionEvent::Agent(AgentEvent::Tool(ToolEvent::InputDelta { id: "bash".into(), chunk: "partial".into() }));
+
+    assert!(!started.is_persisted());
+    assert!(!delta.is_persisted());
+    assert!(tool_call("bash", "coding__bash", r#"{"command":"echo $HOME"}"#).is_persisted());
 }
 
 #[test]

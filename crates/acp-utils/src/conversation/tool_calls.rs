@@ -3,54 +3,14 @@ use agent_client_protocol::schema::{MaybeUndefined, v2 as acp};
 use schemars::JsonSchema;
 use serde::Serialize;
 
-/// A tracked tool call within a sub-agent.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct SubAgentToolCall {
-    pub id: String,
-    pub name: String,
-    pub raw_input: String,
-    pub display_value: Option<String>,
-    pub status: ToolStatus,
-    #[serde(skip)]
-    kind: ToolKind,
-}
-
-impl SubAgentToolCall {
-    pub fn bash_command(&self) -> Option<String> {
-        bash_command(self.kind, &self.raw_input)
-    }
-}
-
 /// Per-sub-agent state: tracks its tool calls in arrival order.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SubAgentState {
     pub task_id: String,
     pub agent_name: String,
     pub done: bool,
-    pub tool_calls: Vec<SubAgentToolCall>,
-}
-
-impl SubAgentState {
-    fn tool_call_mut(&mut self, id: &str) -> Option<&mut SubAgentToolCall> {
-        self.tool_calls.iter_mut().find(|call| call.id == id)
-    }
-
-    fn upsert(&mut self, id: &str, name: &str, arguments: String) -> &mut SubAgentToolCall {
-        let index = self.tool_calls.iter().position(|call| call.id == id).unwrap_or_else(|| {
-            self.tool_calls.push(SubAgentToolCall {
-                id: id.to_string(),
-                name: name.to_string(),
-                raw_input: arguments,
-                display_value: None,
-                status: ToolStatus::Running,
-                kind: tool_kind(name),
-            });
-            self.tool_calls.len() - 1
-        });
-        &mut self.tool_calls[index]
-    }
+    pub tool_calls: Vec<ToolCall>,
 }
 
 /// A tool call as the merge of every update the agent sent for it.
@@ -65,16 +25,18 @@ pub struct ToolCall {
     protocol: Box<acp::ToolCallUpdate>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolStatus {
+    Running,
+    Success,
+    Cancelled,
+    Failed,
+}
+
 impl ToolCall {
-    pub(super) fn from_update(update: &acp::ToolCallUpdate) -> Self {
-        let mut tool = Self {
-            status: ToolStatus::Running,
-            error: None,
-            sub_agents: Vec::new(),
-            protocol: Box::new(update.clone()),
-        };
-        tool.refresh_status();
-        tool
+    pub fn id(&self) -> &str {
+        &self.protocol.tool_call_id.0
     }
 
     pub fn title(&self) -> &str {
@@ -82,7 +44,7 @@ impl ToolCall {
     }
 
     pub fn raw_input(&self) -> String {
-        self.protocol.raw_input.value().map_or_else(String::new, raw_input_fragment)
+        self.protocol.raw_input.value().map_or_else(String::new, raw_input_text)
     }
 
     pub fn display_value(&self) -> Option<&str> {
@@ -98,6 +60,24 @@ impl ToolCall {
             acp::ToolCallContent::Diff(diff) => Some(diff),
             _ => None,
         })
+    }
+
+    pub fn bash_command(&self) -> Option<&str> {
+        if self.kind() != ToolKind::Bash {
+            return None;
+        }
+        self.protocol.raw_input.value()?.get("command")?.as_str()
+    }
+
+    pub(super) fn from_update(update: &acp::ToolCallUpdate) -> Self {
+        let mut tool = Self {
+            status: ToolStatus::Running,
+            error: None,
+            sub_agents: Vec::new(),
+            protocol: Box::new(update.clone()),
+        };
+        tool.refresh_status();
+        tool
     }
 
     pub(super) fn apply_update(&mut self, update: &acp::ToolCallUpdate) {
@@ -124,23 +104,14 @@ impl ToolCall {
         for agent in &mut self.sub_agents {
             agent.done = true;
             for call in &mut agent.tool_calls {
-                if call.status == ToolStatus::Running {
-                    call.status = status;
-                }
+                call.finalize(status, None);
             }
         }
     }
 
-    pub fn bash_command(&self) -> Option<String> {
-        bash_command(self.kind(), &self.raw_input())
-    }
-
     pub(super) fn is_running(&self) -> bool {
         self.status == ToolStatus::Running
-            || self
-                .sub_agents
-                .iter()
-                .any(|agent| !agent.done || agent.tool_calls.iter().any(|call| call.status == ToolStatus::Running))
+            || self.sub_agents.iter().any(|agent| !agent.done || agent.tool_calls.iter().any(ToolCall::is_running))
     }
 
     pub(super) fn rendering_final(&self) -> bool {
@@ -166,15 +137,6 @@ impl ToolCall {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolStatus {
-    Running,
-    Success,
-    Cancelled,
-    Failed,
-}
-
 fn apply_sub_agent_progress(states: &mut Vec<SubAgentState>, notification: &SubAgentProgressParams) {
     let index = states.iter().position(|agent| agent.task_id == notification.task_id).unwrap_or_else(|| {
         states.push(SubAgentState {
@@ -188,45 +150,18 @@ fn apply_sub_agent_progress(states: &mut Vec<SubAgentState>, notification: &SubA
     let agent = &mut states[index];
 
     match &notification.event {
-        SubAgentEvent::ToolCall { request } => {
-            let call = agent.upsert(&request.id, &request.name, request.arguments.clone());
-            update_title(&mut call.name, &request.name);
-            call.kind = tool_kind(&request.name);
-            call.raw_input.clone_from(&request.arguments);
-            call.status = ToolStatus::Running;
-        }
-        SubAgentEvent::ToolCallUpdate { update } => {
-            let call = agent.upsert(&update.id, "tool", String::new());
-            call.raw_input.push_str(&update.chunk);
-            call.status = ToolStatus::Running;
-        }
-        SubAgentEvent::ToolResult { result } => {
-            if let Some(call) = agent.tool_call_mut(&result.id) {
-                call.status = ToolStatus::Success;
-                if let Some(result_meta) = &result.result_meta {
-                    call.name.clone_from(&result_meta.display.title);
-                    call.display_value = Some(result_meta.display.value.clone());
-                }
-            }
-        }
-        SubAgentEvent::ToolError { error } => {
-            if let Some(call) = agent.tool_call_mut(&error.id) {
-                call.status = ToolStatus::Failed;
+        SubAgentEvent::Started => {}
+        SubAgentEvent::ToolCallUpdate(update) => {
+            match agent.tool_calls.iter_mut().find(|call| call.protocol.tool_call_id == update.tool_call_id) {
+                Some(call) => call.apply_update(update),
+                None => agent.tool_calls.push(ToolCall::from_update(update)),
             }
         }
         SubAgentEvent::Done => agent.done = true,
-        SubAgentEvent::Other => {}
     }
 }
 
-fn update_title(current: &mut String, new_title: &str) {
-    if !new_title.is_empty() {
-        current.clear();
-        current.push_str(new_title);
-    }
-}
-
-fn raw_input_fragment(raw_input: &serde_json::Value) -> String {
+fn raw_input_text(raw_input: &serde_json::Value) -> String {
     raw_input.as_str().map_or_else(|| raw_input.to_string(), str::to_string)
 }
 
@@ -246,11 +181,4 @@ fn tool_kind(tool_name: &str) -> ToolKind {
     } else {
         ToolKind::Other
     }
-}
-
-fn bash_command(kind: ToolKind, raw_input: &str) -> Option<String> {
-    if kind != ToolKind::Bash {
-        return None;
-    }
-    serde_json::from_str::<serde_json::Value>(raw_input).ok()?.get("command")?.as_str().map(str::to_string)
 }

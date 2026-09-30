@@ -9,39 +9,67 @@ use utils::display_meta::ToolResultMeta;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolEvent {
-    /// The LLM requested a tool call; arguments may still be streaming.
-    Call { request: ToolCallRequest },
-    /// A chunk of streamed tool call arguments.
-    CallUpdate { tool_call_id: String, chunk: String },
-    /// The tool began executing.
-    ExecutionStarted { tool_id: String, tool_name: String },
-    /// Progress reported by an executing tool.
-    Progress { request: ToolCallRequest, progress: f64, total: Option<f64>, message: Option<String> },
-    /// Progress from a sub-agent spawned by this tool call, carrying the child's own event.
-    SubAgentProgress { request: ToolCallRequest, payload: Box<SubAgentProgressPayload> },
-    /// An executing tool refreshed how it should be displayed.
-    DisplayUpdate { request: ToolCallRequest, meta: ToolResultMeta },
-    /// A background task was created by a tool call response.
-    TaskCreated { request: ToolCallRequest, task_id: String, status_message: Option<String> },
-    /// The background task reported a new status.
-    TaskStatus { request: ToolCallRequest, task_id: String, status: String, status_message: Option<String> },
-    /// The background task completed successfully.
+    InputStarted {
+        id: String,
+        name: String,
+    },
+    InputDelta {
+        id: String,
+        chunk: String,
+    },
+    Call {
+        request: ToolCallRequest,
+    },
+    Progress {
+        request: ToolCallRequest,
+        progress: f64,
+        total: Option<f64>,
+        message: Option<String>,
+    },
+    SubAgentProgress {
+        request: ToolCallRequest,
+        payload: Box<SubAgentProgressPayload>,
+    },
+    DisplayUpdate {
+        request: ToolCallRequest,
+        meta: ToolResultMeta,
+    },
+    TaskCreated {
+        request: ToolCallRequest,
+        task_id: String,
+        status_message: Option<String>,
+    },
+    TaskStatus {
+        request: ToolCallRequest,
+        task_id: String,
+        status: String,
+        status_message: Option<String>,
+    },
     TaskCompleted {
         request: ToolCallRequest,
         task_id: String,
         result: ToolCallResult,
         result_meta: Option<ToolResultMeta>,
     },
-    /// The background task failed.
-    TaskFailed { request: ToolCallRequest, task_id: String, error: ToolCallError },
-    /// The background task was cancelled.
-    TaskCancelled { request: ToolCallRequest, task_id: String },
-    /// The tool completed successfully.
-    Result { result: ToolCallResult, result_meta: Option<ToolResultMeta> },
-    /// The tool failed.
-    Error { error: ToolCallError },
-    /// The set of available tool definitions changed.
-    DefinitionsUpdated { tools: Vec<ToolDefinition> },
+    TaskFailed {
+        request: ToolCallRequest,
+        task_id: String,
+        error: ToolCallError,
+    },
+    TaskCancelled {
+        request: ToolCallRequest,
+        task_id: String,
+    },
+    Result {
+        result: ToolCallResult,
+        result_meta: Option<ToolResultMeta>,
+    },
+    Error {
+        error: ToolCallError,
+    },
+    DefinitionsUpdated {
+        tools: Vec<ToolDefinition>,
+    },
 }
 
 impl ToolEvent {

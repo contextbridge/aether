@@ -36,8 +36,7 @@ impl AgentEventBuilder {
         let result_value = serde_json::to_value(result).expect("Failed to serialize result");
         let result_yaml = serde_yml::to_string(&result_value).unwrap_or_else(|_| result_value.to_string());
 
-        self.push_tool_call_start(tool_call_id, name);
-        self.push_tool_call_chunk(tool_call_id, &request_json);
+        self.push_tool_call(tool_call_id, name, &request_json);
 
         self.chunks.push(AgentEvent::Tool(ToolEvent::Result {
             result: ToolCallResult {
@@ -63,8 +62,7 @@ impl AgentEventBuilder {
 
         let error_result = format!("Tool execution error: {error_message}");
 
-        self.push_tool_call_start(tool_call_id, name);
-        self.push_tool_call_chunk(tool_call_id, &request_json);
+        self.push_tool_call(tool_call_id, name, &request_json);
 
         self.chunks.push(AgentEvent::Tool(ToolEvent::Error {
             error: ToolCallError {
@@ -84,16 +82,17 @@ impl AgentEventBuilder {
         self.chunks
     }
 
-    fn push_tool_call_start(&mut self, tool_call_id: &str, name: &str) {
-        self.chunks.push(AgentEvent::Tool(ToolEvent::Call {
-            request: ToolCallRequest { id: tool_call_id.to_string(), name: name.to_string(), arguments: String::new() },
-        }));
-    }
-
-    fn push_tool_call_chunk(&mut self, tool_call_id: &str, chunk: &str) {
-        self.chunks.push(AgentEvent::Tool(ToolEvent::CallUpdate {
-            tool_call_id: tool_call_id.to_string(),
-            chunk: chunk.to_string(),
-        }));
+    fn push_tool_call(&mut self, tool_call_id: &str, name: &str, arguments: &str) {
+        self.chunks.extend([
+            AgentEvent::Tool(ToolEvent::InputStarted { id: tool_call_id.to_string(), name: name.to_string() }),
+            AgentEvent::Tool(ToolEvent::InputDelta { id: tool_call_id.to_string(), chunk: arguments.to_string() }),
+            AgentEvent::Tool(ToolEvent::Call {
+                request: ToolCallRequest {
+                    id: tool_call_id.to_string(),
+                    name: name.to_string(),
+                    arguments: arguments.to_string(),
+                },
+            }),
+        ]);
     }
 }

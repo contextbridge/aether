@@ -143,7 +143,7 @@ Available event kinds:
 | ---------------------------- | -------------------------------------------------------------- |
 | `text`                       | Final text chunks.                                             |
 | `thought`                    | Final reasoning/thought chunks.                                |
-| `tool_call`                  | Tool invocation.                                               |
+| `tool_call`                  | Tool invocation with its complete arguments.                   |
 | `tool_result`                | Tool return value.                                             |
 | `tool_error`                 | Tool failure.                                                  |
 | `auto_continue`              | Agent auto-continuing.                                         |
@@ -160,7 +160,6 @@ Available event kinds:
 | `llm_retry_scheduled`        | LLM retry backoff was scheduled.                               |
 | `llm_call_started`           | LLM call began, including retries.                             |
 | `llm_call_ended`             | LLM call completed, failed, or was cancelled.                  |
-| `tool_execution_started`     | Tool execution began.                                          |
 | `tool_definitions_updated`   | Available tool definitions changed.                            |
 
 When `--events` is set, terminal outcomes are shown only if `turn_ended` is explicitly listed.

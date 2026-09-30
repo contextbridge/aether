@@ -195,8 +195,8 @@ impl EventProjection {
             ToolEvent::TaskCancelled { request, .. } => {
                 Self::for_tool_request("tool_task_cancelled", request, Some("cancelled"))
             }
-            ToolEvent::CallUpdate { .. } => Self::new("agent", "tool_call_update"),
-            ToolEvent::ExecutionStarted { .. } => Self::new("agent", "tool_execution_started"),
+            ToolEvent::InputStarted { .. } => Self::new("agent", "tool_input_started"),
+            ToolEvent::InputDelta { .. } => Self::new("agent", "tool_input_delta"),
             ToolEvent::Progress { .. } => Self::new("agent", "tool_progress"),
             ToolEvent::SubAgentProgress { .. } => Self::new("agent", "sub_agent_progress"),
             ToolEvent::DisplayUpdate { .. } => Self::new("agent", "tool_display_update"),

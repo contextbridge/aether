@@ -22,8 +22,7 @@ use crate::settings::UiSettings;
 use crate::surfaces::composer::ComposerLayout;
 use acp_utils::client::AcpEvent;
 use acp_utils::notifications::{
-    AetherCapabilities, ContextClearedParams, SubAgentEvent, SubAgentProgressParams, SubAgentToolRequest,
-    SubAgentToolResult, WorkspaceStatusResponse,
+    AetherCapabilities, ContextClearedParams, SubAgentEvent, SubAgentProgressParams, WorkspaceStatusResponse,
 };
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::v2::{self as acp, SessionId, SessionUpdate, ToolCallUpdate};
@@ -110,6 +109,11 @@ impl FakeExecutor {
             self.available.push_back(command.clone());
             self.pending.push_back(command);
         }
+    }
+
+    pub fn take_commands(&mut self) -> Vec<Command> {
+        self.pending.clear();
+        self.available.drain(..).collect()
     }
 
     fn complete(&mut self, command: Command) -> Option<CommandResult> {
@@ -207,11 +211,6 @@ impl FakeExecutor {
     fn clear_available(&mut self) {
         self.available.clear();
     }
-
-    pub fn take_commands(&mut self) -> Vec<Command> {
-        self.pending.clear();
-        self.available.drain(..).collect()
-    }
 }
 
 /// An in-memory filesystem used by command-oriented tests.
@@ -297,20 +296,20 @@ pub struct FakeGit {
     state: std::sync::Arc<std::sync::Mutex<FakeGitState>>,
 }
 
-#[derive(Default)]
-struct FakeGitState {
-    root: PathBuf,
-    files: BTreeMap<String, FakeGitFile>,
-    commits: Vec<String>,
-    is_repo: bool,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FakeGitFile {
     pub path: String,
     pub contents: Option<Vec<u8>>,
     pub staged_contents: Option<Vec<u8>>,
     pub committed_contents: Option<Vec<u8>>,
+}
+
+#[derive(Default)]
+struct FakeGitState {
+    root: PathBuf,
+    files: BTreeMap<String, FakeGitFile>,
+    commits: Vec<String>,
+    is_repo: bool,
 }
 
 impl FakeGit {
@@ -520,53 +519,6 @@ impl FakeGit {
         let document = DiffDocument { repo_root: state.root.to_string_lossy().into_owned(), files };
         Ok(DiffSnapshot { scope, document: Arc::new(document) })
     }
-}
-
-fn git_error(message: impl Into<String>) -> RemoteError {
-    RemoteError::new(RemoteErrorCode::Git, message)
-}
-
-fn not_repository_error() -> RemoteError {
-    git_error("path is not inside a Git worktree")
-}
-
-fn status_of(file: &FakeGitFile) -> Option<(FileStatus, StageState)> {
-    let staged_changed = file.staged_contents != file.committed_contents;
-    let working_changed = file.contents != file.staged_contents;
-    if !staged_changed && !working_changed {
-        return None;
-    }
-
-    if file.committed_contents.is_none() {
-        let stage = match (file.staged_contents.is_some(), working_changed) {
-            (true, true) => StageState::PartiallyStaged,
-            (true, false) => StageState::Staged,
-            (false, _) => StageState::Unstaged,
-        };
-        return Some((FileStatus::Untracked, stage));
-    }
-
-    let stage = match (staged_changed, working_changed) {
-        (true, true) => StageState::PartiallyStaged,
-        (true, false) => StageState::Staged,
-        (false, true) => StageState::Unstaged,
-        (false, false) => unreachable!("clean files returned above"),
-    };
-    let status = if file.contents.is_none() { FileStatus::Deleted } else { FileStatus::Modified };
-    Some((status, stage))
-}
-
-fn fake_source(bytes: Option<&[u8]>) -> clankerdiff_ratatui::diff::SourceResult {
-    use clankerdiff_ratatui::diff::{SourceDocument, SourceUnavailable};
-    match bytes {
-        None => Err(SourceUnavailable::Absent),
-        Some(bytes) if is_binary(bytes) => Err(SourceUnavailable::Binary),
-        Some(bytes) => SourceDocument::new(String::from_utf8_lossy(bytes)).map(std::sync::Arc::new),
-    }
-}
-
-fn is_binary(bytes: &[u8]) -> bool {
-    bytes.iter().take(8192).any(|byte| *byte == 0) || std::str::from_utf8(bytes).is_err()
 }
 
 /// Deterministic terminal wrapper used by focused golden tests.
@@ -957,41 +909,6 @@ where
         }
     }
 
-    /// One spawn tool whose sub-agents run and finish, leaving a sealed tree.
-    fn seed_sub_agent_tree(&mut self, turn: usize) {
-        let parent = format!("seed-spawn-{turn}");
-        self.acp_event(seed_spawn_tool(&parent));
-        self.acp_event(tool_completed(&parent));
-        for agent in ["explorer", "fixer"] {
-            let task = format!("{parent}-{agent}");
-            self.acp_event(seed_sub_agent(
-                &parent,
-                &task,
-                agent,
-                SubAgentEvent::ToolCall {
-                    request: SubAgentToolRequest {
-                        id: format!("{task}-grep"),
-                        name: "grep".to_string(),
-                        arguments: r#"{"pattern":"torn update"}"#.to_string(),
-                    },
-                },
-            ));
-            self.acp_event(seed_sub_agent(
-                &parent,
-                &task,
-                agent,
-                SubAgentEvent::ToolResult {
-                    result: SubAgentToolResult {
-                        id: format!("{task}-grep"),
-                        name: "grep".to_string(),
-                        result_meta: None,
-                    },
-                },
-            ));
-            self.acp_event(seed_sub_agent(&parent, &task, agent, SubAgentEvent::Done));
-        }
-    }
-
     /// Streams one assistant message of `total_bytes` in `chunk_bytes` chunks,
     /// drawing after every chunk the way the event loop draws after every
     /// wakeup. The message stays one open item while it streams.
@@ -1111,6 +1028,32 @@ where
                 }
             }
             initial_batch = false;
+        }
+    }
+
+    fn seed_sub_agent_tree(&mut self, turn: usize) {
+        let parent = format!("seed-spawn-{turn}");
+        self.acp_event(seed_spawn_tool(&parent));
+        self.acp_event(tool_completed(&parent));
+        for agent in ["explorer", "fixer"] {
+            let task = format!("{parent}-{agent}");
+            let grep = format!("{task}-grep");
+            self.acp_event(sub_agent_tool_update(
+                &parent,
+                &task,
+                agent,
+                ToolCallUpdate::new(grep.clone())
+                    .title("Grep")
+                    .name("coding__grep")
+                    .raw_input(json!({ "pattern": "torn update" })),
+            ));
+            self.acp_event(sub_agent_tool_update(
+                &parent,
+                &task,
+                agent,
+                ToolCallUpdate::new(grep).status(acp::ToolCallStatus::Completed),
+            ));
+            self.acp_event(sub_agent_progress(&parent, &task, agent, SubAgentEvent::Done));
         }
     }
 }
@@ -1461,78 +1404,6 @@ impl TestUiBuilder {
     }
 }
 
-/// The terminal a scenario draws into: the inline viewport sized from the
-/// backend, exactly as the real event loop enters it.
-fn test_terminal<B: Backend>(backend: B) -> Terminal<B>
-where
-    B::Error: std::fmt::Debug,
-{
-    let height = backend.size().unwrap().height;
-    Terminal::with_options(backend, TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(height)) })
-        .unwrap()
-}
-
-/// What the inline viewport shows: `terminal.get_frame().area()` clipped out of
-/// the backend's full screen buffer.
-fn viewport_buffer<B>(terminal: &mut Terminal<B>) -> Buffer
-where
-    B: Backend + BuffersReader,
-{
-    let area = terminal.get_frame().area();
-    let screen = terminal.backend().screen();
-    let mut viewport = Buffer::empty(Rect::new(0, 0, area.width, area.height));
-    for y in 0..area.height {
-        for x in 0..area.width {
-            viewport[(x, y)] = screen[(area.x + x, area.y + y)].clone();
-        }
-    }
-    viewport
-}
-
-/// Content Ratatui's `insert_before` committed above the inline viewport.
-fn history_buffer<B>(terminal: &mut Terminal<B>) -> Buffer
-where
-    B: Backend + BuffersReader,
-{
-    let viewport_area = terminal.get_frame().area();
-    let screen = terminal.backend().screen();
-    let scrollback = terminal.backend().scrollback();
-    let history_height = scrollback.area.height.saturating_add(viewport_area.top());
-    let mut history = Buffer::empty(Rect::new(0, 0, screen.area.width, history_height));
-    for y in 0..scrollback.area.height {
-        for x in 0..scrollback.area.width {
-            history[(x, y)] = scrollback[(x, y)].clone();
-        }
-    }
-    for y in 0..viewport_area.top() {
-        for x in 0..screen.area.width {
-            history[(x, scrollback.area.height + y)] = screen[(x, y)].clone();
-        }
-    }
-    history
-}
-
-fn conversation_buffer<B>(terminal: &mut Terminal<B>) -> Buffer
-where
-    B: Backend + BuffersReader,
-{
-    let history = history_buffer(terminal);
-    let viewport = viewport_buffer(terminal);
-    let mut conversation =
-        Buffer::empty(Rect::new(0, 0, viewport.area.width, history.area.height.saturating_add(viewport.area.height)));
-    for y in 0..history.area.height {
-        for x in 0..history.area.width {
-            conversation[(x, y)] = history[(x, y)].clone();
-        }
-    }
-    for y in 0..viewport.area.height {
-        for x in 0..viewport.area.width {
-            conversation[(x, history.area.height + y)] = viewport[(x, y)].clone();
-        }
-    }
-    conversation
-}
-
 /// Whether any cell drawn with `symbol` satisfies `predicate`.
 pub fn has_cell(buffer: &Buffer, symbol: &str, predicate: impl Fn(&Cell) -> bool) -> bool {
     for y in buffer.area.top()..buffer.area.bottom() {
@@ -1619,6 +1490,199 @@ pub enum StreamContent {
     Thought,
 }
 
+pub fn session_update(update: acp::SessionUpdate) -> AcpEvent {
+    acp::UpdateSessionNotification::new(SessionId::new("test-session"), update).into()
+}
+
+pub fn context_cleared() -> AcpEvent {
+    AcpEvent::ContextCleared(ContextClearedParams { session_id: SessionId::new("test-session") })
+}
+
+pub fn compaction_update(id: &str, status: acp::CompactionStatus) -> AcpEvent {
+    session_update(acp::SessionUpdate::CompactionUpdate(acp::CompactionUpdate::new(id, status)))
+}
+
+pub fn text_chunk(text: &str) -> AcpEvent {
+    text_chunk_with_id("assistant", text)
+}
+
+pub fn text_chunk_with_id(message_id: &str, text: &str) -> AcpEvent {
+    session_update(acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
+        acp::ContentBlock::Text(acp::TextContent::new(text)),
+        message_id.to_string(),
+    )))
+}
+
+pub fn thought_chunk(text: &str) -> AcpEvent {
+    thought_chunk_with_id("thought", text)
+}
+
+pub fn thought_chunk_with_id(message_id: &str, text: &str) -> AcpEvent {
+    session_update(acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(
+        acp::ContentBlock::Text(acp::TextContent::new(text)),
+        message_id.to_string(),
+    )))
+}
+
+pub fn text_diff(path: &str, old: &str, new: &str) -> acp::Diff {
+    let diff_text = git_patch_from_texts(path, Some(old), Some(new)).expect("valid text diff");
+    acp::Diff::new(vec![acp::DiffChange::modify(acp::AbsolutePath::new(path))])
+        .with_patch(diff_text.map(acp::DiffPatch::new))
+}
+
+pub fn sub_agent_progress(parent: &str, task: &str, agent: &str, event: SubAgentEvent) -> AcpEvent {
+    AcpEvent::SubAgentProgress(SubAgentProgressParams {
+        session_id: SessionId::new("test-session"),
+        parent_tool_id: parent.to_string(),
+        task_id: task.to_string(),
+        agent_name: agent.to_string(),
+        event,
+    })
+}
+
+pub fn sub_agent_tool_update(parent: &str, task: &str, agent: &str, update: ToolCallUpdate) -> AcpEvent {
+    sub_agent_progress(parent, task, agent, SubAgentEvent::ToolCallUpdate(Box::new(update)))
+}
+
+pub fn tool_completed(id: &str) -> AcpEvent {
+    session_update(acp::SessionUpdate::ToolCallUpdate(
+        acp::ToolCallUpdate::new(id.to_string()).status(acp::ToolCallStatus::Completed),
+    ))
+}
+
+pub fn chunk_message(message: &str, chunk_bytes: usize) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut rest = message;
+    while !rest.is_empty() {
+        let mut end = rest.len().min(chunk_bytes);
+        while !rest.is_char_boundary(end) {
+            end -= 1;
+        }
+        chunks.push(rest[..end].to_string());
+        rest = &rest[end..];
+    }
+    chunks
+}
+
+fn git_error(message: impl Into<String>) -> RemoteError {
+    RemoteError::new(RemoteErrorCode::Git, message)
+}
+
+fn not_repository_error() -> RemoteError {
+    git_error("path is not inside a Git worktree")
+}
+
+fn status_of(file: &FakeGitFile) -> Option<(FileStatus, StageState)> {
+    let staged_changed = file.staged_contents != file.committed_contents;
+    let working_changed = file.contents != file.staged_contents;
+    if !staged_changed && !working_changed {
+        return None;
+    }
+
+    if file.committed_contents.is_none() {
+        let stage = match (file.staged_contents.is_some(), working_changed) {
+            (true, true) => StageState::PartiallyStaged,
+            (true, false) => StageState::Staged,
+            (false, _) => StageState::Unstaged,
+        };
+        return Some((FileStatus::Untracked, stage));
+    }
+
+    let stage = match (staged_changed, working_changed) {
+        (true, true) => StageState::PartiallyStaged,
+        (true, false) => StageState::Staged,
+        (false, true) => StageState::Unstaged,
+        (false, false) => unreachable!("clean files returned above"),
+    };
+    let status = if file.contents.is_none() { FileStatus::Deleted } else { FileStatus::Modified };
+    Some((status, stage))
+}
+
+fn fake_source(bytes: Option<&[u8]>) -> clankerdiff_ratatui::diff::SourceResult {
+    use clankerdiff_ratatui::diff::{SourceDocument, SourceUnavailable};
+    match bytes {
+        None => Err(SourceUnavailable::Absent),
+        Some(bytes) if is_binary(bytes) => Err(SourceUnavailable::Binary),
+        Some(bytes) => SourceDocument::new(String::from_utf8_lossy(bytes)).map(std::sync::Arc::new),
+    }
+}
+
+fn is_binary(bytes: &[u8]) -> bool {
+    bytes.iter().take(8192).any(|byte| *byte == 0) || std::str::from_utf8(bytes).is_err()
+}
+
+/// The terminal a scenario draws into: the inline viewport sized from the
+/// backend, exactly as the real event loop enters it.
+fn test_terminal<B: Backend>(backend: B) -> Terminal<B>
+where
+    B::Error: std::fmt::Debug,
+{
+    let height = backend.size().unwrap().height;
+    Terminal::with_options(backend, TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(height)) })
+        .unwrap()
+}
+
+/// What the inline viewport shows: `terminal.get_frame().area()` clipped out of
+/// the backend's full screen buffer.
+fn viewport_buffer<B>(terminal: &mut Terminal<B>) -> Buffer
+where
+    B: Backend + BuffersReader,
+{
+    let area = terminal.get_frame().area();
+    let screen = terminal.backend().screen();
+    let mut viewport = Buffer::empty(Rect::new(0, 0, area.width, area.height));
+    for y in 0..area.height {
+        for x in 0..area.width {
+            viewport[(x, y)] = screen[(area.x + x, area.y + y)].clone();
+        }
+    }
+    viewport
+}
+
+/// Content Ratatui's `insert_before` committed above the inline viewport.
+fn history_buffer<B>(terminal: &mut Terminal<B>) -> Buffer
+where
+    B: Backend + BuffersReader,
+{
+    let viewport_area = terminal.get_frame().area();
+    let screen = terminal.backend().screen();
+    let scrollback = terminal.backend().scrollback();
+    let history_height = scrollback.area.height.saturating_add(viewport_area.top());
+    let mut history = Buffer::empty(Rect::new(0, 0, screen.area.width, history_height));
+    for y in 0..scrollback.area.height {
+        for x in 0..scrollback.area.width {
+            history[(x, y)] = scrollback[(x, y)].clone();
+        }
+    }
+    for y in 0..viewport_area.top() {
+        for x in 0..screen.area.width {
+            history[(x, scrollback.area.height + y)] = screen[(x, y)].clone();
+        }
+    }
+    history
+}
+
+fn conversation_buffer<B>(terminal: &mut Terminal<B>) -> Buffer
+where
+    B: Backend + BuffersReader,
+{
+    let history = history_buffer(terminal);
+    let viewport = viewport_buffer(terminal);
+    let mut conversation =
+        Buffer::empty(Rect::new(0, 0, viewport.area.width, history.area.height.saturating_add(viewport.area.height)));
+    for y in 0..history.area.height {
+        for x in 0..history.area.width {
+            conversation[(x, y)] = history[(x, y)].clone();
+        }
+    }
+    for y in 0..viewport.area.height {
+        for x in 0..viewport.area.width {
+            conversation[(x, history.area.height + y)] = viewport[(x, y)].clone();
+        }
+    }
+    conversation
+}
+
 const SEED_PROSE: &str = "\
 Examining the request. The module guards its invariants behind a shared handle,
 so the fix has to land on the writer side rather than at each call site. I will
@@ -1671,40 +1735,6 @@ fn reconcile(state: &mut State, incoming: Vec<Delta>) -> Outcome {
 }
 ";
 
-pub fn session_update(update: acp::SessionUpdate) -> AcpEvent {
-    acp::UpdateSessionNotification::new(SessionId::new("test-session"), update).into()
-}
-
-pub fn context_cleared() -> AcpEvent {
-    AcpEvent::ContextCleared(ContextClearedParams { session_id: SessionId::new("test-session") })
-}
-
-pub fn compaction_update(id: &str, status: acp::CompactionStatus) -> AcpEvent {
-    session_update(acp::SessionUpdate::CompactionUpdate(acp::CompactionUpdate::new(id, status)))
-}
-
-pub fn text_chunk(text: &str) -> AcpEvent {
-    text_chunk_with_id("assistant", text)
-}
-
-pub fn text_chunk_with_id(message_id: &str, text: &str) -> AcpEvent {
-    session_update(acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
-        acp::ContentBlock::Text(acp::TextContent::new(text)),
-        message_id.to_string(),
-    )))
-}
-
-pub fn thought_chunk(text: &str) -> AcpEvent {
-    thought_chunk_with_id("thought", text)
-}
-
-pub fn thought_chunk_with_id(message_id: &str, text: &str) -> AcpEvent {
-    session_update(acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(
-        acp::ContentBlock::Text(acp::TextContent::new(text)),
-        message_id.to_string(),
-    )))
-}
-
 fn seed_bash_tool(id: &str) -> AcpEvent {
     let mut tool_call = ToolCallUpdate::new(id.to_string()).title(format!("Run {id}"));
     tool_call.name = MaybeUndefined::Value("bash".into());
@@ -1724,18 +1754,6 @@ fn seed_spawn_tool(id: &str) -> AcpEvent {
     session_update(SessionUpdate::ToolCallUpdate(tool_call))
 }
 
-pub fn text_diff(path: &str, old: &str, new: &str) -> acp::Diff {
-    let diff_text = git_patch_from_texts(path, Some(old), Some(new)).expect("valid text diff");
-    acp::Diff::new(vec![acp::DiffChange::modify(acp::AbsolutePath::new(path))])
-        .with_patch(diff_text.map(acp::DiffPatch::new))
-}
-
-pub fn tool_completed(id: &str) -> AcpEvent {
-    session_update(acp::SessionUpdate::ToolCallUpdate(
-        acp::ToolCallUpdate::new(id.to_string()).status(acp::ToolCallStatus::Completed),
-    ))
-}
-
 fn seed_tool_diff(id: &str, turn: usize) -> AcpEvent {
     let diff = text_diff(&format!("/src/module_{turn}.rs"), SEED_DIFF_BEFORE, SEED_DIFF_AFTER);
     session_update(acp::SessionUpdate::ToolCallUpdate(
@@ -1743,16 +1761,6 @@ fn seed_tool_diff(id: &str, turn: usize) -> AcpEvent {
             .content(vec![acp::ToolCallContent::Diff(diff)])
             .status(acp::ToolCallStatus::Completed),
     ))
-}
-
-fn seed_sub_agent(parent: &str, task: &str, agent: &str, event: SubAgentEvent) -> AcpEvent {
-    AcpEvent::SubAgentProgress(SubAgentProgressParams {
-        session_id: SessionId::new("test-session"),
-        parent_tool_id: parent.to_string(),
-        task_id: task.to_string(),
-        agent_name: agent.to_string(),
-        event,
-    })
 }
 
 fn prose_message(total_bytes: usize) -> String {
@@ -1788,20 +1796,6 @@ fn thought_message(total_bytes: usize) -> String {
         step += 1;
     }
     message
-}
-
-pub fn chunk_message(message: &str, chunk_bytes: usize) -> Vec<String> {
-    let mut chunks = Vec::new();
-    let mut rest = message;
-    while !rest.is_empty() {
-        let mut end = rest.len().min(chunk_bytes);
-        while !rest.is_char_boundary(end) {
-            end -= 1;
-        }
-        chunks.push(rest[..end].to_string());
-        rest = &rest[end..];
-    }
-    chunks
 }
 
 #[cfg(test)]

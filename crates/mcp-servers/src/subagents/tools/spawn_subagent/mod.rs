@@ -248,12 +248,12 @@ impl AgentExecutor {
                 .await
                 .map_err(|e| format!("Failed to send message to agent: {e}"))?;
 
-            self.report(&task_id, &agent_name, AgentEvent::Turn(TurnEvent::Started { content: vec![] })).await;
+            self.report(&task_id, &agent_name, &AgentEvent::Turn(TurnEvent::Started { content: vec![] })).await;
 
             let mut final_output = String::new();
 
             while let Some(message) = agent_rx.recv().await {
-                self.report(&task_id, &agent_name, message.clone()).await;
+                self.report(&task_id, &agent_name, &message).await;
 
                 match &message {
                     AgentEvent::Message(MessageEvent::Text { chunk, is_complete, .. }) if *is_complete => {
@@ -288,10 +288,16 @@ impl AgentExecutor {
         }
     }
 
-    async fn report(&self, task_id: &str, agent_name: &str, event: AgentEvent) {
+    async fn report(&self, task_id: &str, agent_name: &str, event: &AgentEvent) {
+        if event.is_stream_delta() {
+            return;
+        }
         if let Some(sink) = &self.progress {
-            let payload =
-                SubAgentProgressPayload { task_id: task_id.to_string(), agent_name: agent_name.to_string(), event };
+            let payload = SubAgentProgressPayload {
+                task_id: task_id.to_string(),
+                agent_name: agent_name.to_string(),
+                event: event.clone(),
+            };
             sink.send(payload).await;
         }
     }
