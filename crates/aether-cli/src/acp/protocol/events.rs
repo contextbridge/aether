@@ -1,11 +1,8 @@
 use crate::acp::session::actor::SessionIo;
-use acp_utils::notifications::{
-    ContextClearedParams, SessionUsageParams, SubAgentEvent, SubAgentProgressParams, SubAgentToolCallUpdate,
-    SubAgentToolError, SubAgentToolRequest, SubAgentToolResult,
-};
+use acp_utils::notifications::{ContextClearedParams, SessionUsageParams, SubAgentEvent, SubAgentProgressParams};
 use aether_core::events::{
     AgentEvent, CompactionOutcome, ContextEvent, MessageEvent, ModelEvent, ToolEvent, TurnEvent, TurnOutcome,
-    humanize_tool_name, parse_tool_call_chunk,
+    humanize_tool_name,
 };
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::v2::{
@@ -30,13 +27,15 @@ pub(crate) fn project_agent_event(msg: &AgentEvent, mode: NotificationMode, io: 
     }
     match msg {
         AgentEvent::Tool(ToolEvent::SubAgentProgress { request, payload }) => {
-            io.send(SubAgentProgressParams {
-                session_id: io.session_id().clone(),
-                parent_tool_id: request.id.clone(),
-                task_id: payload.task_id.clone(),
-                agent_name: payload.agent_name.clone(),
-                event: to_sub_agent_event(&payload.event),
-            });
+            if let Some(event) = to_sub_agent_event(&payload.event) {
+                io.send(SubAgentProgressParams {
+                    session_id: io.session_id().clone(),
+                    parent_tool_id: request.id.clone(),
+                    task_id: payload.task_id.clone(),
+                    agent_name: payload.agent_name.clone(),
+                    event,
+                });
+            }
         }
         AgentEvent::Context(ContextEvent::Cleared) => {
             io.send(ContextClearedParams { session_id: io.session_id().clone() });
@@ -75,11 +74,11 @@ pub fn map_agent_event_to_notification(msg: &AgentEvent, mode: NotificationMode)
             map_message_to_notification(MessageKind::Thought, message_id, chunk, *is_complete, mode)
         }
 
-        AgentEvent::Tool(ToolEvent::Call { request, .. }) => Some(map_tool_call_to_notification(request)),
-
-        AgentEvent::Tool(ToolEvent::CallUpdate { tool_call_id, chunk, .. }) => {
-            Some(map_tool_call_update_to_notification(tool_call_id, chunk))
+        AgentEvent::Tool(ToolEvent::InputStarted { id, name }) => {
+            Some(SessionUpdate::ToolCallUpdate(tool_call_upsert(id, name)))
         }
+
+        AgentEvent::Tool(ToolEvent::Call { request }) => Some(map_tool_call_to_notification(request)),
 
         AgentEvent::Tool(
             ToolEvent::Result { result, result_meta, .. } | ToolEvent::TaskCompleted { result, result_meta, .. },
@@ -157,9 +156,7 @@ pub fn map_agent_event_to_notification(msg: &AgentEvent, mode: NotificationMode)
             | TurnEvent::AutoContinue { .. },
         )
         | AgentEvent::Tool(
-            ToolEvent::ExecutionStarted { .. }
-            | ToolEvent::DefinitionsUpdated { .. }
-            | ToolEvent::SubAgentProgress { .. },
+            ToolEvent::InputDelta { .. } | ToolEvent::DefinitionsUpdated { .. } | ToolEvent::SubAgentProgress { .. },
         )
         | AgentEvent::Model(ModelEvent::Switched { .. })
         | AgentEvent::SessionUsage(_) => None,
@@ -231,23 +228,16 @@ fn thought_message_id(message_id: &llm::MessageId) -> MessageId {
     MessageId::new(format!("{message_id}:thought"))
 }
 
-fn map_tool_call_to_notification(request: &ToolCallRequest) -> SessionUpdate {
-    let raw_input = serde_json::from_str(&request.arguments).map_or(MaybeUndefined::Undefined, json_patch_value);
-    SessionUpdate::ToolCallUpdate(
-        ToolCallUpdate::new(request.id.clone())
-            .title(humanize_tool_name(&request.name))
-            .status(acp::ToolCallStatus::InProgress)
-            .raw_input(raw_input)
-            .name(request.name.clone()),
-    )
+fn tool_call_upsert(id: &str, name: &str) -> ToolCallUpdate {
+    ToolCallUpdate::new(id.to_string())
+        .title(humanize_tool_name(name))
+        .status(ToolCallStatus::InProgress)
+        .name(name.to_string())
 }
 
-fn map_tool_call_update_to_notification(tool_call_id: &str, chunk: &str) -> SessionUpdate {
-    let update = ToolCallUpdate::new(tool_call_id.to_string())
-        .status(ToolCallStatus::InProgress)
-        .raw_input(json_patch_value(parse_tool_call_chunk(chunk)));
-
-    SessionUpdate::ToolCallUpdate(update)
+fn map_tool_call_to_notification(request: &ToolCallRequest) -> SessionUpdate {
+    let raw_input = serde_json::from_str(&request.arguments).map_or(MaybeUndefined::Undefined, json_patch_value);
+    SessionUpdate::ToolCallUpdate(tool_call_upsert(&request.id, &request.name).raw_input(raw_input))
 }
 
 fn map_tool_result_to_notification(result: &ToolCallResult, result_meta: Option<&ToolResultMeta>) -> SessionUpdate {
@@ -316,31 +306,14 @@ fn tool_display_meta(value: &str) -> serde_json::Map<String, serde_json::Value> 
     meta
 }
 
-/// Project the full agent event down to the lightweight sub-agent wire type.
-fn to_sub_agent_event(event: &AgentEvent) -> SubAgentEvent {
+fn to_sub_agent_event(event: &AgentEvent) -> Option<SubAgentEvent> {
     match event {
-        AgentEvent::Tool(ToolEvent::Call { request }) => SubAgentEvent::ToolCall {
-            request: SubAgentToolRequest {
-                id: request.id.clone(),
-                name: request.name.clone(),
-                arguments: request.arguments.clone(),
-            },
+        AgentEvent::Turn(TurnEvent::Started { .. }) => Some(SubAgentEvent::Started),
+        AgentEvent::Turn(TurnEvent::Ended { .. }) => Some(SubAgentEvent::Done),
+        _ => match map_agent_event_to_notification(event, NotificationMode::Live)? {
+            SessionUpdate::ToolCallUpdate(update) => Some(SubAgentEvent::ToolCallUpdate(Box::new(update))),
+            _ => None,
         },
-        AgentEvent::Tool(ToolEvent::CallUpdate { tool_call_id, chunk }) => SubAgentEvent::ToolCallUpdate {
-            update: SubAgentToolCallUpdate { id: tool_call_id.clone(), chunk: chunk.clone() },
-        },
-        AgentEvent::Tool(ToolEvent::Result { result, result_meta }) => SubAgentEvent::ToolResult {
-            result: SubAgentToolResult {
-                id: result.id.clone(),
-                name: result.name.clone(),
-                result_meta: result_meta.clone(),
-            },
-        },
-        AgentEvent::Tool(ToolEvent::Error { error }) => {
-            SubAgentEvent::ToolError { error: SubAgentToolError { id: error.id.clone(), name: error.name.clone() } }
-        }
-        AgentEvent::Turn(TurnEvent::Ended { .. }) => SubAgentEvent::Done,
-        _ => SubAgentEvent::Other,
     }
 }
 
@@ -348,20 +321,20 @@ fn to_sub_agent_event(event: &AgentEvent) -> SubAgentEvent {
 mod tests {
     use super::*;
     use acp_utils::notifications::SubAgentEvent;
-    use aether_core::events::SubAgentProgressPayload;
-    use agent_client_protocol::Client;
+    use aether_core::events::{StreamState, SubAgentProgressPayload};
     use agent_client_protocol::schema::v2::TextContent;
+    use agent_client_protocol::{Client, JsonRpcNotification};
     use llm::{ContextUsage, ToolCallRequest};
     use serde_json::json;
     use tokio::sync::mpsc::unbounded_channel;
     use utils::display_meta::{PlanMeta, PlanMetaEntry, ToolDisplayMeta};
 
-    fn forwarded<N: agent_client_protocol::JsonRpcNotification + Send + 'static>(event: &AgentEvent) -> N {
+    fn forwarded<T: JsonRpcNotification + Send + 'static>(events: &[AgentEvent]) -> T {
         tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(
             tokio::task::LocalSet::new().run_until(async {
                 let (tx, mut rx) = unbounded_channel();
                 let client = Client.v2().on_receive_notification(
-                    async move |notification: N, _cx| {
+                    async move |notification: T, _cx| {
                         tx.send(notification).ok();
                         Ok(())
                     },
@@ -376,20 +349,66 @@ mod tests {
                 let pair = acp_utils::testing::connect_pair(agent, client).await;
                 pair.client.send_request(acp_utils::testing::initialize_request()).block_task().await.unwrap();
                 let io = SessionIo::new(Some(pair.agent), "session".into());
-                project_agent_event(event, NotificationMode::Live, &io);
+                for event in events {
+                    project_agent_event(event, NotificationMode::Live, &io);
+                }
                 rx.recv().await.unwrap()
             }),
         )
     }
 
-    fn sub_agent_notification(event: AgentEvent) -> SubAgentEvent {
-        let event = AgentEvent::Tool(ToolEvent::SubAgentProgress {
+    fn sub_agent_progress(event: AgentEvent) -> AgentEvent {
+        AgentEvent::Tool(ToolEvent::SubAgentProgress {
             request: ToolCallRequest { id: "parent".into(), name: "spawn".into(), arguments: "{}".into() },
             payload: Box::new(SubAgentProgressPayload { task_id: "task".into(), agent_name: "worker".into(), event }),
-        });
-        let params: SubAgentProgressParams = forwarded(&event);
+        })
+    }
+
+    fn sub_agent_notification(event: AgentEvent) -> SubAgentEvent {
+        let params: SubAgentProgressParams = forwarded(&[sub_agent_progress(event)]);
         assert_eq!(params.session_id.0.as_ref(), "session");
         params.event
+    }
+
+    #[test]
+    fn tool_input_start_announces_the_tool_and_deltas_are_not_forwarded() {
+        let started = mapped_tool(&AgentEvent::Tool(ToolEvent::InputStarted {
+            id: "call_1".into(),
+            name: "coding__read_file".into(),
+        }));
+        assert_eq!(started.title, MaybeUndefined::Value("Read file".into()));
+        assert_eq!(started.name.value().map(String::as_str), Some("coding__read_file"));
+        assert_eq!(started.status, MaybeUndefined::Value(ToolCallStatus::InProgress));
+        assert!(started.raw_input.is_undefined());
+
+        let delta = AgentEvent::Tool(ToolEvent::InputDelta { id: "call_1".into(), chunk: "{".into() });
+        assert!(map_agent_event_to_session_notification(&delta).is_none());
+    }
+
+    #[test]
+    fn sub_agent_tool_calls_forward_the_same_upserts_as_top_level_tools() {
+        let request = request("{\"path\":\"a\"}");
+        let started = AgentEvent::Tool(ToolEvent::InputStarted { id: request.id.clone(), name: request.name.clone() });
+        let display = AgentEvent::Tool(ToolEvent::DisplayUpdate {
+            request: request.clone(),
+            meta: ToolDisplayMeta::new("Read", "a").into(),
+        });
+        let result = result_event(Some(ToolDisplayMeta::new("Read file", "Cargo.toml, 156 lines").into()));
+        for event in [started, AgentEvent::Tool(ToolEvent::Call { request }), display, result] {
+            assert_eq!(
+                sub_agent_notification(event.clone()),
+                SubAgentEvent::ToolCallUpdate(Box::new(mapped_tool(&event)))
+            );
+        }
+    }
+
+    #[test]
+    fn sub_agent_turn_start_and_end_bracket_its_progress() {
+        assert_eq!(
+            sub_agent_notification(AgentEvent::Turn(TurnEvent::Started { content: vec![] })),
+            SubAgentEvent::Started
+        );
+        assert_eq!(sub_agent_notification(AgentEvent::turn_ended(TurnOutcome::Completed)), SubAgentEvent::Done);
     }
 
     #[test]
@@ -453,33 +472,25 @@ mod tests {
     }
 
     #[test]
-    fn test_sub_agent_progress_emits_ext_notification() {
-        let payload = SubAgentProgressPayload {
-            task_id: "task_1".to_string(),
-            agent_name: "sub-agent".to_string(),
-            event: AgentEvent::Message(MessageEvent::Text {
-                message_id: "msg_1".into(),
-                chunk: "Hello".to_string(),
-                is_complete: false,
-            }),
-        };
+    fn sub_agent_progress_skips_events_clients_do_not_track() {
+        let untracked = [
+            AgentEvent::text("m", "Hel", StreamState::Partial),
+            AgentEvent::text("m", "Hello", StreamState::Complete),
+            AgentEvent::Tool(ToolEvent::InputDelta { id: "tool".into(), chunk: "{".into() }),
+            AgentEvent::Context(ContextEvent::UsageUpdated { usage: ContextUsage::default() }),
+        ];
+        let events: Vec<_> = untracked
+            .into_iter()
+            .chain([AgentEvent::turn_ended(TurnOutcome::Completed)])
+            .map(sub_agent_progress)
+            .collect();
+        let params: SubAgentProgressParams = forwarded(&events);
 
-        let tool_progress = AgentEvent::Tool(ToolEvent::SubAgentProgress {
-            request: ToolCallRequest {
-                id: "call_123".to_string(),
-                name: "plugins__spawn_subagent".to_string(),
-                arguments: "{}".to_string(),
-            },
-            payload: Box::new(payload),
-        });
-
-        assert!(map_agent_event_to_session_notification(&tool_progress).is_none());
-
-        let params: SubAgentProgressParams = forwarded(&tool_progress);
-        assert_eq!(params.parent_tool_id, "call_123");
-        assert_eq!(params.task_id, "task_1");
-        assert_eq!(params.agent_name, "sub-agent");
-        assert!(matches!(params.event, SubAgentEvent::Other));
+        assert_eq!(
+            (params.parent_tool_id.as_str(), params.task_id.as_str(), params.agent_name.as_str()),
+            ("parent", "task", "worker")
+        );
+        assert_eq!(params.event, SubAgentEvent::Done, "untracked events are never sent");
     }
 
     #[test]
@@ -505,48 +516,8 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_call_update_maps_to_tool_call_update_notification() -> Result<(), String> {
-        let message = AgentEvent::Tool(ToolEvent::CallUpdate {
-            tool_call_id: "call_1".to_string(),
-            chunk: r#"{"filePath":"Cargo.toml"}"#.to_string(),
-        });
-
-        let notification = map_agent_event_to_session_notification(&message).ok_or("notification")?;
-
-        let update = match notification {
-            acp::SessionUpdate::ToolCallUpdate(update) => update,
-            other => return Err(format!("Expected ToolCallUpdate, got {other:?}")),
-        };
-        assert_eq!(update.tool_call_id.0.as_ref(), "call_1");
-        assert_eq!(update.status, MaybeUndefined::Value(acp::ToolCallStatus::InProgress));
-        assert_eq!(update.raw_input, MaybeUndefined::Value(serde_json::json!({ "filePath": "Cargo.toml" })));
-        Ok(())
-    }
-
-    #[test]
-    fn test_tool_call_update_has_same_live_and_replay_mapping() -> Result<(), String> {
-        let message = AgentEvent::Tool(ToolEvent::CallUpdate {
-            tool_call_id: "call_1".to_string(),
-            chunk: r#"{"filePath":"Cargo.toml"}"#.to_string(),
-        });
-
-        let live = map_agent_event_to_session_notification(&message).ok_or("live notification")?;
-        let replay =
-            map_agent_event_to_notification(&message, NotificationMode::Replay).ok_or("replay notification")?;
-
-        let (live_update, replay_update) = match (live, replay) {
-            (acp::SessionUpdate::ToolCallUpdate(live), acp::SessionUpdate::ToolCallUpdate(replay)) => (live, replay),
-            other => return Err(format!("Expected ToolCallUpdate pair, got {other:?}")),
-        };
-        assert_eq!(live_update.tool_call_id.0, replay_update.tool_call_id.0);
-        assert_eq!(live_update.status, replay_update.status);
-        assert_eq!(live_update.raw_input, replay_update.raw_input);
-        Ok(())
-    }
-
-    #[test]
     fn test_context_cleared_maps_to_agent_notification() {
-        let cleared: ContextClearedParams = forwarded(&AgentEvent::Context(ContextEvent::Cleared));
+        let cleared: ContextClearedParams = forwarded(&[AgentEvent::Context(ContextEvent::Cleared)]);
         assert_eq!(cleared.session_id.0.as_ref(), "session");
     }
 
@@ -699,56 +670,6 @@ mod tests {
     }
 
     #[test]
-    fn test_sub_agent_tool_result_includes_display_fields() {
-        use utils::display_meta::ToolDisplayMeta;
-
-        let event = AgentEvent::Tool(ToolEvent::Result {
-            result: ToolCallResult {
-                id: "call_1".to_string(),
-                name: "coding__read_file".to_string(),
-                arguments: r#"{"filePath":"Cargo.toml"}"#.to_string(),
-                result: "ok".to_string(),
-            },
-            result_meta: Some(ToolDisplayMeta::new("Read file", "Cargo.toml, 156 lines").into()),
-        });
-
-        match sub_agent_notification(event) {
-            SubAgentEvent::ToolResult { result } => {
-                assert_eq!(result.id, "call_1");
-                assert_eq!(result.name, "coding__read_file");
-                let result_meta = result.result_meta.expect("result_meta should be present");
-                assert_eq!(result_meta.display.title, "Read file");
-                assert_eq!(result_meta.display.value, "Cargo.toml, 156 lines");
-            }
-            other => panic!("Expected ToolResult, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_sub_agent_tool_call_update_includes_updated_fields() {
-        let event = AgentEvent::Tool(ToolEvent::CallUpdate {
-            tool_call_id: "call_1".to_string(),
-            chunk: r#"{"filePath":"Cargo.toml"}"#.to_string(),
-        });
-
-        match sub_agent_notification(event) {
-            SubAgentEvent::ToolCallUpdate { update } => {
-                assert_eq!(update.id, "call_1");
-                assert_eq!(update.chunk, r#"{"filePath":"Cargo.toml"}"#);
-            }
-            other => panic!("Expected ToolCallUpdate, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_sub_agent_turn_end_maps_to_done() {
-        use aether_core::events::TurnOutcome;
-
-        let event = AgentEvent::turn_ended(TurnOutcome::Completed);
-        assert!(matches!(sub_agent_notification(event), SubAgentEvent::Done));
-    }
-
-    #[test]
     fn tool_upserts_preserve_omitted_null_and_replacement_fields() {
         let mut tool = mapped_tool(&AgentEvent::Tool(ToolEvent::Call { request: request("{\"path\":\"a\"}") }));
         assert_eq!(tool.title.value().map(String::as_str), Some("Read file"));
@@ -759,16 +680,12 @@ mod tests {
         tool.apply_update(omitted);
         assert_eq!(tool.raw_input, MaybeUndefined::Value(json!({"path": "a"})));
 
-        let clear =
-            mapped_tool(&AgentEvent::Tool(ToolEvent::CallUpdate { tool_call_id: "tool".into(), chunk: "null".into() }));
+        let clear = mapped_tool(&AgentEvent::Tool(ToolEvent::Call { request: request("null") }));
         assert!(clear.raw_input.is_null());
         assert_eq!(serde_json::to_value(&clear).unwrap()["rawInput"], json!(null));
         tool.apply_update(clear);
         assert!(tool.raw_input.is_null());
-        tool.apply_update(mapped_tool(&AgentEvent::Tool(ToolEvent::CallUpdate {
-            tool_call_id: "tool".into(),
-            chunk: "{\"other\":1}".into(),
-        })));
+        tool.apply_update(mapped_tool(&AgentEvent::Tool(ToolEvent::Call { request: request("{\"other\":1}") })));
         assert_eq!(tool.raw_input, MaybeUndefined::Value(json!({"other": 1})));
         assert_eq!(tool.name.value().map(String::as_str), Some("coding__read_file"));
 

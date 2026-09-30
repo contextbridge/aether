@@ -84,10 +84,7 @@ fn format_text(message: &AgentEvent) -> Option<String> {
             Some(format!("Model switched: {previous} -> {new}"))
         }
         AgentEvent::Tool(ToolEvent::Progress { request, progress, total, message }) => {
-            let bar = match total {
-                Some(total) => format!("{progress}/{total}"),
-                None => format!("{progress}"),
-            };
+            let bar = total.map_or_else(|| progress.to_string(), |total| format!("{progress}/{total}"));
             let suffix = message.as_deref().map(|message| format!(" - {message}")).unwrap_or_default();
             Some(format!("Tool progress [{}]: {bar}{suffix}", request.name))
         }
@@ -126,7 +123,7 @@ fn format_text(message: &AgentEvent) -> Option<String> {
             },
         )
         | AgentEvent::Tool(
-            ToolEvent::ExecutionStarted { .. } | ToolEvent::DefinitionsUpdated { .. } | ToolEvent::CallUpdate { .. },
+            ToolEvent::InputStarted { .. } | ToolEvent::InputDelta { .. } | ToolEvent::DefinitionsUpdated { .. },
         )
         | AgentEvent::Message(MessageEvent::Text { .. } | MessageEvent::Thought { .. }) => None,
     }
@@ -206,10 +203,11 @@ mod tests {
     }
 
     #[test]
-    fn format_text_skips_tool_call_updates() {
-        let message =
-            AgentEvent::Tool(ToolEvent::CallUpdate { tool_call_id: "tc1".to_string(), chunk: "partial".to_string() });
-        assert_eq!(format_text(&message), None);
+    fn format_text_skips_streamed_tool_input() {
+        let started = AgentEvent::Tool(ToolEvent::InputStarted { id: "tc1".to_string(), name: "bash".to_string() });
+        let delta = AgentEvent::Tool(ToolEvent::InputDelta { id: "tc1".to_string(), chunk: "partial".to_string() });
+        assert_eq!(format_text(&started), None);
+        assert_eq!(format_text(&delta), None);
     }
 
     #[test]

@@ -46,7 +46,6 @@ pub enum CliEventKind {
     LlmRetryScheduled,
     LlmCallStarted,
     LlmCallEnded,
-    ToolExecutionStarted,
     ToolDefinitionsUpdated,
 }
 

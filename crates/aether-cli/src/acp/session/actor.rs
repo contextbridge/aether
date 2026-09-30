@@ -649,7 +649,7 @@ impl SessionActor {
         {
             error!(%error, "Failed to serialize server event");
         }
-        forward_notification(&self.io, message);
+        project_agent_event(message, NotificationMode::Live, &self.io);
     }
 
     fn persist_event(&mut self, event: SessionEvent) {
@@ -691,10 +691,6 @@ fn stop_reason(outcome: &TurnOutcome) -> acp::StopReason {
 
 fn send_mcp_server_status(io: &SessionIo, servers: Vec<McpServerStatusEntry>) {
     io.send(McpNotification::ServerStatus { servers });
-}
-
-fn forward_notification(io: &SessionIo, msg: &AgentEvent) {
-    project_agent_event(msg, NotificationMode::Live, io);
 }
 
 fn on_mcp_client_event(io: &SessionIo, event: McpClientEvent) {

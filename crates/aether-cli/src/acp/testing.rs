@@ -19,7 +19,7 @@ use acp_utils::testing::{TestPeer, initialize_request};
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
 use aether_core::core::{AgentBuilder, AgentHandle, Prompt};
-use aether_core::events::{AgentEvent, Command, MessageEvent, TurnEvent, TurnOutcome};
+use aether_core::events::{AgentEvent, Command, MessageEvent, ToolEvent, TurnEvent, TurnOutcome};
 use aether_core::mcp::{ServerFactory, mcp};
 use aether_project::AgentCatalog;
 use aether_sessions::SessionStore;
@@ -32,7 +32,7 @@ use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, on_receive_not
 use futures::FutureExt;
 use llm::testing::FakeLlmProvider;
 use llm::{ChatMessage, Context, LlmResponse, SessionUsageEvent, StreamingModelProvider};
-use llm::{MessageId, ProviderConnectionOverrides};
+use llm::{MessageId, ProviderConnectionOverrides, ToolCallRequest, ToolCallResult};
 use mcp_utils::client::{InMemoryServerSpec, McpServer, McpTransport, ToolExposure};
 use std::collections::HashMap;
 use std::future::Future;
@@ -460,6 +460,34 @@ impl AcpTestHarness {
                 message_id: MessageId::new(),
                 chunk: text.to_string(),
                 is_complete: true,
+            })),
+        );
+    }
+
+    pub fn append_stored_tool_call(&self, session_id: &str, id: &str, name: &str, arguments: &str) {
+        self.append_stored_event(
+            session_id,
+            &SessionEvent::Agent(AgentEvent::Tool(ToolEvent::Call {
+                request: ToolCallRequest {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    arguments: arguments.to_string(),
+                },
+            })),
+        );
+    }
+
+    pub fn append_stored_tool_result(&self, session_id: &str, id: &str, name: &str, result: &str) {
+        self.append_stored_event(
+            session_id,
+            &SessionEvent::Agent(AgentEvent::Tool(ToolEvent::Result {
+                result: ToolCallResult {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    arguments: "{}".to_string(),
+                    result: result.to_string(),
+                },
+                result_meta: None,
             })),
         );
     }

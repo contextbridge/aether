@@ -1,15 +1,17 @@
 use aether_cli::acp::testing::AcpTestHarness;
 use aether_core::core::agent;
 use agent_client_protocol::Error;
+use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::v2::{
     AbsolutePath, CloseSessionRequest, CloseSessionResponse, ContentBlock, ListSessionsRequest, ListSessionsResponse,
     PromptRequest, ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate, StopReason,
-    TextContent,
+    TextContent, ToolCallStatus,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use llm::LlmResponse;
 use llm::testing::FakeLlmProvider;
+use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::Notify;
 
@@ -135,8 +137,11 @@ async fn close_cancels_prompt_before_returning() {
 async fn resume_replays_persisted_transcript_over_the_server_connection() {
     AcpTestHarness::run(|mut harness| async move {
         let session_id = "replay-session";
+        let arguments = json!({ "command": "python3 - <<'PY'\nprint('hi')\nPY" });
         harness.append_stored_session(session_id, "2026-05-01T00:00:00Z");
         harness.append_stored_prompt(session_id, "prior user");
+        harness.append_stored_tool_call(session_id, "bash", "coding__bash", &arguments.to_string());
+        harness.append_stored_tool_result(session_id, "bash", "coding__bash", "hi");
         harness.append_stored_agent_turn(session_id, "prior assistant");
 
         harness
@@ -149,11 +154,19 @@ async fn resume_replays_persisted_transcript_over_the_server_connection() {
             .await
             .expect("resume succeeds");
 
-        let first = next_history(&mut harness).await;
-        let second = next_history(&mut harness).await;
-        let SessionUpdate::UserMessage(user) = first else { panic!("user history first") };
+        let SessionUpdate::UserMessage(user) = next_history(&mut harness).await else { panic!("user history first") };
         assert!(matches!(&user.content.value().unwrap()[0], ContentBlock::Text(text) if text.text == "prior user"));
-        let SessionUpdate::AgentMessage(agent) = second else { panic!("agent history second") };
+        let SessionUpdate::ToolCallUpdate(mut tool) = next_history(&mut harness).await else {
+            panic!("tool call next")
+        };
+        let SessionUpdate::ToolCallUpdate(result) = next_history(&mut harness).await else {
+            panic!("tool result next")
+        };
+        tool.apply_update(result);
+        assert_eq!(tool.raw_input, MaybeUndefined::Value(arguments), "the resumed tool keeps its complete input");
+        assert_eq!(tool.title.value().map(String::as_str), Some("Bash"));
+        assert_eq!(tool.status, MaybeUndefined::Value(ToolCallStatus::Completed));
+        let SessionUpdate::AgentMessage(agent) = next_history(&mut harness).await else { panic!("agent history last") };
         assert!(
             matches!(&agent.content.value().unwrap()[0], ContentBlock::Text(text) if text.text == "prior assistant")
         );
@@ -238,7 +251,10 @@ async fn disconnect_during_startup_leaves_no_detached_runtime() {
 async fn next_history(harness: &mut AcpTestHarness) -> SessionUpdate {
     loop {
         let update = harness.peer.next_session_notification().await.update;
-        if matches!(update, SessionUpdate::UserMessage(_) | SessionUpdate::AgentMessage(_)) {
+        if matches!(
+            update,
+            SessionUpdate::UserMessage(_) | SessionUpdate::AgentMessage(_) | SessionUpdate::ToolCallUpdate(_)
+        ) {
             return update;
         }
     }
