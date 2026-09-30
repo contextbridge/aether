@@ -80,7 +80,11 @@ function referencedByName(schema) {
   return JSON.parse(JSON.stringify(schema), (_, value) => {
     if (typeof value?.$ref !== "string") return value;
     const { $ref, ...keywords } = value;
-    return { ...keywords, tsType: $ref.replace("#/$defs/", "") };
+    const reference = { tsType: $ref.replace("#/$defs/", "") };
+    // `tsType` overrides sibling constraints, so typed siblings must be intersected instead.
+    return "type" in keywords
+      ? { allOf: [reference, keywords] }
+      : { ...keywords, ...reference };
   });
 }
 
