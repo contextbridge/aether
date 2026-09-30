@@ -3,7 +3,7 @@ use acp_utils::conversation::{
     Activity, Conversation, ConversationContent, ItemState, ToolCall, ToolStatus, TurnFinished, TurnInProgress,
     TurnPhase,
 };
-use acp_utils::notifications::{SubAgentEvent, SubAgentProgressParams, SubAgentToolRequest};
+use acp_utils::notifications::{SubAgentEvent, SubAgentProgressParams};
 use acp_utils::testing::{idle_notification, plan_notification, running_notification};
 use agent_client_protocol::schema::{MaybeUndefined, v2 as acp};
 use serde_json::json;
@@ -124,7 +124,7 @@ fn first_tool_update_creates_and_later_patches_replace_or_clear() {
     assert_eq!(tool(&conversation, 0).title(), "Bash");
 
     conversation.apply_event(&tool_update(acp::ToolCallUpdate::new("tool").raw_input(json!({"command":"second"}))));
-    assert_eq!(tool(&conversation, 0).bash_command().as_deref(), Some("second"));
+    assert_eq!(tool(&conversation, 0).bash_command(), Some("second"));
 
     conversation.apply_event(&tool_update(
         acp::ToolCallUpdate::new("tool").title(MaybeUndefined::Null).raw_input(MaybeUndefined::Null),
@@ -287,6 +287,40 @@ fn a_cancelled_turn_keeps_its_output_and_cancels_running_tools() {
 }
 
 #[test]
+fn sub_agent_tool_calls_merge_upserts_like_top_level_tools() {
+    let mut conversation = Conversation::new();
+    conversation.start_prompt(None).unwrap();
+    conversation.apply_event(&tool_update(acp::ToolCallUpdate::new("spawn").name("subagents__spawn_subagent")));
+    conversation.apply_event(&sub_agent("spawn", SubAgentEvent::Started));
+    assert!(tool(&conversation, 0).sub_agents[0].tool_calls.is_empty(), "a started sub-agent shows before its tools");
+
+    let mut display = serde_json::Map::new();
+    display.insert("display_value".into(), "ls (exit 0)".into());
+    for update in [
+        acp::ToolCallUpdate::new("bash").title("Bash").name("coding__bash").status(acp::ToolCallStatus::InProgress),
+        acp::ToolCallUpdate::new("bash").raw_input(json!({"command": "ls"})),
+        acp::ToolCallUpdate::new("bash").title("Ran").status(acp::ToolCallStatus::Completed).meta(display),
+        acp::ToolCallUpdate::new("grep").title("Grep").name("coding__grep").status(acp::ToolCallStatus::InProgress),
+    ] {
+        conversation.apply_event(&sub_agent_tool_update("spawn", update));
+    }
+
+    let [bash, grep] = tool(&conversation, 0).sub_agents[0].tool_calls.as_slice() else {
+        panic!("two sub-agent tools")
+    };
+    assert_eq!((bash.title(), bash.status), ("Ran", ToolStatus::Success));
+    assert_eq!((bash.bash_command(), bash.display_value()), (Some("ls"), Some("ls (exit 0)")));
+    assert_eq!((grep.title(), grep.status), ("Grep", ToolStatus::Running));
+
+    conversation.apply_event(&idle(Some(acp::StopReason::Cancelled)));
+
+    let agent = &tool(&conversation, 0).sub_agents[0];
+    assert!(agent.done);
+    let statuses: Vec<_> = agent.tool_calls.iter().map(|call| (call.status, call.error.as_deref())).collect();
+    assert_eq!(statuses, [(ToolStatus::Success, None), (ToolStatus::Cancelled, None)]);
+}
+
+#[test]
 fn a_running_state_while_idle_adopts_a_turn_started_elsewhere() {
     let mut conversation = Conversation::new();
     conversation.apply_event(&running());
@@ -346,7 +380,7 @@ fn activity_after_the_turn_ends_is_ignored_until_the_next_prompt() {
     conversation.apply_event(&idle(None));
 
     conversation.apply_event(&thought_chunk("late", "stray thought"));
-    conversation.apply_event(&AcpEvent::SubAgentProgress(sub_agent_tool_call("spawn", "late-call")));
+    conversation.apply_event(&sub_agent_tool_call("spawn", "late-call"));
     conversation.apply_event(&compaction(acp::CompactionStatus::InProgress));
 
     assert_eq!(conversation.activity(), Activity::Idle);
@@ -354,8 +388,8 @@ fn activity_after_the_turn_ends_is_ignored_until_the_next_prompt() {
     assert!(!conversation.is_compacting());
 
     conversation.start_prompt(None).unwrap();
-    conversation.apply_event(&AcpEvent::SubAgentProgress(sub_agent_tool_call("spawn", "call")));
-    assert_eq!(tool(&conversation, 0).sub_agents[0].tool_calls[0].id, "call");
+    conversation.apply_event(&sub_agent_tool_call("spawn", "call"));
+    assert_eq!(tool(&conversation, 0).sub_agents[0].tool_calls[0].id(), "call");
 }
 
 #[test]
@@ -494,7 +528,7 @@ fn revision_advances_only_when_something_observable_changes() {
     assert!(!changes(&mut conversation, &tool_update(acp::ToolCallUpdate::new("tool"))));
 
     let revision = conversation.revision();
-    conversation.apply_event(&AcpEvent::SubAgentProgress(sub_agent_tool_call("unknown", "call")));
+    conversation.apply_event(&sub_agent_tool_call("unknown", "call"));
     assert_eq!(conversation.revision(), revision, "progress for an unknown tool changes nothing");
 
     conversation.clear();
@@ -571,14 +605,20 @@ fn update(update: acp::SessionUpdate) -> AcpEvent {
     acp::UpdateSessionNotification::new("session", update).into()
 }
 
-fn sub_agent_tool_call(parent_tool_id: &str, id: &str) -> SubAgentProgressParams {
-    SubAgentProgressParams {
+fn sub_agent(parent_tool_id: &str, event: SubAgentEvent) -> AcpEvent {
+    AcpEvent::SubAgentProgress(SubAgentProgressParams {
         session_id: "session".into(),
         parent_tool_id: parent_tool_id.to_string(),
         task_id: "task".to_string(),
         agent_name: "explorer".to_string(),
-        event: SubAgentEvent::ToolCall {
-            request: SubAgentToolRequest { id: id.to_string(), name: "grep".to_string(), arguments: "{}".to_string() },
-        },
-    }
+        event,
+    })
+}
+
+fn sub_agent_tool_call(parent_tool_id: &str, id: &str) -> AcpEvent {
+    sub_agent_tool_update(parent_tool_id, acp::ToolCallUpdate::new(id.to_string()).title("Grep").name("coding__grep"))
+}
+
+fn sub_agent_tool_update(parent_tool_id: &str, update: acp::ToolCallUpdate) -> AcpEvent {
+    sub_agent(parent_tool_id, SubAgentEvent::ToolCallUpdate(Box::new(update)))
 }
