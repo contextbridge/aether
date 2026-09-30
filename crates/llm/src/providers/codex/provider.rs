@@ -185,7 +185,7 @@ mod tests {
         assert_eq!(captured.body["model"], "gpt-6-luna");
         assert_eq!(captured.body["instructions"], "You are helpful");
         assert_eq!(captured.body["tools"].as_array().unwrap().len(), 1);
-        assert!(captured.body.get("parallel_tool_calls").is_none());
+        assert_eq!(captured.body["parallel_tool_calls"], true);
         assert_eq!(captured.body["input"][0]["role"], "user");
         assert_eq!(captured.body["prompt_cache_key"], "session-abc");
         assert_eq!(captured.body["store"], false);

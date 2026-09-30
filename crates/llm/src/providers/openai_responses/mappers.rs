@@ -26,6 +26,7 @@ pub struct ResponsesRequestPolicy {
     /// `true`, which rejects tool schemas that omit `additionalProperties`, so
     /// `None` and `Some(false)` are not interchangeable.
     tool_strict: Option<bool>,
+    parallel_tool_calls: Option<bool>,
     tool_schema_transform: Option<fn(&mut Schema)>,
     reasoning_format: ReasoningFormat,
     prompt_cache_key: PromptCacheKeySource,
@@ -38,6 +39,7 @@ impl ResponsesRequestPolicy {
         default_effort: None,
         text_verbosity: None,
         tool_strict: Some(false),
+        parallel_tool_calls: None,
         tool_schema_transform: None,
         reasoning_format: ReasoningFormat::Encrypted,
         prompt_cache_key: PromptCacheKeySource::Prefix,
@@ -58,6 +60,7 @@ impl ResponsesRequestPolicy {
         default_effort: Some(ReasoningEffort::Medium),
         text_verbosity: Some(Verbosity::Medium),
         tool_strict: None,
+        parallel_tool_calls: Some(true),
         ..Self::OPENAI
     };
 
@@ -114,6 +117,7 @@ pub(crate) fn build_typed_request(
         input: InputParam::Items(input),
         instructions,
         tools,
+        parallel_tool_calls: policy.parallel_tool_calls,
         stream: Some(true),
         store: Some(false),
         max_output_tokens: settings.max_tokens,
