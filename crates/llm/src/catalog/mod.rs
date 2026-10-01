@@ -249,6 +249,8 @@ mod tests {
     #[test]
     fn bedrock_responses_models_carry_their_endpoint_and_wire_shape() {
         let cases = [
+            ("openai.gpt-6.1-sol", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
+            ("us.openai.gpt-6.1-sol", "https://bedrock-runtime.${AWS_REGION}.amazonaws.com/openai/v1"),
             ("openai.gpt-5.6-luna", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
             ("openai.gpt-5.6-sol", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
             ("openai.gpt-5.6-terra", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
@@ -281,6 +283,7 @@ mod tests {
             "us.anthropic.claude-future-model-v99:0",
             "global.openai.gpt-6-luna",
             "global.openai.gpt-6-sol",
+            "global.openai.gpt-6.1-sol",
             "global.openai.gpt-6-astra",
         ] {
             let model: LlmModel = format!("bedrock:{id}").parse().unwrap();
