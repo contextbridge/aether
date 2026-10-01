@@ -33,17 +33,11 @@ sha2 = { workspace = true }
 base16ct = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 tokio-stream = { workspace = true }
-async-openai = { workspace = true }
 rmcp = { workspace = true, features = ["client", "server", "elicitation"] }
 schemars = { workspace = true }
-chrono = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-clap = { workspace = true }
 thiserror = { workspace = true }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", default-features = false, version = "0.5.8" }
 glob = { workspace = true }
-regex = { workspace = true }
 aether-auth = { path = "../aether-auth", version = "0.1.16" }
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.7.8" }
 llm = { package = "aether-llm", path = "../llm", version = "0.9.8", features = ["codex"] }
@@ -57,10 +51,13 @@ testing = ["dep:tempfile", "mcp_utils/testing"]
 [dev-dependencies]
 aether-core = { package = "aether-agent-core", path = ".", features = ["testing"] }
 aether-doctest = { path = "../doctest" }
+chrono = { workspace = true }
+clap = { workspace = true }
 mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", default-features = false, features = ["coding", "review"] }
 reqwest = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
+tracing-subscriber = { workspace = true }
 
 [[example]]
 name = "basic_agent"

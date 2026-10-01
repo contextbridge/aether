@@ -17,7 +17,7 @@ aether-sessions = { path = "crates/aether-sessions", version = "0.3.8" }
 
 # AWS SDK
 aws-config = { version = "1.8.18", features = ["behavior-version-latest"] }
-aws-sdk-bedrockruntime = "1.133.0"
+aws-sdk-bedrockruntime = { version = "1.133.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 # Capped below 1.5.0: it makes DeferredSignerSender::send generic, which breaks
 # type inference in aws-runtime 1.7.4 (latest). Lift once aws-runtime ships a fix.
 aws-smithy-types = ">=1.4.9, <1.7.0"
@@ -62,7 +62,7 @@ url = "2.5"
 axum = "0.8.9"
 http = "1.5.0"
 tower = "0.5.3"
-tower-http = "0.7.1"
+tower-http = "0.6.11"
 
 # LSP types - shared across packages
 lsp-types = "0.97"
