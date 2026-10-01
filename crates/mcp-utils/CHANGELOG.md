@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.9](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.7.8...aether-mcp-utils-v0.7.9) - 2026-10-01
+
+### Fixed
+
+- support bedrock gpt-6.1-sol routing and clean up dependencies ([#553](https://github.com/contextbridge/aether/pull/553))
+
 ## [0.7.8](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.7.7...aether-mcp-utils-v0.7.8) - 2026-09-28
 
 ### Other

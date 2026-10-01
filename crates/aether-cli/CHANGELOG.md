@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.10](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.9...aether-agent-cli-v0.9.10) - 2026-10-01
+
+### Fixed
+
+- Bash tool highlighting ([#551](https://github.com/contextbridge/aether/pull/551))
+
 ## [0.9.9](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.8...aether-agent-cli-v0.9.9) - 2026-09-28
 
 ### Other

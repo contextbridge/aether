@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.14](https://github.com/contextbridge/aether/compare/aether-evals-v0.3.13...aether-evals-v0.3.14) - 2026-10-01
+
+### Fixed
+
+- support bedrock gpt-6.1-sol routing and clean up dependencies ([#553](https://github.com/contextbridge/aether/pull/553))
+
 ## [0.3.13](https://github.com/contextbridge/aether/compare/aether-evals-v0.3.12...aether-evals-v0.3.13) - 2026-09-28
 
 ### Other

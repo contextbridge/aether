@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.8.8...aether-agent-core-v0.9.0) - 2026-10-01
+
+### Fixed
+
+- support bedrock gpt-6.1-sol routing and clean up dependencies ([#553](https://github.com/contextbridge/aether/pull/553))
+- Bash tool highlighting ([#551](https://github.com/contextbridge/aether/pull/551))
+
+### Other
+
+- [**breaking**] remove tools that are no longer needed ([#549](https://github.com/contextbridge/aether/pull/549))
+
 ## [0.8.8](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.8.7...aether-agent-core-v0.8.8) - 2026-09-28
 
 ### Other

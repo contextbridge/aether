@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.29](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.28...aether-llm-codegen-v0.2.29) - 2026-10-01
+
+### Added
+
+- add gpt-6.1-sol to codex subscription models ([#548](https://github.com/contextbridge/aether/pull/548))
+
+### Fixed
+
+- support bedrock gpt-6.1-sol routing and clean up dependencies ([#553](https://github.com/contextbridge/aether/pull/553))
+
 ## [0.2.28](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.27...aether-llm-codegen-v0.2.28) - 2026-09-27
 
 ### Other
