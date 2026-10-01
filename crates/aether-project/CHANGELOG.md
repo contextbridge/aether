@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.53](https://github.com/contextbridge/aether/compare/aether-project-v0.5.52...aether-project-v0.5.53) - 2026-10-01
+
+### Fixed
+
+- support bedrock gpt-6.1-sol routing and clean up dependencies ([#553](https://github.com/contextbridge/aether/pull/553))
+
 ## [0.5.52](https://github.com/contextbridge/aether/compare/aether-project-v0.5.51...aether-project-v0.5.52) - 2026-09-28
 
 ### Other

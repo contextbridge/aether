@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.40...aether-lspd-v0.2.0) - 2026-10-01
+
+### Other
+
+- [**breaking**] remove tools that are no longer needed ([#549](https://github.com/contextbridge/aether/pull/549))
+
 ## [0.1.40](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.39...aether-lspd-v0.1.40) - 2026-09-27
 
 ### Other

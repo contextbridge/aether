@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.6.9...aether-mcp-servers-v0.7.0) - 2026-10-01
+
+### Fixed
+
+- Bash tool highlighting ([#551](https://github.com/contextbridge/aether/pull/551))
+
+### Other
+
+- [**breaking**] remove tools that are no longer needed ([#549](https://github.com/contextbridge/aether/pull/549))
+
 ## [0.6.9](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.6.8...aether-mcp-servers-v0.6.9) - 2026-09-28
 
 ### Other

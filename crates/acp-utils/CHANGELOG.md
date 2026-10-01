@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.9](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.5.8...aether-acp-utils-v0.5.9) - 2026-10-01
+
+### Fixed
+
+- Bash tool highlighting ([#551](https://github.com/contextbridge/aether/pull/551))
+
 ## [0.5.8](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.5.7...aether-acp-utils-v0.5.8) - 2026-09-28
 
 ### Other

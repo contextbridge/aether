@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.9](https://github.com/contextbridge/aether/compare/aether-wisp-v0.7.8...aether-wisp-v0.7.9) - 2026-10-01
+
+### Fixed
+
+- Bash tool highlighting ([#551](https://github.com/contextbridge/aether/pull/551))
+
 ## [0.7.8](https://github.com/contextbridge/aether/compare/aether-wisp-v0.7.7...aether-wisp-v0.7.8) - 2026-09-28
 
 ### Fixed

@@ -1,6 +1,6 @@
 [package]
 name = "aether-sessions"
-version = "0.3.8"
+version = "0.3.9"
 edition = "2024"
 description = "Persisted session logs and transcript reconstruction for Aether"
 license = "MIT"
@@ -18,9 +18,9 @@ analytics = ["dep:chrono", "dep:futures", "dep:sqlx", "dep:tokio"]
 testing = ["dep:tempfile"]
 
 [dependencies]
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", default-features = false, version = "0.5.8" }
-aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.8.8" }
-llm = { package = "aether-llm", path = "../llm", version = "0.9.8" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", default-features = false, version = "0.5.9" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.9.0" }
+llm = { package = "aether-llm", path = "../llm", version = "0.9.9" }
 chrono = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 serde = { workspace = true }
