@@ -52,7 +52,6 @@ aether-auth = { path = "../aether-auth", version = "0.1.16", optional = true }
 async-stream = { workspace = true, optional = true }
 llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.9.8" }
 serde_json = { workspace = true }
-regex = { workspace = true }
 reqwest = { workspace = true, optional = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }

@@ -26,7 +26,6 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 tempfile = { workspace = true }
 aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.8.8" }
-aether-project = { path = "../aether-project", version = "0.5.52" }
 llm = { package = "aether-llm", path = "../llm", version = "0.9.8" }
 testcontainers = { workspace = true }
 
