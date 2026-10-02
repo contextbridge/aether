@@ -1,5 +1,7 @@
 //! LSP-powered rename refactoring tool
 
+use std::path::Path;
+
 use lsp_types::{DocumentChangeOperation, DocumentChanges, OneOf, ResourceOp, WorkspaceEdit};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -8,6 +10,7 @@ use utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 use crate::lsp::common::uri_to_path;
 use crate::lsp::error::LspError;
 use crate::lsp::registry::LspRegistry;
+use crate::lsp::render::{SourceLine, render_locations};
 
 /// Input for the `lsp_rename` tool
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -24,32 +27,6 @@ pub struct LspRenameInput {
     /// Optional 1-indexed line hint. Stale hints fall back to automatic symbol resolution.
     #[serde(default)]
     pub line: Option<u32>,
-}
-
-/// A single text edit in a file
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct FileEdit {
-    /// The file path
-    pub file_path: String,
-    /// The text edits for this file
-    pub edits: Vec<TextEdit>,
-}
-
-/// A text edit with range information
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct TextEdit {
-    /// 1-indexed start line
-    pub start_line: u32,
-    /// 1-indexed start column
-    pub start_column: u32,
-    /// 1-indexed end line
-    pub end_line: u32,
-    /// 1-indexed end column
-    pub end_column: u32,
-    /// The new text to insert
-    pub new_text: String,
 }
 
 /// A raw LSP text edit grouped by file path.
@@ -71,8 +48,8 @@ pub struct LspRenameOutput {
     pub total_edits: usize,
     /// Number of files affected
     pub files_affected: usize,
-    /// The edits grouped by file
-    pub changes: Vec<FileEdit>,
+    /// Edited lines grouped by file (relative to the workspace root): `path: 3, 18`
+    pub changes: String,
     /// Whether the rename was successful
     pub success: bool,
     /// Error message if rename failed
@@ -82,6 +59,41 @@ pub struct LspRenameOutput {
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub meta: Option<ToolResultMeta>,
+}
+
+impl LspRenameOutput {
+    async fn applied(input: &LspRenameInput, changes: &[LspFileEdit], project_root: &Path) -> Self {
+        let edited: Vec<SourceLine> = changes
+            .iter()
+            .flat_map(|file_edit| {
+                file_edit.edits.iter().map(|edit| SourceLine::from_range(file_edit.file_path.clone(), &edit.range))
+            })
+            .collect();
+        let total_edits = edited.len();
+        let files_affected = changes.len();
+
+        Self {
+            old_name: input.symbol.clone(),
+            new_name: input.new_name.clone(),
+            total_edits,
+            files_affected,
+            changes: render_locations(&edited, project_root, None).await,
+            success: true,
+            meta: Some(rename_success_meta(input, total_edits, files_affected).into()),
+            ..Default::default()
+        }
+    }
+
+    fn failed(input: &LspRenameInput, error: String) -> Self {
+        Self {
+            old_name: input.symbol.clone(),
+            new_name: input.new_name.clone(),
+            success: false,
+            error: Some(error),
+            meta: Some(rename_failure_meta(input).into()),
+            ..Default::default()
+        }
+    }
 }
 
 /// Execute the rename operation
@@ -96,40 +108,15 @@ pub async fn execute_lsp_rename(
         resolved.client.rename(resolved.uri, resolved.line, resolved.column, input.new_name.clone()).await?;
 
     let Some(edit) = workspace_edit else {
-        return Ok(rename_failure(&input, "No changes returned from LSP server".to_string()));
+        return Ok(LspRenameOutput::failed(&input, "No changes returned from LSP server".to_string()));
     };
 
-    let raw_changes = match collect_workspace_text_edits(&edit) {
+    let changes = match collect_workspace_text_edits(&edit) {
         Ok(changes) => changes,
-        Err(error) => return Ok(rename_failure(&input, error.to_string())),
+        Err(error) => return Ok(LspRenameOutput::failed(&input, error.to_string())),
     };
-    let changes = convert_lsp_file_edits(&raw_changes);
-
-    apply_workspace_text_edits(&raw_changes).await?;
-    let total_edits: usize = changes.iter().map(|f| f.edits.len()).sum();
-    let files_affected = changes.len();
-
-    Ok(LspRenameOutput {
-        old_name: input.symbol.clone(),
-        new_name: input.new_name.clone(),
-        total_edits,
-        files_affected,
-        changes,
-        success: true,
-        meta: Some(rename_success_meta(&input, total_edits, files_affected).into()),
-        ..Default::default()
-    })
-}
-
-fn rename_failure(input: &LspRenameInput, error: String) -> LspRenameOutput {
-    LspRenameOutput {
-        old_name: input.symbol.clone(),
-        new_name: input.new_name.clone(),
-        success: false,
-        error: Some(error),
-        meta: Some(rename_failure_meta(input).into()),
-        ..Default::default()
-    }
+    apply_workspace_text_edits(&changes).await?;
+    Ok(LspRenameOutput::applied(&input, &changes, registry.root_path()).await)
 }
 
 /// Convert LSP `WorkspaceEdit` to grouped raw text edits.
@@ -198,16 +185,6 @@ fn extract_one_of_text_edit(edit: &OneOf<lsp_types::TextEdit, lsp_types::Annotat
         OneOf::Left(edit) => edit.clone(),
         OneOf::Right(edit) => edit.text_edit.clone(),
     }
-}
-
-fn convert_lsp_file_edits(edits: &[LspFileEdit]) -> Vec<FileEdit> {
-    edits
-        .iter()
-        .map(|file_edit| FileEdit {
-            file_path: file_edit.file_path.clone(),
-            edits: file_edit.edits.iter().map(convert_text_edit).collect(),
-        })
-        .collect()
 }
 
 async fn apply_workspace_text_edits(changes: &[LspFileEdit]) -> Result<(), LspError> {
@@ -293,16 +270,6 @@ fn lsp_position_to_byte_offset(content: &str, position: lsp_types::Position) -> 
     }
 }
 
-fn convert_text_edit(edit: &lsp_types::TextEdit) -> TextEdit {
-    TextEdit {
-        start_line: edit.range.start.line + 1,
-        start_column: edit.range.start.character + 1,
-        end_line: edit.range.end.line + 1,
-        end_column: edit.range.end.character + 1,
-        new_text: edit.new_text.clone(),
-    }
-}
-
 fn rename_success_meta(input: &LspRenameInput, total_edits: usize, files_affected: usize) -> ToolDisplayMeta {
     ToolDisplayMeta::new(
         "LSP rename",
@@ -355,13 +322,11 @@ mod tests {
 
         let edit = WorkspaceEdit { changes: Some(changes), document_changes: None, change_annotations: None };
 
-        let raw = collect_workspace_text_edits(&edit).unwrap();
-        let result = convert_lsp_file_edits(&raw);
+        let result = collect_workspace_text_edits(&edit).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].file_path, "/src/main.rs");
         assert_eq!(result[0].edits.len(), 2);
-        assert_eq!(result[0].edits[0].start_line, 1);
-        assert_eq!(result[0].edits[0].start_column, 6);
+        assert_eq!(result[0].edits[0].range.start, lsp_types::Position { line: 0, character: 5 });
     }
 
     #[test]
@@ -383,12 +348,10 @@ mod tests {
             change_annotations: None,
         };
 
-        let raw = collect_workspace_text_edits(&edit).unwrap();
-        let result = convert_lsp_file_edits(&raw);
+        let result = collect_workspace_text_edits(&edit).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].file_path, "/src/lib.rs");
-        assert_eq!(result[0].edits[0].start_line, 11);
-        assert_eq!(result[0].edits[0].start_column, 3);
+        assert_eq!(result[0].edits[0].range.start, lsp_types::Position { line: 10, character: 2 });
         assert_eq!(result[0].edits[0].new_text, "renamed");
     }
 
@@ -427,8 +390,7 @@ mod tests {
             change_annotations: None,
         };
 
-        let raw = collect_workspace_text_edits(&edit).unwrap();
-        let result = convert_lsp_file_edits(&raw);
+        let result = collect_workspace_text_edits(&edit).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].file_path, "/src/document_changes.rs");
     }

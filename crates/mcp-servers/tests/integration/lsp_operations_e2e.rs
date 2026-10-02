@@ -193,18 +193,9 @@ async fn test_lsp_rename_falls_back_from_stale_line_hint() {
     assert!(files_affected >= 2, "expected at least 2 files, got {files_affected}");
     assert!(total_edits >= 3, "expected at least 3 edits, got {total_edits}");
 
-    let changes = result["changes"].as_array().unwrap();
-    let changed_paths: Vec<&str> =
-        changes.iter().filter_map(|entry| entry.get("filePath").and_then(|v| v.as_str())).collect();
-
-    assert!(
-        changed_paths.iter().any(|path| path.ends_with("src/lib.rs")),
-        "expected lib.rs in changes, got {changed_paths:?}"
-    );
-    assert!(
-        changed_paths.iter().any(|path| path.ends_with("src/main.rs")),
-        "expected main.rs in changes, got {changed_paths:?}"
-    );
+    let changes = result["changes"].as_str().unwrap();
+    assert!(changes.contains("src/lib.rs: 1"), "expected lib.rs in changes, got {changes}");
+    assert!(changes.contains("src/main.rs: 2, 3"), "expected main.rs in changes, got {changes}");
 
     let lib_content =
         std::fs::read_to_string(project.root().join("src/lib.rs")).expect("failed to read lib.rs after rename");
