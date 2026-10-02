@@ -64,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("\n{}: {counts}", uri.as_str());
 
             for diag in &formatted {
-                println!("  {}", diag.format());
+                println!("  {diag}");
             }
         }
     }

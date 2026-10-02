@@ -3,13 +3,15 @@
 // `Uri` only uses interior mutability to cache parsed components; its identity is stable.
 #![allow(clippy::mutable_key_type)]
 
-use crate::lsp::diagnostics::{DiagnosticCounts, FormattedDiagnostic, count_by_severity};
+use crate::lsp::common::truncate_results;
+use crate::lsp::diagnostics::{DiagnosticCounts, FormattedDiagnostic, Severity, count_by_severity};
 use crate::lsp::error::LspError;
 use crate::lsp::registry::LspRegistry;
+use crate::workspace_paths::relative_path;
 use lsp_types::Diagnostic;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 
@@ -26,23 +28,25 @@ pub struct LspDiagnosticsRequest {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LspDiagnosticsOutput {
-    /// The scope that was queried
     pub scope: Scope,
-    /// The workspace root (present when scope is "workspace")
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_root: Option<String>,
-    /// The file path that was queried (present when scope is "file")
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file_path: Option<String>,
-    /// List of diagnostics
-    pub diagnostics: Vec<FormattedDiagnostic>,
-    /// Summary counts
+    pub diagnostics: BTreeMap<String, Vec<String>>,
     pub summary: DiagnosticCounts,
-    /// Display metadata for human-friendly rendering
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncated: Option<bool>,
+
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub meta: Option<ToolResultMeta>,
 }
+
+pub const MAX_LISTED_DIAGNOSTICS: usize = 200;
 
 /// Scope label for output serialization
 #[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
@@ -50,6 +54,45 @@ pub struct LspDiagnosticsOutput {
 pub enum Scope {
     Workspace,
     File,
+}
+
+impl LspDiagnosticsOutput {
+    pub fn new(
+        request: &LspDiagnosticsRequest,
+        root_path: &Path,
+        diagnostics_cache: &HashMap<lsp_types::Uri, Vec<Diagnostic>>,
+    ) -> Self {
+        let mut diagnostics: Vec<FormattedDiagnostic> = diagnostics_cache
+            .iter()
+            .flat_map(|(uri, diagnostics)| {
+                diagnostics.iter().map(move |diagnostic| FormattedDiagnostic::from_diagnostic(uri, diagnostic))
+            })
+            .collect();
+
+        let summary = count_by_severity(&diagnostics);
+        diagnostics.retain(|diagnostic| diagnostic.severity <= Severity::Warning);
+        diagnostics
+            .sort_by(|a, b| (a.severity, &a.file, a.line, a.column).cmp(&(b.severity, &b.file, b.line, b.column)));
+
+        let truncation = truncate_results(&mut diagnostics, MAX_LISTED_DIAGNOSTICS);
+        let mut by_file: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for diagnostic in &diagnostics {
+            by_file.entry(relative_path(root_path, &diagnostic.file)).or_default().push(diagnostic.to_string());
+        }
+
+        let file_path = request.file_path.clone();
+        let is_workspace = file_path.is_none();
+
+        Self {
+            scope: if is_workspace { Scope::Workspace } else { Scope::File },
+            workspace_root: if is_workspace { Some(root_path.to_string_lossy().to_string()) } else { None },
+            file_path,
+            diagnostics: by_file,
+            summary,
+            truncated: truncation.truncated,
+            meta: None,
+        }
+    }
 }
 
 /// Execute the `lsp_check_errors` operation
@@ -63,7 +106,7 @@ pub async fn execute_lsp_diagnostics(
     }
 
     let diagnostics_cache = registry.collect_diagnostics(request.file_path.as_deref()).await?;
-    let mut output = build_output(&request, registry.root_path(), &diagnostics_cache);
+    let mut output = LspDiagnosticsOutput::new(&request, registry.root_path(), &diagnostics_cache);
 
     let detail = if output.summary.errors == 0 && output.summary.warnings == 0 {
         "no issues".to_string()
@@ -80,34 +123,6 @@ pub async fn execute_lsp_diagnostics(
     }
 
     Ok(output)
-}
-
-fn build_output(
-    input: &LspDiagnosticsRequest,
-    root_path: &Path,
-    diagnostics_cache: &HashMap<lsp_types::Uri, Vec<Diagnostic>>,
-) -> LspDiagnosticsOutput {
-    let mut diagnostics: Vec<FormattedDiagnostic> = diagnostics_cache
-        .iter()
-        .flat_map(|(uri, diagnostics)| {
-            diagnostics.iter().map(move |diagnostic| FormattedDiagnostic::from_diagnostic(uri, diagnostic))
-        })
-        .collect();
-
-    diagnostics.sort_by(|a, b| a.file.cmp(&b.file).then(a.line.cmp(&b.line)).then(a.column.cmp(&b.column)));
-
-    let summary = count_by_severity(&diagnostics);
-    let file_path = input.file_path.clone();
-    let is_workspace = file_path.is_none();
-
-    LspDiagnosticsOutput {
-        scope: if is_workspace { Scope::Workspace } else { Scope::File },
-        workspace_root: if is_workspace { Some(root_path.to_string_lossy().to_string()) } else { None },
-        file_path,
-        diagnostics,
-        summary,
-        meta: None,
-    }
 }
 
 #[cfg(test)]
@@ -143,7 +158,7 @@ mod tests {
     }
 
     fn workspace_output(cache: &HashMap<lsp_types::Uri, Vec<Diagnostic>>) -> LspDiagnosticsOutput {
-        build_output(&workspace_request(), Path::new("/project"), cache)
+        LspDiagnosticsOutput::new(&workspace_request(), Path::new("/project"), cache)
     }
 
     fn parse_request(json: &str) -> Result<LspDiagnosticsRequest, serde_json::Error> {
@@ -169,7 +184,11 @@ mod tests {
 
         let result = workspace_output(&cache);
 
-        assert_eq!(result.diagnostics.len(), 3);
+        assert_eq!(
+            result.diagnostics["src/main.rs"],
+            ["11:1 error[E0308]: type mismatch", "21:1 warning[E0308]: unused variable"]
+        );
+        assert_eq!(result.diagnostics["src/lib.rs"], ["6:1 error[E0308]: missing field"]);
         assert_eq!(result.summary.errors, 2);
         assert_eq!(result.summary.warnings, 1);
         assert_eq!(result.summary.infos, 0);
@@ -183,18 +202,31 @@ mod tests {
         cache.insert(uri("/project/src/main.rs"), vec![diag(DiagnosticSeverity::ERROR, "type mismatch", 10)]);
 
         let input = file_request("/project/src/main.rs");
-        let result = build_output(&input, Path::new("/project"), &cache);
+        let result = LspDiagnosticsOutput::new(&input, Path::new("/project"), &cache);
 
-        assert_eq!(result.diagnostics.len(), 1);
-        assert!(result.diagnostics[0].file.contains("main.rs"));
-        assert_eq!(result.diagnostics[0].message, "type mismatch");
+        assert_eq!(result.diagnostics["src/main.rs"], ["11:1 error[E0308]: type mismatch"]);
         assert_eq!(result.summary.total, 1);
+    }
+
+    #[test]
+    fn multiline_messages_are_listed_on_one_line() {
+        let cache = HashMap::from([(
+            uri("/project/src/main.rs"),
+            vec![diag(DiagnosticSeverity::ERROR, "mismatched types\nexpected `u32`, found `&str`", 1)],
+        )]);
+
+        let result = workspace_output(&cache);
+
+        assert_eq!(
+            result.diagnostics["src/main.rs"],
+            ["2:1 error[E0308]: mismatched types expected `u32`, found `&str`"]
+        );
     }
 
     #[test]
     fn test_empty_diagnostics() {
         let result = workspace_output(&HashMap::new());
-        assert_eq!(result.diagnostics.len(), 0);
+        assert!(result.diagnostics.is_empty());
         assert_eq!(result.summary.total, 0);
     }
 
@@ -205,8 +237,8 @@ mod tests {
         cache.insert(uri("/project/src/a.rs"), vec![diag(DiagnosticSeverity::ERROR, "error in a", 10)]);
 
         let result = workspace_output(&cache);
-        assert!(result.diagnostics[0].file.contains("a.rs"));
-        assert!(result.diagnostics[1].file.contains("b.rs"));
+        let files: Vec<&str> = result.diagnostics.keys().map(String::as_str).collect();
+        assert_eq!(files, ["src/a.rs", "src/b.rs"]);
     }
 
     #[test]
@@ -251,7 +283,7 @@ mod tests {
 
     #[test]
     fn test_output_workspace_metadata() {
-        let output = build_output(&workspace_request(), Path::new("/home/user/project"), &HashMap::new());
+        let output = LspDiagnosticsOutput::new(&workspace_request(), Path::new("/home/user/project"), &HashMap::new());
 
         let json = serde_json::to_string(&output).unwrap();
         assert!(json.contains(r#""scope":"workspace""#));
@@ -262,7 +294,7 @@ mod tests {
     #[test]
     fn test_output_file_metadata() {
         let input = file_request("/home/user/project/src/main.rs");
-        let output = build_output(&input, Path::new("/home/user/project"), &HashMap::new());
+        let output = LspDiagnosticsOutput::new(&input, Path::new("/home/user/project"), &HashMap::new());
 
         let json = serde_json::to_string(&output).unwrap();
         assert!(json.contains(r#""scope":"file""#));
@@ -291,5 +323,26 @@ mod tests {
         assert_eq!(result.summary.infos, 1);
         assert_eq!(result.summary.hints, 1);
         assert_eq!(result.summary.total, 5);
+        assert_eq!(
+            result.diagnostics["src/main.rs"],
+            ["2:1 error[E0308]: error1", "3:1 error[E0308]: error2", "4:1 warning[E0308]: warn1"]
+        );
+    }
+
+    #[test]
+    fn test_listed_diagnostics_are_capped_with_errors_first() {
+        let line_count = u32::try_from(MAX_LISTED_DIAGNOSTICS).unwrap();
+        let mut diagnostics: Vec<Diagnostic> =
+            (0..line_count).map(|line| diag(DiagnosticSeverity::WARNING, "warn", line)).collect();
+        diagnostics.push(diag(DiagnosticSeverity::ERROR, "late error", line_count + 10));
+        let cache = HashMap::from([(uri("/project/src/main.rs"), diagnostics)]);
+
+        let result = workspace_output(&cache);
+
+        let listed = &result.diagnostics["src/main.rs"];
+        assert_eq!(listed.len(), MAX_LISTED_DIAGNOSTICS);
+        assert_eq!(listed[0], format!("{}:1 error[E0308]: late error", line_count + 11));
+        assert_eq!(result.truncated, Some(true));
+        assert_eq!(result.summary.total, MAX_LISTED_DIAGNOSTICS + 1);
     }
 }
