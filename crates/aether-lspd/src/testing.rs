@@ -109,14 +109,6 @@ pub unsafe fn configure_fake_server(language: LanguageId, extra_args: &[&str]) {
     }
 }
 
-/// Configure the Rust fake server to return an error for workspace symbols.
-///
-/// This is useful for exercising clients that must propagate workspace-symbol
-/// request failures.
-pub fn use_fake_rust_server_failing_workspace_symbol() {
-    unsafe { configure_fake_server(LanguageId::Rust, &["--fail-on", "workspace/symbol"]) }
-}
-
 #[doc = include_str!("docs/testing.md")]
 pub trait TestProject {
     fn root(&self) -> &Path;

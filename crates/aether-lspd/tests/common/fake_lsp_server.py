@@ -73,10 +73,6 @@ def document(uri):
     return docs.get(uri, {"open_count": 0, "text": ""})
 
 
-def first_uri():
-    return next(iter(docs), "file:///workspace.rs")
-
-
 def make_range(start_line, start_character, end_line, end_character):
     return {
         "start": {"line": start_line, "character": start_character},
@@ -93,24 +89,11 @@ def make_location(uri, start_line, start_character, end_line, end_character):
     }
 
 
-def make_symbol(name, kind, uri, line, container_name=None):
-    symbol = {
+def make_symbol(name, kind, uri, line):
+    return {
         "name": name,
         "kind": kind,
         "location": make_location(uri, line, 0, line, len(name)),
-    }
-    if container_name is not None:
-        symbol["containerName"] = container_name
-    return symbol
-
-
-def make_call_hierarchy_item(name, uri, line):
-    return {
-        "name": name,
-        "kind": 12,
-        "uri": uri,
-        "range": make_range(line, 0, line, len(name)),
-        "selectionRange": make_range(line, 0, line, len(name)),
     }
 
 
@@ -208,15 +191,6 @@ while True:
                 "result": [make_location(uri, 0, 0, 0, 10)],
             }
         )
-    elif method == "textDocument/implementation":
-        uri = params["textDocument"]["uri"]
-        write_message(
-            {
-                "jsonrpc": "2.0",
-                "id": message["id"],
-                "result": [make_location(uri, 0, 0, 0, 10)],
-            }
-        )
     elif method == "textDocument/references":
         uri = params["textDocument"]["uri"]
         write_message(
@@ -238,56 +212,6 @@ while True:
                 "result": [
                     make_symbol("ExampleStruct", 23, uri, 0),
                     make_symbol("example_fn", 12, uri, 0),
-                ],
-            }
-        )
-    elif method == "workspace/symbol":
-        uri = first_uri()
-        write_message(
-            {
-                "jsonrpc": "2.0",
-                "id": message["id"],
-                "result": [
-                    symbol
-                    for symbol in [make_symbol("example_fn", 12, uri, 0, "module")]
-                    if params.get("query", "").lower() in symbol["name"].lower()
-                ],
-            }
-        )
-    elif method == "textDocument/prepareCallHierarchy":
-        uri = params["textDocument"]["uri"]
-        write_message(
-            {
-                "jsonrpc": "2.0",
-                "id": message["id"],
-                "result": [make_call_hierarchy_item("example_fn", uri, 0)],
-            }
-        )
-    elif method == "callHierarchy/incomingCalls":
-        uri = params["item"]["uri"]
-        write_message(
-            {
-                "jsonrpc": "2.0",
-                "id": message["id"],
-                "result": [
-                    {
-                        "from": make_call_hierarchy_item("caller_fn", uri, 4),
-                        "fromRanges": [make_range(4, 0, 4, 9)],
-                    }
-                ],
-            }
-        )
-    elif method == "callHierarchy/outgoingCalls":
-        uri = params["item"]["uri"]
-        write_message(
-            {
-                "jsonrpc": "2.0",
-                "id": message["id"],
-                "result": [
-                    {
-                        "to": make_call_hierarchy_item("callee_fn", uri, 6),
-                        "fromRanges": [make_range(0, 0, 0, 10)],
-                    }
                 ],
             }
         )

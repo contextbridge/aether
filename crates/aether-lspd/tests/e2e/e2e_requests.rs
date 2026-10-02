@@ -37,16 +37,6 @@ fn main() {
         other => panic!("Expected array goto definition result, got {other:?}"),
     }
 
-    let implementation = client.goto_implementation(uri.clone(), 4, 16).await.expect("Goto implementation failed");
-    match implementation {
-        GotoDefinitionResponse::Array(locations) => {
-            assert_eq!(locations.len(), 1);
-            assert_eq!(locations[0].uri, uri);
-            assert_eq!(locations[0].range.start.line, 0);
-        }
-        other => panic!("Expected array goto implementation result, got {other:?}"),
-    }
-
     let references = client.find_references(uri.clone(), 0, 3, true).await.expect("Find references failed");
     assert_eq!(references.len(), 2);
     assert!(references.iter().all(|location| location.uri == uri));
@@ -59,21 +49,6 @@ fn main() {
         }
         other @ DocumentSymbolResponse::Nested(_) => panic!("Expected flat document symbols, got {other:?}"),
     }
-
-    let workspace_symbols = client.workspace_symbol("example".to_string()).await.expect("Workspace symbol failed");
-    assert!(workspace_symbols.iter().any(|symbol| symbol.name == "example_fn"));
-
-    let call_items = client.prepare_call_hierarchy(uri.clone(), 4, 16).await.expect("Prepare call hierarchy failed");
-    assert_eq!(call_items.len(), 1);
-    assert_eq!(call_items[0].name, "example_fn");
-
-    let incoming = client.incoming_calls(call_items[0].clone()).await.expect("Incoming calls failed");
-    assert_eq!(incoming.len(), 1);
-    assert_eq!(incoming[0].from.name, "caller_fn");
-
-    let outgoing = client.outgoing_calls(call_items[0].clone()).await.expect("Outgoing calls failed");
-    assert_eq!(outgoing.len(), 1);
-    assert_eq!(outgoing[0].to.name, "callee_fn");
 
     let rename = client
         .rename(uri.clone(), 0, 3, "renamed_fn".to_string())

@@ -17,7 +17,6 @@ mod workspace_session;
 mod client;
 pub mod daemon;
 pub mod error;
-pub mod lsp_utils;
 pub mod protocol;
 pub mod socket_path;
 pub mod uri;
@@ -45,7 +44,6 @@ pub use language_catalog::{
     LANGUAGE_METADATA, LanguageMetadata, LanguageServerMetadata, LspConfig, detect_project_languages,
     extensions_for_alias, from_lsp_id, get_config_for_language, metadata_for, server_metadata_for_language,
 };
-pub use lsp_utils::symbol_kind_to_string;
 pub use socket_path::{ensure_socket_dir, lockfile_path, log_file_path, socket_path};
 
 pub use protocol::{

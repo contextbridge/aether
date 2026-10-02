@@ -5,10 +5,9 @@ use crate::protocol::{LspErrorResponse, LspNotification};
 use lsp_types::notification::{DidChangeWatchedFiles, Initialized, Notification, PublishDiagnostics};
 use lsp_types::request::{Initialize, RegisterCapability, Request, UnregisterCapability, WorkDoneProgressCreate};
 use lsp_types::{
-    CallHierarchyClientCapabilities, ClientCapabilities, DidChangeWatchedFilesClientCapabilities,
-    GeneralClientCapabilities, GotoCapability, HoverClientCapabilities, InitializeParams, MarkupKind,
-    PublishDiagnosticsClientCapabilities, RegistrationParams, TextDocumentClientCapabilities,
-    WorkspaceClientCapabilities, WorkspaceFolder,
+    ClientCapabilities, DidChangeWatchedFilesClientCapabilities, GeneralClientCapabilities, GotoCapability,
+    HoverClientCapabilities, InitializeParams, MarkupKind, PublishDiagnosticsClientCapabilities, RegistrationParams,
+    TextDocumentClientCapabilities, WorkspaceClientCapabilities, WorkspaceFolder,
 };
 use lsp_types::{DocumentSymbolClientCapabilities, DynamicRegistrationClientCapabilities};
 #[cfg(unix)]
@@ -221,7 +220,6 @@ impl ProcessTransportActor {
                     ..Default::default()
                 }),
                 definition: Some(GotoCapability { dynamic_registration: Some(false), link_support: Some(true) }),
-                implementation: Some(GotoCapability { dynamic_registration: Some(false), link_support: Some(true) }),
                 references: Some(DynamicRegistrationClientCapabilities { dynamic_registration: Some(false) }),
                 hover: Some(HoverClientCapabilities {
                     dynamic_registration: Some(false),
@@ -231,7 +229,6 @@ impl ProcessTransportActor {
                     hierarchical_document_symbol_support: Some(true),
                     ..Default::default()
                 }),
-                call_hierarchy: Some(CallHierarchyClientCapabilities { dynamic_registration: Some(false) }),
                 ..Default::default()
             }),
             workspace: Some(WorkspaceClientCapabilities {

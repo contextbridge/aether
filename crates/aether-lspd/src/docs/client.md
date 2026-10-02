@@ -16,12 +16,10 @@ connect(workspace_root, language)
 
 All requests are forwarded to the underlying language server through the daemon. Each method accepts the same parameters as the corresponding LSP protocol method:
 
-- [`goto_definition`](LspClient::goto_definition) / [`goto_implementation`](LspClient::goto_implementation) -- Jump to a symbol's definition or implementation.
+- [`goto_definition`](LspClient::goto_definition) -- Jump to a symbol's definition.
 - [`find_references`](LspClient::find_references) -- Find all references to a symbol.
 - [`hover`](LspClient::hover) -- Get hover information (type signature, docs).
-- [`workspace_symbol`](LspClient::workspace_symbol) -- Search for symbols across the workspace.
 - [`document_symbol`](LspClient::document_symbol) -- List all symbols in a document.
-- [`prepare_call_hierarchy`](LspClient::prepare_call_hierarchy), [`incoming_calls`](LspClient::incoming_calls), [`outgoing_calls`](LspClient::outgoing_calls) -- Navigate the call graph.
 - [`rename`](LspClient::rename) -- Rename a symbol across the workspace.
 
 # Diagnostics
