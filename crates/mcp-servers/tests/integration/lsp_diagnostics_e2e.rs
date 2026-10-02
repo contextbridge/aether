@@ -44,14 +44,14 @@ async fn poll_workspace_diagnostics(
 
 fn file_error_count(result: &serde_json::Value, file_path: &str) -> usize {
     let expected_path = canonical_path(file_path);
+    let root = PathBuf::from(result["workspaceRoot"].as_str().unwrap_or_default());
     result["diagnostics"]
-        .as_array()
+        .as_object()
         .into_iter()
         .flatten()
-        .filter(|diagnostic| {
-            diagnostic["file"].as_str().map(canonical_path).as_deref() == Some(expected_path.as_str())
-                && diagnostic["severity"].as_str() == Some("error")
-        })
+        .filter(|(file, _)| canonical_path(&root.join(file).to_string_lossy()) == expected_path)
+        .flat_map(|(_, diagnostics)| diagnostics.as_array().into_iter().flatten())
+        .filter(|diagnostic| diagnostic.as_str().is_some_and(|diagnostic| diagnostic.contains(" error")))
         .count()
 }
 

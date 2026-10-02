@@ -30,8 +30,8 @@ impl WorkspacePaths {
         resolve_dir(&self.root, raw)
     }
 
-    pub fn make_relative(&self, path: &Path) -> Option<PathBuf> {
-        path.strip_prefix(&self.root).ok().map(Path::to_path_buf)
+    pub fn relative_path(&self, path: &str) -> String {
+        relative_path(&self.root, path)
     }
 }
 
@@ -42,6 +42,12 @@ pub fn current_dir() -> PathBuf {
 /// Resolves `path` against `root`, leaving absolute paths untouched.
 pub fn resolve_path(root: &Path, path: PathBuf) -> PathBuf {
     if path.is_absolute() { path } else { root.join(path) }
+}
+
+pub fn relative_path(root: &Path, path: &str) -> String {
+    Path::new(path)
+        .strip_prefix(root)
+        .map_or_else(|_| path.to_string(), |relative| relative.to_string_lossy().to_string())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -77,7 +83,8 @@ mod tests {
         assert_eq!(workspace.root(), Path::new("/workspace"));
         assert_eq!(workspace.resolve_path(PathBuf::from("src/main.rs")), PathBuf::from("/workspace/src/main.rs"));
         assert_eq!(workspace.resolve_dir(None), PathBuf::from("/workspace"));
-        assert_eq!(workspace.make_relative(Path::new("/workspace/src/main.rs")), Some(PathBuf::from("src/main.rs")));
+        assert_eq!(workspace.relative_path("/workspace/src/main.rs"), "src/main.rs");
+        assert_eq!(workspace.relative_path("/elsewhere/lib.rs"), "/elsewhere/lib.rs");
     }
 
     #[test]

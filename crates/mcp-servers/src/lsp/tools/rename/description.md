@@ -13,4 +13,4 @@ A single rename updates all references — no manual file-by-file editing needed
 - `new_name` — **required**, new symbol name
 - `line` — optional 1-indexed optimization hint; stale hints fall back to automatic resolution
 
-**Returns:** files affected, line/column ranges, total edit count.
+**Returns:** files affected, total edit count, and the edited lines grouped by file (relative to the workspace root): `src/lib.rs: 1, 14`.

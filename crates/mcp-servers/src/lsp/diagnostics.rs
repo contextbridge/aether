@@ -1,15 +1,15 @@
 //! Utilities for working with LSP diagnostics
 //!
-//! This module provides helper functions for formatting and filtering diagnostics.
+//! This module provides helpers for formatting and counting diagnostics.
 
 use super::common::uri_to_path;
-use lsp_types::{Diagnostic, DiagnosticSeverity, PublishDiagnosticsParams, Uri};
+use super::render::single_line;
+use lsp_types::{Diagnostic, DiagnosticSeverity, Uri};
 use schemars::JsonSchema;
 use serde::Serialize;
+use std::fmt;
 
-/// A simplified diagnostic representation for display
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct FormattedDiagnostic {
     /// The file path (extracted from URI)
     pub file: String,
@@ -21,15 +21,11 @@ pub struct FormattedDiagnostic {
     pub severity: Severity,
     /// The diagnostic message
     pub message: String,
-    /// The source (e.g., "rustc", "clippy")
-    pub source: Option<String>,
     /// The diagnostic code
     pub code: Option<String>,
 }
 
-/// Simplified severity levels
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
     Error,
     Warning,
@@ -48,8 +44,8 @@ impl From<Option<DiagnosticSeverity>> for Severity {
     }
 }
 
-impl std::fmt::Display for Severity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for Severity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Severity::Error => write!(f, "error"),
             Severity::Warning => write!(f, "warning"),
@@ -62,54 +58,30 @@ impl std::fmt::Display for Severity {
 impl FormattedDiagnostic {
     /// Create a formatted diagnostic from a raw diagnostic and URI
     pub fn from_diagnostic(uri: &Uri, diagnostic: &Diagnostic) -> Self {
-        // Extract file path from URI, falling back to the URI string if not a file URI
-        let file = uri_to_path(uri);
-
         let code = diagnostic.code.as_ref().map(|c| match c {
             lsp_types::NumberOrString::Number(n) => n.to_string(),
             lsp_types::NumberOrString::String(s) => s.clone(),
         });
 
         Self {
-            file,
-            line: diagnostic.range.start.line + 1, // Convert to 1-indexed
+            file: uri_to_path(uri),
+            line: diagnostic.range.start.line + 1,
             column: diagnostic.range.start.character + 1,
             severity: diagnostic.severity.into(),
             message: diagnostic.message.clone(),
-            source: diagnostic.source.clone(),
             code,
         }
     }
+}
 
-    /// Format the diagnostic for display (rustc-style)
-    pub fn format(&self) -> String {
-        let source = self.source.as_ref().map(|s| format!("[{s}] ")).unwrap_or_default();
-
-        let code = self.code.as_ref().map(|c| format!("[{c}] ")).unwrap_or_default();
-
-        format!("{}: {}{}{}:{}:{}: {}", self.severity, source, code, self.file, self.line, self.column, self.message)
+impl fmt::Display for FormattedDiagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{} {}", self.line, self.column, self.severity)?;
+        if let Some(code) = &self.code {
+            write!(f, "[{code}]")?;
+        }
+        write!(f, ": {}", single_line(&self.message))
     }
-}
-
-/// Extract and format all diagnostics from a `PublishDiagnosticsParams`
-pub fn format_diagnostics(params: &PublishDiagnosticsParams) -> Vec<FormattedDiagnostic> {
-    params.diagnostics.iter().map(|d| FormattedDiagnostic::from_diagnostic(&params.uri, d)).collect()
-}
-
-/// Filter diagnostics by severity
-pub fn filter_by_severity(diagnostics: &[FormattedDiagnostic], min_severity: Severity) -> Vec<&FormattedDiagnostic> {
-    diagnostics
-        .iter()
-        .filter(|d| {
-            matches!(
-                (d.severity, min_severity),
-                (Severity::Error, _)
-                    | (Severity::Warning, Severity::Warning | Severity::Info | Severity::Hint)
-                    | (Severity::Info, Severity::Info | Severity::Hint)
-                    | (Severity::Hint, Severity::Hint)
-            )
-        })
-        .collect()
 }
 
 /// Count diagnostics by severity
@@ -145,8 +117,8 @@ impl DiagnosticCounts {
     }
 }
 
-impl std::fmt::Display for DiagnosticCounts {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for DiagnosticCounts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} errors, {} warnings, {} info, {} hints", self.errors, self.warnings, self.infos, self.hints)
     }
 }
@@ -195,6 +167,14 @@ mod tests {
         assert_eq!(formatted.column, 1);
         assert_eq!(formatted.severity, Severity::Error);
         assert_eq!(formatted.message, "test error");
+        assert_eq!(formatted.to_string(), "6:1 error: test error");
+    }
+
+    #[test]
+    fn severities_are_ordered_from_most_severe() {
+        assert!(Severity::Error < Severity::Warning);
+        assert!(Severity::Warning < Severity::Info);
+        assert!(Severity::Info < Severity::Hint);
     }
 
     #[test]

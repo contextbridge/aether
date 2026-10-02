@@ -100,16 +100,14 @@ async fn coding_server_lists_tools_over_stdio() {
     let names = tool_names(&tools);
 
     assert!(names.contains(&"bash"), "expected bash tool, got: {names:?}");
-    for removed in ["find", "grep", "ast_grep", "list_files"] {
+    for removed in ["find", "grep", "ast_grep", "list_files", "lsp_document", "lsp_workspace_search"] {
         assert!(!names.contains(&removed), "unexpected removed tool {removed}, got: {names:?}");
     }
     assert!(names.contains(&"read_file"), "expected read_file tool, got: {names:?}");
 
     // LSP tools should be in the coding server too
     assert!(names.contains(&"lsp_symbol"), "expected lsp_symbol in coding server, got: {names:?}");
-    assert!(names.contains(&"lsp_document"), "expected lsp_document in coding server, got: {names:?}");
     assert!(names.contains(&"lsp_check_errors"), "expected lsp_check_errors in coding server, got: {names:?}");
-    assert!(names.contains(&"lsp_workspace_search"), "expected lsp_workspace_search in coding server, got: {names:?}");
     assert!(names.contains(&"lsp_rename"), "expected lsp_rename in coding server, got: {names:?}");
 }
 

@@ -12,13 +12,18 @@ use std::sync::Once;
 
 static SETUP: Once = Once::new();
 
-/// Fake server that never answers `workspace/symbol` and exits on
+/// Fake server that never answers `textDocument/definition` and exits on
 /// `textDocument/references`, with a short daemon request timeout so wedge
 /// detection fires quickly.
 fn use_misbehaving_fake_server() {
     SETUP.call_once(|| {
         unsafe { std::env::set_var("AETHER_LSPD_REQUEST_TIMEOUT", "2") };
-        use_fake_rust_server_with_args(&["--wedge-on", "workspace/symbol", "--crash-on", "textDocument/references"]);
+        use_fake_rust_server_with_args(&[
+            "--wedge-on",
+            "textDocument/definition",
+            "--crash-on",
+            "textDocument/references",
+        ]);
     });
 }
 
@@ -27,10 +32,11 @@ async fn wedged_request_fails_with_timeout_instead_of_hanging() {
     use_misbehaving_fake_server();
 
     let project = CargoProject::new("wedge_timeout").expect("Failed to create project");
+    project.add_file("src/main.rs", "fn main() {}\n").expect("Failed to add file");
     let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
     let client = harness.connect().await.expect("Failed to connect");
 
-    let result = client.workspace_symbol("example".to_string()).await;
+    let result = client.goto_definition(project.file_uri("src/main.rs"), 0, 3).await;
     match result {
         Err(ClientError::LspError { code, message }) => {
             assert_eq!(code, LSP_REQUEST_TIMED_OUT, "unexpected error: {message}");
@@ -51,7 +57,7 @@ async fn wedged_server_is_replaced_on_next_request() {
     let client = harness.connect().await.expect("Failed to connect");
     let uri = project.file_uri("src/main.rs");
 
-    let wedged = client.workspace_symbol("example".to_string()).await;
+    let wedged = client.goto_definition(uri.clone(), 0, 3).await;
     assert!(wedged.is_err(), "wedged request should fail, got {wedged:?}");
 
     let hover = hover_text(client.hover(uri, 0, 0).await.expect("Hover after wedge should succeed"));

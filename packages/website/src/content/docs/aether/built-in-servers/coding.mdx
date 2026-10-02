@@ -64,10 +64,8 @@ Because `bash` spawns real subprocesses, it composes with [deferred (proxied) to
 
 Unless `--disable-lsp` is set, Aether wires LSP-backed tools into the `coding` server. With `--disable-lsp`, the `lsp_*` tools are still advertised but every call returns an "LSP not configured" error.
 
-| Tool                   | Description                                                               |
-| ---------------------- | ------------------------------------------------------------------------- |
-| `lsp_symbol`           | Definition, references, hover, implementation lookup, and call hierarchy. |
-| `lsp_workspace_search` | Search for symbols across the workspace by name.                          |
-| `lsp_document`         | Document symbol outline for a file.                                       |
-| `lsp_check_errors`     | Compiler diagnostics without running a full build command.                |
-| `lsp_rename`           | Rename a symbol across the workspace.                                     |
+| Tool               | Description                                                |
+| ------------------ | ---------------------------------------------------------- |
+| `lsp_symbol`       | Definition, references, and hover for a symbol.            |
+| `lsp_check_errors` | Compiler diagnostics without running a full build command. |
+| `lsp_rename`       | Rename a symbol across the workspace.                      |

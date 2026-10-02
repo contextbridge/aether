@@ -1,4 +1,4 @@
-//! End-to-end tests for LSP operations (hover, definition, references, document symbols)
+//! End-to-end tests for LSP operations (hover, definition, references, rename)
 //! through the MCP tool layer, using Rust projects with rust-analyzer.
 //!
 //! Requirements:
@@ -76,17 +76,11 @@ fn main() {
             "symbol": "greet",
             "line": 6
         }),
-        |r| r.get("locations").and_then(|l| l.as_array()).is_some_and(|a| !a.is_empty()),
+        |r| r["locations"].as_str().is_some_and(|locations| !locations.is_empty()),
     )
     .await;
 
-    let locations = result["locations"].as_array().unwrap();
-    assert!(!locations.is_empty(), "Expected at least one definition location");
-
-    // LocationResult uses 1-indexed startLine (camelCase)
-    let first = &locations[0];
-    let start_line = first["startLine"].as_u64().unwrap();
-    assert_eq!(start_line, 1, "Expected definition at line 1 (1-indexed)");
+    assert_eq!(result["locations"], "src/main.rs: 1", "Expected definition at line 1 (1-indexed)");
 }
 
 /// Test: find references returns all usages of a symbol
@@ -121,13 +115,15 @@ fn main() {
             "symbol": "greet",
             "line": 1
         }),
-        |r| r.get("locations").and_then(|l| l.as_array()).is_some_and(|a| a.len() >= 2),
+        |r| r["totalCount"].as_u64().is_some_and(|count| count >= 2),
     )
     .await;
 
-    let locations = result["locations"].as_array().unwrap();
-    // At least the 2 call sites (and possibly the definition if include_declaration defaults true)
-    assert!(locations.len() >= 2, "Expected at least 2 references to greet, got {}", locations.len());
+    let locations = result["locations"].as_str().unwrap();
+    assert!(
+        locations.starts_with("src/main.rs: ") && locations.ends_with("6, 7"),
+        "Expected references to greet on lines 6 and 7, got {locations}"
+    );
 }
 
 /// Test: `lsp_rename` applies workspace edits for a Rust symbol
@@ -172,12 +168,7 @@ async fn test_lsp_rename_falls_back_from_stale_line_hint() {
             "symbol": "greet",
             "line": 1
         }),
-        |r| {
-            r.get("locations").and_then(|v| v.as_array()).is_some_and(|refs| {
-                refs.iter()
-                    .any(|loc| loc.get("filePath").and_then(|p| p.as_str()).is_some_and(|p| p.ends_with("main.rs")))
-            })
-        },
+        |r| r["locations"].as_str().is_some_and(|locations| locations.contains("src/main.rs")),
     )
     .await;
 
@@ -202,18 +193,9 @@ async fn test_lsp_rename_falls_back_from_stale_line_hint() {
     assert!(files_affected >= 2, "expected at least 2 files, got {files_affected}");
     assert!(total_edits >= 3, "expected at least 3 edits, got {total_edits}");
 
-    let changes = result["changes"].as_array().unwrap();
-    let changed_paths: Vec<&str> =
-        changes.iter().filter_map(|entry| entry.get("filePath").and_then(|v| v.as_str())).collect();
-
-    assert!(
-        changed_paths.iter().any(|path| path.ends_with("src/lib.rs")),
-        "expected lib.rs in changes, got {changed_paths:?}"
-    );
-    assert!(
-        changed_paths.iter().any(|path| path.ends_with("src/main.rs")),
-        "expected main.rs in changes, got {changed_paths:?}"
-    );
+    let changes = result["changes"].as_str().unwrap();
+    assert!(changes.contains("src/lib.rs: 1"), "expected lib.rs in changes, got {changes}");
+    assert!(changes.contains("src/main.rs: 2, 3"), "expected main.rs in changes, got {changes}");
 
     let lib_content =
         std::fs::read_to_string(project.root().join("src/lib.rs")).expect("failed to read lib.rs after rename");
@@ -228,50 +210,4 @@ async fn test_lsp_rename_falls_back_from_stale_line_hint() {
         main_content.contains("say_hello") && !main_content.contains("greet"),
         "expected main.rs to be renamed, got: {main_content}"
     );
-}
-
-/// Test: document symbols returns structs and functions
-#[tokio::test]
-async fn test_document_symbols() {
-    let project = CargoProject::new("docsym_test").expect("Failed to create project");
-    project
-        .add_file(
-            "src/main.rs",
-            r#"struct Point {
-    x: f64,
-    y: f64,
-}
-
-fn distance(a: &Point, b: &Point) -> f64 {
-    ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
-}
-
-fn main() {
-    let p1 = Point { x: 0.0, y: 0.0 };
-    let p2 = Point { x: 3.0, y: 4.0 };
-    println!("{}", distance(&p1, &p2));
-}
-"#,
-        )
-        .expect("Failed to add file");
-
-    let main_rs = project.file_path_str("src/main.rs");
-    let (_server_handle, client) = connect_lsp(&project).await;
-
-    let result = poll_lsp_tool(
-        &client,
-        "lsp_document",
-        serde_json::json!({
-            "file_path": main_rs
-        }),
-        |r| r.get("symbols").and_then(|s| s.as_array()).is_some_and(|a| !a.is_empty()),
-    )
-    .await;
-
-    let symbols = result["symbols"].as_array().unwrap();
-    let names: Vec<&str> = symbols.iter().filter_map(|s| s.get("name").and_then(|n| n.as_str())).collect();
-
-    assert!(names.contains(&"Point"), "Expected 'Point' in document symbols, got: {names:?}");
-    assert!(names.contains(&"distance"), "Expected 'distance' in document symbols, got: {names:?}");
-    assert!(names.contains(&"main"), "Expected 'main' in document symbols, got: {names:?}");
 }

@@ -9,12 +9,9 @@ use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
 use lsp_types::{
-    CallHierarchyIncomingCall, CallHierarchyIncomingCallsParams, CallHierarchyItem, CallHierarchyOutgoingCall,
-    CallHierarchyOutgoingCallsParams, CallHierarchyPrepareParams, DocumentSymbolParams, DocumentSymbolResponse,
-    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, Location, PartialResultParams, Position,
-    PublishDiagnosticsParams, ReferenceContext, ReferenceParams, RenameParams, SymbolInformation,
+    DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
+    Location, PartialResultParams, Position, PublishDiagnosticsParams, ReferenceContext, ReferenceParams, RenameParams,
     TextDocumentIdentifier, TextDocumentPositionParams, Uri, WorkDoneProgressParams, WorkspaceEdit,
-    WorkspaceSymbolParams,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -99,23 +96,6 @@ impl LspClient {
         self.call("textDocument/definition", &params, || GotoDefinitionResponse::Array(vec![])).await
     }
 
-    pub async fn goto_implementation(
-        &self,
-        uri: Uri,
-        line: u32,
-        character: u32,
-    ) -> ClientResult<GotoDefinitionResponse> {
-        let params = GotoDefinitionParams {
-            text_document_position_params: TextDocumentPositionParams {
-                text_document: TextDocumentIdentifier { uri },
-                position: Position { line, character },
-            },
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            partial_result_params: PartialResultParams::default(),
-        };
-        self.call("textDocument/implementation", &params, || GotoDefinitionResponse::Array(vec![])).await
-    }
-
     pub async fn find_references(
         &self,
         uri: Uri,
@@ -146,15 +126,6 @@ impl LspClient {
         self.call("textDocument/hover", &params, || None).await
     }
 
-    pub async fn workspace_symbol(&self, query: String) -> ClientResult<Vec<SymbolInformation>> {
-        let params = WorkspaceSymbolParams {
-            query,
-            partial_result_params: PartialResultParams::default(),
-            work_done_progress_params: WorkDoneProgressParams::default(),
-        };
-        self.call("workspace/symbol", &params, Vec::new).await
-    }
-
     pub async fn document_symbol(&self, uri: Uri) -> ClientResult<DocumentSymbolResponse> {
         let params = DocumentSymbolParams {
             text_document: TextDocumentIdentifier { uri },
@@ -162,40 +133,6 @@ impl LspClient {
             partial_result_params: PartialResultParams::default(),
         };
         self.call("textDocument/documentSymbol", &params, || DocumentSymbolResponse::Flat(vec![])).await
-    }
-
-    pub async fn prepare_call_hierarchy(
-        &self,
-        uri: Uri,
-        line: u32,
-        character: u32,
-    ) -> ClientResult<Vec<CallHierarchyItem>> {
-        let params = CallHierarchyPrepareParams {
-            text_document_position_params: TextDocumentPositionParams {
-                text_document: TextDocumentIdentifier { uri },
-                position: Position { line, character },
-            },
-            work_done_progress_params: WorkDoneProgressParams::default(),
-        };
-        self.call("textDocument/prepareCallHierarchy", &params, Vec::new).await
-    }
-
-    pub async fn incoming_calls(&self, item: CallHierarchyItem) -> ClientResult<Vec<CallHierarchyIncomingCall>> {
-        let params = CallHierarchyIncomingCallsParams {
-            item,
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            partial_result_params: PartialResultParams::default(),
-        };
-        self.call("callHierarchy/incomingCalls", &params, Vec::new).await
-    }
-
-    pub async fn outgoing_calls(&self, item: CallHierarchyItem) -> ClientResult<Vec<CallHierarchyOutgoingCall>> {
-        let params = CallHierarchyOutgoingCallsParams {
-            item,
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            partial_result_params: PartialResultParams::default(),
-        };
-        self.call("callHierarchy/outgoingCalls", &params, Vec::new).await
     }
 
     pub async fn rename(
