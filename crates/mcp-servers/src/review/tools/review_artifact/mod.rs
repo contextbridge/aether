@@ -74,6 +74,8 @@ pub struct HtmlAnnotation {
     pub element: String,
     pub excerpt: String,
     pub comment: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 pub struct ReviewArtifactTool {

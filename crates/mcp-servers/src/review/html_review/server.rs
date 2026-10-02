@@ -29,21 +29,6 @@ pub enum Artifact {
     App(Url),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OverlayMode {
-    Document,
-    App,
-}
-
-impl OverlayMode {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Document => "document",
-            Self::App => "app",
-        }
-    }
-}
-
 #[derive(Clone, Default)]
 pub struct PendingReviews(Arc<Mutex<HashMap<String, ReviewServer>>>);
 
@@ -73,7 +58,7 @@ impl ReviewServer {
 
         let (url, router): (String, Router<Arc<ServerState>>) = match artifact {
             Artifact::Document { html, assets } => {
-                let page = render_document(&html, &token, OverlayMode::Document);
+                let page = render_document(&html, &token, None);
                 let router = Router::new().route("/", get(move || std::future::ready(Html(page.clone()))));
                 let router = match assets {
                     Some(directory) => router.fallback_service(
@@ -189,7 +174,7 @@ impl Proxy {
             return StatusCode::BAD_GATEWAY.into_response();
         };
         let body = if is_html {
-            Body::from(render_document(&String::from_utf8_lossy(&bytes), &self.token, OverlayMode::App))
+            Body::from(render_document(&String::from_utf8_lossy(&bytes), &self.token, Some(&self.origin)))
         } else {
             Body::from(bytes)
         };
@@ -227,11 +212,11 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
     matches!(name.as_str(), "connection" | "keep-alive" | "transfer-encoding" | "upgrade" | "te" | "trailer")
 }
 
-fn render_document(html: &str, token: &str, mode: OverlayMode) -> String {
-    let mode = mode.as_str();
+fn render_document(html: &str, token: &str, app_origin: Option<&str>) -> String {
+    let origin = app_origin.map_or_else(String::new, |origin| format!(" data-origin=\"{origin}\""));
     let injection = format!(
         "<style id=\"aether-review-style\">{OVERLAY_CSS}</style>\
-         <script data-token=\"{token}\" data-mode=\"{mode}\">{OVERLAY_JS}</script>"
+         <script data-token=\"{token}\"{origin}>{OVERLAY_JS}</script>"
     );
     match html.to_ascii_lowercase().rfind("</body") {
         Some(index) => format!("{}{}{}", &html[..index], injection, &html[index..]),

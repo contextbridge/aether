@@ -1,6 +1,8 @@
 (() => {
   "use strict";
 
+  if (window !== window.top) return;
+
   const HOVER = "data-aether-hover";
   const COMMENTED = "data-aether-commented";
   const ARMED = "data-aether-armed";
@@ -10,7 +12,8 @@
   const script = document.currentScript;
   const token = script.dataset.token;
   const style = document.getElementById("aether-review-style");
-  const liveApp = script.dataset.mode === "app";
+  const appOrigin = script.dataset.origin;
+  const liveApp = appOrigin !== undefined;
   let annotations = [];
   let sequence = 0;
   let armed = !liveApp;
@@ -19,6 +22,7 @@
   let dwell = null;
   let scrollUntil = 0;
   let finished = false;
+  const adopted = new WeakSet();
 
   const host = document.createElement("div");
   const shadow = host.attachShadow({ mode: "open" });
@@ -52,12 +56,7 @@
   document.documentElement.setAttribute(REVIEW, "");
   document.body.append(host);
 
-  document.addEventListener("mouseover", onHover, true);
-  document.addEventListener("mouseout", onOut, true);
-  document.addEventListener("click", onClick, true);
-  document.addEventListener("keydown", onKey, true);
-  document.addEventListener("scroll", onScroll, true);
-  document.addEventListener("wheel", onScroll, { capture: true, passive: true });
+  for (const type of ["keydown", "keypress", "keyup"]) host.addEventListener(type, (event) => event.stopPropagation());
   armButton.addEventListener("click", () => setArmed(!armed));
   summaryBox.addEventListener("input", () => autoGrow(summaryBox));
   submitButton.addEventListener("click", submit);
@@ -68,8 +67,7 @@
 
   function setArmed(next) {
     armed = next;
-    if (armed) document.documentElement.setAttribute(ARMED, "");
-    else document.documentElement.removeAttribute(ARMED);
+    syncDocuments();
     if (!armed) clearHover();
     armButton.setAttribute("aria-pressed", String(armed));
     armButton.textContent = armed ? "Annotating" : "Annotate";
@@ -77,6 +75,35 @@
     empty.textContent = armed
       ? "Click any element to comment on it. Press C to stop."
       : "Comment mode is off. Press C to annotate.";
+  }
+
+  function syncDocuments() {
+    for (const doc of documents(document)) {
+      adopt(doc);
+      doc.documentElement.toggleAttribute(ARMED, armed);
+    }
+  }
+
+  function adopt(doc) {
+    if (adopted.has(doc)) return;
+    adopted.add(doc);
+    if (!doc.getElementById(style.id)) (doc.head || doc.documentElement).append(style.cloneNode(true));
+    doc.addEventListener("mouseover", onHover, true);
+    doc.addEventListener("mouseout", onOut, true);
+    doc.addEventListener("click", onClick, true);
+    doc.addEventListener("keydown", onKey, true);
+    doc.addEventListener("scroll", onScroll, true);
+    doc.addEventListener("wheel", onScroll, { capture: true, passive: true });
+    doc.addEventListener("load", onFrameLoad, true);
+  }
+
+  function onFrameLoad(event) {
+    if (event.target.tagName === "IFRAME") syncDocuments();
+  }
+
+  function documents(doc) {
+    const frames = [...doc.querySelectorAll("iframe")].map((frame) => frame.contentDocument).filter(Boolean);
+    return [doc, ...frames.flatMap(documents)];
   }
 
   function onHover(event) {
@@ -138,6 +165,7 @@
       tag: target.tagName,
       element: target.cloneNode(false).outerHTML,
       excerpt: excerptFor(target),
+      url: pageOf(target),
       comment: "",
     };
     target.setAttribute(COMMENTED, annotation.id);
@@ -211,7 +239,7 @@
     const body = {
       status: "feedback",
       feedback: summary,
-      annotations: annotations.map(({ element, excerpt, comment }) => ({ element, excerpt, comment })),
+      annotations: annotations.map(({ element, excerpt, comment, url }) => ({ element, excerpt, comment, url })),
     };
     finish(body, "Review submitted.");
   }
@@ -257,6 +285,12 @@
       return element.getAttribute("placeholder") || element.getAttribute("value") || "";
     }
     return (element.innerText || element.textContent || "").replace(/\s+/g, " ").trim().slice(0, MAX_EXCERPT);
+  }
+
+  function pageOf(element) {
+    if (!liveApp) return undefined;
+    const { pathname, search, hash } = element.ownerDocument.location;
+    return appOrigin + pathname + search + hash;
   }
 
   // Only one un-commented draft may exist at a time; a fresh pick re-targets it.
