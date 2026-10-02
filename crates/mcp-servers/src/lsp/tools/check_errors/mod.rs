@@ -17,29 +17,9 @@ use utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LspDiagnosticsRequest {
-    /// Absolute path to a file. When omitted, checks the workspace.
+    /// Path to an existing file, absolute or relative to the workspace root. When omitted, checks the workspace.
     #[serde(default, alias = "file_path")]
     pub file_path: Option<String>,
-}
-
-impl LspDiagnosticsRequest {
-    fn validate(&self) -> Result<(), LspError> {
-        if let Some(file_path) = &self.file_path {
-            if file_path.trim().is_empty() {
-                return Err(LspError::InvalidPath("filePath cannot be empty".to_string()));
-            }
-            let path = Path::new(file_path);
-            if !path.is_absolute() {
-                return Err(LspError::InvalidPath(format!("filePath must be an absolute path, got: {file_path}")));
-            }
-            if !path.is_file() {
-                return Err(LspError::InvalidPath(format!(
-                    "filePath must point to an existing file, got: {file_path}"
-                )));
-            }
-        }
-        Ok(())
-    }
 }
 
 /// Output from the `lsp_check_errors` tool
@@ -74,10 +54,13 @@ pub enum Scope {
 
 /// Execute the `lsp_check_errors` operation
 pub async fn execute_lsp_diagnostics(
-    request: LspDiagnosticsRequest,
+    mut request: LspDiagnosticsRequest,
     registry: &LspRegistry,
 ) -> Result<LspDiagnosticsOutput, LspError> {
-    request.validate()?;
+    request.file_path = request.file_path.map(|path| registry.resolve_file(&path)).transpose()?;
+    if let Some(file_path) = request.file_path.as_deref().filter(|path| !Path::new(path).is_file()) {
+        return Err(LspError::InvalidPath(format!("filePath must point to an existing file, got: {file_path}")));
+    }
 
     let diagnostics_cache = registry.collect_diagnostics(request.file_path.as_deref()).await?;
     let mut output = build_output(&request, registry.root_path(), &diagnostics_cache);
@@ -248,23 +231,20 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_validate_rejects_bad_file_paths() {
+    #[tokio::test]
+    async fn rejects_file_paths_that_are_not_existing_files() {
         let temp_dir = TempDir::new().unwrap();
-        let dir_path = temp_dir.path().to_string_lossy().to_string();
-        let missing_path = temp_dir.path().join("missing.rs");
-        let missing = missing_path.to_string_lossy().to_string();
+        std::fs::create_dir(temp_dir.path().join("src")).unwrap();
+        let registry = LspRegistry::new(temp_dir.path().to_path_buf());
 
-        let cases: Vec<(&str, &str)> = vec![
-            ("", "filePath cannot be empty"),
-            ("src/main.rs", "filePath must be an absolute path"),
-            (&dir_path, "filePath must point to an existing file"),
-            (&missing, "filePath must point to an existing file"),
+        let cases = [
+            ("", "file path is required"),
+            ("src", "filePath must point to an existing file"),
+            ("src/missing.rs", "filePath must point to an existing file"),
         ];
 
         for (path, expected_msg) in cases {
-            let input = file_request(path);
-            let err = input.validate().unwrap_err().to_string();
+            let err = execute_lsp_diagnostics(file_request(path), &registry).await.unwrap_err().to_string();
             assert!(err.contains(expected_msg), "path={path:?}: expected {expected_msg:?}, got {err:?}");
         }
     }

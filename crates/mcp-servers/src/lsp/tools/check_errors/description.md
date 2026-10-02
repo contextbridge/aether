@@ -15,11 +15,11 @@ The tool infers scope from `filePath`:
 **Single-file diagnostics:**
 
 ```json
-{"filePath":"/absolute/path/to/file.rs"}
+{"filePath":"src/main.rs"}
 ```
 
 ## Parameters
 
-- `filePath` — optional absolute path to an existing file. When omitted, checks the workspace.
+- `filePath` — optional path to an existing file, absolute or relative to the workspace root. When omitted, checks the workspace.
 
 If the required language server cannot start, the tool returns the startup error. For a missing TypeScript server, the error includes local and global npm installation commands.

@@ -186,7 +186,6 @@ console.log(msg);
         )
         .expect("Failed to add file");
 
-    let index_ts = project.file_path_str("src/index.ts");
     let (_server_handle, client) = connect_lsp(&project).await;
 
     let result = poll_lsp_tool(
@@ -194,7 +193,7 @@ console.log(msg);
         "lsp_symbol",
         serde_json::json!({
             "operation": "definition",
-            "file_path": index_ts,
+            "file_path": "src/index.ts",
             "symbol": "greet",
             "line": 5
         }),

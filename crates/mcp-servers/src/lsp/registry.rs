@@ -39,6 +39,7 @@ pub struct ResolvedSymbol {
 
 use super::common::{find_document_symbol_line, find_symbol_column, find_symbol_line, path_to_uri};
 use super::error::LspError;
+use crate::workspace_paths::{resolve_file, resolve_path};
 
 #[doc = include_str!("../docs/lsp_registry.md")]
 pub struct LspRegistry {
@@ -82,6 +83,12 @@ impl LspRegistry {
     /// Get the project root path
     pub fn root_path(&self) -> &Path {
         &self.root_path
+    }
+
+    pub fn resolve_file(&self, raw: &str) -> Result<String, LspError> {
+        resolve_file(&self.root_path, raw)
+            .map(|path| path.to_string_lossy().to_string())
+            .map_err(|error| LspError::InvalidPath(error.to_string()))
     }
 
     /// Get or connect to the LSP daemon client for a file path.
@@ -226,7 +233,7 @@ impl LspRegistry {
     }
 
     pub async fn queue_diagnostic_refresh(&self, file_path: &str) {
-        let resolved_path = self.resolve_path(file_path);
+        let resolved_path = resolve_path(&self.root_path, PathBuf::from(file_path));
 
         let client = match self.get_or_spawn(&resolved_path).await {
             Ok(client) => client,
@@ -250,17 +257,13 @@ impl LspRegistry {
     }
 
     async fn collect_file_diagnostics(&self, file_path: &str) -> Result<HashMap<Uri, Vec<Diagnostic>>, LspError> {
-        let resolved_path = self.resolve_path(file_path);
+        let resolved_path = resolve_path(&self.root_path, PathBuf::from(file_path));
         let client = self.get_or_spawn(&resolved_path).await?;
         let uri = path_to_uri(&resolved_path)?;
         let params_list = client.get_diagnostics(Some(uri)).await?;
         let mut result: HashMap<Uri, Vec<Diagnostic>> = HashMap::new();
         merge_diagnostics(&mut result, params_list);
         Ok(result)
-    }
-
-    fn resolve_path(&self, file_path: &str) -> PathBuf {
-        if Path::new(file_path).is_absolute() { PathBuf::from(file_path) } else { self.root_path.join(file_path) }
     }
 }
 
@@ -327,6 +330,17 @@ mod tests {
         let registry = LspRegistry::new(PathBuf::from("/tmp"));
 
         assert!(registry.active_clients().await.is_empty());
+    }
+
+    #[test]
+    fn file_arguments_resolve_against_the_project_root() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let registry = LspRegistry::new(temp.path().to_path_buf());
+
+        let expected = registry.root_path().join("src/main.rs");
+        assert_eq!(registry.resolve_file("src/main.rs").unwrap(), expected.to_string_lossy());
+        assert_eq!(registry.resolve_file("/elsewhere/lib.rs").unwrap(), "/elsewhere/lib.rs");
+        assert!(registry.resolve_file("  ").is_err());
     }
 
     #[cfg(unix)]

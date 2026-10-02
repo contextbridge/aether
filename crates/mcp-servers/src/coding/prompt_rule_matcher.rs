@@ -2,6 +2,8 @@ use aether_project::{PromptCatalog, PromptFile};
 use std::collections::HashSet;
 use std::path::Path;
 
+use crate::workspace_paths::relative_path;
+
 #[doc = include_str!("../docs/prompt_rule_matcher.md")]
 #[derive(Debug)]
 pub struct PromptRuleMatcher {
@@ -17,9 +19,7 @@ impl PromptRuleMatcher {
     /// Returns newly-matched rules for `file_path` and marks them as activated.
     /// Subsequent calls for the same rules return an empty `Vec`.
     pub fn get_matched_rules(&mut self, root_dir: &Path, file_path: &str) -> Vec<PromptFile> {
-        let relative = make_relative(root_dir, file_path);
-        let relative_path = relative.as_deref().unwrap_or(file_path);
-        let matches = self.catalog.matching_rules(relative_path);
+        let matches = self.catalog.matching_rules(&relative_path(root_dir, file_path));
 
         let mut result = Vec::new();
         for spec in matches {
@@ -42,11 +42,6 @@ impl Default for PromptRuleMatcher {
     fn default() -> Self {
         Self::new(PromptCatalog::empty())
     }
-}
-
-fn make_relative(root_dir: &Path, file_path: &str) -> Option<String> {
-    let path = Path::new(file_path);
-    path.strip_prefix(root_dir).ok().map(|rel| rel.to_string_lossy().to_string())
 }
 
 #[cfg(test)]

@@ -73,7 +73,7 @@ pub enum CallScope {
 pub struct LspSymbolInput {
     /// The operation to perform
     pub operation: SymbolLookupOperation,
-    /// The file path containing the symbol
+    /// The file containing the symbol, absolute or relative to the workspace root
     #[serde(alias = "file_path")]
     pub file_path: String,
     /// The symbol name to look up (e.g., "`HashMap`", "spawn", "`LspClient`")
@@ -149,7 +149,11 @@ impl LspSymbolOutput {
 }
 
 /// Execute the `lsp_symbol` operation
-pub async fn execute_lsp_symbol(input: LspSymbolInput, registry: &LspRegistry) -> Result<LspSymbolOutput, LspError> {
+pub async fn execute_lsp_symbol(
+    mut input: LspSymbolInput,
+    registry: &LspRegistry,
+) -> Result<LspSymbolOutput, LspError> {
+    input.file_path = registry.resolve_file(&input.file_path)?;
     let resolved = registry.resolve_symbol(&input.file_path, &input.symbol, input.line).await?;
     let source_file_path = input.file_path.clone();
     let mut output = match input.operation {

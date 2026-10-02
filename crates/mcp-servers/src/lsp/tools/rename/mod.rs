@@ -13,7 +13,7 @@ use crate::lsp::registry::LspRegistry;
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LspRenameInput {
-    /// The file path containing the symbol to rename
+    /// The file containing the symbol to rename, absolute or relative to the workspace root
     #[serde(alias = "file_path")]
     pub file_path: String,
     /// The symbol name to rename (used for position resolution if line not provided)
@@ -85,7 +85,11 @@ pub struct LspRenameOutput {
 }
 
 /// Execute the rename operation
-pub async fn execute_lsp_rename(input: LspRenameInput, registry: &LspRegistry) -> Result<LspRenameOutput, LspError> {
+pub async fn execute_lsp_rename(
+    mut input: LspRenameInput,
+    registry: &LspRegistry,
+) -> Result<LspRenameOutput, LspError> {
+    input.file_path = registry.resolve_file(&input.file_path)?;
     let resolved = registry.resolve_symbol(&input.file_path, &input.symbol, input.line).await?;
 
     let workspace_edit =

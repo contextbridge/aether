@@ -13,12 +13,12 @@ Code navigation powered by a LSP server. **Prefer this over shell-based text and
 
 ## Usage
 
-Required: `file_path`, `symbol` (exact name as it appears)
+Required: `file_path` (absolute or relative to the workspace root), `symbol` (exact name as it appears)
 Optional: `line` (1-indexed optimization hint; stale hints fall back to automatic resolution)
 
 ```json
-{"operation": "definition", "file_path": "/path/to/file.rs", "symbol": "HashMap"}
-{"operation": "references", "file_path": "/path/to/file.rs", "symbol": "process_request"}
+{"operation": "definition", "file_path": "src/main.rs", "symbol": "HashMap"}
+{"operation": "references", "file_path": "src/main.rs", "symbol": "process_request"}
 {"operation": "incoming_calls", "file_path": "/path/to/file.rs", "symbol": "process_request", "limit": 20}
 ```
 
