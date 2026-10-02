@@ -20,7 +20,7 @@ Optional: `line` (1-indexed optimization hint; stale hints fall back to automati
 
 ## Output Control
 
-- **`limit`** — cap results. `totalCount` always reports the full count.
+- **`limit`** — cap locations (default: 50). `totalCount` always reports the full count.
 - **`context_lines`** — include N lines around definition and reference locations. Eliminates the need for a separate `read_file` call.
 - **`include_declaration`** — for `references` only (default: true)
 

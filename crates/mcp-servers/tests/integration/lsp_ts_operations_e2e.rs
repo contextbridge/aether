@@ -64,16 +64,11 @@ console.log(msg);
             "symbol": "greet",
             "line": 5
         }),
-        |r| r.get("locations").and_then(|l| l.as_array()).is_some_and(|a| !a.is_empty()),
+        |r| r["locations"].as_str().is_some_and(|locations| !locations.is_empty()),
     )
     .await;
 
-    let locations = result["locations"].as_array().unwrap();
-    assert!(!locations.is_empty(), "Expected at least one definition location");
-
-    let first = &locations[0];
-    let start_line = first["startLine"].as_u64().unwrap();
-    assert_eq!(start_line, 1, "Expected definition at line 1 (1-indexed)");
+    assert_eq!(result["locations"], "src/index.ts: 1", "Expected definition at line 1 (1-indexed)");
 }
 
 /// Test: find references returns all usages of a symbol in TypeScript
@@ -106,10 +101,10 @@ console.log(a, b);
             "symbol": "greet",
             "line": 1
         }),
-        |r| r.get("locations").and_then(|l| l.as_array()).is_some_and(|a| a.len() >= 2),
+        |r| r["totalCount"].as_u64().is_some_and(|count| count >= 2),
     )
     .await;
 
-    let locations = result["locations"].as_array().unwrap();
-    assert!(locations.len() >= 2, "Expected at least 2 references to greet, got {}", locations.len());
+    let locations = result["locations"].as_str().unwrap();
+    assert!(locations.starts_with("src/index.ts: ") && locations.ends_with("5, 6"), "{locations}");
 }

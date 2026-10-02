@@ -5,15 +5,18 @@
 //! - references: Find all references to a symbol
 //! - hover: Get type and documentation info for a symbol
 
+use std::path::Path;
+
 use lsp_types::GotoDefinitionResponse;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 
-use crate::lsp::common::{LocationResult, uri_to_path};
+use crate::lsp::common::{DEFAULT_RESULT_LIMIT, truncate_results, uri_to_path};
 use crate::lsp::error::LspError;
 use crate::lsp::registry::LspRegistry;
+use crate::lsp::render::{SourceLine, render_locations};
 
 /// The operation to perform on a symbol
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -45,7 +48,7 @@ pub struct LspSymbolInput {
     /// Whether to include the declaration in references results (default: true, only used for references operation)
     #[serde(default = "default_true", alias = "include_declaration")]
     pub include_declaration: bool,
-    /// Maximum number of results to return. When set, results are truncated and
+    /// Maximum number of locations to return (default: 50). When results are dropped,
     /// `truncated: true` is included in the response.
     #[serde(default)]
     pub limit: Option<usize>,
@@ -64,9 +67,10 @@ fn default_true() -> bool {
 pub struct LspSymbolOutput {
     /// The operation that was performed
     pub operation: String,
-    /// Location results (for definition, references)
+    /// Locations for definition and references, grouped by file with paths relative to the workspace root:
+    /// `path: 3, 18`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub locations: Option<Vec<LocationResult>>,
+    pub locations: Option<String>,
     /// Hover contents as markdown (for hover operation)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hover_contents: Option<String>,
@@ -83,18 +87,19 @@ pub struct LspSymbolOutput {
 }
 
 impl LspSymbolOutput {
-    fn with_locations(operation: &str, locations: Vec<LocationResult>, limit: Option<usize>) -> Self {
-        let total_count = locations.len();
-        let truncated = limit.is_some_and(|l| total_count > l);
-        let locations = match limit {
-            Some(l) if total_count > l => locations.into_iter().take(l).collect(),
-            _ => locations,
-        };
+    /// Definition or references output: capped at `limit` and grouped by file.
+    async fn locations(
+        operation: &str,
+        mut locations: Vec<SourceLine>,
+        input: &LspSymbolInput,
+        project_root: &Path,
+    ) -> Self {
+        let truncation = truncate_results(&mut locations, input.limit.unwrap_or(DEFAULT_RESULT_LIMIT));
         Self {
             operation: operation.to_string(),
-            locations: Some(locations),
-            total_count: Some(total_count),
-            truncated: if truncated { Some(true) } else { None },
+            locations: Some(render_locations(&locations, project_root, input.context_lines).await),
+            total_count: Some(truncation.total_count),
+            truncated: truncation.truncated,
             ..Self::default()
         }
     }
@@ -107,23 +112,19 @@ pub async fn execute_lsp_symbol(
 ) -> Result<LspSymbolOutput, LspError> {
     input.file_path = registry.resolve_file(&input.file_path)?;
     let resolved = registry.resolve_symbol(&input.file_path, &input.symbol, input.line).await?;
+    let root = registry.root_path();
     let mut output = match input.operation {
         SymbolLookupOperation::Definition => {
             let response = resolved.client.goto_definition(resolved.uri, resolved.line, resolved.column).await?;
-            let locations = definition_response_to_locations(response);
-            let mut output = LspSymbolOutput::with_locations("definition", locations, input.limit);
-            enrich_locations_with_context(&mut output, input.context_lines).await;
-            output
+            LspSymbolOutput::locations("definition", definition_response_to_lines(response), &input, root).await
         }
         SymbolLookupOperation::References => {
             let lsp_locations = resolved
                 .client
                 .find_references(resolved.uri, resolved.line, resolved.column, input.include_declaration)
                 .await?;
-            let locations: Vec<LocationResult> = lsp_locations.iter().map(LocationResult::from_location).collect();
-            let mut output = LspSymbolOutput::with_locations("references", locations, input.limit);
-            enrich_locations_with_context(&mut output, input.context_lines).await;
-            output
+            let locations = lsp_locations.iter().map(SourceLine::from_location).collect();
+            LspSymbolOutput::locations("references", locations, &input, root).await
         }
         SymbolLookupOperation::Hover => {
             let hover = resolved.client.hover(resolved.uri, resolved.line, resolved.column).await?;
@@ -142,24 +143,14 @@ pub async fn execute_lsp_symbol(
     Ok(output)
 }
 
-/// Enrich locations in the output with source code context when `context_lines` is set.
-async fn enrich_locations_with_context(output: &mut LspSymbolOutput, context_lines: Option<u32>) {
-    let Some(n) = context_lines.filter(|&n| n > 0) else {
-        return;
-    };
-    if let Some(locations) = output.locations.as_mut() {
-        super::super::common::enrich_locations(locations, n).await;
-    }
-}
-
-/// Convert `GotoDefinitionResponse` to a list of `LocationResult`
-fn definition_response_to_locations(response: GotoDefinitionResponse) -> Vec<LocationResult> {
+/// Convert `GotoDefinitionResponse` to a list of `SourceLine`s
+fn definition_response_to_lines(response: GotoDefinitionResponse) -> Vec<SourceLine> {
     match response {
-        GotoDefinitionResponse::Scalar(loc) => vec![LocationResult::from_location(&loc)],
-        GotoDefinitionResponse::Array(locs) => locs.iter().map(LocationResult::from_location).collect(),
+        GotoDefinitionResponse::Scalar(loc) => vec![SourceLine::from_location(&loc)],
+        GotoDefinitionResponse::Array(locs) => locs.iter().map(SourceLine::from_location).collect(),
         GotoDefinitionResponse::Link(links) => links
             .iter()
-            .map(|link| LocationResult::from_range(uri_to_path(&link.target_uri), &link.target_selection_range))
+            .map(|link| SourceLine::from_range(uri_to_path(&link.target_uri), &link.target_selection_range))
             .collect(),
     }
 }
