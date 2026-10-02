@@ -35,17 +35,11 @@ pub use tools_trait::CodingTools;
 use crate::coding::error::CodingError;
 use crate::lsp::tools::check_errors::{LspDiagnosticsOutput, LspDiagnosticsRequest, execute_lsp_diagnostics};
 use crate::lsp::tools::symbol_lookup::{LspSymbolInput, LspSymbolOutput, execute_lsp_symbol};
-use crate::lsp::tools::workspace_search::{
-    LspWorkspaceSearchInput, LspWorkspaceSearchOutput, execute_lsp_workspace_search,
-};
+use crate::workspace_paths::WorkspacePaths;
 use crate::{coding::prompt_rule_matcher::PromptRuleMatcher, lsp::registry::LspRegistry};
 use crate::{
     error::ServerInitError,
     lsp::tools::rename::{LspRenameInput, LspRenameOutput, execute_lsp_rename},
-};
-use crate::{
-    lsp::tools::document_info::{LspDocumentInput, LspDocumentOutput, execute_lsp_document},
-    workspace_paths::WorkspacePaths,
 };
 use mcp_utils::server::mrtr::{input_requests_supported, parse_response};
 use mcp_utils::server::tasks::{BACKGROUND_TASK_TTL_MS, require_tasks_capability};
@@ -332,7 +326,7 @@ File I/O, shell, and optional LSP code intelligence tools for coding workflows.
 
 ## Quick Reference
 
-- **Search and directory listings**: run shell commands with `bash`
+- **Search, symbol lookup by name, file outlines, and directory listings**: run `rg`, `ast-grep`, and other shell commands with `bash`
 - **Read/write/edit** files: `read_file`, `write_file`, `edit_file`
 - **Shell commands**: `bash`
 ",
@@ -342,8 +336,6 @@ File I/O, shell, and optional LSP code intelligence tools for coding workflows.
             base.push_str(
                 r"- **Errors & warnings** (instant check without build): `lsp_check_errors`
 - **Code symbols** (definitions, usages, types): `lsp_symbol`
-- **Find symbol across workspace** (don't know the file?): `lsp_workspace_search`
-- **File structure** (what's in this file?): `lsp_document`
 - **Rename symbol** (refactor across codebase): `lsp_rename`
 ",
             );
@@ -626,32 +618,6 @@ When using tools that take file paths, always use absolute paths from:
         notify_preview(&context, ToolDisplayMeta::new("LSP symbol", &input.symbol)).await;
         let lsp = self.lsp.as_ref().ok_or_else(|| CodingError::NotConfigured("LSP not configured".to_string()))?;
         execute_lsp_symbol(input, lsp.as_ref()).await.map(Json).map_err(CodingError::from)
-    }
-
-    #[doc = include_str!("../lsp/tools/workspace_search/description.md")]
-    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
-    pub async fn lsp_workspace_search(
-        &self,
-        request: Parameters<LspWorkspaceSearchInput>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<Json<LspWorkspaceSearchOutput>, CodingError> {
-        let Parameters(input) = request;
-        notify_preview(&context, ToolDisplayMeta::new("LSP search", format!("'{}'", input.query))).await;
-        let lsp = self.lsp.as_ref().ok_or_else(|| CodingError::NotConfigured("LSP not configured".to_string()))?;
-        execute_lsp_workspace_search(input, lsp.as_ref()).await.map(Json).map_err(CodingError::from)
-    }
-
-    #[doc = include_str!("../lsp/tools/document_info/description.md")]
-    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
-    pub async fn lsp_document(
-        &self,
-        request: Parameters<LspDocumentInput>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<Json<LspDocumentOutput>, CodingError> {
-        let Parameters(input) = request;
-        notify_preview(&context, ToolDisplayMeta::new("LSP document", basename(&input.file_path))).await;
-        let lsp = self.lsp.as_ref().ok_or_else(|| CodingError::NotConfigured("LSP not configured".to_string()))?;
-        execute_lsp_document(input, lsp.as_ref()).await.map(Json).map_err(CodingError::from)
     }
 
     #[doc = include_str!("../lsp/tools/check_errors/description.md")]

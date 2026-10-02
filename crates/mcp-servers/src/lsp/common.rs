@@ -1,7 +1,6 @@
 //! Common types and utilities shared across LSP tools
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use lsp_types::{DocumentSymbol, DocumentSymbolResponse, Location};
 use schemars::JsonSchema;
@@ -47,29 +46,6 @@ impl LocationResult {
     }
 }
 
-/// Return whether a source path belongs to the project rather than a dependency or build directory.
-pub fn is_project_local(path: &str, project_root: &Path) -> bool {
-    Path::new(path).strip_prefix(project_root).is_ok_and(|relative| {
-        !relative
-            .components()
-            .any(|component| component.as_os_str().to_str().is_some_and(|name| DEPENDENCY_DIRS.contains(&name)))
-    })
-}
-
-/// Return a compact source path for display.
-pub fn display_path(path: &str, project_root: &Path) -> String {
-    if let Some(pnpm_index) = path.find("/.pnpm/") {
-        let encoded = &path[pnpm_index + "/.pnpm/".len()..];
-        if let Some(node_modules_index) = encoded.find("/node_modules/") {
-            return encoded[node_modules_index + "/node_modules/".len()..].to_string();
-        }
-    }
-    if let Ok(relative) = Path::new(path).strip_prefix(project_root) {
-        return relative.to_string_lossy().to_string();
-    }
-    path.to_string()
-}
-
 /// Visit every symbol in a document-symbol response.
 pub fn for_each_document_symbol(
     response: &DocumentSymbolResponse,
@@ -99,9 +75,6 @@ pub fn find_document_symbol_line(response: &DocumentSymbolResponse, symbol: &str
     });
     line
 }
-
-/// Directory names belonging to dependencies or build output rather than project source.
-const DEPENDENCY_DIRS: &[&str] = &["node_modules", ".pnpm", "target"];
 
 fn visit_nested_document_symbol(
     symbol: &DocumentSymbol,
@@ -387,14 +360,6 @@ mod tests {
         let content = "let app_state_extra = 1;\nlet app_state = AppState::new();";
         // Should match line 2 where AppState appears as a whole word
         assert_eq!(find_symbol_line(content, "AppState"), Some(2));
-    }
-
-    #[test]
-    fn project_local_ignores_dependency_names_above_project_root() {
-        let project_root = Path::new("/home/ci/target/myrepo");
-
-        assert!(is_project_local("/home/ci/target/myrepo/src/main.rs", project_root));
-        assert!(!is_project_local("/home/ci/target/myrepo/node_modules/package/index.js", project_root));
     }
 
     #[allow(deprecated)]

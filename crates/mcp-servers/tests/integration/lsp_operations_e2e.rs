@@ -1,4 +1,4 @@
-//! End-to-end tests for LSP operations (hover, definition, references, document symbols)
+//! End-to-end tests for LSP operations (hover, definition, references, rename)
 //! through the MCP tool layer, using Rust projects with rust-analyzer.
 //!
 //! Requirements:
@@ -228,50 +228,4 @@ async fn test_lsp_rename_falls_back_from_stale_line_hint() {
         main_content.contains("say_hello") && !main_content.contains("greet"),
         "expected main.rs to be renamed, got: {main_content}"
     );
-}
-
-/// Test: document symbols returns structs and functions
-#[tokio::test]
-async fn test_document_symbols() {
-    let project = CargoProject::new("docsym_test").expect("Failed to create project");
-    project
-        .add_file(
-            "src/main.rs",
-            r#"struct Point {
-    x: f64,
-    y: f64,
-}
-
-fn distance(a: &Point, b: &Point) -> f64 {
-    ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
-}
-
-fn main() {
-    let p1 = Point { x: 0.0, y: 0.0 };
-    let p2 = Point { x: 3.0, y: 4.0 };
-    println!("{}", distance(&p1, &p2));
-}
-"#,
-        )
-        .expect("Failed to add file");
-
-    let main_rs = project.file_path_str("src/main.rs");
-    let (_server_handle, client) = connect_lsp(&project).await;
-
-    let result = poll_lsp_tool(
-        &client,
-        "lsp_document",
-        serde_json::json!({
-            "file_path": main_rs
-        }),
-        |r| r.get("symbols").and_then(|s| s.as_array()).is_some_and(|a| !a.is_empty()),
-    )
-    .await;
-
-    let symbols = result["symbols"].as_array().unwrap();
-    let names: Vec<&str> = symbols.iter().filter_map(|s| s.get("name").and_then(|n| n.as_str())).collect();
-
-    assert!(names.contains(&"Point"), "Expected 'Point' in document symbols, got: {names:?}");
-    assert!(names.contains(&"distance"), "Expected 'distance' in document symbols, got: {names:?}");
-    assert!(names.contains(&"main"), "Expected 'main' in document symbols, got: {names:?}");
 }

@@ -2,14 +2,14 @@
 mod common;
 
 use aether_lspd::LanguageId;
-use aether_lspd::testing::{CargoProject, TestDaemon, TestProject, use_fake_rust_server_failing_workspace_symbol};
+use aether_lspd::testing::{CargoProject, TestDaemon, TestProject, configure_fake_server};
 use common::{call_tool_error, connect_lsp};
 use std::time::Duration;
 
 #[tokio::test]
-async fn workspace_search_propagates_language_server_errors() {
-    use_fake_rust_server_failing_workspace_symbol();
-    let project = CargoProject::new("workspace_search_errors").expect("create project");
+async fn symbol_lookup_propagates_language_server_errors() {
+    unsafe { configure_fake_server(LanguageId::Rust, &["--fail-on", "textDocument/definition"]) };
+    let project = CargoProject::new("symbol_lookup_errors").expect("create project");
     project.add_file("src/lib.rs", "pub fn example_fn() {}\n").expect("add source file");
     let daemon =
         TestDaemon::spawn(project.root(), LanguageId::Rust, Duration::from_secs(120)).await.expect("start daemon");
@@ -17,8 +17,8 @@ async fn workspace_search_propagates_language_server_errors() {
 
     let error = call_tool_error(
         &client,
-        "lsp_workspace_search",
-        serde_json::json!({ "query": "example_fn", "language": "rust" }),
+        "lsp_symbol",
+        serde_json::json!({ "operation": "definition", "file_path": "src/lib.rs", "symbol": "example_fn", "line": 1 }),
     )
     .await;
 

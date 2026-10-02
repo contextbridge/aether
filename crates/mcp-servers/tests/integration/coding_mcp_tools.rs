@@ -118,10 +118,10 @@ async fn coding_tool_catalog_uses_bash_for_search_and_directory_listings() -> Te
     let workspace = CodingWorkspace::new().await?;
     let catalog = workspace.client.raw().list_tools(None).await?;
     let names: Vec<_> = catalog.tools.iter().map(|tool| tool.name.as_ref()).collect();
-    for retained in ["bash", "read_file", "write_file", "edit_file", "lsp_workspace_search"] {
+    for retained in ["bash", "read_file", "write_file", "edit_file", "lsp_symbol"] {
         assert!(names.contains(&retained), "missing tool {retained}: {names:?}");
     }
-    for removed in ["find", "grep", "ast_grep", "list_files"] {
+    for removed in ["find", "grep", "ast_grep", "list_files", "lsp_document", "lsp_workspace_search"] {
         assert!(!names.contains(&removed), "unexpected removed tool {removed}: {names:?}");
     }
     Ok(())

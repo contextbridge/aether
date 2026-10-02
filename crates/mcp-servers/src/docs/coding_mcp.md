@@ -39,9 +39,7 @@ let server = CodingMcp::with_tools(my_custom_tools);
 - `web_search` -- Web search via Brave Search API
 
 **LSP** (requires [`with_lsp`](CodingMcp::with_lsp)):
-- `lsp_symbol` -- Go to definition, find references, find implementations
-- `lsp_workspace_search` -- Search one explicitly selected language for workspace symbols
-- `lsp_document` -- List symbols in a file
+- `lsp_symbol` -- Go to definition, find references, hover for types and docs
 - `lsp_check_errors` -- Get diagnostics for a file or workspace
 - `lsp_rename` -- Rename a symbol across the project
 
