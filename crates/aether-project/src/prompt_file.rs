@@ -183,7 +183,7 @@ pub struct PromptTriggers {
 }
 
 impl PromptTriggers {
-    fn new(glob_patterns: Vec<String>) -> Result<Self, PromptFileError> {
+    pub(crate) fn new(glob_patterns: Vec<String>) -> Result<Self, PromptFileError> {
         if glob_patterns.is_empty() {
             return Ok(Self { patterns: Vec::new(), globs: None });
         }
@@ -256,57 +256,31 @@ fn zero(n: &u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
-
-    fn minimal_frontmatter(description: &str) -> PromptFrontmatter {
-        PromptFrontmatter {
-            description: description.to_string(),
-            name: None,
-            user_invocable: None,
-            agent_invocable: None,
-            argument_hint: None,
-            tags: vec![],
-            triggers: None,
-            globs: vec![],
-            paths: vec![],
-            agent_authored: false,
-            helpful: 0,
-            harmful: 0,
-        }
-    }
+    use crate::testing::{project, prompt_file};
 
     #[test]
-    fn frontmatter_serde_roundtrip() {
-        let fm = minimal_frontmatter("A simple skill");
+    fn parse_skill_frontmatter_and_body() {
+        let dir = project().skill(
+            "my-skill",
+            "---\ndescription: Test skill\ntags:\n  - rust\nagent_authored: true\nhelpful: 3\nharmful: 1\n---\n# My Skill\n\nSome content here.",
+        );
 
-        let yaml = serde_yml::to_string(&fm).unwrap();
-        let parsed: PromptFrontmatter = serde_yml::from_str(&yaml).unwrap();
-        assert_eq!(parsed.description, "A simple skill");
-        assert!(parsed.tags.is_empty());
-        assert!(!parsed.agent_authored);
-    }
-
-    #[test]
-    fn frontmatter_serde_with_all_fields() {
-        let mut fm = minimal_frontmatter("A full skill");
-        fm.tags = vec!["convention".to_string(), "testing".to_string()];
-        fm.agent_authored = true;
-        fm.helpful = 5;
-        fm.harmful = 2;
-
-        let yaml = serde_yml::to_string(&fm).unwrap();
-        let parsed: PromptFrontmatter = serde_yml::from_str(&yaml).unwrap();
-        assert_eq!(parsed.description, "A full skill");
-        assert_eq!(parsed.tags, vec!["convention", "testing"]);
+        let parsed = PromptFile::parse(&dir.root().join("my-skill").join(SKILL_FILENAME)).unwrap();
+        assert_eq!(parsed.name, "my-skill");
+        assert_eq!(parsed.description, "Test skill");
+        assert_eq!(parsed.tags, vec!["rust"]);
         assert!(parsed.agent_authored);
-        assert_eq!(parsed.helpful, 5);
-        assert_eq!(parsed.harmful, 2);
+        assert_eq!(parsed.helpful, 3);
+        assert_eq!(parsed.harmful, 1);
+        assert!(parsed.body.contains("# My Skill"));
+        assert!(parsed.body.contains("Some content here."));
     }
 
     #[test]
     fn backward_compat_old_frontmatter() {
-        let yaml = "description: An old skill\n";
-        let parsed: PromptFrontmatter = serde_yml::from_str(yaml).unwrap();
+        let dir = project().skill("old-skill", "---\ndescription: An old skill\n---\nBody.");
+
+        let parsed = PromptFile::parse(&dir.root().join("old-skill").join(SKILL_FILENAME)).unwrap();
         assert_eq!(parsed.description, "An old skill");
         assert!(parsed.tags.is_empty());
         assert!(!parsed.agent_authored);
@@ -316,60 +290,28 @@ mod tests {
 
     #[test]
     fn confidence() {
-        let pf = |helpful, harmful| PromptFile {
-            name: String::new(),
-            description: "test".to_string(),
-            body: String::new(),
-            path: PathBuf::new(),
-            user_invocable: false,
-            agent_invocable: false,
-            argument_hint: None,
-            tags: vec![],
-            triggers: PromptTriggers::default(),
-            agent_authored: true,
-            helpful,
-            harmful,
-        };
+        let prompt = |helpful, harmful| prompt_file("test").ratings(helpful, harmful).build();
 
-        assert!((pf(0, 0).confidence() - 0.0).abs() < f64::EPSILON);
-        assert!((pf(7, 1).confidence() - 7.0 / 9.0).abs() < f64::EPSILON);
-        assert!((pf(0, 5).confidence() - 0.0).abs() < f64::EPSILON);
-        assert!((pf(3, 0).confidence() - 3.0 / 4.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn parse_frontmatter_from_string() {
-        let content = "---\ndescription: Test skill\ntags:\n  - rust\nagent_authored: true\nhelpful: 3\nharmful: 1\n---\n# My Skill\n\nSome content here.";
-        let (fm, body) = PromptFile::parse_frontmatter(content).unwrap();
-        assert_eq!(fm.description, "Test skill");
-        assert_eq!(fm.tags, vec!["rust"]);
-        assert!(fm.agent_authored);
-        assert_eq!(fm.helpful, 3);
-        assert_eq!(fm.harmful, 1);
-        assert!(body.contains("# My Skill"));
-        assert!(body.contains("Some content here."));
+        assert!((prompt(0, 0).confidence() - 0.0).abs() < f64::EPSILON);
+        assert!((prompt(7, 1).confidence() - 7.0 / 9.0).abs() < f64::EPSILON);
+        assert!((prompt(0, 5).confidence() - 0.0).abs() < f64::EPSILON);
+        assert!((prompt(3, 0).confidence() - 3.0 / 4.0).abs() < f64::EPSILON);
     }
 
     #[test]
     fn write_and_parse_roundtrip() {
-        let temp_dir = TempDir::new().unwrap();
-        let skill_path = temp_dir.path().join("my-skill").join(SKILL_FILENAME);
+        let project = project();
+        let skill_path = project.root().join("my-skill").join(SKILL_FILENAME);
 
-        let prompt = PromptFile {
-            name: "my-skill".to_string(),
-            description: "Test skill".to_string(),
-            body: "# My Skill\n\nSome content here.".to_string(),
-            path: skill_path.clone(),
-            user_invocable: false,
-            agent_invocable: true,
-            argument_hint: None,
-            tags: vec!["convention".to_string()],
-            triggers: PromptTriggers::default(),
-            agent_authored: true,
-            helpful: 2,
-            harmful: 1,
-        };
-        prompt.write(&skill_path).unwrap();
+        prompt_file("my-skill")
+            .description("Test skill")
+            .body("# My Skill\n\nSome content here.")
+            .tags(&["convention"])
+            .agent_authored(true)
+            .ratings(2, 1)
+            .build()
+            .write(&skill_path)
+            .unwrap();
 
         let parsed = PromptFile::parse(&skill_path).unwrap();
         assert_eq!(parsed.description, "Test skill");
@@ -383,24 +325,10 @@ mod tests {
 
     #[test]
     fn write_empty_body() {
-        let temp_dir = TempDir::new().unwrap();
-        let skill_path = temp_dir.path().join("empty-body").join(SKILL_FILENAME);
+        let project = project();
+        let skill_path = project.root().join("empty-body").join(SKILL_FILENAME);
 
-        let prompt = PromptFile {
-            name: "empty-body".to_string(),
-            description: "Empty".to_string(),
-            body: String::new(),
-            path: skill_path.clone(),
-            user_invocable: false,
-            agent_invocable: true,
-            argument_hint: None,
-            tags: vec![],
-            triggers: PromptTriggers::default(),
-            agent_authored: true,
-            helpful: 0,
-            harmful: 0,
-        };
-        prompt.write(&skill_path).unwrap();
+        prompt_file("empty-body").description("Empty").body("").build().write(&skill_path).unwrap();
 
         let raw = std::fs::read_to_string(&skill_path).unwrap();
         assert!(raw.starts_with("---\n"));
@@ -409,26 +337,18 @@ mod tests {
 
     #[test]
     fn write_and_parse_roundtrip_with_triggers() {
-        let temp_dir = TempDir::new().unwrap();
-        let skill_path = temp_dir.path().join("rust-rules").join(SKILL_FILENAME);
+        let project = project();
+        let skill_path = project.root().join("rust-rules").join(SKILL_FILENAME);
 
-        let triggers = PromptTriggers::new(vec!["src/**/*.rs".to_string(), "tests/**/*.rs".to_string()]).unwrap();
-
-        let prompt = PromptFile {
-            name: "rust-rules".to_string(),
-            description: "Rust conventions".to_string(),
-            body: "Follow Rust conventions.".to_string(),
-            path: skill_path.clone(),
-            user_invocable: false,
-            agent_invocable: false,
-            argument_hint: None,
-            tags: vec![],
-            triggers,
-            agent_authored: false,
-            helpful: 0,
-            harmful: 0,
-        };
-        prompt.write(&skill_path).unwrap();
+        prompt_file("rust-rules")
+            .description("Rust conventions")
+            .body("Follow Rust conventions.")
+            .user_invocable(false)
+            .agent_invocable(false)
+            .read_triggers(&["src/**/*.rs", "tests/**/*.rs"])
+            .build()
+            .write(&skill_path)
+            .unwrap();
 
         let parsed = PromptFile::parse(&skill_path).unwrap();
         assert_eq!(parsed.description, "Rust conventions");
@@ -436,116 +356,78 @@ mod tests {
         assert!(parsed.triggers.matches_read("src/main.rs"));
         assert!(parsed.triggers.matches_read("tests/integration.rs"));
         assert!(!parsed.triggers.matches_read("README.md"));
-        assert_eq!(parsed.triggers.patterns(), &["src/**/*.rs", "tests/**/*.rs"]);
+        assert_eq!(parsed.triggers.patterns(), ["src/**/*.rs", "tests/**/*.rs"]);
     }
 
     #[test]
     fn write_rejects_empty_description() {
-        let temp_dir = TempDir::new().unwrap();
-        let skill_path = temp_dir.path().join("bad").join(SKILL_FILENAME);
+        let project = project();
+        let skill_path = project.root().join("bad").join(SKILL_FILENAME);
 
-        let prompt = PromptFile {
-            name: "bad".to_string(),
-            description: String::new(),
-            body: "content".to_string(),
-            path: skill_path.clone(),
-            user_invocable: true,
-            agent_invocable: false,
-            argument_hint: None,
-            tags: vec![],
-            triggers: PromptTriggers::default(),
-            agent_authored: true,
-            helpful: 0,
-            harmful: 0,
-        };
-        let result = prompt.write(&skill_path);
+        let result = prompt_file("bad").description("").build().write(&skill_path);
         assert!(matches!(result, Err(PromptFileError::MissingDescription { .. })));
     }
 
     #[test]
     fn write_rejects_no_activation_surface() {
-        let temp_dir = TempDir::new().unwrap();
-        let skill_path = temp_dir.path().join("noop").join(SKILL_FILENAME);
+        let project = project();
+        let skill_path = project.root().join("noop").join(SKILL_FILENAME);
 
-        let prompt = PromptFile {
-            name: "noop".to_string(),
-            description: "Does nothing".to_string(),
-            body: "content".to_string(),
-            path: skill_path.clone(),
-            user_invocable: false,
-            agent_invocable: false,
-            argument_hint: None,
-            tags: vec![],
-            triggers: PromptTriggers::default(),
-            agent_authored: true,
-            helpful: 0,
-            harmful: 0,
-        };
-        let result = prompt.write(&skill_path);
+        let result = prompt_file("noop").user_invocable(false).agent_invocable(false).build().write(&skill_path);
         assert!(matches!(result, Err(PromptFileError::NoActivationSurface { .. })));
     }
 
     #[test]
-    fn skip_serializing_defaults() {
-        let fm = minimal_frontmatter("Minimal");
+    fn write_skips_default_frontmatter_fields() {
+        let project = project();
+        let skill_path = project.root().join("minimal").join(SKILL_FILENAME);
 
-        let yaml = serde_yml::to_string(&fm).unwrap();
-        assert!(!yaml.contains("tags"));
-        assert!(!yaml.contains("agent_authored"));
-        assert!(!yaml.contains("helpful"));
-        assert!(!yaml.contains("harmful"));
+        prompt_file("minimal").build().write(&skill_path).unwrap();
+
+        let raw = std::fs::read_to_string(&skill_path).unwrap();
+        assert!(raw.contains("description: minimal skill"));
+        assert!(!raw.contains("tags"));
+        assert!(!raw.contains("agent_authored"));
+        assert!(!raw.contains("agent-invocable"));
+        assert!(!raw.contains("argument-hint"));
+        assert!(!raw.contains("helpful"));
+        assert!(!raw.contains("harmful"));
+        assert!(!raw.contains("triggers"));
     }
 
     #[test]
     fn parse_globs_key() {
-        let content = r#"---
-description: TS conventions
-globs:
-  - "src/**/*.ts"
-  - "src/**/*.tsx"
----
-Use strict TypeScript."#;
-        let (fm, body) = PromptFile::parse_frontmatter(content).unwrap();
-        assert_eq!(fm.globs, vec!["src/**/*.ts", "src/**/*.tsx"]);
-        assert!(fm.triggers.is_none());
-        assert!(body.contains("Use strict TypeScript."));
+        let dir = project().skill(
+            "ts-conventions",
+            "---\ndescription: TS conventions\nglobs:\n  - \"src/**/*.ts\"\n  - \"src/**/*.tsx\"\n---\nUse strict TypeScript.",
+        );
+
+        let parsed = PromptFile::parse(&dir.root().join("ts-conventions").join(SKILL_FILENAME)).unwrap();
+        assert_eq!(parsed.triggers.patterns(), ["src/**/*.ts", "src/**/*.tsx"]);
+        assert!(parsed.triggers.matches_read("src/main.ts"));
+        assert!(parsed.body.contains("Use strict TypeScript."));
     }
 
     #[test]
     fn parse_paths_key() {
-        let content = r#"---
-description: Rust rules
-paths:
-  - "**/*.rs"
----
-Follow Rust conventions."#;
-        let (fm, _) = PromptFile::parse_frontmatter(content).unwrap();
-        assert_eq!(fm.paths, vec!["**/*.rs"]);
-        assert!(fm.triggers.is_none());
+        let dir = project().skill(
+            "rust-rules",
+            "---\ndescription: Rust rules\npaths:\n  - \"**/*.rs\"\n---\nFollow Rust conventions.",
+        );
+
+        let parsed = PromptFile::parse(&dir.root().join("rust-rules").join(SKILL_FILENAME)).unwrap();
+        assert_eq!(parsed.triggers.patterns(), ["**/*.rs"]);
+        assert!(parsed.triggers.matches_read("src/lib.rs"));
     }
 
     #[test]
     fn parse_merges_all_glob_sources() {
-        let temp_dir = TempDir::new().unwrap();
-        let path = temp_dir.path().join("merged-rules").join(SKILL_FILENAME);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(
-            &path,
-            r#"---
-description: Merged
-triggers:
-  read:
-    - "src/**/*.rs"
-globs:
-  - "lib/**/*.ts"
-paths:
-  - "app/**/*.py"
----
-Merged rules."#,
-        )
-        .unwrap();
+        let dir = project().skill(
+            "merged-rules",
+            "---\ndescription: Merged\ntriggers:\n  read:\n    - \"src/**/*.rs\"\nglobs:\n  - \"lib/**/*.ts\"\npaths:\n  - \"app/**/*.py\"\n---\nMerged rules.",
+        );
 
-        let parsed = PromptFile::parse(&path).unwrap();
+        let parsed = PromptFile::parse(&dir.root().join("merged-rules").join(SKILL_FILENAME)).unwrap();
         assert!(parsed.triggers.matches_read("src/main.rs"));
         assert!(parsed.triggers.matches_read("lib/index.ts"));
         assert!(parsed.triggers.matches_read("app/main.py"));
@@ -553,96 +435,48 @@ Merged rules."#,
 
     #[test]
     fn parse_globs_as_activation_surface() {
-        let temp_dir = TempDir::new().unwrap();
-        let path = temp_dir.path().join("globs-only.md");
-        std::fs::write(
-            &path,
-            r#"---
-description: TS rules
-globs:
-  - "**/*.ts"
----
-TypeScript rules."#,
-        )
-        .unwrap();
+        let dir = project()
+            .file("globs-only.md", "---\ndescription: TS rules\nglobs:\n  - \"**/*.ts\"\n---\nTypeScript rules.");
 
-        let parsed = PromptFile::parse(&path).unwrap();
+        let parsed = PromptFile::parse(&dir.root().join("globs-only.md")).unwrap();
         assert_eq!(parsed.name, "globs-only");
         assert!(parsed.triggers.matches_read("src/index.ts"));
     }
 
     #[test]
     fn name_from_file_stem_for_non_skill_md() {
-        let temp_dir = TempDir::new().unwrap();
-        let path = temp_dir.path().join("rust-conventions.md");
-        std::fs::write(
-            &path,
-            r#"---
-description: Rust conventions
-globs:
-  - "**/*.rs"
----
-Follow Rust conventions."#,
-        )
-        .unwrap();
+        let dir = project().file(
+            "rust-conventions.md",
+            "---\ndescription: Rust conventions\nglobs:\n  - \"**/*.rs\"\n---\nFollow Rust conventions.",
+        );
 
-        let parsed = PromptFile::parse(&path).unwrap();
+        let parsed = PromptFile::parse(&dir.root().join("rust-conventions.md")).unwrap();
         assert_eq!(parsed.name, "rust-conventions");
     }
 
     #[test]
     fn empty_description_defaults_to_name() {
-        let temp_dir = TempDir::new().unwrap();
-        let path = temp_dir.path().join("my-rule.md");
-        std::fs::write(
-            &path,
-            r#"---
-globs:
-  - "**/*.rs"
----
-Rule body."#,
-        )
-        .unwrap();
+        let dir = project().file("my-rule.md", "---\nglobs:\n  - \"**/*.rs\"\n---\nRule body.");
 
-        let parsed = PromptFile::parse(&path).unwrap();
+        let parsed = PromptFile::parse(&dir.root().join("my-rule.md")).unwrap();
         assert_eq!(parsed.name, "my-rule");
         assert_eq!(parsed.description, "my-rule");
     }
 
     #[test]
     fn skill_file_defaults_user_invocable_true_when_missing() {
-        let temp_dir = TempDir::new().unwrap();
-        let path = temp_dir.path().join("compat-skill").join(SKILL_FILENAME);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(
-            &path,
-            r"---
-description: Claude-style skill
----
-Skill body.",
-        )
-        .unwrap();
+        let dir = project().skill("compat-skill", "---\ndescription: Claude-style skill\n---\nSkill body.");
 
-        let parsed = PromptFile::parse(&path).unwrap();
+        let parsed = PromptFile::parse(&dir.root().join("compat-skill").join(SKILL_FILENAME)).unwrap();
         assert!(parsed.user_invocable);
         assert!(parsed.agent_invocable);
     }
 
     #[test]
     fn non_skill_md_without_activation_surface_still_rejected() {
-        let temp_dir = TempDir::new().unwrap();
-        let path = temp_dir.path().join("noop.md");
-        std::fs::write(
-            &path,
-            r"---
-description: No activation
-agent-invocable: false
----
-Rule body.",
-        )
-        .unwrap();
+        let dir = project().file("noop.md", "---\ndescription: No activation\nagent-invocable: false\n---\nRule body.");
 
-        let result = PromptFile::parse(&path);
+        let result = PromptFile::parse(&dir.root().join("noop.md"));
         assert!(matches!(result, Err(PromptFileError::NoActivationSurface { .. })));
     }
 }
