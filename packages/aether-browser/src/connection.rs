@@ -95,13 +95,10 @@ impl Connection {
                     reply.respond(response);
                 }))
             }
-            Command::Prompt(prompt, reply) => match self.start_prompt(prompt.clone()) {
+            Command::Prompt(prompt, reply) => match self.current_session() {
                 Ok(session_id) => {
-                    let response = handle.prompt(PromptRequest::new(session_id.clone(), prompt));
-                    Some(pending(response, move |connection, response| {
-                        connection.settle_prompt(&session_id, &response);
-                        reply.respond(response);
-                    }))
+                    let response = handle.prompt(PromptRequest::new(session_id, prompt));
+                    Some(pending(response, |_, response| reply.respond(response)))
                 }
                 Err(error) => {
                     reply.send(Err(error));
@@ -159,24 +156,6 @@ impl Connection {
         if self.current.take_if(|tracked| tracked.session_id == *session_id).is_some() {
             self.emit(to_js(&AetherClientEvent::ConversationChanged { conversation: None }));
         }
-    }
-
-    fn start_prompt(&mut self, content: Vec<ContentBlock>) -> Result<SessionId, ClientError> {
-        let tracked = self.current.as_mut().ok_or(ClientError::NoSession)?;
-        tracked.conversation.start_prompt(Some(content))?;
-        let session_id = tracked.session_id.clone();
-        self.flush();
-        Ok(session_id)
-    }
-
-    fn settle_prompt<T>(&mut self, session_id: &SessionId, response: &Result<T, AcpClientError>) {
-        if let Some(tracked) = self.current.as_mut().filter(|tracked| tracked.session_id == *session_id) {
-            match response {
-                Ok(_) => tracked.conversation.accept_prompt(),
-                Err(error) => tracked.conversation.fail_prompt(error),
-            }
-        }
-        self.flush();
     }
 
     fn reduce(&mut self, event: &AcpEvent) {

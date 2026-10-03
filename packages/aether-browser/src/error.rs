@@ -2,7 +2,6 @@ use crate::js::to_js;
 use crate::types::{AetherClientErrorCode, AetherClientErrorDetails, WebSocketClose};
 use crate::websocket::InvalidRequest;
 use acp_utils::client::AcpClientError;
-use acp_utils::conversation::TurnInProgress;
 use js_sys::Object;
 use thiserror::Error;
 use wasm_bindgen::{JsCast, JsValue};
@@ -20,8 +19,6 @@ pub enum ClientError {
     InvalidArgument(#[source] serde_wasm_bindgen::Error),
     #[error("agent message is not representable in JavaScript: {0}")]
     Conversion(#[source] serde_wasm_bindgen::Error),
-    #[error(transparent)]
-    TurnInProgress(#[from] TurnInProgress),
     #[error("no session is open")]
     NoSession,
     #[error("the connection stopped")]
@@ -42,7 +39,6 @@ impl ClientError {
                 AetherClientErrorCode::Protocol
             }
             Self::InvalidArgument(_) => AetherClientErrorCode::InvalidArgument,
-            Self::TurnInProgress(_) => AetherClientErrorCode::TurnInProgress,
             Self::NoSession => AetherClientErrorCode::NoSession,
             Self::AlreadyAnswered => AetherClientErrorCode::AlreadyAnswered,
         };

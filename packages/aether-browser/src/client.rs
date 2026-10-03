@@ -69,9 +69,6 @@ impl AetherClient {
         self.request(request, Command::ResumeSession)
     }
 
-    /// Send a prompt to the current session, echoing it into the conversation. The promise resolves once the agent
-    /// accepts it; the turn streams as `session_update` events. Rejects with `turn_in_progress` unless the turn is
-    /// idle.
     #[wasm_bindgen(unchecked_return_type = "Promise<PromptResponse>")]
     pub fn prompt(&self, #[wasm_bindgen(unchecked_param_type = "ContentBlock[]")] prompt: JsValue) -> Promise {
         self.request(prompt, Command::Prompt)
