@@ -101,6 +101,8 @@ impl SessionEvent {
                 )
                 | AgentEvent::Turn(
                     TurnEvent::Started { .. }
+                    | TurnEvent::UserMessageInserted { .. }
+                    | TurnEvent::UserMessageDiscarded { .. }
                     | TurnEvent::LlmCallStarted { .. }
                     | TurnEvent::LlmCallEnded {
                         outcome: LlmCallOutcome::Completed { .. } | LlmCallOutcome::Cancelled,
