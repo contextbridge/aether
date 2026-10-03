@@ -152,8 +152,9 @@ A `result` message is always emitted last (unless the stream errors), so it is a
 
 ### Token usage and estimated cost
 
-Aether exposes accounting as a domain-level `usage` message rather than an ACP
-extension notification:
+Aether surfaces accounting as a domain-level `usage` message. The CLI delivers
+it over the private `_aether/session_usage` ACP extension notification, which
+the SDK republishes on the message stream:
 
 ```ts
 for await (const message of session.prompt("Implement the feature")) {

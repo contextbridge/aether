@@ -53,6 +53,17 @@ cargo build --release
 aether settings init --user # bootstrap user-level settings
 ```
 
+The init wizard prompts for a provider and preset. Non-interactive runs can pass them directly:
+
+| Flag | Description |
+| --- | --- |
+| `--user` / `--project` | Scope to write; exactly one is required. |
+| `--path <dir>` | Project directory for `--project` (default `.`). |
+| `--provider <name>` | Provider to use, e.g. `anthropic`, `codex`, `bedrock`. |
+| `--preset <preset>` | `minimal` or `batteries-included`. |
+| `--harness <name>` | Harness conventions to auto-load (`claude`, `agents`); repeatable, `batteries-included` only. |
+| `--force` | Overwrite an existing settings file. |
+
 ## 3. Run
 
 <Tabs syncKey="run">

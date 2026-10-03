@@ -100,7 +100,7 @@ aether headless --model bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0 \
 
   </TabItem>
   <TabItem label="json">
-    Newline-delimited `AgentEvent` JSON. Each stdout line has a top-level `category` discriminator and a nested event with a `type` discriminator.
+    Newline-delimited `AgentEvent` JSON. Each stdout line has a top-level `category` discriminator; most events also carry a nested `type` discriminator, except `session_usage`, whose event payload is the usage object itself.
 
     ```bash
     aether headless --output json --events text,tool_call,tool_result,turn_ended \

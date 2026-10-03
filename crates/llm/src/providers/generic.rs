@@ -79,7 +79,7 @@ pub const AZURE_FOUNDRY: ProviderConfig = ProviderConfig {
 pub const FIREWORKS: ProviderConfig = ProviderConfig {
     provider: Provider::Fireworks,
     api_base: Some("https://api.fireworks.ai/inference/v1"),
-    default_model: "accounts/fireworks/models/glm-5p1",
+    default_model: "accounts/fireworks/models/glm-5p3",
     api: Api::ChatCompletions { tool_schema_transform: None, prompt_cache_key: PromptCacheKeySource::SessionAffinity },
 };
 

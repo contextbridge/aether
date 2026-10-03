@@ -19,7 +19,7 @@ The default in-memory server is session-scoped: tasks are stored in a temporary 
 }
 ```
 
-For persistent task storage, pass `--dir`. Aether stores JSONL task files under `<dir>/.aether-tasks/`.
+For persistent task storage, pass `--dir`. Aether stores JSONL task files under `<dir>/.aether-tasks/`: active trees in `active/` and completed trees in `completed/`.
 
 ```json title=".aether/mcp.json"
 {
@@ -46,6 +46,8 @@ For persistent task storage, pass `--dir`. Aether stores JSONL task files under 
 - Root tasks: `at-a1b2c3d4`
 - Subtasks: `at-a1b2c3d4.1`, `at-a1b2c3d4.2`, etc.
 
+Subtasks can be nested arbitrarily, so deeper levels look like `at-a1b2c3d4.1.2`.
+
 Each root task tree is stored in one JSONL file when persistent storage is enabled.
 
 ## Status values
@@ -61,14 +63,16 @@ Each root task tree is stored in one JSONL file when persistent storage is enabl
 
 ## Listing and filtering
 
-`task_list` accepts optional filters:
+`task_list` accepts optional filters. Filters are applied one at a time — when several are provided, only the highest-priority one takes effect, in this order:
 
-| Field       | Type      | Description                                                                          |
-| ----------- | --------- | ------------------------------------------------------------------------------------ |
-| `assignee`  | `string`  | Only return tasks assigned to this agent or worker.                                  |
-| `status`    | `string`  | Filter by status: `pending`, `inProgress`, `completed`, or `blocked`.                |
-| `treeId`    | `string`  | Only return tasks in one tree, identified by its root task ID.                       |
-| `readyOnly` | `boolean` | Only return tasks that are ready to start (pending with all dependencies completed).  |
+| Priority | Field       | Type      | Description                                                                          |
+| -------- | ----------- | --------- | ------------------------------------------------------------------------------------ |
+| 1        | `readyOnly` | `boolean` | Only return tasks that are ready to start (pending with all dependencies completed).  |
+| 2        | `treeId`    | `string`  | Only return tasks in one tree, identified by its root task ID.                       |
+| 3        | `assignee`  | `string`  | Only return tasks assigned to this agent or worker.                                  |
+| 4        | `status`    | `string`  | Filter by status: `pending`, `inProgress`, `completed`, or `blocked`.                |
+
+With no filters, `task_list` returns every task across all trees.
 
 ## Examples
 

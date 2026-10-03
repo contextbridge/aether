@@ -29,17 +29,26 @@ The file-list header shows the active scope: `Git Diff · Both`, `Git Diff · Un
 
 | Key | Action |
 | --- | --- |
+| `Tab` | Switch focus between the file list and the diff pane |
 | `h` / `←` | In the diff pane, focus the file list; in the file list, collapse the selected directory |
 | `l` / `→` or `Enter` | In the file list, expand/open the selected entry and focus the diff |
 | `j` / `↓` | Move down |
 | `k` / `↑` | Move up |
 | `PageDown` / `PageUp` | Page through the diff pane |
+| `Home` / `End` | Jump to the first / last entry |
+| `Enter` (diff pane) | Reveal the next line of collapsed gap context |
+| `O` | Reveal all collapsed gap context |
 | `o` | Toggle between the diff and the source view of the selected file |
 | `f` | Toggle full-file context (show the entire file instead of just the hunks) |
 | `v` | Cycle the diff layout: auto, unified, or split |
+| `←` / `→` (diff pane, split layout) | Focus the old / new side |
+| `t` | Open the theme picker |
 | `?` | Show help |
 | `r` | Refresh the diff |
-| `Esc` / `Ctrl+G` | Close git diff view |
+| `Esc` | Close git diff view (or cancel a comment draft / commit / discard prompt) |
+| `Ctrl+G` | Close git diff view while browsing; inert while a prompt is open |
+
+Mouse clicks work too: clicking a file's stage column in the file list toggles its staging, and clicking a diff row starts a comment on that line.
 
 ## Diff scope
 
@@ -61,6 +70,8 @@ The active scope is shown in the file-list header.
 | `a` | Stage all changes |
 | `A` | Unstage all changes |
 | `C` | Commit staged changes |
+
+`Space`, `a`, and `A` act on the file list, so focus it first (with `Tab` or `h`) when the diff pane is focused; `C` works from either pane.
 
 `C` opens a commit-message composer at the bottom of the screen. Type a message and press `Enter` to commit the staged changes, or `Esc` to cancel. Git rejects the commit when nothing is staged.
 

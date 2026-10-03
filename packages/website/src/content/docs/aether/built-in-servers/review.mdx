@@ -2,10 +2,12 @@
 title: Review
 ---
 
-Review MCP opens agent-authored artifacts for human review. It supports:
+The `review` server exposes a single tool, `review_artifact`, which opens agent-authored artifacts for human review. It supports:
 
 - **Markdown** (`format: "markdown"`) opens in Aether's in-terminal Markdown review UI.
 - **HTML** (`format: "html"`) opens in your browser with an annotation overlay for element-level comments.
+
+Both formats also accept an optional `title` used as the review heading.
 
 ```json
 {
@@ -14,6 +16,8 @@ Review MCP opens agent-authored artifacts for human review. It supports:
   }
 }
 ```
+
+The tool requires elicitation support from the client: Markdown reviews use form elicitation, HTML reviews use URL elicitation. Calls fail with an error when the client lacks the required capability. `review` is read-only apart from the elicitation it opens; pass `--root-dir <path>` to resolve relative file paths against a specific directory (Aether sets this to the workspace root automatically).
 
 ## Markdown
 
@@ -33,3 +37,16 @@ Submit HTML inline, as a file path, or as the URL of a web app already running o
 {"format": "html", "source": {"type": "file", "path": "site/index.html"}}
 {"format": "html", "source": {"type": "url", "url": "http://localhost:5173/settings"}}
 ```
+
+URL sources are proxied by the review server so the annotation overlay works on pages you don't control.
+
+## Result
+
+The tool call resolves after the reviewer responds and returns a `status`-tagged payload:
+
+| Status      | Meaning                                                                    |
+| ----------- | -------------------------------------------------------------------------- |
+| `approved`  | The reviewer approved the artifact.                                        |
+| `feedback`  | The reviewer returned `feedback` text plus optional HTML `annotations`.    |
+| `cancelled` | The review was cancelled.                                                  |
+| `declined`  | The reviewer declined to review.

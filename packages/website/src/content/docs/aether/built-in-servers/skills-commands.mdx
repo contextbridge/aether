@@ -14,16 +14,26 @@ A single markdown artifact can be a user prompt, an agent skill, a read-triggere
 
 ## Configuration
 
-Aether's project scaffold wires `skills` to `.aether/skills`:
+`aether init` scaffolds the skills server inline in `.aether/settings.json`, loading `--dir ${AETHER_HOME}/skills` (user skills), a `--dir` per harness skills directory (`.claude/skills` and `.agents/skills` under both `$HOME` and the workspace, when harness integration is enabled), and `--dir ${WORKSPACE}/.aether/skills` (project skills) last:
 
-```json title=".aether/mcp.json"
+```json title=".aether/settings.json"
 {
-  "servers": {
-    "skills": {
-      "type": "in-memory",
-      "args": ["--dir", ".aether/skills"]
+  "mcps": [
+    {
+      "type": "inline",
+      "servers": {
+        "skills": {
+          "type": "in-memory",
+          "args": [
+            "--dir", "${AETHER_HOME}/skills",
+            "--dir", "${HOME}/.claude/skills",
+            "--dir", "${WORKSPACE}/.claude/skills",
+            "--dir", "${WORKSPACE}/.aether/skills"
+          ]
+        }
+      }
     }
-  }
+  ]
 }
 ```
 
@@ -77,6 +87,8 @@ See `traits.md` and `error-handling.md` for detailed patterns.
 | `tags`            | Tags returned by `list_skills`.                                                                                            |
 | `triggers.read`   | Project-relative glob patterns used as read-triggered rules by the coding server.                                          |
 | `globs`, `paths`  | Compatibility aliases that also feed `triggers.read`.                                                                      |
+| `agent_authored`  | Marks artifacts authored by an agent (for example during skill self-improvement). Defaults to `false`.                     |
+| `helpful`, `harmful` | Rating counters used to compute a skill's confidence score. Defaults to `0`.                                            |
 
 Every authored artifact must have at least one activation surface: `user-invocable`, `agent-invocable`, `triggers.read`, `globs`, or `paths`.
 
@@ -122,7 +134,7 @@ Every authored artifact must have at least one activation surface: `user-invocab
     Context: $ARGUMENTS
     ```
 
-    `$ARGUMENTS` and named MCP prompt parameters are substituted when the prompt is requested.
+    `$ARGUMENTS` is substituted with the arguments passed when the prompt is requested.
 
   </TabItem>
 </Tabs>

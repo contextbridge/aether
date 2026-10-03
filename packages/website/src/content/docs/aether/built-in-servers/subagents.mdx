@@ -98,11 +98,14 @@ The result payload is:
     }
   ],
   "successCount": 1,
-  "errorCount": 0
+  "errorCount": 0,
+  "_meta": { "display": { "title": "Spawn agent", "value": "Explorer (1/1)" } }
 }
 ```
 
-`agent_name` is accepted as an input alias for `agentName`.
+`_meta` is display metadata for human-friendly rendering; clients can ignore it.
+
+`agent_name` and `run_in_background` are accepted as snake_case input aliases for `agentName` and `runInBackground`.
 
 ## Structured handoff
 
@@ -124,4 +127,4 @@ Each result's `output` contains the sub-agent's raw final output string. Parent 
 - If a background batch task is cancelled, all remaining child execution is stopped.
 - If no `agentInvocable` agents are registered and tasks are requested, the tool returns an error before creating a task and should not be retried until configuration changes.
 - If a named agent is missing or not `agentInvocable`, that task result is returned with `status: "error"`.
-- Empty `tasks` returns an empty result set.
+- Empty `tasks` in foreground mode returns an empty result set. In background mode, an empty batch still spawns an MCP Task, which completes immediately with the same (empty) payload.
