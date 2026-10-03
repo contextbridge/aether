@@ -5,7 +5,7 @@ use rmcp::{
         CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ClientCapabilities,
         ContentBlock, CreateTaskResult, DetailedTask, DiscoverResult, GetTaskParams, GetTaskResult, Implementation,
         ListToolsResult, PaginatedRequestParams, ProgressNotificationParam, ProtocolVersion, ResultType,
-        ServerCapabilities, ServerConfig, Tool, UpdateTaskParams,
+        ServerCapabilities, ServerConfig, TaskPayload, Tool, UpdateTaskParams,
     },
     service::{DynService, RequestContext},
 };
@@ -17,6 +17,11 @@ use std::time::Duration;
 
 pub fn fake_mcp(name: &str, server: FakeMcpServer) -> RuntimeMcpServer {
     RuntimeMcpServer::new(name, RuntimeMcpTransport::InMemory { server: server.into_dyn() }, ToolExposure::ModelVisible)
+}
+
+pub fn completed_task_payload(result: CallToolResult) -> TaskPayload {
+    let result = serde_json::to_value(result).and_then(serde_json::from_value).expect("a tool result is a JSON object");
+    TaskPayload::Completed { result }
 }
 
 /// A fake MCP server preloaded with the classic math tools (`add_numbers`,
