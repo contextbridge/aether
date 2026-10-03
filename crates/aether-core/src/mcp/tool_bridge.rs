@@ -1,19 +1,13 @@
-use std::path::{Path, PathBuf};
-
 use crate::events::{TaskOutcome, TaskOutcomeState};
 use mcp_utils::client::{CallToolError, SERVERNAME_DELIMITER};
-use rmcp::model::{CallToolRequestParams, CallToolResult, Task};
-use serde_json;
+use rmcp::model::{CallToolRequestParams, CallToolResult, ContentBlock, EmbeddedResource, ResourceContents, Task};
 
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
 use utils::display_meta::ToolResultMeta;
+use utils::temp_dir::TempDir;
+use utils::tool_result_truncator::ToolResultTruncator;
 
-/// Maximum bytes for a tool result before spilling to disk.
-/// ~50K tokens at ~4 bytes/token.
-const TOOL_RESULT_MAX_BYTES: usize = 200_000;
-
-/// Size of the head preview included inline when a result spills to disk.
-const SPILLOVER_PREVIEW_BYTES: usize = 10_000;
+const TOOL_RESULT_TRUNCATOR: ToolResultTruncator = ToolResultTruncator { head: 25_000, tail: 25_000 };
 
 /// Convert a `ToolCallRequest` to `rmcp::CallToolRequestParams`
 pub fn tool_call_request_to_mcp(request: &ToolCallRequest) -> Result<CallToolRequestParams, String> {
@@ -35,116 +29,81 @@ pub fn tool_call_request_to_mcp(request: &ToolCallRequest) -> Result<CallToolReq
     Ok(params)
 }
 
-/// Convert an rmcp `CallToolResult` and request to `ToolCallResult` or `ToolCallError`,
-/// extracting any `_meta` metadata from structured content.
-pub fn mcp_result_to_tool_call_result(
+pub fn convert_tool_result(
     request: &ToolCallRequest,
-    mcp_result: rmcp::model::CallToolResult,
+    outcome: Result<CallToolResult, CallToolError>,
+    spill_dir: &TempDir,
 ) -> Result<(ToolCallResult, Option<ToolResultMeta>), ToolCallError> {
-    if mcp_result.is_error.unwrap_or(false) {
-        let error_msg = mcp_result.content.first().map_or_else(
-            || "Unknown error".to_string(),
-            |content| {
-                content.as_text().map_or_else(
-                    || serde_json::to_string(content).unwrap_or_else(|_| "Unknown error".to_string()),
-                    |text| text.text.clone(),
-                )
-            },
-        );
-        Err(ToolCallError {
+    let mcp_result = outcome.map_err(|error| ToolCallError::from_request(request, error.to_string()))?;
+    if mcp_result.is_error == Some(true) {
+        let text = content_text(&mcp_result.content, "Unknown error");
+        let message = TOOL_RESULT_TRUNCATOR.truncate(text, spill_dir, &request.name);
+        return Err(ToolCallError::from_request(request, format!("Tool execution error: {message}")));
+    }
+
+    let (result, result_meta) = match mcp_result.structured_content {
+        Some(mut value) => {
+            let result_meta = extract_result_meta(&mut value);
+            (encode_structured(&value), result_meta)
+        }
+        None => (content_text(&mcp_result.content, "No result"), None),
+    };
+    let result = TOOL_RESULT_TRUNCATOR.truncate(result, spill_dir, &request.name);
+
+    Ok((
+        ToolCallResult {
             id: request.id.clone(),
             name: request.name.clone(),
-            arguments: Some(request.arguments.clone()),
-            error: format!("Tool execution error: {error_msg}"),
-        })
-    } else {
-        let (result_value, result_meta) = extract_result_and_meta(mcp_result.structured_content, &mcp_result.content);
-        // YAML is ~18% more token-efficient than JSON for LLM consumption
-        let yaml = serde_yml::to_string(&result_value)
-            .ok()
-            .filter(|yaml| serde_yml::from_str::<serde_json::Value>(yaml).is_ok_and(|decoded| decoded == result_value))
-            .unwrap_or_else(|| result_value.to_string());
-        let result_str = maybe_spillover(&request.id, yaml, TOOL_RESULT_MAX_BYTES, &spillover_dir());
-        Ok((
-            ToolCallResult {
-                id: request.id.clone(),
-                name: request.name.clone(),
-                arguments: request.arguments.clone(),
-                result: result_str,
-            },
-            result_meta,
-        ))
-    }
+            arguments: request.arguments.clone(),
+            result,
+        },
+        result_meta,
+    ))
 }
 
 pub fn map_task_result_to_outcome(
     request: ToolCallRequest,
     task: Task,
     outcome: Result<CallToolResult, CallToolError>,
+    spill_dir: &TempDir,
 ) -> TaskOutcome {
-    let state = match convert_tool_result(&request, outcome) {
+    let state = match convert_tool_result(&request, outcome, spill_dir) {
         Ok((result, result_meta)) => TaskOutcomeState::Completed { result, result_meta },
         Err(error) => TaskOutcomeState::Failed { error },
     };
     TaskOutcome { request, task_id: task.task_id, state }
 }
 
-pub fn convert_tool_result(
-    request: &ToolCallRequest,
-    outcome: Result<CallToolResult, CallToolError>,
-) -> Result<(ToolCallResult, Option<ToolResultMeta>), ToolCallError> {
-    outcome
-        .map_err(|error| ToolCallError::from_request(request, error.to_string()))
-        .and_then(|mcp_result| mcp_result_to_tool_call_result(request, mcp_result))
+pub(crate) fn encode_structured(value: &serde_json::Value) -> String {
+    noyalib::to_string(value).unwrap_or_else(|_| value.to_string())
 }
 
-fn spillover_dir() -> PathBuf {
-    std::env::temp_dir().join("aether-tool-output")
+fn content_text(content: &[ContentBlock], empty: &str) -> String {
+    if content.is_empty() {
+        return empty.to_string();
+    }
+    content.iter().map(block_text).collect::<Vec<_>>().join("\n")
 }
 
-/// If `result` exceeds `max_bytes`, write the full output to disk and return
-/// a head preview with a pointer to the file. Otherwise return unchanged.
-fn maybe_spillover(tool_id: &str, result: String, max_bytes: usize, dir: &Path) -> String {
-    if result.len() <= max_bytes {
-        return result;
+fn block_text(block: &ContentBlock) -> String {
+    match block {
+        ContentBlock::Text(text) => text.text.clone(),
+        ContentBlock::Image(image) => binary_placeholder(&image.mime_type, &image.data),
+        ContentBlock::Audio(audio) => binary_placeholder(&audio.mime_type, &audio.data),
+        ContentBlock::Resource(EmbeddedResource {
+            resource: ResourceContents::TextResourceContents { text, .. },
+            ..
+        }) => text.clone(),
+        ContentBlock::Resource(EmbeddedResource {
+            resource: ResourceContents::BlobResourceContents { mime_type, blob, .. },
+            ..
+        }) => binary_placeholder(mime_type.as_deref().unwrap_or("binary"), blob),
+        block => serde_json::to_string(block).unwrap_or_default(),
     }
-
-    if let Err(e) = std::fs::create_dir_all(dir) {
-        tracing::warn!("Failed to create tool-output dir: {e}");
-        return result;
-    }
-
-    let file_path = dir.join(format!("{tool_id}.txt"));
-
-    if let Err(e) = std::fs::write(&file_path, &result) {
-        tracing::warn!("Failed to write spillover file: {e}");
-        return result;
-    }
-
-    let preview_end = result.floor_char_boundary(SPILLOVER_PREVIEW_BYTES);
-    let preview = &result[..preview_end];
-    let total_bytes = result.len();
-
-    format!(
-        "<preview>\n{preview}\n</preview>\n\n[Tool result too large ({total_bytes} bytes). Full output saved to {path}. Use grep, read, or tail to explore the full result.]",
-        path = file_path.display()
-    )
 }
 
-fn extract_result_and_meta(
-    structured_content: Option<serde_json::Value>,
-    content: &[rmcp::model::ContentBlock],
-) -> (serde_json::Value, Option<ToolResultMeta>) {
-    if let Some(mut val) = structured_content {
-        let result_meta = extract_result_meta(&mut val);
-        (val, result_meta)
-    } else {
-        let fallback = content.first().map_or_else(
-            || serde_json::Value::String("No result".to_string()),
-            |c| serde_json::to_value(c).unwrap_or(serde_json::Value::String("Serialization error".to_string())),
-        );
-        (fallback, None)
-    }
+fn binary_placeholder(mime_type: &str, base64: &str) -> String {
+    format!("[{mime_type} content omitted, {} bytes of base64]", base64.len())
 }
 
 fn extract_result_meta(value: &mut serde_json::Value) -> Option<ToolResultMeta> {
@@ -172,7 +131,7 @@ fn extract_result_meta(value: &mut serde_json::Value) -> Option<ToolResultMeta> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rmcp::model::{CallToolResult as McpCallToolResult, ContentBlock};
+    use rmcp::model::CallToolResult as McpCallToolResult;
     use serde::Serialize;
     use serde_json::json;
     use utils::display_meta::PlanMetaStatus;
@@ -181,16 +140,14 @@ mod tests {
         ToolCallRequest { id: "call_123".into(), name: "test_tool".into(), arguments: "{}".into() }
     }
 
+    fn convert(mcp: McpCallToolResult) -> Result<(ToolCallResult, Option<ToolResultMeta>), ToolCallError> {
+        convert_tool_result(&req(), Ok(mcp), &TempDir::new())
+    }
+
     fn call_structured(structured: serde_json::Value) -> (ToolCallResult, Option<ToolResultMeta>) {
         let mut mcp = McpCallToolResult::structured(structured);
         mcp.content = vec![];
-        mcp_result_to_tool_call_result(&req(), mcp).unwrap()
-    }
-
-    fn extract_preview(result: &str) -> &str {
-        let start = result.find("<preview>\n").unwrap() + "<preview>\n".len();
-        let end = result.find("\n</preview>").unwrap();
-        &result[start..end]
+        convert(mcp).unwrap()
     }
 
     #[test]
@@ -201,7 +158,7 @@ mod tests {
         });
         let mut mcp = McpCallToolResult::structured(structured);
         mcp.content = vec![ContentBlock::text("plain text fallback")];
-        let (result, meta) = mcp_result_to_tool_call_result(&req(), mcp).unwrap();
+        let (result, meta) = convert(mcp).unwrap();
 
         assert!(!result.result.contains("_meta"));
         assert!(result.result.contains("success"));
@@ -261,19 +218,6 @@ mod tests {
     }
 
     #[test]
-    fn structured_strings_preserve_trailing_whitespace() {
-        for text in ["", "plain", "line\n", "line\n\n", "line\n\n\n", "\n", "\n\n", "  line\n\n", "line\n  "] {
-            for value in
-                [json!(text), json!({"first": text, "last": "end"}), json!({"nested": [text]}), json!({"last": text})]
-            {
-                let (result, _) = call_structured(value.clone());
-                let decoded: serde_json::Value = serde_yml::from_str(&result.result).unwrap();
-                assert_eq!(decoded, value, "encoded result: {:?}", result.result);
-            }
-        }
-    }
-
-    #[test]
     fn test_no_meta_passes_through_unchanged() {
         let (result, meta) = call_structured(json!({"status": "success", "data": "hello"}));
         assert!(result.result.contains("success"));
@@ -282,11 +226,18 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_call_result_falls_back_to_content() {
+    fn text_results_are_returned_as_plain_text() {
         let mcp = McpCallToolResult::success(vec![ContentBlock::text("plain text result")]);
-        let (result, meta) = mcp_result_to_tool_call_result(&req(), mcp).unwrap();
-        assert!(result.result.contains("plain text result"));
+        let (result, meta) = convert(mcp).unwrap();
+        assert_eq!(result.result, "plain text result");
         assert!(meta.is_none());
+    }
+
+    #[test]
+    fn text_results_join_every_content_block() {
+        let mcp = McpCallToolResult::success(vec![ContentBlock::text("first"), ContentBlock::text("second")]);
+        let (result, _) = convert(mcp).unwrap();
+        assert_eq!(result.result, "first\nsecond");
     }
 
     #[test]
@@ -343,39 +294,52 @@ mod tests {
         })
         .unwrap();
         assert!(good.get("_meta").is_some(), "expected `_meta` key, got: {good}");
-        let (stripped, meta) = extract_result_and_meta(Some(good), &[]);
+        let (stripped, meta) = call_structured(good);
         let rm = meta.expect("meta should be extracted");
         assert_eq!(rm.display.title, "Read file");
         assert_eq!(rm.display.value, "file.rs, 50 lines");
-        assert!(stripped.get("_meta").is_none());
+        assert!(!stripped.result.contains("_meta"));
 
         let broken =
             serde_json::to_value(&BrokenResult { file_path: "/test/file.rs".into(), _meta: Some(display_meta) })
                 .unwrap();
         assert!(broken.get("_meta").is_none(), "should be mangled by camelCase");
         assert!(broken.get("meta").is_some());
-        let (_, meta) = extract_result_and_meta(Some(broken), &[]);
+        let (_, meta) = call_structured(broken);
         assert!(meta.is_none(), "extraction should fail when _meta is mangled");
     }
 
     #[test]
     fn test_tool_call_result_handles_text_error_without_sdk_debug_output() {
         let mcp = McpCallToolResult::error(vec![ContentBlock::text("Error: file not found")]);
-        let err = mcp_result_to_tool_call_result(&req(), mcp).unwrap_err();
+        let err = convert(mcp).unwrap_err();
         assert_eq!(err.error, "Tool execution error: Error: file not found");
     }
 
     #[test]
-    fn test_tool_call_result_serializes_non_text_error_content() {
-        let image = serde_json::from_value(serde_json::json!({
-            "type": "image",
-            "data": "aW1hZ2U=",
-            "mimeType": "image/png"
-        }))
-        .unwrap();
-        let mcp = McpCallToolResult::error(vec![image]);
-        let err = mcp_result_to_tool_call_result(&req(), mcp).unwrap_err();
-        assert_eq!(err.error, r#"Tool execution error: {"type":"image","data":"aW1hZ2U=","mimeType":"image/png"}"#);
+    fn binary_content_is_summarized_instead_of_inlined() {
+        let image = ContentBlock::image("aW1hZ2U=", "image/png");
+        let mcp = McpCallToolResult::success(vec![ContentBlock::text("Captured screenshot"), image.clone()]);
+        let (result, _) = convert(mcp).unwrap();
+        assert_eq!(result.result, "Captured screenshot\n[image/png content omitted, 8 bytes of base64]");
+
+        let err = convert(McpCallToolResult::error(vec![image])).unwrap_err();
+        assert_eq!(err.error, "Tool execution error: [image/png content omitted, 8 bytes of base64]");
+    }
+
+    #[test]
+    fn embedded_text_resources_are_returned_as_their_text() {
+        let mcp = McpCallToolResult::success(vec![ContentBlock::embedded_text("file:///a.rs", "fn main() {\n}")]);
+        let (result, _) = convert(mcp).unwrap();
+        assert_eq!(result.result, "fn main() {\n}");
+    }
+
+    #[test]
+    fn non_binary_content_is_serialized() {
+        let link =
+            serde_json::from_value(json!({"type": "resource_link", "uri": "file:///a.rs", "name": "a.rs"})).unwrap();
+        let err = convert(McpCallToolResult::error(vec![link])).unwrap_err();
+        assert_eq!(err.error, r#"Tool execution error: {"type":"resource_link","uri":"file:///a.rs","name":"a.rs"}"#);
     }
 
     #[test]
@@ -393,56 +357,25 @@ mod tests {
     }
 
     #[test]
-    fn test_serde_yml_produces_yaml_not_json() {
-        let yaml = serde_yml::to_string(&json!({"key": "value"})).unwrap();
-        assert!(yaml.contains("key:") && yaml.contains("value") && !yaml.starts_with('{'));
+    fn structured_results_yaml_cannot_hold_fall_back_to_json() {
+        let (result, _) = call_structured(json!({"id": u64::MAX}));
+        assert_eq!(result.result, r#"{"id":18446744073709551615}"#);
     }
 
     #[test]
-    fn test_spillover_small_input_unchanged() {
-        let dir = tempfile::tempdir().unwrap();
-        let input = "hello world".to_string();
-        assert_eq!(maybe_spillover("id", input.clone(), 1000, dir.path()), input);
-    }
+    fn oversized_results_and_errors_keep_their_head_and_tail_and_save_the_full_text() {
+        let text = (1..=100_000).map(|n| format!("{n}\n")).collect::<Vec<_>>().concat();
+        let spill_dir = TempDir::new();
+        let convert = |mcp| convert_tool_result(&req(), Ok(mcp), &spill_dir);
+        let (result, _) = convert(McpCallToolResult::success(vec![ContentBlock::text(&text)])).unwrap();
+        let error = convert(McpCallToolResult::error(vec![ContentBlock::text(&text)])).unwrap_err().error;
 
-    #[test]
-    fn test_spillover_large_input_writes_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let large = "x".repeat(5000);
-        let result = maybe_spillover("test_large", large.clone(), 1000, dir.path());
-        for expected in ["<preview>", "</preview>", "Tool result too large", "5000 bytes", "test_large.txt"] {
-            assert!(result.contains(expected), "missing '{expected}' in: {result}");
-        }
-        let on_disk = std::fs::read_to_string(dir.path().join("test_large.txt")).unwrap();
-        assert_eq!(on_disk, large);
-    }
-
-    #[test]
-    fn test_spillover_preview_content() {
-        let dir = tempfile::tempdir().unwrap();
-        let large = format!("HEAD_{}{}", "z".repeat(SPILLOVER_PREVIEW_BYTES + 5000), "TAIL");
-        let result = maybe_spillover("id", large, 1000, dir.path());
-        assert!(result.contains("HEAD_"));
-        assert!(!result.contains("TAIL"));
-    }
-
-    #[test]
-    fn test_spillover_preserves_utf8_boundaries() {
-        let dir = tempfile::tempdir().unwrap();
-        let large = format!("{}{}", "\u{1F600}".repeat(300), "a".repeat(5000));
-        let result = maybe_spillover("id", large, 100, dir.path());
-        assert!(extract_preview(&result).chars().count() > 0);
-    }
-
-    #[test]
-    fn test_mcp_result_spills_large_output() {
-        let request =
-            ToolCallRequest { id: "spill_integration".into(), name: "big_tool".into(), arguments: "{}".into() };
-        let mut mcp = McpCallToolResult::structured(json!({"data": "x".repeat(TOOL_RESULT_MAX_BYTES + 1000)}));
-        mcp.content = vec![];
-        let (result, _) = mcp_result_to_tool_call_result(&request, mcp).unwrap();
-        for expected in ["<preview>", "Tool result too large", "spill_integration.txt"] {
-            assert!(result.result.contains(expected));
+        for excerpt in [result.result.as_str(), error.strip_prefix("Tool execution error: ").unwrap()] {
+            assert!(excerpt.starts_with("1\n2\n3\n"), "{excerpt}");
+            assert!(excerpt.ends_with("99999\n100000\n"), "{excerpt}");
+            assert!(excerpt.len() < text.len() / 5, "{excerpt}");
+            let saved = utils::tool_result_truncator::saved_path(excerpt).expect("excerpt names its saved file");
+            assert_eq!(std::fs::read_to_string(saved).unwrap(), text);
         }
     }
 }

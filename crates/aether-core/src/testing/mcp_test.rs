@@ -16,6 +16,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::watch;
+use utils::temp_dir::TempDir;
 
 pub use mcp_utils::testing::CapturedElicitation;
 
@@ -53,6 +54,7 @@ pub struct McpTest {
     trace_context: Option<TraceContext>,
     tool_timeout: Duration,
     next_call_id: AtomicU64,
+    spill_dir: TempDir,
 }
 
 pub struct TaskOutcome {
@@ -167,6 +169,7 @@ impl McpTestBuilder {
             trace_context: self.trace_context,
             tool_timeout: if self.tool_timeout.is_zero() { DEFAULT_TOOL_TIMEOUT } else { self.tool_timeout },
             next_call_id: AtomicU64::new(1),
+            spill_dir: TempDir::new(),
         }
     }
 }
@@ -205,7 +208,8 @@ impl McpTest {
                     };
                 }
                 ToolCallEvent::Complete(outcome) => {
-                    let result = convert_tool_result(&request_for_outcome, outcome).map(|(result, _)| result);
+                    let result =
+                        convert_tool_result(&request_for_outcome, outcome, &self.spill_dir).map(|(result, _)| result);
                     return ToolCallOutcome { result, progress, deferred_task: None };
                 }
                 ToolCallEvent::TaskStatus(_) | ToolCallEvent::TaskComplete { .. } | ToolCallEvent::Cancelled { .. } => {
@@ -229,7 +233,7 @@ impl McpTest {
         while let Some((request, event)) = self.next_deferred_event().await {
             match event {
                 ToolCallEvent::TaskComplete { task, result } => {
-                    return Some(task_outcome(map_task_result_to_outcome(request, task, result)));
+                    return Some(task_outcome(map_task_result_to_outcome(request, task, result, &self.spill_dir)));
                 }
                 ToolCallEvent::Cancelled { task_id } => {
                     return Some(task_outcome(crate::events::TaskOutcome {

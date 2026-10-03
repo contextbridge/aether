@@ -1,4 +1,5 @@
 use crate::events::{AgentEvent, StreamState, ToolEvent};
+use crate::mcp::tool_bridge::encode_structured;
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
 use serde::Serialize;
 
@@ -34,7 +35,6 @@ impl AgentEventBuilder {
     ) -> Self {
         let request_json = serde_json::to_string(request).expect("Failed to serialize request");
         let result_value = serde_json::to_value(result).expect("Failed to serialize result");
-        let result_yaml = serde_yml::to_string(&result_value).unwrap_or_else(|_| result_value.to_string());
 
         self.push_tool_call(tool_call_id, name, &request_json);
 
@@ -43,7 +43,7 @@ impl AgentEventBuilder {
                 id: tool_call_id.to_string(),
                 name: name.to_string(),
                 arguments: request_json,
-                result: result_yaml,
+                result: encode_structured(&result_value),
             },
             result_meta: None,
         }));
