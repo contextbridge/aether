@@ -12,3 +12,5 @@ mod mcp_command;
 mod run_init;
 mod slash_commands;
 mod trace_context;
+
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
