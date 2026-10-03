@@ -9,6 +9,7 @@ pub(crate) mod git_diff;
 pub(crate) mod hooks;
 pub(crate) mod model;
 mod pagination;
+pub(crate) mod prompts;
 pub(crate) mod registry;
 pub(crate) mod runtime;
 pub(crate) mod slash_commands;
