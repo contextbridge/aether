@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.0](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.7.0...aether-mcp-servers-v0.8.0) - 2026-10-03
+
+### Fixed
+
+- *(mcp-servers)* Make url annotation work when source content is loa… ([#556](https://github.com/contextbridge/aether/pull/556))
+
+### Other
+
+- Oversized coding tool output handling ([#560](https://github.com/contextbridge/aether/pull/560))
+- *(mcp-servers)* [**breaking**] Remove a handful of LSP tools that burned a lot of tokens and make remaining LSP tool responses more token efficient.  ([#558](https://github.com/contextbridge/aether/pull/558))
+
 ## [0.7.0](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.6.9...aether-mcp-servers-v0.7.0) - 2026-10-01
 
 ### Fixed

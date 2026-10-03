@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.10](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.3.9...aether-telemetry-v0.3.10) - 2026-10-03
+
+### Other
+
+- updated the following local packages: aether-utils, aether-agent-core, aether-llm
+
 ## [0.3.9](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.3.8...aether-telemetry-v0.3.9) - 2026-10-01
 
 ### Fixed

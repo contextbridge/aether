@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0](https://github.com/contextbridge/aether/compare/aether-lspd-v0.2.0...aether-lspd-v0.3.0) - 2026-10-03
+
+### Other
+
+- *(mcp-servers)* [**breaking**] Remove a handful of LSP tools that burned a lot of tokens and make remaining LSP tool responses more token efficient.  ([#558](https://github.com/contextbridge/aether/pull/558))
+
 ## [0.2.0](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.40...aether-lspd-v0.2.0) - 2026-10-01
 
 ### Other

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.10](https://github.com/contextbridge/aether/compare/aether-sessions-v0.3.9...aether-sessions-v0.3.10) - 2026-10-03
+
+### Fixed
+
+- ACP actor gets proper state when background tasks return  ([#559](https://github.com/contextbridge/aether/pull/559))
+
 ## [0.3.9](https://github.com/contextbridge/aether/compare/aether-sessions-v0.3.8...aether-sessions-v0.3.9) - 2026-10-01
 
 ### Fixed

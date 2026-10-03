@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.11](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.10...aether-agent-cli-v0.9.11) - 2026-10-03
+
+### Fixed
+
+- ACP actor gets proper state when background tasks return  ([#559](https://github.com/contextbridge/aether/pull/559))
+
 ## [0.9.10](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.9...aether-agent-cli-v0.9.10) - 2026-10-01
 
 ### Fixed
