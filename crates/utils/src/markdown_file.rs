@@ -20,7 +20,7 @@ impl<T: DeserializeOwned + Send + 'static> MarkdownFile<T> {
 
         match split_frontmatter(&raw_content) {
             Some((yaml_str, body)) => {
-                let frontmatter = serde_yml::from_str(yaml_str).ok();
+                let frontmatter = noyalib::from_str(yaml_str).ok();
                 Ok(Self { frontmatter, content: body.to_string() })
             }
             None => Ok(Self { frontmatter: None, content: raw_content.trim().to_string() }),

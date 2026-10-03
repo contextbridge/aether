@@ -81,7 +81,7 @@ base16ct = { version = "1.0", features = ["alloc"] }
 base64 = "0.23"
 rand = "0.10"
 dirs = "7.0"
-serde_yml = "0.0.13"
+noyalib = "0.0.51"
 htmd = "0.5"
 dom_smoothie = "0.18"
 
