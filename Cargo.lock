@@ -123,12 +123,12 @@ dependencies = [
  "clap",
  "futures",
  "glob",
+ "noyalib",
  "reqwest 0.13.5",
  "rmcp",
  "schemars 1.2.2",
  "serde",
  "serde_json",
- "serde_yml",
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.21",
@@ -363,10 +363,10 @@ dependencies = [
  "aether-project",
  "aether-utils",
  "globset",
+ "noyalib",
  "schemars 1.2.2",
  "serde",
  "serde_json",
- "serde_yml",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -446,15 +446,16 @@ name = "aether-utils"
 version = "0.2.17"
 dependencies = [
  "futures",
+ "noyalib",
  "regex",
  "schemars 1.2.2",
  "serde",
  "serde_json",
- "serde_yml",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -5360,14 +5361,19 @@ dependencies = [
 
 [[package]]
 name = "noyalib"
-version = "0.0.5"
+version = "0.0.51"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e493c05128df7a83b9676b709d590e0ebc285c7ed3152bc679668e8c1e506af5"
+checksum = "77d00fc12936a62c370ddaaba83218c753ba110b34a60ed6e278fd7b7389e350"
 dependencies = [
+ "hashbrown 0.17.1",
  "indexmap 2.14.2",
+ "itoa",
+ "libm",
  "memchr",
  "rustc-hash",
- "serde",
+ "ryu",
+ "serde_core",
+ "serde_ignored",
  "smallvec",
 ]
 
@@ -7048,6 +7054,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_ignored"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "115dffd5f3853e06e746965a20dcbae6ee747ae30b543d91b0e089668bb07798"
+dependencies = [
+ "serde",
+ "serde_core",
+]
+
+[[package]]
 name = "serde_json"
 version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7126,16 +7142,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
-]
-
-[[package]]
-name = "serde_yml"
-version = "0.0.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "909764a65f86829ccdb5eea9ab355843aa02c019a7bfd47465092953565caa05"
-dependencies = [
- "noyalib",
- "serde",
 ]
 
 [[package]]

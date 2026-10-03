@@ -29,7 +29,7 @@ async fn artifact_review_round_trips_complete_feedback_through_the_production_ex
             .await
             .result
             .expect("review completes");
-        let output: serde_json::Value = serde_yml::from_str(&result.result).unwrap();
+        let output: serde_json::Value = noyalib::from_str(&result.result).unwrap();
         assert_eq!(output, json!({"status": "feedback", "feedback": feedback}), "encoded result: {:?}", result.result);
         assert_eq!(test.elicitations().len(), 1);
     }
@@ -59,7 +59,7 @@ async fn artifact_review_round_trips_approval_and_cancellation_through_the_produ
             .await
             .result
             .expect("review completes");
-        let output: serde_json::Value = serde_yml::from_str(&result.result).unwrap();
+        let output: serde_json::Value = noyalib::from_str(&result.result).unwrap();
         assert_eq!(output, json!({"status": status}));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "# Plan");
     }
@@ -98,7 +98,7 @@ async fn artifact_review_round_trips_html_annotations_through_the_production_exe
         .result
         .expect("review completes");
 
-    let output: serde_json::Value = serde_yml::from_str(&result.result).unwrap();
+    let output: serde_json::Value = noyalib::from_str(&result.result).unwrap();
     assert_eq!(output, submission);
     assert_eq!(test.elicitations().len(), 1);
 }

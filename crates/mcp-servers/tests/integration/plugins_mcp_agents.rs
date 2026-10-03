@@ -378,7 +378,8 @@ async fn call_subagent_through_manager(
     while let Some(event) = events.next().await {
         match event {
             ToolCallEvent::Complete(outcome) => {
-                let (result, _) = convert_tool_result(&request, outcome).map_err(|error| test_error(error.error))?;
+                let (result, _) = convert_tool_result(&request, outcome, &utils::temp_dir::TempDir::new())
+                    .map_err(|error| test_error(error.error))?;
                 return Ok(result.result);
             }
             ToolCallEvent::TaskComplete { .. } => {

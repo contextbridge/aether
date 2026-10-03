@@ -48,10 +48,11 @@ use tools::bash::{BashInput, BashOutput, validate_args};
 use tools::edit_file::{EditFileArgs, EditFileResponse, edit_file_contents};
 use tools::read_file::{ReadFileArgs, ReadFileResult, read_file_contents};
 use tools::web_fetch::{WebFetchInput, WebFetchOutput, WebFetcher};
-use tools::web_search::search_client::BraveSearchClient;
 use tools::web_search::{WebSearchInput, WebSearchOutput, WebSearcher};
 use tools::write_file::{WriteFileArgs, WriteFileResponse, write_file_contents};
 use utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename, truncate};
+use utils::temp_dir::TempDir;
+use utils::tool_result_truncator::ToolResultTruncator;
 
 #[doc = include_str!("../docs/permission_mode.md")]
 #[derive(Debug, Clone, Default, PartialEq, clap::ValueEnum)]
@@ -105,13 +106,16 @@ pub struct CodingMcp<T: CodingTools = DefaultCodingTools> {
     /// Optional LSP operations (enabled with `.with_lsp()`)
     lsp: Option<Arc<LspRegistry>>,
     web_fetcher: WebFetcher,
-    web_searcher: Option<WebSearcher<BraveSearchClient>>,
+    web_searcher: Option<WebSearcher>,
     /// Root directory used for path resolution and tool instructions.
     root_dir: PathBuf,
     /// Configured prompt directories used to build read rules.
     configured_rules_dirs: Vec<PathBuf>,
     /// Permission mode controlling user approval for tool calls
     permission_mode: PermissionMode,
+    spill_dir: Arc<TempDir>,
+    bash_truncator: ToolResultTruncator,
+    web_truncator: ToolResultTruncator,
 }
 
 #[allow(clippy::unused_async_trait_impl)]
@@ -260,6 +264,9 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
             root_dir: crate::workspace_paths::current_dir(),
             configured_rules_dirs: Vec::new(),
             permission_mode: PermissionMode::AlwaysAllow,
+            spill_dir: Arc::new(TempDir::new()),
+            bash_truncator: ToolResultTruncator { head: 4_000, tail: 12_000 },
+            web_truncator: ToolResultTruncator { head: 24_000, tail: 8_000 },
         }
     }
 
@@ -295,6 +302,8 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
     fn create_background_bash_task(&self, args: BashInput) -> rmcp::model::Task {
         let tools = Arc::clone(&self.tools);
         let cwd = self.root_dir.clone();
+        let spill_dir = Arc::clone(&self.spill_dir);
+        let truncator = self.bash_truncator;
         let description = args.description.clone().unwrap_or_else(|| truncate(&args.command, 80));
         let options = TaskOptions::new().with_ttl_ms(BACKGROUND_TASK_TTL_MS).with_status_message(description);
 
@@ -302,7 +311,7 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
             Box::pin(async move {
                 tokio::select! {
                     () = task_context.cancelled() => Err(TaskExit::Cancelled),
-                    result = tools.bash(args, Some(cwd)) => Ok(match result {
+                    result = run_bash(tools.as_ref(), args, cwd, truncator, &spill_dir) => Ok(match result {
                         Ok(output) => serde_json::to_value(output).map_or_else(
                             |error| CallToolResult::error(vec![ContentBlock::text(error.to_string())]),
                             CallToolResult::structured,
@@ -552,8 +561,8 @@ When using tools that take file paths, always use absolute paths from:
         let Parameters(args) = request;
         notify_preview(&context, ToolDisplayMeta::new("Run command", truncate(&args.command, 40))).await;
 
-        let cwd = self.root_dir.clone();
-        let result = self.tools.bash(args, Some(cwd)).await?;
+        let result =
+            run_bash(self.tools.as_ref(), args, self.root_dir.clone(), self.bash_truncator, &self.spill_dir).await?;
         Ok(Json(result))
     }
 
@@ -566,7 +575,9 @@ When using tools that take file paths, always use absolute paths from:
     ) -> Result<Json<WebFetchOutput>, CodingError> {
         let Parameters(args) = request;
         notify_preview(&context, ToolDisplayMeta::new("Fetch URL", truncate(&args.url, 60))).await;
-        self.web_fetcher.fetch(args).await.map(Json).map_err(CodingError::from)
+        let output = self.web_fetcher.fetch(args).await?;
+        let content = self.web_truncator.truncate(output.content, &self.spill_dir, "web-fetch");
+        Ok(Json(WebFetchOutput { content, ..output }))
     }
 
     #[doc = include_str!("tools/web_search/description.md")]
@@ -699,6 +710,17 @@ fn decision_form(tool_name: &str, description: &str) -> ElicitRequestParams {
     }
 }
 
+async fn run_bash<T: CodingTools>(
+    tools: &T,
+    args: BashInput,
+    cwd: PathBuf,
+    truncator: ToolResultTruncator,
+    spill_dir: &TempDir,
+) -> Result<BashOutput, CodingError> {
+    let output = tools.bash(args, Some(cwd)).await?;
+    Ok(BashOutput { output: truncator.truncate(output.output, spill_dir, "bash"), ..output })
+}
+
 fn background_bash_args(request: &CallToolRequestParams) -> Option<BashInput> {
     if request.name.as_ref() != "bash" {
         return None;
@@ -734,6 +756,11 @@ impl Default for CodingMcp<DefaultCodingTools> {
 
 #[cfg(feature = "test-helpers")]
 impl<T: CodingTools + 'static> CodingMcp<T> {
+    pub fn with_web_fetcher(mut self, web_fetcher: WebFetcher) -> Self {
+        self.web_fetcher = web_fetcher;
+        self
+    }
+
     /// Read a file and track it in the read set (test helper, no MCP context needed).
     pub async fn test_read_file(&self, mut args: ReadFileArgs) -> Result<Json<ReadFileResult>, CodingError> {
         args.file_path = self.resolve_file_arg(&args.file_path)?;

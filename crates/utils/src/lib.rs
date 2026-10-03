@@ -14,6 +14,10 @@ pub mod settings;
 #[cfg(not(target_family = "wasm"))]
 pub mod shell_expander;
 pub mod substitution;
+#[cfg(not(target_family = "wasm"))]
+pub mod temp_dir;
+#[cfg(not(target_family = "wasm"))]
+pub mod tool_result_truncator;
 pub mod variables;
 
 pub use markdown_file::MarkdownFile;

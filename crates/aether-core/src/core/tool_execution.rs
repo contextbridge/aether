@@ -5,10 +5,12 @@ use mcp_utils::client::{CancellationToken, ToolCallEvent};
 use rmcp::model::ProgressNotificationParam;
 use std::collections::HashMap;
 use utils::display_meta::ToolResultMeta;
+use utils::temp_dir::TempDir;
 
 #[derive(Default)]
 pub(super) struct ToolExecutions {
     executions: HashMap<String, ToolExecution>,
+    spill_dir: TempDir,
 }
 
 pub(super) enum ToolExecutionUpdate {
@@ -112,7 +114,12 @@ impl ToolExecutions {
                 let Some(execution) = self.take_background(tool_id) else {
                     return ToolExecutionUpdate::Ignored;
                 };
-                ToolExecutionUpdate::TaskCompleted(map_task_result_to_outcome(execution.request, task, result))
+                ToolExecutionUpdate::TaskCompleted(map_task_result_to_outcome(
+                    execution.request,
+                    task,
+                    result,
+                    &self.spill_dir,
+                ))
             }
             ToolCallEvent::Cancelled { task_id } => {
                 if self.take_retiring(tool_id).is_some() {
@@ -134,7 +141,7 @@ impl ToolExecutions {
                 let Some(execution) = self.take_foreground(tool_id) else {
                     return ToolExecutionUpdate::Ignored;
                 };
-                match convert_tool_result(&execution.request, outcome) {
+                match convert_tool_result(&execution.request, outcome, &self.spill_dir) {
                     Ok((result, result_meta)) => ToolExecutionUpdate::Completed {
                         result: Ok(result.clone()),
                         event: ToolEvent::Result { result, result_meta },

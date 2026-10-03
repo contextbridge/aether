@@ -1,5 +1,5 @@
+use futures::future::BoxFuture;
 use std::collections::HashMap;
-use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -82,17 +82,17 @@ impl FakeHttpClient {
 }
 
 impl HttpClient for FakeHttpClient {
-    fn fetch(&self, url: &str, _timeout: Duration) -> impl Future<Output = Result<HttpResponse, WebFetchError>> + Send {
+    fn fetch<'a>(&'a self, url: &'a str, _timeout: Duration) -> BoxFuture<'a, Result<HttpResponse, WebFetchError>> {
         self.fetch_history.lock().unwrap().push(url.to_string());
 
         let responses = self.responses.lock().unwrap();
-        std::future::ready(match responses.get(url) {
+        Box::pin(std::future::ready(match responses.get(url) {
             Some(response) => response.clone().into_result(),
             None => self
                 .default_response
                 .clone()
                 .ok_or_else(|| WebFetchError::RequestFailed(format!("No fake response configured for URL: {url}"))),
-        })
+        }))
     }
 }
 

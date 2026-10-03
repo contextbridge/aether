@@ -7,12 +7,11 @@ fn html_page(title: &str, body: &str) -> String {
 }
 
 #[tokio::test]
-async fn test_fetch_truncates_unicode_without_panicking() {
-    let result = WebFetchTest::new(html_page("Unicode", &format!("<p>{}</p>", "界".repeat(20_000)))).fetch().await;
+async fn test_fetch_returns_long_pages_whole() {
+    let body = "界".repeat(20_000);
+    let result = WebFetchTest::new(body.clone()).content_type(Some("text/plain")).fetch().await;
 
-    assert!(result.truncated);
-    assert!(result.content.ends_with("[Content truncated...]"));
-    assert!(result.content.starts_with('界'));
+    assert_eq!(result.content, body);
 }
 
 #[tokio::test]
@@ -26,7 +25,6 @@ async fn test_fetch_preserves_plain_text_documentation() {
 
     assert_eq!(result.content, body);
     assert_eq!(result.title, None);
-    assert!(!result.truncated);
 }
 
 #[tokio::test]
@@ -56,7 +54,6 @@ async fn test_fetch_real_page() {
 
     assert_eq!(result.status_code, 200);
     assert!(!result.content.is_empty());
-    assert!(!result.truncated);
     assert!(result.content.contains("Melville") || result.content.contains("Moby"));
 }
 

@@ -1,8 +1,8 @@
 //! Search client abstraction for web search operations
 
+use futures::future::BoxFuture;
 use reqwest::header::RETRY_AFTER;
 use serde::Deserialize;
-use std::future::Future;
 use std::time::Duration;
 
 use crate::coding::error::WebSearchError;
@@ -26,8 +26,7 @@ pub struct SearchParams {
 
 /// Trait for search clients that can perform web searches
 pub trait SearchClient: Send + Sync {
-    fn search(&self, params: SearchParams)
-    -> impl Future<Output = Result<Vec<RawSearchResult>, WebSearchError>> + Send;
+    fn search(&self, params: SearchParams) -> BoxFuture<'_, Result<Vec<RawSearchResult>, WebSearchError>>;
 }
 
 /// Production search client using Brave Search API
@@ -70,60 +69,62 @@ impl BraveSearchClient {
 }
 
 impl SearchClient for BraveSearchClient {
-    async fn search(&self, params: SearchParams) -> Result<Vec<RawSearchResult>, WebSearchError> {
-        if params.query.trim().is_empty() {
-            return Err(WebSearchError::InvalidQuery("Search query cannot be empty".to_string()));
-        }
-
-        let count = params.count.min(20); // Max 20 results per request
-
-        let response = self
-            .client
-            .get(BRAVE_API_ENDPOINT)
-            .header("X-Subscription-Token", &self.api_key)
-            .header("Accept", "application/json")
-            .query(&[("q", &params.query), ("count", &count.to_string())])
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    WebSearchError::Timeout(DEFAULT_TIMEOUT_MS)
-                } else if e.is_connect() {
-                    WebSearchError::ApiError(format!("Connection failed: {e}"))
-                } else {
-                    WebSearchError::ApiError(format!("Request failed: {e}"))
-                }
-            })?;
-
-        let status = response.status();
-
-        if status.is_client_error() || status.is_server_error() {
-            let retry_after = parse_retry_after(response.headers().get(RETRY_AFTER));
-            let error_text = response.text().await.unwrap_or_else(|_| "Unable to read error response".to_string());
-
-            if status.as_u16() == 429 {
-                return Err(WebSearchError::RateLimited { message: error_text, retry_after });
+    fn search(&self, params: SearchParams) -> BoxFuture<'_, Result<Vec<RawSearchResult>, WebSearchError>> {
+        Box::pin(async move {
+            if params.query.trim().is_empty() {
+                return Err(WebSearchError::InvalidQuery("Search query cannot be empty".to_string()));
             }
 
-            return Err(WebSearchError::ApiError(format!("API returned {}: {error_text}", status.as_u16())));
-        }
+            let count = params.count.min(20); // Max 20 results per request
 
-        let response_body: BraveWebResponse = response
-            .json()
-            .await
-            .map_err(|e| WebSearchError::ParseError(format!("Failed to parse JSON response: {e}")))?;
+            let response = self
+                .client
+                .get(BRAVE_API_ENDPOINT)
+                .header("X-Subscription-Token", &self.api_key)
+                .header("Accept", "application/json")
+                .query(&[("q", &params.query), ("count", &count.to_string())])
+                .send()
+                .await
+                .map_err(|e| {
+                    if e.is_timeout() {
+                        WebSearchError::Timeout(DEFAULT_TIMEOUT_MS)
+                    } else if e.is_connect() {
+                        WebSearchError::ApiError(format!("Connection failed: {e}"))
+                    } else {
+                        WebSearchError::ApiError(format!("Request failed: {e}"))
+                    }
+                })?;
 
-        let results = response_body
-            .web
-            .map(|w| {
-                w.results
-                    .into_iter()
-                    .map(|r| RawSearchResult { title: r.title, url: r.url, description: r.description })
-                    .collect()
-            })
-            .unwrap_or_default();
+            let status = response.status();
 
-        Ok(results)
+            if status.is_client_error() || status.is_server_error() {
+                let retry_after = parse_retry_after(response.headers().get(RETRY_AFTER));
+                let error_text = response.text().await.unwrap_or_else(|_| "Unable to read error response".to_string());
+
+                if status.as_u16() == 429 {
+                    return Err(WebSearchError::RateLimited { message: error_text, retry_after });
+                }
+
+                return Err(WebSearchError::ApiError(format!("API returned {}: {error_text}", status.as_u16())));
+            }
+
+            let response_body: BraveWebResponse = response
+                .json()
+                .await
+                .map_err(|e| WebSearchError::ParseError(format!("Failed to parse JSON response: {e}")))?;
+
+            let results = response_body
+                .web
+                .map(|w| {
+                    w.results
+                        .into_iter()
+                        .map(|r| RawSearchResult { title: r.title, url: r.url, description: r.description })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            Ok(results)
+        })
     }
 }
 
@@ -220,10 +221,7 @@ impl FakeSearchClient {
 
 #[cfg(test)]
 impl SearchClient for FakeSearchClient {
-    fn search(
-        &self,
-        params: SearchParams,
-    ) -> impl std::future::Future<Output = Result<Vec<RawSearchResult>, WebSearchError>> + Send {
+    fn search(&self, params: SearchParams) -> BoxFuture<'_, Result<Vec<RawSearchResult>, WebSearchError>> {
         let call_index = {
             let mut history = self.search_history.lock().unwrap();
             let index = history.len();
@@ -232,19 +230,19 @@ impl SearchClient for FakeSearchClient {
         };
 
         if let Some(ref sequential) = self.sequential_responses {
-            return std::future::ready(sequential.lock().unwrap().get(call_index).cloned().unwrap_or_else(|| {
-                Err(WebSearchError::ApiError(format!("No sequential response at index {call_index}")))
-            }));
+            return Box::pin(std::future::ready(sequential.lock().unwrap().get(call_index).cloned().unwrap_or_else(
+                || Err(WebSearchError::ApiError(format!("No sequential response at index {call_index}"))),
+            )));
         }
 
         let responses = self.responses.lock().unwrap();
-        std::future::ready(if let Some(results) = responses.get(&params.query) {
+        Box::pin(std::future::ready(if let Some(results) = responses.get(&params.query) {
             Ok(results.clone())
         } else if let Some(ref default) = self.default_response {
             Ok(default.clone())
         } else {
             Err(WebSearchError::ApiError(format!("No fake response configured for query: {}", params.query)))
-        })
+        }))
     }
 }
 

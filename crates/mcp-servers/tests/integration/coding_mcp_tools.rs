@@ -1,7 +1,13 @@
 use crate::common::{CodingWorkspace, TestResult, test_error};
+use aether_core::mcp::tool_bridge::convert_tool_result;
+use llm::ToolCallRequest;
 use mcp_servers::coding::tools::bash::BashInput;
 use mcp_servers::coding::tools::read_file::ReadFileArgs;
-use std::fs::canonicalize;
+use mcp_servers::coding::tools::web_fetch::{HttpResponse, WebFetchInput};
+use mcp_servers::testing::FakeHttpClient;
+use std::fs::{canonicalize, read_to_string};
+use utils::temp_dir::TempDir;
+use utils::tool_result_truncator::saved_path;
 
 #[tokio::test]
 async fn read_file_supports_paging_and_snake_case_arguments() -> TestResult {
@@ -13,13 +19,12 @@ async fn read_file_supports_paging_and_snake_case_arguments() -> TestResult {
     assert_eq!(result["content"], "    2\tline 2\n    3\tline 3");
     assert_eq!(result["totalLines"], 5);
     assert_eq!(result["linesShown"], 2);
-    assert_eq!(result["offset"], 2);
-    assert_eq!(result["limit"], 2);
+    assert_eq!(result["nextOffset"], 4);
     Ok(())
 }
 
 #[tokio::test]
-async fn read_file_truncates_lines_and_applies_default_limit() -> TestResult {
+async fn read_file_truncates_long_lines() -> TestResult {
     let workspace = CodingWorkspace::new().await?;
     let long_path = workspace.write("long.txt", &format!("short\n{}", "x".repeat(2500)))?;
     let result = workspace
@@ -27,17 +32,70 @@ async fn read_file_truncates_lines_and_applies_default_limit() -> TestResult {
         .call("read_file", ReadFileArgs { file_path: long_path.to_string_lossy().into(), ..Default::default() })
         .await?;
     assert!(result["content"].as_str().unwrap().contains("[truncated, 2500 bytes total]"));
-    let content = (1..=2001).map(|line| format!("Line {line}")).collect::<Vec<_>>().join("\n");
-    let capped_path = workspace.write("capped.txt", &content)?;
-    let result = workspace
+    Ok(())
+}
+
+#[tokio::test]
+async fn full_read_file_pages_reach_the_llm_whole() -> TestResult {
+    let workspace = CodingWorkspace::new().await?;
+    let content = (1..=5_000).map(|n| format!("let line_{n} = \"{}\";", "x".repeat(20))).collect::<Vec<_>>();
+    let path = workspace.write("big.rs", &content.join("\n"))?;
+    let page = workspace
         .client
-        .call("read_file", ReadFileArgs { file_path: capped_path.to_string_lossy().into(), ..Default::default() })
+        .call_raw("read_file", ReadFileArgs { file_path: path.to_string_lossy().into(), ..Default::default() })
         .await?;
-    assert_eq!(result["totalLines"], 2001);
-    assert_eq!(result["linesShown"], 2000);
-    assert_eq!(result["limit"], 2000);
-    assert!(result["content"].as_str().unwrap().contains(" 2000\tLine 2000"));
-    assert!(!result["content"].as_str().unwrap().contains("Line 2001"));
+
+    let request = ToolCallRequest { id: "read".into(), name: "coding__read_file".into(), arguments: "{}".into() };
+    let (result, _) =
+        convert_tool_result(&request, Ok(page), &TempDir::new()).map_err(|error| test_error(error.error))?;
+
+    assert!(!result.result.contains("bytes omitted"), "{}", result.result);
+    assert!(result.result.contains("nextOffset"), "{}", result.result);
+    Ok(())
+}
+
+#[tokio::test]
+async fn long_bash_output_keeps_head_and_tail_and_saves_the_full_output() -> TestResult {
+    let workspace = CodingWorkspace::new().await?;
+    let result =
+        workspace.client.call("bash", BashInput { command: "seq 1 20000".into(), ..Default::default() }).await?;
+    let output = result["output"].as_str().unwrap();
+    assert!(output.starts_with("1\n2\n3\n"), "{output}");
+    assert!(output.ends_with("19999\n20000\n"), "{output}");
+    let saved = saved_path(output).ok_or_else(|| test_error("output should name its saved file"))?;
+    assert_eq!(read_to_string(saved)?, (1..=20000).map(|n| format!("{n}\n")).collect::<Vec<_>>().concat());
+    assert_eq!(result["exitCode"], 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn long_web_pages_keep_head_and_tail_and_save_the_full_page() -> TestResult {
+    let url = "https://example.com/long.txt";
+    let page = (1..=20_000).map(|n| format!("line {n}\n")).collect::<Vec<_>>().concat();
+    let response = HttpResponse {
+        final_url: url.into(),
+        status_code: 200,
+        body: page.clone(),
+        content_type: Some("text/plain".into()),
+    };
+    let workspace = CodingWorkspace::with_http(FakeHttpClient::new().with_response(url, response)).await?;
+
+    let result =
+        workspace.client.call("web_fetch", WebFetchInput { url: url.into(), prompt: None, timeout: None }).await?;
+
+    let content = result["content"].as_str().unwrap();
+    assert!(content.starts_with("line 1\nline 2\n"), "{content}");
+    assert!(content.ends_with("line 19999\nline 20000\n"), "{content}");
+    let saved = saved_path(content).ok_or_else(|| test_error("content should name its saved file"))?;
+    assert_eq!(read_to_string(saved)?, page);
+    Ok(())
+}
+
+#[tokio::test]
+async fn short_output_is_returned_whole() -> TestResult {
+    let workspace = CodingWorkspace::new().await?;
+    let result = workspace.client.call("bash", BashInput { command: "seq 1 3".into(), ..Default::default() }).await?;
+    assert_eq!(result["output"], "1\n2\n3\n");
     Ok(())
 }
 

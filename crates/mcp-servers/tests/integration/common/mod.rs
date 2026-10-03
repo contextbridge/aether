@@ -4,10 +4,12 @@
 
 use aether_lspd::testing::TestProject;
 use mcp_servers::coding::CodingMcp;
+use mcp_servers::coding::tools::web_fetch::WebFetcher;
 use mcp_servers::skills::{
     SkillsMcp,
     tools::{LoadSkillsInput, SkillRequest},
 };
+use mcp_servers::testing::FakeHttpClient;
 use mcp_utils::client::{McpClient, client_capabilities};
 use mcp_utils::testing::{ElicitationScript, connect};
 use rmcp::RoleClient;
@@ -71,6 +73,13 @@ impl CodingWorkspace {
 
     pub async fn new_with_lsp() -> TestResult<Self> {
         Self::start(|root| CodingMcp::new().with_lsp(root.to_path_buf())).await
+    }
+
+    pub async fn with_http(http: FakeHttpClient) -> TestResult<Self> {
+        Self::start(|root| {
+            CodingMcp::new().with_root_dir(root.to_path_buf()).with_web_fetcher(WebFetcher::with_client(http))
+        })
+        .await
     }
 
     async fn start(configure: impl FnOnce(&Path) -> CodingMcp) -> TestResult<Self> {

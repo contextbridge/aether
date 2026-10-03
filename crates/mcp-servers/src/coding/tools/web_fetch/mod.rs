@@ -1,8 +1,7 @@
 mod http_client;
 
 pub use http_client::{
-    DEFAULT_TIMEOUT_MS, HttpClient, HttpResponse, MAX_CONTENT_LENGTH, MAX_TIMEOUT_MS, ReqwestClient, WebFetchInput,
-    WebFetchOutput,
+    DEFAULT_TIMEOUT_MS, HttpClient, HttpResponse, MAX_TIMEOUT_MS, ReqwestClient, WebFetchInput, WebFetchOutput,
 };
 
 use dom_smoothie::Readability;
@@ -14,28 +13,25 @@ use crate::coding::error::WebFetchError;
 use utils::display_meta::{ToolDisplayMeta, truncate};
 
 /// HTTP client for fetching web content and converting to markdown.
-#[derive(Debug, Clone)]
-pub struct WebFetcher<C: HttpClient = ReqwestClient> {
-    client: C,
+pub struct WebFetcher {
+    client: Box<dyn HttpClient>,
 }
 
-impl Default for WebFetcher<ReqwestClient> {
+impl Default for WebFetcher {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl WebFetcher<ReqwestClient> {
+impl WebFetcher {
     /// Creates a new `WebFetcher` with a preconfigured reqwest client
     pub fn new() -> Self {
-        Self { client: ReqwestClient::new() }
+        Self::with_client(ReqwestClient::new())
     }
-}
 
-impl<C: HttpClient> WebFetcher<C> {
     /// Creates a `WebFetcher` with a custom HTTP client (useful for testing)
-    pub fn with_client(client: C) -> Self {
-        Self { client }
+    pub fn with_client(client: impl HttpClient + 'static) -> Self {
+        Self { client: Box::new(client) }
     }
 
     /// Fetches web content and converts it to markdown
@@ -55,20 +51,14 @@ impl<C: HttpClient> WebFetcher<C> {
         } else {
             ExtractedContent { title: None, markdown: response.body, byline: None }
         };
-        let (content, truncated) = if extracted.markdown.len() > MAX_CONTENT_LENGTH {
-            (truncate_str(&extracted.markdown, MAX_CONTENT_LENGTH), true)
-        } else {
-            (extracted.markdown, false)
-        };
 
         let display_meta =
             ToolDisplayMeta::new("Fetch URL", extracted.title.clone().unwrap_or_else(|| truncate(&url, 60)));
 
         Ok(WebFetchOutput {
-            content,
+            content: extracted.markdown,
             final_url: response.final_url,
             status_code: response.status_code,
-            truncated,
             title: extracted.title,
             byline: extracted.byline,
             meta: Some(display_meta.into()),
@@ -133,22 +123,6 @@ fn extract_title(html: &str) -> Option<String> {
 
 fn non_empty(s: String) -> Option<String> {
     if s.trim().is_empty() { None } else { Some(s) }
-}
-
-fn truncate_str(content: &str, max_len: usize) -> String {
-    if content.len() <= max_len {
-        return content.to_string();
-    }
-
-    let truncated = &content[..content.floor_char_boundary(max_len)];
-
-    if let Some(last_para) = truncated.rfind("\n\n") {
-        format!("{}\n\n[Content truncated...]", &truncated[..last_para])
-    } else if let Some(last_newline) = truncated.rfind('\n') {
-        format!("{}\n\n[Content truncated...]", &truncated[..last_newline])
-    } else {
-        format!("{truncated}\n\n[Content truncated...]")
-    }
 }
 
 #[cfg(test)]
@@ -226,17 +200,6 @@ mod tests {
 
         assert_eq!(result.title, Some("Sparse".to_string()));
         assert!(result.markdown.contains("Hi"));
-    }
-
-    #[test]
-    fn test_truncate_str() {
-        assert_eq!(truncate_str("Short content", 100), "Short content");
-
-        let content = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.";
-        let result = truncate_str(content, 35);
-        assert!(result.contains("First paragraph."));
-        assert!(result.contains("[Content truncated...]"));
-        assert!(!result.contains("Third paragraph"));
     }
 
     #[tokio::test]

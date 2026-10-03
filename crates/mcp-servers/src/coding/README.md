@@ -24,7 +24,7 @@ File operations, bash execution, LSP code intelligence, and web tools. This is t
 
 | Tool | Description |
 |------|-------------|
-| `read_file` | Read a file with optional line offset and limit. Returns content with line numbers. Max 2000 lines by default. |
+| `read_file` | Read a file with optional line offset and limit. Returns content with line numbers, a page at a time for long files. |
 | `write_file` | Write content to a file. Creates parent directories automatically. File must be read first (safety check). |
 | `edit_file` | Find-and-replace in a file. Matches exact strings, supports `replace_all`. File must be read first. |
 
