@@ -18,8 +18,6 @@ pub struct SubAgentState {
 #[serde(rename_all = "camelCase")]
 pub struct ToolCall {
     pub status: ToolStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
     pub sub_agents: Vec<SubAgentState>,
     #[serde(rename = "toolCall")]
     protocol: Box<acp::ToolCallUpdate>,
@@ -70,12 +68,7 @@ impl ToolCall {
     }
 
     pub(super) fn from_update(update: &acp::ToolCallUpdate) -> Self {
-        let mut tool = Self {
-            status: ToolStatus::Running,
-            error: None,
-            sub_agents: Vec::new(),
-            protocol: Box::new(update.clone()),
-        };
+        let mut tool = Self { status: ToolStatus::Running, sub_agents: Vec::new(), protocol: Box::new(update.clone()) };
         tool.refresh_status();
         tool
     }
@@ -96,15 +89,14 @@ impl ToolCall {
         apply_sub_agent_progress(&mut self.sub_agents, notification);
     }
 
-    pub(super) fn finalize(&mut self, status: ToolStatus, error: Option<&str>) {
+    pub(super) fn finalize(&mut self, status: ToolStatus) {
         if self.status == ToolStatus::Running {
             self.status = status;
-            self.error = error.map(str::to_owned);
         }
         for agent in &mut self.sub_agents {
             agent.done = true;
             for call in &mut agent.tool_calls {
-                call.finalize(status, None);
+                call.finalize(status);
             }
         }
     }
@@ -129,7 +121,6 @@ impl ToolCall {
             Some(acp::ToolCallStatus::Cancelled) => ToolStatus::Cancelled,
             _ => ToolStatus::Running,
         };
-        self.error = None;
     }
 
     fn meta_str(&self, key: &str) -> Option<&str> {

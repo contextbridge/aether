@@ -6,7 +6,7 @@ use agent_client_protocol::schema::v2::{
     ElicitationSessionScope, Implementation, InitializeRequest, InitializeResponse, ListSessionsRequest,
     ListSessionsResponse, LoginAuthRequest, LoginAuthResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
     PromptResponse, ResumeSessionRequest, ResumeSessionResponse, SessionId, SessionInfo, SessionUpdate,
-    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, StopReason, UpdateSessionNotification,
+    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, StopReason, UpdateSessionNotification, UserMessage,
 };
 use agent_client_protocol::util::MatchDispatchFrom;
 use agent_client_protocol::{
@@ -262,8 +262,7 @@ impl HandleDispatchFrom<Client> for FakeAgent {
                     let _ = capture.prompt.send((request, responder));
                     return Ok(());
                 }
-                responder.respond(PromptResponse::new("user-message"))?;
-                self.run_turn(request.session_id, &cx)
+                self.run_turn(request, responder, &cx)
             })
             .await
             .if_request(async |request: ResumeSessionRequest, responder| self.resume(request, responder, &cx))
@@ -308,11 +307,24 @@ impl FakeAgent {
         Ok(())
     }
 
-    fn run_turn(&self, session_id: SessionId, cx: &ConnectionTo<Client>) -> Result<(), acp::Error> {
+    fn run_turn(
+        &self,
+        request: PromptRequest,
+        responder: Responder<PromptResponse>,
+        cx: &ConnectionTo<Client>,
+    ) -> Result<(), acp::Error> {
+        const USER_MESSAGE_ID: &str = "user-message";
+        let session_id = request.session_id;
         let Some(turn) = &self.turn else {
-            return Ok(());
+            return responder.respond(PromptResponse::new(USER_MESSAGE_ID));
         };
         cx.send_notification(running_notification(session_id.clone()))?;
+        let user_message = UserMessage::new(USER_MESSAGE_ID).content(request.prompt);
+        cx.send_notification(UpdateSessionNotification::new(
+            session_id.clone(),
+            SessionUpdate::UserMessage(user_message),
+        ))?;
+        responder.respond(PromptResponse::new(USER_MESSAGE_ID))?;
         match turn {
             Turn::Reply(text) => {
                 cx.send_notification(message(&session_id.0, text))?;

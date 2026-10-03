@@ -1,7 +1,6 @@
 use acp_utils::client::AcpEvent;
 use acp_utils::conversation::{
-    Activity, Conversation, ConversationContent, ItemState, ToolCall, ToolStatus, TurnFinished, TurnInProgress,
-    TurnPhase,
+    Activity, Conversation, ConversationContent, ItemState, ToolCall, ToolStatus, TurnFinished, TurnPhase,
 };
 use acp_utils::notifications::{SubAgentEvent, SubAgentProgressParams};
 use acp_utils::testing::{idle_notification, plan_notification, running_notification};
@@ -74,39 +73,27 @@ fn remote_user_resources_render_as_references_but_keep_their_blocks() {
 }
 
 #[test]
-fn user_ack_adopts_only_the_explicit_optimistic_item() {
+fn user_messages_appear_once_the_agent_inserts_them_and_are_keyed_by_message_id() {
     let mut conversation = Conversation::new();
-    conversation.append_user_content(vec!["same".into()]);
-    conversation.start_prompt(Some(vec!["same".into()])).unwrap();
-    conversation.apply_event(&user_message("user", "expanded prompt"));
-    conversation.apply_event(&user_message("user", "expanded prompt"));
-    assert_eq!(conversation.items().len(), 2);
-    assert_eq!(text(&conversation, 0), "same");
-    assert_eq!(text(&conversation, 1), "same");
+    conversation.apply_event(&running());
+    assert!(conversation.items().is_empty());
 
-    conversation.apply_event(&update(acp::SessionUpdate::UserMessageChunk(acp::ContentChunk::new(
-        "expanded tail".into(),
-        "user",
-    ))));
-    assert_eq!(text(&conversation, 1), "same");
-    assert_eq!(conversation.items()[1].message_id(), Some(&acp::MessageId::new("user")));
-
-    conversation.clear();
-    conversation.apply_event(&user_message("user", "replayed"));
+    conversation.apply_event(&user_message("user", "prompt"));
+    conversation.apply_event(&user_message("user", "prompt"));
+    conversation
+        .apply_event(&update(acp::SessionUpdate::UserMessageChunk(acp::ContentChunk::new(" tail".into(), "user"))));
     assert_eq!(conversation.items().len(), 1);
-    assert_eq!(text(&conversation, 0), "replayed");
+    assert_eq!(text(&conversation, 0), "prompt tail");
+    assert_eq!(conversation.items()[0].message_id(), Some(&acp::MessageId::new("user")));
 }
 
 #[test]
-fn optimistic_prompt_stays_open_until_its_turn_ends() {
+fn a_user_message_stays_open_until_its_turn_ends() {
     let mut conversation = Conversation::new();
-    conversation.start_prompt(Some(vec!["prompt".into()])).unwrap();
+    conversation.apply_event(&running());
+    conversation.apply_event(&user_message("user", "prompt"));
     assert!(conversation.items()[0].is_open());
 
-    conversation.apply_event(&user_message("ack", "expanded"));
-    assert!(conversation.items()[0].is_open());
-
-    conversation.accept_prompt();
     conversation.apply_event(&idle(None));
     assert!(!conversation.items()[0].is_open());
 }
@@ -177,7 +164,7 @@ fn tool_kind_status_and_metadata_follow_patch_semantics() {
 #[test]
 fn tool_items_seal_at_a_terminal_status_or_the_end_of_the_turn() {
     let mut conversation = Conversation::new();
-    conversation.start_prompt(None).unwrap();
+    conversation.apply_event(&running());
     let update = acp::ToolCallUpdate::new("read").title("Read file").raw_input(json!({"path": "src/lib.rs"}));
     conversation.apply_event(&tool_update(update.clone()));
     conversation.apply_event(&tool_update(update));
@@ -218,13 +205,12 @@ fn diffs_keep_their_patch_and_follow_patch_semantics() {
 }
 
 #[test]
-fn a_prompt_accepted_before_idle_finishes_on_idle() {
+fn a_turn_runs_from_a_running_state_to_the_next_idle_state() {
     let mut conversation = Conversation::new();
-    conversation.start_prompt(None).unwrap();
-    assert_eq!(conversation.turn(), TurnPhase::Submitting);
-    assert!(conversation.turn().waiting_for_response());
+    assert_eq!(conversation.turn(), TurnPhase::Idle);
 
-    conversation.accept_prompt();
+    conversation.apply_event(&running());
+    assert_eq!(conversation.turn(), TurnPhase::Running);
     conversation.apply_event(&running());
     assert_eq!(conversation.turn(), TurnPhase::Running);
 
@@ -235,45 +221,9 @@ fn a_prompt_accepted_before_idle_finishes_on_idle() {
 }
 
 #[test]
-fn a_turn_that_finishes_before_acceptance_stays_owed_until_the_response() {
-    let mut conversation = Conversation::new();
-    conversation.start_prompt(None).unwrap();
-    assert!(conversation.apply_event(&idle(None)).is_some());
-    assert_eq!(conversation.turn(), TurnPhase::CompletedBeforeAcceptance);
-    assert!(!conversation.turn().waiting_for_response());
-    assert!(!conversation.turn().is_idle(), "the prompt's response is still owed");
-
-    conversation.clear();
-    assert_eq!(conversation.turn(), TurnPhase::CompletedBeforeAcceptance, "a clear does not settle the prompt");
-
-    conversation.accept_prompt();
-    assert!(conversation.turn().is_idle());
-}
-
-#[test]
-fn a_rejected_prompt_fails_its_running_tools() {
-    for idle_first in [false, true] {
-        let mut conversation = Conversation::new();
-        conversation.start_prompt(None).unwrap();
-        conversation.apply_event(&tool_update(acp::ToolCallUpdate::new("tool").title("Bash")));
-        if idle_first {
-            conversation.apply_event(&idle(None));
-        }
-
-        conversation.fail_prompt("overloaded");
-
-        assert!(conversation.turn().is_idle());
-        let (status, error) =
-            if idle_first { (ToolStatus::Success, None) } else { (ToolStatus::Failed, Some("overloaded")) };
-        assert_eq!(tool(&conversation, 0).status, status);
-        assert_eq!(tool(&conversation, 0).error.as_deref(), error);
-    }
-}
-
-#[test]
 fn a_cancelled_turn_keeps_its_output_and_cancels_running_tools() {
     let mut conversation = Conversation::new();
-    conversation.start_prompt(None).unwrap();
+    conversation.apply_event(&running());
     conversation.apply_event(&tool_update(acp::ToolCallUpdate::new("tool").title("Bash")));
     conversation.apply_event(&agent_chunk("reply", "final output"));
 
@@ -282,14 +232,12 @@ fn a_cancelled_turn_keeps_its_output_and_cancels_running_tools() {
     assert_eq!(finished, Some(TurnFinished { stop_reason: Some(acp::StopReason::Cancelled) }));
     assert_eq!(tool(&conversation, 0).status, ToolStatus::Cancelled);
     assert_eq!(text(&conversation, 1), "final output");
-    conversation.accept_prompt();
-    assert!(conversation.turn().is_idle(), "a late acceptance does not restart the turn");
 }
 
 #[test]
 fn sub_agent_tool_calls_merge_upserts_like_top_level_tools() {
     let mut conversation = Conversation::new();
-    conversation.start_prompt(None).unwrap();
+    conversation.apply_event(&running());
     conversation.apply_event(&tool_update(acp::ToolCallUpdate::new("spawn").name("subagents__spawn_subagent")));
     conversation.apply_event(&sub_agent("spawn", SubAgentEvent::Started));
     assert!(tool(&conversation, 0).sub_agents[0].tool_calls.is_empty(), "a started sub-agent shows before its tools");
@@ -316,16 +264,22 @@ fn sub_agent_tool_calls_merge_upserts_like_top_level_tools() {
 
     let agent = &tool(&conversation, 0).sub_agents[0];
     assert!(agent.done);
-    let statuses: Vec<_> = agent.tool_calls.iter().map(|call| (call.status, call.error.as_deref())).collect();
-    assert_eq!(statuses, [(ToolStatus::Success, None), (ToolStatus::Cancelled, None)]);
+    let statuses: Vec<_> = agent.tool_calls.iter().map(|call| call.status).collect();
+    assert_eq!(statuses, [ToolStatus::Success, ToolStatus::Cancelled]);
 }
 
 #[test]
-fn a_running_state_while_idle_adopts_a_turn_started_elsewhere() {
+fn a_running_state_while_idle_starts_a_turn_that_thinks_until_it_responds() {
     let mut conversation = Conversation::new();
     conversation.apply_event(&running());
     assert_eq!(conversation.turn(), TurnPhase::Running);
-    assert_eq!(conversation.activity(), Activity::Responding);
+    assert_eq!(conversation.activity(), Activity::Thinking);
+
+    conversation.apply_event(&update(acp::SessionUpdate::StateUpdate(acp::StateUpdate::RequiresAction(
+        acp::RequiresActionStateUpdate::new(),
+    ))));
+    conversation.apply_event(&running());
+    assert_eq!(conversation.activity(), Activity::Responding, "running again resumes a turn already underway");
 
     assert!(conversation.apply_event(&idle(None)).is_some());
     assert!(conversation.turn().is_idle());
@@ -347,7 +301,7 @@ fn replayed_history_does_not_start_activity() {
 #[test]
 fn thoughts_are_items_keyed_by_message_id_and_drive_thinking() {
     let mut conversation = Conversation::new();
-    conversation.start_prompt(None).unwrap();
+    conversation.apply_event(&running());
     conversation.apply_event(&thought_chunk("thought", "first\n"));
     conversation.apply_event(&thought_chunk("thought", "second"));
     assert_eq!(conversation.activity(), Activity::Thinking);
@@ -372,10 +326,9 @@ fn thoughts_are_items_keyed_by_message_id_and_drive_thinking() {
 }
 
 #[test]
-fn activity_after_the_turn_ends_is_ignored_until_the_next_prompt() {
+fn activity_after_the_turn_ends_is_ignored_until_the_next_turn() {
     let mut conversation = Conversation::new();
-    conversation.start_prompt(None).unwrap();
-    conversation.accept_prompt();
+    conversation.apply_event(&running());
     conversation.apply_event(&tool_update(acp::ToolCallUpdate::new("spawn").title("spawn_subagent")));
     conversation.apply_event(&idle(None));
 
@@ -387,7 +340,7 @@ fn activity_after_the_turn_ends_is_ignored_until_the_next_prompt() {
     assert!(tool(&conversation, 0).sub_agents.is_empty());
     assert!(!conversation.is_compacting());
 
-    conversation.start_prompt(None).unwrap();
+    conversation.apply_event(&running());
     conversation.apply_event(&sub_agent_tool_call("spawn", "call"));
     assert_eq!(tool(&conversation, 0).sub_agents[0].tool_calls[0].id(), "call");
 }
@@ -395,7 +348,7 @@ fn activity_after_the_turn_ends_is_ignored_until_the_next_prompt() {
 #[test]
 fn compaction_is_tracked_until_it_completes_or_the_turn_ends() {
     let mut conversation = Conversation::new();
-    conversation.start_prompt(None).unwrap();
+    conversation.apply_event(&running());
     conversation.apply_event(&compaction(acp::CompactionStatus::InProgress));
     assert!(conversation.is_compacting());
     conversation.apply_event(&compaction(acp::CompactionStatus::Completed));
@@ -429,9 +382,8 @@ fn plan_and_usage_updates_replace_the_previous_ones() {
 fn clear_replaces_identity_and_resets_everything() {
     let mut conversation = Conversation::new();
     let previous_id = conversation.id();
-    conversation.start_prompt(None).unwrap();
-    conversation.accept_prompt();
-    conversation.append_user_content(vec!["before".into()]);
+    conversation.apply_event(&running());
+    conversation.apply_event(&user_message("user", "before"));
     conversation.apply_event(&update(acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(10, 100))));
     conversation.apply_event(&plan_notification("session", "a", vec![]).into());
 
@@ -447,7 +399,7 @@ fn clear_replaces_identity_and_resets_everything() {
 #[test]
 fn a_closed_connection_ends_the_turn() {
     let mut conversation = Conversation::new();
-    conversation.start_prompt(None).unwrap();
+    conversation.apply_event(&running());
     conversation.apply_event(&thought_chunk("thought", "pondering"));
 
     conversation.apply_event(&AcpEvent::ConnectionClosed);
@@ -459,7 +411,7 @@ fn a_closed_connection_ends_the_turn() {
 #[test]
 fn notices_are_distinct_from_user_content() {
     let mut conversation = Conversation::new();
-    conversation.append_user_content(vec!["prompt".into()]);
+    conversation.apply_event(&user_message("user", "prompt"));
     conversation.append_notice("Context cleared");
 
     assert!(matches!(conversation.items()[0].content(), ConversationContent::User(_)));
@@ -469,8 +421,7 @@ fn notices_are_distinct_from_user_content() {
 #[test]
 fn items_serialize_with_their_kind_and_protocol_content() {
     let mut conversation = Conversation::new();
-    conversation.start_prompt(None).unwrap();
-    conversation.accept_prompt();
+    conversation.apply_event(&running());
     conversation.apply_event(&agent_chunk("reply", "hello"));
     conversation.apply_event(&tool_update(acp::ToolCallUpdate::new("tool").title("Bash")));
     conversation.apply_event(&idle(Some(acp::StopReason::Cancelled)));
@@ -482,34 +433,22 @@ fn items_serialize_with_their_kind_and_protocol_content() {
         items,
         json!([
             {
-                "id": 0, "messageId": "reply", "revision": 9, "state": "sealed",
+                "id": 0, "messageId": "reply", "revision": 8, "state": "sealed",
                 "kind": "assistant", "content": [{"type": "text", "text": "hello"}]
             },
             {
-                "id": 1, "messageId": null, "revision": 9, "state": "sealed", "kind": "tool",
+                "id": 1, "messageId": null, "revision": 8, "state": "sealed", "kind": "tool",
                 "content": {
                     "status": "cancelled",
                     "subAgents": [],
                     "toolCall": {"toolCallId": "tool", "title": "Bash"}
                 }
             },
-            {"id": 2, "messageId": null, "revision": 10, "state": "sealed", "kind": "notice", "content": "note"}
+            {"id": 2, "messageId": null, "revision": 9, "state": "sealed", "kind": "notice", "content": "note"}
         ])
     );
     assert_eq!(serde_json::to_value(conversation.activity()).unwrap(), json!("idle"));
     assert_eq!(serde_json::to_value(conversation.turn()).unwrap(), json!("idle"));
-}
-
-#[test]
-fn a_prompt_during_a_turn_is_refused_without_an_echo() {
-    let mut conversation = Conversation::new();
-    conversation.start_prompt(Some(vec!["first".into()])).unwrap();
-    let revision = conversation.revision();
-
-    assert_eq!(conversation.start_prompt(Some(vec!["second".into()])), Err(TurnInProgress));
-
-    assert_eq!(conversation.items().len(), 1);
-    assert_eq!(conversation.revision(), revision);
 }
 
 #[test]
