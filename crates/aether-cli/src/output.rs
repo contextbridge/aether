@@ -113,6 +113,8 @@ fn format_text(message: &AgentEvent) -> Option<String> {
         AgentEvent::SessionUsage(usage) => Some(format_session_usage(usage)),
         AgentEvent::Turn(
             TurnEvent::Started { .. }
+            | TurnEvent::UserMessageInserted { .. }
+            | TurnEvent::UserMessageDiscarded { .. }
             | TurnEvent::LlmCallStarted { .. }
             | TurnEvent::LlmCallEnded {
                 outcome:
