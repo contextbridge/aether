@@ -70,15 +70,21 @@ pub struct SearchResult {
 }
 
 /// Web searcher that performs searches and filters results
-#[derive(Debug, Clone)]
-pub struct WebSearcher<C: SearchClient> {
-    client: C,
+pub struct WebSearcher {
+    client: Box<dyn SearchClient>,
 }
 
-impl<C: SearchClient> WebSearcher<C> {
-    /// Creates a new `WebSearcher` with the given client
-    pub fn with_client(client: C) -> Self {
-        Self { client }
+impl WebSearcher {
+    pub fn with_client(client: impl SearchClient + 'static) -> Self {
+        Self { client: Box::new(client) }
+    }
+
+    pub fn try_new() -> Result<Self, WebSearchError> {
+        Ok(Self::with_client(BraveSearchClient::new()?))
+    }
+
+    pub fn with_api_key(api_key: String) -> Self {
+        Self::with_client(BraveSearchClient::with_api_key(api_key))
     }
 
     /// Performs a web search with the given parameters
@@ -138,21 +144,7 @@ impl<C: SearchClient> WebSearcher<C> {
     }
 }
 
-impl WebSearcher<BraveSearchClient> {
-    /// Creates a new `WebSearcher` with Brave Search API
-    pub fn try_new() -> Result<Self, WebSearchError> {
-        let client = BraveSearchClient::new()?;
-        Ok(Self::with_client(client))
-    }
-
-    /// Creates a new `WebSearcher` with a custom Brave API key
-    pub fn with_api_key(api_key: String) -> Self {
-        let client = BraveSearchClient::with_api_key(api_key);
-        Self::with_client(client)
-    }
-}
-
-impl Default for WebSearcher<BraveSearchClient> {
+impl Default for WebSearcher {
     fn default() -> Self {
         Self::with_api_key(std::env::var("BRAVE_SEARCH_API_KEY").expect("BRAVE_SEARCH_API_KEY must be set"))
     }
@@ -219,7 +211,7 @@ mod tests {
         vals.iter().map(std::string::ToString::to_string).collect()
     }
 
-    fn searcher_with(query: &str, results: Vec<RawSearchResult>) -> WebSearcher<FakeSearchClient> {
+    fn searcher_with(query: &str, results: Vec<RawSearchResult>) -> WebSearcher {
         WebSearcher::with_client(FakeSearchClient::new().with_results(query, results))
     }
 

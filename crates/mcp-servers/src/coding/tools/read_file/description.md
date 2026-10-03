@@ -9,13 +9,13 @@ Reads a file from the local filesystem with line numbers.
 
 - `file_path` — **required**, must be absolute path
 - `offset` — 1-indexed starting line (default: 1)
-- `limit` — max lines to read (default: 2000)
+- `limit` — max lines to read
 
 Output format: `    1\tline content` (line number, tab, content)
 
 ## Tips
 
-- Read the whole file by omitting `offset`/`limit` — use them only for large files
+- Omit `offset`/`limit` to read from the top, then follow `nextOffset` to keep reading a long file
 - Read multiple files in parallel when you need several
 - Use shell commands through `bash` for directory listings, not this tool
 

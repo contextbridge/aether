@@ -1,14 +1,13 @@
+use futures::future::BoxFuture;
 use reqwest::header::CONTENT_TYPE;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::future::Future;
 use std::time::Duration;
 
 use crate::coding::error::WebFetchError;
 
 pub const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 pub const MAX_TIMEOUT_MS: u64 = 60_000;
-pub const MAX_CONTENT_LENGTH: usize = 50_000;
 const USER_AGENT: &str = "Mozilla/5.0 (compatible; MCP-Lexicon/1.0)";
 
 /// Input parameters for the `web_fetch` tool
@@ -39,9 +38,6 @@ pub struct WebFetchOutput {
     /// HTTP status code
     pub status_code: u16,
 
-    /// Whether the content was truncated
-    pub truncated: bool,
-
     /// Page title if available
     pub title: Option<String>,
 
@@ -66,7 +62,7 @@ pub struct HttpResponse {
 
 /// Trait for HTTP clients that can fetch web content
 pub trait HttpClient: Send + Sync {
-    fn fetch(&self, url: &str, timeout: Duration) -> impl Future<Output = Result<HttpResponse, WebFetchError>> + Send;
+    fn fetch<'a>(&'a self, url: &'a str, timeout: Duration) -> BoxFuture<'a, Result<HttpResponse, WebFetchError>>;
 }
 
 /// Production HTTP client using reqwest
@@ -90,22 +86,24 @@ impl ReqwestClient {
 }
 
 impl HttpClient for ReqwestClient {
-    async fn fetch(&self, url: &str, timeout: Duration) -> Result<HttpResponse, WebFetchError> {
-        let response = self.client.get(url).timeout(timeout).send().await.map_err(|e| {
-            if e.is_timeout() {
-                WebFetchError::Timeout(u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX))
-            } else {
-                WebFetchError::RequestFailed(e.to_string())
-            }
-        })?;
+    fn fetch<'a>(&'a self, url: &'a str, timeout: Duration) -> BoxFuture<'a, Result<HttpResponse, WebFetchError>> {
+        Box::pin(async move {
+            let response = self.client.get(url).timeout(timeout).send().await.map_err(|e| {
+                if e.is_timeout() {
+                    WebFetchError::Timeout(u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX))
+                } else {
+                    WebFetchError::RequestFailed(e.to_string())
+                }
+            })?;
 
-        let final_url = response.url().to_string();
-        let status_code = response.status().as_u16();
-        let content_type =
-            response.headers().get(CONTENT_TYPE).and_then(|value| value.to_str().ok()).map(str::to_owned);
+            let final_url = response.url().to_string();
+            let status_code = response.status().as_u16();
+            let content_type =
+                response.headers().get(CONTENT_TYPE).and_then(|value| value.to_str().ok()).map(str::to_owned);
 
-        let body = response.text().await.map_err(|e| WebFetchError::RequestFailed(e.to_string()))?;
+            let body = response.text().await.map_err(|e| WebFetchError::RequestFailed(e.to_string()))?;
 
-        Ok(HttpResponse { final_url, status_code, body, content_type })
+            Ok(HttpResponse { final_url, status_code, body, content_type })
+        })
     }
 }
