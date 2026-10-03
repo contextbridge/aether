@@ -1,10 +1,10 @@
-use aether_core::events::{AgentEvent, MessageEvent, ToolEvent, TurnEvent};
+use aether_core::events::{AgentEvent, Command, MessageEvent, ToolEvent, TurnEvent, UserCommand};
 use std::sync::Arc;
 
 use aether_core::events::TurnOutcome;
-use aether_core::testing::{TestScenario, test_agent};
+use aether_core::testing::{AgentTrace, TestResult, TestScenario, test_agent};
 use llm::testing::llm_response;
-use llm::{ChatMessage, ContentBlock, Context, StopReason};
+use llm::{ChatMessage, ContentBlock, Context, LlmResponse, StopReason};
 use tokio::sync::Notify;
 
 #[tokio::test]
@@ -105,6 +105,65 @@ async fn queued_text_takes_precedence_over_auto_continue() {
     );
 }
 
+#[tokio::test]
+async fn queued_text_is_inserted_after_the_current_reply() {
+    let trace = AgentTrace::from_events(run_queued_scenario(None, &["beep"]).await.messages);
+    let inserted = trace.positions(is_user_message_inserted);
+    let reply = trace.position(|m| is_complete_text(m, "hello world"));
+    let next_reply = trace.position(|m| is_partial_text(m, "next turn"));
+
+    assert_eq!(inserted.len(), 2, "the prompt and the queued text are each inserted once: {:?}", trace.events());
+    assert!(inserted[0] < reply && reply < inserted[1] && inserted[1] < next_reply, "{:?}", trace.events());
+}
+
+#[tokio::test]
+async fn text_arriving_after_a_turn_ends_starts_a_new_turn_while_the_finished_stream_closes() -> TestResult<()> {
+    let turn_1 = llm_response().text(&["hello"]).build();
+    let turn_2 = llm_response().text(&["next turn"]).build();
+    let after_done = turn_1.len() - 1;
+    let result = test_agent()
+        .without_mcp()
+        .llm_responses(&[turn_1, turn_2])
+        .pause_turn_after(0, after_done, Arc::new(Notify::new()))
+        .scenario(
+            TestScenario::new().user_text("original prompt").wait_for_turn_end().user_text("beep").wait_for_turn_end(),
+        )
+        .run_with_context()
+        .await?;
+
+    let contexts = result.captured_contexts.lock().expect("captured contexts lock poisoned").clone();
+    assert_eq!(user_texts(&contexts[1]), vec!["original prompt", "beep"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancelled_turn_discards_queued_text() -> TestResult<()> {
+    let first_turn = llm_response().text(&["hello", " world"]).build();
+    let scenario = run_interrupted_scenario(first_turn, |scenario, _| scenario.cancel()).await?;
+    assert_queued_text_discarded(scenario, &["original prompt", "again"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_turn_discards_queued_text() -> TestResult<()> {
+    let first_turn =
+        vec![LlmResponse::Start, LlmResponse::text("hello"), LlmResponse::Error { message: "boom".into() }];
+    let release_into_failure =
+        |scenario: TestScenario, release: Arc<Notify>| scenario.perform(move || release.notify_one());
+    let scenario = run_interrupted_scenario(first_turn, release_into_failure).await?;
+    assert_queued_text_discarded(scenario, &["original prompt", "again"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn clearing_context_discards_queued_text() -> TestResult<()> {
+    let first_turn = llm_response().text(&["hello", " world"]).build();
+    let clear = |scenario: TestScenario, _| scenario.send(Command::UserCommand(UserCommand::ClearContext));
+    let scenario = run_interrupted_scenario(first_turn, clear).await?;
+    assert_queued_text_discarded(scenario, &["again"]);
+    Ok(())
+}
+
 struct Scenario {
     messages: Vec<AgentEvent>,
     contexts: Vec<Context>,
@@ -138,6 +197,45 @@ async fn run_queued_scenario(first_stop_reason: Option<StopReason>, queued: &[&s
         messages: result.messages,
         contexts: result.captured_contexts.lock().expect("captured contexts lock poisoned").clone(),
     }
+}
+
+async fn run_interrupted_scenario(
+    first_turn: Vec<LlmResponse>,
+    interrupt: impl FnOnce(TestScenario, Arc<Notify>) -> TestScenario,
+) -> TestResult<Scenario> {
+    let turns = vec![first_turn, llm_response().text(&["again reply"]).build()];
+    let release = Arc::new(Notify::new());
+    let scenario =
+        TestScenario::new().user_text("original prompt").user_text("beep").wait_for(|m| is_partial_text(m, "hello"));
+
+    let result = test_agent()
+        .without_mcp()
+        .llm_responses(&turns)
+        .pause_turn_after(0, 1, Arc::clone(&release))
+        .scenario(interrupt(scenario, release).wait_for_turn_end().user_text("again").wait_for_turn_end())
+        .run_with_context()
+        .await?;
+
+    Ok(Scenario {
+        messages: result.messages,
+        contexts: result.captured_contexts.lock().expect("captured contexts lock poisoned").clone(),
+    })
+}
+
+fn assert_queued_text_discarded(Scenario { messages, contexts }: Scenario, final_user_texts: &[&str]) {
+    let trace = AgentTrace::from_events(messages);
+    let first_end = trace.position(|m| matches!(m, AgentEvent::Turn(TurnEvent::Ended { .. })));
+    let inserted = trace.positions(is_user_message_inserted).into_iter().filter(|&index| index < first_end).count();
+    let discarded = trace.positions(|m| matches!(m, AgentEvent::Turn(TurnEvent::UserMessageDiscarded { .. })));
+
+    assert_eq!(inserted, 1, "only the prompt that started the turn is inserted: {:?}", trace.events());
+    assert_eq!(discarded.len(), 1, "the queued text is discarded once: {:?}", trace.events());
+    assert!(discarded[0] < first_end, "the queued text is discarded before the turn ends: {:?}", trace.events());
+    assert_eq!(contexts.last().map(user_texts).unwrap_or_default(), final_user_texts);
+}
+
+fn is_user_message_inserted(m: &AgentEvent) -> bool {
+    matches!(m, AgentEvent::Turn(TurnEvent::UserMessageInserted { .. }))
 }
 
 fn is_partial_text(m: &AgentEvent, chunk: &str) -> bool {

@@ -115,7 +115,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     | ToolEvent::TaskCreated { .. },
                 )
                 | AgentEvent::Turn(
-                    TurnEvent::Started { .. } | TurnEvent::LlmCallStarted { .. } | TurnEvent::LlmCallEnded { .. },
+                    TurnEvent::Started { .. }
+                    | TurnEvent::UserMessageInserted { .. }
+                    | TurnEvent::UserMessageDiscarded { .. }
+                    | TurnEvent::LlmCallStarted { .. }
+                    | TurnEvent::LlmCallEnded { .. },
                 )
                 | AgentEvent::SessionUsage(_),
             ) => {}
