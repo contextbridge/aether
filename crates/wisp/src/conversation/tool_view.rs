@@ -165,13 +165,12 @@ fn bash_tool_detail(command: &str, display_value: Option<&str>, status: ToolStat
 }
 
 /// The muted detail and, on failure, the error cause that trail a tool line.
-fn tool_suffix(detail: String, status: ToolStatus, error: Option<&str>, theme: &Theme) -> Vec<Span<'static>> {
+fn tool_suffix(detail: String, status: ToolStatus, theme: &Theme) -> Vec<Span<'static>> {
     let mut suffix = vec![Span::styled(detail, Style::new().fg(theme.muted))];
-    let cause = match (status, error) {
-        (ToolStatus::Running | ToolStatus::Success, _) => None,
-        (ToolStatus::Cancelled, _) => Some(" cancelled".to_string()),
-        (ToolStatus::Failed, None) => Some(" failed".to_string()),
-        (ToolStatus::Failed, Some(reason)) => Some(format!(" failed: {reason}")),
+    let cause = match status {
+        ToolStatus::Running | ToolStatus::Success => None,
+        ToolStatus::Cancelled => Some(" cancelled"),
+        ToolStatus::Failed => Some(" failed"),
     };
     if let Some(cause) = cause {
         suffix.push(Span::styled(cause, Style::new().fg(theme.error)));
@@ -194,7 +193,7 @@ fn tool_line(
         || tool_detail(tool.display_value(), &tool.raw_input(), tool.status),
         |command| bash_tool_detail(command, tool.display_value(), tool.status),
     );
-    let suffix = tool_suffix(detail, tool.status, tool.error.as_deref(), theme);
+    let suffix = tool_suffix(detail, tool.status, theme);
     let command_lines = command.map(|command| highlighter.highlight(command, "bash", theme));
     if let Some(command_lines) = &command_lines
         && let Some(first) = command_lines.first()

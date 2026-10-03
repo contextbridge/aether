@@ -17,7 +17,6 @@ pub(super) async fn execute(command: FilesystemCommand) -> CommandResult {
             let outcome =
                 run_blocking(move || build_attachments(&attachments)).await.unwrap_or_else(|error| AttachmentOutcome {
                     blocks: Vec::new(),
-                    placeholders: Vec::new(),
                     warnings: vec![format!("Could not prepare attachments: {error}")],
                 });
             CommandResult::SubmissionPrepared(outcome)

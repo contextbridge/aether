@@ -1,13 +1,14 @@
+use crate::surfaces::composer::Submission;
 use agent_client_protocol::schema::v2::SessionId;
 use std::path::PathBuf;
 
-/// The operation the UI itself is in the middle of. A prompt's own lifecycle
-/// lives in the conversation's turn.
+/// The operation the UI itself is in the middle of. A sent prompt's lifecycle
+/// lives in the queued prompts and the conversation's turn.
 #[derive(Default)]
 pub enum ForegroundOperation {
     #[default]
     Idle,
-    PreparingPrompt(String),
+    PreparingPrompt(Submission),
     CreatingSession { previous_selections: Vec<(String, String)> },
     ResumingSession { session_id: SessionId, cwd: PathBuf },
     ListingWorkspaces,
@@ -28,11 +29,11 @@ impl ForegroundOperation {
         }
     }
 
-    pub(super) fn take_prepared_prompt(&mut self) -> Option<String> {
+    pub(super) fn take_prepared_prompt(&mut self) -> Option<Submission> {
         if !matches!(self, Self::PreparingPrompt(_)) {
             return None;
         }
-        let Self::PreparingPrompt(text) = std::mem::take(self) else { unreachable!() };
-        Some(text)
+        let Self::PreparingPrompt(submission) = std::mem::take(self) else { unreachable!() };
+        Some(submission)
     }
 }

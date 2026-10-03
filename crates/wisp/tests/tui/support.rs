@@ -24,7 +24,7 @@ pub(crate) use std::time::{Duration, Instant};
 pub(crate) use tempfile::TempDir;
 pub(crate) use tokio::task::LocalSet;
 pub(crate) use wisp::app::ForegroundOperation;
-pub(crate) use wisp::command::{AgentCommand, Command, CommandResult, FilesystemCommand};
+pub(crate) use wisp::command::{AgentCommand, Command, CommandResult, FilesystemCommand, PromptRejection};
 pub(crate) use wisp::testing::{
     BackendEvent, CountingBackend, FakeGit, RecordingBackend, StreamContent, TestUi, TestUiBuilder, assert_buffer_eq,
     buffer_text, chunk_message, compaction_update, context_cleared, has_cell, line_text, row_containing, row_text,
@@ -285,10 +285,6 @@ pub(crate) fn workspace_moved(new_cwd: &str) -> CommandResult {
 
 pub(crate) fn workspace_move_failed(error: &str) -> CommandResult {
     CommandResult::WorkspaceMoved(Err(error.to_string()))
-}
-
-pub(crate) fn prompt_failed(error: &str) -> CommandResult {
-    CommandResult::Prompt(Err(error.to_string()))
 }
 
 pub(crate) fn session_load_failed(error: &str) -> CommandResult {

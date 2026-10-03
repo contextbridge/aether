@@ -1,7 +1,7 @@
 use crate::app::App;
 use crate::conversation::plan_view::PlanView;
 use crate::conversation::status_line::StatusLine;
-use crate::surfaces::composer::ComposerLayout;
+use crate::surfaces::composer::{ComposerLayout, QueuedPromptsView};
 use crate::view::wrap::as_u16;
 use agent_client_protocol::schema::v2::PlanEntry;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
@@ -22,11 +22,10 @@ pub(super) struct FrameLayout {
     pub(super) status_line_rows: u16,
     pub(super) plan_entries: Vec<PlanEntry>,
     pub(super) plan_height: u16,
+    pub(super) queued_height: u16,
     pub(super) progress_height: u16,
     /// Columns of blank gutter each side of the conversation content.
     pub(super) content_padding: u16,
-    /// Rows the conversation gets once the plan, composer, and status line are
-    /// placed — what [`FrameLayout::split`]'s `Fill` resolves to.
     pub(super) transcript_height: u16,
 }
 
@@ -49,6 +48,8 @@ impl FrameLayout {
         // cannot squeeze out the conversation.
         let plan_height =
             as_u16(PlanView::new(&plan_entries, renderer.theme()).line_count()).min(remaining.div_ceil(3));
+        let queued_height = as_u16(QueuedPromptsView::new(app.queued_prompts(), renderer.theme()).line_count())
+            .min(remaining.saturating_sub(plan_height));
         let progress_height = app.progress_indicator().height();
 
         Self {
@@ -60,18 +61,18 @@ impl FrameLayout {
             status_line_rows,
             plan_entries,
             plan_height,
+            queued_height,
             progress_height,
             content_padding: as_u16(app.content_padding()),
-            transcript_height: remaining.saturating_sub(plan_height),
+            transcript_height: remaining.saturating_sub(plan_height).saturating_sub(queued_height),
         }
     }
 
-    /// Splits the frame into the four stacked bands it always has. The plan and
-    /// the conversation share whatever the composer and status line leave.
-    pub(super) fn split(&self, area: Rect) -> [Rect; 4] {
+    pub(super) fn split(&self, area: Rect) -> [Rect; 5] {
         Layout::vertical([
             Constraint::Fill(1),
             Constraint::Length(self.plan_height),
+            Constraint::Length(self.queued_height),
             Constraint::Length(self.composer_height),
             Constraint::Length(self.status_line_rows),
         ])

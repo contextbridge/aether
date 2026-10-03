@@ -11,9 +11,6 @@ use wisp::testing::{TestUi, session_update, text_chunk_with_id, tool_completed};
 fn user_ack_and_idle_preserve_one_foreground_turn() {
     let mut ui = TestUi::new();
     ui.submit("hello");
-    ui.acp_event(session_update(acp::SessionUpdate::UserMessage(
-        acp::UserMessage::new("user-1").content(vec!["hello".into()]),
-    )));
     ui.acp_event(session_update(running_notification("test-session").update));
     assert!(ui.app().waiting_for_response());
     ui.acp_event(text_chunk_with_id("reply-1", "world"));
@@ -40,31 +37,7 @@ fn user_ack_and_idle_preserve_one_foreground_turn() {
 }
 
 #[test]
-fn prompt_rejection_recovers_before_and_after_native_idle() {
-    use wisp::command::{AgentCommand, CommandResult};
-    for idle_first in [false, true] {
-        let mut ui = TestUi::new();
-        ui.submit("first");
-        ui.next_agent_command().unwrap();
-        if idle_first {
-            ui.acp_event(session_update(idle_notification("test-session", None).update));
-            assert!(!ui.app().waiting_for_response());
-        }
-        ui.submit("next");
-        assert!(ui.next_agent_command().is_none(), "pending result still owns submission");
-        ui.deliver_result(CommandResult::Cancel(Ok(())));
-        ui.key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
-        assert!(ui.next_agent_command().is_none(), "unrelated acceptance cannot release a prompt");
-        ui.deliver_result(CommandResult::Prompt(Err("rejected".into())));
-        assert!(!ui.app().waiting_for_response());
-        ui.key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
-        assert!(matches!(ui.next_agent_command(), Some(AgentCommand::Prompt { text, .. }) if text == "next"));
-        assert!(ui.app().waiting_for_response());
-    }
-}
-
-#[test]
-fn cancellation_keeps_final_output_and_ignores_late_acceptance() {
+fn cancellation_keeps_final_output_and_ignores_stale_prompt_results() {
     use wisp::command::CommandResult;
     let mut ui = TestUi::new();
     ui.submit("hello");
@@ -74,8 +47,8 @@ fn cancellation_keeps_final_output_and_ignores_late_acceptance() {
     ui.acp_event(text_chunk_with_id("reply", "final output"));
     ui.acp_event(session_update(idle_notification("test-session", Some(acp::StopReason::Cancelled)).update));
     assert!(!ui.app().waiting_for_response());
-    ui.deliver_result(CommandResult::Prompt(Ok(acp::PromptResponse::new("user-message"))));
-    assert!(!ui.app().waiting_for_response(), "late acceptance must not restart the turn");
+    ui.deliver_result(CommandResult::Prompt { request_id: wisp::request::RequestId::next(), result: Ok(()) });
+    assert!(!ui.app().waiting_for_response(), "a result for no queued prompt changes nothing");
     assert_eq!(ui.conversation_text().matches("final output").count(), 1);
 }
 

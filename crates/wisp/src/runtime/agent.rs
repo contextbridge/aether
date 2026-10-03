@@ -1,11 +1,11 @@
-use crate::command::{AgentCommand, CommandResult};
+use crate::command::{AgentCommand, CommandResult, PromptRejection};
 use crate::runtime::tasks::TaskSupervisor;
 use crate::session::workspace_status::WorkspaceStatus;
-use acp_utils::client::AcpClientHandle;
+use acp_utils::client::{AcpClientError, AcpClientHandle};
 use acp_utils::notifications::{
     McpRequest, SessionPreviewParams, WorkspaceListParams, WorkspaceMoveParams, WorkspaceStatusPayload,
 };
-use agent_client_protocol::JsonRpcRequest;
+use agent_client_protocol::{ErrorCode, JsonRpcRequest};
 use agent_client_protocol::schema::v2::{
     CancelSessionNotification, ContentBlock, ListSessionsRequest, LoginAuthRequest, NewSessionRequest, PromptRequest,
     ReplayFrom, ReplayFromStart, ResumeSessionRequest, SetSessionConfigOptionRequest,
@@ -17,10 +17,13 @@ pub(super) fn execute(
     tasks: &mut TaskSupervisor,
 ) -> Option<CommandResult> {
     match command {
-        AgentCommand::Prompt { session_id, text, content } => {
+        AgentCommand::Prompt { request_id, session_id, text, content } => {
             let mut prompt = vec![ContentBlock::from(text)];
             prompt.extend(content.into_iter().flatten());
-            submit_request(handle, tasks, PromptRequest::new(session_id, prompt), CommandResult::Prompt);
+            let response = handle.prompt(PromptRequest::new(session_id, prompt));
+            tasks.submit_network(async move {
+                CommandResult::Prompt { request_id, result: response.await.map(drop).map_err(prompt_rejection) }
+            });
         }
         AgentCommand::Cancel { session_id } => {
             return Some(CommandResult::Cancel(
@@ -79,6 +82,13 @@ pub(super) fn execute(
         }
     }
     None
+}
+
+fn prompt_rejection(error: AcpClientError) -> PromptRejection {
+    match error {
+        AcpClientError::Protocol(error) if error.code == ErrorCode::RequestCancelled => PromptRejection::Cancelled,
+        error => PromptRejection::Failed(error.to_string()),
+    }
 }
 
 fn submit_request<R: JsonRpcRequest + Send + 'static>(

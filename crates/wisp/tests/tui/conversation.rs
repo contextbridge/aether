@@ -8,7 +8,7 @@ fn submit_sends_prompt_and_clears_composer() {
     app.submit("hello agent");
 
     match app.next_agent_command().unwrap() {
-        AgentCommand::Prompt { session_id, text, content } => {
+        AgentCommand::Prompt { session_id, text, content, .. } => {
             assert_eq!(session_id.0.as_ref(), "test-session");
             assert_eq!(text, "hello agent");
             assert!(content.is_none());
@@ -16,18 +16,6 @@ fn submit_sends_prompt_and_clears_composer() {
         other => panic!("expected Prompt command, got {other:?}"),
     }
     assert!(app.app().composer().is_empty());
-}
-
-#[test]
-fn submit_is_ignored_while_prompt_in_flight() {
-    let mut app = make_app();
-    app.submit("first");
-    app.next_agent_command().unwrap();
-
-    app.submit("second");
-
-    assert!(app.next_command().is_none());
-    assert_eq!(app.app().composer().text(), "second");
 }
 
 #[test]

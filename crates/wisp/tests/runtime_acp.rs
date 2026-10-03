@@ -1,6 +1,8 @@
 #![cfg(feature = "testing")]
 
+use acp_utils::client::AcpClientError;
 use acp_utils::testing::{idle_notification, running_notification};
+use agent_client_protocol::Error;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v2::{
     AgentCapabilities, AuthMethodId, CancelSessionNotification, ContentBlock, Implementation, InitializeRequest,
@@ -15,7 +17,8 @@ use agent_client_protocol::{Channel, Responder};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tokio::task::{LocalSet, spawn_local};
-use wisp::command::{AgentCommand, Command, CommandResult};
+use wisp::command::{AgentCommand, Command, CommandResult, PromptRejection};
+use wisp::request::RequestId;
 use wisp::runtime::CommandDispatcher;
 use wisp::session::Session;
 
@@ -160,7 +163,9 @@ async fn runtime_replays_sequentially_without_owning_turn_policy() {
             plain_resume.await.unwrap().unwrap();
             assert!(session.client.event_rx.try_recv().is_err());
 
+            let request_id = RequestId::next();
             dispatcher.dispatch(Command::Agent(AgentCommand::Prompt {
+                request_id,
                 session_id: "second".into(),
                 text: "hello".into(),
                 content: None,
@@ -168,7 +173,28 @@ async fn runtime_replays_sequentially_without_owning_turn_policy() {
             let (request, responder) = peer.prompt.recv().await.unwrap();
             assert_eq!(request.prompt, vec![ContentBlock::Text(TextContent::new("hello"))]);
             responder.respond(PromptResponse::new("user-message")).unwrap();
-            assert!(matches!(dispatcher.next_result().await, Some(CommandResult::Prompt(Ok(_)))));
+            assert!(matches!(
+                dispatcher.next_result().await,
+                Some(CommandResult::Prompt { request_id: id, result: Ok(()) }) if id == request_id
+            ));
+            for (error, rejection) in [
+                (Error::request_cancelled(), PromptRejection::Cancelled),
+                (Error::internal_error(), PromptRejection::Failed(AcpClientError::Protocol(Error::internal_error()).to_string())),
+            ] {
+                let request_id = RequestId::next();
+                dispatcher.dispatch(Command::Agent(AgentCommand::Prompt {
+                    request_id,
+                    session_id: "second".into(),
+                    text: "queued".into(),
+                    content: None,
+                }));
+                let (_, responder) = peer.prompt.recv().await.unwrap();
+                responder.respond_with_error(error).unwrap();
+                assert!(matches!(
+                    dispatcher.next_result().await,
+                    Some(CommandResult::Prompt { request_id: id, result: Err(actual) }) if id == request_id && actual == rejection
+                ));
+            }
             dispatcher.dispatch(Command::Agent(AgentCommand::ResumeSession {
                 session_id: "other".into(),
                 cwd: PathBuf::from("/workspace"),

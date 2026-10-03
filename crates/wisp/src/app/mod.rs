@@ -5,6 +5,7 @@ use crate::command::{AgentCommand, Command, CommandResult};
 use crate::conversation::plan_tracker::PlanTracker;
 use crate::conversation::progress_indicator::{ProgressIndicator, ProgressPhase};
 use crate::conversation::status_line::{ContextUsageDisplay, StatusLineModel};
+use crate::request::RequestId;
 use crate::session::WorkspaceAccess;
 use crate::session::platform::{BrowserOpener, ClipboardWriter, default_browser_opener, default_clipboard_writer};
 use crate::session::session_config_view::LocalConfigOption;
@@ -13,7 +14,7 @@ use crate::session::workspace_status::WorkspaceStatus;
 use crate::settings::{
     ResolvedStatusLineSettings, SettingsModel, UiSettings, resolve_content_padding, resolve_status_line_settings,
 };
-use crate::surfaces::composer::Composer;
+use crate::surfaces::composer::{Composer, Submission};
 use crate::surfaces::picker::CommandEntry;
 use crate::surfaces::workspace_picker::WorkspacePicker;
 use crate::theme::Theme;
@@ -44,6 +45,7 @@ use config::build_theme_entries;
 pub use foreground::ForegroundOperation;
 use input::CTRL_C_CONFIRM_WINDOW;
 use session::builtin_commands;
+pub use submission::QueuedPrompt;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ExitState {
@@ -78,6 +80,7 @@ pub struct App {
     /// What the event loop still owes the outside world.
     commands: VecDeque<Command>,
     foreground: ForegroundOperation,
+    queued_prompts: Vec<QueuedPrompt>,
     browser_opener: BrowserOpener,
     clipboard_writer: ClipboardWriter,
 }
@@ -164,6 +167,7 @@ impl App {
             swallow_next_click: false,
             commands: VecDeque::new(),
             foreground: ForegroundOperation::Idle,
+            queued_prompts: Vec::new(),
             browser_opener,
             clipboard_writer,
         };
@@ -196,12 +200,7 @@ impl App {
     #[allow(clippy::too_many_lines)]
     pub fn on_command_result(&mut self, result: CommandResult) {
         match result {
-            CommandResult::Prompt(Ok(_)) => self.conversation.accept_prompt(),
-            CommandResult::Prompt(Err(error)) => {
-                self.conversation.fail_prompt(&error);
-                self.foreground.drop_prepared_prompt();
-                self.notify(&format!("Failed to send prompt: {error}"));
-            }
+            CommandResult::Prompt { request_id, result } => self.finish_prompt(request_id, result),
             CommandResult::Cancel(result) | CommandResult::AuthenticateMcp(result) => {
                 if let Err(error) = result {
                     self.notify(&error);
@@ -320,17 +319,12 @@ impl App {
         }
     }
 
-    fn start_prompt(
-        &mut self,
-        text: String,
-        content: Option<Vec<acp::ContentBlock>>,
-        echo: Option<Vec<acp::ContentBlock>>,
-    ) {
-        if let Err(error) = self.conversation.start_prompt(echo) {
-            self.notify(&error.to_string());
-            return;
-        }
+    fn start_prompt(&mut self, submission: Submission, content: Option<Vec<acp::ContentBlock>>) {
+        let request_id = RequestId::next();
+        let text = submission.text.clone();
+        self.queued_prompts.push(QueuedPrompt { request_id, submission });
         self.queue(Command::Agent(AgentCommand::Prompt {
+            request_id,
             session_id: self.session.session_id().clone(),
             text,
             content,
@@ -472,9 +466,12 @@ impl App {
         self.ui.theme_generation
     }
 
-    /// A prompt is outstanding, so the agent owes us a reply.
     pub fn waiting_for_response(&self) -> bool {
-        self.conversation.turn().waiting_for_response()
+        !self.conversation.turn().is_idle() || !self.queued_prompts.is_empty()
+    }
+
+    pub fn queued_prompts(&self) -> &[QueuedPrompt] {
+        &self.queued_prompts
     }
 
     /// Either the prompt or one of its tool calls is still running.

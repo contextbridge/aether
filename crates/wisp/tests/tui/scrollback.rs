@@ -11,28 +11,6 @@ fn completed_large_reply_keeps_its_tail_in_the_viewport() {
 }
 
 #[test]
-fn expanded_user_acknowledgements_keep_the_submitted_display() {
-    for prompt in ["/review", "explain @large.rs"] {
-        let mut ui = TestUi::new();
-        ui.paste(prompt);
-        ui.key(key(KeyCode::Enter));
-        assert_command(&mut ui, |c| matches!(c, AgentCommand::Prompt { .. }), "submitted display");
-        let expanded = "expanded-content-sentinel\n".repeat(100);
-        ui.acp_event(session_update(acp::SessionUpdate::UserMessage(
-            acp::UserMessage::new("user").content(vec![acp::ContentBlock::from(expanded.clone())]),
-        )));
-        ui.acp_event(session_update(acp::SessionUpdate::UserMessageChunk(acp::ContentChunk::new(
-            acp::ContentBlock::from(expanded),
-            "user",
-        ))));
-        ui.draw();
-        ui.assert_viewport_contains(prompt);
-        assert!(!ui.conversation_text().contains("expanded-content-sentinel"));
-        ui.assert_history_not_contains("Transcript updated;");
-    }
-}
-
-#[test]
 fn committed_message_replacements_publish_a_corrected_transcript_once() {
     let mut ui = TestUi::new();
     commit_overflowing_reply(&mut ui);

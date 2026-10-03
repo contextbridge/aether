@@ -13,7 +13,13 @@ fn make_app_with_caps_and_config(
 }
 
 fn make_failable_app_with_caps(prompt_capabilities: acp::PromptCapabilities) -> TestUi {
-    TestUiBuilder::new().prompt_capabilities(prompt_capabilities).build()
+    let mut app = TestUiBuilder::new().prompt_capabilities(prompt_capabilities).build();
+    app.reject_prompts(PromptRejection::Failed("connection closed".to_string()));
+    app
+}
+
+fn pending_media_paths(app: &TestUi) -> Vec<&PathBuf> {
+    app.app().composer().pending_media().iter().map(|attachment| &attachment.path).collect()
 }
 
 fn media_caps() -> acp::PromptCapabilities {
@@ -480,7 +486,6 @@ fn sync_prompt_failure_resets_busy_state() {
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
     let _ = app.next_agent_command().expect("prompt should be recorded before its completion fails");
-    app.deliver_result(CommandResult::Prompt(Err("connection closed".to_string())));
 
     assert!(!app.app().waiting_for_response(), "failed prompt should reset busy state");
     assert!(app.next_command().is_none(), "no follow-up prompt should be sent");
@@ -696,7 +701,7 @@ fn comma_separated_multi_model_sends_when_all_support_media() {
 }
 
 #[test]
-fn rejection_preserves_text_and_placeholders_in_transcript() {
+fn unsupported_media_returns_the_text_to_the_composer() {
     let caps = acp::PromptCapabilities::new().image(None).audio(None);
     let mut app = make_app_with_prompt_capabilities(caps);
     let tmp = TempDir::new().unwrap();
@@ -710,17 +715,18 @@ fn rejection_preserves_text_and_placeholders_in_transcript() {
 
     assert!(app.next_command().is_none(), "prompt should be blocked locally");
 
+    assert_eq!(app.app().composer().text(), "describe this image");
+    assert_eq!(pending_media_paths(&app), [&img]);
     let messages: Vec<_> = message_texts(&app).collect();
     assert!(
-        messages.iter().any(|msg| msg.contains("describe this image") && msg.contains("image attachment")),
-        "text and attachment share one user message"
+        messages.iter().all(|msg| !msg.contains("describe this image")),
+        "an unsent prompt stays out of the transcript"
     );
-    assert!(messages.iter().any(|msg| msg.contains("image attachment")), "media placeholder preserved in transcript");
     assert!(messages.iter().any(|msg| msg.contains("does not support image")), "error message shown");
 }
 
 #[test]
-fn sync_failure_preserves_text_and_placeholders_in_transcript() {
+fn sync_failure_returns_the_text_to_the_composer() {
     let caps = media_caps();
     let mut app = make_failable_app_with_caps(caps);
     let tmp = TempDir::new().unwrap();
@@ -732,17 +738,14 @@ fn sync_failure_preserves_text_and_placeholders_in_transcript() {
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
     let _ = app.next_agent_command().expect("prompt should be recorded before its completion fails");
-    app.deliver_result(CommandResult::Prompt(Err("connection closed".to_string())));
 
     assert!(!app.app().waiting_for_response(), "failed prompt should reset busy state");
     assert!(app.next_command().is_none(), "no follow-up prompt should be sent");
 
+    assert_eq!(app.app().composer().text(), "describe this");
+    assert_eq!(pending_media_paths(&app), [&img]);
     let messages: Vec<_> = message_texts(&app).collect();
-    assert!(
-        messages.iter().any(|msg| msg.contains("describe this") && msg.contains("image attachment")),
-        "text and attachment share one user message"
-    );
-    assert!(messages.iter().any(|msg| msg.contains("image attachment")), "media placeholder preserved in transcript");
+    assert!(messages.iter().all(|msg| !msg.contains("describe this")), "an unsent prompt stays out of the transcript");
     assert!(messages.iter().any(|msg| msg.contains("Failed to send prompt")), "error message shown");
 }
 
@@ -825,7 +828,6 @@ fn image_at_ten_mib_limit_is_accepted() {
     assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
     assert!(matches!(outcome.blocks[0], acp::ContentBlock::Image(_)));
     assert_eq!(mime_of(&outcome.blocks[0]), "image/png");
-    assert_eq!(outcome.placeholders, vec!["[image attachment: photo.png]"]);
 }
 
 #[test]
@@ -834,7 +836,6 @@ fn image_above_ten_mib_is_rejected() {
     let outcome = build_attachments(&attach(path, "photo.png"));
 
     assert!(outcome.blocks.is_empty());
-    assert!(outcome.placeholders.is_empty());
     assert_eq!(outcome.warnings.len(), 1);
     assert_eq!(outcome.warnings[0], "Skipped photo.png: file too large (max 10485760)");
 }
@@ -848,7 +849,6 @@ fn audio_at_ten_mib_limit_is_accepted() {
     assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
     assert!(matches!(outcome.blocks[0], acp::ContentBlock::Audio(_)));
     assert_eq!(mime_of(&outcome.blocks[0]), "audio/wav");
-    assert_eq!(outcome.placeholders, vec!["[audio attachment: note.wav]"]);
 }
 
 #[test]
@@ -857,7 +857,6 @@ fn audio_above_ten_mib_is_rejected() {
     let outcome = build_attachments(&attach(path, "note.wav"));
 
     assert!(outcome.blocks.is_empty());
-    assert!(outcome.placeholders.is_empty());
     assert_eq!(outcome.warnings.len(), 1);
     assert_eq!(outcome.warnings[0], "Skipped note.wav: file too large (max 10485760)");
 }
@@ -949,7 +948,6 @@ fn svg_is_embedded_as_text_not_an_image() {
     assert!(matches!(outcome.blocks[0], acp::ContentBlock::Resource(_)));
     assert_eq!(text_of(&outcome.blocks[0]), svg);
     assert_eq!(mime_of(&outcome.blocks[0]), "image/svg+xml");
-    assert!(outcome.placeholders.is_empty());
 }
 
 #[test]
@@ -963,7 +961,6 @@ fn unsupported_audio_mime_is_embedded_as_text_not_audio() {
     assert!(matches!(outcome.blocks[0], acp::ContentBlock::Resource(_)), "audio/flac is not a whitelisted media type");
     assert!(mime_of(&outcome.blocks[0]).starts_with("audio/"), "kept its audio/* MIME but stayed a text resource");
     assert_eq!(text_of(&outcome.blocks[0]), std::str::from_utf8(flac).unwrap());
-    assert!(outcome.placeholders.is_empty());
 }
 
 #[test]
@@ -1015,8 +1012,6 @@ fn multi_attachment_preserves_order_with_truncated_text_between_media() {
     assert!(matches!(outcome.blocks[0], acp::ContentBlock::Image(_)));
     assert!(matches!(outcome.blocks[1], acp::ContentBlock::Resource(_)));
     assert!(matches!(outcome.blocks[2], acp::ContentBlock::Audio(_)));
-    // The truncated text block carries no placeholder; image and audio do, in order.
-    assert_eq!(outcome.placeholders, vec!["[image attachment: photo.png]", "[audio attachment: note.wav]"]);
     // The truncation warning is emitted without dropping the truncated block.
     assert_eq!(outcome.warnings, vec!["Truncated big.txt to 1048576 bytes"]);
     assert_eq!(text_of(&outcome.blocks[1]).len(), ONE_MIB);

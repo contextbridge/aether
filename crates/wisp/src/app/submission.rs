@@ -1,55 +1,51 @@
 use super::{App, ForegroundOperation};
-use crate::attachment::{AttachmentOutcome, PromptAttachment};
-use crate::command::{AgentCommand, Command, FilesystemCommand};
+use crate::attachment::AttachmentOutcome;
+use crate::command::{AgentCommand, Command, FilesystemCommand, PromptRejection};
+use crate::request::RequestId;
 use crate::session::session_config_view::LocalConfigView;
+use crate::surfaces::composer::Submission;
 use acp_utils::config_option_id::ConfigOptionId;
 use agent_client_protocol::schema::v2 as acp;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueuedPrompt {
+    pub request_id: RequestId,
+    pub submission: Submission,
+}
+
 impl App {
     pub(super) fn submit(&mut self) {
-        if self.composer.is_empty() || !self.can_start_foreground_operation() {
+        if self.composer.is_empty() || !self.foreground.is_idle() {
             return;
         }
 
-        let mentions = self.composer.selected_mentions();
         if self.session.workspace_access() == crate::session::WorkspaceAccess::Remote
-            && (!mentions.is_empty() || !self.composer.pending_media().is_empty())
+            && (!self.composer.selected_mentions().is_empty() || !self.composer.pending_media().is_empty())
         {
             self.notify("Path attachments are unavailable for remote workspaces; remove attachments before sending");
             return;
         }
-        let (text, pending_media) = self.composer.take_submission();
-        let mut all_attachments: Vec<PromptAttachment> =
-            mentions.into_iter().map(|m| PromptAttachment { path: m.path, display_name: m.display_name }).collect();
-        all_attachments.extend(pending_media);
+        let submission = self.composer.take_submission();
+        let attachments = submission.attachments();
 
-        self.foreground = ForegroundOperation::PreparingPrompt(text);
-        if all_attachments.is_empty() {
-            self.finish_submission(AttachmentOutcome {
-                blocks: Vec::new(),
-                placeholders: Vec::new(),
-                warnings: Vec::new(),
-            });
+        self.foreground = ForegroundOperation::PreparingPrompt(submission);
+        if attachments.is_empty() {
+            self.finish_submission(AttachmentOutcome { blocks: Vec::new(), warnings: Vec::new() });
         } else {
-            self.queue(Command::Filesystem(FilesystemCommand::PrepareSubmission { attachments: all_attachments }));
+            self.queue(Command::Filesystem(FilesystemCommand::PrepareSubmission { attachments }));
         }
     }
 
     pub(super) fn finish_submission(&mut self, outcome: AttachmentOutcome) {
-        let Some(text) = self.foreground.take_prepared_prompt() else {
+        let Some(submission) = self.foreground.take_prepared_prompt() else {
             return;
         };
-        let display = std::iter::once(text.as_str())
-            .chain(outcome.placeholders.iter().map(String::as_str))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let echo = vec![display.into()];
         let media_error = self.media_support_error(&outcome.blocks);
         if media_error.is_some() {
-            self.conversation.append_user_content(echo);
+            self.composer.restore_submission(submission);
         } else {
             let content = (!outcome.blocks.is_empty()).then_some(outcome.blocks);
-            self.start_prompt(text, content, Some(echo));
+            self.start_prompt(submission, content);
         }
         for warning in &outcome.warnings {
             self.notify(warning);
@@ -58,6 +54,19 @@ impl App {
             self.notify(&message);
         }
     }
+
+    pub(super) fn finish_prompt(&mut self, request_id: RequestId, result: Result<(), PromptRejection>) {
+        let Some(index) = self.queued_prompts.iter().position(|prompt| prompt.request_id == request_id) else {
+            return;
+        };
+        let prompt = self.queued_prompts.remove(index);
+        let Err(rejection) = result else { return };
+        self.composer.restore_submission(prompt.submission);
+        if let PromptRejection::Failed(error) = rejection {
+            self.notify(&format!("Failed to send prompt: {error}"));
+        }
+    }
+
     fn media_support_error(&self, blocks: &[acp::ContentBlock]) -> Option<String> {
         let requires_image = blocks.iter().any(|block| matches!(block, acp::ContentBlock::Image(_)));
         let requires_audio = blocks.iter().any(|block| matches!(block, acp::ContentBlock::Audio(_)));

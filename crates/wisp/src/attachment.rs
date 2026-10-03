@@ -5,9 +5,6 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use url::Url;
 
-const IMAGE_ATTACHMENT_LABEL: &str = "image attachment";
-const AUDIO_ATTACHMENT_LABEL: &str = "audio attachment";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptAttachment {
     pub path: PathBuf,
@@ -24,7 +21,6 @@ pub enum AttachmentKind {
 
 pub struct AttachmentOutcome {
     pub blocks: Vec<acp::ContentBlock>,
-    pub placeholders: Vec<String>,
     pub warnings: Vec<String>,
 }
 
@@ -52,16 +48,13 @@ pub(crate) fn build_attachments_with(
     attachments: &[PromptAttachment],
     mut read: impl FnMut(&Path, &str) -> Result<Vec<u8>, String>,
 ) -> AttachmentOutcome {
-    let mut outcome = AttachmentOutcome { blocks: Vec::new(), placeholders: Vec::new(), warnings: Vec::new() };
+    let mut outcome = AttachmentOutcome { blocks: Vec::new(), warnings: Vec::new() };
     for attachment in attachments {
         let encoded = read(&attachment.path, &attachment.display_name)
             .and_then(|bytes| encode_attachment(&attachment.path, &attachment.display_name, bytes));
         match encoded {
-            Ok((block, placeholder, warning)) => {
+            Ok((block, warning)) => {
                 outcome.blocks.push(block);
-                if let Some(placeholder) = placeholder {
-                    outcome.placeholders.push(placeholder);
-                }
                 if let Some(warning) = warning {
                     outcome.warnings.push(warning);
                 }
@@ -94,37 +87,26 @@ pub(crate) fn encode_attachment(
     path: &Path,
     display_name: &str,
     bytes: Vec<u8>,
-) -> Result<(acp::ContentBlock, Option<String>, Option<String>), String> {
+) -> Result<(acp::ContentBlock, Option<String>), String> {
     let mime_type = mime_guess::from_path(path).first_or_octet_stream().to_string();
     match classify_attachment(path) {
         AttachmentKind::Image | AttachmentKind::Audio => {
-            encode_media_block(&bytes, display_name, &mime_type).map(|(block, placeholder)| (block, placeholder, None))
+            encode_media_block(&bytes, display_name, &mime_type).map(|block| (block, None))
         }
         AttachmentKind::Text | AttachmentKind::Unsupported => encode_text_block(bytes, path, display_name, &mime_type),
     }
 }
 
-fn encode_media_block(
-    bytes: &[u8],
-    display_name: &str,
-    mime_type: &str,
-) -> Result<(acp::ContentBlock, Option<String>), String> {
+fn encode_media_block(bytes: &[u8], display_name: &str, mime_type: &str) -> Result<acp::ContentBlock, String> {
     if bytes.len() > MAX_MEDIA_BYTES {
         return Err(format!("Skipped {display_name}: file too large (max {MAX_MEDIA_BYTES})"));
     }
     let data = BASE64.encode(bytes);
-    let (block, placeholder) = if IMAGE_MIME_TYPES.contains(&mime_type) {
-        (
-            acp::ContentBlock::Image(acp::ImageContent::new(data, mime_type)),
-            format!("[{IMAGE_ATTACHMENT_LABEL}: {display_name}]"),
-        )
+    Ok(if IMAGE_MIME_TYPES.contains(&mime_type) {
+        acp::ContentBlock::Image(acp::ImageContent::new(data, mime_type))
     } else {
-        (
-            acp::ContentBlock::Audio(acp::AudioContent::new(data, mime_type)),
-            format!("[{AUDIO_ATTACHMENT_LABEL}: {display_name}]"),
-        )
-    };
-    Ok((block, Some(placeholder)))
+        acp::ContentBlock::Audio(acp::AudioContent::new(data, mime_type))
+    })
 }
 
 fn encode_text_block(
@@ -132,7 +114,7 @@ fn encode_text_block(
     path: &Path,
     display_name: &str,
     mime_type: &str,
-) -> Result<(acp::ContentBlock, Option<String>, Option<String>), String> {
+) -> Result<(acp::ContentBlock, Option<String>), String> {
     let truncated = bytes.len() > MAX_EMBED_TEXT_BYTES;
     if truncated {
         bytes.truncate(MAX_EMBED_TEXT_BYTES);
@@ -155,7 +137,6 @@ fn encode_text_block(
         acp::ContentBlock::Resource(acp::EmbeddedResource::new(acp::EmbeddedResourceResource::TextResourceContents(
             acp::TextResourceContents::new(text, uri).mime_type(mime_type),
         ))),
-        None,
         warning,
     ))
 }

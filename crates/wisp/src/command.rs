@@ -1,17 +1,17 @@
 use crate::attachment::{AttachmentOutcome, PromptAttachment};
-use acp_utils::conversation::ConversationId;
 use crate::file_index::FileEntry;
 use crate::git_review::{ClientState, DiffReviewEvent, ServerMessage};
 use crate::request::RequestId;
 use crate::session::workspace_status::WorkspaceStatus;
 use crate::settings::UiSettings;
 use crate::theme::{Theme, ThemeApplicationError};
+use acp_utils::conversation::ConversationId;
 use acp_utils::notifications::{
     PromptSearchParams, PromptSearchResponse, SessionPreviewResponse, WorkspaceListResponse, WorkspaceMoveResponse,
     WorkspaceMoveTarget,
 };
 use agent_client_protocol::schema::v2::{
-    ContentBlock, ListSessionsResponse, LoginAuthResponse, NewSessionResponse, PromptResponse, ResumeSessionResponse,
+    ContentBlock, ListSessionsResponse, LoginAuthResponse, NewSessionResponse, ResumeSessionResponse,
     SessionConfigOptionValue, SessionId, SetSessionConfigOptionResponse,
 };
 use std::path::PathBuf;
@@ -28,6 +28,7 @@ pub enum Command {
 #[derive(Debug, Clone)]
 pub enum AgentCommand {
     Prompt {
+        request_id: RequestId,
         session_id: SessionId,
         text: String,
         content: Option<Vec<ContentBlock>>,
@@ -99,8 +100,14 @@ pub enum TerminalCommand {
     RingBell,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PromptRejection {
+    Cancelled,
+    Failed(String),
+}
+
 pub enum CommandResult {
-    Prompt(Result<PromptResponse, String>),
+    Prompt { request_id: RequestId, result: Result<(), PromptRejection> },
     Cancel(Result<(), String>),
     AuthenticateMcp(Result<(), String>),
     ConfigOptionsUpdated { conversation_id: ConversationId, result: Result<SetSessionConfigOptionResponse, String> },
