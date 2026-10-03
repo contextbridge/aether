@@ -83,7 +83,6 @@ pub enum AetherClientErrorCode {
     ConnectFailed,
     Protocol,
     InvalidArgument,
-    TurnInProgress,
     NoSession,
     AlreadyAnswered,
 }

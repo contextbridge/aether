@@ -1,8 +1,9 @@
+use crate::TestResult;
 use acp_utils::config_option_id::ConfigOptionId;
 use aether_cli::acp::testing::{AcpTestHarness, FakeAgentSwitchingSession};
 use agent_client_protocol::schema::v2::{
-    CloseSessionRequest, ContentBlock, PromptRequest, PromptResponse, SetSessionConfigOptionRequest, StopReason,
-    TextContent,
+    CloseSessionRequest, ContentBlock, ImageContent, PromptRequest, PromptResponse, SetSessionConfigOptionRequest,
+    StopReason, TextContent,
 };
 use std::future::Future;
 
@@ -151,6 +152,31 @@ async fn mode_change_applies_at_next_prompt_boundary() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn prompt_sent_before_a_deferred_mode_switch_is_validated_against_the_agent_that_runs_it() -> TestResult {
+    AcpTestHarness::run(|mut harness| async move {
+        let (expansion_started, release_expansion) = harness.pause_prompt_expansion();
+        let fake = harness.insert_agent_switching_session().await;
+        harness.expect_mcp_server_status(&["planner-mcp"]).await;
+        let in_flight = send_prompt(&harness, &fake, "/plan");
+        expansion_started.notified().await;
+
+        select_coder(&harness, &fake).await;
+        let image = send_content(&harness, &fake, vec![ContentBlock::Image(ImageContent::new("aW1n", "image/png"))]);
+        release_expansion.notify_one();
+
+        in_flight.await?;
+        image.await?;
+        harness.expect_mcp_server_status(&["coder-mcp"]).await;
+        fake.planner().assert_saw_user_content(&[llm::ContentBlock::Image {
+            data: "aW1n".into(),
+            mime_type: "image/png".into(),
+        }]);
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn loaded_session_restores_last_active_agent_from_control_events() {
     AcpTestHarness::run(|mut harness| async move {
         harness.append_stored_session("loaded", "2026-05-01T00:00:00Z");
@@ -221,10 +247,15 @@ fn send_prompt(
     fake: &FakeAgentSwitchingSession,
     text: &str,
 ) -> impl Future<Output = Result<PromptResponse, agent_client_protocol::Error>> + use<> {
-    let response = harness.client_cx.send_request(PromptRequest::new(
-        fake.session_id().clone(),
-        vec![ContentBlock::Text(TextContent::new(text.to_string()))],
-    ));
+    send_content(harness, fake, vec![ContentBlock::Text(TextContent::new(text.to_string()))])
+}
+
+fn send_content(
+    harness: &AcpTestHarness,
+    fake: &FakeAgentSwitchingSession,
+    content: Vec<ContentBlock>,
+) -> impl Future<Output = Result<PromptResponse, agent_client_protocol::Error>> + use<> {
+    let response = harness.client_cx.send_request(PromptRequest::new(fake.session_id().clone(), content));
     async move { response.block_task().await }
 }
 

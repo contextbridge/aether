@@ -1,12 +1,10 @@
+use crate::TestResult;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v2::{Implementation, InitializeRequest};
-use std::error::Error;
 use std::io::{BufRead, BufReader, Error as IoError, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
 use std::process::{Command, Stdio};
-
-type TestResult<T = ()> = std::result::Result<T, Box<dyn Error>>;
 
 #[test]
 fn socket_backed_stdio_serves_acp() -> TestResult {

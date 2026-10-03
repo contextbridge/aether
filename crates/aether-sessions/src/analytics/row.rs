@@ -207,6 +207,8 @@ impl EventProjection {
     fn from_turn(event: &TurnEvent) -> Self {
         match event {
             TurnEvent::Started { .. } => Self::new("agent", "turn_started"),
+            TurnEvent::UserMessageInserted { .. } => Self::new("agent", "user_message_inserted"),
+            TurnEvent::UserMessageDiscarded { .. } => Self::new("agent", "user_message_discarded"),
             TurnEvent::RetryScheduled { .. } => Self::new("agent", "retry_scheduled"),
             TurnEvent::LlmCallStarted { model, display_name, .. } => Self {
                 model_name: model.model_id.clone().or_else(|| Some(display_name.clone())),

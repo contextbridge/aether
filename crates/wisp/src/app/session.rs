@@ -6,6 +6,7 @@ use crate::surfaces::input::{
     ElicitationOutput, GitReviewOutput, ArtifactReviewOutput, ReviewOutcome, RootOutput, SessionPickerOutput,
     SettingsOutput, WorkspacePickerOutput,
 };
+use crate::surfaces::composer::Submission;
 use crate::surfaces::picker::CommandEntry;
 use acp_utils::notifications::AetherCapabilities;
 use agent_client_protocol::schema::v2::SessionId;
@@ -241,7 +242,7 @@ impl App {
             return;
         }
         self.conversation.append_notice(format!("[wisp] Submitted review of working tree diff.\n{prompt}"));
-        self.start_prompt(prompt.to_string(), None, None);
+        self.start_prompt(Submission { text: prompt.to_string(), ..Submission::default() }, None);
         self.close_active();
     }
 
@@ -262,7 +263,7 @@ impl App {
     }
 
     pub(super) fn can_start_foreground_operation(&self) -> bool {
-        self.foreground.is_idle() && self.conversation.turn().is_idle()
+        self.foreground.is_idle() && !self.waiting_for_response()
     }
 
     /// Adds a semantic notice for information outside the agent's own output.

@@ -6,14 +6,13 @@ mod turn;
 pub use activity::Activity;
 pub use items::{ConversationContent, ConversationId, ConversationItem, ConversationItemId, ItemState, Revision};
 pub use tool_calls::{SubAgentState, ToolCall, ToolStatus};
-pub use turn::{TurnFinished, TurnInProgress, TurnPhase};
+pub use turn::{TurnFinished, TurnPhase};
 
 use crate::client::AcpEvent;
 use crate::notifications::SubAgentProgressParams;
 use agent_client_protocol::schema::{MaybeUndefined, v2 as acp};
 use items::MessageRole;
 use std::collections::{HashMap, HashSet};
-use std::fmt::Display;
 
 /// One session's conversation items and state of the current turn.
 #[derive(Debug)]
@@ -23,7 +22,6 @@ pub struct Conversation {
     items: Vec<ConversationItem>,
     tool_index: HashMap<String, usize>,
     message_index: HashMap<acp::MessageId, usize>,
-    pending_user: Option<usize>,
     next_item_id: u64,
     turn: TurnPhase,
     turn_ended: bool,
@@ -47,7 +45,6 @@ impl Conversation {
             items: Vec::new(),
             tool_index: HashMap::new(),
             message_index: HashMap::new(),
-            pending_user: None,
             next_item_id: 0,
             turn: TurnPhase::Idle,
             turn_ended: false,
@@ -72,39 +69,9 @@ impl Conversation {
         None
     }
 
-    pub fn start_prompt(&mut self, echo: Option<Vec<acp::ContentBlock>>) -> Result<(), TurnInProgress> {
-        if !self.turn.is_idle() {
-            return Err(TurnInProgress);
-        }
-        if let Some(content) = echo {
-            self.push(ItemState::Open, ConversationContent::User(content));
-            let index = self.items.len() - 1;
-            self.items[index].preserve_user_display = true;
-            self.pending_user = Some(index);
-        }
-        self.begin_turn(TurnPhase::Submitting);
-        Ok(())
-    }
-
-    /// The agent accepted the prompt.
-    pub fn accept_prompt(&mut self) {
-        self.set_turn(self.turn.accepted());
-    }
-
-    pub fn fail_prompt(&mut self, reason: impl Display) {
-        if self.turn.waiting_for_response() {
-            self.end_turn(ToolStatus::Failed, Some(&reason.to_string()));
-        }
-        self.set_turn(TurnPhase::Idle);
-    }
-
     pub fn clear(&mut self) {
-        *self = Self { turn: self.turn.finished(), revision: self.revision, ..Self::new() };
+        *self = Self { revision: self.revision, ..Self::new() };
         self.advance();
-    }
-
-    pub fn append_user_content(&mut self, content: Vec<acp::ContentBlock>) -> ConversationItemId {
-        self.push(ItemState::Sealed, ConversationContent::User(content))
     }
 
     pub fn append_notice(&mut self, text: impl Into<String>) -> ConversationItemId {
@@ -152,9 +119,8 @@ impl Conversation {
 
     fn apply_update(&mut self, update: &acp::SessionUpdate) -> Option<TurnFinished> {
         if matches!(update, acp::SessionUpdate::StateUpdate(acp::StateUpdate::Running(_))) && self.turn.is_idle() {
-            self.begin_turn(TurnPhase::Running);
-        }
-        if self.turn.waiting_for_response()
+            self.begin_turn();
+        } else if !self.turn.is_idle()
             && let Some(activity) = Activity::after(update)
         {
             self.set_activity(activity);
@@ -165,7 +131,7 @@ impl Conversation {
                     self.apply_compaction(update);
                 }
             }
-            acp::SessionUpdate::StateUpdate(acp::StateUpdate::Idle(idle)) if self.turn.waiting_for_response() => {
+            acp::SessionUpdate::StateUpdate(acp::StateUpdate::Idle(idle)) if !self.turn.is_idle() => {
                 return Some(self.finish_turn(idle.stop_reason.clone()));
             }
             acp::SessionUpdate::UserMessage(message) => {
@@ -216,23 +182,19 @@ impl Conversation {
     }
 
     fn connection_closed(&mut self) {
-        self.set_turn(TurnPhase::Idle);
+        if !self.turn.is_idle() {
+            self.turn = TurnPhase::Idle;
+            self.advance();
+        }
         self.turn_ended = true;
         self.set_activity(Activity::Idle);
     }
 
-    fn begin_turn(&mut self, phase: TurnPhase) {
-        self.turn = phase;
+    fn begin_turn(&mut self) {
+        self.turn = TurnPhase::Running;
         self.turn_ended = false;
         self.activity = Activity::Thinking;
         self.advance();
-    }
-
-    fn set_turn(&mut self, turn: TurnPhase) {
-        if self.turn != turn {
-            self.turn = turn;
-            self.advance();
-        }
     }
 
     fn set_activity(&mut self, activity: Activity) {
@@ -247,24 +209,19 @@ impl Conversation {
             Some(acp::StopReason::Cancelled) => ToolStatus::Cancelled,
             _ => ToolStatus::Success,
         };
-        self.end_turn(status, None);
-        TurnFinished { stop_reason }
-    }
-
-    fn end_turn(&mut self, status: ToolStatus, error: Option<&str>) {
-        self.turn = self.turn.finished();
+        self.turn = TurnPhase::Idle;
         self.turn_ended = true;
         self.compactions.clear();
         self.activity = Activity::Idle;
-        self.pending_user = None;
         let revision = self.advance();
         for item in self.items.iter_mut().filter(|item| item.is_open()) {
             if let ConversationContent::Tool(tool_call) = &mut item.content {
-                tool_call.finalize(status, error);
+                tool_call.finalize(status);
             }
             item.state = ItemState::Sealed;
             item.touch(revision, false);
         }
+        TurnFinished { stop_reason }
     }
 
     fn apply_compaction(&mut self, update: &acp::CompactionUpdate) {
@@ -293,9 +250,6 @@ impl Conversation {
         };
         let index = self.message_slot(role, message_id.clone());
         let item = &mut self.items[index];
-        if item.preserve_user_display {
-            return;
-        }
         let content = role.content(blocks);
         if item.content != content {
             item.content = content;
@@ -306,9 +260,6 @@ impl Conversation {
     fn append_message_chunk(&mut self, role: MessageRole, chunk: &acp::ContentChunk) {
         let index = self.message_slot(role, chunk.message_id.clone());
         let item = &mut self.items[index];
-        if item.preserve_user_display {
-            return;
-        }
         let rewrites = !item.is_open() || role == MessageRole::User;
         if role.blocks_mut(&mut item.content).is_some_and(|blocks| items::append_block(blocks, &chunk.content)) {
             self.touch(index, rewrites);
@@ -319,11 +270,8 @@ impl Conversation {
         if let Some(&index) = self.message_index.get(&message_id) {
             return index;
         }
-        let index = if role == MessageRole::User { self.pending_user.take() } else { None }.unwrap_or_else(|| {
-            let index = self.items.len();
-            self.push(ItemState::Open, role.content(Vec::new()));
-            index
-        });
+        let index = self.items.len();
+        self.push(ItemState::Open, role.content(Vec::new()));
         self.items[index].message_id = Some(message_id.clone());
         self.message_index.insert(message_id, index);
         index

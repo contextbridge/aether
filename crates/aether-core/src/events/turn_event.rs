@@ -71,26 +71,25 @@ pub struct RetryInfo {
     pub delay_ms: u64,
 }
 
-/// Turn lifecycle events.
-///
-/// A turn spans from a user message to a terminal [`TurnEvent::Ended`]. Within a
-/// turn, each LLM call is bracketed by `LlmCallStarted`/`LlmCallEnded`; retries
-/// surface as an `LlmCallStarted` with `attempt > 0`. Note that the completion
-/// events for streamed message content
-/// ([`MessageEvent`](crate::events::MessageEvent) with `is_complete: true`) are
-/// emitted at turn completion, after the originating call's `LlmCallEnded`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TurnEvent {
-    /// A user message began a turn. Messages queued while a turn is active are
-    /// folded into that turn and do not start a new one.
     Started {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         content: Vec<ContentBlock>,
     },
-    /// A retry is waiting for its backoff delay before the request starts.
-    RetryScheduled { purpose: LlmCallPurpose, attempt: u32, max_attempts: u32, delay_ms: u64 },
-    /// An LLM request was issued.
+    UserMessageInserted {
+        message_id: MessageId,
+    },
+    UserMessageDiscarded {
+        message_id: MessageId,
+    },
+    RetryScheduled {
+        purpose: LlmCallPurpose,
+        attempt: u32,
+        max_attempts: u32,
+        delay_ms: u64,
+    },
     LlmCallStarted {
         purpose: LlmCallPurpose,
         model: ModelIdentity,
@@ -99,13 +98,19 @@ pub enum TurnEvent {
         attempt: u32,
         max_attempts: u32,
     },
-    /// An LLM call reached a terminal state.
-    LlmCallEnded { purpose: LlmCallPurpose, outcome: LlmCallOutcome },
-    /// The agent is auto-continuing because the LLM stopped with a resumable
-    /// stop reason.
-    AutoContinue { attempt: u32, max_attempts: u32, message_id: MessageId, content: Vec<ContentBlock> },
-    /// The turn reached a terminal state.
-    Ended { outcome: TurnOutcome },
+    LlmCallEnded {
+        purpose: LlmCallPurpose,
+        outcome: LlmCallOutcome,
+    },
+    AutoContinue {
+        attempt: u32,
+        max_attempts: u32,
+        message_id: MessageId,
+        content: Vec<ContentBlock>,
+    },
+    Ended {
+        outcome: TurnOutcome,
+    },
 }
 
 impl TurnEvent {

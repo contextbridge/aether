@@ -51,8 +51,6 @@ pub enum ConversationContent {
 pub struct ConversationItem {
     id: ConversationItemId,
     pub(super) message_id: Option<acp::MessageId>,
-    #[serde(skip)]
-    pub(super) preserve_user_display: bool,
     revision: Revision,
     #[serde(skip)]
     replacement_revision: Revision,
@@ -108,15 +106,7 @@ impl ConversationItem {
         state: ItemState,
         content: ConversationContent,
     ) -> Self {
-        Self {
-            id,
-            message_id: None,
-            preserve_user_display: false,
-            revision,
-            replacement_revision: revision,
-            state,
-            content,
-        }
+        Self { id, message_id: None, revision, replacement_revision: revision, state, content }
     }
 
     pub(super) fn touch(&mut self, revision: Revision, rewrites: bool) {

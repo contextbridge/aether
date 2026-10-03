@@ -154,11 +154,7 @@ impl Agent {
                 }
 
                 StreamEvent::Command(Command::UserCommand(UserCommand::Text { message_id, content })) => {
-                    if self.is_busy() {
-                        self.queued_inputs.push_back(QueuedInput::User { message_id, content });
-                    } else {
-                        self.begin_turn(QueuedInput::User { message_id, content }, &mut state).await;
-                    }
+                    self.receive_input(QueuedInput::User { message_id, content }, &mut state).await;
                 }
 
                 StreamEvent::Command(Command::AgentCommand(AgentCommand::SwitchModel(new_provider))) => {
@@ -287,17 +283,15 @@ impl Agent {
 
     async fn on_user_cancel(&mut self, state: &mut IterationState) {
         self.abort_in_flight_work(ToolAbortPolicy::PreserveBackgroundAcknowledgements).await;
-        self.commit_pending_inputs().await;
-        self.queued_inputs.retain(|input| matches!(input, QueuedInput::TaskOutcome(_)));
-        self.commit_queued_inputs().await;
         *state = IterationState::default();
         self.finish_turn(TurnOutcome::Cancelled).await;
     }
 
     async fn discard_in_flight_work(&mut self, state: &mut IterationState) {
         self.abort_in_flight_work(ToolAbortPolicy::CancelAll).await;
-        self.pending_inputs.clear();
-        self.queued_inputs.clear();
+        let mut inputs = std::mem::take(&mut self.pending_inputs);
+        inputs.append(&mut self.queued_inputs);
+        self.discard_inputs(inputs, false).await;
         self.auto_continue.reset();
         *state = IterationState::default();
     }
@@ -327,9 +321,8 @@ impl Agent {
         self.start_next_turn().await;
     }
 
-    async fn enqueue_task_outcome(&mut self, outcome: TaskOutcome, state: &mut IterationState) {
-        let input = QueuedInput::TaskOutcome(Box::new(outcome));
-        if self.is_busy() {
+    async fn receive_input(&mut self, input: QueuedInput, state: &mut IterationState) {
+        if self.turn_active {
             self.queued_inputs.push_back(input);
         } else {
             self.begin_turn(input, state).await;
@@ -675,7 +668,7 @@ impl Agent {
             }
             ToolExecutionUpdate::TaskCompleted(outcome) => {
                 self.streams.remove(&StreamKey::Tool(tool_id));
-                self.enqueue_task_outcome(outcome, state).await;
+                self.receive_input(QueuedInput::TaskOutcome(Box::new(outcome)), state).await;
             }
             ToolExecutionUpdate::TaskCancelled(outcome) => {
                 self.streams.remove(&StreamKey::Tool(tool_id));
@@ -705,16 +698,24 @@ impl Agent {
         self.commit_inputs(inputs).await;
     }
 
-    async fn commit_queued_inputs(&mut self) {
-        let inputs = std::mem::take(&mut self.queued_inputs);
-        self.commit_inputs(inputs).await;
+    async fn discard_inputs(&mut self, inputs: VecDeque<QueuedInput>, keep_task_outcomes: bool) {
+        for input in inputs {
+            match input {
+                QueuedInput::User { message_id, .. } => {
+                    self.emit(AgentEvent::Turn(TurnEvent::UserMessageDiscarded { message_id })).await;
+                }
+                QueuedInput::TaskOutcome(outcome) if keep_task_outcomes => self.record_task_outcome(*outcome).await,
+                QueuedInput::TaskOutcome(_) => {}
+            }
+        }
     }
 
     async fn commit_inputs(&mut self, inputs: VecDeque<QueuedInput>) {
         for input in inputs {
             match input {
                 QueuedInput::User { message_id, content } => {
-                    self.context.add_message(ChatMessage::user_with_id(message_id, content));
+                    self.context.add_message(ChatMessage::user_with_id(message_id.clone(), content));
+                    self.emit(AgentEvent::Turn(TurnEvent::UserMessageInserted { message_id })).await;
                 }
                 QueuedInput::TaskOutcome(outcome) => self.record_task_outcome(*outcome).await,
             }
@@ -739,6 +740,9 @@ impl Agent {
     }
 
     async fn finish_turn(&mut self, outcome: TurnOutcome) {
+        self.commit_pending_inputs().await;
+        let queued = std::mem::take(&mut self.queued_inputs);
+        self.discard_inputs(queued, true).await;
         if std::mem::take(&mut self.turn_active) {
             self.emit(AgentEvent::turn_ended(outcome)).await;
         }

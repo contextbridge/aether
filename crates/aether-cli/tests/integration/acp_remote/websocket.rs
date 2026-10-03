@@ -197,7 +197,6 @@ async fn second_websocket_is_rejected_without_detaching_owner() {
         let mut owner = connect(&server, &id).await;
         expect_running(&mut owner).await;
         assert_occupied(&server).await;
-        assert!(owner.handle.prompt(PromptRequest::new(id.clone(), vec!["still busy".into()])).await.is_err());
         release.notify_one();
         expect_completed(&mut owner, &id, Some(StopReason::EndTurn)).await;
         assert_persisted_response(&harness, &id);

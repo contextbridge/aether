@@ -1,15 +1,17 @@
+mod queued_prompts_view;
 mod view;
+pub(crate) use queued_prompts_view::QueuedPromptsView;
 pub(crate) use view::ComposerBodyView;
 
 use crate::attachment::{AttachmentKind, PromptAttachment, classify_attachment};
 use crate::command::FilesystemCommand;
 use crate::file_index::FileEntry;
+use crate::request::RequestId;
 use crate::surfaces::input::MouseAction;
 use crate::surfaces::picker::{CommandEntry, CompletionOverlay};
 use crate::surfaces::prompt_search::{self, PromptSearchPicker};
 use crate::view::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::view::filterable_list::FilterableList;
-use crate::request::RequestId;
 use crate::view::selection::Direction;
 use acp_utils::notifications::PromptSearchResponse;
 use crossterm::event::KeyCode;
@@ -22,6 +24,23 @@ use unicode_width::UnicodeWidthStr;
 pub struct SelectedFileMention {
     pub path: std::path::PathBuf,
     pub display_name: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Submission {
+    pub text: String,
+    pub mentions: Vec<SelectedFileMention>,
+    pub media: Vec<PromptAttachment>,
+}
+
+impl Submission {
+    pub fn attachments(&self) -> Vec<PromptAttachment> {
+        let mentions = self.mentions.iter().map(|mention| PromptAttachment {
+            path: mention.path.clone(),
+            display_name: mention.display_name.clone(),
+        });
+        mentions.chain(self.media.iter().cloned()).collect()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -155,14 +174,25 @@ impl Composer {
             .collect()
     }
 
-    pub fn take_submission(&mut self) -> (String, Vec<PromptAttachment>) {
+    pub fn take_submission(&mut self) -> Submission {
+        let mentions = self.selected_mentions();
         let text = self.buffer.take();
-        let pending_media = std::mem::take(&mut self.pending_media);
+        let media = std::mem::take(&mut self.pending_media);
         self.history.push(&text);
         self.overlay = None;
         self.mentions.clear();
         self.history.reset();
-        (text, pending_media)
+        Submission { text, mentions, media }
+    }
+
+    pub fn restore_submission(&mut self, submission: Submission) {
+        let Submission { text, mentions, media } = submission;
+        let restored = if self.buffer.is_empty() { text } else { format!("{}\n{text}", self.buffer.text()) };
+        self.buffer.set_text(restored);
+        self.buffer.set_cursor(self.buffer.text().len());
+        push_missing(&mut self.mentions, mentions);
+        push_missing(&mut self.pending_media, media);
+        self.history.reset();
     }
 
     pub fn clear(&mut self) {
@@ -612,6 +642,14 @@ fn navigate_list<T>(list: &mut FilterableList<T>, direction: Option<Direction>, 
         Some(direction) => list.step(direction),
         None => {
             list.select_at(row);
+        }
+    }
+}
+
+fn push_missing<T: PartialEq>(items: &mut Vec<T>, restored: Vec<T>) {
+    for item in restored {
+        if !items.contains(&item) {
+            items.push(item);
         }
     }
 }

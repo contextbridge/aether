@@ -111,9 +111,8 @@ function describe(item: ConversationItem): string {
         .map((block) => (block.type === "text" ? block.text : block.type))
         .join("");
     case "tool": {
-      const { status, error, subAgents, toolCall } = item.content;
-      const outcome = error ? `${status}: ${error}` : status;
-      return `${toolCall.title ?? "tool"}: ${outcome} (${subAgents.length} sub-agents)`;
+      const { status, subAgents, toolCall } = item.content;
+      return `${toolCall.title ?? "tool"}: ${status} (${subAgents.length} sub-agents)`;
     }
     case "notice":
       return item.content;

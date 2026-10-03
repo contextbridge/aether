@@ -10,7 +10,8 @@ use rmcp::{
 pub use elicitation_script::{CapturedElicitation, ElicitationScript, UrlElicitationHandler, url_elicitation_handler};
 #[cfg(all(feature = "client", any(test, feature = "testing")))]
 pub use fake_mcp::{
-    CapturedTaskUpdate, CapturedToolCall, FakeMcpServer, FakeMcpState, FakeTool, FakeToolResponse, fake_mcp,
+    CapturedTaskUpdate, CapturedToolCall, FakeMcpServer, FakeMcpState, FakeTool, FakeToolResponse,
+    completed_task_payload, fake_mcp,
 };
 
 #[cfg(all(feature = "client", any(test, feature = "testing")))]

@@ -18,6 +18,7 @@ mod perf;
 mod plans;
 mod progress_indicator;
 mod prompt_search;
+mod queued_prompts;
 mod review_rendering;
 mod scrollback;
 mod session_config_view;

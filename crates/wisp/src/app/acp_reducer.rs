@@ -18,6 +18,7 @@ impl App {
         if current
             && let Some(TurnFinished { stop_reason }) = self.conversation.apply_event(&event)
             && stop_reason != Some(acp::StopReason::Cancelled)
+            && self.queued_prompts.is_empty()
         {
             self.queue(Command::Terminal(TerminalCommand::RingBell));
         }

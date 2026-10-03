@@ -7,7 +7,7 @@
 use crate::app::message::Message;
 use crate::app::{App, AppConfig};
 use crate::attachment::{AttachmentOutcome, PromptAttachment, build_attachments_with};
-use crate::command::{AgentCommand, Command, CommandResult, FilesystemCommand, GitReviewCommand};
+use crate::command::{AgentCommand, Command, CommandResult, FilesystemCommand, GitReviewCommand, PromptRejection};
 use crate::file_index::{FileEntry, MAX_INDEXED_FILES, file_entries};
 use crate::git_review::{
     ClientState, ConnectionState, DiffDocument, DiffReviewEvent, DiffScope, DiffSnapshot, FileDiff, FileStatus,
@@ -15,12 +15,14 @@ use crate::git_review::{
 };
 pub use crate::renderer::RenderStats;
 use crate::renderer::Renderer;
+use crate::request::RequestId;
 use crate::session::platform::BrowserOpener;
 use crate::session::terminal::inline_viewport_height;
 use crate::session::workspace_status::WorkspaceStatus;
 use crate::settings::UiSettings;
 use crate::surfaces::composer::ComposerLayout;
 use acp_utils::client::AcpEvent;
+use acp_utils::content::display_content_blocks;
 use acp_utils::notifications::{
     AetherCapabilities, ContextClearedParams, SubAgentEvent, SubAgentProgressParams, WorkspaceStatusResponse,
 };
@@ -210,6 +212,49 @@ impl FakeExecutor {
 
     fn clear_available(&mut self) {
         self.available.clear();
+    }
+}
+
+#[derive(Default)]
+struct FakeAgent {
+    running: bool,
+    queued: VecDeque<SentPrompt>,
+    inserted: usize,
+    rejection: Option<PromptRejection>,
+}
+
+struct SentPrompt {
+    request_id: RequestId,
+    content: Vec<acp::ContentBlock>,
+}
+
+impl FakeAgent {
+    fn observe(&mut self, message: &Message, session_id: &SessionId) {
+        let Message::Agent(event) = message else { return };
+        match event.as_ref() {
+            AcpEvent::SessionUpdate(notification) if notification.session_id == *session_id => {
+                match notification.update {
+                    acp::SessionUpdate::StateUpdate(acp::StateUpdate::Running(_)) => self.running = true,
+                    acp::SessionUpdate::StateUpdate(acp::StateUpdate::Idle(_)) => self.running = false,
+                    _ => {}
+                }
+            }
+            AcpEvent::ConnectionClosed => {
+                self.running = false;
+                self.queued.clear();
+            }
+            _ => {}
+        }
+    }
+
+    fn receive(&mut self, commands: &[Command]) {
+        for command in commands {
+            if let Command::Agent(AgentCommand::Prompt { request_id, text, content, .. }) = command {
+                let mut blocks = vec![acp::ContentBlock::from(text.clone())];
+                blocks.extend(content.iter().flatten().cloned());
+                self.queued.push_back(SentPrompt { request_id: *request_id, content: blocks });
+            }
+        }
     }
 }
 
@@ -766,6 +811,7 @@ pub struct TestUi<B: Backend = TestBackend> {
     renderer: Renderer,
     terminal: Terminal<B>,
     executor: FakeExecutor,
+    agent: FakeAgent,
     opened_urls: Arc<Mutex<Vec<String>>>,
 }
 
@@ -784,6 +830,7 @@ where
             renderer: Renderer::new(),
             terminal: test_terminal(backend),
             executor: FakeExecutor::new(),
+            agent: FakeAgent::default(),
             opened_urls: builder.opened_urls.clone(),
         }
     }
@@ -795,10 +842,47 @@ where
         &self.app
     }
 
-    /// Delivers one message through the public application boundary and records
-    /// every command it emits in the fake runtime.
     pub fn deliver(&mut self, message: Message) {
-        self.executor.record(self.app.update(message));
+        self.agent.observe(&message, self.app.session_id());
+        let commands = self.app.update(message);
+        self.agent.receive(&commands);
+        self.executor.record(commands);
+        if !self.agent.running {
+            self.insert_queued_prompts();
+        }
+    }
+
+    pub fn insert_queued_prompts(&mut self) {
+        while let Some(prompt) = self.agent.queued.pop_front() {
+            if let Some(rejection) = self.agent.rejection.clone() {
+                self.deliver_result(CommandResult::Prompt { request_id: prompt.request_id, result: Err(rejection) });
+                continue;
+            }
+            if !self.agent.running {
+                let session_id = self.app.session_id().clone();
+                let running =
+                    acp::SessionUpdate::StateUpdate(acp::StateUpdate::Running(acp::RunningStateUpdate::new()));
+                self.acp_event(acp::UpdateSessionNotification::new(session_id, running).into());
+            }
+            self.agent.inserted += 1;
+            let message = acp::UserMessage::new(format!("user-message-{}", self.agent.inserted))
+                .content(display_content_blocks(&prompt.content));
+            self.acp_event(session_update(acp::SessionUpdate::UserMessage(message)));
+            self.deliver_result(CommandResult::Prompt { request_id: prompt.request_id, result: Ok(()) });
+        }
+    }
+
+    pub fn reject_queued_prompts(&mut self, rejection: &PromptRejection) {
+        while let Some(prompt) = self.agent.queued.pop_front() {
+            self.deliver_result(CommandResult::Prompt {
+                request_id: prompt.request_id,
+                result: Err(rejection.clone()),
+            });
+        }
+    }
+
+    pub fn reject_prompts(&mut self, rejection: PromptRejection) {
+        self.agent.rejection = Some(rejection);
     }
 
     pub fn deliver_result(&mut self, result: CommandResult) {
@@ -882,10 +966,6 @@ where
         for turn in 0..turns {
             let prompt = format!("Turn {turn}: reconcile the writer path in module_{turn} and add a regression test.");
             self.submit(&prompt);
-            self.acp_event(session_update(acp::SessionUpdate::UserMessage(
-                acp::UserMessage::new(format!("seed-user-{turn}"))
-                    .content(vec![acp::ContentBlock::Text(acp::TextContent::new(prompt))]),
-            )));
             self.acp_event(session_update(acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(
                 acp::ContentBlock::Text(acp::TextContent::new(format!(
                     "Reading module_{turn} to find the torn-update window before touching any call site."
@@ -984,8 +1064,8 @@ where
         self.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     }
 
+    /// The agent reports that its turn is over.
     pub fn complete_prompt(&mut self, stop_reason: acp::StopReason) {
-        self.deliver_result(CommandResult::Prompt(Ok(acp::PromptResponse::new("user-message"))));
         let session_id = self.app.session_id().clone();
         let update = acp::SessionUpdate::StateUpdate(acp::StateUpdate::Idle(
             acp::IdleStateUpdate::new().stop_reason(stop_reason),
@@ -1366,6 +1446,7 @@ impl TestUiBuilder {
             renderer: Renderer::new(),
             terminal: test_terminal(TestBackend::new(self.width, self.height)),
             executor: FakeExecutor::with_git(self.git),
+            agent: FakeAgent::default(),
             opened_urls: self.opened_urls,
         }
     }

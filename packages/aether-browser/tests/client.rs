@@ -51,12 +51,12 @@ async fn without_a_session_prompt_cancel_and_close_reject_with_no_session() {
 }
 
 #[wasm_bindgen_test]
-async fn prompt_resolves_on_acceptance_and_streams_the_turn_as_events() {
+async fn prompt_resolves_on_insertion_and_streams_the_turn_as_events() {
     let mut client = test_client().with_session().connect().await;
 
     let response = client.prompt().await;
     assert_eq!(response.message_id.0.as_ref(), "user-message");
-    assert!(matches!(client.next_update().await, SessionUpdate::StateUpdate(StateUpdate::Running(_))));
+    client.expect_turn_start().await;
     assert_eq!(client.next_message().await, "hello from the fake agent");
     assert!(matches!(
         client.next_update().await,
@@ -115,7 +115,7 @@ async fn releasing_an_unanswered_elicitation_answers_cancel() {
 async fn an_elicitation_request_event_serializes_its_request() {
     let mut client = test_client().eliciting().with_session().connect().await;
     client.prompt().await;
-    client.next_update().await;
+    client.expect_turn_start().await;
 
     let event = client.next_event().await;
     let json: serde_json::Value = serde_json::from_str(&String::from(JSON::stringify(&event.0).unwrap())).unwrap();
@@ -128,11 +128,6 @@ async fn a_prompt_reduces_into_conversation_snapshots() {
     let mut client = test_client().with_session().connect().await;
     client.prompt().await;
 
-    let first = client.next_conversation().await;
-    let second = client.next_conversation().await;
-    assert_eq!(first.json()["turn"], "submitting");
-    assert!(Object::is(&first.item(0), &second.item(0)), "an unchanged item keeps its object");
-
     let settled = client.conversation_where(|conversation| conversation["turn"] == "idle").await;
     let items = settled.json()["items"].clone();
     assert_eq!(items[0]["kind"], "user");
@@ -141,14 +136,17 @@ async fn a_prompt_reduces_into_conversation_snapshots() {
     assert_eq!(items[1]["content"], json!([{"type": "text", "text": "hello from the fake agent"}]));
     assert!(items.as_array().unwrap().iter().all(|item| item["state"] == "sealed"));
     assert_eq!(settled.json()["activity"], "idle");
+
+    client.prompt().await;
+    let next = client.conversation_where(|conversation| conversation["turn"] == "idle").await;
+    assert!(Object::is(&settled.item(0), &next.item(0)), "an unchanged item keeps its object");
 }
 
 #[wasm_bindgen_test]
-async fn a_prompt_during_a_turn_rejects_with_turn_in_progress() {
+async fn a_prompt_during_a_turn_is_sent_to_the_agent() {
     let client = test_client().eliciting().with_session().connect().await;
     client.prompt().await;
-    let error = client.try_prompt().await.expect_err("the elicitation holds the turn open");
-    assert_eq!(code(&error), "turn_in_progress");
+    client.try_prompt().await.expect("the agent decides when a prompt sent during a turn joins it");
 }
 
 #[wasm_bindgen_test]
@@ -423,10 +421,17 @@ impl TestClient {
     /// Prompt the current session, for the eliciting agent's turn to ask its question.
     async fn elicit(&mut self) -> Elicitation {
         self.prompt().await;
-        assert!(matches!(self.next_update().await, SessionUpdate::StateUpdate(StateUpdate::Running(_))));
+        self.expect_turn_start().await;
         let event = self.next_event().await;
         assert_eq!(event.kind(), "elicitation_request");
         Elicitation::try_from_js_value(event.get("elicitation")).expect("the event carries an Elicitation")
+    }
+
+    async fn expect_turn_start(&mut self) {
+        assert!(matches!(self.next_update().await, SessionUpdate::StateUpdate(StateUpdate::Running(_))));
+        assert!(
+            matches!(self.next_update().await, SessionUpdate::UserMessage(message) if message.message_id.0.as_ref() == "user-message")
+        );
     }
 
     async fn next_event(&mut self) -> Event {

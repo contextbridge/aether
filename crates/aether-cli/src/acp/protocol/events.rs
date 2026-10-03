@@ -149,6 +149,8 @@ pub fn map_agent_event_to_notification(msg: &AgentEvent, mode: NotificationMode)
         AgentEvent::Context(ContextEvent::Cleared)
         | AgentEvent::Turn(
             TurnEvent::Started { .. }
+            | TurnEvent::UserMessageInserted { .. }
+            | TurnEvent::UserMessageDiscarded { .. }
             | TurnEvent::Ended { outcome: TurnOutcome::Completed | TurnOutcome::Cancelled }
             | TurnEvent::RetryScheduled { .. }
             | TurnEvent::LlmCallStarted { .. }

@@ -144,12 +144,9 @@ fn selected_file_is_sent_as_an_acp_resource_attachment() {
     blocks.extend(content.unwrap());
     let expanded = acp_utils::content::map_content_blocks_to_text(&blocks);
     assert!(expanded.contains("attached context"), "the model receives the file contents");
-    app.acp_event(session_update(acp::SessionUpdate::UserMessage(
-        acp::UserMessage::new("attached-user").content(vec![acp::ContentBlock::from(expanded)]),
-    )));
-    app.draw();
     app.assert_viewport_contains("@context.txt");
-    assert!(!app.conversation_text().contains("attached context"));
+    app.assert_viewport_contains("file:///workspace/context.txt");
+    assert!(!app.conversation_text().contains("attached context"), "the transcript references the file");
 }
 
 #[test]
@@ -170,9 +167,9 @@ fn file_picker_renders_in_the_live_viewport_not_scrollback() {
 fn composer_history_restores_the_unsubmitted_draft() {
     let mut composer = Composer::new();
     composer.insert_str("first");
-    let (text, pending) = composer.take_submission();
-    assert_eq!(text, "first");
-    assert!(pending.is_empty());
+    let submission = composer.take_submission();
+    assert_eq!(submission.text, "first");
+    assert!(submission.attachments().is_empty());
     composer.insert_str("draft");
 
     assert!(composer.recall_previous());
@@ -194,7 +191,7 @@ fn composer_edits_unicode_without_splitting_graphemes() {
     composer.insert_newline();
     composer.insert_str("é");
     assert_eq!(composer.cursor_position(), (1, 1));
-    assert_eq!(composer.take_submission().0, "a\né🙂");
+    assert_eq!(composer.take_submission().text, "a\né🙂");
 }
 
 #[test]

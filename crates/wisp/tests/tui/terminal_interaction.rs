@@ -4,11 +4,11 @@ use ratatui::TerminalOptions;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use wisp::app::ForegroundOperation;
-use wisp::command::{AgentCommand, Command, CommandResult, TerminalCommand};
+use wisp::command::{AgentCommand, Command, CommandResult, PromptRejection, TerminalCommand};
 
 use super::support::{
     BooleanPropertySchema, ElicitationSchema, StringPropertySchema, TestUi, TestUiBuilder, accepted_content, acp,
-    block_on_local, buffer_text, form_elicitation, prompt_failed, with_elicitation,
+    block_on_local, buffer_text, form_elicitation, with_elicitation,
 };
 
 /// Whether the app asked the terminal to ring the bell, draining whatever else
@@ -322,9 +322,9 @@ mod bell {
     #[test]
     fn no_bell_after_prompt_error() {
         let mut app = make_app();
+        app.reject_prompts(PromptRejection::Failed("internal error".to_string()));
 
         app.submit("hello");
-        app.deliver_result(prompt_failed("internal error"));
 
         assert!(!rang_bell(&mut app));
     }

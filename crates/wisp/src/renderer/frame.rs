@@ -3,7 +3,7 @@ use super::layout::FrameLayout;
 use crate::app::App;
 use crate::conversation::plan_view::PlanView;
 use crate::conversation::progress_indicator::{ProgressIndicator, ProgressIndicatorView};
-use crate::surfaces::composer::ComposerBodyView;
+use crate::surfaces::composer::{ComposerBodyView, QueuedPromptsView};
 use crate::theme::Theme;
 use crate::view::widgets::RowsView;
 use crate::view::wrap::as_u16;
@@ -20,11 +20,12 @@ pub(super) fn draw_frame(
     layout: &FrameLayout,
     live: &[Line<'static>],
 ) {
-    let [transcript_area, plan_area, composer_area, status_area] = layout.split(frame.area());
+    let [transcript_area, plan_area, queued_area, composer_area, status_area] = layout.split(frame.area());
     let theme = renderer.theme();
     let buf = frame.buffer_mut();
 
     PlanView::new(&layout.plan_entries, theme).render(layout.indent(plan_area), buf);
+    QueuedPromptsView::new(app.queued_prompts(), theme).render(layout.indent(queued_area), buf);
     draw_transcript(layout, live, transcript_area, buf, app.progress_indicator(), theme, app.spinner_tick());
 
     let cursor = render_composer(layout, app, composer_area, buf, theme);

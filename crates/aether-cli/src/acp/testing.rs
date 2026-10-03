@@ -19,8 +19,8 @@ use acp_utils::testing::{TestPeer, initialize_request};
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
 use aether_core::core::{AgentBuilder, AgentHandle, Prompt};
-use aether_core::events::{AgentEvent, Command, MessageEvent, ToolEvent, TurnEvent, TurnOutcome};
-use aether_core::mcp::{ServerFactory, mcp};
+use aether_core::events::{AgentEvent, Command, MessageEvent, ToolEvent, TurnEvent, TurnOutcome, UserCommand};
+use aether_core::mcp::{McpBuilder, McpSession, ServerFactory, mcp};
 use aether_project::AgentCatalog;
 use aether_sessions::SessionStore;
 use aether_sessions::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent, last_agent_from_events};
@@ -31,9 +31,13 @@ use agent_client_protocol::schema::v2::{
 use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, on_receive_notification};
 use futures::FutureExt;
 use llm::testing::FakeLlmProvider;
-use llm::{ChatMessage, Context, LlmResponse, SessionUsageEvent, StreamingModelProvider};
+use llm::{ChatMessage, Context, LlmModel, LlmResponse, SessionUsageEvent, StreamingModelProvider};
 use llm::{MessageId, ProviderConnectionOverrides, ToolCallRequest, ToolCallResult};
 use mcp_utils::client::{InMemoryServerSpec, McpServer, McpTransport, ToolExposure};
+use mcp_utils::testing::{FakeMcpServer, FakeTool, FakeToolResponse, completed_task_payload};
+use rmcp::RoleServer;
+use rmcp::model::{CallToolResult, CreateTaskResult, DetailedTask, Task, TaskPayload, TaskStatus};
+use rmcp::service::DynService;
 use std::collections::HashMap;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -109,6 +113,10 @@ pub struct FakeAcpAgent {
     captured_contexts: Arc<Mutex<Vec<Context>>>,
 }
 
+pub struct FakeBackgroundTask {
+    server: FakeMcpServer,
+}
+
 pub struct PendingRuntime {
     started: oneshot::Receiver<()>,
     release: oneshot::Sender<bool>,
@@ -136,6 +144,10 @@ impl AcpTestHarness {
         let gate = (Arc::new(tokio::sync::Notify::new()), Arc::new(tokio::sync::Notify::new()));
         self.runtime_control.lock().unwrap().prompt_gate = Some(gate.clone());
         gate
+    }
+
+    pub fn watch_agent_prompts(&self) -> watch::Receiver<usize> {
+        self.runtime_control.lock().unwrap().agent_prompts.subscribe()
     }
 
     pub fn elicit_during_prompt_expansion(&self) -> mpsc::UnboundedReceiver<rmcp::model::ElicitResult> {
@@ -225,12 +237,12 @@ impl AcpTestHarness {
     /// Runs `body` with a fresh harness on the current-thread `LocalSet` the
     /// host needs for its `spawn_local` tasks; tests must be annotated with
     /// `#[tokio::test(flavor = "current_thread")]`.
-    pub async fn run<F, Fut>(body: F)
+    pub async fn run<F, Fut, T>(body: F) -> T
     where
         F: FnOnce(Self) -> Fut,
-        Fut: Future<Output = ()>,
+        Fut: Future<Output = T>,
     {
-        LocalSet::new().run_until(Box::pin(async move { body(Self::start().await).await })).await;
+        LocalSet::new().run_until(Box::pin(async move { body(Self::start().await).await })).await
     }
 
     pub async fn run_with_hooks<F, Fut>(hooks: SessionHooks, body: F)
@@ -337,6 +349,25 @@ impl AcpTestHarness {
         }
     }
 
+    pub async fn updates_until(
+        &mut self,
+        session_id: &SessionId,
+        last: impl Fn(&SessionUpdate) -> bool,
+    ) -> Vec<SessionUpdate> {
+        let mut updates = Vec::new();
+        loop {
+            let notification = self.peer.next_session_notification().await;
+            if notification.session_id != *session_id {
+                continue;
+            }
+            let done = last(&notification.update);
+            updates.push(notification.update);
+            if done {
+                return updates;
+            }
+        }
+    }
+
     pub async fn expect_mcp_server_status(&mut self, expected: &[&str]) {
         assert_server_status(self.peer.next_mcp_notification().await, expected);
     }
@@ -378,33 +409,33 @@ impl AcpTestHarness {
         id: SessionId,
         model: &str,
     ) {
-        let model_spec: llm::catalog::LlmModel = "anthropic:claude-sonnet-4-5".parse().expect("test model parses");
-        let mut specs = SessionAgents::new(AgentCatalog::empty(PathBuf::from("/tmp")));
-        specs.set_default(AgentSpec::bare(&model_spec, None, Vec::new()));
-        self.runtime_control.lock().unwrap().agents.push(agent_tx.clone());
-        let factory = Arc::new(StubRuntimeFactory {
-            cwd: PathBuf::from("/tmp"),
-            agent_parts: Mutex::new(Some(StubAgentParts { tx: agent_tx, rx: agent_rx, handle: agent_handle })),
-        });
-
-        self.state
-            .register_session(SessionActorInit {
-                cwd: PathBuf::from("/tmp"),
-                mcp_servers: Vec::new(),
-                session_id: id.clone(),
-                connection: Some(self.agent_cx.clone()),
-                repository: self.session_store.clone(),
-                oauth_credential_store: self.oauth_store.clone(),
-                active_agent: AgentKey::Default,
-                specs,
-                runtime_factory: factory,
-                transcript: Vec::new(),
-                replay: false,
-                modes: Modes::default(),
-                config: SessionConfigState::with_selection(model.to_string(), None, None),
-                hooks: SessionHooks::default(),
-            })
+        let mut mcp = mcp("/tmp").spawn().await.expect("stub MCP spawns");
+        mcp.block_until_ready().await.expect("stub MCP is ready");
+        self.register_stub_session(StubAgentParts { tx: agent_tx, rx: agent_rx, handle: agent_handle, mcp }, id, model)
             .await;
+    }
+
+    pub async fn insert_background_task_session(
+        &self,
+        provider: FakeLlmProvider,
+        task: &FakeBackgroundTask,
+        id: SessionId,
+    ) {
+        let server = task.server.clone();
+        let gate = self.runtime_control.lock().unwrap().prompt_gate.clone();
+        let mcp = with_in_memory_server(mcp("/tmp"), "tasks", move || server.clone().into_dyn());
+        let mcp = with_in_memory_server(mcp, "prompts", move || {
+            FakePromptMcp::new("plan").with_gate(gate.clone()).into_dyn()
+        });
+        let mut mcp = mcp.spawn().await.expect("background task MCP spawns");
+        mcp.block_until_ready().await.expect("background task MCP is ready");
+        let (tx, rx, handle) = AgentBuilder::new(Arc::new(provider))
+            .max_auto_continues(0)
+            .tools(mcp.handle().clone(), Vec::new())
+            .spawn()
+            .await
+            .expect("background task agent spawns");
+        self.register_stub_session(StubAgentParts { tx, rx, handle, mcp }, id, "fake:fake").await;
     }
 
     pub fn append_stored_session(&self, session_id: &str, created_at: &str) {
@@ -545,6 +576,35 @@ impl AcpTestHarness {
     pub fn append_stored_event(&self, session_id: &str, event: &SessionEvent) {
         self.session_store.append_event(session_id, event).expect("stored session event appends");
     }
+
+    async fn register_stub_session(&self, mut parts: StubAgentParts, id: SessionId, model: &str) {
+        let model_spec: llm::catalog::LlmModel = "anthropic:claude-sonnet-4-5".parse().expect("test model parses");
+        let mut specs = SessionAgents::new(AgentCatalog::empty(PathBuf::from("/tmp")));
+        specs.set_default(AgentSpec::bare(&model_spec, None, Vec::new()));
+        let agent_prompts = self.runtime_control.lock().unwrap().agent_prompts.clone();
+        self.runtime_control.lock().unwrap().agents.push(parts.tx.clone());
+        parts.tx = count_prompts(parts.tx, agent_prompts);
+        let factory = Arc::new(StubRuntimeFactory { agent_parts: Mutex::new(Some(parts)) });
+
+        self.state
+            .register_session(SessionActorInit {
+                cwd: PathBuf::from("/tmp"),
+                mcp_servers: Vec::new(),
+                session_id: id.clone(),
+                connection: Some(self.agent_cx.clone()),
+                repository: self.session_store.clone(),
+                oauth_credential_store: self.oauth_store.clone(),
+                active_agent: AgentKey::Default,
+                specs,
+                runtime_factory: factory,
+                transcript: Vec::new(),
+                replay: false,
+                modes: Modes::default(),
+                config: SessionConfigState::with_selection(model.to_string(), None, None),
+                hooks: SessionHooks::default(),
+            })
+            .await;
+    }
 }
 
 impl FakeAgentSwitchingSession {
@@ -603,6 +663,31 @@ impl FakeAcpAgent {
         let contexts = self.captured_contexts.lock().expect("captured contexts lock is healthy");
         let latest = contexts.last().unwrap_or_else(|| panic!("{} should have run a turn", self.name));
         conversation_texts(latest)
+    }
+}
+
+impl FakeBackgroundTask {
+    pub const TOOL: &str = "tasks__start";
+    const ID: &str = "background-task";
+
+    pub fn new() -> Self {
+        let working = background_task(TaskStatus::Working);
+        let server = FakeMcpServer::new()
+            .with_tool(FakeTool::new("start").responds(FakeToolResponse::task(CreateTaskResult::new(working.clone()))))
+            .with_task(Self::ID, [DetailedTask::new(working, TaskPayload::Working)]);
+        Self { server }
+    }
+
+    pub fn complete(&self, output: &str) {
+        let result = CallToolResult::success(vec![rmcp::model::ContentBlock::text(output)]);
+        let completed = DetailedTask::new(background_task(TaskStatus::Completed), completed_task_payload(result));
+        self.server.state().script_task(Self::ID, [completed]);
+    }
+}
+
+impl Default for FakeBackgroundTask {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -681,6 +766,7 @@ struct FakeRuntimeControl {
     pending: Option<(oneshot::Sender<()>, oneshot::Receiver<bool>)>,
     prompt_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     elicitation_results: Option<mpsc::UnboundedSender<rmcp::model::ElicitResult>>,
+    agent_prompts: watch::Sender<usize>,
 }
 
 struct FakeAgentDef {
@@ -714,28 +800,15 @@ impl RuntimeFactory for FakeRuntimeFactory {
 
         let mut mcp_builder = mcp(&self.cwd).with_tool_filter(spec.tools.clone());
         if let Some((server_name, prompt_name)) = &def.mcp {
-            let factory_name = server_name.clone();
             let prompt_name = prompt_name.clone();
             let gate = self.control.lock().unwrap().prompt_gate.clone();
             let elicitation_results = self.control.lock().unwrap().elicitation_results.clone();
-            let factory: ServerFactory = Box::new(move |_spec, _services| {
-                let prompt_name = prompt_name.clone();
-                let gate = gate.clone();
-                let elicitation_results = elicitation_results.clone();
-                async move {
-                    FakePromptMcp::new(&prompt_name).with_gate(gate).with_elicitation(elicitation_results).into_dyn()
-                }
-                .boxed()
+            mcp_builder = with_in_memory_server(mcp_builder, server_name, move || {
+                FakePromptMcp::new(&prompt_name)
+                    .with_gate(gate.clone())
+                    .with_elicitation(elicitation_results.clone())
+                    .into_dyn()
             });
-            mcp_builder = mcp_builder.register_in_memory_server(factory_name.clone(), factory).with_servers(vec![
-                McpServer::new(
-                    server_name.clone(),
-                    McpTransport::InMemory {
-                        spec: InMemoryServerSpec { factory: factory_name, args: Vec::new(), input: None },
-                    },
-                    ToolExposure::ModelVisible,
-                ),
-            ]);
         }
         let mut spawn =
             mcp_builder.spawn().await.map_err(|e| SessionError::Build(CliError::McpError(e.to_string())))?;
@@ -762,7 +835,6 @@ impl RuntimeFactory for FakeRuntimeFactory {
 }
 
 struct StubRuntimeFactory {
-    cwd: PathBuf,
     agent_parts: Mutex<Option<StubAgentParts>>,
 }
 
@@ -770,6 +842,7 @@ struct StubAgentParts {
     tx: mpsc::Sender<Command>,
     rx: mpsc::Receiver<AgentEvent>,
     handle: AgentHandle,
+    mcp: McpSession,
 }
 
 #[async_trait::async_trait]
@@ -787,14 +860,47 @@ impl RuntimeFactory for StubRuntimeFactory {
             .expect("stub agent parts lock is healthy")
             .take()
             .expect("stub runtime spawned more than once");
-
-        let mut spawn =
-            mcp(&self.cwd).spawn().await.map_err(|e| SessionError::Build(CliError::McpError(e.to_string())))?;
-        spawn.block_until_ready().await.ok_or(SessionError::McpStartupStopped)?;
-        let (mcp_runtime, event_rx) = spawn.connect_agent(parts.tx.clone()).await.split();
+        let (mcp_runtime, event_rx) = parts.mcp.connect_agent(parts.tx.clone()).await.split();
 
         Ok(AgentRuntime::new(parts.tx, parts.rx, Some(parts.handle), event_rx, mcp_runtime))
     }
+}
+
+fn with_in_memory_server(
+    builder: McpBuilder,
+    name: &str,
+    server: impl Fn() -> Box<dyn DynService<RoleServer>> + Send + Sync + 'static,
+) -> McpBuilder {
+    let factory: ServerFactory = Box::new(move |_spec, _services| std::future::ready(server()).boxed());
+    let transport = McpTransport::InMemory {
+        spec: InMemoryServerSpec { factory: name.to_string(), args: Vec::new(), input: None },
+    };
+    builder.register_in_memory_server(name, factory).with_servers(vec![McpServer::new(
+        name,
+        transport,
+        ToolExposure::ModelVisible,
+    )])
+}
+
+fn count_prompts(agent_tx: mpsc::Sender<Command>, prompts: watch::Sender<usize>) -> mpsc::Sender<Command> {
+    let (tx, mut rx) = mpsc::channel(32);
+    tokio::spawn(async move {
+        while let Some(command) = rx.recv().await {
+            let is_prompt = matches!(command, Command::UserCommand(UserCommand::Text { .. }));
+            if agent_tx.send(command).await.is_err() {
+                return;
+            }
+            if is_prompt {
+                prompts.send_modify(|count| *count += 1);
+            }
+        }
+    });
+    tx
+}
+
+fn background_task(status: TaskStatus) -> Task {
+    const CREATED_AT: &str = "2026-01-01T00:00:00Z";
+    Task::new(FakeBackgroundTask::ID, status, CREATED_AT.to_string(), CREATED_AT.to_string()).with_poll_interval_ms(10)
 }
 
 fn fake_agent(name: &str, server_name: &str, prompt_name: &str, reply: &str) -> (FakeAgentDef, FakeAcpAgent) {
@@ -833,12 +939,16 @@ fn switching_modes() -> Modes {
             model: "anthropic:claude-sonnet-4-5".to_string(),
             reasoning_effort: None,
         },
-        ValidatedMode {
-            name: "Coder".to_string(),
-            model: "deepseek:deepseek-v4-flash".to_string(),
-            reasoning_effort: None,
-        },
+        ValidatedMode { name: "Coder".to_string(), model: text_only_model(), reasoning_effort: None },
     ])
+}
+
+fn text_only_model() -> String {
+    LlmModel::all()
+        .iter()
+        .find(|model| !model.supports_image())
+        .expect("catalog contains a text-only model")
+        .to_string()
 }
 
 fn fake_agent_spec(name: &str) -> AgentSpec {

@@ -36,7 +36,11 @@ pub fn content_events(events: Vec<AgentEvent>) -> Vec<AgentEvent> {
             !matches!(
                 event,
                 AgentEvent::Turn(
-                    TurnEvent::Started { .. } | TurnEvent::LlmCallStarted { .. } | TurnEvent::LlmCallEnded { .. }
+                    TurnEvent::Started { .. }
+                        | TurnEvent::UserMessageInserted { .. }
+                        | TurnEvent::UserMessageDiscarded { .. }
+                        | TurnEvent::LlmCallStarted { .. }
+                        | TurnEvent::LlmCallEnded { .. }
                 ) | AgentEvent::Tool(ToolEvent::DefinitionsUpdated { .. })
             )
         })

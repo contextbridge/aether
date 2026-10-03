@@ -222,19 +222,6 @@ fn sub_agent_drain_includes_sub_agents_in_history_items() {
 }
 
 #[test]
-fn sub_agent_prompt_error_finalizes_sub_agents() {
-    let mut app = make_app();
-    app.submit("work");
-    app.acp_event(tool_call("parent-1", "spawn_subagent"));
-    app.acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", "{}"));
-
-    // A failed prompt should finalize sub-agents
-    app.deliver_result(prompt_failed("internal error"));
-
-    assert!(!app.app().wants_tick());
-}
-
-#[test]
 fn sub_agent_prompt_cancelled_finalizes_sub_agents() {
     let mut app = make_app();
     app.submit("explore");

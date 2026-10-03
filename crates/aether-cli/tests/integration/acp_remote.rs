@@ -401,12 +401,6 @@ async fn start_observed_paused_turn(harness: &mut AcpTestHarness) -> (SessionId,
 }
 
 async fn finish_original_turn(harness: &mut AcpTestHarness, id: &SessionId, release: Arc<Notify>) {
-    let second_prompt = harness
-        .client_cx
-        .send_request(PromptRequest::new(id.clone(), vec!["must not start another turn".into()]))
-        .block_task()
-        .await;
-    assert!(second_prompt.is_err(), "resume must preserve the running turn, not accept a new prompt");
     assert_no_ended_turn(harness, id);
     release.notify_one();
 
