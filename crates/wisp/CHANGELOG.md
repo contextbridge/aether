@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.10](https://github.com/contextbridge/aether/compare/aether-wisp-v0.7.9...aether-wisp-v0.7.10) - 2026-10-03
+
+### Fixed
+
+- ACP actor gets proper state when background tasks return  ([#559](https://github.com/contextbridge/aether/pull/559))
+
 ## [0.7.9](https://github.com/contextbridge/aether/compare/aether-wisp-v0.7.8...aether-wisp-v0.7.9) - 2026-10-01
 
 ### Fixed

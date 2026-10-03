@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.18](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.17...aether-utils-v0.2.18) - 2026-10-03
+
+### Other
+
+- Oversized coding tool output handling ([#560](https://github.com/contextbridge/aether/pull/560))
+
 ## [0.2.17](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.16...aether-utils-v0.2.17) - 2026-09-27
 
 ### Added

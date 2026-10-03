@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.54](https://github.com/contextbridge/aether/compare/aether-project-v0.5.53...aether-project-v0.5.54) - 2026-10-03
+
+### Other
+
+- Oversized coding tool output handling ([#560](https://github.com/contextbridge/aether/pull/560))
+- scheduled code-cleanup ([#525](https://github.com/contextbridge/aether/pull/525))
+
 ## [0.5.53](https://github.com/contextbridge/aether/compare/aether-project-v0.5.52...aether-project-v0.5.53) - 2026-10-01
 
 ### Fixed

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.30](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.29...aether-llm-codegen-v0.2.30) - 2026-10-03
+
+### Other
+
+- updated the following local packages: aether-utils
+
 ## [0.2.29](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.28...aether-llm-codegen-v0.2.29) - 2026-10-01
 
 ### Added

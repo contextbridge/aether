@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "aether-acp-utils"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "aether-acp-utils",
  "aether-llm",
@@ -62,7 +62,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-cli"
-version = "0.9.10"
+version = "0.9.11"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-cli",
@@ -108,7 +108,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-core"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "aether-agent-core",
  "aether-auth",
@@ -195,7 +195,7 @@ dependencies = [
 
 [[package]]
 name = "aether-evals"
-version = "0.3.14"
+version = "0.3.15"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -213,7 +213,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm"
-version = "0.9.9"
+version = "0.9.10"
 dependencies = [
  "aether-auth",
  "aether-doctest",
@@ -253,7 +253,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm-codegen"
-version = "0.2.29"
+version = "0.2.30"
 dependencies = [
  "aether-utils",
  "prettyplease",
@@ -268,7 +268,7 @@ dependencies = [
 
 [[package]]
 name = "aether-lspd"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "aether-lspd",
  "clap",
@@ -294,7 +294,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-servers"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "aether-agent-core",
  "aether-auth",
@@ -329,7 +329,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-utils"
-version = "0.7.9"
+version = "0.7.10"
 dependencies = [
  "aether-auth",
  "aether-doctest",
@@ -354,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "aether-project"
-version = "0.5.53"
+version = "0.5.54"
 dependencies = [
  "aether-agent-core",
  "aether-doctest",
@@ -375,7 +375,7 @@ dependencies = [
 
 [[package]]
 name = "aether-schemas"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "aether-agent-cli",
  "aether-agent-core",
@@ -398,7 +398,7 @@ dependencies = [
 
 [[package]]
 name = "aether-sessions"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -418,7 +418,7 @@ dependencies = [
 
 [[package]]
 name = "aether-telemetry"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -443,7 +443,7 @@ dependencies = [
 
 [[package]]
 name = "aether-utils"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "futures",
  "noyalib",
@@ -460,7 +460,7 @@ dependencies = [
 
 [[package]]
 name = "aether-wisp"
-version = "0.7.9"
+version = "0.7.10"
 dependencies = [
  "aether-acp-utils",
  "aether-utils",
@@ -2434,9 +2434,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.5.1"
+version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f360145194ee8e21db5ee7f3fcd4fe52210864c75c985dae33218202c8bbe040"
+checksum = "f74872d07caf508b30a21f6836e7d7016a2eaf7d9ff4f48deaa58cd8a0407630"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -5009,15 +5009,15 @@ checksum = "bf36173d4167ed999940f804952e6b08197cae5ad5d572eb4db150ce8ad5d58f"
 
 [[package]]
 name = "lazy_static"
-version = "1.5.0"
+version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
 name = "libc"
-version = "0.2.189"
+version = "0.2.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
+checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
 
 [[package]]
 name = "libdbus-sys"
@@ -5956,9 +5956,9 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "pin-utils"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
+checksum = "13bee6c73da26345c729282832b60b0363cf3dd9f4bfd81d8551b7a1c889a113"
 
 [[package]]
 name = "piper"
@@ -8410,9 +8410,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.26.1"
+version = "1.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
+checksum = "97277d36b9c3ace13e58fa6e753f8b0bbbf302a18dd193240d70f9e29681059a"
 dependencies = [
  "atomic",
  "getrandom 0.4.3",
