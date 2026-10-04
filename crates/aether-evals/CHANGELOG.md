@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.17](https://github.com/contextbridge/aether/compare/aether-evals-v0.3.16...aether-evals-v0.3.17) - 2026-10-04
+
+### Fixed
+
+- wait for docker eval commands before container cleanup ([#568](https://github.com/contextbridge/aether/pull/568))
+
 ## [0.3.16](https://github.com/contextbridge/aether/compare/aether-evals-v0.3.15...aether-evals-v0.3.16) - 2026-10-04
 
 ### Added

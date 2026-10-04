@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.1](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.8.0...aether-mcp-servers-v0.8.1) - 2026-10-04
+
+### Other
+
+- update Cargo.lock dependencies
+
 ## [0.8.0](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.7.0...aether-mcp-servers-v0.8.0) - 2026-10-03
 
 ### Fixed

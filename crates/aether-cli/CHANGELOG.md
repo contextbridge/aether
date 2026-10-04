@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.12](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.11...aether-agent-cli-v0.9.12) - 2026-10-04
+
+### Other
+
+- update Cargo.lock dependencies
+
 ## [0.9.11](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.10...aether-agent-cli-v0.9.11) - 2026-10-03
 
 ### Fixed
