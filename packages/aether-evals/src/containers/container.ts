@@ -134,8 +134,17 @@ export class ContainerBuilder {
   private envVars: Record<string, string> = {};
   private mounts: BindMount[] = [];
   private ephemeralMounts: string[] = [];
+  private privileged = false;
 
   constructor(private readonly image: Image) {}
+
+  /**
+   * Enables Docker privileged mode.
+   */
+  withPrivileged(privileged: boolean): this {
+    this.privileged = privileged;
+    return this;
+  }
 
   withEnvVar(key: string, value: string): this {
     this.envVars[key] = value;
@@ -176,6 +185,9 @@ export class ContainerBuilder {
         mode: "rw",
       };
       const container = await createGenericContainer(this.image);
+      if (this.privileged) {
+        container.withPrivilegedMode();
+      }
       const started = await container
         .withEntrypoint(["/bin/sh"])
         .withCommand(["-c", "sleep infinity"])
