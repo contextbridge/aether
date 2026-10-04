@@ -28,6 +28,9 @@ pub enum RunError {
     #[error("Agent configuration error: {0}")]
     ConfigurationError(String),
 
+    #[error("Agent command exited with code {exit_code}: {stderr}")]
+    CommandExitNonzero { exit_code: i64, stderr: String },
+
     #[error("Agent command exited without emitting a terminal AgentEvent: {stderr}")]
     CommandExitWithoutTerminal { stderr: String },
 

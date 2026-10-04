@@ -1,4 +1,5 @@
 use aether_core::events::{AgentEvent, TurnEvent};
+use futures::{StreamExt, pin_mut};
 
 use aether_evals::{
     Agent, Container, ContainerError, DockerAgent, Image, Task, Transcript, TranscriptError, Workspace, WorkspaceError,
@@ -41,5 +42,22 @@ async fn container_exec_shell_returns_non_zero_exit_codes() -> Result<(), Docker
 
     assert_eq!(output.exit_code, 7);
     assert!(output.stderr.contains("nope"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn docker_agent_waits_for_cleanup() -> Result<(), DockerAgentTestError> {
+    let workspace = Workspace::empty()?;
+    let container = Container::builder(Image::parse("alpine:3").unwrap()).start(&workspace).await?;
+    let agent = DockerAgent::new(container.clone(), vec![
+        "/bin/sh".to_string(), "-c".to_string(),
+        r#"mkfifo /tmp/release; printf '%s\n' '{"category":"turn","event":{"type":"ended","outcome":{"status":"completed"}}}'; read release < /tmp/release; echo cleaned-up > /workspace/cleanup; printf 'trailing output\n'"#.to_string(),
+    ]);
+    let stream = agent.run(Task::new("cleanup"));
+    pin_mut!(stream);
+    assert!(matches!(stream.next().await, Some(Ok(AgentEvent::Turn(TurnEvent::Ended { .. })))));
+    container.exec_shell("echo release > /tmp/release").await?;
+    assert!(stream.next().await.is_none());
+    assert_eq!(container.exec_shell("cat /workspace/cleanup").await?.stdout, "cleaned-up\n");
     Ok(())
 }
