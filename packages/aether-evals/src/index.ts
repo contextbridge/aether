@@ -1,6 +1,6 @@
 export { DockerAgent } from "./DockerAgent.js";
 export type { DockerAgentOptions } from "./DockerAgent.js";
-export { AetherEvalError } from "./errors.js";
+export { AetherEvalError, AetherCommandExitError } from "./errors.js";
 export type { AetherEvalErrorCode } from "./errors.js";
 export { Container, ContainerBuilder, Image } from "./containers/index.js";
 export type {

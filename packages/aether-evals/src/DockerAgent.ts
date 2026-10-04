@@ -81,12 +81,12 @@ export class DockerAgent implements Agent {
         stderr += chunk;
       },
     })) {
+      if (finished) continue;
       const trimmed = line.trim();
       if (!trimmed) continue;
       const message = parseAgentEvent(trimmed);
       finished = isTerminalEvent(message);
       yield message;
-      if (finished) break;
     }
 
     if (!finished) {

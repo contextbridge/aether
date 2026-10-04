@@ -77,6 +77,54 @@ describe.skipIf(!process.env.AETHER_EVALS_E2E)(
       expect(output.stdout).toContain("same-container");
     }, 120_000);
 
+    it("waits for gated cleanup after the terminal event", async () => {
+      await using workspace = await Workspace.empty();
+      await using container = await Container.builder(
+        Image.parse("alpine:3"),
+      ).start(workspace);
+      const agent = new DockerAgent({
+        container,
+        command: [
+          "/bin/sh",
+          "-c",
+          `mkfifo /tmp/release; printf '%s\\n' '${JSON.stringify(done)}'; read release < /tmp/release; echo cleaned-up > /workspace/cleanup; printf 'trailing output\\n'`,
+        ],
+      });
+      const stream = agent.run(new Task("cleanup"))[Symbol.asyncIterator]();
+      expect((await stream.next()).value).toEqual(done);
+      const completion = stream.next();
+      await container.execShell("echo release > /tmp/release");
+      expect(await completion).toMatchObject({ done: true });
+      expect(await readFile(join(workspace.path, "cleanup"), "utf8")).toBe(
+        "cleaned-up\n",
+      );
+    });
+
+    it("rejects a nonzero exit after a successful terminal event", async () => {
+      await using workspace = await Workspace.empty();
+      await using container = await Container.builder(
+        Image.parse("alpine:3"),
+      ).start(workspace);
+      const agent = new DockerAgent({
+        container,
+        command: [
+          "/bin/sh",
+          "-c",
+          `printf '%s\\n' '${JSON.stringify(done)}'; echo final-error >&2; exit 7`,
+        ],
+      });
+      await expect(
+        Transcript.fromStream(agent.run(new Task("test"))),
+      ).rejects.toMatchObject({
+        transcript: { events: [done] },
+        cause: {
+          code: "command_exit_nonzero",
+          exitCode: 7,
+          stderr: "final-error\n",
+        },
+      });
+    });
+
     it("returns non-zero follow-up command exit codes", async () => {
       await using workspace = await Workspace.empty();
       await using container = await Container.builder(
