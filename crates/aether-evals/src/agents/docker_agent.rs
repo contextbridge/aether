@@ -57,18 +57,14 @@ impl Agent for DockerAgent {
                 let mut lines = exec.stdout().lines();
                 let mut finished = false;
                 while let Some(line) = lines.next_line().await.map_err(|source| ContainerError::StdoutRead { source })? {
-                    if line.trim().is_empty() {
+                    if finished || line.trim().is_empty() {
                         continue;
                     }
                     tracing::debug!("docker agent stdout: {line}");
                     let message: AgentEvent = serde_json::from_str(&line)
                         .map_err(|source| RunError::AgentEventJsonLine { line, source })?;
-                    let terminal = is_terminal(&message);
+                    finished = is_terminal(&message);
                     yield message;
-                    if terminal {
-                        finished = true;
-                        break;
-                    }
                 }
                 finished
             };
@@ -78,7 +74,10 @@ impl Agent for DockerAgent {
                 tracing::debug!("docker agent stderr: {}", stderr.trim());
             }
 
-            if !finished {
+            let exit_code = exec.exit_code().await?;
+            if exit_code != 0 {
+                Err::<AgentEvent, RunError>(RunError::CommandExitNonzero { exit_code, stderr })?;
+            } else if !finished {
                 Err::<AgentEvent, RunError>(RunError::CommandExitWithoutTerminal { stderr })?;
             }
         }

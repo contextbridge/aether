@@ -15,6 +15,12 @@ pub enum ContainerError {
         source: std::io::Error,
     },
 
+    #[error("Failed to inspect container exec: {source}")]
+    ExecInspection {
+        #[source]
+        source: tokio::task::JoinError,
+    },
+
     #[error("Container exec completed without an exit code")]
     MissingExecExitCode,
 }

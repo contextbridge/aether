@@ -7,6 +7,8 @@ use testcontainers::core::{ExecCommand, ExecResult, Mount};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 use tokio::io::AsyncBufRead;
+use tokio::runtime::Handle;
+use tokio::task::spawn_blocking;
 
 use super::{ContainerError, Image};
 
@@ -152,10 +154,18 @@ impl ExecHandle {
         Ok(String::from_utf8_lossy(&stderr).into_owned())
     }
 
+    pub async fn exit_code(self) -> Result<i64, ContainerError> {
+        let runtime = Handle::current();
+        spawn_blocking(move || runtime.block_on(self.exec.exit_code()))
+            .await
+            .map_err(|source| ContainerError::ExecInspection { source })??
+            .ok_or(ContainerError::MissingExecExitCode)
+    }
+
     pub async fn collect(mut self) -> Result<ExecOutput, ContainerError> {
         let stdout = String::from_utf8_lossy(&self.exec.stdout_to_vec().await?).into_owned();
         let stderr = String::from_utf8_lossy(&self.exec.stderr_to_vec().await?).into_owned();
-        let exit_code = self.exec.exit_code().await?.ok_or(ContainerError::MissingExecExitCode)?;
+        let exit_code = self.exit_code().await?;
         Ok(ExecOutput { exit_code, stdout, stderr })
     }
 }

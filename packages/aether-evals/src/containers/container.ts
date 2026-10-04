@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { createInterface } from "node:readline";
 import { PassThrough } from "node:stream";
+import { finished } from "node:stream/promises";
 import {
   GenericContainer,
   getContainerRuntimeClient,
@@ -12,6 +13,7 @@ import {
 } from "testcontainers";
 import { AetherSdkError } from "@aether-agent/sdk";
 import { Image } from "./image.js";
+import { AetherCommandExitError, AetherEvalError } from "../errors.js";
 import type { Workspace } from "../workspace.js";
 
 const STARTUP_TIMEOUT_MS = 60_000;
@@ -80,6 +82,9 @@ export class Container {
   async *execStreaming(
     options: ContainerStreamingOptions,
   ): AsyncIterable<string> {
+    if (options.signal?.aborted) {
+      throw new AetherSdkError("aborted", "Aborted by caller");
+    }
     const client = await getContainerRuntimeClient();
     const dockerode = client.container.dockerode;
     const dockerodeContainer = dockerode.getContainer(this.container.getId());
@@ -97,11 +102,35 @@ export class Container {
     const stream = await exec.start({ hijack: true, stdin: false });
     const stdoutPipe = new PassThrough();
     const stderrPipe = new PassThrough();
-    dockerodeContainer.modem.demuxStream(stream, stdoutPipe, stderrPipe);
+    const attached = finished(stream, {
+      readable: true,
+      writable: false,
+      cleanup: true,
+    }).then(
+      () => {
+        stdoutPipe.end();
+        stderrPipe.end();
+      },
+      (error: Error) => {
+        stdoutPipe.destroy(error);
+        stderrPipe.destroy(error);
+        throw error;
+      },
+    );
+    const drained = Promise.all([
+      attached,
+      finished(stdoutPipe, { cleanup: true }),
+      finished(stderrPipe, { cleanup: true }),
+    ]);
+    void drained.catch(() => {});
+    let stderr = "";
     stderrPipe.setEncoding("utf8");
     stderrPipe.on("data", (chunk: string) => {
+      stderr += chunk;
       options.onStderr?.(chunk);
     });
+
+    dockerodeContainer.modem.demuxStream(stream, stdoutPipe, stderrPipe);
 
     using abortCleanup = options.signal
       ? addAbortListener(options.signal, () => {
@@ -119,8 +148,25 @@ export class Container {
       } finally {
         lines.close();
       }
+      await drained;
+      const status = await exec.inspect();
+      if (
+        status.Running ||
+        status.ExitCode === null ||
+        status.ExitCode === undefined
+      ) {
+        throw new AetherEvalError(
+          "command_exit_missing",
+          `agent command completed without an exit code.\nstderr:\n${stderr}`,
+        );
+      }
+      if (status.ExitCode !== 0) {
+        throw new AetherCommandExitError(status.ExitCode, stderr);
+      }
     } finally {
       stream.destroy();
+      stdoutPipe.destroy();
+      stderrPipe.destroy();
     }
   }
 

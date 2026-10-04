@@ -35,26 +35,31 @@ describe("DockerAgent", () => {
     { status: "completed" } as const,
     { status: "failed", message_id: "error-1", error: "boom" } as const,
     { status: "cancelled" } as const,
-  ])("stops at a $status turn outcome", async (outcome) => {
-    const ended: AgentEvent = {
-      category: "turn",
-      event: { type: "ended", outcome },
-    };
-    const trailing: AgentEvent = {
-      category: "message",
-      event: {
-        type: "text",
-        chunk: "not emitted",
-        is_complete: true,
-        message_id: "message-1",
-      },
-    };
-    const agent = agentEmitting(ended, trailing);
+  ])(
+    "keeps the transcript through the first $status turn outcome",
+    async (outcome) => {
+      const ended: AgentEvent = {
+        category: "turn",
+        event: { type: "ended", outcome },
+      };
+      const trailing: AgentEvent = {
+        category: "message",
+        event: {
+          type: "text",
+          chunk: "not emitted",
+          is_complete: true,
+          message_id: "message-1",
+        },
+      };
+      const agent = agentEmitting(ended, trailing);
 
-    const transcript = await Transcript.fromStream(agent.run(new Task("test")));
+      const transcript = await Transcript.fromStream(
+        agent.run(new Task("test")),
+      );
 
-    expect(transcript.events).toEqual([ended]);
-  });
+      expect(transcript.events).toEqual([ended]);
+    },
+  );
 
   it("rejects malformed NDJSON", async () => {
     const agent = agentEmittingLines("not JSON");
