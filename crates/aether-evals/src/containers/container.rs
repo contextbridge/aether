@@ -27,6 +27,7 @@ pub struct ContainerBuilder {
     env_vars: BTreeMap<String, String>,
     mounts: Vec<Mount>,
     ephemeral_mounts: Vec<String>,
+    privileged: bool,
 }
 
 pub struct ExecOutput {
@@ -41,7 +42,13 @@ pub(crate) struct ExecHandle {
 
 impl Container {
     pub fn builder(image: Image) -> ContainerBuilder {
-        ContainerBuilder { image, env_vars: BTreeMap::new(), mounts: Vec::new(), ephemeral_mounts: Vec::new() }
+        ContainerBuilder {
+            image,
+            env_vars: BTreeMap::new(),
+            mounts: Vec::new(),
+            ephemeral_mounts: Vec::new(),
+            privileged: false,
+        }
     }
 
     pub fn workspace_root(&self) -> &Path {
@@ -72,6 +79,12 @@ impl Container {
 }
 
 impl ContainerBuilder {
+    /// Enables Docker privileged mode.
+    pub fn with_privileged(mut self, privileged: bool) -> Self {
+        self.privileged = privileged;
+        self
+    }
+
     pub fn with_env_var(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.env_vars.insert(key.into(), value.into());
         self
@@ -97,6 +110,7 @@ impl ContainerBuilder {
         let container_cwd = container_cwd(&container_workspace_root, workspace.relative_cwd());
         let mut image = GenericImage::new(&self.image.name, &self.image.tag)
             .with_entrypoint("/bin/sh")
+            .with_privileged(self.privileged)
             .with_cmd(["-c", "sleep infinity"])
             .with_mount(Mount::bind_mount(workspace.root_path().display().to_string(), "/workspace"))
             .with_working_dir(container_cwd.display().to_string());
