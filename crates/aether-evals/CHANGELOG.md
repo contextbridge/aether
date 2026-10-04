@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.16](https://github.com/contextbridge/aether/compare/aether-evals-v0.3.15...aether-evals-v0.3.16) - 2026-10-04
+
+### Added
+
+- *(aether-evals)* add privileged container options to evals ([#565](https://github.com/contextbridge/aether/pull/565))
+
 ## [0.3.15](https://github.com/contextbridge/aether/compare/aether-evals-v0.3.14...aether-evals-v0.3.15) - 2026-10-03
 
 ### Other

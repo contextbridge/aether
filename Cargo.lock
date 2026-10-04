@@ -195,7 +195,7 @@ dependencies = [
 
 [[package]]
 name = "aether-evals"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -375,7 +375,7 @@ dependencies = [
 
 [[package]]
 name = "aether-schemas"
-version = "0.2.15"
+version = "0.2.16"
 dependencies = [
  "aether-agent-cli",
  "aether-agent-core",
@@ -5248,9 +5248,9 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "mio"
-version = "1.2.3"
+version = "1.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b18443e9c262bfe8fa82f51666e2642c53393f7e5c27b3e1aeab922cff5b9d8"
+checksum = "1788edb87fdc09c7e26304471e2f5be8cdefb1b6930d6e3985fc02ff53bf86ee"
 dependencies = [
  "libc",
  "log",
