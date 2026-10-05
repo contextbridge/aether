@@ -336,6 +336,7 @@ dependencies = [
  "aether-llm",
  "aether-utils",
  "async-stream",
+ "axum",
  "chrono",
  "futures",
  "reqwest 0.13.5",

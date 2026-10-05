@@ -1,4 +1,5 @@
 use aether_auth::OAuthClientRegistration;
+use reqwest::header::{AUTHORIZATION, HeaderName, HeaderValue, InvalidHeaderName, InvalidHeaderValue};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -191,8 +192,12 @@ pub fn loopback_redirect_uri(port: u16) -> String {
 }
 
 impl McpHttpConfig {
+    pub(crate) fn has_explicit_authorization(&self) -> bool {
+        self.transport.auth_header.is_some() || self.transport.custom_headers.contains_key(&AUTHORIZATION)
+    }
+
     pub fn resolved_oauth(&self) -> Option<ResolvedOAuth> {
-        if self.transport.auth_header.is_some() {
+        if self.has_explicit_authorization() {
             return None;
         }
         let oauth = self.oauth.as_ref();
@@ -315,6 +320,20 @@ pub enum ParseError {
 
     #[error("Variable expansion failed: {0}")]
     VarError(#[from] VarError),
+
+    #[error("Invalid HTTP header name {name:?}: {source}")]
+    InvalidHeaderName {
+        name: String,
+        #[source]
+        source: InvalidHeaderName,
+    },
+
+    #[error("Invalid HTTP header value for {name:?}: {source}")]
+    InvalidHeaderValue {
+        name: String,
+        #[source]
+        source: InvalidHeaderValue,
+    },
 }
 
 impl McpConfig {
@@ -398,17 +417,22 @@ impl McpServerConfig {
             }),
 
             McpServerConfig::Remote(RemoteServerConfig { url, headers, oauth, .. }) => {
-                let auth_header = headers.get("Authorization").map(|v| vars.expand(v)).transpose()?.map(|auth| {
-                    // rmcp adds `Bearer`  to the auth header.
-                    auth.split_once(' ')
-                        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("Bearer"))
-                        .map_or(auth.as_str(), |(_, rest)| rest)
-                        .to_string()
-                });
-
                 let mut transport = StreamableHttpClientTransportConfig::with_uri(vars.expand(&url)?);
-                if let Some(auth) = auth_header {
-                    transport = transport.auth_header(auth);
+                for (name, value) in headers {
+                    let header_name = name
+                        .parse::<HeaderName>()
+                        .map_err(|source| ParseError::InvalidHeaderName { name: name.clone(), source })?;
+
+                    let mut header_value = vars
+                        .expand(&value)?
+                        .parse::<HeaderValue>()
+                        .map_err(|source| ParseError::InvalidHeaderValue { name, source })?;
+
+                    if header_name == AUTHORIZATION {
+                        header_value.set_sensitive(true);
+                    }
+
+                    transport.custom_headers.insert(header_name, header_value);
                 }
 
                 let oauth = oauth
@@ -729,7 +753,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn into_transport_strips_bearer_prefix_from_auth_header() -> Result<(), String> {
+    async fn into_transport_preserves_bearer_auth_header() -> Result<(), String> {
         let config = McpConfig::from_json(
             r#"{"servers":{"weather":{"type":"http","url":"http://127.0.0.1:9000/mcp","headers":{"Authorization":"Bearer secret-token"}}}}"#,
         )
@@ -740,7 +764,8 @@ mod tests {
             return Err(format!("expected Http transport, got {:?}", servers[0].transport));
         };
 
-        assert_eq!(config.transport.auth_header.as_deref(), Some("secret-token"));
+        assert!(config.transport.auth_header.is_none());
+        assert_eq!(config.transport.custom_headers[&AUTHORIZATION], "Bearer secret-token");
         Ok(())
     }
 
@@ -755,7 +780,8 @@ mod tests {
         let McpTransport::Http(config) = &servers[0].transport else {
             return Err(format!("expected Http transport, got {:?}", servers[0].transport));
         };
-        assert_eq!(config.transport.auth_header.as_deref(), Some("Basic dXNlcjpwYXNz"));
+        assert!(config.transport.auth_header.is_none());
+        assert_eq!(config.transport.custom_headers[&AUTHORIZATION], "Basic dXNlcjpwYXNz");
         Ok(())
     }
 
@@ -771,7 +797,8 @@ mod tests {
         let McpTransport::Http(config) = &servers[0].transport else {
             return Err(format!("expected Http transport, got {:?}", servers[0].transport));
         };
-        assert_eq!(config.transport.auth_header.as_deref(), Some("expanded-token"));
+        assert!(config.transport.auth_header.is_none());
+        assert_eq!(config.transport.custom_headers[&AUTHORIZATION], "Bearer expanded-token");
         Ok(())
     }
 }

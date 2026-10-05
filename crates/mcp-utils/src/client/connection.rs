@@ -351,7 +351,7 @@ fn reauth_config_for(
 ) -> Option<McpHttpConfig> {
     match transport {
         RuntimeMcpTransport::Http(config)
-            if oauth_handler_factory.is_some() && config.transport.auth_header.is_none() =>
+            if oauth_handler_factory.is_some() && !config.has_explicit_authorization() =>
         {
             Some(config.clone())
         }

@@ -57,6 +57,7 @@ thiserror = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+axum = { workspace = true }
 aether-doctest = { path = "../doctest" }
 rmcp = { workspace = true, features = ["macros"] }
 tempfile = { workspace = true }
