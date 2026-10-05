@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.2](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.9.1...aether-agent-core-v0.9.2) - 2026-10-05
+
+### Fixed
+
+- preserve configured MCP HTTP headers verbatim ([#571](https://github.com/contextbridge/aether/pull/571))
+
 ## [0.9.1](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.9.0...aether-agent-core-v0.9.1) - 2026-10-03
 
 ### Fixed
