@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.11](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.7.10...aether-mcp-utils-v0.7.11) - 2026-10-05
+
+### Fixed
+
+- preserve configured MCP HTTP headers verbatim ([#571](https://github.com/contextbridge/aether/pull/571))
+
 ## [0.7.10](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.7.9...aether-mcp-utils-v0.7.10) - 2026-10-03
 
 ### Fixed

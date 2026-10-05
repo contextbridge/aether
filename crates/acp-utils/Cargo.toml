@@ -1,6 +1,6 @@
 [package]
 name = "aether-acp-utils"
-version = "0.5.10"
+version = "0.5.11"
 edition = "2024"
 description = "Agent Client Protocol (ACP) utilities for the Aether AI agent framework"
 license = "MIT"
@@ -48,7 +48,7 @@ thiserror = { workspace = true }
 tokio-tungstenite = { workspace = true, optional = true }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-llm = { package = "aether-llm", path = "../llm", version = "0.9.10" }
+llm = { package = "aether-llm", path = "../llm", version = "0.9.11" }
 rmcp = { workspace = true, features = ["client", "elicitation"] }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
