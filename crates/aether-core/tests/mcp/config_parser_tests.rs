@@ -1,4 +1,5 @@
 use mcp_utils::client::{McpConfig, McpHttpConfig, McpServer, McpTransport, ParseError};
+use reqwest::header::AUTHORIZATION;
 use std::env;
 use std::num::NonZeroU16;
 use utils::variables::Vars;
@@ -116,7 +117,8 @@ async fn test_parse_http_and_sse_configs() {
         assert_http(parse_one(&json), "mcpMesh", "http://localhost:3000/mcp")
     );
     if let McpTransport::Http(c) = cfg.transport {
-        assert_eq!(c.transport.auth_header.as_ref().unwrap(), "secret_token");
+        assert!(c.transport.auth_header.is_none());
+        assert_eq!(c.transport.custom_headers[&AUTHORIZATION], "Bearer secret_token");
     }
 
     let json = server_json("sseServer", r#"{ "type": "sse", "url": "http://localhost:4000/sse", "headers": {} }"#);
