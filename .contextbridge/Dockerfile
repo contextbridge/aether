@@ -25,8 +25,7 @@ FROM debian:${DEBIAN_VERSION}-slim
 ARG AGENT_UID=1000
 ARG AGENT_GID=1000
 ARG MISE_VERSION=v2026.5.9
-ARG TYPESCRIPT_VERSION=6.0.3
-ARG TYPESCRIPT_LANGUAGE_SERVER_VERSION=5.2.0
+ARG TYPESCRIPT_VERSION=7.0.2
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -77,7 +76,7 @@ RUN --mount=type=secret,id=github_token,required=false \
   if [ -f /run/secrets/github_token ]; then export GITHUB_TOKEN="$(cat /run/secrets/github_token)"; fi; \
   mise install --yes \
   && awk 'NF >= 2 && $1 !~ /^#/ { print $1 "@" $2 }' .tool-versions | (cd / && xargs -r mise use -g) \
-  && npm install -g "typescript@${TYPESCRIPT_VERSION}" "typescript-language-server@${TYPESCRIPT_LANGUAGE_SERVER_VERSION}" \
+  && npm install -g "typescript@${TYPESCRIPT_VERSION}" \
   && chmod -R a+rX /mise
 
 RUN printf '%s\n' 'export PATH="/home/node/.cargo/bin:/usr/local/cargo/bin:$PATH"' 'eval "$(mise activate bash --shims)"' > /etc/profile.d/aether-tooling.sh

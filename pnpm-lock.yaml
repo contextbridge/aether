@@ -14,6 +14,9 @@ importers:
       prettier-plugin-astro:
         specifier: ^0.14.1
         version: 0.14.1
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
 
   packages/aether-browser:
     devDependencies:
