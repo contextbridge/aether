@@ -44,6 +44,10 @@ impl DiagnosticsStore {
         }
     }
 
+    pub(crate) fn uris(&self) -> Vec<Uri> {
+        self.state.read().unwrap_or_else(PoisonError::into_inner).keys().cloned().collect()
+    }
+
     pub(crate) fn forget_uri(&self, uri: &Uri) {
         self.state.write().unwrap_or_else(PoisonError::into_inner).remove(uri);
     }

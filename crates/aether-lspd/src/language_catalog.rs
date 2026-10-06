@@ -87,7 +87,7 @@ impl LanguageId {
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub(crate) enum ServerKind {
     RustAnalyzer,
-    TypeScriptLanguageServer,
+    Tsc,
     Pyright,
     Gopls,
     Clangd,
@@ -97,7 +97,7 @@ impl ServerKind {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::RustAnalyzer => "rust-analyzer",
-            Self::TypeScriptLanguageServer => "typescript-language-server",
+            Self::Tsc => "tsc",
             Self::Pyright => "pyright-langserver",
             Self::Gopls => "gopls",
             Self::Clangd => "clangd",
@@ -107,12 +107,18 @@ impl ServerKind {
     pub(crate) fn env_key(self) -> &'static str {
         match self {
             Self::RustAnalyzer => "RUST_ANALYZER",
-            Self::TypeScriptLanguageServer => "TYPESCRIPT_LANGUAGE_SERVER",
+            Self::Tsc => "TSC",
             Self::Pyright => "PYRIGHT",
             Self::Gopls => "GOPLS",
             Self::Clangd => "CLANGD",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum DiagnosticsMode {
+    Push,
+    Pull,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -134,22 +140,7 @@ pub struct LspConfig {
     pub command: String,
     pub args: Vec<String>,
     pub languages: Vec<LanguageId>,
-}
-
-impl LspConfig {
-    pub fn new(command: impl Into<String>) -> Self {
-        Self { command: command.into(), args: Vec::new(), languages: Vec::new() }
-    }
-
-    pub fn with_args(mut self, args: Vec<String>) -> Self {
-        self.args = args;
-        self
-    }
-
-    pub fn with_languages(mut self, languages: Vec<LanguageId>) -> Self {
-        self.languages = languages;
-        self
-    }
+    pub(crate) diagnostics_mode: DiagnosticsMode,
 }
 
 #[derive(Clone, Copy)]
@@ -158,6 +149,7 @@ struct ServerSpec {
     command: &'static str,
     display_name: &'static str,
     args: &'static [&'static str],
+    diagnostics_mode: DiagnosticsMode,
     installation_instructions: Option<&'static str>,
 }
 
@@ -173,16 +165,19 @@ const SERVER_SPECS: &[ServerSpec] = &[
         command: "rust-analyzer",
         display_name: "rust-analyzer",
         args: &[],
+        diagnostics_mode: DiagnosticsMode::Push,
         installation_instructions: None,
     },
     ServerSpec {
-        kind: ServerKind::TypeScriptLanguageServer,
-        command: "typescript-language-server",
-        display_name: "TypeScript language server",
-        args: &["--stdio"],
+        kind: ServerKind::Tsc,
+        command: "tsc",
+        display_name: "TypeScript 7 language server",
+        args: &["--lsp", "--stdio"],
+        diagnostics_mode: DiagnosticsMode::Pull,
         installation_instructions: Some(
-            "Install it in this workspace with `npm install --save-dev typescript typescript-language-server`, or \
-             install it globally with `npm install --global typescript typescript-language-server`, then retry.",
+            "It requires TypeScript 7 or newer. Install it in this workspace with \
+             `npm install --save-dev typescript@^7`, or install it globally with \
+             `npm install --global typescript@^7`, then retry.",
         ),
     },
     ServerSpec {
@@ -190,6 +185,7 @@ const SERVER_SPECS: &[ServerSpec] = &[
         command: "pyright-langserver",
         display_name: "Pyright language server",
         args: &["--stdio"],
+        diagnostics_mode: DiagnosticsMode::Push,
         installation_instructions: None,
     },
     ServerSpec {
@@ -197,6 +193,7 @@ const SERVER_SPECS: &[ServerSpec] = &[
         command: "gopls",
         display_name: "gopls language server",
         args: &[],
+        diagnostics_mode: DiagnosticsMode::Push,
         installation_instructions: None,
     },
     ServerSpec {
@@ -204,6 +201,7 @@ const SERVER_SPECS: &[ServerSpec] = &[
         command: "clangd",
         display_name: "clangd language server",
         args: &[],
+        diagnostics_mode: DiagnosticsMode::Push,
         installation_instructions: None,
     },
 ];
@@ -242,7 +240,7 @@ const LANGUAGE_SPECS: &[LanguageSpec] = &[
             aliases: &["javascript", "js"],
             extensions: &["js", "mjs"],
         },
-        server_kind: Some(ServerKind::TypeScriptLanguageServer),
+        server_kind: Some(ServerKind::Tsc),
     },
     LanguageSpec {
         metadata: LanguageMetadata {
@@ -251,7 +249,7 @@ const LANGUAGE_SPECS: &[LanguageSpec] = &[
             aliases: &["javascript", "js", "javascriptreact", "jsx"],
             extensions: &["jsx"],
         },
-        server_kind: Some(ServerKind::TypeScriptLanguageServer),
+        server_kind: Some(ServerKind::Tsc),
     },
     LanguageSpec {
         metadata: LanguageMetadata {
@@ -260,7 +258,7 @@ const LANGUAGE_SPECS: &[LanguageSpec] = &[
             aliases: &["typescript", "ts"],
             extensions: &["ts"],
         },
-        server_kind: Some(ServerKind::TypeScriptLanguageServer),
+        server_kind: Some(ServerKind::Tsc),
     },
     LanguageSpec {
         metadata: LanguageMetadata {
@@ -269,7 +267,7 @@ const LANGUAGE_SPECS: &[LanguageSpec] = &[
             aliases: &["typescript", "ts", "typescriptreact", "tsx"],
             extensions: &["tsx"],
         },
-        server_kind: Some(ServerKind::TypeScriptLanguageServer),
+        server_kind: Some(ServerKind::Tsc),
     },
     LanguageSpec {
         metadata: LanguageMetadata {
@@ -472,9 +470,12 @@ static CONFIG_MAP: LazyLock<HashMap<LanguageId, LspConfig>> = LazyLock::new(|| {
             let server = SERVER_SPECS.iter().find(|server| server.kind == server_kind)?;
             Some((
                 spec.metadata.id,
-                LspConfig::new(server.command)
-                    .with_args(server.args.iter().map(|arg| (*arg).to_string()).collect())
-                    .with_languages(languages_by_server.get(&server_kind).cloned().unwrap_or_default()),
+                LspConfig {
+                    command: server.command.to_string(),
+                    args: server.args.iter().map(|arg| (*arg).to_string()).collect(),
+                    languages: languages_by_server.get(&server_kind).cloned().unwrap_or_default(),
+                    diagnostics_mode: server.diagnostics_mode,
+                },
             ))
         })
         .collect()
@@ -566,8 +567,8 @@ mod tests {
     fn typescript_server_metadata_has_installation_instructions() {
         let metadata = server_metadata_for_language(LanguageId::TypeScript).unwrap();
 
-        assert_eq!(metadata.display_name, "TypeScript language server");
-        assert!(metadata.installation_instructions.unwrap().contains("npm install --save-dev"));
+        assert_eq!(metadata.display_name, "TypeScript 7 language server");
+        assert!(metadata.installation_instructions.unwrap().contains("npm install --save-dev typescript@^7"));
     }
 
     #[test]
@@ -687,25 +688,15 @@ mod tests {
     }
 
     #[test]
-    fn lsp_config_builder() {
-        let config = LspConfig::new("test-lsp")
-            .with_args(vec!["--stdio".to_string(), "--debug".to_string()])
-            .with_languages(vec![LanguageId::Rust]);
-
-        assert_eq!(config.command, "test-lsp");
-        assert_eq!(config.args, vec!["--stdio", "--debug"]);
-        assert_eq!(config.languages, vec![LanguageId::Rust]);
-    }
-
-    #[test]
     fn get_config_for_known_languages() {
         let rust_config = get_config_for_language(LanguageId::Rust);
         assert!(rust_config.is_some());
         assert_eq!(rust_config.unwrap().command, "rust-analyzer");
 
-        let ts_config = get_config_for_language(LanguageId::TypeScript);
-        assert!(ts_config.is_some());
-        assert_eq!(ts_config.unwrap().command, "typescript-language-server");
+        let ts_config = get_config_for_language(LanguageId::TypeScript).unwrap();
+        assert_eq!(ts_config.command, "tsc");
+        assert_eq!(ts_config.args, ["--lsp", "--stdio"]);
+        assert_eq!(ts_config.diagnostics_mode, DiagnosticsMode::Pull);
 
         let plaintext_config = get_config_for_language(LanguageId::PlainText);
         assert!(plaintext_config.is_none());

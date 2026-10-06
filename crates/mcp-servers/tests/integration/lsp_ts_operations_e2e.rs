@@ -1,16 +1,6 @@
-//! End-to-end tests for LSP operations (hover, definition, references)
-//! through the MCP tool layer, using TypeScript projects with typescript-language-server.
-//!
-//! Requirements:
-//! - `npm` must be installed (the test project installs pinned TypeScript tooling locally)
-//! - `aether-lspd` binary must be built (`cargo build -p aether-lspd`)
-//!
-//! Run with: `cargo test -p mcp-servers -- lsp_ts_operations`
-
 use crate::common::{connect_lsp, poll_lsp_tool};
 use aether_lspd::testing::{NodeProject, TestProject};
 
-/// Test: hover returns type information for a TypeScript variable
 #[tokio::test]
 async fn test_ts_hover_returns_type_info() {
     let project = NodeProject::new("ts_hover_test").expect("Failed to create project");
@@ -36,7 +26,6 @@ async fn test_ts_hover_returns_type_info() {
     assert!(hover.contains("number"), "Expected hover to contain 'number', got: {hover}");
 }
 
-/// Test: goto definition resolves to the correct function definition in TypeScript
 #[tokio::test]
 async fn test_ts_goto_definition() {
     let project = NodeProject::new("ts_def_test").expect("Failed to create project");
@@ -71,7 +60,6 @@ console.log(msg);
     assert_eq!(result["locations"], "src/index.ts: 1", "Expected definition at line 1 (1-indexed)");
 }
 
-/// Test: find references returns all usages of a symbol in TypeScript
 #[tokio::test]
 async fn test_ts_find_references() {
     let project = NodeProject::new("ts_refs_test").expect("Failed to create project");

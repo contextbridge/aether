@@ -1,35 +1,52 @@
+#![allow(dead_code, unused_imports)]
+
 pub mod cargo_project;
 pub mod daemon_harness;
 
 pub use cargo_project::{CargoProject, TestProject};
 pub use daemon_harness::DaemonHarness;
 
-use aether_lspd::LanguageId;
 use aether_lspd::testing::configure_fake_server;
-use lsp_types::Hover;
+use aether_lspd::{LanguageId, LspClient};
+use lsp_types::{Hover, PublishDiagnosticsParams};
 use std::sync::Once;
+use std::time::{Duration, Instant};
 
-#[allow(dead_code)]
-static FAKE_SERVER_ENV: Once = Once::new();
+static FAKE_SERVERS: Once = Once::new();
 
-#[allow(dead_code)]
-pub fn use_fake_rust_server() {
-    use_fake_rust_server_with_args(&[]);
-}
-
-/// Point the daemon at the fake Python LSP server for this test binary.
-///
-/// The configuration is process-wide and applied exactly once: the first
-/// caller's `extra_args` win and later calls with different args are silently
-/// ignored. Don't mix differently-configured fake servers in one test binary.
-#[allow(dead_code)]
-pub fn use_fake_rust_server_with_args(extra_args: &[&str]) {
-    FAKE_SERVER_ENV.call_once(|| unsafe {
-        configure_fake_server(LanguageId::Rust, extra_args);
+pub fn use_fake_servers() {
+    FAKE_SERVERS.call_once(|| unsafe {
+        configure_fake_server(LanguageId::Rust, &[]);
+        configure_fake_server(LanguageId::TypeScript, &["--pull-diagnostics"]);
+        configure_fake_server(LanguageId::Go, &["--crash-on", "initialize"]);
+        configure_fake_server(LanguageId::C, &["--fail-on", "initialize"]);
     });
 }
 
-#[allow(dead_code)]
+pub async fn poll_workspace_diagnostics(
+    client: &LspClient,
+    predicate: impl Fn(&[PublishDiagnosticsParams]) -> bool,
+    timeout: Duration,
+) -> Vec<PublishDiagnosticsParams> {
+    let start = Instant::now();
+    let mut last = Vec::new();
+
+    while start.elapsed() < timeout {
+        let diagnostics = client.get_diagnostics(None).await.expect("Failed to get workspace diagnostics");
+        if predicate(&diagnostics) {
+            return diagnostics;
+        }
+        last = diagnostics;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    panic!("workspace diagnostics timed out after {timeout:?}. Last result: {last:?}");
+}
+
+pub fn workspace_error_count(diagnostics: &[PublishDiagnosticsParams]) -> usize {
+    diagnostics.iter().map(|params| params.diagnostics.len()).sum()
+}
+
 pub fn hover_text(hover: Option<Hover>) -> String {
     let hover = hover.expect("Expected hover result");
     match hover.contents {

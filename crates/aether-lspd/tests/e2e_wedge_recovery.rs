@@ -6,24 +6,20 @@
 
 mod common;
 
+use aether_lspd::testing::configure_fake_server;
 use aether_lspd::{ClientError, LSP_REQUEST_TIMED_OUT, LanguageId};
-use common::{CargoProject, DaemonHarness, TestProject, hover_text, use_fake_rust_server_with_args};
+use common::{CargoProject, DaemonHarness, TestProject, hover_text};
 use std::sync::Once;
 
 static SETUP: Once = Once::new();
 
-/// Fake server that never answers `textDocument/definition` and exits on
-/// `textDocument/references`, with a short daemon request timeout so wedge
-/// detection fires quickly.
 fn use_misbehaving_fake_server() {
-    SETUP.call_once(|| {
-        unsafe { std::env::set_var("AETHER_LSPD_REQUEST_TIMEOUT", "2") };
-        use_fake_rust_server_with_args(&[
-            "--wedge-on",
-            "textDocument/definition",
-            "--crash-on",
-            "textDocument/references",
-        ]);
+    SETUP.call_once(|| unsafe {
+        std::env::set_var("AETHER_LSPD_REQUEST_TIMEOUT", "2");
+        configure_fake_server(
+            LanguageId::Rust,
+            &["--wedge-on", "textDocument/definition", "--crash-on", "textDocument/references"],
+        );
     });
 }
 

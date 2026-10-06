@@ -1,16 +1,20 @@
 use crate::diagnostics_store::DiagnosticsStore;
 use crate::document_lifecycle::{AcquireAction, DocumentLifecycle, ReleaseAction};
-use crate::language_catalog::LanguageId;
+use crate::error::DaemonResult;
+use crate::file_watcher::FileWatcherBatch;
+use crate::language_catalog::{DiagnosticsMode, LanguageId, LspConfig, metadata_for};
 use crate::process_transport::{ProcessTransport, TransportError, TransportEvent};
-use crate::protocol::LspNotification;
+use crate::protocol::{LspNotification, extract_document_uri};
 use crate::refresh_queue::RefreshQueue;
 use ignore::WalkBuilder;
 use lsp_types::notification::{
     DidChangeWatchedFiles, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument, Notification,
 };
+use lsp_types::request::{DocumentDiagnosticRequest, Request};
 use lsp_types::{
     DidChangeWatchedFilesParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-    PublishDiagnosticsParams, TextDocumentIdentifier, TextDocumentItem, Uri,
+    DocumentDiagnosticReport, DocumentDiagnosticReportResult, PublishDiagnosticsParams, TextDocumentIdentifier,
+    TextDocumentItem, Uri,
 };
 use serde_json::Value;
 use std::collections::HashSet;
@@ -23,75 +27,70 @@ use tokio::sync::mpsc;
 
 const DIAGNOSTICS_TIMEOUT: Duration = Duration::from_secs(20);
 const BACKGROUND_REFRESH_TIMEOUT: Duration = Duration::from_secs(20);
+const LSP_CONTENT_MODIFIED: i32 = -32801;
+const LSP_SERVER_CANCELLED: i32 = -32802;
+const TRANSIENT_RETRY_LIMIT: u32 = 3;
+const TRANSIENT_RETRY_DELAY: Duration = Duration::from_millis(500);
 
+#[derive(Clone)]
 pub(crate) struct WorkspaceSession {
     transport: ProcessTransport,
     documents: DocumentLifecycle,
     diagnostics: DiagnosticsStore,
     refresh: RefreshQueue,
+    diagnostics_mode: DiagnosticsMode,
+    supported_extensions: Arc<HashSet<String>>,
     alive: Arc<AtomicBool>,
 }
 
 impl WorkspaceSession {
-    pub(crate) fn spawn(
-        workspace_root: &Path,
-        command: &str,
-        args: &[String],
-        supported_extensions: HashSet<String>,
-    ) -> crate::DaemonResult<Self> {
-        let (transport, event_rx) = ProcessTransport::spawn(workspace_root, command, args)?;
-        let documents = DocumentLifecycle::new();
-        let diagnostics = DiagnosticsStore::new();
-        let refresh = RefreshQueue::new();
-        let alive = Arc::new(AtomicBool::new(true));
+    pub(crate) fn spawn(workspace_root: &Path, config: &LspConfig) -> DaemonResult<Self> {
+        let (transport, event_rx) = ProcessTransport::spawn(workspace_root, config)?;
+        let session = Self {
+            transport,
+            documents: DocumentLifecycle::new(),
+            diagnostics: DiagnosticsStore::new(),
+            refresh: RefreshQueue::new(),
+            diagnostics_mode: config.diagnostics_mode,
+            supported_extensions: Arc::new(supported_extensions(config)),
+            alive: Arc::new(AtomicBool::new(true)),
+        };
 
-        let session = Self { transport, documents, diagnostics, refresh, alive: Arc::clone(&alive) };
-        let supported_extensions = Arc::new(supported_extensions);
-
-        tokio::spawn(run_session_events(
-            session.transport.clone(),
-            session.documents.clone(),
-            session.diagnostics.clone(),
-            session.refresh.clone(),
-            Arc::clone(&supported_extensions),
-            event_rx,
-            alive,
-        ));
-
-        tokio::spawn(run_background_refresh_worker(
-            session.transport.clone(),
-            session.documents.clone(),
-            session.diagnostics.clone(),
-            session.refresh.clone(),
-        ));
-
-        tokio::spawn(bootstrap_workspace_refresh(
-            workspace_root.to_path_buf(),
-            supported_extensions,
-            session.refresh.clone(),
-        ));
+        tokio::spawn(session.clone().run_events(event_rx));
+        tokio::spawn(session.clone().run_refresh_worker());
+        tokio::spawn(session.clone().bootstrap_refresh(workspace_root.to_path_buf()));
 
         Ok(session)
     }
 
-    pub(crate) async fn request_raw(&self, method: &str, params: Value) -> Result<Value, TransportError> {
-        self.transport.request_raw(method, params).await
+    pub(crate) async fn wait_until_initialized(&self) -> DaemonResult<()> {
+        self.transport.wait_until_initialized().await
+    }
+
+    pub(crate) async fn request(&self, method: &str, params: &Value) -> Result<Value, TransportError> {
+        let Some(uri) = extract_document_uri(method, params) else {
+            return self.request_with_retry(method, params).await;
+        };
+
+        self.open_document(&uri).await;
+        let result = self.request_with_retry(method, params).await;
+        self.close_document(&uri).await;
+        result
     }
 
     pub(crate) fn queue_diagnostic_refresh(&self, uri: Uri) {
         self.refresh.enqueue(vec![uri]);
     }
 
-    pub(crate) async fn ensure_document_open(&self, uri: &Uri) -> Option<u64> {
-        sync_document(&self.transport, &self.documents, &self.diagnostics, uri).await
-    }
-
-    pub(crate) async fn close_document(&self, uri: &Uri) {
-        release_document(&self.transport, &self.documents, &self.refresh, uri).await;
-    }
-
     pub(crate) async fn get_diagnostics(&self, uri: Option<&Uri>) -> Vec<PublishDiagnosticsParams> {
-        self.sync_documents_for_diagnostics(uri).await;
+        match uri {
+            Some(uri) => {
+                if self.refresh_uri(uri).await == Freshness::Unconfirmed {
+                    self.refresh.wait_for_current_generation(DIAGNOSTICS_TIMEOUT).await;
+                }
+            }
+            None => self.refresh.wait_for_current_generation(BACKGROUND_REFRESH_TIMEOUT).await,
+        }
         self.diagnostics.get(uri)
     }
 
@@ -118,178 +117,189 @@ impl WorkspaceSession {
         }
     }
 
-    async fn sync_documents_for_diagnostics(&self, uri: Option<&Uri>) {
-        if let Some(uri) = uri {
-            let version_before = self.ensure_document_open(uri).await;
-            if let Some(version_before) = version_before {
-                self.diagnostics.wait_for_uri_fresh(uri, version_before, DIAGNOSTICS_TIMEOUT).await;
-            } else {
-                self.refresh.wait_for_current_generation(DIAGNOSTICS_TIMEOUT).await;
+    async fn refresh_uri(&self, uri: &Uri) -> Freshness {
+        let sync = self.open_document(uri).await;
+        let freshness = self.settle_diagnostics(uri, sync).await;
+        self.close_document(uri).await;
+        freshness
+    }
+
+    async fn open_document(&self, uri: &Uri) -> DocumentSync {
+        let notifications = match self.documents.acquire(uri).await {
+            AcquireAction::Open { file_path, content } => open_and_save_notifications(uri, &file_path, content),
+            AcquireAction::Reopen { file_path, content } => reopen_notifications(uri, &file_path, content),
+            AcquireAction::Unchanged => return DocumentSync::AlreadyOpen,
+            AcquireAction::MissingOnDisk => {
+                self.documents.forget_uri(uri);
+                self.diagnostics.forget_uri(uri);
+                return DocumentSync::Missing;
             }
-            self.close_document(uri).await;
+        };
+
+        let version_before = self.diagnostics.current_uri_version(uri);
+        for notification in notifications {
+            self.transport.send_notification(notification).await;
+        }
+        DocumentSync::Sent { version_before }
+    }
+
+    async fn close_document(&self, uri: &Uri) {
+        match self.documents.release(uri) {
+            ReleaseAction::Close => self.transport.send_notification(close_notification(uri)).await,
+            ReleaseAction::CloseAndRefresh => {
+                self.transport.send_notification(close_notification(uri)).await;
+                self.refresh.enqueue(vec![uri.clone()]);
+            }
+            ReleaseAction::Unchanged => {}
+        }
+    }
+
+    async fn settle_diagnostics(&self, uri: &Uri, sync: DocumentSync) -> Freshness {
+        match (self.diagnostics_mode, sync) {
+            (_, DocumentSync::Missing) | (DiagnosticsMode::Push, DocumentSync::AlreadyOpen) => Freshness::Unconfirmed,
+            (DiagnosticsMode::Push, DocumentSync::Sent { version_before }) => {
+                self.diagnostics.wait_for_uri_fresh(uri, version_before, DIAGNOSTICS_TIMEOUT).await;
+                Freshness::Fresh
+            }
+            (DiagnosticsMode::Pull, DocumentSync::Sent { .. } | DocumentSync::AlreadyOpen) => {
+                self.pull_diagnostics(uri).await
+            }
+        }
+    }
+
+    async fn pull_diagnostics(&self, uri: &Uri) -> Freshness {
+        // Built by hand: lsp-types serializes `identifier` and `previousResultId` as explicit nulls,
+        // which TypeScript 7 rejects.
+        let params = serde_json::json!({ "textDocument": TextDocumentIdentifier { uri: uri.clone() } });
+        let request = self.request_with_retry(DocumentDiagnosticRequest::METHOD, &params);
+        let report = tokio::time::timeout(DIAGNOSTICS_TIMEOUT, request)
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .and_then(|value| serde_json::from_value(value).ok());
+
+        let Some(DocumentDiagnosticReportResult::Report(DocumentDiagnosticReport::Full(report))) = report else {
+            tracing::warn!(uri = uri.as_str(), "Language server returned no full diagnostic report");
+            return Freshness::Unconfirmed;
+        };
+        self.diagnostics.publish(PublishDiagnosticsParams {
+            uri: uri.clone(),
+            diagnostics: report.full_document_diagnostic_report.items,
+            version: None,
+        });
+        Freshness::Fresh
+    }
+
+    async fn request_with_retry(&self, method: &str, params: &Value) -> Result<Value, TransportError> {
+        let mut retries = 0;
+        loop {
+            match self.transport.request_raw(method, params.clone()).await {
+                Err(TransportError::Lsp(err))
+                    if matches!(err.code, LSP_CONTENT_MODIFIED | LSP_SERVER_CANCELLED)
+                        && retries < TRANSIENT_RETRY_LIMIT =>
+                {
+                    retries += 1;
+                    tokio::time::sleep(TRANSIENT_RETRY_DELAY).await;
+                }
+                result => return result,
+            }
+        }
+    }
+
+    async fn run_events(self, mut event_rx: mpsc::Receiver<TransportEvent>) {
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                TransportEvent::PublishedDiagnostics(params) => self.diagnostics.publish(params),
+                TransportEvent::DiagnosticsRefreshRequested => {
+                    self.refresh.enqueue(self.filter_supported(self.diagnostics.uris()));
+                }
+                TransportEvent::FileWatcherBatch(batch) => self.forward_watcher_batch(batch).await,
+                TransportEvent::Closed => break,
+            }
+        }
+
+        self.mark_dead();
+        self.refresh.shutdown();
+    }
+
+    async fn forward_watcher_batch(&self, batch: FileWatcherBatch) {
+        let changes = self.documents.filter_watcher_changes(batch.forwarded_changes);
+        let mut refresh_uris = self.filter_supported(changes.iter().map(|change| change.uri.clone()).collect());
+        refresh_uris.extend(self.filter_supported(batch.discovered_uris));
+        self.refresh.enqueue(refresh_uris);
+
+        if changes.is_empty() {
             return;
         }
 
-        self.refresh.wait_for_current_generation(BACKGROUND_REFRESH_TIMEOUT).await;
-    }
-}
-
-async fn sync_document(
-    transport: &ProcessTransport,
-    documents: &DocumentLifecycle,
-    diagnostics: &DiagnosticsStore,
-    uri: &Uri,
-) -> Option<u64> {
-    let notifications = match documents.acquire(uri).await {
-        AcquireAction::Open { file_path, content } => open_and_save_notifications(uri, &file_path, content),
-        AcquireAction::Reopen { file_path, content } => reopen_notifications(uri, &file_path, content),
-        AcquireAction::Unchanged => return None,
-        AcquireAction::MissingOnDisk => {
-            documents.forget_uri(uri);
-            diagnostics.forget_uri(uri);
-            return None;
-        }
-    };
-
-    let version_before = diagnostics.current_uri_version(uri);
-    for notification in notifications {
-        transport.send_notification(notification).await;
-    }
-    Some(version_before)
-}
-
-async fn release_document(
-    transport: &ProcessTransport,
-    documents: &DocumentLifecycle,
-    refresh: &RefreshQueue,
-    uri: &Uri,
-) {
-    match documents.release(uri) {
-        ReleaseAction::Close => {
-            transport.send_notification(close_notification(uri)).await;
-        }
-        ReleaseAction::CloseAndRefresh => {
-            transport.send_notification(close_notification(uri)).await;
-            refresh.enqueue(vec![uri.clone()]);
-        }
-        ReleaseAction::Unchanged => {}
-    }
-}
-
-async fn run_background_refresh_worker(
-    transport: ProcessTransport,
-    documents: DocumentLifecycle,
-    diagnostics: DiagnosticsStore,
-    refresh: RefreshQueue,
-) {
-    while let Some(uri) = refresh.recv().await {
-        refresh_uri(&transport, &documents, &diagnostics, &refresh, &uri).await;
-    }
-}
-
-async fn refresh_uri(
-    transport: &ProcessTransport,
-    documents: &DocumentLifecycle,
-    diagnostics: &DiagnosticsStore,
-    refresh: &RefreshQueue,
-    uri: &Uri,
-) {
-    let sync_result = sync_document(transport, documents, diagnostics, uri).await;
-    if let Some(version_before) = sync_result {
-        diagnostics.wait_for_uri_fresh(uri, version_before, DIAGNOSTICS_TIMEOUT).await;
-    }
-
-    release_document(transport, documents, refresh, uri).await;
-}
-
-async fn bootstrap_workspace_refresh(
-    workspace_root: PathBuf,
-    supported_extensions: Arc<HashSet<String>>,
-    refresh: RefreshQueue,
-) {
-    let uris = if supported_extensions.is_empty() {
-        Vec::new()
-    } else {
-        tokio::task::spawn_blocking(move || {
-            let mut builder = WalkBuilder::new(&workspace_root);
-            builder
-                .standard_filters(true)
-                .filter_entry(|entry| entry.depth() == 0 || !is_ignored_directory_name(entry.file_name()));
-
-            let mut uris = Vec::new();
-            for entry in builder.build() {
-                let Ok(entry) = entry else {
-                    continue;
-                };
-                if !entry.file_type().is_some_and(|file_type| file_type.is_file()) {
-                    continue;
-                }
-                if !path_is_supported(entry.path(), supported_extensions.as_ref()) {
-                    continue;
-                }
-                if let Ok(uri) = crate::path_to_uri(entry.path()) {
-                    uris.push(uri);
-                }
-            }
-            uris
-        })
-        .await
-        .unwrap_or_default()
-    };
-
-    refresh.enqueue(uris);
-    refresh.complete_bootstrap();
-}
-
-async fn run_session_events(
-    transport: ProcessTransport,
-    documents: DocumentLifecycle,
-    diagnostics: DiagnosticsStore,
-    refresh: RefreshQueue,
-    supported_extensions: Arc<HashSet<String>>,
-    mut event_rx: mpsc::Receiver<TransportEvent>,
-    alive: Arc<AtomicBool>,
-) {
-    while let Some(event) = event_rx.recv().await {
-        match event {
-            TransportEvent::PublishedDiagnostics(params) => {
-                diagnostics.publish(params);
-            }
-            TransportEvent::FileWatcherBatch(batch) => {
-                let filtered = documents.filter_watcher_changes(batch.forwarded_changes);
-                let discovered = filter_supported_uris(batch.discovered_uris, supported_extensions.as_ref());
-
-                let mut refresh_uris = filter_supported_uris(
-                    filtered.iter().map(|change| change.uri.clone()).collect(),
-                    supported_extensions.as_ref(),
-                );
-                refresh_uris.extend(discovered);
-                refresh.enqueue(refresh_uris);
-
-                if filtered.is_empty() {
-                    continue;
-                }
-
-                let params = DidChangeWatchedFilesParams { changes: filtered };
-                if let Ok(value) = serde_json::to_value(&params) {
-                    transport
-                        .send_notification(LspNotification {
-                            method: DidChangeWatchedFiles::METHOD.to_string(),
-                            params: value,
-                        })
-                        .await;
-                }
-            }
-            TransportEvent::Closed => break,
+        let params = DidChangeWatchedFilesParams { changes };
+        if let Ok(value) = serde_json::to_value(&params) {
+            self.transport
+                .send_notification(LspNotification { method: DidChangeWatchedFiles::METHOD.to_string(), params: value })
+                .await;
         }
     }
 
-    alive.store(false, Ordering::SeqCst);
-    refresh.shutdown();
+    async fn run_refresh_worker(self) {
+        while let Some(uri) = self.refresh.recv().await {
+            self.refresh_uri(&uri).await;
+        }
+    }
+
+    async fn bootstrap_refresh(self, workspace_root: PathBuf) {
+        let supported_extensions = Arc::clone(&self.supported_extensions);
+        let uris = tokio::task::spawn_blocking(move || discover_supported_uris(&workspace_root, &supported_extensions))
+            .await
+            .unwrap_or_default();
+
+        self.refresh.enqueue(uris);
+        self.refresh.complete_bootstrap();
+    }
+
+    fn filter_supported(&self, uris: Vec<Uri>) -> Vec<Uri> {
+        uris.into_iter().filter(|uri| uri_is_supported(uri, &self.supported_extensions)).collect()
+    }
 }
 
-fn filter_supported_uris(uris: Vec<Uri>, supported_extensions: &HashSet<String>) -> Vec<Uri> {
-    uris.into_iter().filter(|uri| uri_is_supported(uri, supported_extensions)).collect()
+enum DocumentSync {
+    Sent { version_before: u64 },
+    AlreadyOpen,
+    Missing,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Freshness {
+    Fresh,
+    Unconfirmed,
+}
+
+fn supported_extensions(config: &LspConfig) -> HashSet<String> {
+    config
+        .languages
+        .iter()
+        .filter_map(|language| metadata_for(*language))
+        .flat_map(|metadata| metadata.extensions.iter().copied())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn discover_supported_uris(workspace_root: &Path, supported_extensions: &HashSet<String>) -> Vec<Uri> {
+    if supported_extensions.is_empty() {
+        return Vec::new();
+    }
+
+    let mut builder = WalkBuilder::new(workspace_root);
+    builder
+        .standard_filters(true)
+        .filter_entry(|entry| entry.depth() == 0 || !is_ignored_directory_name(entry.file_name()));
+
+    builder
+        .build()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_some_and(|file_type| file_type.is_file()))
+        .filter(|entry| path_is_supported(entry.path(), supported_extensions))
+        .filter_map(|entry| crate::path_to_uri(entry.path()).ok())
+        .collect()
 }
 
 fn uri_is_supported(uri: &Uri, supported_extensions: &HashSet<String>) -> bool {

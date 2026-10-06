@@ -1,9 +1,9 @@
-use crate::common::{CargoProject, DaemonHarness, TestProject, use_fake_rust_server};
+use crate::common::{CargoProject, DaemonHarness, TestProject, use_fake_servers};
 use aether_lspd::LanguageId;
 
 #[tokio::test]
 async fn daemon_survives_client_drop() {
-    use_fake_rust_server();
+    use_fake_servers();
 
     let project = CargoProject::new("client_drop").expect("Failed to create project");
     let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");

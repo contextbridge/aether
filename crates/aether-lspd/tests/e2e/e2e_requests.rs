@@ -1,11 +1,11 @@
-use crate::common::{CargoProject, DaemonHarness, TestProject, hover_text, use_fake_rust_server};
+use crate::common::{CargoProject, DaemonHarness, TestProject, hover_text, use_fake_servers};
 use aether_lspd::LanguageId;
 use lsp_types::{DocumentSymbolResponse, GotoDefinitionResponse};
 use std::path::PathBuf;
 
 #[tokio::test]
 async fn request_helpers_round_trip_through_fake_server() {
-    use_fake_rust_server();
+    use_fake_servers();
 
     let project = CargoProject::new("request_contracts").expect("Failed to create project");
     let content = r#"fn example_fn() -> i32 {
@@ -66,7 +66,7 @@ fn main() {
 
 #[tokio::test]
 async fn documents_in_paths_with_spaces_round_trip_through_the_daemon() {
-    use_fake_rust_server();
+    use_fake_servers();
 
     let project = CargoProject::new("request_spaces").expect("Failed to create project");
     project.add_file("src/my mod.rs", "fn main() { let error = 1; }\n").expect("Failed to add file");
@@ -94,7 +94,7 @@ async fn documents_in_paths_with_spaces_round_trip_through_the_daemon() {
 }
 #[tokio::test]
 async fn diagnostic_helpers_round_trip_through_fake_server() {
-    use_fake_rust_server();
+    use_fake_servers();
 
     let project = CargoProject::new("request_diagnostics").expect("Failed to create project");
     project.add_file("src/main.rs", "fn main() { let error = 1; }\n").expect("Failed to add file");

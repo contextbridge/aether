@@ -1,35 +1,13 @@
-use crate::common::{CargoProject, DaemonHarness, TestProject, hover_text, use_fake_rust_server};
+use crate::common::{
+    CargoProject, DaemonHarness, TestProject, hover_text, poll_workspace_diagnostics, use_fake_servers,
+    workspace_error_count,
+};
 use aether_lspd::{LanguageId, LspClient, lockfile_path, socket_path};
-use lsp_types::PublishDiagnosticsParams;
-use std::time::{Duration, Instant};
-
-async fn poll_workspace_diagnostics(
-    client: &LspClient,
-    predicate: impl Fn(&[PublishDiagnosticsParams]) -> bool,
-    timeout: Duration,
-) -> Vec<PublishDiagnosticsParams> {
-    let start = Instant::now();
-    let mut last = Vec::new();
-
-    while start.elapsed() < timeout {
-        let diagnostics = client.get_diagnostics(None).await.expect("Failed to get workspace diagnostics");
-        if predicate(&diagnostics) {
-            return diagnostics;
-        }
-        last = diagnostics;
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-
-    panic!("workspace diagnostics timed out after {timeout:?}. Last result: {last:?}");
-}
-
-fn workspace_error_count(diagnostics: &[PublishDiagnosticsParams]) -> usize {
-    diagnostics.iter().map(|params| params.diagnostics.len()).sum()
-}
+use std::time::Duration;
 
 #[tokio::test]
 async fn daemon_persists_after_client_disconnect() {
-    use_fake_rust_server();
+    use_fake_servers();
 
     let project = CargoProject::new("disconnect_persists").expect("Failed to create project");
     let socket_path = socket_path(project.root(), LanguageId::Rust);
@@ -43,7 +21,7 @@ async fn daemon_persists_after_client_disconnect() {
 
 #[tokio::test]
 async fn multiple_clients_share_fake_server_session() {
-    use_fake_rust_server();
+    use_fake_servers();
 
     let project = CargoProject::new("shared_session").expect("Failed to create project");
 
@@ -64,7 +42,7 @@ async fn multiple_clients_share_fake_server_session() {
 
 #[tokio::test]
 async fn diagnostics_are_available_across_clients_without_explicit_open() {
-    use_fake_rust_server();
+    use_fake_servers();
 
     let project = CargoProject::new("shared_diagnostics").expect("Failed to create project");
     project.add_file("src/main.rs", "fn main() { let error = 1; }\n").expect("Failed to add source file");
@@ -87,7 +65,7 @@ async fn diagnostics_are_available_across_clients_without_explicit_open() {
 
 #[tokio::test]
 async fn workspace_bootstrap_diagnostics_are_available_without_explicit_open() {
-    use_fake_rust_server();
+    use_fake_servers();
 
     let temp = tempfile::tempdir().expect("Failed to create temp directory");
     let root = temp.path().join("build");
@@ -117,7 +95,7 @@ async fn workspace_bootstrap_diagnostics_are_available_without_explicit_open() {
 
 #[tokio::test]
 async fn workspace_diagnostics_refresh_after_external_edit_without_explicit_open() {
-    use_fake_rust_server();
+    use_fake_servers();
 
     let project = CargoProject::new("workspace_external_refresh").expect("Failed to create project");
     project.add_file("src/main.rs", "fn main() { let ok = 1; }\n").expect("Failed to add source file");

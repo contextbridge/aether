@@ -1,12 +1,11 @@
 use crate::error::{DaemonError, DaemonResult};
 use crate::language_catalog::LanguageId;
-use crate::language_catalog::{ServerKind, metadata_for, resolved_config_for_language, server_kind_for_language};
+use crate::language_catalog::{ServerKind, resolved_config_for_language, server_kind_for_language};
 use crate::process_transport::TransportError;
-use crate::protocol::{LSP_REQUEST_TIMED_OUT, LSP_TRANSPORT_CLOSED, LspErrorResponse, extract_document_uri};
+use crate::protocol::{LSP_REQUEST_TIMED_OUT, LSP_TRANSPORT_CLOSED, LspErrorResponse};
 use crate::workspace_session::WorkspaceSession;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
@@ -37,12 +36,15 @@ impl WorkspaceRegistry {
         Self { sessions: Arc::new(RwLock::new(HashMap::new())), request_timeout }
     }
 
-    /// Resolve a workspace/language pair and spawn its language server if needed.
-    pub(crate) fn bind(&self, workspace_root: &Path, language: LanguageId) -> DaemonResult<WorkspaceBinding> {
+    pub(crate) async fn bind(&self, workspace_root: &Path, language: LanguageId) -> DaemonResult<WorkspaceBinding> {
         let key = WorkspaceKey::new(workspace_root, language)?;
         let binding = WorkspaceBinding { key, language };
-        self.get_or_spawn(&binding)?;
-        Ok(binding)
+        let session = self.get_or_spawn(&binding)?;
+
+        match self.within_deadline(&session, session.wait_until_initialized()).await {
+            Ok(initialized) => initialized.map(|()| binding),
+            Err(_) => Err(DaemonError::LspInitializeTimedOut(self.request_timeout)),
+        }
     }
 
     /// Run an LSP call against the binding's current session. If the session's
@@ -74,10 +76,10 @@ impl WorkspaceRegistry {
         uri: Option<&lsp_types::Uri>,
     ) -> Result<Value, LspErrorResponse> {
         let session = self.session(binding)?;
-        let Ok(diagnostics) = tokio::time::timeout(self.request_timeout, session.get_diagnostics(uri)).await else {
-            session.declare_wedged();
-            return Err(SessionCallError::TimedOut.into_response("diagnostics", self.request_timeout));
-        };
+        let diagnostics = self
+            .within_deadline(&session, session.get_diagnostics(uri))
+            .await
+            .map_err(|err| err.into_response("diagnostics", self.request_timeout))?;
         serde_json::to_value(&diagnostics).map_err(|e| LspErrorResponse { code: -1, message: e.to_string() })
     }
 
@@ -129,12 +131,7 @@ impl WorkspaceRegistry {
             sessions.remove(&binding.key);
         }
 
-        let session = Arc::new(WorkspaceSession::spawn(
-            &binding.key.workspace_root,
-            &config.command,
-            &config.args,
-            supported_extensions(&config),
-        )?);
+        let session = Arc::new(WorkspaceSession::spawn(&binding.key.workspace_root, &config)?);
         sessions.insert(binding.key.clone(), Arc::clone(&session));
         Ok(session)
     }
@@ -146,27 +143,18 @@ impl WorkspaceRegistry {
         method: &str,
         params: &Value,
     ) -> Result<Value, SessionCallError> {
-        let call = async {
-            let opened_uri = if let Some(uri) = extract_document_uri(method, params) {
-                let _ = session.ensure_document_open(&uri).await;
-                Some(uri)
-            } else {
-                None
-            };
+        self.within_deadline(session, session.request(method, params)).await?.map_err(SessionCallError::from)
+    }
 
-            let result = request_with_retry(session, method, params, TRANSIENT_RETRY_LIMIT).await;
-
-            if let Some(uri) = opened_uri {
-                session.close_document(&uri).await;
-            }
-            result
-        };
-
-        let Ok(result) = tokio::time::timeout(self.request_timeout, call).await else {
+    async fn within_deadline<T>(
+        &self,
+        session: &WorkspaceSession,
+        work: impl Future<Output = T>,
+    ) -> Result<T, SessionCallError> {
+        tokio::time::timeout(self.request_timeout, work).await.map_err(|_| {
             session.declare_wedged();
-            return Err(SessionCallError::TimedOut);
-        };
-        result.map_err(SessionCallError::from)
+            SessionCallError::TimedOut
+        })
     }
 }
 
@@ -178,10 +166,6 @@ impl WorkspaceKey {
         Ok(Self { workspace_root, server_kind })
     }
 }
-
-const LSP_CONTENT_MODIFIED: i32 = -32801;
-const TRANSIENT_RETRY_LIMIT: u32 = 3;
-const TRANSIENT_RETRY_DELAY: Duration = Duration::from_millis(500);
 
 enum SessionCallError {
     Lsp(LspErrorResponse),
@@ -214,36 +198,6 @@ impl From<TransportError> for SessionCallError {
             TransportError::Closed => Self::TransportClosed,
         }
     }
-}
-
-async fn request_with_retry(
-    session: &WorkspaceSession,
-    method: &str,
-    params: &Value,
-    max_retries: u32,
-) -> Result<Value, TransportError> {
-    let mut last_err = None;
-    for attempt in 0..=max_retries {
-        match session.request_raw(method, params.clone()).await {
-            Ok(value) => return Ok(value),
-            Err(TransportError::Lsp(err)) if err.code == LSP_CONTENT_MODIFIED && attempt < max_retries => {
-                last_err = Some(TransportError::Lsp(err));
-                tokio::time::sleep(TRANSIENT_RETRY_DELAY).await;
-            }
-            Err(err) => return Err(err),
-        }
-    }
-    Err(last_err.unwrap())
-}
-
-fn supported_extensions(config: &crate::language_catalog::LspConfig) -> HashSet<String> {
-    config
-        .languages
-        .iter()
-        .filter_map(|language| metadata_for(*language))
-        .flat_map(|metadata| metadata.extensions.iter().copied())
-        .map(ToOwned::to_owned)
-        .collect()
 }
 
 #[cfg(test)]

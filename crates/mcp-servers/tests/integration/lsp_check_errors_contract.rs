@@ -1,5 +1,6 @@
 use crate::common::{CodingWorkspace, call_tool, call_tool_error, connect_lsp};
 use aether_lspd::testing::{CargoProject, TestProject};
+use std::os::unix::fs::PermissionsExt;
 
 #[tokio::test]
 async fn lsp_check_errors_accepts_flat_file_path_and_infers_file_scope() {
@@ -62,17 +63,33 @@ async fn lsp_check_errors_returns_typescript_installation_instructions_when_serv
     let workspace = CodingWorkspace::new_with_lsp().await.expect("create workspace");
     workspace.write("package.json", "{}\n").expect("write package.json");
     let index_ts = workspace.write("index.ts", "const value: string = 1;\n").expect("write TypeScript file");
-    workspace
-        .write("node_modules/.bin/typescript-language-server", "not executable\n")
-        .expect("write unavailable language server");
+    workspace.write("node_modules/.bin/tsc", "not executable\n").expect("write unavailable language server");
 
     let error =
         call_tool_error(workspace.client.raw(), "lsp_check_errors", serde_json::json!({ "filePath": index_ts })).await;
 
     assert!(error.contains("Permission denied"), "{error}");
-    assert!(error.contains("TypeScript language server"), "{error}");
-    assert!(error.contains("npm install --save-dev typescript typescript-language-server"), "{error}");
-    assert!(error.contains("npm install --global typescript typescript-language-server"), "{error}");
+    assert!(error.contains("TypeScript 7 language server"), "{error}");
+    assert!(error.contains("npm install --save-dev typescript@^7"), "{error}");
+    assert!(error.contains("npm install --global typescript@^7"), "{error}");
+}
+
+#[tokio::test]
+async fn lsp_check_errors_returns_typescript_installation_instructions_when_tsc_predates_lsp() {
+    let workspace = CodingWorkspace::new_with_lsp().await.expect("create workspace");
+    workspace.write("package.json", "{}\n").expect("write package.json");
+    let index_ts = workspace.write("index.ts", "const value: string = 1;\n").expect("write TypeScript file");
+    let tsc = workspace
+        .write("node_modules/.bin/tsc", "#!/bin/sh\necho \"error TS5023: Unknown compiler option '--lsp'.\"\nexit 1\n")
+        .expect("write TypeScript 6 tsc");
+    std::fs::set_permissions(&tsc, std::fs::Permissions::from_mode(0o755)).expect("make tsc executable");
+
+    let error =
+        call_tool_error(workspace.client.raw(), "lsp_check_errors", serde_json::json!({ "filePath": index_ts })).await;
+
+    assert!(error.contains("failed to complete initialization"), "{error}");
+    assert!(error.contains("TypeScript 7 language server"), "{error}");
+    assert!(error.contains("npm install --save-dev typescript@^7"), "{error}");
 }
 
 #[tokio::test]

@@ -1,6 +1,7 @@
 import json
 import argparse
 import sys
+from urllib.parse import unquote, urlparse
 
 docs = {}
 
@@ -8,10 +9,16 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--wedge-on", action="append", default=[])
 parser.add_argument("--crash-on", action="append", default=[])
 parser.add_argument("--fail-on", action="append", default=[])
+parser.add_argument("--pull-diagnostics", action="store_true")
 cli_args = parser.parse_args()
 wedge_methods = set(cli_args.wedge_on)
 crash_methods = set(cli_args.crash_on)
 fail_methods = set(cli_args.fail_on)
+pull_diagnostics = cli_args.pull_diagnostics
+refresh_supported = False
+root_path = None
+next_request_id = 0
+cancelled_since_open = set()
 
 
 def write_message(msg):
@@ -43,19 +50,60 @@ def read_message():
     return json.loads(body.decode("utf-8"))
 
 
-def publish(uri, text):
+def send_request(method, params):
+    global next_request_id
+    next_request_id += 1
+    write_message(
+        {
+            "jsonrpc": "2.0",
+            "id": f"fake-{next_request_id}",
+            "method": method,
+            "params": params,
+        }
+    )
+
+
+def uri_to_path(uri):
+    return unquote(urlparse(uri).path)
+
+
+def read_disk(path):
+    try:
+        with open(path, encoding="utf-8") as file:
+            return file.read()
+    except OSError:
+        return ""
+
+
+def make_diagnostic(message):
+    return {
+        "range": {
+            "start": {"line": 0, "character": 0},
+            "end": {"line": 0, "character": 5},
+        },
+        "severity": 1,
+        "message": message,
+    }
+
+
+def diagnostics_for(uri, text):
+    """Report `error` tokens, plus errors in files named by `// depends: <path>` lines."""
     diagnostics = []
     if "error" in text.lower():
-        diagnostics.append(
-            {
-                "range": {
-                    "start": {"line": 0, "character": 0},
-                    "end": {"line": 0, "character": 5},
-                },
-                "severity": 1,
-                "message": "error token",
-            }
-        )
+        diagnostics.append(make_diagnostic("error token"))
+
+    directory = uri_to_path(uri).rsplit("/", 1)[0]
+    for line in text.splitlines():
+        if line.startswith("// depends: "):
+            dependency = f"{directory}/{line[len('// depends: '):].strip()}"
+            if "error" in read_disk(dependency).lower():
+                diagnostics.append(make_diagnostic("dependency error"))
+    return diagnostics
+
+
+def publish(uri, text):
+    if pull_diagnostics:
+        return
 
     write_message(
         {
@@ -63,7 +111,7 @@ def publish(uri, text):
             "method": "textDocument/publishDiagnostics",
             "params": {
                 "uri": uri,
-                "diagnostics": diagnostics,
+                "diagnostics": diagnostics_for(uri, text),
             },
         }
     )
@@ -105,6 +153,9 @@ while True:
     method = message.get("method")
     params = message.get("params", {})
 
+    if method is None:
+        continue
+
     if method in crash_methods:
         sys.exit(1)
 
@@ -122,22 +173,74 @@ while True:
         continue
 
     if method == "initialize":
+        root_path = uri_to_path(params["rootUri"])
+        capabilities = {"hoverProvider": True}
+        if pull_diagnostics:
+            capabilities["diagnosticProvider"] = {
+                "interFileDependencies": True,
+                "workspaceDiagnostics": False,
+            }
+            client_workspace = params.get("capabilities", {}).get("workspace", {})
+            refresh_supported = client_workspace.get("diagnostics", {}).get("refreshSupport", False)
         write_message(
             {
                 "jsonrpc": "2.0",
                 "id": message["id"],
-                "result": {
-                    "capabilities": {
-                        "hoverProvider": True,
-                    }
-                },
+                "result": {"capabilities": capabilities},
             }
         )
     elif method == "initialized":
-        continue
+        if pull_diagnostics:
+            send_request(
+                "client/registerCapability",
+                {
+                    "registrations": [
+                        {
+                            "id": "fake-watcher",
+                            "method": "workspace/didChangeWatchedFiles",
+                            "registerOptions": {"watchers": [{"globPattern": f"{root_path}/**/*"}]},
+                        }
+                    ]
+                },
+            )
+    elif method == "workspace/didChangeWatchedFiles":
+        if pull_diagnostics and refresh_supported:
+            send_request("workspace/diagnostic/refresh", None)
+    elif method == "textDocument/diagnostic":
+        # TypeScript 7 rejects explicit nulls in these optional fields.
+        if any(key in params and params[key] is None for key in ("identifier", "previousResultId")):
+            write_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": message["id"],
+                    "error": {"code": -32602, "message": "null value is not allowed"},
+                }
+            )
+            continue
+        uri = params["textDocument"]["uri"]
+        text = docs[uri]["text"] if uri in docs else read_disk(uri_to_path(uri))
+        # Mimics a server still loading its project: the first pull after each open is cancelled.
+        if "// cancel-first-pull" in text and uri not in cancelled_since_open:
+            cancelled_since_open.add(uri)
+            write_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": message["id"],
+                    "error": {"code": -32802, "message": "server cancelled", "data": {"retriggerRequest": True}},
+                }
+            )
+            continue
+        write_message(
+            {
+                "jsonrpc": "2.0",
+                "id": message["id"],
+                "result": {"kind": "full", "items": diagnostics_for(uri, text)},
+            }
+        )
     elif method == "textDocument/didOpen":
         document_item = params["textDocument"]
         uri = document_item["uri"]
+        cancelled_since_open.discard(uri)
         state = document(uri)
         docs[uri] = {
             "open_count": state["open_count"] + 1,
