@@ -32,6 +32,9 @@ pub enum McpError {
     /// Prompt retrieval failed
     #[error("Prompt retrieval failed: {0}")]
     PromptGetFailed(String),
+    /// Server names namespace their tools as `server__tool`, so they cannot contain `__`.
+    #[error("MCP server name '{0}' cannot contain '__'")]
+    InvalidServerName(String),
     /// A configured server conflicts with an Aether-owned instruction namespace.
     #[error("MCP server name '{0}' is reserved by Aether")]
     ReservedServerName(String),

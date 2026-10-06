@@ -104,7 +104,7 @@ And bring Mr. `BotBot` to life!
 ```rust,no_run
 use aether_core::core::{Command, Prompt, agent};
 use aether_core::events::{AgentEvent, MessageEvent, ToolEvent, TurnEvent};
-use aether_core::mcp::mcp;
+use aether_core::mcp::{mcp, tool_definitions};
 use llm::providers::openrouter::OpenRouterProvider;
 use std::io::{self, Write};
 
@@ -122,7 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Create Agent
     let (tx, mut rx, _handle) = agent(llm)
         .system_prompt(Prompt::file("AGENTS.md", ".")) // <-- Load system prompt from AGENTS.md
-        .tools(mcp_runtime.handle().clone(), snapshot.tool_definitions()) // <-- Give the agent MCP tools
+        .tools(mcp_runtime.handle().clone(), tool_definitions(&snapshot)) // <-- Give the agent MCP tools
         .spawn()
         .await?;
 

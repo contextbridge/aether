@@ -347,11 +347,9 @@ mod tests {
                 "task-1",
                 [DetailedTask::new(task(TaskStatus::Working), TaskPayload::Working), completed_task()],
             );
-        let (event_tx, _event_rx) = mpsc::channel::<McpClientEvent>(4);
         let client = McpClient::new(
             ClientConfig::new(client_capabilities(), Implementation::new("test-client", "0.1.0")),
             "task-server".into(),
-            event_tx,
         );
         let (_server, client) = connect(server, client).await.expect("connect task server");
 
@@ -393,11 +391,9 @@ mod tests {
             .with_tool(FakeTool::new("deferred").responds(FakeToolResponse::task(CreateTaskResult::new(seed.clone()))))
             .with_task("task-1", [DetailedTask::new(seed, TaskPayload::Working)]);
         let state = server.state();
-        let (event_tx, _event_rx) = mpsc::channel::<McpClientEvent>(4);
         let client = McpClient::new(
             ClientConfig::new(client_capabilities(), Implementation::new("test-client", "0.1.0")),
             "task-server".into(),
-            event_tx,
         );
         let (_server, client) = connect(server, client).await.expect("connect task server");
 
@@ -470,8 +466,8 @@ mod tests {
             let client = McpClient::new(
                 ClientConfig::new(client_capabilities(), Implementation::new("test-client", "0.1.0")),
                 "task-server".into(),
-                event_tx,
-            );
+            )
+            .with_event_sender(event_tx);
             let (_server, client) = connect(server, client).await.expect("connect task server");
             assert_eq!(client.peer_info().expect("peer info").protocol_version, ProtocolVersion::V_2026_07_28);
 

@@ -1,3 +1,4 @@
+#[cfg(feature = "oauth")]
 use aether_auth::OAuthClientRegistration;
 use reqwest::header::{AUTHORIZATION, HeaderName, HeaderValue, InvalidHeaderName, InvalidHeaderValue};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
@@ -175,12 +176,14 @@ pub struct McpHttpConfig {
     pub oauth: Option<McpOAuthConfig>,
 }
 
+#[cfg(feature = "oauth")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedOAuth {
     pub client_registration: OAuthClientRegistration,
     pub callback_port: NonZeroU16,
 }
 
+#[cfg(feature = "oauth")]
 impl ResolvedOAuth {
     pub fn redirect_uri(&self) -> String {
         loopback_redirect_uri(self.callback_port.get())
@@ -191,6 +194,7 @@ pub fn loopback_redirect_uri(port: u16) -> String {
     format!("http://localhost:{port}/")
 }
 
+#[cfg(feature = "oauth")]
 impl McpHttpConfig {
     pub(crate) fn has_explicit_authorization(&self) -> bool {
         self.transport.auth_header.is_some() || self.transport.custom_headers.contains_key(&AUTHORIZATION)

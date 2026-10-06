@@ -1,5 +1,5 @@
 use aether_auth::{OAuthError, OAuthHandler, accept_oauth_callback};
-use aether_core::mcp::mcp;
+use aether_core::mcp::{mcp, tool_definitions};
 use aether_core::testing::{FakeMcpServer, fake_mcp};
 use futures::future::BoxFuture;
 use mcp_utils::client::{
@@ -83,9 +83,8 @@ impl Drop for UnauthorizedHttpEndpoint {
 }
 
 fn test_manager(with_oauth: bool) -> McpManager {
-    let (event_tx, _) = mpsc::channel::<McpClientEvent>(50);
-    let factory = if with_oauth { Some(fake_oauth_handler_factory()) } else { None };
-    McpManager::new(event_tx, factory)
+    let manager = McpManager::new();
+    if with_oauth { manager.with_oauth_handler_factory(fake_oauth_handler_factory()) } else { manager }
 }
 
 struct CancellingOAuthHandler;
@@ -162,7 +161,7 @@ async fn builder_with_oauth_handler_factory_spawns_successfully() {
         .unwrap();
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
-    assert!(snapshot.tool_definitions().is_empty());
+    assert!(tool_definitions(&snapshot).is_empty());
     assert!(snapshot.model_instructions().is_empty());
 }
 
@@ -221,7 +220,7 @@ async fn add_mcps_continues_on_oauth_failure() {
             .await
             .is_ok()
     );
-    assert!(manager.tool_definitions().is_empty());
+    assert!(tool_definitions(&manager.snapshot()).is_empty());
 }
 
 #[tokio::test]
@@ -269,7 +268,7 @@ async fn deferred_server_with_failing_http_surfaces_failure() {
     let local_status = statuses.iter().find(|s| s.name == "local").expect("Expected status entry for 'local'");
     assert!(matches!(local_status.status, McpServerStatus::Connected { .. }));
     assert!(local_status.deferred_tools);
-    assert!(manager.tool_definitions().is_empty());
+    assert!(tool_definitions(&manager.snapshot()).is_empty());
 }
 
 #[tokio::test]
@@ -288,7 +287,7 @@ async fn selective_policy_survives_reconnection_after_failure() {
     let remote = manager.server_statuses().into_iter().find(|status| status.name == "remote").unwrap();
     assert!(matches!(remote.status, McpServerStatus::Connected { .. }));
     assert!(remote.deferred_tools);
-    let names = manager.tool_definitions().into_iter().map(|tool| tool.name).collect::<Vec<_>>();
+    let names = tool_definitions(&manager.snapshot()).into_iter().map(|tool| tool.name).collect::<Vec<_>>();
     assert_eq!(names, ["remote__add_numbers"]);
 }
 
@@ -304,7 +303,7 @@ async fn deferred_tools_partial_connection_works() {
 
     let _ = manager.add_mcps(servers).await;
 
-    assert!(manager.tool_definitions().is_empty());
+    assert!(tool_definitions(&manager.snapshot()).is_empty());
     let statuses = manager.server_statuses();
     assert!(matches!(
         statuses.iter().find(|status| status.name == "working").unwrap().status,

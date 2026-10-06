@@ -225,6 +225,17 @@ impl FakeTool {
         self
     }
 
+    pub fn title(mut self, title: impl Into<String>) -> Self {
+        self.definition.title = Some(title.into());
+        self
+    }
+
+    pub fn output_schema(mut self, schema: serde_json::Value) -> Self {
+        let schema = serde_json::from_value(schema).expect("output schema is a JSON object");
+        self.definition.output_schema = Some(Arc::new(schema));
+        self
+    }
+
     pub fn responds(mut self, response: impl Into<FakeToolResponse>) -> Self {
         self.responses.insert(None, response.into());
         self

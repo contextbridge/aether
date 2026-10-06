@@ -4,7 +4,7 @@ use aether_core::core::{AgentBuilder, AgentDeps, AgentHandle, Prompt};
 use aether_core::events::{AgentEvent, Command};
 use aether_core::mcp::McpBuilder;
 use aether_core::mcp::mcp;
-use aether_core::mcp::{McpHandle, McpRuntime, McpSession};
+use aether_core::mcp::{McpHandle, McpRuntime, McpSession, tool_definitions};
 use llm::{ChatMessage, SessionUsageEvent, ToolDefinition};
 use mcp_servers::McpBuilderExt;
 use mcp_utils::client::{McpClientEvent, McpConnectionDetails, McpServer, OAuthHandlerFactory};
@@ -137,7 +137,7 @@ impl RuntimeBuilder {
             .block_until_ready()
             .await
             .ok_or_else(|| CliError::McpError("MCP bootstrap aborted before completion".to_string()))?;
-        let filtered_tools = details.tool_definitions();
+        let filtered_tools = tool_definitions(&details);
         Ok(PromptInfo { spec, tool_definitions: filtered_tools })
     }
 

@@ -50,10 +50,7 @@ fn catalog_projects_visibility_filtering_instructions_and_routes_consistently() 
     catalog.set_progressive_discovery_instructions(Some("Discover deferred tools".to_string()));
 
     let tools = catalog.tools();
-    assert_eq!(
-        tools.model_visible.iter().map(|tool| tool.definition().name.as_str()).collect::<Vec<_>>(),
-        ["coding__bash"]
-    );
+    assert_eq!(tools.model_visible.iter().map(|tool| tool.namespaced_name()).collect::<Vec<_>>(), ["coding__bash"]);
     assert_eq!(tools.deferred.into_iter().map(CatalogTool::local_name).collect::<Vec<_>>(), ["write"]);
     let server_tools = catalog.tools_for("coding").unwrap();
     assert_eq!(server_tools.model_visible.len(), 1);
@@ -73,8 +70,14 @@ fn catalog_projects_visibility_filtering_instructions_and_routes_consistently() 
 
 #[test]
 fn catalog_preserves_names_schema_annotations_metadata_and_order() {
-    let tools =
-        vec![tool("first").with_annotations(ToolAnnotations::new().read_only(true).idempotent(true)), tool("second")];
+    let output_schema = json!({"type": "object", "properties": {"ok": {"type": "boolean"}}});
+    let tools = vec![
+        tool("first")
+            .with_title("First tool")
+            .with_raw_output_schema(Arc::new(output_schema.as_object().unwrap().clone()))
+            .with_annotations(ToolAnnotations::new().read_only(true).idempotent(true)),
+        tool("second"),
+    ];
     let mut catalog = ToolCatalog::new();
     catalog.upsert_server(connected_entry("alpha", ToolExposure::ModelVisible, &tools, &ToolFilter::default()));
     catalog.upsert_server(connected_entry("beta", ToolExposure::deferred_all(), &tools, &ToolFilter::default()));
@@ -82,10 +85,13 @@ fn catalog_preserves_names_schema_annotations_metadata_and_order() {
     let first = catalog.tool("alpha__first").unwrap();
     assert_eq!(first.namespaced_name(), "alpha__first");
     assert_eq!(first.local_name(), "first");
-    assert_eq!(first.definition().server.as_deref(), Some("alpha"));
-    assert_eq!(first.definition().description, "first description");
-    assert_eq!(first.definition().parameters["required"], json!(["value"]));
-    let annotations = first.definition().annotations.as_ref().unwrap();
+    assert_eq!(first.server(), "alpha");
+    assert_eq!(first.tool().name, "alpha__first");
+    assert_eq!(first.tool().title.as_deref(), Some("First tool"));
+    assert_eq!(first.tool().description.as_deref(), Some("first description"));
+    assert_eq!(first.tool().input_schema["required"], json!(["value"]));
+    assert_eq!(first.tool().output_schema.as_deref(), output_schema.as_object());
+    let annotations = first.tool().annotations.as_ref().unwrap();
     assert_eq!(annotations.read_only_hint, Some(true));
     assert_eq!(annotations.idempotent_hint, Some(true));
     assert_eq!(first.exposure(), ToolExposureKind::ModelVisible);

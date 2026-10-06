@@ -18,21 +18,28 @@ pub struct McpClient {
     client_info: ClientConfig,
     server_name: String,
     pub(crate) progress_dispatcher: ProgressDispatcher,
-    event_sender: mpsc::Sender<McpClientEvent>,
+    event_sender: Option<mpsc::Sender<McpClientEvent>>,
     tool_refresh_sender: Option<mpsc::Sender<ToolListChangedRequest>>,
     connection_generation: u64,
 }
 
 impl McpClient {
-    pub fn new(client_info: ClientConfig, server_name: String, event_sender: mpsc::Sender<McpClientEvent>) -> Self {
+    pub fn new(client_info: ClientConfig, server_name: String) -> Self {
         Self {
             client_info,
             server_name,
             progress_dispatcher: ProgressDispatcher::new(),
-            event_sender,
+            event_sender: None,
             tool_refresh_sender: None,
             connection_generation: 0,
         }
+    }
+
+    /// Route elicitations and completion notifications to the host. Without a
+    /// sender, elicitations are cancelled immediately.
+    pub fn with_event_sender(mut self, sender: mpsc::Sender<McpClientEvent>) -> Self {
+        self.event_sender = Some(sender);
+        self
     }
 
     pub(super) fn with_tool_refresh(
@@ -54,11 +61,14 @@ impl McpClient {
     /// Used by both the `create_elicitation` handler and the MRTR round loop
     /// in `call_tool_mrtr` to ensure the same user-facing flow.
     pub async fn dispatch_elicitation(&self, request: ElicitRequestParams) -> ElicitResult {
+        let Some(event_sender) = &self.event_sender else {
+            return cancel_result();
+        };
         let (response_tx, response_rx) = oneshot::channel();
         let elicitation_request =
             ElicitationRequest { server_name: self.server_name.clone(), request, response_sender: response_tx };
 
-        if self.event_sender.send(McpClientEvent::Elicitation(Box::new(elicitation_request))).await.is_err() {
+        if event_sender.send(McpClientEvent::Elicitation(Box::new(elicitation_request))).await.is_err() {
             return cancel_result();
         }
         response_rx.await.unwrap_or_else(|_| cancel_result())
@@ -116,8 +126,10 @@ impl ClientHandler for McpClient {
             tracing::warn!("Ignoring malformed MCP elicitation completion notification");
             return;
         };
-        let _ = self
-            .event_sender
+        let Some(event_sender) = &self.event_sender else {
+            return;
+        };
+        let _ = event_sender
             .send(McpClientEvent::ElicitationComplete {
                 server_name: self.server_name.clone(),
                 elicitation_id: params.elicitation_id,
@@ -153,7 +165,7 @@ mod tests {
     }
 
     fn make_client(event_sender: mpsc::Sender<McpClientEvent>) -> McpClient {
-        McpClient::new(test_client_info(), "test-server".to_string(), event_sender)
+        McpClient::new(test_client_info(), "test-server".to_string()).with_event_sender(event_sender)
     }
 
     fn unwrap_elicitation(event: McpClientEvent) -> ElicitationRequest {

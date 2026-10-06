@@ -1,7 +1,8 @@
+use mcp_utils::aggregate::AggregateServer;
 use mcp_utils::client::{
-    InMemoryServerSpec, McpClientEvent, McpConfig, McpConnectionDetails, McpError, McpManager, McpServer, McpTransport,
-    OAuthHandlerFactory, PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME, ParseError, RuntimeMcpServer, RuntimeMcpTransport,
-    ToolFilter,
+    InMemoryServerSpec, McpClientEvent, McpConfig, McpConnectionDetails, McpError, McpHandle, McpManager, McpServer,
+    McpTransport, OAuthHandlerFactory, PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME, ParseError, RuntimeMcpServer,
+    RuntimeMcpTransport, ToolFilter,
 };
 use mcp_utils::tool_gateway::{AETHER_MCP_IPC_SOCKET, UnixSocketMcpTransport, UnixSocketPath, UnixSocketServer};
 use utils::{SettingsStore, variables::Vars};
@@ -10,21 +11,13 @@ use crate::agent_spec::McpConfigSource;
 use crate::core::AgentDeps;
 use crate::events::{AgentCommand, Command};
 
-use super::{
-    gateway_service::GatewayService,
-    mcp_handle::McpHandle,
-    run_mcp_task::{ManagerCommand, run_mcp_task},
-};
+use super::tool_bridge::tool_definitions;
 use futures::future::BoxFuture;
-use rmcp::{RoleServer, service::DynService};
+use rmcp::{RoleServer, model::Implementation, service::DynService};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tokio::{
-    sync::{
-        mpsc::{self, Receiver},
-        watch,
-    },
+    sync::mpsc::{self, Receiver},
     task::JoinHandle,
 };
 
@@ -106,7 +99,7 @@ impl McpSession {
         assert!(self.runtime.agent_sync_handle.is_none(), "an MCP session can only connect one agent");
         let mut snapshots = self.runtime.handle().subscribe();
         let initial = snapshots.borrow_and_update().clone();
-        let mut previous_tools = initial.tool_definitions();
+        let mut previous_tools = tool_definitions(&initial);
         let mut previous_instructions = initial.model_instructions();
         if agent_tx.send(Command::agent(AgentCommand::UpdateTools(previous_tools.clone()))).await.is_err() {
             return self;
@@ -131,7 +124,7 @@ impl McpSession {
                     break;
                 };
                 let snapshot = snapshots.borrow_and_update().clone();
-                let tools = snapshot.tool_definitions();
+                let tools = tool_definitions(&snapshot);
                 if tools != previous_tools {
                     if agent_tx.send(Command::agent(AgentCommand::UpdateTools(tools.clone()))).await.is_err() {
                         break;
@@ -310,10 +303,22 @@ impl McpBuilder {
         {
             return Err(McpError::ReservedServerName(PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME.to_string()));
         }
-        let (manager_tx, manager_rx) = mpsc::channel::<ManagerCommand>(mcp_channel_capacity);
-        let (snapshot_tx, snapshot_rx) = watch::channel(Arc::new(mcp_utils::client::McpSnapshot::default()));
         let (event_tx, event_rx) = mpsc::channel::<McpClientEvent>(mcp_channel_capacity);
-        let mcp = McpHandle::new(manager_tx, snapshot_rx);
+        let mut mcp_manager =
+            McpManager::new().with_event_sender(event_tx).with_tool_filter(tool_filter).with_root_dir(root_dir.clone());
+        if let Some(factory) = oauth_handler_factory {
+            mcp_manager = mcp_manager.with_oauth_handler_factory(factory);
+        }
+        if let Some(capabilities) = agent_deps.mcp_client_capabilities.clone() {
+            mcp_manager = mcp_manager.with_client_capabilities(capabilities);
+        }
+        if let Some(instructions) = progressive_discovery_instructions {
+            mcp_manager = mcp_manager.with_progressive_discovery_instructions(instructions);
+        }
+        if let Some(store) = agent_deps.oauth_credential_store.clone() {
+            mcp_manager = mcp_manager.with_oauth_credential_store(store);
+        }
+        let mcp = mcp_manager.handle();
         let gateway_transport = if servers.iter().any(|server| server.tool_exposure.has_deferred_tools()) {
             let path = UnixSocketPath::new().map_err(|error| McpError::TransportError(error.to_string()))?;
             Some(UnixSocketMcpTransport::bind(path).map_err(|error| McpError::TransportError(error.to_string()))?)
@@ -326,25 +331,14 @@ impl McpBuilder {
                 BTreeMap::from([(AETHER_MCP_IPC_SOCKET.to_string(), transport.path().to_string_lossy().into_owned())])
             })
             .unwrap_or_default();
-        let services = RuntimeServices { mcp: mcp.clone(), root_dir: root_dir.clone(), agent_deps, shell_environment };
+        let services = RuntimeServices { mcp: mcp.clone(), root_dir, agent_deps, shell_environment };
         let servers = resolve_servers(servers, &factories, &services).await?;
-
-        let mut mcp_manager = McpManager::new(event_tx, oauth_handler_factory)
-            .with_tool_filter(tool_filter)
-            .with_snapshot_sender(snapshot_tx);
-        if let Some(capabilities) = services.agent_deps.mcp_client_capabilities.clone() {
-            mcp_manager = mcp_manager.with_client_capabilities(capabilities);
-        }
-        if let Some(instructions) = progressive_discovery_instructions {
-            mcp_manager = mcp_manager.with_progressive_discovery_instructions(instructions);
-        }
-        if let Some(store) = services.agent_deps.oauth_credential_store.clone() {
-            mcp_manager = mcp_manager.with_oauth_credential_store(store);
-        }
-        mcp_manager = mcp_manager.with_root_dir(root_dir);
-        let pending = mcp_manager.register_pending(servers).await?;
-        let task = tokio::spawn(run_mcp_task(mcp_manager, manager_rx, pending));
-        let gateway = gateway_transport.map(|transport| transport.spawn(GatewayService::new(mcp.clone())));
+        let task = mcp_manager.spawn(servers).await?;
+        let gateway = gateway_transport.map(|transport| {
+            let server = AggregateServer::deferred(mcp.clone())
+                .with_server_info(Implementation::new("aether-deferred-tool-gateway", env!("CARGO_PKG_VERSION")));
+            transport.spawn(server)
+        });
 
         Ok(McpSession { runtime: McpRuntime { mcp, handle: task, agent_sync_handle: None, gateway }, event_rx })
     }
@@ -356,19 +350,16 @@ async fn resolve_servers(
     services: &RuntimeServices,
 ) -> Result<Vec<RuntimeMcpServer>, McpError> {
     let mut resolved = Vec::with_capacity(servers.len());
-    for McpServer { name, transport, tool_exposure } in servers {
-        let transport = match transport {
-            McpTransport::Stdio { command, args, env } => RuntimeMcpTransport::Stdio { command, args, env },
-            McpTransport::Http(config) => RuntimeMcpTransport::Http(config),
-            McpTransport::InMemory { spec } => {
-                let factory = factories.get(&spec.factory).ok_or_else(|| McpError::InMemoryFactoryNotFound {
-                    server: name.clone(),
-                    factory: spec.factory.clone(),
-                })?;
-                RuntimeMcpTransport::InMemory { server: factory(spec, services.clone()).await }
-            }
+    for server in servers {
+        let McpTransport::InMemory { spec } = &server.transport else {
+            resolved.push(RuntimeMcpServer::try_from(server)?);
+            continue;
         };
-        resolved.push(RuntimeMcpServer::new(name, transport, tool_exposure));
+        let Some(factory) = factories.get(&spec.factory) else {
+            return Err(McpError::InMemoryFactoryNotFound { server: server.name, factory: spec.factory.clone() });
+        };
+        let transport = RuntimeMcpTransport::InMemory { server: factory(spec.clone(), services.clone()).await };
+        resolved.push(RuntimeMcpServer::new(server.name, transport, server.tool_exposure));
     }
     Ok(resolved)
 }
@@ -477,9 +468,9 @@ mod tests {
         updates.changed().await.expect("connection publishes a snapshot");
         let observed = updates.borrow().clone();
 
-        assert!(old.tool_definitions().is_empty());
-        assert_eq!(ready.tool_definitions()[0].name, "test__add_numbers");
-        assert_eq!(observed.tool_definitions(), ready.tool_definitions());
+        assert!(tool_definitions(&old).is_empty());
+        assert_eq!(tool_definitions(&ready)[0].name, "test__add_numbers");
+        assert_eq!(tool_definitions(&observed), tool_definitions(&ready));
         assert!(!Arc::ptr_eq(&old, &ready));
     }
 

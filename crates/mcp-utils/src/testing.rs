@@ -15,7 +15,12 @@ pub use fake_mcp::{
 };
 
 #[cfg(all(feature = "client", any(test, feature = "testing")))]
+pub use http_server::HttpTestServer;
+
+#[cfg(all(feature = "client", any(test, feature = "testing")))]
 mod fake_mcp;
+#[cfg(all(feature = "client", any(test, feature = "testing")))]
+mod http_server;
 
 pub type ConnectedServices<T, U> = (RunningService<RoleServer, T>, RunningService<RoleClient, U>);
 

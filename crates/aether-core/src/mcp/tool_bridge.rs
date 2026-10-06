@@ -1,13 +1,36 @@
 use crate::events::{TaskOutcome, TaskOutcomeState};
-use mcp_utils::client::{CallToolError, SERVERNAME_DELIMITER};
+use mcp_utils::client::{CallToolError, CatalogTool, McpSnapshot, SERVERNAME_DELIMITER};
 use rmcp::model::{CallToolRequestParams, CallToolResult, ContentBlock, EmbeddedResource, ResourceContents, Task};
 
-use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
+use llm::{ToolAnnotations, ToolCallError, ToolCallRequest, ToolCallResult, ToolDefinition};
 use utils::display_meta::ToolResultMeta;
 use utils::temp_dir::TempDir;
 use utils::tool_result_truncator::ToolResultTruncator;
 
 const TOOL_RESULT_TRUNCATOR: ToolResultTruncator = ToolResultTruncator { head: 25_000, tail: 25_000 };
+
+/// The model-visible tools of `snapshot`, as LLM tool definitions.
+pub fn tool_definitions(snapshot: &McpSnapshot) -> Vec<ToolDefinition> {
+    snapshot.catalog().tools().model_visible.into_iter().map(tool_definition).collect()
+}
+
+pub fn tool_definition(tool: &CatalogTool) -> ToolDefinition {
+    let mcp_tool = tool.tool();
+    let annotations = mcp_tool.annotations.as_ref().map(|annotations| ToolAnnotations {
+        title: annotations.title.clone(),
+        read_only_hint: annotations.read_only_hint,
+        destructive_hint: annotations.destructive_hint,
+        idempotent_hint: annotations.idempotent_hint,
+        open_world_hint: annotations.open_world_hint,
+    });
+    ToolDefinition::new(
+        tool.namespaced_name(),
+        mcp_tool.description.as_deref().unwrap_or_default(),
+        serde_json::Value::Object((*mcp_tool.input_schema).clone()),
+    )
+    .with_server(tool.server())
+    .with_annotations(annotations)
+}
 
 /// Convert a `ToolCallRequest` to `rmcp::CallToolRequestParams`
 pub fn tool_call_request_to_mcp(request: &ToolCallRequest) -> Result<CallToolRequestParams, String> {

@@ -15,8 +15,8 @@ async fn custom_completion_notification_includes_the_source_server() {
     let client = McpClient::new(
         ClientConfig::new(client_capabilities(), Implementation::new("test-client", "1.0.0")),
         "linear".to_string(),
-        event_tx,
-    );
+    )
+    .with_event_sender(event_tx);
     let (server, client) = connect(CompletionServer, client).await.expect("connect MCP peers");
 
     server

@@ -1,7 +1,8 @@
 use aether_core::testing::{FakeMcpServer, FakeTool, FakeToolResponse, McpTestBuilder};
 use mcp_utils::ServiceExt;
+use mcp_utils::aggregate::LIST_SERVERS_TOOL;
 use mcp_utils::client::{DeferredToolRules, ToolExposure, ToolFilter, ToolMatcher};
-use mcp_utils::tool_gateway::{LIST_SERVERS_TOOL, connect};
+use mcp_utils::tool_gateway::connect;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, CreateTaskResult, DetailedTask, Task, TaskPayload,
     TaskStatus,
@@ -56,6 +57,26 @@ async fn gateway_discovers_and_calls_only_deferred_tools() {
         .await
         .expect_err("model-visible tools are rejected by the deferred route");
     assert!(error.to_string().contains("exposed directly") || error.to_string().contains("Tool not found"));
+}
+
+#[tokio::test]
+async fn gateway_preserves_upstream_tool_title_and_output_schema() {
+    let output_schema = json!({"type": "object", "properties": {"report": {"type": "string"}}});
+    let server = FakeMcpServer::new().with_tool(
+        FakeTool::new("report")
+            .title("Weekly report")
+            .output_schema(output_schema.clone())
+            .responds(FakeToolResponse::new(CallToolResult::structured(json!({"report": "ok"})))),
+    );
+    let mcp_test = McpTestBuilder::new().deferred_server("docs", server).build().await;
+    let client =
+        ().serve(connect(mcp_test.gateway_endpoint().expect("deferred gateway exists")).await.unwrap()).await.unwrap();
+
+    let tools = client.list_tools(None).await.unwrap().tools;
+    let report = tools.iter().find(|tool| tool.name == "docs__report").unwrap();
+
+    assert_eq!(report.title.as_deref(), Some("Weekly report"));
+    assert_eq!(report.output_schema.as_deref(), output_schema.as_object());
 }
 
 #[tokio::test]

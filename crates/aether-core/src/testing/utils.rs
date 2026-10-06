@@ -407,7 +407,7 @@ impl TestAgentBuilder {
         let mut builder = agent(llm);
         if let Some(spawn) = &mut mcp_spawn {
             let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
-            builder = builder.tools(spawn.handle().clone(), snapshot.tool_definitions());
+            builder = builder.tools(spawn.handle().clone(), crate::mcp::tool_definitions(&snapshot));
         }
         if let Some(timeout) = config.timeout {
             builder = builder.tool_timeout(timeout);

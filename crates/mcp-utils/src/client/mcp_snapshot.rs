@@ -2,7 +2,6 @@ use super::{
     McpClient, McpError, ToolCatalog, ToolRoute,
     naming::{create_namespaced_tool_name, split_on_server_name},
 };
-use llm::ToolDefinition;
 use rmcp::{RoleClient, model::CallToolRequestParams, service::RunningService};
 use serde_json::{Map, Value};
 use std::{collections::HashMap, fmt, sync::Arc};
@@ -33,10 +32,6 @@ impl McpSnapshot {
 
     pub fn catalog(&self) -> &Arc<ToolCatalog> {
         &self.catalog
-    }
-
-    pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
-        self.catalog.tools().model_visible.into_iter().map(|tool| tool.definition().clone()).collect()
     }
 
     pub fn model_instructions(&self) -> std::collections::BTreeMap<String, String> {

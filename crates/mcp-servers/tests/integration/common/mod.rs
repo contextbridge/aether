@@ -45,14 +45,14 @@ pub fn production_client_info() -> ClientConfig {
 /// calls resolve as Cancel.
 pub fn silent_mcp_client(server_name: &str) -> McpClient {
     let (event_tx, _event_rx) = mpsc::channel(8);
-    McpClient::new(production_client_info(), server_name.to_string(), event_tx)
+    McpClient::new(production_client_info(), server_name.to_string()).with_event_sender(event_tx)
 }
 
 /// An `McpClient` plus a script answering the next elicitation request with
 /// `response` and capturing what arrived for assertions.
 pub fn scripted_mcp_client(server_name: &str, response: ElicitResult) -> (McpClient, ElicitationScript) {
     let (event_tx, event_rx) = mpsc::channel(8);
-    let client = McpClient::new(production_client_info(), server_name.to_string(), event_tx);
+    let client = McpClient::new(production_client_info(), server_name.to_string()).with_event_sender(event_tx);
     (client, ElicitationScript::spawn(event_rx, [response]))
 }
 

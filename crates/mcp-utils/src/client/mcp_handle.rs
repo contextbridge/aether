@@ -1,16 +1,24 @@
-use super::run_mcp_task::ManagerCommand;
+use super::{
+    CallToolError, CallToolOptions, McpError, McpSnapshot, ToolCallEvent, ToolRoute, call_tool,
+    manager_task::ManagerCommand,
+};
 use futures::{Stream, future::join_all};
-use mcp_utils::client::{CallToolError, CallToolOptions, McpError, McpSnapshot, ToolCallEvent, ToolRoute, call_tool};
 use rmcp::model::{GetPromptRequestParams, GetPromptResult, Prompt};
 use serde_json::{Map, Value};
 use std::{pin::Pin, sync::Arc};
 use thiserror::Error;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, watch};
+
+#[cfg(feature = "oauth")]
+use tokio::sync::oneshot;
 
 pub type ToolCallStream = Pin<Box<dyn Stream<Item = ToolCallEvent> + Send>>;
 
+/// A cheap, cloneable view of a spawned [`McpManager`](super::McpManager): the latest
+/// catalog snapshot plus tool and prompt calls routed to the owning server.
 #[derive(Clone)]
 pub struct McpHandle {
+    #[cfg_attr(not(feature = "oauth"), allow(dead_code))]
     control_tx: mpsc::Sender<ManagerCommand>,
     snapshot_rx: watch::Receiver<Arc<McpSnapshot>>,
 }
@@ -46,11 +54,7 @@ impl McpHandle {
     pub fn call(&self, route: ToolRoute, arguments: Map<String, Value>, options: CallToolOptions) -> ToolCallStream {
         match self.snapshot().resolve(route, arguments) {
             Ok((client, params)) => Box::pin(call_tool(client, params, options)),
-            Err(error) => Box::pin(futures::stream::once(async move {
-                ToolCallEvent::Complete(Err(CallToolError::Unavailable {
-                    message: format!("Failed to resolve tool: {error}"),
-                }))
-            })),
+            Err(error) => failed_call(error),
         }
     }
 
@@ -115,6 +119,7 @@ impl McpHandle {
         })
     }
 
+    #[cfg(feature = "oauth")]
     pub async fn authenticate_server(&self, name: &str) -> Result<(), McpHandleError> {
         let (tx, rx) = oneshot::channel();
         self.control_tx

@@ -8,7 +8,7 @@ use futures::StreamExt;
 use futures::future::{Either, select};
 use rmcp::RoleClient;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ClientRequest, CreateTaskResult, InputRequests,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ClientRequest, CreateTaskResult, ErrorData, InputRequests,
     InputRequiredResult, InputResponses, ProgressNotificationParam, Request, RequestMetaObject, ServerResult, Task,
 };
 use rmcp::service::{PeerRequestOptions, RequestHandle, RunningService, ServiceError};
@@ -63,6 +63,19 @@ pub enum CallToolError {
     UnsupportedResponse { server: String },
     #[error("{message}")]
     Unavailable { message: String },
+}
+
+/// Upstream JSON-RPC errors pass through unchanged so callers see the original code and data.
+impl From<CallToolError> for ErrorData {
+    fn from(error: CallToolError) -> Self {
+        match error {
+            CallToolError::Send(ServiceError::McpError(error)) | CallToolError::Call(ServiceError::McpError(error)) => {
+                error
+            }
+            CallToolError::Unavailable { message } => ErrorData::invalid_params(message, None),
+            error => ErrorData::internal_error(error.to_string(), None),
+        }
+    }
 }
 
 pub fn call_tool(

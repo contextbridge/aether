@@ -1,4 +1,4 @@
-use llm::ToolDefinition;
+use rmcp::model::Tool;
 use utils::matches_name_pattern;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
@@ -21,7 +21,7 @@ impl ToolMatcher {
         Self::Annotations(matcher)
     }
 
-    pub fn matches(&self, tool: &ToolDefinition) -> bool {
+    pub fn matches(&self, tool: &Tool) -> bool {
         match self {
             Self::Name(pattern) => matches_name_pattern(pattern, &tool.name),
             Self::Annotations(matcher) => matcher.matches(tool),
@@ -43,7 +43,7 @@ pub struct ToolAnnotationMatcher {
 }
 
 impl ToolAnnotationMatcher {
-    pub fn matches(&self, tool: &ToolDefinition) -> bool {
+    pub fn matches(&self, tool: &Tool) -> bool {
         let Some(annotations) = tool.annotations.as_ref() else { return false };
         let pairs = [
             (self.read_only, annotations.read_only_hint),
@@ -59,6 +59,8 @@ impl ToolAnnotationMatcher {
 }
 
 /// Filter for restricting which MCP tools an agent may discover and execute.
+///
+/// Matchers see namespaced tool names (`server__tool`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToolFilter {
@@ -73,11 +75,11 @@ impl ToolFilter {
         self.allow.is_empty() && self.deny.is_empty()
     }
 
-    pub fn apply(&self, tools: Vec<ToolDefinition>) -> Vec<ToolDefinition> {
+    pub fn apply(&self, tools: Vec<Tool>) -> Vec<Tool> {
         tools.into_iter().filter(|tool| self.is_tool_allowed(tool)).collect()
     }
 
-    pub fn is_tool_allowed(&self, tool: &ToolDefinition) -> bool {
+    pub fn is_tool_allowed(&self, tool: &Tool) -> bool {
         let allowed = self.allow.is_empty() || self.allow.iter().any(|matcher| matcher.matches(tool));
         let denied = self.deny.iter().any(|matcher| matcher.matches(tool));
         allowed && !denied

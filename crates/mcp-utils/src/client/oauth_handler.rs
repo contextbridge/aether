@@ -1,5 +1,6 @@
 use crate::client::config::loopback_redirect_uri;
-use crate::client::manager::{ElicitationRequest, McpClientEvent, OAuthHandlerContext};
+use crate::client::manager::{ElicitationRequest, McpClientEvent};
+use crate::client::oauth::OAuthHandlerContext;
 use aether_auth::{OAuthError, OAuthHandler, accept_oauth_callback};
 use futures::future::BoxFuture;
 use rmcp::model::{ElicitRequestParams, ElicitationAction};

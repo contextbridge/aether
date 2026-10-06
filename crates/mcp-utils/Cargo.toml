@@ -24,17 +24,16 @@ rustdoc-args = ["--cfg", "docsrs"]
 workspace = true
 
 [features]
-default = ["client"]
-testing = ["client"]
+default = ["client", "oauth", "stdio", "ipc"]
+testing = ["client", "dep:axum", "rmcp/transport-streamable-http-server"]
 client = [
-    "dep:aether-auth",
-    "aether-auth/mcp",
     "dep:async-stream",
-    "dep:llm",
     "dep:reqwest",
     "rmcp/transport-streamable-http-client-reqwest",
-    "rmcp/transport-child-process",
 ]
+oauth = ["client", "dep:aether-auth", "aether-auth/mcp"]
+stdio = ["client", "rmcp/transport-child-process"]
+ipc = []
 
 [dependencies]
 chrono = { workspace = true }
@@ -46,19 +45,25 @@ rmcp = { workspace = true, features = ["client", "elicitation", "server", "trans
 tracing = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.18" }
 schemars = { workspace = true }
-
-# client-only deps
-aether-auth = { path = "../aether-auth", version = "0.1.16", optional = true }
-async-stream = { workspace = true, optional = true }
-llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.9.11" }
 serde_json = { workspace = true }
-reqwest = { workspace = true, optional = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 
+# client deps
+async-stream = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+
+# oauth deps
+aether-auth = { path = "../aether-auth", version = "0.1.16", optional = true }
+
+# testing deps
+axum = { workspace = true, optional = true }
+
 [dev-dependencies]
 axum = { workspace = true }
+mcp_utils = { package = "aether-mcp-utils", path = ".", features = ["testing"] }
 aether-doctest = { path = "../doctest" }
-rmcp = { workspace = true, features = ["macros"] }
+rmcp = { workspace = true, features = ["macros", "transport-streamable-http-server"] }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 tracing-subscriber = { workspace = true }

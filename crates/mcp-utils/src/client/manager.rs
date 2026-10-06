@@ -1,18 +1,14 @@
-use llm::ToolDefinition;
-
 use super::{
     McpError, McpSnapshot, Result,
-    config::{McpHttpConfig, ToolExposure},
-    connection::{
-        ConnectConfig, McpConnectAttempt, McpConnectOutcome, McpServerConnection, Tool, authenticate_http,
-        connect_server,
-    },
+    config::{McpHttpConfig, McpServer, McpTransport, ToolExposure},
+    connection::{ConnectConfig, McpConnectAttempt, McpConnectOutcome, McpServerConnection, connect_server},
+    manager_task::{self, ManagerCommand},
     mcp_client::client_capabilities,
-    naming::{create_namespaced_tool_name, split_on_server_name},
+    mcp_handle::McpHandle,
+    naming::{SERVERNAME_DELIMITER, create_namespaced_tool_name, split_on_server_name},
     tool_catalog::{ServerCatalogEntry, ToolCatalog},
     tool_filter::ToolFilter,
 };
-use aether_auth::{OAuthCredentialStorage, OAuthHandler};
 use futures::future::join_all;
 use rmcp::{
     Peer, RoleClient, RoleServer,
@@ -21,42 +17,18 @@ use rmcp::{
 };
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
-use std::num::NonZeroU16;
 use std::path::PathBuf;
 use std::sync::{Arc, atomic::AtomicU64};
+use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use utils::mcp_status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
 
-pub type OAuthHandlerFactory = Arc<dyn Fn(OAuthHandlerContext) -> Result<Arc<dyn OAuthHandler>> + Send + Sync>;
-
-pub struct ToolListChangedRequest {
-    server: String,
-    generation: u64,
-    peer: Peer<RoleClient>,
-}
-
-pub struct ToolListRefresh {
-    server: String,
-    generation: u64,
-    result: Result<Vec<RmcpTool>>,
-}
-
-impl ToolListChangedRequest {
-    pub(crate) fn new(server: String, generation: u64, peer: Peer<RoleClient>) -> Self {
-        Self { server, generation, peer }
-    }
-
-    pub async fn refresh(self) -> ToolListRefresh {
-        let result = self
-            .peer
-            .list_all_tools()
-            .await
-            .map_err(|error| McpError::ToolDiscoveryFailed(format!("Failed to refresh tools: {error}")));
-        ToolListRefresh { server: self.server, generation: self.generation, result }
-    }
-}
+#[cfg(feature = "oauth")]
+use super::oauth::{OAuthHandlerFactory, authenticate_http};
+#[cfg(feature = "oauth")]
+use aether_auth::OAuthCredentialStorage;
 
 pub struct RuntimeMcpServer {
     pub name: String,
@@ -81,13 +53,22 @@ impl RuntimeMcpServer {
     }
 }
 
-/// Context passed to an `OAuthHandlerFactory` so the constructed handler can
-/// dispatch user-facing prompts back to the host through the MCP event channel.
-#[derive(Clone)]
-pub struct OAuthHandlerContext {
-    pub server_name: String,
-    pub callback_port: Option<NonZeroU16>,
-    pub tx: mpsc::Sender<McpClientEvent>,
+/// Converts parsed configuration into a connectable server. In-memory servers need a
+/// host-provided factory, so they are rejected here.
+impl TryFrom<McpServer> for RuntimeMcpServer {
+    type Error = McpError;
+
+    fn try_from(server: McpServer) -> Result<Self> {
+        let McpServer { name, transport, tool_exposure } = server;
+        let transport = match transport {
+            McpTransport::Stdio { command, args, env } => RuntimeMcpTransport::Stdio { command, args, env },
+            McpTransport::Http(config) => RuntimeMcpTransport::Http(config),
+            McpTransport::InMemory { spec } => {
+                return Err(McpError::InMemoryFactoryNotFound { server: name, factory: spec.factory });
+            }
+        };
+        Ok(Self::new(name, transport, tool_exposure))
+    }
 }
 
 #[derive(Debug)]
@@ -111,49 +92,98 @@ pub enum McpClientEvent {
 
 pub type McpConnectionDetails = Arc<McpSnapshot>;
 
-/// Manages connections to multiple MCP servers and their tools
+/// Exponential backoff for retrying HTTP servers whose connection attempt failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReconnectPolicy {
+    pub initial_delay: Duration,
+    pub max_delay: Duration,
+}
+
+impl Default for ReconnectPolicy {
+    fn default() -> Self {
+        Self { initial_delay: Duration::from_secs(1), max_delay: Duration::from_mins(1) }
+    }
+}
+
+impl ReconnectPolicy {
+    fn delay(self, failures: u32) -> Duration {
+        self.initial_delay.saturating_mul(2u32.saturating_pow(failures)).min(self.max_delay)
+    }
+}
+
+/// Manages connections to multiple MCP servers and their tools.
+///
+/// Use it directly with [`Self::add_mcps`], or take a [`Self::handle`] and
+/// [`Self::spawn`] it to connect servers in the background and keep their
+/// catalogs current.
 pub struct McpManager {
     servers: HashMap<String, ServerRecord>,
     catalog: ToolCatalog,
     tool_filter: ToolFilter,
     client_info: ClientConfig,
-    event_sender: mpsc::Sender<McpClientEvent>,
+    event_sender: Option<mpsc::Sender<McpClientEvent>>,
     root_dir: PathBuf,
+    #[cfg(feature = "oauth")]
     oauth_handler_factory: Option<OAuthHandlerFactory>,
+    #[cfg(feature = "oauth")]
     oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
-    snapshot_sender: Option<watch::Sender<Arc<McpSnapshot>>>,
+    snapshot_sender: watch::Sender<Arc<McpSnapshot>>,
+    command_sender: mpsc::Sender<ManagerCommand>,
+    command_receiver: Option<mpsc::Receiver<ManagerCommand>>,
     tool_refresh_sender: mpsc::Sender<ToolListChangedRequest>,
     tool_refresh_receiver: Option<mpsc::Receiver<ToolListChangedRequest>>,
     next_connection_generation: Arc<AtomicU64>,
     progressive_discovery_instructions: Option<String>,
+    reconnect_policy: Option<ReconnectPolicy>,
+}
+
+impl Default for McpManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl McpManager {
-    pub fn new(event_sender: mpsc::Sender<McpClientEvent>, oauth_handler_factory: Option<OAuthHandlerFactory>) -> Self {
+    pub fn new() -> Self {
         let (tool_refresh_sender, tool_refresh_receiver) = mpsc::channel(32);
+        let (command_sender, command_receiver) = mpsc::channel(32);
+        let (snapshot_sender, _) = watch::channel(Arc::new(McpSnapshot::default()));
         Self {
             servers: HashMap::new(),
             catalog: ToolCatalog::new(),
             tool_filter: ToolFilter::default(),
             client_info: ClientConfig::new(client_capabilities(), Implementation::new("aether", "0.1.0")),
-            event_sender,
+            event_sender: None,
             root_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            oauth_handler_factory,
+            #[cfg(feature = "oauth")]
+            oauth_handler_factory: None,
+            #[cfg(feature = "oauth")]
             oauth_credential_store: None,
-            snapshot_sender: None,
+            snapshot_sender,
+            command_sender,
+            command_receiver: Some(command_receiver),
             tool_refresh_sender,
             tool_refresh_receiver: Some(tool_refresh_receiver),
             next_connection_generation: Arc::new(AtomicU64::new(1)),
             progressive_discovery_instructions: None,
+            reconnect_policy: None,
         }
     }
 
-    pub fn take_tool_refresh_receiver(&mut self) -> mpsc::Receiver<ToolListChangedRequest> {
-        self.tool_refresh_receiver.take().expect("tool refresh receiver can only be taken once")
+    /// Deliver elicitations, status changes and readiness to the host. Without a
+    /// sender, events are dropped and server elicitations are cancelled.
+    pub fn with_event_sender(mut self, sender: mpsc::Sender<McpClientEvent>) -> Self {
+        self.event_sender = Some(sender);
+        self
     }
 
     pub fn with_client_capabilities(mut self, capabilities: ClientCapabilities) -> Self {
         self.client_info.capabilities = capabilities;
+        self
+    }
+
+    pub fn with_client_info(mut self, client_info: Implementation) -> Self {
+        self.client_info.client_info = client_info;
         self
     }
 
@@ -162,12 +192,13 @@ impl McpManager {
         self
     }
 
-    pub fn with_snapshot_sender(mut self, sender: watch::Sender<Arc<McpSnapshot>>) -> Self {
-        self.snapshot_sender = Some(sender);
-        self.publish_snapshot();
+    #[cfg(feature = "oauth")]
+    pub fn with_oauth_handler_factory(mut self, factory: OAuthHandlerFactory) -> Self {
+        self.oauth_handler_factory = Some(factory);
         self
     }
 
+    #[cfg(feature = "oauth")]
     pub fn with_oauth_credential_store(mut self, store: Arc<dyn OAuthCredentialStorage>) -> Self {
         self.oauth_credential_store = Some(store);
         self
@@ -183,13 +214,40 @@ impl McpManager {
         self
     }
 
+    /// Retry HTTP servers whose connection attempt failed. Only applies to [`Self::spawn`].
+    pub fn with_reconnect(mut self, policy: ReconnectPolicy) -> Self {
+        self.reconnect_policy = Some(policy);
+        self
+    }
+
+    /// A cloneable handle for reading snapshots and calling tools once this manager is spawned.
+    pub fn handle(&self) -> McpHandle {
+        McpHandle::new(self.command_sender.clone(), self.snapshot_sender.subscribe())
+    }
+
+    /// Connect `servers` in the background. The returned task applies connection
+    /// attempts, tool list changes and reconnects until every [`McpHandle`] and
+    /// snapshot subscription is dropped, then shuts the servers down.
+    pub async fn spawn(mut self, servers: Vec<RuntimeMcpServer>) -> Result<JoinHandle<()>> {
+        let pending = self.register_pending(servers).await?;
+        Ok(tokio::spawn(manager_task::run(self, pending)))
+    }
+
     pub fn catalog(&self) -> &ToolCatalog {
         &self.catalog
     }
 
     pub async fn register_pending(&mut self, servers: Vec<RuntimeMcpServer>) -> Result<Vec<RuntimeMcpServer>> {
+        if let Some(server) = servers.iter().find(|server| server.name.contains(SERVERNAME_DELIMITER)) {
+            return Err(McpError::InvalidServerName(server.name.clone()));
+        }
+        let reconnect = self.reconnect_policy.is_some();
         for server in &servers {
-            self.register_record(&server.name, ServerState::Connecting, None, server.tool_exposure.clone());
+            let record =
+                self.register_record(&server.name, ServerState::Connecting, None, server.tool_exposure.clone());
+            if reconnect && let RuntimeMcpTransport::Http(config) = &server.transport {
+                record.reconnect = Some(ReconnectState { config: config.clone(), failures: 0 });
+            }
         }
 
         self.publish_snapshot();
@@ -215,10 +273,6 @@ impl McpManager {
         Ok(())
     }
 
-    pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
-        self.catalog.tools().model_visible.into_iter().map(|tool| tool.definition().clone()).collect()
-    }
-
     pub fn server_instructions(&self) -> BTreeMap<String, String> {
         self.catalog.model_instructions()
     }
@@ -227,6 +281,7 @@ impl McpManager {
         self.catalog.server_statuses()
     }
 
+    #[cfg(feature = "oauth")]
     pub async fn authenticate_server_task(
         &mut self,
         name: &str,
@@ -251,32 +306,6 @@ impl McpManager {
         self.emit_server_statuses_changed().await;
 
         Ok(async move { authenticate_http(name, config, challenge, ctx).await })
-    }
-
-    pub async fn apply_tool_list_refresh(&mut self, refresh: ToolListRefresh) {
-        let ToolListRefresh { server, generation, result } = refresh;
-        let Some(record) = self.servers.get(&server) else {
-            return;
-        };
-        let Some(connection) = record.connection() else {
-            return;
-        };
-        if connection.generation() != generation {
-            tracing::debug!(server = %server, generation, "Ignoring stale MCP tool refresh");
-            return;
-        }
-        let tools = match result {
-            Ok(tools) => tools,
-            Err(error) => {
-                tracing::warn!(server = %server, %error, "Failed to refresh MCP tools; retaining previous catalog");
-                return;
-            }
-        };
-        if let Err(error) = self.replace_catalog_tools(&server, &tools) {
-            tracing::warn!(server = %server, %error, "Failed to apply refreshed MCP tools; retaining previous catalog");
-            return;
-        }
-        self.emit_server_statuses_changed().await;
     }
 
     pub async fn apply_connection_attempt(&mut self, attempt: McpConnectAttempt) {
@@ -397,6 +426,82 @@ impl McpManager {
         Ok(())
     }
 
+    pub async fn emit_connection_ready(&self) {
+        self.emit_event(McpClientEvent::ConnectionReady(self.snapshot())).await;
+    }
+
+    pub fn snapshot(&self) -> Arc<McpSnapshot> {
+        let clients = self
+            .servers
+            .iter()
+            .filter_map(|(name, record)| record.connection().map(|conn| (name.clone(), conn.client.clone())))
+            .collect();
+        Arc::new(McpSnapshot::new(Arc::new(self.catalog.clone()), Arc::new(clients)))
+    }
+
+    pub(crate) async fn apply_tool_list_refresh(&mut self, refresh: ToolListRefresh) {
+        let ToolListRefresh { server, generation, result } = refresh;
+        let Some(record) = self.servers.get(&server) else {
+            return;
+        };
+        let Some(connection) = record.connection() else {
+            return;
+        };
+        if connection.generation() != generation {
+            tracing::debug!(server = %server, generation, "Ignoring stale MCP tool refresh");
+            return;
+        }
+        let tools = match result {
+            Ok(tools) => tools,
+            Err(error) => {
+                tracing::warn!(server = %server, %error, "Failed to refresh MCP tools; retaining previous catalog");
+                return;
+            }
+        };
+        if let Err(error) = self.replace_catalog_tools(&server, &tools) {
+            tracing::warn!(server = %server, %error, "Failed to apply refreshed MCP tools; retaining previous catalog");
+            return;
+        }
+        self.emit_server_statuses_changed().await;
+    }
+
+    /// A delayed retry for `name` if it failed and the reconnect policy covers it.
+    pub(crate) fn reconnect_task(
+        &mut self,
+        name: &str,
+    ) -> Option<impl Future<Output = McpConnectAttempt> + Send + 'static> {
+        let policy = self.reconnect_policy?;
+        let record = self.servers.get_mut(name)?;
+        let failed = matches!(record.state, ServerState::Failed { .. });
+        let reconnect = record.reconnect.as_mut()?;
+        if !failed {
+            reconnect.failures = 0;
+            return None;
+        }
+        let delay = policy.delay(reconnect.failures);
+        reconnect.failures = reconnect.failures.saturating_add(1);
+        let transport = RuntimeMcpTransport::Http(reconnect.config.clone());
+        let exposure = self.catalog.server(name).map_or(ToolExposure::ModelVisible, |entry| entry.exposure().clone());
+        let server = RuntimeMcpServer::new(name, transport, exposure);
+        let ctx = self.connect_config();
+        Some(async move {
+            tokio::time::sleep(delay).await;
+            connect_server(server, &ctx).await
+        })
+    }
+
+    pub(crate) fn take_command_receiver(&mut self) -> mpsc::Receiver<ManagerCommand> {
+        self.command_receiver.take().expect("command receiver can only be taken once")
+    }
+
+    pub(crate) fn take_tool_refresh_receiver(&mut self) -> mpsc::Receiver<ToolListChangedRequest> {
+        self.tool_refresh_receiver.take().expect("tool refresh receiver can only be taken once")
+    }
+
+    pub(crate) fn snapshot_sender(&self) -> watch::Sender<Arc<McpSnapshot>> {
+        self.snapshot_sender.clone()
+    }
+
     async fn emit_server_statuses_changed(&self) {
         self.emit_event(McpClientEvent::ServerStatusesChanged(self.server_statuses())).await;
     }
@@ -408,16 +513,14 @@ impl McpManager {
         self.catalog.set_progressive_discovery_instructions(instructions);
     }
 
-    pub async fn emit_connection_ready(&self) {
-        self.emit_event(McpClientEvent::ConnectionReady(self.snapshot())).await;
-    }
-
     async fn emit_authentication_failed(&self, server: String, error: String) {
         self.emit_event(McpClientEvent::AuthenticationFailed { server, error }).await;
     }
 
     async fn emit_event(&self, event: McpClientEvent) {
-        if let Err(e) = self.event_sender.send(event).await {
+        if let Some(sender) = &self.event_sender
+            && let Err(e) = sender.send(event).await
+        {
             tracing::warn!("Failed to emit MCP client event: {e}");
         }
     }
@@ -429,7 +532,9 @@ impl McpManager {
             tool_refresh_sender: self.tool_refresh_sender.clone(),
             next_connection_generation: Arc::clone(&self.next_connection_generation),
             root_dir: self.root_dir.clone(),
+            #[cfg(feature = "oauth")]
             oauth_handler_factory: self.oauth_handler_factory.clone(),
+            #[cfg(feature = "oauth")]
             oauth_credential_store: self.oauth_credential_store.clone(),
         })
     }
@@ -460,15 +565,14 @@ impl McpManager {
             .filter(|description| !description.is_empty())
             .unwrap_or_else(|| name.to_string());
         let instructions = conn.instructions.clone();
-        let catalog_tools = tools.iter().map(Tool::from).collect::<Vec<_>>();
-        let entry = ServerCatalogEntry::from_tools(
-            name.to_string(),
+        let entry = ServerCatalogEntry::new(
+            name,
             description,
             instructions,
-            McpServerStatus::Connected { tool_count: catalog_tools.len() },
+            McpServerStatus::Connected { tool_count: tools.len() },
             auth_capability,
-            exposure.clone(),
-            &catalog_tools,
+            exposure,
+            &tools,
             &self.tool_filter,
         );
 
@@ -481,15 +585,14 @@ impl McpManager {
 
     fn replace_catalog_tools(&mut self, name: &str, tools: &[RmcpTool]) -> Result<()> {
         let existing = self.catalog.server(name).cloned().ok_or_else(|| McpError::ServerNotFound(name.to_string()))?;
-        let catalog_tools = tools.iter().map(Tool::from).collect::<Vec<_>>();
-        let entry = ServerCatalogEntry::from_tools(
-            name.to_string(),
-            existing.description().to_string(),
+        let entry = ServerCatalogEntry::new(
+            name,
+            existing.description(),
             existing.instructions().map(str::to_string),
-            McpServerStatus::Connected { tool_count: catalog_tools.len() },
+            McpServerStatus::Connected { tool_count: tools.len() },
             existing.auth_capability(),
             existing.exposure().clone(),
-            &catalog_tools,
+            tools,
             &self.tool_filter,
         );
         self.catalog.upsert_server(entry);
@@ -530,27 +633,16 @@ impl McpManager {
         state: ServerState,
         reauth_config: Option<McpHttpConfig>,
         exposure: ToolExposure,
-    ) {
+    ) -> &mut ServerRecord {
         let status = McpServerStatus::from(&state);
         let auth_capability =
             if reauth_config.is_some() { McpServerAuthCapability::OAuth } else { McpServerAuthCapability::Unavailable };
-        self.servers.insert(name.to_string(), ServerRecord::new(state, reauth_config));
         self.catalog.upsert_server(ServerCatalogEntry::pending(name, exposure).with_status(status, auth_capability));
-    }
-
-    pub fn snapshot(&self) -> Arc<McpSnapshot> {
-        let clients = self
-            .servers
-            .iter()
-            .filter_map(|(name, record)| record.connection().map(|conn| (name.clone(), conn.client.clone())))
-            .collect();
-        Arc::new(McpSnapshot::new(Arc::new(self.catalog.clone()), Arc::new(clients)))
+        self.servers.entry(name.to_string()).insert_entry(ServerRecord::new(state, reauth_config)).into_mut()
     }
 
     fn publish_snapshot(&self) {
-        if let Some(sender) = &self.snapshot_sender {
-            sender.send_replace(self.snapshot());
-        }
+        self.snapshot_sender.send_replace(self.snapshot());
     }
 
     fn connection_for(&self, server_name: &str) -> Option<&McpServerConnection> {
@@ -572,18 +664,56 @@ impl Drop for McpManager {
     }
 }
 
+pub(crate) struct ToolListChangedRequest {
+    server: String,
+    generation: u64,
+    peer: Peer<RoleClient>,
+}
+
+pub(crate) struct ToolListRefresh {
+    server: String,
+    generation: u64,
+    result: Result<Vec<RmcpTool>>,
+}
+
+impl ToolListChangedRequest {
+    pub(crate) fn new(server: String, generation: u64, peer: Peer<RoleClient>) -> Self {
+        Self { server, generation, peer }
+    }
+
+    pub(crate) async fn refresh(self) -> ToolListRefresh {
+        let result = self
+            .peer
+            .list_all_tools()
+            .await
+            .map_err(|error| McpError::ToolDiscoveryFailed(format!("Failed to refresh tools: {error}")));
+        ToolListRefresh { server: self.server, generation: self.generation, result }
+    }
+}
+
 /// Internal record holding all mutable state for a single MCP server.
 struct ServerRecord {
     state: ServerState,
     reauth_config: Option<McpHttpConfig>,
     oauth_challenge: Option<String>,
+    reconnect: Option<ReconnectState>,
+}
+
+struct ReconnectState {
+    config: McpHttpConfig,
+    failures: u32,
 }
 
 enum ServerState {
     Connecting,
-    Connected { connection: McpServerConnection },
+    Connected {
+        connection: McpServerConnection,
+    },
+    #[cfg_attr(not(feature = "oauth"), allow(dead_code))]
     Authenticating,
-    Failed { error: String },
+    Failed {
+        error: String,
+    },
     NeedsOAuth,
 }
 
@@ -601,7 +731,7 @@ impl From<&ServerState> for McpServerStatus {
 
 impl ServerRecord {
     fn new(state: ServerState, reauth_config: Option<McpHttpConfig>) -> Self {
-        Self { state, reauth_config, oauth_challenge: None }
+        Self { state, reauth_config, oauth_challenge: None, reconnect: None }
     }
 
     fn connection(&self) -> Option<&McpServerConnection> {
@@ -628,6 +758,7 @@ impl ServerRecord {
         if self.reauth_config.is_some() { McpServerAuthCapability::OAuth } else { McpServerAuthCapability::Unavailable }
     }
 
+    #[cfg(feature = "oauth")]
     fn can_authenticate(&self) -> bool {
         self.reauth_config.is_some()
     }
@@ -654,9 +785,7 @@ mod tests {
     };
     use crate::client::config::{McpHttpConfig, ToolExposure};
     use crate::client::connection::{McpConnectAttempt, McpConnectOutcome};
-    use crate::client::{McpSnapshot, OAuthHandlerFactory, ToolRoute};
-    use aether_auth::{OAuthError, OAuthHandler};
-    use futures::future::BoxFuture;
+    use crate::client::{McpSnapshot, ToolRoute};
     use rmcp::{
         Json, RoleServer, ServerHandler,
         handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -671,7 +800,7 @@ mod tests {
         io,
         sync::{Arc, Mutex},
     };
-    use tokio::sync::{mpsc, watch};
+    use tokio::sync::mpsc;
     use utils::mcp_status::McpServerAuthCapability;
 
     #[derive(Clone)]
@@ -732,134 +861,10 @@ mod tests {
         }
     }
 
-    struct TestOAuthHandler;
-
-    impl OAuthHandler for TestOAuthHandler {
-        fn redirect_uri(&self) -> &'static str {
-            "http://127.0.0.1:0/oauth2callback"
-        }
-
-        fn authorize(&self, _auth_url: &str) -> BoxFuture<'_, Result<String, OAuthError>> {
-            Box::pin(async { Err(OAuthError::UserCancelled) })
-        }
-    }
-
-    fn test_oauth_handler_factory() -> OAuthHandlerFactory {
-        Arc::new(|_ctx| Ok(Arc::new(TestOAuthHandler)))
-    }
-
-    fn http_config(uri: &str) -> McpHttpConfig {
-        StreamableHttpClientTransportConfig::with_uri(uri).into()
-    }
-
-    #[tokio::test]
-    async fn authenticate_server_task_rejects_record_without_reauth_config() {
-        let (event_sender, _event_receiver) = mpsc::channel(1);
-        let mut manager = McpManager::new(event_sender, Some(test_oauth_handler_factory()));
-        manager.register_record("public", ServerState::Connecting, None, ToolExposure::ModelVisible);
-
-        let error = match manager.authenticate_server_task("public").await {
-            Ok(_) => panic!("non-OAuth server should be rejected"),
-            Err(error) => error.to_string(),
-        };
-        assert!(error.contains("not OAuth-authenticatable"));
-    }
-
-    #[tokio::test]
-    async fn authenticate_server_task_marks_server_authenticating_and_emits_status() {
-        let (event_sender, mut event_receiver) = mpsc::channel(2);
-        let mut manager = McpManager::new(event_sender, Some(test_oauth_handler_factory()));
-        manager.register_record(
-            "remote",
-            ServerState::NeedsOAuth,
-            Some(http_config("http://localhost:19999/mcp")),
-            ToolExposure::ModelVisible,
-        );
-
-        let _task = manager.authenticate_server_task("remote").await.expect("auth should start");
-
-        assert!(matches!(manager.server_statuses()[0].status, McpServerStatus::Authenticating));
-        let event = event_receiver.recv().await.expect("status change event");
-        let McpClientEvent::ServerStatusesChanged(servers) = event else {
-            panic!("expected ServerStatusesChanged");
-        };
-        let status = servers.iter().find(|entry| entry.name == "remote").expect("remote status");
-        assert!(matches!(status.status, McpServerStatus::Authenticating));
-        assert_eq!(status.auth_capability, McpServerAuthCapability::OAuth);
-    }
-
-    #[tokio::test]
-    async fn apply_connection_attempt_failure_allows_retry() {
-        let (event_sender, mut event_receiver) = mpsc::channel(2);
-        let mut manager = McpManager::new(event_sender, Some(test_oauth_handler_factory()));
-        manager.register_record(
-            "remote",
-            ServerState::NeedsOAuth,
-            Some(http_config("http://localhost:19999/mcp")),
-            ToolExposure::ModelVisible,
-        );
-        let _task = manager.authenticate_server_task("remote").await.expect("auth should start");
-        let _authenticating_event = event_receiver.recv().await.expect("authenticating status change event");
-
-        manager
-            .apply_connection_attempt(McpConnectAttempt {
-                name: "remote".to_string(),
-                outcome: McpConnectOutcome::Failed {
-                    error: crate::client::McpError::ConnectionFailed("boom".to_string()),
-                },
-            })
-            .await;
-
-        let event = event_receiver.recv().await.expect("status change event");
-        let McpClientEvent::ServerStatusesChanged(servers) = event else {
-            panic!("expected ServerStatusesChanged");
-        };
-        let auth_event = event_receiver.recv().await.expect("authentication failure event");
-        let McpClientEvent::AuthenticationFailed { server, error } = auth_event else {
-            panic!("expected AuthenticationFailed");
-        };
-        assert_eq!(server, "remote");
-        assert!(error.contains("boom"));
-
-        let status = servers.iter().find(|entry| entry.name == "remote").expect("remote status");
-        assert_eq!(status.auth_capability, McpServerAuthCapability::OAuth);
-        assert!(matches!(status.status, McpServerStatus::Failed { ref error } if error.contains("boom")));
-        assert!(manager.authenticate_server_task("remote").await.is_ok());
-    }
-
-    #[test]
-    fn status_entries_are_derived_from_reauth_config() {
-        let (event_sender, _event_receiver) = mpsc::channel(1);
-        let mut manager = McpManager::new(event_sender, Some(test_oauth_handler_factory()));
-
-        manager.register_record(
-            "with-oauth",
-            ServerState::Connecting,
-            Some(http_config("http://localhost/mcp")),
-            ToolExposure::ModelVisible,
-        );
-        manager.register_record("without-oauth", ServerState::Connecting, None, ToolExposure::ModelVisible);
-        manager.register_record(
-            "needs-oauth",
-            ServerState::NeedsOAuth,
-            Some(http_config("http://localhost/mcp2")),
-            ToolExposure::ModelVisible,
-        );
-
-        let statuses = manager.server_statuses();
-        let with_oauth = statuses.iter().find(|s| s.name == "with-oauth").unwrap();
-        let without_oauth = statuses.iter().find(|s| s.name == "without-oauth").unwrap();
-        let needs_oauth = statuses.iter().find(|s| s.name == "needs-oauth").unwrap();
-
-        assert_eq!(with_oauth.auth_capability, McpServerAuthCapability::OAuth);
-        assert_eq!(without_oauth.auth_capability, McpServerAuthCapability::Unavailable);
-        assert_eq!(needs_oauth.auth_capability, McpServerAuthCapability::OAuth);
-    }
-
     #[tokio::test]
     async fn register_pending_marks_every_server_connecting_and_emits_status() {
         let (event_sender, mut event_receiver) = mpsc::channel(32);
-        let mut manager = McpManager::new(event_sender, None);
+        let mut manager = McpManager::new().with_event_sender(event_sender);
 
         let servers = vec![
             McpServer::new(
@@ -893,7 +898,7 @@ mod tests {
     #[tokio::test]
     async fn server_statuses_mark_model_visible_and_deferred_servers() {
         let (event_sender, _event_receiver) = mpsc::channel(32);
-        let mut manager = McpManager::new(event_sender, None);
+        let mut manager = McpManager::new().with_event_sender(event_sender);
         manager
             .add_mcps(vec![
                 McpServer::new(
@@ -917,9 +922,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tool_definitions_drop_when_a_server_shuts_down() {
+    async fn tools_drop_when_a_server_shuts_down() {
         let (event_sender, _event_receiver) = mpsc::channel(32);
-        let mut manager = McpManager::new(event_sender, None);
+        let mut manager = McpManager::new().with_event_sender(event_sender);
         manager
             .add_mcps(vec![
                 McpServer::new(
@@ -936,22 +941,20 @@ mod tests {
             .await
             .unwrap();
 
-        let names =
-            |manager: &McpManager| manager.tool_definitions().into_iter().map(|tool| tool.name).collect::<Vec<_>>();
-        assert!(names(&manager).contains(&"git__echo".to_string()));
-        assert!(names(&manager).contains(&"github__echo".to_string()));
+        assert!(visible_tool_names(&manager.snapshot()).contains(&"git__echo".to_string()));
+        assert!(visible_tool_names(&manager.snapshot()).contains(&"github__echo".to_string()));
 
         manager.shutdown_server("git").await.unwrap();
 
-        assert!(!names(&manager).iter().any(|name| name.starts_with("git__")));
-        assert!(names(&manager).contains(&"github__echo".to_string()));
+        assert!(!visible_tool_names(&manager.snapshot()).iter().any(|name| name.starts_with("git__")));
+        assert!(visible_tool_names(&manager.snapshot()).contains(&"github__echo".to_string()));
     }
 
     #[tokio::test]
     async fn server_removal_publishes_before_stale_connection_cleanup() {
         let (event_sender, _event_receiver) = mpsc::channel(32);
-        let (snapshot_sender, mut snapshots) = watch::channel(Arc::new(McpSnapshot::default()));
-        let mut manager = McpManager::new(event_sender, None).with_snapshot_sender(snapshot_sender);
+        let mut manager = McpManager::new().with_event_sender(event_sender);
+        let mut snapshots = manager.handle().subscribe();
         manager
             .add_mcps(vec![McpServer::new(
                 "test",
@@ -960,27 +963,27 @@ mod tests {
             )])
             .await
             .unwrap();
-        let connected = snapshots.borrow().clone();
-        assert_eq!(connected.tool_definitions()[0].name, "test__echo");
+        let connected = snapshots.borrow_and_update().clone();
+        assert_eq!(visible_tool_names(&connected), ["test__echo"]);
 
         manager.shutdown_server("test").await.unwrap();
         snapshots.changed().await.unwrap();
         let removed = snapshots.borrow().clone();
 
-        assert!(removed.tool_definitions().is_empty());
+        assert!(visible_tool_names(&removed).is_empty());
         assert!(
             removed
                 .resolve(ToolRoute::ModelVisible { namespaced_name: "test__echo".to_string() }, serde_json::Map::new(),)
                 .is_err()
         );
-        assert_eq!(connected.tool_definitions()[0].name, "test__echo");
+        assert_eq!(visible_tool_names(&connected), ["test__echo"]);
     }
 
     #[tokio::test]
     async fn failed_tool_refresh_preserves_last_healthy_snapshot() {
         let (event_sender, _event_receiver) = mpsc::channel(32);
-        let (snapshot_sender, snapshots) = watch::channel(Arc::new(McpSnapshot::default()));
-        let mut manager = McpManager::new(event_sender, None).with_snapshot_sender(snapshot_sender);
+        let mut manager = McpManager::new().with_event_sender(event_sender);
+        let snapshots = manager.handle().subscribe();
         manager
             .add_mcps(vec![McpServer::new(
                 "test",
@@ -1001,14 +1004,14 @@ mod tests {
             .await;
 
         assert!(Arc::ptr_eq(&healthy, &snapshots.borrow()));
-        assert_eq!(snapshots.borrow().tool_definitions()[0].name, "test__echo");
+        assert_eq!(visible_tool_names(&snapshots.borrow()), ["test__echo"]);
     }
 
     #[tokio::test]
     async fn stale_tool_refresh_is_ignored_after_connection_generation_changes() {
         let (event_sender, _event_receiver) = mpsc::channel(32);
-        let (snapshot_sender, snapshots) = watch::channel(Arc::new(McpSnapshot::default()));
-        let mut manager = McpManager::new(event_sender, None).with_snapshot_sender(snapshot_sender);
+        let mut manager = McpManager::new().with_event_sender(event_sender);
+        let snapshots = manager.handle().subscribe();
         manager
             .add_mcps(vec![McpServer::new(
                 "test",
@@ -1030,13 +1033,13 @@ mod tests {
             .await;
 
         assert!(Arc::ptr_eq(&healthy, &snapshots.borrow()));
-        assert!(!snapshots.borrow().tool_definitions().iter().any(|tool| tool.name == "test__stale"));
+        assert!(!visible_tool_names(&snapshots.borrow()).contains(&"test__stale".to_string()));
     }
 
     #[tokio::test]
-    async fn tool_definitions_preserve_annotations() {
+    async fn tools_preserve_annotations() {
         let (event_sender, _event_receiver) = mpsc::channel(32);
-        let mut manager = McpManager::new(event_sender, None);
+        let mut manager = McpManager::new().with_event_sender(event_sender);
         manager
             .add_mcps(vec![McpServer::new(
                 "test",
@@ -1046,8 +1049,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tools = manager.tool_definitions();
-        let echo = tools.iter().find(|tool| tool.name == "test__echo").expect("echo tool");
+        let echo = manager.catalog().tool("test__echo").expect("echo tool").tool();
         let annotations = echo.annotations.as_ref().expect("annotations should be preserved");
         assert_eq!(annotations.read_only_hint, Some(true));
         assert_eq!(annotations.open_world_hint, Some(false));
@@ -1056,7 +1058,7 @@ mod tests {
     #[tokio::test]
     async fn drop_logs_cleanup_abort_with_tracing() {
         let (event_sender, _event_receiver) = mpsc::channel(32);
-        let mut manager = McpManager::new(event_sender, None);
+        let mut manager = McpManager::new().with_event_sender(event_sender);
         manager
             .add_mcps(vec![McpServer::new(
                 "test",
@@ -1082,5 +1084,149 @@ mod tests {
 
         let logs = String::from_utf8(output.lock().unwrap().clone()).unwrap();
         assert!(logs.contains("Server 'test' task aborted during cleanup"));
+    }
+
+    fn visible_tool_names(snapshot: &McpSnapshot) -> Vec<String> {
+        snapshot.catalog().tools().model_visible.iter().map(|tool| tool.namespaced_name().to_string()).collect()
+    }
+
+    #[cfg(feature = "oauth")]
+    mod oauth {
+        use super::*;
+        use crate::client::OAuthHandlerFactory;
+        use aether_auth::{OAuthError, OAuthHandler};
+        use futures::future::BoxFuture;
+
+        struct TestOAuthHandler;
+
+        impl OAuthHandler for TestOAuthHandler {
+            fn redirect_uri(&self) -> &'static str {
+                "http://127.0.0.1:0/oauth2callback"
+            }
+
+            fn authorize(&self, _auth_url: &str) -> BoxFuture<'_, Result<String, OAuthError>> {
+                Box::pin(async { Err(OAuthError::UserCancelled) })
+            }
+        }
+
+        fn test_oauth_handler_factory() -> OAuthHandlerFactory {
+            Arc::new(|_ctx| Ok(Arc::new(TestOAuthHandler)))
+        }
+
+        fn http_config(uri: &str) -> McpHttpConfig {
+            StreamableHttpClientTransportConfig::with_uri(uri).into()
+        }
+
+        #[tokio::test]
+        async fn authenticate_server_task_rejects_record_without_reauth_config() {
+            let (event_sender, _event_receiver) = mpsc::channel(1);
+            let mut manager = McpManager::new()
+                .with_event_sender(event_sender)
+                .with_oauth_handler_factory(test_oauth_handler_factory());
+            manager.register_record("public", ServerState::Connecting, None, ToolExposure::ModelVisible);
+
+            let error = match manager.authenticate_server_task("public").await {
+                Ok(_) => panic!("non-OAuth server should be rejected"),
+                Err(error) => error.to_string(),
+            };
+            assert!(error.contains("not OAuth-authenticatable"));
+        }
+
+        #[tokio::test]
+        async fn authenticate_server_task_marks_server_authenticating_and_emits_status() {
+            let (event_sender, mut event_receiver) = mpsc::channel(2);
+            let mut manager = McpManager::new()
+                .with_event_sender(event_sender)
+                .with_oauth_handler_factory(test_oauth_handler_factory());
+            manager.register_record(
+                "remote",
+                ServerState::NeedsOAuth,
+                Some(http_config("http://localhost:19999/mcp")),
+                ToolExposure::ModelVisible,
+            );
+
+            let _task = manager.authenticate_server_task("remote").await.expect("auth should start");
+
+            assert!(matches!(manager.server_statuses()[0].status, McpServerStatus::Authenticating));
+            let event = event_receiver.recv().await.expect("status change event");
+            let McpClientEvent::ServerStatusesChanged(servers) = event else {
+                panic!("expected ServerStatusesChanged");
+            };
+            let status = servers.iter().find(|entry| entry.name == "remote").expect("remote status");
+            assert!(matches!(status.status, McpServerStatus::Authenticating));
+            assert_eq!(status.auth_capability, McpServerAuthCapability::OAuth);
+        }
+
+        #[tokio::test]
+        async fn apply_connection_attempt_failure_allows_retry() {
+            let (event_sender, mut event_receiver) = mpsc::channel(2);
+            let mut manager = McpManager::new()
+                .with_event_sender(event_sender)
+                .with_oauth_handler_factory(test_oauth_handler_factory());
+            manager.register_record(
+                "remote",
+                ServerState::NeedsOAuth,
+                Some(http_config("http://localhost:19999/mcp")),
+                ToolExposure::ModelVisible,
+            );
+            let _task = manager.authenticate_server_task("remote").await.expect("auth should start");
+            let _authenticating_event = event_receiver.recv().await.expect("authenticating status change event");
+
+            manager
+                .apply_connection_attempt(McpConnectAttempt {
+                    name: "remote".to_string(),
+                    outcome: McpConnectOutcome::Failed {
+                        error: crate::client::McpError::ConnectionFailed("boom".to_string()),
+                    },
+                })
+                .await;
+
+            let event = event_receiver.recv().await.expect("status change event");
+            let McpClientEvent::ServerStatusesChanged(servers) = event else {
+                panic!("expected ServerStatusesChanged");
+            };
+            let auth_event = event_receiver.recv().await.expect("authentication failure event");
+            let McpClientEvent::AuthenticationFailed { server, error } = auth_event else {
+                panic!("expected AuthenticationFailed");
+            };
+            assert_eq!(server, "remote");
+            assert!(error.contains("boom"));
+
+            let status = servers.iter().find(|entry| entry.name == "remote").expect("remote status");
+            assert_eq!(status.auth_capability, McpServerAuthCapability::OAuth);
+            assert!(matches!(status.status, McpServerStatus::Failed { ref error } if error.contains("boom")));
+            assert!(manager.authenticate_server_task("remote").await.is_ok());
+        }
+
+        #[test]
+        fn status_entries_are_derived_from_reauth_config() {
+            let (event_sender, _event_receiver) = mpsc::channel(1);
+            let mut manager = McpManager::new()
+                .with_event_sender(event_sender)
+                .with_oauth_handler_factory(test_oauth_handler_factory());
+
+            manager.register_record(
+                "with-oauth",
+                ServerState::Connecting,
+                Some(http_config("http://localhost/mcp")),
+                ToolExposure::ModelVisible,
+            );
+            manager.register_record("without-oauth", ServerState::Connecting, None, ToolExposure::ModelVisible);
+            manager.register_record(
+                "needs-oauth",
+                ServerState::NeedsOAuth,
+                Some(http_config("http://localhost/mcp2")),
+                ToolExposure::ModelVisible,
+            );
+
+            let statuses = manager.server_statuses();
+            let with_oauth = statuses.iter().find(|s| s.name == "with-oauth").unwrap();
+            let without_oauth = statuses.iter().find(|s| s.name == "without-oauth").unwrap();
+            let needs_oauth = statuses.iter().find(|s| s.name == "needs-oauth").unwrap();
+
+            assert_eq!(with_oauth.auth_capability, McpServerAuthCapability::OAuth);
+            assert_eq!(without_oauth.auth_capability, McpServerAuthCapability::Unavailable);
+            assert_eq!(needs_oauth.auth_capability, McpServerAuthCapability::OAuth);
+        }
     }
 }

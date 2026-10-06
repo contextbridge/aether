@@ -1,5 +1,5 @@
-use super::{ToolExposure, connection::Tool, naming::create_namespaced_tool_name, tool_filter::ToolFilter};
-use llm::ToolDefinition;
+use super::{ToolExposure, naming::create_namespaced_tool_name, tool_filter::ToolFilter};
+use rmcp::model::Tool;
 use std::collections::BTreeMap;
 use utils::mcp_status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
 
@@ -34,11 +34,12 @@ pub struct CatalogTools<'a> {
     pub deferred: Vec<&'a CatalogTool>,
 }
 
+/// An upstream tool as advertised by its server, renamed to `server__tool`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CatalogTool {
-    namespaced_name: String,
+    server: String,
     local_name: String,
-    definition: ToolDefinition,
+    tool: Tool,
     exposure: ToolExposureKind,
     allowed: bool,
 }
@@ -68,7 +69,7 @@ impl ToolCatalog {
     }
 
     pub fn tool(&self, namespaced_name: &str) -> Option<&CatalogTool> {
-        self.servers.iter().flat_map(|server| &server.tools).find(|tool| tool.namespaced_name == namespaced_name)
+        self.servers.iter().flat_map(|server| &server.tools).find(|tool| tool.namespaced_name() == namespaced_name)
     }
 
     pub fn tools(&self) -> CatalogTools<'_> {
@@ -120,11 +121,13 @@ impl ToolCatalog {
             }
         };
         let Some(server) = self.servers.iter().find(|server| {
-            server.is_connected() && server.tools.iter().any(|tool| tool.namespaced_name == namespaced_name)
+            server.is_connected() && server.tools.iter().any(|tool| tool.namespaced_name() == namespaced_name)
         }) else {
             return false;
         };
-        let Some(tool) = server.tools.iter().find(|tool| tool.namespaced_name == namespaced_name) else { return false };
+        let Some(tool) = server.tools.iter().find(|tool| tool.namespaced_name() == namespaced_name) else {
+            return false;
+        };
         tool.allowed && tool.exposure == exposure
     }
 
@@ -158,20 +161,12 @@ impl ServerCatalogEntry {
         status: McpServerStatus,
         auth_capability: McpServerAuthCapability,
         exposure: ToolExposure,
-        tools: &[rmcp::model::Tool],
+        tools: &[Tool],
         filter: &ToolFilter,
     ) -> Self {
-        let tools = tools.iter().map(Tool::from).collect::<Vec<_>>();
-        Self::from_tools(
-            name.into(),
-            description.into(),
-            instructions,
-            status,
-            auth_capability,
-            exposure,
-            &tools,
-            filter,
-        )
+        let name = name.into();
+        let tools = tools.iter().map(|tool| CatalogTool::new(&name, tool, &exposure, filter)).collect();
+        Self { name, description: description.into(), instructions, status, auth_capability, exposure, tools }
     }
     pub fn name(&self) -> &str {
         &self.name
@@ -211,43 +206,6 @@ impl ServerCatalogEntry {
             tools: Vec::new(),
         }
     }
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn from_tools(
-        name: String,
-        description: String,
-        instructions: Option<String>,
-        status: McpServerStatus,
-        auth_capability: McpServerAuthCapability,
-        exposure: ToolExposure,
-        tools: &[Tool],
-        filter: &ToolFilter,
-    ) -> Self {
-        let catalog_tools = tools
-            .iter()
-            .map(|tool| {
-                let definition = ToolDefinition::new(
-                    create_namespaced_tool_name(&name, &tool.name),
-                    tool.description.clone(),
-                    tool.parameters.clone(),
-                )
-                .with_server(name.clone())
-                .with_annotations(tool.annotations.clone());
-                let exposure_kind = if exposure.is_model_visible_tool(&tool.name) {
-                    ToolExposureKind::ModelVisible
-                } else {
-                    ToolExposureKind::Deferred
-                };
-                CatalogTool {
-                    namespaced_name: definition.name.clone(),
-                    local_name: tool.name.clone(),
-                    allowed: filter.is_tool_allowed(&definition),
-                    definition,
-                    exposure: exposure_kind,
-                }
-            })
-            .collect();
-        Self { name, description, instructions, status, auth_capability, exposure, tools: catalog_tools }
-    }
     pub(crate) fn with_status(&self, status: McpServerStatus, auth_capability: McpServerAuthCapability) -> Self {
         let mut next = self.clone();
         next.status = status;
@@ -278,18 +236,49 @@ impl<'a> CatalogTools<'a> {
 
 impl CatalogTool {
     pub fn namespaced_name(&self) -> &str {
-        &self.namespaced_name
+        &self.tool.name
+    }
+    pub fn server(&self) -> &str {
+        &self.server
     }
     pub fn local_name(&self) -> &str {
         &self.local_name
     }
-    pub fn definition(&self) -> &ToolDefinition {
-        &self.definition
+    /// The upstream tool definition, unchanged apart from its namespaced name.
+    pub fn tool(&self) -> &Tool {
+        &self.tool
     }
     pub fn exposure(&self) -> ToolExposureKind {
         self.exposure
     }
     pub fn allowed(&self) -> bool {
         self.allowed
+    }
+    pub fn route(&self) -> ToolRoute {
+        match self.exposure {
+            ToolExposureKind::ModelVisible => {
+                ToolRoute::ModelVisible { namespaced_name: self.namespaced_name().to_string() }
+            }
+            ToolExposureKind::Deferred => {
+                ToolRoute::Deferred { server: self.server.clone(), tool: self.local_name.clone() }
+            }
+        }
+    }
+
+    fn new(server: &str, tool: &Tool, exposure: &ToolExposure, filter: &ToolFilter) -> Self {
+        let mut namespaced = tool.clone();
+        namespaced.name = create_namespaced_tool_name(server, &tool.name).into();
+        let exposure = if exposure.is_model_visible_tool(&tool.name) {
+            ToolExposureKind::ModelVisible
+        } else {
+            ToolExposureKind::Deferred
+        };
+        Self {
+            server: server.to_string(),
+            local_name: tool.name.to_string(),
+            allowed: filter.is_tool_allowed(&namespaced),
+            tool: namespaced,
+            exposure,
+        }
     }
 }

@@ -1,6 +1,7 @@
 use clap::{ArgAction, Args};
 use mcp_utils::ServiceExt;
-use mcp_utils::tool_gateway::{AETHER_MCP_IPC_SOCKET, LIST_SERVERS_TOOL, UnixSocketPath, connect};
+use mcp_utils::aggregate::LIST_SERVERS_TOOL;
+use mcp_utils::tool_gateway::{AETHER_MCP_IPC_SOCKET, UnixSocketPath, connect};
 use rmcp::model::{CallToolRequestParams, CallToolResponse, CallToolResult, Tool};
 use serde::Deserialize;
 use serde_json::{Map, Value};

@@ -361,8 +361,7 @@ async fn call_subagent_through_manager(
         .await?;
 
     let snapshot = spawn.block_until_ready().await.ok_or_else(|| test_error("MCP bootstrap aborted"))?;
-    let tool = snapshot
-        .tool_definitions()
+    let tool = aether_core::mcp::tool_definitions(&snapshot)
         .into_iter()
         .find(|tool| tool.name.ends_with("spawn_subagent"))
         .ok_or_else(|| test_error("spawn_subagent tool missing"))?;
