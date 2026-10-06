@@ -17,7 +17,7 @@ All test projects implement [`TestProject`], which provides:
 # Implementations
 
 - [`CargoProject::new(name)`](CargoProject::new) -- Creates a temporary Cargo project with `Cargo.toml` and `src/main.rs`.
-- [`NodeProject::new(name)`](NodeProject::new) -- Creates a temporary Node.js/TypeScript project with `package.json`, `tsconfig.json`, `src/index.ts`, and runs `npm install typescript`.
+- [`NodeProject::new(name)`](NodeProject::new) -- Creates a temporary Node.js/TypeScript project with `package.json`, `tsconfig.json`, `src/index.ts`, and installs TypeScript 7 locally with `npm install`.
 
 Both are backed by [`TempDir`](tempfile::TempDir) and are automatically cleaned up when dropped.
 

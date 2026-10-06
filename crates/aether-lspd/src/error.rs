@@ -1,4 +1,5 @@
 use std::io;
+use std::time::Duration;
 use thiserror::Error;
 
 #[doc = include_str!("docs/daemon_error.md")]
@@ -15,6 +16,14 @@ pub enum DaemonError {
     /// Failed to spawn LSP process
     #[error("Failed to spawn LSP: {0}")]
     LspSpawnFailed(String),
+
+    /// The LSP process exited or rejected `initialize` before completing the handshake
+    #[error("Language server failed to complete initialization (it exited or rejected `initialize`)")]
+    LspInitializeFailed,
+
+    /// The LSP process never answered `initialize`
+    #[error("Language server did not answer `initialize` within {}s", .0.as_secs())]
+    LspInitializeTimedOut(Duration),
 
     /// Lockfile error
     #[error("Lockfile error: {0}")]

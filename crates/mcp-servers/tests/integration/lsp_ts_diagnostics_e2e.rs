@@ -1,18 +1,9 @@
-//! End-to-end tests for LSP diagnostics through the MCP tool layer (TypeScript).
-//!
-//! These tests verify the full pipeline:
-//!   file edits → LSP daemon → typescript-language-server diagnostics → queryable via `lsp_check_errors`
-//!
-//! Requirements:
-//! - `npm` must be installed (the test project installs pinned TypeScript tooling locally)
-//! - `aether-lspd` binary must be built (`cargo build -p aether-lspd`)
-//!
-//! Run with: `cargo test -p mcp-servers -- --ignored lsp_ts_diagnostics`
-
-use crate::common::{call_tool, connect_lsp, has_errors, has_no_errors, poll_diagnostics};
+use crate::common::{call_tool, connect_lsp, has_errors, has_no_errors};
 use aether_lspd::testing::{NodeProject, TestProject};
+use rmcp::RoleClient;
+use rmcp::model::ClientConfig;
+use rmcp::service::RunningService;
 
-/// Test: MCP `edit_file` tool → `typescript-language-server` picks up change → diagnostics queryable
 #[tokio::test]
 async fn test_ts_mcp_edit_produces_diagnostics() {
     let project = NodeProject::new("ts_mcp_edit_diag").expect("Failed to create project");
@@ -24,9 +15,8 @@ async fn test_ts_mcp_edit_produces_diagnostics() {
 
     let (_server_handle, client) = connect_lsp(&project).await;
 
-    let result = poll_diagnostics(&client, Some(&index_ts), has_errors).await;
-    let errors = result["summary"]["errors"].as_u64().unwrap();
-    assert!(errors > 0, "Expected type error diagnostics");
+    let result = check_errors(&client, &index_ts).await;
+    assert!(has_errors(&result), "Expected type error diagnostics: {result}");
 
     call_tool(&client, "read_file", serde_json::json!({ "filePath": index_ts })).await;
 
@@ -40,7 +30,8 @@ async fn test_ts_mcp_edit_produces_diagnostics() {
     )
     .await;
 
-    poll_diagnostics(&client, Some(&index_ts), has_no_errors).await;
+    let result = check_errors(&client, &index_ts).await;
+    assert!(has_no_errors(&result), "Expected no errors after fixing the bug: {result}");
 
     call_tool(&client, "read_file", serde_json::json!({ "filePath": index_ts })).await;
 
@@ -54,12 +45,10 @@ async fn test_ts_mcp_edit_produces_diagnostics() {
     )
     .await;
 
-    let result = poll_diagnostics(&client, Some(&index_ts), has_errors).await;
-    let errors = result["summary"]["errors"].as_u64().unwrap();
-    assert!(errors > 0, "Expected type error after re-introducing bug");
+    let result = check_errors(&client, &index_ts).await;
+    assert!(has_errors(&result), "Expected type error after re-introducing bug: {result}");
 }
 
-/// Test: External `fs::write` → file watcher → diagnostics queryable (TypeScript)
 #[tokio::test]
 async fn test_ts_external_file_change_produces_diagnostics() {
     let project = NodeProject::new("ts_ext_write_diag").expect("Failed to create project");
@@ -72,23 +61,20 @@ async fn test_ts_external_file_change_produces_diagnostics() {
 
     let (_server_handle, client) = connect_lsp(&project).await;
 
-    let result = poll_diagnostics(&client, Some(&index_ts), has_errors).await;
-    let errors = result["summary"]["errors"].as_u64().unwrap();
-    assert!(errors > 0, "Expected type error diagnostics");
+    let result = check_errors(&client, &index_ts).await;
+    assert!(has_errors(&result), "Expected type error diagnostics: {result}");
 
     std::fs::write(&index_ts_path, "const x: number = 42;\nconsole.log(x);\n").expect("Failed to write file");
 
-    poll_diagnostics(&client, Some(&index_ts), has_no_errors).await;
+    let result = check_errors(&client, &index_ts).await;
+    assert!(has_no_errors(&result), "Expected no errors after external fix: {result}");
 
     std::fs::write(&index_ts_path, "const x: number = true;\nconsole.log(x);\n").expect("Failed to write file");
 
-    let result = poll_diagnostics(&client, Some(&index_ts), has_errors).await;
-    let errors = result["summary"]["errors"].as_u64().unwrap();
-    assert!(errors > 0, "Expected type error after external write");
+    let result = check_errors(&client, &index_ts).await;
+    assert!(has_errors(&result), "Expected type error after external write: {result}");
 }
 
-/// Regression test: after `edit_file`, a SINGLE `lsp_check_errors` call (no polling)
-/// should return fresh diagnostics for TypeScript files.
 #[tokio::test]
 async fn test_ts_diagnostics_after_edit_without_polling() {
     let project = NodeProject::new("ts_diag_no_poll").expect("Failed to create project");
@@ -97,8 +83,6 @@ async fn test_ts_diagnostics_after_edit_without_polling() {
     let index_ts = project.file_path_str("src/index.ts");
 
     let (_server_handle, client) = connect_lsp(&project).await;
-
-    poll_diagnostics(&client, Some(&index_ts), has_no_errors).await;
 
     call_tool(&client, "read_file", serde_json::json!({ "filePath": index_ts })).await;
 
@@ -112,16 +96,10 @@ async fn test_ts_diagnostics_after_edit_without_polling() {
     )
     .await;
 
-    // Poll until tsserver publishes the fresh diagnostics so the single
-    // (non-polling) call below is not racing tsserver's async publishing.
-    poll_diagnostics(&client, Some(&index_ts), has_errors).await;
+    let result = check_errors(&client, &index_ts).await;
+    assert!(has_errors(&result), "Expected diagnostics after edit + single lsp_check_errors call: {result}");
+}
 
-    let result = call_tool(&client, "lsp_check_errors", serde_json::json!({ "filePath": index_ts })).await;
-
-    let errors = result["summary"]["errors"].as_u64().unwrap_or(0);
-    assert!(
-        errors > 0,
-        "Expected diagnostics after edit + single lsp_check_errors call, got 0 errors. \
-         Full result: {result}"
-    );
+async fn check_errors(client: &RunningService<RoleClient, ClientConfig>, file_path: &str) -> serde_json::Value {
+    call_tool(client, "lsp_check_errors", serde_json::json!({ "filePath": file_path })).await
 }

@@ -1,13 +1,17 @@
 use crate::error::{DaemonError, DaemonResult};
 use crate::file_watcher::{FileWatcherBatch, FileWatcherHandle};
+use crate::language_catalog::{DiagnosticsMode, LspConfig};
 use crate::path_to_uri;
 use crate::protocol::{LspErrorResponse, LspNotification};
 use lsp_types::notification::{DidChangeWatchedFiles, Initialized, Notification, PublishDiagnostics};
-use lsp_types::request::{Initialize, RegisterCapability, Request, UnregisterCapability, WorkDoneProgressCreate};
+use lsp_types::request::{
+    Initialize, RegisterCapability, Request, UnregisterCapability, WorkDoneProgressCreate, WorkspaceDiagnosticRefresh,
+};
 use lsp_types::{
-    ClientCapabilities, DidChangeWatchedFilesClientCapabilities, GeneralClientCapabilities, GotoCapability,
-    HoverClientCapabilities, InitializeParams, MarkupKind, PublishDiagnosticsClientCapabilities, RegistrationParams,
-    TextDocumentClientCapabilities, WorkspaceClientCapabilities, WorkspaceFolder,
+    ClientCapabilities, DiagnosticClientCapabilities, DidChangeWatchedFilesClientCapabilities,
+    GeneralClientCapabilities, GotoCapability, HoverClientCapabilities, InitializeParams, MarkupKind,
+    PublishDiagnosticsClientCapabilities, PublishDiagnosticsParams, RegistrationParams, TextDocumentClientCapabilities,
+    WorkspaceClientCapabilities, WorkspaceFolder,
 };
 use lsp_types::{DocumentSymbolClientCapabilities, DynamicRegistrationClientCapabilities};
 #[cfg(unix)]
@@ -21,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 const INITIALIZE_REQUEST_ID: i64 = 1;
 
@@ -29,10 +33,12 @@ const INITIALIZE_REQUEST_ID: i64 = 1;
 pub(crate) struct ProcessTransport {
     command_tx: mpsc::Sender<TransportCommand>,
     process_id: Option<i32>,
+    initialized_rx: watch::Receiver<bool>,
 }
 
 pub(crate) enum TransportEvent {
-    PublishedDiagnostics(lsp_types::PublishDiagnosticsParams),
+    PublishedDiagnostics(PublishDiagnosticsParams),
+    DiagnosticsRefreshRequested,
     FileWatcherBatch(FileWatcherBatch),
     Closed,
 }
@@ -62,6 +68,8 @@ enum TransportCommand {
 struct ProcessTransportActor {
     process: Child,
     stdin: ChildStdin,
+    diagnostics_mode: DiagnosticsMode,
+    initialized_tx: watch::Sender<bool>,
     message_rx: mpsc::Receiver<Value>,
     command_rx: mpsc::Receiver<TransportCommand>,
     event_tx: mpsc::Sender<TransportEvent>,
@@ -72,15 +80,11 @@ struct ProcessTransportActor {
 }
 
 impl ProcessTransport {
-    pub(crate) fn spawn(
-        root_path: &Path,
-        command: &str,
-        args: &[String],
-    ) -> DaemonResult<(Self, mpsc::Receiver<TransportEvent>)> {
-        let resolved_command = resolve_command(root_path, command);
+    pub(crate) fn spawn(root_path: &Path, config: &LspConfig) -> DaemonResult<(Self, mpsc::Receiver<TransportEvent>)> {
+        let resolved_command = resolve_command(root_path, &config.command);
         let mut process = Command::new(&resolved_command)
             .current_dir(root_path)
-            .args(args)
+            .args(&config.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -97,12 +101,15 @@ impl ProcessTransport {
         let (event_tx, event_rx) = mpsc::channel(100);
         let (watcher_tx, watcher_rx) = mpsc::channel(64);
         let (message_tx, message_rx) = mpsc::channel(100);
+        let (initialized_tx, initialized_rx) = watch::channel(false);
         let watcher = FileWatcherHandle::spawn(root_path.to_path_buf(), watcher_tx);
         tokio::spawn(read_lsp_messages(BufReader::new(stdout), message_tx));
 
         let actor = ProcessTransportActor {
             process,
             stdin,
+            diagnostics_mode: config.diagnostics_mode,
+            initialized_tx,
             message_rx,
             command_rx,
             event_tx,
@@ -113,7 +120,16 @@ impl ProcessTransport {
         };
         tokio::spawn(actor.run(root_path.to_path_buf()));
 
-        Ok((Self { command_tx, process_id }, event_rx))
+        Ok((Self { command_tx, process_id, initialized_rx }, event_rx))
+    }
+
+    pub(crate) async fn wait_until_initialized(&self) -> DaemonResult<()> {
+        let mut initialized_rx = self.initialized_rx.clone();
+        initialized_rx
+            .wait_for(|initialized| *initialized)
+            .await
+            .map(|_| ())
+            .map_err(|_| DaemonError::LspInitializeFailed)
     }
 
     pub(crate) async fn request_raw(&self, method: &str, params: Value) -> Result<Value, TransportError> {
@@ -150,10 +166,12 @@ impl ProcessTransportActor {
     async fn run(mut self, root_path: PathBuf) {
         if let Err(err) = self.initialize(&root_path).await {
             tracing::error!(%err, "Failed to initialize LSP transport");
+            let _ = self.process.kill().await;
             self.cleanup_pending();
             let _ = self.event_tx.send(TransportEvent::Closed).await;
             return;
         }
+        self.initialized_tx.send_replace(true);
 
         loop {
             tokio::select! {
@@ -210,7 +228,8 @@ impl ProcessTransportActor {
 
     async fn initialize(&mut self, root_path: &Path) -> std::io::Result<()> {
         let root_uri =
-            crate::path_to_uri(root_path).map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
+            crate::path_to_uri(root_path).map_err(|err| std::io::Error::new(ErrorKind::InvalidInput, err))?;
+        let pull_diagnostics = self.diagnostics_mode == DiagnosticsMode::Pull;
 
         let capabilities = ClientCapabilities {
             general: Some(GeneralClientCapabilities::default()),
@@ -228,6 +247,10 @@ impl ProcessTransportActor {
                 document_symbol: Some(DocumentSymbolClientCapabilities {
                     hierarchical_document_symbol_support: Some(true),
                     ..Default::default()
+                }),
+                diagnostic: pull_diagnostics.then_some(DiagnosticClientCapabilities {
+                    dynamic_registration: Some(false),
+                    related_document_support: Some(false),
                 }),
                 ..Default::default()
             }),
@@ -252,19 +275,26 @@ impl ProcessTransportActor {
             capabilities,
             ..Default::default()
         };
+        let mut params = serde_json::to_value(&params).unwrap();
+        if pull_diagnostics {
+            // lsp-types serializes this as `workspace.diagnostic`, but the spec (and servers) read `workspace.diagnostics`.
+            params["capabilities"]["workspace"]["diagnostics"] = serde_json::json!({ "refreshSupport": true });
+        }
 
-        self.send_request(INITIALIZE_REQUEST_ID, Initialize::METHOD, serde_json::to_value(&params).unwrap()).await?;
+        self.send_request(INITIALIZE_REQUEST_ID, Initialize::METHOD, params).await?;
 
         while let Some(message) = self.message_rx.recv().await {
             if message.get("id").and_then(Value::as_i64) == Some(INITIALIZE_REQUEST_ID) {
-                send_notification(&mut self.stdin, Initialized::METHOD, serde_json::json!({})).await?;
-                return Ok(());
+                if let Some(error) = message.get("error") {
+                    return Err(std::io::Error::other(format!("server rejected `initialize`: {error}")));
+                }
+                return send_notification(&mut self.stdin, Initialized::METHOD, serde_json::json!({})).await;
             }
 
             self.handle_lsp_message(message).await;
         }
 
-        Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "LSP closed during initialization"))
+        Err(std::io::Error::new(ErrorKind::UnexpectedEof, "LSP closed during initialization"))
     }
 
     async fn handle_lsp_message(&mut self, message: Value) {
@@ -284,6 +314,10 @@ impl ProcessTransportActor {
                     }
                     WorkDoneProgressCreate::METHOD => {
                         let _ = self.send_ok_response(&id).await;
+                    }
+                    WorkspaceDiagnosticRefresh::METHOD => {
+                        let _ = self.send_ok_response(&id).await;
+                        let _ = self.event_tx.send(TransportEvent::DiagnosticsRefreshRequested).await;
                     }
                     _ => {
                         let response = serde_json::json!({

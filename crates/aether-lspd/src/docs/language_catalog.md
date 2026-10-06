@@ -15,7 +15,7 @@ Identifies a programming language for LSP server selection.
 | Server | Languages | Env override |
 |--------|-----------|-------------|
 | `rust-analyzer` | Rust | `AETHER_LSPD_SERVER_COMMAND_RUST_ANALYZER` |
-| `typescript-language-server` | JavaScript, JSX, TypeScript, TSX | `AETHER_LSPD_SERVER_COMMAND_TYPESCRIPT_LANGUAGE_SERVER` |
+| `tsc --lsp` (TypeScript 7+) | JavaScript, JSX, TypeScript, TSX | `AETHER_LSPD_SERVER_COMMAND_TSC` |
 | `pyright-langserver` | Python | `AETHER_LSPD_SERVER_COMMAND_PYRIGHT` |
 | `gopls` | Go | `AETHER_LSPD_SERVER_COMMAND_GOPLS` |
 | `clangd` | C, C++ | `AETHER_LSPD_SERVER_COMMAND_CLANGD` |
@@ -24,7 +24,7 @@ Languages without a configured server (Java, Ruby, etc.) can still be identified
 
 # Server pooling
 
-Languages that share a server implementation also share a daemon socket. For example, TypeScript and TSX both use `typescript-language-server`, so [`socket_path`](crate::socket_path()) returns the same path for both. This avoids spawning duplicate server processes.
+Languages that share a server implementation also share a daemon socket. For example, TypeScript and TSX both use `tsc`, so [`socket_path`](crate::socket_path()) returns the same path for both. This avoids spawning duplicate server processes.
 
 # Metadata
 

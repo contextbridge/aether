@@ -186,8 +186,7 @@ edition = "2021"
     }
 }
 
-const TYPESCRIPT_PACKAGE: &str = "typescript@6.0.3";
-const TYPESCRIPT_LANGUAGE_SERVER_PACKAGE: &str = "typescript-language-server@5.2.0";
+const TYPESCRIPT_PACKAGE: &str = "typescript@7.0.2";
 
 /// A temporary Node.js/TypeScript project for testing.
 pub struct NodeProject {
@@ -202,8 +201,6 @@ impl TestProject for NodeProject {
 
 impl NodeProject {
     /// Create a new minimal Node/TypeScript project.
-    ///
-    /// Installs pinned TypeScript tooling locally so tests do not depend on global Node tools.
     pub fn new(name: &str) -> Result<Self, TestProjectError> {
         let temp_dir = TempDir::new()?;
         let project = Self { temp_dir };
@@ -244,15 +241,7 @@ impl NodeProject {
     }
 
     fn install_typescript(&self) -> Result<(), TestProjectError> {
-        let args = [
-            "install",
-            "--save-dev",
-            "--no-audit",
-            "--no-fund",
-            "--prefer-offline",
-            TYPESCRIPT_PACKAGE,
-            TYPESCRIPT_LANGUAGE_SERVER_PACKAGE,
-        ];
+        let args = ["install", "--save-dev", "--no-audit", "--no-fund", "--prefer-offline", TYPESCRIPT_PACKAGE];
         let output = Command::new("npm").args(args).current_dir(self.root()).output()?;
 
         if !output.status.success() {
