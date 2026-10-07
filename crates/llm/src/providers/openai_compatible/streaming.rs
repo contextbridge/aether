@@ -1,4 +1,5 @@
 use super::types::{ChatCompletionStreamResponse, FinishReason, FunctionCallDelta, ToolCallDelta};
+use crate::provider::stream_from;
 use crate::providers::stream_assembler::{StreamAssembler, assemble};
 use crate::{LlmError, LlmResponse, LlmResponseStream, ProviderError, Result, StopReason};
 use async_openai::{Client, config::Config};
@@ -15,33 +16,22 @@ where
 {
     let client = client.clone();
 
-    Box::pin(async_stream::stream! {
-        let stream = match client
-            .chat()
-            .create_stream_byot::<U, ChatCompletionStreamResponse>(request)
-            .await {
-            Ok(stream) => stream,
-            Err(e) => {
+    stream_from(
+        async move {
+            client.chat().create_stream_byot::<U, ChatCompletionStreamResponse>(request).await.map_err(|e| {
                 warn!("create_stream_byot failed: {e}");
-                yield Err(LlmError::from(e));
-                return;
-            }
-        };
-
-        // Once the SSE stream has started (HTTP 200), any failure is a fault of
-        // the active stream rather than a rejected request, regardless of the
-        // error's concrete type. Treat all post-handshake errors as retryable.
-        let stream = stream.map(|result| {
-            if let Err(ref e) = result {
-                warn!("Stream error from API: {e}");
-            }
-            result.map_err(|e| LlmError::from(ProviderError::stream_interrupted(e.to_string())))
-        });
-
-        for await item in process_compatible_stream(stream) {
-            yield item;
-        }
-    })
+                LlmError::from(e)
+            })
+        },
+        |stream| {
+            process_compatible_stream(stream.map(|result| {
+                result.map_err(|e| {
+                    warn!("Stream error from API: {e}");
+                    ProviderError::stream_interrupted(e.to_string())
+                })
+            }))
+        },
+    )
 }
 
 pub fn process_compatible_stream<E: Into<LlmError> + Send>(
@@ -81,13 +71,13 @@ fn decode_chunk(mut chunk: ChatCompletionStreamResponse, turn: &mut StreamAssemb
     Ok(responses)
 }
 
-fn decode_tool_call_delta(delta: ToolCallDelta, turn: &mut StreamAssembler<i32>) -> Vec<LlmResponse> {
+fn decode_tool_call_delta(delta: ToolCallDelta, turn: &mut StreamAssembler<i32>) -> impl Iterator<Item = LlmResponse> {
     let ToolCallDelta { index, id, function, .. } = delta;
     let FunctionCallDelta { name, arguments } = function.unwrap_or_default();
 
     let start = name.map(|name| turn.start_tool(index, id.unwrap_or_else(|| format!("tool_call_{index}")), name));
     let chunk = arguments.and_then(|chunk| turn.append_tool_args(&index, chunk));
-    start.into_iter().chain(chunk).collect()
+    start.into_iter().chain(chunk)
 }
 
 fn map_finish_reason(reason: FinishReason) -> Result<StopReason> {
@@ -106,12 +96,48 @@ fn map_finish_reason(reason: FinishReason) -> Result<StopReason> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::http::openai_client;
     use crate::providers::openai_compatible::types::{
         ChatCompletionStreamChoice, ChatCompletionStreamResponseDelta, CompletionTokensDetails, PromptTokensDetails,
         Usage,
     };
-    use crate::testing::llm_response;
+    use crate::testing::{FakeHttpService, llm_response};
     use crate::{ProviderErrorKind, TokenUsage};
+    use async_openai::config::OpenAIConfig;
+    use reqwest::{Body, Method};
+
+    #[tokio::test]
+    async fn transport_errors_preserve_request_and_stream_classification() {
+        let request = serde_json::json!({ "model": "test-model", "messages": [], "stream": true });
+        for (status, body, kind, retryable) in [
+            (400, r#"{"error":{"message":"invalid request"}}"#, ProviderErrorKind::Api, false),
+            (200, "data: invalid json\n\n", ProviderErrorKind::StreamInterrupted, true),
+        ] {
+            let service = FakeHttpService::default();
+            service.route(Method::POST, "https://api.openai.com/v1/chat/completions", move || {
+                http::Response::builder()
+                    .status(status)
+                    .header("content-type", "text/event-stream")
+                    .body(Body::from(body))
+                    .unwrap()
+                    .into()
+            });
+            let client = openai_client(OpenAIConfig::new().with_api_key("test-key"), service.clone());
+            let responses = create_custom_stream_generic(&client, request.clone()).collect::<Vec<_>>().await;
+
+            assert_eq!(responses.len(), if status == 200 { 2 } else { 1 }, "{responses:?}");
+            if status == 200 {
+                assert!(matches!(responses[0], Ok(LlmResponse::Start)));
+            }
+            let error = responses.last().unwrap().as_ref().expect_err("transport failure must surface as Err");
+            assert_eq!(error.provider().map(|provider| provider.kind), Some(kind));
+            assert_eq!(error.is_retryable(), retryable);
+
+            let sent = service.take_requests().pop().unwrap();
+            let body: serde_json::Value = serde_json::from_slice(sent.body().unwrap().as_bytes().unwrap()).unwrap();
+            assert_eq!(body, request);
+        }
+    }
 
     #[tokio::test]
     async fn error_finish_reasons_yield_retryable_server_errors() {
@@ -171,7 +197,12 @@ mod tests {
     #[tokio::test]
     async fn test_tool_call_stream() {
         let responses = collect_responses(
-            chat_stream().tool_start(0, "call_1", "tool").tool_args(0, "{}").finish(FinishReason::ToolCalls).build(),
+            chat_stream()
+                .tool_start(0, "call_1", "tool")
+                .tool_args(0, "")
+                .tool_args(0, "{}")
+                .finish(FinishReason::ToolCalls)
+                .build(),
         )
         .await;
 
@@ -198,8 +229,8 @@ mod tests {
     async fn parallel_tool_calls_complete_in_index_order() {
         let responses = collect_responses(
             chat_stream()
-                .tool_start(0, "call_1", "function_a")
                 .tool_start(1, "call_2", "function_b")
+                .tool_start(0, "call_1", "function_a")
                 .tool_args(0, r#"{"param":"#)
                 .tool_args(1, r#"{"value":"#)
                 .tool_args(0, r#""test"}"#)
@@ -213,8 +244,8 @@ mod tests {
             responses,
             vec![
                 LlmResponse::Start,
-                LlmResponse::tool_request_start("call_1", "function_a"),
                 LlmResponse::tool_request_start("call_2", "function_b"),
+                LlmResponse::tool_request_start("call_1", "function_a"),
                 LlmResponse::tool_request_arg("call_1", r#"{"param":"#),
                 LlmResponse::tool_request_arg("call_2", r#"{"value":"#),
                 LlmResponse::tool_request_arg("call_1", r#""test"}"#),
@@ -245,6 +276,20 @@ mod tests {
                 .text(&["Here is the result"])
                 .build_with_stop_reason(StopReason::EndTurn)
         );
+    }
+
+    #[tokio::test]
+    async fn usage_after_finish_reason_is_preserved() {
+        let responses = collect_responses(
+            chat_stream()
+                .text(&["done"])
+                .finish(FinishReason::Stop)
+                .usage(Usage { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, ..Default::default() })
+                .build(),
+        )
+        .await;
+
+        assert_eq!(responses, llm_response().text(&["done"]).usage(10, 5).build_with_stop_reason(StopReason::EndTurn));
     }
 
     #[tokio::test]
