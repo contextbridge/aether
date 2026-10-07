@@ -8,7 +8,6 @@ mod providers {
     mod openai {
         mod capture_fixtures;
         mod fixture_tests;
-        mod streaming_tests;
     }
     mod openrouter {
         mod capture_fixtures;

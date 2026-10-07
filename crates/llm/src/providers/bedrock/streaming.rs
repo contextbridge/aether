@@ -2,15 +2,33 @@ use aws_sdk_bedrockruntime::error::SdkError;
 use aws_sdk_bedrockruntime::primitives::event_stream::EventReceiver;
 use aws_sdk_bedrockruntime::types::error::ConverseStreamOutputError;
 use aws_sdk_bedrockruntime::types::{
-    ContentBlockDelta, ContentBlockStart, ConverseStreamOutput, StopReason as BedrockStopReason,
-    TokenUsage as BedrockTokenUsage,
+    ContentBlockDelta, ContentBlockStart, ConverseStreamOutput, ReasoningContentBlockDelta,
+    StopReason as BedrockStopReason, TokenUsage as BedrockTokenUsage,
 };
 use aws_smithy_types::event_stream::RawMessage;
-use futures::Stream;
-use std::collections::HashMap;
-use tracing::{debug, error, info, warn};
+use futures::{Stream, StreamExt, stream};
+use tracing::{error, warn};
 
-use crate::{LlmError, LlmResponse, ProviderError, StopReason, TokenUsage, Tokens, ToolCallRequest};
+use crate::providers::stream_assembler::{StreamAssembler, assemble};
+use crate::{LlmError, LlmResponse, ProviderError, StopReason, TokenUsage, Tokens};
+
+pub fn process_bedrock_stream(
+    events: impl Stream<Item = crate::Result<ConverseStreamOutput>> + Send,
+) -> impl Stream<Item = crate::Result<LlmResponse>> + Send {
+    stream::iter([Ok(LlmResponse::Start)]).chain(assemble(events, |event, turn| Ok(decode_event(event, turn))))
+}
+
+pub(crate) fn converse_events(
+    receiver: EventReceiver<ConverseStreamOutput, ConverseStreamOutputError>,
+) -> impl Stream<Item = crate::Result<ConverseStreamOutput>> + Send {
+    stream::unfold(receiver, |mut receiver| async move {
+        let event = receiver.recv().await.map_err(|e| {
+            error!("Bedrock stream recv error: {e}");
+            LlmError::from(e)
+        });
+        event.transpose().map(|event| (event, receiver))
+    })
+}
 
 impl From<&BedrockTokenUsage> for TokenUsage {
     fn from(usage: &BedrockTokenUsage) -> Self {
@@ -25,168 +43,6 @@ impl From<&BedrockTokenUsage> for TokenUsage {
             cache_creation_tokens: cache_creation,
             ..TokenUsage::default()
         }
-    }
-}
-
-struct PendingToolCall {
-    id: String,
-    name: String,
-    args: String,
-}
-
-enum StreamEvent {
-    Emit(LlmResponse),
-    Stop(StopReason),
-    Skip,
-}
-
-pub fn process_bedrock_stream(
-    mut receiver: EventReceiver<ConverseStreamOutput, ConverseStreamOutputError>,
-) -> impl Stream<Item = crate::Result<LlmResponse>> + Send {
-    async_stream::stream! {
-        yield Ok(LlmResponse::Start);
-
-        let mut active_tool_calls: HashMap<i32, PendingToolCall> = HashMap::new();
-        let mut last_stop_reason: Option<StopReason> = None;
-
-        loop {
-            match receiver.recv().await {
-                Ok(Some(event)) => {
-                    match process_stream_event(&event, &mut active_tool_calls) {
-                        StreamEvent::Emit(resp) => yield Ok(resp),
-                        StreamEvent::Stop(sr) => last_stop_reason = Some(sr),
-                        StreamEvent::Skip => {}
-                    }
-                }
-                Ok(None) => {
-                    debug!("Bedrock stream ended (recv returned None)");
-                    break;
-                }
-                Err(e) => {
-                    error!("Bedrock stream recv error: {e}");
-                    yield Err(LlmError::from(e));
-                    return;
-                }
-            }
-        }
-
-        // Emit any remaining tool calls that weren't completed via ContentBlockStop
-        for (_index, tc) in active_tool_calls {
-            let tool_call = ToolCallRequest {
-                id: tc.id,
-                name: tc.name,
-                arguments: tc.args,
-            };
-            yield Ok(LlmResponse::ToolRequestComplete { tool_call });
-        }
-
-        yield Ok(LlmResponse::Done {
-            stop_reason: last_stop_reason,
-        });
-    }
-}
-
-fn process_stream_event(
-    event: &ConverseStreamOutput,
-    active_tool_calls: &mut HashMap<i32, PendingToolCall>,
-) -> StreamEvent {
-    match event {
-        ConverseStreamOutput::MessageStart(_) => {
-            info!("Bedrock message started");
-            StreamEvent::Skip
-        }
-        ConverseStreamOutput::ContentBlockStart(start_event) => {
-            handle_content_block_start(start_event, active_tool_calls)
-        }
-        ConverseStreamOutput::ContentBlockDelta(delta_event) => {
-            handle_content_block_delta(delta_event, active_tool_calls)
-        }
-        ConverseStreamOutput::ContentBlockStop(stop_event) => {
-            handle_content_block_stop(stop_event.content_block_index(), active_tool_calls)
-        }
-        ConverseStreamOutput::MessageStop(stop_event) => {
-            let stop_reason = map_bedrock_stop_reason(&stop_event.stop_reason);
-            info!("Bedrock message stopped: {stop_reason:?}");
-            StreamEvent::Stop(stop_reason)
-        }
-        ConverseStreamOutput::Metadata(metadata_event) => metadata_event
-            .usage()
-            .map_or(StreamEvent::Skip, |usage| StreamEvent::Emit(LlmResponse::Usage { tokens: usage.into() })),
-        other => {
-            warn!("Unhandled Bedrock stream event: {other:?}");
-            StreamEvent::Skip
-        }
-    }
-}
-
-fn handle_content_block_start(
-    event: &aws_sdk_bedrockruntime::types::ContentBlockStartEvent,
-    active_tool_calls: &mut HashMap<i32, PendingToolCall>,
-) -> StreamEvent {
-    let index = event.content_block_index();
-
-    if let Some(ContentBlockStart::ToolUse(tool_start)) = event.start() {
-        let id = tool_start.tool_use_id().to_string();
-        let name = tool_start.name().to_string();
-        debug!("Bedrock tool use started: {name} ({id})");
-        active_tool_calls.insert(index, PendingToolCall { id: id.clone(), name: name.clone(), args: String::new() });
-        StreamEvent::Emit(LlmResponse::ToolRequestStart { id, name })
-    } else {
-        debug!("Content block started at index {index}");
-        StreamEvent::Skip
-    }
-}
-
-fn handle_content_block_delta(
-    event: &aws_sdk_bedrockruntime::types::ContentBlockDeltaEvent,
-    active_tool_calls: &mut HashMap<i32, PendingToolCall>,
-) -> StreamEvent {
-    let index = event.content_block_index();
-
-    let Some(delta) = event.delta() else {
-        return StreamEvent::Skip;
-    };
-
-    match delta {
-        ContentBlockDelta::Text(text) if !text.is_empty() => {
-            StreamEvent::Emit(LlmResponse::Text { chunk: text.clone() })
-        }
-        ContentBlockDelta::ToolUse(tool_delta) => {
-            let input = tool_delta.input();
-            if input.is_empty() {
-                return StreamEvent::Skip;
-            }
-
-            if let Some(tc) = active_tool_calls.get_mut(&index) {
-                tc.args.push_str(input);
-                StreamEvent::Emit(LlmResponse::ToolRequestArg { id: tc.id.clone(), chunk: input.to_string() })
-            } else {
-                warn!("Received tool input delta for unknown content block index: {index}");
-                StreamEvent::Skip
-            }
-        }
-        ContentBlockDelta::ReasoningContent(reasoning) => {
-            if let Ok(text) = reasoning.as_text()
-                && !text.is_empty()
-            {
-                return StreamEvent::Emit(LlmResponse::Reasoning { chunk: text.clone() });
-            }
-            StreamEvent::Skip
-        }
-        _ => {
-            debug!("Unhandled content block delta type");
-            StreamEvent::Skip
-        }
-    }
-}
-
-fn handle_content_block_stop(index: i32, active_tool_calls: &mut HashMap<i32, PendingToolCall>) -> StreamEvent {
-    if let Some(tc) = active_tool_calls.remove(&index) {
-        let tool_call = ToolCallRequest { id: tc.id, name: tc.name, arguments: tc.args };
-        StreamEvent::Emit(LlmResponse::ToolRequestComplete { tool_call })
-    } else {
-        debug!("Content block stopped at index {index}");
-        StreamEvent::Skip
     }
 }
 
@@ -213,6 +69,41 @@ impl From<SdkError<ConverseStreamOutputError, RawMessage>> for LlmError {
     }
 }
 
+fn decode_event(event: ConverseStreamOutput, turn: &mut StreamAssembler<i32>) -> Vec<LlmResponse> {
+    let response = match event {
+        ConverseStreamOutput::ContentBlockStart(event) => match event.start {
+            Some(ContentBlockStart::ToolUse(tool)) => {
+                Some(turn.start_tool(event.content_block_index, tool.tool_use_id, tool.name))
+            }
+            _ => None,
+        },
+        ConverseStreamOutput::ContentBlockDelta(event) => match event.delta {
+            Some(ContentBlockDelta::Text(text)) if !text.is_empty() => Some(LlmResponse::Text { chunk: text }),
+            Some(ContentBlockDelta::ToolUse(delta)) => turn.append_tool_args(event.content_block_index, delta.input),
+            Some(ContentBlockDelta::ReasoningContent(ReasoningContentBlockDelta::Text(text))) if !text.is_empty() => {
+                Some(LlmResponse::Reasoning { chunk: text })
+            }
+            _ => None,
+        },
+        ConverseStreamOutput::ContentBlockStop(event) => turn.complete_tool(event.content_block_index),
+        ConverseStreamOutput::MessageStop(event) => {
+            turn.stop(map_bedrock_stop_reason(&event.stop_reason));
+            turn.terminate();
+            None
+        }
+        ConverseStreamOutput::Metadata(event) => {
+            event.usage.as_ref().map(|usage| LlmResponse::Usage { tokens: usage.into() })
+        }
+        ConverseStreamOutput::MessageStart(_) => None,
+        other => {
+            warn!("Unhandled Bedrock stream event: {other:?}");
+            None
+        }
+    };
+
+    response.into_iter().collect()
+}
+
 fn map_bedrock_stop_reason(reason: &BedrockStopReason) -> StopReason {
     match reason {
         BedrockStopReason::EndTurn | BedrockStopReason::StopSequence => StopReason::EndTurn,
@@ -226,132 +117,81 @@ fn map_bedrock_stop_reason(reason: &BedrockStopReason) -> StopReason {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ProviderErrorKind;
+    use crate::testing::llm_response;
+    use aws_sdk_bedrockruntime::types::{
+        ContentBlockDeltaEvent, ContentBlockStartEvent, ContentBlockStopEvent, ConversationRole,
+        ConverseStreamMetadataEvent, MessageStartEvent, MessageStopEvent, ToolUseBlockDelta, ToolUseBlockStart,
+    };
 
-    #[test]
-    fn test_map_stop_reason_end_turn() {
-        assert_eq!(map_bedrock_stop_reason(&BedrockStopReason::EndTurn), StopReason::EndTurn);
+    #[tokio::test]
+    async fn test_text_stream() {
+        let responses = collect_responses(
+            bedrock_stream().text(0, &["Hello", "", " world"]).message_stop(BedrockStopReason::EndTurn).build(),
+        )
+        .await;
+
+        assert_eq!(responses, llm_response().text(&["Hello", " world"]).build_with_stop_reason(StopReason::EndTurn));
     }
 
-    #[test]
-    fn test_map_stop_reason_stop_sequence() {
-        assert_eq!(map_bedrock_stop_reason(&BedrockStopReason::StopSequence), StopReason::EndTurn);
+    #[tokio::test]
+    async fn test_reasoning_stream() {
+        let responses = collect_responses(
+            bedrock_stream()
+                .reasoning(0, &["thinking"])
+                .text(1, &["answer"])
+                .message_stop(BedrockStopReason::EndTurn)
+                .build(),
+        )
+        .await;
+
+        assert_eq!(
+            responses,
+            llm_response().reasoning(&["thinking"]).text(&["answer"]).build_with_stop_reason(StopReason::EndTurn)
+        );
     }
 
-    #[test]
-    fn test_map_stop_reason_tool_use() {
-        assert_eq!(map_bedrock_stop_reason(&BedrockStopReason::ToolUse), StopReason::ToolCalls);
+    #[tokio::test]
+    async fn test_tool_call_stream() {
+        let deltas = [r#"{"query":"#, r#""test"}"#];
+
+        let responses = collect_responses(
+            bedrock_stream()
+                .tool_call(0, "tool_123", "search", &deltas)
+                .message_stop(BedrockStopReason::ToolUse)
+                .build(),
+        )
+        .await;
+
+        assert_eq!(
+            responses,
+            llm_response().tool_call("tool_123", "search", &deltas).build_with_stop_reason(StopReason::ToolCalls)
+        );
     }
 
-    #[test]
-    fn test_map_stop_reason_max_tokens() {
-        assert_eq!(map_bedrock_stop_reason(&BedrockStopReason::MaxTokens), StopReason::Length);
-    }
+    #[tokio::test]
+    async fn stream_closed_mid_tool_call_does_not_complete_it() {
+        let responses =
+            process_events(bedrock_stream().tool_start(0, "tool_123", "search").tool_delta(0, r#"{"query":"#).build())
+                .await;
 
-    #[test]
-    fn test_map_stop_reason_context_window_exceeded() {
-        assert_eq!(map_bedrock_stop_reason(&BedrockStopReason::ModelContextWindowExceeded), StopReason::Length);
-    }
-
-    #[test]
-    fn test_map_stop_reason_content_filtered() {
-        assert_eq!(map_bedrock_stop_reason(&BedrockStopReason::ContentFiltered), StopReason::ContentFilter);
-    }
-
-    #[test]
-    fn test_map_stop_reason_guardrail() {
-        assert_eq!(map_bedrock_stop_reason(&BedrockStopReason::GuardrailIntervened), StopReason::ContentFilter);
-    }
-
-    #[test]
-    fn test_handle_content_block_start_tool_use() {
-        let mut active = HashMap::new();
-        let tool_start = aws_sdk_bedrockruntime::types::ToolUseBlockStart::builder()
-            .tool_use_id("tool_123")
-            .name("search")
-            .build()
-            .unwrap();
-
-        let event = aws_sdk_bedrockruntime::types::ContentBlockStartEvent::builder()
-            .content_block_index(0)
-            .start(ContentBlockStart::ToolUse(tool_start))
-            .build()
-            .unwrap();
-
-        let result = handle_content_block_start(&event, &mut active);
         assert!(
-            matches!(&result, StreamEvent::Emit(LlmResponse::ToolRequestStart { id, name }) if id == "tool_123" && name == "search")
+            matches!(
+                responses.as_slice(),
+                [
+                    Ok(LlmResponse::Start),
+                    Ok(LlmResponse::ToolRequestStart { .. }),
+                    Ok(LlmResponse::ToolRequestArg { .. }),
+                    Err(error)
+                ] if error.provider().map(|provider| provider.kind) == Some(ProviderErrorKind::StreamInterrupted)
+            ),
+            "{responses:?}"
         );
-        assert!(active.contains_key(&0));
     }
 
-    #[test]
-    fn test_handle_content_block_delta_text() {
-        let mut active = HashMap::new();
-        let delta = aws_sdk_bedrockruntime::types::ContentBlockDeltaEvent::builder()
-            .content_block_index(0)
-            .delta(ContentBlockDelta::Text("Hello".to_string()))
-            .build()
-            .unwrap();
-
-        let result = handle_content_block_delta(&delta, &mut active);
-        assert!(matches!(&result, StreamEvent::Emit(LlmResponse::Text { chunk }) if chunk == "Hello"));
-    }
-
-    #[test]
-    fn test_handle_content_block_delta_tool_input() {
-        let mut active = HashMap::new();
-        active
-            .insert(0, PendingToolCall { id: "tool_123".to_string(), name: "search".to_string(), args: String::new() });
-
-        let tool_delta =
-            aws_sdk_bedrockruntime::types::ToolUseBlockDelta::builder().input(r#"{"query":"test"}"#).build().unwrap();
-
-        let delta = aws_sdk_bedrockruntime::types::ContentBlockDeltaEvent::builder()
-            .content_block_index(0)
-            .delta(ContentBlockDelta::ToolUse(tool_delta))
-            .build()
-            .unwrap();
-
-        let result = handle_content_block_delta(&delta, &mut active);
-        assert!(
-            matches!(&result, StreamEvent::Emit(LlmResponse::ToolRequestArg { id, chunk }) if id == "tool_123" && chunk == r#"{"query":"test"}"#)
-        );
-
-        // Verify accumulated args
-        assert_eq!(active.get(&0).unwrap().args, r#"{"query":"test"}"#);
-    }
-
-    #[test]
-    fn test_handle_content_block_stop_completes_tool() {
-        let mut active = HashMap::new();
-        active.insert(
-            0,
-            PendingToolCall {
-                id: "tool_123".to_string(),
-                name: "search".to_string(),
-                args: r#"{"query":"test"}"#.to_string(),
-            },
-        );
-
-        let result = handle_content_block_stop(0, &mut active);
-        assert!(matches!(&result, StreamEvent::Emit(LlmResponse::ToolRequestComplete { tool_call })
-            if tool_call.id == "tool_123"
-            && tool_call.name == "search"
-            && tool_call.arguments == r#"{"query":"test"}"#
-        ));
-        assert!(active.is_empty());
-    }
-
-    #[test]
-    fn test_handle_content_block_stop_no_tool() {
-        let mut active = HashMap::new();
-        let result = handle_content_block_stop(0, &mut active);
-        assert!(matches!(result, StreamEvent::Skip));
-    }
-
-    #[test]
-    fn test_metadata_event_emits_cache_read_and_creation() {
-        let usage = aws_sdk_bedrockruntime::types::TokenUsage::builder()
+    #[tokio::test]
+    async fn test_metadata_after_message_stop_reports_cache_usage() {
+        let usage = BedrockTokenUsage::builder()
             .input_tokens(100)
             .output_tokens(50)
             .total_tokens(150)
@@ -360,57 +200,144 @@ mod tests {
             .build()
             .unwrap();
 
-        let metadata = aws_sdk_bedrockruntime::types::ConverseStreamMetadataEvent::builder().usage(usage).build();
+        let responses =
+            collect_responses(bedrock_stream().message_stop(BedrockStopReason::EndTurn).metadata(usage).build()).await;
 
-        let event = ConverseStreamOutput::Metadata(metadata);
-        let mut active = HashMap::new();
-        let result = process_stream_event(&event, &mut active);
+        let usage = responses.iter().find_map(|response| match response {
+            LlmResponse::Usage { tokens } => Some(*tokens),
+            _ => None,
+        });
+        assert_eq!(
+            usage,
+            Some(TokenUsage {
+                input_tokens: 160.into(),
+                output_tokens: 50.into(),
+                cache_read_tokens: Some(40.into()),
+                cache_creation_tokens: Some(20.into()),
+                ..TokenUsage::default()
+            }),
+            "cached tokens count toward the prompt"
+        );
+        assert_eq!(responses.last(), Some(&LlmResponse::done_with_stop_reason(StopReason::EndTurn)));
+    }
 
-        match result {
-            StreamEvent::Emit(LlmResponse::Usage { tokens: sample }) => {
-                assert_eq!(sample.input_tokens.get(), 160, "cached tokens count toward the prompt");
-                assert_eq!(sample.output_tokens.get(), 50);
-                assert_eq!(sample.cache_read_tokens.map(crate::Tokens::get), Some(40));
-                assert_eq!(sample.cache_creation_tokens.map(crate::Tokens::get), Some(20));
-            }
-            _ => panic!("expected Emit(Usage{{..}})"),
+    #[tokio::test]
+    async fn test_metadata_without_cache_fields() {
+        let usage = BedrockTokenUsage::builder().input_tokens(10).output_tokens(5).total_tokens(15).build().unwrap();
+
+        let responses =
+            collect_responses(bedrock_stream().message_stop(BedrockStopReason::EndTurn).metadata(usage).build()).await;
+
+        assert_eq!(responses, llm_response().usage(10, 5).build_with_stop_reason(StopReason::EndTurn));
+    }
+
+    #[tokio::test]
+    async fn test_stop_reasons_map_to_llm_stop_reasons() {
+        for (bedrock_stop_reason, stop_reason) in [
+            (BedrockStopReason::EndTurn, StopReason::EndTurn),
+            (BedrockStopReason::StopSequence, StopReason::EndTurn),
+            (BedrockStopReason::ToolUse, StopReason::ToolCalls),
+            (BedrockStopReason::MaxTokens, StopReason::Length),
+            (BedrockStopReason::ModelContextWindowExceeded, StopReason::Length),
+            (BedrockStopReason::ContentFiltered, StopReason::ContentFilter),
+            (BedrockStopReason::GuardrailIntervened, StopReason::ContentFilter),
+        ] {
+            let responses = collect_responses(bedrock_stream().message_stop(bedrock_stop_reason).build()).await;
+
+            assert_eq!(responses, llm_response().build_with_stop_reason(stop_reason));
         }
     }
 
-    #[test]
-    fn test_metadata_event_without_cache_fields() {
-        let usage = aws_sdk_bedrockruntime::types::TokenUsage::builder()
-            .input_tokens(10)
-            .output_tokens(5)
-            .total_tokens(15)
-            .build()
-            .unwrap();
-
-        let metadata = aws_sdk_bedrockruntime::types::ConverseStreamMetadataEvent::builder().usage(usage).build();
-
-        let event = ConverseStreamOutput::Metadata(metadata);
-        let mut active = HashMap::new();
-        let result = process_stream_event(&event, &mut active);
-
-        match result {
-            StreamEvent::Emit(LlmResponse::Usage { tokens: sample }) => {
-                assert_eq!(sample.cache_read_tokens, None);
-                assert_eq!(sample.cache_creation_tokens, None);
-            }
-            _ => panic!("expected Emit(Usage{{..}})"),
-        }
+    async fn collect_responses(events: Vec<ConverseStreamOutput>) -> Vec<LlmResponse> {
+        process_events(events).await.into_iter().map(Result::unwrap).collect()
     }
 
-    #[test]
-    fn test_handle_content_block_delta_empty_text() {
-        let mut active = HashMap::new();
-        let delta = aws_sdk_bedrockruntime::types::ContentBlockDeltaEvent::builder()
-            .content_block_index(0)
-            .delta(ContentBlockDelta::Text(String::new()))
-            .build()
-            .unwrap();
+    async fn process_events(events: Vec<ConverseStreamOutput>) -> Vec<crate::Result<LlmResponse>> {
+        process_bedrock_stream(stream::iter(events.into_iter().map(Ok))).collect().await
+    }
 
-        let result = handle_content_block_delta(&delta, &mut active);
-        assert!(matches!(result, StreamEvent::Skip));
+    fn bedrock_stream() -> BedrockStreamBuilder {
+        BedrockStreamBuilder::default().push(ConverseStreamOutput::MessageStart(
+            MessageStartEvent::builder().role(ConversationRole::Assistant).build().unwrap(),
+        ))
+    }
+
+    #[derive(Default)]
+    struct BedrockStreamBuilder {
+        events: Vec<ConverseStreamOutput>,
+    }
+
+    impl BedrockStreamBuilder {
+        fn text(self, index: i32, chunks: &[&str]) -> Self {
+            chunks
+                .iter()
+                .fold(self, |builder, chunk| builder.delta(index, ContentBlockDelta::Text((*chunk).to_string())))
+                .block_stop(index)
+        }
+
+        fn reasoning(self, index: i32, chunks: &[&str]) -> Self {
+            chunks
+                .iter()
+                .fold(self, |builder, chunk| {
+                    builder.delta(
+                        index,
+                        ContentBlockDelta::ReasoningContent(ReasoningContentBlockDelta::Text((*chunk).to_string())),
+                    )
+                })
+                .block_stop(index)
+        }
+
+        fn tool_call(self, index: i32, id: &str, name: &str, argument_deltas: &[&str]) -> Self {
+            argument_deltas
+                .iter()
+                .fold(self.tool_start(index, id, name), |builder, delta| builder.tool_delta(index, delta))
+                .block_stop(index)
+        }
+
+        fn tool_start(self, index: i32, id: &str, name: &str) -> Self {
+            let tool = ToolUseBlockStart::builder().tool_use_id(id).name(name).build().unwrap();
+            self.push(ConverseStreamOutput::ContentBlockStart(
+                ContentBlockStartEvent::builder()
+                    .content_block_index(index)
+                    .start(ContentBlockStart::ToolUse(tool))
+                    .build()
+                    .unwrap(),
+            ))
+        }
+
+        fn tool_delta(self, index: i32, input: &str) -> Self {
+            self.delta(index, ContentBlockDelta::ToolUse(ToolUseBlockDelta::builder().input(input).build().unwrap()))
+        }
+
+        fn message_stop(self, stop_reason: BedrockStopReason) -> Self {
+            self.push(ConverseStreamOutput::MessageStop(
+                MessageStopEvent::builder().stop_reason(stop_reason).build().unwrap(),
+            ))
+        }
+
+        fn metadata(self, usage: BedrockTokenUsage) -> Self {
+            self.push(ConverseStreamOutput::Metadata(ConverseStreamMetadataEvent::builder().usage(usage).build()))
+        }
+
+        fn delta(self, index: i32, delta: ContentBlockDelta) -> Self {
+            self.push(ConverseStreamOutput::ContentBlockDelta(
+                ContentBlockDeltaEvent::builder().content_block_index(index).delta(delta).build().unwrap(),
+            ))
+        }
+
+        fn block_stop(self, index: i32) -> Self {
+            self.push(ConverseStreamOutput::ContentBlockStop(
+                ContentBlockStopEvent::builder().content_block_index(index).build().unwrap(),
+            ))
+        }
+
+        fn push(mut self, event: ConverseStreamOutput) -> Self {
+            self.events.push(event);
+            self
+        }
+
+        fn build(self) -> Vec<ConverseStreamOutput> {
+            self.events
+        }
     }
 }
