@@ -10,7 +10,9 @@ use schemars::Schema;
 use crate::catalog::Provider;
 use crate::providers::openai_compatible::PromptCacheKeySource;
 use crate::tool_schema::normalize_for_xiaomi;
-use crate::{ChatMessage, ContentBlock, Context, LlmError, LlmModel, ReasoningEffort, Result, ToolDefinition};
+use crate::{
+    ChatMessage, ContentBlock, Context, LlmError, LlmModel, ReasoningEffort, Result, ToolCallRequest, ToolDefinition,
+};
 
 /// The per-provider decisions that shape an otherwise identical Responses request.
 pub struct ResponsesRequestPolicy {
@@ -185,6 +187,27 @@ pub(crate) fn map_user_content_for_responses(parts: &[ContentBlock]) -> Result<E
     Ok(EasyInputContent::ContentList(items))
 }
 
+impl From<FunctionToolCall> for ToolCallRequest {
+    fn from(call: FunctionToolCall) -> Self {
+        ToolCallRequest { id: call.call_id, name: call.name, arguments: call.arguments }
+    }
+}
+
+impl From<&ToolCallRequest> for FunctionToolCall {
+    fn from(call: &ToolCallRequest) -> Self {
+        FunctionToolCall {
+            call_id: call.id.clone(),
+            name: call.name.clone(),
+            arguments: call.arguments.clone(),
+            namespace: None,
+            id: None,
+            status: None,
+            caller: None,
+            r#async: None,
+        }
+    }
+}
+
 /// Map internal `ChatMessage`s to Responses API input items.
 ///
 /// Returns `(system_prompt, input_items)` — the system prompt is extracted
@@ -238,16 +261,7 @@ fn map_messages(
                     })));
                 }
                 for tc in tool_calls {
-                    items.push(InputItem::Item(Item::FunctionCall(FunctionToolCall {
-                        call_id: tc.id.clone(),
-                        name: tc.name.clone(),
-                        arguments: tc.arguments.clone(),
-                        namespace: None,
-                        id: None,
-                        status: None,
-                        caller: None,
-                        r#async: None,
-                    })));
+                    items.push(InputItem::Item(Item::FunctionCall(tc.into())));
                 }
             }
             ChatMessage::ToolCallResult(result) => match result {
