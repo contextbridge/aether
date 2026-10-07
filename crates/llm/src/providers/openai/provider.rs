@@ -1,15 +1,10 @@
 use async_openai::{Client, config::Config, types::chat::CreateChatCompletionRequest};
-use async_stream;
-use std::error::Error;
-use tokio_stream::StreamExt;
-use tracing::{debug, error};
+use tracing::debug;
 
-use super::{
-    mappers::{map_messages, map_tools},
-    streaming::process_completion_stream,
-};
+use super::mappers::{map_messages, map_tools};
 use crate::provider::error_stream;
-use crate::{Context, LlmError, LlmResponseStream, ProviderError, StreamingModelProvider};
+use crate::providers::openai_compatible::create_custom_stream_generic;
+use crate::{Context, LlmResponseStream, StreamingModelProvider};
 
 /// A Provider that's compatible with `OpenAI`'s chat completion API
 /// Other providers (e.g. Ollama, Llama.cpp etc) that are "`OpenAI` compatible" should implement this trait
@@ -26,7 +21,6 @@ impl<T: OpenAiChatProvider + Send + Sync> StreamingModelProvider for T {
         if let Err(error) = crate::provider::validate_reasoning(context, None) {
             return crate::provider::error_stream(error);
         }
-        let client = self.client().clone();
         let model = self.model().to_string();
         let messages = match map_messages(context.messages()) {
             Ok(messages) => messages,
@@ -42,55 +36,9 @@ impl<T: OpenAiChatProvider + Send + Sync> StreamingModelProvider for T {
             }
         };
 
-        Box::pin(async_stream::stream! {
-            debug!("Starting chat completion stream for model: {model}");
-
-            let req = CreateChatCompletionRequest {
-                model: model.clone(),
-                messages,
-                tools,
-                stream: Some(true),
-                ..Default::default()
-            };
-
-            debug!(
-                "Making request to Ollama API with model: {model} and {message_count} messages"
-            );
-
-            let stream = match client.chat().create_stream(req).await {
-                Ok(stream) => {
-                    debug!("Successfully created stream from Ollama API");
-                    stream
-                }
-                Err(e) => {
-                    error!("Failed to create stream from Ollama API: {:?}", e);
-
-                    // Check if it's a reqwest error with more details
-                    if let Some(reqwest_err) =
-                        e.source().and_then(|s| s.downcast_ref::<reqwest::Error>())
-                    {
-                        if let Some(url) = reqwest_err.url() {
-                            error!("Request URL was: {url}");
-                        }
-                        if let Some(status) = reqwest_err.status() {
-                            error!("HTTP status: {status}");
-                        }
-                    }
-
-                    yield Err(LlmError::from(e));
-                    return;
-                }
-            };
-
-            let stream = stream.map(|result| {
-                result.map_err(|e| LlmError::from(ProviderError::stream_interrupted(e.to_string())))
-            });
-
-            let mut shared_stream = Box::pin(process_completion_stream(stream));
-            while let Some(result) = shared_stream.next().await {
-                yield result;
-            }
-        })
+        debug!("Starting chat completion stream for model: {model} with {message_count} messages");
+        let request = CreateChatCompletionRequest { model, messages, tools, stream: Some(true), ..Default::default() };
+        create_custom_stream_generic(self.client(), request)
     }
 
     fn context_window(&self) -> Option<u32> {

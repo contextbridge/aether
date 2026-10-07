@@ -1,6 +1,6 @@
 use super::mantle::{MantleAuth, MantleClient};
 use super::mappers::{default_cache_point, map_messages, map_tools};
-use super::streaming::process_bedrock_stream;
+use super::streaming::{converse_events, process_bedrock_stream};
 use crate::catalog::transport::ModelTransport;
 use crate::provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider, get_context_window, stream_from};
 use crate::providers::openai_responses::transport::process_connection;
@@ -194,7 +194,9 @@ impl StreamingModelProvider for BedrockProvider {
         let context = context.clone();
 
         let Some(transport) = self.mantle_transport() else {
-            return stream_from(async move { provider.send_converse_stream(&context).await }, process_bedrock_stream);
+            return stream_from(async move { provider.send_converse_stream(&context).await }, |receiver| {
+                process_bedrock_stream(converse_events(receiver))
+            });
         };
 
         if let Some(arn) = self.inference_profile_arn.as_deref() {

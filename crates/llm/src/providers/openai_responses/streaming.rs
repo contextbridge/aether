@@ -1,9 +1,8 @@
-use async_openai::types::responses::{OutputItem, ResponseUsage, Status};
-use futures::Stream;
+use async_openai::types::responses::{OutputItem, ReasoningItem, ResponseUsage, Status};
+use futures::{Stream, StreamExt};
 use serde::{Deserialize, Deserializer, de::Error as _};
-use tokio_stream::StreamExt;
 
-use crate::providers::tool_call_collector::ToolCallCollector;
+use crate::providers::stream_assembler::{StreamAssembler, assemble};
 use crate::{LlmResponse, ProviderError, ProviderErrorKind, Result, StopReason, TokenUsage};
 
 #[derive(Debug)]
@@ -51,8 +50,6 @@ pub enum ResponsesStreamEvent {
     OutputItemDone(ResponsesOutputItemEvent),
     #[serde(rename = "response.function_call_arguments.delta")]
     FunctionCallArgumentsDelta(ResponsesFunctionCallArgumentsDeltaEvent),
-    #[serde(rename = "response.function_call_arguments.done")]
-    FunctionCallArgumentsDone(ResponsesFunctionCallArgumentsDoneEvent),
     #[serde(rename = "response.reasoning_summary_text.delta", alias = "response.reasoning_text.delta")]
     ReasoningTextDelta(ResponsesTextDeltaEvent),
     #[serde(rename = "response.completed")]
@@ -74,6 +71,10 @@ impl ResponsesStreamEvent {
     /// message with a generic interrupt.
     fn may_precede_creation(&self) -> bool {
         matches!(self, Self::Ignored | Self::Error(_) | Self::Failed(_))
+    }
+
+    fn is_terminal(&self) -> bool {
+        matches!(self, Self::Completed(_) | Self::Incomplete(_))
     }
 }
 
@@ -103,11 +104,6 @@ pub struct ResponsesOutputItemEvent {
 pub struct ResponsesFunctionCallArgumentsDeltaEvent {
     pub output_index: u32,
     pub delta: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ResponsesFunctionCallArgumentsDoneEvent {
-    pub output_index: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -141,61 +137,20 @@ fn map_responses_error(code: Option<String>, message: String, fallback: Provider
 }
 
 /// Process an `OpenAI` Responses event stream into `LlmResponse` items.
-pub fn process_response_stream<T>(stream: T) -> impl Stream<Item = Result<LlmResponse>> + Send
-where
-    T: Stream<Item = Result<ResponsesStreamEvent>> + Send + Unpin,
-{
-    async_stream::stream! {
-        let mut tool_collector = ToolCallCollector::<u32>::new();
-        let mut stream = Box::pin(stream);
-        let mut last_stop_reason: Option<StopReason> = None;
-        let mut started = false;
-        let mut terminal = false;
-
-        while let Some(result) = stream.next().await {
-            let event = match result {
-                Ok(event) => event,
-                Err(e) => {
-                    yield Err(ProviderError::stream_interrupted(e.to_string()).into());
-                    return;
-                }
-            };
-
-            if matches!(event, ResponsesStreamEvent::Created) {
-                started = true;
-            } else if !started && !event.may_precede_creation() {
-                yield Err(ProviderError::stream_interrupted(
-                    "Responses stream emitted data before response.created".to_string(),
-                ).into());
-                return;
-            }
-
-            terminal = matches!(event, ResponsesStreamEvent::Completed(_) | ResponsesStreamEvent::Incomplete(_));
-            let responses = process_event(event, &mut tool_collector, &mut last_stop_reason);
-            let event_failed = responses.iter().any(Result::is_err);
-            for response in responses {
-                yield response;
-            }
-            if event_failed {
-                return;
-            }
-            if terminal {
-                break;
-            }
+pub fn process_response_stream(
+    events: impl Stream<Item = Result<ResponsesStreamEvent>> + Send,
+) -> impl Stream<Item = Result<LlmResponse>> + Send {
+    let mut started = false;
+    assemble(through_terminal_event(events), move |event, turn| {
+        if matches!(event, ResponsesStreamEvent::Created) {
+            started = true;
+        } else if !started && !event.may_precede_creation() {
+            return Err(
+                ProviderError::stream_interrupted("Responses stream emitted data before response.created").into()
+            );
         }
-
-        for tool_call in tool_collector.complete_all() {
-            yield Ok(LlmResponse::ToolRequestComplete { tool_call });
-        }
-
-        if terminal {
-            yield Ok(LlmResponse::Done { stop_reason: last_stop_reason });
-        } else {
-            yield Err(ProviderError::stream_interrupted(
-                "Responses stream ended before a terminal response event".to_string(),
-            ).into());
-        }
-    }
+        decode_event(event, turn)
+    })
 }
 
 #[derive(Deserialize, Default)]
@@ -210,276 +165,313 @@ struct ResponsesInputTokenDetailsExtension {
     cache_write_tokens: Option<u32>,
 }
 
-fn process_event(
-    event: ResponsesStreamEvent,
-    tool_collector: &mut ToolCallCollector<u32>,
-    last_stop_reason: &mut Option<StopReason>,
-) -> Vec<Result<LlmResponse>> {
-    let mut responses = Vec::new();
+/// Ends `events` at the terminal event rather than waiting for the server to
+/// close the connection.
+fn through_terminal_event(
+    events: impl Stream<Item = Result<ResponsesStreamEvent>> + Send,
+) -> impl Stream<Item = Result<ResponsesStreamEvent>> + Send {
+    events.scan(false, |terminated, event| {
+        if *terminated {
+            return std::future::ready(None);
+        }
+        *terminated = event.as_ref().is_ok_and(ResponsesStreamEvent::is_terminal);
+        std::future::ready(Some(event))
+    })
+}
+
+fn decode_event(event: ResponsesStreamEvent, turn: &mut StreamAssembler<u32>) -> Result<Vec<LlmResponse>> {
     let incomplete = matches!(&event, ResponsesStreamEvent::Incomplete(_));
 
-    match event {
-        ResponsesStreamEvent::Created => responses.push(Ok(LlmResponse::Start)),
-        ResponsesStreamEvent::OutputTextDelta(e) if !e.delta.is_empty() => {
-            responses.push(Ok(LlmResponse::Text { chunk: e.delta }));
-        }
-        ResponsesStreamEvent::OutputItemAdded(e) => {
-            if let OutputItem::FunctionCall(call) = e.item {
-                let tool_responses =
-                    tool_collector.handle_delta(e.output_index, Some(call.call_id), Some(call.name), None);
-                responses.extend(tool_responses.into_iter().map(Ok));
-            }
-        }
+    let responses = match event {
+        ResponsesStreamEvent::Created => vec![LlmResponse::Start],
+        ResponsesStreamEvent::OutputTextDelta(e) if !e.delta.is_empty() => vec![LlmResponse::Text { chunk: e.delta }],
+        ResponsesStreamEvent::OutputItemAdded(e) => match e.item {
+            OutputItem::FunctionCall(call) => vec![turn.start_tool(e.output_index, call.call_id, call.name)],
+            _ => vec![],
+        },
         ResponsesStreamEvent::FunctionCallArgumentsDelta(e) => {
-            let tool_responses = tool_collector.handle_delta(e.output_index, None, None, Some(e.delta));
-            responses.extend(tool_responses.into_iter().map(Ok));
-        }
-        ResponsesStreamEvent::FunctionCallArgumentsDone(e) => {
-            if let Some(tc) = tool_collector.complete_one(e.output_index) {
-                responses.push(Ok(LlmResponse::ToolRequestComplete { tool_call: tc }));
-            }
+            turn.append_tool_args(e.output_index, e.delta).into_iter().collect()
         }
         ResponsesStreamEvent::ReasoningTextDelta(e) if !e.delta.is_empty() => {
-            responses.push(Ok(LlmResponse::Reasoning { chunk: e.delta }));
+            vec![LlmResponse::Reasoning { chunk: e.delta }]
         }
-        ResponsesStreamEvent::OutputItemDone(e) => {
-            if let OutputItem::Reasoning(reasoning) = e.item
-                && let Some(id) = reasoning.id
-                && let Some(encrypted) = reasoning.encrypted_content
-            {
-                responses.push(Ok(LlmResponse::EncryptedReasoning { id, content: encrypted }));
+        ResponsesStreamEvent::OutputItemDone(e) => match e.item {
+            OutputItem::FunctionCall(call) => turn.complete_tool_with(e.output_index, call.into()),
+            OutputItem::Reasoning(ReasoningItem { id: Some(id), encrypted_content: Some(content), .. }) => {
+                vec![LlmResponse::EncryptedReasoning { id, content }]
             }
-        }
+            _ => vec![],
+        },
         ResponsesStreamEvent::Completed(e) | ResponsesStreamEvent::Incomplete(e) => {
-            if let Some(usage) = e.response.usage {
-                responses.push(Ok(LlmResponse::Usage { tokens: usage.into() }));
-            }
             match e.response.status {
-                Some(Status::Completed) => *last_stop_reason = Some(StopReason::EndTurn),
-                Some(Status::Incomplete) => *last_stop_reason = Some(StopReason::Length),
-                _ if incomplete => {
-                    *last_stop_reason = Some(StopReason::Length);
-                }
+                Some(Status::Completed) => turn.stop(StopReason::EndTurn),
+                Some(Status::Incomplete) => turn.stop(StopReason::Length),
+                _ if incomplete => turn.stop(StopReason::Length),
                 _ => {}
             }
+            turn.terminate();
+            e.response.usage.map(|usage| LlmResponse::Usage { tokens: usage.into() }).into_iter().collect()
         }
         ResponsesStreamEvent::Failed(e) => {
             let error = e.response.error.map_or_else(
                 || ProviderError::new(ProviderErrorKind::Api, "Unknown Responses API failure"),
                 |e| map_responses_error(e.code, e.message, ProviderErrorKind::Api),
             );
-            responses.push(Err(error.into()));
+            return Err(error.into());
         }
         ResponsesStreamEvent::Error(e) => {
             let message = format!("Responses API error: {}", e.message);
-            responses.push(Err(map_responses_error(e.code, message, ProviderErrorKind::Unknown).into()));
+            return Err(map_responses_error(e.code, message, ProviderErrorKind::Unknown).into());
         }
         ResponsesStreamEvent::Ignored
         | ResponsesStreamEvent::OutputTextDelta(_)
-        | ResponsesStreamEvent::ReasoningTextDelta(_) => {}
-    }
+        | ResponsesStreamEvent::ReasoningTextDelta(_) => vec![],
+    };
 
-    responses
+    Ok(responses)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{LlmError, ProviderErrorKind, TokenUsage};
-    use async_openai::types::responses::{FunctionToolCall, ReasoningItem};
-    use serde_json::json;
-
-    async fn collect_responses(events: Vec<ResponsesStreamEvent>) -> Vec<LlmResponse> {
-        let stream = make_stream(events);
-        let mut response_stream = Box::pin(process_response_stream(stream));
-        let mut responses = Vec::new();
-        while let Some(result) = response_stream.next().await {
-            responses.push(result.unwrap());
-        }
-        responses
-    }
+    use crate::LlmError;
+    use crate::testing::llm_response;
+    use serde_json::{Value, json};
 
     #[tokio::test]
     async fn test_text_stream() {
-        let responses = collect_responses(vec![
-            text_delta("Hello"),
-            text_delta(" world"),
-            completed(Status::Completed, Some(make_usage(10, 5))),
-        ])
-        .await;
+        let responses =
+            collect_responses(responses_stream().created().text(&["Hello", " world"]).completed().build()).await;
 
-        assert!(matches!(responses[0], LlmResponse::Start));
-        assert!(matches!(responses[1], LlmResponse::Text { ref chunk } if chunk == "Hello"));
-        assert!(matches!(responses[2], LlmResponse::Text { ref chunk } if chunk == " world"));
-        assert!(matches!(
-            responses[3],
-            LlmResponse::Usage { tokens } if tokens.input_tokens.get() == 10 && tokens.output_tokens.get() == 5
-        ));
-        assert!(matches!(responses[4], LlmResponse::Done { stop_reason: Some(StopReason::EndTurn) }));
+        assert_eq!(responses, llm_response().text(&["Hello", " world"]).build_with_stop_reason(StopReason::EndTurn));
     }
 
     #[tokio::test]
     async fn test_tool_call_stream() {
-        let responses = collect_responses(vec![
-            ResponsesStreamEvent::OutputItemAdded(ResponsesOutputItemEvent {
-                output_index: 0,
-                item: OutputItem::FunctionCall(FunctionToolCall {
-                    id: Some("fc_1".to_string()),
-                    call_id: "call_1".to_string(),
-                    name: "read_file".to_string(),
-                    arguments: String::new(),
-                    status: None,
-                    namespace: None,
-                    caller: None,
-                    r#async: None,
-                }),
-            }),
-            function_call_delta(r#"{"path":"#),
-            function_call_delta(r#""foo.rs"}"#),
-            ResponsesStreamEvent::FunctionCallArgumentsDone(ResponsesFunctionCallArgumentsDoneEvent {
-                output_index: 0,
-            }),
-            completed(Status::Completed, Some(make_usage(20, 10))),
-        ])
+        let deltas = [r#"{"path":"#, r#""foo.rs"}"#];
+
+        let responses = collect_responses(
+            responses_stream().created().tool_call(0, "call_1", "read_file", &deltas).completed().build(),
+        )
         .await;
 
-        assert!(matches!(responses[0], LlmResponse::Start));
-        assert!(
-            matches!(&responses[1], LlmResponse::ToolRequestStart { id, name } if id == "call_1" && name == "read_file")
+        assert_eq!(
+            responses,
+            llm_response().tool_call("call_1", "read_file", &deltas).build_with_stop_reason(StopReason::EndTurn)
         );
-        assert!(matches!(responses[2], LlmResponse::ToolRequestArg { .. }));
-        assert!(matches!(responses[3], LlmResponse::ToolRequestArg { .. }));
-
-        let tc = responses.iter().find(|r| matches!(r, LlmResponse::ToolRequestComplete { .. }));
-        assert!(tc.is_some());
-        if let LlmResponse::ToolRequestComplete { tool_call } = tc.unwrap() {
-            assert_eq!(tool_call.id, "call_1");
-            assert_eq!(tool_call.name, "read_file");
-            assert_eq!(tool_call.arguments, r#"{"path":"foo.rs"}"#);
-        }
     }
 
     #[tokio::test]
-    async fn error_event_without_code_stays_retryable() {
-        let stream = make_stream(vec![ResponsesStreamEvent::Error(ResponsesErrorEvent {
-            code: None,
-            message: "Rate limit exceeded".to_string(),
-        })]);
-        let mut response_stream = Box::pin(process_response_stream(stream));
+    async fn interleaved_function_calls_complete_independently() {
+        let read_deltas = [r#"{"path":"#, r#""a.rs"}"#];
+        let bash_deltas = [r#"{"command":"#, r#""ls"}"#];
+        let read_arguments = read_deltas.concat();
+        let bash_arguments = bash_deltas.concat();
 
-        let mut responses = Vec::new();
-        while let Some(result) = response_stream.next().await {
-            responses.push(result);
-        }
+        let responses = collect_responses(
+            responses_stream()
+                .created()
+                .tool_start(0, "call_a", "read_file")
+                .tool_start(1, "call_b", "bash")
+                .tool_delta(0, read_deltas[0])
+                .tool_delta(1, bash_deltas[0])
+                .tool_delta(0, read_deltas[1])
+                .tool_args_done(0, &read_arguments)
+                .tool_done(0, "call_a", "read_file", &read_arguments)
+                .tool_delta(1, bash_deltas[1])
+                .tool_args_done(1, &bash_arguments)
+                .tool_done(1, "call_b", "bash", &bash_arguments)
+                .completed()
+                .build(),
+        )
+        .await;
 
-        assert!(responses[0].is_ok());
+        assert_eq!(
+            responses,
+            vec![
+                LlmResponse::Start,
+                LlmResponse::tool_request_start("call_a", "read_file"),
+                LlmResponse::tool_request_start("call_b", "bash"),
+                LlmResponse::tool_request_arg("call_a", read_deltas[0]),
+                LlmResponse::tool_request_arg("call_b", bash_deltas[0]),
+                LlmResponse::tool_request_arg("call_a", read_deltas[1]),
+                LlmResponse::tool_request_complete("call_a", "read_file", &read_arguments),
+                LlmResponse::tool_request_arg("call_b", bash_deltas[1]),
+                LlmResponse::tool_request_complete("call_b", "bash", &bash_arguments),
+                LlmResponse::done_with_stop_reason(StopReason::EndTurn),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn function_call_without_done_item_completes_with_the_response() {
+        let arguments = r#"{"path":"foo.rs"}"#;
+
+        let responses = collect_responses(
+            responses_stream()
+                .created()
+                .tool_start(0, "call_1", "read_file")
+                .tool_delta(0, arguments)
+                .completed()
+                .build(),
+        )
+        .await;
+
+        assert_eq!(
+            responses,
+            llm_response().tool_call("call_1", "read_file", &[arguments]).build_with_stop_reason(StopReason::EndTurn)
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_closed_mid_function_call_does_not_complete_it() {
+        let responses = process_events(
+            responses_stream().created().tool_start(0, "call_1", "bash").tool_delta(0, r#"{"command":"ls"#).build(),
+        )
+        .await;
+
+        assert!(
+            matches!(
+                responses.as_slice(),
+                [
+                    Ok(LlmResponse::Start),
+                    Ok(LlmResponse::ToolRequestStart { .. }),
+                    Ok(LlmResponse::ToolRequestArg { .. }),
+                    Err(_)
+                ]
+            ),
+            "{responses:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn multiple_function_calls_without_argument_deltas_use_completed_item_arguments() {
+        let responses = collect_responses(
+            responses_stream()
+                .created()
+                .tool_call_without_deltas(0, "call_a", "read_file", r#"{"filePath":"a.rs"}"#)
+                .tool_call_without_deltas(1, "call_b", "bash", r#"{"command":"ls"}"#)
+                .completed()
+                .build(),
+        )
+        .await;
+
+        assert_eq!(
+            responses,
+            llm_response()
+                .tool_call_without_deltas("call_a", "read_file", r#"{"filePath":"a.rs"}"#)
+                .tool_call_without_deltas("call_b", "bash", r#"{"command":"ls"}"#)
+                .build_with_stop_reason(StopReason::EndTurn)
+        );
+    }
+
+    #[tokio::test]
+    async fn completed_item_without_added_event_starts_the_tool_call() {
+        let arguments = r#"{"path":"foo.rs"}"#;
+
+        let responses = collect_responses(
+            responses_stream().created().tool_done(0, "call_1", "read_file", arguments).completed().build(),
+        )
+        .await;
+
+        assert_eq!(
+            responses,
+            llm_response()
+                .tool_call_without_deltas("call_1", "read_file", arguments)
+                .build_with_stop_reason(StopReason::EndTurn)
+        );
+    }
+
+    #[tokio::test]
+    async fn completed_item_with_empty_arguments_keeps_the_streamed_arguments() {
+        let arguments = r#"{"path":"foo.rs"}"#;
+
+        let responses = collect_responses(
+            responses_stream()
+                .created()
+                .tool_start(0, "call_1", "read_file")
+                .tool_delta(0, arguments)
+                .tool_done(0, "call_1", "read_file", "")
+                .completed()
+                .build(),
+        )
+        .await;
+
+        assert_eq!(
+            responses,
+            llm_response().tool_call("call_1", "read_file", &[arguments]).build_with_stop_reason(StopReason::EndTurn)
+        );
+    }
+
+    #[tokio::test]
+    async fn events_after_the_terminal_event_are_not_read() {
+        let responses =
+            collect_responses(responses_stream().created().text(&["done"]).completed().text(&["late"]).build()).await;
+
+        assert_eq!(responses, llm_response().text(&["done"]).build_with_stop_reason(StopReason::EndTurn));
+    }
+
+    #[tokio::test]
+    async fn error_event_after_creation_stays_retryable() {
+        let responses = process_events(responses_stream().created().error(None, "Rate limit exceeded").build()).await;
+
+        assert!(matches!(responses[0], Ok(LlmResponse::Start)));
         let err = responses[1].as_ref().expect_err("expected error event to surface as Err");
         assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::Unknown), "got {err:?}");
         assert!(err.is_retryable(), "an uncoded top-level error event must stay retryable so the agent can recover");
     }
 
     #[tokio::test]
-    async fn error_event_with_unknown_code_stays_retryable() {
-        let events = vec![Ok(ResponsesStreamEvent::Error(ResponsesErrorEvent {
-            code: Some("bogus".to_string()),
-            message: "boom".to_string(),
-        }))];
-        let responses = process_response_stream(tokio_stream::iter(events)).collect::<Vec<_>>().await;
-        let err = responses[0].as_ref().expect_err("expected error to surface as Err");
-        assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::Unknown), "got {err:?}");
-        assert!(err.is_retryable());
-    }
+    async fn error_events_map_codes_to_retryable_kinds() {
+        for (code, kind) in [
+            (None, ProviderErrorKind::Unknown),
+            (Some("bogus"), ProviderErrorKind::Unknown),
+            (Some("rate_limit_exceeded"), ProviderErrorKind::RateLimit),
+            (Some("server_error"), ProviderErrorKind::Server),
+        ] {
+            let responses = process_events(responses_stream().error(code, "slow down").build()).await;
 
-    #[tokio::test]
-    async fn error_event_with_rate_limit_code_is_rate_limited() {
-        let events = vec![Ok(ResponsesStreamEvent::Error(ResponsesErrorEvent {
-            code: Some("rate_limit_exceeded".to_string()),
-            message: "slow down".to_string(),
-        }))];
-        let responses = process_response_stream(tokio_stream::iter(events)).collect::<Vec<_>>().await;
-        let err = responses[0].as_ref().expect_err("expected error to surface as Err");
-        assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::RateLimit), "got {err:?}");
-        assert!(err.is_retryable());
-    }
-
-    #[tokio::test]
-    async fn failed_event_with_server_error_code_is_retryable() {
-        let responses = failed_events([ResponsesFailedEvent {
-            response: ResponsesFailed {
-                error: Some(ResponsesErrorEvent {
-                    code: Some("server_error".to_string()),
-                    message: "The server had an error".to_string(),
-                }),
-            },
-        }])
-        .await;
-        let err = responses[0].as_ref().expect_err("expected failure to surface as Err");
-        assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::Server), "got {err:?}");
-        assert!(err.is_retryable());
-        assert_eq!(err.provider().and_then(|provider| provider.code.as_deref()), Some("server_error"));
-    }
-
-    #[tokio::test]
-    async fn failed_event_with_rate_limit_code_is_retryable() {
-        let responses = failed_events([ResponsesFailedEvent {
-            response: ResponsesFailed {
-                error: Some(ResponsesErrorEvent {
-                    code: Some("rate_limit_exceeded".to_string()),
-                    message: "slow down".to_string(),
-                }),
-            },
-        }])
-        .await;
-        let err = responses[0].as_ref().expect_err("expected failure to surface as Err");
-        assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::RateLimit), "got {err:?}");
-        assert!(err.is_retryable());
-    }
-
-    #[tokio::test]
-    async fn failed_event_with_unknown_code_is_terminal() {
-        for code in [Some("invalid_prompt".to_string()), Some("bogus".to_string()), None] {
-            let responses = failed_events([ResponsesFailedEvent {
-                response: ResponsesFailed {
-                    error: Some(ResponsesErrorEvent { code: code.clone(), message: "bad".to_string() }),
-                },
-            }])
-            .await;
-            let err = responses[0].as_ref().expect_err("expected failure to surface as Err");
-            assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::Api), "got {err:?}");
-            assert!(!err.is_retryable(), "unknown/failed codes must be terminal: {err:?}");
+            let err = responses[0].as_ref().expect_err("expected the error event to surface as Err");
+            assert_eq!(err.provider().map(|provider| provider.kind), Some(kind), "{code:?}: {err:?}");
+            assert_eq!(err.provider().and_then(|provider| provider.code.as_deref()), code);
+            assert!(err.is_retryable(), "{code:?}: {err:?}");
+            assert!(err.to_string().contains("slow down"), "server message was dropped: {err}");
         }
     }
 
     #[tokio::test]
-    async fn error_event_with_server_error_code_is_retryable() {
-        let events = vec![Ok(ResponsesStreamEvent::Error(ResponsesErrorEvent {
-            code: Some("server_error".to_string()),
-            message: "boom".to_string(),
-        }))];
-        let responses = process_response_stream(tokio_stream::iter(events)).collect::<Vec<_>>().await;
-        let err = responses[0].as_ref().expect_err("expected error to surface as Err");
-        assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::Server), "got {err:?}");
-        assert!(err.is_retryable());
+    async fn failed_events_map_codes_to_kinds() {
+        for (code, kind, retryable) in [
+            (Some("server_error"), ProviderErrorKind::Server, true),
+            (Some("rate_limit_exceeded"), ProviderErrorKind::RateLimit, true),
+            (Some("invalid_prompt"), ProviderErrorKind::Api, false),
+            (Some("bogus"), ProviderErrorKind::Api, false),
+            (None, ProviderErrorKind::Api, false),
+        ] {
+            let responses = process_events(responses_stream().failed(code, "model overloaded").build()).await;
+
+            let err = responses[0].as_ref().expect_err("expected the failure to surface as Err");
+            assert_eq!(err.provider().map(|provider| provider.kind), Some(kind), "{code:?}: {err:?}");
+            assert_eq!(err.provider().and_then(|provider| provider.code.as_deref()), code);
+            assert_eq!(err.is_retryable(), retryable, "{code:?}: {err:?}");
+            assert!(err.to_string().contains("model overloaded"), "server message was dropped: {err}");
+        }
     }
 
     #[tokio::test]
     async fn test_reasoning_delta() {
-        let responses = collect_responses(vec![
-            reasoning_delta("Thinking about"),
-            reasoning_delta(" the problem"),
-            completed(Status::Completed, None),
-        ])
-        .await;
+        let deltas = ["Thinking about", " the problem"];
 
-        assert!(matches!(responses[1], LlmResponse::Reasoning { ref chunk } if chunk == "Thinking about"));
-        assert!(matches!(responses[2], LlmResponse::Reasoning { ref chunk } if chunk == " the problem"));
+        let responses = collect_responses(responses_stream().created().reasoning(&deltas).completed().build()).await;
+
+        assert_eq!(responses, llm_response().reasoning(&deltas).build_with_stop_reason(StopReason::EndTurn));
     }
 
     #[tokio::test]
     async fn test_incomplete_status_gives_length_stop_reason() {
-        let responses = collect_responses(vec![completed(Status::Incomplete, None)]).await;
+        let responses = collect_responses(responses_stream().created().incomplete().build()).await;
 
-        assert!(matches!(responses.last().unwrap(), LlmResponse::Done { stop_reason: Some(StopReason::Length) }));
+        assert_eq!(responses, llm_response().build_with_stop_reason(StopReason::Length));
     }
 
     #[tokio::test]
@@ -487,13 +479,7 @@ mod tests {
         let events: Vec<Result<ResponsesStreamEvent>> =
             vec![Err(ProviderError::stream_interrupted("connection lost").into())];
 
-        let stream = tokio_stream::iter(events);
-        let mut response_stream = Box::pin(process_response_stream(stream));
-
-        let mut responses = Vec::new();
-        while let Some(result) = response_stream.next().await {
-            responses.push(result);
-        }
+        let responses: Vec<_> = process_response_stream(tokio_stream::iter(events)).collect().await;
 
         let err = responses[0].as_ref().expect_err("expected upstream Err to surface as Err");
         assert_eq!(
@@ -506,36 +492,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn error_event_before_creation_keeps_the_servers_message() {
-        let events = vec![Ok(ResponsesStreamEvent::Error(ResponsesErrorEvent {
-            code: None,
-            message: "Rate limit exceeded".to_string(),
-        }))];
-        let responses = process_response_stream(tokio_stream::iter(events)).collect::<Vec<_>>().await;
-
-        let err = responses[0].as_ref().expect_err("expected the error event to surface as Err");
-        assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::Unknown), "got {err:?}");
-        assert!(err.to_string().contains("Rate limit exceeded"), "server message was dropped: {err}");
-    }
-
-    #[tokio::test]
-    async fn failure_event_before_creation_keeps_the_servers_message() {
-        let events = vec![Ok(ResponsesStreamEvent::Failed(ResponsesFailedEvent {
-            response: ResponsesFailed {
-                error: Some(ResponsesErrorEvent { code: None, message: "model overloaded".to_string() }),
-            },
-        }))];
-        let responses = process_response_stream(tokio_stream::iter(events)).collect::<Vec<_>>().await;
-
-        let err = responses[0].as_ref().expect_err("expected the failure event to surface as Err");
-        assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::Api), "got {err:?}");
-        assert!(err.to_string().contains("model overloaded"), "server message was dropped: {err}");
-    }
-
-    #[tokio::test]
     async fn data_before_creation_is_interrupted() {
-        let events = vec![Ok(text_delta("leaked"))];
-        let responses = process_response_stream(tokio_stream::iter(events)).collect::<Vec<_>>().await;
+        let responses = process_events(responses_stream().text(&["leaked"]).build()).await;
 
         assert_eq!(
             responses[0].as_ref().err().and_then(LlmError::provider).map(|provider| provider.kind),
@@ -546,8 +504,7 @@ mod tests {
 
     #[tokio::test]
     async fn stream_without_terminal_event_is_interrupted() {
-        let stream = make_stream(vec![text_delta("partial")]);
-        let responses = process_response_stream(stream).collect::<Vec<_>>().await;
+        let responses = process_events(responses_stream().created().text(&["partial"]).build()).await;
 
         assert!(matches!(responses[0], Ok(LlmResponse::Start)));
         assert!(matches!(responses[1], Ok(LlmResponse::Text { .. })));
@@ -563,7 +520,7 @@ mod tests {
         let responses = process_fixture(include_str!("../../../tests/fixtures/openai_responses/01_minimal.sse")).await;
 
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
-        let usage = fixture_usage(&responses).expect("fixture should report usage");
+        let usage = find_usage(&responses).expect("fixture should report usage");
         assert!(!usage.input_tokens.is_zero(), "input_tokens should be > 0: {usage:?}");
         assert!(!usage.output_tokens.is_zero(), "output_tokens should be > 0: {usage:?}");
         assert!(matches!(responses.last(), Some(Ok(LlmResponse::Done { stop_reason: Some(StopReason::EndTurn) }))));
@@ -575,7 +532,7 @@ mod tests {
             process_fixture(include_str!("../../../tests/fixtures/openai_responses/02_reasoning.sse")).await;
 
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
-        let usage = fixture_usage(&responses).expect("fixture should report usage");
+        let usage = find_usage(&responses).expect("fixture should report usage");
         assert!(!usage.input_tokens.is_zero(), "input_tokens should be > 0: {usage:?}");
         assert!(!usage.output_tokens.is_zero(), "output_tokens should be > 0: {usage:?}");
         assert!(usage.reasoning_tokens.is_some_and(|tokens| !tokens.is_zero()), "{usage:?}");
@@ -587,61 +544,39 @@ mod tests {
             process_fixture(include_str!("../../../tests/fixtures/openai_responses/03_mantle_cache_write.sse")).await;
 
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
-        let usage = fixture_usage(&responses).expect("fixture should report usage");
+        let usage = find_usage(&responses).expect("fixture should report usage");
         assert_eq!(usage.cache_creation_tokens.map(crate::Tokens::get), Some(1024));
     }
 
-    /// Decode a captured SSE body and run it through the shared processor.
-    async fn failed_events<const N: usize>(events: [ResponsesFailedEvent; N]) -> Vec<Result<LlmResponse>> {
-        let events = events.into_iter().map(ResponsesStreamEvent::Failed).map(Ok);
-        process_response_stream(tokio_stream::iter(events)).collect().await
-    }
+    #[tokio::test]
+    async fn test_encrypted_reasoning_from_output_item_done() {
+        let responses = collect_responses(
+            responses_stream().created().reasoning_item(0, Some("enc-blob-data")).completed().build(),
+        )
+        .await;
 
-    async fn process_fixture(sse: &str) -> Vec<Result<LlmResponse>> {
-        let events = sse
-            .lines()
-            .filter_map(|line| line.strip_prefix("data: "))
-            .filter(|data| *data != "[DONE]")
-            .map(|data| serde_json::from_str::<ResponsesStreamEvent>(data).map_err(LlmError::from));
-        process_response_stream(tokio_stream::iter(events)).collect::<Vec<_>>().await
-    }
-
-    fn fixture_usage(responses: &[Result<LlmResponse>]) -> Option<TokenUsage> {
-        responses.iter().find_map(|response| match response {
-            Ok(LlmResponse::Usage { tokens }) => Some(*tokens),
-            _ => None,
-        })
-    }
-
-    #[test]
-    fn test_encrypted_reasoning_from_output_item_done() {
-        let event = ResponsesStreamEvent::OutputItemDone(ResponsesOutputItemEvent {
-            output_index: 0,
-            item: reasoning_item(Some("enc-blob-data")),
-        });
-
-        let mut tool_collector = ToolCallCollector::<u32>::new();
-        let mut stop_reason = None;
-        let responses = process_event(event, &mut tool_collector, &mut stop_reason);
-
-        assert_eq!(responses.len(), 1);
-        assert!(
-            matches!(&responses[0], Ok(LlmResponse::EncryptedReasoning { content, .. }) if content == "enc-blob-data")
+        assert_eq!(
+            responses,
+            llm_response().encrypted_reasoning("r_1", "enc-blob-data").build_with_stop_reason(StopReason::EndTurn)
         );
+    }
+
+    #[tokio::test]
+    async fn test_output_item_done_without_encrypted_content_is_ignored() {
+        let responses =
+            collect_responses(responses_stream().created().reasoning_item(0, None).completed().build()).await;
+
+        assert_eq!(responses, llm_response().build_with_stop_reason(StopReason::EndTurn));
     }
 
     #[tokio::test]
     async fn test_usage_forwards_reasoning_and_cache_read() {
         let responses =
-            collect_responses(vec![completed(Status::Completed, Some(make_usage_full(120, 80, 50, 30)))]).await;
-
-        let usage = responses.iter().find_map(|r| match r {
-            LlmResponse::Usage { tokens } => Some(*tokens),
-            _ => None,
-        });
+            process_events(responses_stream().created().completed_with_usage(&usage_json(120, 80, 50, 30)).build())
+                .await;
 
         assert_eq!(
-            usage,
+            find_usage(&responses),
             Some(TokenUsage {
                 input_tokens: 120.into(),
                 output_tokens: 80.into(),
@@ -654,107 +589,195 @@ mod tests {
 
     #[tokio::test]
     async fn test_completed_without_output_deserializes_usage_and_stop_reason() {
-        let event: ResponsesStreamEvent = serde_json::from_value(json!({
-            "type": "response.completed",
-            "sequence_number": 1,
-            "response": {
-                "id": "resp_1",
-                "object": "response",
-                "created_at": 1_000_u64,
-                "status": "completed",
-                "background": false,
-                "completed_at": 2_000_u64,
-                "error": null,
-                "model": "test-model",
-                "usage": make_usage_json(100, 20, 0, 10)
-            }
-        }))
-        .unwrap();
-        let responses = collect_responses(vec![event]).await;
+        let responses = collect_responses(
+            responses_stream()
+                .created()
+                .push(json!({
+                    "type": "response.completed",
+                    "sequence_number": 1,
+                    "response": {
+                        "id": "resp_1",
+                        "object": "response",
+                        "created_at": 1_000_u64,
+                        "status": "completed",
+                        "background": false,
+                        "completed_at": 2_000_u64,
+                        "error": null,
+                        "model": "test-model",
+                        "usage": usage_json(100, 20, 0, 10)
+                    }
+                }))
+                .build(),
+        )
+        .await;
 
         assert!(matches!(
             responses.iter().find(|response| matches!(response, LlmResponse::Usage { .. })),
-            Some(LlmResponse::Usage {
-                tokens
-            }) if tokens.input_tokens.get() == 100
-                && tokens.output_tokens.get() == 20
-                && tokens.reasoning_tokens.is_some_and(|tokens| tokens.get() == 10)
+            Some(LlmResponse::Usage { tokens })
+                if tokens.input_tokens.get() == 100
+                    && tokens.output_tokens.get() == 20
+                    && tokens.reasoning_tokens.map(crate::Tokens::get) == Some(10)
         ));
         assert!(matches!(responses.last().unwrap(), LlmResponse::Done { stop_reason: Some(StopReason::EndTurn) }));
     }
 
-    #[test]
-    fn test_output_item_done_without_encrypted_content_is_ignored() {
-        let event = ResponsesStreamEvent::OutputItemDone(ResponsesOutputItemEvent {
-            output_index: 0,
-            item: reasoning_item(None),
-        });
-
-        let mut tool_collector = ToolCallCollector::<u32>::new();
-        let mut stop_reason = None;
-        let responses = process_event(event, &mut tool_collector, &mut stop_reason);
-
-        assert!(responses.is_empty());
+    async fn collect_responses(events: Vec<Value>) -> Vec<LlmResponse> {
+        process_events(events).await.into_iter().map(Result::unwrap).collect()
     }
 
-    fn text_delta(delta: &str) -> ResponsesStreamEvent {
-        ResponsesStreamEvent::OutputTextDelta(ResponsesTextDeltaEvent { delta: delta.to_string() })
+    async fn process_events(events: Vec<Value>) -> Vec<Result<LlmResponse>> {
+        let events = events.into_iter().map(|event| serde_json::from_value(event).map_err(LlmError::from));
+        process_response_stream(tokio_stream::iter(events)).collect().await
     }
 
-    fn reasoning_delta(delta: &str) -> ResponsesStreamEvent {
-        ResponsesStreamEvent::ReasoningTextDelta(ResponsesTextDeltaEvent { delta: delta.to_string() })
+    async fn process_fixture(sse: &str) -> Vec<Result<LlmResponse>> {
+        let events = sse
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .filter(|data| *data != "[DONE]")
+            .map(|data| serde_json::from_str(data).expect("fixture lines are JSON"))
+            .collect();
+        process_events(events).await
     }
 
-    fn function_call_delta(delta: &str) -> ResponsesStreamEvent {
-        ResponsesStreamEvent::FunctionCallArgumentsDelta(ResponsesFunctionCallArgumentsDeltaEvent {
-            output_index: 0,
-            delta: delta.to_string(),
+    fn find_usage(responses: &[Result<LlmResponse>]) -> Option<TokenUsage> {
+        responses.iter().find_map(|response| match response {
+            Ok(LlmResponse::Usage { tokens }) => Some(*tokens),
+            _ => None,
         })
     }
 
-    fn completed(status: Status, usage: Option<ResponsesUsage>) -> ResponsesStreamEvent {
-        ResponsesStreamEvent::Completed(ResponsesCompletedEvent {
-            response: ResponsesCompleted { usage, status: Some(status) },
+    fn responses_stream() -> ResponsesStreamBuilder {
+        ResponsesStreamBuilder::default()
+    }
+
+    #[derive(Default)]
+    struct ResponsesStreamBuilder {
+        events: Vec<Value>,
+    }
+
+    impl ResponsesStreamBuilder {
+        fn created(self) -> Self {
+            self.push(json!({ "type": "response.created" }))
+        }
+
+        fn text(self, deltas: &[&str]) -> Self {
+            deltas.iter().fold(self, |builder, delta| {
+                builder.push(json!({ "type": "response.output_text.delta", "delta": delta }))
+            })
+        }
+
+        fn reasoning(self, deltas: &[&str]) -> Self {
+            deltas.iter().fold(self, |builder, delta| {
+                builder.push(json!({ "type": "response.reasoning_summary_text.delta", "delta": delta }))
+            })
+        }
+
+        fn reasoning_item(self, output_index: u32, encrypted_content: Option<&str>) -> Self {
+            self.push(json!({
+                "type": "response.output_item.done",
+                "output_index": output_index,
+                "item": { "type": "reasoning", "id": "r_1", "summary": [], "encrypted_content": encrypted_content }
+            }))
+        }
+
+        fn tool_call(self, output_index: u32, call_id: &str, name: &str, argument_deltas: &[&str]) -> Self {
+            let arguments = argument_deltas.concat();
+            argument_deltas
+                .iter()
+                .fold(self.tool_start(output_index, call_id, name), |builder, delta| {
+                    builder.tool_delta(output_index, delta)
+                })
+                .tool_args_done(output_index, &arguments)
+                .tool_done(output_index, call_id, name, &arguments)
+        }
+
+        fn tool_call_without_deltas(self, output_index: u32, call_id: &str, name: &str, arguments: &str) -> Self {
+            self.tool_start(output_index, call_id, name).tool_args_done(output_index, arguments).tool_done(
+                output_index,
+                call_id,
+                name,
+                arguments,
+            )
+        }
+
+        fn tool_start(self, output_index: u32, call_id: &str, name: &str) -> Self {
+            self.push(json!({
+                "type": "response.output_item.added",
+                "output_index": output_index,
+                "item": function_call_item(call_id, name, "", "in_progress")
+            }))
+        }
+
+        fn tool_delta(self, output_index: u32, delta: &str) -> Self {
+            self.push(json!({
+                "type": "response.function_call_arguments.delta",
+                "output_index": output_index,
+                "delta": delta
+            }))
+        }
+
+        fn tool_args_done(self, output_index: u32, arguments: &str) -> Self {
+            self.push(json!({
+                "type": "response.function_call_arguments.done",
+                "output_index": output_index,
+                "arguments": arguments
+            }))
+        }
+
+        fn tool_done(self, output_index: u32, call_id: &str, name: &str, arguments: &str) -> Self {
+            self.push(json!({
+                "type": "response.output_item.done",
+                "output_index": output_index,
+                "item": function_call_item(call_id, name, arguments, "completed")
+            }))
+        }
+
+        fn error(self, code: Option<&str>, message: &str) -> Self {
+            self.push(json!({ "type": "error", "code": code, "message": message }))
+        }
+
+        fn failed(self, code: Option<&str>, message: &str) -> Self {
+            self.push(json!({
+                "type": "response.failed",
+                "response": { "error": { "code": code, "message": message } }
+            }))
+        }
+
+        fn completed(self) -> Self {
+            self.push(json!({ "type": "response.completed", "response": { "status": "completed" } }))
+        }
+
+        fn completed_with_usage(self, usage: &Value) -> Self {
+            self.push(json!({ "type": "response.completed", "response": { "status": "completed", "usage": usage } }))
+        }
+
+        fn incomplete(self) -> Self {
+            self.push(json!({ "type": "response.incomplete", "response": { "status": "incomplete" } }))
+        }
+
+        fn push(mut self, event: Value) -> Self {
+            self.events.push(event);
+            self
+        }
+
+        fn build(self) -> Vec<Value> {
+            self.events
+        }
+    }
+
+    fn function_call_item(call_id: &str, name: &str, arguments: &str, status: &str) -> Value {
+        json!({
+            "type": "function_call",
+            "id": format!("fc_{call_id}"),
+            "call_id": call_id,
+            "name": name,
+            "arguments": arguments,
+            "status": status
         })
     }
 
-    fn reasoning_item(encrypted_content: Option<&str>) -> OutputItem {
-        OutputItem::Reasoning(ReasoningItem {
-            id: Some("r_1".to_string()),
-            summary: vec![],
-            encrypted_content: encrypted_content.map(ToString::to_string),
-            content: None,
-            status: None,
-        })
-    }
-
-    fn make_stream(
-        events: Vec<ResponsesStreamEvent>,
-    ) -> impl Stream<Item = Result<ResponsesStreamEvent>> + Send + Unpin {
-        tokio_stream::iter(
-            std::iter::once(Ok(ResponsesStreamEvent::Created)).chain(events.into_iter().map(Ok)).collect::<Vec<_>>(),
-        )
-    }
-
-    fn make_usage(input_tokens: u32, output_tokens: u32) -> ResponsesUsage {
-        make_usage_full(input_tokens, output_tokens, 0, 0)
-    }
-
-    fn make_usage_full(
-        input_tokens: u32,
-        output_tokens: u32,
-        cached_tokens: u32,
-        reasoning_tokens: u32,
-    ) -> ResponsesUsage {
-        serde_json::from_value(make_usage_json(input_tokens, output_tokens, cached_tokens, reasoning_tokens)).unwrap()
-    }
-
-    fn make_usage_json(
-        input_tokens: u32,
-        output_tokens: u32,
-        cached_tokens: u32,
-        reasoning_tokens: u32,
-    ) -> serde_json::Value {
+    fn usage_json(input_tokens: u32, output_tokens: u32, cached_tokens: u32, reasoning_tokens: u32) -> Value {
         json!({
             "input_tokens": input_tokens,
             "input_tokens_details": { "cached_tokens": cached_tokens },

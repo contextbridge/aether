@@ -40,6 +40,11 @@ impl LlmResponseBuilder {
         self
     }
 
+    pub fn encrypted_reasoning(mut self, id: &str, content: &str) -> Self {
+        self.chunks.push(LlmResponse::encrypted_reasoning(id, content));
+        self
+    }
+
     pub fn tool_call(mut self, id: &str, name: &str, argument_chunks: &[&str]) -> Self {
         self.chunks.push(LlmResponse::tool_request_start(id, name));
 
@@ -57,9 +62,9 @@ impl LlmResponseBuilder {
         self
     }
 
-    pub fn tool_call_with_invalid_json(mut self, id: &str, name: &str) -> Self {
+    pub fn tool_call_without_deltas(mut self, id: &str, name: &str, arguments: &str) -> Self {
         self.chunks.push(LlmResponse::tool_request_start(id, name));
-        self.chunks.push(LlmResponse::tool_request_complete(id, name, "invalid json"));
+        self.chunks.push(LlmResponse::tool_request_complete(id, name, arguments));
 
         self
     }

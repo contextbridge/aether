@@ -215,7 +215,7 @@ pub struct ToolCallDelta {
     pub function: Option<FunctionCallDelta>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FunctionCallDelta {
     pub name: Option<String>,
     pub arguments: Option<String>,
