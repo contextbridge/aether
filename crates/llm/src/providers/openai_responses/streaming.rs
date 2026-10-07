@@ -1,5 +1,5 @@
 use async_openai::types::responses::{OutputItem, ReasoningItem, ResponseUsage, Status};
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use serde::{Deserialize, Deserializer, de::Error as _};
 
 use crate::providers::stream_assembler::{StreamAssembler, assemble};
@@ -72,10 +72,6 @@ impl ResponsesStreamEvent {
     fn may_precede_creation(&self) -> bool {
         matches!(self, Self::Ignored | Self::Error(_) | Self::Failed(_))
     }
-
-    fn is_terminal(&self) -> bool {
-        matches!(self, Self::Completed(_) | Self::Incomplete(_))
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -127,21 +123,12 @@ pub struct ResponsesErrorEvent {
     pub message: String,
 }
 
-fn map_responses_error(code: Option<String>, message: String, fallback: ProviderErrorKind) -> ProviderError {
-    let kind = match code.as_deref() {
-        Some("server_error") => ProviderErrorKind::Server,
-        Some("rate_limit_exceeded") => ProviderErrorKind::RateLimit,
-        _ => fallback,
-    };
-    ProviderError::new(kind, message).with_code(code)
-}
-
 /// Process an `OpenAI` Responses event stream into `LlmResponse` items.
 pub fn process_response_stream(
     events: impl Stream<Item = Result<ResponsesStreamEvent>> + Send,
 ) -> impl Stream<Item = Result<LlmResponse>> + Send {
     let mut started = false;
-    assemble(through_terminal_event(events), move |event, turn| {
+    assemble(events, move |event, turn| {
         if matches!(event, ResponsesStreamEvent::Created) {
             started = true;
         } else if !started && !event.may_precede_creation() {
@@ -165,18 +152,13 @@ struct ResponsesInputTokenDetailsExtension {
     cache_write_tokens: Option<u32>,
 }
 
-/// Ends `events` at the terminal event rather than waiting for the server to
-/// close the connection.
-fn through_terminal_event(
-    events: impl Stream<Item = Result<ResponsesStreamEvent>> + Send,
-) -> impl Stream<Item = Result<ResponsesStreamEvent>> + Send {
-    events.scan(false, |terminated, event| {
-        if *terminated {
-            return std::future::ready(None);
-        }
-        *terminated = event.as_ref().is_ok_and(ResponsesStreamEvent::is_terminal);
-        std::future::ready(Some(event))
-    })
+fn map_responses_error(code: Option<String>, message: String, fallback: ProviderErrorKind) -> ProviderError {
+    let kind = match code.as_deref() {
+        Some("server_error") => ProviderErrorKind::Server,
+        Some("rate_limit_exceeded") => ProviderErrorKind::RateLimit,
+        _ => fallback,
+    };
+    ProviderError::new(kind, message).with_code(code)
 }
 
 fn decode_event(event: ResponsesStreamEvent, turn: &mut StreamAssembler<u32>) -> Result<Vec<LlmResponse>> {
@@ -190,13 +172,13 @@ fn decode_event(event: ResponsesStreamEvent, turn: &mut StreamAssembler<u32>) ->
             _ => vec![],
         },
         ResponsesStreamEvent::FunctionCallArgumentsDelta(e) => {
-            turn.append_tool_args(e.output_index, e.delta).into_iter().collect()
+            turn.append_tool_args(&e.output_index, e.delta).into_iter().collect()
         }
         ResponsesStreamEvent::ReasoningTextDelta(e) if !e.delta.is_empty() => {
             vec![LlmResponse::Reasoning { chunk: e.delta }]
         }
         ResponsesStreamEvent::OutputItemDone(e) => match e.item {
-            OutputItem::FunctionCall(call) => turn.complete_tool_with(e.output_index, call.into()),
+            OutputItem::FunctionCall(call) => turn.complete_tool_with(&e.output_index, call.into()),
             OutputItem::Reasoning(ReasoningItem { id: Some(id), encrypted_content: Some(content), .. }) => {
                 vec![LlmResponse::EncryptedReasoning { id, content }]
             }
@@ -209,7 +191,7 @@ fn decode_event(event: ResponsesStreamEvent, turn: &mut StreamAssembler<u32>) ->
                 _ if incomplete => turn.stop(StopReason::Length),
                 _ => {}
             }
-            turn.terminate();
+            turn.finish_now();
             e.response.usage.map(|usage| LlmResponse::Usage { tokens: usage.into() }).into_iter().collect()
         }
         ResponsesStreamEvent::Failed(e) => {
@@ -236,6 +218,7 @@ mod tests {
     use super::*;
     use crate::LlmError;
     use crate::testing::llm_response;
+    use futures::{FutureExt, StreamExt, stream};
     use serde_json::{Value, json};
 
     #[tokio::test]
@@ -383,6 +366,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn completed_item_arguments_supersede_streamed_arguments() {
+        let arguments = r#"{"path":"foo.rs"}"#;
+        let responses = collect_responses(
+            responses_stream()
+                .created()
+                .tool_start(0, "call_1", "read_file")
+                .tool_delta(0, "{}")
+                .tool_done(0, "call_1", "read_file", arguments)
+                .completed()
+                .build(),
+        )
+        .await;
+
+        assert_eq!(
+            responses,
+            vec![
+                LlmResponse::Start,
+                LlmResponse::tool_request_start("call_1", "read_file"),
+                LlmResponse::tool_request_arg("call_1", "{}"),
+                LlmResponse::tool_request_complete("call_1", "read_file", arguments),
+                LlmResponse::done_with_stop_reason(StopReason::EndTurn),
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn completed_item_with_empty_arguments_keeps_the_streamed_arguments() {
         let arguments = r#"{"path":"foo.rs"}"#;
 
@@ -401,6 +410,26 @@ mod tests {
             responses,
             llm_response().tool_call("call_1", "read_file", &[arguments]).build_with_stop_reason(StopReason::EndTurn)
         );
+    }
+
+    #[tokio::test]
+    async fn terminal_events_complete_without_waiting_for_the_connection_to_close() {
+        for (events, stop_reason) in [
+            (responses_stream().created().text(&["done"]).completed(), StopReason::EndTurn),
+            (responses_stream().created().text(&["done"]).incomplete(), StopReason::Length),
+        ] {
+            let events = events.build().into_iter().map(|event| serde_json::from_value(event).map_err(LlmError::from));
+            let events = stream::iter(events).chain(stream::pending());
+            let responses = process_response_stream(events)
+                .collect::<Vec<_>>()
+                .now_or_never()
+                .expect("a terminal event must finish the response without waiting for another upstream event");
+
+            assert_eq!(
+                responses.into_iter().collect::<Result<Vec<_>>>().unwrap(),
+                llm_response().text(&["done"]).build_with_stop_reason(stop_reason)
+            );
+        }
     }
 
     #[tokio::test]

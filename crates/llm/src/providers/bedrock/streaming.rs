@@ -79,16 +79,16 @@ fn decode_event(event: ConverseStreamOutput, turn: &mut StreamAssembler<i32>) ->
         },
         ConverseStreamOutput::ContentBlockDelta(event) => match event.delta {
             Some(ContentBlockDelta::Text(text)) if !text.is_empty() => Some(LlmResponse::Text { chunk: text }),
-            Some(ContentBlockDelta::ToolUse(delta)) => turn.append_tool_args(event.content_block_index, delta.input),
+            Some(ContentBlockDelta::ToolUse(delta)) => turn.append_tool_args(&event.content_block_index, delta.input),
             Some(ContentBlockDelta::ReasoningContent(ReasoningContentBlockDelta::Text(text))) if !text.is_empty() => {
                 Some(LlmResponse::Reasoning { chunk: text })
             }
             _ => None,
         },
-        ConverseStreamOutput::ContentBlockStop(event) => turn.complete_tool(event.content_block_index),
+        ConverseStreamOutput::ContentBlockStop(event) => turn.complete_tool(&event.content_block_index),
         ConverseStreamOutput::MessageStop(event) => {
             turn.stop(map_bedrock_stop_reason(&event.stop_reason));
-            turn.terminate();
+            turn.allow_eof();
             None
         }
         ConverseStreamOutput::Metadata(event) => {

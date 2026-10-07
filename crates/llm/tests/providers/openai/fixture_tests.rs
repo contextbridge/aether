@@ -1,6 +1,3 @@
-//! Fixture-driven `OpenAI` Chat Completions streaming tests.
-//!
-//! Loads raw SSE bodies captured from `api.openai.com/v1/chat/completions`,
 use llm::{LlmResponse, StopReason};
 
 use crate::providers::common::{assert_minimal_usage, find_usage, parse_compatible_fixture};
