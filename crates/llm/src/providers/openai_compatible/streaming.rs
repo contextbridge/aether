@@ -52,7 +52,7 @@ pub fn process_compatible_stream<E: Into<LlmError> + Send>(
 }
 
 fn decode_chunk(mut chunk: ChatCompletionStreamResponse, turn: &mut StreamAssembler<i32>) -> Result<Vec<LlmResponse>> {
-    turn.terminate();
+    turn.allow_eof();
 
     let mut responses: Vec<_> =
         chunk.usage.map(|usage| LlmResponse::Usage { tokens: usage.into() }).into_iter().collect();
@@ -86,7 +86,7 @@ fn decode_tool_call_delta(delta: ToolCallDelta, turn: &mut StreamAssembler<i32>)
     let FunctionCallDelta { name, arguments } = function.unwrap_or_default();
 
     let start = name.map(|name| turn.start_tool(index, id.unwrap_or_else(|| format!("tool_call_{index}")), name));
-    let chunk = arguments.and_then(|chunk| turn.append_tool_args(index, chunk));
+    let chunk = arguments.and_then(|chunk| turn.append_tool_args(&index, chunk));
     start.into_iter().chain(chunk).collect()
 }
 

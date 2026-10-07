@@ -33,9 +33,9 @@ fn decode_event(event: StreamEvent, turn: &mut StreamAssembler<u32>) -> Result<V
             ContentBlockDeltaData::ThinkingDelta { thinking } => {
                 (!thinking.is_empty()).then_some(LlmResponse::Reasoning { chunk: thinking })
             }
-            ContentBlockDeltaData::InputJsonDelta { partial_json } => turn.append_tool_args(data.index, partial_json),
+            ContentBlockDeltaData::InputJsonDelta { partial_json } => turn.append_tool_args(&data.index, partial_json),
         },
-        StreamEvent::ContentBlockStop { data } => turn.complete_tool(data.index),
+        StreamEvent::ContentBlockStop { data } => turn.complete_tool(&data.index),
         StreamEvent::MessageDelta { data } => {
             if let Some(stop_reason) = data.delta.stop_reason.as_deref() {
                 turn.stop(map_anthropic_stop_reason(stop_reason));
@@ -43,7 +43,7 @@ fn decode_event(event: StreamEvent, turn: &mut StreamAssembler<u32>) -> Result<V
             data.usage.as_ref().map(|usage| LlmResponse::Usage { tokens: usage.into() })
         }
         StreamEvent::MessageStop { .. } => {
-            turn.terminate();
+            turn.allow_eof();
             None
         }
         StreamEvent::Error { data } => {
@@ -119,6 +119,14 @@ mod tests {
                 .usage(10, 15)
                 .build_with_stop_reason(StopReason::ToolCalls)
         );
+    }
+
+    #[tokio::test]
+    async fn unknown_tool_call_arguments_and_stops_are_ignored() {
+        let responses =
+            collect_responses(anthropic_stream().tool_delta(7, "{}").block_stop(7).message_stop().build()).await;
+
+        assert_eq!(responses, llm_response().build());
     }
 
     #[tokio::test]
@@ -243,29 +251,24 @@ mod tests {
     async fn test_anthropic_stream_event_enum_deserialization() {
         use super::super::types::StreamEvent;
 
-        // Test message_start deserialization
         let message_start_json = r#"{"type": "message_start", "message": {"id": "msg_123", "type": "message", "role": "assistant", "content": [], "model": "claude-3", "stop_reason": null, "stop_sequence": null, "usage": {"input_tokens": 10, "output_tokens": 0}}}"#;
         let event: StreamEvent = serde_json::from_str(message_start_json).unwrap();
         assert!(matches!(event, StreamEvent::MessageStart { .. }));
 
-        // Test content_block_start deserialization
         let content_block_start_json =
             r#"{"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}"#;
         let event: StreamEvent = serde_json::from_str(content_block_start_json).unwrap();
         assert!(matches!(event, StreamEvent::ContentBlockStart { .. }));
 
-        // Test content_block_delta deserialization
         let content_block_delta_json =
             r#"{"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}}"#;
         let event: StreamEvent = serde_json::from_str(content_block_delta_json).unwrap();
         assert!(matches!(event, StreamEvent::ContentBlockDelta { .. }));
 
-        // Test ping deserialization
         let ping_json = r#"{"type": "ping"}"#;
         let event: StreamEvent = serde_json::from_str(ping_json).unwrap();
         assert!(matches!(event, StreamEvent::Ping));
 
-        // Test error deserialization
         let error_json =
             r#"{"type": "error", "error": {"type": "rate_limit_error", "message": "Rate limit exceeded"}}"#;
         let event: StreamEvent = serde_json::from_str(error_json).unwrap();
