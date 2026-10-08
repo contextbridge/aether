@@ -1,14 +1,11 @@
 use aether_core::{
     core::AgentDeps,
     events::{AgentCommand, Command},
-    mcp::{ServerFactory, mcp},
-    testing::{FakeMcpServer, FakeTool},
+    mcp::mcp,
+    testing::{FakeMcpServer, FakeTool, McpBuilderTestExt},
 };
-use futures::FutureExt;
-use mcp_utils::client::{InMemoryServerSpec, McpClientEvent, McpServer, McpTransport};
-use rmcp::RoleServer;
+use mcp_utils::client::McpClientEvent;
 use rmcp::model::{ClientCapabilities, UrlElicitationCapability};
-use rmcp::service::DynService;
 use tokio::sync::mpsc;
 
 #[tokio::test]
@@ -29,23 +26,10 @@ async fn session_synchronization_does_not_keep_agent_input_open() {
 async fn spawned_mcp_client_advertises_the_configured_elicitation_support() {
     let server = FakeMcpServer::new();
     let state = server.state();
-    let factory_server = server.clone();
-    let factory: ServerFactory = Box::new(move |_, _| {
-        let server = factory_server.clone();
-        async move { Box::new(server) as Box<dyn DynService<RoleServer>> }.boxed()
-    });
-    let configured = McpServer::new(
-        "capability-capture",
-        McpTransport::InMemory {
-            spec: InMemoryServerSpec { factory: "capability-factory".to_string(), args: Vec::new(), input: None },
-        },
-        mcp_utils::client::ToolExposure::ModelVisible,
-    );
     let mut url_only = ClientCapabilities::builder().enable_elicitation().build();
     url_only.elicitation.as_mut().unwrap().url = Some(UrlElicitationCapability::default());
     let mut session = mcp("/workspace")
-        .register_in_memory_server("capability-factory", factory)
-        .with_servers(vec![configured])
+        .with_fake_mcp("capability-capture", server)
         .with_agent_deps(AgentDeps::default().with_mcp_client_capabilities(url_only))
         .spawn()
         .await
@@ -63,24 +47,7 @@ async fn spawned_mcp_client_advertises_the_configured_elicitation_support() {
 async fn session_synchronizes_agent_while_forwarding_host_events() {
     let server = FakeMcpServer::new();
     let state = server.state();
-    let factory_server = server.clone();
-    let factory: ServerFactory = Box::new(move |_, _| {
-        let server = factory_server.clone();
-        async move { Box::new(server) as Box<dyn DynService<RoleServer>> }.boxed()
-    });
-    let configured = McpServer::new(
-        "dynamic",
-        McpTransport::InMemory {
-            spec: InMemoryServerSpec { factory: "dynamic-factory".to_string(), args: Vec::new(), input: None },
-        },
-        mcp_utils::client::ToolExposure::ModelVisible,
-    );
-    let session = mcp("/workspace")
-        .register_in_memory_server("dynamic-factory", factory)
-        .with_servers(vec![configured])
-        .spawn()
-        .await
-        .unwrap();
+    let session = mcp("/workspace").with_fake_mcp("dynamic", server).spawn().await.unwrap();
     let handle = session.handle().clone();
     let (agent_tx, mut agent_rx) = mpsc::channel(32);
     let (runtime, mut host_events) = session.connect_agent(agent_tx.clone()).await.split();

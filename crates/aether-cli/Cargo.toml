@@ -29,7 +29,7 @@ name = "aether"
 path = "src/main.rs"
 
 [features]
-testing = ["acp_utils/testing", "mcp_utils/testing"]
+testing = ["aether-core/testing", "acp_utils/testing", "mcp_utils/testing"]
 
 [dependencies]
 aether-auth = { path = "../aether-auth", version = "0.1.16", features = ["keyring"] }

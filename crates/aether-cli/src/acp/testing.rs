@@ -20,7 +20,8 @@ use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
 use aether_core::core::{AgentBuilder, AgentHandle, Prompt};
 use aether_core::events::{AgentEvent, Command, MessageEvent, ToolEvent, TurnEvent, TurnOutcome, UserCommand};
-use aether_core::mcp::{McpBuilder, McpSession, ServerFactory, mcp};
+use aether_core::mcp::{McpBuilder, McpSession, mcp};
+use aether_core::testing::McpBuilderTestExt;
 use aether_project::AgentCatalog;
 use aether_sessions::SessionStore;
 use aether_sessions::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent, last_agent_from_events};
@@ -33,7 +34,6 @@ use futures::FutureExt;
 use llm::testing::FakeLlmProvider;
 use llm::{ChatMessage, Context, LlmModel, LlmResponse, SessionUsageEvent, StreamingModelProvider};
 use llm::{MessageId, ProviderConnectionOverrides, ToolCallRequest, ToolCallResult};
-use mcp_utils::client::{InMemoryServerSpec, McpServer, McpTransport, ToolExposure};
 use mcp_utils::testing::{FakeMcpServer, FakeTool, FakeToolResponse, completed_task_payload};
 use rmcp::RoleServer;
 use rmcp::model::{CallToolResult, CreateTaskResult, DetailedTask, Task, TaskPayload, TaskStatus};
@@ -871,15 +871,7 @@ fn with_in_memory_server(
     name: &str,
     server: impl Fn() -> Box<dyn DynService<RoleServer>> + Send + Sync + 'static,
 ) -> McpBuilder {
-    let factory: ServerFactory = Box::new(move |_spec, _services| std::future::ready(server()).boxed());
-    let transport = McpTransport::InMemory {
-        spec: InMemoryServerSpec { factory: name.to_string(), args: Vec::new(), input: None },
-    };
-    builder.register_in_memory_server(name, factory).with_servers(vec![McpServer::new(
-        name,
-        transport,
-        ToolExposure::ModelVisible,
-    )])
+    builder.with_in_memory_mcp(name, Box::new(move |_spec, _services| std::future::ready(server()).boxed()))
 }
 
 fn count_prompts(agent_tx: mpsc::Sender<Command>, prompts: watch::Sender<usize>) -> mpsc::Sender<Command> {
