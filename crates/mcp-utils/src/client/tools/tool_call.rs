@@ -2,7 +2,6 @@ use super::mrtr::{MrtrAction, MrtrState};
 use super::task::{TaskErrorReason, cancel_server_task, stream_task_events};
 use crate::McpError;
 use crate::client::McpClient;
-use crate::client::handler::UnsupportedInput;
 use async_stream::stream;
 use futures::{Stream, StreamExt};
 use rmcp::RoleClient;
@@ -195,17 +194,13 @@ fn stream_events(
                         params.request_state = Some(request_state);
                     }
                     MrtrAction::Elicit { input_requests, request_state } => {
-                        match client.handler().elicit_inputs(input_requests).await {
-                            Ok((responses, cancelled)) => {
-                                mrtr_state.record_cancelled(cancelled);
-                                params.input_responses = Some(responses);
-                                params.request_state = request_state;
-                            }
-                            Err(UnsupportedInput) => {
-                                yield ToolCallError::UnsupportedInput.into();
-                                return;
-                            }
-                        }
+                        let Ok((responses, cancelled)) = client.handler().elicit_inputs(input_requests).await else {
+                            yield ToolCallError::UnsupportedInput.into();
+                            return;
+                        };
+                        mrtr_state.record_cancelled(cancelled);
+                        params.input_responses = Some(responses);
+                        params.request_state = request_state;
                     }
                     MrtrAction::Abort(error) => {
                         yield error.into();

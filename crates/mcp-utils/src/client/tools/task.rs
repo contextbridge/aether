@@ -76,7 +76,7 @@ pub(super) async fn cancel_server_task(client: &McpClient, task_id: &str) {
     }
 }
 
-fn poll_task<'a>(client: &'a McpClient, mut task: Task) -> impl Stream<Item = ToolCallEvent> + 'a {
+fn poll_task(client: &McpClient, mut task: Task) -> impl Stream<Item = ToolCallEvent> + '_ {
     stream! {
         let mut answered = HashSet::new();
 
