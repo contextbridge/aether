@@ -1,4 +1,4 @@
-use aether_core::core::{AgentDeps, Prompt};
+use aether_core::core::{AgentDeps, Prompt, recv_agent_event};
 use aether_core::events::{
     AgentEvent, Command, ContextEvent, MessageEvent, ModelEvent, ToolEvent, TurnEvent, TurnOutcome,
 };
@@ -77,7 +77,8 @@ async fn expand_prompt(mcp: &McpHandle, prompt: String) -> String {
 }
 
 async fn stream_output(mut rx: mpsc::Receiver<AgentEvent>, format: OutputFormat, events: &[CliEventKind]) -> ExitCode {
-    while let Some(msg) = rx.recv().await {
+    loop {
+        let msg = recv_agent_event(&mut rx).await;
         if should_emit(&msg, events)
             && let Err(error) = print_message(format, &msg)
         {
@@ -92,7 +93,6 @@ async fn stream_output(mut rx: mpsc::Receiver<AgentEvent>, format: OutputFormat,
             };
         }
     }
-    ExitCode::SUCCESS
 }
 
 fn should_emit(msg: &AgentEvent, include: &[CliEventKind]) -> bool {
@@ -312,6 +312,15 @@ mod tests {
     async fn stream_output_failed_turn_exits_with_failure() {
         let (tx, rx) = mpsc::channel(4);
         tx.send(AgentEvent::turn_ended(TurnOutcome::failed("boom"))).await.unwrap();
+        let code = stream_output(rx, OutputFormat::Text, &[]).await;
+        assert_eq!(code, ExitCode::FAILURE);
+    }
+
+    #[tokio::test]
+    async fn stream_output_channel_closed_before_turn_ended_exits_with_failure() {
+        let (tx, rx) = mpsc::channel(4);
+        tx.send(AgentEvent::Turn(TurnEvent::Started { content: vec![] })).await.unwrap();
+        drop(tx);
         let code = stream_output(rx, OutputFormat::Text, &[]).await;
         assert_eq!(code, ExitCode::FAILURE);
     }

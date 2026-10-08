@@ -10,8 +10,8 @@ use crate::events::{
     AgentCommand, AgentEvent, AgentObserver, Command, CompactionId, CompactionOutcome, ContextEvent, LlmCallOutcome,
     ModelEvent, StreamState, TaskOutcome, ToolEvent, TraceContext, TurnEvent, TurnOutcome, UserCommand,
 };
-use crate::mcp::McpHandle;
-use futures::Stream;
+use crate::mcp::{McpHandle, ToolCallStream};
+use futures::{FutureExt, Stream, future};
 use llm::{
     AssistantReasoning, ChatMessage, Context, EncryptedReasoningContent, LlmCallPurpose, LlmError, LlmModel,
     LlmResponse, MessageId, ModelIdentity, StopReason, StreamingModelProvider, TokenUsage, ToolCallError,
@@ -19,6 +19,7 @@ use llm::{
 };
 use mcp_utils::client::{CallToolError, CallToolOptions, ToolCallEvent};
 use std::collections::VecDeque;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,6 +28,7 @@ use tokio::time::sleep;
 use tokio_stream::StreamExt;
 use tokio_stream::StreamMap;
 use tokio_stream::wrappers::ReceiverStream;
+use utils::panic::panic_message;
 
 /// Internal event type for merging LLM and tool result streams
 #[derive(Debug)]
@@ -71,7 +73,7 @@ pub struct Agent {
     context: Context,
     mcp: Option<McpHandle>,
     message_tx: mpsc::Sender<AgentEvent>,
-    observers: Vec<Box<dyn AgentObserver>>,
+    observers: Observers,
     streams: StreamMap<StreamKey, EventStream>,
     tool_timeout: Duration,
     token_tracker: TokenTracker,
@@ -109,7 +111,7 @@ impl Agent {
             context: config.context,
             mcp: config.mcp,
             message_tx,
-            observers: config.observers,
+            observers: Observers(config.observers),
             streams,
             tool_timeout: config.tool_timeout,
             token_tracker: TokenTracker::new(context_limit),
@@ -139,6 +141,25 @@ impl Agent {
     }
 
     pub async fn run(mut self) {
+        let Err(panic) = AssertUnwindSafe(self.event_loop()).catch_unwind().await else {
+            return;
+        };
+
+        let error = format!("Agent panicked: {}", panic_message(&*panic));
+        tracing::error!("{error}");
+
+        self.end_in_flight_llm_calls(
+            LlmCallOutcome::failed(error.clone(), false),
+            CompactionOutcome::Failed { error: error.clone() },
+        )
+        .await;
+
+        if std::mem::take(&mut self.turn_active) {
+            self.emit(AgentEvent::turn_ended(TurnOutcome::failed(error))).await;
+        }
+    }
+
+    async fn event_loop(&mut self) {
         let mut state = IterationState::default();
         let mut input_closed = false;
         self.emit_tool_definitions().await;
@@ -408,30 +429,32 @@ impl Agent {
 
     fn is_busy(&self) -> bool {
         self.streams.contains_key(&StreamKey::Llm)
-            || self.streams.contains_key(&StreamKey::Compaction)
+            || self.active_compaction.is_some()
             || self.tool_executions.has_foreground()
     }
 
     async fn abort_in_flight_work(&mut self, tool_policy: ToolAbortPolicy) {
-        if self.llm_call_active {
-            self.finish_chat_call(LlmCallOutcome::Cancelled).await;
+        self.end_in_flight_llm_calls(LlmCallOutcome::Cancelled, CompactionOutcome::Cancelled).await;
+        self.streams.remove(&StreamKey::Llm);
+        for tool_id in self.tool_executions.abort(&tool_policy) {
+            self.streams.remove(&StreamKey::Tool(tool_id));
         }
-        if self.streams.remove(&StreamKey::Compaction).is_some() {
-            let compaction_id = self.active_compaction.take().expect("active compaction stream has an identity");
+    }
+
+    async fn end_in_flight_llm_calls(&mut self, call_outcome: LlmCallOutcome, compaction_outcome: CompactionOutcome) {
+        self.finish_chat_call(call_outcome.clone()).await;
+        if let Some(compaction_id) = self.active_compaction.take() {
+            self.streams.remove(&StreamKey::Compaction);
             self.emit(AgentEvent::Turn(TurnEvent::LlmCallEnded {
                 purpose: LlmCallPurpose::Compaction,
-                outcome: LlmCallOutcome::Cancelled,
+                outcome: call_outcome,
             }))
             .await;
             self.emit(AgentEvent::Context(ContextEvent::CompactionEnded {
                 compaction_id,
-                outcome: CompactionOutcome::Cancelled,
+                outcome: compaction_outcome,
             }))
             .await;
-        }
-        self.streams.remove(&StreamKey::Llm);
-        for tool_id in self.tool_executions.abort(&tool_policy) {
-            self.streams.remove(&StreamKey::Tool(tool_id));
         }
     }
 
@@ -534,24 +557,24 @@ impl Agent {
         tracing::debug!("Tool execution started: {} ({})", tool_call.name, tool_id);
         self.emit(AgentEvent::Tool(ToolEvent::Call { request: tool_call.clone() })).await;
 
-        let Some(mcp) = self.mcp.clone() else {
-            let stream = futures::stream::once(async {
-                StreamEvent::ToolExecution(ToolCallEvent::Complete(Err(CallToolError::Unavailable {
-                    message: "MCP runtime is not available".to_string(),
-                })))
-            });
-            self.streams.insert(StreamKey::Tool(tool_id), Box::pin(stream));
-            return;
+        let events: ToolCallStream = match self.mcp.clone() {
+            Some(mcp) => {
+                let trace_context = self.observers.tool_trace_context(&tool_id);
+                let options = CallToolOptions {
+                    timeout: self.tool_timeout,
+                    meta: trace_context.as_ref().map(TraceContext::to_meta),
+                    cancel,
+                };
+
+                mcp.call_model_visible(tool_call.name, &tool_call.arguments, options)
+            }
+
+            None => Box::pin(futures::stream::once(future::ready(ToolCallEvent::Complete(Err(
+                CallToolError::Unavailable { message: "MCP runtime is not available".to_string() },
+            ))))),
         };
 
-        let trace_context = self.observers.iter().find_map(|observer| observer.tool_trace_context(&tool_id));
-        let options = CallToolOptions {
-            timeout: self.tool_timeout,
-            meta: trace_context.as_ref().map(TraceContext::to_meta),
-            cancel,
-        };
-        let stream =
-            mcp.call_model_visible(tool_call.name, &tool_call.arguments, options).map(StreamEvent::ToolExecution);
+        let stream = events.map(StreamEvent::ToolExecution);
         self.streams.insert(StreamKey::Tool(tool_id), Box::pin(stream));
     }
 
@@ -730,9 +753,7 @@ impl Agent {
     }
 
     async fn emit(&mut self, message: AgentEvent) {
-        for observer in &mut self.observers {
-            observer.on_event(&message);
-        }
+        self.observers.on_event(&message);
 
         if let Err(e) = self.message_tx.send(message).await {
             tracing::warn!("Failed to send agent message: {e:?}");
@@ -752,9 +773,7 @@ impl Agent {
         self.llm_call_active = true;
         let started = self.begin_llm_call(LlmCallPurpose::Chat, attempt);
         if let Some(system_prompt) = self.context.system_content() {
-            for observer in &mut self.observers {
-                observer.on_system_prompt(system_prompt);
-            }
+            self.observers.on_system_prompt(system_prompt);
         }
         self.emit(started).await;
     }
@@ -825,5 +844,33 @@ impl IterationState {
 
     fn is_complete(&self, has_foreground_tools: bool) -> bool {
         self.llm_done && !has_foreground_tools
+    }
+}
+
+struct Observers(Vec<Box<dyn AgentObserver>>);
+
+impl Observers {
+    fn on_event(&mut self, event: &AgentEvent) {
+        self.notify(|observer| observer.on_event(event));
+    }
+
+    fn on_system_prompt(&mut self, prompt: &str) {
+        self.notify(|observer| observer.on_system_prompt(prompt));
+    }
+
+    fn tool_trace_context(&mut self, tool_id: &str) -> Option<TraceContext> {
+        let mut trace_context = None;
+        self.notify(|observer| trace_context = trace_context.take().or_else(|| observer.tool_trace_context(tool_id)));
+        trace_context
+    }
+
+    fn notify(&mut self, mut callback: impl FnMut(&mut dyn AgentObserver)) {
+        self.0.retain_mut(|observer| {
+            catch_unwind(AssertUnwindSafe(|| callback(observer.as_mut())))
+                .inspect_err(|panic| {
+                    tracing::error!("Removing agent observer that panicked: {}", panic_message(&**panic));
+                })
+                .is_ok()
+        });
     }
 }

@@ -5,6 +5,7 @@ pub mod display_meta;
 pub mod markdown_file;
 pub mod mcp_status;
 pub mod name_pattern;
+pub mod panic;
 pub mod path;
 pub mod reasoning;
 pub mod resource_path;

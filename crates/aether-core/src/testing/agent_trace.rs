@@ -1,4 +1,4 @@
-use crate::events::{AgentEvent, ToolEvent, TurnEvent};
+use crate::events::{AgentEvent, CompactionOutcome, ContextEvent, ToolEvent, TurnEvent};
 use std::sync::{Arc, Mutex};
 
 use crate::events::{LlmCallOutcome, TurnOutcome};
@@ -83,6 +83,15 @@ pub fn map_event_names(events: &[AgentEvent]) -> Vec<String> {
                     LlmCallOutcome::Cancelled => "cancelled",
                 };
                 Some(format!("call_ended:{purpose:?}:{outcome}"))
+            }
+            AgentEvent::Context(ContextEvent::CompactionStarted { .. }) => Some("compaction_started".to_string()),
+            AgentEvent::Context(ContextEvent::CompactionEnded { outcome, .. }) => {
+                let outcome = match outcome {
+                    CompactionOutcome::Completed => "completed",
+                    CompactionOutcome::Failed { .. } => "failed",
+                    CompactionOutcome::Cancelled => "cancelled",
+                };
+                Some(format!("compaction_ended:{outcome}"))
             }
             AgentEvent::Tool(ToolEvent::Call { .. }) => Some("tool_call".to_string()),
             AgentEvent::Tool(ToolEvent::DefinitionsUpdated { .. }) => Some("tool_definitions".to_string()),
