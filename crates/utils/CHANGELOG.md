@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.19](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.18...aether-utils-v0.2.19) - 2026-10-08
+
+### Fixed
+
+- report agent panics as failed turns ([#586](https://github.com/contextbridge/aether/pull/586))
+
 ## [0.2.18](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.17...aether-utils-v0.2.18) - 2026-10-03
 
 ### Other

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.12](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.11...aether-llm-v0.9.12) - 2026-10-08
+
+### Fixed
+
+- *(llm)* finalize responses streams at terminal events ([#584](https://github.com/contextbridge/aether/pull/584))
+
+### Other
+
+- unify LLM provider stream assembly ([#583](https://github.com/contextbridge/aether/pull/583))
+
 ## [0.9.11](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.10...aether-llm-v0.9.11) - 2026-10-05
 
 ### Other

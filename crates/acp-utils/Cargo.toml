@@ -1,6 +1,6 @@
 [package]
 name = "aether-acp-utils"
-version = "0.5.11"
+version = "0.5.12"
 edition = "2024"
 description = "Agent Client Protocol (ACP) utilities for the Aether AI agent framework"
 license = "MIT"
@@ -43,12 +43,12 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "sync", "io-util", "time"] }
 tracing = { workspace = true }
-utils = { package = "aether-utils", path = "../utils", version = "0.2.18" }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.19" }
 thiserror = { workspace = true }
 tokio-tungstenite = { workspace = true, optional = true }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-llm = { package = "aether-llm", path = "../llm", version = "0.9.11" }
+llm = { package = "aether-llm", path = "../llm", version = "0.9.12" }
 rmcp = { workspace = true, features = ["client", "elicitation"] }
 
 [target.'cfg(target_family = "wasm")'.dependencies]

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.12](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.7.11...aether-mcp-utils-v0.7.12) - 2026-10-08
+
+### Other
+
+- Fix flaky test ([#587](https://github.com/contextbridge/aether/pull/587))
+
 ## [0.7.11](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.7.10...aether-mcp-utils-v0.7.11) - 2026-10-05
 
 ### Fixed
