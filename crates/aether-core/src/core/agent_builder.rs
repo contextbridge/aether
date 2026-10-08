@@ -2,7 +2,7 @@ use super::agent::{AgentConfig, AutoContinue, RetryConfig};
 use crate::agent_spec::AgentSpec;
 use crate::context::{CompactionConfig, SessionUsageTracker};
 use crate::core::{Agent, AgentDeps, Prompt, PromptCache, Result};
-use crate::events::{AgentEvent, AgentObserver, Command};
+use crate::events::{AgentEvent, AgentObserver, Command, TurnOutcome};
 use crate::mcp::McpHandle;
 use llm::parser::ModelProviderParser;
 use llm::{ChatMessage, Context, ModelSettings, SessionUsageEvent, StreamingModelProvider, ToolDefinition};
@@ -31,6 +31,12 @@ impl AgentHandle {
     pub async fn await_completion(self) {
         let _ = self.handle.await;
     }
+}
+
+pub async fn recv_agent_event(rx: &mut Receiver<AgentEvent>) -> AgentEvent {
+    rx.recv()
+        .await
+        .unwrap_or_else(|| AgentEvent::turn_ended(TurnOutcome::failed("Agent stopped before its turn ended")))
 }
 
 pub struct AgentBuilder {
@@ -280,6 +286,7 @@ impl AgentBuilder {
 mod tests {
     use super::*;
     use crate::agent_spec::AgentSpecExposure;
+    use crate::events::TurnEvent;
     use llm::ProviderConnectionOverrides;
     use mcp_utils::client::ToolFilter;
 
@@ -297,6 +304,24 @@ mod tests {
         while !handle.is_finished() {
             tokio::task::yield_now().await;
         }
+    }
+
+    #[tokio::test]
+    async fn recv_agent_event_returns_events_from_open_channel() {
+        let (tx, mut rx) = mpsc::channel(4);
+        tx.send(AgentEvent::Turn(TurnEvent::Started { content: vec![] })).await.unwrap();
+
+        assert_eq!(recv_agent_event(&mut rx).await, AgentEvent::Turn(TurnEvent::Started { content: vec![] }));
+    }
+
+    #[tokio::test]
+    async fn recv_agent_event_returns_failed_turn_end_once_channel_closes() {
+        let (tx, mut rx) = mpsc::channel::<AgentEvent>(4);
+        drop(tx);
+
+        let event = recv_agent_event(&mut rx).await;
+
+        assert!(matches!(event.turn_outcome(), Some(TurnOutcome::Failed { .. })), "got: {event:?}");
     }
 
     #[tokio::test]

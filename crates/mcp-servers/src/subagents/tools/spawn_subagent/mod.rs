@@ -2,7 +2,7 @@ use crate::setup::McpBuilderExt;
 use crate::subagents::SubAgentProgressSink;
 use aether_core::{
     agent_spec::McpConfigSource,
-    core::{AgentBuilder, AgentDeps, AgentHandle},
+    core::{AgentBuilder, AgentDeps, AgentHandle, recv_agent_event},
     events::{AgentEvent, Command, MessageEvent, SubAgentProgressPayload, TurnEvent, TurnOutcome, UserCommand},
     mcp::{McpRuntime, McpSession, mcp},
 };
@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
+use utils::panic::panic_message;
 
 /// Reference to a file artifact discovered or modified by a sub-agent
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -196,7 +197,7 @@ impl AgentExecutor {
                         agent_name,
                         status: SubAgentStatus::Error,
                         output: None,
-                        error: Some(format!("Sub-agent task panicked: {}", panic_message(&panic))),
+                        error: Some(format!("Sub-agent task panicked: {}", panic_message(&*panic))),
                     });
                 (index, result)
             });
@@ -252,7 +253,8 @@ impl AgentExecutor {
 
             let mut final_output = String::new();
 
-            while let Some(message) = agent_rx.recv().await {
+            loop {
+                let message = recv_agent_event(&mut agent_rx).await;
                 self.report(&task_id, &agent_name, &message).await;
 
                 match &message {
@@ -269,8 +271,6 @@ impl AgentExecutor {
                     _ => {}
                 }
             }
-
-            Ok(final_output)
         }
         .await;
 
@@ -346,14 +346,6 @@ impl Drop for RunningAgent {
     fn drop(&mut self) {
         self.agent_handle.abort();
     }
-}
-
-fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
-    panic
-        .downcast_ref::<&str>()
-        .copied()
-        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
-        .unwrap_or("unknown panic")
 }
 
 #[cfg(test)]
