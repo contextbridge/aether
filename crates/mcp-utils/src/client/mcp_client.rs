@@ -1,241 +1,141 @@
-// Don't use custom Result type here as we need to return rmcp::ErrorData
+use super::transport::Session;
+use super::{ClientOptions, ToolCall, ToolCallOptions, Transport, handler::Handler};
+use crate::error::McpError;
+use futures::future::{BoxFuture, FutureExt, Shared};
 use rmcp::{
-    ClientHandler, RoleClient,
-    handler::client::progress::ProgressDispatcher,
-    model::{
-        ClientCapabilities, ClientConfig, CustomNotification, ElicitRequestParams, ElicitResult, ElicitationAction,
-        ElicitationCapability, ErrorData, FormElicitationCapability, ProgressNotificationParam,
-        UrlElicitationCapability,
-    },
-    service::{NotificationContext, RequestContext},
+    RoleClient,
+    model::{CallToolRequestParams, GetPromptRequestParams, GetPromptResult, Prompt, Tool},
+    service::{Peer, QuitReason},
 };
-use std::result::Result;
-use tokio::sync::{mpsc, oneshot};
+use serde_json::{Map, Value};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::watch;
+use tokio::task::JoinError;
+use tokio_util::sync::{CancellationToken, DropGuard};
 
-use crate::client::{ElicitationRequest, McpClientEvent, elicitation::with_meta, manager::ToolListChangedRequest};
-
+#[derive(Clone)]
 pub struct McpClient {
-    client_info: ClientConfig,
-    server_name: String,
-    pub(crate) progress_dispatcher: ProgressDispatcher,
-    event_sender: mpsc::Sender<McpClientEvent>,
-    tool_refresh_sender: Option<mpsc::Sender<ToolListChangedRequest>>,
-    connection_generation: u64,
+    peer: Peer<RoleClient>,
+    handler: Arc<Handler>,
+    shutdown: Arc<Shutdown>,
 }
 
 impl McpClient {
-    pub fn new(client_info: ClientConfig, server_name: String, event_sender: mpsc::Sender<McpClientEvent>) -> Self {
-        Self {
-            client_info,
-            server_name,
-            progress_dispatcher: ProgressDispatcher::new(),
-            event_sender,
-            tool_refresh_sender: None,
-            connection_generation: 0,
+    pub async fn connect(
+        name: impl Into<String>,
+        transport: Transport,
+        options: &ClientOptions,
+    ) -> Result<Self, McpError> {
+        transport.connect(Handler::new(name.into(), options), options).await.map(Self::from_session)
+    }
+
+    pub async fn authorize(
+        name: impl Into<String>,
+        transport: Transport,
+        options: &ClientOptions,
+        challenge: Option<String>,
+    ) -> Result<Self, McpError> {
+        transport.authorize(Handler::new(name.into(), options), options, challenge).await.map(Self::from_session)
+    }
+
+    pub fn name(&self) -> &str {
+        self.handler.server()
+    }
+
+    pub fn description(&self) -> Option<String> {
+        let info = self.peer.peer_info()?;
+        non_empty(info.server_info.as_ref()?.description.as_ref())
+    }
+
+    pub fn instructions(&self) -> Option<String> {
+        non_empty(self.peer.peer_info()?.instructions.as_ref())
+    }
+
+    pub async fn list_tools(&self) -> Result<Vec<Tool>, McpError> {
+        self.peer.list_all_tools().await.map_err(|source| McpError::request(self.name(), source))
+    }
+
+    pub async fn list_prompts(&self) -> Result<Vec<Prompt>, McpError> {
+        if !self.supports_prompts() {
+            return Ok(Vec::new());
         }
+        self.peer.list_all_prompts().await.map_err(|source| McpError::request(self.name(), source))
     }
 
-    pub(super) fn with_tool_refresh(
-        mut self,
-        sender: mpsc::Sender<ToolListChangedRequest>,
-        connection_generation: u64,
-    ) -> Self {
-        self.tool_refresh_sender = Some(sender);
-        self.connection_generation = connection_generation;
-        self
-    }
-
-    pub fn server_name(&self) -> &str {
-        &self.server_name
-    }
-
-    /// Dispatch an elicitation request through the shared event channel.
-    ///
-    /// Used by both the `create_elicitation` handler and the MRTR round loop
-    /// in `call_tool_mrtr` to ensure the same user-facing flow.
-    pub async fn dispatch_elicitation(&self, request: ElicitRequestParams) -> ElicitResult {
-        let (response_tx, response_rx) = oneshot::channel();
-        let elicitation_request =
-            ElicitationRequest { server_name: self.server_name.clone(), request, response_sender: response_tx };
-
-        if self.event_sender.send(McpClientEvent::Elicitation(Box::new(elicitation_request))).await.is_err() {
-            return cancel_result();
+    pub async fn get_prompt(&self, name: &str, args: Map<String, Value>) -> Result<GetPromptResult, McpError> {
+        let mut request = GetPromptRequestParams::new(name);
+        if !args.is_empty() {
+            request = request.with_arguments(args);
         }
-        response_rx.await.unwrap_or_else(|_| cancel_result())
+        self.peer.get_prompt(request).await.map_err(|source| McpError::request(self.name(), source))
+    }
+
+    pub fn tool_list_changes(&self) -> watch::Receiver<()> {
+        self.handler.tool_list_changes()
+    }
+
+    pub fn call_tool(&self, name: &str, args: Map<String, Value>, options: ToolCallOptions) -> ToolCall {
+        let params = CallToolRequestParams::new(name.to_string()).with_arguments(args);
+        ToolCall::new(self.clone(), params, options)
+    }
+
+    pub async fn close(&self) {
+        self.shutdown.cancel.cancel();
+        self.shutdown.closed.clone().await;
+    }
+
+    pub fn close_on_drop(&self) -> DropGuard {
+        self.shutdown.cancel.clone().drop_guard()
+    }
+
+    pub(super) fn peer(&self) -> &Peer<RoleClient> {
+        &self.peer
+    }
+
+    pub(super) fn handler(&self) -> &Handler {
+        &self.handler
+    }
+
+    fn supports_prompts(&self) -> bool {
+        self.peer.peer_info().is_some_and(|info| info.capabilities.prompts.is_some())
+    }
+
+    fn from_session(session: Session) -> Self {
+        let peer = session.service.peer().clone();
+        let handler = Arc::clone(session.service.service());
+        let cancel = CancellationToken::new();
+        let closed = tokio::spawn(close_once_cancelled(session, cancel.clone())).map(|_| ()).boxed().shared();
+        let shutdown = Shutdown { _cancel_on_drop: cancel.clone().drop_guard(), cancel, closed };
+        Self { peer, handler, shutdown: Arc::new(shutdown) }
     }
 }
 
-pub fn cancel_result() -> ElicitResult {
-    ElicitResult::new(ElicitationAction::Cancel)
+struct Shutdown {
+    cancel: CancellationToken,
+    _cancel_on_drop: DropGuard,
+    closed: Shared<BoxFuture<'static, ()>>,
 }
 
-pub fn client_capabilities() -> ClientCapabilities {
-    client_capabilities_for(true, true)
-}
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub fn client_capabilities_for(form: bool, url: bool) -> ClientCapabilities {
-    let mut capabilities = ClientCapabilities::builder().enable_tasks().build();
-    if form || url {
-        let mut elicitation = ElicitationCapability::new();
-        elicitation.form = form.then(FormElicitationCapability::default);
-        elicitation.url = url.then(UrlElicitationCapability::default);
-        capabilities.elicitation = Some(elicitation);
-    }
-    capabilities
-}
-
-impl ClientHandler for McpClient {
-    fn get_info(&self) -> ClientConfig {
-        self.client_info.clone()
-    }
-
-    async fn on_progress(&self, params: ProgressNotificationParam, _context: NotificationContext<RoleClient>) -> () {
-        self.progress_dispatcher.handle_notification(params).await;
-    }
-
-    async fn create_elicitation(
-        &self,
-        request: ElicitRequestParams,
-        context: RequestContext<RoleClient>,
-    ) -> Result<ElicitResult, ErrorData> {
-        let meta = (!context.meta.is_empty()).then_some(context.meta);
-        Ok(self.dispatch_elicitation(with_meta(request, meta)).await)
-    }
-
-    async fn on_custom_notification(
-        &self,
-        notification: CustomNotification,
-        _context: NotificationContext<RoleClient>,
-    ) {
-        if notification.method != "notifications/elicitation/complete" {
-            return;
-        }
-        let params: Option<ElicitationCompleteParams> =
-            notification.params.and_then(|params| serde_json::from_value(params).ok());
-        let Some(params) = params else {
-            tracing::warn!("Ignoring malformed MCP elicitation completion notification");
-            return;
-        };
-        let _ = self
-            .event_sender
-            .send(McpClientEvent::ElicitationComplete {
-                server_name: self.server_name.clone(),
-                elicitation_id: params.elicitation_id,
-            })
-            .await;
-    }
-
-    async fn on_tool_list_changed(&self, context: NotificationContext<RoleClient>) {
-        let Some(sender) = &self.tool_refresh_sender else {
-            return;
-        };
-        let request = ToolListChangedRequest::new(self.server_name.clone(), self.connection_generation, context.peer);
-        if sender.send(request).await.is_err() {
-            tracing::debug!(server = %self.server_name, "MCP tool refresh receiver closed");
-        }
+async fn close_once_cancelled(Session { mut service, hosted }: Session, cancel: CancellationToken) {
+    cancel.cancelled().await;
+    let server = service.service().server().to_string();
+    log_close(&server, service.close_with_timeout(CLOSE_TIMEOUT).await);
+    if let Some(mut hosted) = hosted {
+        log_close(&server, hosted.close_with_timeout(CLOSE_TIMEOUT).await);
     }
 }
 
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ElicitationCompleteParams {
-    elicitation_id: String,
+fn non_empty(text: Option<&String>) -> Option<String> {
+    text.filter(|text| !text.is_empty()).cloned()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rmcp::model::{ElicitationSchema, Implementation};
-    use std::collections::BTreeMap;
-
-    fn test_client_info() -> ClientConfig {
-        ClientConfig::new(client_capabilities(), Implementation::new("test", "0.1.0"))
-    }
-
-    fn make_client(event_sender: mpsc::Sender<McpClientEvent>) -> McpClient {
-        McpClient::new(test_client_info(), "test-server".to_string(), event_sender)
-    }
-
-    fn unwrap_elicitation(event: McpClientEvent) -> ElicitationRequest {
-        match event {
-            McpClientEvent::Elicitation(req) => *req,
-            other => panic!("expected Elicitation, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn dispatch_elicitation_dropped_sender_returns_cancel() {
-        let (event_tx, _) = mpsc::channel(1);
-        let client = make_client(event_tx);
-
-        let request = ElicitRequestParams::FormElicitationParams {
-            meta: None,
-            message: "test".to_string(),
-            requested_schema: ElicitationSchema::new(BTreeMap::new()),
-        };
-
-        let result = client.dispatch_elicitation(request).await;
-        assert_eq!(result.action, ElicitationAction::Cancel, "dropped sender should return Cancel, not Decline");
-        assert!(result.content.is_none());
-    }
-
-    #[tokio::test]
-    async fn dispatch_elicitation_dropped_receiver_returns_cancel() {
-        let (event_tx, mut event_rx) = mpsc::channel(1);
-        let client = make_client(event_tx);
-
-        let request = ElicitRequestParams::FormElicitationParams {
-            meta: None,
-            message: "test".to_string(),
-            requested_schema: ElicitationSchema::new(BTreeMap::new()),
-        };
-
-        let handle = tokio::spawn(async move {
-            let event = event_rx.recv().await.unwrap();
-            let elicitation = unwrap_elicitation(event);
-            drop(elicitation.response_sender);
-        });
-
-        let result = client.dispatch_elicitation(request).await;
-        handle.await.unwrap();
-
-        assert_eq!(result.action, ElicitationAction::Cancel, "dropped receiver should return Cancel, not Decline");
-        assert!(result.content.is_none());
-    }
-
-    #[tokio::test]
-    async fn dispatch_elicitation_forwards_request_with_server_name() {
-        let (event_tx, mut event_rx) = mpsc::channel(1);
-        let client = make_client(event_tx);
-
-        let request = ElicitRequestParams::UrlElicitationParams {
-            meta: None,
-            message: "Auth".to_string(),
-            url: "https://example.com/auth".to_string(),
-            elicitation_id: "el-123".to_string(),
-        };
-
-        let handle = tokio::spawn(async move {
-            let event = event_rx.recv().await.unwrap();
-            let elicitation = unwrap_elicitation(event);
-            assert_eq!(elicitation.server_name, "test-server");
-            let _ = elicitation.response_sender.send(ElicitResult::new(ElicitationAction::Accept));
-        });
-
-        let result = client.dispatch_elicitation(request).await;
-        handle.await.unwrap();
-        assert_eq!(result.action, ElicitationAction::Accept);
-    }
-
-    #[test]
-    fn capabilities_include_form_url_and_tasks() {
-        let info = test_client_info();
-        let caps = &info.capabilities;
-        let elicitation = caps.elicitation.as_ref().expect("elicitation capability should be set");
-        assert!(elicitation.form.is_some(), "form capability should be advertised");
-        assert!(elicitation.url.is_some(), "url capability should be advertised");
-        assert!(
-            caps.extensions.as_ref().is_some_and(|extensions| extensions.contains_key("io.modelcontextprotocol/tasks"))
-        );
+fn log_close(server: &str, result: Result<Option<QuitReason>, JoinError>) {
+    match result {
+        Ok(Some(reason)) => tracing::debug!(server, ?reason, "MCP server connection closed"),
+        Ok(None) => tracing::warn!(server, "MCP server connection did not close within {CLOSE_TIMEOUT:?}"),
+        Err(error) => tracing::warn!(server, %error, "MCP server connection task failed while closing"),
     }
 }
