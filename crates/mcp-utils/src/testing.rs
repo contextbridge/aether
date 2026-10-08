@@ -29,13 +29,13 @@ where
     Box::pin(async move {
         let (client_transport, server_transport) = tokio::io::duplex(64 * 1024);
 
-        let (server_result, client_result) = tokio::join!(
-            serve_server(server, server_transport),
-            serve_client_with_lifecycle(client, client_transport, client_lifecycle_mode())
-        );
+        let server = tokio::spawn(serve_server(server, server_transport));
+        let client = serve_client_with_lifecycle(client, client_transport, client_lifecycle_mode())
+            .await
+            .map_err(|error| ConnectError::ClientInit(Box::new(error)))?;
 
-        let server = server_result.map_err(|error| ConnectError::ServerInit(Box::new(error)))?;
-        let client = client_result.map_err(|error| ConnectError::ClientInit(Box::new(error)))?;
+        let _ = client.list_tools(None).await;
+        let server = server.await?.map_err(|error| ConnectError::ServerInit(Box::new(error)))?;
 
         Ok((server, client))
     })
@@ -47,6 +47,8 @@ pub enum ConnectError {
     ServerInit(Box<ServerInitializeError>),
     #[error("Client initialization failed: {0}")]
     ClientInit(Box<ClientInitializeError>),
+    #[error("Server task failed: {0}")]
+    ServerTask(#[from] tokio::task::JoinError),
 }
 
 #[cfg(feature = "client")]
