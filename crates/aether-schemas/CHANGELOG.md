@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.19](https://github.com/contextbridge/aether/compare/aether-schemas-v0.2.18...aether-schemas-v0.2.19) - 2026-10-08
+
+### Other
+
+- update Cargo.lock dependencies
+
 ## [0.2.18](https://github.com/contextbridge/aether/compare/aether-schemas-v0.2.17...aether-schemas-v0.2.18) - 2026-10-05
 
 ### Other

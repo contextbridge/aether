@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.14](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.13...aether-agent-cli-v0.9.14) - 2026-10-08
+
+### Fixed
+
+- report agent panics as failed turns ([#586](https://github.com/contextbridge/aether/pull/586))
+
 ## [0.9.13](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.12...aether-agent-cli-v0.9.13) - 2026-10-05
 
 ### Other

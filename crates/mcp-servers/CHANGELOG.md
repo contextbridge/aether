@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.3](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.8.2...aether-mcp-servers-v0.8.3) - 2026-10-08
+
+### Added
+
+- support native TypeScript 7 LSP ([#582](https://github.com/contextbridge/aether/pull/582))
+
+### Fixed
+
+- report agent panics as failed turns ([#586](https://github.com/contextbridge/aether/pull/586))
+
 ## [0.8.2](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.8.1...aether-mcp-servers-v0.8.2) - 2026-10-05
 
 ### Other

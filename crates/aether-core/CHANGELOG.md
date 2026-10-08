@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.3](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.9.2...aether-agent-core-v0.9.3) - 2026-10-08
+
+### Fixed
+
+- report agent panics as failed turns ([#586](https://github.com/contextbridge/aether/pull/586))
+
 ## [0.9.2](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.9.1...aether-agent-core-v0.9.2) - 2026-10-05
 
 ### Fixed

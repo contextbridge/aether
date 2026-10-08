@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.13](https://github.com/contextbridge/aether/compare/aether-wisp-v0.7.12...aether-wisp-v0.7.13) - 2026-10-08
+
+### Other
+
+- update Cargo.lock dependencies
+
 ## [0.7.12](https://github.com/contextbridge/aether/compare/aether-wisp-v0.7.11...aether-wisp-v0.7.12) - 2026-10-05
 
 ### Other

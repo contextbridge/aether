@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.2](https://github.com/contextbridge/aether/compare/aether-lspd-v0.3.1...aether-lspd-v0.3.2) - 2026-10-08
+
+### Added
+
+- support native TypeScript 7 LSP ([#582](https://github.com/contextbridge/aether/pull/582))
+
 ## [0.3.1](https://github.com/contextbridge/aether/compare/aether-lspd-v0.3.0...aether-lspd-v0.3.1) - 2026-10-04
 
 ### Other
