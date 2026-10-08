@@ -1,6 +1,5 @@
-use super::bounds::{Bounds, Interrupted, Stop};
-use super::mrtr::{AbortReason, MrtrAction, MrtrState};
-use super::task::{TaskErrorReason, task_events};
+use super::mrtr::{MrtrAction, MrtrState};
+use super::task::{TaskErrorReason, cancel_server_task, stream_task_events};
 use crate::McpError;
 use crate::client::McpClient;
 use crate::client::handler::UnsupportedInput;
@@ -8,15 +7,16 @@ use async_stream::stream;
 use futures::{Stream, StreamExt};
 use rmcp::RoleClient;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ClientRequest, CreateTaskResult, InputRequiredResult,
-    ProgressNotificationParam, Request, RequestMetaObject, ServerResult, Task,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ClientRequest, CreateTaskResult, DEFAULT_MRTR_MAX_ROUNDS,
+    InputRequiredResult, ProgressNotificationParam, Request, RequestMetaObject, ServerResult, Task,
 };
 use rmcp::service::{PeerRequestOptions, RequestHandle, ServiceError};
+use std::future::pending;
 use std::pin::{Pin, pin};
 use std::task::{Context, Poll};
 use std::time::Duration;
 use thiserror::Error;
-use tokio::time::sleep;
+use tokio::time::{Instant, sleep, sleep_until};
 use tokio_util::sync::CancellationToken;
 
 pub struct ToolCall {
@@ -28,9 +28,7 @@ pub enum ToolCallEvent {
     Progress(ProgressNotificationParam),
     TaskCreated(CreateTaskResult),
     TaskStatus(Task),
-    TaskComplete { task: Task, result: Result<CallToolResult, ToolCallError> },
-    Complete(Result<CallToolResult, ToolCallError>),
-    Cancelled { task_id: Option<String> },
+    Done { task: Option<Task>, result: Result<CallToolResult, ToolCallError> },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -50,8 +48,12 @@ pub enum ToolCallError {
     TimedOut(Duration),
     #[error("Server requested an input kind this client does not support (sampling or roots)")]
     UnsupportedInput,
-    #[error("Server {0}")]
-    Aborted(#[source] AbortReason),
+    #[error("Server requested input without any input requests or request state")]
+    EmptyInputRequired,
+    #[error("Server requested input again after the user cancelled")]
+    RePromptAfterCancel,
+    #[error("Server did not complete within {DEFAULT_MRTR_MAX_ROUNDS} MRTR input rounds")]
+    InputRoundsExceeded,
     #[error("Task '{task_id}' {reason}")]
     Task {
         task_id: String,
@@ -75,94 +77,10 @@ impl ToolCallOptions {
 }
 
 impl ToolCall {
-    pub(crate) fn new(client: McpClient, mut params: CallToolRequestParams, options: ToolCallOptions) -> Self {
-        let events = stream! {
-            let bounds = Bounds::new(options.timeout, options.cancel.clone());
-            let mut mrtr_state = MrtrState::new();
-
-            loop {
-                let request = ClientRequest::CallToolRequest(Request::new(params.clone()));
-                let handle = match bounds.try_run(client.peer().send_cancellable_request(request, peer_request_options(&options))).await {
-                    Ok(handle) => handle,
-                    Err(stop) => {
-                        yield stop.map_failure(ToolCallError::Send).into();
-                        return;
-                    }
-                };
-
-                let mut progress = client.handler().progress.subscribe(handle.progress_token.clone()).await;
-                let mut pending = pin!(bounds.run(await_tool_response(handle)));
-                let bounded = loop {
-                    tokio::select! {
-                        biased;
-                        progress_event = progress.next() => match progress_event {
-                            Some(progress_event) => yield ToolCallEvent::Progress(progress_event),
-                            None => break pending.await,
-                        },
-                        bounded = pending.as_mut() => break bounded,
-                    }
-                };
-
-                let response = match bounded {
-                    Ok(response) => response,
-                    Err(interrupted) => {
-                        yield interrupted.into();
-                        return;
-                    }
-                };
-
-                match response {
-                    Ok(CallToolResponse::Complete(result)) => {
-                        yield ToolCallEvent::Complete(Ok(result));
-                        return;
-                    }
-                    Ok(CallToolResponse::InputRequired(input_required)) => match mrtr_state.tick(input_required) {
-                        MrtrAction::Poll { backoff, request_state } => {
-                            if let Err(interrupted) = bounds.run(sleep(backoff)).await {
-                                yield interrupted.into();
-                                return;
-                            }
-                            params.input_responses = None;
-                            params.request_state = Some(request_state);
-                        }
-                        MrtrAction::Elicit { input_requests, request_state } => {
-                            match bounds.try_run(client.handler().elicit_inputs(input_requests)).await {
-                                Ok((responses, cancelled)) => {
-                                    mrtr_state.record_cancelled(cancelled);
-                                    params.input_responses = Some(responses);
-                                    params.request_state = request_state;
-                                }
-                                Err(stop) => {
-                                    yield stop.map_failure(|UnsupportedInput| ToolCallError::UnsupportedInput).into();
-                                    return;
-                                }
-                            }
-                        }
-                        MrtrAction::Abort(reason) => {
-                            yield ToolCallError::Aborted(reason).into();
-                            return;
-                        }
-                    },
-                    Ok(CallToolResponse::Task(created)) => {
-                        let mut events = pin!(task_events(&client, &bounds, created, progress));
-                        while let Some(event) = events.next().await {
-                            yield event;
-                        }
-                        return;
-                    }
-                    Ok(_) => {
-                        yield ToolCallError::UnsupportedResponse.into();
-                        return;
-                    }
-                    Err(e) => {
-                        yield ToolCallError::Call(e).into();
-                        return;
-                    }
-                }
-            }
-        };
-
-        Self { events: Box::pin(events) }
+    pub(crate) fn new(client: McpClient, params: CallToolRequestParams, options: ToolCallOptions) -> Self {
+        let ToolCallOptions { timeout, meta, cancel } = options;
+        let events = stream_events(client.clone(), params, meta);
+        Self { events: Box::pin(bounded(client, events, timeout, cancel)) }
     }
 
     pub fn failed(error: ToolCallError) -> Self {
@@ -171,10 +89,8 @@ impl ToolCall {
 
     pub async fn result(mut self) -> Result<CallToolResult, ToolCallError> {
         while let Some(event) = self.next().await {
-            match event {
-                ToolCallEvent::Complete(result) | ToolCallEvent::TaskComplete { result, .. } => return result,
-                ToolCallEvent::Cancelled { .. } => return Err(ToolCallError::Cancelled),
-                ToolCallEvent::Progress(_) | ToolCallEvent::TaskCreated(_) | ToolCallEvent::TaskStatus(_) => {}
+            if let ToolCallEvent::Done { result, .. } = event {
+                return result;
             }
         }
         Err(ToolCallError::Cancelled)
@@ -189,35 +105,145 @@ impl Stream for ToolCall {
     }
 }
 
-impl From<Interrupted> for ToolCallEvent {
-    fn from(interrupted: Interrupted) -> Self {
-        match interrupted {
-            Interrupted::TimedOut(timeout) => ToolCallError::TimedOut(timeout).into(),
-            Interrupted::Cancelled => Self::Cancelled { task_id: None },
-        }
-    }
-}
-
-impl From<Stop<ToolCallError>> for ToolCallEvent {
-    fn from(stop: Stop<ToolCallError>) -> Self {
-        match stop {
-            Stop::Interrupted(interrupted) => interrupted.into(),
-            Stop::Failed(error) => error.into(),
-        }
-    }
-}
-
 impl From<ToolCallError> for ToolCallEvent {
     fn from(error: ToolCallError) -> Self {
-        Self::Complete(Err(error))
+        Self::Done { task: None, result: Err(error) }
     }
 }
 
-fn peer_request_options(options: &ToolCallOptions) -> PeerRequestOptions {
-    options
-        .meta
-        .clone()
-        .map_or_else(PeerRequestOptions::no_options, |meta| PeerRequestOptions::no_options().with_meta(meta))
+fn bounded(
+    client: McpClient,
+    events: impl Stream<Item = ToolCallEvent> + Send + 'static,
+    timeout: Option<Duration>,
+    cancel: CancellationToken,
+) -> impl Stream<Item = ToolCallEvent> + Send + 'static {
+    stream! {
+        let mut events = Box::pin(events);
+        let mut expired = pin!(expiry(timeout));
+        let mut cancelled = pin!(cancel.cancelled());
+        let mut task = None;
+
+        let interrupted = loop {
+            tokio::select! {
+                biased;
+                event = events.next() => {
+                    let Some(event) = event else { return };
+                    match &event {
+                        ToolCallEvent::TaskCreated(created) => task = Some(created.task.clone()),
+                        ToolCallEvent::TaskStatus(status) => task = Some(status.clone()),
+                        ToolCallEvent::Progress(_) | ToolCallEvent::Done { .. } => {}
+                    }
+                    let done = matches!(event, ToolCallEvent::Done { .. });
+                    yield event;
+                    if done {
+                        return;
+                    }
+                }
+                timeout = &mut expired => break ToolCallError::TimedOut(timeout),
+                () = &mut cancelled => break ToolCallError::Cancelled,
+            }
+        };
+
+        drop(events);
+        if let Some(task) = &task {
+            cancel_server_task(&client, &task.task_id).await;
+        }
+        yield ToolCallEvent::Done { task, result: Err(interrupted) };
+    }
+}
+
+fn stream_events(
+    client: McpClient,
+    mut params: CallToolRequestParams,
+    meta: Option<RequestMetaObject>,
+) -> impl Stream<Item = ToolCallEvent> + Send + 'static {
+    stream! {
+        let mut mrtr_state = MrtrState::new();
+
+        loop {
+            let request = ClientRequest::CallToolRequest(Request::new(params.clone()));
+            let handle = match client.peer().send_cancellable_request(request, peer_request_options(meta.clone())).await {
+                Ok(handle) => handle,
+                Err(error) => {
+                    yield ToolCallError::Send(error).into();
+                    return;
+                }
+            };
+
+            let mut progress = client.handler().progress.subscribe(handle.progress_token.clone()).await;
+            let mut pending = pin!(await_tool_response(handle));
+            let response = loop {
+                tokio::select! {
+                    biased;
+                    progress_event = progress.next() => match progress_event {
+                        Some(progress_event) => yield ToolCallEvent::Progress(progress_event),
+                        None => break pending.await,
+                    },
+                    response = pending.as_mut() => break response,
+                }
+            };
+
+            match response {
+                Ok(CallToolResponse::Complete(result)) => {
+                    yield ToolCallEvent::Done { task: None, result: Ok(result) };
+                    return;
+                }
+                Ok(CallToolResponse::InputRequired(input_required)) => match mrtr_state.tick(input_required) {
+                    MrtrAction::Poll { backoff, request_state } => {
+                        sleep(backoff).await;
+                        params.input_responses = None;
+                        params.request_state = Some(request_state);
+                    }
+                    MrtrAction::Elicit { input_requests, request_state } => {
+                        match client.handler().elicit_inputs(input_requests).await {
+                            Ok((responses, cancelled)) => {
+                                mrtr_state.record_cancelled(cancelled);
+                                params.input_responses = Some(responses);
+                                params.request_state = request_state;
+                            }
+                            Err(UnsupportedInput) => {
+                                yield ToolCallError::UnsupportedInput.into();
+                                return;
+                            }
+                        }
+                    }
+                    MrtrAction::Abort(error) => {
+                        yield error.into();
+                        return;
+                    }
+                },
+                Ok(CallToolResponse::Task(created)) => {
+                    let mut events = pin!(stream_task_events(&client, created, progress));
+                    while let Some(event) = events.next().await {
+                        yield event;
+                    }
+                    return;
+                }
+                Ok(_) => {
+                    yield ToolCallError::UnsupportedResponse.into();
+                    return;
+                }
+                Err(error) => {
+                    yield ToolCallError::Call(error).into();
+                    return;
+                }
+            }
+        }
+    }
+}
+
+async fn expiry(timeout: Option<Duration>) -> Duration {
+    match timeout.and_then(|timeout| Some((Instant::now().checked_add(timeout)?, timeout))) {
+        Some((deadline, timeout)) => {
+            sleep_until(deadline).await;
+            timeout
+        }
+        None => pending().await,
+    }
+}
+
+fn peer_request_options(meta: Option<RequestMetaObject>) -> PeerRequestOptions {
+    meta.map_or_else(PeerRequestOptions::no_options, |meta| PeerRequestOptions::no_options().with_meta(meta))
 }
 
 async fn await_tool_response(handle: RequestHandle<RoleClient>) -> Result<CallToolResponse, ServiceError> {

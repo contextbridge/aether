@@ -1,12 +1,11 @@
-use super::bounds::{Bounds, Interrupted, Stop};
 use super::tool_call::{ToolCallError, ToolCallEvent};
 use crate::client::McpClient;
 use crate::client::handler::UnsupportedInput;
 use async_stream::stream;
 use futures::{Stream, StreamExt};
 use rmcp::model::{
-    CancelTaskParams, CreateTaskResult, GetTaskParams, InputRequests, InputResponses, ProgressNotificationParam, Task,
-    TaskPayload, TaskStatus, UpdateTaskParams,
+    CancelTaskParams, CreateTaskResult, GetTaskParams, InputRequests, ProgressNotificationParam, Task, TaskPayload,
+    TaskStatus, UpdateTaskParams,
 };
 use rmcp::service::ServiceError;
 use std::collections::HashSet;
@@ -31,22 +30,19 @@ pub enum TaskErrorReason {
     Cancelled,
     #[error("returned a malformed result: {0}")]
     MalformedResult(#[source] serde_json::Error),
-    #[error("requested an input kind this client does not support (sampling or roots)")]
-    UnsupportedInput,
     #[error("returned a task payload this client does not support (status {status:?})")]
     UnsupportedPayload { status: TaskStatus },
 }
 
-pub(super) fn task_events<'a>(
+pub(super) fn stream_task_events<'a>(
     client: &'a McpClient,
-    bounds: &'a Bounds,
     created: CreateTaskResult,
     progress: impl Stream<Item = ProgressNotificationParam> + 'a,
 ) -> impl Stream<Item = ToolCallEvent> + 'a {
     stream! {
         yield ToolCallEvent::TaskCreated(created.clone());
         let mut progress = pin!(progress);
-        let mut polled = pin!(poll_task(client, bounds, created.task));
+        let mut polled = pin!(poll_task(client, created.task));
 
         loop {
             tokio::select! {
@@ -69,9 +65,20 @@ pub(super) fn task_events<'a>(
     }
 }
 
-fn poll_task<'a>(client: &'a McpClient, bounds: &'a Bounds, mut task: Task) -> impl Stream<Item = ToolCallEvent> + 'a {
+pub(super) async fn cancel_server_task(client: &McpClient, task_id: &str) {
+    let server_name = client.name();
+    match timeout(Duration::from_secs(1), client.peer().cancel_task(CancelTaskParams::new(task_id))).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            tracing::warn!(server = %server_name, %task_id, "Failed to cancel abandoned MCP task: {error}");
+        }
+        Err(_) => tracing::warn!(server = %server_name, %task_id, "Timed out cancelling abandoned MCP task"),
+    }
+}
+
+fn poll_task<'a>(client: &'a McpClient, mut task: Task) -> impl Stream<Item = ToolCallEvent> + 'a {
     stream! {
-        let mut input_state = TaskInputState::default();
+        let mut answered = HashSet::new();
 
         loop {
             if is_task_expired(&task) {
@@ -79,11 +86,10 @@ fn poll_task<'a>(client: &'a McpClient, bounds: &'a Bounds, mut task: Task) -> i
                 return;
             }
 
-            let params = GetTaskParams::new(task.task_id.clone());
-            let detailed_task = match bounds.try_run(client.peer().get_task(params)).await {
+            let detailed_task = match client.peer().get_task(GetTaskParams::new(task.task_id.clone())).await {
                 Ok(result) => result.task,
-                Err(stop) => {
-                    yield stopped(client, task, stop.map_failure(TaskErrorReason::Get)).await;
+                Err(error) => {
+                    yield abandoned(client, task, TaskErrorReason::Get(error)).await;
                     return;
                 }
             };
@@ -96,16 +102,16 @@ fn poll_task<'a>(client: &'a McpClient, bounds: &'a Bounds, mut task: Task) -> i
             match detailed_task.payload {
                 TaskPayload::Working => {}
                 TaskPayload::InputRequired { input_requests } => {
-                    let answered = answer_inputs(client, &task.task_id, input_requests, &mut input_state);
-                    if let Err(stop) = bounds.try_run(answered).await {
-                        yield stopped(client, task, stop).await;
+                    if let Err(error) = answer_inputs(client, &task.task_id, input_requests, &mut answered).await {
+                        cancel_server_task(client, &task.task_id).await;
+                        yield ToolCallEvent::Done { task: Some(task), result: Err(error) };
                         return;
                     }
                 }
                 TaskPayload::Completed { result } => {
                     let result = serde_json::from_value(serde_json::Value::Object(result))
                         .map_err(|source| task_error(&task.task_id, TaskErrorReason::MalformedResult(source)));
-                    yield ToolCallEvent::TaskComplete { task, result };
+                    yield ToolCallEvent::Done { task: Some(task), result };
                     return;
                 }
                 TaskPayload::Failed { error } => {
@@ -123,63 +129,33 @@ fn poll_task<'a>(client: &'a McpClient, bounds: &'a Bounds, mut task: Task) -> i
                 }
             }
 
-            let poll_interval = task.poll_interval_ms.map_or(DEFAULT_POLL_INTERVAL, Duration::from_millis);
-            if let Err(interrupted) = bounds.run(sleep(poll_interval)).await {
-                yield stopped(client, task, Stop::Interrupted(interrupted)).await;
-                return;
-            }
+            sleep(task.poll_interval_ms.map_or(DEFAULT_POLL_INTERVAL, Duration::from_millis)).await;
         }
     }
 }
 
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
-#[derive(Default)]
-struct TaskInputState {
-    answered_keys: HashSet<String>,
-}
-
-impl TaskInputState {
-    fn check(&self, input_requests: &InputRequests) -> Result<(), TaskErrorReason> {
-        if input_requests.keys().any(|key| self.answered_keys.contains(key)) {
-            return Err(TaskErrorReason::RepeatedInput);
-        }
-        Ok(())
-    }
-
-    fn record_answered(&mut self, responses: &InputResponses) {
-        self.answered_keys.extend(responses.keys().cloned());
-    }
-}
-
 async fn answer_inputs(
     client: &McpClient,
     task_id: &str,
     input_requests: InputRequests,
-    input_state: &mut TaskInputState,
-) -> Result<(), TaskErrorReason> {
-    input_state.check(&input_requests)?;
+    answered: &mut HashSet<String>,
+) -> Result<(), ToolCallError> {
+    if input_requests.keys().any(|key| answered.contains(key)) {
+        return Err(task_error(task_id, TaskErrorReason::RepeatedInput));
+    }
     let (responses, _) = client
         .handler()
         .elicit_inputs(input_requests)
         .await
-        .map_err(|UnsupportedInput| TaskErrorReason::UnsupportedInput)?;
-    input_state.record_answered(&responses);
-    client.peer().update_task(UpdateTaskParams::new(task_id, responses)).await.map_err(TaskErrorReason::Update)
-}
-
-async fn stopped(client: &McpClient, task: Task, stop: Stop<TaskErrorReason>) -> ToolCallEvent {
-    match stop {
-        Stop::Interrupted(Interrupted::TimedOut(timeout)) => {
-            cancel_server_task(client, &task.task_id).await;
-            ToolCallEvent::TaskComplete { task, result: Err(ToolCallError::TimedOut(timeout)) }
-        }
-        Stop::Interrupted(Interrupted::Cancelled) => {
-            cancel_server_task(client, &task.task_id).await;
-            ToolCallEvent::Cancelled { task_id: Some(task.task_id) }
-        }
-        Stop::Failed(reason) => abandoned(client, task, reason).await,
-    }
+        .map_err(|UnsupportedInput| ToolCallError::UnsupportedInput)?;
+    answered.extend(responses.keys().cloned());
+    client
+        .peer()
+        .update_task(UpdateTaskParams::new(task_id, responses))
+        .await
+        .map_err(|error| task_error(task_id, TaskErrorReason::Update(error)))
 }
 
 async fn abandoned(client: &McpClient, task: Task, reason: TaskErrorReason) -> ToolCallEvent {
@@ -189,22 +165,11 @@ async fn abandoned(client: &McpClient, task: Task, reason: TaskErrorReason) -> T
 
 fn failed(task: Task, reason: TaskErrorReason) -> ToolCallEvent {
     let error = task_error(&task.task_id, reason);
-    ToolCallEvent::TaskComplete { task, result: Err(error) }
+    ToolCallEvent::Done { task: Some(task), result: Err(error) }
 }
 
 fn task_error(task_id: &str, reason: TaskErrorReason) -> ToolCallError {
     ToolCallError::Task { task_id: task_id.to_string(), reason: Box::new(reason) }
-}
-
-async fn cancel_server_task(client: &McpClient, task_id: &str) {
-    let server_name = client.name();
-    match timeout(Duration::from_secs(1), client.peer().cancel_task(CancelTaskParams::new(task_id))).await {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => {
-            tracing::warn!(server = %server_name, %task_id, "Failed to cancel abandoned MCP task: {error}");
-        }
-        Err(_) => tracing::warn!(server = %server_name, %task_id, "Timed out cancelling abandoned MCP task"),
-    }
 }
 
 fn is_task_expired(task: &Task) -> bool {
