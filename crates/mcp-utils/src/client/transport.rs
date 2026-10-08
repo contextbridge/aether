@@ -5,12 +5,13 @@ use super::{
 };
 use crate::config::McpOAuthConfig;
 use crate::error::{McpError, Result};
-use crate::protocol::{client_lifecycle_mode, serve_in_memory};
 use crate::server::McpServer;
 use reqwest::header::HeaderMap;
 use rmcp::{
-    RoleClient, RoleServer, serve_client_with_lifecycle,
-    service::{DynService, RunningService},
+    ClientLifecycleMode, RoleClient,
+    model::ProtocolVersion,
+    serve_client_with_lifecycle,
+    service::RunningService,
     transport::{
         IntoTransport, StreamableHttpClientTransport, TokioChildProcess,
         streamable_http_client::StreamableHttpClientTransportConfig,
@@ -34,11 +35,6 @@ pub enum Transport {
     Unix(PathBuf),
 }
 
-pub(super) struct Session {
-    pub(super) service: ClientService,
-    pub(super) hosted: Option<RunningService<RoleServer, Box<dyn DynService<RoleServer>>>>,
-}
-
 pub(super) type ClientService = RunningService<RoleClient, Arc<Handler>>;
 
 impl Transport {
@@ -47,17 +43,15 @@ impl Transport {
             && matches!(self, Self::Http { headers, oauth, .. } if ResolvedOAuth::resolve(headers, oauth.as_ref(), options).is_some())
     }
 
-    pub(super) async fn connect(self, handler: Handler, options: &ClientOptions) -> Result<Session> {
+    pub(super) async fn connect(self, handler: Handler, options: &ClientOptions) -> Result<ClientService> {
         let handler = Arc::new(handler);
         match self {
             Self::Stdio { command, args, env } => {
-                connect_stdio(handler, command, args, env, options.cwd.as_deref()).await.map(Session::from)
+                connect_stdio(handler, command, args, env, options.cwd.as_deref()).await
             }
-            Self::Http { url, headers, oauth } => {
-                connect_http(handler, url, headers, oauth, options).await.map(Session::from)
-            }
-            Self::InProcess(server) => connect_in_process(handler, server).await,
-            Self::Unix(path) => connect_unix(handler, path).await.map(Session::from),
+            Self::Http { url, headers, oauth } => connect_http(handler, url, headers, oauth, options).await,
+            Self::InProcess(server) => serve(handler, server.serve_in_memory()).await,
+            Self::Unix(path) => connect_unix(handler, path).await,
         }
     }
 
@@ -66,7 +60,7 @@ impl Transport {
         handler: Handler,
         options: &ClientOptions,
         challenge: Option<String>,
-    ) -> Result<Session> {
+    ) -> Result<ClientService> {
         let server = handler.server().to_string();
         let resolved = match &self {
             Self::Http { headers, oauth, .. } => ResolvedOAuth::resolve(headers, oauth.as_ref(), options),
@@ -77,13 +71,20 @@ impl Transport {
         };
         let auth_client = oauth::authorize(&server, &url, resolved, options, challenge).await?;
         let transport = StreamableHttpClientTransport::with_client(auth_client, http_config(url, headers));
-        serve(Arc::new(handler), transport).await.map(Session::from)
+        serve(Arc::new(handler), transport).await
     }
 }
 
-impl From<ClientService> for Session {
-    fn from(service: ClientService) -> Self {
-        Self { service, hosted: None }
+pub(crate) fn client_lifecycle_mode() -> ClientLifecycleMode {
+    ClientLifecycleMode::Auto {
+        preferred_versions: vec![
+            ProtocolVersion::V_2026_07_28,
+            ProtocolVersion::V_2025_11_25,
+            ProtocolVersion::V_2025_06_18,
+            ProtocolVersion::V_2025_03_26,
+            ProtocolVersion::V_2024_11_05,
+        ],
+        legacy_version: Some(ProtocolVersion::V_2025_11_25),
     }
 }
 
@@ -144,13 +145,6 @@ async fn connect_http(
             McpError::connect(server, error)
         }
     })
-}
-
-async fn connect_in_process(handler: Arc<Handler>, server: McpServer) -> Result<Session> {
-    let name = handler.server().to_string();
-    let (hosted, service) = serve_in_memory(server.service(), handler).await;
-    let service = service.map_err(|source| McpError::connect(name, source))?;
-    Ok(Session { service, hosted: Some(hosted?) })
 }
 
 async fn connect_unix(handler: Arc<Handler>, path: PathBuf) -> Result<ClientService> {

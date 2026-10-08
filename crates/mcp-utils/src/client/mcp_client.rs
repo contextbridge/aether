@@ -1,4 +1,4 @@
-use super::transport::Session;
+use super::transport::ClientService;
 use super::{ClientOptions, ToolCall, ToolCallOptions, Transport, handler::Handler};
 use crate::error::McpError;
 use futures::future::{BoxFuture, FutureExt, Shared};
@@ -27,7 +27,7 @@ impl McpClient {
         transport: Transport,
         options: &ClientOptions,
     ) -> Result<Self, McpError> {
-        transport.connect(Handler::new(name.into(), options), options).await.map(Self::from_session)
+        transport.connect(Handler::new(name.into(), options), options).await.map(Self::from_service)
     }
 
     pub async fn authorize(
@@ -36,7 +36,7 @@ impl McpClient {
         options: &ClientOptions,
         challenge: Option<String>,
     ) -> Result<Self, McpError> {
-        transport.authorize(Handler::new(name.into(), options), options, challenge).await.map(Self::from_session)
+        transport.authorize(Handler::new(name.into(), options), options, challenge).await.map(Self::from_service)
     }
 
     pub fn name(&self) -> &str {
@@ -101,11 +101,11 @@ impl McpClient {
         self.peer.peer_info().is_some_and(|info| info.capabilities.prompts.is_some())
     }
 
-    fn from_session(session: Session) -> Self {
-        let peer = session.service.peer().clone();
-        let handler = Arc::clone(session.service.service());
+    fn from_service(service: ClientService) -> Self {
+        let peer = service.peer().clone();
+        let handler = Arc::clone(service.service());
         let cancel = CancellationToken::new();
-        let closed = tokio::spawn(close_once_cancelled(session, cancel.clone())).map(|_| ()).boxed().shared();
+        let closed = tokio::spawn(close_once_cancelled(service, cancel.clone())).map(|_| ()).boxed().shared();
         let shutdown = Shutdown { _cancel_on_drop: cancel.clone().drop_guard(), cancel, closed };
         Self { peer, handler, shutdown: Arc::new(shutdown) }
     }
@@ -119,13 +119,10 @@ struct Shutdown {
 
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
-async fn close_once_cancelled(Session { mut service, hosted }: Session, cancel: CancellationToken) {
+async fn close_once_cancelled(mut service: ClientService, cancel: CancellationToken) {
     cancel.cancelled().await;
     let server = service.service().server().to_string();
     log_close(&server, service.close_with_timeout(CLOSE_TIMEOUT).await);
-    if let Some(mut hosted) = hosted {
-        log_close(&server, hosted.close_with_timeout(CLOSE_TIMEOUT).await);
-    }
 }
 
 fn non_empty(text: Option<&String>) -> Option<String> {
