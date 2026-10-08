@@ -1,9 +1,10 @@
 use aether_core::context::CompactionConfig;
 use aether_core::events::{AgentEvent, LlmCallOutcome, SubAgentProgressPayload, ToolEvent, TurnEvent, TurnOutcome};
-use aether_core::testing::{FakeMcpServer, FakeTool, FakeToolResponse, TestScenario, fast_retry, test_agent};
+use aether_core::testing::{TestScenario, fast_retry, test_agent};
 use llm::alloyed::AlloyedModelProvider;
 use llm::testing::{FakeLlmProvider, llm_response, priced_model, session_usage_event};
 use llm::{ChatMessage, LlmCallPurpose, LlmModel, ProviderError, SessionUsageEvent, TokenUsage, UsageSource, Usd};
+use mcp_utils::testing::{FakeMcpServer, FakeTool, FakeToolResponse};
 use std::sync::Arc;
 use tokio::sync::Notify;
 

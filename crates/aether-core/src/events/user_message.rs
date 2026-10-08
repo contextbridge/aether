@@ -1,4 +1,4 @@
-use llm::{ChatMessage, ContentBlock, MessageId, ReasoningEffort, StreamingModelProvider, ToolDefinition};
+use llm::{ChatMessage, ContentBlock, MessageId, ReasoningEffort, StreamingModelProvider};
 
 /// The unified command type sent to the agent input channel.
 ///
@@ -57,13 +57,8 @@ impl std::fmt::Debug for UserCommand {
 
 /// Runtime-internal operations that modify agent state without user interaction.
 ///
-/// These are sent by the runtime controller or MCP event pumps to update
-/// tools, model, instructions, or to sync conversation history across
-/// agent runtimes.
 pub enum AgentCommand {
     SwitchModel(Box<dyn StreamingModelProvider>),
-    UpdateTools(Vec<ToolDefinition>),
-    UpdateMcpInstructions { server: String, body: Option<String> },
     SetReasoningEffort(Option<ReasoningEffort>),
     ReplaceConversation(Vec<ChatMessage>),
 }
@@ -74,12 +69,6 @@ impl std::fmt::Debug for AgentCommand {
             AgentCommand::SwitchModel(provider) => {
                 f.debug_tuple("SwitchModel").field(&provider.display_name()).finish()
             }
-            AgentCommand::UpdateTools(tools) => f.debug_tuple("UpdateTools").field(&tools.len()).finish(),
-            AgentCommand::UpdateMcpInstructions { server, body } => f
-                .debug_struct("UpdateMcpInstructions")
-                .field("server", server)
-                .field("body_len", &body.as_ref().map(String::len))
-                .finish(),
             AgentCommand::SetReasoningEffort(effort) => f.debug_tuple("SetReasoningEffort").field(effort).finish(),
             AgentCommand::ReplaceConversation(messages) => {
                 f.debug_tuple("ReplaceConversation").field(&messages.len()).finish()

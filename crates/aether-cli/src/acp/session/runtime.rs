@@ -1,15 +1,13 @@
 use super::agent_key::AgentKey;
 use super::error::SessionError;
 use crate::runtime::{Runtime, RuntimeBuilder};
-use aether_auth::OAuthHandler;
 use aether_core::agent_spec::AgentSpec;
 use aether_core::core::{AgentDeps, AgentHandle};
 use aether_core::events::{AgentCommand, AgentEvent, Command};
-use aether_core::mcp::{McpHandle, McpRuntime};
+use aether_core::mcp::McpRuntime;
 use llm::{ChatMessage, SessionUsageEvent};
-use mcp_utils::client::{
-    ElicitingOAuthHandler, McpClientEvent, McpConnectionDetails, McpError, McpServer, OAuthHandlerFactory,
-};
+use mcp_utils::client::Elicitation;
+use mcp_utils::gateway::{McpCatalog, McpGateway, ServerSpec};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
@@ -17,11 +15,12 @@ use utils::mcp_status::McpServerStatusEntry;
 
 pub(crate) struct AgentRuntime {
     pub(crate) agent_rx: mpsc::Receiver<AgentEvent>,
-    pub(crate) event_rx: mpsc::Receiver<McpClientEvent>,
+    pub(crate) event_rx: mpsc::Receiver<Elicitation>,
+    pub(crate) mcp_catalog: watch::Receiver<Arc<McpCatalog>>,
     agent_tx: mpsc::Sender<Command>,
-    latest_mcp_snapshot: watch::Receiver<McpConnectionDetails>,
     agent_handle: Option<AgentHandle>,
     mcp_runtime: McpRuntime,
+    reported_statuses: Vec<McpServerStatusEntry>,
 }
 
 impl AgentRuntime {
@@ -29,11 +28,11 @@ impl AgentRuntime {
         agent_tx: mpsc::Sender<Command>,
         agent_rx: mpsc::Receiver<AgentEvent>,
         agent_handle: Option<AgentHandle>,
-        event_rx: mpsc::Receiver<McpClientEvent>,
+        event_rx: mpsc::Receiver<Elicitation>,
         mcp_runtime: McpRuntime,
     ) -> Self {
-        let latest_mcp_snapshot = mcp_runtime.handle().subscribe();
-        Self { agent_rx, event_rx, agent_tx, latest_mcp_snapshot, agent_handle, mcp_runtime }
+        let mcp_catalog = mcp_runtime.gateway().subscribe();
+        Self { agent_rx, event_rx, mcp_catalog, agent_tx, agent_handle, mcp_runtime, reported_statuses: Vec::new() }
     }
 
     pub(crate) async fn shutdown(mut self) {
@@ -55,12 +54,22 @@ impl AgentRuntime {
             .map_err(|_| SessionError::CommandChannelClosed)
     }
 
-    pub(crate) fn mcp(&self) -> &McpHandle {
-        self.mcp_runtime.handle()
+    pub(crate) fn mcp(&self) -> &McpGateway {
+        self.mcp_runtime.gateway()
     }
 
-    pub(crate) fn mcp_server_statuses(&self) -> Vec<McpServerStatusEntry> {
-        self.latest_mcp_snapshot.borrow().server_statuses()
+    pub(crate) fn report_statuses(&mut self) -> Vec<McpServerStatusEntry> {
+        self.take_status_change();
+        self.reported_statuses.clone()
+    }
+
+    pub(crate) fn take_status_change(&mut self) -> Option<Vec<McpServerStatusEntry>> {
+        let statuses = self.mcp_catalog.borrow_and_update().statuses();
+        if statuses == self.reported_statuses {
+            return None;
+        }
+        self.reported_statuses.clone_from(&statuses);
+        Some(statuses)
     }
 }
 
@@ -88,13 +97,13 @@ pub(crate) trait RuntimeFactory: Send + Sync {
 
 pub(crate) struct ProductionRuntimeFactory {
     cwd: PathBuf,
-    mcp_servers: Vec<McpServer>,
+    mcp_servers: Vec<ServerSpec>,
     agent_deps: AgentDeps,
 }
 
 impl ProductionRuntimeFactory {
-    pub fn new(cwd: PathBuf, client_servers: Vec<McpServer>, agent_deps: AgentDeps) -> Self {
-        Self { cwd, mcp_servers: client_servers, agent_deps }
+    pub fn new(cwd: PathBuf, mcp_servers: Vec<ServerSpec>, agent_deps: AgentDeps) -> Self {
+        Self { cwd, mcp_servers, agent_deps }
     }
 }
 
@@ -109,27 +118,20 @@ impl RuntimeFactory for ProductionRuntimeFactory {
     ) -> Result<AgentRuntime, SessionError> {
         let extra_servers = self.mcp_servers.clone();
 
+        let (elicitations, event_rx) = mpsc::channel(ELICITATION_CAPACITY);
         let mut builder = RuntimeBuilder::from_spec(self.cwd.clone(), spec.clone())
             .extra_servers(extra_servers)
+            .elicitations(elicitations)
             .agent_deps(self.agent_deps.clone());
         if let Some(last) = usage_seed {
             builder = builder.resume_usage(last);
         }
-        if self.agent_deps.supports_mcp_url_elicitation() {
-            builder = builder.oauth_handler_factory(mcp_oauth_handler_factory());
-        }
 
-        let runtime = builder.build(None, Some(initial_messages)).await?;
+        let runtime = builder.build(initial_messages).await?;
 
-        let Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime } = runtime;
+        let Runtime { agent_tx, agent_rx, agent_handle, mcp_runtime } = runtime;
         Ok(AgentRuntime::new(agent_tx, agent_rx, Some(agent_handle), event_rx, mcp_runtime))
     }
 }
 
-fn mcp_oauth_handler_factory() -> OAuthHandlerFactory {
-    Arc::new(|ctx| {
-        ElicitingOAuthHandler::new(ctx)
-            .map(|handler| Arc::new(handler) as Arc<dyn OAuthHandler>)
-            .map_err(|error| McpError::ConnectionFailed(format!("failed to initialize OAuth handler: {error}")))
-    })
-}
+const ELICITATION_CAPACITY: usize = 32;

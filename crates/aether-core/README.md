@@ -106,6 +106,7 @@ use aether_core::core::{Command, Prompt, agent};
 use aether_core::events::{AgentEvent, MessageEvent, ToolEvent, TurnEvent};
 use aether_core::mcp::mcp;
 use llm::providers::openrouter::OpenRouterProvider;
+use mcp_utils::config::McpConfig;
 use std::io::{self, Write};
 
 #[tokio::main]
@@ -113,16 +114,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let llm = OpenRouterProvider::default("z-ai/glm-4.6")?;
 
     // 1. Connect to MCP servers
-    let mut mcp_runtime = mcp(".")
-        .from_json_files(&["mcp.json"])? // <-- Load MCP servers from one or more JSON files
-        .spawn() // <-- Spawn the MCP client into a tokio task (multiple agents can use it)
-        .await?;
-    let snapshot = mcp_runtime.block_until_ready().await.expect("MCP should initialize");
+    let mcp_runtime = mcp(".")
+        .with_config(McpConfig::from_json_files(&["mcp.json"])?)? // <-- Load MCP servers from one or more JSON files
+        .spawn()?; // <-- Start the MCP gateway; servers connect in the background
+    mcp_runtime.gateway().ready().await; // <-- Wait for every server to connect
 
     // 2. Create Agent
     let (tx, mut rx, _handle) = agent(llm)
         .system_prompt(Prompt::file("AGENTS.md", ".")) // <-- Load system prompt from AGENTS.md
-        .tools(mcp_runtime.handle().clone(), snapshot.tool_definitions()) // <-- Give the agent MCP tools
+        .mcp(mcp_runtime.gateway().clone()) // <-- Give the agent MCP tools, kept in sync as they change
         .spawn()
         .await?;
 

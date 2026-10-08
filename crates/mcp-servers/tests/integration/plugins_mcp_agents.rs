@@ -10,14 +10,14 @@ use futures::StreamExt;
 use mcp_servers::McpBuilderExt;
 use mcp_servers::subagents::SubAgentsMcp;
 use mcp_servers::subagents::tools::{SpawnSubAgentsInput, SubAgentTask};
-use mcp_utils::client::{CallToolOptions, CancellationToken, ToolCallEvent};
+use mcp_utils::client::{CancellationToken, ToolCallEvent, ToolCallOptions};
+use mcp_utils::testing::RawClient;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, DetailedTask, GetTaskParams,
     TaskPayload, TaskStatus,
 };
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tempfile::TempDir;
 
 fn spawn_input(tasks: &[(&str, &str)]) -> SpawnSubAgentsInput {
@@ -142,8 +142,8 @@ async fn test_spawn_agent_with_coding_mcp_from_settings_catalog() {
 #[tokio::test]
 async fn test_spawn_subagent_codex_uses_oauth_store() -> TestResult {
     let temp_dir = create_project_with_codex_agent();
-    let mcp = TestClient::start_with(
-        || {
+    let mcp = RawClient::connect(
+        {
             let deps = AgentDeps::new(Arc::new(FakeOAuthCredentialStore::new()), None)
                 .with_agent_registry(test_registry(temp_dir.path()));
             SubAgentsMcp::embedded(temp_dir.path().to_path_buf(), deps)
@@ -162,7 +162,7 @@ async fn test_spawn_subagent_codex_uses_oauth_store() -> TestResult {
 #[tokio::test]
 async fn spawn_subagent_empty_batch_completes_with_empty_output() -> TestResult {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    let mcp = TestClient::start_with(|| create_test_server(temp_dir.path()), test_client_info()).await?;
+    let mcp = RawClient::connect(create_test_server(temp_dir.path()), test_client_info()).await?;
 
     let parsed = call_complete(&mcp, spawn_input(&[])).await?;
 
@@ -176,7 +176,7 @@ async fn spawn_subagent_empty_batch_completes_with_empty_output() -> TestResult 
 #[tokio::test]
 async fn test_spawn_subagent_errors_when_no_invocable_agents() -> TestResult {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    let mcp = TestClient::start_with(|| create_test_server(temp_dir.path()), production_client_info()).await?;
+    let mcp = RawClient::connect(create_test_server(temp_dir.path()), production_client_info()).await?;
 
     let error =
         mcp.raw().call_tool_once(tool_request(spawn_input(&[("any-agent", "Do something")]))).await.unwrap_err();
@@ -191,7 +191,7 @@ async fn test_spawn_subagent_errors_when_no_invocable_agents() -> TestResult {
 #[tokio::test]
 async fn spawn_subagent_defaults_to_foreground_without_tasks_capability() -> TestResult {
     let temp_dir = create_project_with_invocable_agent();
-    let mcp = TestClient::start_with(|| create_test_server(temp_dir.path()), test_client_info()).await?;
+    let mcp = RawClient::connect(create_test_server(temp_dir.path()), test_client_info()).await?;
 
     let parsed = call_complete(&mcp, spawn_input(&[("nonexistent-agent", "Do something")])).await?;
 
@@ -265,8 +265,8 @@ async fn background_instrumentation_finishes_when_the_batch_settles() -> TestRes
     let project_root = temp_dir.path().to_path_buf();
     let finishes = Arc::new(Mutex::new(Vec::new()));
     let recorded = Arc::clone(&finishes);
-    let mcp = TestClient::start_with(
-        move || {
+    let mcp = RawClient::connect(
+        {
             let mut deps = AgentDeps::default().with_agent_registry(test_registry(&project_root));
             deps.observer_factory = Some(Arc::new(RecordingObserverFactory { finishes: recorded }));
             SubAgentsMcp::embedded(project_root.clone(), deps)
@@ -292,7 +292,7 @@ async fn background_instrumentation_finishes_when_the_batch_settles() -> TestRes
 #[tokio::test]
 async fn spawn_subagent_background_requires_tasks_capability() -> TestResult {
     let temp_dir = create_project_with_invocable_agent();
-    let mcp = TestClient::start_with(|| create_test_server(temp_dir.path()), test_client_info()).await?;
+    let mcp = RawClient::connect(create_test_server(temp_dir.path()), test_client_info()).await?;
 
     let error = mcp
         .raw()
@@ -304,11 +304,11 @@ async fn spawn_subagent_background_requires_tasks_capability() -> TestResult {
     Ok(())
 }
 
-async fn task_client(project_root: &Path) -> TestResult<TestClient<SubAgentsMcp>> {
-    TestClient::start_with(|| create_test_server(project_root), production_client_info()).await
+async fn task_client(project_root: &Path) -> TestResult<RawClient> {
+    Ok(RawClient::connect(create_test_server(project_root), production_client_info()).await?)
 }
 
-async fn await_terminal_task(client: &TestClient<SubAgentsMcp>, task_id: &str) -> TestResult<DetailedTask> {
+async fn await_terminal_task(client: &RawClient, task_id: &str) -> TestResult<DetailedTask> {
     loop {
         let task = client.raw().get_task(GetTaskParams::new(task_id.to_string())).await?.task;
         if task.status().is_terminal() {
@@ -323,7 +323,7 @@ fn tool_request(input: SpawnSubAgentsInput) -> CallToolRequestParams {
     CallToolRequestParams::new("spawn_subagent").with_arguments(arguments)
 }
 
-async fn call_complete(client: &TestClient<SubAgentsMcp>, input: SpawnSubAgentsInput) -> TestResult<serde_json::Value> {
+async fn call_complete(client: &RawClient, input: SpawnSubAgentsInput) -> TestResult<serde_json::Value> {
     let response = client.raw().call_tool_once(tool_request(input)).await?;
     let CallToolResponse::Complete(result) = response else {
         return Err(test_error(format!("expected completed response: {response:?}")).into());
@@ -331,7 +331,7 @@ async fn call_complete(client: &TestClient<SubAgentsMcp>, input: SpawnSubAgentsI
     result.structured_content.ok_or_else(|| test_error("completed response had no structured content").into())
 }
 
-async fn call_task(client: &TestClient<SubAgentsMcp>, input: SpawnSubAgentsInput) -> TestResult<serde_json::Value> {
+async fn call_task(client: &RawClient, input: SpawnSubAgentsInput) -> TestResult<serde_json::Value> {
     let response = client.raw().call_tool_once(tool_request(input)).await?;
     let CallToolResponse::Task(created) = response else {
         return Err(test_error(format!("expected task response: {response:?}")).into());
@@ -351,38 +351,41 @@ async fn call_subagent_through_manager(
     deps: AgentDeps,
     input: SpawnSubAgentsInput,
 ) -> TestResult<String> {
-    let mut spawn = mcp(project_root)
+    let runtime = mcp(project_root)
         .with_agent_deps(deps)
         .with_builtin_servers()
         .from_mcp_config_sources(&[McpConfigSource::Json(
             r#"{"servers":{"subagents":{"type":"in-memory","args":[]}}}"#.to_string(),
         )])?
-        .spawn()
-        .await?;
+        .spawn()?;
 
-    let snapshot = spawn.block_until_ready().await.ok_or_else(|| test_error("MCP bootstrap aborted"))?;
-    let tool = snapshot
-        .tool_definitions()
+    let tool = runtime
+        .gateway()
+        .ready()
+        .await
+        .tools()
         .into_iter()
         .find(|tool| tool.name.ends_with("spawn_subagent"))
         .ok_or_else(|| test_error("spawn_subagent tool missing"))?;
     let request = llm::ToolCallRequest {
         id: "runtime-registry-test".to_string(),
-        name: tool.name.clone(),
+        name: tool.name.to_string(),
         arguments: serde_json::to_string(&input)?,
     };
 
-    let options = CallToolOptions { timeout: Duration::MAX, meta: None, cancel: CancellationToken::new() };
-    let mut events = spawn.handle().call_model_visible(request.name.clone(), &request.arguments, options);
+    let arguments =
+        serde_json::to_value(&input)?.as_object().cloned().ok_or_else(|| test_error("input is an object"))?;
+    let options = ToolCallOptions { timeout: None, meta: None, cancel: CancellationToken::new() };
+    let mut events = runtime.gateway().call_tool(&request.name, arguments, options)?;
 
     while let Some(event) = events.next().await {
         match event {
-            ToolCallEvent::Complete(outcome) => {
-                let (result, _) = convert_tool_result(&request, outcome, &utils::temp_dir::TempDir::new())
+            ToolCallEvent::Done { task: None, result } => {
+                let (result, _) = convert_tool_result(&request, result, &utils::temp_dir::TempDir::new())
                     .map_err(|error| test_error(error.error))?;
                 return Ok(result.result);
             }
-            ToolCallEvent::TaskComplete { .. } => {
+            ToolCallEvent::Done { task: Some(_), .. } => {
                 return Err(test_error("foreground subagent call unexpectedly returned an MCP Task").into());
             }
             _ => {}
@@ -448,7 +451,7 @@ fn create_project_with_codex_agent() -> TempDir {
 /// instructions it advertises, which name the agents it will accept.
 async fn subagent_instructions(project_root: &Path, catalog: AgentCatalog) -> String {
     let deps = AgentDeps::default().with_agent_registry(catalog.registry().clone());
-    let mut spawn = mcp(project_root)
+    let runtime = mcp(project_root)
         .with_agent_deps(deps)
         .with_builtin_servers()
         .from_mcp_config_sources(&[McpConfigSource::Json(
@@ -456,11 +459,9 @@ async fn subagent_instructions(project_root: &Path, catalog: AgentCatalog) -> St
         )])
         .expect("Failed to configure subagents MCP")
         .spawn()
-        .await
-        .expect("Failed to spawn MCP manager");
+        .expect("Failed to spawn MCP gateway");
 
-    let snapshot = spawn.block_until_ready().await.expect("MCP bootstrap aborted");
-    snapshot.model_instructions().get("subagents").expect("Missing subagents instructions").clone()
+    runtime.gateway().ready().await.instructions().get("subagents").expect("Missing subagents instructions").clone()
 }
 
 /// The catalog a standalone server would discover from `test_dir`.

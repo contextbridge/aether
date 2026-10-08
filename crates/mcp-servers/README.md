@@ -66,7 +66,7 @@ These servers use Aether's `in-memory` transport type -- they run inside your ag
 }
 ```
 
-Each server key must match a factory registered with `McpBuilder::register_in_memory_server()`. Config loading only records a cloneable in-memory server specification and expands its variables. The factory is invoked exactly once during `McpBuilder::spawn`, after the runtime MCP handle exists. It receives the specification plus `RuntimeServices` containing the live `McpHandle`, root directory, and `AgentDeps`. The `args` array is parsed as CLI flags by each server:
+Each server key must match a factory registered with `McpBuilder::register_in_memory_server()`. Loading the config only expands the server's variables. The factory is invoked exactly once during `McpBuilder::spawn`, after the deferred-tools endpoint is bound. It receives the server's `InMemoryServerConfig` plus `RuntimeServices` containing the root directory, `AgentDeps`, and the shell environment for that endpoint. The `args` array is parsed as CLI flags by each server:
 
 | Server | Flag | Default | Description |
 |--------|------|---------|-------------|
@@ -83,25 +83,23 @@ To register factories and load the config:
 ```rust,ignore
 use aether_core::mcp::mcp;
 use mcp_servers::McpBuilderExt;
+use mcp_utils::config::McpConfig;
 
 let builder = mcp("/my/project")
     .with_agent_deps(deps)
     .with_builtin_servers()
-    .from_json_files(&["mcp.json"])?;
+    .with_config(McpConfig::from_json_files(&["mcp.json"])?)?;
 
 // Built-in factories have not run yet. They receive RuntimeServices here.
-let runtime = builder.spawn().await?;
+let runtime = builder.spawn()?;
 ```
 
 Custom factories use the same lazy signature:
 
 ```rust,ignore
-builder.register_in_memory_server("custom", Box::new(|spec, services| {
-    async move {
-        CustomMcp::new(spec.args, services.root_dir, services.mcp).into_dyn()
-    }
-    .boxed()
-}));
+builder.register_in_memory_server("custom", |config, services| {
+    McpServer::new(CustomMcp::new(config.args, services.root_dir))
+});
 ```
 
 ## Programmatic Usage
@@ -120,18 +118,19 @@ Create and start servers directly:
 
 ```rust,ignore
 use mcp_servers::{CodingMcp, SkillsMcp, TasksMcp};
-use rmcp::ServiceExt;
+use mcp_utils::server::McpServer;
 
 // Create a coding server
-let server = CodingMcp::new()
-    .with_root_dir("/my/project".into())
-    .into_dyn();
+let server = McpServer::new(CodingMcp::new().with_root_dir("/my/project".into()));
 
 // Or with LSP support
-let server = CodingMcp::new()
-    .with_root_dir("/my/project".into())
-    .with_lsp("/my/project".into())
-    .into_dyn();
+let server = McpServer::new(
+    CodingMcp::new()
+        .with_root_dir("/my/project".into())
+        .with_lsp("/my/project".into()),
+);
+
+server.serve_stdio().await?;
 ```
 
 ## Server Documentation

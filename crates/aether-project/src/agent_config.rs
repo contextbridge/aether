@@ -1,6 +1,6 @@
 use crate::{McpSourceSpec, PromptSource};
 use llm::{ModelSettings, ProviderConnectionOverrides, ReasoningEffort};
-use mcp_utils::client::ToolFilter;
+use mcp_utils::gateway::ToolFilter;
 
 #[doc = include_str!("docs/agent_config.md")]
 #[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]

@@ -1,6 +1,8 @@
 use aether_auth::OAuthError;
+use aether_core::mcp::McpSpawnError;
 use aether_project::SettingsError;
 use aether_telemetry::TelemetryInitError;
+use mcp_utils::config::ParseError;
 use std::io;
 use thiserror::Error;
 
@@ -20,8 +22,10 @@ pub enum CliError {
     Telemetry(#[from] TelemetryInitError),
     #[error("Model error: {0}")]
     ModelError(String),
+    #[error("Invalid MCP config: {0}")]
+    McpConfig(#[from] ParseError),
     #[error("MCP error: {0}")]
-    McpError(String),
+    McpSpawn(#[from] McpSpawnError),
     #[error("IO error: {0}")]
     IoError(#[from] io::Error),
     #[error("Agent error: {0}")]

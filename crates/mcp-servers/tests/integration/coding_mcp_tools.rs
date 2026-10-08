@@ -5,6 +5,7 @@ use mcp_servers::coding::tools::bash::BashInput;
 use mcp_servers::coding::tools::read_file::ReadFileArgs;
 use mcp_servers::coding::tools::web_fetch::{HttpResponse, WebFetchInput};
 use mcp_servers::testing::FakeHttpClient;
+use mcp_utils::client::ToolCallError;
 use std::fs::{canonicalize, read_to_string};
 use utils::temp_dir::TempDir;
 use utils::tool_result_truncator::saved_path;
@@ -46,8 +47,8 @@ async fn full_read_file_pages_reach_the_llm_whole() -> TestResult {
         .await?;
 
     let request = ToolCallRequest { id: "read".into(), name: "coding__read_file".into(), arguments: "{}".into() };
-    let (result, _) =
-        convert_tool_result(&request, Ok(page), &TempDir::new()).map_err(|error| test_error(error.error))?;
+    let (result, _) = convert_tool_result(&request, Ok::<_, ToolCallError>(page), &TempDir::new())
+        .map_err(|error| test_error(error.error))?;
 
     assert!(!result.result.contains("bytes omitted"), "{}", result.result);
     assert!(result.result.contains("nextOffset"), "{}", result.result);
@@ -174,8 +175,8 @@ async fn test_bash_pwd_uses_workspace_root() -> TestResult {
 #[tokio::test]
 async fn coding_tool_catalog_uses_bash_for_search_and_directory_listings() -> TestResult {
     let workspace = CodingWorkspace::new().await?;
-    let catalog = workspace.client.raw().list_tools(None).await?;
-    let names: Vec<_> = catalog.tools.iter().map(|tool| tool.name.as_ref()).collect();
+    let catalog = workspace.client.mcp().list_tools().await?;
+    let names: Vec<_> = catalog.iter().map(|tool| tool.name.as_ref()).collect();
     for retained in ["bash", "read_file", "write_file", "edit_file", "lsp_symbol"] {
         assert!(names.contains(&retained), "missing tool {retained}: {names:?}");
     }

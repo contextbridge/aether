@@ -2,8 +2,8 @@ use aether_core::core::{AgentDeps, Prompt};
 use aether_core::events::{
     AgentEvent, Command, ContextEvent, MessageEvent, ModelEvent, ToolEvent, TurnEvent, TurnOutcome,
 };
-use aether_core::mcp::McpHandle;
 use aether_telemetry::TelemetryRuntime;
+use mcp_utils::gateway::McpGateway;
 use std::io;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -40,13 +40,14 @@ async fn run_agent(config: RunConfig, telemetry: Option<Arc<TelemetryRuntime>>) 
     let deps =
         AgentDeps::new(config.oauth_credential_store, telemetry.as_ref().map(|runtime| runtime.observer_factory()))
             .with_agent_registry(registry);
-    let (agent, _mcp_snapshot) = RuntimeBuilder::from_spec(config.cwd.clone(), spec)
+    let agent = RuntimeBuilder::from_spec(config.cwd.clone(), spec)
         .mcp_sources(config.mcp_config_sources)
         .agent_deps(deps)
-        .build_ready(vec![])
+        .wait_for_mcp()
+        .build(Vec::new())
         .await?;
 
-    let prompt = expand_prompt(agent.mcp_runtime.handle(), config.prompt).await;
+    let prompt = expand_prompt(agent.mcp_runtime.gateway(), config.prompt).await;
 
     agent
         .agent_tx
@@ -62,7 +63,7 @@ async fn run_agent(config: RunConfig, telemetry: Option<Arc<TelemetryRuntime>>) 
     Ok(exit_code)
 }
 
-async fn expand_prompt(mcp: &McpHandle, prompt: String) -> String {
+async fn expand_prompt(mcp: &McpGateway, prompt: String) -> String {
     let Some(slash_command) = parse_slash_command(&prompt) else {
         return prompt;
     };

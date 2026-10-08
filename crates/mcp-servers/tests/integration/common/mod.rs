@@ -10,15 +10,13 @@ use mcp_servers::skills::{
     tools::{LoadSkillsInput, SkillRequest},
 };
 use mcp_servers::testing::FakeHttpClient;
-use mcp_utils::client::{McpClient, client_capabilities};
-use mcp_utils::testing::{ElicitationScript, connect};
-use rmcp::RoleClient;
-use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ClientCapabilities, ClientConfig, ElicitResult, Implementation,
-};
-use rmcp::service::RunningService;
-use rmcp::{RoleServer, Service};
+use mcp_utils::client::{ClientOptions, McpClient, ToolCallOptions};
+use mcp_utils::server::McpServer;
+use mcp_utils::testing::{ElicitationScript, args, connect};
+use rmcp::ServerHandler;
+use rmcp::model::{CallToolResult, ClientCapabilities, ClientConfig, ElicitResult, Implementation};
 use serde::Serialize;
+use serde_json::Value;
 use std::fs::{create_dir_all, read_to_string};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -35,25 +33,18 @@ pub fn test_client_info() -> ClientConfig {
     ClientConfig::new(ClientCapabilities::default(), Implementation::new("test-client", "0.1.0"))
 }
 
-/// Client info declaring the same capabilities `McpManager` advertises in
-/// production: form + url elicitation and MCP tasks.
 pub fn production_client_info() -> ClientConfig {
-    ClientConfig::new(client_capabilities(), Implementation::new("test-client", "0.1.0"))
+    silent_client().client_config()
 }
 
-/// An `McpClient` whose elicitation events go nowhere; elicitation-dependent
-/// calls resolve as Cancel.
-pub fn silent_mcp_client(server_name: &str) -> McpClient {
+pub fn silent_client() -> ClientOptions {
     let (event_tx, _event_rx) = mpsc::channel(8);
-    McpClient::new(production_client_info(), server_name.to_string(), event_tx)
+    ClientOptions::default().elicitation(event_tx)
 }
 
-/// An `McpClient` plus a script answering the next elicitation request with
-/// `response` and capturing what arrived for assertions.
-pub fn scripted_mcp_client(server_name: &str, response: ElicitResult) -> (McpClient, ElicitationScript) {
+pub fn scripted_client(response: ElicitResult) -> (ClientOptions, ElicitationScript) {
     let (event_tx, event_rx) = mpsc::channel(8);
-    let client = McpClient::new(production_client_info(), server_name.to_string(), event_tx);
-    (client, ElicitationScript::spawn(event_rx, [response]))
+    (ClientOptions::default().elicitation(event_tx), ElicitationScript::spawn(event_rx, [response]))
 }
 
 pub fn test_error(message: impl Into<String>) -> std::io::Error {
@@ -63,7 +54,7 @@ pub fn test_error(message: impl Into<String>) -> std::io::Error {
 /// An isolated workspace connected to a `CodingMcp` through the public MCP protocol.
 pub struct CodingWorkspace {
     root: TempDir,
-    pub client: TestClient<CodingMcp>,
+    pub client: TestClient,
 }
 
 impl CodingWorkspace {
@@ -110,24 +101,20 @@ impl CodingWorkspace {
     }
 }
 
-/// Generic test client wrapping a connected MCP server.
-pub struct TestClient<T: Service<RoleServer>, U: Service<RoleClient> = ClientConfig> {
-    _server_handle: RunningService<RoleServer, T>,
-    client: RunningService<RoleClient, U>,
+pub struct TestClient {
+    client: McpClient,
 }
 
-impl<T: Service<RoleServer>> TestClient<T, ClientConfig> {
-    /// Connect a default test `ClientConfig` to a server built by `configure`.
-    pub async fn start(configure: impl FnOnce() -> T) -> TestResult<Self> {
-        let (server_handle, client) = connect(configure(), test_client_info()).await?;
-        Ok(Self { _server_handle: server_handle, client })
+impl TestClient {
+    pub async fn start<T: ServerHandler>(configure: impl FnOnce() -> T) -> TestResult<Self> {
+        Self::start_with(configure, ClientOptions::default()).await
     }
-}
 
-impl<T: Service<RoleServer>, U: Service<RoleClient>> TestClient<T, U> {
-    pub async fn start_with(configure_server: impl FnOnce() -> T, client: U) -> TestResult<Self> {
-        let (server_handle, client) = connect(configure_server(), client).await?;
-        Ok(Self { _server_handle: server_handle, client })
+    pub async fn start_with<T: ServerHandler>(
+        configure: impl FnOnce() -> T,
+        options: ClientOptions,
+    ) -> TestResult<Self> {
+        Ok(Self { client: connect("test-server", McpServer::new(configure()), &options).await })
     }
 
     pub async fn call<V: Serialize>(&self, tool: &str, args: V) -> TestResult<serde_json::Value> {
@@ -141,33 +128,24 @@ impl<T: Service<RoleServer>, U: Service<RoleClient>> TestClient<T, U> {
     }
 
     pub async fn call_raw<V: Serialize>(&self, tool: &str, args: V) -> TestResult<CallToolResult> {
-        let args = serde_json::to_value(args)?;
-        let arguments =
-            args.as_object().ok_or_else(|| test_error("tool arguments must serialize to a JSON object"))?.clone();
-        Ok(self.client.call_tool(CallToolRequestParams::new(tool.to_string()).with_arguments(arguments)).await?)
+        Ok(call(&self.client, tool, serde_json::to_value(args)?).await?)
     }
 
-    pub fn raw(&self) -> &RunningService<RoleClient, U> {
+    pub fn mcp(&self) -> &McpClient {
         &self.client
     }
 }
 
-pub async fn connect_lsp(
-    project: &impl TestProject,
-) -> (RunningService<RoleServer, CodingMcp>, RunningService<RoleClient, ClientConfig>) {
-    let server = CodingMcp::new().with_lsp(project.root().to_path_buf());
-    connect(server, test_client_info()).await.expect("Failed to connect")
+pub async fn connect_lsp(project: &impl TestProject) -> McpClient {
+    connect_coding(CodingMcp::new().with_lsp(project.root().to_path_buf())).await
 }
 
-pub async fn call_tool_error(
-    client: &RunningService<RoleClient, ClientConfig>,
-    name: &str,
-    args: serde_json::Value,
-) -> String {
-    match client
-        .call_tool(CallToolRequestParams::new(name.to_string()).with_arguments(args.as_object().unwrap().clone()))
-        .await
-    {
+pub async fn connect_coding<T: ServerHandler>(server: T) -> McpClient {
+    connect("coding", McpServer::new(server), &ClientOptions::default()).await
+}
+
+pub async fn call_tool_error(client: &McpClient, name: &str, args: Value) -> String {
+    match call(client, name, args).await {
         Ok(result) => {
             assert!(result.is_error.unwrap_or(false), "tool call should fail: {result:?}");
             let content = result.content.first().expect("Expected error content");
@@ -178,23 +156,12 @@ pub async fn call_tool_error(
     }
 }
 
-pub async fn call_tool(
-    client: &RunningService<RoleClient, ClientConfig>,
-    name: &str,
-    args: serde_json::Value,
-) -> serde_json::Value {
+pub async fn call_tool(client: &McpClient, name: &str, args: Value) -> Value {
     try_call_tool(client, name, args).await.unwrap_or_else(|| panic!("Tool '{name}' did not return valid JSON"))
 }
 
-pub async fn try_call_tool(
-    client: &RunningService<RoleClient, ClientConfig>,
-    name: &str,
-    args: serde_json::Value,
-) -> Option<serde_json::Value> {
-    let result = match client
-        .call_tool(CallToolRequestParams::new(name.to_string()).with_arguments(args.as_object().unwrap().clone()))
-        .await
-    {
+pub async fn try_call_tool(client: &McpClient, name: &str, args: Value) -> Option<Value> {
+    let result = match call(client, name, args).await {
         Ok(result) => result,
         Err(error) => {
             eprintln!("[try_call_tool] {name} RPC error: {error}");
@@ -214,7 +181,7 @@ pub async fn try_call_tool(
 }
 
 pub async fn poll_diagnostics(
-    client: &RunningService<RoleClient, ClientConfig>,
+    client: &McpClient,
     file_path: Option<&str>,
     predicate: impl Fn(&serde_json::Value) -> bool,
 ) -> serde_json::Value {
@@ -226,7 +193,7 @@ pub async fn poll_diagnostics(
 }
 
 pub async fn poll_lsp_tool(
-    client: &RunningService<RoleClient, ClientConfig>,
+    client: &McpClient,
     tool_name: &str,
     args: serde_json::Value,
     predicate: impl Fn(&serde_json::Value) -> bool,
@@ -268,6 +235,14 @@ pub async fn cleanup_daemon(project: &impl TestProject) {
         let _ = tokio::fs::remove_file(sock.with_extension("lock")).await;
         let _ = tokio::fs::remove_file(sock.with_extension("log")).await;
     }
+}
+
+async fn call(
+    client: &McpClient,
+    tool: &str,
+    arguments: Value,
+) -> Result<CallToolResult, mcp_utils::client::ToolCallError> {
+    client.call_tool(tool, args(arguments), ToolCallOptions::default()).result().await
 }
 
 /// Creates files and directories (including parents) from `(path, content)`

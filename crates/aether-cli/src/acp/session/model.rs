@@ -255,7 +255,7 @@ mod tests {
     use aether_core::agent_spec::AgentSpecExposure;
     use agent_client_protocol::schema::v2::{SessionConfigKind, SessionConfigSelectOption, SessionConfigSelectOptions};
     use llm::catalog::{AnthropicModel, BedrockFoundationModel, BedrockModel, DeepSeekModel, GeminiModel};
-    use mcp_utils::client::ToolFilter;
+    use mcp_utils::gateway::ToolFilter;
 
     fn test_models() -> Vec<LlmModel> {
         vec![

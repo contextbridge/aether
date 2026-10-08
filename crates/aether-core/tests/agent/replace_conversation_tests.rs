@@ -8,6 +8,7 @@ use llm::{AssistantReasoning, ChatMessage, ContentBlock};
 #[tokio::test]
 async fn replace_conversation_preserves_system_prompt_for_next_request() {
     let result = test_agent()
+        .without_mcp()
         .system_prompt(Prompt::text("original system"))
         .llm_responses(&[llm_response().build()])
         .scenario(

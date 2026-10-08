@@ -1,6 +1,6 @@
 use regex::Regex;
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fmt;
 use std::sync::Arc;
@@ -96,6 +96,16 @@ impl Vars {
             Some(var) => Err(VarError::NotFound(var)),
             None => Ok(result.into_owned()),
         }
+    }
+
+    /// Names of the `$VAR` / `${VAR}` references in `template` that [`Self::expand`] would look up. `$$` escapes
+    /// are not references.
+    pub fn references(&self, template: &str) -> BTreeSet<String> {
+        let escaped = self.escape_re.replace_all(template, ESCAPE_PLACEHOLDER);
+        [&self.bracketed_re, &self.simple_re]
+            .into_iter()
+            .flat_map(|re| re.captures_iter(&escaped).map(|caps| caps[1].to_string()))
+            .collect()
     }
 
     /// Returns `true` if `s` contains a `$VAR` or `${VAR}` style reference.
@@ -210,6 +220,18 @@ mod tests {
         let vars = Vars::new().with_env_lookup(|k| (k == "ONLY_IN_ENV").then(|| "from-env".into()));
         let result = vars.expand("$ONLY_IN_ENV").unwrap();
         assert_eq!(result, "from-env");
+    }
+
+    #[test]
+    fn references_lists_each_name_once() {
+        let references = no_env().references("Bearer ${TOKEN} $USER:$TOKEN");
+        assert_eq!(references.into_iter().collect::<Vec<_>>(), ["TOKEN", "USER"]);
+    }
+
+    #[test]
+    fn references_skip_escaped_dollars() {
+        let references = no_env().references("$$HOME $${PATH} ${REAL}");
+        assert_eq!(references.into_iter().collect::<Vec<_>>(), ["REAL"]);
     }
 
     #[test]

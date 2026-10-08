@@ -1,12 +1,12 @@
+use aether_core::mcp::AETHER_MCP_IPC_SOCKET;
 use clap::{ArgAction, Args};
-use mcp_utils::ServiceExt;
-use mcp_utils::tool_gateway::{AETHER_MCP_IPC_SOCKET, LIST_SERVERS_TOOL, UnixSocketPath, connect};
-use rmcp::model::{CallToolRequestParams, CallToolResponse, CallToolResult, Tool};
+use mcp_utils::McpError;
+use mcp_utils::client::{ClientOptions, McpClient, ToolCallError, ToolCallOptions, Transport};
+use mcp_utils::gateway::{LIST_SERVERS_TOOL, namespaced, split_namespaced};
+use mcp_utils::model::{CallToolResult, Tool};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::env::var_os;
-use std::fmt::Display;
-use std::future::Future;
 use std::io::{self, IsTerminal, Read};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -45,10 +45,10 @@ pub enum McpCommandError {
     Usage(String),
     #[error("`aether mcp` requires the inherited {AETHER_MCP_IPC_SOCKET} from an active Aether session")]
     SessionUnavailable,
-    #[error("invalid {AETHER_MCP_IPC_SOCKET}: {0}")]
-    InvalidSocket(String),
+    #[error("invalid {AETHER_MCP_IPC_SOCKET}: socket path must be absolute")]
+    RelativeSocket,
     #[error("failed to connect to the active Aether session: {0}")]
-    Connect(String),
+    Connect(#[source] McpError),
     #[error("MCP request timed out after {0} seconds")]
     Timeout(u64),
     #[error("MCP request failed: {0}")]
@@ -85,7 +85,7 @@ impl McpCommandError {
         match self {
             Self::Usage(_) | Self::Stdin(_) => 2,
             Self::SessionUnavailable
-            | Self::InvalidSocket(_)
+            | Self::RelativeSocket
             | Self::Connect(_)
             | Self::Timeout(_)
             | Self::Request(_)
@@ -97,9 +97,9 @@ impl McpCommandError {
 
 pub async fn run(args: McpArgs) -> Result<(), McpCommandError> {
     let request = Request::try_from(args)?;
-    let socket = inherited_socket()?;
-    let transport = connect(socket.path()).await.map_err(|error| McpCommandError::Connect(error.to_string()))?;
-    let client = ().serve(transport).await.map_err(|error| McpCommandError::Connect(error.to_string()))?;
+    let transport = Transport::Unix(inherited_socket()?);
+    let client =
+        McpClient::connect("aether", transport, &ClientOptions::default()).await.map_err(McpCommandError::Connect)?;
     execute_request(&client, request).await
 }
 
@@ -127,9 +127,9 @@ impl TryFrom<McpArgs> for Request {
     }
 }
 
-fn inherited_socket() -> Result<UnixSocketPath, McpCommandError> {
-    let path = var_os(AETHER_MCP_IPC_SOCKET).ok_or(McpCommandError::SessionUnavailable)?;
-    UnixSocketPath::from_path(PathBuf::from(path)).map_err(|error| McpCommandError::InvalidSocket(error.to_string()))
+fn inherited_socket() -> Result<PathBuf, McpCommandError> {
+    let path = PathBuf::from(var_os(AETHER_MCP_IPC_SOCKET).ok_or(McpCommandError::SessionUnavailable)?);
+    if path.is_absolute() { Ok(path) } else { Err(McpCommandError::RelativeSocket) }
 }
 
 fn read_stdin() -> Result<Option<String>, McpCommandError> {
@@ -150,10 +150,7 @@ fn parse_json_object(input: Option<&str>) -> Result<Map<String, Value>, McpComma
     })
 }
 
-async fn execute_request(
-    client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
-    request: Request,
-) -> Result<(), McpCommandError> {
+async fn execute_request(client: &McpClient, request: Request) -> Result<(), McpCommandError> {
     match request {
         Request::Help(HelpLevel::Servers) => show_servers_help(client).await,
         Request::Help(HelpLevel::Server(server)) => show_server_help(client, &server).await,
@@ -164,11 +161,9 @@ async fn execute_request(
     }
 }
 
-async fn show_servers_help(
-    client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
-) -> Result<(), McpCommandError> {
-    let result = timed(DISCOVERY_TIMEOUT, client.call_tool_once(CallToolRequestParams::new(LIST_SERVERS_TOOL))).await?;
-    let result = complete(result)?;
+async fn show_servers_help(client: &McpClient) -> Result<(), McpCommandError> {
+    let options = ToolCallOptions::with_timeout(DISCOVERY_TIMEOUT);
+    let result = client.call_tool(LIST_SERVERS_TOOL, Map::new(), options).result().await.map_err(call_error)?;
     let servers: Vec<ServerSummary> = serde_json::from_value(
         result
             .structured_content
@@ -179,10 +174,7 @@ async fn show_servers_help(
     Ok(())
 }
 
-async fn show_server_help(
-    client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
-    server: &str,
-) -> Result<(), McpCommandError> {
+async fn show_server_help(client: &McpClient, server: &str) -> Result<(), McpCommandError> {
     let tools = list_tools(client).await?;
     let tools = tools_for_server(&tools, server);
     if tools.is_empty() {
@@ -192,30 +184,25 @@ async fn show_server_help(
     Ok(())
 }
 
-async fn show_tool_help(
-    client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
-    server: &str,
-    tool: &str,
-) -> Result<(), McpCommandError> {
+async fn show_tool_help(client: &McpClient, server: &str, tool: &str) -> Result<(), McpCommandError> {
     let tools = list_tools(client).await?;
-    let namespaced = format!("{server}__{tool}");
+    let name = namespaced(server, tool);
     let definition = tools
         .into_iter()
-        .find(|definition| definition.name == namespaced)
+        .find(|definition| definition.name == name)
         .ok_or_else(|| McpCommandError::Usage(format!("unknown deferred tool `{server} {tool}`")))?;
     print_tool_help(server, tool, &definition)
 }
 
 async fn call_tool(
-    client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
+    client: &McpClient,
     server: &str,
     tool: &str,
     json: Map<String, Value>,
     timeout_seconds: u64,
 ) -> Result<(), McpCommandError> {
-    let params = CallToolRequestParams::new(format!("{server}__{tool}")).with_arguments(json);
-    let result = timed(Duration::from_secs(timeout_seconds), client.call_tool_once(params)).await?;
-    let result = complete(result)?;
+    let options = ToolCallOptions::with_timeout(Duration::from_secs(timeout_seconds));
+    let result = client.call_tool(&namespaced(server, tool), json, options).result().await.map_err(call_error)?;
     if result.is_error.unwrap_or(false) {
         return Err(McpCommandError::Tool(result_json(&result).to_string()));
     }
@@ -223,32 +210,22 @@ async fn call_tool(
     Ok(())
 }
 
-async fn list_tools(
-    client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
-) -> Result<Vec<Tool>, McpCommandError> {
-    timed(DISCOVERY_TIMEOUT, client.list_all_tools()).await
-}
-
-async fn timed<T, U: Display>(
-    duration: Duration,
-    future: impl Future<Output = Result<T, U>>,
-) -> Result<T, McpCommandError> {
-    tokio::time::timeout(duration, future)
+async fn list_tools(client: &McpClient) -> Result<Vec<Tool>, McpCommandError> {
+    tokio::time::timeout(DISCOVERY_TIMEOUT, client.list_tools())
         .await
-        .map_err(|_| McpCommandError::Timeout(duration.as_secs()))?
+        .map_err(|_| McpCommandError::Timeout(DISCOVERY_TIMEOUT.as_secs()))?
         .map_err(|error| McpCommandError::Request(error.to_string()))
 }
 
-fn complete(response: CallToolResponse) -> Result<CallToolResult, McpCommandError> {
-    match response {
-        CallToolResponse::Complete(result) => Ok(result),
-        other => Err(McpCommandError::Request(format!("gateway returned an incomplete response: {other:?}"))),
+fn call_error(error: ToolCallError) -> McpCommandError {
+    match error {
+        ToolCallError::TimedOut(timeout) => McpCommandError::Timeout(timeout.as_secs()),
+        error => McpCommandError::Request(error.to_string()),
     }
 }
 
 fn tools_for_server<'a>(tools: &'a [Tool], server: &str) -> Vec<&'a Tool> {
-    let prefix = format!("{server}__");
-    tools.iter().filter(|tool| tool.name.starts_with(&prefix)).collect()
+    tools.iter().filter(|tool| split_namespaced(&tool.name).is_some_and(|(owner, _)| owner == server)).collect()
 }
 
 fn print_servers_help(servers: &[ServerSummary]) {
@@ -265,7 +242,7 @@ fn print_server_help(server: &str, tools: Vec<&Tool>) {
     println!("Usage: aether mcp {server} <tool> --help\n");
     println!("Tools:");
     for tool in tools {
-        let local_name = tool.name.strip_prefix(&format!("{server}__")).unwrap_or(tool.name.as_ref());
+        let local_name = split_namespaced(&tool.name).map_or(tool.name.as_ref(), |(_, name)| name);
         println!("  {:<20} {}", local_name, tool.description.as_deref().unwrap_or_default());
     }
 }

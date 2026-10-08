@@ -245,7 +245,7 @@ async fn list_skills_input_schema_has_properties_object() -> TestResult {
     let temp_dir = create_test_files(&[]);
     let mcp = TestClient::start(|| skills_server(temp_dir.path())).await?;
 
-    let tools = mcp.raw().peer().list_all_tools().await?;
+    let tools = mcp.mcp().list_tools().await?;
     let tool = tools.into_iter().find(|tool| tool.name.as_ref() == "list_skills").expect("list_skills tool present");
 
     let schema = serde_json::Value::Object((*tool.input_schema).clone());

@@ -3,7 +3,7 @@
 
 use aether_core::core::PromptSource;
 use aether_doctest::assert_json_examples;
-use mcp_utils::client::ToolFilter;
+use mcp_utils::gateway::ToolFilter;
 
 #[test]
 fn prompt_source_examples_parse() {

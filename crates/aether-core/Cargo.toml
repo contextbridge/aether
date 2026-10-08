@@ -32,7 +32,7 @@ noyalib = { workspace = true }
 sha2 = { workspace = true }
 base16ct = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
-tokio-stream = { workspace = true }
+tokio-stream = { workspace = true, features = ["sync"] }
 rmcp = { workspace = true, features = ["client", "server", "elicitation"] }
 schemars = { workspace = true }
 tracing = { workspace = true }
@@ -56,7 +56,7 @@ clap = { workspace = true }
 mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", default-features = false, features = ["coding", "review"] }
 reqwest = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util", "net"] }
 tracing-subscriber = { workspace = true }
 
 [[example]]

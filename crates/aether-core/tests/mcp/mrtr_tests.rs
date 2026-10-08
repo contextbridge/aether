@@ -1,4 +1,5 @@
-use aether_core::testing::{FakeMcpServer, FakeTool, FakeToolResponse, McpTestBuilder};
+use aether_core::testing::McpTestBuilder;
+use mcp_utils::testing::{FakeMcpServer, FakeTool, FakeToolResponse};
 use rmcp::model::{
     CallToolResponse, ElicitRequest, ElicitRequestParams, ElicitResult, ElicitationAction, InputRequest, InputRequests,
     InputRequiredResult,

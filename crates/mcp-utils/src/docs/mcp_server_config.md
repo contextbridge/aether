@@ -51,14 +51,15 @@ A remote server using a bearer token:
 Set `"deferTools": true` to omit every tool on this server from the model-visible
 tool definitions and make it available through progressive `aether mcp` discovery.
 For selective deferral, set `deferTools` to an object with `include` and `exclude`
-lists. Entries match either an exact MCP-local tool name or a prefix ending in `*`:
+lists. Entries match an exact MCP-local tool name, a prefix ending in `*`, or tool
+annotations, and `exclude` wins:
 
 ```json
 {
   "type": "in-memory",
   "deferTools": {
     "include": ["*"],
-    "exclude": ["bash", "lsp_*"]
+    "exclude": ["bash", "lsp_*", { "readOnly": true }]
   }
 }
 ```

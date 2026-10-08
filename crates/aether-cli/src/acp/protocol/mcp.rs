@@ -1,9 +1,8 @@
 use agent_client_protocol::schema::v2::{HttpHeader, McpServer};
-use mcp_utils::client::{McpServer as RuntimeMcpServer, McpTransport, ToolExposure};
-use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
+use mcp_utils::client::{HeaderMap, Transport};
+use mcp_utils::gateway::{ServerSpec, ToolExposure};
 
-/// Maps ACP MCP server definitions to internal MCP servers, skipping unsupported transports or invalid headers.
-pub fn map_acp_mcp_servers(servers: Vec<McpServer>) -> Vec<RuntimeMcpServer> {
+pub fn map_acp_mcp_servers(servers: Vec<McpServer>) -> Vec<ServerSpec> {
     servers
         .into_iter()
         .filter_map(|s| {
@@ -15,36 +14,25 @@ pub fn map_acp_mcp_servers(servers: Vec<McpServer>) -> Vec<RuntimeMcpServer> {
         .collect()
 }
 
-fn try_map_mcp_server(server: McpServer) -> Option<RuntimeMcpServer> {
+fn try_map_mcp_server(server: McpServer) -> Option<ServerSpec> {
     use McpServer::{Http, Stdio};
-    match server {
-        Stdio(stdio) => Some(RuntimeMcpServer::new(
+    let (name, transport) = match server {
+        Stdio(stdio) => (
             stdio.name,
-            McpTransport::Stdio {
+            Transport::Stdio {
                 command: stdio.command.0.to_string_lossy().into_owned(),
                 args: stdio.args,
                 env: stdio.env.into_iter().map(|e| (e.name, e.value)).collect(),
             },
-            ToolExposure::ModelVisible,
-        )),
-
-        Http(http) => Some(RuntimeMcpServer::new(
-            http.name,
-            McpTransport::Http(http_config(http.url, &http.headers)?.into()),
-            ToolExposure::ModelVisible,
-        )),
-
-        _ => None,
-    }
+        ),
+        Http(http) => (http.name, Transport::Http { url: http.url, headers: header_map(&http.headers)?, oauth: None }),
+        _ => return None,
+    };
+    Some(ServerSpec { name, transport, exposure: ToolExposure::ModelVisible })
 }
 
-fn http_config(url: String, headers: &[HttpHeader]) -> Option<StreamableHttpClientTransportConfig> {
-    let mut config = StreamableHttpClientTransportConfig::with_uri(url);
-    for header in headers {
-        // ACP supplies complete header values; rmcp's auth_header would prepend `Bearer `.
-        config.custom_headers.insert(header.name.parse().ok()?, header.value.parse().ok()?);
-    }
-    Some(config)
+fn header_map(headers: &[HttpHeader]) -> Option<HeaderMap> {
+    headers.iter().map(|header| Some((header.name.parse().ok()?, header.value.parse().ok()?))).collect()
 }
 
 #[cfg(test)]
@@ -64,7 +52,7 @@ mod tests {
         assert_eq!(configs.len(), 1);
 
         match &configs[0].transport {
-            McpTransport::Stdio { command, args, env } => {
+            Transport::Stdio { command, args, env } => {
                 assert_eq!(configs[0].name, "my-server");
                 assert_eq!(command, "/usr/bin/server");
                 assert_eq!(args, &["--port", "8080"]);
@@ -85,22 +73,10 @@ mod tests {
         assert_eq!(configs.len(), 1);
 
         match &configs[0].transport {
-            McpTransport::Http(config) => {
+            Transport::Http { url, headers, .. } => {
                 assert_eq!(configs[0].name, "http-server");
-                assert_eq!(config.transport.uri.as_ref(), "https://example.com/mcp");
-                assert!(config.transport.auth_header.is_none());
-                assert_eq!(
-                    config
-                        .transport
-                        .custom_headers
-                        .iter()
-                        .find(|(name, _)| name.as_str() == "authorization")
-                        .unwrap()
-                        .1
-                        .to_str()
-                        .unwrap(),
-                    "Bearer token123"
-                );
+                assert_eq!(url, "https://example.com/mcp");
+                assert_eq!(headers["authorization"], "Bearer token123");
             }
             other => panic!("Expected Http, got {other:?}"),
         }
@@ -116,14 +92,7 @@ mod tests {
                 ]));
             let configs = map_acp_mcp_servers(vec![server]);
             match &configs[0].transport {
-                McpTransport::Http(config) => {
-                    assert!(config.transport.auth_header.is_none());
-                    let headers: std::collections::BTreeMap<_, _> = config
-                        .transport
-                        .custom_headers
-                        .iter()
-                        .map(|(name, value)| (name.as_str(), value.to_str().unwrap()))
-                        .collect();
+                Transport::Http { headers, .. } => {
                     assert_eq!(headers["authorization"], input);
                     assert_eq!(headers["x-api-key"], "secret");
                 }
@@ -149,10 +118,10 @@ mod tests {
         ]))
         .unwrap();
         let configs = map_acp_mcp_servers(servers);
-        let McpTransport::Stdio { args, env, .. } = &configs[0].transport else { panic!("expected stdio") };
+        let Transport::Stdio { args, env, .. } = &configs[0].transport else { panic!("expected stdio") };
         assert!(args.is_empty() && env.is_empty());
-        let McpTransport::Http(config) = &configs[1].transport else { panic!("expected http") };
-        assert!(config.transport.auth_header.is_none() && config.transport.custom_headers.is_empty());
+        let Transport::Http { headers, .. } = &configs[1].transport else { panic!("expected http") };
+        assert!(headers.is_empty());
     }
 
     #[test]

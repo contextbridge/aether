@@ -10,14 +10,16 @@ use crate::events::{
     AgentCommand, AgentEvent, AgentObserver, Command, CompactionId, CompactionOutcome, ContextEvent, LlmCallOutcome,
     ModelEvent, StreamState, TaskOutcome, ToolEvent, TraceContext, TurnEvent, TurnOutcome, UserCommand,
 };
-use crate::mcp::McpHandle;
+use crate::mcp::mcp_instructions;
+use crate::mcp::tool_bridge::{call_tool, tool_definitions};
 use futures::Stream;
 use llm::{
     AssistantReasoning, ChatMessage, Context, EncryptedReasoningContent, LlmCallPurpose, LlmError, LlmModel,
     LlmResponse, MessageId, ModelIdentity, StopReason, StreamingModelProvider, TokenUsage, ToolCallError,
     ToolCallRequest, ToolCallResult,
 };
-use mcp_utils::client::{CallToolError, CallToolOptions, ToolCallEvent};
+use mcp_utils::client::{ToolCallEvent, ToolCallOptions};
+use mcp_utils::gateway::{McpCatalog, McpGateway};
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -26,7 +28,7 @@ use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_stream::StreamExt;
 use tokio_stream::StreamMap;
-use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::wrappers::{ReceiverStream, WatchStream};
 
 /// Internal event type for merging LLM and tool result streams
 #[derive(Debug)]
@@ -37,6 +39,7 @@ enum StreamEvent {
     ToolExecution(ToolCallEvent),
     Command(Command),
     InputClosed,
+    McpCatalog(Arc<McpCatalog>),
     Compaction(Result<CompactionResult, CompactionError>),
 }
 
@@ -47,6 +50,7 @@ type EventStream = Pin<Box<dyn Stream<Item = StreamEvent> + Send>>;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum StreamKey {
     Input,
+    Mcp,
     Llm,
     Compaction,
     Tool(String),
@@ -55,7 +59,7 @@ enum StreamKey {
 pub(crate) struct AgentConfig {
     pub llm: Arc<dyn StreamingModelProvider>,
     pub context: Context,
-    pub mcp: Option<McpHandle>,
+    pub mcp: Option<McpGateway>,
     pub tool_timeout: Duration,
     pub compaction_config: Option<CompactionConfig>,
     pub auto_continue: AutoContinue,
@@ -69,7 +73,7 @@ pub(crate) struct AgentConfig {
 pub struct Agent {
     llm: Arc<dyn StreamingModelProvider>,
     context: Context,
-    mcp: Option<McpHandle>,
+    mcp: Option<McpGateway>,
     message_tx: mpsc::Sender<AgentEvent>,
     observers: Vec<Box<dyn AgentObserver>>,
     streams: StreamMap<StreamKey, EventStream>,
@@ -141,6 +145,13 @@ impl Agent {
     pub async fn run(mut self) {
         let mut state = IterationState::default();
         let mut input_closed = false;
+        if let Some(gateway) = &self.mcp {
+            let mut catalogs = gateway.subscribe();
+            let catalog = Arc::clone(&catalogs.borrow_and_update());
+            let changes = WatchStream::from_changes(catalogs).map(StreamEvent::McpCatalog);
+            self.streams.insert(StreamKey::Mcp, Box::pin(changes));
+            self.apply_mcp_catalog(&catalog).await;
+        }
         self.emit_tool_definitions().await;
 
         while let Some((stream_key, event)) = self.streams.next().await {
@@ -161,13 +172,11 @@ impl Agent {
                     self.on_switch_model(new_provider).await;
                 }
 
-                StreamEvent::Command(Command::AgentCommand(AgentCommand::UpdateTools(tools))) => {
-                    self.context.set_tools(tools);
-                    self.emit_tool_definitions().await;
-                }
-
-                StreamEvent::Command(Command::AgentCommand(AgentCommand::UpdateMcpInstructions { server, body })) => {
-                    self.on_update_instruction(server, body).await;
+                StreamEvent::McpCatalog(catalog) => {
+                    if self.apply_mcp_catalog(&catalog).await {
+                        let tools = self.context.tools().clone();
+                        self.emit(AgentEvent::Tool(ToolEvent::DefinitionsUpdated { tools })).await;
+                    }
                 }
 
                 StreamEvent::Command(Command::AgentCommand(AgentCommand::SetReasoningEffort(effort))) => {
@@ -329,12 +338,19 @@ impl Agent {
         }
     }
 
-    async fn on_update_instruction(&mut self, server: String, body: Option<String>) {
-        self.prompt_cache.update_mcp_instruction(server, body);
-        match self.prompt_cache.render().await {
-            Ok(content) => self.context.set_system_content(content),
-            Err(e) => tracing::warn!("Failed to rebuild system prompt after instructions update: {e}"),
+    async fn apply_mcp_catalog(&mut self, catalog: &McpCatalog) -> bool {
+        if self.prompt_cache.set_mcp_instructions(mcp_instructions(catalog)) {
+            match self.prompt_cache.render().await {
+                Ok(content) => self.context.set_system_content(content),
+                Err(e) => tracing::warn!("Failed to rebuild system prompt after instructions update: {e}"),
+            }
         }
+        let tools = tool_definitions(catalog);
+        let changed = tools != *self.context.tools();
+        if changed {
+            self.context.set_tools(tools);
+        }
+        changed
     }
 
     async fn on_switch_model(&mut self, new_provider: Box<dyn StreamingModelProvider>) {
@@ -534,24 +550,13 @@ impl Agent {
         tracing::debug!("Tool execution started: {} ({})", tool_call.name, tool_id);
         self.emit(AgentEvent::Tool(ToolEvent::Call { request: tool_call.clone() })).await;
 
-        let Some(mcp) = self.mcp.clone() else {
-            let stream = futures::stream::once(async {
-                StreamEvent::ToolExecution(ToolCallEvent::Complete(Err(CallToolError::Unavailable {
-                    message: "MCP runtime is not available".to_string(),
-                })))
-            });
-            self.streams.insert(StreamKey::Tool(tool_id), Box::pin(stream));
-            return;
-        };
-
         let trace_context = self.observers.iter().find_map(|observer| observer.tool_trace_context(&tool_id));
-        let options = CallToolOptions {
-            timeout: self.tool_timeout,
+        let options = ToolCallOptions {
+            timeout: Some(self.tool_timeout),
             meta: trace_context.as_ref().map(TraceContext::to_meta),
             cancel,
         };
-        let stream =
-            mcp.call_model_visible(tool_call.name, &tool_call.arguments, options).map(StreamEvent::ToolExecution);
+        let stream = call_tool(self.mcp.as_ref(), &tool_call, options).map(StreamEvent::ToolExecution);
         self.streams.insert(StreamKey::Tool(tool_id), Box::pin(stream));
     }
 

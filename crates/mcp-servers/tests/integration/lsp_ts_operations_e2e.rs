@@ -7,7 +7,7 @@ async fn test_ts_hover_returns_type_info() {
     project.add_file("src/index.ts", "const x: number = 42;\nconsole.log(x);\n").expect("Failed to add file");
 
     let index_ts = project.file_path_str("src/index.ts");
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
 
     let result = poll_lsp_tool(
         &client,
@@ -42,7 +42,7 @@ console.log(msg);
         )
         .expect("Failed to add file");
 
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
 
     let result = poll_lsp_tool(
         &client,
@@ -78,7 +78,7 @@ console.log(a, b);
         .expect("Failed to add file");
 
     let index_ts = project.file_path_str("src/index.ts");
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
 
     let result = poll_lsp_tool(
         &client,

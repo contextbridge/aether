@@ -1,6 +1,7 @@
 use aether_core::events::{AgentEvent, MessageEvent, ToolEvent, TurnEvent};
-use aether_core::testing::{FakeMcpServer, FakeTool, FakeToolResponse, TestScenario, test_agent};
+use aether_core::testing::{TestScenario, test_agent};
 use llm::testing::llm_response;
+use mcp_utils::testing::{FakeMcpServer, FakeTool, FakeToolResponse};
 use rmcp::model::{CallToolResult, ContentBlock, CreateTaskResult, DetailedTask, Task, TaskPayload, TaskStatus};
 use std::sync::Arc;
 use tokio::sync::Notify;

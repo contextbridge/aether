@@ -19,11 +19,11 @@ Provides a standalone MCP server for hierarchical task tracking with support for
 
 ```rust,ignore
 use mcp_servers::TasksMcp;
-use mcp_utils::ServiceExt;
+use mcp_utils::server::McpServer;
 
 // Session-scoped (temp dir, auto-cleanup)
-let server = TasksMcp::new().into_dyn();
+let server = McpServer::new(TasksMcp::new());
 
 // Persistent across sessions
-let server = TasksMcp::new_persistent(".aether-tasks".into()).into_dyn();
+let server = McpServer::new(TasksMcp::new_persistent(".aether-tasks".into()));
 ```

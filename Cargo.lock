@@ -333,7 +333,6 @@ version = "0.7.11"
 dependencies = [
  "aether-auth",
  "aether-doctest",
- "aether-llm",
  "aether-utils",
  "async-stream",
  "axum",
@@ -349,7 +348,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "tracing-subscriber",
  "uuid",
 ]
 
@@ -6649,11 +6647,14 @@ dependencies = [
  "chrono",
  "futures",
  "http 1.5.0",
+ "http-body 1.1.0",
+ "http-body-util",
  "indexmap 2.14.2",
  "oauth2",
  "pastey",
  "pin-project-lite",
  "process-wrap",
+ "rand 0.10.3",
  "reqwest 0.13.5",
  "rmcp-macros",
  "schemars 1.2.2",
@@ -6664,6 +6665,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
+ "tower-service",
  "tracing",
  "url",
  "uuid",
@@ -7959,6 +7961,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

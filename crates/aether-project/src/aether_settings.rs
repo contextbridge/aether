@@ -5,7 +5,7 @@ use crate::error::SettingsError;
 use crate::{McpFileSpec, McpSourceSpec, PromptSource};
 use aether_core::core::Prompt;
 use llm::ProviderConnectionOverrides;
-use mcp_utils::client::McpConfig;
+use mcp_utils::config::McpConfig;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

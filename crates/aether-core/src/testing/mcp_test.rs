@@ -1,21 +1,20 @@
 use crate::events::{TaskOutcomeState, TraceContext, task_created_result};
-use crate::mcp::tool_bridge::{convert_tool_result, map_task_result_to_outcome};
-use crate::mcp::{McpHandle, McpRuntime, ServerFactory, ToolCallStream, mcp};
-use futures::{FutureExt, StreamExt};
-use mcp_utils::client::{
-    CallToolOptions, CancellationToken, InMemoryServerSpec, McpConnectionDetails, McpServer, McpTransport,
-    ToolCallEvent, ToolExposure, ToolFilter,
-};
-use mcp_utils::testing::{ElicitationScript, UrlElicitationHandler, url_elicitation_handler};
+use crate::mcp::tool_bridge::{call_tool, convert_tool_result, map_task_result_to_outcome};
+use crate::mcp::{McpRuntime, mcp};
+use futures::StreamExt;
+use mcp_utils::client::{CancellationToken, ToolCall, ToolCallError, ToolCallEvent, ToolCallOptions, Transport};
+use mcp_utils::gateway::{McpCatalog, ServerSpec, ToolExposure, ToolFilter, namespaced};
+use mcp_utils::server::McpServer;
+use mcp_utils::testing::{ElicitationScript, ElicitationScriptBuilder};
+use rmcp::ServerHandler;
 use rmcp::model::{CreateTaskResult, ElicitResult, ProgressNotificationParam};
-use rmcp::{RoleServer, ServerHandler, service::DynService};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::watch;
+use tokio::sync::mpsc;
 use utils::temp_dir::TempDir;
 
 pub use mcp_utils::testing::CapturedElicitation;
@@ -24,10 +23,8 @@ const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Default)]
 pub struct McpTestBuilder {
-    servers: Vec<McpServer>,
-    factories: Vec<(String, ServerFactory)>,
-    elicitation_responses: Vec<ElicitResult>,
-    on_url_elicitation: Option<UrlElicitationHandler>,
+    servers: Vec<ServerSpec>,
+    elicitations: ElicitationScriptBuilder,
     trace_context: Option<TraceContext>,
     tool_timeout: Duration,
     tool_filter: ToolFilter,
@@ -45,9 +42,8 @@ fn task_outcome(outcome: crate::events::TaskOutcome) -> TaskOutcome {
 }
 
 pub struct McpTest {
-    mcp: McpHandle,
     runtime: McpRuntime,
-    snapshot: McpConnectionDetails,
+    catalog: Arc<McpCatalog>,
     elicitations: ElicitationScript,
     deferred_tools: tokio::sync::Mutex<VecDeque<DeferredTool>>,
     cancel_tokens: Mutex<HashMap<String, CancellationToken>>,
@@ -71,7 +67,7 @@ pub struct ToolCallOutcome {
 
 struct DeferredTool {
     request: llm::ToolCallRequest,
-    events: ToolCallStream,
+    events: ToolCall,
 }
 
 impl McpTestBuilder {
@@ -79,44 +75,27 @@ impl McpTestBuilder {
         Self::default()
     }
 
-    pub fn server<S>(self, name: impl Into<String>, server: S) -> Self
-    where
-        S: ServerHandler + Clone + Send + Sync + 'static,
-    {
+    pub fn server(self, name: impl Into<String>, server: impl ServerHandler) -> Self {
         self.server_with_exposure(name, server, ToolExposure::ModelVisible)
     }
 
-    pub fn deferred_server<T>(self, name: impl Into<String>, server: T) -> Self
-    where
-        T: ServerHandler + Clone + Send + Sync + 'static,
-    {
+    pub fn deferred_server(self, name: impl Into<String>, server: impl ServerHandler) -> Self {
         self.server_with_exposure(name, server, ToolExposure::deferred_all())
     }
 
-    pub fn server_with_exposure<T>(mut self, name: impl Into<String>, server: T, exposure: ToolExposure) -> Self
-    where
-        T: ServerHandler + Clone + Send + Sync + 'static,
-    {
-        let name = name.into();
-        let factory_name = format!("test-{}", self.factories.len());
-        let factory_server = server;
-        let factory: ServerFactory = Box::new(move |_spec, _services| {
-            let server = factory_server.clone();
-            async move { Box::new(server) as Box<dyn DynService<RoleServer>> }.boxed()
-        });
-        self.factories.push((factory_name.clone(), factory));
-        self.servers.push(McpServer::new(
-            name,
-            McpTransport::InMemory {
-                spec: InMemoryServerSpec { factory: factory_name, args: Vec::new(), input: None },
-            },
-            exposure,
-        ));
+    pub fn server_with_exposure(
+        mut self,
+        name: impl Into<String>,
+        server: impl ServerHandler,
+        exposure: ToolExposure,
+    ) -> Self {
+        let transport = Transport::InProcess(McpServer::new(server));
+        self.servers.push(ServerSpec { name: name.into(), transport, exposure });
         self
     }
 
     pub fn elicitation_response(mut self, response: ElicitResult) -> Self {
-        self.elicitation_responses.push(response);
+        self.elicitations = self.elicitations.response(response);
         self
     }
 
@@ -125,7 +104,7 @@ impl McpTestBuilder {
         T: Fn(String, String) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        self.on_url_elicitation = Some(url_elicitation_handler(handler));
+        self.elicitations = self.elicitations.on_url(handler);
         self
     }
 
@@ -146,24 +125,16 @@ impl McpTestBuilder {
     }
 
     pub async fn build(self) -> McpTest {
-        let builder = mcp("/workspace").with_servers(self.servers).with_tool_filter(self.tool_filter);
-        let builder = self
-            .factories
-            .into_iter()
-            .fold(builder, |builder, (name, factory)| builder.register_in_memory_server(name, factory));
-        let mut spawn = builder.spawn().await.expect("MCP test manager spawns");
-        let snapshot = spawn.block_until_ready().await.expect("MCP test manager becomes ready");
-        let (runtime, event_rx) = spawn.split();
+        let (sink, events) = mpsc::channel(32);
+        let builder =
+            mcp("/workspace").with_servers(self.servers).with_tool_filter(self.tool_filter).with_elicitations(sink);
+        let runtime = builder.spawn().expect("MCP test gateway spawns");
+        let catalog = runtime.gateway().ready().await;
 
         McpTest {
-            mcp: runtime.handle().clone(),
             runtime,
-            snapshot,
-            elicitations: ElicitationScript::spawn_with_url_handler(
-                event_rx,
-                self.elicitation_responses,
-                self.on_url_elicitation,
-            ),
+            catalog,
+            elicitations: self.elicitations.spawn(events),
             deferred_tools: tokio::sync::Mutex::new(VecDeque::new()),
             cancel_tokens: Mutex::new(HashMap::new()),
             trace_context: self.trace_context,
@@ -179,42 +150,35 @@ impl McpTest {
         let id = self.next_call_id.fetch_add(1, Ordering::Relaxed);
         let request = llm::ToolCallRequest {
             id: format!("mcp-test-{id}"),
-            name: format!("{server}__{tool}"),
+            name: namespaced(server, tool),
             arguments: arguments.to_string(),
         };
-        let request_for_outcome = request.clone();
         let cancel = CancellationToken::new();
         self.cancel_tokens.lock().expect("cancel token lock").insert(request.id.clone(), cancel.clone());
-        let options = CallToolOptions {
-            timeout: self.tool_timeout,
+        let options = ToolCallOptions {
+            timeout: Some(self.tool_timeout),
             meta: self.trace_context.as_ref().map(TraceContext::to_meta),
             cancel,
         };
-        let mut events = self.mcp.call_model_visible(request.name, &request.arguments, options);
+        let mut events = call_tool(Some(self.runtime.gateway()), &request, options);
 
         let mut progress = Vec::new();
         while let Some(event) = events.next().await {
             match event {
                 ToolCallEvent::Progress(event) => progress.push(event),
                 ToolCallEvent::TaskCreated(task) => {
-                    self.deferred_tools
-                        .lock()
-                        .await
-                        .push_back(DeferredTool { request: request_for_outcome.clone(), events });
+                    self.deferred_tools.lock().await.push_back(DeferredTool { request: request.clone(), events });
                     return ToolCallOutcome {
-                        result: Ok(task_created_result(&request_for_outcome, &task.task.task_id)),
+                        result: Ok(task_created_result(&request, &task.task.task_id)),
                         progress,
                         deferred_task: Some(task),
                     };
                 }
-                ToolCallEvent::Complete(outcome) => {
-                    let result =
-                        convert_tool_result(&request_for_outcome, outcome, &self.spill_dir).map(|(result, _)| result);
+                ToolCallEvent::Done { result, .. } => {
+                    let result = convert_tool_result(&request, result, &self.spill_dir).map(|(result, _)| result);
                     return ToolCallOutcome { result, progress, deferred_task: None };
                 }
-                ToolCallEvent::TaskStatus(_) | ToolCallEvent::TaskComplete { .. } | ToolCallEvent::Cancelled { .. } => {
-                    panic!("MCP task lifecycle event arrived before deferral")
-                }
+                ToolCallEvent::TaskStatus(_) => panic!("MCP task lifecycle event arrived before deferral"),
             }
         }
         panic!("MCP test tool event stream ended before completion");
@@ -232,20 +196,17 @@ impl McpTest {
     pub async fn next_task_outcome(&self) -> Option<TaskOutcome> {
         while let Some((request, event)) = self.next_deferred_event().await {
             match event {
-                ToolCallEvent::TaskComplete { task, result } => {
-                    return Some(task_outcome(map_task_result_to_outcome(request, task, result, &self.spill_dir)));
+                ToolCallEvent::Done { task, result } => {
+                    let task_id = task.map_or_else(|| "pending".to_string(), |task| task.task_id);
+                    let outcome = match result {
+                        Err(ToolCallError::Cancelled) => {
+                            crate::events::TaskOutcome { request, task_id, state: TaskOutcomeState::Cancelled }
+                        }
+                        result => map_task_result_to_outcome(request, task_id, result, &self.spill_dir),
+                    };
+                    return Some(task_outcome(outcome));
                 }
-                ToolCallEvent::Cancelled { task_id } => {
-                    return Some(task_outcome(crate::events::TaskOutcome {
-                        request,
-                        task_id: task_id.unwrap_or_else(|| "pending".to_string()),
-                        state: TaskOutcomeState::Cancelled,
-                    }));
-                }
-                ToolCallEvent::Progress(_)
-                | ToolCallEvent::TaskCreated(_)
-                | ToolCallEvent::TaskStatus(_)
-                | ToolCallEvent::Complete(_) => {}
+                ToolCallEvent::Progress(_) | ToolCallEvent::TaskCreated(_) | ToolCallEvent::TaskStatus(_) => {}
             }
         }
         None
@@ -264,17 +225,12 @@ impl McpTest {
         }
     }
 
-    pub fn snapshot(&self) -> &McpConnectionDetails {
-        &self.snapshot
+    pub fn catalog(&self) -> &Arc<McpCatalog> {
+        &self.catalog
     }
 
-    /// The Unix socket path of the deferred-tool gateway, if one was started.
-    pub fn gateway_endpoint(&self) -> Option<&Path> {
-        self.runtime.gateway_endpoint()
-    }
-
-    pub fn subscribe(&self) -> watch::Receiver<McpConnectionDetails> {
-        self.mcp.subscribe()
+    pub fn deferred_tools_socket(&self) -> Option<&Path> {
+        self.runtime.deferred_tools_socket()
     }
 
     pub fn elicitations(&self) -> Vec<CapturedElicitation> {

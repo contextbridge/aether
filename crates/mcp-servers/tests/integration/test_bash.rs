@@ -1,11 +1,12 @@
 use mcp_servers::CodingMcp;
 use mcp_servers::coding::error::BashError;
 use mcp_servers::coding::tools::bash::{BashEnvironment, BashInput, execute_command};
+use mcp_utils::testing::RawClient;
 use rmcp::model::{CallToolRequestParams, CallToolResponse, TaskPayload, TaskStatus};
 use std::fs::canonicalize;
 use std::process::{Command, Stdio};
 
-use super::common::{TestClient, TestResult, production_client_info, test_client_info};
+use super::common::{TestResult, production_client_info, test_client_info};
 
 #[tokio::test]
 async fn bash_commands_receive_eof_instead_of_inherited_stdin() {
@@ -113,7 +114,7 @@ async fn command_runs_in_working_directory() -> Result<(), Box<dyn std::error::E
 
 #[tokio::test]
 async fn background_bash_uses_tasks_and_returns_structured_output() -> TestResult {
-    let client = TestClient::start_with(CodingMcp::new, production_client_info()).await?;
+    let client = RawClient::connect(CodingMcp::new(), production_client_info()).await?;
     let response = client
         .raw()
         .call_tool_once(
@@ -155,7 +156,7 @@ async fn background_bash_uses_tasks_and_returns_structured_output() -> TestResul
 
 #[tokio::test]
 async fn background_bash_requires_tasks_capability() -> TestResult {
-    let client = TestClient::start_with(CodingMcp::new, test_client_info()).await?;
+    let client = RawClient::connect(CodingMcp::new(), test_client_info()).await?;
     let error = client
         .raw()
         .call_tool_once(CallToolRequestParams::new("bash").with_arguments(

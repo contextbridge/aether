@@ -11,14 +11,12 @@
 
 use crate::common::{call_tool, connect_lsp, has_errors, has_no_errors, poll_diagnostics, try_call_tool};
 use aether_lspd::testing::{CargoProject, TestProject};
-use rmcp::RoleClient;
-use rmcp::model::ClientConfig;
-use rmcp::service::RunningService;
+use mcp_utils::client::McpClient;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 async fn poll_workspace_diagnostics(
-    client: &RunningService<RoleClient, ClientConfig>,
+    client: &McpClient,
     predicate: impl Fn(&serde_json::Value) -> bool,
     timeout: Duration,
 ) -> serde_json::Value {
@@ -76,7 +74,7 @@ async fn test_mcp_edit_produces_diagnostics() {
 
     let main_rs = project.file_path_str("src/main.rs");
 
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
 
     let result = poll_diagnostics(&client, Some(&main_rs), has_errors).await;
     let errors = result["summary"]["errors"].as_u64().unwrap();
@@ -132,7 +130,7 @@ async fn test_diagnostics_available_after_edit_without_polling() {
 
     let main_rs = project.file_path_str("src/main.rs");
 
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
 
     poll_diagnostics(&client, Some(&main_rs), has_no_errors).await;
 
@@ -170,7 +168,7 @@ async fn test_diagnostics_all_files_after_edit() {
 
     let main_rs = project.file_path_str("src/main.rs");
 
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
 
     poll_diagnostics(&client, Some(&main_rs), has_no_errors).await;
 
@@ -208,7 +206,7 @@ async fn test_workspace_diagnostics_after_edit_without_file_check() {
 
     let main_rs = project.file_path_str("src/main.rs");
 
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
 
     poll_diagnostics(&client, None, has_no_errors).await;
 
@@ -246,7 +244,7 @@ async fn test_workspace_diagnostics_clear_after_fix_without_file_check() {
 
     let main_rs = project.file_path_str("src/main.rs");
 
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
 
     let initial =
         poll_workspace_diagnostics(&client, |result| file_error_count(result, &main_rs) > 0, Duration::from_mins(1))
@@ -299,7 +297,7 @@ async fn test_diagnostics_all_files_after_external_edit() {
     let main_rs = project.file_path_str("src/main.rs");
     let main_rs_path = project.root().join("src/main.rs");
 
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
 
     poll_diagnostics(&client, Some(&main_rs), has_no_errors).await;
 
@@ -336,7 +334,7 @@ async fn test_diagnostics_all_files_after_external_edit_single_call() {
     let main_rs = project.file_path_str("src/main.rs");
     let main_rs_path = project.root().join("src/main.rs");
 
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
 
     poll_diagnostics(&client, Some(&main_rs), has_no_errors).await;
 
@@ -371,7 +369,7 @@ async fn test_external_file_change_produces_diagnostics() {
     let main_rs = project.file_path_str("src/main.rs");
     let main_rs_path = project.root().join("src/main.rs");
 
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
 
     let result = poll_diagnostics(&client, Some(&main_rs), has_errors).await;
     let errors = result["summary"]["errors"].as_u64().unwrap();
@@ -429,7 +427,7 @@ async fn test_diagnostics_all_files_discovers_file_watcher_uris() {
 
     let main_rs_path = project.root().join("src/main.rs");
 
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
 
     poll_diagnostics(&client, None, has_no_errors).await;
 

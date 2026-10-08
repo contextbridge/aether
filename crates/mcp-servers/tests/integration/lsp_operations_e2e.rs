@@ -26,7 +26,7 @@ async fn test_hover_falls_back_from_stale_line_hint() {
         .expect("Failed to add file");
 
     let main_rs = project.file_path_str("src/main.rs");
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
 
     let result = poll_lsp_tool(
         &client,
@@ -65,7 +65,7 @@ fn main() {
         .expect("Failed to add file");
 
     let main_rs = project.file_path_str("src/main.rs");
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
 
     let result = poll_lsp_tool(
         &client,
@@ -104,7 +104,7 @@ fn main() {
         .expect("Failed to add file");
 
     let main_rs = project.file_path_str("src/main.rs");
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
 
     let result = poll_lsp_tool(
         &client,
@@ -152,7 +152,7 @@ async fn test_lsp_rename_falls_back_from_stale_line_hint() {
         .expect("Failed to add main.rs");
 
     let lib_rs = project.file_path_str("src/lib.rs");
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
 
     // Wait for rust-analyzer to fully index both files before calling rename.
     // Rename is a side-effecting operation that writes to disk, so it must not

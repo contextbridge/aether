@@ -2,9 +2,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum AgentError {
-    /// MCP manager operation failed
-    #[error("MCP error: {0}")]
-    McpError(#[from] mcp_utils::client::McpError),
+    #[error(transparent)]
+    McpSpawn(#[from] crate::mcp::McpSpawnError),
     /// LLM provider error
     #[error("LLM error: {0}")]
     LlmError(#[from] llm::LlmError),

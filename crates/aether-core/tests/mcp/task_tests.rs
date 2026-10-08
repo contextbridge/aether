@@ -1,5 +1,6 @@
-use aether_core::testing::{FakeMcpServer, FakeTool, FakeToolResponse, McpTestBuilder};
-use mcp_utils::client::ToolCallEvent;
+use aether_core::testing::McpTestBuilder;
+use mcp_utils::client::{ToolCallError, ToolCallEvent};
+use mcp_utils::testing::{FakeMcpServer, FakeTool, FakeToolResponse};
 use rmcp::model::{
     CallToolResult, CreateTaskResult, DetailedTask, ElicitRequest, ElicitRequestParams, ElicitResult,
     ElicitationAction, InputRequest, InputRequests, Task, TaskPayload, TaskStatus,
@@ -212,7 +213,7 @@ async fn task_execution_deadline_terminates_polling() {
     let notification = test.next_task_outcome().await.expect("deadline notification");
 
     assert_eq!(notification.status, "failed");
-    assert!(notification.body.contains("execution deadline"), "{}", notification.body);
+    assert!(notification.body.contains("timeout"), "{}", notification.body);
     assert_eq!(state.task_cancel_ids(), ["deadline-task"]);
 }
 
@@ -323,8 +324,9 @@ async fn cancelling_deferred_task_stops_polling_and_notifies_server() {
 
     loop {
         let event = test.next_tool_event().await.expect("tool event before cancellation");
-        if let ToolCallEvent::Cancelled { task_id } = event {
-            assert_eq!(task_id.as_deref(), Some("task-cancel"));
+        if let ToolCallEvent::Done { task, result } = event {
+            assert!(matches!(result, Err(ToolCallError::Cancelled)), "{result:?}");
+            assert_eq!(task.map(|task| task.task_id).as_deref(), Some("task-cancel"));
             break;
         }
     }

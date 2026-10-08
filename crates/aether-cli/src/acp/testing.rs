@@ -20,7 +20,7 @@ use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
 use aether_core::core::{AgentBuilder, AgentHandle, Prompt};
 use aether_core::events::{AgentEvent, Command, MessageEvent, ToolEvent, TurnEvent, TurnOutcome, UserCommand};
-use aether_core::mcp::{McpBuilder, McpSession, ServerFactory, mcp};
+use aether_core::mcp::{McpRuntime, mcp};
 use aether_project::AgentCatalog;
 use aether_sessions::SessionStore;
 use aether_sessions::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent, last_agent_from_events};
@@ -29,15 +29,14 @@ use agent_client_protocol::schema::v2::{
     StateUpdate, StopReason,
 };
 use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, on_receive_notification};
-use futures::FutureExt;
 use llm::testing::FakeLlmProvider;
 use llm::{ChatMessage, Context, LlmModel, LlmResponse, SessionUsageEvent, StreamingModelProvider};
 use llm::{MessageId, ProviderConnectionOverrides, ToolCallRequest, ToolCallResult};
-use mcp_utils::client::{InMemoryServerSpec, McpServer, McpTransport, ToolExposure};
-use mcp_utils::testing::{FakeMcpServer, FakeTool, FakeToolResponse, completed_task_payload};
-use rmcp::RoleServer;
+use mcp_utils::client::Elicitation;
+use mcp_utils::gateway::McpCatalog;
+use mcp_utils::server::McpServer;
+use mcp_utils::testing::{FakeMcpServer, FakeTool, FakeToolResponse, completed_task_payload, fake_mcp};
 use rmcp::model::{CallToolResult, CreateTaskResult, DetailedTask, Task, TaskPayload, TaskStatus};
-use rmcp::service::DynService;
 use std::collections::HashMap;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -46,6 +45,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{JoinHandle, JoinSet, LocalSet};
 use tokio_util::sync::CancellationToken;
+use utils::mcp_status::McpServerStatusEntry;
 
 const PLANNER_REPLY: &str = "planner reply";
 const CODER_REPLY: &str = "coder reply";
@@ -376,6 +376,11 @@ impl AcpTestHarness {
         assert_server_status_exact(self.peer.next_mcp_notification().await, expected);
     }
 
+    pub async fn next_mcp_server_statuses(&mut self) -> Vec<McpServerStatusEntry> {
+        let McpNotification::ServerStatus { servers } = self.peer.next_mcp_notification().await;
+        servers
+    }
+
     pub async fn expect_available_commands(&mut self, expected: &[&str], unexpected: &[&str]) {
         loop {
             let update = self.peer.next_session_notification().await.update;
@@ -409,10 +414,15 @@ impl AcpTestHarness {
         id: SessionId,
         model: &str,
     ) {
-        let mut mcp = mcp("/tmp").spawn().await.expect("stub MCP spawns");
-        mcp.block_until_ready().await.expect("stub MCP is ready");
-        self.register_stub_session(StubAgentParts { tx: agent_tx, rx: agent_rx, handle: agent_handle, mcp }, id, model)
-            .await;
+        let (sink, events) = mpsc::channel(32);
+        let mcp = mcp("/tmp").with_elicitations(sink).spawn().expect("stub MCP spawns");
+        mcp.gateway().ready().await;
+        self.register_stub_session(
+            StubAgentParts { tx: agent_tx, rx: agent_rx, handle: agent_handle, mcp, events },
+            id,
+            model,
+        )
+        .await;
     }
 
     pub async fn insert_background_task_session(
@@ -420,22 +430,26 @@ impl AcpTestHarness {
         provider: FakeLlmProvider,
         task: &FakeBackgroundTask,
         id: SessionId,
-    ) {
+    ) -> watch::Receiver<Arc<McpCatalog>> {
         let server = task.server.clone();
         let gate = self.runtime_control.lock().unwrap().prompt_gate.clone();
-        let mcp = with_in_memory_server(mcp("/tmp"), "tasks", move || server.clone().into_dyn());
-        let mcp = with_in_memory_server(mcp, "prompts", move || {
-            FakePromptMcp::new("plan").with_gate(gate.clone()).into_dyn()
-        });
-        let mut mcp = mcp.spawn().await.expect("background task MCP spawns");
-        mcp.block_until_ready().await.expect("background task MCP is ready");
+        let prompts = McpServer::new(FakePromptMcp::new("plan").with_gate(gate));
+        let (sink, events) = mpsc::channel(32);
+        let mcp = mcp("/tmp")
+            .with_servers(vec![fake_mcp("tasks", server), fake_mcp("prompts", prompts)])
+            .with_elicitations(sink)
+            .spawn()
+            .expect("background task MCP spawns");
+        mcp.gateway().ready().await;
+        let catalog = mcp.gateway().subscribe();
         let (tx, rx, handle) = AgentBuilder::new(Arc::new(provider))
             .max_auto_continues(0)
-            .tools(mcp.handle().clone(), Vec::new())
+            .mcp(mcp.gateway().clone())
             .spawn()
             .await
             .expect("background task agent spawns");
-        self.register_stub_session(StubAgentParts { tx, rx, handle, mcp }, id, "fake:fake").await;
+        self.register_stub_session(StubAgentParts { tx, rx, handle, mcp, events }, id, "fake:fake").await;
+        catalog
     }
 
     pub fn append_stored_session(&self, session_id: &str, created_at: &str) {
@@ -671,10 +685,9 @@ impl FakeBackgroundTask {
     const ID: &str = "background-task";
 
     pub fn new() -> Self {
-        let working = background_task(TaskStatus::Working);
         let server = FakeMcpServer::new()
-            .with_tool(FakeTool::new("start").responds(FakeToolResponse::task(CreateTaskResult::new(working.clone()))))
-            .with_task(Self::ID, [DetailedTask::new(working, TaskPayload::Working)]);
+            .with_tool(Self::start_tool())
+            .with_task(Self::ID, [DetailedTask::new(background_task(TaskStatus::Working), TaskPayload::Working)]);
         Self { server }
     }
 
@@ -682,6 +695,19 @@ impl FakeBackgroundTask {
         let result = CallToolResult::success(vec![rmcp::model::ContentBlock::text(output)]);
         let completed = DetailedTask::new(background_task(TaskStatus::Completed), completed_task_payload(result));
         self.server.state().script_task(Self::ID, [completed]);
+    }
+
+    pub async fn announce_unchanged_tools(&self) {
+        self.server.state().add_tool_and_notify(Self::start_tool()).await;
+    }
+
+    pub async fn add_tool(&self, name: &str) {
+        self.server.state().add_tool_and_notify(FakeTool::new(name)).await;
+    }
+
+    fn start_tool() -> FakeTool {
+        let working = background_task(TaskStatus::Working);
+        FakeTool::new("start").responds(FakeToolResponse::task(CreateTaskResult::new(working)))
     }
 }
 
@@ -798,22 +824,16 @@ impl RuntimeFactory for FakeRuntimeFactory {
             .ok_or_else(|| SessionError::AgentNotFound(spec.name.clone()))?;
         let provider = def.provider.clone();
 
-        let mut mcp_builder = mcp(&self.cwd).with_tool_filter(spec.tools.clone());
+        let (sink, events) = mpsc::channel(32);
+        let mut mcp_builder = mcp(&self.cwd).with_tool_filter(spec.tools.clone()).with_elicitations(sink);
         if let Some((server_name, prompt_name)) = &def.mcp {
-            let prompt_name = prompt_name.clone();
             let gate = self.control.lock().unwrap().prompt_gate.clone();
             let elicitation_results = self.control.lock().unwrap().elicitation_results.clone();
-            mcp_builder = with_in_memory_server(mcp_builder, server_name, move || {
-                FakePromptMcp::new(&prompt_name)
-                    .with_gate(gate.clone())
-                    .with_elicitation(elicitation_results.clone())
-                    .into_dyn()
-            });
+            let server = FakePromptMcp::new(prompt_name).with_gate(gate).with_elicitation(elicitation_results);
+            mcp_builder = mcp_builder.with_servers(vec![fake_mcp(server_name, McpServer::new(server))]);
         }
-        let mut spawn =
-            mcp_builder.spawn().await.map_err(|e| SessionError::Build(CliError::McpError(e.to_string())))?;
-        spawn.block_until_ready().await.ok_or(SessionError::McpStartupStopped)?;
-        let mcp_handle = spawn.handle().clone();
+        let mcp_runtime = mcp_builder.spawn().map_err(CliError::from)?;
+        mcp_runtime.gateway().ready().await;
         let mut builder = AgentBuilder::new(provider).max_auto_continues(0);
         if let Some(last) = &usage_seed {
             builder = builder.resume_usage(last);
@@ -822,15 +842,14 @@ impl RuntimeFactory for FakeRuntimeFactory {
             builder = builder.system_prompt(prompt.clone());
         }
         let (agent_tx, agent_rx, agent_handle) = builder
-            .tools(mcp_handle, Vec::new())
+            .mcp(mcp_runtime.gateway().clone())
             .messages(initial_messages)
             .spawn()
             .await
             .map_err(|e| SessionError::Build(CliError::AgentError(e.to_string())))?;
         self.control.lock().unwrap().agents.push(agent_tx.clone());
-        let (mcp_runtime, event_rx) = spawn.connect_agent(agent_tx.clone()).await.split();
 
-        Ok(AgentRuntime::new(agent_tx, agent_rx, Some(agent_handle), event_rx, mcp_runtime))
+        Ok(AgentRuntime::new(agent_tx, agent_rx, Some(agent_handle), events, mcp_runtime))
     }
 }
 
@@ -842,7 +861,8 @@ struct StubAgentParts {
     tx: mpsc::Sender<Command>,
     rx: mpsc::Receiver<AgentEvent>,
     handle: AgentHandle,
-    mcp: McpSession,
+    mcp: McpRuntime,
+    events: mpsc::Receiver<Elicitation>,
 }
 
 #[async_trait::async_trait]
@@ -860,26 +880,10 @@ impl RuntimeFactory for StubRuntimeFactory {
             .expect("stub agent parts lock is healthy")
             .take()
             .expect("stub runtime spawned more than once");
-        let (mcp_runtime, event_rx) = parts.mcp.connect_agent(parts.tx.clone()).await.split();
+        let StubAgentParts { tx, rx, handle, mcp, events } = parts;
 
-        Ok(AgentRuntime::new(parts.tx, parts.rx, Some(parts.handle), event_rx, mcp_runtime))
+        Ok(AgentRuntime::new(tx, rx, Some(handle), events, mcp))
     }
-}
-
-fn with_in_memory_server(
-    builder: McpBuilder,
-    name: &str,
-    server: impl Fn() -> Box<dyn DynService<RoleServer>> + Send + Sync + 'static,
-) -> McpBuilder {
-    let factory: ServerFactory = Box::new(move |_spec, _services| std::future::ready(server()).boxed());
-    let transport = McpTransport::InMemory {
-        spec: InMemoryServerSpec { factory: name.to_string(), args: Vec::new(), input: None },
-    };
-    builder.register_in_memory_server(name, factory).with_servers(vec![McpServer::new(
-        name,
-        transport,
-        ToolExposure::ModelVisible,
-    )])
 }
 
 fn count_prompts(agent_tx: mpsc::Sender<Command>, prompts: watch::Sender<usize>) -> mpsc::Sender<Command> {

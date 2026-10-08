@@ -7,7 +7,7 @@ async fn lsp_check_errors_accepts_flat_file_path_and_infers_file_scope() {
     let project = CargoProject::new("diag_contract_infers_file_scope").expect("Failed to create project");
     project.add_file("src/main.rs", "fn main() {}\n").expect("Failed to add file");
 
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
     let result = call_tool(
         &client,
         "lsp_check_errors",
@@ -25,8 +25,8 @@ async fn lsp_check_errors_schema_is_flat_and_has_only_file_path() {
     let project = CargoProject::new("diag_contract_flat_schema").expect("Failed to create project");
     project.add_file("src/main.rs", "fn main() {}\n").expect("Failed to add file");
 
-    let (_server_handle, client) = connect_lsp(&project).await;
-    let tools = client.peer().list_all_tools().await.expect("list tools");
+    let client = connect_lsp(&project).await;
+    let tools = client.list_tools().await.expect("list tools");
     let tool =
         tools.into_iter().find(|tool| tool.name.as_ref() == "lsp_check_errors").expect("lsp_check_errors tool present");
 
@@ -44,7 +44,7 @@ async fn lsp_check_errors_rejects_redundant_scope_parameter() {
     let project = CargoProject::new("diag_contract_redundant_scope").expect("Failed to create project");
     project.add_file("src/main.rs", "fn main() {}\n").expect("Failed to add file");
 
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
     let error = call_tool_error(&client, "lsp_check_errors", serde_json::json!({ "scope": "workspace" })).await;
 
     assert!(error.contains("unknown field `scope`"), "{error}");
@@ -53,7 +53,7 @@ async fn lsp_check_errors_rejects_redundant_scope_parameter() {
 #[tokio::test]
 async fn lsp_check_errors_fails_when_workspace_has_no_active_language_server() {
     let workspace = CodingWorkspace::new_with_lsp().await.expect("create workspace");
-    let error = call_tool_error(workspace.client.raw(), "lsp_check_errors", serde_json::json!({})).await;
+    let error = call_tool_error(workspace.client.mcp(), "lsp_check_errors", serde_json::json!({})).await;
 
     assert!(error.contains("No active LSP clients"), "{error}");
 }
@@ -66,7 +66,7 @@ async fn lsp_check_errors_returns_typescript_installation_instructions_when_serv
     workspace.write("node_modules/.bin/tsc", "not executable\n").expect("write unavailable language server");
 
     let error =
-        call_tool_error(workspace.client.raw(), "lsp_check_errors", serde_json::json!({ "filePath": index_ts })).await;
+        call_tool_error(workspace.client.mcp(), "lsp_check_errors", serde_json::json!({ "filePath": index_ts })).await;
 
     assert!(error.contains("Permission denied"), "{error}");
     assert!(error.contains("TypeScript 7 language server"), "{error}");
@@ -85,7 +85,7 @@ async fn lsp_check_errors_returns_typescript_installation_instructions_when_tsc_
     std::fs::set_permissions(&tsc, std::fs::Permissions::from_mode(0o755)).expect("make tsc executable");
 
     let error =
-        call_tool_error(workspace.client.raw(), "lsp_check_errors", serde_json::json!({ "filePath": index_ts })).await;
+        call_tool_error(workspace.client.mcp(), "lsp_check_errors", serde_json::json!({ "filePath": index_ts })).await;
 
     assert!(error.contains("failed to complete initialization"), "{error}");
     assert!(error.contains("TypeScript 7 language server"), "{error}");
@@ -97,7 +97,7 @@ async fn lsp_check_errors_rejects_file_scope_parameter() {
     let project = CargoProject::new("diag_contract_rejects_scope").expect("Failed to create project");
     project.add_file("src/main.rs", "fn main() {}\n").expect("Failed to add file");
 
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
     let error = call_tool_error(
         &client,
         "lsp_check_errors",
@@ -116,7 +116,7 @@ async fn lsp_check_errors_rejects_file_scope_directory_path() {
     let project = CargoProject::new("diag_contract_file_rejects_directory").expect("Failed to create project");
     project.add_file("src/main.rs", "fn main() {}\n").expect("Failed to add file");
 
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
     let error = call_tool_error(
         &client,
         "lsp_check_errors",

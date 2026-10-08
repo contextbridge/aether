@@ -1,4 +1,4 @@
-use mcp_utils::client::McpServerConfig;
+use mcp_utils::config::McpServerConfig;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 use utils::{PathOrObject, ResourcePath, is_false, string_or_object_schema};

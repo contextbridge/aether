@@ -6,7 +6,7 @@ use aether_project::{AetherSettings, AgentCatalog, TelemetrySettings};
 use aether_telemetry::AgentTraceContext;
 use error::CliError;
 use llm::{ProviderConnectionOverride, ProviderConnectionOverrides};
-use mcp_utils::client::McpConfig;
+use mcp_utils::config::McpConfig;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

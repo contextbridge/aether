@@ -13,7 +13,7 @@ use rmcp::{
         GetTaskParams, GetTaskResult, Implementation, InputRequest, InputRequests, InputRequiredResult,
         ProgressNotificationParam, ServerCapabilities, ServerConfig, UpdateTaskParams,
     },
-    service::RequestContext,
+    service::{ElicitationMode, RequestContext},
     task_manager::{TaskContext, TaskExit, TaskManager, TaskOptions},
     tool, tool_handler, tool_router,
 };
@@ -35,14 +35,13 @@ pub use tools_trait::CodingTools;
 use crate::coding::error::CodingError;
 use crate::lsp::tools::check_errors::{LspDiagnosticsOutput, LspDiagnosticsRequest, execute_lsp_diagnostics};
 use crate::lsp::tools::symbol_lookup::{LspSymbolInput, LspSymbolOutput, execute_lsp_symbol};
+use crate::request_context::{BACKGROUND_TASK_TTL_MS, parse_response, require_tasks, supports_elicitation};
 use crate::workspace_paths::WorkspacePaths;
 use crate::{coding::prompt_rule_matcher::PromptRuleMatcher, lsp::registry::LspRegistry};
 use crate::{
     error::ServerInitError,
     lsp::tools::rename::{LspRenameInput, LspRenameOutput, execute_lsp_rename},
 };
-use mcp_utils::server::mrtr::{input_requests_supported, parse_response};
-use mcp_utils::server::tasks::{BACKGROUND_TASK_TTL_MS, require_tasks_capability};
 
 use tools::bash::{BashInput, BashOutput, validate_args};
 use tools::edit_file::{EditFileArgs, EditFileResponse, edit_file_contents};
@@ -135,12 +134,16 @@ impl<T: CodingTools + 'static> ServerHandler for CodingMcp<T> {
     ) -> Result<CallToolResponse, ErrorData> {
         let background_args = background_bash_args(&request);
         if let Some(args) = &background_args {
-            require_tasks_capability(&context)?;
+            require_tasks(&context)?;
             validate_args(args).map_err(|error| ErrorData::invalid_params(error.to_string(), None))?;
         }
 
         if let Some(prompt) = self.permission_prompt(&request) {
             let Some(responses) = request.input_responses.clone() else {
+                if !supports_elicitation(&context, ElicitationMode::Form) {
+                    let message = permission_unsupported(&prompt.tool_name);
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(message)]).into());
+                }
                 let requests = InputRequests::from([(
                     "permission".to_string(),
                     InputRequest::Elicitation(ElicitRequest::new(decision_form(
@@ -148,10 +151,6 @@ impl<T: CodingTools + 'static> ServerHandler for CodingMcp<T> {
                         &prompt.description,
                     ))),
                 )]);
-                if !input_requests_supported(context.client_capabilities().as_ref(), &requests) {
-                    let message = permission_unsupported(&prompt.tool_name);
-                    return Ok(CallToolResult::error(vec![ContentBlock::text(message)]).into());
-                }
                 return Ok(InputRequiredResult::from_input_requests(requests).into());
             };
 

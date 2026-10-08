@@ -1,22 +1,30 @@
-use crate::client::{RuntimeMcpServer, RuntimeMcpTransport, ToolExposure};
+use crate::client::Transport;
+use crate::gateway::{ServerSpec, ToolExposure};
+use crate::server::McpServer;
 use rmcp::{
     ErrorData as McpError, Peer, RoleServer, ServerHandler,
     model::{
         CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ClientCapabilities,
-        ContentBlock, CreateTaskResult, DetailedTask, DiscoverResult, GetTaskParams, GetTaskResult, Implementation,
-        ListToolsResult, PaginatedRequestParams, ProgressNotificationParam, ProtocolVersion, ResultType,
-        ServerCapabilities, ServerConfig, TaskPayload, Tool, UpdateTaskParams,
+        ContentBlock, CreateTaskResult, DetailedTask, DiscoverResult, GetPromptRequestParams, GetPromptResponse,
+        GetPromptResult, GetTaskParams, GetTaskResult, Implementation, ListPromptsResult, ListToolsResult,
+        PaginatedRequestParams, ProgressNotificationParam, Prompt, PromptMessage, PromptsCapability, ProtocolVersion,
+        ResultType, Role, ServerCapabilities, ServerConfig, TaskPayload, Tool, ToolAnnotations, UpdateTaskParams,
     },
-    service::{DynService, RequestContext},
+    service::RequestContext,
 };
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::sync::watch;
 
-pub fn fake_mcp(name: &str, server: FakeMcpServer) -> RuntimeMcpServer {
-    RuntimeMcpServer::new(name, RuntimeMcpTransport::InMemory { server: server.into_dyn() }, ToolExposure::ModelVisible)
+pub fn fake_mcp(name: &str, server: impl Into<McpServer>) -> ServerSpec {
+    ServerSpec {
+        name: name.to_string(),
+        transport: Transport::InProcess(server.into()),
+        exposure: ToolExposure::ModelVisible,
+    }
 }
 
 pub fn completed_task_payload(result: CallToolResult) -> TaskPayload {
@@ -34,6 +42,7 @@ pub struct FakeMcpServer {
 #[derive(Clone, Default)]
 pub struct FakeMcpState {
     inner: Arc<Mutex<FakeMcpStateInner>>,
+    changes: Arc<watch::Sender<()>>,
 }
 
 #[derive(Clone)]
@@ -80,6 +89,11 @@ impl FakeMcpServer {
         self
     }
 
+    pub fn with_prompt(self, name: impl Into<String>, template: impl Into<String>) -> Self {
+        self.state.lock().prompts.insert(name.into(), template.into());
+        self
+    }
+
     pub fn with_task(self, task_id: impl Into<String>, states: impl IntoIterator<Item = DetailedTask>) -> Self {
         self.state.script_task(task_id, states);
         self
@@ -98,9 +112,11 @@ impl FakeMcpServer {
     pub fn state(&self) -> FakeMcpState {
         self.state.clone()
     }
+}
 
-    pub fn into_dyn(self) -> Box<dyn DynService<RoleServer>> {
-        Box::new(self)
+impl From<FakeMcpServer> for McpServer {
+    fn from(server: FakeMcpServer) -> Self {
+        McpServer::new(server)
     }
 }
 
@@ -129,34 +145,44 @@ impl FakeMcpState {
         self.lock().tasks.insert(task_id.into(), states.into_iter().collect());
     }
 
-    fn task_for(&self, task_id: &str) -> Result<Option<DetailedTask>, ()> {
-        let mut inner = self.lock();
-        inner.task_get_ids.push(task_id.to_string());
-        if inner.task_get_failures > 0 {
-            inner.task_get_failures -= 1;
-            return Err(());
+    /// Resolves once `condition` holds, re-checking whenever the server records a request.
+    pub async fn wait_until(&self, condition: impl Fn(&Self) -> bool) {
+        let mut changes = self.changes.subscribe();
+        while !condition(self) {
+            changes.changed().await.expect("the state outlives its waiters");
         }
-        let Some(states) = inner.tasks.get_mut(task_id) else {
-            return Ok(None);
-        };
-        Ok(if states.len() > 1 { states.pop_front() } else { states.front().cloned() })
+    }
+
+    fn task_for(&self, task_id: &str) -> Result<Option<DetailedTask>, ()> {
+        self.record(|inner| {
+            inner.task_get_ids.push(task_id.to_string());
+            if inner.task_get_failures > 0 {
+                inner.task_get_failures -= 1;
+                return Err(());
+            }
+            let Some(states) = inner.tasks.get_mut(task_id) else {
+                return Ok(None);
+            };
+            Ok(if states.len() > 1 { states.pop_front() } else { states.front().cloned() })
+        })
     }
 
     fn record_task_update(&self, request: UpdateTaskParams) -> bool {
-        let mut inner = self.lock();
-        inner
-            .task_updates
-            .push(CapturedTaskUpdate { task_id: request.task_id, input_responses: request.input_responses });
-        if inner.task_update_failures > 0 {
-            inner.task_update_failures -= 1;
-            false
-        } else {
-            true
-        }
+        self.record(|inner| {
+            inner
+                .task_updates
+                .push(CapturedTaskUpdate { task_id: request.task_id, input_responses: request.input_responses });
+            if inner.task_update_failures > 0 {
+                inner.task_update_failures -= 1;
+                false
+            } else {
+                true
+            }
+        })
     }
 
     fn record_task_cancel(&self, request: CancelTaskParams) {
-        self.lock().task_cancel_ids.push(request.task_id);
+        self.record(|inner| inner.task_cancel_ids.push(request.task_id));
     }
 
     pub fn add_tool(&self, tool: FakeTool) {
@@ -198,13 +224,20 @@ impl FakeMcpState {
         request: &CallToolRequestParams,
         context_meta: serde_json::Map<String, serde_json::Value>,
     ) -> Option<FakeToolResponse> {
-        let mut inner = self.lock();
-        inner.calls.push(CapturedToolCall { request: request.clone(), context_meta });
-        inner.tools.get(request.name.as_ref()).and_then(|tool| tool.response_for(request))
+        self.record(|inner| {
+            inner.calls.push(CapturedToolCall { request: request.clone(), context_meta });
+            inner.tools.get(request.name.as_ref()).and_then(|tool| tool.response_for(request))
+        })
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, FakeMcpStateInner> {
         self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn record<T>(&self, change: impl FnOnce(&mut FakeMcpStateInner) -> T) -> T {
+        let result = change(&mut self.lock());
+        self.changes.send_replace(());
+        result
     }
 }
 
@@ -222,6 +255,11 @@ impl FakeTool {
 
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.definition.description = Some(description.into().into());
+        self
+    }
+
+    pub fn annotations(mut self, annotations: ToolAnnotations) -> Self {
+        self.definition.annotations = Some(annotations);
         self
     }
 
@@ -318,7 +356,11 @@ impl ServerHandler for FakeMcpServer {
     }
 
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_tasks().build())
+        let mut capabilities = ServerCapabilities::builder().enable_tools().enable_tasks().build();
+        if !self.state.lock().prompts.is_empty() {
+            capabilities.prompts = Some(PromptsCapability::default());
+        }
+        ServerConfig::new(capabilities)
             .with_server_info(
                 Implementation::new("fake-mcp-server", "0.1.0").with_description("A fake MCP server for testing"),
             )
@@ -388,6 +430,33 @@ impl ServerHandler for FakeMcpServer {
         }))
     }
 
+    fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
+        let prompts =
+            self.state.lock().prompts.keys().map(|name| Prompt::new(name, Some("Fake prompt"), None)).collect();
+        std::future::ready(Ok(ListPromptsResult::with_all_items(prompts)))
+    }
+
+    fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<GetPromptResponse, McpError>> + Send + '_ {
+        let template = self.state.lock().prompts.get(&request.name).cloned();
+        let result = template
+            .map(|template| {
+                let text = request.arguments.unwrap_or_default().iter().fold(template, |text, (name, value)| {
+                    text.replace(&format!("{{{name}}}"), value.as_str().unwrap_or_default())
+                });
+                GetPromptResult::new(vec![PromptMessage::new_text(Role::User, text)]).into()
+            })
+            .ok_or_else(|| McpError::invalid_params(format!("unknown prompt: {}", request.name), None));
+        std::future::ready(result)
+    }
+
     fn get_tool(&self, name: &str) -> Option<Tool> {
         self.state.definitions().into_iter().find(|tool| tool.name == name)
     }
@@ -440,6 +509,7 @@ type ToolHandler = Arc<dyn Fn(&CallToolRequestParams) -> FakeToolResponse + Send
 #[derive(Default)]
 struct FakeMcpStateInner {
     tools: BTreeMap<String, FakeTool>,
+    prompts: BTreeMap<String, String>,
     calls: Vec<CapturedToolCall>,
     client_capabilities: Option<ClientCapabilities>,
     tasks: HashMap<String, VecDeque<DetailedTask>>,

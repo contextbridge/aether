@@ -5,7 +5,8 @@
 
 use crate::core::Prompt;
 use llm::{LlmModel, ModelSettings, ProviderConnectionOverrides, ReasoningEffort};
-use mcp_utils::client::{McpConfig, ToolFilter};
+use mcp_utils::config::McpConfig;
+use mcp_utils::gateway::ToolFilter;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
@@ -124,8 +125,6 @@ impl AgentSpecExposure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use llm::{ToolAnnotations, ToolDefinition};
-    use mcp_utils::client::{ToolAnnotationMatcher, ToolMatcher};
 
     #[test]
     fn default_spec_has_expected_fields() {
@@ -140,199 +139,5 @@ mod tests {
         assert_eq!(spec.prompts.len(), 1);
         assert!(spec.mcp_config_sources.is_empty());
         assert_eq!(spec.exposure, AgentSpecExposure::none());
-    }
-
-    fn make_tool(name: &str) -> ToolDefinition {
-        ToolDefinition::new(name, "", serde_json::json!({}))
-    }
-
-    fn make_annotated_tool(name: &str, annotations: ToolAnnotations) -> ToolDefinition {
-        ToolDefinition::new(name, "", serde_json::json!({})).with_annotations(annotations)
-    }
-
-    #[test]
-    fn empty_filter_allows_all_tools() {
-        let filter = ToolFilter::default();
-        let tools = vec![make_tool("bash"), make_tool("read_file")];
-        let result = filter.apply(tools);
-        assert_eq!(result.len(), 2);
-    }
-
-    #[test]
-    fn allow_keeps_only_matching_tools() {
-        let filter =
-            ToolFilter { allow: vec![ToolMatcher::name("read_file"), ToolMatcher::name("grep")], deny: vec![] };
-        let tools = vec![make_tool("bash"), make_tool("read_file"), make_tool("grep")];
-        let result = filter.apply(tools);
-        let names: Vec<_> = result.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, vec!["read_file", "grep"]);
-    }
-
-    #[test]
-    fn deny_removes_matching_tools() {
-        let filter = ToolFilter { allow: vec![], deny: vec![ToolMatcher::name("bash")] };
-        let tools = vec![make_tool("bash"), make_tool("read_file")];
-        let result = filter.apply(tools);
-        let names: Vec<_> = result.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, vec!["read_file"]);
-    }
-
-    #[test]
-    fn wildcard_matching() {
-        let filter = ToolFilter { allow: vec![ToolMatcher::name("coding__*")], deny: vec![] };
-        let tools = vec![make_tool("coding__grep"), make_tool("coding__read_file"), make_tool("plugins__bash")];
-        let result = filter.apply(tools);
-        let names: Vec<_> = result.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, vec!["coding__grep", "coding__read_file"]);
-    }
-
-    #[test]
-    fn combined_allow_and_deny() {
-        let filter = ToolFilter {
-            allow: vec![ToolMatcher::name("coding__*")],
-            deny: vec![ToolMatcher::name("coding__write_file")],
-        };
-        let tools = vec![
-            make_tool("coding__grep"),
-            make_tool("coding__write_file"),
-            make_tool("coding__read_file"),
-            make_tool("plugins__bash"),
-        ];
-        let result = filter.apply(tools);
-        let names: Vec<_> = result.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, vec!["coding__grep", "coding__read_file"]);
-    }
-
-    #[test]
-    fn annotation_allow_matches_present_values() {
-        let filter = ToolFilter { allow: vec![ToolMatcher::read_only()], deny: vec![] };
-        let tools = vec![
-            make_tool("unknown"),
-            make_annotated_tool("read", ToolAnnotations { read_only_hint: Some(true), ..ToolAnnotations::default() }),
-            make_annotated_tool("write", ToolAnnotations { read_only_hint: Some(false), ..ToolAnnotations::default() }),
-        ];
-        let names: Vec<_> = filter.apply(tools).into_iter().map(|tool| tool.name).collect();
-        assert_eq!(names, vec!["read"]);
-    }
-
-    #[test]
-    fn deny_annotation_removes_destructive_tools() {
-        let filter = ToolFilter {
-            allow: vec![],
-            deny: vec![ToolMatcher::annotations(ToolAnnotationMatcher {
-                destructive: Some(true),
-                ..ToolAnnotationMatcher::default()
-            })],
-        };
-        let tools = vec![
-            make_tool("unknown"),
-            make_annotated_tool(
-                "safe_update",
-                ToolAnnotations {
-                    read_only_hint: Some(false),
-                    destructive_hint: Some(false),
-                    ..ToolAnnotations::default()
-                },
-            ),
-        ];
-        let names: Vec<_> = filter.apply(tools).into_iter().map(|tool| tool.name).collect();
-        assert_eq!(names, vec!["unknown", "safe_update"]);
-    }
-
-    #[test]
-    fn annotation_matchers_do_not_match_missing_fields() {
-        let filter = ToolFilter {
-            allow: vec![],
-            deny: vec![
-                ToolMatcher::annotations(ToolAnnotationMatcher {
-                    destructive: Some(true),
-                    ..ToolAnnotationMatcher::default()
-                }),
-                ToolMatcher::annotations(ToolAnnotationMatcher {
-                    open_world: Some(true),
-                    ..ToolAnnotationMatcher::default()
-                }),
-                ToolMatcher::annotations(ToolAnnotationMatcher {
-                    idempotent: Some(false),
-                    ..ToolAnnotationMatcher::default()
-                }),
-                ToolMatcher::annotations(ToolAnnotationMatcher {
-                    read_only: Some(false),
-                    ..ToolAnnotationMatcher::default()
-                }),
-            ],
-        };
-        let tools = vec![make_tool("unknown")];
-        let names: Vec<_> = filter.apply(tools).into_iter().map(|tool| tool.name).collect();
-        assert_eq!(names, vec!["unknown"]);
-    }
-
-    #[test]
-    fn annotation_matchers_do_not_infer_fields_from_read_only_hint() {
-        let filter = ToolFilter {
-            allow: vec![ToolMatcher::annotations(ToolAnnotationMatcher {
-                destructive: Some(false),
-                ..ToolAnnotationMatcher::default()
-            })],
-            deny: vec![],
-        };
-        let tools = vec![make_annotated_tool("read", ToolAnnotations::read_only())];
-        assert!(filter.apply(tools).is_empty());
-    }
-
-    #[test]
-    fn deny_wins_over_allow() {
-        let filter =
-            ToolFilter { allow: vec![ToolMatcher::read_only()], deny: vec![ToolMatcher::name("coding__read_file")] };
-        let tools = vec![make_annotated_tool(
-            "coding__read_file",
-            ToolAnnotations { read_only_hint: Some(true), ..ToolAnnotations::default() },
-        )];
-        assert!(filter.apply(tools).is_empty());
-    }
-
-    #[test]
-    fn mixed_allow_entries_are_ored() {
-        let filter = ToolFilter { allow: vec![ToolMatcher::read_only(), ToolMatcher::name("review__*")], deny: vec![] };
-        let tools = vec![
-            make_annotated_tool(
-                "coding__grep",
-                ToolAnnotations { read_only_hint: Some(true), ..ToolAnnotations::default() },
-            ),
-            make_tool("review__review_artifact"),
-            make_tool("coding__bash"),
-        ];
-        let names: Vec<_> = filter.apply(tools).into_iter().map(|tool| tool.name).collect();
-        assert_eq!(names, vec!["coding__grep", "review__review_artifact"]);
-    }
-
-    #[test]
-    fn empty_annotation_matcher_matches_nothing() {
-        let filter =
-            ToolFilter { allow: vec![ToolMatcher::annotations(ToolAnnotationMatcher::default())], deny: vec![] };
-        let tools = vec![make_annotated_tool(
-            "coding__grep",
-            ToolAnnotations { read_only_hint: Some(true), ..ToolAnnotations::default() },
-        )];
-        assert!(filter.apply(tools).is_empty());
-    }
-
-    #[test]
-    fn exact_name_match_is_not_a_prefix_match() {
-        let filter = ToolFilter { allow: vec![ToolMatcher::name("bash")], deny: vec![] };
-        let names: Vec<_> =
-            filter.apply(vec![make_tool("bash"), make_tool("bash_extended")]).into_iter().map(|t| t.name).collect();
-        assert_eq!(names, vec!["bash"]);
-    }
-
-    #[test]
-    fn tool_matcher_uses_exact_and_trailing_wildcard_names() {
-        let exact = ToolMatcher::name("foo");
-        let wildcard = ToolMatcher::name("foo*");
-        assert!(exact.matches(&make_tool("foo")));
-        assert!(!exact.matches(&make_tool("foobar")));
-        assert!(wildcard.matches(&make_tool("foobar")));
-        assert!(wildcard.matches(&make_tool("foo")));
-        assert!(!wildcard.matches(&make_tool("bar")));
     }
 }

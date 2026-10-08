@@ -4,10 +4,10 @@ use llm::ContentBlock;
 use tracing::{error, info};
 
 use crate::slash_commands::{expand_slash_command, parse_slash_command};
-use aether_core::mcp::McpHandle;
+use mcp_utils::gateway::McpGateway;
 
 pub(crate) async fn expand_slash_command_in_content(
-    mcp: &McpHandle,
+    mcp: &McpGateway,
     mut content: Vec<ContentBlock>,
 ) -> Vec<ContentBlock> {
     if let Some(ContentBlock::Text { text }) = content.first() {
@@ -17,7 +17,7 @@ pub(crate) async fn expand_slash_command_in_content(
     content
 }
 
-async fn expand_slash_command_text(mcp: &McpHandle, text: String) -> String {
+async fn expand_slash_command_text(mcp: &McpGateway, text: String) -> String {
     let Some(slash_command) = parse_slash_command(&text) else {
         return text;
     };

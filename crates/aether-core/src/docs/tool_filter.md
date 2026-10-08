@@ -26,5 +26,5 @@ Annotation matcher fields are `readOnly`, `destructive`, `idempotent`, and `open
 
 MCP name matchers are evaluated against the canonical namespaced name
 (`server__tool`), not the server-local name. The decision is stored in the
-per-agent `ToolCatalog` and applies consistently to model-visible definitions,
+per-agent MCP gateway's catalog and applies consistently to model-visible definitions,
 deferred discovery, instructions, and both model-visible and deferred execution routes.

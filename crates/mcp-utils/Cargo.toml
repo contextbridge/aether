@@ -30,7 +30,6 @@ client = [
     "dep:aether-auth",
     "aether-auth/mcp",
     "dep:async-stream",
-    "dep:llm",
     "dep:reqwest",
     "rmcp/transport-streamable-http-client-reqwest",
     "rmcp/transport-child-process",
@@ -41,8 +40,8 @@ chrono = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "sync", "net", "time"] }
-tokio-util = { workspace = true }
-rmcp = { workspace = true, features = ["client", "elicitation", "server", "transport-async-rw"] }
+tokio-util = { workspace = true, features = ["rt"] }
+rmcp = { workspace = true, features = ["client", "elicitation", "server", "transport-async-rw", "transport-io"] }
 tracing = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.18" }
 schemars = { workspace = true }
@@ -50,15 +49,26 @@ schemars = { workspace = true }
 # client-only deps
 aether-auth = { path = "../aether-auth", version = "0.1.16", optional = true }
 async-stream = { workspace = true, optional = true }
-llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.9.11" }
 serde_json = { workspace = true }
 reqwest = { workspace = true, optional = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 
+[[test]]
+name = "client"
+required-features = ["testing"]
+
+[[test]]
+name = "oauth"
+required-features = ["testing"]
+
+[[test]]
+name = "gateway"
+required-features = ["testing"]
+
 [dev-dependencies]
 axum = { workspace = true }
 aether-doctest = { path = "../doctest" }
-rmcp = { workspace = true, features = ["macros"] }
+rmcp = { workspace = true, features = ["macros", "transport-streamable-http-server"] }
 tempfile = { workspace = true }
-tracing-subscriber = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }

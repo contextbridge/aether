@@ -20,7 +20,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum AgentError {
     #[error("MCP error: {0}")]
-    McpError(#[from] mcp_utils::client::McpError),
+    McpError(#[from] mcp_utils::McpError),
     #[error("LLM error: {0}")]
     LlmError(#[from] llm::LlmError),
     #[error("IO error: {0}")]

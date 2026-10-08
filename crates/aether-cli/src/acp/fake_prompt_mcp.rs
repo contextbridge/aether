@@ -2,7 +2,7 @@ use rmcp::model::{
     GetPromptRequestParams, GetPromptResponse, Implementation, ListPromptsResult, PaginatedRequestParams,
     Prompt as McpPrompt, PromptMessage, Role, ServerCapabilities, ServerConfig,
 };
-use rmcp::service::{DynService, RequestContext};
+use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use std::sync::Arc;
 use tokio::sync::{Notify, mpsc};
@@ -30,10 +30,6 @@ impl FakePromptMcp {
     ) -> Self {
         self.elicitation_results = results;
         self
-    }
-
-    pub(crate) fn into_dyn(self) -> Box<dyn DynService<RoleServer>> {
-        Box::new(self)
     }
 }
 

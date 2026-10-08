@@ -11,6 +11,7 @@ use llm::LlmResponse;
 use llm::testing::{FakeLlmProvider, llm_response};
 use std::sync::Arc;
 use tokio::{sync::Notify, task::LocalSet};
+use utils::mcp_status::{McpServerStatus, McpServerStatusEntry};
 
 #[tokio::test(flavor = "current_thread")]
 async fn cancel_during_mcp_prompt_expansion_does_not_wait_for_the_server() {
@@ -209,6 +210,42 @@ async fn acceptance_precedes_streaming_and_idle_completes_the_turn() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn mcp_status_is_reported_only_when_a_tool_refresh_changes_it() -> TestResult {
+    AcpTestHarness::run(|mut harness| async move {
+        let task = FakeBackgroundTask::new();
+        let id = SessionId::new("mcp-status-refresh");
+        let mut catalog = harness.insert_background_task_session(background_task_provider(), &task, id).await;
+        let initial = tasks_tool_count(&harness.next_mcp_server_statuses().await).expect("tasks server is connected");
+
+        task.announce_unchanged_tools().await;
+        catalog.changed().await?;
+        task.add_tool("extra").await;
+
+        assert_eq!(tasks_tool_count(&harness.next_mcp_server_statuses().await), Some(initial + 1));
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn mcp_status_change_re_advertises_available_commands() -> TestResult {
+    AcpTestHarness::run(|mut harness| async move {
+        let task = FakeBackgroundTask::new();
+        let id = SessionId::new("mcp-commands-refresh");
+        harness.insert_background_task_session(background_task_provider(), &task, id).await;
+        harness.next_mcp_server_statuses().await;
+        harness.expect_available_commands(&["plan"], &[]).await;
+
+        task.add_tool("extra").await;
+
+        harness.next_mcp_server_statuses().await;
+        harness.expect_available_commands(&["plan"], &[]).await;
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn background_task_outcome_turn_is_framed_by_running_and_idle() -> TestResult {
     AcpTestHarness::run(|mut harness| async move {
         let task = FakeBackgroundTask::new();
@@ -379,6 +416,13 @@ async fn prompt_sent_after_cancel_starts_a_new_turn() -> TestResult {
         Ok(())
     })
     .await
+}
+
+fn tasks_tool_count(statuses: &[McpServerStatusEntry]) -> Option<usize> {
+    statuses.iter().find(|entry| entry.name == "tasks").and_then(|entry| match entry.status {
+        McpServerStatus::Connected { tool_count } => Some(tool_count),
+        _ => None,
+    })
 }
 
 fn background_task_provider() -> FakeLlmProvider {

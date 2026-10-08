@@ -1,8 +1,6 @@
 use crate::common::{call_tool, connect_lsp, has_errors, has_no_errors};
 use aether_lspd::testing::{NodeProject, TestProject};
-use rmcp::RoleClient;
-use rmcp::model::ClientConfig;
-use rmcp::service::RunningService;
+use mcp_utils::client::McpClient;
 
 #[tokio::test]
 async fn test_ts_mcp_edit_produces_diagnostics() {
@@ -13,7 +11,7 @@ async fn test_ts_mcp_edit_produces_diagnostics() {
 
     let index_ts = project.file_path_str("src/index.ts");
 
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
 
     let result = check_errors(&client, &index_ts).await;
     assert!(has_errors(&result), "Expected type error diagnostics: {result}");
@@ -59,7 +57,7 @@ async fn test_ts_external_file_change_produces_diagnostics() {
     let index_ts = project.file_path_str("src/index.ts");
     let index_ts_path = project.root().join("src/index.ts");
 
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
 
     let result = check_errors(&client, &index_ts).await;
     assert!(has_errors(&result), "Expected type error diagnostics: {result}");
@@ -82,7 +80,7 @@ async fn test_ts_diagnostics_after_edit_without_polling() {
 
     let index_ts = project.file_path_str("src/index.ts");
 
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
 
     call_tool(&client, "read_file", serde_json::json!({ "filePath": index_ts })).await;
 
@@ -100,6 +98,6 @@ async fn test_ts_diagnostics_after_edit_without_polling() {
     assert!(has_errors(&result), "Expected diagnostics after edit + single lsp_check_errors call: {result}");
 }
 
-async fn check_errors(client: &RunningService<RoleClient, ClientConfig>, file_path: &str) -> serde_json::Value {
+async fn check_errors(client: &McpClient, file_path: &str) -> serde_json::Value {
     call_tool(client, "lsp_check_errors", serde_json::json!({ "filePath": file_path })).await
 }

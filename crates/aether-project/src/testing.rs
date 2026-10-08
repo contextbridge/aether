@@ -13,7 +13,7 @@ use crate::prompt_file::{PromptFile, PromptTriggers};
 use crate::{AgentConfig, PromptSource, SKILL_FILENAME};
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
 use llm::{ModelSettings, ProviderConnectionOverrides};
-use mcp_utils::client::ToolFilter;
+use mcp_utils::gateway::ToolFilter;
 
 /// The model id every shared agent fixture resolves to.
 pub const DEFAULT_MODEL: &str = "anthropic:claude-sonnet-4-5";

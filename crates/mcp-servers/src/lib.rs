@@ -2,6 +2,9 @@
 
 pub mod error;
 
+#[cfg(any(feature = "coding", feature = "review"))]
+mod request_context;
+
 pub mod workspace_paths;
 
 #[cfg(any(test, feature = "test-helpers"))]

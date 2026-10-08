@@ -1,13 +1,15 @@
 use aether_core::core::Prompt;
-use aether_core::testing::{FakeMcpServer, McpTestBuilder, mcp_instructions as instructions, test_agent};
+use aether_core::mcp::mcp_instructions;
+use aether_core::testing::{McpTestBuilder, mcp_instructions as instructions, test_agent};
 use llm::ChatMessage;
 use llm::testing::llm_response;
+use mcp_utils::testing::FakeMcpServer;
 use std::error::Error;
 
 #[tokio::test]
 async fn test_fake_mcp_server_has_instructions() {
     let mcp_test = McpTestBuilder::new().server("test", FakeMcpServer::new()).build().await;
-    let instructions = mcp_test.snapshot().model_instructions();
+    let instructions = mcp_test.catalog().instructions();
 
     // FakeMcpServer does provide instructions, so we should get them
     assert_eq!(instructions.len(), 1);
@@ -21,12 +23,29 @@ async fn test_multiple_servers_with_instructions() {
         .server("server2", FakeMcpServer::new())
         .build()
         .await;
-    let instructions = mcp_test.snapshot().model_instructions();
+    let instructions = mcp_test.catalog().instructions();
 
     // Both servers should have instructions
     assert_eq!(instructions.len(), 2);
     assert!(instructions.get("server1").unwrap().contains("A fake MCP server for testing"));
     assert!(instructions.get("server2").unwrap().contains("A fake MCP server for testing"));
+}
+
+#[tokio::test]
+async fn progressive_discovery_is_explained_only_while_a_server_defers_tools() {
+    let direct = McpTestBuilder::new().server("direct", FakeMcpServer::new()).build().await;
+    let deferred = McpTestBuilder::new()
+        .server("direct", FakeMcpServer::new())
+        .deferred_server("lazy", FakeMcpServer::new())
+        .build()
+        .await;
+
+    let without = mcp_instructions(direct.catalog());
+    let with = mcp_instructions(deferred.catalog());
+
+    assert_eq!(without.keys().collect::<Vec<_>>(), ["direct"]);
+    assert_eq!(with.keys().collect::<Vec<_>>(), ["direct", "progressive-discovery"]);
+    assert!(with["progressive-discovery"].contains("aether mcp"));
 }
 
 #[tokio::test]
@@ -68,6 +87,7 @@ async fn test_format_mcp_instructions_is_deterministically_ordered() {
 #[tokio::test]
 async fn test_agent_builder_includes_mcp_instructions_in_system_prompt() -> Result<(), Box<dyn Error>> {
     let result = test_agent()
+        .without_mcp()
         .llm_responses(&[llm_response().text(&["done"]).build()])
         .system_prompt(Prompt::text("You are a test agent"))
         .system_prompt(Prompt::McpInstructions(instructions(&[("test-server", "Test instructions")])))
@@ -88,6 +108,7 @@ async fn test_agent_builder_includes_mcp_instructions_in_system_prompt() -> Resu
 #[tokio::test]
 async fn test_agent_builder_works_without_mcp_instructions() -> Result<(), Box<dyn Error>> {
     let result = test_agent()
+        .without_mcp()
         .llm_responses(&[llm_response().text(&["done"]).build()])
         .system_prompt(Prompt::text("You are a test agent"))
         .user_text("test")

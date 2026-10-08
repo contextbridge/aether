@@ -11,12 +11,9 @@ pub enum SessionError {
     #[error("agent command channel is closed")]
     CommandChannelClosed,
     #[error("MCP operation failed: {0}")]
-    McpOperation(#[from] aether_core::mcp::McpHandleError),
+    McpOperation(#[from] mcp_utils::McpError),
     #[error("model configuration failed: {0}")]
     Model(#[from] llm::LlmError),
-    #[cfg(any(test, feature = "testing"))]
-    #[error("MCP runtime stopped during startup")]
-    McpStartupStopped,
     #[error("agent runtime not found: {0}")]
     AgentNotFound(String),
     #[error("session shut down during runtime startup")]

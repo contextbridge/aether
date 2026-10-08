@@ -1,3 +1,4 @@
+use mcp_utils::testing::{FakeMcpServer, fake_mcp};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -9,7 +10,7 @@ use crate::events::{
     AgentCommand, AgentEvent, AgentObserver, Command, ContextEvent, ToolEvent, TurnEvent, UserCommand,
 };
 use crate::mcp::mcp;
-use crate::testing::{AgentTrace, FakeAgentObserver, FakeMcpServer, McpBuilderTestExt};
+use crate::testing::{AgentTrace, FakeAgentObserver};
 use llm::{ChatMessage, Context, LlmError, LlmModel, LlmResponse, ModelSettings, StreamingModelProvider};
 
 use llm::testing::FakeLlmProvider;
@@ -397,17 +398,17 @@ impl TestAgentBuilder {
         }
         let captured_contexts = llm.captured_contexts();
 
-        let mut mcp_spawn = match config.mcp_server {
+        let mcp_spawn = match config.mcp_server {
             Some((name, server)) => {
-                Some(mcp("/workspace").with_fake_mcp(name, server).spawn().await.map_err(AgentError::from)?)
+                Some(mcp("/workspace").with_servers(vec![fake_mcp(&name, server)]).spawn().map_err(AgentError::from)?)
             }
             None => None,
         };
 
         let mut builder = agent(llm);
-        if let Some(spawn) = &mut mcp_spawn {
-            let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
-            builder = builder.tools(spawn.handle().clone(), snapshot.tool_definitions());
+        if let Some(runtime) = &mcp_spawn {
+            runtime.gateway().ready().await;
+            builder = builder.mcp(runtime.gateway().clone());
         }
         if let Some(timeout) = config.timeout {
             builder = builder.tool_timeout(timeout);

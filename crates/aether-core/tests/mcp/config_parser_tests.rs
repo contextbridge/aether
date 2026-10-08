@@ -1,14 +1,27 @@
-use mcp_utils::client::{McpConfig, McpHttpConfig, McpServer, McpTransport, ParseError};
+use mcp_utils::client::Transport;
+use mcp_utils::config::{McpConfig, McpServerConfig, ParseError};
 use reqwest::header::AUTHORIZATION;
 use std::env;
 use std::num::NonZeroU16;
 use utils::variables::Vars;
 
-fn parse_servers(json: &str) -> Result<Vec<McpServer>, ParseError> {
-    McpConfig::from_json(json).unwrap().into_servers(&Vars::new())
+fn parse_servers(json: &str) -> Result<Vec<(String, Transport)>, ParseError> {
+    let vars = Vars::new();
+    McpConfig::from_json(json)?
+        .servers
+        .into_iter()
+        .map(|(name, config)| {
+            let transport = match config {
+                McpServerConfig::Stdio(config) => config.into_transport(&vars)?,
+                McpServerConfig::Remote(config) => config.into_transport(&vars)?,
+                McpServerConfig::InMemory(_) => panic!("in-memory servers have no transport"),
+            };
+            Ok((name, transport))
+        })
+        .collect()
 }
 
-fn parse_one(json: &str) -> McpServer {
+fn parse_one(json: &str) -> (String, Transport) {
     let mut servers = parse_servers(json).unwrap();
     assert_eq!(servers.len(), 1);
     servers.remove(0)
@@ -27,15 +40,16 @@ macro_rules! with_env {
     }};
 }
 
-fn assert_http(server: McpServer, expected_name: &str, expected_url: &str) -> McpServer {
-    match &server.transport {
-        McpTransport::Http(c) => {
-            assert_eq!(server.name, expected_name);
-            assert_eq!(c.transport.uri.to_string(), expected_url);
+fn assert_http(server: (String, Transport), expected_name: &str, expected_url: &str) -> Transport {
+    let (name, transport) = server;
+    match &transport {
+        Transport::Http { url, .. } => {
+            assert_eq!(name, expected_name);
+            assert_eq!(url, expected_url);
         }
         other => panic!("Expected Http config, got {other:?}"),
     }
-    server
+    transport
 }
 
 #[tokio::test]
@@ -50,11 +64,10 @@ async fn test_parse_stdio_config() {
         }"#,
     );
     with_env!([("GITHUB_TOKEN", "test_token")], {
-        let server = parse_one(&json);
-        assert!(!server.has_deferred_tools());
-        match server.transport {
-            McpTransport::Stdio { command, args, env } => {
-                assert_eq!(server.name, "githubMcp");
+        let (name, transport) = parse_one(&json);
+        match transport {
+            Transport::Stdio { command, args, env } => {
+                assert_eq!(name, "githubMcp");
                 assert_eq!(command, "npx");
                 assert_eq!(args, vec!["-y", "@modelcontextprotocol/server-github"]);
                 assert_eq!(env.get("GITHUB_TOKEN").unwrap(), "test_token");
@@ -78,9 +91,9 @@ async fn test_parse_http_oauth_config() {
         }"#,
     );
 
-    let server = parse_one(&json);
-    match server.transport {
-        McpTransport::Http(McpHttpConfig { oauth: Some(oauth), .. }) => {
+    let (_, transport) = parse_one(&json);
+    match transport {
+        Transport::Http { oauth: Some(oauth), .. } => {
             assert_eq!(oauth.client_id.as_deref(), Some("1601185624273.8899143856786"));
             assert_eq!(oauth.callback_port.map(NonZeroU16::get), Some(3118));
         }
@@ -112,13 +125,12 @@ async fn test_parse_http_and_sse_configs() {
             "headers": { "Authorization": "Bearer $API_TOKEN" }
         }"#,
     );
-    let cfg = with_env!(
+    let transport = with_env!(
         [("API_TOKEN", "secret_token")],
         assert_http(parse_one(&json), "mcpMesh", "http://localhost:3000/mcp")
     );
-    if let McpTransport::Http(c) = cfg.transport {
-        assert!(c.transport.auth_header.is_none());
-        assert_eq!(c.transport.custom_headers[&AUTHORIZATION], "Bearer secret_token");
+    if let Transport::Http { headers, .. } = transport {
+        assert_eq!(headers[AUTHORIZATION], "Bearer secret_token");
     }
 
     let json = server_json("sseServer", r#"{ "type": "sse", "url": "http://localhost:4000/sse", "headers": {} }"#);
@@ -136,18 +148,13 @@ async fn test_missing_env_var_error() {
 
 #[tokio::test]
 async fn test_in_memory_config_is_declarative() {
-    let json = server_json(
-        "test",
-        r#"{ "type": "in-memory", "args": ["--root", "${WORKSPACE}"], "input": {"enabled": true} }"#,
-    );
+    let json = server_json("test", r#"{ "type": "in-memory", "args": ["--root", "${WORKSPACE}"] }"#);
     let vars = Vars::new().with("WORKSPACE", "/workspace");
-    let mut servers = McpConfig::from_json(&json).unwrap().into_servers(&vars).unwrap();
-    let McpTransport::InMemory { spec } = servers.remove(0).transport else {
-        panic!("expected in-memory transport");
+    let Some(McpServerConfig::InMemory(config)) = McpConfig::from_json(&json).unwrap().servers.remove("test") else {
+        panic!("expected in-memory server");
     };
-    assert_eq!(spec.factory, "test");
-    assert_eq!(spec.args, ["--root", "/workspace"]);
-    assert_eq!(spec.input, Some(serde_json::json!({"enabled": true})));
+    let config = config.expand(&vars).unwrap();
+    assert_eq!(config.args, ["--root", "/workspace"]);
 }
 
 #[tokio::test]
@@ -188,10 +195,10 @@ async fn test_parse_per_server_defer_tools_config() {
             "sentry": { "type": "http", "url": "https://sentry.example.com/mcp" }
         }
     }"#;
-    let servers = parse_servers(json).unwrap();
+    let servers = McpConfig::from_json(json).unwrap().servers;
     assert_eq!(servers.len(), 2);
-    assert!(servers.iter().find(|s| s.name == "github").unwrap().has_deferred_tools());
-    assert!(!servers.iter().find(|s| s.name == "sentry").unwrap().has_deferred_tools());
+    assert!(servers["github"].defer_tools().has_deferred_tools());
+    assert!(!servers["sentry"].defer_tools().has_deferred_tools());
 }
 
 #[test]

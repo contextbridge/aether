@@ -1,5 +1,6 @@
+use aether_core::mcp::AETHER_MCP_IPC_SOCKET;
 use mcp_servers::coding::tools::bash::{BashEnvironment, BashInput, execute_command};
-use mcp_utils::tool_gateway::{AETHER_MCP_IPC_SOCKET, UnixSocketMcpTransport, UnixSocketPath};
+use mcp_utils::server::{McpServer, ServerHandle};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData, Implementation, ListToolsResult,
     PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
@@ -222,11 +223,10 @@ async fn usage_errors_exit_two_and_runtime_errors_exit_one() {
     assert!(String::from_utf8_lossy(&missing.stderr).contains(AETHER_MCP_IPC_SOCKET));
 }
 
-fn gateway() -> (mcp_utils::tool_gateway::UnixSocketServer, String) {
-    let path = UnixSocketPath::new().unwrap();
-    let transport = UnixSocketMcpTransport::bind(path).unwrap();
-    let socket = transport.path().to_string_lossy().into_owned();
-    (transport.spawn(FakeGateway), socket)
+fn gateway() -> (ServerHandle, String) {
+    let handle = McpServer::new(FakeGateway).serve_unix().unwrap();
+    let socket = handle.path().to_string_lossy().into_owned();
+    (handle, socket)
 }
 
 fn run(socket: &str, args: &[&str], stdin: Option<&str>) -> Output {

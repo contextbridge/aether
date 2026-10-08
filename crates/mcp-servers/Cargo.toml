@@ -65,7 +65,7 @@ subagents = [
     "dep:tracing",
 ]
 all = ["coding", "skills", "tasks", "subagents", "review"]
-stdio = ["coding", "skills", "tasks", "subagents", "review", "rmcp/transport-io"]
+stdio = ["coding", "skills", "tasks", "subagents", "review"]
 
 [dependencies]
 # Always required
@@ -109,7 +109,7 @@ reqwest = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 aether-lspd = { path = "../aether-lspd", features = ["testing"], version = "0.3.1" }
 mcp-servers = { package = "aether-mcp-servers", path = ".", features = ["test-helpers"] }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", features = ["client"], version = "0.7.11" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", features = ["testing"], version = "0.7.11" }
 
 [[bin]]
 name = "mcp-servers-stdio"

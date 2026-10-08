@@ -1,37 +1,24 @@
 use crate::events::{TaskOutcome, TaskOutcomeState};
-use mcp_utils::client::{CallToolError, SERVERNAME_DELIMITER};
-use rmcp::model::{CallToolRequestParams, CallToolResult, ContentBlock, EmbeddedResource, ResourceContents, Task};
+use mcp_utils::McpError;
+use mcp_utils::client::{ToolCall, ToolCallError as McpToolCallError, ToolCallOptions};
+use mcp_utils::gateway::{McpCatalog, McpGateway, split_namespaced};
+use rmcp::model::{CallToolResult, ContentBlock, EmbeddedResource, ResourceContents, Tool};
+use serde_json::{Map, Value};
 
-use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
+use llm::{ToolAnnotations, ToolCallError, ToolCallRequest, ToolCallResult, ToolDefinition};
 use utils::display_meta::ToolResultMeta;
 use utils::temp_dir::TempDir;
 use utils::tool_result_truncator::ToolResultTruncator;
 
 const TOOL_RESULT_TRUNCATOR: ToolResultTruncator = ToolResultTruncator { head: 25_000, tail: 25_000 };
 
-/// Convert a `ToolCallRequest` to `rmcp::CallToolRequestParams`
-pub fn tool_call_request_to_mcp(request: &ToolCallRequest) -> Result<CallToolRequestParams, String> {
-    let tool_name = request
-        .name
-        .split_once(SERVERNAME_DELIMITER)
-        .map_or_else(|| request.name.clone(), |(_, tool_name)| tool_name.to_string());
-
-    // Parse arguments from JSON string
-    let arguments = serde_json::from_str::<serde_json::Value>(&request.arguments)
-        .map_err(|e| format!("Invalid tool arguments: {e}"))?
-        .as_object()
-        .cloned();
-
-    let mut params = CallToolRequestParams::new(tool_name);
-    if let Some(args) = arguments {
-        params = params.with_arguments(args);
-    }
-    Ok(params)
+pub fn tool_definitions(catalog: &McpCatalog) -> Vec<ToolDefinition> {
+    catalog.tools().iter().map(tool_definition).collect()
 }
 
 pub fn convert_tool_result(
     request: &ToolCallRequest,
-    outcome: Result<CallToolResult, CallToolError>,
+    outcome: Result<CallToolResult, McpToolCallError>,
     spill_dir: &TempDir,
 ) -> Result<(ToolCallResult, Option<ToolResultMeta>), ToolCallError> {
     let mcp_result = outcome.map_err(|error| ToolCallError::from_request(request, error.to_string()))?;
@@ -61,21 +48,53 @@ pub fn convert_tool_result(
     ))
 }
 
-pub fn map_task_result_to_outcome(
+pub(crate) fn map_task_result_to_outcome(
     request: ToolCallRequest,
-    task: Task,
-    outcome: Result<CallToolResult, CallToolError>,
+    task_id: String,
+    outcome: Result<CallToolResult, McpToolCallError>,
     spill_dir: &TempDir,
 ) -> TaskOutcome {
     let state = match convert_tool_result(&request, outcome, spill_dir) {
         Ok((result, result_meta)) => TaskOutcomeState::Completed { result, result_meta },
         Err(error) => TaskOutcomeState::Failed { error },
     };
-    TaskOutcome { request, task_id: task.task_id, state }
+    TaskOutcome { request, task_id, state }
+}
+
+pub(crate) fn call_tool(gateway: Option<&McpGateway>, request: &ToolCallRequest, options: ToolCallOptions) -> ToolCall {
+    serde_json::from_str::<Map<String, Value>>(&request.arguments)
+        .map_err(McpToolCallError::InvalidArguments)
+        .and_then(|arguments| {
+            gateway
+                .ok_or_else(|| McpError::ToolNotFound(request.name.clone()))
+                .and_then(|gateway| gateway.call_tool(&request.name, arguments, options))
+                .map_err(McpToolCallError::Unresolved)
+        })
+        .unwrap_or_else(ToolCall::failed)
 }
 
 pub(crate) fn encode_structured(value: &serde_json::Value) -> String {
     noyalib::to_string(value).unwrap_or_else(|_| value.to_string())
+}
+
+fn tool_definition(tool: &Tool) -> ToolDefinition {
+    let annotations = tool.annotations.as_ref().map(|annotations| ToolAnnotations {
+        title: annotations.title.clone(),
+        read_only_hint: annotations.read_only_hint,
+        destructive_hint: annotations.destructive_hint,
+        idempotent_hint: annotations.idempotent_hint,
+        open_world_hint: annotations.open_world_hint,
+    });
+    let definition = ToolDefinition::new(
+        tool.name.to_string(),
+        tool.description.clone().unwrap_or_default(),
+        Value::Object((*tool.input_schema).clone()),
+    )
+    .with_annotations(annotations);
+    match split_namespaced(&tool.name) {
+        Some((server, _)) => definition.with_server(server),
+        None => definition,
+    }
 }
 
 fn content_text(content: &[ContentBlock], empty: &str) -> String {
@@ -141,7 +160,7 @@ mod tests {
     }
 
     fn convert(mcp: McpCallToolResult) -> Result<(ToolCallResult, Option<ToolResultMeta>), ToolCallError> {
-        convert_tool_result(&req(), Ok(mcp), &TempDir::new())
+        convert_tool_result(&req(), Ok::<_, McpToolCallError>(mcp), &TempDir::new())
     }
 
     fn call_structured(structured: serde_json::Value) -> (ToolCallResult, Option<ToolResultMeta>) {
@@ -366,7 +385,7 @@ mod tests {
     fn oversized_results_and_errors_keep_their_head_and_tail_and_save_the_full_text() {
         let text = (1..=100_000).map(|n| format!("{n}\n")).collect::<Vec<_>>().concat();
         let spill_dir = TempDir::new();
-        let convert = |mcp| convert_tool_result(&req(), Ok(mcp), &spill_dir);
+        let convert = |mcp| convert_tool_result(&req(), Ok::<_, McpToolCallError>(mcp), &spill_dir);
         let (result, _) = convert(McpCallToolResult::success(vec![ContentBlock::text(&text)])).unwrap();
         let error = convert(McpCallToolResult::error(vec![ContentBlock::text(&text)])).unwrap_err().error;
 

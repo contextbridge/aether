@@ -5,7 +5,7 @@ use aether_core::agent_spec::{AgentSpec, AgentSpecExposure, McpConfigSource};
 use aether_core::core::{AgentRegistry, Prompt};
 use llm::catalog::{LlmModel, ModelSpec, ModelSpecError};
 use llm::{ProviderConnectionOverrides, ReasoningEffort};
-use mcp_utils::client::McpConfig;
+use mcp_utils::config::McpConfig;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use utils::variables::VarError;

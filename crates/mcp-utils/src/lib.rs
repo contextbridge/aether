@@ -1,11 +1,16 @@
 #![doc = include_str!("../README.md")]
 
-mod protocol;
+mod error;
+#[cfg(feature = "client")]
+pub mod gateway;
 pub mod server;
+#[cfg(all(feature = "client", any(test, feature = "testing")))]
 pub mod testing;
-pub mod tool_gateway;
 
 #[cfg(feature = "client")]
 pub mod client;
+#[cfg(feature = "client")]
+pub mod config;
 
-pub use rmcp::ServiceExt;
+pub use error::McpError;
+pub use rmcp::model;

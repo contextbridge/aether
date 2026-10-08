@@ -4,8 +4,8 @@ use aether_project::{AetherSettings, AgentCatalog, McpSourceSpec, PromptSource};
 use llm::catalog::Provider;
 use llm::{LlmModel, ReasoningEffort};
 use mcp_servers::{CodingMcpArgs, ReviewMcpArgs, SkillsMcpArgs, SubAgentsMcpArgs, TasksMcpArgs};
-use mcp_utils::client::McpServerConfig;
-use mcp_utils::client::ToolMatcher;
+use mcp_utils::config::McpServerConfig;
+use mcp_utils::gateway::ToolMatcher;
 use std::collections::BTreeMap;
 use std::path::Path;
 

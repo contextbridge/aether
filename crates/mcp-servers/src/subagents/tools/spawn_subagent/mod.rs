@@ -4,7 +4,7 @@ use aether_core::{
     agent_spec::McpConfigSource,
     core::{AgentBuilder, AgentDeps, AgentHandle},
     events::{AgentEvent, Command, MessageEvent, SubAgentProgressPayload, TurnEvent, TurnOutcome, UserCommand},
-    mcp::{McpRuntime, McpSession, mcp},
+    mcp::{McpRuntime, mcp},
 };
 use futures::FutureExt;
 use llm::{ContentBlock, MessageId};
@@ -230,12 +230,10 @@ impl AgentExecutor {
                 .resolve_agent_invocable(&task.agent_name)
                 .map_err(|error| error.to_string())?;
 
-            let mut spawn = self.spawn_mcps(&spec.mcp_config_sources, spec.tools.clone()).await?;
-            spawn.block_until_ready().await.ok_or_else(|| "MCP bootstrap aborted before completion".to_string())?;
-            let mcp = spawn.handle().clone();
+            let mcp_runtime = self.spawn_mcps(&spec.mcp_config_sources, spec.tools.clone())?;
+            mcp_runtime.gateway().ready().await;
 
-            let (user_tx, mut agent_rx, agent_handle) = self.spawn_agent(spec, mcp).await?;
-            let (mcp_runtime, _) = spawn.connect_agent(user_tx.clone()).await.split();
+            let (user_tx, mut agent_rx, agent_handle) = self.spawn_agent(spec, mcp_runtime.gateway().clone()).await?;
             let running_agent = RunningAgent { user_tx, agent_handle, _mcp_runtime: mcp_runtime };
 
             let prompt_with_instructions = format!("{}\n\n{}", task.prompt, STRUCTURED_OUTPUT_INSTRUCTIONS);
@@ -302,11 +300,11 @@ impl AgentExecutor {
         }
     }
 
-    async fn spawn_mcps(
+    fn spawn_mcps(
         &self,
         effective_mcp_config_sources: &[McpConfigSource],
-        tool_filter: mcp_utils::client::ToolFilter,
-    ) -> Result<McpSession, String> {
+        tool_filter: mcp_utils::gateway::ToolFilter,
+    ) -> Result<McpRuntime, String> {
         let mut builder = mcp(&self.project_root)
             .with_tool_filter(tool_filter)
             .with_agent_deps(self.deps.clone())
@@ -318,18 +316,18 @@ impl AgentExecutor {
                 .map_err(|e| format!("Failed to load mcp configs: {e}"))?;
         }
 
-        builder.spawn().await.map_err(|e| format!("Failed to spawn MCP manager: {e}"))
+        builder.spawn().map_err(|e| format!("Failed to spawn MCP gateway: {e}"))
     }
 
     async fn spawn_agent(
         &self,
         spec: aether_core::agent_spec::AgentSpec,
-        mcp: aether_core::mcp::McpHandle,
+        mcp: mcp_utils::gateway::McpGateway,
     ) -> Result<(mpsc::Sender<Command>, mpsc::Receiver<AgentEvent>, AgentHandle), String> {
         AgentBuilder::from_spec(&spec, vec![], &self.deps)
             .await
             .map_err(|e| format!("Failed to build agent from spec: {e}"))?
-            .tools(mcp, Vec::new())
+            .mcp(mcp)
             .spawn()
             .await
             .map_err(|e| format!("Failed to spawn agent: {e}"))

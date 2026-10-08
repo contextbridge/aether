@@ -218,7 +218,7 @@ async fn pending_and_detached_elicitations_cancel_without_stopping_session() {
                 };
                 assert_eq!(
                     results.recv().await.expect("MCP receives cancellation"),
-                    mcp_utils::client::cancel_result()
+                    rmcp::model::ElicitResult::new(rmcp::model::ElicitationAction::Cancel)
                 );
                 drop(pending);
                 assert!(prompt.await.is_err(), "disconnected prompt response is not retried");

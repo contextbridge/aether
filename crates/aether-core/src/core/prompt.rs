@@ -300,20 +300,17 @@ impl PromptCache {
         Self { prompts, entries: Vec::new() }
     }
 
-    pub fn update_mcp_instruction(&mut self, server: String, body: Option<String>) {
-        for prompt in &mut self.prompts {
-            if let Prompt::McpInstructions(map) = prompt {
-                match body {
-                    Some(text) => {
-                        map.insert(server, text);
-                    }
-                    None => {
-                        map.remove(&server);
-                    }
-                }
-                return;
-            }
+    pub fn set_mcp_instructions(&mut self, instructions: BTreeMap<String, String>) -> bool {
+        let Some(Prompt::McpInstructions(current)) =
+            self.prompts.iter_mut().find(|prompt| matches!(prompt, Prompt::McpInstructions(_)))
+        else {
+            return false;
+        };
+        if *current == instructions {
+            return false;
         }
+        *current = instructions;
+        true
     }
 
     pub async fn render(&mut self) -> Result<String> {
@@ -426,7 +423,7 @@ mod tests {
 
         // Remove the source file to prove we cached things
         remove_file(dir.path().join("AGENTS.md")).unwrap();
-        cache.update_mcp_instruction("srv".into(), Some("instr".into()));
+        cache.set_mcp_instructions(BTreeMap::from([("srv".to_string(), "instr".to_string())]));
 
         let rendered = cache.render().await.unwrap();
         assert!(rendered.contains("cached body"));

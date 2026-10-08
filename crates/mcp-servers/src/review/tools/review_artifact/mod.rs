@@ -1,6 +1,6 @@
+use crate::request_context::{parse_response, supports_elicitation};
 use crate::review::html_review::{Artifact, PendingReviews, ReviewServer};
 use crate::workspace_paths::resolve_path;
-use mcp_utils::server::mrtr::{ELICITATION_UNSUPPORTED, ElicitationMode, elicitation_supported, parse_response};
 use reqwest::Url;
 use rmcp::{
     ErrorData as McpError, RoleServer,
@@ -13,7 +13,7 @@ use rmcp::{
         ElicitationAction, ElicitationSchema, EnumSchema, InputRequest, InputRequests, InputRequiredResult,
         RequestMetaObject,
     },
-    service::RequestContext,
+    service::{ElicitationMode, RequestContext},
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,8 @@ use std::path::{Path, PathBuf};
 use utils::artifact_review::{ArtifactReviewDecision, ArtifactReviewElicitationMeta, ArtifactReviewSubmission};
 
 const REVIEW: &str = "review";
+const ELICITATION_UNSUPPORTED: &str = "This tool needs to ask the user for input, but the connected client does not support \
+     interactive input (MCP elicitation over protocol 2026-07-28 or newer).";
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "format", rename_all = "lowercase", deny_unknown_fields)]
@@ -110,7 +112,7 @@ impl ReviewArtifactTool {
             ReviewArtifactInput::Markdown { .. } => ElicitationMode::Form,
             ReviewArtifactInput::Html { .. } => ElicitationMode::Url,
         };
-        if !elicitation_supported(context.client_capabilities().as_ref(), mode) {
+        if !supports_elicitation(context, mode) {
             return Err(ELICITATION_UNSUPPORTED.to_string());
         }
 

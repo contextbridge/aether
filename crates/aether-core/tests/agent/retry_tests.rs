@@ -1,10 +1,11 @@
 use aether_core::events::TurnEvent;
+use mcp_utils::testing::{FakeMcpServer, FakeTool, FakeToolResponse};
 use std::error::Error;
 use std::time::Duration;
 
 use aether_core::core::RetryConfig;
 use aether_core::events::{AgentEvent, LlmCallOutcome, TurnOutcome};
-use aether_core::testing::{FakeMcpServer, FakeTool, FakeToolResponse, fast_retry, test_agent};
+use aether_core::testing::{fast_retry, test_agent};
 use llm::ProviderError;
 use llm::testing::{failed_call, llm_response};
 use rmcp::model::{CreateTaskResult, DetailedTask, Task, TaskPayload, TaskStatus};

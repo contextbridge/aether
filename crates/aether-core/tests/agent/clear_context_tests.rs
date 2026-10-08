@@ -1,8 +1,9 @@
 use aether_core::core::Prompt;
 use aether_core::events::{AgentEvent, Command, ContextEvent, ToolEvent, UserCommand};
-use aether_core::testing::{FakeMcpServer, FakeTool, FakeToolResponse, TestScenario, test_agent};
+use aether_core::testing::{TestScenario, test_agent};
 use llm::testing::llm_response;
 use llm::{ChatMessage, ContentBlock};
+use mcp_utils::testing::{FakeMcpServer, FakeTool, FakeToolResponse};
 use rmcp::model::{CreateTaskResult, DetailedTask, Task, TaskPayload, TaskStatus};
 use std::sync::Arc;
 use tokio::sync::Notify;

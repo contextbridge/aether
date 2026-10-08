@@ -1,10 +1,11 @@
+use mcp_utils::testing::{FakeMcpServer, FakeTool};
 use std::error::Error;
 
 use aether_core::core::Prompt;
-use aether_core::events::{AgentCommand, Command};
-use aether_core::testing::{FakeMcpServer, FakeTool, TestScenario, test_agent};
+use aether_core::events::{AgentEvent, ToolEvent};
+use aether_core::testing::{TestScenario, test_agent};
+use llm::LlmResponse;
 use llm::testing::llm_response;
-use llm::{LlmResponse, ToolDefinition};
 
 #[tokio::test]
 async fn derives_same_cache_key_for_shared_prompt_prefix() -> Result<(), Box<dyn Error>> {
@@ -35,15 +36,20 @@ async fn cache_key_changes_with_tools() -> Result<(), Box<dyn Error>> {
 
 #[tokio::test]
 async fn cache_key_refreshes_after_tool_updates() -> Result<(), Box<dyn Error>> {
+    let server = FakeMcpServer::new();
+    let state = server.state();
     let result = test_agent()
-        .without_mcp()
+        .fake_mcp_server("test", server)
         .system_prompt(Prompt::text("system prompt"))
         .llm_responses(&[response(), response()])
         .scenario(
             TestScenario::new()
                 .user_text("first question")
                 .wait_for_turn_end()
-                .send(Command::AgentCommand(AgentCommand::UpdateTools(vec![tool("read_file")])))
+                .perform(move || {
+                    tokio::spawn(async move { state.add_tool_and_notify(FakeTool::new("read_file")).await });
+                })
+                .wait_for(|event| defines_tool(event, "test__read_file"))
                 .user_text("second question")
                 .wait_for_turn_end(),
         )
@@ -170,6 +176,6 @@ fn server_with_tool(name: &str) -> FakeMcpServer {
     FakeMcpServer::new().with_tool(FakeTool::new(name).description(format!("{name} description")))
 }
 
-fn tool(name: &str) -> ToolDefinition {
-    ToolDefinition::new(name, format!("{name} description"), serde_json::json!({ "type": "object" }))
+fn defines_tool(event: &AgentEvent, name: &str) -> bool {
+    matches!(event, AgentEvent::Tool(ToolEvent::DefinitionsUpdated { tools }) if tools.iter().any(|tool| tool.name == name))
 }

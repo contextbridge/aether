@@ -3,9 +3,9 @@ use crate::agent_spec::AgentSpec;
 use crate::context::{CompactionConfig, SessionUsageTracker};
 use crate::core::{Agent, AgentDeps, Prompt, PromptCache, Result};
 use crate::events::{AgentEvent, AgentObserver, Command};
-use crate::mcp::McpHandle;
 use llm::parser::ModelProviderParser;
-use llm::{ChatMessage, Context, ModelSettings, SessionUsageEvent, StreamingModelProvider, ToolDefinition};
+use llm::{ChatMessage, Context, ModelSettings, SessionUsageEvent, StreamingModelProvider};
+use mcp_utils::gateway::McpGateway;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -36,9 +36,8 @@ impl AgentHandle {
 pub struct AgentBuilder {
     llm: Arc<dyn StreamingModelProvider>,
     prompts: Vec<Prompt>,
-    tool_definitions: Vec<ToolDefinition>,
     initial_messages: Vec<ChatMessage>,
-    mcp: Option<McpHandle>,
+    mcp: Option<McpGateway>,
     channel_capacity: usize,
     tool_timeout: Duration,
     compaction_config: Option<CompactionConfig>,
@@ -56,7 +55,6 @@ impl AgentBuilder {
         Self {
             llm,
             prompts: Vec::new(),
-            tool_definitions: Vec::new(),
             initial_messages: Vec::new(),
             mcp: None,
             channel_capacity: 1000,
@@ -114,9 +112,8 @@ impl AgentBuilder {
         self
     }
 
-    pub fn tools(mut self, mcp: McpHandle, tools: Vec<ToolDefinition>) -> Self {
-        self.tool_definitions = tools;
-        self.mcp = Some(mcp);
+    pub fn mcp(mut self, gateway: McpGateway) -> Self {
+        self.mcp = Some(gateway);
         self
     }
 
@@ -251,7 +248,7 @@ impl AgentBuilder {
         messages.extend(self.initial_messages);
         let (command_tx, command_rx) = mpsc::channel::<Command>(self.channel_capacity);
         let (message_tx, agent_event_rx) = mpsc::channel::<AgentEvent>(self.channel_capacity);
-        let mut context = Context::new(messages, self.tool_definitions);
+        let mut context = Context::new(messages, Vec::new());
         context.set_model_settings(self.model_settings);
         context.set_session_affinity_key(Some(self.session_affinity_key));
 
@@ -281,7 +278,7 @@ mod tests {
     use super::*;
     use crate::agent_spec::AgentSpecExposure;
     use llm::ProviderConnectionOverrides;
-    use mcp_utils::client::ToolFilter;
+    use mcp_utils::gateway::ToolFilter;
 
     #[tokio::test]
     async fn test_agent_handle_is_finished() {

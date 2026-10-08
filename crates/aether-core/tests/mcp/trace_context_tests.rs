@@ -1,5 +1,6 @@
 use aether_core::events::TraceContext;
-use aether_core::testing::{FakeMcpServer, FakeMcpState, FakeTool, FakeToolResponse, McpTestBuilder};
+use aether_core::testing::McpTestBuilder;
+use mcp_utils::testing::{FakeMcpServer, FakeMcpState, FakeTool, FakeToolResponse};
 use serde_json::json;
 
 #[tokio::test]

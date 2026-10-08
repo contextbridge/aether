@@ -1,7 +1,7 @@
-use crate::common::{TestClient, TestResult, scripted_mcp_client, silent_mcp_client, test_error};
+use crate::common::{TestClient, TestResult, production_client_info, scripted_client, silent_client, test_error};
 use axum::{Router, extract::Query, http::header::CONTENT_TYPE, response::Html, routing::get};
 use mcp_servers::review::ReviewMcp;
-use mcp_utils::{client::McpClient, testing::ElicitationScript};
+use mcp_utils::testing::{ElicitationScript, RawClient};
 use reqwest::Url;
 use rmcp::model::{
     CallToolRequest, CallToolRequestParams, CallToolResponse, ClientRequest, ElicitRequestParams, ElicitResult,
@@ -9,7 +9,7 @@ use rmcp::model::{
 };
 use rmcp::service::PeerRequestOptions;
 use serde_json::{Value, json};
-use std::{collections::HashMap, fs, path::Path, path::PathBuf};
+use std::{collections::HashMap, fs, path::Path, path::PathBuf, sync::Arc};
 use tempfile::TempDir;
 use tokio::task::JoinHandle;
 use utils::artifact_review::ArtifactReviewElicitationMeta;
@@ -162,7 +162,7 @@ async fn cancelling_the_tool_call_tears_down_the_review_server() -> TestResult {
     let second_round =
         response_request(args, ElicitResult::new(ElicitationAction::Accept)).with_request_state(review.token.clone());
     let request = ClientRequest::CallToolRequest(CallToolRequest::new(second_round));
-    let handle = test.client.raw().send_cancellable_request(request, PeerRequestOptions::no_options()).await?;
+    let handle = test.raw.raw().send_cancellable_request(request, PeerRequestOptions::no_options()).await?;
     handle.cancel(None).await?;
 
     while reqwest::get(&review.url).await.is_ok() {
@@ -271,6 +271,8 @@ async fn clients_without_elicitation_support_are_rejected() -> TestResult {
     let result = mcp.call_raw("review_artifact", markdown_file("valid.md")).await?;
 
     assert_eq!(result.is_error, Some(true));
+    let text = result.content.first().and_then(|content| content.as_text()).expect("error text");
+    assert!(text.text.contains("does not support interactive input"), "unexpected error: {}", text.text);
     Ok(())
 }
 
@@ -286,7 +288,8 @@ struct ReviewTestBuilder {
 
 struct ReviewTest {
     root: TempDir,
-    client: TestClient<ReviewMcp, McpClient>,
+    client: TestClient,
+    raw: RawClient,
     script: Option<ElicitationScript>,
 }
 
@@ -330,15 +333,17 @@ impl ReviewTestBuilder {
             fs::write(path, content)?;
         }
 
-        let (client, script) = self.response.map_or_else(
-            || (silent_mcp_client("review-test-server"), None),
+        let (options, script) = self.response.map_or_else(
+            || (silent_client(), None),
             |response| {
-                let (client, script) = scripted_mcp_client("review-test-server", response);
-                (client, Some(script))
+                let (options, script) = scripted_client(response);
+                (options, Some(script))
             },
         );
-        let client = TestClient::start_with(|| review_mcp_at(root.path()), client).await?;
-        Ok(ReviewTest { root, client, script })
+        let server = Arc::new(review_mcp_at(root.path()));
+        let client = TestClient::start_with(|| Arc::clone(&server), options).await?;
+        let raw = RawClient::connect(Arc::clone(&server), production_client_info()).await?;
+        Ok(ReviewTest { root, client, raw, script })
     }
 }
 
@@ -358,12 +363,12 @@ impl ReviewTest {
 
     /// The first MRTR round of a Markdown review.
     async fn request_form(&self, args: Value) -> TestResult<FormReview> {
-        FormReview::from_response(self.client.raw().call_tool_once(tool_request(args)).await?)
+        FormReview::from_response(self.raw.raw().call_tool_once(tool_request(args)).await?)
     }
 
     /// The first MRTR round of an HTML review.
     async fn request_url(&self, args: Value) -> TestResult<UrlReview> {
-        UrlReview::from_response(self.client.raw().call_tool_once(tool_request(args)).await?)
+        UrlReview::from_response(self.raw.raw().call_tool_once(tool_request(args)).await?)
     }
 
     /// The second MRTR round: the client echoes the arguments, the review token
@@ -373,7 +378,7 @@ impl ReviewTest {
         if let Some(token) = token {
             request = request.with_request_state(token.to_string());
         }
-        structured_output(self.client.raw().call_tool_once(request).await?)
+        structured_output(self.raw.raw().call_tool_once(request).await?)
     }
 
     /// A full review driven by the scripted elicitation response.

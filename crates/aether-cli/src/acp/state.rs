@@ -21,8 +21,7 @@ use agent_client_protocol::util::internal_error;
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Error, Responder};
 use llm::catalog::{LlmModel, ModelSpec};
 use llm::{ContentBlock, ProviderConnectionOverrides};
-use mcp_utils::client::{client_capabilities, client_capabilities_for};
-use rmcp::model::ClientCapabilities;
+use mcp_utils::model::{ElicitationCapability, FormElicitationCapability, UrlElicitationCapability};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -62,7 +61,7 @@ pub(crate) struct AcpState {
     oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
     factory: SessionFactory,
     telemetry: Option<Arc<TelemetryRuntime>>,
-    mcp_capabilities: OnceLock<ClientCapabilities>,
+    mcp_elicitation: OnceLock<ElicitationCapability>,
     cwd: PathBuf,
 }
 
@@ -187,14 +186,14 @@ impl AcpState {
             oauth_credential_store: config.oauth_credential_store,
             factory,
             telemetry: config.telemetry,
-            mcp_capabilities: OnceLock::new(),
+            mcp_elicitation: OnceLock::new(),
             cwd: config.cwd,
         }
     }
 
     pub(crate) async fn initialize(&self, args: InitializeRequest) -> Result<InitializeResponse, Error> {
         info!("Received initialize request: {:?}", args);
-        let _ = self.mcp_capabilities.set(mcp_client_capabilities(&args.capabilities));
+        let _ = self.mcp_elicitation.set(mcp_elicitation(&args.capabilities));
         let auth_methods = build_auth_methods(self.oauth_credential_store.as_ref());
         let available = self.factory.available_models().await.to_vec();
         let prompt_capabilities = prompt_capabilities_for_models(&available);
@@ -267,8 +266,7 @@ impl AcpState {
         request: NewSessionRequest,
         connection: Option<&ConnectionTo<Client>>,
     ) -> Result<SpawnedSession, Error> {
-        let mcp_capabilities = self.mcp_capabilities();
-        let prepared = self.factory.prepare_new(request, connection, mcp_capabilities).await?;
+        let prepared = self.factory.prepare_new(request, connection, self.mcp_elicitation()).await?;
         self.registry.stop().await;
         let created = prepared.start().await?;
         let spawned = SpawnedSession {
@@ -321,8 +319,7 @@ impl AcpState {
             return Ok(ResumeSessionResponse::new().config_options(options));
         }
 
-        let mcp_capabilities = self.mcp_capabilities();
-        let prepared = self.factory.prepare_resume(req, cx, mcp_capabilities, replay).await?;
+        let prepared = self.factory.prepare_resume(req, cx, self.mcp_elicitation(), replay).await?;
         self.registry.stop().await;
         let created = prepared.start().await?;
         let response = ResumeSessionResponse::new().config_options(created.config_options);
@@ -610,8 +607,8 @@ impl AcpState {
         self.broadcast_config_options().await;
     }
 
-    fn mcp_capabilities(&self) -> ClientCapabilities {
-        self.mcp_capabilities.get().cloned().unwrap_or_else(client_capabilities)
+    fn mcp_elicitation(&self) -> Option<ElicitationCapability> {
+        self.mcp_elicitation.get().cloned()
     }
 
     async fn broadcast_config_options(&self) {
@@ -657,12 +654,16 @@ fn workspace_error(e: &WorkspaceError) -> Error {
     if e.is_invalid_input() { Error::invalid_params().data(e.to_string()) } else { internal_error(e.to_string()) }
 }
 
-fn mcp_client_capabilities(client: &acp::ClientCapabilities) -> rmcp::model::ClientCapabilities {
+fn mcp_elicitation(client: &acp::ClientCapabilities) -> ElicitationCapability {
     let elicitation = client.elicitation.as_ref();
-    client_capabilities_for(
-        elicitation.is_some_and(|capabilities| capabilities.form.is_some()),
-        elicitation.is_some_and(|capabilities| capabilities.url.is_some()),
-    )
+    let mut capability = ElicitationCapability::new();
+    if elicitation.is_some_and(|capabilities| capabilities.form.is_some()) {
+        capability = capability.with_form(FormElicitationCapability::new());
+    }
+    if elicitation.is_some_and(|capabilities| capabilities.url.is_some()) {
+        capability = capability.with_url(UrlElicitationCapability::new());
+    }
+    capability
 }
 
 fn build_auth_methods(store: &dyn OAuthCredentialStorage) -> Vec<AuthMethod> {
@@ -811,20 +812,19 @@ mod tests {
 
     #[test]
     fn mcp_elicitation_capabilities_mirror_the_acp_client() {
-        let none = mcp_client_capabilities(&acp::ClientCapabilities::new());
-        assert!(none.elicitation.is_none());
+        let none = mcp_elicitation(&acp::ClientCapabilities::new());
+        assert_eq!(none, ElicitationCapability::new());
 
         let form_only = acp::ClientCapabilities::new()
             .elicitation(acp::ElicitationCapabilities::new().form(acp::ElicitationFormCapabilities::new()));
-        let form = mcp_client_capabilities(&form_only).elicitation.unwrap();
-        assert!(form.form.is_some());
-        assert!(form.url.is_none());
+        assert_eq!(
+            mcp_elicitation(&form_only),
+            ElicitationCapability::new().with_form(FormElicitationCapability::new())
+        );
 
         let url_only = acp::ClientCapabilities::new()
             .elicitation(acp::ElicitationCapabilities::new().url(acp::ElicitationUrlCapabilities::new()));
-        let url = mcp_client_capabilities(&url_only).elicitation.unwrap();
-        assert!(url.form.is_none());
-        assert!(url.url.is_some());
+        assert_eq!(mcp_elicitation(&url_only), ElicitationCapability::new().with_url(UrlElicitationCapability::new()));
     }
 
     #[test]

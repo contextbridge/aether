@@ -1,9 +1,7 @@
 use clap::Parser;
 use mcp_servers::workspace_paths::{current_dir, resolve_path};
 use mcp_servers::{CodingMcp, CodingMcpArgs, ReviewMcp, SkillsMcp, SubAgentsMcp, TasksMcp};
-use mcp_utils::ServiceExt;
-use rmcp::ServerHandler;
-use rmcp::transport::io::stdio;
+use mcp_utils::server::McpServer;
 
 #[derive(Parser)]
 #[command(name = "mcp-servers-stdio", about = "Run an MCP server over stdio")]
@@ -23,51 +21,31 @@ enum StdioError {
     UnknownServer(String),
     #[error("{0}")]
     ServerArgs(#[from] mcp_servers::error::ServerInitError),
-    #[error("Failed to start server: {0}")]
-    Serve(String),
-    #[error("Server task failed: {0}")]
-    Join(tokio::task::JoinError),
-}
-
-async fn serve_stdio(server: impl ServerHandler) -> Result<(), StdioError> {
-    let running = server.serve(stdio()).await.map_err(|e| StdioError::Serve(e.to_string()))?;
-    running.waiting().await.map_err(StdioError::Join)?;
-    Ok(())
+    #[error("{0}")]
+    Serve(#[from] mcp_utils::McpError),
 }
 
 #[tokio::main]
 async fn main() -> Result<(), StdioError> {
     let cli = Cli::parse();
 
-    match cli.server.as_str() {
+    let server = match cli.server.as_str() {
         "coding" => {
             let CodingMcpArgs { root_dir, rules_dirs, permission_mode, disable_lsp } =
-                CodingMcpArgs::from_args(cli.args).map_err(StdioError::ServerArgs)?;
+                CodingMcpArgs::from_args(cli.args)?;
             let root_dir = root_dir.unwrap_or_else(current_dir);
             let rules_dirs = rules_dirs.into_iter().map(|path| resolve_path(&root_dir, path)).collect();
             let server = CodingMcp::new()
                 .with_root_dir(root_dir.clone())
                 .with_rules_dirs(rules_dirs)
                 .with_permission_mode(permission_mode);
-            let server = if disable_lsp { server } else { server.with_lsp(root_dir) };
-            serve_stdio(server).await
+            McpServer::new(if disable_lsp { server } else { server.with_lsp(root_dir) })
         }
-        "skills" => {
-            let server = SkillsMcp::from_args(cli.args).map_err(StdioError::ServerArgs)?;
-            serve_stdio(server).await
-        }
-        "tasks" => {
-            let server = TasksMcp::from_args(cli.args).map_err(StdioError::ServerArgs)?;
-            serve_stdio(server).await
-        }
-        "subagents" => {
-            let server = SubAgentsMcp::standalone_from_args(cli.args).map_err(StdioError::ServerArgs)?;
-            serve_stdio(server).await
-        }
-        "review" => {
-            let server = ReviewMcp::from_args(cli.args).map_err(StdioError::ServerArgs)?;
-            serve_stdio(server).await
-        }
-        other => Err(StdioError::UnknownServer(other.to_string())),
-    }
+        "skills" => McpServer::new(SkillsMcp::from_args(cli.args)?),
+        "tasks" => McpServer::new(TasksMcp::from_args(cli.args)?),
+        "subagents" => McpServer::new(SubAgentsMcp::standalone_from_args(cli.args)?),
+        "review" => McpServer::new(ReviewMcp::from_args(cli.args)?),
+        other => return Err(StdioError::UnknownServer(other.to_string())),
+    };
+    Ok(server.serve_stdio().await?)
 }

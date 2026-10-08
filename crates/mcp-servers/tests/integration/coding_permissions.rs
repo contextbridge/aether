@@ -1,4 +1,4 @@
-use crate::common::{TestClient, TestResult, scripted_mcp_client, silent_mcp_client, test_client_info};
+use crate::common::{TestClient, TestResult, scripted_client, silent_client};
 use mcp_servers::coding::CodingMcp;
 use mcp_servers::{DefaultCodingTools, PermissionMode};
 use rmcp::model::{ElicitRequestParams, ElicitResult, ElicitationAction};
@@ -20,7 +20,7 @@ fn deny() -> ElicitResult {
 #[tokio::test]
 async fn always_ask_bash_runs_after_user_allows() -> TestResult {
     let root = TempDir::new()?;
-    let (client, elicitation) = scripted_mcp_client("coding", allow());
+    let (client, elicitation) = scripted_client(allow());
     let mcp = TestClient::start_with(|| coding_mcp(&root, PermissionMode::AlwaysAsk), client).await?;
 
     let result = mcp.call("bash", json!({ "command": "echo hello" })).await?;
@@ -38,7 +38,7 @@ async fn always_ask_bash_runs_after_user_allows() -> TestResult {
 #[tokio::test]
 async fn always_ask_bash_denied_returns_declined_error() -> TestResult {
     let root = TempDir::new()?;
-    let (client, _elicitation) = scripted_mcp_client("coding", deny());
+    let (client, _elicitation) = scripted_client(deny());
     let mcp = TestClient::start_with(|| coding_mcp(&root, PermissionMode::AlwaysAsk), client).await?;
 
     let result = mcp.call_raw("bash", json!({ "command": "echo hello" })).await?;
@@ -53,7 +53,7 @@ async fn auto_mode_safe_command_runs_without_elicitation() -> TestResult {
     let root = TempDir::new()?;
     // A silent client resolves any elicitation as Cancel, so success proves
     // no elicitation was dispatched.
-    let mcp = TestClient::start_with(|| coding_mcp(&root, PermissionMode::Auto), silent_mcp_client("coding")).await?;
+    let mcp = TestClient::start_with(|| coding_mcp(&root, PermissionMode::Auto), silent_client()).await?;
 
     let result = mcp.call("bash", json!({ "command": "echo safe" })).await?;
     assert!(result["output"].as_str().unwrap_or_default().contains("safe"));
@@ -63,7 +63,7 @@ async fn auto_mode_safe_command_runs_without_elicitation() -> TestResult {
 #[tokio::test]
 async fn auto_mode_dangerous_command_is_gated() -> TestResult {
     let root = TempDir::new()?;
-    let (client, elicitation) = scripted_mcp_client("coding", deny());
+    let (client, elicitation) = scripted_client(deny());
     let mcp = TestClient::start_with(|| coding_mcp(&root, PermissionMode::Auto), client).await?;
 
     let result = mcp.call_raw("bash", json!({ "command": "rm -rf ./scratch" })).await?;
@@ -80,7 +80,7 @@ async fn auto_mode_dangerous_command_is_gated() -> TestResult {
 #[tokio::test]
 async fn always_ask_write_file_denied_leaves_file_unwritten() -> TestResult {
     let root = TempDir::new()?;
-    let (client, _elicitation) = scripted_mcp_client("coding", deny());
+    let (client, _elicitation) = scripted_client(deny());
     let mcp = TestClient::start_with(|| coding_mcp(&root, PermissionMode::AlwaysAsk), client).await?;
 
     let target = root.path().join("never.txt");
@@ -94,7 +94,7 @@ async fn always_ask_write_file_denied_leaves_file_unwritten() -> TestResult {
 #[tokio::test]
 async fn auto_mode_write_file_is_not_gated() -> TestResult {
     let root = TempDir::new()?;
-    let mcp = TestClient::start_with(|| coding_mcp(&root, PermissionMode::Auto), silent_mcp_client("coding")).await?;
+    let mcp = TestClient::start_with(|| coding_mcp(&root, PermissionMode::Auto), silent_client()).await?;
 
     let target = root.path().join("free.txt");
     mcp.call("write_file", json!({ "filePath": target.display().to_string(), "content": "hi" })).await?;
@@ -106,7 +106,7 @@ async fn auto_mode_write_file_is_not_gated() -> TestResult {
 async fn cancelled_prompt_carrying_allow_content_is_not_approval() -> TestResult {
     let root = TempDir::new()?;
     let cancel_with_allow = ElicitResult::new(ElicitationAction::Cancel).with_content(json!({ "decision": "allow" }));
-    let (client, _elicitation) = scripted_mcp_client("coding", cancel_with_allow);
+    let (client, _elicitation) = scripted_client(cancel_with_allow);
     let mcp = TestClient::start_with(|| coding_mcp(&root, PermissionMode::AlwaysAsk), client).await?;
 
     let target = root.path().join("never.txt");
@@ -119,7 +119,7 @@ async fn cancelled_prompt_carrying_allow_content_is_not_approval() -> TestResult
 #[tokio::test]
 async fn always_ask_gates_lsp_rename_via_destructive_annotation() -> TestResult {
     let root = TempDir::new()?;
-    let (client, elicitation) = scripted_mcp_client("coding", deny());
+    let (client, elicitation) = scripted_client(deny());
     let mcp = TestClient::start_with(|| coding_mcp(&root, PermissionMode::AlwaysAsk), client).await?;
 
     let result = mcp.call_raw("lsp_rename", json!({ "symbol": "foo", "newName": "bar" })).await?;
@@ -138,7 +138,7 @@ async fn always_ask_gates_lsp_rename_via_destructive_annotation() -> TestResult 
 #[tokio::test]
 async fn always_ask_without_elicitation_capability_denies_with_friendly_error() -> TestResult {
     let root = TempDir::new()?;
-    let mcp = TestClient::start_with(|| coding_mcp(&root, PermissionMode::AlwaysAsk), test_client_info()).await?;
+    let mcp = TestClient::start(|| coding_mcp(&root, PermissionMode::AlwaysAsk)).await?;
 
     let target = root.path().join("gated.txt");
     let result = mcp.call_raw("bash", json!({ "command": format!("touch {}", target.display()) })).await?;

@@ -13,7 +13,7 @@ async fn symbol_lookup_propagates_language_server_errors() {
     project.add_file("src/lib.rs", "pub fn example_fn() {}\n").expect("add source file");
     let daemon =
         TestDaemon::spawn(project.root(), LanguageId::Rust, Duration::from_secs(120)).await.expect("start daemon");
-    let (server_handle, client) = connect_lsp(&project).await;
+    let client = connect_lsp(&project).await;
 
     let error = call_tool_error(
         &client,
@@ -23,7 +23,6 @@ async fn symbol_lookup_propagates_language_server_errors() {
     .await;
 
     assert!(error.contains("fake server rejected request"), "unexpected error: {error}");
-    drop(client);
-    drop(server_handle);
+    client.close().await;
     daemon.shutdown().expect("stop daemon");
 }

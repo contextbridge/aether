@@ -80,6 +80,7 @@ async fn observers_receive_the_rendered_prompt_for_each_llm_request() -> Result<
     let responses = [llm_response().text(&["hi"]).build()];
 
     test_agent()
+        .without_mcp()
         .system_prompt(Prompt::Text("You are the test agent.".to_string()))
         .llm_responses(&responses)
         .observer(Box::new(observer))

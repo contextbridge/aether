@@ -9,7 +9,7 @@ use agent_client_protocol::{Client, ConnectionTo, Error};
 use llm::catalog::{LlmModel, get_local_models};
 use llm::types::IsoString;
 use llm::{ProviderConnectionOverrides, ReasoningEffort};
-use rmcp::model::ClientCapabilities;
+use mcp_utils::model::ElicitationCapability;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::OnceCell;
@@ -102,7 +102,7 @@ impl SessionFactory {
         &self,
         mut args: NewSessionRequest,
         cx: Option<&ConnectionTo<Client>>,
-        mcp_capabilities: ClientCapabilities,
+        mcp_elicitation: Option<ElicitationCapability>,
     ) -> Result<PreparedSession, Error> {
         let cwd = args.cwd.clone().into_inner();
         let mcp_servers = args.mcp_servers.clone();
@@ -140,7 +140,7 @@ impl SessionFactory {
                 args.cwd.into_inner(),
                 args.mcp_servers,
                 mode_catalog.specs.catalog(),
-                mcp_capabilities,
+                mcp_elicitation,
                 &session_id,
             )
         });
@@ -161,10 +161,10 @@ impl SessionFactory {
         &self,
         args: ResumeSessionRequest,
         cx: &ConnectionTo<Client>,
-        mcp_capabilities: ClientCapabilities,
+        mcp_elicitation: Option<ElicitationCapability>,
         replay: bool,
     ) -> Result<PreparedSession, Error> {
-        self.restore(args.session_id, args.cwd.into_inner(), args.mcp_servers, cx, mcp_capabilities, replay).await
+        self.restore(args.session_id, args.cwd.into_inner(), args.mcp_servers, cx, mcp_elicitation, replay).await
     }
 
     async fn restore(
@@ -173,7 +173,7 @@ impl SessionFactory {
         cwd: PathBuf,
         mcp_servers: Vec<acp::McpServer>,
         cx: &ConnectionTo<Client>,
-        mcp_capabilities: ClientCapabilities,
+        mcp_elicitation: Option<ElicitationCapability>,
         replay: bool,
     ) -> Result<PreparedSession, Error> {
         let session_id_string = session_id.0.to_string();
@@ -197,7 +197,7 @@ impl SessionFactory {
                 cwd.clone(),
                 mcp_servers.clone(),
                 mode_catalog.specs.catalog(),
-                mcp_capabilities,
+                mcp_elicitation,
                 session_id.0.as_ref(),
             )
         });
@@ -219,12 +219,12 @@ impl SessionFactory {
         cwd: PathBuf,
         mcp_servers: Vec<acp::McpServer>,
         catalog: &AgentCatalog,
-        mcp_capabilities: ClientCapabilities,
+        mcp_elicitation: Option<ElicitationCapability>,
         session_affinity_key: &str,
     ) -> Arc<dyn RuntimeFactory> {
         let deps = AgentDeps::new(Arc::clone(&self.oauth_credential_store), self.observer_factory.clone())
             .with_agent_registry(catalog.registry().clone())
-            .with_mcp_client_capabilities(mcp_capabilities)
+            .with_mcp_elicitation(mcp_elicitation)
             .with_session_affinity_key(session_affinity_key);
         Arc::new(ProductionRuntimeFactory::new(cwd, map_acp_mcp_servers(mcp_servers), deps))
     }

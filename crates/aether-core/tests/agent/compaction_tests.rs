@@ -90,6 +90,7 @@ fn user_message(text: &str) -> ChatMessage {
 #[tokio::test]
 async fn oversized_context_is_compacted_before_the_llm_call() {
     let result = test_agent()
+        .without_mcp()
         .llm_responses(&[llm_response().text(&["summary"]).build(), llm_response().text(&["hello"]).build()])
         .context_window_override(100)
         .compaction_config(CompactionConfig::with_threshold(0.85))

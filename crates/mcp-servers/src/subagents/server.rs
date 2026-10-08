@@ -2,7 +2,6 @@ use aether_core::core::AgentDeps;
 use aether_core::events::{McpRequestInstrumentation, TraceContext};
 use aether_project::{AetherSettings, AgentCatalog};
 use clap::Parser;
-use mcp_utils::server::tasks::{BACKGROUND_TASK_TTL_MS, require_tasks_capability};
 use rmcp::model::{CallToolResult, Task};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
@@ -20,6 +19,7 @@ use std::path::{Path, PathBuf};
 use super::progress::SubAgentProgressSink;
 use super::tools::{AgentExecutor, SpawnSubAgentsInput, SpawnSubAgentsOutput};
 use crate::error::ServerInitError;
+use crate::request_context::{BACKGROUND_TASK_TTL_MS, require_tasks};
 use crate::workspace_paths::resolve_path;
 
 const SPAWN_SUBAGENT_TOOL: &str = "spawn_subagent";
@@ -121,7 +121,7 @@ impl SubAgentsMcp {
             ));
         }
         if args.run_in_background {
-            require_tasks_capability(context)?;
+            require_tasks(context)?;
         }
         Ok(())
     }

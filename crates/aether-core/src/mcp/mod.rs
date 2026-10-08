@@ -1,10 +1,6 @@
-pub mod mcp_builder;
+mod mcp_builder;
 pub mod tool_bridge;
 
-mod gateway_service;
-mod mcp_handle;
-mod run_mcp_task;
-
-pub use gateway_service::GatewayService;
-pub use mcp_builder::*;
-pub use mcp_handle::{McpHandle, McpHandleError, ToolCallStream};
+pub use mcp_builder::{
+    AETHER_MCP_IPC_SOCKET, McpBuilder, McpRuntime, McpSpawnError, RuntimeServices, ServerFactory, mcp, mcp_instructions,
+};
