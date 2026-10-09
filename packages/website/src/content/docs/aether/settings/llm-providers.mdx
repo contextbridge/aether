@@ -99,7 +99,7 @@ Fireworks uses `https://api.fireworks.ai/inference/v1` by default. Serverless ca
       "requestModel": "accounts/acme/deployments/coding-prod"
     }
   },
-  "agents": [{ "model": "fireworks:accounts/fireworks/models/glm-5p1", "userInvocable": true }]
+  "agents": [{ "model": "fireworks:accounts/fireworks/models/glm-5p3", "userInvocable": true }]
 }
 ```
 
@@ -168,7 +168,7 @@ Some Bedrock models are not available through the Converse API. Aether routes th
 }
 ```
 
-Catalog IDs that use the Responses transport include the `openai.gpt-5.6-*`, `openai.gpt-6-*`, `openai.gpt-5.5`, `openai.gpt-5.4`, `xai.grok-4.3`, and `openai.gpt-oss-*` families (for example, `bedrock:openai.gpt-5.5` or `bedrock:openai.gpt-oss-120b`). All other Bedrock models use the Converse API described above.
+Catalog IDs that use the Responses transport include the `openai.gpt-5.6-*`, `openai.gpt-6-*`, `openai.gpt-5.5`, `openai.gpt-5.4`, `xai.grok-*`, and `openai.gpt-oss-*` families (for example, `bedrock:openai.gpt-5.5` or `bedrock:openai.gpt-oss-120b`). All other Bedrock models use the Converse API described above.
 
 Requests go to one of two endpoints depending on the model ID:
 
