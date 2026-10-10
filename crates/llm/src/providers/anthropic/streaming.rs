@@ -1,16 +1,20 @@
 use super::types::{ContentBlockDeltaData, ContentBlockStartData, StreamEvent};
-use crate::providers::stream_assembler::{StreamAssembler, assemble};
-use crate::{LlmError, LlmResponse, ProviderError, Result, StopReason};
-use futures::{Stream, StreamExt, stream};
+use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
+use crate::providers::response_stream::{OpenedStream, StreamAssembler, response_stream};
+use crate::{LlmError, LlmResponse, LlmResponseStream, ProviderError, Result, StopReason};
+use futures::Stream;
+use std::future::ready;
 use tracing::debug;
 
-pub fn process_anthropic_stream(
-    lines: impl Stream<Item = Result<String>> + Send,
-) -> impl Stream<Item = Result<LlmResponse>> + Send {
-    stream::iter([Ok(LlmResponse::Start)]).chain(assemble(lines, |line, turn| decode_line(&line, turn)))
+pub fn process_anthropic_stream(lines: impl Stream<Item = Result<String>> + Send + 'static) -> LlmResponseStream {
+    response_stream(
+        ready(Ok(OpenedStream::new(lines))),
+        |line, turn| decode_line(&line, turn),
+        DEFAULT_STREAM_IDLE_TIMEOUT,
+    )
 }
 
-fn decode_line(line: &str, turn: &mut StreamAssembler<u32>) -> Result<Vec<LlmResponse>> {
+pub(super) fn decode_line(line: &str, turn: &mut StreamAssembler<u32>) -> Result<Vec<LlmResponse>> {
     match serde_json::from_str(line) {
         Ok(event) => decode_event(event, turn),
         Err(e) => {
@@ -80,6 +84,7 @@ mod tests {
     use super::*;
     use crate::testing::llm_response;
     use crate::{ProviderErrorKind, TokenUsage};
+    use futures::{StreamExt, stream};
     use serde_json::{Value, json};
 
     #[tokio::test]
