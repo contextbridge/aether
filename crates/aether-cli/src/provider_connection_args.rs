@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 use std::str::FromStr;
 
 use llm::{ProviderAuthMode, ProviderConnectionOverride, ProviderConnectionOverrides};
@@ -7,7 +8,7 @@ use llm::{ProviderAuthMode, ProviderConnectionOverride, ProviderConnectionOverri
 pub struct ProviderConnectionArgs {
     #[arg(
         long = "provider",
-        value_name = "PROVIDER.url=URL|PROVIDER.auth=default|none|PROVIDER.request-model=MODEL|bedrock.inference-profile-arn=ARN"
+        value_name = "PROVIDER.url=URL|PROVIDER.auth=default|none|PROVIDER.request-model=MODEL|PROVIDER.idle-timeout-secs=SECS|bedrock.inference-profile-arn=ARN"
     )]
     pub providers: Vec<ProviderArg>,
 }
@@ -35,7 +36,7 @@ impl FromStr for ProviderArg {
         let (key, setting) = split_key_value(value)?;
         let (provider, field) = key
             .split_once('.')
-            .ok_or_else(|| "provider override must be PROVIDER.url=URL, PROVIDER.auth=default|none, PROVIDER.request-model=MODEL, or bedrock.inference-profile-arn=ARN".to_string())?;
+            .ok_or_else(|| "provider override must be PROVIDER.url=URL, PROVIDER.auth=default|none, PROVIDER.request-model=MODEL, PROVIDER.idle-timeout-secs=SECS, or bedrock.inference-profile-arn=ARN".to_string())?;
 
         validate_provider(provider)?;
         if setting.trim().is_empty() {
@@ -49,6 +50,7 @@ impl FromStr for ProviderArg {
             }
             "auth" => ProviderConnectionOverride::auth(parse_auth_mode(setting)?),
             "request-model" => ProviderConnectionOverride::request_model(setting),
+            "idle-timeout-secs" => ProviderConnectionOverride::idle_timeout_secs(parse_idle_timeout_secs(setting)?),
             "inference-profile-arn" => {
                 if provider != "bedrock" {
                     return Err("inference-profile-arn is only supported for the bedrock provider".to_string());
@@ -57,7 +59,8 @@ impl FromStr for ProviderArg {
             }
             _ => {
                 return Err(
-                    "provider override field must be url, auth, request-model, or inference-profile-arn".to_string()
+                    "provider override field must be url, auth, request-model, idle-timeout-secs, or inference-profile-arn"
+                        .to_string()
                 );
             }
         };
@@ -83,6 +86,10 @@ fn validate_url(url: &str) -> Result<(), String> {
         "http" | "https" => Ok(()),
         scheme => Err(format!("provider URL must use http or https, got {scheme}")),
     }
+}
+
+fn parse_idle_timeout_secs(value: &str) -> Result<NonZeroU64, String> {
+    value.parse().map_err(|_| "provider idle timeout must be a positive number of seconds".to_string())
 }
 
 fn parse_auth_mode(value: &str) -> Result<ProviderAuthMode, String> {
@@ -120,6 +127,12 @@ mod tests {
     fn parses_provider_request_model() {
         let arg: ProviderArg = "azure-foundry.request-model=production-coding".parse().unwrap();
         assert_eq!(arg.connection.request_model.as_deref(), Some("production-coding"));
+    }
+
+    #[test]
+    fn parses_provider_idle_timeout() {
+        let arg: ProviderArg = "ollama.idle-timeout-secs=900".parse().unwrap();
+        assert_eq!(arg.connection.idle_timeout_secs, NonZeroU64::new(900));
     }
 
     #[test]
@@ -171,6 +184,8 @@ mod tests {
         assert!("bedrock.url=".parse::<ProviderArg>().is_err());
         assert!("bedrock.url=file:///tmp/proxy".parse::<ProviderArg>().is_err());
         assert!("bedrock.auth=disabled".parse::<ProviderArg>().is_err());
+        assert!("ollama.idle-timeout-secs=0".parse::<ProviderArg>().is_err());
+        assert!("ollama.idle-timeout-secs=soon".parse::<ProviderArg>().is_err());
         assert!("bedrock.region=us-west-2".parse::<ProviderArg>().is_err());
         assert!("openai.inference-profile-arn=arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000".parse::<ProviderArg>().is_err());
     }

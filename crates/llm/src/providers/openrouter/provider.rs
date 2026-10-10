@@ -1,34 +1,44 @@
 use super::types::OpenRouterChatRequest;
-use crate::provider::{error_stream, get_context_window};
-use crate::providers::http::openai_client;
+use crate::provider::{get_context_window, validate_reasoning};
+use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
+use crate::providers::http::{http_client, openai_client};
 use crate::providers::openai_compatible::{
     AetherOpenAiConfig, build_chat_request, streaming::create_custom_stream_generic,
 };
+use crate::providers::response_stream::error_stream;
 use crate::{
     Context, LlmError, LlmResponseStream, ProviderAuthMode, ProviderConnectionConfig, ProviderFactory, Result,
     StreamingModelProvider,
 };
 use async_openai::{Client, config::OpenAIConfig};
 use std::future::ready;
+use std::time::Duration;
 
 pub struct OpenRouterProvider {
     client: Client<AetherOpenAiConfig>,
     model: String,
+    idle_timeout: Duration,
 }
 
 impl OpenRouterProvider {
-    pub fn new(api_key: String, model: String) -> Result<Self> {
+    pub fn new(api_key: String, model: String) -> Self {
         let config = openai_config(Some(api_key), ProviderConnectionConfig::default());
-
-        let client = openai_client(config, reqwest::Client::new());
-        Ok(Self { client, model })
+        Self { client: openai_client(config, http_client()), model, idle_timeout: DEFAULT_STREAM_IDLE_TIMEOUT }
     }
 
     pub fn default(model: &str) -> Result<Self> {
         let api_key = std::env::var("OPENROUTER_API_KEY")
             .map_err(|_| LlmError::MissingApiKey("OPENROUTER_API_KEY".to_string()))?;
 
-        Self::new(api_key, model.to_string())
+        Ok(Self::new(api_key, model.to_string()))
+    }
+
+    fn try_stream_response(&self, context: &Context) -> Result<LlmResponseStream> {
+        validate_reasoning(context, self.model().as_ref())?;
+        let mut request = build_chat_request(&self.model, context, None)?;
+        request.prompt_cache_key = context.prompt_cache_key().map(String::from);
+        let request = OpenRouterChatRequest::from_compatible(request, context.session_affinity_key());
+        Ok(create_custom_stream_generic(&self.client, request, self.idle_timeout))
     }
 }
 
@@ -57,17 +67,7 @@ impl StreamingModelProvider for OpenRouterProvider {
     }
 
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
-        if let Err(error) = crate::provider::validate_reasoning(context, self.model().as_ref()) {
-            return crate::provider::error_stream(error);
-        }
-        let mut request = match build_chat_request(&self.model, context, None) {
-            Ok(request) => request,
-            Err(e) => return error_stream(e),
-        };
-        request.prompt_cache_key = context.prompt_cache_key().map(String::from);
-        let request = OpenRouterChatRequest::from_compatible(request, context.session_affinity_key());
-
-        create_custom_stream_generic(&self.client, request)
+        self.try_stream_response(context).unwrap_or_else(error_stream)
     }
 
     fn display_name(&self) -> String {
@@ -90,10 +90,11 @@ fn provider_from_connection(connection: ProviderConnectionConfig) -> Result<Open
         ),
         ProviderAuthMode::None => None,
     };
+    let idle_timeout = connection.idle_timeout;
     let config = openai_config(api_key, connection);
-    let client = openai_client(config, reqwest::Client::new());
+    let client = openai_client(config, http_client());
 
-    Ok(OpenRouterProvider { client, model: String::new() })
+    Ok(OpenRouterProvider { client, model: String::new(), idle_timeout })
 }
 
 #[cfg(test)]
@@ -207,7 +208,7 @@ mod tests {
     fn provider_with_service(service: &FakeHttpService) -> OpenRouterProvider {
         let config = openai_config(Some("test-key".into()), ProviderConnectionConfig::default());
         let client = openai_client(config, service.clone());
-        OpenRouterProvider { client, model: "test-model".into() }
+        OpenRouterProvider { client, model: "test-model".into(), idle_timeout: DEFAULT_STREAM_IDLE_TIMEOUT }
     }
 
     fn response(status: u16, body: impl Into<Body>) -> reqwest::Response {

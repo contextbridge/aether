@@ -1,12 +1,17 @@
+use crate::{ChatMessage, Context, LlmResponse, LlmResponseStream, Result};
+use axum::body::Body;
 use axum::extract::State;
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::{Json, Router};
+use futures::{StreamExt, stream};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
@@ -20,17 +25,38 @@ pub(crate) struct ResponseSpec {
     pub(crate) status: u16,
     pub(crate) body: String,
     pub(crate) headers: HashMap<String, String>,
+    gap: Option<Duration>,
 }
 
 impl ResponseSpec {
     pub(crate) fn sse(body: &str) -> Self {
-        Self { status: 200, body: body.to_string(), headers: HashMap::new() }
+        Self { status: 200, body: body.to_string(), headers: HashMap::new(), gap: None }
     }
 
     pub(crate) fn with_header(mut self, name: &str, value: &str) -> Self {
         self.headers.insert(name.to_string(), value.to_string());
         self
     }
+
+    pub(crate) fn paced(mut self, gap: Duration) -> Self {
+        self.gap = Some(gap);
+        self
+    }
+
+    fn response_body(&self) -> Body {
+        let Some(gap) = self.gap else {
+            return Body::from(self.body.clone());
+        };
+        let events: Vec<String> = self.body.split_inclusive("\n\n").map(str::to_string).collect();
+        Body::from_stream(stream::iter(events).then(move |event| async move {
+            tokio::time::sleep(gap).await;
+            Ok::<_, Infallible>(event)
+        }))
+    }
+}
+
+pub(crate) fn hello_context() -> Context {
+    Context::new(vec![ChatMessage::user("Hello")], vec![])
 }
 
 struct CaptureState {
@@ -64,6 +90,7 @@ impl CaptureServer {
             .route("/v1/messages", post(capture))
             .route("/chat/completions", post(capture))
             .route("/v1/chat/completions", post(capture))
+            .route("/model/{model}/converse-stream", post(capture))
             .with_state(Arc::new(CaptureState { sender, response: spec }));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());
@@ -73,6 +100,14 @@ impl CaptureServer {
 
     pub(crate) async fn captured(&mut self) -> CapturedRequest {
         self.receiver.recv().await.expect("no request captured")
+    }
+
+    pub(crate) async fn collect_on_paused_clock(&mut self, responses: LlmResponseStream) -> Vec<Result<LlmResponse>> {
+        let (responses, ()) = tokio::join!(responses.collect::<Vec<_>>(), async {
+            self.captured().await;
+            tokio::time::pause();
+        });
+        responses
     }
 }
 
@@ -94,5 +129,5 @@ async fn capture(
             response_headers.insert(name, value);
         }
     }
-    (status, response_headers, state.response.body.clone())
+    (status, response_headers, state.response.response_body())
 }

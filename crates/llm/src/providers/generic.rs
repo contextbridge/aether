@@ -2,15 +2,18 @@ use async_openai::Client;
 use async_openai::config::{Config, OpenAIConfig};
 use reqwest::Url;
 use schemars::Schema;
+use std::time::Duration;
 
 use crate::catalog::Provider;
-use crate::provider::{error_stream, get_context_window, stream_from, validate_reasoning};
-use crate::providers::http::openai_client;
+use crate::provider::{get_context_window, validate_reasoning};
+use crate::providers::http::{http_client, openai_client};
 use crate::providers::openai_compatible::{
     AetherOpenAiConfig, PromptCacheKeySource, build_chat_request, create_custom_stream_generic,
 };
 use crate::providers::openai_responses::mappers::build_wire_request;
-use crate::providers::openai_responses::transport::{process_connection, send};
+use crate::providers::openai_responses::streaming::decode_responses;
+use crate::providers::openai_responses::transport::send;
+use crate::providers::response_stream::{error_stream, response_stream};
 use crate::tool_schema::normalize_for_moonshot;
 use crate::{
     Context, LlmError, LlmModel, LlmResponseStream, ProviderAuthMode, ProviderConnectionConfig, Result,
@@ -94,6 +97,7 @@ pub struct GenericProvider {
     chat_client: Client<AetherOpenAiConfig>,
     model: String,
     request_model: Option<String>,
+    idle_timeout: Duration,
 }
 
 impl GenericProvider {
@@ -134,7 +138,7 @@ impl GenericProvider {
             connection.auth_mode,
         );
 
-        let http = reqwest::Client::new();
+        let http = http_client();
         Ok(Self {
             config,
             chat_client: openai_client(openai_config.clone(), http.clone()),
@@ -142,6 +146,7 @@ impl GenericProvider {
             http,
             model: config.default_model.to_string(),
             request_model: connection.request_model,
+            idle_timeout: connection.idle_timeout,
         })
     }
 
@@ -155,12 +160,13 @@ impl GenericProvider {
 
 impl StreamingModelProvider for GenericProvider {
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
-        match &self.config.api {
+        let stream = match &self.config.api {
             Api::ChatCompletions { tool_schema_transform, prompt_cache_key } => {
                 self.stream_chat_completions(context, *tool_schema_transform, *prompt_cache_key)
             }
             Api::Responses(policy) => self.stream_responses(context, policy),
-        }
+        };
+        stream.unwrap_or_else(error_stream)
     }
 
     fn display_name(&self) -> String {
@@ -182,41 +188,31 @@ impl GenericProvider {
         context: &Context,
         tool_schema_transform: Option<fn(&mut Schema)>,
         prompt_cache_key: PromptCacheKeySource,
-    ) -> LlmResponseStream {
-        if let Err(error) = validate_reasoning(context, self.model().as_ref()) {
-            return error_stream(error);
-        }
-        let mut request = match build_chat_request(
-            self.request_model.as_deref().unwrap_or(&self.model),
-            context,
-            tool_schema_transform,
-        ) {
-            Ok(request) => request,
-            Err(error) => return error_stream(error),
-        };
+    ) -> Result<LlmResponseStream> {
+        validate_reasoning(context, self.model().as_ref())?;
+        let model = self.request_model.as_deref().unwrap_or(&self.model);
+        let mut request = build_chat_request(model, context, tool_schema_transform)?;
         request.prompt_cache_key = prompt_cache_key.resolve(context).map(String::from);
-        create_custom_stream_generic(&self.chat_client, request)
+        Ok(create_custom_stream_generic(&self.chat_client, request, self.idle_timeout))
     }
 
-    fn stream_responses(&self, context: &Context, policy: &ResponsesRequestPolicy) -> LlmResponseStream {
-        let mut url = match Url::parse(&self.openai_config.url("/responses")) {
-            Ok(url) => url,
-            Err(error) => return error_stream(LlmError::ProviderRequest(error.to_string())),
-        };
-
+    fn stream_responses(&self, context: &Context, policy: &ResponsesRequestPolicy) -> Result<LlmResponseStream> {
+        let mut url = Url::parse(&self.openai_config.url("/responses"))
+            .map_err(|error| LlmError::ProviderRequest(error.to_string()))?;
         url.query_pairs_mut().extend_pairs(self.openai_config.query());
 
-        let mut request = match build_wire_request(&self.model, context, policy) {
-            Ok(request) => request,
-            Err(error) => return error_stream(error),
-        };
+        let mut request = build_wire_request(&self.model, context, policy)?;
         if let Some(model) = &self.request_model {
             request["model"] = model.clone().into();
         }
 
         let http = self.http.clone();
         let headers = self.openai_config.headers();
-        stream_from(async move { send(&http, url.as_str(), headers, request).await }, process_connection)
+        Ok(response_stream(
+            async move { send(&http, url.as_str(), headers, request).await },
+            decode_responses(),
+            self.idle_timeout,
+        ))
     }
 }
 

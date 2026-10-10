@@ -1,8 +1,40 @@
-use crate::ProviderError;
+use crate::providers::response_stream::OpenedStream;
+use crate::{LlmError, ProviderError, Result};
 use async_openai::{Client, config::Config, error::OpenAIError, middleware::HttpRequestFactory};
-use reqwest::{Request, Response, header::HeaderMap};
+use eventsource_stream::Eventsource;
+use futures::{Stream, StreamExt};
+use reqwest::{Request, RequestBuilder, Response, header::HeaderMap};
 use serde_json::{Value, from_str};
+use std::future::ready;
+use std::pin::Pin;
+use std::time::Duration;
 use tower::{Service, ServiceExt, service_fn};
+
+pub(crate) type SseData = Pin<Box<dyn Stream<Item = Result<String>> + Send>>;
+
+pub(crate) fn http_client() -> reqwest::Client {
+    reqwest::Client::builder().connect_timeout(Duration::from_secs(30)).build().expect("HTTP client should build")
+}
+
+pub(crate) async fn open_sse(
+    request: RequestBuilder,
+    code: fn(&str) -> Option<String>,
+) -> Result<OpenedStream<SseData>> {
+    let response = request.send().await?;
+    if !response.status().is_success() {
+        return Err(rejected(response, code).await.into());
+    }
+
+    let http = HttpResponseMetadata::from(&response);
+    let data = response.bytes_stream().eventsource().filter_map(|event| {
+        ready(match event {
+            Ok(event) if event.data == "[DONE]" => None,
+            Ok(event) => Some(Ok(event.data)),
+            Err(error) => Some(Err(ProviderError::stream_interrupted(error.to_string()).into())),
+        })
+    });
+    Ok(OpenedStream::with_http(Box::pin(data), http))
+}
 
 /// Preserve HTTP diagnostics before async-openai deserializes rejected responses.
 pub(crate) fn openai_client<T, U>(config: T, service: U) -> Client<T>
@@ -27,6 +59,17 @@ where
 pub(crate) struct HttpResponseMetadata {
     pub(crate) status: u16,
     pub(crate) request_id: Option<String>,
+}
+
+impl HttpResponseMetadata {
+    pub(crate) fn annotate(&self, error: LlmError) -> LlmError {
+        match error {
+            LlmError::Provider(provider) => {
+                provider.with_http_metadata(Some(self.status), self.request_id.clone()).into()
+            }
+            error => error,
+        }
+    }
 }
 
 impl From<&Response> for HttpResponseMetadata {

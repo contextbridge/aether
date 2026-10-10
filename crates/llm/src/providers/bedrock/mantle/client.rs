@@ -2,8 +2,10 @@ use tracing::debug;
 
 use super::auth::MantleAuth;
 use crate::catalog::transport::{ModelTransport, expand_api_template};
+use crate::providers::http::{SseData, http_client};
 use crate::providers::openai_responses::mappers::{ResponsesRequestPolicy, build_wire_request};
-use crate::providers::openai_responses::transport::{ResponsesConnection, send};
+use crate::providers::openai_responses::transport::send;
+use crate::providers::response_stream::OpenedStream;
 use crate::{Context, LlmError, Result};
 
 /// Transport for Bedrock models served through the `OpenAI` Responses API.
@@ -18,7 +20,7 @@ pub struct MantleClient {
 impl MantleClient {
     pub fn new(region: String, auth: MantleAuth, base_url_override: Option<String>) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: http_client(),
             region,
             auth,
             base_url_override: base_url_override.map(|url| url.trim_end_matches('/').to_string()),
@@ -49,7 +51,7 @@ impl MantleClient {
         model: &str,
         transport: &ModelTransport,
         context: &Context,
-    ) -> Result<ResponsesConnection> {
+    ) -> Result<OpenedStream<SseData>> {
         let url = self.endpoint(transport)?;
         let body = build_wire_request(model, context, &ResponsesRequestPolicy::MANTLE)?;
 

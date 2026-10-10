@@ -1,14 +1,13 @@
 use super::mappers::{map_messages, map_tools};
-use super::streaming::process_anthropic_stream;
+use super::streaming::decode_line;
 use super::types::{Request, Thinking};
 use crate::provider::{
-    LlmResponseStream, ProviderFactory, StreamingModelProvider, error_stream, get_context_window, validate_reasoning,
+    LlmResponseStream, ProviderFactory, StreamingModelProvider, get_context_window, validate_reasoning,
 };
-use crate::providers::http::{anthropic_code, rejected};
-use crate::{Context, LlmError, ProviderAuthMode, ProviderConnectionConfig, ProviderError, ReasoningEffort, Result};
-use async_stream;
-use eventsource_stream::Eventsource;
-use futures::StreamExt;
+use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
+use crate::providers::http::{SseData, anthropic_code, http_client, open_sse};
+use crate::providers::response_stream::{OpenedStream, response_stream};
+use crate::{Context, LlmError, ProviderAuthMode, ProviderConnectionConfig, ReasoningEffort, Result};
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use reqwest::{Client, header};
 use std::env;
@@ -27,19 +26,19 @@ pub struct AnthropicProvider {
     base_url: Option<String>,
     auth_mode: ProviderAuthMode,
     api_key: Option<String>,
+    idle_timeout: Duration,
 }
 
 impl AnthropicProvider {
-    pub fn new(api_key: Option<String>) -> Result<Self> {
-        let client = build_client()?;
-
-        Ok(Self {
-            client,
+    pub fn new(api_key: Option<String>) -> Self {
+        Self {
+            client: http_client(),
             model: "claude-sonnet-4-5-20250929".to_string(),
             base_url: Some("https://api.anthropic.com".to_string()),
             auth_mode: ProviderAuthMode::Default,
             api_key,
-        })
+            idle_timeout: DEFAULT_STREAM_IDLE_TIMEOUT,
+        }
     }
 
     pub fn with_model(mut self, model: &str) -> Self {
@@ -57,10 +56,12 @@ impl AnthropicProvider {
             self.base_url = Some(base_url);
         }
         self.auth_mode = connection.auth_mode;
+        self.idle_timeout = connection.idle_timeout;
         self
     }
 
     pub(crate) fn build_request(&self, context: &Context) -> Result<Request> {
+        validate_reasoning(context, self.model().as_ref())?;
         let (system_prompt, messages) = map_messages(context.messages())?;
         let tools = if context.tools().is_empty() { None } else { Some(map_tools(context.tools())?) };
 
@@ -129,11 +130,7 @@ impl AnthropicProvider {
         Ok(headers)
     }
 
-    async fn send_request(
-        &self,
-        request: Request,
-        headers: header::HeaderMap,
-    ) -> Result<impl futures::Stream<Item = Result<String>>> {
+    async fn send_request(&self, request: Request, headers: header::HeaderMap) -> Result<OpenedStream<SseData>> {
         let base_url = self.base_url.as_deref().unwrap_or("https://api.anthropic.com");
         let url = format!("{base_url}/v1/messages");
 
@@ -144,34 +141,17 @@ impl AnthropicProvider {
         );
 
         debug!("Anthropic request headers: {}", format_headers(&headers));
-        let response = self.client.post(&url).headers(headers).json(&request).send().await?;
-
-        if !response.status().is_success() {
-            return Err(rejected(response, anthropic_code).await.into());
-        }
-
-        let event_stream = response.bytes_stream().eventsource();
-        let processed_stream = event_stream.filter_map(|result| {
-            std::future::ready(match result {
-                Ok(event) => {
-                    let data = event.data;
-                    if data == "[DONE]" { None } else { Some(Ok(data)) }
-                }
-                Err(e) => Some(Err(ProviderError::stream_interrupted(e.to_string()).into())),
-            })
-        });
-
-        Ok(processed_stream)
+        open_sse(self.client.post(&url).headers(headers).json(&request), anthropic_code).await
     }
 }
 
 impl ProviderFactory for AnthropicProvider {
     fn from_env() -> impl Future<Output = Result<Self>> + Send {
-        ready(Self::new(None))
+        ready(Ok(Self::new(None)))
     }
 
     fn from_env_with_connection(connection: ProviderConnectionConfig) -> impl Future<Output = Result<Self>> + Send {
-        ready(Self::new(None).map(|provider| provider.with_connection(connection)))
+        ready(Ok(Self::new(None).with_connection(connection)))
     }
 
     fn with_model(self, model: &str) -> Self {
@@ -188,52 +168,24 @@ impl StreamingModelProvider for AnthropicProvider {
         get_context_window("anthropic", &self.model)
     }
 
-    fn stream_response<'a>(&self, context: &Context) -> LlmResponseStream {
-        if let Err(error) = validate_reasoning(context, self.model().as_ref()) {
-            return error_stream(error);
-        }
+    fn stream_response(&self, context: &Context) -> LlmResponseStream {
         let provider = self.clone();
         let context = context.clone();
 
-        Box::pin(async_stream::stream! {
-            let headers = match provider.build_headers() {
-                Ok(result) => result,
-                Err(e) => {
-                    yield Err(e);
-                    return;
-                }
-            };
-
-            let request = match provider.build_request(&context) {
-                Ok(req) => req,
-                Err(e) => {
-                    yield Err(e);
-                    return;
-                }
-            };
-
-            let stream = match provider.send_request(request, headers).await {
-                Ok(stream) => stream,
-                Err(e) => {
-                    yield Err(e);
-                    return;
-                }
-            };
-
-            let mut anthropic_stream = Box::pin(process_anthropic_stream(stream));
-            while let Some(result) = anthropic_stream.next().await {
-                yield result;
-            }
-        })
+        response_stream(
+            async move {
+                let request = provider.build_request(&context)?;
+                let headers = provider.build_headers()?;
+                provider.send_request(request, headers).await
+            },
+            |line, turn| decode_line(&line, turn),
+            self.idle_timeout,
+        )
     }
 
     fn display_name(&self) -> String {
         format!("Anthropic ({})", self.model)
     }
-}
-
-fn build_client() -> Result<Client> {
-    Client::builder().timeout(Duration::from_mins(1)).build().map_err(|e| LlmError::HttpClientCreation(e.to_string()))
 }
 
 fn effort_to_budget_tokens(effort: ReasoningEffort) -> Option<u32> {
@@ -273,16 +225,18 @@ mod tests {
 
     use crate::ToolDefinition;
     use crate::providers::anthropic::types::{SystemContent, SystemContentBlock};
+    use crate::providers::test_capture_server::{CaptureServer, ResponseSpec, hello_context};
+    use futures::StreamExt;
 
     use reqwest::header::AUTHORIZATION;
+    use std::time::Duration;
 
     fn create_test_provider() -> AnthropicProvider {
-        AnthropicProvider::new(Some("test-api-key".to_string())).unwrap().with_model("claude-sonnet-4-5-20250929")
+        AnthropicProvider::new(Some("test-api-key".to_string())).with_model("claude-sonnet-4-5-20250929")
     }
 
     #[tokio::test]
     async fn default_and_disabled_thinking_preserve_sampling_and_token_limit() {
-        use crate::providers::test_capture_server::CaptureServer;
         let mut server =
             CaptureServer::start_with_response(include_str!("../../../tests/fixtures/anthropic/01_minimal.sse")).await;
         let model = crate::LlmModel::all()
@@ -293,7 +247,7 @@ mod tests {
             .unwrap();
         let provider = create_test_provider().with_model(&model.model_id()).with_base_url(&server.base_url);
         for (effort, temperature) in [(ReasoningEffort::Default, 0.0), (ReasoningEffort::Disabled, 0.5)] {
-            let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
+            let mut context = hello_context();
             context.set_reasoning_effort(effort);
             context.set_model_settings(crate::ModelSettings {
                 temperature: Some(temperature),
@@ -314,15 +268,22 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_provider_creation() {
-        let provider = AnthropicProvider::new(Some("test-api-key".to_string()));
-        assert!(provider.is_ok());
+    #[tokio::test]
+    async fn stream_with_long_pauses_between_events_completes() {
+        let spec = ResponseSpec::sse(include_str!("../../../tests/fixtures/anthropic/01_minimal.sse"))
+            .paced(Duration::from_mins(2));
+        let mut server = CaptureServer::start_with_spec(spec).await;
+        let provider = create_test_provider().with_base_url(&server.base_url);
+
+        let responses = server.collect_on_paused_clock(provider.stream_response(&hello_context())).await;
+
+        assert!(responses.iter().all(Result::is_ok), "{responses:?}");
+        assert!(responses.iter().any(|response| matches!(response, Ok(crate::LlmResponse::Done { .. }))));
     }
 
     #[test]
     fn build_headers_uses_api_key() {
-        let provider = AnthropicProvider::new(Some("test-api-key".to_string())).unwrap();
+        let provider = AnthropicProvider::new(Some("test-api-key".to_string()));
         let headers = provider.build_headers().expect("headers");
         assert_eq!(headers.get("x-api-key").and_then(|value| value.to_str().ok()), Some("test-api-key"));
         assert!(headers.get(AUTHORIZATION).is_none());
@@ -332,7 +293,6 @@ mod tests {
     #[test]
     fn build_headers_skips_api_key_when_auth_is_none() {
         let provider = AnthropicProvider::new(None)
-            .unwrap()
             .with_connection(ProviderConnectionConfig { auth_mode: ProviderAuthMode::None, ..Default::default() });
         let headers = provider.build_headers().expect("headers");
         assert!(headers.get("x-api-key").is_none());
@@ -343,9 +303,7 @@ mod tests {
     fn test_build_request_simple() {
         let provider = create_test_provider();
 
-        let context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
-
-        let request = provider.build_request(&context).unwrap();
+        let request = provider.build_request(&hello_context()).unwrap();
         assert_eq!(request.model, "claude-sonnet-4-5-20250929");
         assert_eq!(request.max_tokens, DEFAULT_MAX_TOKENS);
         assert_eq!(request.messages.len(), 1);
@@ -386,7 +344,7 @@ mod tests {
 
     #[test]
     fn test_build_request_with_caching() {
-        let provider = AnthropicProvider::new(Some("test-api-key".to_string())).unwrap(); // Caching is enabled by default
+        let provider = AnthropicProvider::new(Some("test-api-key".to_string())); // Caching is enabled by default
 
         let context = Context::new(
             vec![ChatMessage::system("Hello"), ChatMessage::user("Hello")],
@@ -450,7 +408,7 @@ mod tests {
 
     #[test]
     fn test_build_request_thinking_bumps_max_tokens_if_needed() {
-        let provider = AnthropicProvider::new(Some("test-api-key".to_string())).unwrap();
+        let provider = AnthropicProvider::new(Some("test-api-key".to_string()));
 
         let mut context = Context::new(vec![ChatMessage::user("Hi")], vec![]);
         context.set_model_settings(crate::ModelSettings { max_tokens: Some(500), ..Default::default() });
@@ -471,7 +429,7 @@ mod tests {
 
     #[test]
     fn test_anthropic_provider_display_name_default() {
-        let provider = AnthropicProvider::new(Some("test-api-key".to_string())).unwrap();
+        let provider = AnthropicProvider::new(Some("test-api-key".to_string()));
         assert_eq!(provider.display_name(), "Anthropic (claude-sonnet-4-5-20250929)");
     }
 

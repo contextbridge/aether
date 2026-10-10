@@ -6,9 +6,6 @@ Errors that can occur when interacting with LLM providers.
 - **`MissingApiKey`** -- A required environment variable (e.g. `ANTHROPIC_API_KEY`) is not set.
 - **`OAuthError`** -- OAuth authentication failed (when the `oauth` feature is enabled).
 
-## Request/Response
-- **`HttpClientCreation`** -- Failed to create the HTTP client (e.g. TLS configuration error).
-
 ## Parsing
 - **`JsonParsing`** -- Failed to parse or serialize JSON (response body, tool arguments).
 - **`ToolParameterParsing`** -- Failed to parse tool parameters for a specific tool.

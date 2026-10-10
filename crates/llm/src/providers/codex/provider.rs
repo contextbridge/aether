@@ -1,11 +1,16 @@
 use super::oauth::CodexTokenManager;
-use crate::provider::{LlmResponseStream, StreamingModelProvider, get_context_window, stream_from};
+use crate::provider::{LlmResponseStream, StreamingModelProvider, get_context_window};
+use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
+use crate::providers::http::{SseData, http_client};
 use crate::providers::openai_responses::mappers::{ResponsesRequestPolicy, build_wire_request};
-use crate::providers::openai_responses::transport::{ResponsesConnection, process_connection, send};
+use crate::providers::openai_responses::streaming::decode_responses;
+use crate::providers::openai_responses::transport::send;
+use crate::providers::response_stream::{OpenedStream, response_stream};
 use crate::{Context, LlmError, Result};
 use aether_auth::OAuthCredentialStorage;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::debug;
 
 const CODEX_API_BASE: &str = "https://chatgpt.com/backend-api/codex";
@@ -17,6 +22,7 @@ pub struct CodexProvider {
     client: reqwest::Client,
     model: String,
     token_manager: Arc<CodexTokenManager>,
+    idle_timeout: Duration,
 }
 
 impl CodexProvider {
@@ -24,9 +30,10 @@ impl CodexProvider {
         let token_manager = CodexTokenManager::new(store, super::PROVIDER_ID);
         Self {
             base_url: CODEX_API_BASE.to_string(),
-            client: reqwest::Client::new(),
+            client: http_client(),
             model: "gpt-5.5".to_string(),
             token_manager: Arc::new(token_manager),
+            idle_timeout: DEFAULT_STREAM_IDLE_TIMEOUT,
         }
     }
 
@@ -34,6 +41,7 @@ impl CodexProvider {
         if let Some(base_url) = connection.base_url {
             self.base_url = base_url.trim_end_matches('/').to_string();
         }
+        self.idle_timeout = connection.idle_timeout;
         self
     }
 
@@ -70,7 +78,7 @@ impl CodexProvider {
     /// Uses manual SSE parsing because the Codex API does not return a
     /// `Content-Type: text/event-stream` header, which `reqwest_eventsource`
     /// (used by `async-openai`'s `create_stream`) requires.
-    async fn send_request(&self, request: serde_json::Value, headers: HeaderMap) -> Result<ResponsesConnection> {
+    async fn send_request(&self, request: serde_json::Value, headers: HeaderMap) -> Result<OpenedStream<SseData>> {
         let url = format!("{}/responses", self.base_url);
 
         debug!("Sending request to Codex API: {url}");
@@ -80,7 +88,7 @@ impl CodexProvider {
         );
 
         match send(&self.client, &url, headers, request).await {
-            Ok(connection) => Ok(connection),
+            Ok(opened) => Ok(opened),
             Err(error) => {
                 if error.provider().map(|provider| provider.kind) == Some(crate::ProviderErrorKind::Authentication) {
                     self.token_manager.clear_cache().await;
@@ -101,19 +109,17 @@ impl StreamingModelProvider for CodexProvider {
     }
 
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
-        if let Err(error) = crate::provider::validate_reasoning(context, self.model().as_ref()) {
-            return crate::provider::error_stream(error);
-        }
         let provider = self.clone();
         let context = context.clone();
 
-        stream_from(
+        response_stream(
             async move {
-                let headers = provider.build_headers().await?;
                 let request = provider.build_wire_request(&context)?;
+                let headers = provider.build_headers().await?;
                 provider.send_request(request, headers).await
             },
-            process_connection,
+            decode_responses(),
+            self.idle_timeout,
         )
     }
 
