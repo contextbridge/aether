@@ -274,7 +274,7 @@ mod tests {
         let messages = vec![ChatMessage::user("Hello")];
 
         let (system, mapped) = map_messages(&messages, None).unwrap();
-        assert!(system.is_empty());
+        assert_eq!(system.len(), 0);
         assert_eq!(mapped.len(), 1);
         assert_eq!(mapped[0].role(), &ConversationRole::User);
         assert_eq!(mapped[0].content().len(), 1);
@@ -474,7 +474,7 @@ mod tests {
 
         let (system, _mapped) = map_messages(&messages, Some(&cache_point)).unwrap();
 
-        assert!(system.is_empty());
+        assert_eq!(system.len(), 0);
     }
 
     #[test]

@@ -19,7 +19,7 @@ fn a_prompt_sent_during_a_turn_is_queued_until_the_agent_inserts_it() {
 
     ui.insert_queued_prompts();
 
-    assert!(queued_texts(&ui).is_empty());
+    assert_eq!(queued_texts(&ui).len(), 0);
     assert!(!ui.viewport_text().contains("queued ›"));
     assert_eq!(transcript(&ui), ["first", "first reply", "second"]);
     assert!(ui.app().waiting_for_response(), "the inserted prompt joins the running turn");
@@ -70,7 +70,7 @@ fn prompts_rejected_by_a_cancel_return_to_the_composer_in_order() {
     ui.complete_prompt(acp::StopReason::Cancelled);
 
     assert_eq!(ui.app().composer().text(), "second\nthird");
-    assert!(queued_texts(&ui).is_empty());
+    assert_eq!(queued_texts(&ui).len(), 0);
     assert!(!ui.app().waiting_for_response());
     assert_eq!(transcript(&ui), ["first"], "cancelled prompts never join the conversation and need no notice");
 }

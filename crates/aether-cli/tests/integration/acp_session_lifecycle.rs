@@ -69,7 +69,7 @@ async fn terminal_list_cursor_returns_an_empty_page() {
             .to_string(),
         );
         let response = list(&harness, ListSessionsRequest::new().cursor(cursor)).await;
-        assert!(response.sessions.is_empty());
+        assert_eq!(response.sessions.len(), 0);
         assert!(response.next_cursor.is_none());
     })
     .await;

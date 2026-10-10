@@ -169,7 +169,7 @@ fn composer_history_restores_the_unsubmitted_draft() {
     composer.insert_str("first");
     let submission = composer.take_submission();
     assert_eq!(submission.text, "first");
-    assert!(submission.attachments().is_empty());
+    assert_eq!(submission.attachments().len(), 0);
     composer.insert_str("draft");
 
     assert!(composer.recall_previous());

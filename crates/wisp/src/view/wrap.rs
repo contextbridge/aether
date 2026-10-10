@@ -314,7 +314,7 @@ mod tests {
     fn truncate_spans_narrow_width_returns_empty() {
         let spans = vec![Span::raw("abc")];
         let result = truncate_spans(&spans, 0, Style::new());
-        assert!(result.is_empty());
+        assert_eq!(result.len(), 0);
     }
 
     #[test]

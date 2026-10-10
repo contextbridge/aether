@@ -609,7 +609,7 @@ mod tests {
         assert_eq!(result.path, "rust-rules.md");
         let content = result.content.expect("flat prompt content should exist");
         assert!(content.contains("Use Rust conventions."));
-        assert!(result.available_files.is_empty());
+        assert_eq!(result.available_files.len(), 0);
         assert!(result.error.is_none());
     }
 
@@ -626,7 +626,7 @@ mod tests {
         let result = load(&server, "rust-rules", Some("details.md")).await;
 
         assert!(result.content.is_none());
-        assert!(result.available_files.is_empty());
+        assert_eq!(result.available_files.len(), 0);
         assert!(result.error.as_deref().unwrap().contains("does not support relative paths"));
     }
 
@@ -645,7 +645,7 @@ mod tests {
 
         assert_eq!(result.path, "traits.md");
         assert_eq!(result.content.unwrap(), "# Traits content");
-        assert!(result.available_files.is_empty());
+        assert_eq!(result.available_files.len(), 0);
     }
 
     #[tokio::test]
@@ -784,7 +784,7 @@ mod tests {
         assert_eq!(files[1].name, "rust");
         assert_eq!(files[1].path, "traits.md");
         assert_eq!(files[1].content.as_deref(), Some("# Traits"));
-        assert!(files[1].available_files.is_empty());
+        assert_eq!(files[1].available_files.len(), 0);
 
         assert_eq!(files[2].name, "python");
         assert_eq!(files[2].path, "SKILL.md");

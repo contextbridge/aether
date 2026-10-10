@@ -477,7 +477,7 @@ mod tests {
         updates.changed().await.expect("connection publishes a snapshot");
         let observed = updates.borrow().clone();
 
-        assert!(old.tool_definitions().is_empty());
+        assert_eq!(old.tool_definitions().len(), 0);
         assert_eq!(ready.tool_definitions()[0].name, "test__add_numbers");
         assert_eq!(observed.tool_definitions(), ready.tool_definitions());
         assert!(!Arc::ptr_eq(&old, &ready));

@@ -282,7 +282,7 @@ mod tests {
 
         let parsed = PromptFile::parse(&dir.root().join("old-skill").join(SKILL_FILENAME)).unwrap();
         assert_eq!(parsed.description, "An old skill");
-        assert!(parsed.tags.is_empty());
+        assert_eq!(parsed.tags.len(), 0);
         assert!(!parsed.agent_authored);
         assert_eq!(parsed.helpful, 0);
         assert_eq!(parsed.harmful, 0);

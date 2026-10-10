@@ -287,7 +287,7 @@ mod tests {
     #[test]
     fn generate_random_state_is_valid_uuid() {
         let state = generate_random_state();
-        assert!(!state.is_empty());
+        assert_ne!(state, "");
         assert!(uuid::Uuid::parse_str(&state).is_ok());
     }
 

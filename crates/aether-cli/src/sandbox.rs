@@ -351,7 +351,7 @@ mod tests {
     fn select_forwarded_vars_excludes_unknown() {
         let vars = vec![("HOME".to_string(), "/root".to_string()), ("EDITOR".to_string(), "vim".to_string())];
         let forwarded = select_forwarded_vars(vars.into_iter());
-        assert!(forwarded.is_empty());
+        assert_eq!(forwarded.len(), 0);
     }
 
     #[test]

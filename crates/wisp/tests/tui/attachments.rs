@@ -80,7 +80,7 @@ fn remote_paste_never_attaches_even_when_the_path_exists_locally() {
     let image = create_temp_file(&tmp, "photo.png", b"client-only contents");
     let mut ui = TestUiBuilder::new().remote_workspace().build();
     ui.paste(image.to_str().unwrap());
-    assert!(ui.app().composer().pending_media().is_empty());
+    assert_eq!(ui.app().composer().pending_media().len(), 0);
     assert_eq!(ui.app().composer().text(), image.to_str().unwrap());
     ui.key(key(KeyCode::Enter));
     assert!(
@@ -99,7 +99,7 @@ fn paste_image_path_adds_pending_media() {
 
     assert_eq!(app.app().composer().pending_media().len(), 1);
     assert_eq!(app.app().composer().pending_media()[0].display_name, "photo.png");
-    assert!(app.app().composer().text().is_empty());
+    assert_eq!(app.app().composer().text(), "");
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn paste_ordinary_text_inserts_as_text() {
 
     app.paste("hello world");
 
-    assert!(app.app().composer().pending_media().is_empty());
+    assert_eq!(app.app().composer().pending_media().len(), 0);
     assert_eq!(app.app().composer().text(), "hello world");
 }
 
@@ -132,8 +132,8 @@ fn paste_non_media_file_falls_back_to_text() {
 
     app.paste(txt.to_str().unwrap());
 
-    assert!(app.app().composer().pending_media().is_empty());
-    assert!(!app.app().composer().text().is_empty());
+    assert_eq!(app.app().composer().pending_media().len(), 0);
+    assert_ne!(app.app().composer().text(), "");
 }
 
 #[test]
@@ -145,7 +145,7 @@ fn paste_nonexistent_path_remains_as_text() {
 
     app.paste(input);
 
-    assert!(app.app().composer().pending_media().is_empty());
+    assert_eq!(app.app().composer().pending_media().len(), 0);
     assert_eq!(app.app().composer().text(), input);
 }
 
@@ -158,7 +158,7 @@ fn paste_nonexistent_file_uri_remains_as_text() {
 
     app.paste(&uri);
 
-    assert!(app.app().composer().pending_media().is_empty());
+    assert_eq!(app.app().composer().pending_media().len(), 0);
     assert_eq!(app.app().composer().text(), uri);
 }
 
@@ -173,7 +173,7 @@ fn paste_directory_path_remains_as_text() {
 
     app.paste(input);
 
-    assert!(app.app().composer().pending_media().is_empty());
+    assert_eq!(app.app().composer().pending_media().len(), 0);
     assert_eq!(app.app().composer().text(), input);
 }
 
@@ -187,7 +187,7 @@ fn paste_multiple_nonexistent_paths_remain_as_text() {
 
     app.paste(&input);
 
-    assert!(app.app().composer().pending_media().is_empty());
+    assert_eq!(app.app().composer().pending_media().len(), 0);
     assert_eq!(app.app().composer().text(), input);
 }
 
@@ -214,7 +214,7 @@ fn paste_mixed_valid_and_missing_media_keeps_text_and_adds_nothing() {
 
     app.paste(&input);
 
-    assert!(app.app().composer().pending_media().is_empty());
+    assert_eq!(app.app().composer().pending_media().len(), 0);
     assert_eq!(app.app().composer().text(), input);
 }
 
@@ -229,7 +229,7 @@ fn paste_mixed_valid_media_and_directory_keeps_text_and_adds_nothing() {
 
     app.paste(&input);
 
-    assert!(app.app().composer().pending_media().is_empty());
+    assert_eq!(app.app().composer().pending_media().len(), 0);
     assert_eq!(app.app().composer().text(), input);
 }
 
@@ -275,7 +275,7 @@ fn media_only_submit_sends_with_content_blocks() {
         AgentCommand::Prompt { text, content, .. } => {
             assert!(text.is_empty(), "media-only send should have empty text");
             assert!(content.is_some(), "media-only send should have content blocks");
-            assert!(!content.unwrap().is_empty());
+            assert_ne!(content.unwrap().len(), 0);
         }
         other => panic!("expected Prompt command, got {other:?}"),
     }
@@ -314,8 +314,8 @@ fn submit_clears_pending_media() {
     app.settle_tasks();
     app.next_agent_command().unwrap();
 
-    assert!(app.app().composer().pending_media().is_empty());
-    assert!(app.app().composer().text().is_empty());
+    assert_eq!(app.app().composer().pending_media().len(), 0);
+    assert_eq!(app.app().composer().text(), "");
 }
 
 #[test]
@@ -334,7 +334,7 @@ fn backspace_on_empty_composer_removes_last_dropped_media() {
     assert_eq!(app.app().composer().pending_media()[0].display_name, "a.png");
 
     app.key(key(KeyCode::Backspace));
-    assert!(app.app().composer().pending_media().is_empty());
+    assert_eq!(app.app().composer().pending_media().len(), 0);
 }
 
 #[test]
@@ -348,7 +348,7 @@ fn backspace_does_not_remove_media_when_text_present() {
     app.key(key(KeyCode::Backspace));
 
     assert_eq!(app.app().composer().pending_media().len(), 1);
-    assert!(app.app().composer().text().is_empty());
+    assert_eq!(app.app().composer().text(), "");
 }
 
 #[test]
@@ -532,8 +532,8 @@ fn clear_command_also_clears_pending_media() {
     app.key(key(KeyCode::Tab));
     let _ = app.next_agent_command().unwrap();
 
-    assert!(app.app().composer().pending_media().is_empty());
-    assert!(app.app().composer().text().is_empty());
+    assert_eq!(app.app().composer().pending_media().len(), 0);
+    assert_eq!(app.app().composer().text(), "");
 }
 
 #[test]
@@ -835,7 +835,7 @@ fn image_above_ten_mib_is_rejected() {
     let (_dir, path) = write_temp("photo.png", &vec![0u8; TEN_MIB + 1]);
     let outcome = build_attachments(&attach(path, "photo.png"));
 
-    assert!(outcome.blocks.is_empty());
+    assert_eq!(outcome.blocks.len(), 0);
     assert_eq!(outcome.warnings.len(), 1);
     assert_eq!(outcome.warnings[0], "Skipped photo.png: file too large (max 10485760)");
 }
@@ -856,7 +856,7 @@ fn audio_above_ten_mib_is_rejected() {
     let (_dir, path) = write_temp("note.wav", &vec![0u8; TEN_MIB + 1]);
     let outcome = build_attachments(&attach(path, "note.wav"));
 
-    assert!(outcome.blocks.is_empty());
+    assert_eq!(outcome.blocks.len(), 0);
     assert_eq!(outcome.warnings.len(), 1);
     assert_eq!(outcome.warnings[0], "Skipped note.wav: file too large (max 10485760)");
 }
@@ -978,7 +978,7 @@ fn non_utf8_file_is_skipped_with_warning() {
     let (_dir, path) = write_temp("data.bin", &[0xff, 0xfe, 0xfd]);
     let outcome = build_attachments(&attach(path, "data.bin"));
 
-    assert!(outcome.blocks.is_empty());
+    assert_eq!(outcome.blocks.len(), 0);
     assert_eq!(outcome.warnings.len(), 1);
     assert_eq!(outcome.warnings[0], "Skipped binary or non-UTF8 file: data.bin");
 }
@@ -989,7 +989,7 @@ fn unsupported_extension_text_is_embedded_as_resource() {
     let outcome = build_attachments(&attach(path, "notes.xyz"));
 
     assert_eq!(outcome.blocks.len(), 1);
-    assert!(outcome.warnings.is_empty());
+    assert_eq!(outcome.warnings.len(), 0);
     assert!(matches!(outcome.blocks[0], acp::ContentBlock::Resource(_)));
     assert_eq!(text_of(&outcome.blocks[0]), "hello world");
 }

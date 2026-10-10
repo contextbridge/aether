@@ -403,8 +403,8 @@ Hope this helps!"#;
 
         assert_eq!(result.summary, "Agent did not return structured output");
         assert!(result.artifacts.is_empty());
-        assert!(result.decisions.is_empty());
-        assert!(result.next_steps.is_empty());
+        assert_eq!(result.decisions.len(), 0);
+        assert_eq!(result.next_steps.len(), 0);
         assert_eq!(result.details, Some(plain_text.to_string()));
     }
 

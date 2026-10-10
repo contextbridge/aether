@@ -744,7 +744,7 @@ fn settings_builtin_opens_overlay_and_clears_composer() {
     ui.key(key(KeyCode::Tab));
 
     // Composer should be cleared
-    assert!(ui.app().composer().text().is_empty());
+    assert_eq!(ui.app().composer().text(), "");
     // Should not emit a Prompt
     assert_no_commands(&mut ui, "settings open should not emit an action command");
     // Overlay should be open (has_modal returns true)

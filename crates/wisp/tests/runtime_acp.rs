@@ -374,7 +374,7 @@ async fn remote_startup_resumes_selected_session_and_preserves_queued_replay() {
                 let (request, responder) = requests.resume.recv().await.unwrap();
                 assert_eq!(request.session_id, SessionId::new(selected));
                 assert_eq!(request.cwd.0, PathBuf::from(cwd));
-                assert!(request.mcp_servers.is_empty());
+                assert_eq!(request.mcp_servers.len(), 0);
                 assert!(matches!(request.replay_from, Some(ReplayFrom::Start(_))));
                 let connection = requests.connection.recv().await.unwrap();
                 connection
@@ -496,7 +496,7 @@ async fn connect(capabilities: Option<SessionCapabilities>) -> (Session, Peer) {
     let session = Session::connect_to(client_transport, PathBuf::from("/workspace")).await.unwrap();
     let created = requests.new_session.recv().await.unwrap();
     assert_eq!(created.cwd.0, PathBuf::from("/workspace"));
-    assert!(created.mcp_servers.is_empty());
+    assert_eq!(created.mcp_servers.len(), 0);
     let connection = requests.connection.recv().await.unwrap();
     (
         session,

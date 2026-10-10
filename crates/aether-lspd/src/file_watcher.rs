@@ -515,7 +515,7 @@ mod tests {
         actor.accumulate_event(&notify_event(MODIFY_CONTENT, vec!["/tmp/project/src/main.rs"]));
         actor.flush_pending().await;
         let batch = event_rx.recv().await.expect("expected file watcher batch");
-        assert!(batch.forwarded_changes.is_empty());
+        assert_eq!(batch.forwarded_changes.len(), 0);
         assert_eq!(batch.discovered_uris.len(), 1);
     }
 

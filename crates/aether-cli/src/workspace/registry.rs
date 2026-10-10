@@ -144,7 +144,7 @@ mod tests {
         registry.register("old", &a).unwrap();
         registry.register("new", &a).unwrap();
 
-        assert!(registry.workspaces_for("old").unwrap().is_empty());
+        assert_eq!(registry.workspaces_for("old").unwrap().len(), 0);
         assert_eq!(registry.workspaces_for("new").unwrap().len(), 1);
     }
 
@@ -169,6 +169,6 @@ mod tests {
     #[test]
     fn missing_registry_file_lists_empty() {
         let (_dir, registry) = temp_registry();
-        assert!(registry.workspaces_for("repo1").unwrap().is_empty());
+        assert_eq!(registry.workspaces_for("repo1").unwrap().len(), 0);
     }
 }

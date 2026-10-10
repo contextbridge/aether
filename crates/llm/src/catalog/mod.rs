@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn dynamic_provider_models_have_no_reasoning_levels() {
-        assert!(LlmModel::Ollama("llama3.2".into()).reasoning_levels().is_empty());
+        assert_eq!(LlmModel::Ollama("llama3.2".into()).reasoning_levels(), []);
         assert!(!LlmModel::Ollama("llama3.2".into()).supports_reasoning());
     }
 
@@ -310,7 +310,7 @@ mod tests {
     fn bedrock_profile_fallback_parses_arbitrary_id() {
         let profile: LlmModel = "bedrock:us.anthropic.future-model-v99:0".parse().unwrap();
         assert_eq!(profile.context_window(), None);
-        assert!(profile.reasoning_levels().is_empty());
+        assert_eq!(profile.reasoning_levels(), []);
         assert!(!profile.supports_prompt_caching());
     }
 }

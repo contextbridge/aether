@@ -94,12 +94,12 @@ fn prompt_search_is_smart_case_unicode_safe_and_retains_recent_entries() {
     store.append("session-1", &user_message("café"));
 
     let old = store.store().search_prompts("prompt 0", None).expect("search succeeds");
-    assert!(old.results.is_empty());
+    assert_eq!(old.results.len(), 0);
 
     let lower = store.store().search_prompts("hello", None).expect("search succeeds");
     assert_eq!(lower.results.len(), 1);
     let upper = store.store().search_prompts("Hello", None).expect("search succeeds");
-    assert!(upper.results.is_empty());
+    assert_eq!(upper.results.len(), 0);
     let unicode = store.store().search_prompts("fé", None).expect("search succeeds");
     let hit = &unicode.results[0];
     assert_eq!(&hit.prompt[hit.match_start..hit.match_end], "fé");
@@ -210,18 +210,18 @@ fn blank_runs_and_oversized_lines_consume_preview_budget() {
 
     let preview = store.store().preview("session-1").expect("preview succeeds");
     assert!(preview.truncated);
-    assert!(preview.transcript.is_empty());
+    assert_eq!(preview.transcript.len(), 0);
 }
 
 #[test]
 fn empty_and_missing_stores_have_no_sessions_or_prompts() {
     let store = TestStore::new();
-    assert!(store.store().list().is_empty());
+    assert_eq!(store.store().list().len(), 0);
     let missing_session = store.store().load("missing").unwrap_err();
     assert!(matches!(missing_session, SessionStoreError::Io(error) if error.kind() == std::io::ErrorKind::NotFound));
     let empty = store.store().search_prompts(" ", None).expect("search succeeds");
-    assert!(empty.results.is_empty());
+    assert_eq!(empty.results.len(), 0);
 
     let missing = SessionStore::from_path(store.path().join("missing"));
-    assert!(missing.list().is_empty());
+    assert_eq!(missing.list().len(), 0);
 }

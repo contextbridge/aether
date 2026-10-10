@@ -36,7 +36,7 @@ async fn runtime_exports_metrics_to_a_signal_specific_endpoint() {
     runtime.shutdown().expect("runtime flushes metrics");
     let exports = collector.exports();
 
-    assert!(exports.traces.is_empty());
+    assert_eq!(exports.traces.len(), 0);
     assert_eq!(exports.metrics.len(), 1);
 }
 
@@ -57,7 +57,7 @@ async fn runtime_exports_traces_to_a_signal_specific_endpoint() {
     let exports = collector.exports();
 
     assert_eq!(exports.traces.len(), 1);
-    assert!(exports.metrics.is_empty());
+    assert_eq!(exports.metrics.len(), 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -87,7 +87,7 @@ async fn runtime_parents_every_turn_to_the_supplied_trace_context() {
     let spans = trace_spans(&exports);
 
     assert_propagated_hierarchy(&spans, &expected_trace_id, &expected_parent_span_id);
-    assert!(!exports.metrics.is_empty());
+    assert_ne!(exports.metrics.len(), 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -116,9 +116,9 @@ fn disconnected_servers_retain_status_without_exposing_tools_or_instructions() {
     catalog.set_progressive_discovery_instructions(Some("not visible".to_string()));
 
     let tools = catalog.tools();
-    assert!(tools.model_visible.is_empty());
-    assert!(tools.deferred.is_empty());
-    assert!(catalog.discoverable_deferred_servers().is_empty());
+    assert_eq!(tools.model_visible.len(), 0);
+    assert_eq!(tools.deferred.len(), 0);
+    assert_eq!(catalog.discoverable_deferred_servers().len(), 0);
     assert!(catalog.model_instructions().is_empty());
     assert!(!catalog.route_permitted(&ToolRoute::Deferred { server: "remote".into(), tool: "hidden".into() }));
     assert!(matches!(catalog.servers()[0].status(), McpServerStatus::NeedsOAuth));

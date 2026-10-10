@@ -265,7 +265,7 @@ async fn v2_initialization_accessors_expose_agent_metadata() -> Result<(), TestE
             assert_eq!(client.agent_name(), "Display Name");
             assert!(client.prompt_capabilities().is_some());
             assert!(client.session_capabilities().is_some());
-            assert!(client.auth_methods().is_empty());
+            assert_eq!(client.auth_methods(), []);
             client.handle.disconnect().await;
             Ok(())
         })

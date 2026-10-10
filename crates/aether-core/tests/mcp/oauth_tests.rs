@@ -162,7 +162,7 @@ async fn builder_with_oauth_handler_factory_spawns_successfully() {
         .unwrap();
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
-    assert!(snapshot.tool_definitions().is_empty());
+    assert_eq!(snapshot.tool_definitions().len(), 0);
     assert!(snapshot.model_instructions().is_empty());
 }
 
@@ -221,7 +221,7 @@ async fn add_mcps_continues_on_oauth_failure() {
             .await
             .is_ok()
     );
-    assert!(manager.tool_definitions().is_empty());
+    assert_eq!(manager.tool_definitions().len(), 0);
 }
 
 #[tokio::test]
@@ -269,7 +269,7 @@ async fn deferred_server_with_failing_http_surfaces_failure() {
     let local_status = statuses.iter().find(|s| s.name == "local").expect("Expected status entry for 'local'");
     assert!(matches!(local_status.status, McpServerStatus::Connected { .. }));
     assert!(local_status.deferred_tools);
-    assert!(manager.tool_definitions().is_empty());
+    assert_eq!(manager.tool_definitions().len(), 0);
 }
 
 #[tokio::test]
@@ -304,7 +304,7 @@ async fn deferred_tools_partial_connection_works() {
 
     let _ = manager.add_mcps(servers).await;
 
-    assert!(manager.tool_definitions().is_empty());
+    assert_eq!(manager.tool_definitions().len(), 0);
     let statuses = manager.server_statuses();
     assert!(matches!(
         statuses.iter().find(|status| status.name == "working").unwrap().status,
