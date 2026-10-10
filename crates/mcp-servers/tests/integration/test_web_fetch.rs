@@ -53,7 +53,7 @@ async fn test_fetch_real_page() {
         .unwrap();
 
     assert_eq!(result.status_code, 200);
-    assert!(!result.content.is_empty());
+    assert_ne!(result.content, "");
     assert!(result.content.contains("Melville") || result.content.contains("Moby"));
 }
 
@@ -128,7 +128,7 @@ async fn test_fetch_with_prompt() {
         .unwrap();
 
     assert_eq!(result.status_code, 200);
-    assert!(!result.content.is_empty());
+    assert_ne!(result.content, "");
 }
 
 #[tokio::test]

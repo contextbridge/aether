@@ -229,7 +229,7 @@ mod tests {
 
         let filtered = lifecycle
             .filter_watcher_changes(vec![FileEvent { uri: uri.clone(), typ: lsp_types::FileChangeType::CHANGED }]);
-        assert!(filtered.is_empty());
+        assert_eq!(filtered.len(), 0);
         assert!(matches!(lifecycle.release(&uri), ReleaseAction::CloseAndRefresh));
     }
 
@@ -246,7 +246,7 @@ mod tests {
 
         let filtered = lifecycle
             .filter_watcher_changes(vec![FileEvent { uri: uri.clone(), typ: lsp_types::FileChangeType::CHANGED }]);
-        assert!(filtered.is_empty());
+        assert_eq!(filtered.len(), 0);
         assert!(matches!(lifecycle.release(&uri), ReleaseAction::Unchanged));
         assert!(matches!(lifecycle.release(&uri), ReleaseAction::CloseAndRefresh));
     }

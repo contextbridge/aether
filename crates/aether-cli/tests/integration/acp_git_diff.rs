@@ -60,7 +60,7 @@ async fn git_diff_refresh_tracks_scope_and_reports_status_ref() {
             .block_task()
             .await
             .expect("status succeeds");
-        assert!(!status.display_dir.is_empty());
+        assert_ne!(status.display_dir, "");
     })
     .await;
 }

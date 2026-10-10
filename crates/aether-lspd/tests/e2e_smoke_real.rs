@@ -15,7 +15,7 @@ async fn rust_analyzer_smoke_hover() {
     let uri = project.file_uri("src/main.rs");
 
     let hover = hover_text(client.hover(uri, 0, 0).await.expect("Hover failed"));
-    assert!(!hover.is_empty());
+    assert_ne!(hover, "");
 
     harness.kill().await.expect("Failed to kill daemon");
 }

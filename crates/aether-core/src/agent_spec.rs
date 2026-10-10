@@ -277,7 +277,7 @@ mod tests {
             deny: vec![],
         };
         let tools = vec![make_annotated_tool("read", ToolAnnotations::read_only())];
-        assert!(filter.apply(tools).is_empty());
+        assert_eq!(filter.apply(tools).len(), 0);
     }
 
     #[test]
@@ -288,7 +288,7 @@ mod tests {
             "coding__read_file",
             ToolAnnotations { read_only_hint: Some(true), ..ToolAnnotations::default() },
         )];
-        assert!(filter.apply(tools).is_empty());
+        assert_eq!(filter.apply(tools).len(), 0);
     }
 
     #[test]
@@ -314,7 +314,7 @@ mod tests {
             "coding__grep",
             ToolAnnotations { read_only_hint: Some(true), ..ToolAnnotations::default() },
         )];
-        assert!(filter.apply(tools).is_empty());
+        assert_eq!(filter.apply(tools).len(), 0);
     }
 
     #[test]

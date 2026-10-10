@@ -76,7 +76,7 @@ fn remote_user_resources_render_as_references_but_keep_their_blocks() {
 fn user_messages_appear_once_the_agent_inserts_them_and_are_keyed_by_message_id() {
     let mut conversation = Conversation::new();
     conversation.apply_event(&running());
-    assert!(conversation.items().is_empty());
+    assert_eq!(conversation.items(), []);
 
     conversation.apply_event(&user_message("user", "prompt"));
     conversation.apply_event(&user_message("user", "prompt"));
@@ -117,8 +117,8 @@ fn first_tool_update_creates_and_later_patches_replace_or_clear() {
         acp::ToolCallUpdate::new("tool").title(MaybeUndefined::Null).raw_input(MaybeUndefined::Null),
     ));
     assert_eq!(conversation.items().len(), 1);
-    assert!(tool(&conversation, 0).title().is_empty());
-    assert!(tool(&conversation, 0).raw_input().is_empty());
+    assert_eq!(tool(&conversation, 0).title(), "");
+    assert_eq!(tool(&conversation, 0).raw_input(), "");
 }
 
 #[test]
@@ -133,7 +133,7 @@ fn tool_content_chunks_append_but_updates_replace() {
     assert_eq!(tool(&conversation, 0).content().len(), 1);
 
     conversation.apply_event(&tool_update(acp::ToolCallUpdate::new("tool").content(MaybeUndefined::Null)));
-    assert!(tool(&conversation, 0).content().is_empty());
+    assert_eq!(tool(&conversation, 0).content(), []);
 }
 
 #[test]
@@ -337,7 +337,7 @@ fn activity_after_the_turn_ends_is_ignored_until_the_next_turn() {
     conversation.apply_event(&compaction(acp::CompactionStatus::InProgress));
 
     assert_eq!(conversation.activity(), Activity::Idle);
-    assert!(tool(&conversation, 0).sub_agents.is_empty());
+    assert_eq!(tool(&conversation, 0).sub_agents, []);
     assert!(!conversation.is_compacting());
 
     conversation.apply_event(&running());
@@ -390,7 +390,7 @@ fn clear_replaces_identity_and_resets_everything() {
     conversation.clear();
 
     assert_ne!(conversation.id(), previous_id);
-    assert!(conversation.items().is_empty());
+    assert_eq!(conversation.items(), []);
     assert!(conversation.turn().is_idle(), "a running turn ends with the conversation");
     assert!(conversation.plan().is_none());
     assert!(conversation.context_usage().is_none());

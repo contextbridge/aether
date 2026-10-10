@@ -16,7 +16,7 @@ fn remote_client_parser_defaults_and_overrides() {
     let args = ClientCli::try_parse_from(["client"]).unwrap().args;
     assert_eq!(args.url, "ws://127.0.0.1:8765");
     assert!(args.session.is_none());
-    assert!(args.headers.is_empty());
+    assert_eq!(args.headers.len(), 0);
     assert!(args.log_dir.is_none());
     let args = ClientCli::try_parse_from([
         "client",

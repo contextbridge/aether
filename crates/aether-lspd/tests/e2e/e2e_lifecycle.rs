@@ -34,7 +34,7 @@ async fn multiple_clients_share_fake_server_session() {
     let hover1 = hover_text(client1.hover(uri.clone(), 0, 0).await.expect("Hover failed"));
     let hover2 = hover_text(client2.hover(uri.clone(), 0, 0).await.expect("Hover failed"));
 
-    assert!(!hover1.is_empty());
+    assert_ne!(hover1, "");
     assert_eq!(hover1, hover2);
 
     harness.kill().await.expect("Failed to kill daemon");

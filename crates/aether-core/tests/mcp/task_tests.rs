@@ -198,7 +198,7 @@ async fn expired_task_terminates_before_polling() {
 
     assert_eq!(notification.status, "failed");
     assert!(notification.body.contains("expired before completion"));
-    assert!(state.task_get_ids().is_empty());
+    assert_eq!(state.task_get_ids().len(), 0);
 }
 
 #[tokio::test]

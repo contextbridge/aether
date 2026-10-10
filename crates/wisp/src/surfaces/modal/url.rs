@@ -101,7 +101,7 @@ mod tests {
     fn url_modal_parses_host() {
         let url = UrlModal::new("github".into(), "Auth".into(), "https://github.com/login".into());
         assert_eq!(url.host.as_deref(), Some("github.com"));
-        assert!(url.warnings.is_empty());
+        assert_eq!(url.warnings.len(), 0);
     }
 
     #[test]
@@ -114,13 +114,13 @@ mod tests {
     #[test]
     fn url_modal_does_not_warn_on_localhost() {
         let url = UrlModal::new("test".into(), "Local".into(), "http://localhost:3000/auth".into());
-        assert!(url.warnings.is_empty());
+        assert_eq!(url.warnings.len(), 0);
     }
 
     #[test]
     fn url_modal_allows_127_0_0_1_as_localhost() {
         let url = UrlModal::new("test".into(), "Local".into(), "http://127.0.0.1:8000/api".into());
-        assert!(url.warnings.is_empty());
+        assert_eq!(url.warnings.len(), 0);
     }
 
     #[test]

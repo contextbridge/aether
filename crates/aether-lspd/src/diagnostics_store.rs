@@ -170,6 +170,6 @@ mod tests {
         let uri: Uri = "file:///test.rs".parse().unwrap();
         store.publish(diagnostics(uri.as_str(), "error"));
         store.forget_uri(&uri);
-        assert!(store.get(Some(&uri)).is_empty());
+        assert_eq!(store.get(Some(&uri)).len(), 0);
     }
 }

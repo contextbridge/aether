@@ -137,7 +137,7 @@ mod tests {
         tracker.replace("plan".into(), vec![entry("Task A", PlanEntryStatus::Completed)], now);
 
         let visible = tracker.visible_entries(now + GRACE_PERIOD + Duration::from_millis(1));
-        assert!(visible.is_empty());
+        assert_eq!(visible.len(), 0);
     }
 
     #[test]
@@ -260,7 +260,7 @@ mod tests {
         tracker.replace("plan".into(), vec![entry], now + Duration::from_secs(2));
 
         assert_eq!(tracker.visible_entries(now + GRACE_PERIOD).len(), 1);
-        assert!(tracker.visible_entries(now + GRACE_PERIOD + Duration::from_millis(1)).is_empty());
+        assert_eq!(tracker.visible_entries(now + GRACE_PERIOD + Duration::from_millis(1)).len(), 0);
     }
 
     #[test]
@@ -335,7 +335,7 @@ mod tests {
         tracker.clear();
 
         let visible = tracker.visible_entries(now);
-        assert!(visible.is_empty());
+        assert_eq!(visible.len(), 0);
         assert!(!tracker.has_entries());
     }
 

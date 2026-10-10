@@ -135,7 +135,7 @@ mod tests {
         assert_eq!(responses.len(), 1);
         assert!(matches!(&responses[0], Err(LlmError::ReasoningValidation(_))));
         assert!(!responses[0].as_ref().unwrap_err().is_retryable());
-        assert!(request_bodies(&service).is_empty());
+        assert_eq!(request_bodies(&service).len(), 0);
     }
 
     #[tokio::test]

@@ -35,8 +35,8 @@ async fn prompt_search_request_searches_user_text_only() {
             vec![llm::ContentBlock::text("first block"), llm::ContentBlock::text("second block")],
         );
 
-        assert!(search(&harness, "agent").await.results.is_empty());
-        assert!(search(&harness, "aW1n").await.results.is_empty());
+        assert_eq!(search(&harness, "agent").await.results.len(), 0);
+        assert_eq!(search(&harness, "aW1n").await.results.len(), 0);
 
         let multi = search(&harness, "second").await;
         assert_eq!(multi.results.len(), 1);
@@ -66,7 +66,7 @@ async fn prompt_search_request_uses_literal_smart_case_unicode_matching() {
         assert!(lower.results.iter().any(|hit| hit.prompt == "HELLO world"));
 
         let upper = search(&harness, "Hello").await;
-        assert!(upper.results.is_empty());
+        assert_eq!(upper.results.len(), 0);
 
         let unicode = search(&harness, "fé").await;
         assert_eq!(unicode.results.len(), 1);
@@ -102,7 +102,7 @@ async fn prompt_search_request_with_empty_query_returns_no_results() {
         harness.append_stored_prompt("s1", "cached alpha");
 
         let response = search(&harness, "").await;
-        assert!(response.results.is_empty());
+        assert_eq!(response.results.len(), 0);
         assert!(!response.truncated);
     })
     .await;

@@ -972,8 +972,8 @@ mod tests {
 
         settings.inline_resources(project.root()).unwrap();
 
-        assert!(settings.prompts.is_empty());
-        assert!(settings.mcps.is_empty());
+        assert_eq!(settings.prompts.len(), 0);
+        assert_eq!(settings.mcps.len(), 0);
     }
 
     #[test]

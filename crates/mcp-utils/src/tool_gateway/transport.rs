@@ -244,7 +244,7 @@ mod tests {
         let _server = transport.spawn(TestServer { tool_router: TestServer::tool_router() });
         let client = ().serve(connect(&socket).await.unwrap()).await.unwrap();
 
-        assert!(client.list_all_tools().await.unwrap().is_empty());
+        assert_eq!(client.list_all_tools().await.unwrap().len(), 0);
     }
 
     #[tokio::test]

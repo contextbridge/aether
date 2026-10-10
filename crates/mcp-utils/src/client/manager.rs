@@ -967,7 +967,7 @@ mod tests {
         snapshots.changed().await.unwrap();
         let removed = snapshots.borrow().clone();
 
-        assert!(removed.tool_definitions().is_empty());
+        assert_eq!(removed.tool_definitions().len(), 0);
         assert!(
             removed
                 .resolve(ToolRoute::ModelVisible { namespaced_name: "test__echo".to_string() }, serde_json::Map::new(),)

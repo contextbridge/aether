@@ -352,7 +352,7 @@ fn assert_plan_tools(agent: &aether_project::AgentConfig) {
             ToolMatcher::name("review__review_artifact"),
         ]
     );
-    assert!(agent.tools.deny.is_empty());
+    assert_eq!(agent.tools.deny.len(), 0);
 }
 
 fn assert_read_only_coding_tools(agent: &aether_project::AgentConfig) {
@@ -365,7 +365,7 @@ fn assert_read_only_coding_tools(agent: &aether_project::AgentConfig) {
             ToolMatcher::name("tasks__*"),
         ]
     );
-    assert!(agent.tools.deny.is_empty());
+    assert_eq!(agent.tools.deny.len(), 0);
 }
 
 fn assert_minimal_mcp_and_tools(agent: &aether_project::AgentConfig) {
@@ -373,7 +373,7 @@ fn assert_minimal_mcp_and_tools(agent: &aether_project::AgentConfig) {
     let names: Vec<&str> = servers.keys().map(String::as_str).collect();
     assert_eq!(names, vec!["coding", "skills"]);
     assert_eq!(agent.tools.allow, vec![ToolMatcher::name("coding__bash"), ToolMatcher::name("skills__*")]);
-    assert!(agent.tools.deny.is_empty());
+    assert_eq!(agent.tools.deny.len(), 0);
 }
 
 fn assert_contains_all(args: &[String], expected: &[&str], context: &str) {

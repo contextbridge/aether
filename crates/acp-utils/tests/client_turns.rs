@@ -32,10 +32,10 @@ async fn prompts_and_resumes_do_not_gate_requests() {
             let first = fake.submit("one").await;
             let second = fake.submit("one").await;
             fake.client.handle.request(CloseSessionRequest::new("saved")).await.unwrap();
-            assert!(fake.client.handle.request(ListSessionsRequest::new()).await.unwrap().sessions.is_empty());
+            assert_eq!(fake.client.handle.request(ListSessionsRequest::new()).await.unwrap().sessions.len(), 0);
             let resume = fake.resume("two", true);
             let (_, responder) = fake.resumes.recv().await.unwrap();
-            assert!(fake.client.handle.request(ListSessionsRequest::new()).await.unwrap().sessions.is_empty());
+            assert_eq!(fake.client.handle.request(ListSessionsRequest::new()).await.unwrap().sessions.len(), 0);
             for replay in [false, true] {
                 let other = fake.resume("other", replay);
                 let (_, responder) = fake.resumes.recv().await.unwrap();

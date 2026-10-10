@@ -970,7 +970,7 @@ mod tests {
                     dispatch_event(&cx, McpClientEvent::ServerStatusesChanged(vec![]));
 
                     let McpNotification::ServerStatus { servers } = peer.next_mcp_notification().await;
-                    assert!(servers.is_empty());
+                    assert_eq!(servers.len(), 0);
                 })
                 .await;
         }

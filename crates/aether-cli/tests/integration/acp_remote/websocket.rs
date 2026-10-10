@@ -217,7 +217,7 @@ async fn occupied_server_drops_non_websocket_request_without_detaching_owner() {
         invalid.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n").await.unwrap();
         let mut response = Vec::new();
         invalid.read_to_end(&mut response).await.unwrap();
-        assert!(response.is_empty());
+        assert_eq!(response.len(), 0);
         assert_occupied(&server).await;
         drop(owner);
         server.shutdown().await;

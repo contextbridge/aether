@@ -165,7 +165,7 @@ mod tests {
         git(&clone, &["commit", "-m", "diverge"]);
 
         let original = root_commit_hash(&repo).unwrap();
-        assert!(!original.is_empty());
+        assert_ne!(original, "");
         assert_eq!(root_commit_hash(&clone).unwrap(), original);
     }
 
