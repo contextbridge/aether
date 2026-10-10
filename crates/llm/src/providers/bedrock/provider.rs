@@ -1,9 +1,12 @@
 use super::mantle::{MantleAuth, MantleClient};
 use super::mappers::{default_cache_point, map_messages, map_tools};
-use super::streaming::{converse_events, process_bedrock_stream};
+use super::streaming::{converse_events, decode_converse_event};
 use crate::catalog::transport::ModelTransport;
-use crate::provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider, get_context_window, stream_from};
-use crate::providers::openai_responses::transport::process_connection;
+use crate::provider::{
+    LlmResponseStream, ProviderFactory, StreamingModelProvider, get_context_window, validate_reasoning,
+};
+use crate::providers::openai_responses::streaming::decode_responses;
+use crate::providers::response_stream::{OpenedStream, response_stream};
 use crate::{Context, LlmError, ProviderAuthMode, ProviderConnectionConfig, ProviderError, Result};
 use aws_config::Region;
 use aws_credential_types::provider::SharedCredentialsProvider;
@@ -14,6 +17,7 @@ use aws_sdk_bedrockruntime::primitives::event_stream::EventReceiver;
 use aws_sdk_bedrockruntime::types::error::ConverseStreamOutputError;
 use aws_sdk_bedrockruntime::types::{ConverseStreamOutput, InferenceConfiguration};
 use aws_sdk_bedrockruntime::{Client, Config};
+use std::time::Duration;
 use tracing::{error, info, warn};
 
 const DEFAULT_MODEL: &str = "anthropic.claude-sonnet-4-5-20250929-v1:0";
@@ -34,6 +38,7 @@ pub struct BedrockProvider {
     mantle: MantleClient,
     model: String,
     inference_profile_arn: Option<String>,
+    idle_timeout: Duration,
 }
 
 impl BedrockProvider {
@@ -56,7 +61,7 @@ impl BedrockProvider {
             .or_else(region_from_env)
             .unwrap_or_else(|| DEFAULT_REGION.to_string());
         let auth = mantle_auth(config.credentials_provider(), &region);
-        Self::assemble(Client::new(&config), region, auth, connection)
+        Self::from_parts(Client::new(&config), region, auth, connection)
     }
 
     /// Create a provider from explicit configuration without async credential discovery.
@@ -71,16 +76,17 @@ impl BedrockProvider {
             ProviderAuthMode::None => MantleAuth::None,
         };
         let client = build_client(credentials, &region, connection.base_url.as_deref(), connection.auth_mode);
-        Self::assemble(client, region, auth, connection)
+        Self::from_parts(client, region, auth, connection)
     }
 
-    fn assemble(client: Client, region: String, auth: MantleAuth, connection: ProviderConnectionConfig) -> Self {
+    fn from_parts(client: Client, region: String, auth: MantleAuth, connection: ProviderConnectionConfig) -> Self {
         let mantle = MantleClient::new(region, auth, connection.base_url.clone());
         Self {
             client,
             mantle,
             model: DEFAULT_MODEL.to_string(),
             inference_profile_arn: connection.inference_profile_arn,
+            idle_timeout: connection.idle_timeout,
         }
     }
 
@@ -115,6 +121,7 @@ impl BedrockProvider {
         &self,
         context: &Context,
     ) -> Result<EventReceiver<ConverseStreamOutput, ConverseStreamOutputError>> {
+        validate_reasoning(context, self.model().as_ref())?;
         let cache_point =
             self.model().is_some_and(|m| m.supports_prompt_caching()).then(default_cache_point).transpose()?;
         let (system_blocks, messages) = map_messages(context.messages(), cache_point.as_ref())?;
@@ -187,16 +194,15 @@ impl StreamingModelProvider for BedrockProvider {
     }
 
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
-        if let Err(error) = crate::provider::validate_reasoning(context, self.model().as_ref()) {
-            return crate::provider::error_stream(error);
-        }
         let provider = self.clone();
         let context = context.clone();
 
         let Some(transport) = self.mantle_transport() else {
-            return stream_from(async move { provider.send_converse_stream(&context).await }, |receiver| {
-                process_bedrock_stream(converse_events(receiver))
-            });
+            return response_stream(
+                async move { Ok(OpenedStream::new(converse_events(provider.send_converse_stream(&context).await?))) },
+                |event, turn| Ok(decode_converse_event(event, turn)),
+                self.idle_timeout,
+            );
         };
 
         if let Some(arn) = self.inference_profile_arn.as_deref() {
@@ -207,9 +213,10 @@ impl StreamingModelProvider for BedrockProvider {
             );
         }
 
-        stream_from(
+        response_stream(
             async move { provider.mantle.stream(&provider.model, &transport, &context).await },
-            process_connection,
+            decode_responses(),
+            self.idle_timeout,
         )
     }
 
@@ -304,55 +311,11 @@ fn region_from_env() -> Option<String> {
 mod tests {
     use super::*;
     use crate::catalog::Provider;
-    use crate::providers::test_capture_server::CaptureServer;
+    use crate::providers::test_capture_server::{CaptureServer, ResponseSpec, hello_context};
     use crate::types::IsoString;
     use crate::{AssistantReasoning, ChatMessage, EncryptedReasoningContent, LlmModel, MessageId};
-    use axum::Router;
-    use axum::body::Body;
-    use axum::extract::State;
-    use axum::http::{HeaderMap, Method, Request, StatusCode};
-    use axum::response::IntoResponse;
-    use axum::routing::any;
     use futures::StreamExt;
-    use std::sync::Arc;
-    use tokio::net::TcpListener;
-    use tokio::sync::{Mutex, oneshot};
     use utils::ReasoningEffort;
-
-    fn inference_profile_arn(model: &str) -> String {
-        format!("arn:aws:bedrock:us-west-2:000000000000:inference-profile/{model}")
-    }
-
-    fn application_inference_profile_arn() -> &'static str {
-        "arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000"
-    }
-
-    fn test_provider() -> BedrockProvider {
-        BedrockProvider::from_config(None, None, ProviderConnectionConfig::default())
-    }
-
-    /// A catalog model routed to the Responses transport, resolved from the
-    /// catalog so a models.dev sync that retires one model does not quietly
-    /// leave these tests exercising the Converse path instead.
-    fn mantle_model() -> String {
-        LlmModel::all()
-            .iter()
-            .find(|model| model.provider_enum() == Provider::Bedrock && model.transport().is_some())
-            .expect("catalog must expose at least one Responses-transport Bedrock model")
-            .model_id()
-            .to_string()
-    }
-
-    /// A provider talking to `server` over the Responses transport, unauthenticated.
-    async fn mantle_provider(server: &CaptureServer) -> BedrockProvider {
-        BedrockProvider::new(ProviderConnectionConfig {
-            base_url: Some(server.base_url.clone()),
-            auth_mode: ProviderAuthMode::None,
-            ..Default::default()
-        })
-        .await
-        .with_model(&mantle_model())
-    }
 
     #[test]
     fn test_display_name() {
@@ -373,19 +336,12 @@ mod tests {
 
     #[tokio::test]
     async fn auth_none_sends_unsigned_request_to_custom_endpoint() {
-        let endpoint = FakeBedrockEndpoint::start().await;
-        let provider = BedrockProvider::new(ProviderConnectionConfig {
-            base_url: Some(endpoint.url.clone()),
-            auth_mode: ProviderAuthMode::None,
-            ..Default::default()
-        })
-        .await;
+        let mut server = CaptureServer::start_with_response("{}").await;
+        let provider = create_provider(&server.base_url, DEFAULT_MODEL).await;
 
-        let result = provider.send_converse_stream(&hello_context()).await;
-        let request = endpoint.request.await.expect("fake Bedrock endpoint received no request");
+        let _ = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
+        let request = server.captured().await;
 
-        assert!(result.is_err());
-        assert_eq!(request.method, Method::POST);
         assert!(request.path.starts_with("/model/"), "{}", request.path);
         assert!(!request.headers.contains_key("authorization"), "request was signed: {:?}", request.headers);
         assert!(
@@ -403,10 +359,6 @@ mod tests {
         }
     }
 
-    fn hello_context() -> Context {
-        Context::new(vec![ChatMessage::user("Hello")], vec![])
-    }
-
     #[tokio::test]
     async fn mantle_disabled_uses_none_without_summary() {
         let model = LlmModel::all()
@@ -418,7 +370,7 @@ mod tests {
             })
             .unwrap();
         let mut server = CaptureServer::start_responses().await;
-        let provider = mantle_provider(&server).await.with_model(&model.model_id());
+        let provider = create_provider(&server.base_url, &model.model_id()).await;
         let mut context = hello_context();
         context.set_reasoning_effort(ReasoningEffort::Disabled);
         let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
@@ -474,7 +426,6 @@ mod tests {
 
     #[tokio::test]
     async fn http_200_failed_server_error_is_retryable_with_diagnostics() {
-        use crate::providers::test_capture_server::ResponseSpec;
         let spec = ResponseSpec::sse(include_str!("../../../tests/fixtures/openai_responses/04_failed_server.sse"))
             .with_header("x-amzn-requestid", "amzn-req-123");
         let mut server = CaptureServer::start_with_spec(spec).await;
@@ -561,17 +512,11 @@ mod tests {
 
     #[tokio::test]
     async fn converse_shape_models_do_not_use_the_responses_endpoint() {
-        let endpoint = FakeBedrockEndpoint::start().await;
-        let provider = BedrockProvider::new(ProviderConnectionConfig {
-            base_url: Some(endpoint.url.clone()),
-            auth_mode: ProviderAuthMode::None,
-            ..Default::default()
-        })
-        .await
-        .with_model(DEFAULT_MODEL);
+        let mut server = CaptureServer::start_with_response("{}").await;
+        let provider = create_provider(&server.base_url, DEFAULT_MODEL).await;
 
         let _ = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
-        let request = endpoint.request.await.expect("fake Bedrock endpoint received no request");
+        let request = server.captured().await;
 
         assert!(request.path.starts_with("/model/"), "{}", request.path);
     }
@@ -686,20 +631,19 @@ mod tests {
 
     #[tokio::test]
     async fn separate_inference_profile_arn_is_used_as_request_model_id() {
-        let endpoint = FakeBedrockEndpoint::start().await;
+        let mut server = CaptureServer::start_with_response("{}").await;
         let provider = BedrockProvider::new(ProviderConnectionConfig {
-            base_url: Some(endpoint.url.clone()),
+            base_url: Some(server.base_url.clone()),
             auth_mode: ProviderAuthMode::None,
-            request_model: None,
             inference_profile_arn: Some(application_inference_profile_arn().to_string()),
+            ..Default::default()
         })
         .await
         .with_model(DEFAULT_MODEL);
 
-        let result = provider.send_converse_stream(&hello_context()).await;
-        let request = endpoint.request.await.expect("fake Bedrock endpoint received no request");
+        let _ = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
+        let request = server.captured().await;
 
-        assert!(result.is_err());
         assert!(
             request.path.contains("arn%3Aaws%3Abedrock%3Aus-west-2%3A000000000000%3Aapplication-inference-profile"),
             "{}",
@@ -729,63 +673,38 @@ mod tests {
         assert!(!unknown_profile.model().unwrap().supports_prompt_caching());
     }
 
-    struct FakeBedrockEndpoint {
-        url: String,
-        request: oneshot::Receiver<CapturedRequest>,
+    fn inference_profile_arn(model: &str) -> String {
+        format!("arn:aws:bedrock:us-west-2:000000000000:inference-profile/{model}")
     }
 
-    struct CapturedRequest {
-        method: Method,
-        path: String,
-        headers: HeaderMap,
+    fn application_inference_profile_arn() -> &'static str {
+        "arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000"
     }
 
-    #[derive(Clone)]
-    struct FakeBedrockState {
-        request_tx: Arc<Mutex<Option<oneshot::Sender<CapturedRequest>>>>,
-        shutdown_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    fn test_provider() -> BedrockProvider {
+        BedrockProvider::from_config(None, None, ProviderConnectionConfig::default())
     }
 
-    impl FakeBedrockEndpoint {
-        async fn start() -> Self {
-            let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind fake Bedrock endpoint");
-            let url = format!("http://{}", listener.local_addr().expect("fake Bedrock endpoint address"));
-            let (request_tx, request) = oneshot::channel();
-            let (shutdown_tx, shutdown) = oneshot::channel();
-            let state = FakeBedrockState {
-                request_tx: Arc::new(Mutex::new(Some(request_tx))),
-                shutdown_tx: Arc::new(Mutex::new(Some(shutdown_tx))),
-            };
-
-            let app = Router::new().fallback(any(capture_bedrock_request)).with_state(state);
-            tokio::spawn(async move {
-                axum::serve(listener, app)
-                    .with_graceful_shutdown(async {
-                        let _ = shutdown.await;
-                    })
-                    .await
-                    .expect("serve fake Bedrock endpoint");
-            });
-
-            Self { url, request }
-        }
+    fn mantle_model() -> String {
+        LlmModel::all()
+            .iter()
+            .find(|model| model.provider_enum() == Provider::Bedrock && model.transport().is_some())
+            .expect("catalog must expose at least one Responses-transport Bedrock model")
+            .model_id()
+            .to_string()
     }
 
-    async fn capture_bedrock_request(
-        State(state): State<FakeBedrockState>,
-        request: Request<Body>,
-    ) -> impl IntoResponse {
-        let (parts, _) = request.into_parts();
-        if let Some(tx) = state.request_tx.lock().await.take() {
-            let _ = tx.send(CapturedRequest {
-                method: parts.method,
-                path: parts.uri.path().to_string(),
-                headers: parts.headers,
-            });
-        }
-        if let Some(tx) = state.shutdown_tx.lock().await.take() {
-            let _ = tx.send(());
-        }
-        (StatusCode::FORBIDDEN, "{}")
+    async fn mantle_provider(server: &CaptureServer) -> BedrockProvider {
+        create_provider(&server.base_url, &mantle_model()).await
+    }
+
+    async fn create_provider(base_url: &str, model: &str) -> BedrockProvider {
+        BedrockProvider::new(ProviderConnectionConfig {
+            base_url: Some(base_url.to_string()),
+            auth_mode: ProviderAuthMode::None,
+            ..Default::default()
+        })
+        .await
+        .with_model(model)
     }
 }

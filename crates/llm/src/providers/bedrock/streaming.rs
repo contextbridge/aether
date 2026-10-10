@@ -6,16 +6,23 @@ use aws_sdk_bedrockruntime::types::{
     StopReason as BedrockStopReason, TokenUsage as BedrockTokenUsage,
 };
 use aws_smithy_types::event_stream::RawMessage;
-use futures::{Stream, StreamExt, stream};
+use futures::{Stream, stream};
+use std::future::ready;
 use tracing::{error, warn};
 
-use crate::providers::stream_assembler::{StreamAssembler, assemble};
-use crate::{LlmError, LlmResponse, ProviderError, StopReason, TokenUsage, Tokens};
+use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
+
+use crate::providers::response_stream::{OpenedStream, StreamAssembler, response_stream};
+use crate::{LlmError, LlmResponse, LlmResponseStream, ProviderError, StopReason, TokenUsage, Tokens};
 
 pub fn process_bedrock_stream(
-    events: impl Stream<Item = crate::Result<ConverseStreamOutput>> + Send,
-) -> impl Stream<Item = crate::Result<LlmResponse>> + Send {
-    stream::iter([Ok(LlmResponse::Start)]).chain(assemble(events, |event, turn| Ok(decode_event(event, turn))))
+    events: impl Stream<Item = crate::Result<ConverseStreamOutput>> + Send + 'static,
+) -> LlmResponseStream {
+    response_stream(
+        ready(Ok(OpenedStream::new(events))),
+        |event, turn| Ok(decode_converse_event(event, turn)),
+        DEFAULT_STREAM_IDLE_TIMEOUT,
+    )
 }
 
 pub(crate) fn converse_events(
@@ -69,7 +76,7 @@ impl From<SdkError<ConverseStreamOutputError, RawMessage>> for LlmError {
     }
 }
 
-fn decode_event(event: ConverseStreamOutput, turn: &mut StreamAssembler<i32>) -> Vec<LlmResponse> {
+pub(super) fn decode_converse_event(event: ConverseStreamOutput, turn: &mut StreamAssembler<i32>) -> Vec<LlmResponse> {
     let response = match event {
         ConverseStreamOutput::ContentBlockStart(event) => match event.start {
             Some(ContentBlockStart::ToolUse(tool)) => {
@@ -123,6 +130,7 @@ mod tests {
         ContentBlockDeltaEvent, ContentBlockStartEvent, ContentBlockStopEvent, ConversationRole,
         ConverseStreamMetadataEvent, MessageStartEvent, MessageStopEvent, ToolUseBlockDelta, ToolUseBlockStart,
     };
+    use futures::StreamExt;
 
     #[tokio::test]
     async fn test_text_stream() {

@@ -1,44 +1,47 @@
 use super::types::{ChatCompletionStreamResponse, FinishReason, FunctionCallDelta, ToolCallDelta};
-use crate::provider::stream_from;
-use crate::providers::stream_assembler::{StreamAssembler, assemble};
+use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
+use crate::providers::response_stream::{OpenedStream, StreamAssembler, response_stream};
 use crate::{LlmError, LlmResponse, LlmResponseStream, ProviderError, Result, StopReason};
 use async_openai::{Client, config::Config};
-use futures::{Stream, StreamExt, stream};
+use futures::{Stream, StreamExt};
 use serde::Serialize;
+use std::future::ready;
+use std::time::Duration;
 use tracing::{debug, warn};
 
 /// Generic streaming function that accepts any serializable request type.
 /// This enables providers to use custom request types while reusing the streaming logic.
-pub fn create_custom_stream_generic<T, U>(client: &Client<T>, request: U) -> LlmResponseStream
+pub fn create_custom_stream_generic<T, U>(client: &Client<T>, request: U, idle_timeout: Duration) -> LlmResponseStream
 where
     T: Config + Clone + 'static,
     U: Serialize + Send + 'static,
 {
     let client = client.clone();
 
-    stream_from(
+    response_stream(
         async move {
-            client.chat().create_stream_byot::<U, ChatCompletionStreamResponse>(request).await.map_err(|e| {
-                warn!("create_stream_byot failed: {e}");
-                LlmError::from(e)
-            })
-        },
-        |stream| {
-            process_compatible_stream(stream.map(|result| {
-                result.map_err(|e| {
+            let chunks =
+                client.chat().create_stream_byot::<U, ChatCompletionStreamResponse>(request).await.map_err(|e| {
+                    warn!("create_stream_byot failed: {e}");
+                    LlmError::from(e)
+                })?;
+            Ok(OpenedStream::new(chunks.map(|chunk| {
+                chunk.map_err(|e| {
                     warn!("Stream error from API: {e}");
-                    ProviderError::stream_interrupted(e.to_string())
+                    ProviderError::stream_interrupted(e.to_string()).into()
                 })
-            }))
+            })))
         },
+        decode_chunk,
+        idle_timeout,
     )
 }
 
-pub fn process_compatible_stream<E: Into<LlmError> + Send>(
-    chunks: impl Stream<Item = std::result::Result<ChatCompletionStreamResponse, E>> + Send,
-) -> impl Stream<Item = Result<LlmResponse>> + Send {
+pub fn process_compatible_stream<E: Into<LlmError> + Send + 'static>(
+    chunks: impl Stream<Item = std::result::Result<ChatCompletionStreamResponse, E>> + Send + 'static,
+) -> LlmResponseStream {
     let chunks = chunks.map(|chunk| chunk.map_err(Into::into));
-    stream::iter([Ok(LlmResponse::Start)]).chain(assemble(chunks, decode_chunk))
+    response_stream(ready(Ok(OpenedStream::new(chunks))), decode_chunk, DEFAULT_STREAM_IDLE_TIMEOUT)
 }
 
 fn decode_chunk(mut chunk: ChatCompletionStreamResponse, turn: &mut StreamAssembler<i32>) -> Result<Vec<LlmResponse>> {
@@ -104,6 +107,7 @@ mod tests {
     use crate::testing::{FakeHttpService, llm_response};
     use crate::{ProviderErrorKind, TokenUsage};
     use async_openai::config::OpenAIConfig;
+    use futures::stream;
     use reqwest::{Body, Method};
 
     #[tokio::test]
@@ -123,7 +127,9 @@ mod tests {
                     .into()
             });
             let client = openai_client(OpenAIConfig::new().with_api_key("test-key"), service.clone());
-            let responses = create_custom_stream_generic(&client, request.clone()).collect::<Vec<_>>().await;
+            let responses = create_custom_stream_generic(&client, request.clone(), DEFAULT_STREAM_IDLE_TIMEOUT)
+                .collect::<Vec<_>>()
+                .await;
 
             assert_eq!(responses.len(), if status == 200 { 2 } else { 1 }, "{responses:?}");
             if status == 200 {

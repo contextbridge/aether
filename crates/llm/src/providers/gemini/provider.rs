@@ -1,14 +1,15 @@
-use crate::provider::get_context_window;
-use crate::providers::http::openai_client;
+use crate::provider::{get_context_window, validate_reasoning};
+use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
+use crate::providers::http::{http_client, openai_client};
 use crate::providers::openai_compatible::{AetherOpenAiConfig, build_chat_request, create_custom_stream_generic};
+use crate::providers::response_stream::error_stream;
 use crate::{
     Context, LlmError, LlmResponseStream, ProviderAuthMode, ProviderConnectionConfig, ProviderFactory, Result,
     StreamingModelProvider,
 };
-use async_stream::stream;
-use futures::StreamExt;
 use std::env::var;
 use std::future::ready;
+use std::time::Duration;
 
 pub const GEMINI_API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/openai/";
 
@@ -18,16 +19,26 @@ pub struct GeminiProvider {
     base_url: Option<String>,
     auth_mode: ProviderAuthMode,
     model: String,
+    http: reqwest::Client,
+    idle_timeout: Duration,
 }
 
 impl GeminiProvider {
     pub fn new(api_key: Option<String>) -> Self {
-        Self { api_key, base_url: None, auth_mode: ProviderAuthMode::Default, model: String::new() }
+        Self {
+            api_key,
+            base_url: None,
+            auth_mode: ProviderAuthMode::Default,
+            model: String::new(),
+            http: http_client(),
+            idle_timeout: DEFAULT_STREAM_IDLE_TIMEOUT,
+        }
     }
 
     pub fn with_connection(mut self, connection: ProviderConnectionConfig) -> Self {
         self.base_url = connection.base_url;
         self.auth_mode = connection.auth_mode;
+        self.idle_timeout = connection.idle_timeout;
         self
     }
 
@@ -51,7 +62,16 @@ impl GeminiProvider {
     fn build_openai_client(&self, api_key: &str) -> async_openai::Client<AetherOpenAiConfig> {
         let api_base = self.base_url.as_deref().unwrap_or(GEMINI_API_BASE);
         let config = async_openai::config::OpenAIConfig::new().with_api_key(api_key).with_api_base(api_base);
-        openai_client(AetherOpenAiConfig::new(config, self.auth_mode), reqwest::Client::new())
+        openai_client(AetherOpenAiConfig::new(config, self.auth_mode), self.http.clone())
+    }
+
+    fn try_stream_response(&self, context: &Context) -> Result<LlmResponseStream> {
+        validate_reasoning(context, self.model().as_ref())?;
+        let api_key = self.get_api_key()?;
+        let request = build_chat_request(&self.model, context, None)?;
+
+        tracing::info!("Using Gemini API with API key (OpenAI-compatible endpoint)");
+        Ok(create_custom_stream_generic(&self.build_openai_client(&api_key), request, self.idle_timeout))
     }
 }
 
@@ -80,37 +100,7 @@ impl StreamingModelProvider for GeminiProvider {
     }
 
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
-        if let Err(error) = crate::provider::validate_reasoning(context, self.model().as_ref()) {
-            return crate::provider::error_stream(error);
-        }
-        let provider = self.clone();
-        let context = context.clone();
-
-        Box::pin(stream! {
-            let api_key = match provider.get_api_key() {
-                Ok(key) => key,
-                Err(e) => {
-                    yield Err(e);
-                    return;
-                }
-            };
-
-            tracing::info!("Using Gemini API with API key (OpenAI-compatible endpoint)");
-            let client = provider.build_openai_client(&api_key);
-            let request = match build_chat_request(&provider.model, &context, None) {
-                Ok(req) => req,
-                Err(e) => {
-                    yield Err(e);
-                    return;
-                }
-            };
-            let mut inner_stream =
-                create_custom_stream_generic(&client, request);
-
-            while let Some(result) = inner_stream.next().await {
-                yield result;
-            }
-        })
+        self.try_stream_response(context).unwrap_or_else(error_stream)
     }
 
     fn display_name(&self) -> String {
@@ -122,6 +112,7 @@ impl StreamingModelProvider for GeminiProvider {
 mod tests {
     use super::*;
     use async_openai::config::Config;
+    use futures::StreamExt;
     use reqwest::header::AUTHORIZATION;
 
     #[tokio::test]

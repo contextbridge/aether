@@ -12,9 +12,6 @@ pub enum LlmError {
     /// Environment variable not set or invalid
     #[error("{0} environment variable not set")]
     MissingApiKey(String),
-    /// HTTP client creation failed
-    #[error("Failed to create HTTP client: {0}")]
-    HttpClientCreation(String),
     /// Normalized provider-side failure carrying retry classification and
     /// support diagnostics (HTTP status, request ID, provider error code).
     #[error("{0}")]
@@ -328,7 +325,6 @@ mod tests {
         assert!(!LlmError::from(ProviderError::api("x")).is_retryable());
         assert!(!LlmError::from(ProviderError::authentication("x")).is_retryable());
         assert!(!LlmError::MissingApiKey("x".into()).is_retryable());
-        assert!(!LlmError::HttpClientCreation("x".into()).is_retryable());
         assert!(!LlmError::IoError("x".into()).is_retryable());
         assert!(!LlmError::JsonParsing("x".into()).is_retryable());
         assert!(!LlmError::ToolParameterParsing { tool_name: "t".into(), error: "e".into() }.is_retryable());

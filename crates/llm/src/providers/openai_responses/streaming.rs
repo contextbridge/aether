@@ -1,8 +1,8 @@
 use async_openai::types::responses::{OutputItem, ReasoningItem, ResponseUsage, Status};
-use futures::Stream;
 use serde::{Deserialize, Deserializer, de::Error as _};
+use tracing::debug;
 
-use crate::providers::stream_assembler::{StreamAssembler, assemble};
+use crate::providers::response_stream::StreamAssembler;
 use crate::{LlmResponse, ProviderError, ProviderErrorKind, Result, StopReason, TokenUsage};
 
 #[derive(Debug)]
@@ -123,12 +123,13 @@ pub struct ResponsesErrorEvent {
     pub message: String,
 }
 
-/// Process an `OpenAI` Responses event stream into `LlmResponse` items.
-pub fn process_response_stream(
-    events: impl Stream<Item = Result<ResponsesStreamEvent>> + Send,
-) -> impl Stream<Item = Result<LlmResponse>> + Send {
+pub(crate) fn decode_responses() -> impl FnMut(String, &mut StreamAssembler<u32>) -> Result<Vec<LlmResponse>> + Send {
     let mut started = false;
-    assemble(events, move |event, turn| {
+    move |data, turn| {
+        let event = serde_json::from_str::<ResponsesStreamEvent>(&data).map_err(|error| {
+            debug!(data, %error, "Failed to decode Responses SSE event");
+            ProviderError::stream_interrupted(format!("Invalid Responses SSE event: {error}"))
+        })?;
         if matches!(event, ResponsesStreamEvent::Created) {
             started = true;
         } else if !started && !event.may_precede_creation() {
@@ -137,7 +138,7 @@ pub fn process_response_stream(
             );
         }
         decode_event(event, turn)
-    })
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -165,7 +166,6 @@ fn decode_event(event: ResponsesStreamEvent, turn: &mut StreamAssembler<u32>) ->
     let incomplete = matches!(&event, ResponsesStreamEvent::Incomplete(_));
 
     let responses = match event {
-        ResponsesStreamEvent::Created => vec![LlmResponse::Start],
         ResponsesStreamEvent::OutputTextDelta(e) if !e.delta.is_empty() => vec![LlmResponse::Text { chunk: e.delta }],
         ResponsesStreamEvent::OutputItemAdded(e) => match e.item {
             OutputItem::FunctionCall(call) => vec![turn.start_tool(e.output_index, call.call_id, call.name)],
@@ -205,7 +205,8 @@ fn decode_event(event: ResponsesStreamEvent, turn: &mut StreamAssembler<u32>) ->
             let message = format!("Responses API error: {}", e.message);
             return Err(map_responses_error(e.code, message, ProviderErrorKind::Unknown).into());
         }
-        ResponsesStreamEvent::Ignored
+        ResponsesStreamEvent::Created
+        | ResponsesStreamEvent::Ignored
         | ResponsesStreamEvent::OutputTextDelta(_)
         | ResponsesStreamEvent::ReasoningTextDelta(_) => vec![],
     };
@@ -216,10 +217,13 @@ fn decode_event(event: ResponsesStreamEvent, turn: &mut StreamAssembler<u32>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::LlmError;
+    use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
+    use crate::providers::response_stream::{OpenedStream, response_stream};
     use crate::testing::llm_response;
-    use futures::{FutureExt, StreamExt, stream};
+    use crate::{LlmError, LlmResponseStream};
+    use futures::{FutureExt, Stream, StreamExt, stream};
     use serde_json::{Value, json};
+    use std::future::ready;
 
     #[tokio::test]
     async fn test_text_stream() {
@@ -418,7 +422,7 @@ mod tests {
             (responses_stream().created().text(&["done"]).completed(), StopReason::EndTurn),
             (responses_stream().created().text(&["done"]).incomplete(), StopReason::Length),
         ] {
-            let events = events.build().into_iter().map(|event| serde_json::from_value(event).map_err(LlmError::from));
+            let events = events.build().into_iter().map(|event| Ok(event.to_string()));
             let events = stream::iter(events).chain(stream::pending());
             let responses = process_response_stream(events)
                 .collect::<Vec<_>>()
@@ -460,7 +464,7 @@ mod tests {
         ] {
             let responses = process_events(responses_stream().error(code, "slow down").build()).await;
 
-            let err = responses[0].as_ref().expect_err("expected the error event to surface as Err");
+            let err = responses[1].as_ref().expect_err("expected the error event to surface as Err");
             assert_eq!(err.provider().map(|provider| provider.kind), Some(kind), "{code:?}: {err:?}");
             assert_eq!(err.provider().and_then(|provider| provider.code.as_deref()), code);
             assert!(err.is_retryable(), "{code:?}: {err:?}");
@@ -479,7 +483,7 @@ mod tests {
         ] {
             let responses = process_events(responses_stream().failed(code, "model overloaded").build()).await;
 
-            let err = responses[0].as_ref().expect_err("expected the failure to surface as Err");
+            let err = responses[1].as_ref().expect_err("expected the failure to surface as Err");
             assert_eq!(err.provider().map(|provider| provider.kind), Some(kind), "{code:?}: {err:?}");
             assert_eq!(err.provider().and_then(|provider| provider.code.as_deref()), code);
             assert_eq!(err.is_retryable(), retryable, "{code:?}: {err:?}");
@@ -505,18 +509,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_stream_error_propagation_is_retryable() {
-        let events: Vec<Result<ResponsesStreamEvent>> =
-            vec![Err(ProviderError::stream_interrupted("connection lost").into())];
+        let events: Vec<Result<String>> = vec![Err(ProviderError::stream_interrupted("connection lost").into())];
 
         let responses: Vec<_> = process_response_stream(tokio_stream::iter(events)).collect().await;
 
-        let err = responses[0].as_ref().expect_err("expected upstream Err to surface as Err");
+        assert!(matches!(responses[0], Ok(LlmResponse::Start)));
+        let err = responses[1].as_ref().expect_err("expected upstream Err to surface as Err");
         assert_eq!(
             err.provider().map(|provider| provider.kind),
             Some(ProviderErrorKind::StreamInterrupted),
             "got {err:?}"
         );
-        assert_eq!(responses.len(), 1);
+        assert_eq!(responses.len(), 2);
         assert!(err.is_retryable(), "mid-stream interrupts must be retryable");
     }
 
@@ -525,7 +529,7 @@ mod tests {
         let responses = process_events(responses_stream().text(&["leaked"]).build()).await;
 
         assert_eq!(
-            responses[0].as_ref().err().and_then(LlmError::provider).map(|provider| provider.kind),
+            responses[1].as_ref().err().and_then(LlmError::provider).map(|provider| provider.kind),
             Some(ProviderErrorKind::StreamInterrupted),
             "{responses:?}"
         );
@@ -655,18 +659,20 @@ mod tests {
     }
 
     async fn process_events(events: Vec<Value>) -> Vec<Result<LlmResponse>> {
-        let events = events.into_iter().map(|event| serde_json::from_value(event).map_err(LlmError::from));
-        process_response_stream(tokio_stream::iter(events)).collect().await
+        process_data(events.into_iter().map(|event| event.to_string()).collect()).await
     }
 
     async fn process_fixture(sse: &str) -> Vec<Result<LlmResponse>> {
-        let events = sse
-            .lines()
-            .filter_map(|line| line.strip_prefix("data: "))
-            .filter(|data| *data != "[DONE]")
-            .map(|data| serde_json::from_str(data).expect("fixture lines are JSON"))
-            .collect();
-        process_events(events).await
+        let data = sse.lines().filter_map(|line| line.strip_prefix("data: ")).filter(|data| *data != "[DONE]");
+        process_data(data.map(str::to_string).collect()).await
+    }
+
+    async fn process_data(data: Vec<String>) -> Vec<Result<LlmResponse>> {
+        process_response_stream(tokio_stream::iter(data.into_iter().map(Ok))).collect().await
+    }
+
+    fn process_response_stream(data: impl Stream<Item = Result<String>> + Send + 'static) -> LlmResponseStream {
+        response_stream(ready(Ok(OpenedStream::new(data))), decode_responses(), DEFAULT_STREAM_IDLE_TIMEOUT)
     }
 
     fn find_usage(responses: &[Result<LlmResponse>]) -> Option<TokenUsage> {

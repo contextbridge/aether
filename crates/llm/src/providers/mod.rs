@@ -13,6 +13,6 @@ pub mod openai;
 pub mod openai_compatible;
 pub(crate) mod openai_responses;
 pub mod openrouter;
-pub(crate) mod stream_assembler;
+pub(crate) mod response_stream;
 #[cfg(test)]
 pub(crate) mod test_capture_server;
