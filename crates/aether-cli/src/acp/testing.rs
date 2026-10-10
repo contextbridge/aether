@@ -30,8 +30,8 @@ use agent_client_protocol::schema::v2::{
 };
 use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, on_receive_notification};
 use futures::FutureExt;
-use llm::testing::FakeLlmProvider;
-use llm::{ChatMessage, Context, LlmModel, LlmResponse, SessionUsageEvent, StreamingModelProvider};
+use llm::testing::{FakeLlmProvider, llm_response};
+use llm::{ChatMessage, Context, LlmModel, SessionUsageEvent, StreamingModelProvider};
 use llm::{MessageId, ProviderConnectionOverrides, ToolCallRequest, ToolCallResult};
 use mcp_utils::client::{InMemoryServerSpec, McpServer, McpTransport, ToolExposure};
 use mcp_utils::testing::{FakeMcpServer, FakeTool, FakeToolResponse, completed_task_payload};
@@ -905,11 +905,8 @@ fn background_task(status: TaskStatus) -> Task {
 
 fn fake_agent(name: &str, server_name: &str, prompt_name: &str, reply: &str) -> (FakeAgentDef, FakeAcpAgent) {
     const TURNS_BEFORE_AND_AFTER_REATTACH: usize = 2;
-    let provider = FakeLlmProvider::new(vec![
-        vec![LlmResponse::Start, LlmResponse::text(reply), LlmResponse::done()];
-        TURNS_BEFORE_AND_AFTER_REATTACH
-    ])
-    .with_display_name(name);
+    let provider = FakeLlmProvider::new(vec![llm_response().text(&[reply]).build(); TURNS_BEFORE_AND_AFTER_REATTACH])
+        .with_display_name(name);
     let captured_contexts = provider.captured_contexts();
     let def = FakeAgentDef {
         spec: fake_agent_spec(name),

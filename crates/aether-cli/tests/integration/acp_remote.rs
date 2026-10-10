@@ -9,7 +9,7 @@ use agent_client_protocol::schema::v2::{
     AbsolutePath, CloseSessionRequest, ContentBlock, NewSessionRequest, PromptRequest, ReplayFrom, ReplayFromStart,
     ResumeSessionRequest, SessionId, SessionUpdate, SetSessionConfigOptionRequest, StateUpdate, StopReason,
 };
-use llm::{LlmResponse, testing::FakeLlmProvider};
+use llm::testing::{FakeLlmProvider, llm_response};
 use std::sync::Arc;
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::task::LocalSet;
@@ -351,13 +351,8 @@ async fn start_paused_turn(harness: &mut AcpTestHarness) -> (SessionId, Arc<Noti
 
 async fn start_observed_paused_turn(harness: &mut AcpTestHarness) -> (SessionId, Arc<Notify>, oneshot::Receiver<()>) {
     let release = Arc::new(Notify::new());
-    let provider = FakeLlmProvider::new(vec![vec![
-        LlmResponse::Start,
-        LlmResponse::text("before gate"),
-        LlmResponse::text(" after gate"),
-        LlmResponse::done(),
-    ]])
-    .pause_turn_after(0, 1, release.clone());
+    let provider = FakeLlmProvider::new(vec![llm_response().text(&["before gate", " after gate"]).build()])
+        .pause_turn_after(0, 1, release.clone());
     let (tx, mut events, handle) = agent(provider).spawn().await.expect("fake agent spawns");
     let (forward, rx) = mpsc::channel(1);
     let (completed, completion) = oneshot::channel();

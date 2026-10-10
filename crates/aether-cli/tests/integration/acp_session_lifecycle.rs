@@ -9,8 +9,7 @@ use agent_client_protocol::schema::v2::{
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use llm::LlmResponse;
-use llm::testing::FakeLlmProvider;
+use llm::testing::{FakeLlmProvider, llm_response};
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -106,8 +105,11 @@ async fn close_removes_idle_session_but_preserves_persisted_log() {
 async fn close_cancels_prompt_before_returning() {
     AcpTestHarness::run(|mut harness| async move {
         let release = Arc::new(Notify::new());
-        let llm = FakeLlmProvider::new(vec![vec![LlmResponse::Start, LlmResponse::text("hello"), LlmResponse::done()]])
-            .pause_turn_after(0, 1, Arc::clone(&release));
+        let llm = FakeLlmProvider::new(vec![llm_response().text(&["hello"]).build()]).pause_turn_after(
+            0,
+            1,
+            Arc::clone(&release),
+        );
         let (agent_tx, agent_rx, agent_handle) = agent(llm).spawn().await.expect("agent spawns");
         let session_id = SessionId::new("prompting-session");
         harness.insert_stub_session(agent_tx, agent_rx, agent_handle, session_id.clone(), "fake:fake").await;
