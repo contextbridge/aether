@@ -1,20 +1,27 @@
 #![doc = include_str!(concat!(env!("OUT_DIR"), "/docs/ollama.md"))]
 
 use super::util::get_local_config;
-use crate::providers::http::openai_client;
+use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
+use crate::providers::http::{http_client, openai_client};
 use crate::providers::openai::OpenAiChatProvider;
 use crate::{ProviderConnectionConfig, ProviderFactory, Result};
 use async_openai::{Client, config::OpenAIConfig};
 use std::future::ready;
+use std::time::Duration;
 
 pub struct OllamaProvider {
     model: String,
     client: Client<OpenAIConfig>,
+    idle_timeout: Duration,
 }
 
 impl OllamaProvider {
     pub fn new(model: &str, base_url: &str) -> Self {
-        Self { model: model.to_string(), client: openai_client(get_local_config(base_url), reqwest::Client::new()) }
+        Self {
+            model: model.to_string(),
+            client: openai_client(get_local_config(base_url), http_client()),
+            idle_timeout: DEFAULT_STREAM_IDLE_TIMEOUT,
+        }
     }
 
     pub fn default(model: &str) -> Self {
@@ -29,7 +36,7 @@ impl ProviderFactory for OllamaProvider {
 
     fn from_env_with_connection(connection: ProviderConnectionConfig) -> impl Future<Output = Result<Self>> + Send {
         let base_url = connection.base_url.as_deref().unwrap_or("http://localhost:11434/v1");
-        ready(Ok(Self::new("", base_url)))
+        ready(Ok(Self { idle_timeout: connection.idle_timeout, ..Self::new("", base_url) }))
     }
 
     fn with_model(mut self, model: &str) -> Self {
@@ -51,5 +58,9 @@ impl OpenAiChatProvider for OllamaProvider {
 
     fn provider_name(&self) -> &'static str {
         "Ollama"
+    }
+
+    fn idle_timeout(&self) -> Duration {
+        self.idle_timeout
     }
 }
