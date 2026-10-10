@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.3](https://github.com/contextbridge/aether/compare/aether-lspd-v0.3.2...aether-lspd-v0.3.3) - 2026-10-10
+
+### Other
+
+- Turn of release-plz trying to update deps as dependabot does t… ([#593](https://github.com/contextbridge/aether/pull/593))
+- *(deps)* bump rust-toolchain from 1.98 to 1.99 in the rust-toolchain-minor-patch group across 1 directory ([#576](https://github.com/contextbridge/aether/pull/576))
+
 ## [0.3.2](https://github.com/contextbridge/aether/compare/aether-lspd-v0.3.1...aether-lspd-v0.3.2) - 2026-10-08
 
 ### Added

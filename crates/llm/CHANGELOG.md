@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.13](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.12...aether-llm-v0.9.13) - 2026-10-10
+
+### Fixed
+
+- Provider stream stalls hangs the agent loop ([#590](https://github.com/contextbridge/aether/pull/590))
+
+### Other
+
+- *(deps)* bump rust-toolchain from 1.98 to 1.99 in the rust-toolchain-minor-patch group across 1 directory ([#576](https://github.com/contextbridge/aether/pull/576))
+
 ## [0.9.12](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.11...aether-llm-v0.9.12) - 2026-10-08
 
 ### Fixed

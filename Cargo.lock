@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "aether-acp-utils"
-version = "0.5.12"
+version = "0.5.13"
 dependencies = [
  "aether-acp-utils",
  "aether-llm",
@@ -62,7 +62,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-cli"
-version = "0.9.14"
+version = "0.9.15"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-cli",
@@ -108,7 +108,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-core"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "aether-agent-core",
  "aether-auth",
@@ -195,7 +195,7 @@ dependencies = [
 
 [[package]]
 name = "aether-evals"
-version = "0.3.19"
+version = "0.3.20"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -213,7 +213,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm"
-version = "0.9.12"
+version = "0.9.13"
 dependencies = [
  "aether-auth",
  "aether-doctest",
@@ -268,7 +268,7 @@ dependencies = [
 
 [[package]]
 name = "aether-lspd"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "aether-lspd",
  "clap",
@@ -294,7 +294,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-servers"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "aether-agent-core",
  "aether-auth",
@@ -329,7 +329,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-utils"
-version = "0.7.12"
+version = "0.7.13"
 dependencies = [
  "aether-auth",
  "aether-doctest",
@@ -355,7 +355,7 @@ dependencies = [
 
 [[package]]
 name = "aether-project"
-version = "0.5.57"
+version = "0.5.58"
 dependencies = [
  "aether-agent-core",
  "aether-doctest",
@@ -376,7 +376,7 @@ dependencies = [
 
 [[package]]
 name = "aether-schemas"
-version = "0.2.19"
+version = "0.2.20"
 dependencies = [
  "aether-agent-cli",
  "aether-agent-core",
@@ -399,7 +399,7 @@ dependencies = [
 
 [[package]]
 name = "aether-sessions"
-version = "0.3.12"
+version = "0.3.13"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -419,7 +419,7 @@ dependencies = [
 
 [[package]]
 name = "aether-telemetry"
-version = "0.3.12"
+version = "0.3.13"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -461,7 +461,7 @@ dependencies = [
 
 [[package]]
 name = "aether-wisp"
-version = "0.7.13"
+version = "0.7.14"
 dependencies = [
  "aether-acp-utils",
  "aether-utils",

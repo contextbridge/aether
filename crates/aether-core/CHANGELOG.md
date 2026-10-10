@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.4](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.9.3...aether-agent-core-v0.9.4) - 2026-10-10
+
+### Other
+
+- *(deps)* bump rust-toolchain from 1.98 to 1.99 in the rust-toolchain-minor-patch group across 1 directory ([#576](https://github.com/contextbridge/aether/pull/576))
+
 ## [0.9.3](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.9.2...aether-agent-core-v0.9.3) - 2026-10-08
 
 ### Fixed

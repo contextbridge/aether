@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.15](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.14...aether-agent-cli-v0.9.15) - 2026-10-10
+
+### Fixed
+
+- Provider stream stalls hangs the agent loop ([#590](https://github.com/contextbridge/aether/pull/590))
+
+### Other
+
+- *(deps)* bump rust-toolchain from 1.98 to 1.99 in the rust-toolchain-minor-patch group across 1 directory ([#576](https://github.com/contextbridge/aether/pull/576))
+
 ## [0.9.14](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.13...aether-agent-cli-v0.9.14) - 2026-10-08
 
 ### Fixed
