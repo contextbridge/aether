@@ -71,7 +71,7 @@ In this user-level example, `PLANNER.md` is loaded from the Aether home, while `
 
 ## Agent prompt files
 
-The onboarding wizard writes a single base prompt file, `SYSTEM.md`, that is shared by every agent it creates:
+The onboarding wizard writes a single base prompt file, `SYSTEM.md`, that every agent inherits by default:
 
 ```markdown title="SYSTEM.md"
 # System Instructions
@@ -88,7 +88,7 @@ OS Version: !`uname -a`
 </env>
 ```
 
-Agents inherit the top-level `prompts` list (which includes `SYSTEM.md`) by default. An agent can override it with its own `prompts` array — for example, the batteries-included wizard also writes `.aether/agents/codebase-explorer/AGENTS.md`, which is scoped to the Explore agent only.
+Agents inherit the top-level `prompts` list (which includes `SYSTEM.md`) by default. An agent can override it with its own `prompts` array — for example, the batteries-included wizard also writes `.aether/agents/codebase-explorer/AGENTS.md` and wires the Explore agent's `prompts` to only that file, so the Explore agent does not read `SYSTEM.md`.
 
 Additional files such as `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md` are ordinary prompt sources. Include them when you want to reuse instructions already authored for other tools.
 
