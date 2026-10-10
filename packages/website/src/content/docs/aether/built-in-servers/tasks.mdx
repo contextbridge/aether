@@ -19,7 +19,7 @@ The default in-memory server is session-scoped: tasks are stored in a temporary 
 }
 ```
 
-For persistent task storage, pass `--dir`. Aether stores JSONL task files under `<dir>/.aether-tasks/`.
+For persistent task storage, pass `--dir`. Aether stores active task trees as JSONL files under `<dir>/.aether-tasks/active/` and moves completed trees to `<dir>/.aether-tasks/completed/`.
 
 ```json title=".aether/mcp.json"
 {
@@ -46,7 +46,7 @@ For persistent task storage, pass `--dir`. Aether stores JSONL task files under 
 - Root tasks: `at-a1b2c3d4`
 - Subtasks: `at-a1b2c3d4.1`, `at-a1b2c3d4.2`, etc.
 
-Each root task tree is stored in one JSONL file when persistent storage is enabled.
+Each root task tree is stored as one JSONL file under `.aether-tasks/active/` when persistent storage is enabled; completed trees are archived to `.aether-tasks/completed/`.
 
 ## Status values
 

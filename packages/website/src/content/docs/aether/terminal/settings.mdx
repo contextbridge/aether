@@ -84,10 +84,11 @@ The theme colors the entire UI: conversation text, syntax highlighting, diff ren
 
 Open with `/settings`. The overlay shows all configurable options:
 
-- **Model** — Override the model used by the currently active agent runtime. Reasoning effort is adjusted from within the model pane, cycling it with `Tab` / `Shift+Tab` (also cyclable from anywhere with the global `Tab` binding)
+- **Model** — Override the model used by the currently active agent runtime. Reasoning effort is adjusted from within the model pane, cycling it with `Tab` / `Shift+Tab` (also cyclable with the global `Tab` binding while the prompt input is focused)
 - **Mode** — Switch to a different user-invocable agent profile, including its prompts, MCP servers, tools, model, and provider settings (also cyclable with `Shift+Tab`)
 - **MCP servers** — View connected servers and their status
 - **Provider logins** — Authenticate with providers that require it
+- **Theme** — Switch between built-in and local themes (this entry is client-local; the rest are advertised by the agent)
 
 These options are advertised by the agent — the terminal UI discovers them at session start. Different agents may expose different options.
 

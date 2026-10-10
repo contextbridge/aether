@@ -123,7 +123,7 @@ If a server entry has a `command` and no `type`, it is treated as `"type": "stdi
     |-------|------|-------------|
     | `type` | `"http"` | Required. |
     | `url` | `string` | Streamable HTTP endpoint URL. |
-    | `headers` | `object` | Optional headers. Aether currently forwards the `Authorization` header to the transport. |
+    | `headers` | `object` | Optional headers. Aether forwards all configured headers to the transport verbatim. |
     | `oauth` | `object` | Optional custom CIMD or pre-registered public OAuth client settings. See [OAuth clients](#oauth-clients). |
     | `deferTools` | `boolean \| object` | `true` proxies every tool; an object partitions tools with `include` and `exclude` patterns. |
 
@@ -149,7 +149,7 @@ If a server entry has a `command` and no `type`, it is treated as `"type": "stdi
     |-------|------|-------------|
     | `type` | `"sse"` | Required. |
     | `url` | `string` | SSE endpoint URL. |
-    | `headers` | `object` | Optional headers. Aether currently forwards the `Authorization` header to the transport. |
+    | `headers` | `object` | Optional headers. Aether forwards all configured headers to the transport verbatim. |
     | `oauth` | `object` | Optional custom CIMD or pre-registered public OAuth client settings. See [OAuth clients](#oauth-clients). |
     | `deferTools` | `boolean \| object` | `true` proxies every tool; an object partitions tools with `include` and `exclude` patterns. |
 
@@ -329,7 +329,7 @@ Tools can be deferred in two ways:
 }
 ```
 
-`deferTools`can be set to: `false`, `true`, or an object; it defaults to `false`. `false` means every tool will be eagerly loaded into context. `true` defers loading every tool for progressive discovery. An object allows controlling which tools within a single MCP server are deferred via `include` and `exclude` rules.
+`deferTools`can be set to: `false`, `true`, or an object; it defaults to `false`. `false` means every tool will be eagerly loaded into context. `true` defers loading every tool for progressive discovery. An object allows controlling which tools within a single MCP server are deferred via `include` and `exclude` rules. A tool is deferred when it matches `include` (an empty `include` matches everything) and does not match `exclude` — `exclude` wins.
 
 Discover deferred tools progressively, without loading their schemas into the model's initial context:
 
@@ -350,7 +350,7 @@ Only the private session socket and Aether executable directory are injected int
 
 ## Variable expansion
 
-Variables are expanded in two places: MCP source paths in settings, and server fields inside MCP JSON files. Environment variables are expanded in stdio `command`, stdio `args`, stdio `env` values, in-memory `args`, HTTP/SSE `url`, and the HTTP/SSE `Authorization` header value. `${WORKSPACE}` and `${AETHER_HOME}` (the user-level Aether home, honoring the `AETHER_HOME` env var) are also available when server configs are converted into running MCP servers.
+Variables are expanded in two places: MCP source paths in settings, and server fields inside MCP JSON files. Environment variables are expanded in stdio `command`, stdio `args`, stdio `env` values, in-memory `args`, HTTP/SSE `url`, and every HTTP/SSE header value. `${WORKSPACE}` and `${AETHER_HOME}` (the user-level Aether home, honoring the `AETHER_HOME` env var) are also available when server configs are converted into running MCP servers.
 
 Supported syntax:
 

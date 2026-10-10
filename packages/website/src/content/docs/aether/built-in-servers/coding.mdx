@@ -43,13 +43,15 @@ Permission modes:
 | `write_file` | Write content to a file, creating or overwriting it. |
 | `edit_file`  | Exact string replacement within a file.              |
 
+`write_file` and `edit_file` enforce a read-before-modify safety rule: overwriting or editing an existing file fails unless it was read with `read_file` first in the same session.
+
 ## Bash
 
 Use shell commands through `bash` for text search, file discovery, structural search, and directory listings.
 
 | Tool                   | Description                                                                                     |
 | ---------------------- | ----------------------------------------------------------------------------------------------- |
-| `bash`                 | Execute a shell command. Pass `timeout` to cap execution time (max 600000 ms), or `run_in_background` to run it as a background MCP task that returns its complete output at completion. |
+| `bash`                 | Execute a shell command. Pass `timeout` to cap execution time (max 600000 ms), or `run_in_background` to run it as a background MCP task that returns its result when the command completes. Background output is truncated like foreground output (with the full output spilled to a file when it overflows). |
 
 Because `bash` spawns real subprocesses, it composes with [deferred (proxied) tools](/aether/settings/mcp-servers/#merging-and-deferred-tool-behavior) from other MCP servers via the `aether mcp` CLI — pipelines, redirects, and command substitution all work.
 
@@ -69,3 +71,5 @@ Unless `--disable-lsp` is set, Aether wires LSP-backed tools into the `coding` s
 | `lsp_symbol`       | Definition, references, and hover for a symbol.            |
 | `lsp_check_errors` | Compiler diagnostics without running a full build command. |
 | `lsp_rename`       | Rename a symbol across the workspace.                      |
+
+The tools are designed to be token-efficient: `lsp_symbol` takes `operation` (`definition`, `references`, or `hover`), `file_path`, `symbol`, and optional `line` (1-indexed hint), `includeDeclaration` (references only, defaults to `true`), `limit` (maximum locations, defaults to 50), and `contextLines` (context lines around each location). When locations are dropped, the response reports `totalCount` and sets `truncated`. `lsp_check_errors` lists at most 200 diagnostics and sets `truncated` when there are more.

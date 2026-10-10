@@ -77,6 +77,8 @@ See `traits.md` and `error-handling.md` for detailed patterns.
 | `tags`            | Tags returned by `list_skills`.                                                                                            |
 | `triggers.read`   | Project-relative glob patterns used as read-triggered rules by the coding server.                                          |
 | `globs`, `paths`  | Compatibility aliases that also feed `triggers.read`.                                                                      |
+| `agent_authored`  | Marks the artifact as agent-authored. Defaults to `false`.                                                                 |
+| `helpful`, `harmful` | Rating counters (non-negative integers, default `0`) used to compute the artifact's confidence score.                    |
 
 Every authored artifact must have at least one activation surface: `user-invocable`, `agent-invocable`, `triggers.read`, `globs`, or `paths`.
 
