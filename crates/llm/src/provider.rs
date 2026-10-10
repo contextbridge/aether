@@ -5,7 +5,7 @@ use crate::Result as LlmResult;
 use crate::catalog::ReasoningEffortError;
 use std::future::Future;
 use std::pin::Pin;
-use tokio_stream::{Stream, StreamExt};
+use tokio_stream::Stream;
 use utils::ReasoningEffort;
 
 use super::{Context, LlmResponse};
@@ -80,37 +80,6 @@ pub(crate) fn validate_reasoning(context: &Context, model: Option<&LlmModel>) ->
     }
 
     Ok(())
-}
-
-/// Bridge a fallible request setup into an [`LlmResponseStream`].
-///
-/// `open` issues the request; `process` turns what it returns into a response
-/// stream. A setup failure becomes the stream's single item, so providers never
-/// hand-roll the yield-then-return dance and cannot drop an error on the way.
-pub(crate) fn stream_from<T, S>(
-    open: impl Future<Output = LlmResult<T>> + Send + 'static,
-    process: impl FnOnce(T) -> S + Send + 'static,
-) -> LlmResponseStream
-where
-    T: Send,
-    S: Stream<Item = LlmResult<LlmResponse>> + Send + 'static,
-{
-    Box::pin(async_stream::stream! {
-        match open.await {
-            Ok(opened) => {
-                let mut stream = Box::pin(process(opened));
-                while let Some(item) = stream.next().await {
-                    yield item;
-                }
-            }
-            Err(error) => yield Err(error),
-        }
-    })
-}
-
-/// A response stream whose only item is `error`.
-pub(crate) fn error_stream(error: LlmError) -> LlmResponseStream {
-    Box::pin(tokio_stream::once(Err(error)))
 }
 
 impl StreamingModelProvider for Box<dyn StreamingModelProvider> {

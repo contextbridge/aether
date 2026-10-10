@@ -81,6 +81,7 @@ aether-doctest = { path = "../doctest" }
 axum = { workspace = true }
 http = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber = { workspace = true }
 
 [[example]]
