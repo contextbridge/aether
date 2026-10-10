@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.13](https://github.com/contextbridge/aether/compare/aether-sessions-v0.3.12...aether-sessions-v0.3.13) - 2026-10-10
+
+### Other
+
+- *(deps)* bump rust-toolchain from 1.98 to 1.99 in the rust-toolchain-minor-patch group across 1 directory ([#576](https://github.com/contextbridge/aether/pull/576))
+
 ## [0.3.12](https://github.com/contextbridge/aether/compare/aether-sessions-v0.3.11...aether-sessions-v0.3.12) - 2026-10-08
 
 ### Other

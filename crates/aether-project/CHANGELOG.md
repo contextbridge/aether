@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.58](https://github.com/contextbridge/aether/compare/aether-project-v0.5.57...aether-project-v0.5.58) - 2026-10-10
+
+### Other
+
+- *(deps)* bump rust-toolchain from 1.98 to 1.99 in the rust-toolchain-minor-patch group across 1 directory ([#576](https://github.com/contextbridge/aether/pull/576))
+
 ## [0.5.57](https://github.com/contextbridge/aether/compare/aether-project-v0.5.56...aether-project-v0.5.57) - 2026-10-08
 
 ### Other

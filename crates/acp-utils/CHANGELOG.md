@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.13](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.5.12...aether-acp-utils-v0.5.13) - 2026-10-10
+
+### Other
+
+- *(deps)* bump rust-toolchain from 1.98 to 1.99 in the rust-toolchain-minor-patch group across 1 directory ([#576](https://github.com/contextbridge/aether/pull/576))
+
 ## [0.5.12](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.5.11...aether-acp-utils-v0.5.12) - 2026-10-08
 
 ### Other
