@@ -87,7 +87,7 @@ async fn spans_form_a_turn_rooted_hierarchy() -> Result<(), Box<dyn Error>> {
 async fn failed_and_cancelled_calls_carry_error_attributes() -> Result<(), Box<dyn Error>> {
     let attempts: Vec<Vec<Result<LlmResponse, LlmError>>> = vec![
         vec![Err(LlmError::from(ProviderError::server("boom".to_string()).with_http_status(503)))],
-        vec![Ok(LlmResponse::Start), Ok(LlmResponse::text("never seen")), Ok(LlmResponse::done())],
+        llm_response().text(&["never seen"]).build_results(),
     ];
     let retry = RetryConfig { max_attempts: 5, base_delay: Duration::from_mins(1), max_delay: Duration::from_mins(1) };
     let trace = test_agent()

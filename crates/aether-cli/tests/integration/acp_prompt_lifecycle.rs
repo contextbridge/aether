@@ -7,7 +7,6 @@ use agent_client_protocol::schema::v2::{
     SessionUpdate, StateUpdate, StopReason,
 };
 use agent_client_protocol::{ErrorCode, SentRequest};
-use llm::LlmResponse;
 use llm::testing::{FakeLlmProvider, llm_response};
 use std::sync::Arc;
 use tokio::{sync::Notify, task::LocalSet};
@@ -53,9 +52,11 @@ async fn cancel_during_prompt_expansion_reports_no_turn() -> TestResult {
 async fn cancel_sent_before_acceptance_is_not_lost() {
     LocalSet::new()
         .run_until(async {
-            let provider =
-                FakeLlmProvider::new(vec![vec![LlmResponse::Start, LlmResponse::text("reply"), LlmResponse::done()]])
-                    .pause_turn_after(0, 1, Arc::new(Notify::new()));
+            let provider = FakeLlmProvider::new(vec![llm_response().text(&["reply"]).build()]).pause_turn_after(
+                0,
+                1,
+                Arc::new(Notify::new()),
+            );
             let (tx, rx, handle) = agent(provider).spawn().await.unwrap();
             let mut harness = AcpTestHarness::start().await;
             let id = SessionId::new("early-cancel");
@@ -73,8 +74,9 @@ async fn cancel_sent_before_acceptance_is_not_lost() {
 #[tokio::test(flavor = "current_thread")]
 async fn provider_failure_after_acceptance_reports_error_and_idle() {
     LocalSet::new().run_until(async {
-        let (tx, rx, handle) = agent(FakeLlmProvider::new(vec![vec![LlmResponse::Error { message: "provider failed".into() }]]))
-            .spawn().await.unwrap();
+        let (tx, rx, handle) =
+            agent(FakeLlmProvider::new(vec![llm_response().build_ending_with_error("provider failed")]))
+                .spawn().await.unwrap();
         let mut harness = AcpTestHarness::start().await;
         let id = SessionId::new("failure");
         harness.insert_stub_session(tx, rx, handle, id.clone(), "fake:fake").await;
@@ -107,7 +109,7 @@ async fn provider_failure_after_acceptance_reports_error_and_idle() {
 async fn failed_turn_is_reported_once_under_a_stable_id_and_kept_out_of_resumed_history() {
     LocalSet::new()
         .run_until(async {
-            let provider = FakeLlmProvider::new(vec![vec![LlmResponse::Error { message: "provider failed".into() }]]);
+            let provider = FakeLlmProvider::new(vec![llm_response().build_ending_with_error("provider failed")]);
             let (tx, rx, handle) = agent(provider).spawn().await.unwrap();
             let mut harness = AcpTestHarness::start().await;
             let id = SessionId::new("failed-turn");
@@ -159,9 +161,11 @@ async fn acceptance_precedes_streaming_and_idle_completes_the_turn() {
     LocalSet::new()
         .run_until(async {
             let release = Arc::new(Notify::new());
-            let provider =
-                FakeLlmProvider::new(vec![vec![LlmResponse::Start, LlmResponse::text("hello"), LlmResponse::done()]])
-                    .pause_turn_after(0, 1, release.clone());
+            let provider = FakeLlmProvider::new(vec![llm_response().text(&["hello"]).build()]).pause_turn_after(
+                0,
+                1,
+                release.clone(),
+            );
             let (tx, rx, handle) = agent(provider).spawn().await.unwrap();
             let mut harness = AcpTestHarness::start().await;
             let id = SessionId::new("lifecycle");

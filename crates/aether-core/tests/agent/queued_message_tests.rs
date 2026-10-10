@@ -146,8 +146,7 @@ async fn cancelled_turn_discards_queued_text() -> TestResult<()> {
 
 #[tokio::test]
 async fn failed_turn_discards_queued_text() -> TestResult<()> {
-    let first_turn =
-        vec![LlmResponse::Start, LlmResponse::text("hello"), LlmResponse::Error { message: "boom".into() }];
+    let first_turn = llm_response().text(&["hello"]).build_ending_with_error("boom");
     let release_into_failure =
         |scenario: TestScenario, release: Arc<Notify>| scenario.perform(move || release.notify_one());
     let scenario = run_interrupted_scenario(first_turn, release_into_failure).await?;

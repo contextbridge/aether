@@ -59,7 +59,7 @@ async fn consecutive_compactions_have_unique_ids_and_ordered_terminal_events() {
 async fn failed_compaction_retains_identity_and_error_without_a_result() {
     let trace = test_agent()
         .llm_responses(&[
-            vec![llm::LlmResponse::Error { message: "provider unavailable".into() }],
+            llm_response().build_ending_with_error("provider unavailable"),
             llm_response().text(&["reply"]).build(),
         ])
         .context_window_override(100)

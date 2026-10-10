@@ -3,7 +3,7 @@ use aether_core::core::agent;
 use agent_client_protocol::schema::v2::{
     CancelSessionNotification, ContentBlock, PromptRequest, SessionId, SessionUpdate, StopReason,
 };
-use llm::{LlmResponse, testing::FakeLlmProvider};
+use llm::testing::{FakeLlmProvider, llm_response};
 use std::sync::Arc;
 use tokio::{sync::Notify, task::LocalSet};
 
@@ -12,13 +12,8 @@ async fn cancel_mid_stream_interrupts_prompt() {
     LocalSet::new()
         .run_until(async {
             let release = Arc::new(Notify::new());
-            let provider = FakeLlmProvider::new(vec![vec![
-                LlmResponse::Start,
-                LlmResponse::text("hello"),
-                LlmResponse::text(" world"),
-                LlmResponse::done(),
-            ]])
-            .pause_turn_after(0, 1, release);
+            let provider = FakeLlmProvider::new(vec![llm_response().text(&["hello", " world"]).build()])
+                .pause_turn_after(0, 1, release);
             let (tx, rx, handle) = agent(provider).spawn().await.unwrap();
             let mut harness = AcpTestHarness::start().await;
             let id = SessionId::new("test-session");

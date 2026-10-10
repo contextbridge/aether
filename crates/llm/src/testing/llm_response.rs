@@ -91,6 +91,13 @@ impl LlmResponseBuilder {
         results
     }
 
+    /// The stream surfaces `error` and closes without `Done` — a provider that
+    /// reports a failure instead of ending cleanly.
+    pub fn build_ending_with_error(mut self, message: &str) -> Vec<LlmResponse> {
+        self.chunks.push(LlmResponse::Error { message: message.to_string() });
+        self.chunks
+    }
+
     /// The stream dies on `error` instead of delivering `Done` — a connection
     /// lost mid-flight.
     pub fn build_interrupted(self, error: impl Into<LlmError>) -> Vec<Result<LlmResponse, LlmError>> {
@@ -168,5 +175,12 @@ mod tests {
         let results = failed_call(ProviderError::server("boom"));
 
         assert!(matches!(results.as_slice(), [Err(_)]));
+    }
+
+    #[test]
+    fn build_ending_with_error_surfaces_error_and_no_done() {
+        let frames = llm_response().text(&["partial"]).build_ending_with_error("boom");
+
+        assert!(matches!(frames.as_slice(), [LlmResponse::Start, LlmResponse::Text { .. }, LlmResponse::Error { .. }]));
     }
 }

@@ -112,8 +112,24 @@ impl Compactor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use llm::types::IsoString;
-    use llm::{ChatMessage, ContentBlock, MessageId};
+    use llm::ContentBlock;
+    use llm::testing::{FakeLlmProvider, llm_response};
+
+    const SUMMARY: &str = "## Primary Goal\nTest the compaction feature\n\n## Completed Work\n- Wrote initial tests\n\n## File Changes\n- `src/main.rs` — added entry point\n\n## Key Decisions\n- Use structured handoff — preserves context better\n\n## Current State\nRunning compaction tests\n\n## Next Steps\n1. Verify all tests pass\n\n## Open Questions\n(none)\n\n## Constraints\n(none)";
+
+    fn context_with_user_message(content: &str) -> Context {
+        Context::new(
+            vec![
+                ChatMessage::system("System"),
+                ChatMessage::User {
+                    message_id: MessageId::new(),
+                    content: vec![ContentBlock::text(content)],
+                    timestamp: IsoString::now(),
+                },
+            ],
+            vec![],
+        )
+    }
 
     #[test]
     fn test_compaction_config_default() {
@@ -129,32 +145,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_compactor_generates_summary() {
-        use llm::testing::FakeLlmProvider;
+        let summary_response = llm_response().text(&[SUMMARY]).build();
+        let compactor = Compactor::new(Arc::new(FakeLlmProvider::with_single_response(summary_response)));
 
-        let summary_response = vec![
-            LlmResponse::Start,
-            LlmResponse::text(
-                "## Primary Goal\nTest the compaction feature\n\n## Completed Work\n- Wrote initial tests\n\n## File Changes\n- `src/main.rs` — added entry point\n\n## Key Decisions\n- Use structured handoff — preserves context better\n\n## Current State\nRunning compaction tests\n\n## Next Steps\n1. Verify all tests pass\n\n## Open Questions\n(none)\n\n## Constraints\n(none)",
-            ),
-            LlmResponse::done(),
-        ];
-
-        let fake_llm = Arc::new(FakeLlmProvider::with_single_response(summary_response));
-        let compactor = Compactor::new(fake_llm);
-
-        let context = Context::new(
-            vec![
-                ChatMessage::system("System"),
-                ChatMessage::User {
-                    message_id: MessageId::new(),
-                    content: vec![ContentBlock::text("Test message")],
-                    timestamp: IsoString::now(),
-                },
-            ],
-            vec![],
-        );
-
-        let result = compactor.compact(context).await;
+        let result = compactor.compact(context_with_user_message("Test message")).await;
         assert!(result.is_ok());
 
         let result = result.unwrap();
@@ -166,39 +160,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_compactor_handles_error() {
-        use llm::testing::FakeLlmProvider;
+        let error_response = llm_response().build_ending_with_error("API error");
+        let compactor = Compactor::new(Arc::new(FakeLlmProvider::with_single_response(error_response)));
 
-        let error_response = vec![LlmResponse::Error { message: "API error".to_string() }];
-
-        let fake_llm = Arc::new(FakeLlmProvider::with_single_response(error_response));
-        let compactor = Compactor::new(fake_llm);
-
-        let context = Context::new(
-            vec![
-                ChatMessage::system("System"),
-                ChatMessage::User {
-                    message_id: MessageId::new(),
-                    content: vec![ContentBlock::text("Test")],
-                    timestamp: IsoString::now(),
-                },
-            ],
-            vec![],
-        );
-
-        let result = compactor.compact(context).await;
+        let result = compactor.compact(context_with_user_message("Test")).await;
         assert!(matches!(result, Err(CompactionError::SummarizationFailed(_))));
     }
 
     #[tokio::test]
     async fn test_compactor_empty_context() {
-        use llm::testing::FakeLlmProvider;
+        let compactor = Compactor::new(Arc::new(FakeLlmProvider::with_single_response(vec![])));
 
-        let fake_llm = Arc::new(FakeLlmProvider::with_single_response(vec![]));
-        let compactor = Compactor::new(fake_llm);
-
-        let context = Context::new(vec![ChatMessage::system("System")], vec![]);
-
-        let result = compactor.compact(context).await;
+        let result = compactor.compact(Context::new(vec![ChatMessage::system("System")], vec![])).await;
         assert!(matches!(result, Err(CompactionError::NothingToCompact)));
     }
 }

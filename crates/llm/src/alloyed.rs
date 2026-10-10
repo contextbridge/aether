@@ -69,25 +69,10 @@ impl StreamingModelProvider for AlloyedModelProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::LlmResponse;
-    use crate::testing::FakeLlmProvider;
+    use crate::testing::{FakeLlmProvider, llm_response};
 
-    struct FixedContextProvider {
-        context_window: Option<u32>,
-    }
-
-    impl StreamingModelProvider for FixedContextProvider {
-        fn stream_response(&self, _context: &Context) -> LlmResponseStream {
-            Box::pin(tokio_stream::iter(vec![Ok(LlmResponse::done())]))
-        }
-
-        fn display_name(&self) -> String {
-            "Fixed Context".to_string()
-        }
-
-        fn context_window(&self) -> Option<u32> {
-            self.context_window
-        }
+    fn fake_provider() -> FakeLlmProvider {
+        FakeLlmProvider::new(vec![llm_response().build()])
     }
 
     #[test]
@@ -98,8 +83,7 @@ mod tests {
 
     #[test]
     fn test_alloyed_provider_display_name_single() {
-        let fake_provider = FakeLlmProvider::new(vec![vec![LlmResponse::done()]]);
-        let provider = AlloyedModelProvider::new(vec![Box::new(fake_provider)]);
+        let provider = AlloyedModelProvider::new(vec![Box::new(fake_provider())]);
 
         // Should return the individual provider's display name
         assert_eq!(provider.display_name(), "Fake LLM");
@@ -107,9 +91,7 @@ mod tests {
 
     #[test]
     fn test_alloyed_provider_display_name_multiple() {
-        let fake_provider1 = FakeLlmProvider::new(vec![vec![LlmResponse::done()]]);
-        let fake_provider2 = FakeLlmProvider::new(vec![vec![LlmResponse::done()]]);
-        let provider = AlloyedModelProvider::new(vec![Box::new(fake_provider1), Box::new(fake_provider2)]);
+        let provider = AlloyedModelProvider::new(vec![Box::new(fake_provider()), Box::new(fake_provider())]);
 
         // Should cycle through individual provider names
         assert_eq!(provider.display_name(), "Fake LLM"); // First call
@@ -118,9 +100,7 @@ mod tests {
 
     #[test]
     fn test_alloyed_provider_cycling() {
-        let fake_provider1 = FakeLlmProvider::new(vec![vec![LlmResponse::done()]]);
-        let fake_provider2 = FakeLlmProvider::new(vec![vec![LlmResponse::done()]]);
-        let provider = AlloyedModelProvider::new(vec![Box::new(fake_provider1), Box::new(fake_provider2)]);
+        let provider = AlloyedModelProvider::new(vec![Box::new(fake_provider()), Box::new(fake_provider())]);
 
         let context = Context::new(vec![], vec![]);
 
@@ -142,9 +122,7 @@ mod tests {
 
     #[test]
     fn test_display_name_doesnt_advance_counter() {
-        let fake_provider1 = FakeLlmProvider::new(vec![vec![LlmResponse::done()]]);
-        let fake_provider2 = FakeLlmProvider::new(vec![vec![LlmResponse::done()]]);
-        let provider = AlloyedModelProvider::new(vec![Box::new(fake_provider1), Box::new(fake_provider2)]);
+        let provider = AlloyedModelProvider::new(vec![Box::new(fake_provider()), Box::new(fake_provider())]);
 
         // Calling display_name multiple times should return the same result
         let name1 = provider.display_name();
@@ -158,16 +136,16 @@ mod tests {
 
     #[test]
     fn test_context_window_unknown_if_any_provider_unknown() {
-        let known = FixedContextProvider { context_window: Some(200_000) };
-        let unknown = FakeLlmProvider::new(vec![vec![LlmResponse::done()]]);
+        let known = fake_provider().with_context_window(Some(200_000));
+        let unknown = fake_provider();
         let provider = AlloyedModelProvider::new(vec![Box::new(known), Box::new(unknown)]);
         assert_eq!(provider.context_window(), None);
     }
 
     #[test]
     fn test_context_window_uses_min_of_known_providers() {
-        let p1 = FixedContextProvider { context_window: Some(200_000) };
-        let p2 = FixedContextProvider { context_window: Some(128_000) };
+        let p1 = fake_provider().with_context_window(Some(200_000));
+        let p2 = fake_provider().with_context_window(Some(128_000));
         let provider = AlloyedModelProvider::new(vec![Box::new(p1), Box::new(p2)]);
         assert_eq!(provider.context_window(), Some(128_000));
     }

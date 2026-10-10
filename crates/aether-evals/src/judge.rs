@@ -466,7 +466,7 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
     use aether_core::events::{AgentEvent, StreamState, TurnOutcome};
-    use llm::testing::FakeLlmProvider;
+    use llm::testing::{FakeLlmProvider, llm_response};
     use llm::{LlmError, ProviderError, ToolCallRequest, ToolCallResult};
 
     const VALID_RESPONSE: &str = r#"{"criteria":[{"id":"behavior","score":1.0,"reason":"correct"},{"id":"clarity","score":0.5,"reason":"brief"}],"overall_reason":"good"}"#;
@@ -665,7 +665,7 @@ mod tests {
     #[tokio::test]
     async fn judge_run_extracts_json_object_from_surrounding_prose() {
         let response = format!("Here is my assessment:\n{VALID_RESPONSE}");
-        let judge_llm = FakeLlmProvider::with_single_response(vec![LlmResponse::text(&response)]);
+        let judge_llm = FakeLlmProvider::with_single_response(llm_response().text(&[&response]).build());
         let judge = judge().task("prompt").criteria(default_criteria()).build().unwrap();
 
         let summary = judge.run(&judge_llm).await.unwrap();
@@ -675,7 +675,7 @@ mod tests {
 
     #[tokio::test]
     async fn judge_run_returns_invalid_json_error_with_raw_response() {
-        let judge_llm = FakeLlmProvider::with_single_response(vec![LlmResponse::text("not json")]);
+        let judge_llm = FakeLlmProvider::with_single_response(llm_response().text(&["not json"]).build());
         let judge = judge().task("prompt").criteria(default_criteria()).build().unwrap();
 
         let error = judge.run(&judge_llm).await.unwrap_err();
