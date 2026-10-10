@@ -256,6 +256,7 @@ The top-level `providers` object (or per-agent `providers`) overrides how Aether
 | `auth`                | Authentication mode: `default` (provider default) or `none` (skip auth). Use `none` only behind a trusted proxy that injects credentials. |
 | `requestModel`        | Overrides the model id sent in requests without changing the catalog identity used for capabilities, context window, and display. |
 | `inferenceProfileArn` | Bedrock application inference profile ARN to route requests through.       |
+| `idleTimeoutSecs`     | Seconds the provider may stay silent, before responding or between stream events, before the request fails with a retryable timeout. Defaults to 300; raise it for slow local models. |
 
 ```json title=".aether/settings.json"
 {
@@ -271,7 +272,7 @@ The top-level `providers` object (or per-agent `providers`) overrides how Aether
 }
 ```
 
-The CLI equivalents are `--provider PROVIDER.url=...`, `--provider PROVIDER.auth=...`, `--provider PROVIDER.request-model=...`, and `--provider bedrock.inference-profile-arn=...`.
+The CLI equivalents are `--provider PROVIDER.url=...`, `--provider PROVIDER.auth=...`, `--provider PROVIDER.request-model=...`, `--provider PROVIDER.idle-timeout-secs=...`, and `--provider bedrock.inference-profile-arn=...`.
 
 ## Reasoning effort
 
