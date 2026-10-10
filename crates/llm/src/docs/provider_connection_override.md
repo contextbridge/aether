@@ -20,6 +20,12 @@ Request-target routing keeps the catalog model identity and its capabilities whi
 
 Use `url` for providers with resource-specific endpoints, such as Microsoft Foundry. A trailing slash is normalized before `/chat/completions` is appended. A provider with `requestModel` cannot appear more than once in an alloy because the target would be ambiguous.
 
+Give a slow local model more time to produce its first token. A request fails with a retryable timeout once the provider has been silent for `idleTimeoutSecs` (default 300), before responding or between stream events:
+
+```json
+{ "idleTimeoutSecs": 900 }
+```
+
 Pin a Bedrock application inference profile:
 
 ```json
