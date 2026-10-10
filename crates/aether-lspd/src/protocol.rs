@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::io;
 use std::marker::PhantomData;
 use std::path::PathBuf;
-use tokio_util::bytes::BytesMut;
+use tokio_util::bytes::{Bytes, BytesMut};
 use tokio_util::codec::{Decoder, Encoder, FramedRead, FramedWrite, LengthDelimitedCodec};
 
 #[doc = include_str!("docs/protocol.md")]
@@ -139,7 +139,7 @@ impl<T: Serialize> Encoder<T> for JsonFrames<T> {
 
     fn encode(&mut self, item: T, dst: &mut BytesMut) -> io::Result<()> {
         let json = serde_json::to_vec(&item).map_err(invalid_data)?;
-        self.0.encode(json.into(), dst)
+        self.0.encode(Bytes::from(json), dst)
     }
 }
 
