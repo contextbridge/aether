@@ -35,8 +35,18 @@ The `oauth` object is optional. Set `clientMetadataUrl` for a custom CIMD, or
 `clientId` for a pre-registered public client; a configured `clientId` takes
 priority. `callbackPort` defaults to 3118 and must exactly match the client's
 registered redirect URI. If the authorization server does not advertise CIMD,
-Aether falls back to deprecated Dynamic Client Registration. An explicit
-`Authorization` header bypasses OAuth entirely.
+Aether falls back to deprecated Dynamic Client Registration. An
+`Authorization` header on its own turns off OAuth. 
+
+A server can configure one of `oauth`, `sigv4`, or an `Authorization` header. For example:
+
+```json
+{
+  "type": "http",
+  "url": "https://abc123.execute-api.us-east-1.amazonaws.com/mcp",
+  "sigv4": { "service": "execute-api", "region": "us-east-1", "profile": "dev" }
+}
+```
 
 A remote server using a bearer token:
 

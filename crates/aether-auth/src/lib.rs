@@ -25,3 +25,8 @@ pub mod mcp;
 pub use mcp::{
     McpCredentialStore, OAuthClientRegistration, OAuthFlowOptions, create_auth_manager_from_store, perform_oauth_flow,
 };
+
+#[cfg(feature = "sigv4")]
+mod sigv4;
+#[cfg(feature = "sigv4")]
+pub use sigv4::{SigV4Config, SigV4Credentials, SigV4Error, SigV4Signer};

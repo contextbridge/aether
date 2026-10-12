@@ -1,10 +1,12 @@
 use super::error::{ClientError, Result};
+use super::sigv4::SigV4HttpClient;
 use super::{
     ClientOptions,
     handler::Handler,
     oauth::{self, OAuthSettings},
 };
 use crate::server::McpServer;
+use aether_auth::SigV4Signer;
 use reqwest::header::HeaderMap;
 use rmcp::{
     ClientLifecycleMode, RoleClient,
@@ -29,16 +31,23 @@ use tokio::{
 #[derive(Debug, Clone)]
 pub enum Transport {
     Stdio { command: String, args: Vec<String>, env: HashMap<String, String>, cwd: Option<PathBuf> },
-    Http { url: String, headers: HeaderMap, oauth: Option<OAuthSettings> },
+    Http { url: String, headers: HeaderMap, auth: HttpAuth },
     InProcess(McpServer),
     Unix(PathBuf),
+}
+
+#[derive(Debug, Clone)]
+pub enum HttpAuth {
+    None,
+    OAuth(OAuthSettings),
+    SigV4(SigV4Signer),
 }
 
 pub(super) type ClientService = RunningService<RoleClient, Arc<Handler>>;
 
 impl Transport {
     pub(crate) fn supports_oauth(&self, options: &ClientOptions) -> bool {
-        options.oauth_prompts().is_some() && matches!(self, Self::Http { oauth: Some(_), .. })
+        options.oauth_prompts().is_some() && matches!(self, Self::Http { auth: HttpAuth::OAuth(_), .. })
     }
 
     pub(super) async fn connect(self, handler: Handler, options: &ClientOptions) -> Result<ClientService> {
@@ -46,7 +55,7 @@ impl Transport {
         let handler = Arc::new(handler);
         let connected = match self {
             Self::Stdio { command, args, env, cwd } => connect_stdio(handler, command, args, env, cwd).await,
-            Self::Http { url, headers, oauth } => connect_http(handler, url, headers, oauth, options).await,
+            Self::Http { url, headers, auth } => connect_http(handler, url, headers, auth, options).await,
             Self::InProcess(server) => serve(handler, server.serve_in_memory()).await,
             Self::Unix(path) => connect_unix(handler, path).await,
         };
@@ -65,7 +74,7 @@ impl Transport {
         challenge: Option<String>,
     ) -> Result<ClientService> {
         let server = handler.server().to_string();
-        let Self::Http { url, headers, oauth: Some(oauth) } = self else {
+        let Self::Http { url, headers, auth: HttpAuth::OAuth(oauth) } = self else {
             return Err(ClientError::OAuthUnavailable { server });
         };
         let auth_client = oauth::authorize(&server, &url, oauth, options, challenge).await?;
@@ -115,22 +124,19 @@ async fn connect_http(
     handler: Arc<Handler>,
     url: String,
     headers: HeaderMap,
-    oauth: Option<OAuthSettings>,
+    auth: HttpAuth,
     options: &ClientOptions,
 ) -> Result<ClientService> {
-    let server = handler.server();
-    let restored = match (options.oauth_store.as_ref(), &oauth) {
-        (Some(store), Some(oauth)) => oauth::restore(server, &url, oauth, store).await,
-        _ => None,
-    };
-
     let config = http_config(url, headers);
-    match restored {
-        Some(auth_client) => {
-            tracing::debug!(server, "Using stored OAuth credentials");
-            serve(handler, StreamableHttpClientTransport::with_client(auth_client, config)).await
+    match auth {
+        HttpAuth::None => serve(handler, StreamableHttpClientTransport::from_config(config)).await,
+        HttpAuth::OAuth(oauth) => match oauth::restore(handler.server(), &config.uri, &oauth, options).await {
+            Some(auth_client) => serve(handler, StreamableHttpClientTransport::with_client(auth_client, config)).await,
+            None => serve(handler, StreamableHttpClientTransport::from_config(config)).await,
+        },
+        HttpAuth::SigV4(signer) => {
+            serve(handler, StreamableHttpClientTransport::with_client(SigV4HttpClient::new(signer), config)).await
         }
-        None => serve(handler, StreamableHttpClientTransport::from_config(config)).await,
     }
 }
 

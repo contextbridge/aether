@@ -28,7 +28,7 @@ fn try_map_mcp_server(server: McpServer, cwd: &Path) -> Option<ServerSpec> {
                 cwd: Some(cwd.to_path_buf()),
             },
         ),
-        Http(http) => (http.name, http_transport(http.url, header_map(&http.headers)?, None)),
+        Http(http) => (http.name, http_transport(http.url, header_map(&http.headers)?)),
         _ => return None,
     };
     Some(ServerSpec { name, transport })
@@ -42,6 +42,7 @@ fn header_map(headers: &[HttpHeader]) -> Option<HeaderMap> {
 mod tests {
     use super::*;
     use agent_client_protocol::schema::v2 as acp;
+    use mcp_utils::client::HttpAuth;
 
     fn map(servers: Vec<acp::McpServer>) -> Vec<ServerSpec> {
         map_acp_mcp_servers(servers, Path::new("/workspace"))
@@ -81,11 +82,11 @@ mod tests {
         assert_eq!(configs.len(), 1);
 
         match &configs[0].transport {
-            Transport::Http { url, headers, oauth } => {
+            Transport::Http { url, headers, auth } => {
                 assert_eq!(configs[0].name, "http-server");
                 assert_eq!(url, "https://example.com/mcp");
                 assert_eq!(headers["authorization"], "Bearer token123");
-                assert!(oauth.is_none(), "an Authorization header replaces OAuth");
+                assert!(matches!(auth, HttpAuth::None), "an Authorization header replaces OAuth");
             }
             other => panic!("Expected Http, got {other:?}"),
         }
@@ -129,9 +130,9 @@ mod tests {
         let configs = map(servers);
         let Transport::Stdio { args, env, .. } = &configs[0].transport else { panic!("expected stdio") };
         assert!(args.is_empty() && env.is_empty());
-        let Transport::Http { headers, oauth, .. } = &configs[1].transport else { panic!("expected http") };
+        let Transport::Http { headers, auth, .. } = &configs[1].transport else { panic!("expected http") };
         assert!(headers.is_empty());
-        assert!(oauth.is_some(), "servers without credentials can sign in with OAuth");
+        assert!(matches!(auth, HttpAuth::OAuth(_)), "servers without credentials can sign in with OAuth");
     }
 
     #[test]

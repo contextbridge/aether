@@ -1,28 +1,20 @@
-use super::FakeMcpServer;
-use crate::client::{Elicitation, ElicitationRequest, OAuthSettings, Transport};
+use super::fake_http_server::origin;
+use super::{FakeHttpServer, FakeMcpServer, RecordedRequest};
+use crate::client::{Elicitation, ElicitationRequest, HttpAuth, OAuthSettings, Transport};
 use crate::gateway::ServerSpec;
 use aether_auth::OAuthClientRegistration;
-use axum::extract::{Request, State};
 use axum::http::{StatusCode, Uri, header::WWW_AUTHENTICATE};
-use axum::middleware::{Next, from_fn_with_state};
-use axum::response::{IntoResponse, Response};
+use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::{Json, Router};
 use reqwest::Url;
 use reqwest::header::{AUTHORIZATION, HeaderMap};
 use rmcp::model::{ElicitRequestParams, ElicitResult, ElicitationAction};
-use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
-use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use serde_json::{Value, json};
-use std::sync::{Arc, Mutex};
-use tokio::net::TcpListener;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 
 pub struct FakeAuthServer {
-    url: String,
-    auth: Arc<AuthState>,
-    task: JoinHandle<()>,
+    http: FakeHttpServer,
 }
 
 pub struct OAuthPrompt {
@@ -34,33 +26,16 @@ pub const CLIENT_METADATA_URL: &str = "https://client.example/oauth/client-metad
 
 impl FakeAuthServer {
     pub async fn start(server: FakeMcpServer) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind the fake authorization server");
-        let origin = format!("http://{}", listener.local_addr().expect("a bound address"));
-        let auth = Arc::new(AuthState { origin: origin.clone(), bearers: Mutex::new(Vec::new()) });
-        let mcp = StreamableHttpService::new(
-            move || Ok(server.clone()),
-            Arc::new(LocalSessionManager::default()),
-            StreamableHttpServerConfig::default(),
-        );
-        let protected =
-            Router::new().nest_service("/mcp", mcp).layer(from_fn_with_state(Arc::clone(&auth), require_token));
-        let app = Router::new()
-            .route("/token", post(token))
-            .fallback(metadata)
-            .with_state(Arc::clone(&auth))
-            .merge(protected);
-        let task = tokio::spawn(async move {
-            axum::serve(listener, app).await.expect("serve the fake authorization server");
-        });
-        Self { url: format!("{origin}/mcp"), auth, task }
+        let routes = Router::new().route("/token", post(token)).fallback(metadata);
+        Self { http: FakeHttpServer::serve(server, routes, require_token).await }
     }
 
     pub fn transport(&self) -> Transport {
-        self.transport_with(Some(client_metadata()))
+        self.transport_with(HttpAuth::OAuth(client_metadata()))
     }
 
-    pub fn transport_with(&self, oauth: Option<OAuthSettings>) -> Transport {
-        Transport::Http { url: self.url.clone(), headers: HeaderMap::new(), oauth }
+    pub fn transport_with(&self, auth: HttpAuth) -> Transport {
+        self.http.transport(HeaderMap::new(), auth)
     }
 
     pub fn spec(&self, name: &str) -> ServerSpec {
@@ -68,13 +43,11 @@ impl FakeAuthServer {
     }
 
     pub fn received_bearer(&self, token: &str) -> bool {
-        self.auth.bearers.lock().expect("bearers lock").iter().any(|bearer| bearer == token)
-    }
-}
-
-impl Drop for FakeAuthServer {
-    fn drop(&mut self) {
-        self.task.abort();
+        let bearer = format!("Bearer {token}");
+        self.http
+            .requests()
+            .iter()
+            .any(|request| request.headers.get(AUTHORIZATION).is_some_and(|value| *value == bearer))
     }
 }
 
@@ -130,34 +103,22 @@ pub fn client_metadata() -> OAuthSettings {
 
 pub const ACCESS_TOKEN: &str = "access-token";
 
-struct AuthState {
-    origin: String,
-    bearers: Mutex<Vec<String>>,
-}
-
-async fn require_token(State(auth): State<Arc<AuthState>>, request: Request, next: Next) -> Response {
-    let bearer = request
-        .headers()
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .map(str::to_string);
-    if let Some(bearer) = bearer {
-        auth.bearers.lock().expect("bearers lock").push(bearer.clone());
-        if bearer == ACCESS_TOKEN {
-            return next.run(request).await;
-        }
+fn require_token(request: &RecordedRequest) -> Result<(), impl IntoResponse + use<>> {
+    let bearer = format!("Bearer {ACCESS_TOKEN}");
+    if request.headers.get(AUTHORIZATION).is_some_and(|value| *value == bearer) {
+        return Ok(());
     }
-    let challenge = format!("Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource/mcp\"", auth.origin);
-    (StatusCode::UNAUTHORIZED, [(WWW_AUTHENTICATE, challenge)]).into_response()
+    let challenge =
+        format!("Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource/mcp\"", origin(&request.headers));
+    Err((StatusCode::UNAUTHORIZED, [(WWW_AUTHENTICATE, challenge)]))
 }
 
 async fn token() -> Json<Value> {
     Json(json!({ "access_token": ACCESS_TOKEN, "token_type": "Bearer", "expires_in": 3600 }))
 }
 
-async fn metadata(State(auth): State<Arc<AuthState>>, uri: Uri) -> Json<Value> {
-    let origin = &auth.origin;
+async fn metadata(headers: HeaderMap, uri: Uri) -> Json<Value> {
+    let origin = origin(&headers);
     if uri.path().contains("oauth-protected-resource") {
         return Json(json!({ "resource": format!("{origin}/mcp"), "authorization_servers": [origin] }));
     }

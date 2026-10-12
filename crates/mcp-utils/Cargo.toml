@@ -29,11 +29,13 @@ testing = ["client", "dep:axum", "rmcp/transport-streamable-http-server"]
 client = [
     "dep:aether-auth",
     "aether-auth/mcp",
+    "aether-auth/sigv4",
     "dep:async-stream",
     "dep:chrono",
     "dep:reqwest",
     "dep:serde",
     "dep:serde_json",
+    "dep:sse-stream",
     "dep:tokio-stream",
     "rmcp/transport-streamable-http-client-reqwest",
     "rmcp/transport-child-process",
@@ -56,6 +58,7 @@ chrono = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+sse-stream = { workspace = true, optional = true }
 tokio-stream = { workspace = true, features = ["sync"], optional = true }
 
 [[test]]
@@ -76,9 +79,15 @@ required-features = ["testing"]
 
 [[test]]
 name = "http_headers"
-required-features = ["client"]
+required-features = ["testing"]
+
+[[test]]
+name = "sigv4"
+required-features = ["testing"]
 
 [dev-dependencies]
+aws-credential-types = { workspace = true }
+aws-sigv4 = { workspace = true }
 axum = { workspace = true }
 rmcp = { workspace = true, features = ["macros", "transport-streamable-http-server"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }

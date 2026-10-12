@@ -7,8 +7,8 @@ pub(crate) mod tool_bridge;
 mod tool_filter;
 
 pub use config::{
-    InMemoryServerConfig, InMemoryType, McpConfig, McpOAuthConfig, McpServerConfig, ParseError, RemoteServerConfig,
-    RemoteType, StdioServerConfig, StdioType, http_transport,
+    InMemoryServerConfig, InMemoryType, McpConfig, McpOAuthConfig, McpServerConfig, McpSigV4Config, ParseError,
+    RemoteServerConfig, RemoteType, StdioServerConfig, StdioType, http_transport,
 };
 pub(crate) use deferred_tools::PROGRESSIVE_DISCOVERY_INSTRUCTIONS;
 pub use deferred_tools::{
