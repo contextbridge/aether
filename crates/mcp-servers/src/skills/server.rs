@@ -37,10 +37,6 @@ pub struct SkillsMcpArgs {
     /// On skill name collision, the last directory wins.
     #[arg(long = "dir", required = true)]
     pub dirs: Vec<PathBuf>,
-
-    /// Deprecated: Accepted for backward compatibility but ignored.
-    #[arg(long = "notes-dir")]
-    pub notes_dir: Option<PathBuf>,
 }
 
 #[doc = include_str!("../docs/skills_mcp.md")]
@@ -361,7 +357,7 @@ mod tests {
 
     #[test]
     fn skills_args_require_at_least_one_dir() {
-        let parsed = SkillsMcpArgs::try_parse_from(["--notes-dir", ".aether/notes"]);
+        let parsed = SkillsMcpArgs::try_parse_from(Vec::<&str>::new());
         assert!(parsed.is_err());
     }
 
@@ -370,15 +366,6 @@ mod tests {
         let parsed = SkillsMcpArgs::try_parse_from(["--dir", ".aether/skills", "--dir", ".claude/rules"]).unwrap();
 
         assert_eq!(parsed.dirs, vec![PathBuf::from(".aether/skills"), PathBuf::from(".claude/rules")]);
-    }
-
-    #[test]
-    fn skills_args_accepts_deprecated_notes_dir() {
-        let parsed =
-            SkillsMcpArgs::try_parse_from(["--dir", ".aether/skills", "--notes-dir", ".aether/notes"]).unwrap();
-
-        assert_eq!(parsed.dirs, vec![PathBuf::from(".aether/skills")]);
-        assert_eq!(parsed.notes_dir, Some(PathBuf::from(".aether/notes")));
     }
 
     #[test]

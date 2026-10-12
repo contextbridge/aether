@@ -20,59 +20,6 @@ use tokio::time::timeout;
 use utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 use utils::panic::panic_message;
 
-/// Reference to a file artifact discovered or modified by a sub-agent
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ArtifactReference {
-    /// Absolute file path
-    pub path: String,
-    /// How this file relates to the task: read, modified, discovered, relevant
-    pub relation: String,
-    /// Brief note on why this file matters
-    pub note: Option<String>,
-}
-
-/// Structured output from a sub-agent, designed to prevent information loss
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct StructuredAgentOutput {
-    /// Brief summary of what the agent accomplished
-    pub summary: String,
-    /// Files read, modified, or discovered as relevant
-    pub artifacts: Vec<ArtifactReference>,
-    /// Key decisions, findings, or conclusions
-    pub decisions: Vec<String>,
-    /// Recommended follow-up tasks
-    pub next_steps: Vec<String>,
-    /// Full detailed output (optional, for deep dives)
-    pub details: Option<String>,
-}
-
-impl StructuredAgentOutput {
-    /// Parse agent output into structured format with fallback for non-JSON responses
-    pub fn parse(raw_output: &str) -> Result<Self, String> {
-        // Try to parse as JSON directly
-        if let Ok(parsed) = serde_json::from_str::<Self>(raw_output) {
-            return Ok(parsed);
-        }
-
-        if let Some(json_str) = extract_json_from_markdown(raw_output)
-            && let Ok(parsed) = serde_json::from_str::<Self>(&json_str)
-        {
-            return Ok(parsed);
-        }
-
-        // Fallback: wrap raw output in structured format
-        Ok(Self {
-            summary: "Agent did not return structured output".to_string(),
-            artifacts: vec![],
-            decisions: vec![],
-            next_steps: vec![],
-            details: Some(raw_output.to_string()),
-        })
-    }
-}
-
 /// Input for a single agent task within a batch
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -119,6 +66,16 @@ pub struct SubAgentResult {
     pub error: Option<String>,
 }
 
+impl SubAgentResult {
+    fn new(task_id: String, agent_name: String, result: Result<String, String>) -> Self {
+        let (status, output, error) = match result {
+            Ok(output) => (SubAgentStatus::Success, Some(output), None),
+            Err(error) => (SubAgentStatus::Error, None, Some(error)),
+        };
+        Self { task_id, agent_name, status, output, error }
+    }
+}
+
 /// Output from spawning sub-agents
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -137,24 +94,6 @@ pub struct SpawnSubAgentsOutput {
 
 /// Prompt instructions appended to sub-agent prompts to ensure structured output
 pub const STRUCTURED_OUTPUT_INSTRUCTIONS: &str = include_str!("structured_output_instructions.md");
-
-/// Extract JSON from markdown code blocks (```json ... ``` or ``` ... ```)
-pub fn extract_json_from_markdown(text: &str) -> Option<String> {
-    // Look for ```json ... ``` pattern
-    let json_block_start = text.find("```json")?;
-    let content_start = json_block_start + 7;
-    let remaining = &text[content_start..];
-
-    // Find the closing ```
-    let content_end = remaining.find("```")?;
-    let json_content = remaining[..content_end].trim();
-
-    if json_content.is_empty() {
-        return None;
-    }
-
-    Some(json_content.to_string())
-}
 
 /// Executor for spawning and running sub-agents
 #[derive(Clone)]
@@ -195,12 +134,9 @@ impl AgentExecutor {
                 let result = AssertUnwindSafe(executor.execute_single(task_id.clone(), task))
                     .catch_unwind()
                     .await
-                    .unwrap_or_else(|panic| SubAgentResult {
-                        task_id,
-                        agent_name,
-                        status: SubAgentStatus::Error,
-                        output: None,
-                        error: Some(format!("Sub-agent task panicked: {}", panic_message(&*panic))),
+                    .unwrap_or_else(|panic| {
+                        let error = format!("Sub-agent task panicked: {}", panic_message(&*panic));
+                        SubAgentResult::new(task_id, agent_name, Err(error))
                     });
                 (index, result)
             });
@@ -214,8 +150,7 @@ impl AgentExecutor {
         let results: Vec<SubAgentResult> = indexed_results.into_iter().map(|(_, result)| result).collect();
 
         let success_count = results.iter().filter(|r| matches!(r.status, SubAgentStatus::Success)).count();
-
-        let error_count = results.iter().filter(|r| matches!(r.status, SubAgentStatus::Error)).count();
+        let error_count = results.len() - success_count;
 
         // Create display metadata using the first task
         let display_meta = ToolDisplayMeta::new("Spawn agent", format!("{first_agent_name} (1/{task_count})"));
@@ -271,22 +206,7 @@ impl AgentExecutor {
         }
         .await;
 
-        match result {
-            Ok(output) => SubAgentResult {
-                task_id,
-                agent_name,
-                status: SubAgentStatus::Success,
-                output: Some(output),
-                error: None,
-            },
-            Err(error) => SubAgentResult {
-                task_id,
-                agent_name,
-                status: SubAgentStatus::Error,
-                output: None,
-                error: Some(error.to_string()),
-            },
-        }
+        SubAgentResult::new(task_id, agent_name, result.map_err(|error| error.to_string()))
     }
 
     async fn report(&self, task_id: &str, agent_name: &str, event: &AgentEvent) {
@@ -344,105 +264,6 @@ const MCP_READY_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_parse_valid_json() {
-        let json = r#"{
-            "summary": "Found the main entry point",
-            "artifacts": [{"path": "/src/main.rs", "relation": "read", "note": "entry point"}],
-            "decisions": ["Use async runtime"],
-            "nextSteps": ["Implement feature"],
-            "details": null
-        }"#;
-
-        let result = StructuredAgentOutput::parse(json).expect("Should parse valid JSON");
-
-        assert_eq!(result.summary, "Found the main entry point");
-        assert_eq!(result.artifacts.len(), 1);
-        assert_eq!(result.artifacts[0].path, "/src/main.rs");
-        assert_eq!(result.artifacts[0].relation, "read");
-        assert_eq!(result.decisions.len(), 1);
-        assert_eq!(result.next_steps.len(), 1);
-    }
-
-    #[test]
-    fn test_parse_json_in_markdown() {
-        let markdown = r#"Here's what I found:
-
-```json
-{
-    "summary": "Analyzed the codebase",
-    "artifacts": [],
-    "decisions": ["Use Rust"],
-    "nextSteps": [],
-    "details": null
-}
-```
-
-Hope this helps!"#;
-
-        let result = StructuredAgentOutput::parse(markdown).expect("Should parse JSON from markdown");
-
-        assert_eq!(result.summary, "Analyzed the codebase");
-        assert_eq!(result.decisions.len(), 1);
-        assert_eq!(result.decisions[0], "Use Rust");
-    }
-
-    #[test]
-    fn test_parse_fallback() {
-        let plain_text = "I analyzed the code and found several issues.";
-
-        let result = StructuredAgentOutput::parse(plain_text).expect("Should fallback gracefully");
-
-        assert_eq!(result.summary, "Agent did not return structured output");
-        assert!(result.artifacts.is_empty());
-        assert_eq!(result.decisions.len(), 0);
-        assert_eq!(result.next_steps.len(), 0);
-        assert_eq!(result.details, Some(plain_text.to_string()));
-    }
-
-    #[test]
-    fn test_extract_json_from_markdown_valid() {
-        let markdown = r#"Some text
-```json
-{"key": "value"}
-```
-More text"#;
-
-        let result = extract_json_from_markdown(markdown);
-
-        assert_eq!(result, Some(r#"{"key": "value"}"#.to_string()));
-    }
-
-    #[test]
-    fn test_extract_json_from_markdown_no_block() {
-        let text = "Just plain text without code blocks";
-
-        let result = extract_json_from_markdown(text);
-
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_extract_json_from_markdown_empty_block() {
-        let markdown = r"```json
-```";
-
-        let result = extract_json_from_markdown(markdown);
-
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_extract_json_from_markdown_unclosed() {
-        let markdown = r#"```json
-{"unclosed": true}
-"#;
-
-        let result = extract_json_from_markdown(markdown);
-
-        assert!(result.is_none());
-    }
 
     #[test]
     fn test_sub_agent_task_accepts_snake_case_agent_name() {

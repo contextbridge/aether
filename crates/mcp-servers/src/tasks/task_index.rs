@@ -82,49 +82,6 @@ impl TaskIndex {
         self.tasks.insert(id, task);
     }
 
-    /// Remove a task from the index
-    pub fn remove(&mut self, id: &TaskId) -> Option<Task> {
-        if let Some(task) = self.tasks.remove(id) {
-            if let Some(assignee) = &task.assignee
-                && let Some(ids) = self.by_assignee.get_mut(assignee)
-            {
-                ids.remove(id);
-                if ids.is_empty() {
-                    self.by_assignee.remove(assignee);
-                }
-            }
-
-            if let Some(ids) = self.by_status.get_mut(&task.status) {
-                ids.remove(id);
-                if ids.is_empty() {
-                    self.by_status.remove(&task.status);
-                }
-            }
-
-            Some(task)
-        } else {
-            None
-        }
-    }
-
-    /// Remove an entire task tree from the index
-    pub fn remove_tree(&mut self, root_id: &TaskId) -> Vec<Task> {
-        let mut removed = Vec::new();
-
-        let ids_to_remove: Vec<TaskId> = self.tasks.keys().filter(|id| id.root() == *root_id).cloned().collect();
-
-        for id in ids_to_remove {
-            if let Some(task) = self.remove(&id) {
-                removed.push(task);
-            }
-        }
-
-        self.trees.remove(root_id);
-        self.subtask_counters.remove(root_id);
-
-        removed
-    }
-
     /// Get a task by ID
     pub fn get(&self, id: &TaskId) -> Option<&Task> {
         self.tasks.get(id)
@@ -179,11 +136,6 @@ impl TaskIndex {
     /// Get all root task IDs
     pub fn root_ids(&self) -> Vec<&TaskId> {
         self.trees.keys().collect()
-    }
-
-    /// Get all tasks (for iteration)
-    pub fn all_tasks(&self) -> impl Iterator<Item = &Task> {
-        self.tasks.values()
     }
 
     /// Check if a task exists
@@ -314,20 +266,6 @@ mod tests {
 
         let tree = index.get_tree(&TaskId::from("at-abc123"));
         assert_eq!(tree.len(), 3);
-    }
-
-    #[test]
-    fn test_remove_tree() {
-        let mut index = TaskIndex::new();
-        let path = PathBuf::from(".aether-tasks/active/at-abc123.jsonl");
-
-        index.insert(make_task("at-abc123", TaskStatus::Pending, None), path.clone());
-        index.insert(make_task("at-abc123.1", TaskStatus::Pending, None), path.clone());
-        index.insert(make_task("at-abc123.2", TaskStatus::Pending, None), path);
-
-        let removed = index.remove_tree(&TaskId::from("at-abc123"));
-        assert_eq!(removed.len(), 3);
-        assert!(index.is_empty());
     }
 
     #[test]

@@ -23,12 +23,6 @@ pub enum TaskStoreError {
     #[error("Dependency not found: {id}")]
     DependencyNotFound { id: String },
 
-    #[error("Cannot create subtask of non-root task: {id}")]
-    InvalidParent { id: String },
-
-    #[error("Validation error: {message}")]
-    ValidationError { message: String },
-
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -179,29 +173,6 @@ impl TaskStore {
         self.index.get_ready()
     }
 
-    /// Archive a completed task tree (move to completed directory)
-    pub fn archive_tree(&mut self, root_id: &TaskId) -> Result<(), TaskStoreError> {
-        let root_id = root_id.root();
-
-        let src_path = self
-            .index
-            .get_tree_path(&root_id)
-            .cloned()
-            .ok_or_else(|| TaskStoreError::TreeNotFound { id: root_id.to_string() })?;
-
-        let completed_dir = self.completed_dir();
-        if !completed_dir.exists() {
-            fs::create_dir_all(&completed_dir)?;
-        }
-
-        let dst_path = completed_dir.join(root_id.filename());
-
-        fs::rename(&src_path, &dst_path)?;
-        self.index.remove_tree(&root_id);
-
-        Ok(())
-    }
-
     /// Get all root task IDs
     pub fn list_trees(&self) -> Vec<&TaskId> {
         self.index.root_ids()
@@ -219,10 +190,6 @@ impl TaskStore {
 
     fn active_dir(&self) -> PathBuf {
         self.root.join("active")
-    }
-
-    fn completed_dir(&self) -> PathBuf {
-        self.root.join("completed")
     }
 
     fn generate_hash(&self) -> String {
@@ -403,27 +370,6 @@ mod tests {
 
         let ready_ids: Vec<_> = ready.iter().map(|t| t.id.as_str()).collect();
         assert!(ready_ids.contains(&subtask2.id.as_str()));
-    }
-
-    #[test]
-    fn test_archive_tree() {
-        let mut tasks = TestTaskStore::new();
-
-        let root = tasks.root_task("Completed research");
-        tasks.subtask(&root.id, "Subtask");
-
-        let store = tasks.store_mut();
-        let active_file = store.active_dir().join(root.id.filename());
-        assert!(active_file.exists());
-
-        store.archive_tree(&root.id).unwrap();
-
-        assert!(!active_file.exists());
-
-        let completed_file = store.completed_dir().join(root.id.filename());
-        assert!(completed_file.exists());
-
-        assert!(store.is_empty());
     }
 
     #[test]
