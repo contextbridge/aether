@@ -1,42 +1,6 @@
 use crate::common::{McpClientExt, TestResult, connect, create_test_files, load_skills_input, skills_server};
 use mcp_servers::skills::tools::ListSkillsInput;
 use mcp_utils::client::ClientOptions;
-use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
-use utils::MarkdownFile;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TestFrontmatter {
-    pub description: Option<String>,
-}
-
-#[tokio::test]
-async fn test_load_from_nested_directories() {
-    let test_files = vec![
-        ("skill-1/SKILL.md", "---\ndescription: First skill\n---\nThis is skill 1 content"),
-        ("skill-2/SKILL.md", "---\ndescription: Second skill\n---\nThis is skill 2 content"),
-        ("illegal-flat-skill.md", "This should be ignored"),
-    ];
-
-    let temp_dir = create_test_files(&test_files);
-
-    let skills_with_dirs: Vec<(PathBuf, MarkdownFile<TestFrontmatter>)> =
-        MarkdownFile::from_nested_dirs(temp_dir.path(), "SKILL.md").await.expect("Failed to load skills");
-
-    assert_eq!(skills_with_dirs.len(), 2);
-
-    let skill_names: Vec<String> = skills_with_dirs
-        .iter()
-        .filter_map(|(dir, _)| {
-            let name = dir.file_name()?.to_string_lossy().to_string();
-            Some(name)
-        })
-        .collect();
-
-    assert!(skill_names.contains(&"skill-1".to_string()));
-    assert!(skill_names.contains(&"skill-2".to_string()));
-    assert!(!skill_names.contains(&"illegal-flat-skill".to_string()));
-}
 
 #[tokio::test]
 async fn test_load_skills_tool() -> TestResult {

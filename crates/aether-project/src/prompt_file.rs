@@ -28,7 +28,7 @@ pub(crate) struct PromptFrontmatter {
     /// Cursor compatibility: top-level path patterns (alias for `triggers.read`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<String>,
-    #[serde(default, skip_serializing_if = "not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub agent_authored: bool,
     #[serde(default, skip_serializing_if = "zero")]
     pub helpful: u32,
@@ -166,8 +166,7 @@ impl PromptFile {
 
     /// Parse YAML frontmatter and body from a SKILL.md content string (no I/O).
     fn parse_frontmatter(content: &str) -> Result<(PromptFrontmatter, String), PromptFileError> {
-        let (yaml_str, body) =
-            utils::markdown_file::split_frontmatter(content).ok_or(PromptFileError::MissingFrontmatter)?;
+        let (yaml_str, body) = split_frontmatter(content).ok_or(PromptFileError::MissingFrontmatter)?;
 
         let frontmatter: PromptFrontmatter = noyalib::from_str(yaml_str)?;
 
@@ -237,15 +236,17 @@ pub enum PromptFileError {
     NotAgentAuthored(String),
 }
 
+fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
+    let content = content.trim();
+    let rest = content.strip_prefix("---")?;
+    let end_pos = rest.find("\n---")?;
+    Some((&rest[..end_pos], rest[end_pos + 4..].trim()))
+}
+
 fn normalize_frontmatter_yaml(yaml: &str) -> &str {
     let yaml = yaml.trim();
     let yaml = yaml.strip_prefix("---\n").unwrap_or(yaml);
     yaml.strip_suffix("\n...").unwrap_or(yaml).trim()
-}
-
-#[expect(clippy::trivially_copy_pass_by_ref)]
-fn not(b: &bool) -> bool {
-    !b
 }
 
 #[expect(clippy::trivially_copy_pass_by_ref)]

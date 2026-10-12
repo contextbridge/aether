@@ -11,7 +11,7 @@ use tracing::warn;
 use utils::shell_expander::ShellExpander;
 use utils::substitution::substitute_parameters;
 use utils::variables::VarError;
-use utils::{PathOrObject, ResourcePath, is_false, string_or_object_schema};
+use utils::{PathOrObject, ResourcePath, string_or_object_schema};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Prompt {
@@ -143,14 +143,14 @@ enum PromptSourceObject {
         /// Path to a prompt file, resolved as a resource path.
         path: ResourcePath,
         /// When true, a missing file is skipped instead of raising an error.
-        #[serde(default, skip_serializing_if = "is_false")]
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         optional: bool,
     },
     Glob {
         /// Glob pattern matching prompt files, resolved as a resource path.
         pattern: ResourcePath,
         /// When true, a zero-match glob is skipped instead of raising an error.
-        #[serde(default, skip_serializing_if = "is_false")]
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         optional: bool,
     },
 }

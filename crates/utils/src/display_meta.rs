@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -80,23 +78,6 @@ impl ToolResultMeta {
     }
 }
 
-pub fn extension_hint(path: &str) -> String {
-    Path::new(path).extension().and_then(|ext| ext.to_str()).unwrap_or("").to_lowercase()
-}
-
-impl ToolResultMeta {
-    pub fn into_map(self) -> serde_json::Map<String, serde_json::Value> {
-        match serde_json::to_value(self).expect("ToolResultMeta should serialize") {
-            serde_json::Value::Object(map) => map,
-            _ => unreachable!("ToolResultMeta should serialize to a JSON object"),
-        }
-    }
-
-    pub fn from_map(map: &serde_json::Map<String, serde_json::Value>) -> Option<Self> {
-        serde_json::from_value(serde_json::Value::Object(map.clone())).ok()
-    }
-}
-
 pub fn truncate(s: &str, max_length: usize) -> String {
     if s.chars().count() <= max_length {
         s.to_string()
@@ -129,12 +110,6 @@ mod tests {
         let json = serde_json::to_string(val).unwrap();
         let parsed: T = serde_json::from_str(&json).unwrap();
         assert_eq!(&parsed, val);
-    }
-
-    fn assert_map_roundtrip(meta: &ToolResultMeta) {
-        let map = meta.clone().into_map();
-        let parsed = ToolResultMeta::from_map(&map).expect("should deserialize");
-        assert_eq!(&parsed, meta);
     }
 
     fn sample_diff(old_text: Option<&str>) -> FileDiff {
@@ -180,35 +155,6 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_result_meta_map_roundtrips() {
-        let plain: ToolResultMeta = display("Read file", "Cargo.toml, 156 lines").into();
-        assert_map_roundtrip(&plain);
-
-        let with_diff = ToolResultMeta::with_file_diff(display("Edit file", "main.rs"), sample_diff(Some("old")));
-        assert_map_roundtrip(&with_diff);
-
-        let with_plan = ToolResultMeta::with_plan(
-            display("Todo", "Research AI agents"),
-            PlanMeta {
-                entries: vec![PlanMetaEntry {
-                    content: "Research AI agents".into(),
-                    status: PlanMetaStatus::InProgress,
-                }],
-            },
-        );
-        assert_map_roundtrip(&with_plan);
-    }
-
-    #[test]
-    fn test_tool_result_meta_from_invalid_map_returns_none() {
-        let map = serde_json::Map::from_iter([(
-            "display".to_string(),
-            serde_json::Value::String("not an object".to_string()),
-        )]);
-        assert!(ToolResultMeta::from_map(&map).is_none());
-    }
-
-    #[test]
     fn test_into_result_meta() {
         let d = display("Write file", "main.rs");
         let meta: ToolResultMeta = d.clone().into();
@@ -246,15 +192,6 @@ mod tests {
     fn test_file_diff_missing_old_text_defaults_to_none() {
         let parsed: FileDiff = serde_json::from_str(r#"{"path":"/tmp/f.rs","new_text":"content"}"#).unwrap();
         assert_eq!(parsed.old_text, None);
-    }
-
-    #[test]
-    fn test_extension_hint() {
-        for (path, expected) in
-            [("/path/to/main.rs", "rs"), ("README.MD", "md"), ("Makefile", ""), ("/foo/bar/baz.tsx", "tsx")]
-        {
-            assert_eq!(extension_hint(path), expected, "path: {path}");
-        }
     }
 
     #[test]

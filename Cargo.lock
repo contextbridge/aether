@@ -446,7 +446,6 @@ name = "aether-utils"
 version = "0.2.19"
 dependencies = [
  "futures",
- "noyalib",
  "regex",
  "schemars 1.2.2",
  "serde",

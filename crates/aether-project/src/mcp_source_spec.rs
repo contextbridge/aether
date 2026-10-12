@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use utils::variables::VarError;
-use utils::{PathOrObject, ResourcePath, is_false, string_or_object_schema};
+use utils::{PathOrObject, ResourcePath, string_or_object_schema};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum McpSourceSpec {
@@ -145,9 +145,9 @@ impl schemars::JsonSchema for McpSourceSpec {
 enum McpSourceSpecObject {
     File {
         path: ResourcePath,
-        #[serde(rename = "deferTools", default, skip_serializing_if = "is_false")]
+        #[serde(rename = "deferTools", default, skip_serializing_if = "std::ops::Not::not")]
         defer_tools: bool,
-        #[serde(default, skip_serializing_if = "is_false")]
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         optional: bool,
     },
     Inline {
