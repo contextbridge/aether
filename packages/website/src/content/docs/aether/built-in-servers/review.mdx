@@ -2,7 +2,7 @@
 title: Review
 ---
 
-Review MCP opens agent-authored artifacts for human review. It supports:
+The `review` server exposes a single `review_artifact` tool that opens agent-authored artifacts for human review. It supports:
 
 - **Markdown** (`format: "markdown"`) opens in Aether's in-terminal Markdown review UI.
 - **HTML** (`format: "html"`) opens in your browser with an annotation overlay for element-level comments.
@@ -14,6 +14,12 @@ Review MCP opens agent-authored artifacts for human review. It supports:
   }
 }
 ```
+
+Supported args:
+
+| Arg                 | Description                                                                     |
+| ------------------- | ------------------------------------------------------------------------------- |
+| `--root-dir <path>` | Workspace root used to resolve relative artifact paths. Users don't need to set this as Aether sets this automatically. |
 
 ## Markdown
 
@@ -33,3 +39,14 @@ Submit HTML inline, as a file path, or as the URL of a web app already running o
 {"format": "html", "source": {"type": "file", "path": "site/index.html"}}
 {"format": "html", "source": {"type": "url", "url": "http://localhost:5173/settings"}}
 ```
+
+## Results
+
+The tool's structured result reports one of the following statuses:
+
+| Status      | Meaning                                                                                              |
+| ----------- | ---------------------------------------------------------------------------------------------------- |
+| `approved`  | You approved the artifact.                                                                            |
+| `feedback`  | You submitted feedback: a `feedback` comment, plus `annotations` with element-level HTML comments when present. |
+| `cancelled` | The review UI was dismissed without a decision.                                                       |
+| `declined`  | You declined to review.                                                                               |

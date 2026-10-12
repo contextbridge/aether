@@ -76,7 +76,7 @@ aether headless --model bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0 \
 | `--output`          | `text \| pretty \| json` | Output format. Defaults to `text`.                                                                |
 | `-v, --verbose`     | flag                     | Verbose diagnostic logging to stderr.                                                             |
 | `--events`          | comma-separated list     | Event kinds to emit. Omit to emit all.                                                            |
-| `--provider`        | `provider.field=value`   | Provider override. Supports `PROVIDER.url`, `PROVIDER.auth`, `PROVIDER.request-model`, and `bedrock.inference-profile-arn`. |
+| `--provider`        | `provider.field=value`   | Provider override. Supports `PROVIDER.url`, `PROVIDER.auth`, `PROVIDER.request-model`, `PROVIDER.idle-timeout-secs`, and `bedrock.inference-profile-arn`. |
 
 `--sandbox-image` is a global CLI flag, so it can appear before the subcommand or in the subcommand options shown by help.
 

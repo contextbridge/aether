@@ -41,7 +41,7 @@ Permission modes:
 | ------------ | ---------------------------------------------------- |
 | `read_file`  | Read a file with optional line range.                |
 | `write_file` | Write content to a file, creating or overwriting it. |
-| `edit_file`  | Exact string replacement within a file.              |
+| `edit_file`  | Apply a batch of exact-string replacements atomically via the required `edits` array (`oldString`, `newString`, optional `replaceAll`). |
 
 ## Bash
 
@@ -49,7 +49,7 @@ Use shell commands through `bash` for text search, file discovery, structural se
 
 | Tool                   | Description                                                                                     |
 | ---------------------- | ----------------------------------------------------------------------------------------------- |
-| `bash`                 | Execute a shell command. Pass `timeout` to cap execution time (max 600000 ms), or `run_in_background` to run it as a background MCP task that returns its complete output at completion. |
+| `bash`                 | Execute a shell command. Pass `timeout` to cap execution time (max 600000 ms), or `run_in_background` to run it as a background MCP task whose results are delivered automatically when it completes. |
 
 Because `bash` spawns real subprocesses, it composes with [deferred (proxied) tools](/aether/settings/mcp-servers/#merging-and-deferred-tool-behavior) from other MCP servers via the `aether mcp` CLI — pipelines, redirects, and command substitution all work.
 
@@ -66,6 +66,6 @@ Unless `--disable-lsp` is set, Aether wires LSP-backed tools into the `coding` s
 
 | Tool               | Description                                                |
 | ------------------ | ---------------------------------------------------------- |
-| `lsp_symbol`       | Definition, references, and hover for a symbol.            |
+| `lsp_symbol`       | Definition, references, or hover lookup for a symbol, selected via the required `operation` parameter. |
 | `lsp_check_errors` | Compiler diagnostics without running a full build command. |
 | `lsp_rename`       | Rename a symbol across the workspace.                      |
