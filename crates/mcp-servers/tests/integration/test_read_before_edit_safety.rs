@@ -18,7 +18,7 @@ async fn test_edit_file_without_read_fails() {
     let test_file = temp_dir.path().join("test.txt");
     fs::write(&test_file, "original content").unwrap();
 
-    let mcp = CodingMcp::new();
+    let mcp = CodingMcp::new(temp_dir.path());
 
     // Try to edit without reading first
     let edit_args =
@@ -39,7 +39,7 @@ async fn test_edit_file_after_read_succeeds() {
     let test_file = temp_dir.path().join("test.txt");
     fs::write(&test_file, "original content").unwrap();
 
-    let mcp = CodingMcp::new();
+    let mcp = CodingMcp::new(temp_dir.path());
 
     // First read the file
     let read_args = ReadFileArgs { file_path: test_file.to_string_lossy().to_string(), offset: None, limit: None };
@@ -65,7 +65,7 @@ async fn test_write_existing_file_without_read_fails() {
     let test_file = temp_dir.path().join("test.txt");
     fs::write(&test_file, "original content").unwrap();
 
-    let mcp = CodingMcp::new();
+    let mcp = CodingMcp::new(temp_dir.path());
 
     // Try to write without reading first
     let write_args =
@@ -86,7 +86,7 @@ async fn test_write_existing_file_after_read_succeeds() {
     let test_file = temp_dir.path().join("test.txt");
     fs::write(&test_file, "original content").unwrap();
 
-    let mcp = CodingMcp::new();
+    let mcp = CodingMcp::new(temp_dir.path());
 
     // First read the file
     let read_args = ReadFileArgs { file_path: test_file.to_string_lossy().to_string(), offset: None, limit: None };
@@ -111,7 +111,7 @@ async fn test_write_new_file_without_read_succeeds() {
     let temp_dir = TempDir::new().unwrap();
     let test_file = temp_dir.path().join("new_file.txt");
 
-    let mcp = CodingMcp::new();
+    let mcp = CodingMcp::new(temp_dir.path());
 
     // Write to a file that doesn't exist - should succeed
     let write_args =
@@ -135,7 +135,7 @@ async fn test_multiple_files_tracked_independently() {
     fs::write(&file1, "content 1").unwrap();
     fs::write(&file2, "content 2").unwrap();
 
-    let mcp = CodingMcp::new();
+    let mcp = CodingMcp::new(temp_dir.path());
 
     // Read file1
     let read_args = ReadFileArgs { file_path: file1.to_string_lossy().to_string(), offset: None, limit: None };
@@ -156,7 +156,7 @@ async fn test_failed_read_doesnt_track_file() {
     let temp_dir = TempDir::new().unwrap();
     let nonexistent_file = temp_dir.path().join("doesnt_exist.txt");
 
-    let mcp = CodingMcp::new();
+    let mcp = CodingMcp::new(temp_dir.path());
 
     // Try to read a file that doesn't exist
     let read_args =

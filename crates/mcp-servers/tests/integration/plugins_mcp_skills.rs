@@ -1,5 +1,6 @@
-use crate::common::{TestClient, TestResult, create_test_files, load_skills_input, skills_server};
+use crate::common::{McpClientExt, TestResult, connect, create_test_files, load_skills_input, skills_server};
 use mcp_servers::skills::tools::ListSkillsInput;
+use mcp_utils::client::ClientOptions;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use utils::MarkdownFile;
@@ -55,7 +56,7 @@ async fn test_load_skills_tool() -> TestResult {
     ];
 
     let temp_dir = create_test_files(&test_files);
-    let mcp = TestClient::start(|| skills_server(temp_dir.path())).await?;
+    let mcp = connect(skills_server(temp_dir.path()), ClientOptions::default()).await;
 
     let parsed =
         mcp.call("get_skills", load_skills_input(&[("skill-1", None), ("skill-2", None), ("skill-3", None)])).await?;
@@ -94,7 +95,7 @@ async fn test_list_skills_only_returns_agent_invocable_entries() -> TestResult {
     ];
 
     let temp_dir = create_test_files(&test_files);
-    let mcp = TestClient::start(|| skills_server(temp_dir.path())).await?;
+    let mcp = connect(skills_server(temp_dir.path()), ClientOptions::default()).await;
 
     let parsed = mcp.call("list_skills", ListSkillsInput::default()).await?;
 
@@ -122,7 +123,7 @@ async fn test_load_skills_with_missing() -> TestResult {
     ];
 
     let temp_dir = create_test_files(&test_files);
-    let mcp = TestClient::start(|| skills_server(temp_dir.path())).await?;
+    let mcp = connect(skills_server(temp_dir.path()), ClientOptions::default()).await;
 
     let parsed = mcp
         .call("get_skills", load_skills_input(&[("skill-1", None), ("nonexistent-skill", None), ("skill-2", None)]))
@@ -160,7 +161,7 @@ async fn test_get_skills_rejects_non_agent_invocable_prompts() -> TestResult {
     ];
 
     let temp_dir = create_test_files(&test_files);
-    let mcp = TestClient::start(|| skills_server(temp_dir.path())).await?;
+    let mcp = connect(skills_server(temp_dir.path()), ClientOptions::default()).await;
 
     let parsed = mcp
         .call("get_skills", load_skills_input(&[("allowed", None), ("user-only", None), ("rule-only", None)]))
@@ -194,7 +195,7 @@ async fn test_load_auxiliary_file() -> TestResult {
     ];
 
     let temp_dir = create_test_files(&test_files);
-    let mcp = TestClient::start(|| skills_server(temp_dir.path())).await?;
+    let mcp = connect(skills_server(temp_dir.path()), ClientOptions::default()).await;
 
     let parsed = mcp.call("get_skills", load_skills_input(&[("test-skill", None)])).await?;
     let file = &parsed["files"][0];
@@ -217,7 +218,7 @@ async fn test_reject_traversal() -> TestResult {
     let test_files = vec![("skills/test-skill/SKILL.md", "---\ndescription: Test\nagent-invocable: true\n---\n# Test")];
 
     let temp_dir = create_test_files(&test_files);
-    let mcp = TestClient::start(|| skills_server(temp_dir.path())).await?;
+    let mcp = connect(skills_server(temp_dir.path()), ClientOptions::default()).await;
 
     let parsed = mcp.call("get_skills", load_skills_input(&[("test-skill", Some("../other-skill/SKILL.md"))])).await?;
     let file = &parsed["files"][0];
@@ -231,7 +232,7 @@ async fn test_reject_absolute_path() -> TestResult {
     let test_files = vec![("skills/test-skill/SKILL.md", "---\ndescription: Test\nagent-invocable: true\n---\n# Test")];
 
     let temp_dir = create_test_files(&test_files);
-    let mcp = TestClient::start(|| skills_server(temp_dir.path())).await?;
+    let mcp = connect(skills_server(temp_dir.path()), ClientOptions::default()).await;
 
     let parsed = mcp.call("get_skills", load_skills_input(&[("test-skill", Some("/etc/passwd"))])).await?;
     let file = &parsed["files"][0];
@@ -243,9 +244,9 @@ async fn test_reject_absolute_path() -> TestResult {
 #[tokio::test]
 async fn list_skills_input_schema_has_properties_object() -> TestResult {
     let temp_dir = create_test_files(&[]);
-    let mcp = TestClient::start(|| skills_server(temp_dir.path())).await?;
+    let mcp = connect(skills_server(temp_dir.path()), ClientOptions::default()).await;
 
-    let tools = mcp.raw().peer().list_all_tools().await?;
+    let tools = mcp.list_tools().await?;
     let tool = tools.into_iter().find(|tool| tool.name.as_ref() == "list_skills").expect("list_skills tool present");
 
     let schema = serde_json::Value::Object((*tool.input_schema).clone());

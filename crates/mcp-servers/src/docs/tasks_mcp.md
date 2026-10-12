@@ -10,16 +10,18 @@ Provides tools for creating, listing, and updating tasks organized into trees wi
 # Construction
 
 ```rust,ignore
-use mcp_servers::TasksMcp;
+use clap::Parser;
+use mcp_servers::{TasksMcp, TasksMcpArgs};
 
 // Session-scoped
 let server = TasksMcp::new();
 
-// Persistent
-let server = TasksMcp::new_persistent("/my/project/.aether-tasks".into());
+// Persistent, in /my/project/.aether-tasks
+let server = TasksMcp::new_persistent("/my/project");
 
-// From CLI args (e.g. --dir /path)
-let server = TasksMcp::from_args(vec!["--dir".into(), ".".into()]).unwrap();
+// From CLI args (e.g. --dir /path), with a relative --dir resolved against a base directory
+let args = TasksMcpArgs::try_parse_from(["--dir", "."])?;
+let server = TasksMcp::from_args(args, "/my/project".as_ref());
 ```
 
 # Tools provided

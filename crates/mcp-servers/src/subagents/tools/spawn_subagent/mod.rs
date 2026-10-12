@@ -1,10 +1,10 @@
-use crate::setup::McpBuilderExt;
+use crate::setup::agent_mcp;
 use crate::subagents::SubAgentProgressSink;
 use aether_core::{
-    agent_spec::McpConfigSource,
-    core::{AgentBuilder, AgentDeps, AgentHandle, recv_agent_event},
+    agent_spec::AgentSpec,
+    core::{AgentBuilder, AgentDeps, AgentError, AgentHandle, AgentRegistryError, recv_agent_event},
     events::{AgentEvent, Command, MessageEvent, SubAgentProgressPayload, TurnEvent, TurnOutcome, UserCommand},
-    mcp::{McpRuntime, McpSession, mcp},
+    mcp::{McpCatalog, McpSpawnError, ParseError},
 };
 use futures::FutureExt;
 use llm::{ContentBlock, MessageId};
@@ -12,8 +12,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
+use std::time::Duration;
+use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
+use tokio::time::timeout;
 use utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 use utils::panic::panic_message;
 
@@ -224,30 +227,24 @@ impl AgentExecutor {
     async fn execute_single(&self, task_id: String, task: SubAgentTask) -> SubAgentResult {
         let agent_name = task.agent_name.clone();
 
-        let result: Result<String, String> = async {
-            let spec = self
-                .deps
-                .agent_registry
-                .resolve_agent_invocable(&task.agent_name)
-                .map_err(|error| error.to_string())?;
+        let result: Result<String, SubAgentError> = async {
+            let spec = self.deps.agent_registry.resolve_agent_invocable(&task.agent_name)?;
 
-            let mut spawn = self.spawn_mcps(&spec.mcp_config_sources, spec.tools.clone()).await?;
-            spawn.block_until_ready().await.ok_or_else(|| "MCP bootstrap aborted before completion".to_string())?;
-            let mcp = spawn.handle().clone();
+            let mcp = self.spawn_mcp(&spec)?;
+            if timeout(MCP_READY_TIMEOUT, mcp.ready()).await.is_err() {
+                tracing::warn!(agent = %agent_name, "Starting sub-agent before every MCP server connected");
+            }
 
-            let (user_tx, mut agent_rx, agent_handle) = self.spawn_agent(spec, mcp).await?;
-            let (mcp_runtime, _) = spawn.connect_agent(user_tx.clone()).await.split();
-            let running_agent = RunningAgent { user_tx, agent_handle, _mcp_runtime: mcp_runtime };
+            let (user_tx, mut agent_rx, _agent) = self.spawn_agent(&spec, mcp).await?;
 
             let prompt_with_instructions = format!("{}\n\n{}", task.prompt, STRUCTURED_OUTPUT_INSTRUCTIONS);
-            running_agent
-                .user_tx
+            user_tx
                 .send(Command::UserCommand(UserCommand::Text {
                     message_id: MessageId::new(),
                     content: vec![ContentBlock::text(&prompt_with_instructions)],
                 }))
                 .await
-                .map_err(|e| format!("Failed to send message to agent: {e}"))?;
+                .map_err(|_| SubAgentError::Stopped)?;
 
             self.report(&task_id, &agent_name, &AgentEvent::Turn(TurnEvent::Started { content: vec![] })).await;
 
@@ -264,8 +261,8 @@ impl AgentExecutor {
 
                     AgentEvent::Turn(TurnEvent::Ended { outcome }) => match outcome {
                         TurnOutcome::Completed => return Ok(final_output),
-                        TurnOutcome::Failed { error, .. } => return Err(format!("Agent error: {error}")),
-                        TurnOutcome::Cancelled => return Err("Agent cancelled".to_string()),
+                        TurnOutcome::Failed { error, .. } => return Err(SubAgentError::Failed(error.clone())),
+                        TurnOutcome::Cancelled => return Err(SubAgentError::Cancelled),
                     },
 
                     _ => {}
@@ -282,9 +279,13 @@ impl AgentExecutor {
                 output: Some(output),
                 error: None,
             },
-            Err(error) => {
-                SubAgentResult { task_id, agent_name, status: SubAgentStatus::Error, output: None, error: Some(error) }
-            }
+            Err(error) => SubAgentResult {
+                task_id,
+                agent_name,
+                status: SubAgentStatus::Error,
+                output: None,
+                error: Some(error.to_string()),
+            },
         }
     }
 
@@ -302,51 +303,43 @@ impl AgentExecutor {
         }
     }
 
-    async fn spawn_mcps(
-        &self,
-        effective_mcp_config_sources: &[McpConfigSource],
-        tool_filter: mcp_utils::client::ToolFilter,
-    ) -> Result<McpSession, String> {
-        let mut builder = mcp(&self.project_root)
-            .with_tool_filter(tool_filter)
-            .with_agent_deps(self.deps.clone())
-            .with_builtin_servers();
-
-        if !effective_mcp_config_sources.is_empty() {
-            builder = builder
-                .from_mcp_config_sources(effective_mcp_config_sources)
-                .map_err(|e| format!("Failed to load mcp configs: {e}"))?;
-        }
-
-        builder.spawn().await.map_err(|e| format!("Failed to spawn MCP manager: {e}"))
+    fn spawn_mcp(&self, spec: &AgentSpec) -> Result<McpCatalog, SubAgentError> {
+        let builder =
+            agent_mcp(&self.project_root, self.deps.clone(), spec.tools.clone()).with_config(spec.mcp.clone())?;
+        Ok(builder.spawn()?)
     }
 
     async fn spawn_agent(
         &self,
-        spec: aether_core::agent_spec::AgentSpec,
-        mcp: aether_core::mcp::McpHandle,
-    ) -> Result<(mpsc::Sender<Command>, mpsc::Receiver<AgentEvent>, AgentHandle), String> {
-        AgentBuilder::from_spec(&spec, vec![], &self.deps)
-            .await
-            .map_err(|e| format!("Failed to build agent from spec: {e}"))?
-            .tools(mcp, Vec::new())
-            .spawn()
-            .await
-            .map_err(|e| format!("Failed to spawn agent: {e}"))
+        spec: &AgentSpec,
+        mcp: McpCatalog,
+    ) -> Result<(mpsc::Sender<Command>, mpsc::Receiver<AgentEvent>, AgentHandle), SubAgentError> {
+        let builder = AgentBuilder::from_spec(spec, &self.deps).await.map_err(SubAgentError::Build)?;
+        builder.mcp(mcp).spawn().await.map_err(SubAgentError::Spawn)
     }
 }
 
-struct RunningAgent {
-    user_tx: mpsc::Sender<Command>,
-    agent_handle: AgentHandle,
-    _mcp_runtime: McpRuntime,
+#[derive(Debug, Error)]
+enum SubAgentError {
+    #[error(transparent)]
+    Resolve(#[from] AgentRegistryError),
+    #[error("Failed to load MCP configs: {0}")]
+    McpConfig(#[from] ParseError),
+    #[error("Failed to spawn MCP servers: {0}")]
+    McpSpawn(#[from] McpSpawnError),
+    #[error("Failed to build agent from spec: {0}")]
+    Build(#[source] AgentError),
+    #[error("Failed to spawn agent: {0}")]
+    Spawn(#[source] AgentError),
+    #[error("Agent stopped before it received its task")]
+    Stopped,
+    #[error("Agent error: {0}")]
+    Failed(String),
+    #[error("Agent cancelled")]
+    Cancelled,
 }
 
-impl Drop for RunningAgent {
-    fn drop(&mut self) {
-        self.agent_handle.abort();
-    }
-}
+const MCP_READY_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[cfg(test)]
 mod tests {

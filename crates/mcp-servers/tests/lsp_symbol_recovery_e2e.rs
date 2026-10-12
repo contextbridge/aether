@@ -3,9 +3,9 @@ mod common;
 
 use aether_lspd::testing::{TestDaemon, configure_fake_server};
 use aether_lspd::{LanguageId, socket_path};
-use common::{call_tool, call_tool_error, test_client_info};
+use common::{call_tool, call_tool_error, connect};
 use mcp_servers::coding::CodingMcp;
-use mcp_utils::testing::connect;
+use mcp_utils::client::ClientOptions;
 use std::time::Duration;
 use tempfile::tempdir;
 
@@ -22,8 +22,8 @@ async fn symbol_lookup_recovers_after_language_server_timeout() {
     let daemon = TestDaemon::spawn(root.path(), LanguageId::TypeScript, Duration::from_secs(1))
         .await
         .expect("Failed to spawn test daemon");
-    let server = CodingMcp::new().with_lsp(root.path().to_path_buf());
-    let (server_handle, client) = connect(server, test_client_info()).await.expect("Failed to connect");
+    let server = CodingMcp::new(root.path()).with_lsp();
+    let client = connect(server, ClientOptions::default()).await;
     let lookup = |operation: &str| serde_json::json!({ "operation": operation, "file_path": "example.ts", "symbol": "example_fn", "line": 1 });
 
     let error = call_tool_error(&client, "lsp_symbol", lookup("definition")).await;
@@ -33,8 +33,7 @@ async fn symbol_lookup_recovers_after_language_server_timeout() {
     let hover = result["hoverContents"].as_str().unwrap_or_default();
     assert!(hover.contains("export function example_fn"), "{result}");
 
-    drop(client);
-    drop(server_handle);
+    client.close().await;
     daemon.shutdown().expect("Failed to shut down test daemon");
     assert!(!socket_path(root.path(), LanguageId::TypeScript).exists());
 }

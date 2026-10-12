@@ -40,7 +40,7 @@ aether-project = { path = "../aether-project", version = "0.5.58" }
 aether-telemetry = { path = "../aether-telemetry", version = "0.3.13" }
 llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.9.13" }
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.7.13" }
-mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.8.4" }
+mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["subagents"], version = "0.8.4" }
 wisp = { package = "aether-wisp", path = "../wisp", version = "0.7.14" }
 ratatui = { workspace = true }
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["websocket"], version = "0.5.13" }

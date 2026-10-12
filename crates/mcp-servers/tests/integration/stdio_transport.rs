@@ -1,36 +1,26 @@
-#![cfg(feature = "stdio")]
+#![cfg(feature = "subagents")]
 
-use rmcp::ServiceExt;
-use rmcp::model::CallToolRequestParams;
-use rmcp::transport::TokioChildProcess;
-use std::process::Stdio;
-use tokio::process::Command;
+use crate::common::call_tool;
+use mcp_utils::client::{ClientError, ClientOptions, McpClient, Transport};
+use serde_json::json;
+use std::collections::HashMap;
 
-fn stdio_binary() -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_mcp-servers-stdio"));
-    cmd.stdin(Stdio::piped()).stdout(Stdio::piped());
-    cmd
+async fn connect(args: &[&str], env: HashMap<String, String>) -> Result<McpClient, ClientError> {
+    let command = env!("CARGO_BIN_EXE_mcp-servers-stdio").to_string();
+    let args = args.iter().map(ToString::to_string).collect();
+    McpClient::connect("stdio", Transport::Stdio { command, args, env, cwd: None }, &ClientOptions::default()).await
 }
 
 fn tool_names(tools: &[rmcp::model::Tool]) -> Vec<&str> {
     tools.iter().map(|t| t.name.as_ref()).collect()
 }
 
-fn extract_text(content: &rmcp::model::ContentBlock) -> &str {
-    content.as_text().expect("expected text content").text.as_str()
-}
-
 async fn connect_and_list_tools(server: &str, extra_args: &[&str]) -> Vec<rmcp::model::Tool> {
     let aether_home = tempfile::tempdir().expect("create temp aether home");
-    let mut cmd = stdio_binary();
-    cmd.env("AETHER_HOME", aether_home.path().join(".aether"));
-    cmd.arg("--server").arg(server);
-    for arg in extra_args {
-        cmd.arg(arg);
-    }
-    let transport = TokioChildProcess::new(cmd).expect("spawn stdio server");
-    let client = ().serve(transport).await.expect("connect to server");
-    client.peer().list_all_tools().await.expect("list tools")
+    let env = HashMap::from([("AETHER_HOME".to_string(), aether_home.path().join(".aether").display().to_string())]);
+    let args = [&["--server", server], extra_args].concat();
+    let client = connect(&args, env).await.expect("connect to server");
+    client.list_tools().await.expect("list tools")
 }
 
 #[tokio::test]
@@ -50,47 +40,18 @@ async fn tasks_server_lists_tools_over_stdio() {
 async fn tasks_server_create_and_get_task_over_stdio() {
     let tmp = tempfile::tempdir().expect("create temp dir");
 
-    let mut cmd = stdio_binary();
-    cmd.arg("--server").arg("tasks");
-    cmd.arg("--").arg("--dir").arg(tmp.path());
+    let dir = tmp.path().to_str().unwrap();
+    let client = connect(&["--server", "tasks", "--", "--dir", dir], HashMap::new()).await.expect("connect to server");
 
-    let transport = TokioChildProcess::new(cmd).expect("spawn stdio server");
-    let client = ().serve(transport).await.expect("connect to server");
-
-    // This test exercises call_tool, so it doesn't use connect_and_list_tools.
-    // Create a task
-    let create_result = client
-        .peer()
-        .call_tool(
-            rmcp::model::CallToolRequestParams::new("task_create").with_arguments(
-                serde_json::json!({
-                    "title": "Test task",
-                    "description": "A test task created over stdio"
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-        )
-        .await
-        .expect("call task_create");
-
-    let text = extract_text(create_result.content.first().expect("response has content"));
-    let created: serde_json::Value = serde_json::from_str(text).expect("parse JSON response");
+    let created = call_tool(
+        &client,
+        "task_create",
+        json!({ "title": "Test task", "description": "A test task created over stdio" }),
+    )
+    .await;
     let task_id = created["task"]["id"].as_str().expect("task has id");
 
-    // Get the task back
-    let get_result = client
-        .peer()
-        .call_tool(
-            CallToolRequestParams::new("task_get")
-                .with_arguments(serde_json::json!({ "id": task_id }).as_object().unwrap().clone()),
-        )
-        .await
-        .expect("call task_get");
-
-    let get_text = extract_text(get_result.content.first().expect("response has content"));
-    let fetched: serde_json::Value = serde_json::from_str(get_text).expect("parse JSON response");
+    let fetched = call_tool(&client, "task_get", json!({ "id": task_id })).await;
     assert_eq!(fetched["task"]["title"].as_str(), Some("Test task"));
 }
 
@@ -127,11 +88,7 @@ async fn coding_server_accepts_rules_dir_over_stdio() {
 
 #[tokio::test]
 async fn lsp_server_is_not_available_over_stdio() {
-    let mut cmd = stdio_binary();
-    cmd.arg("--server").arg("lsp");
-
-    let transport = TokioChildProcess::new(cmd).expect("spawn stdio server");
-    let result = ().serve(transport).await;
+    let result = connect(&["--server", "lsp"], HashMap::new()).await;
 
     assert!(result.is_err(), "expected lsp server to be unavailable");
 }
@@ -184,11 +141,7 @@ async fn review_server_lists_tools_over_stdio() {
 
 #[tokio::test]
 async fn unknown_server_exits_with_error() {
-    let mut cmd = stdio_binary();
-    cmd.arg("--server").arg("nonexistent");
-
-    let transport = TokioChildProcess::new(cmd).expect("spawn process");
-    let result = ().serve(transport).await;
+    let result = connect(&["--server", "nonexistent"], HashMap::new()).await;
 
     assert!(result.is_err(), "expected error for unknown server name");
 }

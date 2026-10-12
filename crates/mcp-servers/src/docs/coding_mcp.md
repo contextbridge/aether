@@ -7,21 +7,20 @@ Use the builder-style methods to configure the server:
 ```rust,ignore
 use mcp_servers::CodingMcp;
 
-// Default: local filesystem tools, no LSP
-let server = CodingMcp::new();
+// Default: local filesystem tools rooted at the project, no LSP
+let server = CodingMcp::new("/my/project");
 
-// With LSP code intelligence and explicit read-rule directories
-let server = CodingMcp::new()
+// With LSP code intelligence for that root and explicit read-rule directories
+let server = CodingMcp::new("/my/project")
     .with_rules_dirs(vec!["/my/project/.aether/skills".into(), "/my/project/.claude/rules".into()])
-    .with_lsp("/my/project".into())
-    .with_root_dir("/my/project".into())
+    .with_lsp()
     .with_permission_mode(mcp_servers::PermissionMode::Auto);
 ```
 
 For custom tool backends, use [`CodingMcp::with_tools`]:
 
 ```rust,ignore
-let server = CodingMcp::with_tools(my_custom_tools);
+let server = CodingMcp::with_tools("/my/project", my_custom_tools);
 ```
 
 # Tools provided

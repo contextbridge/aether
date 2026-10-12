@@ -1,5 +1,6 @@
-use crate::common::{connect_lsp, poll_lsp_tool};
+use crate::common::{coding_with_lsp, connect, poll_lsp_tool};
 use aether_lspd::testing::{NodeProject, TestProject};
+use mcp_utils::client::ClientOptions;
 
 #[tokio::test]
 async fn test_ts_hover_returns_type_info() {
@@ -7,7 +8,7 @@ async fn test_ts_hover_returns_type_info() {
     project.add_file("src/index.ts", "const x: number = 42;\nconsole.log(x);\n").expect("Failed to add file");
 
     let index_ts = project.file_path_str("src/index.ts");
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
 
     let result = poll_lsp_tool(
         &client,
@@ -42,7 +43,7 @@ console.log(msg);
         )
         .expect("Failed to add file");
 
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
 
     let result = poll_lsp_tool(
         &client,
@@ -78,7 +79,7 @@ console.log(a, b);
         .expect("Failed to add file");
 
     let index_ts = project.file_path_str("src/index.ts");
-    let (_server_handle, client) = connect_lsp(&project).await;
+    let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
 
     let result = poll_lsp_tool(
         &client,

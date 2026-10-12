@@ -1,3 +1,4 @@
+use crate::server_config;
 use aether_project::PromptCatalog;
 use clap::Parser;
 use rmcp::{
@@ -8,18 +9,16 @@ use rmcp::{
         wrapper::{Json, Parameters},
     },
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ContentBlock, CreateTaskResult,
-        ElicitRequest, ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationSchema, EnumSchema,
-        GetTaskParams, GetTaskResult, Implementation, InputRequest, InputRequests, InputRequiredResult,
-        ProgressNotificationParam, ServerCapabilities, ServerConfig, UpdateTaskParams,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, CreateTaskResult, ElicitRequest,
+        ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationSchema, EnumSchema, InputRequest,
+        InputRequests, InputRequiredResult, ProgressNotificationParam, ServerCapabilities, ServerConfig,
     },
-    service::RequestContext,
-    task_manager::{TaskContext, TaskExit, TaskManager, TaskOptions},
+    service::{ElicitationMode, RequestContext},
     tool, tool_handler, tool_router,
 };
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter, Write as _};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::fs::try_exists;
 
@@ -32,17 +31,15 @@ pub mod tools_trait;
 pub use default_tools::DefaultCodingTools;
 pub use tools_trait::CodingTools;
 
+use crate::background_tasks::{BackgroundTasks, delegate_background_tasks};
 use crate::coding::error::CodingError;
+use crate::coding::prompt_rule_matcher::PromptRuleMatcher;
+use crate::lsp::registry::LspRegistry;
 use crate::lsp::tools::check_errors::{LspDiagnosticsOutput, LspDiagnosticsRequest, execute_lsp_diagnostics};
+use crate::lsp::tools::rename::{LspRenameInput, LspRenameOutput, execute_lsp_rename};
 use crate::lsp::tools::symbol_lookup::{LspSymbolInput, LspSymbolOutput, execute_lsp_symbol};
-use crate::workspace_paths::WorkspacePaths;
-use crate::{coding::prompt_rule_matcher::PromptRuleMatcher, lsp::registry::LspRegistry};
-use crate::{
-    error::ServerInitError,
-    lsp::tools::rename::{LspRenameInput, LspRenameOutput, execute_lsp_rename},
-};
-use mcp_utils::server::mrtr::{input_requests_supported, parse_response};
-use mcp_utils::server::tasks::{BACKGROUND_TASK_TTL_MS, require_tasks_capability};
+use crate::request_context::{CLIENT_CANNOT_ELICIT, parse_response, require_tasks, supports_elicitation};
+use crate::workspace_paths::{WorkspacePaths, resolve_path, resolve_root};
 
 use tools::bash::{BashInput, BashOutput, validate_args};
 use tools::edit_file::{EditFileArgs, EditFileResponse, edit_file_contents};
@@ -68,7 +65,8 @@ pub enum PermissionMode {
 }
 
 /// CLI arguments for `CodingMcp` server
-#[derive(Debug, Clone, Default, Parser)]
+#[derive(Debug, Clone, Parser)]
+#[command(name = "coding", no_binary_name = true)]
 pub struct CodingMcpArgs {
     /// Root directory for path resolution and LSP initialization.
     #[arg(long = "root-dir")]
@@ -88,19 +86,10 @@ pub struct CodingMcpArgs {
     pub disable_lsp: bool,
 }
 
-impl CodingMcpArgs {
-    pub fn from_args(args: Vec<String>) -> Result<Self, ServerInitError> {
-        let mut full_args = vec!["coding-mcp".to_string()];
-        full_args.extend(args);
-
-        Self::try_parse_from(full_args).map_err(ServerInitError::InvalidArgs)
-    }
-}
-
 #[doc = include_str!("../docs/coding_mcp.md")]
 pub struct CodingMcp<T: CodingTools = DefaultCodingTools> {
     tool_router: ToolRouter<Self>,
-    task_manager: TaskManager,
+    tasks: BackgroundTasks,
     read_state: Mutex<ReadState>,
     tools: Arc<T>,
     /// Optional LSP operations (enabled with `.with_lsp()`)
@@ -122,10 +111,11 @@ pub struct CodingMcp<T: CodingTools = DefaultCodingTools> {
 #[tool_handler(router = self.tool_router)]
 impl<T: CodingTools + 'static> ServerHandler for CodingMcp<T> {
     fn get_info(&self) -> ServerConfig {
-        let instructions = self.build_instructions();
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_tasks().build())
-            .with_server_info(Implementation::new("coding-mcp", "0.1.0"))
-            .with_instructions(instructions)
+        server_config(
+            "coding-mcp",
+            ServerCapabilities::builder().enable_tools().enable_tasks().build(),
+            self.build_instructions(),
+        )
     }
 
     async fn call_tool(
@@ -135,12 +125,16 @@ impl<T: CodingTools + 'static> ServerHandler for CodingMcp<T> {
     ) -> Result<CallToolResponse, ErrorData> {
         let background_args = background_bash_args(&request);
         if let Some(args) = &background_args {
-            require_tasks_capability(&context)?;
+            require_tasks(&context)?;
             validate_args(args).map_err(|error| ErrorData::invalid_params(error.to_string(), None))?;
         }
 
         if let Some(prompt) = self.permission_prompt(&request) {
             let Some(responses) = request.input_responses.clone() else {
+                if !supports_elicitation(&context, ElicitationMode::Form) {
+                    let message = permission_unsupported(&prompt.tool_name);
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(message)]).into());
+                }
                 let requests = InputRequests::from([(
                     "permission".to_string(),
                     InputRequest::Elicitation(ElicitRequest::new(decision_form(
@@ -148,10 +142,6 @@ impl<T: CodingTools + 'static> ServerHandler for CodingMcp<T> {
                         &prompt.description,
                     ))),
                 )]);
-                if !input_requests_supported(context.client_capabilities().as_ref(), &requests) {
-                    let message = permission_unsupported(&prompt.tool_name);
-                    return Ok(CallToolResult::error(vec![ContentBlock::text(message)]).into());
-                }
                 return Ok(InputRequiredResult::from_input_requests(requests).into());
             };
 
@@ -171,35 +161,13 @@ impl<T: CodingTools + 'static> ServerHandler for CodingMcp<T> {
         self.tool_router.call(ToolCallContext::new(self, request, context)).await
     }
 
-    fn get_task(
-        &self,
-        request: GetTaskParams,
-        _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<GetTaskResult, ErrorData>> + Send + '_ {
-        std::future::ready(self.task_manager.get_task(&request.task_id).map(GetTaskResult::new))
-    }
-
-    fn update_task(
-        &self,
-        request: UpdateTaskParams,
-        _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<(), ErrorData>> + Send + '_ {
-        std::future::ready(self.task_manager.update_task(&request.task_id, request.input_responses))
-    }
-
-    fn cancel_task(
-        &self,
-        request: CancelTaskParams,
-        _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<(), ErrorData>> + Send + '_ {
-        std::future::ready(self.task_manager.cancel_task(&request.task_id))
-    }
+    delegate_background_tasks!(tasks);
 }
 
 impl CodingMcp<DefaultCodingTools> {
     /// Create a new `CodingMcp` with default (local filesystem) tools
-    pub fn new() -> Self {
-        Self::with_tools(DefaultCodingTools::new())
+    pub fn new(root_dir: impl Into<PathBuf>) -> Self {
+        Self::with_tools(root_dir, DefaultCodingTools::new())
     }
 }
 
@@ -252,16 +220,16 @@ fn is_dangerous_cmd(command: &str) -> bool {
 #[tool_router]
 impl<T: CodingTools + 'static> CodingMcp<T> {
     /// Create a `CodingMcp` with custom tool implementation
-    pub fn with_tools(tools: T) -> Self {
+    pub fn with_tools(root_dir: impl Into<PathBuf>, tools: T) -> Self {
         Self {
             tool_router: Self::tool_router(),
-            task_manager: TaskManager::new(),
+            tasks: BackgroundTasks::new(),
             read_state: Mutex::new(ReadState::default()),
             tools: Arc::new(tools),
             lsp: None,
             web_fetcher: WebFetcher::new(),
             web_searcher: WebSearcher::try_new().ok(),
-            root_dir: crate::workspace_paths::current_dir(),
+            root_dir: root_dir.into(),
             configured_rules_dirs: Vec::new(),
             permission_mode: PermissionMode::AlwaysAllow,
             spill_dir: Arc::new(TempDir::new()),
@@ -270,18 +238,21 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
         }
     }
 
-    /// Enable LSP code intelligence for the given project root.
+    pub fn from_args(args: CodingMcpArgs, base_dir: &Path, tools: T) -> Self {
+        let CodingMcpArgs { root_dir, rules_dirs, permission_mode, disable_lsp } = args;
+        let root_dir = resolve_root(base_dir, root_dir);
+        let rules_dirs = rules_dirs.into_iter().map(|path| resolve_path(&root_dir, path)).collect();
+        let server =
+            Self::with_tools(root_dir, tools).with_rules_dirs(rules_dirs).with_permission_mode(permission_mode);
+        if disable_lsp { server } else { server.with_lsp() }
+    }
+
+    /// Enable LSP code intelligence for the server's root directory.
     ///
     /// LSP servers for detected project languages are spawned immediately
     /// in the background, allowing indexing to start right away.
-    pub fn with_lsp(mut self, root_path: PathBuf) -> Self {
-        self.lsp = Some(LspRegistry::new_and_spawn(root_path));
-        self
-    }
-
-    /// Set the root directory.
-    pub fn with_root_dir(mut self, root_dir: PathBuf) -> Self {
-        self.root_dir = root_dir;
+    pub fn with_lsp(mut self) -> Self {
+        self.lsp = Some(LspRegistry::new_and_spawn(self.root_dir.clone()));
         self
     }
 
@@ -305,20 +276,14 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
         let spill_dir = Arc::clone(&self.spill_dir);
         let truncator = self.bash_truncator;
         let description = args.description.clone().unwrap_or_else(|| truncate(&args.command, 80));
-        let options = TaskOptions::new().with_ttl_ms(BACKGROUND_TASK_TTL_MS).with_status_message(description);
 
-        self.task_manager.spawn(options, move |task_context: TaskContext| {
-            Box::pin(async move {
-                tokio::select! {
-                    () = task_context.cancelled() => Err(TaskExit::Cancelled),
-                    result = run_bash(tools.as_ref(), args, cwd, truncator, &spill_dir) => Ok(match result {
-                        Ok(output) => serde_json::to_value(output).map_or_else(
-                            |error| CallToolResult::error(vec![ContentBlock::text(error.to_string())]),
-                            CallToolResult::structured,
-                        ),
-                        Err(error) => CallToolResult::error(vec![ContentBlock::text(error.to_string())]),
-                    }),
-                }
+        self.tasks.spawn(description, async move {
+            Ok(match run_bash(tools.as_ref(), args, cwd, truncator, &spill_dir).await {
+                Ok(output) => serde_json::to_value(output).map_or_else(
+                    |error| CallToolResult::error(vec![ContentBlock::text(error.to_string())]),
+                    CallToolResult::structured,
+                ),
+                Err(error) => CallToolResult::error(vec![ContentBlock::text(error.to_string())]),
             })
         })
     }
@@ -686,9 +651,8 @@ fn permission_granted(result: &ElicitResult) -> bool {
 
 fn permission_unsupported(tool_name: &str) -> String {
     format!(
-        "Permission required for {tool_name}, but the connected client cannot prompt the user \
-         (MCP elicitation over protocol 2026-07-28 or newer). Use --permission-mode always-allow \
-         or an elicitation-capable client."
+        "Permission required for {tool_name}, but {CLIENT_CANNOT_ELICIT}. \
+         Use --permission-mode always-allow or an elicitation-capable client."
     )
 }
 
@@ -730,14 +694,6 @@ fn background_bash_args(request: &CallToolRequestParams) -> Option<BashInput> {
     args.run_in_background.is_some_and(|background| background).then_some(args)
 }
 
-// TaskManager has no Drop of its own: aborting the tasks here drops their
-// in-flight command futures, whose kill_on_drop reaps the child processes.
-impl<T: CodingTools> Drop for CodingMcp<T> {
-    fn drop(&mut self) {
-        self.task_manager.shutdown();
-    }
-}
-
 impl<T: CodingTools> Debug for CodingMcp<T> {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -745,12 +701,6 @@ impl<T: CodingTools> Debug for CodingMcp<T> {
             .field("root_dir", &self.root_dir)
             .field("permission_mode", &self.permission_mode)
             .finish_non_exhaustive()
-    }
-}
-
-impl Default for CodingMcp<DefaultCodingTools> {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -802,74 +752,69 @@ mod tests {
 
     #[test]
     fn args_default_permission_mode_is_always_allow() {
-        let args = CodingMcpArgs::from_args(vec![]).unwrap();
+        let args = CodingMcpArgs::try_parse_from(Vec::<&str>::new()).unwrap();
         assert_eq!(args.permission_mode, PermissionMode::AlwaysAllow);
     }
 
     #[test]
     fn args_default_lsp_enabled() {
-        let args = CodingMcpArgs::from_args(vec![]).unwrap();
+        let args = CodingMcpArgs::try_parse_from(Vec::<&str>::new()).unwrap();
         assert!(!args.disable_lsp);
     }
 
     #[test]
     fn args_parses_disable_lsp() {
-        let args = CodingMcpArgs::from_args(vec!["--disable-lsp".into()]).unwrap();
+        let args = CodingMcpArgs::try_parse_from(["--disable-lsp"]).unwrap();
         assert!(args.disable_lsp);
     }
 
     #[test]
     fn disabled_lsp_instructions_omit_lsp_tools() {
-        let instructions = CodingMcp::new().build_instructions();
+        let instructions = CodingMcp::new("/workspace").build_instructions();
         assert!(!instructions.contains("lsp_check_errors"));
         assert!(!instructions.contains("lsp_symbol"));
     }
 
     #[test]
     fn args_parses_always_allow() {
-        let args = CodingMcpArgs::from_args(vec!["--permission-mode".into(), "always-allow".into()]).unwrap();
+        let args = CodingMcpArgs::try_parse_from(["--permission-mode", "always-allow"]).unwrap();
         assert_eq!(args.permission_mode, PermissionMode::AlwaysAllow);
     }
 
     #[test]
     fn args_parses_auto() {
-        let args = CodingMcpArgs::from_args(vec!["--permission-mode".into(), "auto".into()]).unwrap();
+        let args = CodingMcpArgs::try_parse_from(["--permission-mode", "auto"]).unwrap();
         assert_eq!(args.permission_mode, PermissionMode::Auto);
     }
 
     #[test]
     fn args_parses_always_ask() {
-        let args = CodingMcpArgs::from_args(vec!["--permission-mode".into(), "always-ask".into()]).unwrap();
+        let args = CodingMcpArgs::try_parse_from(["--permission-mode", "always-ask"]).unwrap();
         assert_eq!(args.permission_mode, PermissionMode::AlwaysAsk);
     }
 
     #[test]
     fn args_rejects_invalid_permission_mode() {
-        assert!(CodingMcpArgs::from_args(vec!["--permission-mode".into(), "yolo".into()]).is_err());
+        assert!(CodingMcpArgs::try_parse_from(["--permission-mode", "yolo"]).is_err());
     }
 
     #[test]
     fn args_parses_repeated_rules_dirs() {
-        let args = CodingMcpArgs::from_args(vec![
-            "--rules-dir".into(),
-            ".aether/skills".into(),
-            "--rules-dir".into(),
-            ".claude/rules".into(),
-        ])
-        .unwrap();
+        let args =
+            CodingMcpArgs::try_parse_from(["--rules-dir", ".aether/skills", "--rules-dir", ".claude/rules"]).unwrap();
 
         assert_eq!(args.rules_dirs, vec![PathBuf::from(".aether/skills"), PathBuf::from(".claude/rules")]);
     }
 
     #[test]
     fn with_permission_mode_stores_mode() {
-        let mcp = CodingMcp::new().with_permission_mode(PermissionMode::AlwaysAsk);
+        let mcp = CodingMcp::new("/workspace").with_permission_mode(PermissionMode::AlwaysAsk);
         assert_eq!(mcp.permission_mode, PermissionMode::AlwaysAsk);
     }
 
     #[test]
     fn default_permission_mode_is_always_allow() {
-        let mcp = CodingMcp::new();
+        let mcp = CodingMcp::new("/workspace");
         assert_eq!(mcp.permission_mode, PermissionMode::AlwaysAllow);
     }
 

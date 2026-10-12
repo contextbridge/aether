@@ -1,6 +1,7 @@
-use crate::common::{TestClient, TestResult, load_skills_input, skills_server};
+use crate::common::{McpClientExt, TestResult, connect, load_skills_input, skills_server};
 use mcp_servers::skills::SkillsMcp;
 use mcp_servers::skills::tools::ListSkillsInput;
+use mcp_utils::client::ClientOptions;
 use rmcp::ServerHandler;
 use tempfile::TempDir;
 
@@ -23,7 +24,7 @@ async fn test_instructions_reference_list_skills_and_do_not_embed_catalog_entrie
     std::fs::write(human_dir.join("SKILL.md"), "---\ndescription: Human skill\nagent-invocable: true\n---\nContent.\n")
         .unwrap();
 
-    let server = SkillsMcp::new(&[skills_dir]);
+    let server = SkillsMcp::new(temp_dir.path(), &[skills_dir]);
     let info = server.get_info();
     let instructions = info.instructions.unwrap();
 
@@ -45,7 +46,7 @@ async fn test_full_lifecycle() -> TestResult {
         "---\ndescription: Curated skill\nagent-invocable: true\n---\n# Curated\n\nHand-written skill.",
     )?;
 
-    let mcp = TestClient::start(|| skills_server(temp_dir.path())).await?;
+    let mcp = connect(skills_server(temp_dir.path()), ClientOptions::default()).await;
 
     let parsed = mcp.call("list_skills", ListSkillsInput::default()).await?;
     let skills = parsed["skills"].as_array().unwrap();

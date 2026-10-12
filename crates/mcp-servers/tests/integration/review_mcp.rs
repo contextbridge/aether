@@ -1,7 +1,8 @@
-use crate::common::{TestClient, TestResult, scripted_mcp_client, silent_mcp_client, test_error};
+use crate::common::{McpClientExt, TestResult, cancels_prompts, connect, scripted, test_error};
 use axum::{Router, extract::Query, http::header::CONTENT_TYPE, response::Html, routing::get};
 use mcp_servers::review::ReviewMcp;
-use mcp_utils::{client::McpClient, testing::ElicitationScript};
+use mcp_utils::client::{ClientOptions, McpClient};
+use mcp_utils::testing::ElicitationScript;
 use reqwest::Url;
 use rmcp::model::{
     CallToolRequest, CallToolRequestParams, CallToolResponse, ClientRequest, ElicitRequestParams, ElicitResult,
@@ -162,7 +163,7 @@ async fn cancelling_the_tool_call_tears_down_the_review_server() -> TestResult {
     let second_round =
         response_request(args, ElicitResult::new(ElicitationAction::Accept)).with_request_state(review.token.clone());
     let request = ClientRequest::CallToolRequest(CallToolRequest::new(second_round));
-    let handle = test.client.raw().send_cancellable_request(request, PeerRequestOptions::no_options()).await?;
+    let handle = test.client.peer().send_cancellable_request(request, PeerRequestOptions::no_options()).await?;
     handle.cancel(None).await?;
 
     while reqwest::get(&review.url).await.is_ok() {
@@ -266,11 +267,13 @@ async fn explicit_approval_returns_approved_without_feedback() -> TestResult {
 async fn clients_without_elicitation_support_are_rejected() -> TestResult {
     let root = TempDir::new()?;
     fs::write(root.path().join("valid.md"), "# Valid")?;
-    let mcp = TestClient::start(|| review_mcp_at(root.path())).await?;
+    let mcp = connect(review_mcp_at(root.path()), ClientOptions::default()).await;
 
     let result = mcp.call_raw("review_artifact", markdown_file("valid.md")).await?;
 
     assert_eq!(result.is_error, Some(true));
+    let text = result.content.first().and_then(|content| content.as_text()).expect("error text");
+    assert!(text.text.contains("cannot prompt the user"), "unexpected error: {}", text.text);
     Ok(())
 }
 
@@ -286,7 +289,7 @@ struct ReviewTestBuilder {
 
 struct ReviewTest {
     root: TempDir,
-    client: TestClient<ReviewMcp, McpClient>,
+    client: McpClient,
     script: Option<ElicitationScript>,
 }
 
@@ -330,14 +333,14 @@ impl ReviewTestBuilder {
             fs::write(path, content)?;
         }
 
-        let (client, script) = self.response.map_or_else(
-            || (silent_mcp_client("review-test-server"), None),
-            |response| {
-                let (client, script) = scripted_mcp_client("review-test-server", response);
-                (client, Some(script))
-            },
-        );
-        let client = TestClient::start_with(|| review_mcp_at(root.path()), client).await?;
+        let (options, script) = match self.response {
+            Some(response) => {
+                let (options, script) = scripted(response);
+                (options, Some(script))
+            }
+            None => (cancels_prompts(), None),
+        };
+        let client = connect(review_mcp_at(root.path()), options).await;
         Ok(ReviewTest { root, client, script })
     }
 }
@@ -358,12 +361,12 @@ impl ReviewTest {
 
     /// The first MRTR round of a Markdown review.
     async fn request_form(&self, args: Value) -> TestResult<FormReview> {
-        FormReview::from_response(self.client.raw().call_tool_once(tool_request(args)).await?)
+        FormReview::from_response(self.client.peer().call_tool_once(tool_request(args)).await?)
     }
 
     /// The first MRTR round of an HTML review.
     async fn request_url(&self, args: Value) -> TestResult<UrlReview> {
-        UrlReview::from_response(self.client.raw().call_tool_once(tool_request(args)).await?)
+        UrlReview::from_response(self.client.peer().call_tool_once(tool_request(args)).await?)
     }
 
     /// The second MRTR round: the client echoes the arguments, the review token
@@ -373,7 +376,7 @@ impl ReviewTest {
         if let Some(token) = token {
             request = request.with_request_state(token.to_string());
         }
-        structured_output(self.client.raw().call_tool_once(request).await?)
+        structured_output(self.client.peer().call_tool_once(request).await?)
     }
 
     /// A full review driven by the scripted elicitation response.
@@ -465,7 +468,7 @@ impl Drop for UpstreamApp {
 }
 
 fn review_mcp_at(root: &Path) -> ReviewMcp {
-    ReviewMcp::from_args_with_base_dir(Vec::new(), root).expect("empty review MCP arguments are valid")
+    ReviewMcp::new(root.to_path_buf())
 }
 
 fn accepted_response(content: Value) -> ElicitResult {
@@ -507,9 +510,8 @@ fn with_title(mut args: Value, title: Option<&str>) -> Value {
     args
 }
 
-fn tool_request(args: Value) -> CallToolRequestParams {
-    let Value::Object(arguments) = args else { panic!("tool arguments") };
-    CallToolRequestParams::new("review_artifact").with_arguments(arguments)
+fn tool_request(arguments: Value) -> CallToolRequestParams {
+    crate::common::tool_request("review_artifact", arguments)
 }
 
 fn response_request(args: Value, result: ElicitResult) -> CallToolRequestParams {
