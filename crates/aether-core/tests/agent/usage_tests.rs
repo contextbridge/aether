@@ -1,9 +1,10 @@
 use aether_core::context::CompactionConfig;
 use aether_core::events::{AgentEvent, LlmCallOutcome, SubAgentProgressPayload, ToolEvent, TurnEvent, TurnOutcome};
-use aether_core::testing::{FakeMcpServer, FakeTool, FakeToolResponse, TestScenario, fast_retry, test_agent};
+use aether_core::testing::{TestScenario, fast_retry, test_agent};
 use llm::alloyed::AlloyedModelProvider;
 use llm::testing::{FakeLlmProvider, llm_response, priced_model, session_usage_event};
 use llm::{ChatMessage, LlmCallPurpose, LlmModel, ProviderError, SessionUsageEvent, TokenUsage, UsageSource, Usd};
+use mcp_utils::testing::{FakeMcpServer, FakeTool, FakeToolResponse};
 use std::sync::Arc;
 use tokio::sync::Notify;
 
@@ -181,7 +182,7 @@ async fn sub_agent_usage_is_folded_into_the_parent_totals_before_the_tool_result
     let arguments = serde_json::json!({}).to_string();
 
     let events = test_agent()
-        .fake_mcp_server("agents", server)
+        .mcp_server("agents", server)
         .llm_responses(&[
             llm_response().tool_call("spawn-call", "agents__spawn", &[&arguments]).build(),
             llm_response().usage(1, 1).text(&["all done"]).build(),

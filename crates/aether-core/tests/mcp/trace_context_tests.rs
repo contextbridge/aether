@@ -1,5 +1,7 @@
-use aether_core::events::TraceContext;
-use aether_core::testing::{FakeMcpServer, FakeMcpState, FakeTool, FakeToolResponse, McpTestBuilder};
+use super::support::call_tool;
+use aether_core::events::{AgentEvent, AgentObserver, TraceContext};
+use aether_core::testing::test_agent;
+use mcp_utils::testing::{FakeMcpServer, FakeMcpState, FakeTool, FakeToolResponse};
 use serde_json::json;
 
 #[tokio::test]
@@ -9,9 +11,9 @@ async fn tool_call_propagates_w3c_trace_context_in_request_metadata() {
         tracestate: Some("vendor=value".to_string()),
     };
     let (server, state) = capture_server();
-    let test = McpTestBuilder::new().server("trace", server).trace_context(trace_context.clone()).build().await;
+    let agent = test_agent().mcp_server("trace", server).observer(Box::new(Tracing(trace_context.clone())));
 
-    test.call("trace", "capture", json!({})).await.result.expect("capture tool succeeds");
+    call_tool(agent, "trace__capture", json!({})).await.result().expect("capture tool succeeds");
 
     let calls = state.calls_for("capture");
     assert_eq!(calls[0].context_meta["traceparent"], json!(trace_context.traceparent));
@@ -21,13 +23,25 @@ async fn tool_call_propagates_w3c_trace_context_in_request_metadata() {
 #[tokio::test]
 async fn tool_call_without_trace_context_sends_no_trace_metadata() {
     let (server, state) = capture_server();
-    let test = McpTestBuilder::new().server("trace", server).build().await;
 
-    test.call("trace", "capture", json!({})).await.result.expect("capture tool succeeds");
+    call_tool(test_agent().mcp_server("trace", server), "trace__capture", json!({}))
+        .await
+        .result()
+        .expect("capture tool succeeds");
 
     let calls = state.calls_for("capture");
     assert_eq!(calls[0].context_meta.get("traceparent"), None);
     assert_eq!(calls[0].context_meta.get("tracestate"), None);
+}
+
+struct Tracing(TraceContext);
+
+impl AgentObserver for Tracing {
+    fn on_event(&mut self, _message: &AgentEvent) {}
+
+    fn tool_trace_context(&self, _tool_id: &str) -> Option<TraceContext> {
+        Some(self.0.clone())
+    }
 }
 
 fn capture_server() -> (FakeMcpServer, FakeMcpState) {

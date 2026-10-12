@@ -1,25 +1,21 @@
 use aether_core::core::Prompt;
 use aether_core::events::{AgentEvent, Command, ContextEvent, ToolEvent, UserCommand};
-use aether_core::testing::{FakeMcpServer, FakeTool, FakeToolResponse, TestScenario, test_agent};
+use aether_core::testing::{TestScenario, test_agent};
 use llm::testing::llm_response;
 use llm::{ChatMessage, ContentBlock};
-use rmcp::model::{CreateTaskResult, DetailedTask, Task, TaskPayload, TaskStatus};
+use mcp_utils::testing::FakeTask;
 use std::sync::Arc;
 use tokio::sync::Notify;
 
 #[tokio::test]
 async fn clear_context_suppresses_cancelled_background_task_notification() -> Result<(), Box<dyn std::error::Error>> {
-    let now = chrono::Utc::now().to_rfc3339();
-    let task = Task::new("clear-task", TaskStatus::Working, now.clone(), now).with_poll_interval_ms(10);
-    let server = FakeMcpServer::new()
-        .with_tool(FakeTool::new("deferred").responds(FakeToolResponse::task(CreateTaskResult::new(task.clone()))))
-        .with_task("clear-task", [DetailedTask::new(task, TaskPayload::Working)]);
+    let server = FakeTask::new("clear-task").server("deferred");
     let server_state = server.state();
     let arguments = serde_json::json!({}).to_string();
     let release = Arc::new(Notify::new());
 
     let result = test_agent()
-        .fake_mcp_server("tasks", server)
+        .mcp_server("tasks", server)
         .llm_responses(&[
             llm_response().tool_call("clear-call", "tasks__deferred", &[&arguments]).build(),
             llm_response().text(&["must not finish"]).build(),

@@ -1,4 +1,5 @@
 use crate::core::{AgentError, Result};
+use crate::mcp::PROGRESSIVE_DISCOVERY_INSTRUCTIONS;
 use glob::glob;
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -15,14 +16,14 @@ use utils::{PathOrObject, ResourcePath, is_false, string_or_object_schema};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Prompt {
     Text(String),
-    File {
-        path: PathBuf,
-        args: Option<HashMap<String, String>>,
-        cwd: PathBuf,
-    },
-    /// MCP server instructions keyed by server name. `BTreeMap` gives a
-    /// stable render order, which is useful for prompt-caching
-    McpInstructions(BTreeMap<String, String>),
+    File { path: PathBuf, args: Option<HashMap<String, String>>, cwd: PathBuf },
+    McpInstructions(McpInstructions),
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct McpInstructions {
+    pub servers: BTreeMap<String, String>,
+    pub progressive_discovery: bool,
 }
 
 /// Authored description of a prompt source — text, a file path, or a glob pattern.
@@ -295,25 +296,22 @@ pub struct PromptCache {
 impl PromptCache {
     pub fn new(mut prompts: Vec<Prompt>) -> Self {
         if !prompts.iter().any(|p| matches!(p, Prompt::McpInstructions(_))) {
-            prompts.push(Prompt::McpInstructions(BTreeMap::new()));
+            prompts.push(Prompt::McpInstructions(McpInstructions::default()));
         }
         Self { prompts, entries: Vec::new() }
     }
 
-    pub fn update_mcp_instruction(&mut self, server: String, body: Option<String>) {
-        for prompt in &mut self.prompts {
-            if let Prompt::McpInstructions(map) = prompt {
-                match body {
-                    Some(text) => {
-                        map.insert(server, text);
-                    }
-                    None => {
-                        map.remove(&server);
-                    }
-                }
-                return;
-            }
+    pub fn set_mcp_instructions(&mut self, instructions: McpInstructions) -> bool {
+        let Some(Prompt::McpInstructions(current)) =
+            self.prompts.iter_mut().find(|prompt| matches!(prompt, Prompt::McpInstructions(_)))
+        else {
+            return false;
+        };
+        if *current == instructions {
+            return false;
         }
+        *current = instructions;
+        true
     }
 
     pub async fn render(&mut self) -> Result<String> {
@@ -339,20 +337,20 @@ impl PromptCache {
     }
 }
 
-/// Format MCP instructions with XML tags for the system prompt.
-fn format_mcp_instructions(instructions: &BTreeMap<String, String>) -> String {
-    if instructions.is_empty() {
-        return String::new();
+fn format_mcp_instructions(instructions: &McpInstructions) -> String {
+    let mut sections = Vec::new();
+    if !instructions.servers.is_empty() {
+        let mut parts = vec!["# MCP Server Instructions\n".to_string()];
+        parts.push("You are connected to the following MCP servers:\n".to_string());
+        for (server_name, body) in &instructions.servers {
+            parts.push(format!("<mcp-server name=\"{server_name}\">\n{body}\n</mcp-server>\n"));
+        }
+        sections.push(parts.join("\n"));
     }
-
-    let mut parts = vec!["# MCP Server Instructions\n".to_string()];
-    parts.push("You are connected to the following MCP servers:\n".to_string());
-
-    for (server_name, body) in instructions {
-        parts.push(format!("<mcp-server name=\"{server_name}\">\n{body}\n</mcp-server>\n"));
+    if instructions.progressive_discovery {
+        sections.push(format!("# Deferred MCP Tools\n\n{PROGRESSIVE_DISCOVERY_INSTRUCTIONS}"));
     }
-
-    parts.join("\n")
+    sections.join("\n\n")
 }
 
 #[cfg(test)]
@@ -419,14 +417,14 @@ mod tests {
         write(dir.path().join("AGENTS.md"), "cached body").unwrap();
         let mut cache = PromptCache::new(vec![
             Prompt::file(dir.path().join("AGENTS.md"), dir.path()),
-            Prompt::McpInstructions(BTreeMap::new()),
+            Prompt::McpInstructions(McpInstructions::default()),
         ]);
 
         cache.render().await.unwrap();
 
         // Remove the source file to prove we cached things
         remove_file(dir.path().join("AGENTS.md")).unwrap();
-        cache.update_mcp_instruction("srv".into(), Some("instr".into()));
+        cache.set_mcp_instructions(instructions(&[("srv", "instr")]));
 
         let rendered = cache.render().await.unwrap();
         assert!(rendered.contains("cached body"));

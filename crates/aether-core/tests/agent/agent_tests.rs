@@ -8,6 +8,7 @@ use aether_core::{
 };
 use llm::{ChatMessage, ContentBlock, StopReason};
 use llm::{MessageId, testing::llm_response};
+use mcp_utils::testing::{FakeMcpServer, FakeTool, FakeToolResponse};
 use serde_json::json;
 
 fn completed_message_ids(events: &[AgentEvent]) -> Vec<MessageId> {
@@ -117,9 +118,32 @@ async fn failed_mcp_command_submission_completes_the_tool_with_an_error() -> Res
         matches!(
             event,
             AgentEvent::Tool(ToolEvent::Error { error })
-                if error.id == "call_1" && error.error.contains("Failed to resolve tool")
+                if error.id == "call_1" && error.error.contains("Tool not found: test__missing_tool")
         )
     }));
+    assert!(matches!(messages.last(), Some(AgentEvent::Turn(TurnEvent::Ended { .. }))));
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_tool_arguments_fail_the_tool_without_reaching_the_server() -> Result<(), Box<dyn Error>> {
+    let server = FakeMcpServer::math();
+    let state = server.state();
+    let llm_responses = [
+        llm_response().tool_call("call_1", "test__add_numbers", &["{not json"]).build(),
+        llm_response().text(&["recovered"]).build(),
+    ];
+
+    let messages = test_agent().mcp_server("test", server).llm_responses(&llm_responses).user_text("add").run().await?;
+
+    assert!(messages.iter().any(|event| {
+        matches!(
+            event,
+            AgentEvent::Tool(ToolEvent::Error { error })
+                if error.id == "call_1" && error.error.starts_with("Invalid tool arguments")
+        )
+    }));
+    assert!(state.calls_for("add_numbers").is_empty());
     assert!(matches!(messages.last(), Some(AgentEvent::Turn(TurnEvent::Ended { .. }))));
     Ok(())
 }
@@ -246,21 +270,14 @@ async fn test_cancellation() -> Result<(), Box<dyn Error>> {
 
 #[tokio::test(start_paused = true)]
 async fn test_tool_timeout() -> Result<(), Box<dyn Error>> {
-    let tool_duration = 2000;
-    let tool_timeout = 500;
-
-    let tool_request = json!({ "sleep_ms": tool_duration });
-    let (t1_id, t1_name) = ("call_1", "test__slow_tool");
-
-    let llm_responses = [
-        llm_response().tool_call(t1_id, t1_name, &[&tool_request.to_string()]).build(),
-        llm_response().text(&["done"]).build(),
-    ];
+    let llm_responses =
+        [llm_response().tool_call("call_1", "test__slow", &["{}"]).build(), llm_response().text(&["done"]).build()];
 
     let messages = test_agent()
+        .mcp_server("test", FakeMcpServer::new().with_tool(FakeTool::new("slow").responds(FakeToolResponse::pending())))
         .llm_responses(&llm_responses)
         .user_text("run slow tool")
-        .tool_timeout(Duration::from_millis(tool_timeout))
+        .tool_timeout(Duration::from_millis(500))
         .run()
         .await?;
 

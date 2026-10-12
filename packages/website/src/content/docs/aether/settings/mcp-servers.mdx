@@ -128,37 +128,11 @@ If a server entry has a `command` and no `type`, it is treated as `"type": "stdi
     | `deferTools` | `boolean \| object` | `true` proxies every tool; an object partitions tools with `include` and `exclude` patterns. |
 
   </TabItem>
-  <TabItem label="SSE">
-    Remote MCP servers over HTTP with Server-Sent Events. Internally, Aether uses the same HTTP transport path.
-
-    ```json title=".aether/mcp.json"
-    {
-      "servers": {
-        "remote-tools": {
-          "type": "sse",
-          "url": "https://mcp.example.com/sse",
-          "headers": {
-            "Authorization": "Bearer $MCP_TOKEN"
-          }
-        }
-      }
-    }
-    ```
-
-    | Field | Type | Description |
-    |-------|------|-------------|
-    | `type` | `"sse"` | Required. |
-    | `url` | `string` | SSE endpoint URL. |
-    | `headers` | `object` | Optional headers. Aether currently forwards the `Authorization` header to the transport. |
-    | `oauth` | `object` | Optional custom CIMD or pre-registered public OAuth client settings. See [OAuth clients](#oauth-clients). |
-    | `deferTools` | `boolean \| object` | `true` proxies every tool; an object partitions tools with `include` and `exclude` patterns. |
-
-  </TabItem>
 </Tabs>
 
 ## OAuth clients
 
-For `http` and `sse` servers that return an OAuth challenge, Aether defaults to its first-party Client ID Metadata Document (CIMD) at `https://aether-agent.io/oauth/client-metadata.json`. The callback listener binds `http://localhost:3118/`. If port 3118 is occupied, authentication fails rather than selecting an unregistered redirect URI.
+For `http` servers that return an OAuth challenge, Aether defaults to its first-party Client ID Metadata Document (CIMD) at `https://aether-agent.io/oauth/client-metadata.json`. The callback listener binds `http://localhost:3118/`. If port 3118 is occupied, authentication fails rather than selecting an unregistered redirect URI.
 
 Set `oauth.clientMetadataUrl` to use a custom CIMD, or `oauth.clientId` for a public client pre-registered with the provider. A pre-registered client ID takes priority when both are configured:
 
@@ -350,7 +324,7 @@ Only the private session socket and Aether executable directory are injected int
 
 ## Variable expansion
 
-Variables are expanded in two places: MCP source paths in settings, and server fields inside MCP JSON files. Environment variables are expanded in stdio `command`, stdio `args`, stdio `env` values, in-memory `args`, HTTP/SSE `url`, and the HTTP/SSE `Authorization` header value. `${WORKSPACE}` and `${AETHER_HOME}` (the user-level Aether home, honoring the `AETHER_HOME` env var) are also available when server configs are converted into running MCP servers.
+Variables are expanded in two places: MCP source paths in settings, and server fields inside MCP JSON files. Environment variables are expanded in stdio `command`, stdio `args`, stdio `env` values, in-memory `args`, HTTP `url`, and HTTP header values. `${WORKSPACE}` and `${AETHER_HOME}` (the user-level Aether home, honoring the `AETHER_HOME` env var) are also available when server configs are converted into running MCP servers.
 
 Supported syntax:
 

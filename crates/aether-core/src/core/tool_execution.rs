@@ -1,5 +1,5 @@
-use crate::events::{SubAgentProgressPayload, TaskOutcome, TaskOutcomeState, ToolEvent, task_created_result};
-use crate::mcp::tool_bridge::{convert_tool_result, map_task_result_to_outcome};
+use crate::events::{SubAgentProgressPayload, TaskOutcome, ToolEvent, task_created_result};
+use crate::mcp::tool_bridge::{ToolRejection, convert_tool_result, map_task_result_to_outcome};
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
 use mcp_utils::client::{CancellationToken, ToolCallEvent};
 use rmcp::model::ProgressNotificationParam;
@@ -17,8 +17,7 @@ pub(super) enum ToolExecutionUpdate {
     Event(ToolEvent),
     TaskCreated { result: ToolCallResult, event: ToolEvent },
     Completed { result: Result<ToolCallResult, ToolCallError>, event: ToolEvent },
-    TaskCompleted(TaskOutcome),
-    TaskCancelled(TaskOutcome),
+    TaskFinished(TaskOutcome),
     Retired,
     Ignored,
 }
@@ -34,11 +33,10 @@ struct ToolExecution {
     phase: ToolExecutionPhase,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 enum ToolExecutionPhase {
     Foreground,
-    Background,
-    Cancelling,
+    Background { task_id: String, cancelling: bool },
     Retiring,
 }
 
@@ -68,7 +66,10 @@ impl ToolExecutions {
         match event {
             ToolCallEvent::Progress(progress) => {
                 let Some(execution) = self.executions.get(tool_id).filter(|execution| {
-                    matches!(execution.phase, ToolExecutionPhase::Foreground | ToolExecutionPhase::Background)
+                    matches!(
+                        execution.phase,
+                        ToolExecutionPhase::Foreground | ToolExecutionPhase::Background { cancelling: false, .. }
+                    )
                 }) else {
                     return ToolExecutionUpdate::Ignored;
                 };
@@ -85,9 +86,9 @@ impl ToolExecutions {
                 if execution.phase != ToolExecutionPhase::Foreground {
                     return ToolExecutionUpdate::Ignored;
                 }
-                execution.phase = ToolExecutionPhase::Background;
-                let request = execution.request.clone();
                 let task_id = task.task.task_id.clone();
+                execution.phase = ToolExecutionPhase::Background { task_id: task_id.clone(), cancelling: false };
+                let request = execution.request.clone();
                 ToolExecutionUpdate::TaskCreated {
                     result: task_created_result(&request, &task_id),
                     event: ToolEvent::TaskCreated { request, task_id, status_message: task.task.status_message },
@@ -97,7 +98,7 @@ impl ToolExecutions {
                 let Some(execution) = self.executions.get(tool_id) else {
                     return ToolExecutionUpdate::Ignored;
                 };
-                if execution.phase != ToolExecutionPhase::Background {
+                if !matches!(execution.phase, ToolExecutionPhase::Background { cancelling: false, .. }) {
                     return ToolExecutionUpdate::Ignored;
                 }
                 ToolExecutionUpdate::Event(ToolEvent::TaskStatus {
@@ -107,51 +108,38 @@ impl ToolExecutions {
                     status_message: task.status_message,
                 })
             }
-            ToolCallEvent::TaskComplete { task, result } => {
-                if self.take_retiring(tool_id).is_some() {
-                    return ToolExecutionUpdate::Retired;
-                }
-                let Some(execution) = self.take_background(tool_id) else {
+            ToolCallEvent::Done(result) => {
+                let Some(ToolExecution { request, phase, .. }) = self.executions.remove(tool_id) else {
                     return ToolExecutionUpdate::Ignored;
                 };
-                ToolExecutionUpdate::TaskCompleted(map_task_result_to_outcome(
-                    execution.request,
-                    task,
-                    result,
-                    &self.spill_dir,
-                ))
-            }
-            ToolCallEvent::Cancelled { task_id } => {
-                if self.take_retiring(tool_id).is_some() {
-                    return ToolExecutionUpdate::Retired;
-                }
-                let Some(execution) = self.take_background(tool_id) else {
-                    return ToolExecutionUpdate::Ignored;
-                };
-                ToolExecutionUpdate::TaskCancelled(TaskOutcome {
-                    request: execution.request,
-                    task_id: task_id.unwrap_or_else(|| UNASSIGNED_TASK_ID.to_string()),
-                    state: TaskOutcomeState::Cancelled,
-                })
-            }
-            ToolCallEvent::Complete(outcome) => {
-                if self.take_retiring(tool_id).is_some() {
-                    return ToolExecutionUpdate::Retired;
-                }
-                let Some(execution) = self.take_foreground(tool_id) else {
-                    return ToolExecutionUpdate::Ignored;
-                };
-                match convert_tool_result(&execution.request, outcome, &self.spill_dir) {
-                    Ok((result, result_meta)) => ToolExecutionUpdate::Completed {
-                        result: Ok(result.clone()),
-                        event: ToolEvent::Result { result, result_meta },
+                match phase {
+                    ToolExecutionPhase::Retiring => ToolExecutionUpdate::Retired,
+                    ToolExecutionPhase::Foreground => match convert_tool_result(&request, result, &self.spill_dir) {
+                        Ok((result, result_meta)) => ToolExecutionUpdate::Completed {
+                            result: Ok(result.clone()),
+                            event: ToolEvent::Result { result, result_meta },
+                        },
+                        Err(error) => ToolExecutionUpdate::Completed {
+                            result: Err(error.clone()),
+                            event: ToolEvent::Error { error },
+                        },
                     },
-                    Err(error) => {
-                        ToolExecutionUpdate::Completed { result: Err(error.clone()), event: ToolEvent::Error { error } }
+                    ToolExecutionPhase::Background { task_id, .. } => {
+                        let outcome = map_task_result_to_outcome(request, task_id, result, &self.spill_dir);
+                        ToolExecutionUpdate::TaskFinished(outcome)
                     }
                 }
             }
         }
+    }
+
+    /// Fails a tool call that never reached a server.
+    pub(super) fn reject(&mut self, tool_id: &str, rejection: &ToolRejection) -> ToolExecutionUpdate {
+        let Some(execution) = self.executions.remove(tool_id) else {
+            return ToolExecutionUpdate::Ignored;
+        };
+        let error = ToolCallError::from_request(&execution.request, rejection.to_string());
+        ToolExecutionUpdate::Completed { result: Err(error.clone()), event: ToolEvent::Error { error } }
     }
 
     pub(super) fn retire_foreground(&mut self) {
@@ -164,13 +152,13 @@ impl ToolExecutions {
 
     pub(super) fn abort(&mut self, policy: &ToolAbortPolicy) -> Vec<String> {
         let mut removed = Vec::new();
-        self.executions.retain(|tool_id, execution| match execution.phase {
-            ToolExecutionPhase::Background | ToolExecutionPhase::Cancelling => {
+        self.executions.retain(|tool_id, execution| match &mut execution.phase {
+            ToolExecutionPhase::Background { cancelling, .. } => {
                 execution.cancellation_token.cancel();
-                execution.phase = match policy {
-                    ToolAbortPolicy::PreserveBackgroundAcknowledgements => ToolExecutionPhase::Cancelling,
-                    ToolAbortPolicy::CancelAll => ToolExecutionPhase::Retiring,
-                };
+                match policy {
+                    ToolAbortPolicy::PreserveBackgroundAcknowledgements => *cancelling = true,
+                    ToolAbortPolicy::CancelAll => execution.phase = ToolExecutionPhase::Retiring,
+                }
                 true
             }
             ToolExecutionPhase::Retiring if matches!(policy, ToolAbortPolicy::CancelAll) => true,
@@ -182,31 +170,7 @@ impl ToolExecutions {
         });
         removed
     }
-
-    fn take_retiring(&mut self, tool_id: &str) -> Option<ToolExecution> {
-        if self.executions.get(tool_id)?.phase != ToolExecutionPhase::Retiring {
-            return None;
-        }
-        self.executions.remove(tool_id)
-    }
-
-    fn take_foreground(&mut self, tool_id: &str) -> Option<ToolExecution> {
-        if self.executions.get(tool_id)?.phase != ToolExecutionPhase::Foreground {
-            return None;
-        }
-        self.executions.remove(tool_id)
-    }
-
-    fn take_background(&mut self, tool_id: &str) -> Option<ToolExecution> {
-        let phase = self.executions.get(tool_id)?.phase;
-        if !matches!(phase, ToolExecutionPhase::Background | ToolExecutionPhase::Cancelling) {
-            return None;
-        }
-        self.executions.remove(tool_id)
-    }
 }
-
-const UNASSIGNED_TASK_ID: &str = "pending";
 
 /// Tools smuggle structured updates through the progress message string. Decode
 /// them once here so every downstream consumer sees typed events.

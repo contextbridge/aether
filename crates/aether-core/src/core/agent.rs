@@ -8,16 +8,18 @@ pub use crate::core::retry_config::RetryConfig;
 use crate::core::tool_execution::{ToolAbortPolicy, ToolExecutionUpdate, ToolExecutions};
 use crate::events::{
     AgentCommand, AgentEvent, AgentObserver, Command, CompactionId, CompactionOutcome, ContextEvent, LlmCallOutcome,
-    ModelEvent, StreamState, TaskOutcome, ToolEvent, TraceContext, TurnEvent, TurnOutcome, UserCommand,
+    ModelEvent, StreamState, TaskOutcome, TaskOutcomeState, ToolEvent, TraceContext, TurnEvent, TurnOutcome,
+    UserCommand,
 };
-use crate::mcp::{McpHandle, ToolCallStream};
-use futures::{FutureExt, Stream, future};
+use crate::mcp::McpCatalog;
+use crate::mcp::tool_bridge::call_tool;
+use futures::{FutureExt, Stream};
 use llm::{
     AssistantReasoning, ChatMessage, Context, EncryptedReasoningContent, LlmCallPurpose, LlmError, LlmModel,
     LlmResponse, MessageId, ModelIdentity, StopReason, StreamingModelProvider, TokenUsage, ToolCallError,
     ToolCallRequest, ToolCallResult,
 };
-use mcp_utils::client::{CallToolError, CallToolOptions, ToolCallEvent};
+use mcp_utils::client::{ToolCallEvent, ToolCallOptions};
 use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
@@ -39,6 +41,7 @@ enum StreamEvent {
     ToolExecution(ToolCallEvent),
     Command(Command),
     InputClosed,
+    McpChanged,
     Compaction(Result<CompactionResult, CompactionError>),
 }
 
@@ -49,6 +52,7 @@ type EventStream = Pin<Box<dyn Stream<Item = StreamEvent> + Send>>;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum StreamKey {
     Input,
+    Mcp,
     Llm,
     Compaction,
     Tool(String),
@@ -57,7 +61,7 @@ enum StreamKey {
 pub(crate) struct AgentConfig {
     pub llm: Arc<dyn StreamingModelProvider>,
     pub context: Context,
-    pub mcp: Option<McpHandle>,
+    pub mcp: McpCatalog,
     pub tool_timeout: Duration,
     pub compaction_config: Option<CompactionConfig>,
     pub auto_continue: AutoContinue,
@@ -71,7 +75,7 @@ pub(crate) struct AgentConfig {
 pub struct Agent {
     llm: Arc<dyn StreamingModelProvider>,
     context: Context,
-    mcp: Option<McpHandle>,
+    mcp: McpCatalog,
     message_tx: mpsc::Sender<AgentEvent>,
     observers: Observers,
     streams: StreamMap<StreamKey, EventStream>,
@@ -103,6 +107,8 @@ impl Agent {
             .map(StreamEvent::Command)
             .chain(futures::stream::once(async { StreamEvent::InputClosed }));
         streams.insert(StreamKey::Input, Box::pin(input_stream));
+
+        streams.insert(StreamKey::Mcp, Box::pin(config.mcp.changes().map(|()| StreamEvent::McpChanged)));
 
         let context_limit = config.context_window.or_else(|| config.llm.context_window());
 
@@ -162,7 +168,7 @@ impl Agent {
     async fn event_loop(&mut self) {
         let mut state = IterationState::default();
         let mut input_closed = false;
-        self.emit_tool_definitions().await;
+        self.sync_mcp().await;
 
         while let Some((stream_key, event)) = self.streams.next().await {
             match event {
@@ -182,13 +188,8 @@ impl Agent {
                     self.on_switch_model(new_provider).await;
                 }
 
-                StreamEvent::Command(Command::AgentCommand(AgentCommand::UpdateTools(tools))) => {
-                    self.context.set_tools(tools);
-                    self.emit_tool_definitions().await;
-                }
-
-                StreamEvent::Command(Command::AgentCommand(AgentCommand::UpdateMcpInstructions { server, body })) => {
-                    self.on_update_instruction(server, body).await;
+                StreamEvent::McpChanged => {
+                    self.sync_mcp().await;
                 }
 
                 StreamEvent::Command(Command::AgentCommand(AgentCommand::SetReasoningEffort(effort))) => {
@@ -350,11 +351,19 @@ impl Agent {
         }
     }
 
-    async fn on_update_instruction(&mut self, server: String, body: Option<String>) {
-        self.prompt_cache.update_mcp_instruction(server, body);
-        match self.prompt_cache.render().await {
-            Ok(content) => self.context.set_system_content(content),
-            Err(e) => tracing::warn!("Failed to rebuild system prompt after instructions update: {e}"),
+    async fn sync_mcp(&mut self) {
+        let (instructions, tools) = (self.mcp.instructions(), self.mcp.tool_definitions());
+
+        if self.prompt_cache.set_mcp_instructions(instructions) {
+            match self.prompt_cache.render().await {
+                Ok(content) => self.context.set_system_content(content),
+                Err(e) => tracing::warn!("Failed to rebuild system prompt after instructions update: {e}"),
+            }
+        }
+
+        if tools != *self.context.tools() {
+            self.context.set_tools(tools.clone());
+            self.emit(AgentEvent::Tool(ToolEvent::DefinitionsUpdated { tools })).await;
         }
     }
 
@@ -518,7 +527,7 @@ impl Agent {
             }
 
             ToolRequestComplete { tool_call } => {
-                self.handle_tool_completion(tool_call).await;
+                self.handle_tool_completion(tool_call, state).await;
             }
 
             Done { stop_reason } => {
@@ -550,32 +559,28 @@ impl Agent {
         }
     }
 
-    async fn handle_tool_completion(&mut self, tool_call: ToolCallRequest) {
+    async fn handle_tool_completion(&mut self, tool_call: ToolCallRequest, state: &mut IterationState) {
         let cancel = self.tool_executions.start(tool_call.clone());
 
         let tool_id = tool_call.id.clone();
         tracing::debug!("Tool execution started: {} ({})", tool_call.name, tool_id);
         self.emit(AgentEvent::Tool(ToolEvent::Call { request: tool_call.clone() })).await;
 
-        let events: ToolCallStream = match self.mcp.clone() {
-            Some(mcp) => {
-                let trace_context = self.observers.tool_trace_context(&tool_id);
-                let options = CallToolOptions {
-                    timeout: self.tool_timeout,
-                    meta: trace_context.as_ref().map(TraceContext::to_meta),
-                    cancel,
-                };
-
-                mcp.call_model_visible(tool_call.name, &tool_call.arguments, options)
-            }
-
-            None => Box::pin(futures::stream::once(future::ready(ToolCallEvent::Complete(Err(
-                CallToolError::Unavailable { message: "MCP runtime is not available".to_string() },
-            ))))),
+        let trace_context = self.observers.tool_trace_context(&tool_id);
+        let options = ToolCallOptions {
+            timeout: Some(self.tool_timeout),
+            meta: trace_context.as_ref().map(TraceContext::to_meta),
+            cancel,
         };
-
-        let stream = events.map(StreamEvent::ToolExecution);
-        self.streams.insert(StreamKey::Tool(tool_id), Box::pin(stream));
+        match call_tool(&self.mcp, &tool_call, options) {
+            Ok(call) => {
+                self.streams.insert(StreamKey::Tool(tool_id), Box::pin(call.map(StreamEvent::ToolExecution)));
+            }
+            Err(rejection) => {
+                let update = self.tool_executions.reject(&tool_id, &rejection);
+                self.apply_tool_update(tool_id, update, state).await;
+            }
+        }
     }
 
     async fn handle_llm_usage(&mut self, sample: TokenUsage, state: &mut IterationState) {
@@ -670,7 +675,12 @@ impl Agent {
     }
 
     async fn on_tool_execution_event(&mut self, tool_id: String, event: ToolCallEvent, state: &mut IterationState) {
-        match self.tool_executions.on_event(&tool_id, event) {
+        let update = self.tool_executions.on_event(&tool_id, event);
+        self.apply_tool_update(tool_id, update, state).await;
+    }
+
+    async fn apply_tool_update(&mut self, tool_id: String, update: ToolExecutionUpdate, state: &mut IterationState) {
+        match update {
             ToolExecutionUpdate::Event(event) => {
                 if let ToolEvent::SubAgentProgress { payload, .. } = &event
                     && let AgentEvent::SessionUsage(child) = &payload.event
@@ -689,13 +699,13 @@ impl Agent {
                 state.completed_tool_calls.push(Ok(result));
                 self.emit(AgentEvent::Tool(event)).await;
             }
-            ToolExecutionUpdate::TaskCompleted(outcome) => {
+            ToolExecutionUpdate::TaskFinished(outcome) => {
                 self.streams.remove(&StreamKey::Tool(tool_id));
-                self.receive_input(QueuedInput::TaskOutcome(Box::new(outcome)), state).await;
-            }
-            ToolExecutionUpdate::TaskCancelled(outcome) => {
-                self.streams.remove(&StreamKey::Tool(tool_id));
-                self.record_task_outcome(outcome).await;
+                if matches!(outcome.state, TaskOutcomeState::Cancelled) {
+                    self.record_task_outcome(outcome).await;
+                } else {
+                    self.receive_input(QueuedInput::TaskOutcome(Box::new(outcome)), state).await;
+                }
             }
             ToolExecutionUpdate::Retired => {
                 self.streams.remove(&StreamKey::Tool(tool_id));
@@ -742,13 +752,6 @@ impl Agent {
                 }
                 QueuedInput::TaskOutcome(outcome) => self.record_task_outcome(*outcome).await,
             }
-        }
-    }
-
-    async fn emit_tool_definitions(&mut self) {
-        let tools = self.context.tools().clone();
-        if !tools.is_empty() {
-            self.emit(AgentEvent::Tool(ToolEvent::DefinitionsUpdated { tools })).await;
         }
     }
 
