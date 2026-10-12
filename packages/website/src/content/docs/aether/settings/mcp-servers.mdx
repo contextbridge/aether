@@ -125,6 +125,7 @@ If a server entry has a `command` and no `type`, it is treated as `"type": "stdi
     | `url` | `string` | Streamable HTTP endpoint URL. |
     | `headers` | `object` | Optional headers. Aether currently forwards the `Authorization` header to the transport. |
     | `oauth` | `object` | Optional custom CIMD or pre-registered public OAuth client settings. See [OAuth clients](#oauth-clients). |
+    | `sigv4` | `object` | Optional AWS SigV4 request signing. Cannot be combined with `oauth`. See [AWS SigV4](#aws-sigv4). |
     | `deferTools` | `boolean \| object` | `true` proxies every tool; an object partitions tools with `include` and `exclude` patterns. |
 
   </TabItem>
@@ -157,7 +158,35 @@ Set `oauth.clientMetadataUrl` to use a custom CIMD, or `oauth.clientId` for a pu
 | `oauth.clientMetadataUrl` | `string` | HTTPS URL of a custom Client ID Metadata Document. Supports variable expansion. |
 | `oauth.callbackPort` | `number` | Loopback callback port; defaults to `3118`. The advertised URI is `http://localhost:<callbackPort>/` and must exactly match the client metadata or registration. |
 
-When the authorization server does not advertise CIMD support, Aether falls back to deprecated Dynamic Client Registration for compatibility. OAuth discovery, PKCE, scopes, `offline_access`, resource indicators, refresh, and issuer validation are handled by `rmcp`. An explicit bearer `Authorization` header remains authoritative and bypasses OAuth.
+When the authorization server does not advertise CIMD support, Aether falls back to deprecated Dynamic Client Registration for compatibility. OAuth discovery, PKCE, scopes, `offline_access`, resource indicators, refresh, and issuer validation are handled by `rmcp`. An `Authorization` header on its own turns off the default OAuth sign-in. A server can set at most one of `oauth`, `sigv4` or an `Authorization` header.
+
+## AWS SigV4
+
+Set `sigv4` to sign every request with AWS Signature Version 4, for example to reach an MCP gateway behind API Gateway IAM auth or a Lambda function URL. A gateway like this can proxy many upstream servers while holding their tokens itself, so the agent only needs AWS credentials:
+
+```json title=".aether/mcp.json"
+{
+  "servers": {
+    "gateway": {
+      "type": "http",
+      "url": "https://abc123.execute-api.us-east-1.amazonaws.com/mcp",
+      "sigv4": {
+        "service": "execute-api",
+        "region": "us-east-1",
+        "profile": "dev"
+      }
+    }
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sigv4.service` | `string` | Required. Signing name of the AWS service in front of the server, e.g. `execute-api` (API Gateway) or `lambda` (function URLs). |
+| `sigv4.region` | `string` | Required. Region to sign for. `$AWS_REGION` takes it from the environment, but the config fails to load when that variable is unset. |
+| `sigv4.profile` | `string` | Optional named profile. Omit to use the default AWS credential chain (environment, shared config, SSO, web identity, ECS, IMDS), which already honors `AWS_PROFILE`. |
+
+All fields support variable expansion. A server can set at most one of `oauth`, `sigv4` or an `Authorization` header; `sigv4` sends its signature in the `Authorization` header.
 
 ## Built-in servers
 
