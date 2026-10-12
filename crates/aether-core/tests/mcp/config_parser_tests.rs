@@ -1,12 +1,10 @@
-use aether_auth::OAuthClientRegistration;
+use aether_auth::{OAuthClientRegistration, SigV4Credentials};
 use aether_core::mcp::{
-    McpConfig, McpOAuthConfig, McpServerConfig, ParseError, StdioServerConfig, ToolExposure, ToolFilter, ToolMatcher,
-    http_transport,
+    McpConfig, McpServerConfig, ParseError, StdioServerConfig, ToolExposure, ToolFilter, ToolMatcher, http_transport,
 };
 use http::header::{AUTHORIZATION, HeaderMap, HeaderValue};
-use mcp_utils::client::{OAuthSettings, Transport};
+use mcp_utils::client::{HttpAuth, OAuthSettings, Transport};
 use mcp_utils::model::{Tool, ToolAnnotations};
-use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -266,7 +264,7 @@ fn invalid_http_headers_fail_resolution() {
 
 #[test]
 fn http_servers_sign_in_with_aether_client_metadata_by_default() {
-    let oauth = http_oauth(None, HeaderMap::new()).expect("OAuth is offered");
+    let oauth = http_oauth(remote(r#""headers":{}"#).unwrap()).expect("OAuth is offered");
 
     assert!(matches!(
         &oauth.registration,
@@ -277,13 +275,9 @@ fn http_servers_sign_in_with_aether_client_metadata_by_default() {
 
 #[test]
 fn http_servers_prefer_a_preregistered_client_id_over_client_metadata() {
-    let config = McpOAuthConfig {
-        client_id: Some("registered".to_string()),
-        client_metadata_url: Some("https://client.example/oauth/client.json".to_string()),
-        callback_port: NonZeroU16::new(4000),
-    };
+    let oauth = r#""oauth":{"clientId":"registered","clientMetadataUrl":"https://client.example/oauth/client.json","callbackPort":4000}"#;
 
-    let oauth = http_oauth(Some(config), HeaderMap::new()).expect("OAuth is offered");
+    let oauth = http_oauth(remote(oauth).unwrap()).expect("OAuth is offered");
 
     assert!(matches!(&oauth.registration, OAuthClientRegistration::PreRegistered(id) if id == "registered"));
     assert_eq!(oauth.callback_port, 4000);
@@ -293,7 +287,8 @@ fn http_servers_prefer_a_preregistered_client_id_over_client_metadata() {
 fn http_servers_with_an_authorization_header_never_sign_in() {
     let headers = HeaderMap::from_iter([(AUTHORIZATION, HeaderValue::from_static("Bearer static"))]);
 
-    assert!(http_oauth(None, headers).is_none());
+    assert!(http_oauth(http_transport("https://example.com/mcp".to_string(), headers)).is_none());
+    assert!(http_oauth(remote(r#""headers":{"Authorization":"Bearer static"}"#).unwrap()).is_none());
 }
 
 #[test]
@@ -303,7 +298,7 @@ fn oauth_settings_expand_variables() {
         let json = format!(
             r#"{{"servers":{{"linear":{{"type":"http","url":"https://example.com/mcp","oauth":{settings}}}}}}}"#
         );
-        let Transport::Http { oauth: Some(oauth), .. } = transport(&json, &vars) else {
+        let Transport::Http { auth: HttpAuth::OAuth(oauth), .. } = transport(&json, &vars) else {
             panic!("expected HTTP transport with OAuth settings")
         };
         oauth
@@ -318,6 +313,64 @@ fn oauth_settings_expand_variables() {
         &metadata.registration,
         OAuthClientRegistration::ClientMetadata(url) if url == "https://client.example/oauth/client.json"
     ));
+}
+
+#[test]
+fn sigv4_servers_sign_requests_for_the_configured_service_region_and_profile() {
+    let vars = vars(&[("AWS_REGION", "us-west-2"), ("AWS_PROFILE", "gateway")]);
+    let json = r#"{"servers":{"gateway":{"type":"http","url":"https://abc.execute-api.us-west-2.amazonaws.com/mcp","sigv4":{"service":"execute-api","region":"${AWS_REGION}","profile":"$AWS_PROFILE"}}}}"#;
+
+    let Transport::Http { auth: HttpAuth::SigV4(signer), .. } = transport(json, &vars) else {
+        panic!("expected HTTP transport with a SigV4 signer")
+    };
+
+    let config = signer.config();
+    assert_eq!(config.service, "execute-api");
+    assert_eq!(config.region, "us-west-2");
+    assert!(
+        matches!(&config.credentials, SigV4Credentials::DefaultChain { profile: Some(profile) } if profile == "gateway")
+    );
+}
+
+#[test]
+fn sigv4_servers_without_a_profile_use_the_default_credential_chain() {
+    let json = r#"{"servers":{"gateway":{"type":"http","url":"https://example.com/mcp","sigv4":{"service":"lambda","region":"us-east-1"}}}}"#;
+
+    let Transport::Http { auth: HttpAuth::SigV4(signer), .. } = transport(json, &vars(&[])) else {
+        panic!("expected HTTP transport with a SigV4 signer")
+    };
+
+    assert!(matches!(signer.config().credentials, SigV4Credentials::DefaultChain { profile: None }));
+}
+
+#[test]
+fn sigv4_requires_a_service_and_region_and_rejects_unknown_fields() {
+    for sigv4 in [
+        r#"{"region":"us-east-1"}"#,
+        r#"{"service":"execute-api"}"#,
+        r#"{"service":"execute-api","region":"us-east-1","servce":"lambda"}"#,
+    ] {
+        assert!(remote(&format!(r#""sigv4":{sigv4}"#)).is_err(), "invalid sigv4 config was accepted: {sigv4}");
+    }
+}
+
+#[test]
+fn a_server_sets_at_most_one_of_oauth_sigv4_or_an_authorization_header() {
+    let oauth = r#""oauth":{"clientId":"id"}"#;
+    let sigv4 = r#""sigv4":{"service":"execute-api","region":"us-east-1"}"#;
+    let authorization = r#""headers":{"Authorization":"Bearer static"}"#;
+    let lowercase_authorization = r#""headers":{"authorization":"Bearer static"}"#;
+
+    for server in [
+        format!("{oauth},{sigv4}"),
+        format!("{authorization},{oauth}"),
+        format!("{authorization},{sigv4}"),
+        format!("{lowercase_authorization},{sigv4}"),
+        format!("{authorization},{oauth},{sigv4}"),
+    ] {
+        let result = remote(&server);
+        assert!(matches!(result, Err(ParseError::ConflictingAuth)), "{server} gave {result:?}");
+    }
 }
 
 fn vars(pairs: &[(&str, &str)]) -> Vars {
@@ -357,11 +410,21 @@ fn command(command: &str, exposure: ToolExposure) -> (String, ToolExposure) {
     (command.to_string(), exposure)
 }
 
-fn http_oauth(oauth: Option<McpOAuthConfig>, headers: HeaderMap) -> Option<OAuthSettings> {
-    let Transport::Http { oauth, .. } = http_transport("https://example.com/mcp".to_string(), headers, oauth) else {
-        panic!("expected http")
+fn http_oauth(transport: Transport) -> Option<OAuthSettings> {
+    match transport {
+        Transport::Http { auth: HttpAuth::OAuth(oauth), .. } => Some(oauth),
+        Transport::Http { .. } => None,
+        other => panic!("expected http, got {other:?}"),
+    }
+}
+
+fn remote(server: &str) -> Result<Transport, ParseError> {
+    let json = format!(r#"{{"servers":{{"remote":{{"type":"http","url":"https://example.com/mcp",{server}}}}}}}"#);
+    let McpServerConfig::Remote(config) = McpConfig::from_json(&json)?.servers.pop_first().expect("one server").1
+    else {
+        panic!("expected a remote server")
     };
-    oauth
+    config.into_transport(&vars(&[]))
 }
 
 fn deferred(allow: &[&str], deny: &[&str]) -> ToolExposure {

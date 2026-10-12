@@ -1,12 +1,13 @@
 use super::ToolExposure;
-use aether_auth::OAuthClientRegistration;
+use aether_auth::{OAuthClientRegistration, SigV4Config, SigV4Credentials, SigV4Signer};
 use http::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, InvalidHeaderName, InvalidHeaderValue};
-use mcp_utils::client::{OAuthSettings, Transport};
+use mcp_utils::client::{HttpAuth, OAuthSettings, Transport};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroU16;
 use std::path::Path;
+use std::time::Duration;
 use utils::variables::{VarError, Vars};
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
@@ -55,6 +56,15 @@ pub struct McpOAuthConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
+pub struct McpSigV4Config {
+    pub service: String,
+    pub region: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct RemoteServerConfig {
     #[serde(rename = "type")]
     pub type_: RemoteType,
@@ -66,6 +76,9 @@ pub struct RemoteServerConfig {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth: Option<McpOAuthConfig>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sigv4: Option<McpSigV4Config>,
 
     #[serde(rename = "deferTools", default, skip_serializing_if = "is_model_visible")]
     pub defer_tools: ToolExposure,
@@ -133,11 +146,14 @@ pub enum ParseError {
         #[source]
         source: InvalidHeaderValue,
     },
+
+    #[error("A server can set at most one of `oauth`, `sigv4` or an `Authorization` header")]
+    ConflictingAuth,
 }
 
-pub fn http_transport(url: String, headers: HeaderMap, oauth: Option<McpOAuthConfig>) -> Transport {
-    let oauth = (!headers.contains_key(AUTHORIZATION)).then(|| oauth.unwrap_or_default().into_settings());
-    Transport::Http { url, headers, oauth }
+pub fn http_transport(url: String, headers: HeaderMap) -> Transport {
+    let auth = default_auth(&headers);
+    Transport::Http { url, headers, auth }
 }
 
 impl McpConfig {
@@ -224,6 +240,18 @@ impl McpOAuthConfig {
     }
 }
 
+impl McpSigV4Config {
+    fn into_signer(self, vars: &Vars) -> Result<SigV4Signer, VarError> {
+        let profile = self.profile.map(|profile| vars.expand(&profile)).transpose()?;
+        Ok(SigV4Signer::new(SigV4Config {
+            service: vars.expand(&self.service)?,
+            region: vars.expand(&self.region)?,
+            credentials: SigV4Credentials::DefaultChain { profile },
+            refresh_before_expiry: Duration::from_mins(5),
+        }))
+    }
+}
+
 impl RemoteServerConfig {
     pub fn into_transport(self, vars: &Vars) -> Result<Transport, ParseError> {
         let mut headers = HeaderMap::with_capacity(self.headers.len());
@@ -238,8 +266,14 @@ impl RemoteServerConfig {
             header_value.set_sensitive(true);
             headers.insert(header_name, header_value);
         }
-        let oauth = self.oauth.map(|oauth| expand_oauth(vars, oauth)).transpose()?;
-        Ok(http_transport(vars.expand(&self.url)?, headers, oauth))
+        let has_authorization = headers.contains_key(AUTHORIZATION);
+        let auth = match (self.oauth, self.sigv4) {
+            (Some(oauth), None) if !has_authorization => HttpAuth::OAuth(expand_oauth(vars, oauth)?.into_settings()),
+            (None, Some(sigv4)) if !has_authorization => HttpAuth::SigV4(sigv4.into_signer(vars)?),
+            (None, None) => default_auth(&headers),
+            _ => return Err(ParseError::ConflictingAuth),
+        };
+        Ok(Transport::Http { url: vars.expand(&self.url)?, headers, auth })
     }
 }
 
@@ -252,6 +286,14 @@ fn is_model_visible(exposure: &ToolExposure) -> bool {
 
 fn expand_all(vars: &Vars, values: &[String]) -> Result<Vec<String>, VarError> {
     values.iter().map(|value| vars.expand(value)).collect()
+}
+
+fn default_auth(headers: &HeaderMap) -> HttpAuth {
+    if headers.contains_key(AUTHORIZATION) {
+        HttpAuth::None
+    } else {
+        HttpAuth::OAuth(McpOAuthConfig::default().into_settings())
+    }
 }
 
 fn expand_oauth(vars: &Vars, oauth: McpOAuthConfig) -> Result<McpOAuthConfig, VarError> {
