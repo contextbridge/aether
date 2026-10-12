@@ -1,3 +1,4 @@
+use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -35,6 +36,25 @@ impl AgentEvent {
 
     pub fn turn_ended(outcome: TurnOutcome) -> Self {
         Self::Turn(TurnEvent::Ended { outcome })
+    }
+
+    pub fn tool_call(id: &str, name: &str, arguments: &str) -> Self {
+        Self::Tool(ToolEvent::Call { request: ToolCallRequest::new(id, name, arguments) })
+    }
+
+    pub fn tool_result(id: &str, name: &str, arguments: &str, result: &str) -> Self {
+        Self::Tool(ToolEvent::Result { result: ToolCallResult::new(id, name, arguments, result), result_meta: None })
+    }
+
+    pub fn tool_error(id: &str, name: &str, arguments: &str, error: &str) -> Self {
+        Self::Tool(ToolEvent::Error {
+            error: ToolCallError {
+                id: id.into(),
+                name: name.into(),
+                arguments: Some(arguments.into()),
+                error: error.into(),
+            },
+        })
     }
 
     /// Human-readable text content of this event, if any.
@@ -111,11 +131,11 @@ mod tests {
             AgentEvent::Model(ModelEvent::Switched { previous: "a".into(), new: "b".into() }),
             AgentEvent::SessionUsage(llm::testing::session_usage_event(1, llm::TokenUsage::new(1, 2))),
             AgentEvent::Tool(ToolEvent::DisplayUpdate {
-                request: llm::ToolCallRequest { id: "call".into(), name: "read".into(), arguments: "{}".into() },
+                request: llm::ToolCallRequest::new("call", "read", "{}"),
                 meta: ToolDisplayMeta::new("Read file", "main.rs").into(),
             }),
             AgentEvent::Tool(ToolEvent::SubAgentProgress {
-                request: llm::ToolCallRequest { id: "call".into(), name: "spawn".into(), arguments: "{}".into() },
+                request: llm::ToolCallRequest::new("call", "spawn", "{}"),
                 payload: Box::new(crate::events::SubAgentProgressPayload {
                     task_id: "task_0".into(),
                     agent_name: "explorer".into(),
@@ -218,9 +238,7 @@ mod tests {
             AgentEvent::text("m", "partial", StreamState::Complete),
             AgentEvent::thought("m", "partial", StreamState::Complete),
             AgentEvent::Tool(ToolEvent::InputStarted { id: "call".into(), name: "read".into() }),
-            AgentEvent::Tool(ToolEvent::Call {
-                request: llm::ToolCallRequest { id: "call".into(), name: "read".into(), arguments: "{}".into() },
-            }),
+            AgentEvent::tool_call("call", "read", "{}"),
             AgentEvent::turn_ended(TurnOutcome::Completed),
         ];
         assert!(deltas.iter().all(AgentEvent::is_stream_delta));

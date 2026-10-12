@@ -19,20 +19,23 @@ use acp_utils::testing::{TestPeer, initialize_request};
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
 use aether_core::core::{AgentBuilder, AgentHandle, Prompt};
-use aether_core::events::{AgentEvent, Command, MessageEvent, ToolEvent, TurnEvent, TurnOutcome, UserCommand};
+use aether_core::events::{AgentEvent, Command, TurnOutcome, UserCommand};
 use aether_core::mcp::{McpBuilder, McpSession, ServerFactory, mcp};
 use aether_project::AgentCatalog;
 use aether_sessions::SessionStore;
-use aether_sessions::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent, last_agent_from_events};
+use aether_sessions::testing::{
+    agent_switched, assistant_text, tool_call, tool_result, turn_ended, user_message, user_message_with,
+};
+use aether_sessions::{SessionEvent, SessionMeta, last_agent_from_events};
 use agent_client_protocol::schema::v2::{
     AbsolutePath, InitializeResponse, ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate,
     StateUpdate, StopReason,
 };
 use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, on_receive_notification};
 use futures::FutureExt;
-use llm::testing::FakeLlmProvider;
-use llm::{ChatMessage, Context, LlmModel, LlmResponse, SessionUsageEvent, StreamingModelProvider};
-use llm::{MessageId, ProviderConnectionOverrides, ToolCallRequest, ToolCallResult};
+use llm::ProviderConnectionOverrides;
+use llm::testing::{FakeLlmProvider, llm_response};
+use llm::{ChatMessage, Context, LlmModel, SessionUsageEvent, StreamingModelProvider};
 use mcp_utils::client::{InMemoryServerSpec, McpServer, McpTransport, ToolExposure};
 use mcp_utils::testing::{FakeMcpServer, FakeTool, FakeToolResponse, completed_task_payload};
 use rmcp::RoleServer;
@@ -387,13 +390,7 @@ impl AcpTestHarness {
     }
 
     pub fn append_agent_switch(&self, session_id: &str, from: Option<&str>, to: Option<&str>) {
-        self.append_stored_event(
-            session_id,
-            &SessionEvent::Control(SessionControlEvent::AgentSwitched {
-                from: from.map(str::to_string),
-                to: to.map(str::to_string),
-            }),
-        );
+        self.append_stored_event(session_id, &agent_switched(from, to));
     }
 
     /// Register a stub session built from a hand-spawned
@@ -455,72 +452,28 @@ impl AcpTestHarness {
     }
 
     pub fn append_stored_prompt(&self, session_id: &str, prompt: &str) {
-        self.append_stored_event(
-            session_id,
-            &SessionEvent::User(UserEvent::Message {
-                message_id: llm::MessageId::new(),
-                content: vec![llm::ContentBlock::text(prompt)],
-                display_content: None,
-            }),
-        );
+        self.append_stored_event(session_id, &user_message(prompt));
     }
 
     pub fn append_stored_user_blocks(&self, session_id: &str, blocks: Vec<llm::ContentBlock>) {
-        self.append_stored_event(
-            session_id,
-            &SessionEvent::User(UserEvent::Message {
-                message_id: llm::MessageId::new(),
-                content: blocks,
-                display_content: None,
-            }),
-        );
+        self.append_stored_event(session_id, &user_message_with(blocks));
     }
 
     pub fn append_stored_agent_turn(&self, session_id: &str, text: &str) {
         self.append_stored_agent_text(session_id, text);
-        self.append_stored_event(
-            session_id,
-            &SessionEvent::Agent(AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Completed })),
-        );
+        self.append_stored_event(session_id, &turn_ended(TurnOutcome::Completed));
     }
 
     pub fn append_stored_agent_text(&self, session_id: &str, text: &str) {
-        self.append_stored_event(
-            session_id,
-            &SessionEvent::Agent(AgentEvent::Message(MessageEvent::Text {
-                message_id: MessageId::new(),
-                chunk: text.to_string(),
-                is_complete: true,
-            })),
-        );
+        self.append_stored_event(session_id, &assistant_text(llm::MessageId::new().as_str(), text));
     }
 
     pub fn append_stored_tool_call(&self, session_id: &str, id: &str, name: &str, arguments: &str) {
-        self.append_stored_event(
-            session_id,
-            &SessionEvent::Agent(AgentEvent::Tool(ToolEvent::Call {
-                request: ToolCallRequest {
-                    id: id.to_string(),
-                    name: name.to_string(),
-                    arguments: arguments.to_string(),
-                },
-            })),
-        );
+        self.append_stored_event(session_id, &tool_call(id, name, arguments));
     }
 
     pub fn append_stored_tool_result(&self, session_id: &str, id: &str, name: &str, result: &str) {
-        self.append_stored_event(
-            session_id,
-            &SessionEvent::Agent(AgentEvent::Tool(ToolEvent::Result {
-                result: ToolCallResult {
-                    id: id.to_string(),
-                    name: name.to_string(),
-                    arguments: "{}".to_string(),
-                    result: result.to_string(),
-                },
-                result_meta: None,
-            })),
-        );
+        self.append_stored_event(session_id, &tool_result(id, name, result));
     }
 
     async fn insert_switching_session(
@@ -905,11 +858,8 @@ fn background_task(status: TaskStatus) -> Task {
 
 fn fake_agent(name: &str, server_name: &str, prompt_name: &str, reply: &str) -> (FakeAgentDef, FakeAcpAgent) {
     const TURNS_BEFORE_AND_AFTER_REATTACH: usize = 2;
-    let provider = FakeLlmProvider::new(vec![
-        vec![LlmResponse::Start, LlmResponse::text(reply), LlmResponse::done()];
-        TURNS_BEFORE_AND_AFTER_REATTACH
-    ])
-    .with_display_name(name);
+    let provider = FakeLlmProvider::new(vec![llm_response().text(&[reply]).build(); TURNS_BEFORE_AND_AFTER_REATTACH])
+        .with_display_name(name);
     let captured_contexts = provider.captured_contexts();
     let def = FakeAgentDef {
         spec: fake_agent_spec(name),

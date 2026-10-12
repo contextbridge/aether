@@ -45,11 +45,7 @@ fn reconstructs_conversation_and_ignores_control_events() {
 #[test]
 fn task_completion_during_iteration_preserves_pending_tools() {
     let task = aether_core::events::ToolEvent::TaskCancelled {
-        request: llm::ToolCallRequest {
-            id: "background-call".into(),
-            name: "background".into(),
-            arguments: "{}".into(),
-        },
+        request: llm::ToolCallRequest::new("background-call", "background", "{}"),
         task_id: "task".into(),
     };
     let context = context_from_events(&[

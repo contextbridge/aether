@@ -366,11 +366,7 @@ async fn call_subagent_through_manager(
         .into_iter()
         .find(|tool| tool.name.ends_with("spawn_subagent"))
         .ok_or_else(|| test_error("spawn_subagent tool missing"))?;
-    let request = llm::ToolCallRequest {
-        id: "runtime-registry-test".to_string(),
-        name: tool.name.clone(),
-        arguments: serde_json::to_string(&input)?,
-    };
+    let request = llm::ToolCallRequest::new("runtime-registry-test", &tool.name, &serde_json::to_string(&input)?);
 
     let options = CallToolOptions { timeout: Duration::MAX, meta: None, cancel: CancellationToken::new() };
     let mut events = spawn.handle().call_model_visible(request.name.clone(), &request.arguments, options);

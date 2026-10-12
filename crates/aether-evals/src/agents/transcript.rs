@@ -139,8 +139,8 @@ mod tests {
     use super::*;
     use crate::{Agent, FakeAgent, Task};
     use aether_core::events::TurnEvent;
+    use llm::TokenUsage;
     use llm::testing::session_usage_event;
-    use llm::{TokenUsage, ToolCallRequest, ToolCallResult};
 
     #[tokio::test]
     async fn transcript_from_stream() {
@@ -154,7 +154,11 @@ mod tests {
 
     #[test]
     fn tool_call_count_counts_matching_tool_calls() {
-        let transcript = transcript_with_events(vec![tool_call("bash"), tool_call("read"), tool_result("bash")]);
+        let transcript = Transcript::new(vec![
+            AgentEvent::tool_call("call_1", "bash", "{}"),
+            AgentEvent::tool_call("call_2", "read", "{}"),
+            AgentEvent::tool_result("call_3", "bash", "{}", "ok"),
+        ]);
 
         assert!(transcript.tool_called("bash"));
         assert!(!transcript.tool_called("read"));
@@ -179,7 +183,7 @@ mod tests {
 
     #[test]
     fn usage_returns_zeroed_totals_when_no_usage_was_recorded() {
-        let transcript = transcript_with_events(vec![tool_call("bash")]);
+        let transcript = Transcript::new(vec![AgentEvent::tool_call("call_1", "bash", "{}")]);
         assert_eq!(transcript.usage(), SessionUsageTotals::default());
     }
 
@@ -188,7 +192,7 @@ mod tests {
         let mut last = session_usage_event(2, TokenUsage::new(2000, 500));
         last.totals.tokens = TokenUsage::new(3000, 600);
         last.totals.unpriced_calls = 2;
-        let transcript = transcript_with_events(vec![
+        let transcript = Transcript::new(vec![
             AgentEvent::SessionUsage(session_usage_event(1, TokenUsage::new(1000, 100))),
             AgentEvent::SessionUsage(last),
         ]);
@@ -199,27 +203,5 @@ mod tests {
         assert_eq!(usage.tokens.total_tokens().get(), 3600);
         assert_eq!(usage.unpriced_calls, 2);
         assert!(!usage.is_fully_priced());
-    }
-
-    fn transcript_with_events(events: Vec<AgentEvent>) -> Transcript {
-        Transcript::new(events)
-    }
-
-    fn tool_call(name: &str) -> AgentEvent {
-        AgentEvent::Tool(ToolEvent::Call {
-            request: ToolCallRequest { id: name.to_string(), name: name.to_string(), arguments: "{}".to_string() },
-        })
-    }
-
-    fn tool_result(name: &str) -> AgentEvent {
-        AgentEvent::Tool(ToolEvent::Result {
-            result: ToolCallResult {
-                id: name.to_string(),
-                name: name.to_string(),
-                arguments: "{}".to_string(),
-                result: "ok".to_string(),
-            },
-            result_meta: None,
-        })
     }
 }

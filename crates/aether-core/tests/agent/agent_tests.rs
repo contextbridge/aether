@@ -151,13 +151,7 @@ async fn streamed_tool_input_is_followed_by_the_complete_call() -> Result<(), Bo
             &ToolEvent::InputStarted { id: "call_1".into(), name: "test__add_numbers".into() },
             &ToolEvent::InputDelta { id: "call_1".into(), chunk: arg_chunk_1.into() },
             &ToolEvent::InputDelta { id: "call_1".into(), chunk: arg_chunk_2.into() },
-            &ToolEvent::Call {
-                request: llm::ToolCallRequest {
-                    id: "call_1".into(),
-                    name: "test__add_numbers".into(),
-                    arguments: request_json.clone(),
-                },
-            },
+            &ToolEvent::Call { request: llm::ToolCallRequest::new("call_1", "test__add_numbers", &request_json) },
         ]
     );
 

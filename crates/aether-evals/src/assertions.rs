@@ -44,12 +44,11 @@ pub fn assert_tool_call_with_args(transcript: &Transcript, name: &str, expected:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aether_core::events::{AgentEvent, ToolEvent};
-    use llm::ToolCallResult;
+    use aether_core::events::AgentEvent;
 
     #[test]
     fn assert_tool_call_with_args_accepts_matching_json_arguments() {
-        let trace = transcript_with_messages(vec![tool_result("bash", r#"{"command":"pwd"}"#)]);
+        let trace = Transcript::new(vec![AgentEvent::tool_result("call_1", "bash", r#"{"command":"pwd"}"#, "ok")]);
 
         assert_tool_call_with_args(&trace, "bash", &serde_json::json!({ "command": "pwd" }));
     }
@@ -57,7 +56,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Non-JSON arguments seen for this tool")]
     fn assert_tool_call_with_args_surfaces_parse_failures() {
-        let trace = transcript_with_messages(vec![tool_result("bash", "not json")]);
+        let trace = Transcript::new(vec![AgentEvent::tool_result("call_1", "bash", "not json", "ok")]);
 
         assert_tool_call_with_args(&trace, "bash", &serde_json::json!({ "command": "pwd" }));
     }
@@ -65,24 +64,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "expected tool `missing` to be called")]
     fn assert_tool_called_panics_when_tool_was_not_called() {
-        let trace = transcript_with_messages(vec![]);
+        let trace = Transcript::new(vec![]);
 
         assert_tool_called(&trace, "missing");
-    }
-
-    fn transcript_with_messages(messages: Vec<AgentEvent>) -> Transcript {
-        Transcript::new(messages)
-    }
-
-    fn tool_result(name: &str, arguments: &str) -> AgentEvent {
-        AgentEvent::Tool(ToolEvent::Result {
-            result: ToolCallResult {
-                id: name.to_string(),
-                name: name.to_string(),
-                arguments: arguments.to_string(),
-                result: "ok".to_string(),
-            },
-            result_meta: None,
-        })
     }
 }

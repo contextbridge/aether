@@ -466,20 +466,14 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
     use aether_core::events::{AgentEvent, StreamState, TurnOutcome};
-    use llm::testing::FakeLlmProvider;
-    use llm::{LlmError, ProviderError, ToolCallRequest, ToolCallResult};
+    use llm::ProviderError;
+    use llm::testing::{FakeLlmProvider, failed_call, llm_response};
 
     const VALID_RESPONSE: &str = r#"{"criteria":[{"id":"behavior","score":1.0,"reason":"correct"},{"id":"clarity","score":0.5,"reason":"brief"}],"overall_reason":"good"}"#;
 
     #[test]
     fn transcript_lines_label_each_message_kind() {
-        let call = AgentEvent::Tool(ToolEvent::Call {
-            request: ToolCallRequest {
-                id: "call_1".to_string(),
-                name: "bash".to_string(),
-                arguments: "{}".to_string(),
-            },
-        });
+        let call = AgentEvent::tool_call("call_1", "bash", "{}");
 
         assert_eq!(
             get_transcript_line(&AgentEvent::text("msg_1", "hi", StreamState::Complete), 100).unwrap(),
@@ -498,15 +492,7 @@ mod tests {
 
     #[test]
     fn tool_result_transcript_uses_result_arguments() {
-        let message = AgentEvent::Tool(ToolEvent::Result {
-            result: ToolCallResult {
-                id: "call_1".to_string(),
-                name: "coding__read_file".to_string(),
-                arguments: r#"["Cargo.toml"]"#.to_string(),
-                result: "file contents".to_string(),
-            },
-            result_meta: None,
-        });
+        let message = AgentEvent::tool_result("call_1", "coding__read_file", r#"["Cargo.toml"]"#, "file contents");
 
         assert_eq!(get_transcript_line(&message, 100).unwrap(), "[tool-result] coding__read_file: file contents");
     }
@@ -541,13 +527,7 @@ mod tests {
     #[test]
     fn judge_builder_renders_transcript_context() {
         let messages = vec![
-            AgentEvent::Tool(ToolEvent::Call {
-                request: ToolCallRequest {
-                    id: "call_1".to_string(),
-                    name: "bash".to_string(),
-                    arguments: "{}".to_string(),
-                },
-            }),
+            AgentEvent::tool_call("call_1", "bash", "{}"),
             AgentEvent::text("msg_1", "all done", StreamState::Complete),
         ];
 
@@ -665,7 +645,7 @@ mod tests {
     #[tokio::test]
     async fn judge_run_extracts_json_object_from_surrounding_prose() {
         let response = format!("Here is my assessment:\n{VALID_RESPONSE}");
-        let judge_llm = FakeLlmProvider::with_single_response(vec![LlmResponse::text(&response)]);
+        let judge_llm = FakeLlmProvider::with_single_response(llm_response().text(&[response.as_str()]).build());
         let judge = judge().task("prompt").criteria(default_criteria()).build().unwrap();
 
         let summary = judge.run(&judge_llm).await.unwrap();
@@ -675,7 +655,7 @@ mod tests {
 
     #[tokio::test]
     async fn judge_run_returns_invalid_json_error_with_raw_response() {
-        let judge_llm = FakeLlmProvider::with_single_response(vec![LlmResponse::text("not json")]);
+        let judge_llm = FakeLlmProvider::with_single_response(llm_response().text(&["not json"]).build());
         let judge = judge().task("prompt").criteria(default_criteria()).build().unwrap();
 
         let error = judge.run(&judge_llm).await.unwrap_err();
@@ -688,8 +668,7 @@ mod tests {
 
     #[tokio::test]
     async fn judge_run_returns_stream_error_on_llm_failure() {
-        let judge_llm =
-            FakeLlmProvider::from_results(vec![vec![Err(LlmError::from(ProviderError::api("boom".to_string())))]]);
+        let judge_llm = FakeLlmProvider::from_results(vec![failed_call(ProviderError::api("boom".to_string()))]);
         let judge = judge().task("prompt").criteria(default_criteria()).build().unwrap();
 
         let error = judge.run(&judge_llm).await.unwrap_err();

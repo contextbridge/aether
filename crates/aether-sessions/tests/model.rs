@@ -43,7 +43,7 @@ fn persisted_event_policy_covers_representative_variants() {
     let partial = SessionEvent::Agent(AgentEvent::text("message", "partial", StreamState::Partial));
     let usage = SessionEvent::Agent(AgentEvent::SessionUsage(session_usage(1, 5)));
     let sub_agent_progress = SessionEvent::Agent(AgentEvent::Tool(ToolEvent::SubAgentProgress {
-        request: llm::ToolCallRequest { id: "call".into(), name: "spawn".into(), arguments: "{}".into() },
+        request: llm::ToolCallRequest::new("call", "spawn", "{}"),
         payload: Box::new(SubAgentProgressPayload {
             task_id: "task_0".into(),
             agent_name: "explorer".into(),

@@ -45,7 +45,7 @@ async fn full_read_file_pages_reach_the_llm_whole() -> TestResult {
         .call_raw("read_file", ReadFileArgs { file_path: path.to_string_lossy().into(), ..Default::default() })
         .await?;
 
-    let request = ToolCallRequest { id: "read".into(), name: "coding__read_file".into(), arguments: "{}".into() };
+    let request = ToolCallRequest::new("read", "coding__read_file", "{}");
     let (result, _) =
         convert_tool_result(&request, Ok(page), &TempDir::new()).map_err(|error| test_error(error.error))?;
 

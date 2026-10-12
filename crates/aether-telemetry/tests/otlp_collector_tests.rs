@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use aether_core::events::{AgentEvent, LlmCallOutcome, ToolEvent, TraceContext, TurnEvent, TurnOutcome};
+use aether_core::events::{AgentEvent, LlmCallOutcome, TraceContext, TurnEvent, TurnOutcome};
 use aether_telemetry::{
     AETHER_SYSTEM_INSTRUCTIONS_SHA256, AgentTraceContext, ContentCaptureSettings, GEN_AI_SYSTEM_INSTRUCTIONS,
     TelemetryConfig, TelemetryRuntime,
@@ -14,7 +14,7 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
-use llm::{LlmCallPurpose, ModelIdentity, ModelPricing, TokenUsage, ToolCallRequest};
+use llm::{LlmCallPurpose, ModelIdentity, ModelPricing, TokenUsage};
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::trace::v1::Span;
@@ -152,13 +152,7 @@ async fn propagated_mcp_context_connects_parent_tool_server_and_child_agent_span
         let factory = runtime.observer_factory();
         let mut parent = factory.agent(Some("PatchWaveFix"), None);
         parent.on_event(&AgentEvent::Turn(TurnEvent::Started { content: vec![] }));
-        parent.on_event(&AgentEvent::Tool(ToolEvent::Call {
-            request: ToolCallRequest {
-                id: "call_1".to_string(),
-                name: "subagents__spawn_subagent".to_string(),
-                arguments: "{}".to_string(),
-            },
-        }));
+        parent.on_event(&AgentEvent::tool_call("call_1", "subagents__spawn_subagent", "{}"));
         let outbound = parent.tool_trace_context("call_1").expect("outbound tool span provides propagation context");
 
         let server = factory.tool_call_request("spawn_subagent", Some(&outbound));

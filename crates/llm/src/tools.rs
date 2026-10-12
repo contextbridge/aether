@@ -52,6 +52,12 @@ pub struct ToolCallRequest {
     pub arguments: String,
 }
 
+impl ToolCallRequest {
+    pub fn new(id: &str, name: &str, arguments: &str) -> Self {
+        Self { id: id.into(), name: name.into(), arguments: arguments.into() }
+    }
+}
+
 /// Successful result of a tool call
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ToolCallResult {
@@ -59,6 +65,12 @@ pub struct ToolCallResult {
     pub name: String,
     pub arguments: String,
     pub result: String,
+}
+
+impl ToolCallResult {
+    pub fn new(id: &str, name: &str, arguments: &str, result: &str) -> Self {
+        Self { id: id.into(), name: name.into(), arguments: arguments.into(), result: result.into() }
+    }
 }
 
 /// Error result of a tool call

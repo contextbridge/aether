@@ -6,8 +6,8 @@
 use std::fs;
 use std::path::Path;
 
-use aether_core::events::{AgentEvent, ContextEvent, MessageEvent, StreamState, ToolEvent, TurnEvent, TurnOutcome};
-use llm::{ContentBlock, MessageId, ToolCallError, ToolCallRequest, ToolCallResult};
+use aether_core::events::{AgentEvent, ContextEvent, MessageEvent, StreamState, TurnEvent, TurnOutcome};
+use llm::{ContentBlock, MessageId};
 use tempfile::TempDir;
 
 use crate::model::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent};
@@ -53,24 +53,17 @@ pub fn partial_text(message_id: &str, chunk: &str) -> SessionEvent {
 
 /// A tool call issued by the agent.
 pub fn tool_call(id: &str, name: &str, arguments: &str) -> SessionEvent {
-    SessionEvent::Agent(AgentEvent::Tool(ToolEvent::Call {
-        request: ToolCallRequest { id: id.into(), name: name.into(), arguments: arguments.into() },
-    }))
+    SessionEvent::Agent(AgentEvent::tool_call(id, name, arguments))
 }
 
 /// A successful tool result for `id`.
 pub fn tool_result(id: &str, name: &str, result: &str) -> SessionEvent {
-    SessionEvent::Agent(AgentEvent::Tool(ToolEvent::Result {
-        result: ToolCallResult { id: id.into(), name: name.into(), arguments: "{}".into(), result: result.into() },
-        result_meta: None,
-    }))
+    SessionEvent::Agent(AgentEvent::tool_result(id, name, "{}", result))
 }
 
 /// A failed tool execution for `id`.
 pub fn tool_error(id: &str, name: &str, error: &str) -> SessionEvent {
-    SessionEvent::Agent(AgentEvent::Tool(ToolEvent::Error {
-        error: ToolCallError { id: id.into(), name: name.into(), arguments: Some("{}".into()), error: error.into() },
-    }))
+    SessionEvent::Agent(AgentEvent::tool_error(id, name, "{}", error))
 }
 
 /// The terminal event of a turn.
