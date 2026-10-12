@@ -1,4 +1,7 @@
+use crate::resolve::AgentSelectionError;
+use crate::runtime::RuntimeError;
 use aether_auth::OAuthError;
+use aether_core::mcp::ParseError;
 use aether_project::SettingsError;
 use aether_telemetry::TelemetryInitError;
 use std::io;
@@ -18,14 +21,16 @@ pub enum CliError {
     Settings(#[from] SettingsError),
     #[error("Failed to initialize telemetry: {0}")]
     Telemetry(#[from] TelemetryInitError),
-    #[error("Model error: {0}")]
-    ModelError(String),
-    #[error("MCP error: {0}")]
-    McpError(String),
+    #[error(transparent)]
+    AgentSelection(#[from] AgentSelectionError),
+    #[error("Invalid MCP config: {0}")]
+    McpConfig(#[from] ParseError),
+    #[error(transparent)]
+    Runtime(#[from] RuntimeError),
     #[error("IO error: {0}")]
     IoError(#[from] io::Error),
-    #[error("Agent error: {0}")]
-    AgentError(String),
+    #[error("Agent stopped before receiving the prompt")]
+    AgentStopped,
     #[error("Credential store error: {0}")]
     CredentialStore(#[from] OAuthError),
 }

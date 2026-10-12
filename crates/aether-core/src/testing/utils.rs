@@ -1,15 +1,20 @@
-use std::collections::BTreeMap;
+use mcp_utils::client::ElicitationSink;
+use mcp_utils::gateway::ServerSpec;
+use mcp_utils::model::ElicitResult;
+use mcp_utils::server::McpServer;
+use mcp_utils::testing::{CapturedElicitation, ElicitationScriptBuilder, FakeMcpServer};
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{Notify, mpsc};
 
 use crate::context::CompactionConfig;
-use crate::core::{AgentError, Prompt, RetryConfig, agent};
+use crate::core::{AgentError, McpInstructions, Prompt, RetryConfig, agent};
 use crate::events::{
     AgentCommand, AgentEvent, AgentObserver, Command, ContextEvent, ToolEvent, TurnEvent, UserCommand,
 };
-use crate::mcp::mcp;
-use crate::testing::{AgentTrace, FakeAgentObserver, FakeMcpServer, McpBuilderTestExt};
+use crate::mcp::{McpBuilder, McpCatalog, mcp};
+use crate::testing::{AgentTrace, FakeAgentObserver};
 use llm::{ChatMessage, Context, LlmError, LlmModel, LlmResponse, ModelSettings, StreamingModelProvider};
 
 use llm::testing::FakeLlmProvider;
@@ -47,8 +52,15 @@ pub fn content_events(events: Vec<AgentEvent>) -> Vec<AgentEvent> {
         .collect()
 }
 
-pub fn mcp_instructions(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
-    entries.iter().map(|(k, v)| ((*k).to_string(), (*v).to_string())).collect()
+pub async fn ready_catalog(builder: McpBuilder) -> McpCatalog {
+    let catalog = builder.spawn().expect("the MCP catalog spawns");
+    catalog.ready().await;
+    catalog
+}
+
+pub fn mcp_instructions(entries: &[(&str, &str)]) -> McpInstructions {
+    let servers = entries.iter().map(|(k, v)| ((*k).to_string(), (*v).to_string())).collect();
+    McpInstructions { servers, progressive_discovery: false }
 }
 
 /// Millisecond-scale retry delays so retry tests run fast under virtual time.
@@ -182,10 +194,11 @@ impl From<Vec<TestAgentStep>> for TestScenario {
     }
 }
 
-/// Result of running a test agent, including messages and captured contexts.
+/// Result of running a test agent, including messages, captured contexts, and the MCP elicitations it answered.
 pub struct TestAgentResult {
     pub messages: Vec<AgentEvent>,
     pub captured_contexts: Arc<Mutex<Vec<Context>>>,
+    pub elicitations: Vec<CapturedElicitation>,
 }
 
 /// Error returned by [`TestAgentBuilder::run`], [`TestAgentBuilder::run_trace`], and
@@ -213,7 +226,9 @@ struct AgentTestConfig {
     max_auto_continues: Option<u32>,
     retry_config: Option<RetryConfig>,
     observers: Vec<Box<dyn AgentObserver>>,
-    mcp_server: Option<(String, FakeMcpServer)>,
+    /// `None` connects a single fake server named `test`.
+    mcp_servers: Option<Vec<ServerSpec>>,
+    elicitations: Option<ElicitationScriptBuilder>,
     initial_messages: Vec<ChatMessage>,
     system_prompts: Vec<Prompt>,
     session_affinity_key: Option<String>,
@@ -248,7 +263,8 @@ impl TestAgentBuilder {
                 max_auto_continues: None,
                 retry_config: None,
                 observers: Vec::new(),
-                mcp_server: Some(("test".to_string(), FakeMcpServer::new())),
+                mcp_servers: None,
+                elicitations: None,
                 initial_messages: Vec::new(),
                 system_prompts: Vec::new(),
                 session_affinity_key: None,
@@ -313,13 +329,26 @@ impl TestAgentBuilder {
 
     /// Run without the default fake MCP server when the scenario does not exercise tools.
     pub fn without_mcp(mut self) -> Self {
-        self.agent.mcp_server = None;
+        self.agent.mcp_servers = Some(Vec::new());
         self
     }
 
-    /// Replace the default fake MCP server with a scripted server.
-    pub fn fake_mcp_server(mut self, name: &str, server: FakeMcpServer) -> Self {
-        self.agent.mcp_server = Some((name.to_string(), server));
+    pub fn mcp_server(mut self, name: &str, server: impl Into<McpServer>) -> Self {
+        self.agent.mcp_servers.get_or_insert_with(Vec::new).push(ServerSpec::in_process(name, server));
+        self
+    }
+
+    pub fn elicitation_response(mut self, response: ElicitResult) -> Self {
+        self.agent.elicitations = Some(self.agent.elicitations.take().unwrap_or_default().response(response));
+        self
+    }
+
+    pub fn on_url_elicitation<F, Fut>(mut self, handler: F) -> Self
+    where
+        F: Fn(String, String) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.agent.elicitations = Some(self.agent.elicitations.take().unwrap_or_default().on_url(handler));
         self
     }
 
@@ -397,18 +426,17 @@ impl TestAgentBuilder {
         }
         let captured_contexts = llm.captured_contexts();
 
-        let mut mcp_spawn = match config.mcp_server {
-            Some((name, server)) => {
-                Some(mcp("/workspace").with_fake_mcp(name, server).spawn().await.map_err(AgentError::from)?)
-            }
-            None => None,
-        };
-
-        let mut builder = agent(llm);
-        if let Some(spawn) = &mut mcp_spawn {
-            let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
-            builder = builder.tools(spawn.handle().clone(), snapshot.tool_definitions());
+        let servers = config.mcp_servers.unwrap_or_else(|| vec![ServerSpec::in_process("test", FakeMcpServer::math())]);
+        let mut mcp = mcp("/workspace").with_servers(servers);
+        let mut elicitations = None;
+        if let Some(script) = config.elicitations {
+            let (sink, events) = mpsc::channel(32);
+            mcp = mcp.with_elicitation(ElicitationSink::form_and_url(sink));
+            elicitations = Some(script.spawn(events));
         }
+        let mcp = ready_catalog(mcp).await;
+
+        let mut builder = agent(llm).mcp(mcp);
         if let Some(timeout) = config.timeout {
             builder = builder.tool_timeout(timeout);
         }
@@ -473,7 +501,8 @@ impl TestAgentBuilder {
 
         handle.await_completion().await;
 
-        Ok(TestAgentResult { messages, captured_contexts })
+        let elicitations = elicitations.map(|script| script.captured()).unwrap_or_default();
+        Ok(TestAgentResult { messages, captured_contexts, elicitations })
     }
 
     fn with_execution(mut self, execution: TestExecution) -> Self {

@@ -33,7 +33,7 @@ pub(crate) struct ResolvedAgentSelection {
 }
 
 #[derive(Debug, Error)]
-pub(crate) enum AgentSelectionError {
+pub enum AgentSelectionError {
     #[error(transparent)]
     Settings(#[from] SettingsError),
     #[error("{0}")]
@@ -76,10 +76,5 @@ pub fn resolve_agent_spec(
 ) -> Result<AgentSpec, crate::error::CliError> {
     let selection =
         agent_name.map_or(InitialSessionSelection::Default, |name| InitialSessionSelection::Agent(name.to_string()));
-    resolve_agent_from_catalog(catalog.clone(), &selection).map(|resolved| resolved.spec).map_err(|error| match error {
-        AgentSelectionError::Settings(error) | AgentSelectionError::Agent(error) => {
-            crate::error::CliError::AgentError(error.to_string())
-        }
-        AgentSelectionError::Model(error) => crate::error::CliError::ModelError(error),
-    })
+    Ok(resolve_agent_from_catalog(catalog.clone(), &selection)?.spec)
 }

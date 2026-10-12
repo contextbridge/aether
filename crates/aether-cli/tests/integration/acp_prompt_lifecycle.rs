@@ -11,15 +11,16 @@ use llm::LlmResponse;
 use llm::testing::{FakeLlmProvider, llm_response};
 use std::sync::Arc;
 use tokio::{sync::Notify, task::LocalSet};
+use utils::mcp_status::{McpServerStatus, McpServerStatusEntry};
 
 #[tokio::test(flavor = "current_thread")]
 async fn cancel_during_mcp_prompt_expansion_does_not_wait_for_the_server() {
     AcpTestHarness::run(|mut harness| async move {
-        let (started, _release) = harness.pause_prompt_expansion();
+        let expansion = harness.pause_prompt_expansion();
         let session = harness.insert_agent_switching_session().await;
         let id = session.session_id().clone();
         let prompt = harness.client_cx.send_request(PromptRequest::new(id.clone(), vec!["/plan".into()])).block_task();
-        started.notified().await;
+        expansion.reached().await;
         harness.client_cx.send_notification(CancelSessionNotification::new(id.clone())).unwrap();
         let error = prompt.await.expect_err("a prompt cancelled before insertion errors");
         assert_eq!(error.code, ErrorCode::RequestCancelled);
@@ -33,11 +34,11 @@ async fn cancel_during_mcp_prompt_expansion_does_not_wait_for_the_server() {
 #[tokio::test(flavor = "current_thread")]
 async fn cancel_during_prompt_expansion_reports_no_turn() -> TestResult {
     AcpTestHarness::run(|mut harness| async move {
-        let (started, _release) = harness.pause_prompt_expansion();
+        let expansion = harness.pause_prompt_expansion();
         let session = harness.insert_agent_switching_session().await;
         let id = session.session_id().clone();
         let prompt = harness.client_cx.send_request(PromptRequest::new(id.clone(), vec!["/plan".into()])).block_task();
-        started.notified().await;
+        expansion.reached().await;
         harness.client_cx.send_notification(CancelSessionNotification::new(id.clone()))?;
         prompt.await.expect_err("a prompt cancelled before insertion errors");
 
@@ -209,6 +210,23 @@ async fn acceptance_precedes_streaming_and_idle_completes_the_turn() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn mcp_status_is_reported_only_when_a_tool_refresh_changes_it() -> TestResult {
+    AcpTestHarness::run(|mut harness| async move {
+        let task = FakeBackgroundTask::new();
+        let id = SessionId::new("mcp-status-refresh");
+        harness.insert_background_task_session(background_task_provider(), &task, id).await;
+        let initial = tasks_tool_count(&harness.next_mcp_server_statuses().await).expect("tasks server is connected");
+
+        task.announce_unchanged_tools().await;
+        task.add_tool("extra").await;
+
+        assert_eq!(tasks_tool_count(&harness.next_mcp_server_statuses().await), Some(initial + 1));
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn background_task_outcome_turn_is_framed_by_running_and_idle() -> TestResult {
     AcpTestHarness::run(|mut harness| async move {
         let task = FakeBackgroundTask::new();
@@ -255,7 +273,7 @@ async fn prompt_during_background_task_outcome_turn_is_inserted_after_its_reply(
 #[tokio::test(flavor = "current_thread")]
 async fn prompt_prepared_during_background_task_outcome_turn_is_inserted_after_its_reply() -> TestResult {
     AcpTestHarness::run(|mut harness| async move {
-        let (expansion_started, release_expansion) = harness.pause_prompt_expansion();
+        let expansion = harness.pause_prompt_expansion();
         let task = FakeBackgroundTask::new();
         let release = Arc::new(Notify::new());
         let provider = background_task_provider().pause_turn_after(2, 1, release.clone());
@@ -263,13 +281,13 @@ async fn prompt_prepared_during_background_task_outcome_turn_is_inserted_after_i
         harness.insert_background_task_session(provider, &task, id.clone()).await;
         start_background_task(&mut harness, &id).await?;
         let prompt = harness.client_cx.send_request(PromptRequest::new(id.clone(), vec!["/plan".into()])).block_task();
-        expansion_started.notified().await;
+        expansion.reached().await;
 
         task.complete("task output");
         let updates = harness.updates_until(&id, |update| matches!(update, SessionUpdate::AgentMessageChunk(_))).await;
         assert!(updates.iter().any(is_running), "task outcome turn must report running before replying: {updates:?}");
         let mut delivered = harness.watch_agent_prompts();
-        release_expansion.notify_one();
+        expansion.open();
         delivered.changed().await?;
         release.notify_one();
         let prompt = prompt.await?;
@@ -317,14 +335,14 @@ async fn queued_prompt_is_resumed_where_it_was_inserted() -> TestResult {
 #[tokio::test(flavor = "current_thread")]
 async fn prompts_sent_together_are_inserted_in_submission_order() -> TestResult {
     AcpTestHarness::run(|mut harness| async move {
-        let (expansion_started, release_expansion) = harness.pause_prompt_expansion();
+        let expansion = harness.pause_prompt_expansion();
         let session = harness.insert_agent_switching_session().await;
         let id = session.session_id().clone();
         let slow = harness.client_cx.send_request(PromptRequest::new(id.clone(), vec!["/plan".into()])).block_task();
-        expansion_started.notified().await;
+        expansion.reached().await;
         let fast =
             harness.client_cx.send_request(PromptRequest::new(id.clone(), vec!["right after".into()])).block_task();
-        release_expansion.notify_one();
+        expansion.open();
 
         let slow = slow.await?;
         let fast = fast.await?;
@@ -379,6 +397,13 @@ async fn prompt_sent_after_cancel_starts_a_new_turn() -> TestResult {
         Ok(())
     })
     .await
+}
+
+fn tasks_tool_count(statuses: &[McpServerStatusEntry]) -> Option<usize> {
+    statuses.iter().find(|entry| entry.name == "tasks").and_then(|entry| match entry.status {
+        McpServerStatus::Connected { tool_count } => Some(tool_count),
+        _ => None,
+    })
 }
 
 fn background_task_provider() -> FakeLlmProvider {

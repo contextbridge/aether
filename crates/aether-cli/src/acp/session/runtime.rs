@@ -1,74 +1,50 @@
 use super::agent_key::AgentKey;
 use super::error::SessionError;
 use crate::runtime::{Runtime, RuntimeBuilder};
-use aether_auth::OAuthHandler;
 use aether_core::agent_spec::AgentSpec;
-use aether_core::core::{AgentDeps, AgentHandle};
+use aether_core::core::AgentDeps;
 use aether_core::events::{AgentCommand, AgentEvent, Command};
-use aether_core::mcp::{McpHandle, McpRuntime};
+use aether_core::mcp::McpCatalog;
+use futures::Stream;
 use llm::{ChatMessage, SessionUsageEvent};
-use mcp_utils::client::{
-    ElicitingOAuthHandler, McpClientEvent, McpConnectionDetails, McpError, McpServer, OAuthHandlerFactory,
-};
+use mcp_utils::client::{Elicitation, ElicitationSink};
+use mcp_utils::gateway::ServerSpec;
+use mcp_utils::model::ElicitationCapability;
 use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::{mpsc, watch};
-use utils::mcp_status::McpServerStatusEntry;
+use std::pin::Pin;
+use tokio::sync::mpsc;
 
 pub(crate) struct AgentRuntime {
-    pub(crate) agent_rx: mpsc::Receiver<AgentEvent>,
-    pub(crate) event_rx: mpsc::Receiver<McpClientEvent>,
-    agent_tx: mpsc::Sender<Command>,
-    latest_mcp_snapshot: watch::Receiver<McpConnectionDetails>,
-    agent_handle: Option<AgentHandle>,
-    mcp_runtime: McpRuntime,
+    runtime: Runtime,
+    mcp_changes: McpChanges,
 }
 
+pub(crate) type McpChanges = Pin<Box<dyn Stream<Item = ()> + Send + Sync>>;
+
 impl AgentRuntime {
-    pub(crate) fn new(
-        agent_tx: mpsc::Sender<Command>,
-        agent_rx: mpsc::Receiver<AgentEvent>,
-        agent_handle: Option<AgentHandle>,
-        event_rx: mpsc::Receiver<McpClientEvent>,
-        mcp_runtime: McpRuntime,
-    ) -> Self {
-        let latest_mcp_snapshot = mcp_runtime.handle().subscribe();
-        Self { agent_rx, event_rx, agent_tx, latest_mcp_snapshot, agent_handle, mcp_runtime }
+    pub(crate) fn new(runtime: Runtime) -> Self {
+        let mcp_changes = Box::pin(runtime.mcp.changes());
+        Self { runtime, mcp_changes }
     }
 
-    pub(crate) async fn shutdown(mut self) {
-        if let Some(handle) = self.agent_handle.take() {
-            handle.abort();
-            handle.await_completion().await;
-        }
-        self.mcp_runtime.shutdown().await;
+    pub(crate) fn events(&mut self) -> (&mut mpsc::Receiver<AgentEvent>, &mut McpChanges) {
+        (&mut self.runtime.agent_rx, &mut self.mcp_changes)
+    }
+
+    pub(crate) async fn shutdown(self) {
+        self.runtime.shutdown().await;
     }
 
     pub(crate) async fn send_agent_command(&self, command: Command) -> Result<(), SessionError> {
-        self.agent_tx.send(command).await.map_err(|_| SessionError::CommandChannelClosed)
+        self.runtime.agent_tx.send(command).await.map_err(|_| SessionError::CommandChannelClosed)
     }
 
     pub(crate) async fn replace_conversation(&self, messages: Vec<ChatMessage>) -> Result<(), SessionError> {
-        self.agent_tx
-            .send(Command::agent(AgentCommand::ReplaceConversation(messages)))
-            .await
-            .map_err(|_| SessionError::CommandChannelClosed)
+        self.send_agent_command(Command::agent(AgentCommand::ReplaceConversation(messages))).await
     }
 
-    pub(crate) fn mcp(&self) -> &McpHandle {
-        self.mcp_runtime.handle()
-    }
-
-    pub(crate) fn mcp_server_statuses(&self) -> Vec<McpServerStatusEntry> {
-        self.latest_mcp_snapshot.borrow().server_statuses()
-    }
-}
-
-impl Drop for AgentRuntime {
-    fn drop(&mut self) {
-        if let Some(handle) = &self.agent_handle {
-            handle.abort();
-        }
+    pub(crate) fn mcp(&self) -> &McpCatalog {
+        &self.runtime.mcp
     }
 }
 
@@ -83,18 +59,25 @@ pub(crate) trait RuntimeFactory: Send + Sync {
         spec: &AgentSpec,
         initial_messages: Vec<ChatMessage>,
         usage_seed: Option<SessionUsageEvent>,
+        elicitations: mpsc::Sender<Elicitation>,
     ) -> Result<AgentRuntime, SessionError>;
 }
 
 pub(crate) struct ProductionRuntimeFactory {
     cwd: PathBuf,
-    mcp_servers: Vec<McpServer>,
+    mcp_servers: Vec<ServerSpec>,
     agent_deps: AgentDeps,
+    elicitation: ElicitationCapability,
 }
 
 impl ProductionRuntimeFactory {
-    pub fn new(cwd: PathBuf, client_servers: Vec<McpServer>, agent_deps: AgentDeps) -> Self {
-        Self { cwd, mcp_servers: client_servers, agent_deps }
+    pub fn new(
+        cwd: PathBuf,
+        mcp_servers: Vec<ServerSpec>,
+        agent_deps: AgentDeps,
+        elicitation: ElicitationCapability,
+    ) -> Self {
+        Self { cwd, mcp_servers, agent_deps, elicitation }
     }
 }
 
@@ -106,30 +89,16 @@ impl RuntimeFactory for ProductionRuntimeFactory {
         spec: &AgentSpec,
         initial_messages: Vec<ChatMessage>,
         usage_seed: Option<SessionUsageEvent>,
+        elicitations: mpsc::Sender<Elicitation>,
     ) -> Result<AgentRuntime, SessionError> {
-        let extra_servers = self.mcp_servers.clone();
-
-        let mut builder = RuntimeBuilder::from_spec(self.cwd.clone(), spec.clone())
-            .extra_servers(extra_servers)
-            .agent_deps(self.agent_deps.clone());
-        if let Some(last) = usage_seed {
-            builder = builder.resume_usage(last);
-        }
-        if self.agent_deps.supports_mcp_url_elicitation() {
-            builder = builder.oauth_handler_factory(mcp_oauth_handler_factory());
-        }
-
-        let runtime = builder.build(None, Some(initial_messages)).await?;
-
-        let Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime } = runtime;
-        Ok(AgentRuntime::new(agent_tx, agent_rx, Some(agent_handle), event_rx, mcp_runtime))
+        let sink = ElicitationSink::new(elicitations, self.elicitation.clone());
+        let runtime = RuntimeBuilder::from_spec(self.cwd.clone(), spec.clone())
+            .extra_servers(self.mcp_servers.clone())
+            .elicitation(sink)
+            .agent_deps(self.agent_deps.clone())
+            .resume_usage(usage_seed)
+            .build(initial_messages)
+            .await?;
+        Ok(AgentRuntime::new(runtime))
     }
-}
-
-fn mcp_oauth_handler_factory() -> OAuthHandlerFactory {
-    Arc::new(|ctx| {
-        ElicitingOAuthHandler::new(ctx)
-            .map(|handler| Arc::new(handler) as Arc<dyn OAuthHandler>)
-            .map_err(|error| McpError::ConnectionFailed(format!("failed to initialize OAuth handler: {error}")))
-    })
 }

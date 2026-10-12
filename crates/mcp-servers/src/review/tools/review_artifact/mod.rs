@@ -1,6 +1,6 @@
+use crate::request_context::{CLIENT_CANNOT_ELICIT, parse_response, supports_elicitation};
 use crate::review::html_review::{Artifact, PendingReviews, ReviewServer};
 use crate::workspace_paths::resolve_path;
-use mcp_utils::server::mrtr::{ELICITATION_UNSUPPORTED, ElicitationMode, elicitation_supported, parse_response};
 use reqwest::Url;
 use rmcp::{
     ErrorData as McpError, RoleServer,
@@ -13,7 +13,7 @@ use rmcp::{
         ElicitationAction, ElicitationSchema, EnumSchema, InputRequest, InputRequests, InputRequiredResult,
         RequestMetaObject,
     },
-    service::RequestContext,
+    service::{ElicitationMode, RequestContext},
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -110,8 +110,8 @@ impl ReviewArtifactTool {
             ReviewArtifactInput::Markdown { .. } => ElicitationMode::Form,
             ReviewArtifactInput::Html { .. } => ElicitationMode::Url,
         };
-        if !elicitation_supported(context.client_capabilities().as_ref(), mode) {
-            return Err(ELICITATION_UNSUPPORTED.to_string());
+        if !supports_elicitation(context, mode) {
+            return Err(format!("Reviewing an artifact requires user input, but {CLIENT_CANNOT_ELICIT}."));
         }
 
         let (params, review_token) = match input {

@@ -5,17 +5,16 @@ This server loads prompt artifacts from explicitly configured directories. It ex
 # Construction
 
 ```rust,ignore
-use mcp_servers::SkillsMcp;
+use clap::Parser;
+use mcp_servers::{SkillsMcp, SkillsMcpArgs};
 
 let server = SkillsMcp::new(
+    "/my/project",
     &["/my/project/.aether/skills".into(), "/my/project/.claude/rules".into()],
 );
 
-// From CLI args
-let server = SkillsMcp::from_args(vec![
-    "--dir".into(), "/my/project/.aether/skills".into(),
-    "--dir".into(), "/my/project/.claude/rules".into(),
-]).unwrap();
+let args = SkillsMcpArgs::try_parse_from(["--dir", ".aether/skills", "--dir", ".claude/rules"])?;
+let server = SkillsMcp::from_args(args, "/my/project".as_ref());
 ```
 
 # Tools provided

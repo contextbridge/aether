@@ -1,201 +1,380 @@
-use mcp_utils::client::{McpConfig, McpHttpConfig, McpServer, McpTransport, ParseError};
-use reqwest::header::AUTHORIZATION;
-use std::env;
+use aether_auth::OAuthClientRegistration;
+use aether_core::mcp::{
+    McpConfig, McpOAuthConfig, McpServerConfig, ParseError, StdioServerConfig, ToolExposure, ToolFilter, ToolMatcher,
+    http_transport,
+};
+use http::header::{AUTHORIZATION, HeaderMap, HeaderValue};
+use mcp_utils::client::{OAuthSettings, Transport};
+use mcp_utils::model::{Tool, ToolAnnotations};
 use std::num::NonZeroU16;
-use utils::variables::Vars;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use tempfile::tempdir;
+use utils::variables::{VarError, Vars};
 
-fn parse_servers(json: &str) -> Result<Vec<McpServer>, ParseError> {
-    McpConfig::from_json(json).unwrap().into_servers(&Vars::new())
-}
+#[test]
+fn from_json_accepts_mcp_servers_key() {
+    let config = McpConfig::from_json(r#"{"mcpServers": {"alpha": {"type": "stdio", "command": "a"}}}"#).unwrap();
 
-fn parse_one(json: &str) -> McpServer {
-    let mut servers = parse_servers(json).unwrap();
-    assert_eq!(servers.len(), 1);
-    servers.remove(0)
-}
-
-fn server_json(name: &str, body: &str) -> String {
-    format!(r#"{{ "servers": {{ "{name}": {body} }} }}"#)
-}
-
-macro_rules! with_env {
-    ([$( ($k:expr, $v:expr) ),+ $(,)?], $body:expr) => {{
-        unsafe { $( env::set_var($k, $v); )+ }
-        let _result = $body;
-        unsafe { $( env::remove_var($k); )+ }
-        _result
-    }};
-}
-
-fn assert_http(server: McpServer, expected_name: &str, expected_url: &str) -> McpServer {
-    match &server.transport {
-        McpTransport::Http(c) => {
-            assert_eq!(server.name, expected_name);
-            assert_eq!(c.transport.uri.to_string(), expected_url);
-        }
-        other => panic!("Expected Http config, got {other:?}"),
-    }
-    server
-}
-
-#[tokio::test]
-async fn test_parse_stdio_config() {
-    let json = server_json(
-        "githubMcp",
-        r#"{
-            "type": "stdio",
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-github"],
-            "env": { "GITHUB_TOKEN": "$GITHUB_TOKEN" }
-        }"#,
-    );
-    with_env!([("GITHUB_TOKEN", "test_token")], {
-        let server = parse_one(&json);
-        assert!(!server.has_deferred_tools());
-        match server.transport {
-            McpTransport::Stdio { command, args, env } => {
-                assert_eq!(server.name, "githubMcp");
-                assert_eq!(command, "npx");
-                assert_eq!(args, vec!["-y", "@modelcontextprotocol/server-github"]);
-                assert_eq!(env.get("GITHUB_TOKEN").unwrap(), "test_token");
-            }
-            other => panic!("Expected Stdio config, got {other:?}"),
-        }
-    });
-}
-
-#[tokio::test]
-async fn test_parse_http_oauth_config() {
-    let json = server_json(
-        "slack",
-        r#"{
-            "type": "http",
-            "url": "https://mcp.slack.com/mcp",
-            "oauth": {
-                "clientId": "1601185624273.8899143856786",
-                "callbackPort": 3118
-            }
-        }"#,
-    );
-
-    let server = parse_one(&json);
-    match server.transport {
-        McpTransport::Http(McpHttpConfig { oauth: Some(oauth), .. }) => {
-            assert_eq!(oauth.client_id.as_deref(), Some("1601185624273.8899143856786"));
-            assert_eq!(oauth.callback_port.map(NonZeroU16::get), Some(3118));
-        }
-        other => panic!("Expected HTTP OAuth config, got {other:?}"),
-    }
+    assert_eq!(config.servers.keys().collect::<Vec<_>>(), ["alpha"]);
 }
 
 #[test]
-fn test_rejects_zero_oauth_callback_port() {
-    let json = server_json(
-        "bad",
-        r#"{
-            "type": "http",
-            "url": "https://example.com/mcp",
-            "oauth": { "clientId": "client", "callbackPort": 0 }
-        }"#,
-    );
+fn from_json_defaults_missing_type_to_stdio() {
+    let server =
+        only_server(r#"{"mcpServers": {"devtools": {"command": "npx", "args": ["-y", "chrome-devtools-mcp"]}}}"#);
 
-    assert!(McpConfig::from_json(&json).is_err());
-}
-
-#[tokio::test]
-async fn test_parse_http_and_sse_configs() {
-    let json = server_json(
-        "mcpMesh",
-        r#"{
-            "type": "http",
-            "url": "http://localhost:3000/mcp",
-            "headers": { "Authorization": "Bearer $API_TOKEN" }
-        }"#,
-    );
-    let cfg = with_env!(
-        [("API_TOKEN", "secret_token")],
-        assert_http(parse_one(&json), "mcpMesh", "http://localhost:3000/mcp")
-    );
-    if let McpTransport::Http(c) = cfg.transport {
-        assert!(c.transport.auth_header.is_none());
-        assert_eq!(c.transport.custom_headers[&AUTHORIZATION], "Bearer secret_token");
-    }
-
-    let json = server_json("sseServer", r#"{ "type": "sse", "url": "http://localhost:4000/sse", "headers": {} }"#);
-    assert_http(parse_one(&json), "sseServer", "http://localhost:4000/sse");
-}
-
-#[tokio::test]
-async fn test_missing_env_var_error() {
-    let json = server_json("test", r#"{ "type": "stdio", "command": "$MISSING_VAR", "args": [] }"#);
-    match parse_servers(&json).unwrap_err() {
-        ParseError::VarError(_) => (),
-        other => panic!("Expected VarError, got {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn test_in_memory_config_is_declarative() {
-    let json = server_json(
-        "test",
-        r#"{ "type": "in-memory", "args": ["--root", "${WORKSPACE}"], "input": {"enabled": true} }"#,
-    );
-    let vars = Vars::new().with("WORKSPACE", "/workspace");
-    let mut servers = McpConfig::from_json(&json).unwrap().into_servers(&vars).unwrap();
-    let McpTransport::InMemory { spec } = servers.remove(0).transport else {
-        panic!("expected in-memory transport");
+    let McpServerConfig::Stdio(StdioServerConfig { command, args, defer_tools, .. }) = server else {
+        panic!("expected a stdio server, got {server:?}");
     };
-    assert_eq!(spec.factory, "test");
-    assert_eq!(spec.args, ["--root", "/workspace"]);
-    assert_eq!(spec.input, Some(serde_json::json!({"enabled": true})));
-}
-
-#[tokio::test]
-async fn test_multiple_servers() {
-    let json = r#"{
-        "servers": {
-            "server1": { "type": "stdio", "command": "node", "args": ["server.js"] },
-            "server2": {
-                "type": "http",
-                "url": "http://localhost:3000/mcp",
-                "headers": { "Authorization": "$TOKEN" }
-            }
-        }
-    }"#;
-    with_env!([("TOKEN", "test")], {
-        assert_eq!(parse_servers(json).unwrap().len(), 2);
-    });
-}
-
-#[tokio::test]
-async fn test_env_var_in_url() {
-    let json = server_json("test", r#"{ "type": "http", "url": "http://${HOST}:${PORT}/mcp" }"#);
-    with_env!([("HOST", "localhost"), ("PORT", "8080")], {
-        assert_http(parse_one(&json), "test", "http://localhost:8080/mcp");
-    });
-}
-
-#[tokio::test]
-async fn test_parse_per_server_defer_tools_config() {
-    let json = r#"{
-        "servers": {
-            "github": {
-                "type": "stdio",
-                "command": "npx",
-                "args": ["-y", "@modelcontextprotocol/server-github"],
-                "deferTools": true
-            },
-            "sentry": { "type": "http", "url": "https://sentry.example.com/mcp" }
-        }
-    }"#;
-    let servers = parse_servers(json).unwrap();
-    assert_eq!(servers.len(), 2);
-    assert!(servers.iter().find(|s| s.name == "github").unwrap().has_deferred_tools());
-    assert!(!servers.iter().find(|s| s.name == "sentry").unwrap().has_deferred_tools());
+    assert_eq!(command, "npx");
+    assert_eq!(args, ["-y", "chrome-devtools-mcp"]);
+    assert!(!defer_tools.defers_tools());
 }
 
 #[test]
-fn test_rejects_unknown_server_type() {
-    let json = server_json("outer", r#"{ "type": "unknown", "servers": { "bad": { "type": "in-memory" } } }"#);
-    assert!(McpConfig::from_json(&json).is_err());
+fn from_json_rejects_unknown_server_types() {
+    for server in [
+        r#"{"type":"deferTools","servers":{}}"#,
+        r#"{"type":"htp","url":"https://example.com"}"#,
+        r#"{"type":"sse","url":"https://example.com"}"#,
+        r#"{"type":"unknown","servers":{"bad":{"type":"in-memory"}}}"#,
+    ] {
+        let json = format!(r#"{{"servers":{{"bad":{server}}}}}"#);
+        assert!(McpConfig::from_json(&json).is_err(), "unknown server type was accepted: {server}");
+    }
+}
+
+#[test]
+fn from_json_rejects_unknown_fields_for_all_transports() {
+    for server in [
+        r#"{"command":"x","direct_tool":["bash"]}"#,
+        r#"{"type":"http","url":"https://example.com","direct_tool":["bash"]}"#,
+        r#"{"type":"in-memory","direct_tool":["bash"]}"#,
+        r#"{"command":"x","deferTools":true,"direct_tools":["bash"]}"#,
+    ] {
+        let json = format!(r#"{{"servers":{{"bad":{server}}}}}"#);
+        assert!(McpConfig::from_json(&json).is_err(), "unknown field was accepted: {server}");
+    }
+}
+
+#[test]
+fn from_json_rejects_a_zero_oauth_callback_port() {
+    let json = r#"{"servers":{"bad":{"type":"http","url":"https://example.com/mcp","oauth":{"clientId":"client","callbackPort":0}}}}"#;
+
+    assert!(McpConfig::from_json(json).is_err());
+}
+
+#[test]
+fn defer_tools_accepts_booleans_and_rules_for_all_transports() {
+    let config = McpConfig::from_json(
+        r#"{"servers":{"all":{"command":"a","deferTools":true},"stdio":{"command":"x","deferTools":{"include":["lsp_*"],"exclude":["lsp_rename"]}},"http":{"type":"http","url":"https://example.com","deferTools":{"exclude":["bash"]}},"memory":{"type":"in-memory","deferTools":{"include":["read"]}},"direct":{"type":"http","url":"https://example.com"}}}"#,
+    )
+    .unwrap();
+
+    assert_eq!(config.servers["all"].defer_tools(), &ToolExposure::deferred_all());
+    assert_eq!(config.servers["stdio"].defer_tools(), &deferred(&["lsp_*"], &["lsp_rename"]));
+    assert_eq!(config.servers["http"].defer_tools(), &deferred(&[], &["bash"]));
+    assert_eq!(config.servers["memory"].defer_tools(), &deferred(&["read"], &[]));
+    assert_eq!(config.servers["direct"].defer_tools(), &ToolExposure::ModelVisible);
+}
+
+#[test]
+fn defer_tools_rejects_unknown_rule_fields() {
+    for rules in [r#"{"allow":["lsp_*"]}"#, r#"{"deny":["bash"]}"#, r#"{"include":["lsp_*"],"direct":["bash"]}"#] {
+        let json = format!(r#"{{"servers":{{"coding":{{"command":"x","deferTools":{rules}}}}}}}"#);
+        assert!(McpConfig::from_json(&json).is_err(), "unknown deferTools field was accepted: {rules}");
+    }
+}
+
+#[test]
+fn defer_tools_serializes_only_when_tools_are_deferred() {
+    let config = McpConfig::from_json(
+        r#"{"servers":{"coding":{"command":"x","deferTools":{"exclude":["bash","lsp_*"]}},"direct":{"command":"y","deferTools":false},"full":{"command":"z","deferTools":true}}}"#,
+    )
+    .unwrap();
+
+    let value = serde_json::to_value(config).unwrap();
+
+    assert_eq!(value["servers"]["coding"]["deferTools"], serde_json::json!({"exclude":["bash", "lsp_*"]}));
+    assert!(value["servers"]["direct"].get("deferTools").is_none());
+    assert_eq!(value["servers"]["full"]["deferTools"], serde_json::json!(true));
+}
+
+#[test]
+fn deferred_tool_rules_partition_tools_with_exclude_winning() {
+    let server = only_server(
+        r#"{"servers":{"coding":{"command":"server","deferTools":{"include":["lsp_*","bash"],"exclude":["lsp_rename"]}}}}"#,
+    );
+    let exposure = server.defer_tools();
+
+    assert!(exposure.is_deferred(&tool("lsp_hover")));
+    assert!(!exposure.is_deferred(&tool("lsp_rename")));
+    assert!(exposure.is_deferred(&tool("bash")));
+    assert!(!exposure.is_deferred(&tool("read_file")));
+}
+
+#[test]
+fn deferred_tool_rules_match_tool_annotations() {
+    let server = only_server(r#"{"servers":{"coding":{"command":"x","deferTools":{"exclude":[{"readOnly":true}]}}}}"#);
+    let mut read_only = tool("read_file");
+    read_only.annotations = Some(ToolAnnotations::new().read_only(true));
+
+    assert!(!server.defer_tools().is_deferred(&read_only));
+    assert!(server.defer_tools().is_deferred(&tool("write_file")));
+}
+
+#[test]
+fn defer_all_tools_defers_every_server_and_keeps_existing_rules() {
+    let mut config = McpConfig::from_json(
+        r#"{"servers":{"a":{"type":"stdio","command":"a"},"b":{"type":"http","url":"https://example.com"},"coding":{"command":"server","deferTools":{"exclude":["bash"]}}}}"#,
+    )
+    .unwrap();
+
+    config.defer_all_tools();
+
+    assert!(config.servers.values().all(|server| server.defer_tools().defers_tools()));
+    let coding = config.servers["coding"].defer_tools();
+    assert!(!coding.is_deferred(&tool("bash")));
+    assert!(coding.is_deferred(&tool("read_file")));
+}
+
+#[test]
+fn merging_no_configs_is_empty() {
+    assert!(std::iter::empty::<McpConfig>().collect::<McpConfig>().is_empty());
+}
+
+#[test]
+fn merging_keeps_disjoint_servers() {
+    let merged: McpConfig = [
+        config(r#"{"servers": {"alpha": {"type": "stdio", "command": "a"}}}"#),
+        config(r#"{"servers": {"beta": {"type": "stdio", "command": "b"}}}"#),
+    ]
+    .into_iter()
+    .collect();
+
+    assert_eq!(merged.servers.keys().collect::<Vec<_>>(), ["alpha", "beta"]);
+}
+
+#[test]
+fn merging_lets_the_last_config_win_including_its_exposure() {
+    let first =
+        config(r#"{"servers":{"coding":{"type":"stdio","command":"first","deferTools":{"exclude":["bash"]}}}}"#);
+    let second = config(r#"{"servers":{"coding":{"type":"stdio","command":"second"}}}"#);
+
+    assert_eq!(coding([first.clone(), second.clone()]), command("second", ToolExposure::ModelVisible));
+    assert_eq!(coding([second, first]), command("first", deferred(&[], &["bash"])));
+}
+
+#[test]
+fn a_later_config_can_make_a_deferred_server_model_visible() {
+    let mut lazy = config(r#"{"servers":{"coding":{"type":"stdio","command":"lazy"}}}"#);
+    lazy.defer_all_tools();
+    let visible = config(r#"{"servers":{"coding":{"type":"stdio","command":"visible","deferTools":false}}}"#);
+
+    assert_eq!(coding([lazy, visible]), command("visible", ToolExposure::ModelVisible));
+}
+
+#[test]
+fn reading_a_config_file_reports_read_and_parse_errors() {
+    let dir = tempdir().unwrap();
+    let invalid = write_config(dir.path(), "bad.json", "not valid json");
+
+    assert!(matches!(McpConfig::from_json_file(dir.path().join("missing.json")), Err(ParseError::IoError(_))));
+    assert!(matches!(McpConfig::from_json_file(invalid), Err(ParseError::JsonError(_))));
+    assert!(matches!(McpConfig::from_json("{"), Err(ParseError::JsonError(_))));
+}
+
+#[test]
+fn stdio_servers_expand_variables_and_run_in_the_given_directory() {
+    let json = r#"{"servers":{"github":{"type":"stdio","command":"npx","args":["--root","${WORKSPACE}/src"],"env":{"GITHUB_TOKEN":"$GITHUB_TOKEN"}}}}"#;
+    let vars = vars(&[("WORKSPACE", "/workspace"), ("GITHUB_TOKEN", "test_token")]);
+
+    let Transport::Stdio { command, args, env, cwd } = transport(json, &vars) else { panic!("expected stdio") };
+
+    assert_eq!(command, "npx");
+    assert_eq!(args, ["--root", "/workspace/src"]);
+    assert_eq!(env["GITHUB_TOKEN"], "test_token");
+    assert_eq!(cwd.as_deref(), Some(Path::new("/cwd")));
+}
+
+#[test]
+fn missing_variables_fail_resolution() {
+    let json = r#"{"servers":{"test":{"type":"stdio","command":"$MISSING_VAR"}}}"#;
+
+    let result = try_transport(json, &vars(&[]));
+
+    assert!(matches!(result, Err(ParseError::VarError(VarError::NotFound(name))) if name == "MISSING_VAR"));
+}
+
+#[test]
+fn http_servers_connect_to_their_expanded_url() {
+    let vars = vars(&[("HOST", "localhost"), ("PORT", "8080")]);
+    let json = r#"{"servers":{"remote":{"type":"http","url":"http://${HOST}:${PORT}/mcp"}}}"#;
+
+    let Transport::Http { url, .. } = transport(json, &vars) else { panic!("expected http") };
+
+    assert_eq!(url, "http://localhost:8080/mcp");
+}
+
+#[test]
+fn http_headers_expand_variables_and_are_marked_sensitive() {
+    let json = r#"{"servers":{"weather":{"type":"http","url":"http://127.0.0.1:9000/mcp","headers":{"Authorization":"Bearer ${TOKEN}"}}}}"#;
+
+    let Transport::Http { headers, .. } = transport(json, &vars(&[("TOKEN", "expanded-token")])) else {
+        panic!("expected http")
+    };
+
+    assert_eq!(headers[AUTHORIZATION], "Bearer expanded-token");
+    assert!(headers[AUTHORIZATION].is_sensitive());
+}
+
+#[test]
+fn http_headers_keep_authorization_schemes_and_accept_any_header_casing() {
+    let vars = vars(&[("TOKEN", "secret"), ("API_KEY", "custom-secret")]);
+    for scheme in ["Sentry-Bearer", "Bearer", "bearer", "Basic", "Token"] {
+        for header_name in ["Authorization", "authorization", "AUTHORIZATION"] {
+            let json = format!(
+                r#"{{"servers":{{"remote":{{"type":"http","url":"http://localhost/mcp","headers":{{"{header_name}":"{scheme} $TOKEN","X-API-Key":"$API_KEY"}}}}}}}}"#
+            );
+
+            let Transport::Http { headers, .. } = transport(&json, &vars) else { panic!("expected http") };
+
+            assert_eq!(headers.get_all(AUTHORIZATION).iter().count(), 1);
+            assert_eq!(headers[AUTHORIZATION], format!("{scheme} secret"));
+            assert_eq!(headers["x-api-key"], "custom-secret");
+        }
+    }
+}
+
+#[test]
+fn invalid_http_headers_fail_resolution() {
+    let invalid_value =
+        r#"{"servers":{"weather":{"type":"http","url":"http://127.0.0.1:9000/mcp","headers":{"X-Key":"bad\nvalue"}}}}"#;
+    let invalid_name =
+        r#"{"servers":{"weather":{"type":"http","url":"http://127.0.0.1:9000/mcp","headers":{"Bad Key":"value"}}}}"#;
+
+    assert!(matches!(
+        try_transport(invalid_value, &vars(&[])),
+        Err(ParseError::InvalidHeaderValue { name, .. }) if name == "X-Key"
+    ));
+    assert!(matches!(
+        try_transport(invalid_name, &vars(&[])),
+        Err(ParseError::InvalidHeaderName { name, .. }) if name == "Bad Key"
+    ));
+}
+
+#[test]
+fn http_servers_sign_in_with_aether_client_metadata_by_default() {
+    let oauth = http_oauth(None, HeaderMap::new()).expect("OAuth is offered");
+
+    assert!(matches!(
+        &oauth.registration,
+        OAuthClientRegistration::ClientMetadata(url) if url == "https://aether-agent.io/oauth/client-metadata.json"
+    ));
+    assert_eq!(oauth.callback_port, 3118);
+}
+
+#[test]
+fn http_servers_prefer_a_preregistered_client_id_over_client_metadata() {
+    let config = McpOAuthConfig {
+        client_id: Some("registered".to_string()),
+        client_metadata_url: Some("https://client.example/oauth/client.json".to_string()),
+        callback_port: NonZeroU16::new(4000),
+    };
+
+    let oauth = http_oauth(Some(config), HeaderMap::new()).expect("OAuth is offered");
+
+    assert!(matches!(&oauth.registration, OAuthClientRegistration::PreRegistered(id) if id == "registered"));
+    assert_eq!(oauth.callback_port, 4000);
+}
+
+#[test]
+fn http_servers_with_an_authorization_header_never_sign_in() {
+    let headers = HeaderMap::from_iter([(AUTHORIZATION, HeaderValue::from_static("Bearer static"))]);
+
+    assert!(http_oauth(None, headers).is_none());
+}
+
+#[test]
+fn oauth_settings_expand_variables() {
+    let vars = vars(&[("CLIENT_ID", "registered"), ("CIMD_URL", "https://client.example/oauth/client.json")]);
+    let oauth = |settings: &str| {
+        let json = format!(
+            r#"{{"servers":{{"linear":{{"type":"http","url":"https://example.com/mcp","oauth":{settings}}}}}}}"#
+        );
+        let Transport::Http { oauth: Some(oauth), .. } = transport(&json, &vars) else {
+            panic!("expected HTTP transport with OAuth settings")
+        };
+        oauth
+    };
+
+    let registered = oauth(r#"{"clientId":"$CLIENT_ID","callbackPort":4000}"#);
+    let metadata = oauth(r#"{"clientMetadataUrl":"$CIMD_URL"}"#);
+
+    assert!(matches!(&registered.registration, OAuthClientRegistration::PreRegistered(id) if id == "registered"));
+    assert_eq!(registered.callback_port, 4000);
+    assert!(matches!(
+        &metadata.registration,
+        OAuthClientRegistration::ClientMetadata(url) if url == "https://client.example/oauth/client.json"
+    ));
+}
+
+fn vars(pairs: &[(&str, &str)]) -> Vars {
+    pairs.iter().fold(Vars::new().with_env_lookup(|_| None), |vars, (name, value)| vars.with(*name, *value))
+}
+
+fn only_server(json: &str) -> McpServerConfig {
+    let mut servers = McpConfig::from_json(json).unwrap().servers;
+    assert_eq!(servers.len(), 1);
+    servers.pop_first().expect("one server").1
+}
+
+fn try_transport(json: &str, vars: &Vars) -> Result<Transport, ParseError> {
+    match only_server(json) {
+        McpServerConfig::Stdio(config) => config.into_transport(vars, Path::new("/cwd")),
+        McpServerConfig::Remote(config) => config.into_transport(vars),
+        McpServerConfig::InMemory(_) => panic!("in-memory servers have no transport"),
+    }
+}
+
+fn transport(json: &str, vars: &Vars) -> Transport {
+    try_transport(json, vars).unwrap()
+}
+
+fn config(json: &str) -> McpConfig {
+    McpConfig::from_json(json).unwrap()
+}
+
+fn coding(configs: impl IntoIterator<Item = McpConfig>) -> (String, ToolExposure) {
+    match configs.into_iter().collect::<McpConfig>().servers.remove("coding") {
+        Some(McpServerConfig::Stdio(StdioServerConfig { command, defer_tools, .. })) => (command, defer_tools),
+        other => panic!("expected a stdio server, got {other:?}"),
+    }
+}
+
+fn command(command: &str, exposure: ToolExposure) -> (String, ToolExposure) {
+    (command.to_string(), exposure)
+}
+
+fn http_oauth(oauth: Option<McpOAuthConfig>, headers: HeaderMap) -> Option<OAuthSettings> {
+    let Transport::Http { oauth, .. } = http_transport("https://example.com/mcp".to_string(), headers, oauth) else {
+        panic!("expected http")
+    };
+    oauth
+}
+
+fn deferred(allow: &[&str], deny: &[&str]) -> ToolExposure {
+    let matchers = |patterns: &[&str]| patterns.iter().copied().map(ToolMatcher::name).collect();
+    ToolExposure::Deferred(ToolFilter { allow: matchers(allow), deny: matchers(deny) })
+}
+
+fn tool(name: &str) -> Tool {
+    Tool::new(name.to_string(), "", Arc::new(serde_json::Map::new()))
+}
+
+fn write_config(dir: &Path, name: &str, json: &str) -> PathBuf {
+    let path = dir.join(name);
+    std::fs::write(&path, json).unwrap();
+    path
 }

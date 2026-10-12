@@ -26,13 +26,12 @@ async fn live_context_and_reloaded_log_share_identities_and_message_boundaries()
     let (_, loaded) = store.store().load("identity").unwrap();
     let restored = context_from_events(&loaded);
     let replayed = context_from_events(&loaded);
-    let ids = |messages: &[ChatMessage]| messages.iter().map(ChatMessage::message_id).collect::<Vec<_>>();
-    assert_eq!(ids(restored.messages()), ids(replayed.messages()));
+    assert_eq!(conversation_ids(restored.messages()), conversation_ids(replayed.messages()));
     assert_eq!(restored.message_count(), 4);
     assert_eq!(restored.messages()[0].message_id(), Some(user_id));
 
     let contexts = result.captured_contexts.lock().unwrap();
-    assert_eq!(ids(contexts[1].messages()), ids(&restored.messages()[..3]));
+    assert_eq!(conversation_ids(contexts[1].messages()), conversation_ids(&restored.messages()[..3]));
     let assistant_ids: Vec<_> = restored
         .messages()
         .iter()
@@ -59,7 +58,7 @@ async fn live_context_and_reloaded_log_share_identities_and_message_boundaries()
     }
     let mut switched = contexts[1].clone();
     switched.replace_conversation(restored.messages().clone());
-    assert_eq!(ids(switched.messages()), ids(restored.messages()));
+    assert_eq!(conversation_ids(switched.messages()), conversation_ids(restored.messages()));
 }
 
 #[tokio::test]
@@ -77,15 +76,12 @@ async fn continuation_preserves_live_message_boundaries_and_ids() {
         .await
         .unwrap();
     let contexts = result.captured_contexts.lock().unwrap();
-    assert_eq!(contexts[1].message_count(), 3);
     let mut events =
         vec![SessionEvent::User(UserEvent::Message { message_id: user_id, content, display_content: None })];
     events.extend(result.messages.into_iter().map(SessionEvent::Agent));
     let restored = context_from_events(&events);
     assert_eq!(restored.message_count(), 4);
-    for (live, restored) in contexts[1].messages().iter().zip(restored.messages()) {
-        assert_eq!(live.message_id(), restored.message_id());
-    }
+    assert_eq!(conversation_ids(contexts[1].messages()), conversation_ids(&restored.messages()[..3]));
 }
 
 #[test]
@@ -126,4 +122,8 @@ fn partial_streams_do_not_replace_durable_messages() {
     let context = context_from_events(&events);
     assert_eq!(context.message_count(), 1);
     assert_eq!(context.messages()[0].message_id().as_deref(), Some("original"));
+}
+
+fn conversation_ids(messages: &[ChatMessage]) -> Vec<Option<MessageId>> {
+    messages.iter().filter(|message| !message.is_system()).map(ChatMessage::message_id).collect()
 }

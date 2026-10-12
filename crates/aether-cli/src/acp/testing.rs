@@ -1,4 +1,3 @@
-use super::fake_prompt_mcp::FakePromptMcp;
 use super::server::{AcpServer, ServerRunError};
 use super::session::actor::SessionActorInit;
 use super::session::agent_key::AgentKey;
@@ -9,8 +8,8 @@ use super::session::hooks::SessionHooks;
 use super::session::model::{Modes, ValidatedMode};
 use super::session::runtime::{AgentRuntime, RuntimeFactory};
 use super::state::{AcpState, AcpStateConfig};
-use crate::error::CliError;
 use crate::resolve::InitialSessionSelection;
+use crate::runtime::{Runtime, RuntimeBuilder};
 use crate::settings_args::SettingsSourceArgs;
 use crate::workspace::WorkspaceManager;
 use crate::workspace::testing::StdCopyCloner;
@@ -20,24 +19,23 @@ use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
 use aether_core::core::{AgentBuilder, AgentHandle, Prompt};
 use aether_core::events::{AgentEvent, Command, MessageEvent, ToolEvent, TurnEvent, TurnOutcome, UserCommand};
-use aether_core::mcp::{McpBuilder, McpSession, ServerFactory, mcp};
+use aether_core::mcp::{McpBuilder, McpCatalog, mcp};
+use aether_core::testing::ready_catalog;
 use aether_project::AgentCatalog;
 use aether_sessions::SessionStore;
 use aether_sessions::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent, last_agent_from_events};
 use agent_client_protocol::schema::v2::{
-    AbsolutePath, InitializeResponse, ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate,
-    StateUpdate, StopReason,
+    AbsolutePath, AvailableCommand, InitializeResponse, ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId,
+    SessionUpdate, StateUpdate, StopReason,
 };
 use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, on_receive_notification};
-use futures::FutureExt;
 use llm::testing::FakeLlmProvider;
 use llm::{ChatMessage, Context, LlmModel, LlmResponse, SessionUsageEvent, StreamingModelProvider};
 use llm::{MessageId, ProviderConnectionOverrides, ToolCallRequest, ToolCallResult};
-use mcp_utils::client::{InMemoryServerSpec, McpServer, McpTransport, ToolExposure};
-use mcp_utils::testing::{FakeMcpServer, FakeTool, FakeToolResponse, completed_task_payload};
-use rmcp::RoleServer;
-use rmcp::model::{CallToolResult, CreateTaskResult, DetailedTask, Task, TaskPayload, TaskStatus};
-use rmcp::service::DynService;
+use mcp_utils::client::{Elicitation, ElicitationSink};
+use mcp_utils::gateway::ServerSpec;
+use mcp_utils::model::{CallToolResult, CreateTaskResult, DetailedTask, ElicitResult, Task, TaskPayload, TaskStatus};
+use mcp_utils::testing::{FakeMcpServer, FakeTool, FakeToolResponse, Gate, completed_task_payload, elicitation_sink};
 use std::collections::HashMap;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -46,6 +44,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{JoinHandle, JoinSet, LocalSet};
 use tokio_util::sync::CancellationToken;
+use utils::mcp_status::McpServerStatusEntry;
 
 const PLANNER_REPLY: &str = "planner reply";
 const CODER_REPLY: &str = "coder reply";
@@ -140,17 +139,25 @@ impl AcpTestHarness {
         PendingRuntime { started: observed, release }
     }
 
-    pub fn pause_prompt_expansion(&self) -> (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>) {
-        let gate = (Arc::new(tokio::sync::Notify::new()), Arc::new(tokio::sync::Notify::new()));
+    pub fn pause_prompt_expansion(&self) -> Gate {
+        let gate = Gate::new();
         self.runtime_control.lock().unwrap().prompt_gate = Some(gate.clone());
         gate
+    }
+
+    pub fn add_mcp_server(&self, server: ServerSpec) {
+        self.runtime_control.lock().unwrap().extra_servers.push(server);
+    }
+
+    pub fn add_stalled_mcp_server(&self) {
+        self.runtime_control.lock().unwrap().stalled_server = true;
     }
 
     pub fn watch_agent_prompts(&self) -> watch::Receiver<usize> {
         self.runtime_control.lock().unwrap().agent_prompts.subscribe()
     }
 
-    pub fn elicit_during_prompt_expansion(&self) -> mpsc::UnboundedReceiver<rmcp::model::ElicitResult> {
+    pub fn elicit_during_prompt_expansion(&self) -> mpsc::UnboundedReceiver<ElicitResult> {
         let (sender, receiver) = mpsc::unbounded_channel();
         self.runtime_control.lock().unwrap().elicitation_results = Some(sender);
         receiver
@@ -280,7 +287,11 @@ impl AcpTestHarness {
                 workspace_manager,
                 oauth_credential_store: oauth_store.clone(),
                 initial_selection: InitialSessionSelection::default(),
-                settings_source: SettingsSourceArgs::default(),
+                // Inline settings keep the developer's own `~/.aether/settings.json` out of the tests.
+                settings_source: SettingsSourceArgs {
+                    settings_json: Some(r#"{"agents":[]}"#.to_string()),
+                    settings_file: None,
+                },
                 provider_connections: ProviderConnectionOverrides::default(),
                 telemetry: None,
                 runtime_factory: Some(runtime_factory),
@@ -369,19 +380,39 @@ impl AcpTestHarness {
     }
 
     pub async fn expect_mcp_server_status(&mut self, expected: &[&str]) {
-        assert_server_status(self.peer.next_mcp_notification().await, expected);
+        let statuses = self.next_mcp_server_statuses().await;
+        let names = statuses.iter().map(|server| server.name.as_str()).collect::<Vec<_>>();
+        for server_name in expected {
+            assert!(names.contains(server_name), "expected server {server_name} in {names:?}");
+        }
     }
 
     pub async fn expect_mcp_server_status_exact(&mut self, expected: &[&str]) {
-        assert_server_status_exact(self.peer.next_mcp_notification().await, expected);
+        let statuses = self.next_mcp_server_statuses().await;
+        let names = statuses.iter().map(|server| server.name.as_str()).collect::<Vec<_>>();
+        assert_eq!(names, expected);
+    }
+
+    pub async fn next_mcp_server_statuses(&mut self) -> Vec<McpServerStatusEntry> {
+        let McpNotification::ServerStatus { servers } = self.peer.next_mcp_notification().await;
+        servers
     }
 
     pub async fn expect_available_commands(&mut self, expected: &[&str], unexpected: &[&str]) {
+        let commands = self.next_available_commands().await;
+        let names = commands.iter().map(|command| command.name.as_str()).collect::<Vec<_>>();
+        for name in expected {
+            assert!(names.contains(name), "expected command /{name} in {names:?}");
+        }
+        for name in unexpected {
+            assert!(!names.contains(name), "did not expect command /{name} in {names:?}");
+        }
+    }
+
+    pub async fn next_available_commands(&mut self) -> Vec<AvailableCommand> {
         loop {
-            let update = self.peer.next_session_notification().await.update;
-            if matches!(update, SessionUpdate::AvailableCommandsUpdate(_)) {
-                assert_available_commands(update, expected, unexpected);
-                return;
+            if let SessionUpdate::AvailableCommandsUpdate(update) = self.peer.next_session_notification().await.update {
+                return update.available_commands;
             }
         }
     }
@@ -409,10 +440,9 @@ impl AcpTestHarness {
         id: SessionId,
         model: &str,
     ) {
-        let mut mcp = mcp("/tmp").spawn().await.expect("stub MCP spawns");
-        mcp.block_until_ready().await.expect("stub MCP is ready");
-        self.register_stub_session(StubAgentParts { tx: agent_tx, rx: agent_rx, handle: agent_handle, mcp }, id, model)
-            .await;
+        let (mcp, elicitations) = spawn_ready(mcp("/tmp")).await;
+        let runtime = Runtime { agent_tx, agent_rx, agent_handle, mcp };
+        self.register_stub_session(runtime, elicitations, id, model).await;
     }
 
     pub async fn insert_background_task_session(
@@ -420,22 +450,20 @@ impl AcpTestHarness {
         provider: FakeLlmProvider,
         task: &FakeBackgroundTask,
         id: SessionId,
-    ) {
+    ) -> McpCatalog {
         let server = task.server.clone();
-        let gate = self.runtime_control.lock().unwrap().prompt_gate.clone();
-        let mcp = with_in_memory_server(mcp("/tmp"), "tasks", move || server.clone().into_dyn());
-        let mcp = with_in_memory_server(mcp, "prompts", move || {
-            FakePromptMcp::new("plan").with_gate(gate.clone()).into_dyn()
-        });
-        let mut mcp = mcp.spawn().await.expect("background task MCP spawns");
-        mcp.block_until_ready().await.expect("background task MCP is ready");
-        let (tx, rx, handle) = AgentBuilder::new(Arc::new(provider))
+        let prompts = self.runtime_control.lock().unwrap().prompt_server("plan");
+        let servers = vec![ServerSpec::in_process("tasks", server), ServerSpec::in_process("prompts", prompts)];
+        let (mcp, elicitations) = spawn_ready(mcp("/tmp").with_servers(servers)).await;
+        let (agent_tx, agent_rx, agent_handle) = AgentBuilder::new(Arc::new(provider))
             .max_auto_continues(0)
-            .tools(mcp.handle().clone(), Vec::new())
+            .mcp(mcp.clone())
             .spawn()
             .await
             .expect("background task agent spawns");
-        self.register_stub_session(StubAgentParts { tx, rx, handle, mcp }, id, "fake:fake").await;
+        let runtime = Runtime { agent_tx, agent_rx, agent_handle, mcp: mcp.clone() };
+        self.register_stub_session(runtime, elicitations, id, "fake:fake").await;
+        mcp
     }
 
     pub fn append_stored_session(&self, session_id: &str, created_at: &str) {
@@ -577,14 +605,20 @@ impl AcpTestHarness {
         self.session_store.append_event(session_id, event).expect("stored session event appends");
     }
 
-    async fn register_stub_session(&self, mut parts: StubAgentParts, id: SessionId, model: &str) {
+    async fn register_stub_session(
+        &self,
+        mut runtime: Runtime,
+        elicitations: mpsc::Receiver<Elicitation>,
+        id: SessionId,
+        model: &str,
+    ) {
         let model_spec: llm::catalog::LlmModel = "anthropic:claude-sonnet-4-5".parse().expect("test model parses");
         let mut specs = SessionAgents::new(AgentCatalog::empty(PathBuf::from("/tmp")));
         specs.set_default(AgentSpec::bare(&model_spec, None, Vec::new()));
         let agent_prompts = self.runtime_control.lock().unwrap().agent_prompts.clone();
-        self.runtime_control.lock().unwrap().agents.push(parts.tx.clone());
-        parts.tx = count_prompts(parts.tx, agent_prompts);
-        let factory = Arc::new(StubRuntimeFactory { agent_parts: Mutex::new(Some(parts)) });
+        self.runtime_control.lock().unwrap().agents.push(runtime.agent_tx.clone());
+        runtime.agent_tx = count_prompts(runtime.agent_tx, agent_prompts);
+        let factory = Arc::new(StubRuntimeFactory { runtime: Mutex::new(Some((runtime, elicitations))) });
 
         self.state
             .register_session(SessionActorInit {
@@ -671,17 +705,32 @@ impl FakeBackgroundTask {
     const ID: &str = "background-task";
 
     pub fn new() -> Self {
-        let working = background_task(TaskStatus::Working);
         let server = FakeMcpServer::new()
-            .with_tool(FakeTool::new("start").responds(FakeToolResponse::task(CreateTaskResult::new(working.clone()))))
-            .with_task(Self::ID, [DetailedTask::new(working, TaskPayload::Working)]);
+            .with_tool(Self::start_tool())
+            .with_task(Self::ID, [DetailedTask::new(background_task(TaskStatus::Working), TaskPayload::Working)]);
         Self { server }
     }
 
     pub fn complete(&self, output: &str) {
-        let result = CallToolResult::success(vec![rmcp::model::ContentBlock::text(output)]);
+        let result = CallToolResult::success(vec![mcp_utils::model::ContentBlock::text(output)]);
         let completed = DetailedTask::new(background_task(TaskStatus::Completed), completed_task_payload(result));
         self.server.state().script_task(Self::ID, [completed]);
+    }
+
+    pub async fn announce_unchanged_tools(&self) {
+        let state = self.server.state();
+        let listed = state.tool_list_requests();
+        state.notify_tools_changed().await;
+        state.wait_until(|state| state.tool_list_requests() > listed).await;
+    }
+
+    pub async fn add_tool(&self, name: &str) {
+        self.server.state().add_tool_and_notify(FakeTool::new(name)).await;
+    }
+
+    fn start_tool() -> FakeTool {
+        let working = background_task(TaskStatus::Working);
+        FakeTool::new("start").responds(FakeToolResponse::task(CreateTaskResult::new(working)))
     }
 }
 
@@ -764,9 +813,37 @@ struct FakeRuntimeFactory {
 struct FakeRuntimeControl {
     agents: Vec<mpsc::Sender<Command>>,
     pending: Option<(oneshot::Sender<()>, oneshot::Receiver<bool>)>,
-    prompt_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
-    elicitation_results: Option<mpsc::UnboundedSender<rmcp::model::ElicitResult>>,
+    prompt_gate: Option<Gate>,
+    elicitation_results: Option<mpsc::UnboundedSender<ElicitResult>>,
     agent_prompts: watch::Sender<usize>,
+    extra_servers: Vec<ServerSpec>,
+    stalled_server: bool,
+}
+
+impl FakeRuntimeControl {
+    fn servers(&self, def: &FakeAgentDef) -> Vec<ServerSpec> {
+        let mut servers = def
+            .mcp
+            .iter()
+            .map(|(server_name, prompt_name)| ServerSpec::in_process(server_name, self.prompt_server(prompt_name)))
+            .collect::<Vec<_>>();
+        servers.extend(self.extra_servers.iter().cloned());
+        if self.stalled_server {
+            servers.push(ServerSpec::in_process("stalled-mcp", FakeMcpServer::new().with_tool_list_gate(Gate::new())));
+        }
+        servers
+    }
+
+    fn prompt_server(&self, prompt_name: &str) -> FakeMcpServer {
+        let mut server = FakeMcpServer::new().with_prompt(prompt_name, format!("expanded {prompt_name}"));
+        if let Some(gate) = self.prompt_gate.clone() {
+            server = server.with_prompt_gate(gate);
+        }
+        if let Some(results) = self.elicitation_results.clone() {
+            server = server.with_prompt_elicitation(results);
+        }
+        server
+    }
 }
 
 struct FakeAgentDef {
@@ -783,6 +860,7 @@ impl RuntimeFactory for FakeRuntimeFactory {
         spec: &AgentSpec,
         initial_messages: Vec<ChatMessage>,
         usage_seed: Option<SessionUsageEvent>,
+        elicitations: mpsc::Sender<Elicitation>,
     ) -> Result<AgentRuntime, SessionError> {
         let pending = self.control.lock().unwrap().pending.take();
         if let Some((started, proceed)) = pending {
@@ -796,53 +874,29 @@ impl RuntimeFactory for FakeRuntimeFactory {
             .get(&spec.name)
             .or_else(|| self.agents.values().next())
             .ok_or_else(|| SessionError::AgentNotFound(spec.name.clone()))?;
-        let provider = def.provider.clone();
+        let (servers, stalled_server) = {
+            let control = self.control.lock().unwrap();
+            (control.servers(def), control.stalled_server)
+        };
+        let mut builder = RuntimeBuilder::from_spec(self.cwd.clone(), spec.clone())
+            .provider(def.provider.clone())
+            .extra_servers(servers)
+            .elicitation(ElicitationSink::form_and_url(elicitations))
+            .resume_usage(usage_seed);
 
-        let mut mcp_builder = mcp(&self.cwd).with_tool_filter(spec.tools.clone());
-        if let Some((server_name, prompt_name)) = &def.mcp {
-            let prompt_name = prompt_name.clone();
-            let gate = self.control.lock().unwrap().prompt_gate.clone();
-            let elicitation_results = self.control.lock().unwrap().elicitation_results.clone();
-            mcp_builder = with_in_memory_server(mcp_builder, server_name, move || {
-                FakePromptMcp::new(&prompt_name)
-                    .with_gate(gate.clone())
-                    .with_elicitation(elicitation_results.clone())
-                    .into_dyn()
-            });
+        if !stalled_server {
+            builder = builder.wait_for_mcp();
         }
-        let mut spawn =
-            mcp_builder.spawn().await.map_err(|e| SessionError::Build(CliError::McpError(e.to_string())))?;
-        spawn.block_until_ready().await.ok_or(SessionError::McpStartupStopped)?;
-        let mcp_handle = spawn.handle().clone();
-        let mut builder = AgentBuilder::new(provider).max_auto_continues(0);
-        if let Some(last) = &usage_seed {
-            builder = builder.resume_usage(last);
-        }
-        for prompt in &spec.prompts {
-            builder = builder.system_prompt(prompt.clone());
-        }
-        let (agent_tx, agent_rx, agent_handle) = builder
-            .tools(mcp_handle, Vec::new())
-            .messages(initial_messages)
-            .spawn()
-            .await
-            .map_err(|e| SessionError::Build(CliError::AgentError(e.to_string())))?;
-        self.control.lock().unwrap().agents.push(agent_tx.clone());
-        let (mcp_runtime, event_rx) = spawn.connect_agent(agent_tx.clone()).await.split();
 
-        Ok(AgentRuntime::new(agent_tx, agent_rx, Some(agent_handle), event_rx, mcp_runtime))
+        let runtime = builder.build(initial_messages).await?;
+        self.control.lock().unwrap().agents.push(runtime.agent_tx.clone());
+
+        Ok(AgentRuntime::new(runtime))
     }
 }
 
 struct StubRuntimeFactory {
-    agent_parts: Mutex<Option<StubAgentParts>>,
-}
-
-struct StubAgentParts {
-    tx: mpsc::Sender<Command>,
-    rx: mpsc::Receiver<AgentEvent>,
-    handle: AgentHandle,
-    mcp: McpSession,
+    runtime: Mutex<Option<(Runtime, mpsc::Receiver<Elicitation>)>>,
 }
 
 #[async_trait::async_trait]
@@ -853,33 +907,24 @@ impl RuntimeFactory for StubRuntimeFactory {
         _spec: &AgentSpec,
         _initial_messages: Vec<ChatMessage>,
         _usage_seed: Option<SessionUsageEvent>,
+        elicitations: mpsc::Sender<Elicitation>,
     ) -> Result<AgentRuntime, SessionError> {
-        let parts = self
-            .agent_parts
-            .lock()
-            .expect("stub agent parts lock is healthy")
-            .take()
-            .expect("stub runtime spawned more than once");
-        let (mcp_runtime, event_rx) = parts.mcp.connect_agent(parts.tx.clone()).await.split();
-
-        Ok(AgentRuntime::new(parts.tx, parts.rx, Some(parts.handle), event_rx, mcp_runtime))
+        let (runtime, mut stub_elicitations) =
+            self.runtime.lock().expect("stub runtime lock is healthy").take().expect("stub runtime spawned once");
+        tokio::spawn(async move {
+            while let Some(elicitation) = stub_elicitations.recv().await {
+                if elicitations.send(elicitation).await.is_err() {
+                    return;
+                }
+            }
+        });
+        Ok(AgentRuntime::new(runtime))
     }
 }
 
-fn with_in_memory_server(
-    builder: McpBuilder,
-    name: &str,
-    server: impl Fn() -> Box<dyn DynService<RoleServer>> + Send + Sync + 'static,
-) -> McpBuilder {
-    let factory: ServerFactory = Box::new(move |_spec, _services| std::future::ready(server()).boxed());
-    let transport = McpTransport::InMemory {
-        spec: InMemoryServerSpec { factory: name.to_string(), args: Vec::new(), input: None },
-    };
-    builder.register_in_memory_server(name, factory).with_servers(vec![McpServer::new(
-        name,
-        transport,
-        ToolExposure::ModelVisible,
-    )])
+async fn spawn_ready(builder: McpBuilder) -> (McpCatalog, mpsc::Receiver<Elicitation>) {
+    let (sink, elicitations) = elicitation_sink();
+    (ready_catalog(builder.with_elicitation(sink)).await, elicitations)
 }
 
 fn count_prompts(agent_tx: mpsc::Sender<Command>, prompts: watch::Sender<usize>) -> mpsc::Sender<Command> {
@@ -958,33 +1003,6 @@ fn fake_agent_spec(name: &str) -> AgentSpec {
     spec.description = format!("{name} test agent");
     spec.exposure = AgentSpecExposure::user_only();
     spec
-}
-
-fn assert_available_commands(update: SessionUpdate, expected: &[&str], unexpected: &[&str]) {
-    let SessionUpdate::AvailableCommandsUpdate(commands) = update else {
-        panic!("expected available commands update");
-    };
-    let names = commands.available_commands.iter().map(|command| command.name.as_str()).collect::<Vec<_>>();
-    for name in expected {
-        assert!(names.contains(name), "expected command /{name} in {names:?}");
-    }
-    for name in unexpected {
-        assert!(!names.contains(name), "did not expect command /{name} in {names:?}");
-    }
-}
-
-fn assert_server_status(notification: McpNotification, expected: &[&str]) {
-    let McpNotification::ServerStatus { servers } = notification;
-    let names = servers.iter().map(|server| server.name.as_str()).collect::<Vec<_>>();
-    for server_name in expected {
-        assert!(names.contains(server_name), "expected server {server_name} in {names:?}");
-    }
-}
-
-fn assert_server_status_exact(notification: McpNotification, expected: &[&str]) {
-    let McpNotification::ServerStatus { servers } = notification;
-    let names = servers.iter().map(|server| server.name.as_str()).collect::<Vec<_>>();
-    assert_eq!(names, expected);
 }
 
 fn conversation_texts(context: &Context) -> Vec<String> {

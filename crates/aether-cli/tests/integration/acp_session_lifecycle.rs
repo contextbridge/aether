@@ -213,6 +213,21 @@ async fn resume_restores_transcript_without_replay_and_replaces_active_session()
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn commands_are_advertised_while_another_mcp_server_is_still_connecting() {
+    AcpTestHarness::run(|mut harness| async move {
+        harness.add_stalled_mcp_server();
+        let session = harness.insert_agent_switching_session().await;
+
+        let advertises_plan = |update: &SessionUpdate| {
+            matches!(update, SessionUpdate::AvailableCommandsUpdate(commands)
+                if commands.available_commands.iter().any(|command| command.name == "plan"))
+        };
+        harness.updates_until(session.session_id(), advertises_plan).await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn resume_and_close_reject_unknown_sessions() {
     AcpTestHarness::run(|harness| async move {
         let resume = harness

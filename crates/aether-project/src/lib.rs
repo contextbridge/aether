@@ -4,7 +4,7 @@ pub mod aether_settings;
 mod agent_catalog;
 mod agent_config;
 mod error;
-mod mcp_config_source_config;
+mod mcp_source_spec;
 mod prompt_catalog;
 pub mod prompt_file;
 #[cfg(feature = "testing")]
@@ -19,6 +19,6 @@ pub use aether_settings::{
 pub use agent_catalog::AgentCatalog;
 pub use agent_config::AgentConfig;
 pub use error::SettingsError;
-pub use mcp_config_source_config::{McpFileSpec, McpSourceSpec};
+pub use mcp_source_spec::{McpFileSpec, McpSourceSpec};
 pub use prompt_catalog::PromptCatalog;
 pub use prompt_file::{PromptFile, PromptFileError, PromptTriggers, SKILL_FILENAME};

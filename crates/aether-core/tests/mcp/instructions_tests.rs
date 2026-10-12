@@ -1,76 +1,52 @@
-use aether_core::core::Prompt;
-use aether_core::testing::{FakeMcpServer, McpTestBuilder, mcp_instructions as instructions, test_agent};
+use aether_core::core::{McpInstructions, Prompt};
+use aether_core::mcp::mcp;
+use aether_core::testing::{mcp_instructions, ready_catalog, test_agent};
 use llm::ChatMessage;
 use llm::testing::llm_response;
+use mcp_utils::gateway::ServerSpec;
+use mcp_utils::testing::FakeMcpServer;
 use std::error::Error;
 
 #[tokio::test]
-async fn test_fake_mcp_server_has_instructions() {
-    let mcp_test = McpTestBuilder::new().server("test", FakeMcpServer::new()).build().await;
-    let instructions = mcp_test.snapshot().model_instructions();
+async fn each_server_contributes_its_own_instructions() {
+    let servers = vec![
+        ServerSpec::in_process("server1", FakeMcpServer::math().with_instructions("First server")),
+        ServerSpec::in_process("server2", FakeMcpServer::math().with_instructions("Second server")),
+        ServerSpec::in_process("silent", FakeMcpServer::math()),
+    ];
+    let instructions = ready_catalog(mcp("/workspace").with_servers(servers)).await.instructions();
 
-    // FakeMcpServer does provide instructions, so we should get them
-    assert_eq!(instructions.len(), 1);
-    assert!(instructions.get("test").unwrap().contains("A fake MCP server for testing"));
+    assert_eq!(instructions, mcp_instructions(&[("server1", "First server"), ("server2", "Second server")]));
 }
 
 #[tokio::test]
-async fn test_multiple_servers_with_instructions() {
-    let mcp_test = McpTestBuilder::new()
-        .server("server1", FakeMcpServer::new())
-        .server("server2", FakeMcpServer::new())
-        .build()
-        .await;
-    let instructions = mcp_test.snapshot().model_instructions();
+async fn progressive_discovery_renders_apart_from_the_server_instructions() {
+    let only_deferred = McpInstructions { progressive_discovery: true, ..McpInstructions::default() };
 
-    // Both servers should have instructions
-    assert_eq!(instructions.len(), 2);
-    assert!(instructions.get("server1").unwrap().contains("A fake MCP server for testing"));
-    assert!(instructions.get("server2").unwrap().contains("A fake MCP server for testing"));
+    let formatted = Prompt::McpInstructions(only_deferred).build().await.unwrap();
+
+    assert!(formatted.contains("aether mcp"));
+    assert!(!formatted.contains("<mcp-server"), "{formatted}");
 }
 
 #[tokio::test]
-async fn test_format_mcp_instructions_xml_structure() {
-    let formatted = Prompt::McpInstructions(instructions(&[("coding", "Use absolute paths.")])).build().await.unwrap();
+async fn server_instructions_render_as_tagged_sections_in_name_order() {
+    let instructions = mcp_instructions(&[("zebra", "Always confirm."), ("alpha", "Use absolute paths.")]);
 
-    // Check for XML tags with server names
-    assert!(formatted.contains("<mcp-server name=\"coding\">"));
-    assert!(formatted.contains("</mcp-server>\n"));
-    assert!(formatted.contains("Use absolute paths."));
-    assert!(formatted.contains("# MCP Server Instructions"));
-}
+    let formatted = Prompt::McpInstructions(instructions).build().await.unwrap();
 
-#[tokio::test]
-async fn test_format_mcp_instructions_multiple_servers() {
-    let formatted =
-        Prompt::McpInstructions(instructions(&[("coding", "Use absolute paths."), ("plugins", "Always confirm.")]))
-            .build()
-            .await
-            .unwrap();
-
-    // Check for XML tags with both server names
-    assert!(formatted.contains("<mcp-server name=\"coding\">"));
-    assert!(formatted.contains("<mcp-server name=\"plugins\">"));
-    assert!(formatted.contains("Use absolute paths."));
-    assert!(formatted.contains("Always confirm."));
-}
-
-#[tokio::test]
-async fn test_format_mcp_instructions_is_deterministically_ordered() {
-    let a = Prompt::McpInstructions(instructions(&[("zebra", "Z"), ("alpha", "A")])).build().await.unwrap();
-    let b = Prompt::McpInstructions(instructions(&[("alpha", "A"), ("zebra", "Z")])).build().await.unwrap();
-    assert_eq!(a, b);
-    let alpha_pos = a.find("name=\"alpha\"").unwrap();
-    let zebra_pos = a.find("name=\"zebra\"").unwrap();
-    assert!(alpha_pos < zebra_pos, "alphabetical order: alpha before zebra");
+    assert!(formatted.starts_with("# MCP Server Instructions"), "{formatted}");
+    let alpha = formatted.find("<mcp-server name=\"alpha\">\nUse absolute paths.\n</mcp-server>").expect("alpha");
+    let zebra = formatted.find("<mcp-server name=\"zebra\">\nAlways confirm.\n</mcp-server>").expect("zebra");
+    assert!(alpha < zebra);
 }
 
 #[tokio::test]
 async fn test_agent_builder_includes_mcp_instructions_in_system_prompt() -> Result<(), Box<dyn Error>> {
     let result = test_agent()
+        .mcp_server("test-server", FakeMcpServer::math().with_instructions("Use the math tools"))
         .llm_responses(&[llm_response().text(&["done"]).build()])
         .system_prompt(Prompt::text("You are a test agent"))
-        .system_prompt(Prompt::McpInstructions(instructions(&[("test-server", "Test instructions")])))
         .user_text("test")
         .run_with_context()
         .await?;
@@ -80,14 +56,15 @@ async fn test_agent_builder_includes_mcp_instructions_in_system_prompt() -> Resu
     let ChatMessage::System { content, .. } = first_message else {
         panic!("Expected system message, got: {first_message:?}");
     };
-    assert!(content.contains("<mcp-server name=\"test-server\">"));
-    assert!(content.contains("Test instructions"));
+    assert!(content.contains("You are a test agent"));
+    assert!(content.contains("<mcp-server name=\"test-server\">\nUse the math tools\n</mcp-server>"));
     Ok(())
 }
 
 #[tokio::test]
 async fn test_agent_builder_works_without_mcp_instructions() -> Result<(), Box<dyn Error>> {
     let result = test_agent()
+        .without_mcp()
         .llm_responses(&[llm_response().text(&["done"]).build()])
         .system_prompt(Prompt::text("You are a test agent"))
         .user_text("test")

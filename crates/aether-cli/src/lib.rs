@@ -13,7 +13,7 @@ pub mod output;
 pub(crate) mod prompt;
 pub mod provider_connection_args;
 pub mod resolve;
-pub mod runtime;
+pub(crate) mod runtime;
 pub mod sandbox;
 pub mod settings;
 pub mod settings_args;
@@ -21,5 +21,3 @@ pub mod show_prompt;
 pub(crate) mod slash_commands;
 pub(crate) mod telemetry;
 pub mod workspace;
-
-pub use acp::map_mcp_prompt_to_available_command;

@@ -3,17 +3,17 @@ use crate::agent_spec::AgentSpec;
 use crate::context::{CompactionConfig, SessionUsageTracker};
 use crate::core::{Agent, AgentDeps, Prompt, PromptCache, Result};
 use crate::events::{AgentEvent, AgentObserver, Command, TurnOutcome};
-use crate::mcp::McpHandle;
+use crate::mcp::McpCatalog;
 use llm::parser::ModelProviderParser;
-use llm::{ChatMessage, Context, ModelSettings, SessionUsageEvent, StreamingModelProvider, ToolDefinition};
+use llm::{ChatMessage, Context, ModelSettings, SessionUsageEvent, StreamingModelProvider};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio::task::JoinHandle;
+use tokio_util::task::AbortOnDropHandle;
 
-/// Handle for communicating with a running Agent
+/// Handle to a running agent's task; dropping it aborts the agent.
 pub struct AgentHandle {
-    handle: JoinHandle<()>,
+    handle: AbortOnDropHandle<()>,
 }
 
 impl AgentHandle {
@@ -42,9 +42,8 @@ pub async fn recv_agent_event(rx: &mut Receiver<AgentEvent>) -> AgentEvent {
 pub struct AgentBuilder {
     llm: Arc<dyn StreamingModelProvider>,
     prompts: Vec<Prompt>,
-    tool_definitions: Vec<ToolDefinition>,
     initial_messages: Vec<ChatMessage>,
-    mcp: Option<McpHandle>,
+    mcp: McpCatalog,
     channel_capacity: usize,
     tool_timeout: Duration,
     compaction_config: Option<CompactionConfig>,
@@ -62,9 +61,8 @@ impl AgentBuilder {
         Self {
             llm,
             prompts: Vec::new(),
-            tool_definitions: Vec::new(),
             initial_messages: Vec::new(),
-            mcp: None,
+            mcp: McpCatalog::default(),
             channel_capacity: 1000,
             tool_timeout: Duration::from_mins(60),
             compaction_config: Some(CompactionConfig::default()),
@@ -81,15 +79,18 @@ impl AgentBuilder {
     /// Create a builder from a resolved `AgentSpec`.
     ///
     /// The LLM provider is derived from `spec.model` via `ModelProviderParser`.
-    /// `base_prompts` are prepended before the spec's own prompts.
-    pub async fn from_spec(spec: &AgentSpec, base_prompts: Vec<Prompt>, deps: &AgentDeps) -> Result<Self> {
+    pub async fn from_spec(spec: &AgentSpec, deps: &AgentDeps) -> Result<Self> {
         let parser = ModelProviderParser::default().with_provider_connections(spec.provider_connections.clone());
         let parser = match deps.oauth_credential_store.clone() {
             Some(store) => parser.with_codex_provider(store),
             None => parser,
         };
         let (provider, _) = parser.parse(&spec.model).await?;
-        let mut builder = Self::new(Arc::from(provider))
+        Ok(Self::from_spec_with_llm(spec, deps, Arc::from(provider)))
+    }
+
+    pub fn from_spec_with_llm(spec: &AgentSpec, deps: &AgentDeps, llm: Arc<dyn StreamingModelProvider>) -> Self {
+        let mut builder = Self::new(llm)
             .context_window(spec.context_window)
             .model_settings(spec.model_settings.clone())
             .session_usage(SessionUsageTracker::new(&spec.name));
@@ -101,15 +102,11 @@ impl AgentBuilder {
             builder = builder.observer(observer);
         }
 
-        for prompt in base_prompts {
-            builder = builder.system_prompt(prompt);
-        }
-
         for prompt in &spec.prompts {
             builder = builder.system_prompt(prompt.clone());
         }
 
-        Ok(builder)
+        builder
     }
 
     /// Add a prompt to the system prompt.
@@ -120,9 +117,8 @@ impl AgentBuilder {
         self
     }
 
-    pub fn tools(mut self, mcp: McpHandle, tools: Vec<ToolDefinition>) -> Self {
-        self.tool_definitions = tools;
-        self.mcp = Some(mcp);
+    pub fn mcp(mut self, mcp: McpCatalog) -> Self {
+        self.mcp = mcp;
         self
     }
 
@@ -257,7 +253,7 @@ impl AgentBuilder {
         messages.extend(self.initial_messages);
         let (command_tx, command_rx) = mpsc::channel::<Command>(self.channel_capacity);
         let (message_tx, agent_event_rx) = mpsc::channel::<AgentEvent>(self.channel_capacity);
-        let mut context = Context::new(messages, self.tool_definitions);
+        let mut context = Context::new(messages, Vec::new());
         context.set_model_settings(self.model_settings);
         context.set_session_affinity_key(Some(self.session_affinity_key));
 
@@ -276,9 +272,9 @@ impl AgentBuilder {
         };
 
         let agent = Agent::new(config, command_rx, message_tx);
-        let agent_handle = tokio::spawn(agent.run());
+        let handle = AbortOnDropHandle::new(tokio::spawn(agent.run()));
 
-        Ok((command_tx, agent_event_rx, AgentHandle { handle: agent_handle }))
+        Ok((command_tx, agent_event_rx, AgentHandle { handle }))
     }
 }
 
@@ -287,23 +283,27 @@ mod tests {
     use super::*;
     use crate::agent_spec::AgentSpecExposure;
     use crate::events::TurnEvent;
+    use crate::mcp::{McpConfig, ToolFilter};
     use llm::ProviderConnectionOverrides;
-    use mcp_utils::client::ToolFilter;
+    use llm::testing::FakeLlmProvider;
 
     #[tokio::test]
-    async fn test_agent_handle_is_finished() {
-        let handle = AgentHandle { handle: tokio::spawn(async {}) };
+    async fn closing_the_input_lets_the_agent_finish() {
+        let (tx, _rx, handle) = AgentBuilder::new(Arc::new(FakeLlmProvider::new(Vec::new()))).spawn().await.unwrap();
+
+        drop(tx);
+
         handle.await_completion().await;
     }
 
     #[tokio::test]
-    async fn test_agent_handle_abort() {
-        let handle = AgentHandle { handle: tokio::spawn(std::future::pending::<()>()) };
-        assert!(!handle.is_finished());
-        handle.abort();
-        while !handle.is_finished() {
-            tokio::task::yield_now().await;
-        }
+    async fn dropping_the_handle_stops_the_agent() {
+        let (_tx, mut rx, handle) =
+            AgentBuilder::new(Arc::new(FakeLlmProvider::new(Vec::new()))).spawn().await.unwrap();
+
+        drop(handle);
+
+        assert!(rx.recv().await.is_none());
     }
 
     #[tokio::test]
@@ -348,13 +348,13 @@ mod tests {
             context_window: Some(200_000),
             prompts: vec![],
             provider_connections: ProviderConnectionOverrides::default(),
-            mcp_config_sources: Vec::new(),
+            mcp: McpConfig::default(),
             exposure: AgentSpecExposure::both(),
             tools: ToolFilter::default(),
         };
 
         let dependencies = AgentDeps::default().with_session_affinity_key("conversation-123");
-        let builder = AgentBuilder::from_spec(&spec, vec![], &dependencies).await.unwrap();
+        let builder = AgentBuilder::from_spec(&spec, &dependencies).await.unwrap();
 
         assert_eq!(builder.context_window, Some(200_000));
         assert_eq!(builder.model_settings, settings);
@@ -372,12 +372,12 @@ mod tests {
             context_window: None,
             prompts: vec![],
             provider_connections: ProviderConnectionOverrides::default(),
-            mcp_config_sources: Vec::new(),
+            mcp: McpConfig::default(),
             exposure: AgentSpecExposure::both(),
             tools: ToolFilter::default(),
         };
 
-        let builder = AgentBuilder::from_spec(&spec, vec![], &AgentDeps::default()).await;
+        let builder = AgentBuilder::from_spec(&spec, &AgentDeps::default()).await;
         assert!(builder.is_ok());
     }
 }

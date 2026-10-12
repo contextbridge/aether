@@ -1,17 +1,13 @@
+use aether_core::mcp::{AETHER_MCP_IPC_SOCKET, DeferredServer, DeferredToolsClient, DeferredToolsError};
 use clap::{ArgAction, Args};
-use mcp_utils::ServiceExt;
-use mcp_utils::tool_gateway::{AETHER_MCP_IPC_SOCKET, LIST_SERVERS_TOOL, UnixSocketPath, connect};
-use rmcp::model::{CallToolRequestParams, CallToolResponse, CallToolResult, Tool};
-use serde::Deserialize;
+use mcp_utils::client::ToolCallError;
+use mcp_utils::model::{CallToolResult, Tool};
 use serde_json::{Map, Value};
 use std::env::var_os;
-use std::fmt::Display;
-use std::future::Future;
 use std::io::{self, IsTerminal, Read};
 use std::path::PathBuf;
 use std::time::Duration;
 
-const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_CALL_TIMEOUT_SECONDS: u64 = 600;
 
 #[derive(Debug, Args)]
@@ -45,14 +41,14 @@ pub enum McpCommandError {
     Usage(String),
     #[error("`aether mcp` requires the inherited {AETHER_MCP_IPC_SOCKET} from an active Aether session")]
     SessionUnavailable,
-    #[error("invalid {AETHER_MCP_IPC_SOCKET}: {0}")]
-    InvalidSocket(String),
-    #[error("failed to connect to the active Aether session: {0}")]
-    Connect(String),
+    #[error("invalid {AETHER_MCP_IPC_SOCKET}: socket path must be absolute")]
+    RelativeSocket,
+    #[error(transparent)]
+    Session(#[from] DeferredToolsError),
     #[error("MCP request timed out after {0} seconds")]
     Timeout(u64),
-    #[error("MCP request failed: {0}")]
-    Request(String),
+    #[error("MCP tool call failed: {0}")]
+    Call(#[source] ToolCallError),
     #[error("deferred tool returned an error: {0}")]
     Tool(String),
     #[error("failed to read JSON from stdin: {0}")]
@@ -74,21 +70,15 @@ enum HelpLevel {
     Tool { server: String, tool: String },
 }
 
-#[derive(Deserialize)]
-struct ServerSummary {
-    name: String,
-    description: String,
-}
-
 impl McpCommandError {
     pub fn exit_code(&self) -> u8 {
         match self {
             Self::Usage(_) | Self::Stdin(_) => 2,
             Self::SessionUnavailable
-            | Self::InvalidSocket(_)
-            | Self::Connect(_)
+            | Self::RelativeSocket
+            | Self::Session(_)
             | Self::Timeout(_)
-            | Self::Request(_)
+            | Self::Call(_)
             | Self::Tool(_)
             | Self::Output(_) => 1,
         }
@@ -97,9 +87,7 @@ impl McpCommandError {
 
 pub async fn run(args: McpArgs) -> Result<(), McpCommandError> {
     let request = Request::try_from(args)?;
-    let socket = inherited_socket()?;
-    let transport = connect(socket.path()).await.map_err(|error| McpCommandError::Connect(error.to_string()))?;
-    let client = ().serve(transport).await.map_err(|error| McpCommandError::Connect(error.to_string()))?;
+    let client = DeferredToolsClient::connect(inherited_socket()?).await?;
     execute_request(&client, request).await
 }
 
@@ -127,9 +115,9 @@ impl TryFrom<McpArgs> for Request {
     }
 }
 
-fn inherited_socket() -> Result<UnixSocketPath, McpCommandError> {
-    let path = var_os(AETHER_MCP_IPC_SOCKET).ok_or(McpCommandError::SessionUnavailable)?;
-    UnixSocketPath::from_path(PathBuf::from(path)).map_err(|error| McpCommandError::InvalidSocket(error.to_string()))
+fn inherited_socket() -> Result<PathBuf, McpCommandError> {
+    let path = PathBuf::from(var_os(AETHER_MCP_IPC_SOCKET).ok_or(McpCommandError::SessionUnavailable)?);
+    if path.is_absolute() { Ok(path) } else { Err(McpCommandError::RelativeSocket) }
 }
 
 fn read_stdin() -> Result<Option<String>, McpCommandError> {
@@ -150,10 +138,7 @@ fn parse_json_object(input: Option<&str>) -> Result<Map<String, Value>, McpComma
     })
 }
 
-async fn execute_request(
-    client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
-    request: Request,
-) -> Result<(), McpCommandError> {
+async fn execute_request(client: &DeferredToolsClient, request: Request) -> Result<(), McpCommandError> {
     match request {
         Request::Help(HelpLevel::Servers) => show_servers_help(client).await,
         Request::Help(HelpLevel::Server(server)) => show_server_help(client, &server).await,
@@ -164,58 +149,38 @@ async fn execute_request(
     }
 }
 
-async fn show_servers_help(
-    client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
-) -> Result<(), McpCommandError> {
-    let result = timed(DISCOVERY_TIMEOUT, client.call_tool_once(CallToolRequestParams::new(LIST_SERVERS_TOOL))).await?;
-    let result = complete(result)?;
-    let servers: Vec<ServerSummary> = serde_json::from_value(
-        result
-            .structured_content
-            .ok_or_else(|| McpCommandError::Request("server discovery returned no JSON".into()))?,
-    )
-    .map_err(|error| McpCommandError::Request(format!("invalid server discovery response: {error}")))?;
-    print_servers_help(&servers);
+async fn show_servers_help(client: &DeferredToolsClient) -> Result<(), McpCommandError> {
+    print_servers_help(&client.servers().await?);
     Ok(())
 }
 
-async fn show_server_help(
-    client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
-    server: &str,
-) -> Result<(), McpCommandError> {
-    let tools = list_tools(client).await?;
-    let tools = tools_for_server(&tools, server);
-    if tools.is_empty() {
-        return Err(McpCommandError::Usage(format!("unknown deferred server `{server}`")));
-    }
-    print_server_help(server, tools);
+async fn show_server_help(client: &DeferredToolsClient, server: &str) -> Result<(), McpCommandError> {
+    let servers = client.servers().await?;
+    let deferred = servers
+        .iter()
+        .find(|deferred| deferred.name == server)
+        .ok_or_else(|| McpCommandError::Usage(format!("unknown deferred server `{server}`")))?;
+    print_server_help(deferred);
     Ok(())
 }
 
-async fn show_tool_help(
-    client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
-    server: &str,
-    tool: &str,
-) -> Result<(), McpCommandError> {
-    let tools = list_tools(client).await?;
-    let namespaced = format!("{server}__{tool}");
-    let definition = tools
-        .into_iter()
-        .find(|definition| definition.name == namespaced)
+async fn show_tool_help(client: &DeferredToolsClient, server: &str, tool: &str) -> Result<(), McpCommandError> {
+    let definition = client
+        .tool(server, tool)
+        .await?
         .ok_or_else(|| McpCommandError::Usage(format!("unknown deferred tool `{server} {tool}`")))?;
     print_tool_help(server, tool, &definition)
 }
 
 async fn call_tool(
-    client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
+    client: &DeferredToolsClient,
     server: &str,
     tool: &str,
     json: Map<String, Value>,
     timeout_seconds: u64,
 ) -> Result<(), McpCommandError> {
-    let params = CallToolRequestParams::new(format!("{server}__{tool}")).with_arguments(json);
-    let result = timed(Duration::from_secs(timeout_seconds), client.call_tool_once(params)).await?;
-    let result = complete(result)?;
+    let call = client.call(server, tool, json, Duration::from_secs(timeout_seconds));
+    let result = call.result().await.map_err(call_error)?;
     if result.is_error.unwrap_or(false) {
         return Err(McpCommandError::Tool(result_json(&result).to_string()));
     }
@@ -223,35 +188,14 @@ async fn call_tool(
     Ok(())
 }
 
-async fn list_tools(
-    client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
-) -> Result<Vec<Tool>, McpCommandError> {
-    timed(DISCOVERY_TIMEOUT, client.list_all_tools()).await
-}
-
-async fn timed<T, U: Display>(
-    duration: Duration,
-    future: impl Future<Output = Result<T, U>>,
-) -> Result<T, McpCommandError> {
-    tokio::time::timeout(duration, future)
-        .await
-        .map_err(|_| McpCommandError::Timeout(duration.as_secs()))?
-        .map_err(|error| McpCommandError::Request(error.to_string()))
-}
-
-fn complete(response: CallToolResponse) -> Result<CallToolResult, McpCommandError> {
-    match response {
-        CallToolResponse::Complete(result) => Ok(result),
-        other => Err(McpCommandError::Request(format!("gateway returned an incomplete response: {other:?}"))),
+fn call_error(error: ToolCallError) -> McpCommandError {
+    match error {
+        ToolCallError::TimedOut(timeout) => McpCommandError::Timeout(timeout.as_secs()),
+        error => McpCommandError::Call(error),
     }
 }
 
-fn tools_for_server<'a>(tools: &'a [Tool], server: &str) -> Vec<&'a Tool> {
-    let prefix = format!("{server}__");
-    tools.iter().filter(|tool| tool.name.starts_with(&prefix)).collect()
-}
-
-fn print_servers_help(servers: &[ServerSummary]) {
+fn print_servers_help(servers: &[DeferredServer]) {
     println!("Discover and call deferred MCP tools through the active Aether session.\n");
     println!("Usage: aether mcp <server> --help\n");
     println!("Deferred MCP servers:");
@@ -260,13 +204,13 @@ fn print_servers_help(servers: &[ServerSummary]) {
     }
 }
 
-fn print_server_help(server: &str, tools: Vec<&Tool>) {
-    println!("Deferred tools from `{server}`.\n");
-    println!("Usage: aether mcp {server} <tool> --help\n");
+fn print_server_help(server: &DeferredServer) {
+    let name = &server.name;
+    println!("Deferred tools from `{name}`.\n");
+    println!("Usage: aether mcp {name} <tool> --help\n");
     println!("Tools:");
-    for tool in tools {
-        let local_name = tool.name.strip_prefix(&format!("{server}__")).unwrap_or(tool.name.as_ref());
-        println!("  {:<20} {}", local_name, tool.description.as_deref().unwrap_or_default());
+    for tool in &server.tools {
+        println!("  {:<20} {}", tool.name, tool.description.as_deref().unwrap_or_default());
     }
 }
 

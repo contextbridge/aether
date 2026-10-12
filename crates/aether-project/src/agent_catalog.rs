@@ -1,14 +1,13 @@
 use crate::aether_settings::{project_settings_exist, user_settings_exist};
 use crate::error::SettingsError;
-use crate::{AetherSettings, AgentConfig, McpFileSpec, McpSourceSpec};
-use aether_core::agent_spec::{AgentSpec, AgentSpecExposure, McpConfigSource};
+use crate::{AetherSettings, AgentConfig, McpSourceSpec};
+use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
 use aether_core::core::{AgentRegistry, Prompt};
+use aether_core::mcp::McpConfig;
 use llm::catalog::{LlmModel, ModelSpec, ModelSpecError};
 use llm::{ProviderConnectionOverrides, ReasoningEffort};
-use mcp_utils::client::McpConfig;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use utils::variables::VarError;
 
 /// A resolved catalog of agents from a project.
 #[derive(Debug, Clone)]
@@ -217,7 +216,7 @@ fn resolve_agent_entry(
         });
     }
     let mcp_sources = if entry.mcps.is_empty() { &defaults.mcps } else { &entry.mcps };
-    let mcp_config_sources = resolve_mcp_config_sources(project_root, mcp_sources)?;
+    let mcp = load_mcp_config(project_root, mcp_sources)?;
     let mut provider_connections = defaults.providers.clone();
     provider_connections.merge(entry.providers);
 
@@ -230,44 +229,14 @@ fn resolve_agent_entry(
         context_window: entry.context_window,
         prompts,
         provider_connections,
-        mcp_config_sources,
+        mcp,
         exposure: AgentSpecExposure { user_invocable: entry.user_invocable, agent_invocable: entry.agent_invocable },
         tools: entry.tools,
     })
 }
 
-fn resolve_mcp_config_sources(
-    workspace_root: &Path,
-    entries: &[McpSourceSpec],
-) -> Result<Vec<McpConfigSource>, SettingsError> {
-    entries
-        .iter()
-        .filter_map(|entry| match entry {
-            McpSourceSpec::File(McpFileSpec { path, defer_tools, optional }) => match path.resolve(workspace_root) {
-                Ok(full_path) => {
-                    if full_path.is_file() {
-                        Some(Ok(McpConfigSource::file(full_path, *defer_tools)))
-                    } else if *optional {
-                        None
-                    } else {
-                        Some(Err(SettingsError::InvalidMcpConfigPath { path: path.as_authored().to_string() }))
-                    }
-                }
-                Err(VarError::NotFound(variable)) if *optional => {
-                    tracing::warn!(
-                        "Skipping optional MCP config '{}': variable '{variable}' is not defined",
-                        path.as_authored()
-                    );
-                    None
-                }
-                Err(VarError::NotFound(variable)) => Some(Err(SettingsError::UnresolvedMcpConfigVariable {
-                    path: path.as_authored().to_string(),
-                    variable,
-                })),
-            },
-            McpSourceSpec::Inline { servers } => Some(Ok(McpConfigSource::Inline(McpConfig::new(servers.clone())))),
-        })
-        .collect()
+fn load_mcp_config(workspace_root: &Path, entries: &[McpSourceSpec]) -> Result<McpConfig, SettingsError> {
+    entries.iter().filter_map(|entry| entry.load(workspace_root).transpose()).collect()
 }
 
 fn parse_model(agent: &str, model: &str) -> Result<ModelSpec, SettingsError> {
@@ -281,7 +250,7 @@ fn parse_model(agent: &str, model: &str) -> Result<ModelSpec, SettingsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{DEFAULT_MODEL, agent_json_with, fake_spec, project, settings_agent};
+    use crate::testing::{DEFAULT_MODEL, agent_json_with, fake_spec, mcp_json, project, settings_agent};
     use aether_core::agent_spec::AgentSpecExposure;
     use llm::ModelSettings;
     use serde_json::json;
@@ -291,14 +260,8 @@ mod tests {
         AgentCatalog::new(project_root, vec![planner], None)
     }
 
-    fn file_sources(spec: &AgentSpec) -> Vec<(PathBuf, bool)> {
-        spec.mcp_config_sources
-            .iter()
-            .filter_map(|source| match source {
-                McpConfigSource::File { path, defer_tools } => Some((path.clone(), *defer_tools)),
-                McpConfigSource::Json(_) | McpConfigSource::Inline(_) => None,
-            })
-            .collect()
+    fn mcp_servers(spec: &AgentSpec) -> Vec<&str> {
+        spec.mcp.servers.keys().map(String::as_str).collect()
     }
 
     fn has_prompt_file(spec: &AgentSpec, expected: &str) -> bool {
@@ -596,7 +559,7 @@ mod tests {
 
     #[test]
     fn top_level_mcps_are_inherited_when_agent_mcps_are_empty() {
-        let dir = project().file("BASE.md", "Base instructions").file("base-mcp.json", "{}");
+        let dir = project().file("BASE.md", "Base instructions").file("base-mcp.json", &mcp_json("base"));
 
         let config = AetherSettings {
             prompts: vec![crate::PromptSource::file("BASE.md")],
@@ -608,13 +571,15 @@ mod tests {
         let catalog = AgentCatalog::from_settings(dir.root(), config).unwrap();
         let spec = catalog.resolve("planner").unwrap();
 
-        assert_eq!(file_sources(&spec), vec![(dir.root().join("base-mcp.json"), false)]);
+        assert_eq!(mcp_servers(&spec), ["base"]);
     }
 
     #[test]
     fn agent_mcps_override_top_level_mcps() {
-        let dir =
-            project().file("BASE.md", "Base instructions").file("base-mcp.json", "{}").file("agent-mcp.json", "{}");
+        let dir = project()
+            .file("BASE.md", "Base instructions")
+            .file("base-mcp.json", &mcp_json("base"))
+            .file("agent-mcp.json", &mcp_json("agent"));
 
         let config = AetherSettings {
             prompts: vec![crate::PromptSource::file("BASE.md")],
@@ -629,7 +594,22 @@ mod tests {
         let catalog = AgentCatalog::from_settings(dir.root(), config).unwrap();
         let spec = catalog.resolve("planner").unwrap();
 
-        assert_eq!(file_sources(&spec), vec![(dir.root().join("agent-mcp.json"), false)]);
+        assert_eq!(mcp_servers(&spec), ["agent"]);
+    }
+
+    #[test]
+    fn unreadable_mcp_config_names_its_path() {
+        let dir = project().file("BASE.md", "Base instructions").file("broken.json", "not json");
+        let config = AetherSettings {
+            prompts: vec![crate::PromptSource::file("BASE.md")],
+            mcps: vec![McpSourceSpec::file("broken.json")],
+            agents: vec![settings_agent("planner", "Planner agent")],
+            ..AetherSettings::default()
+        };
+
+        let error = AgentCatalog::from_settings(dir.root(), config).unwrap_err();
+
+        assert!(matches!(error, SettingsError::McpConfig { ref path, .. } if path == "broken.json"), "{error}");
     }
 
     #[test]
@@ -652,15 +632,14 @@ mod tests {
 
     #[test]
     fn resolve_preserves_agent_mcp() {
-        let dir = project().file("agent-mcp.json", "{}");
-
+        let dir = project();
         let mut planner = fake_spec("planner", AgentSpecExposure::both());
-        planner.mcp_config_sources = vec![McpConfigSource::model_visible(dir.root().join("agent-mcp.json"))];
+        planner.mcp = McpConfig::from_json(&mcp_json("agent")).unwrap();
 
         let catalog = AgentCatalog::new(dir.root().to_path_buf(), vec![planner], None);
 
         let spec = catalog.resolve("planner").unwrap();
-        assert_eq!(file_sources(&spec), vec![(dir.root().join("agent-mcp.json"), false)]);
+        assert_eq!(mcp_servers(&spec), ["agent"]);
     }
 
     #[test]
@@ -670,6 +649,6 @@ mod tests {
             AgentCatalog::new(dir.root().to_path_buf(), vec![fake_spec("planner", AgentSpecExposure::both())], None);
 
         let spec = catalog.resolve("planner").unwrap();
-        assert!(spec.mcp_config_sources.is_empty());
+        assert!(spec.mcp.is_empty());
     }
 }

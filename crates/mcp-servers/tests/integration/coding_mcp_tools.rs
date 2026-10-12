@@ -1,12 +1,13 @@
-use crate::common::{CodingWorkspace, TestResult, test_error};
-use aether_core::mcp::tool_bridge::convert_tool_result;
-use llm::ToolCallRequest;
+use crate::common::{CodingWorkspace, McpClientExt, TestResult, test_error};
+use aether_core::events::{AgentEvent, ToolEvent};
+use aether_core::testing::test_agent;
+use llm::testing::llm_response;
+use mcp_servers::CodingMcp;
 use mcp_servers::coding::tools::bash::BashInput;
 use mcp_servers::coding::tools::read_file::ReadFileArgs;
 use mcp_servers::coding::tools::web_fetch::{HttpResponse, WebFetchInput};
 use mcp_servers::testing::FakeHttpClient;
 use std::fs::{canonicalize, read_to_string};
-use utils::temp_dir::TempDir;
 use utils::tool_result_truncator::saved_path;
 
 #[tokio::test]
@@ -40,17 +41,28 @@ async fn full_read_file_pages_reach_the_llm_whole() -> TestResult {
     let workspace = CodingWorkspace::new().await?;
     let content = (1..=5_000).map(|n| format!("let line_{n} = \"{}\";", "x".repeat(20))).collect::<Vec<_>>();
     let path = workspace.write("big.rs", &content.join("\n"))?;
-    let page = workspace
-        .client
-        .call_raw("read_file", ReadFileArgs { file_path: path.to_string_lossy().into(), ..Default::default() })
+    let arguments =
+        serde_json::to_string(&ReadFileArgs { file_path: path.to_string_lossy().into(), ..Default::default() })?;
+
+    let events = test_agent()
+        .mcp_server("coding", CodingMcp::new(workspace.root()))
+        .llm_responses(&[
+            llm_response().tool_call("read", "coding__read_file", &[&arguments]).build(),
+            llm_response().text(&["read it"]).build(),
+        ])
+        .user_text("read the file")
+        .run()
         .await?;
 
-    let request = ToolCallRequest { id: "read".into(), name: "coding__read_file".into(), arguments: "{}".into() };
-    let (result, _) =
-        convert_tool_result(&request, Ok(page), &TempDir::new()).map_err(|error| test_error(error.error))?;
-
-    assert!(!result.result.contains("bytes omitted"), "{}", result.result);
-    assert!(result.result.contains("nextOffset"), "{}", result.result);
+    let result = events
+        .iter()
+        .find_map(|event| match event {
+            AgentEvent::Tool(ToolEvent::Result { result, .. }) => Some(result.result.as_str()),
+            _ => None,
+        })
+        .ok_or_else(|| test_error("read_file did not return a result"))?;
+    assert!(!result.contains("bytes omitted"), "{result}");
+    assert!(result.contains("nextOffset"), "{result}");
     Ok(())
 }
 
@@ -174,8 +186,8 @@ async fn test_bash_pwd_uses_workspace_root() -> TestResult {
 #[tokio::test]
 async fn coding_tool_catalog_uses_bash_for_search_and_directory_listings() -> TestResult {
     let workspace = CodingWorkspace::new().await?;
-    let catalog = workspace.client.raw().list_tools(None).await?;
-    let names: Vec<_> = catalog.tools.iter().map(|tool| tool.name.as_ref()).collect();
+    let catalog = workspace.client.list_tools().await?;
+    let names: Vec<_> = catalog.iter().map(|tool| tool.name.as_ref()).collect();
     for retained in ["bash", "read_file", "write_file", "edit_file", "lsp_symbol"] {
         assert!(names.contains(&retained), "missing tool {retained}: {names:?}");
     }

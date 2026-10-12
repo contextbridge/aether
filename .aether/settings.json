@@ -31,8 +31,7 @@
                 "${HOME}/.agents/rules",
                 "--rules-dir",
                 "${WORKSPACE}/.agents/rules"
-              ],
-              "input": null
+              ]
             }
           }
         }

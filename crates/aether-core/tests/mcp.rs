@@ -4,8 +4,10 @@ mod mcp {
     mod instructions_tests;
     mod ipc_tests;
     mod mrtr_tests;
-    mod oauth_tests;
     mod server_round_trip_tests;
+    mod support;
     mod task_tests;
+    mod tool_catalog_tests;
+    mod tool_filter_tests;
     mod trace_context_tests;
 }

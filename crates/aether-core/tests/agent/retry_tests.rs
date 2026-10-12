@@ -1,13 +1,13 @@
 use aether_core::events::TurnEvent;
+use mcp_utils::testing::{FakeTask, Gate};
 use std::error::Error;
 use std::time::Duration;
 
 use aether_core::core::RetryConfig;
 use aether_core::events::{AgentEvent, LlmCallOutcome, TurnOutcome};
-use aether_core::testing::{FakeMcpServer, FakeTool, FakeToolResponse, fast_retry, test_agent};
+use aether_core::testing::{TestScenario, fast_retry, test_agent};
 use llm::ProviderError;
 use llm::testing::{failed_call, llm_response};
-use rmcp::model::{CreateTaskResult, DetailedTask, Task, TaskPayload, TaskStatus};
 
 fn retry_attempts(messages: &[AgentEvent]) -> Vec<u32> {
     messages
@@ -33,21 +33,17 @@ async fn deferred_event_after_retry_clears_pending_tool_and_cancels_task() -> Re
         llm_response().text(&["recovered"]).build_results(),
     ];
 
-    let now = chrono::Utc::now().to_rfc3339();
-    let task = Task::new("stale-task", TaskStatus::Working, now.clone(), now).with_poll_interval_ms(10);
-    let server = FakeMcpServer::new()
-        .with_tool(
-            FakeTool::new("deferred")
-                .responds(FakeToolResponse::task(CreateTaskResult::new(task.clone())).delay(Duration::from_millis(10))),
-        )
-        .with_task("stale-task", [DetailedTask::new(task, TaskPayload::Working)]);
+    let created = Gate::new();
+    let server = FakeTask::new("stale-task").gated(created.clone()).server("deferred");
     let server_state = server.state();
 
     let result = test_agent()
-        .fake_mcp_server("tasks", server)
+        .mcp_server("tasks", server)
         .retry_config(fast_retry(1))
         .llm_result_responses(&attempts)
-        .user_text("go")
+        .scenario(
+            TestScenario::new().user_text("go").wait_for_retry(1).perform(move || created.open()).wait_for_turn_end(),
+        )
         .run_with_context()
         .await?;
 

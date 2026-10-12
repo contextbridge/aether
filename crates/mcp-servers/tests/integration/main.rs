@@ -1,5 +1,6 @@
 mod common;
 
+mod builtin_servers;
 mod coding_mcp_tools;
 mod coding_permissions;
 mod lsp_check_errors_contract;

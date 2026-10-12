@@ -1,10 +1,10 @@
 use super::InitScope;
 use super::harness::HarnessIntegration;
 use super::recommendations::{ProviderRecommendations, recommended_for_provider};
+use aether_core::mcp::{InMemoryServerConfig, InMemoryType, McpConfig, McpServerConfig};
+use aether_core::mcp::{ToolExposure, ToolFilter, ToolMatcher};
 use aether_project::{AetherSettings, AgentConfig, McpSourceSpec, PromptSource};
 use llm::{ReasoningEffort, catalog::Provider};
-use mcp_utils::client::{InMemoryServerConfig, InMemoryType, McpServerConfig, ToolExposure};
-use mcp_utils::client::{ToolFilter, ToolMatcher};
 
 const SYSTEM_PATH: &str = "SYSTEM.md";
 const SYSTEM_MD: &str = include_str!("templates/SYSTEM.md");
@@ -256,13 +256,12 @@ fn mcps(servers: Vec<(&str, Vec<String>)>) -> McpSourceSpec {
                 McpServerConfig::InMemory(InMemoryServerConfig {
                     type_: InMemoryType::InMemory,
                     args,
-                    input: None,
                     defer_tools: ToolExposure::ModelVisible,
                 }),
             )
         })
         .collect();
-    McpSourceSpec::Inline { servers }
+    McpSourceSpec::Inline(McpConfig::new(servers))
 }
 
 fn plan_tools() -> ToolFilter {

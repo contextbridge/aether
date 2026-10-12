@@ -1,4 +1,4 @@
-use aether_core::agent_spec::McpConfigSource;
+use aether_core::mcp::{McpConfig, ParseError};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Default, clap::Args)]
@@ -11,12 +11,9 @@ pub struct McpConfigArgs {
 }
 
 impl McpConfigArgs {
-    pub fn sources(&self, project_root: &Path) -> Vec<McpConfigSource> {
-        self.mcp_configs
-            .iter()
-            .map(|path| project_root.join(path))
-            .map(McpConfigSource::model_visible)
-            .chain(self.mcp_config_jsons.iter().cloned().map(McpConfigSource::Json))
-            .collect()
+    pub fn load(&self, project_root: &Path) -> Result<McpConfig, ParseError> {
+        let files = self.mcp_configs.iter().map(|path| McpConfig::from_json_file(project_root.join(path)));
+        let jsons = self.mcp_config_jsons.iter().map(|json| McpConfig::from_json(json));
+        files.chain(jsons).collect()
     }
 }

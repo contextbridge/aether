@@ -1,23 +1,23 @@
-use crate::error::CliError;
-use aether_core::agent_spec::{AgentSpec, McpConfigSource};
-use aether_core::core::{AgentBuilder, AgentDeps, AgentHandle, Prompt};
+use aether_core::agent_spec::AgentSpec;
+use aether_core::core::{AgentBuilder, AgentDeps, AgentError, AgentHandle, Prompt, PromptCache};
 use aether_core::events::{AgentEvent, Command};
-use aether_core::mcp::McpBuilder;
-use aether_core::mcp::mcp;
-use aether_core::mcp::{McpHandle, McpRuntime, McpSession};
-use llm::{ChatMessage, SessionUsageEvent, ToolDefinition};
-use mcp_servers::McpBuilderExt;
-use mcp_utils::client::{McpClientEvent, McpConnectionDetails, McpServer, OAuthHandlerFactory};
+use aether_core::mcp::{McpCatalog, McpConfig, McpSpawnError, ParseError};
+use llm::{ChatMessage, SessionUsageEvent, StreamingModelProvider, ToolDefinition};
+use mcp_servers::agent_mcp;
+use mcp_utils::client::ElicitationSink;
+use mcp_utils::gateway::ServerSpec;
 use std::path::PathBuf;
+use std::sync::Arc;
+use thiserror::Error;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tracing::debug;
 
 pub struct RuntimeBuilder {
     cwd: PathBuf,
     spec: AgentSpec,
-    mcp_config_sources: Vec<McpConfigSource>,
-    extra_mcp_servers: Vec<McpServer>,
-    oauth_applicator: Option<Box<dyn FnOnce(McpBuilder) -> McpBuilder + Send>>,
+    provider: Option<Arc<dyn StreamingModelProvider>>,
+    extra_mcp_servers: Vec<ServerSpec>,
+    elicitation: Option<ElicitationSink>,
+    wait_for_mcp: bool,
     agent_deps: AgentDeps,
     usage_seed: Option<SessionUsageEvent>,
 }
@@ -26,13 +26,22 @@ pub struct Runtime {
     pub agent_tx: Sender<Command>,
     pub agent_rx: Receiver<AgentEvent>,
     pub agent_handle: AgentHandle,
-    pub event_rx: Receiver<McpClientEvent>,
-    pub mcp_runtime: McpRuntime,
+    pub mcp: McpCatalog,
 }
 
-pub struct PromptInfo {
-    pub spec: AgentSpec,
-    pub tool_definitions: Vec<ToolDefinition>,
+pub struct PromptPreview {
+    pub system_prompt: String,
+    pub tools: Vec<ToolDefinition>,
+}
+
+#[derive(Debug, Error)]
+pub enum RuntimeError {
+    #[error("Invalid MCP config: {0}")]
+    McpConfig(#[from] ParseError),
+    #[error("MCP error: {0}")]
+    McpSpawn(#[from] McpSpawnError),
+    #[error("Agent error: {0}")]
+    Agent(#[from] AgentError),
 }
 
 impl RuntimeBuilder {
@@ -40,9 +49,10 @@ impl RuntimeBuilder {
         Self {
             cwd,
             spec,
-            mcp_config_sources: Vec::new(),
+            provider: None,
             extra_mcp_servers: Vec::new(),
-            oauth_applicator: None,
+            elicitation: None,
+            wait_for_mcp: false,
             agent_deps: AgentDeps::default(),
             usage_seed: None,
         }
@@ -53,136 +63,87 @@ impl RuntimeBuilder {
         self
     }
 
-    /// Continue session usage totals from the last persisted usage event.
-    pub fn resume_usage(mut self, last: SessionUsageEvent) -> Self {
-        self.usage_seed = Some(last);
+    #[cfg(any(test, feature = "testing"))]
+    pub fn provider(mut self, provider: Arc<dyn StreamingModelProvider>) -> Self {
+        self.provider = Some(provider);
         self
     }
 
-    /// Set MCP config source overrides. When non-empty, these completely
-    /// replace any sources resolved from the agent's `AgentSpec`.
-    pub fn mcp_sources(mut self, sources: Vec<McpConfigSource>) -> Self {
-        self.mcp_config_sources = sources;
+    pub fn resume_usage(mut self, last: Option<SessionUsageEvent>) -> Self {
+        self.usage_seed = last;
         self
     }
 
-    pub fn extra_servers(mut self, servers: Vec<McpServer>) -> Self {
+    /// Replaces the agent's own MCP servers when `config` names any.
+    pub fn mcp_config(mut self, config: McpConfig) -> Self {
+        if !config.is_empty() {
+            self.spec.mcp = config;
+        }
+        self
+    }
+
+    pub fn extra_servers(mut self, servers: Vec<ServerSpec>) -> Self {
         self.extra_mcp_servers = servers;
         self
     }
 
-    pub fn oauth_handler_factory(mut self, factory: OAuthHandlerFactory) -> Self {
-        self.oauth_applicator = Some(Box::new(|builder| builder.with_oauth_handler_factory(factory)));
+    pub fn elicitation(mut self, sink: ElicitationSink) -> Self {
+        self.elicitation = Some(sink);
         self
     }
 
-    pub async fn build(
-        self,
-        custom_prompt: Option<Prompt>,
-        messages: Option<Vec<ChatMessage>>,
-    ) -> Result<Runtime, CliError> {
-        let deps = self.agent_deps.clone();
-        let usage_seed = self.usage_seed.clone();
-        let (spec, session) = self.spawn_mcp().await?;
-        let mcp = session.handle().clone();
-
-        let (agent_tx, agent_rx, agent_handle) = spawn_agent(&spec, &deps, mcp, Vec::new(), |mut agent_builder| {
-            if let Some(last) = &usage_seed {
-                agent_builder = agent_builder.resume_usage(last);
-            }
-            if let Some(prompt) = custom_prompt {
-                agent_builder = agent_builder.system_prompt(prompt);
-            }
-            if let Some(msgs) = messages {
-                agent_builder = agent_builder.messages(msgs);
-            }
-            agent_builder
-        })
-        .await?;
-        let (mcp_runtime, event_rx) = session.connect_agent(agent_tx.clone()).await.split();
-
-        Ok(Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime })
+    pub fn wait_for_mcp(mut self) -> Self {
+        self.wait_for_mcp = true;
+        self
     }
 
-    /// Spawn MCP, block until every server finishes its initial connection,
-    /// then connect the agent to the session's filtered tools and MCP
-    /// instructions before returning. Returns the live [`Runtime`] plus the
-    /// bootstrap snapshot for callers that need the agent ready to use tools on
-    /// its first turn.
-    pub async fn build_ready(self, messages: Vec<ChatMessage>) -> Result<(Runtime, McpConnectionDetails), CliError> {
-        let deps = self.agent_deps.clone();
-        let usage_seed = self.usage_seed.clone();
-        let (spec, mut session) = self.spawn_mcp().await?;
-        let snapshot = session
-            .block_until_ready()
-            .await
-            .ok_or_else(|| CliError::McpError("MCP bootstrap aborted before completion".to_string()))?;
-        let mcp = session.handle().clone();
-
-        let (agent_tx, agent_rx, agent_handle) = spawn_agent(&spec, &deps, mcp, Vec::new(), |mut agent_builder| {
-            if let Some(last) = &usage_seed {
-                agent_builder = agent_builder.resume_usage(last);
-            }
-            agent_builder.messages(messages)
-        })
-        .await?;
-        let (mcp_runtime, event_rx) = session.connect_agent(agent_tx.clone()).await.split();
-
-        Ok((Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime }, snapshot))
-    }
-
-    pub async fn build_prompt_info(self) -> Result<PromptInfo, CliError> {
-        let (spec, mut session) = self.spawn_mcp().await?;
-        let details = session
-            .block_until_ready()
-            .await
-            .ok_or_else(|| CliError::McpError("MCP bootstrap aborted before completion".to_string()))?;
-        let filtered_tools = details.tool_definitions();
-        Ok(PromptInfo { spec, tool_definitions: filtered_tools })
-    }
-
-    async fn spawn_mcp(self) -> Result<(AgentSpec, McpSession), CliError> {
-        let deps = self.agent_deps.clone();
-        let mut builder = mcp(&self.cwd).with_tool_filter(self.spec.tools.clone());
-
-        if let Some(apply_oauth) = self.oauth_applicator {
-            builder = apply_oauth(builder);
+    pub async fn build(self, messages: Vec<ChatMessage>) -> Result<Runtime, RuntimeError> {
+        let mcp = self.spawn_mcp()?;
+        if self.wait_for_mcp {
+            mcp.ready().await;
         }
 
-        builder = builder.with_agent_deps(deps).with_builtin_servers();
-
-        if !self.extra_mcp_servers.is_empty() {
-            builder = builder.with_servers(self.extra_mcp_servers);
-        }
-
-        let mcp_config_sources: Vec<McpConfigSource> = if self.mcp_config_sources.is_empty() {
-            self.spec.mcp_config_sources.clone()
-        } else {
-            self.mcp_config_sources
+        let builder = match self.provider.clone() {
+            Some(provider) => AgentBuilder::from_spec_with_llm(&self.spec, &self.agent_deps, provider),
+            None => AgentBuilder::from_spec(&self.spec, &self.agent_deps).await?,
         };
-
-        if !mcp_config_sources.is_empty() {
-            debug!("Loading MCP configs from: {:?}", mcp_config_sources);
-            builder =
-                builder.from_mcp_config_sources(&mcp_config_sources).map_err(|e| CliError::McpError(e.to_string()))?;
+        let mut builder = builder.mcp(mcp.clone()).messages(messages);
+        if let Some(last) = &self.usage_seed {
+            builder = builder.resume_usage(last);
         }
+        let (agent_tx, agent_rx, agent_handle) = builder.spawn().await?;
 
-        let spawn = builder.spawn().await.map_err(|e| CliError::McpError(e.to_string()))?;
-        Ok((self.spec, spawn))
+        Ok(Runtime { agent_tx, agent_rx, agent_handle, mcp })
+    }
+
+    pub async fn preview(self) -> Result<PromptPreview, RuntimeError> {
+        let mcp = self.spawn_mcp()?;
+        mcp.ready().await;
+        let mut prompts = self.spec.prompts.clone();
+        prompts.push(Prompt::McpInstructions(mcp.instructions()));
+        let system_prompt = PromptCache::new(prompts).render().await;
+        let tools = mcp.tool_definitions();
+        mcp.shutdown().await;
+        Ok(PromptPreview { system_prompt: system_prompt?, tools })
+    }
+
+    fn spawn_mcp(&self) -> Result<McpCatalog, RuntimeError> {
+        let mut builder = agent_mcp(&self.cwd, self.agent_deps.clone(), self.spec.tools.clone())
+            .with_servers(self.extra_mcp_servers.clone())
+            .with_config(self.spec.mcp.clone())?;
+        if let Some(sink) = self.elicitation.clone() {
+            builder = builder.with_elicitation(sink);
+        }
+        Ok(builder.spawn()?)
     }
 }
 
-async fn spawn_agent(
-    spec: &AgentSpec,
-    deps: &AgentDeps,
-    mcp: McpHandle,
-    tool_definitions: Vec<ToolDefinition>,
-    configure: impl FnOnce(AgentBuilder) -> AgentBuilder,
-) -> Result<(Sender<Command>, Receiver<AgentEvent>, AgentHandle), CliError> {
-    let builder = AgentBuilder::from_spec(spec, vec![], deps)
-        .await
-        .map_err(|error| CliError::AgentError(error.to_string()))?
-        .tools(mcp, tool_definitions);
-
-    configure(builder).spawn().await.map_err(|error| CliError::AgentError(error.to_string()))
+impl Runtime {
+    pub async fn shutdown(self) {
+        let Self { agent_tx, agent_rx, agent_handle, mcp } = self;
+        drop((agent_tx, agent_rx));
+        agent_handle.abort();
+        agent_handle.await_completion().await;
+        mcp.shutdown().await;
+    }
 }

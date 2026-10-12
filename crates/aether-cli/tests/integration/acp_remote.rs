@@ -6,8 +6,9 @@ use aether_core::core::agent;
 use aether_core::events::{AgentEvent, MessageEvent, TurnEvent, TurnOutcome};
 use aether_sessions::{SessionEvent, UserEvent};
 use agent_client_protocol::schema::v2::{
-    AbsolutePath, CloseSessionRequest, ContentBlock, NewSessionRequest, PromptRequest, ReplayFrom, ReplayFromStart,
-    ResumeSessionRequest, SessionId, SessionUpdate, SetSessionConfigOptionRequest, StateUpdate, StopReason,
+    AbsolutePath, CloseSessionRequest, ContentBlock, ElicitationMode, ElicitationScope, NewSessionRequest,
+    PromptRequest, ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate,
+    SetSessionConfigOptionRequest, StateUpdate, StopReason,
 };
 use llm::{LlmResponse, testing::FakeLlmProvider};
 use std::sync::Arc;
@@ -193,32 +194,62 @@ async fn invalid_live_resume_leaves_original_turn_running() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn elicitations_reach_the_client_and_its_answer_reaches_the_server() {
+    AcpTestHarness::run(|mut harness| async move {
+        let mut results = harness.elicit_during_prompt_expansion();
+        harness.peer.queue_elicitation_response(
+            serde_json::from_value(serde_json::json!({"action": "accept", "content": {"approved": true}})).unwrap(),
+        );
+        let session = harness.insert_agent_switching_session().await;
+        let id = session.session_id().clone();
+
+        harness
+            .client_cx
+            .send_request(PromptRequest::new(id.clone(), vec!["/plan".into()]))
+            .block_task()
+            .await
+            .expect("the prompt completes");
+
+        let request = harness.peer.next_elicitation_request().await;
+        assert_eq!(acp_utils::elicitation::source_mcp_server_name(request.meta.as_ref()), Some("planner-mcp"));
+        let ElicitationMode::Form(form) = request.mode else { panic!("expected a form elicitation") };
+        let ElicitationScope::Session(scope) = form.scope else { panic!("expected a session-scoped elicitation") };
+        assert_eq!(scope.session_id, id);
+        let answer = results.recv().await.expect("the server receives the answer");
+        assert_eq!(answer.action, mcp_utils::model::ElicitationAction::Accept);
+        assert_eq!(answer.content, Some(serde_json::json!({"approved": true})));
+        harness.shutdown().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn pending_and_detached_elicitations_cancel_without_stopping_session() {
     LocalSet::new()
         .run_until(async {
             for detach_before_elicitation in [false, true] {
                 let mut harness = AcpTestHarness::start().await;
-                let (started, release) = harness.pause_prompt_expansion();
+                let expansion = harness.pause_prompt_expansion();
                 let mut results = harness.elicit_during_prompt_expansion();
                 let session = harness.insert_agent_switching_session().await;
                 let id = session.session_id().clone();
                 let capture = harness.peer.capture_next_elicitation();
                 let prompt =
                     harness.client_cx.send_request(PromptRequest::new(id.clone(), vec!["/plan".into()])).block_task();
-                started.notified().await;
+                expansion.reached().await;
                 let pending = if detach_before_elicitation {
                     harness.disconnect().await;
-                    release.notify_one();
+                    expansion.open();
                     None
                 } else {
-                    release.notify_one();
+                    expansion.open();
                     let responder = capture.await.expect("client received elicitation");
                     harness.disconnect().await;
                     Some(responder)
                 };
                 assert_eq!(
                     results.recv().await.expect("MCP receives cancellation"),
-                    mcp_utils::client::cancel_result()
+                    mcp_utils::model::ElicitResult::new(mcp_utils::model::ElicitationAction::Cancel)
                 );
                 drop(pending);
                 assert!(prompt.await.is_err(), "disconnected prompt response is not retried");

@@ -1,80 +1,58 @@
+use crate::server_config;
 use aether_core::core::AgentDeps;
 use aether_core::events::{McpRequestInstrumentation, TraceContext};
-use aether_project::{AetherSettings, AgentCatalog};
+use aether_project::{AetherSettings, AgentCatalog, SettingsError};
 use clap::Parser;
-use mcp_utils::server::tasks::{BACKGROUND_TASK_TTL_MS, require_tasks_capability};
 use rmcp::model::{CallToolResult, Task};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{
-        CallToolResponse, CancelTaskParams, CreateTaskResult, GetTaskParams, GetTaskResult, Implementation,
-        ServerCapabilities, ServerConfig, UpdateTaskParams,
-    },
+    model::{CallToolResponse, CreateTaskResult, ServerCapabilities, ServerConfig},
     service::RequestContext,
-    task_manager::{TaskContext, TaskExit, TaskManager, TaskOptions},
+    task_manager::TaskExit,
     tool, tool_handler, tool_router,
 };
 use std::path::{Path, PathBuf};
 
 use super::progress::SubAgentProgressSink;
 use super::tools::{AgentExecutor, SpawnSubAgentsInput, SpawnSubAgentsOutput};
-use crate::error::ServerInitError;
-use crate::workspace_paths::resolve_path;
+use crate::background_tasks::{BackgroundTasks, delegate_background_tasks};
+use crate::request_context::require_tasks;
+use crate::workspace_paths::resolve_root;
 
 const SPAWN_SUBAGENT_TOOL: &str = "spawn_subagent";
 
 #[derive(Debug, Clone, Parser)]
+#[command(name = "subagents", no_binary_name = true)]
 pub struct SubAgentsMcpArgs {
     /// Project root containing optional .aether/settings.json
     #[arg(long = "project-root", alias = "dir")]
     pub project_root: Option<PathBuf>,
 }
 
-impl SubAgentsMcpArgs {
-    pub fn from_args(args: Vec<String>) -> Result<Self, ServerInitError> {
-        let mut full_args = vec!["subagents-mcp".to_string()];
-        full_args.extend(args);
-        Self::try_parse_from(full_args).map_err(ServerInitError::InvalidArgs)
-    }
-
-    fn resolve_root(self, default_root: &Path) -> PathBuf {
-        self.project_root.map_or_else(|| default_root.to_path_buf(), |path| resolve_path(default_root, path))
-    }
-}
-
 #[doc = include_str!("../docs/subagents_mcp.md")]
 pub struct SubAgentsMcp {
     tool_router: ToolRouter<Self>,
-    task_manager: TaskManager,
+    tasks: BackgroundTasks,
     project_root: PathBuf,
     agent_deps: AgentDeps,
 }
 
 impl SubAgentsMcp {
-    pub fn embedded(project_root: PathBuf, agent_deps: AgentDeps) -> Self {
-        Self { tool_router: Self::tool_router(), task_manager: TaskManager::new(), project_root, agent_deps }
+    pub fn new(project_root: PathBuf, agent_deps: AgentDeps) -> Self {
+        Self { tool_router: Self::tool_router(), tasks: BackgroundTasks::new(), project_root, agent_deps }
     }
 
-    pub fn embedded_from_args(
-        args: Vec<String>,
-        base_dir: &Path,
-        agent_deps: AgentDeps,
-    ) -> Result<Self, ServerInitError> {
-        Ok(Self::embedded(SubAgentsMcpArgs::from_args(args)?.resolve_root(base_dir), agent_deps))
+    pub fn from_args(args: SubAgentsMcpArgs, base_dir: &Path, agent_deps: AgentDeps) -> Self {
+        Self::new(resolve_root(base_dir, args.project_root), agent_deps)
     }
 
-    pub fn standalone(project_root: PathBuf) -> Result<Self, ServerInitError> {
-        let settings = AetherSettings::load_default(&project_root)
-            .map_err(|e| ServerInitError::Other(format!("Failed to load agents: {e}")))?;
-        let catalog = AgentCatalog::from_settings_or_empty(&project_root, settings)
-            .map_err(|e| ServerInitError::Other(format!("Failed to load agents: {e}")))?;
+    pub fn standalone(args: SubAgentsMcpArgs, base_dir: &Path) -> Result<Self, SettingsError> {
+        let project_root = resolve_root(base_dir, args.project_root);
+        let settings = AetherSettings::load_default(&project_root)?;
+        let catalog = AgentCatalog::from_settings_or_empty(&project_root, settings)?;
         let registry = catalog.registry().clone();
-        Ok(Self::embedded(project_root, AgentDeps::default().with_agent_registry(registry)))
-    }
-
-    pub fn standalone_from_args(args: Vec<String>) -> Result<Self, ServerInitError> {
-        Self::standalone(SubAgentsMcpArgs::from_args(args)?.resolve_root(Path::new(".")))
+        Ok(Self::new(project_root, AgentDeps::default().with_agent_registry(registry)))
     }
 
     fn build_instructions(&self) -> String {
@@ -121,7 +99,7 @@ impl SubAgentsMcp {
             ));
         }
         if args.run_in_background {
-            require_tasks_capability(context)?;
+            require_tasks(context)?;
         }
         Ok(())
     }
@@ -148,19 +126,11 @@ impl SubAgentsMcp {
             tasks => format!("Running {} sub-agents", tasks.len()),
         };
         let executor = self.executor(context, instrumentation.trace_context());
-        let options = TaskOptions::new().with_ttl_ms(BACKGROUND_TASK_TTL_MS).with_status_message(status);
 
-        self.task_manager.spawn(options, move |task_context: TaskContext| {
-            Box::pin(async move {
-                tokio::select! {
-                    () = task_context.cancelled() => Err(TaskExit::Cancelled),
-                    output = executor.execute_tasks(args.tasks) => {
-                        let result = output_result(output);
-                        instrumentation.finish(result.as_ref().err().map(ToString::to_string).as_deref());
-                        result.map_err(TaskExit::Error)
-                    }
-                }
-            })
+        self.tasks.spawn(status, async move {
+            let result = output_result(executor.execute_tasks(args.tasks).await);
+            instrumentation.finish(result.as_ref().err().map(ToString::to_string).as_deref());
+            result.map_err(TaskExit::Error)
         })
     }
 }
@@ -169,34 +139,14 @@ impl SubAgentsMcp {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for SubAgentsMcp {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_tasks().build())
-            .with_server_info(Implementation::new("subagents-mcp", "0.1.0"))
-            .with_instructions(self.build_instructions())
+        server_config(
+            "subagents-mcp",
+            ServerCapabilities::builder().enable_tools().enable_tasks().build(),
+            self.build_instructions(),
+        )
     }
 
-    fn get_task(
-        &self,
-        request: GetTaskParams,
-        _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<GetTaskResult, ErrorData>> + Send + '_ {
-        std::future::ready(self.task_manager.get_task(&request.task_id).map(GetTaskResult::new))
-    }
-
-    fn update_task(
-        &self,
-        request: UpdateTaskParams,
-        _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<(), ErrorData>> + Send + '_ {
-        std::future::ready(self.task_manager.update_task(&request.task_id, request.input_responses))
-    }
-
-    fn cancel_task(
-        &self,
-        request: CancelTaskParams,
-        _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<(), ErrorData>> + Send + '_ {
-        std::future::ready(self.task_manager.cancel_task(&request.task_id))
-    }
+    delegate_background_tasks!(tasks);
 }
 
 #[tool_router]
@@ -229,12 +179,6 @@ impl SubAgentsMcp {
             instrumentation.finish(result.as_ref().err().map(ToString::to_string).as_deref());
             result
         }
-    }
-}
-
-impl Drop for SubAgentsMcp {
-    fn drop(&mut self) {
-        self.task_manager.shutdown();
     }
 }
 

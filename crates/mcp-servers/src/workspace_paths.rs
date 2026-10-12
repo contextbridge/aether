@@ -44,6 +44,10 @@ pub fn resolve_path(root: &Path, path: PathBuf) -> PathBuf {
     if path.is_absolute() { path } else { root.join(path) }
 }
 
+pub fn resolve_root(base: &Path, root: Option<PathBuf>) -> PathBuf {
+    root.map_or_else(|| base.to_path_buf(), |path| resolve_path(base, path))
+}
+
 pub fn relative_path(root: &Path, path: &str) -> String {
     Path::new(path)
         .strip_prefix(root)
@@ -93,6 +97,13 @@ mod tests {
             resolve_path(Path::new("/workspace"), PathBuf::from("src/main.rs")),
             PathBuf::from("/workspace/src/main.rs")
         );
+    }
+
+    #[test]
+    fn root_override_resolves_against_base() {
+        assert_eq!(resolve_root(Path::new("/workspace"), None), PathBuf::from("/workspace"));
+        assert_eq!(resolve_root(Path::new("/workspace"), Some("sub".into())), PathBuf::from("/workspace/sub"));
+        assert_eq!(resolve_root(Path::new("/workspace"), Some("/abs".into())), PathBuf::from("/abs"));
     }
 
     #[test]

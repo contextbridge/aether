@@ -1,11 +1,13 @@
 use mcp_servers::CodingMcp;
 use mcp_servers::coding::error::BashError;
 use mcp_servers::coding::tools::bash::{BashEnvironment, BashInput, execute_command};
-use rmcp::model::{CallToolRequestParams, CallToolResponse, TaskPayload, TaskStatus};
+use mcp_utils::testing::args;
+use rmcp::model::{CallToolRequestParams, CallToolResponse, CancelTaskParams, TaskStatus};
+use serde_json::json;
 use std::fs::canonicalize;
 use std::process::{Command, Stdio};
 
-use super::common::{TestClient, TestResult, production_client_info, test_client_info};
+use super::common::{TestResult, await_terminal_task, call_task, cancels_prompts, connect, taskless};
 
 #[tokio::test]
 async fn bash_commands_receive_eof_instead_of_inherited_stdin() {
@@ -113,37 +115,14 @@ async fn command_runs_in_working_directory() -> Result<(), Box<dyn std::error::E
 
 #[tokio::test]
 async fn background_bash_uses_tasks_and_returns_structured_output() -> TestResult {
-    let client = TestClient::start_with(CodingMcp::new, production_client_info()).await?;
-    let response = client
-        .raw()
-        .call_tool_once(
-            CallToolRequestParams::new("bash").with_arguments(
-                serde_json::json!({
-                    "command": "echo stdout; echo stderr >&2; exit 7",
-                    "runInBackground": true
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-        )
-        .await?;
-    let CallToolResponse::Task(created) = response else {
-        panic!("expected task response: {response:?}");
-    };
-    assert_eq!(created.task.status, TaskStatus::Working);
+    let client = connect(CodingMcp::new(std::env::temp_dir()), cancels_prompts()).await;
+    let result = call_task(
+        &client,
+        "bash",
+        json!({ "command": "echo stdout; echo stderr >&2; exit 7", "runInBackground": true }),
+    )
+    .await?;
 
-    let detailed = loop {
-        let result = client.raw().get_task(rmcp::model::GetTaskParams::new(created.task.task_id.clone())).await?;
-        if result.task.status().is_terminal() {
-            break result.task;
-        }
-        tokio::task::yield_now().await;
-    };
-    let TaskPayload::Completed { result } = detailed.payload else {
-        panic!("expected completed task");
-    };
-    let result: rmcp::model::CallToolResult = serde_json::from_value(serde_json::Value::Object(result))?;
     assert_eq!(result.is_error, Some(false));
     let structured = result.structured_content.as_ref().unwrap();
     let output = structured["output"].as_str().unwrap();
@@ -154,13 +133,30 @@ async fn background_bash_uses_tasks_and_returns_structured_output() -> TestResul
 }
 
 #[tokio::test]
+async fn cancelling_a_background_bash_task_stops_it() -> TestResult {
+    let client = connect(CodingMcp::new(std::env::temp_dir()), cancels_prompts()).await;
+    let request = CallToolRequestParams::new("bash")
+        .with_arguments(args(json!({ "command": "sleep 60", "runInBackground": true })));
+    let CallToolResponse::Task(created) = client.peer().call_tool_once(request).await? else {
+        panic!("background bash creates a task");
+    };
+
+    client.peer().cancel_task(CancelTaskParams::new(created.task.task_id.clone())).await?;
+
+    let task = await_terminal_task(&client, &created.task.task_id).await?;
+    assert_eq!(task.status(), TaskStatus::Cancelled);
+    Ok(())
+}
+
+#[tokio::test]
 async fn background_bash_requires_tasks_capability() -> TestResult {
-    let client = TestClient::start_with(CodingMcp::new, test_client_info()).await?;
+    let client = connect(CodingMcp::new(std::env::temp_dir()), taskless()).await;
     let error = client
-        .raw()
-        .call_tool_once(CallToolRequestParams::new("bash").with_arguments(
-            serde_json::json!({ "command": "echo never", "runInBackground": true }).as_object().unwrap().clone(),
-        ))
+        .peer()
+        .call_tool_once(
+            CallToolRequestParams::new("bash")
+                .with_arguments(args(json!({ "command": "echo never", "runInBackground": true }))),
+        )
         .await
         .unwrap_err();
     assert!(

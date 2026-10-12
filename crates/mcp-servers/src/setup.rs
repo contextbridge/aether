@@ -1,127 +1,69 @@
 use crate::coding::tools::bash::BashEnvironment;
-use crate::workspace_paths::resolve_path;
-use crate::{CodingMcp, CodingMcpArgs, DefaultCodingTools, ReviewMcp, SkillsMcp, SubAgentsMcp, TasksMcp};
-use aether_core::mcp::{McpBuilder, RuntimeServices};
-use futures::FutureExt;
-use mcp_utils::ServiceExt;
-use tracing::{debug, warn};
-
-pub fn progressive_discovery_instructions() -> String {
-    include_str!("progressive_discovery_instructions.md").to_string()
-}
+use crate::{CodingMcp, DefaultCodingTools, ReviewMcp, SkillsMcp, SubAgentsMcp, TasksMcp};
+use aether_core::core::AgentDeps;
+use aether_core::mcp::{AETHER_MCP_IPC_SOCKET, McpBuilder, RuntimeServices, ToolFilter, mcp};
+use clap::{Parser, ValueEnum};
+use mcp_utils::server::McpServer;
+use std::path::Path;
 
 #[doc = include_str!("docs/mcp_builder_ext.md")]
 pub trait McpBuilderExt {
-    /// Registers built-in in-memory MCP factories. Servers are constructed at
-    /// spawn time with the runtime's root directory, dependencies, and MCP handle.
     fn with_builtin_servers(self) -> Self;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Builtin {
+    Coding,
+    Skills,
+    Tasks,
+    Subagents,
+    Review,
+}
+
+pub fn agent_mcp(root: impl AsRef<Path>, deps: AgentDeps, tools: ToolFilter) -> McpBuilder {
+    mcp(root).with_agent_deps(deps).with_tool_filter(tools).with_builtin_servers()
 }
 
 impl McpBuilderExt for McpBuilder {
     fn with_builtin_servers(self) -> Self {
-        self.register_in_memory_server(
-            "coding",
-            Box::new(|spec, services| {
-                async move {
-                    let parsed = match CodingMcpArgs::from_args(spec.args) {
-                        Ok(args) => args,
-                        Err(e) => {
-                            warn!("CodingMcp args parse failed: {e}, using defaults");
-                            CodingMcpArgs::default()
-                        }
-                    };
-                    let CodingMcpArgs { permission_mode, mut rules_dirs, disable_lsp, root_dir: arg_root_dir } = parsed;
-                    let root_dir = arg_root_dir
-                        .map_or_else(|| services.root_dir.clone(), |path| resolve_path(&services.root_dir, path));
-                    rules_dirs = rules_dirs.into_iter().map(|path| resolve_path(&root_dir, path)).collect();
-                    debug!(
-                        "CodingMcp created, disable_lsp={}, permission_mode={:?}, rules_dirs={}",
-                        disable_lsp,
-                        permission_mode,
-                        rules_dirs.len()
-                    );
-                    let tools = DefaultCodingTools::new().with_bash_environment(coding_bash_environment(&services));
-                    let server = CodingMcp::with_tools(tools)
-                        .with_rules_dirs(rules_dirs)
-                        .with_root_dir(root_dir.clone())
-                        .with_permission_mode(permission_mode);
-                    let server = if disable_lsp { server } else { server.with_lsp(root_dir) };
-                    server.into_dyn()
-                }
-                .boxed()
-            }),
-        )
-        .register_in_memory_server(
-            "skills",
-            Box::new(|spec, services| {
-                async move {
-                    SkillsMcp::from_args_with_base_dir(spec.args, &services.root_dir)
-                        .map_err(|error| {
-                            warn!("Failed to parse SkillsMcp args: {error}, using defaults");
-                            error
-                        })
-                        .unwrap_or_else(|_| SkillsMcp::new(&[]).with_root_dir(services.root_dir.clone()))
-                        .into_dyn()
-                }
-                .boxed()
-            }),
-        )
-        .register_in_memory_server(
-            "subagents",
-            Box::new(|spec, services| {
-                async move {
-                    let agent_deps = services.agent_deps.clone();
-                    SubAgentsMcp::embedded_from_args(spec.args, &services.root_dir, agent_deps.clone())
-                        .map_err(|error| {
-                            warn!("Failed to parse SubAgentsMcp args: {error}, using defaults");
-                            error
-                        })
-                        .unwrap_or_else(|_| SubAgentsMcp::embedded(services.root_dir.clone(), agent_deps))
-                        .into_dyn()
-                }
-                .boxed()
-            }),
-        )
-        .register_in_memory_server(
-            "review",
-            Box::new(|spec, services| {
-                async move {
-                    ReviewMcp::from_args_with_base_dir(spec.args, &services.root_dir)
-                        .inspect_err(|error| {
-                            warn!("Failed to parse ReviewMcp args: {error}, using workspace root");
-                        })
-                        .unwrap_or_else(|_| {
-                            ReviewMcp::from_args_with_base_dir(Vec::new(), &services.root_dir)
-                                .expect("empty review MCP arguments are valid")
-                        })
-                        .into_dyn()
-                }
-                .boxed()
-            }),
-        )
-        .register_in_memory_server(
-            "tasks",
-            Box::new(|spec, services| {
-                async move {
-                    TasksMcp::from_args_with_base_dir(spec.args, &services.root_dir)
-                        .unwrap_or_else(|e| {
-                            tracing::warn!("Failed to parse TasksMcp args: {e}, using defaults");
-                            TasksMcp::new()
-                        })
-                        .into_dyn()
-                }
-                .boxed()
-            }),
-        )
-        .with_progressive_discovery_instructions(progressive_discovery_instructions())
+        Builtin::value_variants().iter().fold(self, |builder, &builtin| {
+            builder.register_in_memory_server(builtin.name(), move |args, services| Ok(builtin.build(args, services)?))
+        })
     }
 }
 
-fn coding_bash_environment(services: &RuntimeServices) -> BashEnvironment {
-    services
-        .shell_environment
-        .iter()
-        .fold(BashEnvironment::new().with_current_exe_dir_on_path(), |environment, (name, value)| {
-            environment.with_var(name, value)
+impl Builtin {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Coding => "coding",
+            Self::Skills => "skills",
+            Self::Tasks => "tasks",
+            Self::Subagents => "subagents",
+            Self::Review => "review",
+        }
+    }
+
+    pub fn build(self, args: Vec<String>, services: &RuntimeServices) -> Result<McpServer, clap::Error> {
+        let root = services.root_dir.as_path();
+        Ok(match self {
+            Self::Coding => CodingMcp::from_args(parse(args)?, root, coding_tools(services)).into(),
+            Self::Skills => SkillsMcp::from_args(parse(args)?, root).into(),
+            Self::Tasks => TasksMcp::from_args(parse(args)?, root).into(),
+            Self::Review => ReviewMcp::from_args(parse(args)?, root).into(),
+            Self::Subagents => SubAgentsMcp::from_args(parse(args)?, root, services.agent_deps.clone()).into(),
         })
+    }
+}
+
+fn parse<T: Parser>(args: Vec<String>) -> Result<T, clap::Error> {
+    T::try_parse_from(args)
+}
+
+fn coding_tools(services: &RuntimeServices) -> DefaultCodingTools {
+    let environment = BashEnvironment::new().with_current_exe_dir_on_path();
+    let environment = match &services.deferred_tools_socket {
+        Some(socket) => environment.with_var(AETHER_MCP_IPC_SOCKET, socket.to_string_lossy()),
+        None => environment,
+    };
+    DefaultCodingTools::new().with_bash_environment(environment)
 }
