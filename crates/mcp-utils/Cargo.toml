@@ -25,40 +25,60 @@ workspace = true
 
 [features]
 default = ["client"]
-testing = ["client"]
+testing = ["client", "dep:axum", "rmcp/transport-streamable-http-server"]
 client = [
     "dep:aether-auth",
     "aether-auth/mcp",
     "dep:async-stream",
-    "dep:llm",
+    "dep:chrono",
     "dep:reqwest",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:tokio-stream",
     "rmcp/transport-streamable-http-client-reqwest",
     "rmcp/transport-child-process",
 ]
 
 [dependencies]
-chrono = { workspace = true }
 futures = { workspace = true }
-serde = { workspace = true }
+rmcp = { workspace = true, features = ["client", "elicitation", "server", "transport-async-rw", "transport-io"] }
+thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "sync", "net", "time"] }
-tokio-util = { workspace = true }
-rmcp = { workspace = true, features = ["client", "elicitation", "server", "transport-async-rw"] }
+tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
-utils = { package = "aether-utils", path = "../utils", version = "0.2.19" }
-schemars = { workspace = true }
+uuid = { workspace = true }
 
 # client-only deps
+axum = { workspace = true, optional = true }
 aether-auth = { path = "../aether-auth", version = "0.1.17", optional = true }
 async-stream = { workspace = true, optional = true }
-llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.9.13" }
-serde_json = { workspace = true }
+chrono = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
-thiserror = { workspace = true }
-uuid = { workspace = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+tokio-stream = { workspace = true, features = ["sync"], optional = true }
+
+[[test]]
+name = "client"
+required-features = ["testing"]
+
+[[test]]
+name = "oauth"
+required-features = ["testing"]
+
+[[test]]
+name = "gateway"
+required-features = ["testing"]
+
+[[test]]
+name = "server"
+required-features = ["testing"]
+
+[[test]]
+name = "http_headers"
+required-features = ["client"]
 
 [dev-dependencies]
 axum = { workspace = true }
-aether-doctest = { path = "../doctest" }
-rmcp = { workspace = true, features = ["macros"] }
-tempfile = { workspace = true }
-tracing-subscriber = { workspace = true }
+rmcp = { workspace = true, features = ["macros", "transport-streamable-http-server"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }

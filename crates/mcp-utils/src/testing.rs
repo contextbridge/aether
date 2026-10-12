@@ -1,242 +1,50 @@
-use std::future::Future;
-
-use crate::protocol::client_lifecycle_mode;
-use rmcp::{
-    RoleClient, RoleServer, Service, serve_client_with_lifecycle, serve_server,
-    service::{ClientInitializeError, RunningService, ServerInitializeError},
+pub use elicitation_script::{
+    CapturedElicitation, ElicitationScript, ElicitationScriptBuilder, elicitation_host, elicitation_sink,
 };
-
-#[cfg(feature = "client")]
-pub use elicitation_script::{CapturedElicitation, ElicitationScript, UrlElicitationHandler, url_elicitation_handler};
-#[cfg(all(feature = "client", any(test, feature = "testing")))]
+pub use fake_auth_server::{
+    ACCESS_TOKEN, CLIENT_METADATA_URL, FakeAuthServer, OAuthPrompt, client_metadata, complete_authorization,
+};
 pub use fake_mcp::{
     CapturedTaskUpdate, CapturedToolCall, FakeMcpServer, FakeMcpState, FakeTool, FakeToolResponse,
-    completed_task_payload, fake_mcp,
+    completed_task_payload,
 };
+pub use fake_task::{
+    FakeTask, accept_with_name, cancelled_task, completed_task, failed_task, form_request, input_requests,
+    input_required_task, name_input, task, url_request, working_task,
+};
+pub use gate::Gate;
 
-#[cfg(all(feature = "client", any(test, feature = "testing")))]
+mod elicitation_script;
+mod fake_auth_server;
 mod fake_mcp;
+mod fake_task;
+mod gate;
 
-pub type ConnectedServices<T, U> = (RunningService<RoleServer, T>, RunningService<RoleClient, U>);
+use crate::client::{ClientOptions, McpClient, ToolCallError, ToolCallOptions, Transport};
+use crate::gateway::McpGateway;
+use crate::model::CallToolResult;
+use crate::server::McpServer;
+use futures::StreamExt;
+use serde_json::{Map, Value};
 
-/// Helper function to connect an MCP server and client via in-memory transport
-/// This handles the dual-era discovery/initialization handshake by running both concurrently
-pub fn connect<T, U>(server: T, client: U) -> impl Future<Output = Result<ConnectedServices<T, U>, ConnectError>>
-where
-    T: Service<RoleServer>,
-    U: Service<RoleClient>,
-{
-    Box::pin(async move {
-        let (client_transport, server_transport) = tokio::io::duplex(64 * 1024);
-
-        let server = tokio::spawn(serve_server(server, server_transport));
-        let client = serve_client_with_lifecycle(client, client_transport, client_lifecycle_mode())
-            .await
-            .map_err(|error| ConnectError::ClientInit(Box::new(error)))?;
-
-        let _ = client.list_tools(None).await;
-        let server = server.await?.map_err(|error| ConnectError::ServerInit(Box::new(error)))?;
-
-        Ok((server, client))
-    })
+/// Connects an [`McpClient`] named `name` to an in-process `server`.
+pub async fn connect(name: &str, server: impl Into<McpServer>, options: &ClientOptions) -> McpClient {
+    McpClient::connect(name, Transport::InProcess(server.into()), options).await.expect("connect in-process server")
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum ConnectError {
-    #[error("Server initialization failed: {0}")]
-    ServerInit(Box<ServerInitializeError>),
-    #[error("Client initialization failed: {0}")]
-    ClientInit(Box<ClientInitializeError>),
-    #[error("Server task failed: {0}")]
-    ServerTask(#[from] tokio::task::JoinError),
+/// Calls `name` with default options and waits for its result.
+pub async fn call(client: &McpClient, name: &str, arguments: Value) -> Result<CallToolResult, ToolCallError> {
+    client.call_tool(name, args(arguments), ToolCallOptions::default()).result().await
 }
 
-#[cfg(feature = "client")]
-mod elicitation_script {
-    use crate::client::McpClientEvent;
-    use futures::future::BoxFuture;
-    use rmcp::model::{ElicitRequestParams, ElicitResult, ElicitationAction};
-    use std::collections::VecDeque;
-    use std::future::Future;
-    use std::sync::{Arc, Mutex, PoisonError};
-    use tokio::sync::mpsc;
-    use tokio::task::JoinHandle;
-
-    pub type UrlElicitationHandler = Arc<dyn Fn(String, String) -> BoxFuture<'static, ()> + Send + Sync>;
-
-    /// Scripts the user's side of elicitation round trips: answers each
-    /// incoming request with the next queued response (Cancel once the queue
-    /// is empty) and records what arrived for assertions.
-    pub struct ElicitationScript {
-        captured: Arc<Mutex<Vec<CapturedElicitation>>>,
-        task: JoinHandle<()>,
-    }
-
-    pub fn url_elicitation_handler<F, Fut>(handler: F) -> UrlElicitationHandler
-    where
-        F: Fn(String, String) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        Arc::new(move |url, id| Box::pin(handler(url, id)))
-    }
-
-    #[derive(Clone)]
-    pub struct CapturedElicitation {
-        pub server_name: String,
-        pub request: ElicitRequestParams,
-    }
-
-    impl ElicitationScript {
-        pub fn spawn(
-            event_rx: mpsc::Receiver<McpClientEvent>,
-            responses: impl IntoIterator<Item = ElicitResult>,
-        ) -> Self {
-            Self::spawn_with_url_handler(event_rx, responses, None)
-        }
-
-        pub fn spawn_with_url_handler(
-            mut event_rx: mpsc::Receiver<McpClientEvent>,
-            responses: impl IntoIterator<Item = ElicitResult>,
-            on_url: Option<UrlElicitationHandler>,
-        ) -> Self {
-            let mut responses = responses.into_iter().collect::<VecDeque<_>>();
-            let captured = Arc::new(Mutex::new(Vec::new()));
-            let recorder = Arc::clone(&captured);
-            let task = tokio::spawn(async move {
-                while let Some(event) = event_rx.recv().await {
-                    let McpClientEvent::Elicitation(event) = event else { continue };
-                    recorder
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .push(CapturedElicitation { server_name: event.server_name, request: event.request.clone() });
-                    if let (Some(on_url), ElicitRequestParams::UrlElicitationParams { url, elicitation_id, .. }) =
-                        (&on_url, event.request)
-                    {
-                        on_url(url, elicitation_id).await;
-                    }
-                    let response =
-                        responses.pop_front().unwrap_or_else(|| ElicitResult::new(ElicitationAction::Cancel));
-                    let _ = event.response_sender.send(response);
-                }
-            });
-            Self { captured, task }
-        }
-
-        pub fn captured(&self) -> Vec<CapturedElicitation> {
-            self.captured.lock().unwrap_or_else(PoisonError::into_inner).clone()
-        }
-    }
-
-    impl Drop for ElicitationScript {
-        fn drop(&mut self) {
-            self.task.abort();
-        }
+pub async fn wait_until(gateway: &McpGateway, condition: impl Fn(&McpGateway) -> bool) {
+    let mut changes = gateway.changes();
+    while !condition(gateway) {
+        changes.next().await.expect("the gateway stopped before the condition held");
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::connect;
-    use rmcp::{
-        ClientHandler, ServerHandler,
-        model::{
-            ErrorData, Implementation, InitializeRequestParams, ProtocolVersion, ServerCapabilities, ServerConfig,
-        },
-        service::RequestContext,
-    };
-    use std::borrow::Cow;
-
-    #[tokio::test]
-    async fn connect_prefers_stateless_discovery_for_modern_servers() {
-        let (_server, client) = connect(McpServer728, TestClient).await.expect("connect");
-        assert_eq!(client.peer_info().expect("peer info").protocol_version, ProtocolVersion::V_2026_07_28);
-        client.list_tools(None).await.expect("list tools");
-        client.cancel().await.expect("cancel client");
-    }
-
-    #[tokio::test]
-    async fn connect_selects_an_older_mutually_supported_revision() {
-        let (_server, client) = connect(McpServer618, TestClient).await.expect("connect");
-
-        assert_eq!(client.peer_info().expect("peer info").protocol_version, ProtocolVersion::V_2025_06_18);
-        client.list_tools(None).await.expect("list tools");
-        client.cancel().await.expect("cancel client");
-    }
-
-    #[tokio::test]
-    async fn connect_falls_back_to_legacy_initialization() {
-        let (_server, client) = connect(McpServer1125, TestClient).await.expect("connect");
-
-        assert_eq!(client.peer_info().expect("peer info").protocol_version, ProtocolVersion::V_2025_11_25);
-        client.cancel().await.expect("cancel client");
-    }
-
-    #[derive(Clone, Default)]
-    struct TestClient;
-
-    impl ClientHandler for TestClient {}
-
-    #[derive(Clone, Default)]
-    struct McpServer728;
-
-    impl ServerHandler for McpServer728 {
-        fn get_info(&self) -> ServerConfig {
-            ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-                .with_server_info(Implementation::new("modern-only", "1.0.0"))
-                .with_protocol_version(ProtocolVersion::V_2026_07_28)
-        }
-
-        fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
-            Cow::Owned(vec![ProtocolVersion::V_2026_07_28])
-        }
-
-        fn initialize(
-            &self,
-            _request: InitializeRequestParams,
-            _context: RequestContext<rmcp::RoleServer>,
-        ) -> impl std::future::Future<Output = Result<rmcp::model::InitializeResult, ErrorData>> + Send + '_ {
-            std::future::ready(Err(ErrorData::new(
-                rmcp::model::ErrorCode::METHOD_NOT_FOUND,
-                "initialize is not supported",
-                None,
-            )))
-        }
-    }
-
-    #[derive(Clone, Default)]
-    struct McpServer618;
-
-    impl ServerHandler for McpServer618 {
-        fn get_info(&self) -> ServerConfig {
-            ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-                .with_server_info(Implementation::new("older-revision", "1.0.0"))
-                .with_protocol_version(ProtocolVersion::V_2025_06_18)
-        }
-
-        fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
-            Cow::Owned(vec![ProtocolVersion::V_2025_06_18])
-        }
-    }
-
-    #[derive(Clone, Default)]
-    struct McpServer1125;
-
-    impl ServerHandler for McpServer1125 {
-        fn get_info(&self) -> ServerConfig {
-            ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-                .with_server_info(Implementation::new("legacy", "1.0.0"))
-                .with_protocol_version(ProtocolVersion::V_2025_11_25)
-        }
-
-        fn discover(
-            &self,
-            _context: RequestContext<rmcp::RoleServer>,
-        ) -> impl Future<Output = Result<rmcp::model::DiscoverResult, ErrorData>> + Send + '_ {
-            std::future::ready(Err(ErrorData::new(
-                rmcp::model::ErrorCode::METHOD_NOT_FOUND,
-                "server/discover is not supported",
-                None,
-            )))
-        }
-    }
+pub fn args(value: Value) -> Map<String, Value> {
+    let Value::Object(arguments) = value else { panic!("tool arguments must be a JSON object") };
+    arguments
 }

@@ -1,43 +1,24 @@
-pub mod config;
-pub mod error;
-pub mod manager;
-pub mod oauth_handler;
+//! [`McpClient`]: one live connection to one MCP server.
 
-mod call_tool;
-mod connection;
-mod connection_attempt_manager;
 mod elicitation;
+mod error;
+mod handler;
 mod mcp_client;
-mod mcp_snapshot;
-mod mrtr;
-mod naming;
+mod oauth;
+mod options;
 mod task;
-mod tool_catalog;
-mod tool_filter;
+mod tool_call;
+mod transport;
 
-pub use call_tool::{CallToolError, CallToolOptions, ToolCallEvent, call_tool};
-pub use config::{
-    AETHER_OAUTH_CALLBACK_PORT, AETHER_OAUTH_CLIENT_METADATA_URL, DeferredToolRules, InMemoryServerConfig,
-    InMemoryServerSpec, InMemoryType, McpConfig, McpHttpConfig, McpOAuthConfig, McpServer, McpServerConfig,
-    McpTransport, ParseError, RemoteServerConfig, RemoteType, ResolvedOAuth, StdioServerConfig, StdioType,
-    ToolExposure, loopback_redirect_uri,
-};
-pub use connection::{McpConnectAttempt, McpConnectOutcome, McpServerConnection};
-pub use connection_attempt_manager::McpConnectionAttemptManager;
-pub use error::{McpError, Result};
-pub use manager::{
-    ElicitationRequest, McpClientEvent, McpConnectionDetails, McpManager, OAuthHandlerContext, OAuthHandlerFactory,
-    RuntimeMcpServer, RuntimeMcpTransport,
-};
-pub use mcp_client::{McpClient, cancel_result, client_capabilities, client_capabilities_for};
-pub use mcp_snapshot::McpSnapshot;
-pub use mrtr::AbortReason;
-pub use naming::{SERVERNAME_DELIMITER, split_on_server_name};
-pub use oauth_handler::ElicitingOAuthHandler;
+#[cfg(any(test, feature = "testing"))]
+pub(crate) use elicitation::cancelled;
+pub use elicitation::{Elicitation, ElicitationRequest, ElicitationSink};
+pub use error::ClientError;
+pub use mcp_client::McpClient;
+pub use oauth::OAuthSettings;
+pub use options::ClientOptions;
+pub use reqwest::header::HeaderMap;
 pub use task::TaskErrorReason;
 pub use tokio_util::sync::CancellationToken;
-pub use tool_catalog::{
-    CatalogTool, CatalogTools, PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME, ServerCatalogEntry, ServerDescription,
-    ToolCatalog, ToolExposureKind, ToolRoute,
-};
-pub use tool_filter::{ToolAnnotationMatcher, ToolFilter, ToolMatcher};
+pub use tool_call::{ToolCall, ToolCallError, ToolCallEvent, ToolCallOptions};
+pub use transport::Transport;
