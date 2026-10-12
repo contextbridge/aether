@@ -2,7 +2,6 @@ use crate::screens::reviewer::{crossterm_event, theme_selection};
 use crate::surfaces::elicitation::ElicitationResponder;
 use crate::surfaces::input::{ArtifactReviewOutput, ReviewOutcome, UiEvent};
 use crate::surfaces::modal::frame::ModalFrame;
-use agent_client_protocol::schema::v2::ElicitationContentValue;
 use crate::view::generation::Generation;
 use crate::{renderer::DrawContext, settings::builtin_review_theme_choices};
 use clankerdiff_ratatui::ReviewCapabilities;
@@ -89,9 +88,7 @@ impl ArtifactReviewScreen {
     }
 
     fn submit(&mut self, submission: ArtifactReviewSubmission) -> Vec<ArtifactReviewOutput> {
-        self.responder.accept(Some(submission.fields().map(|(name, value)| {
-            (name.to_string(), ElicitationContentValue::String(value.to_string()))
-        }).collect()));
+        self.responder.accept_strings(submission.fields());
         vec![match submission {
             ArtifactReviewSubmission::Approved => ArtifactReviewOutput::Approved,
             ArtifactReviewSubmission::Feedback { feedback } => ArtifactReviewOutput::Outcome(ReviewOutcome::Submitted(feedback)),

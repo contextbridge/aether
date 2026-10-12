@@ -1,5 +1,5 @@
 use crate::renderer::DrawContext;
-use crate::surfaces::input::{Nav, UiEvent, WorkspacePickerOutput, is_press};
+use crate::surfaces::input::{Nav, UiEvent, WorkspacePickerOutput};
 use crate::theme::Theme;
 use crate::view::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::view::filterable_list::FilterableList;
@@ -107,13 +107,12 @@ impl WorkspacePicker {
     pub(crate) fn on_ui_event(&mut self, event: UiEvent) -> Vec<WorkspacePickerOutput> {
         if matches!(self.mode, Mode::NamingNew { .. }) {
             return match event {
-                UiEvent::Key(key) if is_press(key) => self.on_naming_key(key),
+                UiEvent::Key(key) => self.on_naming_key(key),
                 UiEvent::Paste(text) => self.on_paste(&text),
-                UiEvent::Key(_) | UiEvent::Mouse(..) => Vec::new(),
+                UiEvent::Mouse(..) => Vec::new(),
             };
         }
         if let UiEvent::Key(key) = &event
-            && is_press(*key)
             && key.code == KeyCode::Tab
         {
             return self.activate();

@@ -1,5 +1,5 @@
 use super::{LiveSettingsData, summarize};
-use crate::surfaces::input::{SettingsOutput, UiEvent, is_press, one};
+use crate::surfaces::input::{SettingsOutput, UiEvent, one};
 use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
 use crate::view::list_view::ListView;
@@ -68,8 +68,8 @@ impl ServerStatusPane {
     #[allow(clippy::needless_pass_by_value)]
     pub(crate) fn on_ui_event(&mut self, event: UiEvent) -> Vec<SettingsOutput> {
         match event {
-            UiEvent::Key(key) if is_press(key) => self.on_key(key),
-            UiEvent::Key(_) | UiEvent::Paste(_) => Vec::new(),
+            UiEvent::Key(key) => self.on_key(key),
+            UiEvent::Paste(_) => Vec::new(),
             UiEvent::Mouse(action, (_, row)) => match action.direction() {
                 Some(direction) => self.scroll(direction),
                 None => self.click(row),
@@ -79,7 +79,6 @@ impl ServerStatusPane {
 
     fn on_key(&mut self, key: KeyEvent) -> Vec<SettingsOutput> {
         match key.code {
-            KeyCode::Esc => vec![SettingsOutput::Close],
             KeyCode::Up => self.scroll(Direction::Backward),
             KeyCode::Down => self.scroll(Direction::Forward),
             KeyCode::Enter => self.activate(),

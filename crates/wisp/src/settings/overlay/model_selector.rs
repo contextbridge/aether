@@ -1,5 +1,5 @@
 use super::{KeyHint, SettingsChange, SettingsMenuValue, message_for_change, value_match_key};
-use crate::surfaces::input::{Nav, SettingsOutput, UiEvent, is_press};
+use crate::surfaces::input::{Nav, SettingsOutput, UiEvent};
 use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
 use crate::view::filterable_list::FilterableList;
@@ -173,9 +173,7 @@ impl ModelSelector {
     /// those never reach the shared picker navigation.
     #[allow(clippy::needless_pass_by_value)]
     pub(crate) fn on_ui_event(&mut self, event: UiEvent) -> Vec<SettingsOutput> {
-        if let UiEvent::Key(key) = &event
-            && is_press(*key)
-        {
+        if let UiEvent::Key(key) = &event {
             match key.code {
                 KeyCode::Tab => {
                     self.cycle_reasoning(Direction::Forward);
@@ -193,13 +191,6 @@ impl ModelSelector {
             }
         }
         match self.items.on_nav_event(&event) {
-            Nav::Close => self
-                .take_changes()
-                .map(|mut changes| {
-                    changes.push(SettingsOutput::Close);
-                    changes
-                })
-                .unwrap_or_default(),
             Nav::Clicked => {
                 self.toggle_focused();
                 Vec::new()
@@ -208,7 +199,7 @@ impl ModelSelector {
                 self.clamp_reasoning_to_focused();
                 Vec::new()
             }
-            Nav::Activate | Nav::Unhandled => Vec::new(),
+            Nav::Close | Nav::Activate | Nav::Unhandled => Vec::new(),
         }
     }
 }

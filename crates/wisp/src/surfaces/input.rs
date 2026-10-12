@@ -3,7 +3,7 @@ use crate::view::filterable_list::FilterableList;
 use crate::view::selection::Direction;
 use acp_utils::notifications::WorkspaceMoveTarget;
 use agent_client_protocol::schema::v2::SessionId;
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::PathBuf;
 
 const COMPOSED_MODIFIERS: KeyModifiers = KeyModifiers::CONTROL
@@ -14,10 +14,6 @@ const COMPOSED_MODIFIERS: KeyModifiers = KeyModifiers::CONTROL
 
 pub(crate) fn is_composed_char(key: KeyEvent) -> bool {
     matches!(key.code, KeyCode::Char(_)) && key.modifiers.intersects(COMPOSED_MODIFIERS)
-}
-
-pub(crate) fn is_press(key: KeyEvent) -> bool {
-    matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
 }
 
 #[derive(Debug)]
@@ -136,8 +132,8 @@ impl<T> FilterableList<T> {
     /// the outcome and adds only its own behavior.
     pub(crate) fn on_nav_event(&mut self, event: &UiEvent) -> Nav {
         match event {
-            UiEvent::Key(key) if is_press(*key) => self.on_nav_key(*key),
-            UiEvent::Key(_) | UiEvent::Paste(_) => Nav::Unhandled,
+            UiEvent::Key(key) => self.on_nav_key(*key),
+            UiEvent::Paste(_) => Nav::Unhandled,
             UiEvent::Mouse(action, (_, row)) => match action.direction() {
                 Some(direction) => {
                     self.step(direction);

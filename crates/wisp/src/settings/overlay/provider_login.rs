@@ -49,13 +49,12 @@ impl ProviderLoginPane {
     #[allow(clippy::needless_pass_by_value)]
     pub(crate) fn on_ui_event(&mut self, event: UiEvent) -> Vec<SettingsOutput> {
         match self.entries.on_nav_event(&event) {
-            Nav::Close => vec![SettingsOutput::Close],
             Nav::Activate | Nav::Clicked => one(self
                 .entries
                 .selected_entry()
                 .filter(|entry| entry.status != ProviderLoginStatus::Authenticating)
                 .map(|entry| SettingsOutput::AuthenticateProvider(entry.method_id.clone()))),
-            Nav::Moved | Nav::Unhandled => Vec::new(),
+            Nav::Close | Nav::Moved | Nav::Unhandled => Vec::new(),
         }
     }
 }

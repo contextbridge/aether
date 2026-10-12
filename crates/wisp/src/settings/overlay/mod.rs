@@ -12,7 +12,7 @@ use self::server_status::ServerStatusPane;
 use crate::renderer::DrawContext;
 use crate::session::platform::{BrowserOpener, ClipboardWriter};
 use crate::session::session_config_view::{LocalConfigOption, LocalConfigView};
-use crate::surfaces::input::{ElicitationOutput, MouseAction, SettingsOutput, UiEvent, is_press};
+use crate::surfaces::input::{ElicitationOutput, MouseAction, SettingsOutput, UiEvent};
 use crate::surfaces::modal::{ElicitationModal, frame::ModalFrame};
 use crate::theme::Theme;
 use crate::view::selection::Direction;
@@ -284,9 +284,9 @@ impl SettingsOverlay {
     /// above it.
     fn on_menu_event(&mut self, event: &UiEvent) -> Vec<SettingsOutput> {
         match event {
-            UiEvent::Key(key) if is_press(*key) => return self.on_menu_key(*key),
+            UiEvent::Key(key) => return self.on_menu_key(*key),
             // The menu has no editor, so a paste has nowhere to land.
-            UiEvent::Key(_) | UiEvent::Paste(_) => {}
+            UiEvent::Paste(_) => {}
             UiEvent::Mouse(MouseAction::ScrollUp, _) => self.menu.step(Direction::Backward),
             UiEvent::Mouse(MouseAction::ScrollDown, _) => self.menu.step(Direction::Forward),
             UiEvent::Mouse(MouseAction::Click, position) => {
@@ -371,7 +371,7 @@ impl SettingsOverlay {
         // Esc leaves the pane rather than the overlay, committing whatever the
         // pane batched up while it was open.
         let messages = match event {
-            UiEvent::Key(key) if is_press(key) && key.code == KeyCode::Esc => pane
+            UiEvent::Key(key) if key.code == KeyCode::Esc => pane
                 .take_changes()
                 .map(|mut messages| {
                     messages.push(SettingsOutput::Close);
