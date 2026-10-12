@@ -462,7 +462,13 @@ jobs:
           cli_version="${TAG#aether-agent-cli-v}"
           echo "cli_version=$cli_version" >> "$GITHUB_OUTPUT"
           npm pkg set --prefix packages/aether-sdk "dependencies.@aether-agent/cli=^$cli_version"
-          pnpm install --lockfile-only
+          # npm takes ~1 min to process a publish and its CDN caches metadata for up to 5 min.
+          for attempt in $(seq 1 20); do
+            pnpm install --lockfile-only && break
+            if [ "$attempt" -eq 20 ]; then exit 1; fi
+            echo "@aether-agent/cli@$cli_version not resolvable yet (attempt $attempt/20); retrying in 30s"
+            sleep 30
+          done
           if ! git diff --quiet packages/aether-sdk/package.json; then
             (cd packages/aether-sdk && npm version patch --no-git-tag-version)
             (cd packages/aether-evals && npm version patch --no-git-tag-version)
