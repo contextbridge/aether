@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.14](https://github.com/contextbridge/aether/compare/aether-sessions-v0.3.13...aether-sessions-v0.3.14) - 2026-10-12
+
+### Other
+
+- Simplify MCP code around Client, Server and Gateway concepts  ([#595](https://github.com/contextbridge/aether/pull/595))
+
 ## [0.3.13](https://github.com/contextbridge/aether/compare/aether-sessions-v0.3.12...aether-sessions-v0.3.13) - 2026-10-10
 
 ### Other

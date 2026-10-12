@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.59](https://github.com/contextbridge/aether/compare/aether-project-v0.5.58...aether-project-v0.5.59) - 2026-10-12
+
+### Other
+
+- Simplify MCP code around Client, Server and Gateway concepts  ([#595](https://github.com/contextbridge/aether/pull/595))
+
 ## [0.5.58](https://github.com/contextbridge/aether/compare/aether-project-v0.5.57...aether-project-v0.5.58) - 2026-10-10
 
 ### Other

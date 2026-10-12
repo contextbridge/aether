@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.14](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.13...aether-llm-v0.9.14) - 2026-10-12
+
+### Added
+
+- Support sigv4 auth mechanism for MCP servers. ([#597](https://github.com/contextbridge/aether/pull/597))
+
+### Other
+
+- Update models ([#594](https://github.com/contextbridge/aether/pull/594))
+
 ## [0.9.13](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.12...aether-llm-v0.9.13) - 2026-10-10
 
 ### Fixed
