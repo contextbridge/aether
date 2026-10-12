@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.5](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.9.4...aether-agent-core-v0.9.5) - 2026-10-12
+
+### Added
+
+- Support sigv4 auth mechanism for MCP servers. ([#597](https://github.com/contextbridge/aether/pull/597))
+
+### Other
+
+- Simplify MCP code around Client, Server and Gateway concepts  ([#595](https://github.com/contextbridge/aether/pull/595))
+
 ## [0.9.4](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.9.3...aether-agent-core-v0.9.4) - 2026-10-10
 
 ### Other

@@ -1,6 +1,6 @@
 [package]
 name = "aether-agent-cli"
-version = "0.9.15"
+version = "0.9.16"
 edition = "2024"
 description = "CLI and ACP server for the Aether AI coding agent"
 license = "MIT"
@@ -32,18 +32,18 @@ path = "src/main.rs"
 testing = ["acp_utils/testing", "mcp_utils/testing", "aether-core/testing"]
 
 [dependencies]
-aether-auth = { path = "../aether-auth", version = "0.1.17", features = ["keyring"] }
+aether-auth = { path = "../aether-auth", version = "0.1.18", features = ["keyring"] }
 base64 = { workspace = true }
-aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.9.4" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.9.5" }
 aether-sessions = { workspace = true }
-aether-project = { path = "../aether-project", version = "0.5.58" }
-aether-telemetry = { path = "../aether-telemetry", version = "0.3.13" }
-llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.9.13" }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.7.13" }
-mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["subagents"], version = "0.8.4" }
-wisp = { package = "aether-wisp", path = "../wisp", version = "0.7.14" }
+aether-project = { path = "../aether-project", version = "0.5.59" }
+aether-telemetry = { path = "../aether-telemetry", version = "0.3.14" }
+llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.9.14" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.7.14" }
+mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["subagents"], version = "0.8.5" }
+wisp = { package = "aether-wisp", path = "../wisp", version = "0.7.15" }
 ratatui = { workspace = true }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["websocket"], version = "0.5.13" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["websocket"], version = "0.5.14" }
 agent-client-protocol = { workspace = true }
 clankerdiff-core = { workspace = true }
 clankerdiff-protocol = { workspace = true }
@@ -76,4 +76,4 @@ libc = { workspace = true }
 [dev-dependencies]
 aether-agent-cli = { path = ".", features = ["testing"] }
 tokio = { workspace = true, features = ["test-util"] }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"], version = "0.5.13" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"], version = "0.5.14" }

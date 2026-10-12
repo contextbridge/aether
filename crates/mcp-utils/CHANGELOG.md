@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.14](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.7.13...aether-mcp-utils-v0.7.14) - 2026-10-12
+
+### Added
+
+- Support sigv4 auth mechanism for MCP servers. ([#597](https://github.com/contextbridge/aether/pull/597))
+
+### Other
+
+- Simplify MCP code around Client, Server and Gateway concepts  ([#595](https://github.com/contextbridge/aether/pull/595))
+
 ## [0.7.13](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.7.12...aether-mcp-utils-v0.7.13) - 2026-10-10
 
 ### Other
