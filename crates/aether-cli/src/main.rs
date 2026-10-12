@@ -1,5 +1,5 @@
 use aether_cli::acp::server::{ServerArgs, ServerRunError, run_server};
-use aether_cli::acp::{AcpArgs, AcpRunError, AcpRunOutcome, run_acp};
+use aether_cli::acp::{AcpArgs, AcpRunError, run_acp};
 use aether_cli::client::{ClientArgs, ClientRunError, run_client};
 use aether_cli::error::CliError;
 use aether_cli::generate_command::{GenerateArgs, GenerateCommandError, run as run_generate_command};
@@ -95,12 +95,7 @@ fn main() -> ExitCode {
 
         Some(Command::Generate(args)) => rt.block_on(run_generate_command(args)).map_err(Into::into),
 
-        Some(Command::Acp(args)) => rt
-            .block_on(run_acp(args))
-            .map(|outcome| match outcome {
-                AcpRunOutcome::CleanDisconnect => ExitCode::SUCCESS,
-            })
-            .map_err(Into::into),
+        Some(Command::Acp(args)) => rt.block_on(run_acp(args)).map(|()| ExitCode::SUCCESS).map_err(Into::into),
 
         Some(Command::Server(args)) => rt.block_on(run_server(args)).map(|()| ExitCode::SUCCESS).map_err(Into::into),
 

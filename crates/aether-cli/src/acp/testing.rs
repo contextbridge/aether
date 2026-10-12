@@ -856,7 +856,6 @@ struct FakeAgentDef {
 impl RuntimeFactory for FakeRuntimeFactory {
     async fn spawn(
         &self,
-        _agent: AgentKey,
         spec: &AgentSpec,
         initial_messages: Vec<ChatMessage>,
         usage_seed: Option<SessionUsageEvent>,
@@ -903,7 +902,6 @@ struct StubRuntimeFactory {
 impl RuntimeFactory for StubRuntimeFactory {
     async fn spawn(
         &self,
-        _agent: AgentKey,
         _spec: &AgentSpec,
         _initial_messages: Vec<ChatMessage>,
         _usage_seed: Option<SessionUsageEvent>,

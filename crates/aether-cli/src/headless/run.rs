@@ -10,8 +10,8 @@ use tokio::sync::mpsc;
 
 use crate::telemetry::build_telemetry_runtime;
 
-use super::error::CliError;
 use super::{CliEventKind, RunConfig};
+use crate::error::CliError;
 use crate::output::{OutputFormat, print_message};
 use crate::runtime::RuntimeBuilder;
 use crate::slash_commands::expand_slash_command_text;

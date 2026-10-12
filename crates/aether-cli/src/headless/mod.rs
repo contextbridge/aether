@@ -1,11 +1,10 @@
-pub mod error;
 pub mod run;
 
+use crate::error::CliError;
 use aether_core::agent_spec::AgentSpec;
 use aether_core::mcp::McpConfig;
 use aether_project::{AetherSettings, AgentCatalog, TelemetrySettings};
 use aether_telemetry::AgentTraceContext;
-use error::CliError;
 use llm::{ProviderConnectionOverride, ProviderConnectionOverrides};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

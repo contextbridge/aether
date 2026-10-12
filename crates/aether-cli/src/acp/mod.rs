@@ -81,29 +81,14 @@ pub struct AcpArgs {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[schemars(rename = "AetherAcpOptions")]
 pub struct AcpOptions {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_dir: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub providers: Option<BTreeMap<String, ProviderConnectionOverride>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<AetherSettings>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings_file: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffort>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_context: Option<AgentTraceContext>,
-}
-
-/// Outcome of running the ACP server successfully.
-#[derive(Debug)]
-pub enum AcpRunOutcome {
-    /// The client disconnected cleanly (e.g. EOF on stdin).
-    CleanDisconnect,
 }
 
 /// Errors that terminate the ACP server run.
@@ -145,18 +130,14 @@ pub enum AcpOptionsJsonError {
     UnsupportedReasoningEffort(#[from] ReasoningEffortError),
 }
 
-pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
+pub async fn run_acp(args: AcpArgs) -> Result<(), AcpRunError> {
     info!("Starting Aether ACP server");
 
     let cwd = current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let state = Arc::new(create_acp_state(args, &cwd, SessionHooks::default())?);
     let connect_result = state.serve(Stdio::new(), state.stop_token()).await;
     state.shutdown_all().await;
-
-    match connect_result {
-        Ok(()) => Ok(AcpRunOutcome::CleanDisconnect),
-        Err(err) => Err(AcpRunError::Protocol(err)),
-    }
+    connect_result.map_err(AcpRunError::Protocol)
 }
 
 #[derive(Debug)]

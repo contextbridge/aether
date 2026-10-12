@@ -1,4 +1,3 @@
-use super::agent_key::AgentKey;
 use super::error::SessionError;
 use crate::runtime::{Runtime, RuntimeBuilder};
 use aether_core::agent_spec::AgentSpec;
@@ -55,7 +54,6 @@ impl AgentRuntime {
 pub(crate) trait RuntimeFactory: Send + Sync {
     async fn spawn(
         &self,
-        agent: AgentKey,
         spec: &AgentSpec,
         initial_messages: Vec<ChatMessage>,
         usage_seed: Option<SessionUsageEvent>,
@@ -85,7 +83,6 @@ impl ProductionRuntimeFactory {
 impl RuntimeFactory for ProductionRuntimeFactory {
     async fn spawn(
         &self,
-        _agent: AgentKey,
         spec: &AgentSpec,
         initial_messages: Vec<ChatMessage>,
         usage_seed: Option<SessionUsageEvent>,
