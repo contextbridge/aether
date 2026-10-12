@@ -1,5 +1,7 @@
 use futures::{FutureExt, StreamExt};
-use mcp_utils::client::{ClientError, ClientOptions, HeaderMap, OAuthSettings, ToolCall, ToolCallOptions, Transport};
+use mcp_utils::client::{
+    ClientError, ClientOptions, HeaderMap, HttpAuth, OAuthSettings, ToolCall, ToolCallOptions, Transport,
+};
 use mcp_utils::gateway::{ConnectedServer, GatewayError, McpGateway, ServerSpec, ServerState};
 use mcp_utils::model::{ContentBlock, GetPromptResult, Tool, ToolAnnotations};
 use mcp_utils::server::{McpServer, UnixSocket};
@@ -282,7 +284,7 @@ fn stdio(name: &str, command: &str, args: &[&str]) -> ServerSpec {
 fn unreachable_http(name: &str) -> ServerSpec {
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let url = format!("http://127.0.0.1:{port}/mcp");
-    let transport = Transport::Http { url, headers: HeaderMap::new(), oauth: Some(OAuthSettings::default()) };
+    let transport = Transport::Http { url, headers: HeaderMap::new(), auth: HttpAuth::OAuth(OAuthSettings::default()) };
     ServerSpec { name: name.to_string(), transport }
 }
 

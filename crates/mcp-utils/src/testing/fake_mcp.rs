@@ -2,11 +2,11 @@ use rmcp::{
     ErrorData as McpError, Peer, RoleServer, ServerHandler,
     model::{
         CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ClientCapabilities,
-        ContentBlock, CreateTaskResult, DetailedTask, DiscoverResult, ElicitResult, GetPromptRequestParams,
-        GetPromptResponse, GetPromptResult, GetTaskParams, GetTaskResult, Implementation, ListPromptsResult,
-        ListToolsResult, PaginatedRequestParams, ProgressNotificationParam, ProgressToken, Prompt, PromptMessage,
-        PromptsCapability, ProtocolVersion, ResultType, Role, ServerCapabilities, ServerConfig, TaskPayload, Tool,
-        ToolAnnotations, UpdateTaskParams,
+        ContentBlock, CreateTaskResult, DetailedTask, DiscoverRequestMethod, DiscoverResult, ElicitResult,
+        GetPromptRequestParams, GetPromptResponse, GetPromptResult, GetTaskParams, GetTaskResult, Implementation,
+        ListPromptsResult, ListToolsResult, PaginatedRequestParams, ProgressNotificationParam, ProgressToken, Prompt,
+        PromptMessage, PromptsCapability, ProtocolVersion, ResultType, Role, ServerCapabilities, ServerConfig,
+        TaskPayload, Tool, ToolAnnotations, UpdateTaskParams,
     },
     service::RequestContext,
 };
@@ -119,6 +119,11 @@ impl FakeMcpServer {
 
     pub fn with_task_update_failures(self, failures: usize) -> Self {
         self.state.lock().task_update_failures = failures;
+        self
+    }
+
+    pub fn with_legacy_protocol(self) -> Self {
+        self.state.lock().legacy_protocol = true;
         self
     }
 
@@ -382,6 +387,9 @@ impl ServerHandler for FakeMcpServer {
         &self,
         context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<DiscoverResult, McpError>> + Send + '_ {
+        if self.state.lock().legacy_protocol {
+            return std::future::ready(Err(McpError::method_not_found::<DiscoverRequestMethod>()));
+        }
         self.state.lock().client_capabilities = context.meta.client_capabilities();
         std::future::ready(Ok(DiscoverResult::from_server_info(
             ServerHandler::supported_protocol_versions(self).into_owned(),
@@ -395,9 +403,12 @@ impl ServerHandler for FakeMcpServer {
         if !inner.prompts.is_empty() {
             capabilities.prompts = Some(PromptsCapability::default());
         }
-        let config = ServerConfig::new(capabilities).with_server_info(
+        let mut config = ServerConfig::new(capabilities).with_server_info(
             Implementation::new("fake-mcp-server", "0.1.0").with_description("A fake MCP server for testing"),
         );
+        if inner.legacy_protocol {
+            config = config.with_protocol_version(ProtocolVersion::V_2025_11_25);
+        }
         match &inner.instructions {
             Some(instructions) => config.with_instructions(instructions.clone()),
             None => config,
@@ -559,6 +570,7 @@ struct FakeMcpStateInner {
     task_update_failures: usize,
     tool_list_requests: usize,
     tool_list_failures: usize,
+    legacy_protocol: bool,
     client: Option<Peer<RoleServer>>,
 }
 

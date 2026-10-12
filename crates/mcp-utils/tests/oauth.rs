@@ -1,6 +1,6 @@
 use aether_auth::{OAuthClientRegistration, OAuthError};
 use mcp_utils::client::{
-    ClientError, ClientOptions, Elicitation, ElicitationSink, McpClient, OAuthSettings, Transport,
+    ClientError, ClientOptions, Elicitation, ElicitationSink, HttpAuth, McpClient, OAuthSettings, Transport,
 };
 use mcp_utils::gateway::{GatewayError, McpGateway, ServerState};
 use mcp_utils::model::{ElicitResult, ElicitationAction, ElicitationCapability, FormElicitationCapability};
@@ -31,8 +31,8 @@ async fn servers_without_oauth_settings_are_not_offered_oauth() {
     let server = math_auth_server().await;
     let (options, _host) = elicitation_host();
 
-    let connected = McpClient::connect("linear", server.transport_with(None), &options).await;
-    let authorized = McpClient::authorize("linear", server.transport_with(None), &options, None).await;
+    let connected = McpClient::connect("linear", server.transport_with(HttpAuth::None), &options).await;
+    let authorized = McpClient::authorize("linear", server.transport_with(HttpAuth::None), &options, None).await;
 
     assert!(matches!(connected, Err(ClientError::Connect { server, .. }) if server == "linear"));
     assert!(matches!(authorized, Err(ClientError::OAuthUnavailable { server }) if server == "linear"));
@@ -84,8 +84,9 @@ async fn authorization_presents_the_client_metadata_and_a_loopback_redirect() {
 async fn authorization_redirects_to_the_configured_callback_port() {
     let server = math_auth_server().await;
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let mut flow =
-        AuthFlow::start(server.transport_with(Some(OAuthSettings { callback_port: port, ..client_metadata() })));
+    let mut flow = AuthFlow::start(
+        server.transport_with(HttpAuth::OAuth(OAuthSettings { callback_port: port, ..client_metadata() })),
+    );
 
     let prompt = flow.prompt().await;
     let redirect_uri = prompt.query("redirect_uri");
@@ -102,7 +103,7 @@ async fn authorization_presents_a_preregistered_client_id() {
         registration: OAuthClientRegistration::PreRegistered("registered".to_string()),
         callback_port: 0,
     };
-    let mut flow = AuthFlow::start(server.transport_with(Some(oauth)));
+    let mut flow = AuthFlow::start(server.transport_with(HttpAuth::OAuth(oauth)));
 
     let prompt = flow.prompt().await;
     let client_id = prompt.query("client_id");
@@ -242,7 +243,7 @@ async fn a_configured_callback_port_that_is_taken_fails_authorization() {
     let oauth = OAuthSettings { callback_port: taken.local_addr().unwrap().port(), ..client_metadata() };
     let (options, _host) = elicitation_host();
 
-    let error = McpClient::authorize("linear", server.transport_with(Some(oauth)), &options, None)
+    let error = McpClient::authorize("linear", server.transport_with(HttpAuth::OAuth(oauth)), &options, None)
         .await
         .expect_err("the callback port is in use");
 

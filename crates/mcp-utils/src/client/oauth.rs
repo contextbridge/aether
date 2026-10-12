@@ -1,7 +1,7 @@
 use super::error::{ClientError, Result};
 use super::{ClientOptions, Elicitation, elicitation::ElicitationRequest};
 use aether_auth::{
-    OAuthClientRegistration, OAuthCredentialStorage, OAuthError, OAuthFlowOptions, OAuthHandler, accept_oauth_callback,
+    OAuthClientRegistration, OAuthError, OAuthFlowOptions, OAuthHandler, accept_oauth_callback,
     create_auth_manager_from_store, perform_oauth_flow,
 };
 use futures::future::BoxFuture;
@@ -23,8 +23,9 @@ pub(super) async fn restore(
     server: &str,
     url: &str,
     oauth: &OAuthSettings,
-    store: &Arc<dyn OAuthCredentialStorage>,
+    options: &ClientOptions,
 ) -> Option<AuthClient<reqwest::Client>> {
+    let store = options.oauth_store.as_ref()?;
     let restored = create_auth_manager_from_store(
         server,
         url,
@@ -34,7 +35,10 @@ pub(super) async fn restore(
     )
     .await;
     match restored {
-        Ok(manager) => manager.map(|manager| AuthClient::new(reqwest::Client::default(), manager)),
+        Ok(manager) => manager.map(|manager| {
+            tracing::debug!(server, "Using stored OAuth credentials");
+            AuthClient::new(reqwest::Client::default(), manager)
+        }),
         Err(error) => {
             tracing::warn!(
                 server,

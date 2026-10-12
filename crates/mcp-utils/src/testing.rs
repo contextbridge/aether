@@ -4,6 +4,7 @@ pub use elicitation_script::{
 pub use fake_auth_server::{
     ACCESS_TOKEN, CLIENT_METADATA_URL, FakeAuthServer, OAuthPrompt, client_metadata, complete_authorization,
 };
+pub use fake_http_server::{FakeHttpServer, RecordedRequest};
 pub use fake_mcp::{
     CapturedTaskUpdate, CapturedToolCall, FakeMcpServer, FakeMcpState, FakeTool, FakeToolResponse,
     completed_task_payload,
@@ -16,6 +17,7 @@ pub use gate::Gate;
 
 mod elicitation_script;
 mod fake_auth_server;
+mod fake_http_server;
 mod fake_mcp;
 mod fake_task;
 mod gate;
