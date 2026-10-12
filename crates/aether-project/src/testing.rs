@@ -12,13 +12,17 @@ use tempfile::TempDir;
 use crate::prompt_file::{PromptFile, PromptTriggers};
 use crate::{AgentConfig, PromptSource, SKILL_FILENAME};
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
+use aether_core::mcp::{McpConfig, ToolFilter};
 use llm::{ModelSettings, ProviderConnectionOverrides};
-use mcp_utils::client::ToolFilter;
 
 /// The model id every shared agent fixture resolves to.
 pub const DEFAULT_MODEL: &str = "anthropic:claude-sonnet-4-5";
 
 /// A temporary project directory for tests that need on-disk settings, prompts, or skills.
+pub fn mcp_json(server: &str) -> String {
+    json!({ "servers": { server: { "command": format!("{server}-server") } } }).to_string()
+}
+
 pub fn project() -> TestProject {
     TestProject { root: temp_dir("project") }
 }
@@ -98,7 +102,7 @@ pub fn fake_spec(name: &str, exposure: AgentSpecExposure) -> AgentSpec {
         context_window: None,
         prompts: vec![],
         provider_connections: ProviderConnectionOverrides::default(),
-        mcp_config_sources: Vec::new(),
+        mcp: McpConfig::default(),
         exposure,
         tools: ToolFilter::default(),
     }

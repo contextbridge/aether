@@ -1,12 +1,15 @@
-use mcp_utils::client::McpServerConfig;
+use crate::SettingsError;
+use aether_core::mcp::{McpConfig, McpServerConfig};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use utils::variables::VarError;
 use utils::{PathOrObject, ResourcePath, is_false, string_or_object_schema};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum McpSourceSpec {
     File(McpFileSpec),
-    Inline { servers: BTreeMap<String, McpServerConfig> },
+    Inline(McpConfig),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -32,6 +35,43 @@ impl McpFileSpec {
         self.optional = true;
         self
     }
+
+    pub fn load(&self, root: &Path) -> Result<Option<McpConfig>, SettingsError> {
+        let Some(path) = self.resolve(root)? else { return Ok(None) };
+        let mut config = McpConfig::from_json_file(&path)
+            .map_err(|source| SettingsError::McpConfig { path: self.path.as_authored().to_string(), source })?;
+        if self.defer_tools {
+            config.defer_all_tools();
+        }
+        Ok(Some(config))
+    }
+
+    fn resolve(&self, root: &Path) -> Result<Option<PathBuf>, SettingsError> {
+        let full_path = match self.path.resolve(root) {
+            Ok(full_path) => full_path,
+            Err(VarError::NotFound(variable)) if self.optional => {
+                tracing::warn!(
+                    "Skipping optional MCP config '{}': variable '{variable}' is not defined",
+                    self.path.as_authored()
+                );
+                return Ok(None);
+            }
+            Err(VarError::NotFound(variable)) => {
+                return Err(SettingsError::UnresolvedMcpConfigVariable {
+                    path: self.path.as_authored().to_string(),
+                    variable,
+                });
+            }
+        };
+
+        if full_path.is_file() {
+            Ok(Some(full_path))
+        } else if self.optional {
+            Ok(None)
+        } else {
+            Err(SettingsError::InvalidMcpConfigPath { path: self.path.as_authored().to_string() })
+        }
+    }
 }
 
 impl McpSourceSpec {
@@ -42,7 +82,14 @@ impl McpSourceSpec {
     pub fn path(&self) -> Option<&str> {
         match self {
             Self::File(file) => Some(file.path.as_authored()),
-            Self::Inline { .. } => None,
+            Self::Inline(_) => None,
+        }
+    }
+
+    pub fn load(&self, root: &Path) -> Result<Option<McpConfig>, SettingsError> {
+        match self {
+            Self::File(file) => file.load(root),
+            Self::Inline(config) => Ok(Some(config.clone())),
         }
     }
 }
@@ -60,7 +107,7 @@ impl<'de> Deserialize<'de> for McpSourceSpec {
             PathOrObject::Object(McpSourceSpecObject::File { path, defer_tools, optional }) => {
                 Self::File(McpFileSpec { path, defer_tools, optional })
             }
-            PathOrObject::Object(McpSourceSpecObject::Inline { servers }) => Self::Inline { servers },
+            PathOrObject::Object(McpSourceSpecObject::Inline { servers }) => Self::Inline(McpConfig::new(servers)),
         })
     }
 }
@@ -73,8 +120,8 @@ impl Serialize for McpSourceSpec {
                 &McpSourceSpecObject::File { path: path.clone(), defer_tools: *defer_tools, optional: *optional },
                 serializer,
             ),
-            Self::Inline { servers } => {
-                Serialize::serialize(&McpSourceSpecObject::Inline { servers: servers.clone() }, serializer)
+            Self::Inline(config) => {
+                Serialize::serialize(&McpSourceSpecObject::Inline { servers: config.servers.clone() }, serializer)
             }
         }
     }
@@ -98,7 +145,7 @@ impl schemars::JsonSchema for McpSourceSpec {
 enum McpSourceSpecObject {
     File {
         path: ResourcePath,
-        #[serde(rename = "deferTools", alias = "proxy", default, skip_serializing_if = "is_false")]
+        #[serde(rename = "deferTools", default, skip_serializing_if = "is_false")]
         defer_tools: bool,
         #[serde(default, skip_serializing_if = "is_false")]
         optional: bool,

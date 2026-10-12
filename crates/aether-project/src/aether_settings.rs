@@ -2,10 +2,9 @@ use utils::SettingsStore;
 
 use crate::agent_config::AgentConfig;
 use crate::error::SettingsError;
-use crate::{McpFileSpec, McpSourceSpec, PromptSource};
+use crate::{McpSourceSpec, PromptSource};
 use aether_core::core::Prompt;
 use llm::ProviderConnectionOverrides;
-use mcp_utils::client::McpConfig;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -425,45 +424,11 @@ fn inline_prompt_sources(sources: &[PromptSource], root: &Path) -> Result<Vec<Pr
 }
 
 fn inline_mcp_sources(sources: &[McpSourceSpec], root: &Path) -> Result<Vec<McpSourceSpec>, SettingsError> {
-    let mut inlined = Vec::new();
-    for source in sources {
-        let McpSourceSpec::File(McpFileSpec { path, defer_tools, optional }) = source else {
-            inlined.push(source.clone());
-            continue;
-        };
-
-        let full_path = match path.resolve(root) {
-            Ok(full_path) => full_path,
-            Err(VarError::NotFound(variable)) => {
-                if *optional {
-                    tracing::warn!(
-                        "Skipping optional MCP config '{}': variable '{variable}' is not defined",
-                        path.as_authored()
-                    );
-                    continue;
-                }
-                return Err(SettingsError::UnresolvedMcpConfigVariable {
-                    path: path.as_authored().to_string(),
-                    variable,
-                });
-            }
-        };
-
-        if !full_path.is_file() {
-            if *optional {
-                continue;
-            }
-            return Err(SettingsError::InvalidMcpConfigPath { path: path.as_authored().to_string() });
-        }
-
-        let mut config = McpConfig::from_json_file(&full_path)
-            .map_err(|e| SettingsError::IoError(format!("Failed to read MCP config '{}': {e}", full_path.display())))?;
-        if *defer_tools {
-            config.defer_all_tools();
-        }
-        inlined.push(McpSourceSpec::Inline { servers: config.servers });
-    }
-    Ok(inlined)
+    sources
+        .iter()
+        .filter_map(|spec| spec.load(root).transpose())
+        .map(|config| config.map(McpSourceSpec::Inline))
+        .collect()
 }
 
 fn promote_prompt_sources(sources: &mut [PromptSource], source_root: &Path) {
@@ -496,10 +461,10 @@ impl TryFrom<&str> for AetherSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{agent_config, agent_json, agent_json_with, home, project, settings_agent};
+    use crate::testing::{agent_config, agent_json, agent_json_with, home, mcp_json, project, settings_agent};
     use crate::{AgentCatalog, McpFileSpec, McpSourceSpec, PromptSource};
-    use aether_core::agent_spec::McpConfigSource;
     use aether_core::core::Prompt;
+    use aether_core::mcp::McpConfig;
     use serde_json::json;
     use std::collections::BTreeMap;
 
@@ -839,7 +804,7 @@ mod tests {
         let project = project();
         let home = home()
             .file(".aether/agents/user.md", "User instructions")
-            .file(".aether/mcp/user.json", r#"{"servers":{}}"#)
+            .file(".aether/mcp/user.json", &mcp_json("user"))
             .settings(
                 &json!({
                     "agents": [agent_json_with(
@@ -861,10 +826,7 @@ mod tests {
             Prompt::File { path, .. } => path == &expected_prompt,
             Prompt::Text(_) | Prompt::McpInstructions(_) => false,
         }));
-        assert!(matches!(
-            &spec.mcp_config_sources[0],
-            McpConfigSource::File { path, defer_tools: false } if path == &aether_home.join("mcp/user.json")
-        ));
+        assert_eq!(spec.mcp.servers.keys().collect::<Vec<_>>(), ["user"]);
     }
 
     #[test]
@@ -951,9 +913,9 @@ mod tests {
 
         assert_eq!(settings.prompts, vec![PromptSource::Text { text: "Be helpful".to_string() }]);
         assert_eq!(settings.agents[0].prompts, vec![PromptSource::Text { text: "Edit carefully".to_string() }]);
-        assert!(matches!(&settings.mcps[0], McpSourceSpec::Inline { servers } if servers.contains_key("coding")));
+        assert!(matches!(&settings.mcps[0], McpSourceSpec::Inline(config) if config.servers.contains_key("coding")));
         assert!(
-            matches!(&settings.agents[0].mcps[0], McpSourceSpec::Inline { servers } if servers.contains_key("coding"))
+            matches!(&settings.agents[0].mcps[0], McpSourceSpec::Inline(config) if config.servers.contains_key("coding"))
         );
 
         let serialized = serde_json::to_string(&settings).unwrap();
@@ -995,7 +957,7 @@ mod tests {
         let config = AetherSettings {
             agent: None,
             agents: vec![AgentConfig {
-                mcps: vec![McpSourceSpec::Inline { servers: BTreeMap::new() }],
+                mcps: vec![McpSourceSpec::Inline(McpConfig::default())],
                 ..agent_config("alpha")
             }],
             ..AetherSettings::default()
@@ -1004,8 +966,7 @@ mod tests {
         let catalog = AgentCatalog::from_settings(dir.root(), config).unwrap();
         let spec = catalog.resolve("alpha").unwrap();
 
-        assert_eq!(spec.mcp_config_sources.len(), 1);
-        assert!(matches!(spec.mcp_config_sources[0], McpConfigSource::Inline(_)));
+        assert!(spec.mcp.is_empty());
     }
 
     #[test]
@@ -1071,14 +1032,6 @@ mod tests {
     }
 
     #[test]
-    fn deserializes_legacy_proxy_mcp_file_as_deferred() {
-        let source: McpSourceSpec =
-            serde_json::from_value(serde_json::json!({"type":"file", "path":"mcp.json", "proxy":true})).unwrap();
-
-        assert!(matches!(source, McpSourceSpec::File(McpFileSpec { defer_tools: true, .. })));
-    }
-
-    #[test]
     fn serializes_deferred_mcp_file_as_typed_object() {
         let source: McpSourceSpec = McpFileSpec::new("mcp.json").defer_tools().into();
 
@@ -1104,7 +1057,7 @@ mod tests {
 
     #[test]
     fn load_default_resolves_workspace_scoped_user_prompt_and_mcp_paths() {
-        let project = project().file("AGENTS.md", "Agent instructions").file(".aether/mcp.json", r#"{"servers":{}}"#);
+        let project = project().file("AGENTS.md", "Agent instructions").file(".aether/mcp.json", &mcp_json("project"));
         let home = home().file(".aether/agents/planner/SYSTEM.md", "System instructions").settings(
             &json!({
                 "agents": [agent_json_with(
@@ -1137,10 +1090,7 @@ mod tests {
             Prompt::File { path, .. } => path == &expected_agents,
             _ => false,
         }));
-        assert!(matches!(
-            &spec.mcp_config_sources[0],
-            McpConfigSource::File { path, defer_tools: false } if *path == project.root().join(".aether/mcp.json")
-        ));
+        assert_eq!(spec.mcp.servers.keys().collect::<Vec<_>>(), ["project"]);
     }
 
     #[test]
@@ -1214,7 +1164,7 @@ mod tests {
         let catalog = AgentCatalog::from_settings(project.root(), config).unwrap();
         let spec = catalog.resolve("alpha").unwrap();
 
-        assert!(spec.mcp_config_sources.is_empty());
+        assert!(spec.mcp.is_empty());
     }
 
     #[test]
@@ -1233,7 +1183,7 @@ mod tests {
         let catalog = AgentCatalog::from_settings(project.root(), config).unwrap();
         let spec = catalog.resolve("alpha").unwrap();
 
-        assert!(spec.mcp_config_sources.is_empty());
+        assert!(spec.mcp.is_empty());
     }
 
     #[test]
@@ -1270,7 +1220,7 @@ mod tests {
 
     #[test]
     fn optional_existing_mcp_source_preserves_defer_tools_flag() {
-        let project = project().file("BASE.md", "Base instructions").file("mcp.json", r#"{"servers":{}}"#);
+        let project = project().file("BASE.md", "Base instructions").file("mcp.json", &mcp_json("lazy"));
         let config = AetherSettings {
             agents: vec![AgentConfig {
                 prompts: vec![PromptSource::file("BASE.md")],
@@ -1283,7 +1233,7 @@ mod tests {
         let catalog = AgentCatalog::from_settings(project.root(), config).unwrap();
         let spec = catalog.resolve("alpha").unwrap();
 
-        assert!(matches!(&spec.mcp_config_sources[0], McpConfigSource::File { defer_tools: true, .. }));
+        assert!(spec.mcp.servers["lazy"].defer_tools().defers_tools());
     }
 
     #[test]

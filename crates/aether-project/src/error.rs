@@ -74,6 +74,13 @@ pub enum SettingsError {
     #[error("MCP config path '{path}' references undefined variable '{variable}'")]
     UnresolvedMcpConfigVariable { path: String, variable: String },
 
+    #[error("Failed to read MCP config '{path}': {source}")]
+    McpConfig {
+        path: String,
+        #[source]
+        source: aether_core::mcp::ParseError,
+    },
+
     /// I/O error while reading files.
     #[error("I/O error: {0}")]
     IoError(String),
