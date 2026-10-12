@@ -295,7 +295,7 @@ fn mantle_auth(credentials: Option<SharedCredentialsProvider>, region: &str) -> 
         return MantleAuth::BearerToken(token);
     }
     match credentials {
-        Some(credentials) => MantleAuth::SigV4 { credentials, region: region.to_string() },
+        Some(credentials) => MantleAuth::sigv4(credentials, region),
         None => MantleAuth::None,
     }
 }
