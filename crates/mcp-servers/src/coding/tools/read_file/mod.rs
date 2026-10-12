@@ -30,9 +30,6 @@ pub struct ReadFileResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_offset: Option<usize>,
     pub size: usize,
-    /// Raw file content without line numbers (used internally for LSP sync)
-    #[serde(skip_serializing)]
-    pub raw_content: String,
     /// Display metadata for human-friendly rendering
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
@@ -80,7 +77,6 @@ pub async fn read_file_contents(args: ReadFileArgs) -> Result<ReadFileResult, Fi
         lines_shown,
         next_offset,
         size: content.len(),
-        raw_content: content,
         meta: Some(display_meta.into()),
     })
 }

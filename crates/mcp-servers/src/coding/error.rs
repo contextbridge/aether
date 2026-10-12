@@ -96,14 +96,6 @@ pub enum WebFetchError {
     /// Request timed out
     #[error("Request timed out after {0}ms")]
     Timeout(u64),
-
-    /// Response too large
-    #[error("Response too large: {size} bytes exceeds limit of {limit} bytes")]
-    ResponseTooLarge { size: usize, limit: usize },
-
-    /// Failed to parse HTML content
-    #[error("Failed to parse HTML: {0}")]
-    ParseFailed(String),
 }
 
 /// Errors related to web search operations

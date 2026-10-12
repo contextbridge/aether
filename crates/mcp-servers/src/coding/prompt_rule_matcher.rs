@@ -31,11 +31,6 @@ impl PromptRuleMatcher {
 
         result
     }
-
-    /// Allow previously activated rules to fire again after a context reset.
-    pub fn clear(&mut self) {
-        self.activated.clear();
-    }
 }
 
 impl Default for PromptRuleMatcher {
@@ -80,22 +75,6 @@ mod tests {
 
         let matched = state.get_matched_rules(root_dir, "/project/README.md");
         assert!(matched.is_empty());
-    }
-
-    #[test]
-    fn clear_activated_allows_rematching() {
-        let workspace = workspace_with_rust_rules("Rust rules.");
-        let catalog = PromptCatalog::from_dir(workspace.root()).unwrap();
-        let mut state = PromptRuleMatcher::new(catalog);
-        let root_dir = Path::new("/project");
-
-        let matched = state.get_matched_rules(root_dir, "/project/src/main.rs");
-        assert_eq!(matched.len(), 1);
-
-        state.clear();
-
-        let matched2 = state.get_matched_rules(root_dir, "/project/src/main.rs");
-        assert_eq!(matched2.len(), 1);
     }
 
     #[test]

@@ -9,8 +9,3 @@ Errors from LSP code intelligence operations.
 - **`InvalidPath`** -- A requested path cannot be represented as a file URI.
 - **`SymbolNotFound`** -- The requested symbol could not be found.
 - **`InvalidPosition`** -- The requested source position is invalid.
-- **`Transport`** -- Transport or protocol error during LSP message exchange.
-
-# Type alias
-
-The module provides `type Result<T> = std::result::Result<T, LspError>` for convenience.
