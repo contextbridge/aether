@@ -1,11 +1,10 @@
 use aether_cli::init::{HarnessIntegration, InitError, InitOutcome, InitTarget, OverwriteMode, Preset, apply_init};
 use aether_core::core::Prompt;
+use aether_core::mcp::{McpConfig, McpServerConfig, ToolMatcher, mcp};
 use aether_project::{AetherSettings, AgentCatalog, McpSourceSpec, PromptSource};
 use llm::catalog::Provider;
 use llm::{LlmModel, ReasoningEffort};
-use mcp_servers::{CodingMcpArgs, ReviewMcpArgs, SkillsMcpArgs, SubAgentsMcpArgs, TasksMcpArgs};
-use mcp_utils::client::McpServerConfig;
-use mcp_utils::client::ToolMatcher;
+use mcp_servers::McpBuilderExt;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -26,10 +25,10 @@ fn inline_args(servers: &BTreeMap<String, McpServerConfig>, name: &str) -> Vec<S
 }
 
 fn inline_servers(spec: &McpSourceSpec) -> &BTreeMap<String, McpServerConfig> {
-    let McpSourceSpec::Inline { servers } = spec else {
+    let McpSourceSpec::Inline(config) = spec else {
         panic!("expected inline MCPs, got a file spec");
     };
-    servers
+    &config.servers
 }
 
 #[test]
@@ -277,8 +276,8 @@ fn force_overwrites_selected_target_only() {
     assert_eq!(std::fs::read_to_string(dir.path().join(".aether/settings.json")).unwrap(), "{}");
 }
 
-#[test]
-fn every_inline_mcp_in_init_presets_parses_its_args() {
+#[tokio::test]
+async fn every_inline_mcp_in_init_presets_spawns_with_its_args() {
     for preset in [Preset::Minimal, Preset::BatteriesIncluded] {
         for harnesses in
             [vec![], vec![HarnessIntegration::Claude], vec![HarnessIntegration::Claude, HarnessIntegration::Agents]]
@@ -295,28 +294,16 @@ fn every_inline_mcp_in_init_presets_parses_its_args() {
             let settings = load(&dir.path().join("settings.json"));
 
             for agent in &settings.agents {
-                for mcp in &agent.mcps {
-                    let McpSourceSpec::Inline { servers } = mcp else { continue };
-                    for (name, config) in servers {
-                        let McpServerConfig::InMemory(in_memory) = config else { continue };
-                        let args = in_memory.args.clone();
-                        let parse_result = match name.as_str() {
-                            "coding" => CodingMcpArgs::from_args(args).map(|_| ()),
-                            "skills" => SkillsMcpArgs::from_args(args).map(|_| ()),
-                            "subagents" => SubAgentsMcpArgs::from_args(args).map(|_| ()),
-                            "tasks" => TasksMcpArgs::from_args(args).map(|_| ()),
-                            "review" => ReviewMcpArgs::from_args(args).map(|_| ()),
-                            other => {
-                                panic!("preset references unknown in-memory MCP `{other}`; add a parse check")
-                            }
-                        };
-                        assert!(
-                            parse_result.is_ok(),
-                            "{preset:?} agent `{}` server `{name}` harnesses={harnesses:?} args failed to parse: {parse_result:?}",
-                            agent.name
-                        );
-                    }
-                }
+                let inline = agent.mcps.iter().filter_map(|source| match source {
+                    McpSourceSpec::Inline(config) => Some(config.clone()),
+                    McpSourceSpec::File(_) => None,
+                });
+                let config = inline.collect::<McpConfig>();
+                let spawned = mcp(dir.path()).with_builtin_servers().with_config(config).unwrap().spawn();
+                let catalog = spawned.unwrap_or_else(|error| {
+                    panic!("{preset:?} agent `{}` harnesses={harnesses:?} failed to spawn: {error}", agent.name)
+                });
+                catalog.shutdown().await;
             }
         }
     }
@@ -369,8 +356,8 @@ fn assert_read_only_coding_tools(agent: &aether_project::AgentConfig) {
 }
 
 fn assert_minimal_mcp_and_tools(agent: &aether_project::AgentConfig) {
-    let McpSourceSpec::Inline { servers } = &agent.mcps[0] else { panic!("minimal MCPs should be inline") };
-    let names: Vec<&str> = servers.keys().map(String::as_str).collect();
+    let McpSourceSpec::Inline(config) = &agent.mcps[0] else { panic!("minimal MCPs should be inline") };
+    let names: Vec<&str> = config.servers.keys().map(String::as_str).collect();
     assert_eq!(names, vec!["coding", "skills"]);
     assert_eq!(agent.tools.allow, vec![ToolMatcher::name("coding__bash"), ToolMatcher::name("skills__*")]);
     assert_eq!(agent.tools.deny.len(), 0);

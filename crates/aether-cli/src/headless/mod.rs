@@ -1,12 +1,12 @@
 pub mod error;
 pub mod run;
 
-use aether_core::agent_spec::{AgentSpec, McpConfigSource};
+use aether_core::agent_spec::AgentSpec;
+use aether_core::mcp::McpConfig;
 use aether_project::{AetherSettings, AgentCatalog, TelemetrySettings};
 use aether_telemetry::AgentTraceContext;
 use error::CliError;
 use llm::{ProviderConnectionOverride, ProviderConnectionOverrides};
-use mcp_utils::client::McpConfig;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -18,7 +18,7 @@ use crate::mcp_config_args::McpConfigArgs;
 use crate::output::OutputFormat;
 use crate::prompt::prompt_or_stdin;
 use crate::provider_connection_args::ProviderConnectionArgs;
-use crate::resolve::{AgentSelectionError, InitialSessionSelection, resolve_agent_from_settings};
+use crate::resolve::{InitialSessionSelection, resolve_agent_from_settings};
 use crate::settings_args::SettingsSourceArgs;
 use aether_auth::OAuthCredentialStorage;
 use std::sync::Arc;
@@ -52,7 +52,7 @@ pub enum CliEventKind {
 pub struct RunConfig {
     pub prompt: String,
     pub cwd: PathBuf,
-    pub mcp_config_sources: Vec<McpConfigSource>,
+    pub mcp_config: McpConfig,
     pub spec: AgentSpec,
     pub agent_catalog: AgentCatalog,
     pub system_prompt: Option<String>,
@@ -167,14 +167,13 @@ impl RunConfig {
                 return Err(CliError::ConflictingArgs("Cannot specify both --agent and --model".to_string()));
             }
         };
-        let resolved = resolve_agent_from_settings(&cwd, settings, provider_connections, &selection)
-            .map_err(map_selection_error)?;
-        let mcp_config_sources = args.mcp_config.sources(&cwd);
+        let resolved = resolve_agent_from_settings(&cwd, settings, provider_connections, &selection)?;
+        let mcp_config = args.mcp_config.load(&cwd)?;
 
         Ok(Self {
             prompt,
             cwd,
-            mcp_config_sources,
+            mcp_config,
             spec: resolved.spec,
             agent_catalog: resolved.catalog,
             system_prompt: args.system_prompt,
@@ -203,19 +202,11 @@ impl RunConfig {
                 return Err(CliError::ConflictingArgs("Cannot specify both --agent and --model".to_string()));
             }
         };
-        let resolved = resolve_agent_from_settings(&cwd, settings, provider_connections, &selection)
-            .map_err(map_selection_error)?;
-        let mcp_config_sources = options
-            .mcp_config
-            .map(|config| serde_json::to_string(&config).expect("mcp config serialize"))
-            .map(McpConfigSource::Json)
-            .into_iter()
-            .collect();
-
+        let resolved = resolve_agent_from_settings(&cwd, settings, provider_connections, &selection)?;
         Ok(Self {
             prompt,
             cwd,
-            mcp_config_sources,
+            mcp_config: options.mcp_config.unwrap_or_default(),
             spec: resolved.spec,
             agent_catalog: resolved.catalog,
             system_prompt: options.system_prompt,
@@ -232,12 +223,4 @@ impl RunConfig {
 fn resolve_prompt(args: &HeadlessArgs) -> Result<String, CliError> {
     let explicit = (!args.prompt.is_empty()).then(|| args.prompt.join(" "));
     prompt_or_stdin(explicit).map_err(CliError::IoError)?.ok_or(CliError::NoPrompt)
-}
-
-fn map_selection_error(error: AgentSelectionError) -> CliError {
-    match error {
-        AgentSelectionError::Settings(error) => CliError::Settings(error),
-        AgentSelectionError::Agent(error) => CliError::AgentError(error.to_string()),
-        AgentSelectionError::Model(error) => CliError::ModelError(error),
-    }
 }

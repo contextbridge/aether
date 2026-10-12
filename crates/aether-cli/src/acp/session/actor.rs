@@ -4,7 +4,7 @@ use acp_utils::elicitation;
 use acp_utils::notifications::{GitDiffEventPayload, McpNotification};
 use aether_auth::OAuthCredentialStorage;
 use aether_core::events::{AgentCommand, AgentEvent, Command, TurnEvent, TurnOutcome};
-use aether_core::mcp::McpHandle;
+use aether_core::mcp::McpCatalog;
 use aether_sessions::model::{SessionControlEvent, SessionEvent, last_session_usage};
 use aether_sessions::transcript::conversation_messages_from_events;
 use agent_client_protocol::schema::v2::{
@@ -14,11 +14,11 @@ use agent_client_protocol::schema::v2::{
 use agent_client_protocol::{Client, ConnectionTo, Error, Responder};
 use clankerdiff_protocol::client::ClientCommand;
 use clankerdiff_protocol::shared::{DocumentUpdate, Event};
-use futures::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
+use futures::{FutureExt, StreamExt, future::BoxFuture};
 use llm::catalog::LlmModel;
 use llm::parser::ModelProviderParser;
 use llm::{ChatMessage, ContentBlock, MessageId, ProviderConnectionOverrides};
-use mcp_utils::client::{ElicitationRequest, McpClientEvent, cancel_result};
+use mcp_utils::client::{Elicitation, ElicitationRequest};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -29,7 +29,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
-use utils::mcp_status::McpServerStatusEntry;
+use utils::mcp_status::{McpServerStatus, McpServerStatusEntry};
 
 use super::agent_key::AgentKey;
 use super::agents::SessionAgents;
@@ -40,17 +40,17 @@ use super::hooks::SessionHooks;
 use super::model::Modes;
 use super::prompts::{PromptQueue, SubmittedPrompt};
 use super::runtime::{AgentRuntime, RuntimeFactory};
-use super::slash_commands::{expand_slash_command_in_content, send_available_commands};
-use crate::acp::protocol::commands::map_mcp_prompt_to_available_command;
+use crate::acp::protocol::commands::available_commands;
 use crate::acp::protocol::events::{NotificationMode, project_agent_event};
 use crate::acp::protocol::replay::replay_to_client;
 use crate::acp::state::validate_prompt_support;
 use crate::output::print_message;
-use crate::slash_commands::dedupe_commands_by_name;
+use crate::slash_commands::{expand_slash_command_in_content, prompt_commands};
 use aether_sessions::SessionStore;
 
 /// Capacity of the per-session command channel feeding the actor loop.
 const SESSION_COMMAND_CHANNEL_CAPACITY: usize = 50;
+const ELICITATION_CHANNEL_CAPACITY: usize = 32;
 
 /// A command routed to a single session's actor. The actor is the only consumer
 /// of these, so per-session state never needs an additional lock.
@@ -200,23 +200,17 @@ pub(crate) struct SessionActor {
     specs: SessionAgents,
     runtimes: HashMap<AgentKey, AgentRuntime>,
     runtime_factory: Arc<dyn RuntimeFactory>,
+    elicitation_tx: mpsc::Sender<Elicitation>,
+    elicitation_rx: mpsc::Receiver<Elicitation>,
     transcript: Vec<SessionEvent>,
     config: SessionConfigState,
     modes: Modes,
     prompts: PromptQueue,
-    command_refresh: Option<BoxFuture<'static, Result<Vec<acp::AvailableCommand>, SessionError>>>,
-    authentications: FuturesUnordered<BoxFuture<'static, Result<(), SessionError>>>,
+    command_refresh: Option<BoxFuture<'static, Vec<acp::AvailableCommand>>>,
+    advertised_servers: Option<Vec<String>>,
     idle_commands: JoinSet<()>,
     hooks: SessionHooks,
     idle_deadline: Option<Instant>,
-}
-
-/// List a runtime's MCP prompts as ACP available commands, de-duplicated by
-/// name. Used at actor startup and after agent switches.
-async fn available_commands_for(mcp: McpHandle) -> Result<Vec<acp::AvailableCommand>, SessionError> {
-    let prompts = mcp.list_prompts().await.map_err(SessionError::McpOperation)?;
-    let prompt_commands = prompts.iter().map(map_mcp_prompt_to_available_command).collect();
-    Ok(dedupe_commands_by_name(prompt_commands))
 }
 
 impl SessionActor {
@@ -224,6 +218,7 @@ impl SessionActor {
         let cancel = CancellationToken::new();
         let io = SessionIo::new(init.connection, init.session_id.clone());
         let git_diff = GitDiffService::new(init.cwd.clone(), io.clone());
+        let (elicitation_tx, elicitation_rx) = mpsc::channel(ELICITATION_CHANNEL_CAPACITY);
         let mut actor = SessionActor {
             io,
             git_diff,
@@ -236,12 +231,14 @@ impl SessionActor {
             specs: init.specs,
             runtimes: HashMap::new(),
             runtime_factory: init.runtime_factory,
+            elicitation_tx,
+            elicitation_rx,
             transcript: init.transcript,
             config: init.config,
             modes: init.modes,
             prompts: PromptQueue::default(),
             command_refresh: None,
-            authentications: FuturesUnordered::new(),
+            advertised_servers: None,
             idle_commands: JoinSet::new(),
             hooks: init.hooks,
             idle_deadline: None,
@@ -258,13 +255,11 @@ impl SessionActor {
     }
 
     async fn run(mut self, mut cmd_rx: mpsc::Receiver<SessionCommand>) {
-        if let Ok(runtime) = self.active_runtime() {
-            send_mcp_server_status(&self.io, runtime.mcp_server_statuses());
-        }
-        self.refresh_available_commands();
+        self.publish_active_mcps();
         let shutdown = self.cancel.clone();
         loop {
             let runtime = self.runtimes.get_mut(&self.active_agent).expect("active runtime is running");
+            let (agent_events, mcp_changes) = runtime.events();
             tokio::select! {
                 biased;
                 () = shutdown.cancelled() => {
@@ -288,27 +283,18 @@ impl SessionActor {
                 Some((message_id, content)) = self.prompts.next_prepared(), if self.prompts.is_preparing() => {
                     self.submit_prompt(message_id, content).await;
                 }
-                Some(result) = self.authentications.next(), if !self.authentications.is_empty() => {
-                    if let Err(error) = result {
-                        error!("MCP server authentication failed: {error}");
-                    }
-                }
-                result = async { self.command_refresh.as_mut().unwrap().await }, if self.command_refresh.is_some() => {
+                commands = async { self.command_refresh.as_mut().unwrap().await }, if self.command_refresh.is_some() => {
                     self.command_refresh = None;
-                    match result {
-                        Ok(commands) => send_available_commands(&self.io, commands),
-                        Err(error) => error!("Failed to refresh available commands: {error}"),
-                    }
+                    let update = acp::AvailableCommandsUpdate::new(commands);
+                    self.io.send_update(SessionUpdate::AvailableCommandsUpdate(update));
                 }
-                Some(event) = runtime.agent_rx.recv() => {
+                Some(event) = agent_events.recv() => {
                     self.on_agent_event(event).await;
                 }
-                Some(event) = runtime.event_rx.recv() => {
-                    let refresh_commands = matches!(event, McpClientEvent::ConnectionReady(_));
-                    on_mcp_client_event(&self.io, event);
-                    if refresh_commands {
-                        self.refresh_available_commands();
-                    }
+                Some(elicitation) = self.elicitation_rx.recv() => on_elicitation(&self.io, elicitation),
+                Some(()) = mcp_changes.next() => {
+                    let statuses = self.active_runtime().mcp().statuses();
+                    self.publish_mcps(statuses);
                 }
                 else => break,
             }
@@ -319,14 +305,22 @@ impl SessionActor {
         }
     }
 
-    fn refresh_available_commands(&mut self) {
-        if let Ok(runtime) = self.active_runtime() {
-            self.command_refresh = Some(available_commands_for(runtime.mcp().clone()).boxed());
+    fn refresh_available_commands(&mut self, servers: &[McpServerStatusEntry]) {
+        let connected = servers
+            .iter()
+            .filter(|server| matches!(server.status, McpServerStatus::Connected { .. }))
+            .map(|server| server.name.clone())
+            .collect::<Vec<_>>();
+        if self.advertised_servers.as_ref() == Some(&connected) {
+            return;
         }
+        let mcp = self.active_runtime().mcp().clone();
+        self.command_refresh = Some(async move { available_commands(&prompt_commands(&mcp).await) }.boxed());
+        self.advertised_servers = Some(connected);
     }
 
-    fn active_runtime(&self) -> Result<&AgentRuntime, SessionError> {
-        self.runtimes.get(&self.active_agent).ok_or(SessionError::ActiveRuntimeNotRunning)
+    fn active_runtime(&self) -> &AgentRuntime {
+        self.runtimes.get(&self.active_agent).expect("the active agent's runtime runs for the whole session")
     }
 
     fn active_provider_connections(&self) -> ProviderConnectionOverrides {
@@ -352,11 +346,11 @@ impl SessionActor {
 
     async fn sync_active_conversation(&mut self) -> Result<(), SessionError> {
         let messages = conversation_messages_from_events(&self.transcript);
-        self.active_runtime()?.replace_conversation(messages).await
+        self.active_runtime().replace_conversation(messages).await
     }
 
     async fn send_active_command(&mut self, command: Command) -> Result<(), SessionError> {
-        self.active_runtime()?.send_agent_command(command).await
+        self.active_runtime().send_agent_command(command).await
     }
 
     async fn ensure_active_running(&mut self) -> Result<(), SessionError> {
@@ -378,7 +372,7 @@ impl SessionActor {
         let runtime = tokio::select! {
             biased;
             () = self.cancel.cancelled() => return Err(SessionError::Cancelled),
-            runtime = self.runtime_factory.spawn(target.clone(), spec, messages, usage_seed) => runtime?,
+            runtime = self.runtime_factory.spawn(target.clone(), spec, messages, usage_seed, self.elicitation_tx.clone()) => runtime?,
         };
         self.runtimes.insert(target.clone(), runtime);
         Ok(())
@@ -425,7 +419,7 @@ impl SessionActor {
                     StateUpdate::Idle(IdleStateUpdate::new())
                 };
                 self.io.send_update(acp::SessionUpdate::StateUpdate(state));
-                let _ = self.publish_active_mcps();
+                self.publish_active_mcps();
                 let options = self.config.config_options(&self.modes, &available, self.oauth_credential_store.as_ref());
                 let _ = reply.send(Ok(options));
             }
@@ -448,13 +442,12 @@ impl SessionActor {
                 self.io.send_update(acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(options)));
             }
             SessionCommand::AuthenticateMcp { server_name } => {
-                if let Ok(runtime) = self.active_runtime() {
-                    let mcp = runtime.mcp().clone();
-                    self.authentications.push(
-                        async move { mcp.authenticate_server(&server_name).await.map_err(SessionError::McpOperation) }
-                            .boxed(),
-                    );
-                }
+                let mcp = self.active_runtime().mcp().clone();
+                tokio::spawn(async move {
+                    if let Err(error) = mcp.authenticate(&server_name).await {
+                        warn!(%error, server = server_name, "MCP server authentication failed");
+                    }
+                });
             }
             SessionCommand::GitDiff { command } => self.git_diff.command(command).await,
             SessionCommand::GitDiffClose => self.git_diff.close().await,
@@ -569,14 +562,14 @@ impl SessionActor {
         }
     }
 
-    async fn prepare_prompt_runtime(&mut self, idle: bool) -> Result<McpHandle, SessionError> {
+    async fn prepare_prompt_runtime(&mut self, idle: bool) -> Result<McpCatalog, SessionError> {
         if idle {
             let switch = self.config.begin_prompt(&self.modes);
             self.apply_switch(switch).await?;
             self.send_active_command(Command::agent(AgentCommand::SetReasoningEffort(self.config.reasoning_effort)))
                 .await?;
         }
-        Ok(self.active_runtime()?.mcp().clone())
+        Ok(self.active_runtime().mcp().clone())
     }
 
     async fn apply_deferred_agent_switch(&mut self) -> Result<(), SessionError> {
@@ -612,7 +605,8 @@ impl SessionActor {
                 if let Some(event) = self.select_agent(&agent_name).await? {
                     self.persist_event(event);
                 }
-                self.publish_active_mcps()
+                self.publish_active_mcps();
+                Ok(())
             }
             Switch::Model(model) => {
                 let parser = ModelProviderParser::default()
@@ -625,10 +619,15 @@ impl SessionActor {
         }
     }
 
-    fn publish_active_mcps(&mut self) -> Result<(), SessionError> {
-        send_mcp_server_status(&self.io, self.active_runtime()?.mcp_server_statuses());
-        self.refresh_available_commands();
-        Ok(())
+    fn publish_active_mcps(&mut self) {
+        let statuses = self.active_runtime().mcp().statuses();
+        self.advertised_servers = None;
+        self.publish_mcps(statuses);
+    }
+
+    fn publish_mcps(&mut self, servers: Vec<McpServerStatusEntry>) {
+        self.refresh_available_commands(&servers);
+        self.io.send(McpNotification::ServerStatus { servers });
     }
 
     fn record_agent_event(&mut self, message: &AgentEvent) {
@@ -678,30 +677,15 @@ fn stop_reason(outcome: &TurnOutcome) -> acp::StopReason {
     }
 }
 
-fn send_mcp_server_status(io: &SessionIo, servers: Vec<McpServerStatusEntry>) {
-    io.send(McpNotification::ServerStatus { servers });
-}
-
-fn on_mcp_client_event(io: &SessionIo, event: McpClientEvent) {
-    match event {
-        McpClientEvent::Elicitation(elicitation) => {
+fn on_elicitation(io: &SessionIo, elicitation: Elicitation) {
+    match elicitation {
+        Elicitation::Request(elicitation) => {
             if let Some(connection) = &io.connection {
-                spawn_elicitation_request(connection, &io.session_id, *elicitation);
-            } else {
-                let _ = elicitation.response_sender.send(cancel_result());
+                spawn_elicitation_request(connection, &io.session_id, elicitation);
             }
         }
-        McpClientEvent::ElicitationComplete { server_name, elicitation_id } => {
-            io.send(elicitation::build_acp_elicitation_completion_notification(
-                &io.session_id,
-                &server_name,
-                &elicitation_id,
-            ));
-        }
-        McpClientEvent::ServerStatusesChanged(servers) => send_mcp_server_status(io, servers),
-        McpClientEvent::ConnectionReady(snapshot) => send_mcp_server_status(io, snapshot.server_statuses()),
-        McpClientEvent::AuthenticationFailed { server, error } => {
-            error!("MCP server authentication failed for '{server}': {error}");
+        Elicitation::Complete { server, id } => {
+            io.send(elicitation::build_acp_elicitation_completion_notification(&io.session_id, &server, &id));
         }
     }
 }
@@ -709,30 +693,27 @@ fn on_mcp_client_event(io: &SessionIo, event: McpClientEvent) {
 async fn on_elicitation_request(
     connection: &ConnectionTo<Client>,
     session_id: &SessionId,
-    elicitation: ElicitationRequest,
+    elicitation: Box<ElicitationRequest>,
 ) {
     let result = async {
         let request =
-            elicitation::map_mcp_elicitation_request_to_acp(&elicitation.server_name, session_id, &elicitation.request)
+            elicitation::map_mcp_elicitation_request_to_acp(&elicitation.server, session_id, &elicitation.request)
                 .map_err(|error| error.to_string())?;
         let response = connection.send_request(request).block_task().await.map_err(|error| format!("{error:?}"))?;
         elicitation::map_acp_elicitation_response_to_mcp(response).map_err(|error| error.to_string())
     }
-    .await
-    .unwrap_or_else(|error| {
-        error!("ACP elicitation failed: {error}");
-        cancel_result()
-    });
+    .await;
 
-    if elicitation.response_sender.send(result).is_err() {
-        error!("Failed to send elicitation response: receiver dropped");
+    match result {
+        Ok(result) => elicitation.respond(result),
+        Err(error) => error!("ACP elicitation failed: {error}"),
     }
 }
 
 fn spawn_elicitation_request(
     connection: &ConnectionTo<Client>,
     session_id: &SessionId,
-    elicitation: ElicitationRequest,
+    elicitation: Box<ElicitationRequest>,
 ) {
     let connection = connection.clone();
     let session_id = session_id.clone();
@@ -906,175 +887,5 @@ mod tests {
         assert_eq!(s.pending, Some(Pending::Model(DEEPSEEK.into())));
         assert_eq!(s.selected_mode.as_deref(), Some("Planner"));
         assert_eq!(s.effective_model(&validated_modes()), DEEPSEEK);
-    }
-
-    mod connection_tests {
-        use super::*;
-        use acp_utils::elicitation::source_mcp_server_name;
-        use acp_utils::testing::test_connection;
-        use rmcp::model::ElicitRequestParams;
-        use tokio::sync::oneshot;
-        use tokio::task::LocalSet;
-        use utils::mcp_status::McpServerStatus;
-
-        fn dispatch_event(connection: &ConnectionTo<Client>, event: McpClientEvent) {
-            on_mcp_client_event(&SessionIo::new(Some(connection.clone()), SessionId::new("session-1")), event);
-        }
-
-        #[tokio::test(flavor = "current_thread")]
-        async fn server_status_change_forwards_status_notification() {
-            LocalSet::new()
-                .run_until(async {
-                    let (cx, mut peer) = test_connection().await;
-                    let servers =
-                        vec![McpServerStatusEntry::new("github", McpServerStatus::Connected { tool_count: 1 })];
-
-                    dispatch_event(&cx, McpClientEvent::ServerStatusesChanged(servers));
-
-                    let received = peer.next_mcp_notification().await;
-                    assert!(matches!(received, McpNotification::ServerStatus { .. }));
-                })
-                .await;
-        }
-
-        #[tokio::test(flavor = "current_thread")]
-        async fn auth_failure_after_status_change_still_forwards_status() {
-            LocalSet::new()
-                .run_until(async {
-                    let (cx, mut peer) = test_connection().await;
-                    let servers = vec![McpServerStatusEntry::new(
-                        "github",
-                        McpServerStatus::Failed { error: "authentication timed out after 3 minutes".to_string() },
-                    )];
-
-                    dispatch_event(&cx, McpClientEvent::ServerStatusesChanged(servers));
-                    dispatch_event(
-                        &cx,
-                        McpClientEvent::AuthenticationFailed {
-                            server: "github".to_string(),
-                            error: "authentication timed out after 3 minutes".to_string(),
-                        },
-                    );
-
-                    assert!(matches!(peer.next_mcp_notification().await, McpNotification::ServerStatus { .. }));
-                })
-                .await;
-        }
-
-        #[tokio::test(flavor = "current_thread")]
-        async fn empty_server_status_change_forwards_clear_notification() {
-            LocalSet::new()
-                .run_until(async {
-                    let (cx, mut peer) = test_connection().await;
-
-                    dispatch_event(&cx, McpClientEvent::ServerStatusesChanged(vec![]));
-
-                    let McpNotification::ServerStatus { servers } = peer.next_mcp_notification().await;
-                    assert_eq!(servers.len(), 0);
-                })
-                .await;
-        }
-
-        #[tokio::test(flavor = "current_thread")]
-        async fn status_event_forwards_server_status() {
-            LocalSet::new()
-                .run_until(async {
-                    let (cx, mut peer) = test_connection().await;
-                    let servers =
-                        vec![McpServerStatusEntry::new("github", McpServerStatus::Connected { tool_count: 1 })];
-                    dispatch_event(&cx, McpClientEvent::ServerStatusesChanged(servers));
-
-                    let McpNotification::ServerStatus { servers } = peer.next_mcp_notification().await;
-                    assert_eq!(servers[0].name, "github");
-                })
-                .await;
-        }
-
-        #[tokio::test(flavor = "current_thread")]
-        async fn elicitation_completion_forwards_native_acp_notification() {
-            LocalSet::new()
-                .run_until(async {
-                    let (cx, mut peer) = test_connection().await;
-
-                    dispatch_event(
-                        &cx,
-                        McpClientEvent::ElicitationComplete {
-                            server_name: "github".to_string(),
-                            elicitation_id: "el-1".to_string(),
-                        },
-                    );
-
-                    let completion = peer.next_elicitation_completion().await;
-                    assert_eq!(&*completion.elicitation_id.0, r#"["session-1","github","el-1"]"#);
-                })
-                .await;
-        }
-
-        #[tokio::test(flavor = "current_thread")]
-        async fn elicitation_request_forwards_response_from_peer() {
-            LocalSet::new()
-                .run_until(async {
-                    let (cx, mut peer) = test_connection().await;
-                    peer.queue_elicitation_response(
-                        serde_json::from_value(serde_json::json!({
-                            "action": "accept",
-                            "content": { "color": "red" }
-                        }))
-                        .unwrap(),
-                    );
-
-                    let (tx, rx) = oneshot::channel();
-                    let elicitation = ElicitationRequest {
-                        server_name: "test-server".to_string(),
-                        request: ElicitRequestParams::FormElicitationParams {
-                            meta: None,
-                            message: "Pick a color".to_string(),
-                            requested_schema: rmcp::model::ElicitationSchema::builder()
-                                .required_bool("approved")
-                                .build()
-                                .unwrap(),
-                        },
-                        response_sender: tx,
-                    };
-
-                    on_elicitation_request(&cx, &SessionId::new("session-1"), elicitation).await;
-
-                    let result = rx.await.expect("response forwarded");
-                    assert_eq!(result.action, rmcp::model::ElicitationAction::Accept);
-                    assert_eq!(result.content, Some(serde_json::json!({ "color": "red" })));
-
-                    let received = peer.next_elicitation_request().await;
-                    assert_eq!(source_mcp_server_name(received.meta.as_ref()), Some("test-server"));
-                    let acp::ElicitationMode::Form(form) = received.mode else { panic!("expected form") };
-                    let acp::ElicitationScope::Session(scope) = form.scope else { panic!("expected session scope") };
-                    assert_eq!(&*scope.session_id.0, "session-1");
-                })
-                .await;
-        }
-
-        #[tokio::test(flavor = "current_thread")]
-        async fn elicitation_request_surfaces_cancel_on_transport_error() {
-            LocalSet::new()
-                .run_until(async {
-                    let (cx, _peer) = test_connection().await;
-                    let (tx, rx) = oneshot::channel();
-                    let elicitation = ElicitationRequest {
-                        server_name: "test-server".to_string(),
-                        request: ElicitRequestParams::UrlElicitationParams {
-                            meta: None,
-                            message: "Authorize".to_string(),
-                            url: "https://example.com".to_string(),
-                            elicitation_id: "el-1".to_string(),
-                        },
-                        response_sender: tx,
-                    };
-
-                    on_elicitation_request(&cx, &SessionId::new("session-1"), elicitation).await;
-
-                    let result = rx.await.expect("response forwarded");
-                    assert_eq!(result.action, rmcp::model::ElicitationAction::Cancel);
-                })
-                .await;
-        }
     }
 }

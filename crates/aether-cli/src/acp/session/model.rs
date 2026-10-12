@@ -253,9 +253,9 @@ mod tests {
     use super::*;
     use aether_auth::FakeOAuthCredentialStore;
     use aether_core::agent_spec::AgentSpecExposure;
+    use aether_core::mcp::{McpConfig, ToolFilter};
     use agent_client_protocol::schema::v2::{SessionConfigKind, SessionConfigSelectOption, SessionConfigSelectOptions};
     use llm::catalog::{AnthropicModel, BedrockFoundationModel, BedrockModel, DeepSeekModel, GeminiModel};
-    use mcp_utils::client::ToolFilter;
 
     fn test_models() -> Vec<LlmModel> {
         vec![
@@ -277,7 +277,7 @@ mod tests {
             context_window: None,
             prompts: vec![],
             provider_connections: llm::ProviderConnectionOverrides::default(),
-            mcp_config_sources: Vec::new(),
+            mcp: McpConfig::default(),
             exposure: AgentSpecExposure::both(),
             tools: ToolFilter::default(),
         }

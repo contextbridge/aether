@@ -3,47 +3,41 @@ use std::collections::BTreeMap;
 use super::PromptArgs;
 use crate::error::CliError;
 use crate::resolve::resolve_agent_spec;
-use crate::runtime::RuntimeBuilder;
+use crate::runtime::{PromptPreview, RuntimeBuilder};
 use aether_core::core::{AgentDeps, Prompt};
 use llm::ToolDefinition;
 use serde_json::Value;
 
 pub async fn run_prompt(args: PromptArgs) -> Result<(), CliError> {
     let cwd = args.cwd.canonicalize().map_err(CliError::IoError)?;
-    let catalog = args.settings_source.load_agent_catalog(&cwd).map_err(|e| CliError::AgentError(e.to_string()))?;
-    let spec = resolve_agent_spec(&catalog, args.agent.as_deref())?;
+    let catalog = args.settings_source.load_agent_catalog(&cwd)?;
+    let mut spec = resolve_agent_spec(&catalog, args.agent.as_deref())?;
+    if let Some(custom) = args.system_prompt.as_deref() {
+        spec.prompts.push(Prompt::text(custom));
+    }
 
     let registry = catalog.registry().clone();
-    let info = RuntimeBuilder::from_spec(cwd.clone(), spec)
+    let PromptPreview { system_prompt, tools: tool_definitions } = RuntimeBuilder::from_spec(cwd.clone(), spec)
         .agent_deps(AgentDeps::default().with_agent_registry(registry))
-        .mcp_sources(args.mcp_config.sources(&cwd))
-        .build_prompt_info()
+        .mcp_config(args.mcp_config.load(&cwd)?)
+        .preview()
         .await?;
 
-    let system_prompt = build_prompt(&info.spec.prompts, args.system_prompt.as_deref()).await?;
-    let tools_output = build_tools(&info.tool_definitions);
+    let tools_output = build_tools(&tool_definitions);
 
     println!("{system_prompt}");
 
     if !tools_output.is_empty() {
         println!();
-        println!("--- Tools ({} tools) ---", info.tool_definitions.len());
+        println!("--- Tools ({} tools) ---", tool_definitions.len());
         println!();
         println!("{tools_output}");
     }
 
     println!();
-    println!("{}", format_stats(system_prompt.len(), tools_output.len(), info.tool_definitions.len()));
+    println!("{}", format_stats(system_prompt.len(), tools_output.len(), tool_definitions.len()));
 
     Ok(())
-}
-
-pub async fn build_prompt(prompts: &[Prompt], custom: Option<&str>) -> Result<String, CliError> {
-    let mut prompts = prompts.to_vec();
-    if let Some(custom) = custom {
-        prompts.push(Prompt::text(custom));
-    }
-    Prompt::build_all(&prompts).await.map_err(|e| CliError::AgentError(e.to_string()))
 }
 
 pub fn build_tools(tools: &[ToolDefinition]) -> String {

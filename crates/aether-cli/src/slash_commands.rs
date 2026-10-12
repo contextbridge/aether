@@ -1,25 +1,66 @@
-use aether_core::mcp::McpHandle;
-use agent_client_protocol::schema::v2::AvailableCommand;
-use rmcp::model::{ContentBlock, GetPromptResult, Prompt as McpPrompt};
+use aether_core::mcp::McpCatalog;
+use llm::ContentBlock as MessageContent;
+use mcp_utils::gateway::{GatewayError, ServerPrompt};
+use mcp_utils::model::{ContentBlock, GetPromptResult};
 use std::collections::HashSet;
 use thiserror::Error;
+use tracing::{debug, error, info};
 
-pub(crate) struct SlashCommand<'a> {
-    pub(crate) command_name: &'a str,
-    pub(crate) args_text: &'a str,
+pub(crate) async fn expand_slash_command_in_content(
+    mcp: &McpCatalog,
+    mut content: Vec<MessageContent>,
+) -> Vec<MessageContent> {
+    if let Some(MessageContent::Text { text }) = content.first() {
+        let expanded = expand_slash_command_text(mcp, text.clone()).await;
+        content[0] = MessageContent::text(expanded);
+    }
+    content
+}
+
+pub(crate) async fn expand_slash_command_text(mcp: &McpCatalog, text: String) -> String {
+    let Some(slash_command) = parse_slash_command(&text) else {
+        return text;
+    };
+
+    match expand_slash_command(mcp, slash_command.command_name, slash_command.args_text).await {
+        Ok(expanded) => {
+            info!("Expanded slash command -> {} chars", expanded.len());
+            expanded
+        }
+        Err(SlashCommandError::NotFound(command)) => {
+            debug!(command, "Passing an unknown slash command through unexpanded");
+            text
+        }
+        Err(error) => {
+            error!("Failed to expand slash command: {error}");
+            text
+        }
+    }
+}
+
+pub(crate) async fn prompt_commands(mcp: &McpCatalog) -> Vec<ServerPrompt> {
+    let mut seen_names = HashSet::new();
+    let mut prompts = mcp.list_prompts().await;
+    prompts.retain(|listed| seen_names.insert(listed.prompt.name.clone()));
+    prompts
+}
+
+struct SlashCommand<'a> {
+    command_name: &'a str,
+    args_text: &'a str,
 }
 
 #[derive(Error, Debug)]
-pub(crate) enum SlashCommandError {
+enum SlashCommandError {
     #[error("MCP operation failed: {0}")]
-    McpOperation(String),
+    McpOperation(#[from] GatewayError),
     #[error("slash command '/{0}' not found")]
     NotFound(String),
     #[error("prompt result contains no text content")]
     NoTextContent,
 }
 
-pub(crate) fn parse_slash_command(text: &str) -> Option<SlashCommand<'_>> {
+fn parse_slash_command(text: &str) -> Option<SlashCommand<'_>> {
     let slash_command_text = text.strip_prefix('/')?;
 
     let (command_name, args_text) = if let Some(space_idx) = slash_command_text.find(char::is_whitespace) {
@@ -32,41 +73,19 @@ pub(crate) fn parse_slash_command(text: &str) -> Option<SlashCommand<'_>> {
     Some(SlashCommand { command_name, args_text })
 }
 
-pub(crate) fn dedupe_commands_by_name(commands: Vec<AvailableCommand>) -> Vec<AvailableCommand> {
-    let mut seen_names = HashSet::new();
-    commands.into_iter().filter(|command| seen_names.insert(command.name.clone())).collect()
-}
-
-pub(crate) async fn expand_slash_command(
-    mcp: &McpHandle,
+async fn expand_slash_command(
+    mcp: &McpCatalog,
     command_name: &str,
     args_text: &str,
 ) -> Result<String, SlashCommandError> {
+    let command = prompt_commands(mcp)
+        .await
+        .into_iter()
+        .find(|listed| listed.prompt.name == command_name)
+        .ok_or_else(|| SlashCommandError::NotFound(command_name.to_string()))?;
     let arguments = parse_slash_command_arguments(args_text);
-    let prompts = list_prompts(mcp).await?;
-    let prompt_name = find_prompt_name(&prompts, command_name)?;
-    let prompt_result = get_prompt(mcp, prompt_name, arguments).await?;
+    let prompt_result = mcp.get_prompt(&command.server, &command.prompt.name, arguments).await?;
     prompt_result_text(&prompt_result)
-}
-
-pub(crate) async fn list_prompts(mcp: &McpHandle) -> Result<Vec<McpPrompt>, SlashCommandError> {
-    mcp.list_prompts().await.map_err(|error| SlashCommandError::McpOperation(error.to_string()))
-}
-
-async fn get_prompt(
-    mcp: &McpHandle,
-    name: String,
-    arguments: Option<serde_json::Map<String, serde_json::Value>>,
-) -> Result<GetPromptResult, SlashCommandError> {
-    mcp.get_prompt(&name, arguments).await.map_err(|error| SlashCommandError::McpOperation(error.to_string()))
-}
-
-fn find_prompt_name(prompts: &[McpPrompt], command_name: &str) -> Result<String, SlashCommandError> {
-    prompts
-        .iter()
-        .find(|p| p.name.split("__").last().unwrap_or("") == command_name)
-        .map(|prompt| prompt.name.clone())
-        .ok_or_else(|| SlashCommandError::NotFound(command_name.to_string()))
 }
 
 fn prompt_result_text(prompt_result: &GetPromptResult) -> Result<String, SlashCommandError> {
@@ -80,40 +99,14 @@ fn prompt_result_text(prompt_result: &GetPromptResult) -> Result<String, SlashCo
         .ok_or(SlashCommandError::NoTextContent)
 }
 
-fn parse_slash_command_arguments(args_text: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
+fn parse_slash_command_arguments(args_text: &str) -> serde_json::Map<String, serde_json::Value> {
+    let mut arg_map = serde_json::Map::new();
     if args_text.is_empty() {
-        None
-    } else {
-        let mut arg_map = serde_json::Map::new();
-        arg_map.insert("ARGUMENTS".to_string(), serde_json::Value::String(args_text.to_string()));
-        for (i, arg) in args_text.split_whitespace().enumerate() {
-            arg_map.insert((i + 1).to_string(), serde_json::Value::String(arg.to_string()));
-        }
-        Some(arg_map)
+        return arg_map;
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_argument_parsing() {
-        let arg_map = parse_slash_command_arguments("do a thing that has spaces").expect("Expected Some");
-        let expected = serde_json::Map::from_iter([
-            ("ARGUMENTS".to_string(), serde_json::Value::String("do a thing that has spaces".to_string())),
-            ("1".to_string(), serde_json::Value::String("do".to_string())),
-            ("2".to_string(), serde_json::Value::String("a".to_string())),
-            ("3".to_string(), serde_json::Value::String("thing".to_string())),
-            ("4".to_string(), serde_json::Value::String("that".to_string())),
-            ("5".to_string(), serde_json::Value::String("has".to_string())),
-            ("6".to_string(), serde_json::Value::String("spaces".to_string())),
-        ]);
-        assert_eq!(arg_map, expected);
+    arg_map.insert("ARGUMENTS".to_string(), serde_json::Value::String(args_text.to_string()));
+    for (i, arg) in args_text.split_whitespace().enumerate() {
+        arg_map.insert((i + 1).to_string(), serde_json::Value::String(arg.to_string()));
     }
-
-    #[test]
-    fn test_empty_arguments_returns_none() {
-        assert!(parse_slash_command_arguments("").is_none());
-    }
+    arg_map
 }

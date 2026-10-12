@@ -2,13 +2,11 @@ use aether_core::core::{AgentDeps, Prompt, recv_agent_event};
 use aether_core::events::{
     AgentEvent, Command, ContextEvent, MessageEvent, ModelEvent, ToolEvent, TurnEvent, TurnOutcome,
 };
-use aether_core::mcp::McpHandle;
 use aether_telemetry::TelemetryRuntime;
 use std::io;
 use std::process::ExitCode;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::error;
 
 use crate::telemetry::build_telemetry_runtime;
 
@@ -16,7 +14,7 @@ use super::error::CliError;
 use super::{CliEventKind, RunConfig};
 use crate::output::{OutputFormat, print_message};
 use crate::runtime::RuntimeBuilder;
-use crate::slash_commands::{expand_slash_command, parse_slash_command};
+use crate::slash_commands::expand_slash_command_text;
 
 pub async fn run(config: RunConfig) -> Result<ExitCode, CliError> {
     setup_tracing(config.verbose);
@@ -40,45 +38,28 @@ async fn run_agent(config: RunConfig, telemetry: Option<Arc<TelemetryRuntime>>) 
     let deps =
         AgentDeps::new(config.oauth_credential_store, telemetry.as_ref().map(|runtime| runtime.observer_factory()))
             .with_agent_registry(registry);
-    let (agent, _mcp_snapshot) = RuntimeBuilder::from_spec(config.cwd.clone(), spec)
-        .mcp_sources(config.mcp_config_sources)
+    let mut agent = RuntimeBuilder::from_spec(config.cwd.clone(), spec)
+        .mcp_config(config.mcp_config)
         .agent_deps(deps)
-        .build_ready(vec![])
+        .wait_for_mcp()
+        .build(Vec::new())
         .await?;
 
-    let prompt = expand_prompt(agent.mcp_runtime.handle(), config.prompt).await;
+    let prompt = expand_slash_command_text(&agent.mcp, config.prompt).await;
 
-    agent
-        .agent_tx
-        .send(Command::text(&prompt))
-        .await
-        .map_err(|e| CliError::AgentError(format!("Failed to send prompt: {e}")))?;
-
-    let exit_code = stream_output(agent.agent_rx, config.output, &config.events).await;
-
-    drop(agent.agent_tx);
-    agent.agent_handle.await_completion().await;
-
-    Ok(exit_code)
-}
-
-async fn expand_prompt(mcp: &McpHandle, prompt: String) -> String {
-    let Some(slash_command) = parse_slash_command(&prompt) else {
-        return prompt;
+    let outcome = match agent.agent_tx.send(Command::text(&prompt)).await {
+        Ok(()) => Ok(stream_output(&mut agent.agent_rx, config.output, &config.events).await),
+        Err(_) => Err(CliError::AgentStopped),
     };
 
-    match expand_slash_command(mcp, slash_command.command_name, slash_command.args_text).await {
-        Ok(expanded) => expanded,
-        Err(error) => {
-            error!("Failed to expand slash command: {error}");
-            prompt
-        }
-    }
+    agent.shutdown().await;
+
+    outcome
 }
 
-async fn stream_output(mut rx: mpsc::Receiver<AgentEvent>, format: OutputFormat, events: &[CliEventKind]) -> ExitCode {
+async fn stream_output(rx: &mut mpsc::Receiver<AgentEvent>, format: OutputFormat, events: &[CliEventKind]) -> ExitCode {
     loop {
-        let msg = recv_agent_event(&mut rx).await;
+        let msg = recv_agent_event(rx).await;
         if should_emit(&msg, events)
             && let Err(error) = print_message(format, &msg)
         {
@@ -301,27 +282,27 @@ mod tests {
 
     #[tokio::test]
     async fn stream_output_turn_ended_breaks_loop_under_filter() {
-        let (tx, rx) = mpsc::channel(4);
+        let (tx, mut rx) = mpsc::channel(4);
         tx.send(AgentEvent::turn_ended(TurnOutcome::Completed)).await.unwrap();
         let filter = vec![CliEventKind::ToolCall];
-        let code = stream_output(rx, OutputFormat::Text, &filter).await;
+        let code = stream_output(&mut rx, OutputFormat::Text, &filter).await;
         assert_eq!(code, ExitCode::SUCCESS);
     }
 
     #[tokio::test]
     async fn stream_output_failed_turn_exits_with_failure() {
-        let (tx, rx) = mpsc::channel(4);
+        let (tx, mut rx) = mpsc::channel(4);
         tx.send(AgentEvent::turn_ended(TurnOutcome::failed("boom"))).await.unwrap();
-        let code = stream_output(rx, OutputFormat::Text, &[]).await;
+        let code = stream_output(&mut rx, OutputFormat::Text, &[]).await;
         assert_eq!(code, ExitCode::FAILURE);
     }
 
     #[tokio::test]
     async fn stream_output_channel_closed_before_turn_ended_exits_with_failure() {
-        let (tx, rx) = mpsc::channel(4);
+        let (tx, mut rx) = mpsc::channel(4);
         tx.send(AgentEvent::Turn(TurnEvent::Started { content: vec![] })).await.unwrap();
         drop(tx);
-        let code = stream_output(rx, OutputFormat::Text, &[]).await;
+        let code = stream_output(&mut rx, OutputFormat::Text, &[]).await;
         assert_eq!(code, ExitCode::FAILURE);
     }
 

@@ -153,7 +153,7 @@ The `mcp.json` file configures MCP tool servers:
 - **coding** — Filesystem tools (read, write, bash, etc.) plus optional auto-read rules from configured `--rules-dir` paths
 - **skills** — Slash commands and reusable prompts loaded from the configured `--dir` paths
 
-Set `"deferTools": true` on a server to keep its schemas out of the model-visible tool definitions. Use `aether mcp --help` to discover deferred servers, then `aether mcp <server> --help` and `aether mcp <server> <tool> --help` to inspect tools and schemas. Invoke a tool with `--json '{...}'` or a JSON object on stdin. To partition tools, use `"deferTools": { "include": [...], "exclude": [...] }`; patterns are exact MCP-local names or trailing-`*` prefixes, and `exclude` wins.
+Set `"deferTools": true` on a server to keep its schemas out of the model-visible tool definitions. Use `aether mcp --help` to discover deferred servers, then `aether mcp <server> --help` and `aether mcp <server> <tool> --help` to inspect tools and schemas. Invoke a tool with `--json '{...}'` or a JSON object on stdin. To partition tools, use `"deferTools": { "include": [...], "exclude": [...] }`; entries are exact MCP-local names, trailing-`*` prefixes, or annotation matchers such as `{ "readOnly": true }`, and `exclude` wins.
 
 ## Slash Commands
 

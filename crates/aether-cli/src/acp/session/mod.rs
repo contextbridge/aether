@@ -12,7 +12,6 @@ mod pagination;
 pub(crate) mod prompts;
 pub(crate) mod registry;
 pub(crate) mod runtime;
-pub(crate) mod slash_commands;
 
 pub(crate) use pagination::paginate_summaries;
 pub(crate) use registry::SessionRegistry;

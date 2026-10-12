@@ -1,6 +1,4 @@
 pub(crate) mod agent;
-#[cfg(any(test, feature = "testing"))]
-pub(crate) mod fake_prompt_mcp;
 pub(crate) mod protocol;
 pub mod server;
 pub(crate) mod session;
@@ -8,7 +6,6 @@ pub(crate) mod state;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
-pub use protocol::map_mcp_prompt_to_available_command;
 pub use session::hooks::{IdleHook, SessionHooks};
 
 use crate::acp::state::{AcpState, AcpStateConfig};

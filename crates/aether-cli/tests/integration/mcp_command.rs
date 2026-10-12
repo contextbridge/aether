@@ -1,77 +1,22 @@
+use aether_core::mcp::{AETHER_MCP_IPC_SOCKET, McpCatalog, ToolExposure, mcp};
+use aether_core::testing::ready_catalog;
 use mcp_servers::coding::tools::bash::{BashEnvironment, BashInput, execute_command};
-use mcp_utils::tool_gateway::{AETHER_MCP_IPC_SOCKET, UnixSocketMcpTransport, UnixSocketPath};
-use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData, Implementation, ListToolsResult,
-    PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
-};
-use rmcp::{RoleServer, ServerHandler, service::RequestContext};
-use serde_json::{Map, json};
+use mcp_utils::gateway::ServerSpec;
+use mcp_utils::model::CallToolResult;
+use mcp_utils::testing::{FakeMcpServer, FakeTool, FakeToolResponse};
+use serde_json::json;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
-use std::sync::Arc;
-
-#[derive(Clone)]
-struct FakeGateway;
-
-impl ServerHandler for FakeGateway {
-    fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("fake-gateway", "1.0.0"))
-    }
-
-    fn list_tools(
-        &self,
-        _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<ListToolsResult, ErrorData>> + Send + '_ {
-        let schema = json!({
-            "type": "object",
-            "properties": { "message": { "type": "string", "description": "Text to echo" } },
-            "required": ["message"]
-        });
-        std::future::ready(Ok(ListToolsResult::with_all_items(vec![
-            Tool::new("_aether_list_servers", "List deferred servers", Arc::new(Map::new())),
-            Tool::new("demo__echo", "Echo a message", Arc::new(schema.as_object().unwrap().clone())),
-            Tool::new("demo__fail", "Return a tool error", Arc::new(Map::new())),
-            Tool::new("demo__slow", "Wait for cancellation", Arc::new(Map::new())),
-            Tool::new("demo__text", "Return content blocks", Arc::new(Map::new())),
-        ])))
-    }
-
-    async fn call_tool(
-        &self,
-        request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResponse, ErrorData> {
-        match request.name.as_ref() {
-            "_aether_list_servers" => Ok(CallToolResult::structured(json!([
-                {"name": "demo", "description": "Demonstration tools"}
-            ]))
-            .into()),
-            "demo__echo" => Ok(CallToolResult::structured(json!({
-                "echoed": request.arguments.unwrap_or_default().get("message").cloned().unwrap_or(json!(null))
-            }))
-            .into()),
-            "demo__fail" => Ok(CallToolResult::error(vec![]).into()),
-            "demo__slow" => {
-                std::future::pending::<()>().await;
-                Ok(CallToolResult::structured(json!({"done": true})).into())
-            }
-            "demo__text" => Ok(CallToolResult::success(vec![ContentBlock::text("plain")]).into()),
-            _ => Err(ErrorData::invalid_params("unknown tool", None)),
-        }
-    }
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn layered_help_reveals_servers_tools_and_complete_schema() {
-    let (_server, socket) = gateway();
+    let (_session, socket) = gateway().await;
 
     let top = run(&socket, &["mcp", "--help"], None);
     assert_success(&top);
     assert_stdout_contains(&top, "demo");
-    assert_stdout_contains(&top, "Demonstration tools");
+    assert_stdout_contains(&top, "A fake MCP server for testing");
 
     let server = run(&socket, &["mcp", "demo", "--help"], None);
     assert_success(&server);
@@ -86,8 +31,38 @@ async fn layered_help_reveals_servers_tools_and_complete_schema() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_help_supports_namespace_delimiters_in_server_names() {
+    let (_session, socket) = gateway().await;
+
+    let server = run(&socket, &["mcp", "deep__demo", "--help"], None);
+    assert_success(&server);
+    assert_stdout_contains(&server, "  ping");
+    assert_stdout_contains(&server, "Ping a nested server");
+    assert!(!String::from_utf8_lossy(&server.stdout).contains("demo__ping"));
+
+    let demo = run(&socket, &["mcp", "demo", "--help"], None);
+    assert_success(&demo);
+    assert!(!String::from_utf8_lossy(&demo.stdout).contains("ping"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_help_lists_only_the_named_servers_tools() {
+    let (_session, socket) = gateway().await;
+
+    let docs = run(&socket, &["mcp", "docs", "--help"], None);
+    assert_success(&docs);
+    assert_stdout_contains(&docs, "Search the docs");
+    assert!(!String::from_utf8_lossy(&docs.stdout).contains("Search the v2 docs"));
+
+    let v2 = run(&socket, &["mcp", "docs__v2", "--help"], None);
+    assert_success(&v2);
+    assert_stdout_contains(&v2, "Search the v2 docs");
+    assert!(!String::from_utf8_lossy(&v2.stdout).contains("Search the docs"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn calls_accept_empty_json_flag_or_stdin_and_print_one_json_value() {
-    let (_server, socket) = gateway();
+    let (_session, socket) = gateway().await;
 
     let empty = run(&socket, &["mcp", "demo", "echo"], None);
     assert_success(&empty);
@@ -108,7 +83,7 @@ async fn calls_accept_empty_json_flag_or_stdin_and_print_one_json_value() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn json_flag_does_not_wait_for_open_stdin() {
-    let (_server, socket) = gateway();
+    let (_session, socket) = gateway().await;
     let mut command = Command::new(env!("CARGO_BIN_EXE_aether"));
     command
         .args(["mcp", "demo", "echo", "--json", r#"{"message":"flag"}"#])
@@ -126,7 +101,7 @@ async fn json_flag_does_not_wait_for_open_stdin() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn coding_bash_composes_real_cli_with_jq_pipes_redirects_and_scripts() {
-    let (_server, socket) = gateway();
+    let (_session, socket) = gateway().await;
     let workspace = tempfile::tempdir().unwrap();
     let script = workspace.path().join("call.sh");
     std::fs::write(
@@ -183,7 +158,7 @@ async fn coding_bash_composes_real_cli_with_jq_pipes_redirects_and_scripts() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn usage_errors_exit_two_and_runtime_errors_exit_one() {
-    let (_server, socket) = gateway();
+    let (_session, socket) = gateway().await;
 
     for args in [
         vec!["mcp", "demo"],
@@ -222,11 +197,37 @@ async fn usage_errors_exit_two_and_runtime_errors_exit_one() {
     assert!(String::from_utf8_lossy(&missing.stderr).contains(AETHER_MCP_IPC_SOCKET));
 }
 
-fn gateway() -> (mcp_utils::tool_gateway::UnixSocketServer, String) {
-    let path = UnixSocketPath::new().unwrap();
-    let transport = UnixSocketMcpTransport::bind(path).unwrap();
-    let socket = transport.path().to_string_lossy().into_owned();
-    (transport.spawn(FakeGateway), socket)
+/// A session whose servers all defer their tools, as `aether mcp` reaches them through the session's socket.
+async fn gateway() -> (McpCatalog, String) {
+    let demo = FakeMcpServer::new()
+        .with_tool(
+            FakeTool::new("echo")
+                .description("Echo a message")
+                .input_schema(json!({
+                    "type": "object",
+                    "properties": { "message": { "type": "string", "description": "Text to echo" } },
+                    "required": ["message"]
+                }))
+                .responds_with(|request| {
+                    let message = request.arguments.as_ref().and_then(|args| args.get("message")).cloned();
+                    CallToolResult::structured(json!({ "echoed": message })).into()
+                }),
+        )
+        .with_tool(FakeTool::new("fail").responds(CallToolResult::error(vec![])))
+        .with_tool(FakeTool::new("slow").responds(FakeToolResponse::pending()))
+        .with_tool(FakeTool::new("text").responds(FakeToolResponse::text("plain")));
+    let servers = [
+        ("demo", demo),
+        ("deep__demo", FakeMcpServer::new().with_tool(FakeTool::new("ping").description("Ping a nested server"))),
+        ("docs", FakeMcpServer::new().with_tool(FakeTool::new("search").description("Search the docs"))),
+        ("docs__v2", FakeMcpServer::new().with_tool(FakeTool::new("search").description("Search the v2 docs"))),
+    ];
+    let builder = servers.into_iter().fold(mcp("/tmp"), |builder, (name, server)| {
+        builder.with_server(ServerSpec::in_process(name, server), ToolExposure::deferred_all())
+    });
+    let catalog = ready_catalog(builder).await;
+    let socket = catalog.deferred_tools_socket().expect("deferred servers are served").to_string_lossy().into_owned();
+    (catalog, socket)
 }
 
 fn run(socket: &str, args: &[&str], stdin: Option<&str>) -> Output {

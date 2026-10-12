@@ -154,15 +154,15 @@ async fn mode_change_applies_at_next_prompt_boundary() {
 #[tokio::test(flavor = "current_thread")]
 async fn prompt_sent_before_a_deferred_mode_switch_is_validated_against_the_agent_that_runs_it() -> TestResult {
     AcpTestHarness::run(|mut harness| async move {
-        let (expansion_started, release_expansion) = harness.pause_prompt_expansion();
+        let expansion = harness.pause_prompt_expansion();
         let fake = harness.insert_agent_switching_session().await;
         harness.expect_mcp_server_status(&["planner-mcp"]).await;
         let in_flight = send_prompt(&harness, &fake, "/plan");
-        expansion_started.notified().await;
+        expansion.reached().await;
 
         select_coder(&harness, &fake).await;
         let image = send_content(&harness, &fake, vec![ContentBlock::Image(ImageContent::new("aW1n", "image/png"))]);
-        release_expansion.notify_one();
+        expansion.open();
 
         in_flight.await?;
         image.await?;
