@@ -2,6 +2,7 @@
 
 pub mod artifact_review;
 pub mod display_meta;
+pub mod fs;
 #[cfg(not(target_family = "wasm"))]
 pub mod git;
 pub mod mcp_status;

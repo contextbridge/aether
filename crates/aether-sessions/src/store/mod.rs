@@ -3,11 +3,12 @@ mod prompt_history;
 use acp_utils::notifications::{PromptSearchResponse, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn};
 use aether_core::events::{AgentEvent, MessageEvent, ToolEvent};
 use serde::Serialize;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use tracing::warn;
+use utils::fs::write_atomic;
 use utils::settings::aether_home;
 
 use crate::error::SessionStoreError;
@@ -136,17 +137,13 @@ impl SessionStore {
         let mut meta: SessionMeta = serde_json::from_str(first.trim())
             .map_err(|source| SessionStoreError::InvalidMetadata { line_number: 1, source })?;
         meta.cwd = new_cwd.to_path_buf();
-        let meta_line = serde_json::to_string(&meta)?;
-
-        let tmp_path = path.with_extension("jsonl.tmp");
-        {
-            let mut file = File::create(&tmp_path)?;
-            writeln!(file, "{meta_line}")?;
-            for line in lines {
-                writeln!(file, "{line}")?;
-            }
+        let mut rewritten = serde_json::to_string(&meta)?;
+        rewritten.push('\n');
+        for line in lines {
+            rewritten.push_str(line);
+            rewritten.push('\n');
         }
-        fs::rename(tmp_path, &path)?;
+        write_atomic(&path, rewritten.as_bytes())?;
 
         let _ = self.prompt_history.relocate_session(session_id, new_cwd);
         Ok(())
