@@ -27,5 +27,5 @@ pub mod variables;
 pub use name_pattern::matches_name_pattern;
 pub use path::home_relative_path;
 pub use reasoning::ReasoningEffort;
-pub use resource_path::{PathOrObject, ResourcePath, string_or_object_schema};
+pub use resource_path::{PathOrObject, ResourcePath};
 pub use settings::SettingsStore;

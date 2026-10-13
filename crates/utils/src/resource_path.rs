@@ -3,19 +3,11 @@ use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-#[derive(serde::Deserialize)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum PathOrObject<O> {
     Path(ResourcePath),
     Object(O),
-}
-
-pub fn string_or_object_schema(description: &str, object_schema: &serde_json::Value) -> Schema {
-    Schema::try_from(serde_json::json!({
-        "description": description,
-        "oneOf": [{ "type": "string" }, object_schema],
-    }))
-    .expect("string_or_object schema must be valid")
 }
 
 /// A path declared in user-facing settings.

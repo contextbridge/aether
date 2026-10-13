@@ -1,8 +1,8 @@
 use crate::core::{AgentError, Result};
 use crate::mcp::PROGRESSIVE_DISCOVERY_INSTRUCTIONS;
 use glob::glob;
-use schemars::{JsonSchema, Schema, SchemaGenerator};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -11,7 +11,7 @@ use tracing::warn;
 use utils::shell_expander::ShellExpander;
 use utils::substitution::substitute_parameters;
 use utils::variables::VarError;
-use utils::{PathOrObject, ResourcePath, string_or_object_schema};
+use utils::{PathOrObject, ResourcePath};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Prompt {
@@ -30,7 +30,9 @@ pub struct McpInstructions {
 ///
 /// Used by configuration layers to declare prompts before resolution. Convert into
 /// runtime [`Prompt`] values with [`Prompt::from_sources`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(from = "PathOrObject<PromptSourceObject>", into = "PathOrObject<PromptSourceObject>")]
+#[schemars(with = "PathOrObject<PromptSourceObject>", description = include_str!("../docs/prompt_source.md"))]
 pub enum PromptSource {
     Text { text: String },
     File { path: ResourcePath, optional: bool },
@@ -94,41 +96,23 @@ impl From<PromptSourceObject> for PromptSource {
     }
 }
 
-impl<'de> Deserialize<'de> for PromptSource {
-    fn deserialize<T: Deserializer<'de>>(deserializer: T) -> std::result::Result<Self, T::Error> {
-        Ok(match PathOrObject::<PromptSourceObject>::deserialize(deserializer)? {
-            PathOrObject::Path(path) => Self::File { path, optional: false },
+impl From<PathOrObject<PromptSourceObject>> for PromptSource {
+    fn from(source: PathOrObject<PromptSourceObject>) -> Self {
+        match source {
+            PathOrObject::Path(path) => Self::file(path),
             PathOrObject::Object(object) => object.into(),
-        })
-    }
-}
-
-impl Serialize for PromptSource {
-    fn serialize<T: Serializer>(&self, serializer: T) -> std::result::Result<T::Ok, T::Error> {
-        match self {
-            Self::File { path, optional: false } => path.serialize(serializer),
-            Self::File { path, optional } => {
-                Serialize::serialize(&PromptSourceObject::File { path: path.clone(), optional: *optional }, serializer)
-            }
-            Self::Text { text } => Serialize::serialize(&PromptSourceObject::Text { text: text.clone() }, serializer),
-            Self::Glob { pattern, optional } => Serialize::serialize(
-                &PromptSourceObject::Glob { pattern: pattern.clone(), optional: *optional },
-                serializer,
-            ),
         }
     }
 }
 
-impl JsonSchema for PromptSource {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        "PromptSource".into()
-    }
-
-    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
-        string_or_object_schema(
-            include_str!("../docs/prompt_source.md"),
-            &generator.subschema_for::<PromptSourceObject>().to_value(),
-        )
+impl From<PromptSource> for PathOrObject<PromptSourceObject> {
+    fn from(source: PromptSource) -> Self {
+        match source {
+            PromptSource::File { path, optional: false } => Self::Path(path),
+            PromptSource::File { path, optional } => Self::Object(PromptSourceObject::File { path, optional }),
+            PromptSource::Text { text } => Self::Object(PromptSourceObject::Text { text }),
+            PromptSource::Glob { pattern, optional } => Self::Object(PromptSourceObject::Glob { pattern, optional }),
+        }
     }
 }
 
