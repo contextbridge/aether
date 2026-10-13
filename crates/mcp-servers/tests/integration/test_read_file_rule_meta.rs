@@ -21,7 +21,7 @@ async fn test_read_file_meta_includes_matched_rule_names_from_configured_rules_d
     let rs_file = src_dir.join("main.rs");
     fs::write(&rs_file, "fn main() {}\n").unwrap();
 
-    let mcp = CodingMcp::new(root).with_rules_dirs(vec![rules_dir]);
+    let mcp = CodingMcp::new(root).with_rules_dirs(&[rules_dir]);
 
     let result = mcp
         .test_read_file(ReadFileArgs { file_path: rs_file.to_string_lossy().to_string(), offset: None, limit: None })

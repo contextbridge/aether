@@ -24,7 +24,7 @@ use utils::substitution::substitute_parameters;
 use super::tools::{
     ListSkillsInput, ListSkillsOutput, LoadSkillsInput, LoadSkillsOutput, SkillFile, SkillListItem, SkillRequest,
 };
-use crate::workspace_paths::{WorkspacePaths, resolve_path};
+use crate::workspace_paths::resolve_path;
 use aether_project::{PromptCatalog, PromptFile, SKILL_FILENAME};
 use utils::display_meta::ToolDisplayMeta;
 
@@ -275,8 +275,7 @@ impl ServerHandler for SkillsMcp {
         });
 
         let content = substitute_parameters(&body, &arguments);
-        let cwd = WorkspacePaths::new(self.root_dir.clone()).root().to_path_buf();
-        let content = expand_shell(&content, &cwd).await;
+        let content = expand_shell(&content, &self.root_dir).await;
         let messages = vec![PromptMessage::new_text(Role::User, content)];
 
         Ok(rmcp::model::GetPromptResult::new(messages).with_description(spec.description.clone()).into())
