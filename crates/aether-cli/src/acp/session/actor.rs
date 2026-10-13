@@ -89,6 +89,18 @@ pub(crate) enum SessionCommand {
     },
 }
 
+impl SessionCommand {
+    pub(crate) fn reject(self, error: Error) {
+        match self {
+            Self::Prompt { client_connection, .. } => client_connection.respond_with_error(error),
+            Self::SetConfig { responder, .. } => {
+                let _ = responder.respond_with_error(error);
+            }
+            _ => {}
+        }
+    }
+}
+
 pub(crate) enum ClientConnection {
     Attached(Box<Responder<PromptResponse>>),
     Detached,
@@ -244,7 +256,9 @@ impl SessionActor {
             idle_deadline: None,
         };
         actor.reset_idle_deadline();
-        actor.ensure_active_running().await?;
+        let active = actor.active_agent.clone();
+        let messages = conversation_messages_from_events(&actor.transcript);
+        actor.ensure_running_with(&active, messages).await?;
         if init.replay {
             replay_to_client(&actor.transcript, &actor.io);
         }
@@ -353,15 +367,6 @@ impl SessionActor {
         self.active_runtime().send_agent_command(command).await
     }
 
-    async fn ensure_active_running(&mut self) -> Result<(), SessionError> {
-        if self.runtimes.contains_key(&self.active_agent) {
-            return Ok(());
-        }
-        let active = self.active_agent.clone();
-        let messages = conversation_messages_from_events(&self.transcript);
-        self.ensure_running_with(&active, messages).await
-    }
-
     async fn ensure_running_with(&mut self, target: &AgentKey, messages: Vec<ChatMessage>) -> Result<(), SessionError> {
         if let Some(runtime) = self.runtimes.get(target) {
             return runtime.replace_conversation(messages).await;
@@ -376,10 +381,6 @@ impl SessionActor {
         };
         self.runtimes.insert(target.clone(), runtime);
         Ok(())
-    }
-
-    fn record_event(&mut self, event: SessionEvent) {
-        self.transcript.push(event);
     }
 
     fn reset_idle_deadline(&mut self) {
@@ -420,8 +421,7 @@ impl SessionActor {
                 };
                 self.io.send_update(acp::SessionUpdate::StateUpdate(state));
                 self.publish_active_mcps();
-                let options = self.config.config_options(&self.modes, &available, self.oauth_credential_store.as_ref());
-                let _ = reply.send(Ok(options));
+                let _ = reply.send(Ok(self.config_options(&available)));
             }
             SessionCommand::Detach { reply } => {
                 self.io.connection = None;
@@ -430,15 +430,10 @@ impl SessionActor {
             }
             SessionCommand::Cancel => self.cancel_turn().await,
             SessionCommand::SetConfig { setting, available, responder } => {
-                let result = if self.prompts.is_idle() {
-                    self.apply_idle_config_change(&setting, &available).await
-                } else {
-                    self.apply_config_change(&setting, &available)
-                };
-                let _ = responder.respond_with_result(result);
+                let _ = responder.respond_with_result(self.set_config(&setting, &available).await);
             }
             SessionCommand::RefreshConfigOptions { available } => {
-                let options = self.config.config_options(&self.modes, &available, self.oauth_credential_store.as_ref());
+                let options = self.config_options(&available);
                 self.io.send_update(acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(options)));
             }
             SessionCommand::AuthenticateMcp { server_name } => {
@@ -577,26 +572,20 @@ impl SessionActor {
         self.apply_switch(switch).await.inspect_err(|error| error!("Failed to activate selected mode: {error}"))
     }
 
-    async fn apply_idle_config_change(
-        &mut self,
-        setting: &ConfigSetting,
-        available: &[LlmModel],
-    ) -> Result<SetSessionConfigOptionResponse, Error> {
-        self.apply_config_change(setting, available)?;
-        self.apply_deferred_agent_switch().await.map_err(|_| Error::internal_error())?;
-        let options = self.config.config_options(&self.modes, available, self.oauth_credential_store.as_ref());
-        Ok(SetSessionConfigOptionResponse::new(options))
-    }
-
-    fn apply_config_change(
+    async fn set_config(
         &mut self,
         setting: &ConfigSetting,
         available: &[LlmModel],
     ) -> Result<SetSessionConfigOptionResponse, Error> {
         self.config.apply_config_change(&self.modes, available, setting)?;
+        if self.prompts.is_idle() {
+            self.apply_deferred_agent_switch().await.map_err(|_| Error::internal_error())?;
+        }
+        Ok(SetSessionConfigOptionResponse::new(self.config_options(available)))
+    }
 
-        let options = self.config.config_options(&self.modes, available, self.oauth_credential_store.as_ref());
-        Ok(SetSessionConfigOptionResponse::new(options))
+    fn config_options(&self, available: &[LlmModel]) -> Vec<acp::SessionConfigOption> {
+        self.config.config_options(&self.modes, available, self.oauth_credential_store.as_ref())
     }
 
     async fn apply_switch(&mut self, switch: Switch) -> Result<(), SessionError> {
@@ -649,7 +638,7 @@ impl SessionActor {
             warn!("Failed to append session log entry: {e}");
         }
 
-        self.record_event(event);
+        self.transcript.push(event);
     }
 }
 
@@ -690,37 +679,31 @@ fn on_elicitation(io: &SessionIo, elicitation: Elicitation) {
     }
 }
 
-async fn on_elicitation_request(
-    connection: &ConnectionTo<Client>,
-    session_id: &SessionId,
-    elicitation: Box<ElicitationRequest>,
-) {
-    let result = async {
-        let request =
-            elicitation::map_mcp_elicitation_request_to_acp(&elicitation.server, session_id, &elicitation.request)
-                .map_err(|error| error.to_string())?;
-        let response = connection.send_request(request).block_task().await.map_err(|error| format!("{error:?}"))?;
-        elicitation::map_acp_elicitation_response_to_mcp(response).map_err(|error| error.to_string())
-    }
-    .await;
-
-    match result {
-        Ok(result) => elicitation.respond(result),
-        Err(error) => error!("ACP elicitation failed: {error}"),
-    }
-}
-
 fn spawn_elicitation_request(
     connection: &ConnectionTo<Client>,
     session_id: &SessionId,
     elicitation: Box<ElicitationRequest>,
 ) {
-    let connection = connection.clone();
+    let task_connection = connection.clone();
     let session_id = session_id.clone();
-    if let Err(e) = connection.clone().spawn(async move {
-        on_elicitation_request(&connection, &session_id, elicitation).await;
+    let spawned = connection.spawn(async move {
+        let result = async {
+            let request =
+                elicitation::map_mcp_elicitation_request_to_acp(&elicitation.server, &session_id, &elicitation.request)
+                    .map_err(|error| error.to_string())?;
+            let response =
+                task_connection.send_request(request).block_task().await.map_err(|error| format!("{error:?}"))?;
+            elicitation::map_acp_elicitation_response_to_mcp(response).map_err(|error| error.to_string())
+        }
+        .await;
+
+        match result {
+            Ok(result) => elicitation.respond(result),
+            Err(error) => error!("ACP elicitation failed: {error}"),
+        }
         Ok(())
-    }) {
+    });
+    if let Err(e) = spawned {
         error!("Failed to spawn elicitation request handler: {e:?}");
     }
 }
