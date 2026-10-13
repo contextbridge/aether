@@ -99,7 +99,6 @@ dependencies = [
  "tokio-tungstenite 0.30.0",
  "tokio-util",
  "tracing",
- "tracing-appender",
  "tracing-subscriber",
  "url",
  "uuid",

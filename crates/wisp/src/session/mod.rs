@@ -5,7 +5,7 @@ pub mod terminal;
 pub mod workspace_status;
 
 use crate::error::AppError;
-use crate::session::workspace_status::WorkspaceStatus;
+use crate::session::workspace_status::{WorkspaceStatus, initial_workspace_status};
 use acp_utils::client::{AcpClient, AcpClientError, connect_acp_client, initialize_request};
 use acp_utils::notifications::{RemoteServerInfo, SessionPreviewParams};
 use agent_client_protocol::schema::v2::{
@@ -54,7 +54,7 @@ impl Session {
         } else {
             client.handle.new_session(NewSessionRequest::new(working_dir.clone())).await?
         };
-        let workspace_status = WorkspaceStatus::initial(&working_dir);
+        let workspace_status = initial_workspace_status(&working_dir);
         Ok(Self { client, response, working_dir, workspace_status, workspace_access: WorkspaceAccess::Remote })
     }
 
@@ -65,7 +65,7 @@ impl Session {
     }
 
     pub async fn connect_to(agent: impl ConnectTo<Client> + 'static, working_dir: PathBuf) -> Result<Self, AppError> {
-        let workspace_status = WorkspaceStatus::initial(&working_dir);
+        let workspace_status = initial_workspace_status(&working_dir);
         let client = connect_acp_client(agent, initialize_request(client_info())).await?;
         let session_response = client.handle.new_session(NewSessionRequest::new(working_dir.clone())).await?;
 

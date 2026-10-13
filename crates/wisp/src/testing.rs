@@ -118,7 +118,7 @@ impl FakeExecutor {
         match command {
             Command::Agent(AgentCommand::FetchWorkspaceStatus { cwd, .. }) => {
                 let status = self.git.workspace_status();
-                Some(CommandResult::WorkspaceResolved { cwd: cwd.clone(), status: status.into() })
+                Some(CommandResult::WorkspaceResolved { cwd: cwd.clone(), status })
             }
             Command::GitReview(GitReviewCommand::Open { .. }) => {
                 self.git_completion = None;
@@ -1390,10 +1390,10 @@ impl TestUiBuilder {
             )
             .auth_methods(self.auth_methods.clone()),
             session_response: acp::NewSessionResponse::new("test-session").config_options(self.config_options.clone()),
-            workspace_status: self
-                .workspace_status
-                .clone()
-                .unwrap_or_else(|| WorkspaceStatus::new("~/code/demo", Some("main".to_string()))),
+            workspace_status: self.workspace_status.clone().unwrap_or_else(|| WorkspaceStatus {
+                display_dir: "~/code/demo".to_string(),
+                git_ref: Some("main".to_string()),
+            }),
             working_dir: self.working_dir.clone().unwrap_or_else(|| PathBuf::from(".")),
             workspace_access: self.workspace_access,
             settings: self.settings.clone(),

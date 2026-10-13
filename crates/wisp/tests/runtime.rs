@@ -12,7 +12,7 @@ use wisp::command::{AgentCommand, Command, CommandResult, GitReviewCommand};
 use wisp::file_index::index_files_with_limit;
 use wisp::git_review::{DiffScope, DocumentUpdate, Event, FileDiff, FileEntry, LIVE_PROTOCOL_VERSION, ServerMessage};
 use wisp::runtime::CommandDispatcher;
-use wisp::session::workspace_status::WorkspaceStatus;
+use wisp::session::workspace_status::initial_workspace_status;
 
 #[test]
 fn file_index_limit_counts_only_indexed_files() {
@@ -77,7 +77,7 @@ async fn workspace_status_falls_back_to_the_session_path_without_an_agent() -> R
         let Some(CommandResult::WorkspaceResolved { cwd, status }) = dispatcher.next_result().await else {
             panic!("expected workspace status");
         };
-        assert_eq!(status, WorkspaceStatus::initial(&cwd));
+        assert_eq!(status, initial_workspace_status(&cwd));
         resolved.push(cwd);
     }
     assert!(resolved.contains(&second.path().to_path_buf()));

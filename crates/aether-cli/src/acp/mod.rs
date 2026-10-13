@@ -25,15 +25,10 @@ use llm::{ProviderConnectionOverride, ProviderConnectionOverrides, ReasoningEffo
 use std::collections::BTreeMap;
 use std::env::current_dir;
 use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::{
-    fs::create_dir_all,
-    path::{Path, PathBuf},
-};
 use thiserror::Error;
 use tracing::{info, warn};
-use tracing_appender::rolling::daily;
-use tracing_subscriber::EnvFilter;
 
 use aether_auth::OAuthError;
 use aether_project::SettingsError;
@@ -203,7 +198,7 @@ impl AcpRunConfig {
 
 fn create_acp_state(args: AcpArgs, cwd: &Path, hooks: SessionHooks) -> Result<AcpState, AcpRunError> {
     let config = AcpRunConfig::from_args(args)?;
-    setup_logging(&config.log_dir);
+    wisp::init_file_logging(&config.log_dir, "aether-acp.log", "warn");
 
     let initial_selection = if let Some(agent) = config.agent.clone() {
         InitialSessionSelection::agent(agent)
@@ -235,16 +230,6 @@ fn create_acp_state(args: AcpArgs, cwd: &Path, hooks: SessionHooks) -> Result<Ac
         cwd: cwd.to_path_buf(),
         hooks,
     }))
-}
-
-fn setup_logging(log_dir: &Path) {
-    create_dir_all(log_dir).ok();
-    tracing_subscriber::fmt()
-        .with_writer(daily(log_dir, "aether-acp.log"))
-        .with_ansi(false) // No ANSI colors in log files
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")))
-        .pretty()
-        .init();
 }
 
 fn default_log_dir() -> PathBuf {

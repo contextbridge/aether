@@ -1,6 +1,6 @@
 use crate::command::{AgentCommand, CommandResult, PromptRejection};
 use crate::runtime::tasks::TaskSupervisor;
-use crate::session::workspace_status::WorkspaceStatus;
+use crate::session::workspace_status::initial_workspace_status;
 use acp_utils::client::{AcpClientError, AcpClientHandle};
 use acp_utils::notifications::{
     McpRequest, SessionPreviewParams, WorkspaceListParams, WorkspaceMoveParams, WorkspaceStatusPayload,
@@ -76,7 +76,7 @@ pub(super) fn execute(
             let request = WorkspaceStatusPayload { session_id };
             let response = handle.request(request);
             tasks.submit_network(async move {
-                let status = response.await.map_or_else(|_| WorkspaceStatus::initial(&cwd), WorkspaceStatus::from);
+                let status = response.await.unwrap_or_else(|_| initial_workspace_status(&cwd));
                 CommandResult::WorkspaceResolved { cwd, status }
             });
         }
