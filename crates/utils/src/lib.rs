@@ -15,6 +15,8 @@ pub mod shell_expander;
 pub mod substitution;
 #[cfg(not(target_family = "wasm"))]
 pub mod temp_dir;
+#[cfg(all(feature = "testing", not(target_family = "wasm")))]
+pub mod testing;
 #[cfg(not(target_family = "wasm"))]
 pub mod tool_result_truncator;
 pub mod variables;

@@ -137,8 +137,8 @@ mod tests {
 
     #[test]
     fn discover_user_only_prompt() {
-        let dir = project().skill(
-            "commit",
+        let dir = project().file(
+            "commit/SKILL.md",
             "---\ndescription: Generate commit messages\nuser-invocable: true\nagent-invocable: false\n---\nGenerate a commit message.",
         );
 
@@ -154,8 +154,10 @@ mod tests {
 
     #[test]
     fn discover_agent_only_prompt() {
-        let dir = project()
-            .skill("explain-code", "---\ndescription: Explain code\nagent-invocable: true\n---\nExplain the code.");
+        let dir = project().file(
+            "explain-code/SKILL.md",
+            "---\ndescription: Explain code\nagent-invocable: true\n---\nExplain the code.",
+        );
 
         let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert_eq!(catalog.all().len(), 1);
@@ -167,8 +169,8 @@ mod tests {
 
     #[test]
     fn discover_rule_only_prompt() {
-        let dir = project().skill(
-            "rust-rules",
+        let dir = project().file(
+            "rust-rules/SKILL.md",
             "---\ndescription: Rust conventions\nagent-invocable: false\ntriggers:\n  read:\n    - \"crates/**/*.rs\"\n---\nFollow Rust conventions.",
         );
 
@@ -185,8 +187,8 @@ mod tests {
 
     #[test]
     fn discover_dual_use_prompt() {
-        let dir = project().skill(
-            "explain",
+        let dir = project().file(
+            "explain/SKILL.md",
             "---\ndescription: Explain code\nuser-invocable: true\nagent-invocable: true\nargument-hint: \"[path]\"\n---\nExplain with diagrams.",
         );
 
@@ -206,8 +208,8 @@ mod tests {
     fn reject_duplicate_names() {
         let dir = project()
             // Second skill has an explicit name override so it collides with "foo"
-            .skill("foo", "---\ndescription: First\nuser-invocable: true\n---\nContent.")
-            .skill("bar", "---\nname: foo\ndescription: Second\nuser-invocable: true\n---\nContent.");
+            .file("foo/SKILL.md", "---\ndescription: First\nuser-invocable: true\n---\nContent.")
+            .file("bar/SKILL.md", "---\nname: foo\ndescription: Second\nuser-invocable: true\n---\nContent.");
 
         let result = PromptCatalog::from_dir(dir.root());
         assert!(matches!(result, Err(SettingsError::DuplicatePromptName { .. })));
@@ -215,7 +217,7 @@ mod tests {
 
     #[test]
     fn empty_description_defaults_to_name() {
-        let dir = project().skill("bad", "---\ndescription: \"\"\nuser-invocable: true\n---\nContent.");
+        let dir = project().file("bad/SKILL.md", "---\ndescription: \"\"\nuser-invocable: true\n---\nContent.");
 
         let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert_eq!(catalog.all().len(), 1);
@@ -224,7 +226,7 @@ mod tests {
 
     #[test]
     fn skill_without_activation_surface_defaults_to_user_invocable() {
-        let dir = project().skill("noop", "---\ndescription: Does nothing\n---\nContent.");
+        let dir = project().file("noop/SKILL.md", "---\ndescription: Does nothing\n---\nContent.");
 
         let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert_eq!(catalog.all().len(), 1);
@@ -241,7 +243,8 @@ mod tests {
 
     #[test]
     fn name_defaults_to_directory_name() {
-        let dir = project().skill("my-skill", "---\ndescription: My skill\nagent-invocable: true\n---\nContent.");
+        let dir =
+            project().file("my-skill/SKILL.md", "---\ndescription: My skill\nagent-invocable: true\n---\nContent.");
 
         let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert_eq!(catalog.all()[0].name, "my-skill");
@@ -249,8 +252,10 @@ mod tests {
 
     #[test]
     fn name_from_frontmatter_overrides_directory() {
-        let dir = project()
-            .skill("dir-name", "---\nname: custom-name\ndescription: Custom\nuser-invocable: true\n---\nContent.");
+        let dir = project().file(
+            "dir-name/SKILL.md",
+            "---\nname: custom-name\ndescription: Custom\nuser-invocable: true\n---\nContent.",
+        );
 
         let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert_eq!(catalog.all()[0].name, "custom-name");
@@ -259,12 +264,15 @@ mod tests {
     #[test]
     fn matching_read_rules_finds_matches() {
         let dir = project()
-            .skill(
-                "rust-rules",
+            .file(
+                "rust-rules/SKILL.md",
                 "---\ndescription: Rust rules\ntriggers:\n  read:\n    - \"src/**/*.rs\"\n---\nRust rules.",
             )
-            .skill("ts-rules", "---\ndescription: TS rules\ntriggers:\n  read:\n    - \"src/**/*.ts\"\n---\nTS rules.")
-            .skill("commit", "---\ndescription: Commit\nuser-invocable: true\n---\nCommit.");
+            .file(
+                "ts-rules/SKILL.md",
+                "---\ndescription: TS rules\ntriggers:\n  read:\n    - \"src/**/*.ts\"\n---\nTS rules.",
+            )
+            .file("commit/SKILL.md", "---\ndescription: Commit\nuser-invocable: true\n---\nCommit.");
 
         let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         let matches = catalog.matching_rules("src/main.rs");
@@ -295,8 +303,8 @@ mod tests {
     #[test]
     fn skips_hidden_directories() {
         let dir = project()
-            .skill(".archived", "---\ndescription: Archived\nuser-invocable: true\n---\nOld.")
-            .skill("visible", "---\ndescription: Visible\nuser-invocable: true\n---\nNew.");
+            .file(".archived/SKILL.md", "---\ndescription: Archived\nuser-invocable: true\n---\nOld.")
+            .file("visible/SKILL.md", "---\ndescription: Visible\nuser-invocable: true\n---\nNew.");
 
         let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert_eq!(catalog.all().len(), 1);
@@ -305,8 +313,8 @@ mod tests {
 
     #[test]
     fn preserves_tags_and_metadata() {
-        let dir = project().skill(
-            "tagged",
+        let dir = project().file(
+            "tagged/SKILL.md",
             "---\ndescription: Tagged skill\nagent-invocable: true\ntags:\n  - rust\n  - testing\nagent_authored: true\nhelpful: 5\nharmful: 1\n---\nContent.",
         );
 
@@ -320,8 +328,10 @@ mod tests {
 
     #[test]
     fn from_dirs_last_wins() {
-        let dir_a = project().skill("rust", "---\ndescription: Rust A\nagent-invocable: true\n---\nFrom dir A.");
-        let dir_b = project().skill("rust", "---\ndescription: Rust B\nagent-invocable: true\n---\nFrom dir B.");
+        let dir_a =
+            project().file("rust/SKILL.md", "---\ndescription: Rust A\nagent-invocable: true\n---\nFrom dir A.");
+        let dir_b =
+            project().file("rust/SKILL.md", "---\ndescription: Rust B\nagent-invocable: true\n---\nFrom dir B.");
 
         let catalog = PromptCatalog::from_dirs(&[dir_a.root().to_path_buf(), dir_b.root().to_path_buf()]);
         assert_eq!(catalog.all().len(), 1);
@@ -334,8 +344,10 @@ mod tests {
 
     #[test]
     fn from_dirs_union() {
-        let dir_a = project().skill("rust", "---\ndescription: Rust\nagent-invocable: true\n---\nRust content.");
-        let dir_b = project().skill("python", "---\ndescription: Python\nagent-invocable: true\n---\nPython content.");
+        let dir_a =
+            project().file("rust/SKILL.md", "---\ndescription: Rust\nagent-invocable: true\n---\nRust content.");
+        let dir_b =
+            project().file("python/SKILL.md", "---\ndescription: Python\nagent-invocable: true\n---\nPython content.");
 
         let catalog = PromptCatalog::from_dirs(&[dir_a.root().to_path_buf(), dir_b.root().to_path_buf()]);
         assert_eq!(catalog.all().len(), 2);
@@ -347,7 +359,8 @@ mod tests {
 
     #[test]
     fn from_dirs_skips_missing() {
-        let dir_a = project().skill("rust", "---\ndescription: Rust\nagent-invocable: true\n---\nRust content.");
+        let dir_a =
+            project().file("rust/SKILL.md", "---\ndescription: Rust\nagent-invocable: true\n---\nRust content.");
         let missing = PathBuf::from("/tmp/nonexistent-skills-dir-12345");
 
         let catalog = PromptCatalog::from_dirs(&[missing, dir_a.root().to_path_buf()]);
@@ -388,7 +401,7 @@ mod tests {
     #[test]
     fn discover_mixed_skill_md_and_flat_rules() {
         let dir = project()
-            .skill("commit", "---\ndescription: Commit\nuser-invocable: true\n---\nCommit message.")
+            .file("commit/SKILL.md", "---\ndescription: Commit\nuser-invocable: true\n---\nCommit message.")
             .file("rust-rules.md", "---\ndescription: Rust rules\nglobs:\n  - \"**/*.rs\"\n---\nRust conventions.");
 
         let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
@@ -401,7 +414,7 @@ mod tests {
 
     #[test]
     fn from_dirs_merges_flat_rules() {
-        let dir_a = project().skill("commit", "---\ndescription: Commit\nuser-invocable: true\n---\nCommit.");
+        let dir_a = project().file("commit/SKILL.md", "---\ndescription: Commit\nuser-invocable: true\n---\nCommit.");
         let dir_b = project()
             .file("rust-rules.md", "---\ndescription: Rust rules\nglobs:\n  - \"**/*.rs\"\n---\nRust conventions.");
 

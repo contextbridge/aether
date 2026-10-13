@@ -10,7 +10,7 @@
 //! Run with: `cargo test -p mcp-servers -- lsp_diagnostics`
 
 use crate::common::{call_tool, coding_with_lsp, connect, has_errors, has_no_errors, poll_diagnostics, try_call_tool};
-use aether_lspd::testing::{CargoProject, TestProject};
+use aether_lspd::testing::cargo_project;
 use mcp_utils::client::{ClientOptions, McpClient};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -60,19 +60,17 @@ fn canonical_path(path: &str) -> String {
 /// Test: MCP `edit_file` tool → rust-analyzer picks up change → diagnostics queryable
 #[tokio::test]
 async fn test_mcp_edit_produces_diagnostics() {
-    let project = CargoProject::new("mcp_edit_diag").expect("Failed to create project");
-    project
-        .add_file(
-            "src/main.rs",
-            r#"fn main() {
+    let project = cargo_project("mcp_edit_diag");
+    project.write(
+        "src/main.rs",
+        r#"fn main() {
     let x: i32 = "not an int";
     println!("{}", x);
 }
 "#,
-        )
-        .expect("Failed to add file");
+    );
 
-    let main_rs = project.file_path_str("src/main.rs");
+    let main_rs = project.path_string("src/main.rs");
 
     let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
 
@@ -116,19 +114,17 @@ async fn test_mcp_edit_produces_diagnostics() {
 /// the LSP to re-publish diagnostics after syncing a changed document.
 #[tokio::test]
 async fn test_diagnostics_available_after_edit_without_polling() {
-    let project = CargoProject::new("diag_after_edit_no_poll").expect("Failed to create project");
-    project
-        .add_file(
-            "src/main.rs",
-            r#"fn main() {
+    let project = cargo_project("diag_after_edit_no_poll");
+    project.write(
+        "src/main.rs",
+        r#"fn main() {
     let x: i32 = 42;
     println!("{}", x);
 }
 "#,
-        )
-        .expect("Failed to add file");
+    );
 
-    let main_rs = project.file_path_str("src/main.rs");
+    let main_rs = project.path_string("src/main.rs");
 
     let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
 
@@ -154,19 +150,17 @@ async fn test_diagnostics_available_after_edit_without_polling() {
 /// documents before returning the cache.
 #[tokio::test]
 async fn test_diagnostics_all_files_after_edit() {
-    let project = CargoProject::new("diag_all_files").expect("Failed to create project");
-    project
-        .add_file(
-            "src/main.rs",
-            r#"fn main() {
+    let project = cargo_project("diag_all_files");
+    project.write(
+        "src/main.rs",
+        r#"fn main() {
     let x: i32 = 42;
     println!("{}", x);
 }
 "#,
-        )
-        .expect("Failed to add file");
+    );
 
-    let main_rs = project.file_path_str("src/main.rs");
+    let main_rs = project.path_string("src/main.rs");
 
     let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
 
@@ -192,19 +186,17 @@ async fn test_diagnostics_all_files_after_edit() {
 /// diagnostics request has ever been made.
 #[tokio::test]
 async fn test_workspace_diagnostics_after_edit_without_file_check() {
-    let project = CargoProject::new("diag_workspace_after_edit").expect("Failed to create project");
-    project
-        .add_file(
-            "src/main.rs",
-            r#"fn main() {
+    let project = cargo_project("diag_workspace_after_edit");
+    project.write(
+        "src/main.rs",
+        r#"fn main() {
     let x: i32 = 42;
     println!("{}", x);
 }
 "#,
-        )
-        .expect("Failed to add file");
+    );
 
-    let main_rs = project.file_path_str("src/main.rs");
+    let main_rs = project.path_string("src/main.rs");
 
     let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
 
@@ -230,19 +222,17 @@ async fn test_workspace_diagnostics_after_edit_without_file_check() {
 /// file-scoped diagnostics request.
 #[tokio::test]
 async fn test_workspace_diagnostics_clear_after_fix_without_file_check() {
-    let project = CargoProject::new("diag_workspace_fix").expect("Failed to create project");
-    project
-        .add_file(
-            "src/main.rs",
-            r#"fn main() {
+    let project = cargo_project("diag_workspace_fix");
+    project.write(
+        "src/main.rs",
+        r#"fn main() {
     let x: i32 = "not an int";
     println!("{}", x);
 }
 "#,
-        )
-        .expect("Failed to add file");
+    );
 
-    let main_rs = project.file_path_str("src/main.rs");
+    let main_rs = project.path_string("src/main.rs");
 
     let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
 
@@ -282,19 +272,17 @@ async fn test_workspace_diagnostics_clear_after_fix_without_file_check() {
 /// cache, not just previously-opened documents.
 #[tokio::test]
 async fn test_diagnostics_all_files_after_external_edit() {
-    let project = CargoProject::new("diag_all_ext_edit").expect("Failed to create project");
-    project
-        .add_file(
-            "src/main.rs",
-            r#"fn main() {
+    let project = cargo_project("diag_all_ext_edit");
+    project.write(
+        "src/main.rs",
+        r#"fn main() {
     let x: i32 = 42;
     println!("{}", x);
 }
 "#,
-        )
-        .expect("Failed to add file");
+    );
 
-    let main_rs = project.file_path_str("src/main.rs");
+    let main_rs = project.path_string("src/main.rs");
     let main_rs_path = project.root().join("src/main.rs");
 
     let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
@@ -319,19 +307,17 @@ async fn test_diagnostics_all_files_after_external_edit() {
 /// diagnostics cache fresh, so the daemon should simply return whatever is cached.
 #[tokio::test]
 async fn test_diagnostics_all_files_after_external_edit_single_call() {
-    let project = CargoProject::new("diag_ext_single_call").expect("Failed to create project");
-    project
-        .add_file(
-            "src/main.rs",
-            r#"fn main() {
+    let project = cargo_project("diag_ext_single_call");
+    project.write(
+        "src/main.rs",
+        r#"fn main() {
     let x: i32 = 42;
     println!("{}", x);
 }
 "#,
-        )
-        .expect("Failed to add file");
+    );
 
-    let main_rs = project.file_path_str("src/main.rs");
+    let main_rs = project.path_string("src/main.rs");
     let main_rs_path = project.root().join("src/main.rs");
 
     let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
@@ -354,19 +340,17 @@ async fn test_diagnostics_all_files_after_external_edit_single_call() {
 /// Test: External `fs::write` → file watcher → diagnostics queryable
 #[tokio::test]
 async fn test_external_file_change_produces_diagnostics() {
-    let project = CargoProject::new("ext_write_diag").expect("Failed to create project");
-    project
-        .add_file(
-            "src/main.rs",
-            r#"fn main() {
+    let project = cargo_project("ext_write_diag");
+    project.write(
+        "src/main.rs",
+        r#"fn main() {
     let x: i32 = "not an int";
     println!("{}", x);
 }
 "#,
-        )
-        .expect("Failed to add file");
+    );
 
-    let main_rs = project.file_path_str("src/main.rs");
+    let main_rs = project.path_string("src/main.rs");
     let main_rs_path = project.root().join("src/main.rs");
 
     let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
@@ -413,17 +397,15 @@ async fn test_external_file_change_produces_diagnostics() {
 /// for workspace scope, this file will be invisible.
 #[tokio::test]
 async fn test_diagnostics_all_files_discovers_file_watcher_uris() {
-    let project = CargoProject::new("diag_fw_discover").expect("Failed to create project");
-    project
-        .add_file(
-            "src/main.rs",
-            r#"fn main() {
+    let project = cargo_project("diag_fw_discover");
+    project.write(
+        "src/main.rs",
+        r#"fn main() {
     let x: i32 = 42;
     println!("{}", x);
 }
 "#,
-        )
-        .expect("Failed to add file");
+    );
 
     let main_rs_path = project.root().join("src/main.rs");
 

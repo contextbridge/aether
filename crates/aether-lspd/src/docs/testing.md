@@ -1,32 +1,30 @@
-Scaffolds temporary projects for integration testing against real language servers.
+Scaffolds temporary projects and in-process daemons for integration testing against language servers.
 
 Enable with the `testing` feature flag:
 ```toml
 aether-lspd = { version = "...", features = ["testing"] }
 ```
 
-# `TestProject` trait
+# Projects
 
-All test projects implement [`TestProject`], which provides:
+Projects are [`TestWorkspace`]s, so they share its `file`, `write`, `path`, and `path_string` helpers and are cleaned up when dropped.
 
-- [`root()`](TestProject::root) -- The temporary directory path.
-- [`add_file(path, content)`](TestProject::add_file) -- Write a file relative to the project root.
-- [`file_uri(path)`](TestProject::file_uri) -- Get an LSP `file://` URI for a relative path.
-- [`file_path_str(path)`](TestProject::file_path_str) -- Get the absolute path as a string.
+- [`cargo_project(name)`](cargo_project) -- A Cargo project with `Cargo.toml` and `src/main.rs`.
+- [`node_project(name)`](node_project) -- A Node.js/TypeScript project with `package.json`, `tsconfig.json`, `src/index.ts`, and TypeScript 7 installed locally with `npm install`.
+- [`file_uri(path)`](file_uri) -- The LSP `file://` URI for a path.
 
-# Implementations
+# Daemons
 
-- [`CargoProject::new(name)`](CargoProject::new) -- Creates a temporary Cargo project with `Cargo.toml` and `src/main.rs`.
-- [`NodeProject::new(name)`](NodeProject::new) -- Creates a temporary Node.js/TypeScript project with `package.json`, `tsconfig.json`, `src/index.ts`, and installs TypeScript 7 locally with `npm install`.
-
-Both are backed by [`TempDir`](tempfile::TempDir) and are automatically cleaned up when dropped.
+- [`TestDaemon`] -- An in-process daemon with deterministic shutdown.
+- [`remove_stale_daemon_files`] -- Clears a previous daemon's socket and lockfile.
+- [`configure_fake_server`] -- Points a language at the shared fake language server.
 
 # Example
 
 ```rust,no_run
-use aether_lspd::testing::{CargoProject, TestProject};
+use aether_lspd::testing::{cargo_project, file_uri};
 
-let project = CargoProject::new("my-test").unwrap();
-project.add_file("src/lib.rs", "pub fn hello() -> &'static str { \"hi\" }").unwrap();
-let uri = project.file_uri("src/lib.rs");
+let project = cargo_project("my-test");
+project.write("src/lib.rs", "pub fn hello() -> &'static str { \"hi\" }");
+let uri = file_uri(&project.path("src/lib.rs"));
 ```

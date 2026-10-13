@@ -23,6 +23,9 @@ rustdoc-args = ["--cfg", "docsrs"]
 [lints]
 workspace = true
 
+[features]
+testing = []
+
 [dependencies]
 futures = { workspace = true }
 regex = { workspace = true }

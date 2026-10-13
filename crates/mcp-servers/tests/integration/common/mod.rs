@@ -2,14 +2,13 @@
 
 #![allow(dead_code)]
 
-use aether_lspd::testing::TestProject;
 use mcp_servers::coding::CodingMcp;
 use mcp_servers::coding::tools::web_fetch::WebFetcher;
 use mcp_servers::skills::{
     SkillsMcp,
     tools::{LoadSkillsInput, SkillRequest},
 };
-use mcp_servers::testing::FakeHttpClient;
+use mcp_servers::testing::{FakeHttpClient, TestWorkspace};
 use mcp_utils::client::{ClientOptions, McpClient};
 use mcp_utils::testing::{ElicitationScript, args, call, elicitation_host};
 use rmcp::ServerHandler;
@@ -19,10 +18,9 @@ use rmcp::model::{
 };
 use serde::Serialize;
 use serde_json::Value;
-use std::fs::{create_dir_all, read_to_string};
+use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use tempfile::{TempDir, tempdir};
 
 /// Default timeout for polling operations (60 seconds).
 const POLL_TIMEOUT: Duration = Duration::from_mins(1);
@@ -53,7 +51,7 @@ pub fn taskless() -> ClientOptions {
     ClientOptions::default().without_tasks()
 }
 
-pub fn coding_with_lsp(project: &impl TestProject) -> CodingMcp {
+pub fn coding_with_lsp(project: &TestWorkspace) -> CodingMcp {
     CodingMcp::new(project.root()).with_lsp()
 }
 
@@ -86,44 +84,39 @@ pub fn test_error(message: impl Into<String>) -> std::io::Error {
 
 /// An isolated workspace connected to a `CodingMcp` through the public MCP protocol.
 pub struct CodingWorkspace {
-    root: TempDir,
+    workspace: TestWorkspace,
     pub client: McpClient,
 }
 
 impl CodingWorkspace {
-    pub async fn new() -> TestResult<Self> {
+    pub async fn new() -> Self {
         Self::start(|root| CodingMcp::new(root)).await
     }
 
-    pub async fn new_with_lsp() -> TestResult<Self> {
+    pub async fn new_with_lsp() -> Self {
         Self::start(|root| CodingMcp::new(root).with_lsp()).await
     }
 
-    pub async fn with_http(http: FakeHttpClient) -> TestResult<Self> {
+    pub async fn with_http(http: FakeHttpClient) -> Self {
         Self::start(|root| CodingMcp::new(root).with_web_fetcher(WebFetcher::with_client(http))).await
     }
 
-    async fn start(configure: impl FnOnce(&Path) -> CodingMcp) -> TestResult<Self> {
-        let root = tempdir()?;
-        let client = connect(configure(root.path()), ClientOptions::default()).await;
-        Ok(Self { root, client })
+    async fn start(configure: impl FnOnce(&Path) -> CodingMcp) -> Self {
+        let workspace = TestWorkspace::new();
+        let client = connect(configure(workspace.root()), ClientOptions::default()).await;
+        Self { workspace, client }
     }
 
     pub fn root(&self) -> &Path {
-        self.root.path()
+        self.workspace.root()
     }
 
     pub fn path(&self, relative_path: impl AsRef<Path>) -> PathBuf {
-        self.root.path().join(relative_path)
+        self.workspace.path(relative_path)
     }
 
-    pub fn write(&self, relative_path: impl AsRef<Path>, content: &str) -> TestResult<PathBuf> {
-        let path = self.path(relative_path);
-        if let Some(parent) = path.parent() {
-            create_dir_all(parent)?;
-        }
-        std::fs::write(&path, content)?;
-        Ok(path)
+    pub fn write(&self, relative_path: impl AsRef<Path>, content: &str) -> PathBuf {
+        self.workspace.write(relative_path, content)
     }
 
     pub fn read(&self, relative_path: impl AsRef<Path>) -> TestResult<String> {
@@ -222,7 +215,7 @@ pub fn has_no_errors(result: &serde_json::Value) -> bool {
     error_count(result).is_some_and(|n| n == 0)
 }
 
-pub async fn cleanup_daemon(project: &impl TestProject) {
+pub async fn cleanup_daemon(project: &TestWorkspace) {
     use aether_lspd::{LanguageId, socket_path};
     for lang in [LanguageId::Rust, LanguageId::TypeScript] {
         let sock = socket_path(project.root(), lang);
@@ -230,20 +223,6 @@ pub async fn cleanup_daemon(project: &impl TestProject) {
         let _ = tokio::fs::remove_file(sock.with_extension("lock")).await;
         let _ = tokio::fs::remove_file(sock.with_extension("log")).await;
     }
-}
-
-/// Creates files and directories (including parents) from `(path, content)`
-/// pairs inside a fresh temp dir.
-pub fn create_test_files(files: &[(&str, &str)]) -> TempDir {
-    let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    for (path, content) in files {
-        let full_path = temp_dir.path().join(path);
-        if let Some(parent) = full_path.parent() {
-            create_dir_all(parent).unwrap_or_else(|_| panic!("Failed to create directory for {path}"));
-        }
-        std::fs::write(&full_path, content).unwrap_or_else(|_| panic!("Failed to write file {path}"));
-    }
-    temp_dir
 }
 
 /// A skills server serving the `skills` directory of `test_dir`.

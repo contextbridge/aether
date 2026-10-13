@@ -1,5 +1,5 @@
 use crate::common::{
-    CargoProject, DaemonHarness, TestProject, hover_text, poll_workspace_diagnostics, use_fake_servers,
+    DaemonHarness, cargo_project, file_uri, hover_text, poll_workspace_diagnostics, use_fake_servers,
     workspace_error_count,
 };
 use aether_lspd::{LanguageId, LspClient, lockfile_path, socket_path};
@@ -9,7 +9,7 @@ use std::time::Duration;
 async fn daemon_persists_after_client_disconnect() {
     use_fake_servers();
 
-    let project = CargoProject::new("disconnect_persists").expect("Failed to create project");
+    let project = cargo_project("disconnect_persists");
     let socket_path = socket_path(project.root(), LanguageId::Rust);
     let lockfile_path = lockfile_path(&socket_path);
 
@@ -23,13 +23,13 @@ async fn daemon_persists_after_client_disconnect() {
 async fn multiple_clients_share_fake_server_session() {
     use_fake_servers();
 
-    let project = CargoProject::new("shared_session").expect("Failed to create project");
+    let project = cargo_project("shared_session");
 
     let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
     let client1 = harness.connect().await.expect("Failed to connect client 1");
     let client2 = harness.connect().await.expect("Failed to connect client 2");
 
-    let uri = project.file_uri("src/main.rs");
+    let uri = file_uri(&project.path("src/main.rs"));
 
     let hover1 = hover_text(client1.hover(uri.clone(), 0, 0).await.expect("Hover failed"));
     let hover2 = hover_text(client2.hover(uri.clone(), 0, 0).await.expect("Hover failed"));
@@ -44,13 +44,13 @@ async fn multiple_clients_share_fake_server_session() {
 async fn diagnostics_are_available_across_clients_without_explicit_open() {
     use_fake_servers();
 
-    let project = CargoProject::new("shared_diagnostics").expect("Failed to create project");
-    project.add_file("src/main.rs", "fn main() { let error = 1; }\n").expect("Failed to add source file");
+    let project = cargo_project("shared_diagnostics");
+    project.write("src/main.rs", "fn main() { let error = 1; }\n");
 
     let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
     let client1 = harness.connect().await.expect("Failed to connect client 1");
     let client2 = harness.connect().await.expect("Failed to connect client 2");
-    let uri = project.file_uri("src/main.rs");
+    let uri = file_uri(&project.path("src/main.rs"));
 
     let diagnostics1 = client1.get_diagnostics(Some(uri.clone())).await.expect("Failed to get diagnostics");
     let diagnostics2 = client2.get_diagnostics(Some(uri.clone())).await.expect("Failed to get diagnostics");
@@ -97,8 +97,8 @@ async fn workspace_bootstrap_diagnostics_are_available_without_explicit_open() {
 async fn workspace_diagnostics_refresh_after_external_edit_without_explicit_open() {
     use_fake_servers();
 
-    let project = CargoProject::new("workspace_external_refresh").expect("Failed to create project");
-    project.add_file("src/main.rs", "fn main() { let ok = 1; }\n").expect("Failed to add source file");
+    let project = cargo_project("workspace_external_refresh");
+    project.write("src/main.rs", "fn main() { let ok = 1; }\n");
 
     let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
     let client = harness.connect().await.expect("Failed to connect client");

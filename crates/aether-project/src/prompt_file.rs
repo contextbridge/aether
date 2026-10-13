@@ -261,8 +261,8 @@ mod tests {
 
     #[test]
     fn parse_skill_frontmatter_and_body() {
-        let dir = project().skill(
-            "my-skill",
+        let dir = project().file(
+            "my-skill/SKILL.md",
             "---\ndescription: Test skill\ntags:\n  - rust\nagent_authored: true\nhelpful: 3\nharmful: 1\n---\n# My Skill\n\nSome content here.",
         );
 
@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn backward_compat_old_frontmatter() {
-        let dir = project().skill("old-skill", "---\ndescription: An old skill\n---\nBody.");
+        let dir = project().file("old-skill/SKILL.md", "---\ndescription: An old skill\n---\nBody.");
 
         let parsed = PromptFile::parse(&dir.root().join("old-skill").join(SKILL_FILENAME)).unwrap();
         assert_eq!(parsed.description, "An old skill");
@@ -398,8 +398,8 @@ mod tests {
 
     #[test]
     fn parse_globs_key() {
-        let dir = project().skill(
-            "ts-conventions",
+        let dir = project().file(
+            "ts-conventions/SKILL.md",
             "---\ndescription: TS conventions\nglobs:\n  - \"src/**/*.ts\"\n  - \"src/**/*.tsx\"\n---\nUse strict TypeScript.",
         );
 
@@ -411,8 +411,8 @@ mod tests {
 
     #[test]
     fn parse_paths_key() {
-        let dir = project().skill(
-            "rust-rules",
+        let dir = project().file(
+            "rust-rules/SKILL.md",
             "---\ndescription: Rust rules\npaths:\n  - \"**/*.rs\"\n---\nFollow Rust conventions.",
         );
 
@@ -423,8 +423,8 @@ mod tests {
 
     #[test]
     fn parse_merges_all_glob_sources() {
-        let dir = project().skill(
-            "merged-rules",
+        let dir = project().file(
+            "merged-rules/SKILL.md",
             "---\ndescription: Merged\ntriggers:\n  read:\n    - \"src/**/*.rs\"\nglobs:\n  - \"lib/**/*.ts\"\npaths:\n  - \"app/**/*.py\"\n---\nMerged rules.",
         );
 
@@ -466,7 +466,7 @@ mod tests {
 
     #[test]
     fn skill_file_defaults_user_invocable_true_when_missing() {
-        let dir = project().skill("compat-skill", "---\ndescription: Claude-style skill\n---\nSkill body.");
+        let dir = project().file("compat-skill/SKILL.md", "---\ndescription: Claude-style skill\n---\nSkill body.");
 
         let parsed = PromptFile::parse(&dir.root().join("compat-skill").join(SKILL_FILENAME)).unwrap();
         assert!(parsed.user_invocable);

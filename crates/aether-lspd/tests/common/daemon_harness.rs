@@ -1,3 +1,4 @@
+use aether_lspd::testing::remove_stale_daemon_files;
 use aether_lspd::{ClientError, LanguageId, LspClient, lockfile_path, socket_path};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,11 +25,9 @@ pub struct DaemonHarness {
 impl DaemonHarness {
     /// Spawn a daemon for testing using `connect`
     pub async fn spawn(workspace_root: &Path, language: LanguageId) -> Result<Self, HarnessError> {
+        remove_stale_daemon_files(workspace_root, language);
         let sock_path = socket_path(workspace_root, language);
         let lock_path = lockfile_path(&sock_path);
-
-        let _ = fs::remove_file(&sock_path);
-        let _ = fs::remove_file(&lock_path);
 
         let _client =
             LspClient::connect(workspace_root, language).await.map_err(|e| HarnessError::SpawnFailed(e.to_string()))?;

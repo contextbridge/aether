@@ -9,12 +9,10 @@ mod web_fetch;
 #[cfg(feature = "tasks")]
 mod task_store;
 
-mod workspace;
-
 #[cfg(feature = "coding")]
 pub use web_fetch::FakeHttpClient;
 
 #[cfg(feature = "tasks")]
 pub use task_store::TestTaskStore;
 
-pub use workspace::TestWorkspace;
+pub use utils::testing::TestWorkspace;

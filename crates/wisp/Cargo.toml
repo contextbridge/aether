@@ -75,3 +75,4 @@ acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["
 clankerdiff-git = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+utils = { package = "aether-utils", path = "../utils", features = ["testing"], version = "0.2.19" }

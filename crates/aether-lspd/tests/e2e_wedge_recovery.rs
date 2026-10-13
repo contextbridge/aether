@@ -8,7 +8,7 @@ mod common;
 
 use aether_lspd::testing::configure_fake_server;
 use aether_lspd::{ClientError, LSP_REQUEST_TIMED_OUT, LanguageId};
-use common::{CargoProject, DaemonHarness, TestProject, hover_text};
+use common::{DaemonHarness, cargo_project, file_uri, hover_text};
 use std::sync::Once;
 
 static SETUP: Once = Once::new();
@@ -27,12 +27,12 @@ fn use_misbehaving_fake_server() {
 async fn wedged_request_fails_with_timeout_instead_of_hanging() {
     use_misbehaving_fake_server();
 
-    let project = CargoProject::new("wedge_timeout").expect("Failed to create project");
-    project.add_file("src/main.rs", "fn main() {}\n").expect("Failed to add file");
+    let project = cargo_project("wedge_timeout");
+    project.write("src/main.rs", "fn main() {}\n");
     let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
     let client = harness.connect().await.expect("Failed to connect");
 
-    let result = client.goto_definition(project.file_uri("src/main.rs"), 0, 3).await;
+    let result = client.goto_definition(file_uri(&project.path("src/main.rs")), 0, 3).await;
     match result {
         Err(ClientError::LspError { code, message }) => {
             assert_eq!(code, LSP_REQUEST_TIMED_OUT, "unexpected error: {message}");
@@ -47,11 +47,11 @@ async fn wedged_request_fails_with_timeout_instead_of_hanging() {
 async fn wedged_server_is_replaced_on_next_request() {
     use_misbehaving_fake_server();
 
-    let project = CargoProject::new("wedge_recovery").expect("Failed to create project");
-    project.add_file("src/main.rs", "fn main() {}\n").expect("Failed to add file");
+    let project = cargo_project("wedge_recovery");
+    project.write("src/main.rs", "fn main() {}\n");
     let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
     let client = harness.connect().await.expect("Failed to connect");
-    let uri = project.file_uri("src/main.rs");
+    let uri = file_uri(&project.path("src/main.rs"));
 
     let wedged = client.goto_definition(uri.clone(), 0, 3).await;
     assert!(wedged.is_err(), "wedged request should fail, got {wedged:?}");
@@ -66,11 +66,11 @@ async fn wedged_server_is_replaced_on_next_request() {
 async fn crashed_server_is_replaced_on_next_request() {
     use_misbehaving_fake_server();
 
-    let project = CargoProject::new("crash_recovery").expect("Failed to create project");
-    project.add_file("src/main.rs", "fn main() {}\n").expect("Failed to add file");
+    let project = cargo_project("crash_recovery");
+    project.write("src/main.rs", "fn main() {}\n");
     let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
     let client = harness.connect().await.expect("Failed to connect");
-    let uri = project.file_uri("src/main.rs");
+    let uri = file_uri(&project.path("src/main.rs"));
 
     let crashed = client.find_references(uri.clone(), 0, 0, true).await;
     assert!(crashed.is_err(), "request to crashing server should fail, got {crashed:?}");

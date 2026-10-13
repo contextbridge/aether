@@ -271,6 +271,7 @@ name = "aether-lspd"
 version = "0.3.3"
 dependencies = [
  "aether-lspd",
+ "aether-utils",
  "clap",
  "futures",
  "globset",
@@ -365,7 +366,6 @@ dependencies = [
  "schemars 1.2.2",
  "serde",
  "serde_json",
- "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tracing",

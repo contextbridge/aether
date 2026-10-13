@@ -1,11 +1,11 @@
-use crate::common::{CargoProject, DaemonHarness, TestProject, use_fake_servers};
+use crate::common::{DaemonHarness, cargo_project, file_uri, use_fake_servers};
 use aether_lspd::LanguageId;
 
 #[tokio::test]
 async fn daemon_survives_client_drop() {
     use_fake_servers();
 
-    let project = CargoProject::new("client_drop").expect("Failed to create project");
+    let project = cargo_project("client_drop");
     let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
 
     {
@@ -13,7 +13,7 @@ async fn daemon_survives_client_drop() {
     }
 
     let client = harness.connect().await.expect("Failed to reconnect to daemon");
-    let uri = project.file_uri("src/main.rs");
+    let uri = file_uri(&project.path("src/main.rs"));
     let hover = client.hover(uri, 0, 0).await.expect("Hover failed");
     assert!(hover.is_some());
 

@@ -751,8 +751,9 @@ mod tests {
     #[test]
     fn load_default_merges_user_and_project_settings_with_project_winning() {
         let project = project();
-        let home = home().settings(
-            &json!({
+        let home = home().file(
+            ".aether/settings.json",
+            json!({
                 "agent": "shared",
                 "prompts": ["USER.md"],
                 "agents": [agent_json("shared", "User shared"), agent_json("user-only", "User only")]
@@ -761,7 +762,7 @@ mod tests {
         );
         project.write(
             ".aether/settings.json",
-            &json!({
+            json!({
                 "agent": "project-only",
                 "prompts": ["PROJECT.md"],
                 "agents": [agent_json("shared", "Project shared"), agent_json("project-only", "Project only")]
@@ -769,7 +770,7 @@ mod tests {
             .to_string(),
         );
 
-        let aether_home = home.aether();
+        let aether_home = home.path(".aether");
         let config = load_default_from_home(project.root(), &aether_home).unwrap();
         assert_eq!(
             config,
@@ -789,9 +790,10 @@ mod tests {
     #[test]
     fn load_default_uses_user_settings_when_project_settings_are_missing() {
         let project = project();
-        let home = home().settings(&json!({ "agents": [agent_json("user-only", "User only")] }).to_string());
+        let home = home()
+            .file(".aether/settings.json", json!({ "agents": [agent_json("user-only", "User only")] }).to_string());
 
-        let aether_home = home.aether();
+        let aether_home = home.path(".aether");
         let config = load_default_from_home(project.root(), &aether_home).unwrap();
         assert_eq!(
             config,
@@ -804,9 +806,10 @@ mod tests {
         let project = project();
         let home = home()
             .file(".aether/agents/user.md", "User instructions")
-            .file(".aether/mcp/user.json", &mcp_json("user"))
-            .settings(
-                &json!({
+            .file(".aether/mcp/user.json", mcp_json("user"))
+            .file(
+                ".aether/settings.json",
+                json!({
                     "agents": [agent_json_with(
                         "user-only",
                         "User only",
@@ -816,7 +819,7 @@ mod tests {
                 .to_string(),
             );
 
-        let aether_home = home.aether();
+        let aether_home = home.path(".aether");
         let config = load_default_from_home(project.root(), &aether_home).unwrap();
         let catalog = AgentCatalog::from_settings(project.root(), config).unwrap();
         let spec = catalog.resolve("user-only").unwrap();
@@ -834,10 +837,10 @@ mod tests {
         let home = home();
         let project = project().file(
             ".aether/settings.json",
-            &json!({ "agents": [agent_json("project-only", "Project only")] }).to_string(),
+            json!({ "agents": [agent_json("project-only", "Project only")] }).to_string(),
         );
 
-        let aether_home = home.aether();
+        let aether_home = home.path(".aether");
         let config = load_default_from_home(project.root(), &aether_home).unwrap();
 
         assert_eq!(
@@ -853,7 +856,7 @@ mod tests {
     fn load_default_returns_default_when_user_and_project_settings_are_missing() {
         let project = project();
         let home = home();
-        let aether_home = home.aether();
+        let aether_home = home.path(".aether");
         let config = load_default_from_home(project.root(), &aether_home).unwrap();
         assert_eq!(config, AetherSettings::default());
     }
@@ -861,8 +864,8 @@ mod tests {
     #[test]
     fn load_default_rejects_malformed_user_settings() {
         let project = project();
-        let home = home().settings("{not-json");
-        let aether_home = home.aether();
+        let home = home().file(".aether/settings.json", "{not-json");
+        let aether_home = home.path(".aether");
         let err = load_default_from_home(project.root(), &aether_home).unwrap_err();
         assert!(matches!(err, SettingsError::ParseError(_)));
     }
@@ -1057,9 +1060,10 @@ mod tests {
 
     #[test]
     fn load_default_resolves_workspace_scoped_user_prompt_and_mcp_paths() {
-        let project = project().file("AGENTS.md", "Agent instructions").file(".aether/mcp.json", &mcp_json("project"));
-        let home = home().file(".aether/agents/planner/SYSTEM.md", "System instructions").settings(
-            &json!({
+        let project = project().file("AGENTS.md", "Agent instructions").file(".aether/mcp.json", mcp_json("project"));
+        let home = home().file(".aether/agents/planner/SYSTEM.md", "System instructions").file(
+            ".aether/settings.json",
+            json!({
                 "agents": [agent_json_with(
                     "planner",
                     "Plans work",
@@ -1075,7 +1079,7 @@ mod tests {
             .to_string(),
         );
 
-        let aether_home = home.aether();
+        let aether_home = home.path(".aether");
         let config = load_default_from_home(project.root(), &aether_home).unwrap();
         let catalog = AgentCatalog::from_settings(project.root(), config).unwrap();
         let spec = catalog.resolve("planner").unwrap();
@@ -1097,7 +1101,7 @@ mod tests {
     fn workspace_scoped_paths_expand_in_project_settings_without_absolutizing_normal_relative_paths() {
         let project = project().file("PROJECT.md", "Project prompt").file("AGENTS.md", "Agent prompt").file(
             ".aether/settings.json",
-            &json!({
+            json!({
                 "agents": [agent_json_with(
                     "alpha",
                     "Alpha",
@@ -1220,7 +1224,7 @@ mod tests {
 
     #[test]
     fn optional_existing_mcp_source_preserves_defer_tools_flag() {
-        let project = project().file("BASE.md", "Base instructions").file("mcp.json", &mcp_json("lazy"));
+        let project = project().file("BASE.md", "Base instructions").file("mcp.json", mcp_json("lazy"));
         let config = AetherSettings {
             agents: vec![AgentConfig {
                 prompts: vec![PromptSource::file("BASE.md")],
@@ -1297,8 +1301,9 @@ mod tests {
     #[test]
     fn user_settings_relative_paths_absolutize_at_load_but_workspace_token_is_preserved() {
         let project = project().file("AGENTS.md", "agents");
-        let home = home().file(".aether/agents/planner/SYSTEM.md", "system").settings(
-            &json!({
+        let home = home().file(".aether/agents/planner/SYSTEM.md", "system").file(
+            ".aether/settings.json",
+            json!({
                 "agents": [agent_json_with(
                     "planner",
                     "Plans",
@@ -1308,7 +1313,7 @@ mod tests {
             .to_string(),
         );
 
-        let aether_home = home.aether();
+        let aether_home = home.path(".aether");
         let settings = load_default_from_home(project.root(), &aether_home).unwrap();
 
         let expected_user = aether_home.join("agents/planner/SYSTEM.md").to_string_lossy().to_string();
