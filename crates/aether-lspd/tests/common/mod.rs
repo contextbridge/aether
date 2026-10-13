@@ -19,6 +19,7 @@ pub fn use_fake_servers() {
         configure_fake_server(LanguageId::TypeScript, &["--pull-diagnostics"]);
         configure_fake_server(LanguageId::Go, &["--crash-on", "initialize"]);
         configure_fake_server(LanguageId::C, &["--fail-on", "initialize"]);
+        configure_fake_server(LanguageId::Python, &["--garble-before", "textDocument/hover"]);
     });
 }
 

@@ -9,11 +9,13 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--wedge-on", action="append", default=[])
 parser.add_argument("--crash-on", action="append", default=[])
 parser.add_argument("--fail-on", action="append", default=[])
+parser.add_argument("--garble-before", action="append", default=[])
 parser.add_argument("--pull-diagnostics", action="store_true")
 cli_args = parser.parse_args()
 wedge_methods = set(cli_args.wedge_on)
 crash_methods = set(cli_args.crash_on)
 fail_methods = set(cli_args.fail_on)
+garble_methods = set(cli_args.garble_before)
 pull_diagnostics = cli_args.pull_diagnostics
 refresh_supported = False
 root_path = None
@@ -22,7 +24,10 @@ cancelled_since_open = set()
 
 
 def write_message(msg):
-    body = json.dumps(msg, separators=(",", ":")).encode("utf-8")
+    write_frame(json.dumps(msg, separators=(",", ":")).encode("utf-8"))
+
+
+def write_frame(body):
     header = f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
     sys.stdout.buffer.write(header)
     sys.stdout.buffer.write(body)
@@ -171,6 +176,9 @@ while True:
 
     if method in wedge_methods:
         continue
+
+    if method in garble_methods:
+        write_frame(b"{not json")
 
     if method == "initialize":
         root_path = uri_to_path(params["rootUri"])
