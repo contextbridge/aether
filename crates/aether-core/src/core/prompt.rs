@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 use tokio::fs;
 use tracing::warn;
-use utils::shell_expander::ShellExpander;
+use utils::shell_expander::expand_shell;
 use utils::substitution::substitute_parameters;
 use utils::variables::VarError;
 use utils::{PathOrObject, ResourcePath};
@@ -204,9 +204,7 @@ impl Prompt {
             Prompt::Text(text) => Ok(text.clone()),
             Prompt::File { path, args, cwd } => {
                 let content = Self::resolve_file(path).await?;
-                let substituted = substitute_parameters(&content, args);
-                let expander = ShellExpander::new();
-                Ok(expander.expand(&substituted, cwd).await)
+                Ok(expand_shell(&substitute_parameters(&content, args), cwd).await)
             }
             Prompt::McpInstructions(instructions) => Ok(format_mcp_instructions(instructions)),
         }
