@@ -155,7 +155,7 @@ async fn runtime_replays_sequentially_without_owning_turn_policy() {
             let handle = session.client.handle.clone();
             let plain_resume =
                 spawn_local(
-                    async move { handle.resume_session(ResumeSessionRequest::new("second", "/workspace")).await },
+                    async move { handle.request(ResumeSessionRequest::new("second", "/workspace")).await },
                 );
             let (request, responder) = peer.resume.recv().await.unwrap();
             assert!(request.replay_from.is_none());

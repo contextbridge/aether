@@ -262,7 +262,7 @@ async fn explicit_remote_cancel_and_close_remain_destructive() {
         let server = harness.serve_websocket().await;
         let mut client = connect(&server, &id).await;
         expect_running(&mut client).await;
-        client.handle.cancel(CancelSessionNotification::new(id.clone())).unwrap();
+        client.handle.notify(CancelSessionNotification::new(id.clone())).unwrap();
         loop {
             match client.event_rx.recv().await.unwrap() {
                 AcpEvent::SessionUpdate(update) if matches!(update.update,
@@ -278,7 +278,7 @@ async fn explicit_remote_cancel_and_close_remain_destructive() {
         )));
         client.handle.request(CloseSessionRequest::new(id.clone())).await.unwrap();
         assert_stopped_turn(&harness, &id);
-        assert!(client.handle.prompt(PromptRequest::new(id, vec!["closed".into()])).await.is_err());
+        assert!(client.handle.request(PromptRequest::new(id, vec!["closed".into()])).await.is_err());
         server.shutdown().await;
         harness.shutdown().await;
     })
@@ -427,7 +427,7 @@ async fn networking_shutdown_cancels_pending_session_startup_and_allows_reconnec
         let (socket, _) = connect_async(server.url()).await.unwrap();
         let client = connect_acp_client(WebSocketTransport::new(socket), initialize_request()).await.unwrap();
         let pending = tokio::task::spawn_local(async move {
-            client.handle.new_session(NewSessionRequest::new(AbsolutePath::new("/tmp"))).await
+            client.handle.request(NewSessionRequest::new(AbsolutePath::new("/tmp"))).await
         });
         startup.wait_until_started().await;
         server.shutdown().await;
@@ -437,7 +437,7 @@ async fn networking_shutdown_cancels_pending_session_startup_and_allows_reconnec
         let server = harness.serve_websocket().await;
         let (socket, _) = connect_async(server.url()).await.unwrap();
         let client = connect_acp_client(WebSocketTransport::new(socket), initialize_request()).await.unwrap();
-        client.handle.new_session(NewSessionRequest::new(AbsolutePath::new("/tmp"))).await.unwrap();
+        client.handle.request(NewSessionRequest::new(AbsolutePath::new("/tmp"))).await.unwrap();
         assert_eq!(harness.live_runtime_count(), 1);
         server.shutdown().await;
         harness.shutdown().await;
@@ -460,7 +460,7 @@ async fn connect(server: &AcpWebSocketTestServer, id: &SessionId) -> AcpClient {
     let client = connect_acp_client(WebSocketTransport::new(socket), initialize_request()).await.unwrap();
     let request = ResumeSessionRequest::new(id.clone(), AbsolutePath::new("/tmp"))
         .replay_from(ReplayFrom::Start(ReplayFromStart::new()));
-    client.handle.resume_session(request).await.unwrap();
+    client.handle.request(request).await.unwrap();
     client
 }
 

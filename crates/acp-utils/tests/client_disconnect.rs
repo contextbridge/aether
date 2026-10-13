@@ -98,7 +98,7 @@ async fn ordinary_requests_fail_on_disconnect_and_eof_even_with_retained_handles
                 let handle = retained.clone();
                 let request = spawn_local(async move { handle.request(ListSessionsRequest::new()).await });
                 let (_, responder) = requests.list_sessions.recv().await.unwrap();
-                let prompt = retained.prompt(PromptRequest::new("live", vec![]));
+                let prompt = retained.request(PromptRequest::new("live", vec![]));
                 let (_, prompt_responder) = requests.prompt.recv().await.unwrap();
 
                 if disconnect {
@@ -128,7 +128,7 @@ async fn disconnect_drops_connection_before_the_ui_releases_a_pending_approval()
             let server = spawn_local(agent.agent().connect_to(agent_transport));
             let mut client = connect_acp_client(client_transport, initialize_request()).await.unwrap();
             let connection = requests.connection.recv().await.unwrap();
-            let prompt = client.handle.prompt(PromptRequest::new("live", vec![]));
+            let prompt = client.handle.request(PromptRequest::new("live", vec![]));
             let (request, prompt_responder) = requests.prompt.recv().await.unwrap();
             let approval = spawn_local(async move {
                 connection

@@ -5,12 +5,10 @@ use crate::notifications::{
 };
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v2::{
-    AuthMethod, CancelSessionNotification, ClientCapabilities, CreateElicitationRequest, ElicitationCapabilities,
-    ElicitationFormCapabilities, ElicitationUrlCapabilities, Implementation, InitializeRequest, InitializeResponse,
-    NewSessionRequest, NewSessionResponse, PermissionOptionId, PermissionOptionKind, PromptCapabilities, PromptRequest,
-    PromptResponse, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    ResumeSessionRequest, ResumeSessionResponse, SelectedPermissionOutcome, SessionCapabilities,
-    UpdateSessionNotification,
+    AuthMethod, ClientCapabilities, CreateElicitationRequest, ElicitationCapabilities, ElicitationFormCapabilities,
+    ElicitationUrlCapabilities, Implementation, InitializeRequest, InitializeResponse, PermissionOptionId,
+    PermissionOptionKind, PromptCapabilities, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, SelectedPermissionOutcome, SessionCapabilities, UpdateSessionNotification,
 };
 use agent_client_protocol::util::MatchDispatchFrom;
 use agent_client_protocol::{
@@ -86,20 +84,6 @@ impl AcpClientHandle {
         self.connection.closed.cancelled().await;
     }
 
-    pub fn prompt(
-        &self,
-        request: PromptRequest,
-    ) -> impl Future<Output = Result<PromptResponse, AcpClientError>> + Send + use<> {
-        self.request(request)
-    }
-
-    pub fn new_session(
-        &self,
-        request: NewSessionRequest,
-    ) -> impl Future<Output = Result<NewSessionResponse, AcpClientError>> + Send + use<> {
-        self.request(request)
-    }
-
     /// Send immediately; polling the returned future only waits for the response.
     pub fn request<R: acp::JsonRpcRequest>(
         &self,
@@ -107,17 +91,6 @@ impl AcpClientHandle {
     ) -> impl Future<Output = Result<R::Response, AcpClientError>> + Send + use<R> {
         let sent = self.cx.send_request(request);
         async move { sent.block_task().await.map_err(AcpClientError::Protocol) }
-    }
-
-    pub fn resume_session(
-        &self,
-        request: ResumeSessionRequest,
-    ) -> impl Future<Output = Result<ResumeSessionResponse, AcpClientError>> + Send + use<> {
-        self.request(request)
-    }
-
-    pub fn cancel(&self, request: CancelSessionNotification) -> Result<(), AcpClientError> {
-        self.notify(request)
     }
 
     pub fn notify(&self, request: impl acp::JsonRpcNotification) -> Result<(), AcpClientError> {

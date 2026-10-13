@@ -20,14 +20,14 @@ pub(super) fn execute(
         AgentCommand::Prompt { request_id, session_id, text, content } => {
             let mut prompt = vec![ContentBlock::from(text)];
             prompt.extend(content.into_iter().flatten());
-            let response = handle.prompt(PromptRequest::new(session_id, prompt));
+            let response = handle.request(PromptRequest::new(session_id, prompt));
             tasks.submit_network(async move {
                 CommandResult::Prompt { request_id, result: response.await.map(drop).map_err(prompt_rejection) }
             });
         }
         AgentCommand::Cancel { session_id } => {
             return Some(CommandResult::Cancel(
-                handle.cancel(CancelSessionNotification::new(session_id)).map_err(|error| error.to_string()),
+                handle.notify(CancelSessionNotification::new(session_id)).map_err(|error| error.to_string()),
             ));
         }
         AgentCommand::SetConfigOption { conversation_id, session_id, config_id, value } => submit_request(

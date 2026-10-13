@@ -67,7 +67,7 @@ async fn remote_client_reports_occupied_server_without_disturbing_owner() {
         let session = wisp::Session::connect_remote_to(WebSocketTransport::new(socket), None).await.unwrap();
         assert_eq!(session.response.session_id, id);
         assert!(matches!(run_client(args).await, Err(ClientRunError::ServerOccupied)));
-        session.client.handle.prompt(PromptRequest::new(id.clone(), vec!["hello".into()])).await.unwrap();
+        session.client.handle.request(PromptRequest::new(id.clone(), vec!["hello".into()])).await.unwrap();
         let mut detached = server.subscribe();
         let seen = *detached.borrow();
         session.client.handle.disconnect().await;

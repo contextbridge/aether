@@ -28,7 +28,7 @@ async fn cancel_reaches_the_agent_while_a_config_response_is_outstanding() {
 
             let created = client
                 .handle
-                .new_session(NewSessionRequest::new(PathBuf::from("/tmp")))
+                .request(NewSessionRequest::new(PathBuf::from("/tmp")))
                 .await
                 .expect("session establishes");
 
@@ -37,7 +37,7 @@ async fn cancel_reaches_the_agent_while_a_config_response_is_outstanding() {
             let prompt_session_id = session_id.clone();
             spawn_local(async move {
                 let _ = prompt_task_handle
-                    .prompt(PromptRequest::new(prompt_session_id, vec![ContentBlock::Text(TextContent::new("hi"))]))
+                    .request(PromptRequest::new(prompt_session_id, vec![ContentBlock::Text(TextContent::new("hi"))]))
                     .await;
             });
             let (_, prompt_responder) = requests.prompt.recv().await.unwrap();
@@ -48,7 +48,7 @@ async fn cancel_reaches_the_agent_while_a_config_response_is_outstanding() {
                     config_handle.request(SetSessionConfigOptionRequest::new(config_session_id, "mode", "Plan")).await;
             });
             let config_responder = requests.pending_config.recv().await.unwrap();
-            client.handle.cancel(CancelSessionNotification::new(session_id)).expect("cancel queues");
+            client.handle.notify(CancelSessionNotification::new(session_id)).expect("cancel queues");
 
             assert_eq!(requests.cancel.recv().await.unwrap().session_id, SessionId::new("sess-1"));
             drop((prompt_responder, config_responder));
@@ -64,7 +64,7 @@ async fn prompt_completion_follows_session_updates_on_the_event_stream() {
             let (agent, mut requests) = FakeAgent::default().capture();
             let mut client = agent.build().await.expect("initialization succeeds");
             let cx = requests.connection.recv().await.unwrap();
-            let prompt = client.handle.prompt(PromptRequest::new("session", vec![ContentBlock::from("hello")]));
+            let prompt = client.handle.request(PromptRequest::new("session", vec![ContentBlock::from("hello")]));
             let (request, responder) = requests.prompt.recv().await.unwrap();
             cx.send_notification(UpdateSessionNotification::new(
                 request.session_id.clone(),
@@ -97,7 +97,7 @@ async fn new_session_preserves_startup_updates_before_live_updates() {
                 acp::on_receive_request!(),
             );
             let mut client = connect_test_agent(agent).await.unwrap();
-            client.handle.new_session(NewSessionRequest::new("/tmp")).await.unwrap();
+            client.handle.request(NewSessionRequest::new("/tmp")).await.unwrap();
             client.handle.request(ListSessionsRequest::new()).await.unwrap();
             let mut updates = Vec::new();
             while let Ok(event) = client.event_rx.try_recv() {
@@ -125,11 +125,11 @@ async fn replay_updates_precede_the_resume_response() -> Result<(), TestError> {
                 .build()
                 .await?;
 
-            client.handle.resume_session(ResumeSessionRequest::new("saved", "/remote")).await?;
+            client.handle.request(ResumeSessionRequest::new("saved", "/remote")).await?;
             assert!(client.event_rx.try_recv().is_err(), "plain resume must request no history");
             client
                 .handle
-                .resume_session(
+                .request(
                     ResumeSessionRequest::new("saved", "/remote")
                         .replay_from(ReplayFrom::Start(ReplayFromStart::new())),
                 )
@@ -200,7 +200,7 @@ async fn initialized_client_manages_typed_sessions_and_streams_replay() -> Resul
             assert_eq!(client.initialize_response.info.name, "Typed Fake");
 
             let created =
-                client.handle.new_session(NewSessionRequest::new("/tmp/project")).await?;
+                client.handle.request(NewSessionRequest::new("/tmp/project")).await?;
             assert_eq!(created.session_id, SessionId::new("created"));
             assert!(client.event_rx.try_recv().is_err());
 
@@ -210,7 +210,7 @@ async fn initialized_client_manages_typed_sessions_and_streams_replay() -> Resul
 
             client
                 .handle
-                .resume_session(
+                .request(
                     ResumeSessionRequest::new("listed", "/tmp/project")
                         .replay_from(ReplayFrom::Start(ReplayFromStart::new())),
                 )
@@ -219,7 +219,7 @@ async fn initialized_client_manages_typed_sessions_and_streams_replay() -> Resul
                 assert!(matches!(client.event_rx.try_recv()?, AcpEvent::SessionUpdate(notification) if notification.session_id == SessionId::new(id)));
             }
 
-            client.handle.resume_session(ResumeSessionRequest::new("listed", "/tmp/project")).await?;
+            client.handle.request(ResumeSessionRequest::new("listed", "/tmp/project")).await?;
             let search = client
                 .handle
                 .request(PromptSearchParams { query: "hello".to_string(), limit: Some(10) })
@@ -294,7 +294,7 @@ async fn permission_with_no_options_is_cancelled() {
             let (agent, mut requests) = acp_utils::testing::FakeAgent::default().capture();
             let client = agent.build().await.unwrap();
             let connection = requests.connection.recv().await.unwrap();
-            let prompt = client.handle.prompt(PromptRequest::new("session", vec![]));
+            let prompt = client.handle.request(PromptRequest::new("session", vec![]));
             let (_, responder) = requests.prompt.recv().await.unwrap();
             let response = connection
                 .send_request(RequestPermissionRequest::new("session", "Continue?", vec![]))
