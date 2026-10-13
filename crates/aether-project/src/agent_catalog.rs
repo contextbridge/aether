@@ -559,7 +559,7 @@ mod tests {
 
     #[test]
     fn top_level_mcps_are_inherited_when_agent_mcps_are_empty() {
-        let dir = project().file("BASE.md", "Base instructions").file("base-mcp.json", &mcp_json("base"));
+        let dir = project().file("BASE.md", "Base instructions").file("base-mcp.json", mcp_json("base"));
 
         let config = AetherSettings {
             prompts: vec![crate::PromptSource::file("BASE.md")],
@@ -578,8 +578,8 @@ mod tests {
     fn agent_mcps_override_top_level_mcps() {
         let dir = project()
             .file("BASE.md", "Base instructions")
-            .file("base-mcp.json", &mcp_json("base"))
-            .file("agent-mcp.json", &mcp_json("agent"));
+            .file("base-mcp.json", mcp_json("base"))
+            .file("agent-mcp.json", mcp_json("agent"));
 
         let config = AetherSettings {
             prompts: vec![crate::PromptSource::file("BASE.md")],

@@ -1,15 +1,13 @@
 use crate::common::{call_tool, coding_with_lsp, connect, has_errors, has_no_errors};
-use aether_lspd::testing::{NodeProject, TestProject};
+use aether_lspd::testing::node_project;
 use mcp_utils::client::{ClientOptions, McpClient};
 
 #[tokio::test]
 async fn test_ts_mcp_edit_produces_diagnostics() {
-    let project = NodeProject::new("ts_mcp_edit_diag").expect("Failed to create project");
-    project
-        .add_file("src/index.ts", "const x: number = \"not a number\";\nconsole.log(x);\n")
-        .expect("Failed to add file");
+    let project = node_project("ts_mcp_edit_diag");
+    project.write("src/index.ts", "const x: number = \"not a number\";\nconsole.log(x);\n");
 
-    let index_ts = project.file_path_str("src/index.ts");
+    let index_ts = project.path_string("src/index.ts");
 
     let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
 
@@ -49,12 +47,10 @@ async fn test_ts_mcp_edit_produces_diagnostics() {
 
 #[tokio::test]
 async fn test_ts_external_file_change_produces_diagnostics() {
-    let project = NodeProject::new("ts_ext_write_diag").expect("Failed to create project");
-    project
-        .add_file("src/index.ts", "const x: number = \"not a number\";\nconsole.log(x);\n")
-        .expect("Failed to add file");
+    let project = node_project("ts_ext_write_diag");
+    project.write("src/index.ts", "const x: number = \"not a number\";\nconsole.log(x);\n");
 
-    let index_ts = project.file_path_str("src/index.ts");
+    let index_ts = project.path_string("src/index.ts");
     let index_ts_path = project.root().join("src/index.ts");
 
     let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
@@ -75,10 +71,10 @@ async fn test_ts_external_file_change_produces_diagnostics() {
 
 #[tokio::test]
 async fn test_ts_diagnostics_after_edit_without_polling() {
-    let project = NodeProject::new("ts_diag_no_poll").expect("Failed to create project");
-    project.add_file("src/index.ts", "const x: number = 42;\nconsole.log(x);\n").expect("Failed to add file");
+    let project = node_project("ts_diag_no_poll");
+    project.write("src/index.ts", "const x: number = 42;\nconsole.log(x);\n");
 
-    let index_ts = project.file_path_str("src/index.ts");
+    let index_ts = project.path_string("src/index.ts");
 
     let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
 

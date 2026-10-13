@@ -120,11 +120,6 @@ impl LspRegistry {
         Ok(connected)
     }
 
-    /// Get the LSP daemon client for a specific language, if already connected
-    pub async fn get_client_for_language(&self, language_id: LanguageId) -> Option<Arc<LspClient>> {
-        connected(self.slot(language_id).ok()?).await
-    }
-
     /// Get all active LSP daemon clients
     pub async fn active_clients(&self) -> Vec<Arc<LspClient>> {
         let mut active = Vec::new();
@@ -134,14 +129,6 @@ impl LspRegistry {
             }
         }
         active
-    }
-
-    /// Check if an LSP is configured for a given file path
-    ///
-    /// This checks the daemon's configuration registry.
-    pub fn has_config_for(&self, file_path: &Path) -> bool {
-        let language_id = LanguageId::from_path(file_path);
-        get_config_for_language(language_id).is_some()
     }
 
     /// Connect to LSP daemon for all detected project languages.
@@ -313,16 +300,6 @@ mod tests {
         let registry = LspRegistry::new(PathBuf::from("/tmp"));
 
         assert!(std::ptr::eq(registry.slot(LanguageId::C).unwrap(), registry.slot(LanguageId::Cpp).unwrap()));
-    }
-
-    #[test]
-    fn test_has_config_for() {
-        let registry = LspRegistry::new(PathBuf::from("/tmp"));
-
-        assert!(registry.has_config_for(Path::new("foo.rs")));
-        assert!(registry.has_config_for(Path::new("bar.ts")));
-        assert!(registry.has_config_for(Path::new("baz.py")));
-        assert!(!registry.has_config_for(Path::new("unknown.xyz")));
     }
 
     #[tokio::test]

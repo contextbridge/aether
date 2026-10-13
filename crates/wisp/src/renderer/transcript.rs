@@ -47,16 +47,6 @@ impl Renderer {
             return Ok(Vec::new());
         };
         let previous_kind = kind_before(items, commit.item_index);
-        if commit.rows == 0 {
-            return self.lines(
-                &items[commit.item_index..],
-                previous_kind,
-                width,
-                app.content_padding(),
-                app.spinner_tick(),
-            );
-        }
-
         let (item_width, item_padding) = commit.dimensions(width, app.content_padding());
         let mut lines =
             self.item_suffix(item, previous_kind, item_width, item_padding, app.spinner_tick(), commit.rows)?;

@@ -29,7 +29,7 @@ name = "aether"
 path = "src/main.rs"
 
 [features]
-testing = ["acp_utils/testing", "mcp_utils/testing", "aether-core/testing"]
+testing = ["acp_utils/testing", "mcp_utils/testing", "aether-core/testing", "utils/testing"]
 
 [dependencies]
 aether-auth = { path = "../aether-auth", version = "0.1.18", features = ["keyring"] }
@@ -61,7 +61,6 @@ clap = { workspace = true }
 schemars = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-tracing-appender = { workspace = true }
 futures = { workspace = true }
 dirs = { workspace = true }
 uuid = { workspace = true }

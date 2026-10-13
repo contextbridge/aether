@@ -12,14 +12,6 @@ fn needs_oauth_login(model: &LlmModel, store: &dyn OAuthCredentialStorage) -> bo
     model.oauth_provider_id().is_some_and(|id| !store.contains(id))
 }
 
-pub(crate) fn supports_prompt_image(model: &LlmModel) -> bool {
-    model.supports_image()
-}
-
-pub(crate) fn supports_prompt_audio(model: &LlmModel) -> bool {
-    model.supports_audio()
-}
-
 pub(crate) fn unavailable_reason(model: &LlmModel, store: &dyn OAuthCredentialStorage) -> String {
     if needs_oauth_login(model, store) {
         return "Needs login".to_string();
@@ -90,8 +82,8 @@ pub(crate) fn build_model_config_option(
                 let mut option = acp::SessionConfigSelectOption::new(value, name);
                 let meta = SelectOptionMeta {
                     reasoning_levels: m.effective_reasoning_levels(),
-                    supports_image: supports_prompt_image(m),
-                    supports_audio: supports_prompt_audio(m),
+                    supports_image: m.supports_image(),
+                    supports_audio: m.supports_audio(),
                 };
                 if meta != SelectOptionMeta::default() {
                     option = option.meta(meta.into_meta());
@@ -253,7 +245,6 @@ mod tests {
     use super::*;
     use aether_auth::FakeOAuthCredentialStore;
     use aether_core::agent_spec::AgentSpecExposure;
-    use aether_core::mcp::{McpConfig, ToolFilter};
     use agent_client_protocol::schema::v2::{SessionConfigKind, SessionConfigSelectOption, SessionConfigSelectOptions};
     use llm::catalog::{AnthropicModel, BedrockFoundationModel, BedrockModel, DeepSeekModel, GeminiModel};
 
@@ -273,13 +264,8 @@ mod tests {
             description: name.to_lowercase(),
             model: model.to_string(),
             reasoning_effort: effort,
-            model_settings: llm::ModelSettings::default(),
-            context_window: None,
-            prompts: vec![],
-            provider_connections: llm::ProviderConnectionOverrides::default(),
-            mcp: McpConfig::default(),
             exposure: AgentSpecExposure::both(),
-            tools: ToolFilter::default(),
+            ..AgentSpec::default()
         }
     }
 

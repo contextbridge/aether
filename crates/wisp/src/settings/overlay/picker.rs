@@ -44,7 +44,6 @@ impl SettingsPicker {
     #[allow(clippy::needless_pass_by_value)]
     pub(crate) fn on_ui_event(&mut self, event: UiEvent) -> Vec<SettingsOutput> {
         match self.values.on_nav_event(&event) {
-            Nav::Close => vec![SettingsOutput::Close],
             Nav::Activate | Nav::Clicked => {
                 let change = self
                     .values
@@ -53,7 +52,7 @@ impl SettingsPicker {
                     .map(|value| SettingsChange { config_id: self.config_id.clone(), new_value: value.value.clone() });
                 change.iter().map(message_for_change).chain([SettingsOutput::Close]).collect()
             }
-            Nav::Moved | Nav::Unhandled => Vec::new(),
+            Nav::Close | Nav::Moved | Nav::Unhandled => Vec::new(),
         }
     }
 }
@@ -75,7 +74,7 @@ impl StatefulWidget for SettingsPickerView<'_> {
             &format!(" {} search: {}", self.title, state.query()),
             usize::from(header_area.width),
         ))
-        .style(Style::new().fg(self.theme.text_secondary))
+        .style(self.theme.text_secondary)
         .render(header_area, buffer);
 
         let (view, selection) = state.view(self.theme, |value| {
@@ -85,9 +84,9 @@ impl StatefulWidget for SettingsPickerView<'_> {
                 format!("{} ({})", value.name, value.value)
             };
             let style = if value.is_disabled {
-                Style::new().fg(self.theme.text_secondary)
+                Style::from(self.theme.text_secondary)
             } else {
-                Style::new().fg(self.theme.text_primary)
+                Style::from(self.theme.text_primary)
             };
             Line::styled(label, style)
         });

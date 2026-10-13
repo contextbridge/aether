@@ -38,7 +38,6 @@ use super::session::actor::{SessionActor, SessionActorInit};
 use super::session::config_setting::ConfigSetting;
 use super::session::factory::SessionFactory;
 use super::session::hooks::SessionHooks;
-use super::session::model::supports_prompt_audio;
 use super::session::{SessionRegistry, paginate_summaries};
 use crate::resolve::InitialSessionSelection;
 use crate::settings_args::SettingsSourceArgs;
@@ -684,7 +683,7 @@ fn prompt_capabilities_for_models(models: &[LlmModel]) -> PromptCapabilities {
     PromptCapabilities::new()
         .embedded_context(PromptEmbeddedContextCapabilities::new())
         .image(models.iter().any(LlmModel::supports_image).then(PromptImageCapabilities::new))
-        .audio(models.iter().any(supports_prompt_audio).then(PromptAudioCapabilities::new))
+        .audio(models.iter().any(LlmModel::supports_audio).then(PromptAudioCapabilities::new))
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -720,7 +719,7 @@ pub(crate) fn validate_prompt_support(model_value: &str, content: &[ContentBlock
     if modalities.image && selected.iter().any(|model| !model.supports_image()) {
         return Err(Error::invalid_params());
     }
-    if modalities.audio && selected.iter().any(|model| !supports_prompt_audio(model)) {
+    if modalities.audio && selected.iter().any(|model| !model.supports_audio()) {
         return Err(Error::invalid_params());
     }
 
@@ -739,7 +738,7 @@ mod tests {
         // Upstream model metadata changes weekly, so look the fixture up instead of pinning a model id.
         LlmModel::all()
             .iter()
-            .find(|model| !model.supports_image() && !supports_prompt_audio(model))
+            .find(|model| !model.supports_image() && !model.supports_audio())
             .cloned()
             .expect("catalog contains a text-only model")
     }

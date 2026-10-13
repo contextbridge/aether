@@ -24,9 +24,6 @@ pub struct EditFileResponse {
     pub total_lines: usize,
     /// Number of replacements made
     pub replacements_made: usize,
-    /// The new file content after editing (used internally for LSP sync)
-    #[serde(skip_serializing)]
-    pub content: String,
     /// Display metadata for human-friendly rendering
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
@@ -40,14 +37,13 @@ pub async fn edit_file_contents(args: EditFileArgs) -> Result<EditFileResponse, 
     let total_lines = updated_content.lines().count();
     let display_meta = ToolDisplayMeta::new("Edit file", basename(&file_path));
     let file_diff =
-        FileDiff { path: file_path.clone(), old_text: Some(original_content), new_text: Some(updated_content.clone()) };
+        FileDiff { path: file_path.clone(), old_text: Some(original_content), new_text: Some(updated_content) };
 
     Ok(EditFileResponse {
         status: "success".to_string(),
         file_path,
         total_lines,
         replacements_made,
-        content: updated_content,
         meta: Some(ToolResultMeta::with_file_diff(display_meta, file_diff)),
     })
 }

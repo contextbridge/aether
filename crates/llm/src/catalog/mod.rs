@@ -9,7 +9,7 @@ pub mod transport;
 pub use crate::usage::ModelPricing;
 pub use bedrock::BedrockModel;
 pub use model_spec::{ModelSpec, ModelSpecError, ReasoningEffortError, validate_reasoning_effort};
-pub use transport::{ModelTransport, TemplateError, expand_api_template};
+pub use transport::ModelTransport;
 
 include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 
@@ -299,7 +299,9 @@ mod tests {
             let Some(ModelTransport::OpenAiResponses { base_url_template }) = model.transport() else {
                 continue;
             };
-            let resolved = expand_api_template(base_url_template, |_| Some("test-region".to_string()))
+            let resolved = utils::variables::Vars::new()
+                .with_env_lookup(|_| Some("test-region".to_string()))
+                .expand(base_url_template)
                 .unwrap_or_else(|e| panic!("{model} has an unresolvable endpoint template: {e}"));
             assert!(resolved.starts_with("https://"), "{model} resolved to '{resolved}'");
             assert!(!resolved.contains("${"), "{model} left a placeholder in '{resolved}'");

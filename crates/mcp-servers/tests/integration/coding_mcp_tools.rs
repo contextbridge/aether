@@ -12,8 +12,8 @@ use utils::tool_result_truncator::saved_path;
 
 #[tokio::test]
 async fn read_file_supports_paging_and_snake_case_arguments() -> TestResult {
-    let workspace = CodingWorkspace::new().await?;
-    let path = workspace.write("notes.txt", "line 1\nline 2\nline 3\nline 4\nline 5")?;
+    let workspace = CodingWorkspace::new().await;
+    let path = workspace.write("notes.txt", "line 1\nline 2\nline 3\nline 4\nline 5");
     let result =
         workspace.client.call("read_file", serde_json::json!({ "file_path": path, "offset": 2, "limit": 2 })).await?;
     assert_eq!(result["status"], "success");
@@ -26,8 +26,8 @@ async fn read_file_supports_paging_and_snake_case_arguments() -> TestResult {
 
 #[tokio::test]
 async fn read_file_truncates_long_lines() -> TestResult {
-    let workspace = CodingWorkspace::new().await?;
-    let long_path = workspace.write("long.txt", &format!("short\n{}", "x".repeat(2500)))?;
+    let workspace = CodingWorkspace::new().await;
+    let long_path = workspace.write("long.txt", &format!("short\n{}", "x".repeat(2500)));
     let result = workspace
         .client
         .call("read_file", ReadFileArgs { file_path: long_path.to_string_lossy().into(), ..Default::default() })
@@ -38,9 +38,9 @@ async fn read_file_truncates_long_lines() -> TestResult {
 
 #[tokio::test]
 async fn full_read_file_pages_reach_the_llm_whole() -> TestResult {
-    let workspace = CodingWorkspace::new().await?;
+    let workspace = CodingWorkspace::new().await;
     let content = (1..=5_000).map(|n| format!("let line_{n} = \"{}\";", "x".repeat(20))).collect::<Vec<_>>();
-    let path = workspace.write("big.rs", &content.join("\n"))?;
+    let path = workspace.write("big.rs", &content.join("\n"));
     let arguments =
         serde_json::to_string(&ReadFileArgs { file_path: path.to_string_lossy().into(), ..Default::default() })?;
 
@@ -68,7 +68,7 @@ async fn full_read_file_pages_reach_the_llm_whole() -> TestResult {
 
 #[tokio::test]
 async fn long_bash_output_keeps_head_and_tail_and_saves_the_full_output() -> TestResult {
-    let workspace = CodingWorkspace::new().await?;
+    let workspace = CodingWorkspace::new().await;
     let result =
         workspace.client.call("bash", BashInput { command: "seq 1 20000".into(), ..Default::default() }).await?;
     let output = result["output"].as_str().unwrap();
@@ -90,7 +90,7 @@ async fn long_web_pages_keep_head_and_tail_and_save_the_full_page() -> TestResul
         body: page.clone(),
         content_type: Some("text/plain".into()),
     };
-    let workspace = CodingWorkspace::with_http(FakeHttpClient::new().with_response(url, response)).await?;
+    let workspace = CodingWorkspace::with_http(FakeHttpClient::new().with_response(url, response)).await;
 
     let result =
         workspace.client.call("web_fetch", WebFetchInput { url: url.into(), prompt: None, timeout: None }).await?;
@@ -105,7 +105,7 @@ async fn long_web_pages_keep_head_and_tail_and_save_the_full_page() -> TestResul
 
 #[tokio::test]
 async fn short_output_is_returned_whole() -> TestResult {
-    let workspace = CodingWorkspace::new().await?;
+    let workspace = CodingWorkspace::new().await;
     let result = workspace.client.call("bash", BashInput { command: "seq 1 3".into(), ..Default::default() }).await?;
     assert_eq!(result["output"], "1\n2\n3\n");
     Ok(())
@@ -113,8 +113,8 @@ async fn short_output_is_returned_whole() -> TestResult {
 
 #[tokio::test]
 async fn read_file_reports_invalid_and_missing_paths() -> TestResult {
-    let workspace = CodingWorkspace::new().await?;
-    let path = workspace.write("present.txt", "present")?;
+    let workspace = CodingWorkspace::new().await;
+    let path = workspace.write("present.txt", "present");
     let invalid = workspace.client.call_raw("read_file", serde_json::json!({ "filePath": path, "offset": 0 })).await?;
     assert!(invalid.is_error.unwrap_or(false), "invalid offset should fail: {invalid:?}");
     let missing = workspace
@@ -127,7 +127,7 @@ async fn read_file_reports_invalid_and_missing_paths() -> TestResult {
 
 #[tokio::test]
 async fn write_file_handles_empty_content_and_overwrites() -> TestResult {
-    let workspace = CodingWorkspace::new().await?;
+    let workspace = CodingWorkspace::new().await;
     let path = workspace.path("nested/output.txt");
     let result = workspace.client.call("write_file", serde_json::json!({ "file_path": path, "content": "" })).await?;
     assert_eq!(result["bytesWritten"], 0);
@@ -147,8 +147,8 @@ async fn write_file_handles_empty_content_and_overwrites() -> TestResult {
 
 #[tokio::test]
 async fn edit_file_supports_batch_edits_and_response_metadata() -> TestResult {
-    let workspace = CodingWorkspace::new().await?;
-    let path = workspace.write("source.txt", "alpha\nbeta\ngamma\n")?;
+    let workspace = CodingWorkspace::new().await;
+    let path = workspace.write("source.txt", "alpha\nbeta\ngamma\n");
     workspace
         .client
         .call("read_file", ReadFileArgs { file_path: path.to_string_lossy().into(), ..Default::default() })
@@ -176,7 +176,7 @@ async fn edit_file_supports_batch_edits_and_response_metadata() -> TestResult {
 
 #[tokio::test]
 async fn test_bash_pwd_uses_workspace_root() -> TestResult {
-    let workspace = CodingWorkspace::new().await?;
+    let workspace = CodingWorkspace::new().await;
     let parsed = workspace.client.call("bash", BashInput { command: "pwd".to_string(), ..Default::default() }).await?;
     let pwd = parsed["output"].as_str().ok_or_else(|| test_error("Expected output string"))?.trim();
     assert_eq!(canonicalize(pwd)?, canonicalize(workspace.root())?);
@@ -185,7 +185,7 @@ async fn test_bash_pwd_uses_workspace_root() -> TestResult {
 
 #[tokio::test]
 async fn coding_tool_catalog_uses_bash_for_search_and_directory_listings() -> TestResult {
-    let workspace = CodingWorkspace::new().await?;
+    let workspace = CodingWorkspace::new().await;
     let catalog = workspace.client.list_tools().await?;
     let names: Vec<_> = catalog.iter().map(|tool| tool.name.as_ref()).collect();
     for retained in ["bash", "read_file", "write_file", "edit_file", "lsp_symbol"] {

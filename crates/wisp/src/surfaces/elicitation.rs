@@ -22,7 +22,7 @@ impl ElicitationResponder {
         self.respond(ElicitationAction::Accept(ElicitationAcceptAction::new().content(content)));
     }
 
-    pub fn accept_strings<const T: usize>(&mut self, content: [(&str, &str); T]) {
+    pub fn accept_strings<'a, 'b>(&mut self, content: impl IntoIterator<Item = (&'a str, &'b str)>) {
         self.accept(Some(
             content
                 .into_iter()

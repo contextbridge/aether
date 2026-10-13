@@ -53,8 +53,6 @@ testing = ["dep:tempfile", "mcp_utils/testing"]
 [dev-dependencies]
 aether-core = { package = "aether-agent-core", path = ".", features = ["testing"] }
 aether-doctest = { path = "../doctest" }
-chrono = { workspace = true }
-clap = { workspace = true }
 mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", default-features = false, features = ["coding", "review"] }
 reqwest = { workspace = true }
 tempfile = { workspace = true }

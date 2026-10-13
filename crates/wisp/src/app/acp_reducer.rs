@@ -194,5 +194,5 @@ pub(super) fn artifact_review_meta(params: &CreateElicitationRequest) -> Option<
     if !matches!(params.mode, ElicitationMode::Form(_)) {
         return None;
     }
-    ArtifactReviewElicitationMeta::parse(params.meta.as_ref())
+    ArtifactReviewElicitationMeta::from_meta(params.meta.as_ref())
 }

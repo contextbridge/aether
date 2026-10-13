@@ -8,21 +8,13 @@ use tokio::net::TcpListener;
 use tokio::time::timeout;
 
 /// Default `OAuthHandler` that opens the system browser and listens
-/// for the OAuth callback on a dynamically-assigned local port.
+/// for the OAuth callback on a local port.
 pub struct BrowserOAuthHandler {
     listener: TcpListener,
     redirect_uri: String,
 }
 
 impl BrowserOAuthHandler {
-    pub fn new() -> Result<Self, std::io::Error> {
-        let std_listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-        let port = std_listener.local_addr()?.port();
-        std_listener.set_nonblocking(true)?;
-        let listener = TcpListener::from_std(std_listener)?;
-        Ok(Self { listener, redirect_uri: format!("http://127.0.0.1:{port}/oauth2callback") })
-    }
-
     /// Create a handler bound to a specific port with a custom redirect URI.
     pub fn with_redirect_uri(redirect_uri: impl Into<String>, port: u16) -> Result<Self, std::io::Error> {
         let std_listener = std::net::TcpListener::bind(format!("127.0.0.1:{port}"))?;
@@ -72,14 +64,8 @@ pub async fn accept_oauth_callback(listener: &TcpListener) -> Result<String, OAu
     }
 }
 
-/// Start a local callback server and return the OAuth callback URL.
-pub async fn wait_for_callback(port: u16) -> Result<String, OAuthError> {
-    let listener = TcpListener::bind(format!("127.0.0.1:{port}")).await?;
-    accept_oauth_callback(&listener).await
-}
-
 /// Open a URL in the default browser.
-pub fn open_browser(url: &str) -> Result<(), OAuthError> {
+fn open_browser(url: &str) -> Result<(), OAuthError> {
     #[cfg(target_os = "macos")]
     {
         Command::new("open").arg(url).spawn().map_err(std::io::Error::other)?;

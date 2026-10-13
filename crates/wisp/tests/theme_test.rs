@@ -2,13 +2,7 @@
 
 use clankerdiff_ratatui::theme::{ReviewTheme, Rgba, SelectionState as ThemeSelectionState, ThemeError};
 use clankerdiff_ratatui::{RatatuiUiTheme, composite_color, layered_style};
-use ratatui::{
-    buffer::Buffer,
-    layout::Rect,
-    style::{Color, Style},
-    text::Line,
-    widgets::StatefulWidget,
-};
+use ratatui::{buffer::Buffer, layout::Rect, style::Color, text::Line, widgets::StatefulWidget};
 use wisp::{
     theme::Theme,
     view::{list_view::ListView, selection::SelectionState},
@@ -55,10 +49,7 @@ fn lists_use_shared_selection_instead_of_ordinary_surfaces() -> Result<(), Theme
             let area = Rect::new(0, 0, 30, 2);
             let mut buffer = Buffer::empty(area);
             buffer.set_style(area, theme.surface_style());
-            let rows = vec![
-                Line::styled("selected", Style::new().fg(theme.info)),
-                Line::styled("ordinary", Style::new().fg(theme.warning)),
-            ];
+            let rows = vec![Line::styled("selected", theme.info), Line::styled("ordinary", theme.warning)];
             let list = ListView::new(rows, &theme);
             let list = if focused { list.pane("empty") } else { list };
             list.render(area, &mut buffer, &mut SelectionState::new(2));

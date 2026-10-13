@@ -2,13 +2,14 @@ use futures::{FutureExt, StreamExt};
 use mcp_utils::client::{
     ClientError, ClientOptions, HeaderMap, HttpAuth, OAuthSettings, ToolCall, ToolCallOptions, Transport,
 };
-use mcp_utils::gateway::{ConnectedServer, GatewayError, McpGateway, ServerSpec, ServerState};
+use mcp_utils::gateway::{ConnectedServer, GatewayError, McpGateway, ServerSpec};
 use mcp_utils::model::{ContentBlock, GetPromptResult, Tool, ToolAnnotations};
 use mcp_utils::server::{McpServer, UnixSocket};
 use mcp_utils::testing::{FakeMcpServer, FakeMcpState, FakeTool, FakeToolResponse, args, elicitation_host, wait_until};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::sync::Weak;
+use utils::mcp_status::McpServerStatus;
 
 #[tokio::test]
 async fn servers_are_connecting_until_their_handshake_completes() {
@@ -16,7 +17,7 @@ async fn servers_are_connecting_until_their_handshake_completes() {
 
     let statuses = gateway.statuses();
     assert_eq!(statuses.len(), 1);
-    assert_eq!(statuses[0].state, ServerState::Connecting);
+    assert_eq!(statuses[0].status, McpServerStatus::Connecting);
     gateway.shutdown().await;
 }
 
@@ -31,9 +32,9 @@ async fn ready_waits_until_every_server_connects_or_fails() {
     let statuses = gateway.statuses();
 
     assert_eq!(statuses.iter().map(|entry| entry.name.as_str()).collect::<Vec<_>>(), ["math", "broken"]);
-    assert_eq!(statuses[0].state, ServerState::Connected { tool_count: 2 });
-    assert!(matches!(&statuses[1].state, ServerState::Failed { error } if error.contains("Failed to spawn")));
-    assert!(!statuses[1].can_sign_in);
+    assert_eq!(statuses[0].status, McpServerStatus::Connected { tool_count: 2 });
+    assert!(matches!(&statuses[1].status, McpServerStatus::Failed { error } if error.contains("Failed to spawn")));
+    assert!(!statuses[1].can_authenticate());
 }
 
 #[tokio::test]
@@ -49,8 +50,8 @@ async fn unreachable_http_servers_fail_without_offering_oauth() {
     let gateway = ready(McpGateway::new(vec![unreachable_http("remote")], &options)).await;
 
     let status = &gateway.statuses()[0];
-    assert!(matches!(status.state, ServerState::Failed { .. }));
-    assert!(!status.can_sign_in);
+    assert!(matches!(status.status, McpServerStatus::Failed { .. }));
+    assert!(!status.can_authenticate());
 }
 
 #[tokio::test]
@@ -64,9 +65,9 @@ async fn failing_servers_do_not_block_the_others() {
 
     let statuses = gateway.statuses();
     assert_eq!(gateway.servers().iter().map(ConnectedServer::name).collect::<Vec<_>>(), ["working"]);
-    assert!(matches!(statuses[0].state, ServerState::Failed { .. }));
-    assert!(matches!(statuses[1].state, ServerState::Connected { .. }));
-    assert!(matches!(statuses[2].state, ServerState::Failed { .. }));
+    assert!(matches!(statuses[0].status, McpServerStatus::Failed { .. }));
+    assert!(matches!(statuses[1].status, McpServerStatus::Connected { .. }));
+    assert!(matches!(statuses[2].status, McpServerStatus::Failed { .. }));
 }
 
 #[tokio::test]
@@ -106,7 +107,7 @@ async fn tool_list_changes_refresh_the_tools() {
     state.clear_tools_and_notify().await;
     wait_until(&gateway, |gateway| gateway.servers()[0].tools().is_empty()).await;
 
-    assert_eq!(gateway.statuses()[0].state, ServerState::Connected { tool_count: 0 });
+    assert_eq!(gateway.statuses()[0].status, McpServerStatus::Connected { tool_count: 0 });
 }
 
 #[tokio::test]
@@ -119,7 +120,7 @@ async fn failed_tool_refreshes_keep_the_previous_tools() {
     fail_a_refresh(&state).await;
 
     assert_eq!(names(gateway.servers()[0].tools()), ["add_numbers", "divide_numbers"]);
-    assert_eq!(gateway.statuses()[0].state, ServerState::Connected { tool_count: 2 });
+    assert_eq!(gateway.statuses()[0].status, McpServerStatus::Connected { tool_count: 2 });
 }
 
 #[tokio::test]
@@ -165,7 +166,7 @@ async fn authenticate_needs_a_known_oauth_server() {
     assert!(
         matches!(gateway.authenticate("math").await, Err(GatewayError::Client(ClientError::OAuthUnavailable { server })) if server == "math")
     );
-    assert!(!gateway.statuses()[0].can_sign_in);
+    assert!(!gateway.statuses()[0].can_authenticate());
 }
 
 #[tokio::test]
@@ -260,10 +261,10 @@ async fn a_server_that_disconnects_is_reported_as_failed() {
     assert_eq!(gateway.servers().len(), 1);
 
     server.stop();
-    wait_until(&gateway, |gateway| matches!(gateway.statuses()[0].state, ServerState::Failed { .. })).await;
+    wait_until(&gateway, |gateway| matches!(gateway.statuses()[0].status, McpServerStatus::Failed { .. })).await;
 
     assert!(gateway.servers().is_empty());
-    assert!(!gateway.statuses()[0].can_sign_in);
+    assert!(!gateway.statuses()[0].can_authenticate());
 }
 
 fn gateway(servers: Vec<ServerSpec>) -> McpGateway {

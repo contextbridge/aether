@@ -498,7 +498,8 @@ fn status_line_unicode_truncation_uses_display_width() {
         }),
         ..Default::default()
     };
-    let workspace_status = WorkspaceStatus::new("~/café/longpath/here", Some("main".to_string()));
+    let workspace_status =
+        WorkspaceStatus { display_dir: "~/café/longpath/here".to_string(), git_ref: Some("main".to_string()) };
     let mut ui = TestUiBuilder::new().settings(settings).workspace_status(workspace_status).dimensions(120, 15).build();
 
     ui.draw();
@@ -600,10 +601,10 @@ fn status_line_two_row_overflow_truncates_with_ellipsis() {
         }),
         ..Default::default()
     };
-    let workspace_status = WorkspaceStatus::new(
-        "~/very-long-directory-name-that-should-be-truncated",
-        Some("feature/very-long-branch-name".to_string()),
-    );
+    let workspace_status = WorkspaceStatus {
+        display_dir: "~/very-long-directory-name-that-should-be-truncated".to_string(),
+        git_ref: Some("feature/very-long-branch-name".to_string()),
+    };
     let mut ui = TestUiBuilder::new().settings(settings).workspace_status(workspace_status).dimensions(20, 15).build();
 
     ui.draw();
@@ -622,7 +623,10 @@ fn status_line_two_row_unicode_overflow_truncates_at_display_width() {
         }),
         ..Default::default()
     };
-    let workspace_status = WorkspaceStatus::new("~/日本語の長いディレクトリパス", Some("main".to_string()));
+    let workspace_status = WorkspaceStatus {
+        display_dir: "~/日本語の長いディレクトリパス".to_string(),
+        git_ref: Some("main".to_string()),
+    };
     let mut ui = TestUiBuilder::new().settings(settings).workspace_status(workspace_status).dimensions(20, 15).build();
 
     ui.draw();

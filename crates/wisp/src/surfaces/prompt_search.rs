@@ -5,7 +5,7 @@ use crate::view::wrap::truncate_spans;
 use acp_utils::notifications::{PromptSearchResponse, PromptSearchResult};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, StatefulWidget, Widget};
 
@@ -120,7 +120,7 @@ impl PromptSearchPicker {
             ratatui::layout::Constraint::Min(0),
         ])
         .areas(area);
-        Paragraph::new(Line::styled(format!("history search: {}", self.query.text()), Style::new().fg(theme.info)))
+        Paragraph::new(Line::styled(format!("history search: {}", self.query.text()), theme.info))
             .render(header_area, buf);
 
         let message = self.error.as_deref().map(|error| format!("  error: {error}"));
@@ -136,7 +136,7 @@ impl PromptSearchPicker {
             }
         });
         if let Some(message) = message {
-            Paragraph::new(message).style(Style::new().fg(theme.muted)).render(results_area, buf);
+            Paragraph::new(message).style(theme.muted).render(results_area, buf);
             return;
         }
 
@@ -175,14 +175,14 @@ fn result_line(result: &PromptSearchResult, max_width: usize, theme: &Theme) -> 
     let prompt = prompt_spans(
         &result.prompt,
         result.match_start..result.match_end,
-        Style::new().fg(theme.text_secondary),
-        Style::new().fg(theme.warning),
+        theme.text_secondary,
+        theme.warning,
     );
     let mut spans = truncate_spans(&prompt, prompt_budget, Style::default());
     if shows_cwd {
         let used: usize = spans.iter().map(Span::width).sum();
         spans.push(Span::raw(" ".repeat(prompt_budget + CWD_GAP - used)));
-        spans.push(Span::styled(cwd_display, Style::new().fg(theme.muted)));
+        spans.push(Span::styled(cwd_display, theme.muted));
     }
     Line::from(spans)
 }
@@ -191,7 +191,7 @@ fn result_line(result: &PromptSearchResult, max_width: usize, theme: &Theme) -> 
 ///
 /// Runs of whitespace collapse to a single space so a multi-line prompt reads as
 /// one row; the space counts as matched when any character it stands in for did.
-fn prompt_spans(prompt: &str, matched: Range<usize>, base: Style, highlight: Style) -> Vec<Span<'static>> {
+fn prompt_spans(prompt: &str, matched: Range<usize>, base: Color, highlight: Color) -> Vec<Span<'static>> {
     let mut characters: Vec<(char, bool)> = Vec::new();
     let mut last_was_whitespace = false;
     for (index, character) in prompt.char_indices() {
@@ -219,10 +219,3 @@ fn prompt_spans(prompt: &str, matched: Range<usize>, base: Style, highlight: Sty
         .collect()
 }
 
-pub fn cursor_at_match_end(prompt: &str, match_end: usize) -> usize {
-    let mut idx = match_end.min(prompt.len());
-    while idx > 0 && !prompt.is_char_boundary(idx) {
-        idx -= 1;
-    }
-    idx
-}

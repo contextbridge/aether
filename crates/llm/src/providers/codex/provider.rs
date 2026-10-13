@@ -82,10 +82,7 @@ impl CodexProvider {
         let url = format!("{}/responses", self.base_url);
 
         debug!("Sending request to Codex API: {url}");
-        debug!(
-            "Codex request body: {}",
-            serde_json::to_string(&request).unwrap_or_else(|_| "<failed to serialize>".to_string())
-        );
+        debug!("Codex request body: {request}");
 
         match send(&self.client, &url, headers, request).await {
             Ok(opened) => Ok(opened),

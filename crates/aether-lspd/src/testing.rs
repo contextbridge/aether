@@ -1,9 +1,10 @@
+#![doc = include_str!("docs/testing.md")]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread::JoinHandle;
 use std::time::Duration;
-use tempfile::TempDir;
 use tokio::net::UnixStream;
 use tokio::sync::oneshot;
 
@@ -11,8 +12,9 @@ use crate::LanguageId;
 use crate::daemon::LspDaemon;
 use crate::error::DaemonError;
 use crate::language_catalog::server_kind_for_language;
-use crate::socket_path::socket_path;
+use crate::socket_path::{lockfile_path, socket_path};
 use crate::uri::path_to_uri;
+pub use utils::testing::TestWorkspace;
 
 /// An in-process daemon with explicit configuration and deterministic shutdown.
 pub struct TestDaemon {
@@ -26,9 +28,8 @@ impl TestDaemon {
         language: LanguageId,
         request_timeout: Duration,
     ) -> Result<Self, TestDaemonError> {
+        remove_stale_daemon_files(workspace_root, language);
         let socket_path = socket_path(workspace_root, language);
-        let _ = fs::remove_file(&socket_path);
-        let _ = fs::remove_file(socket_path.with_extension("lock"));
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let daemon_socket_path = socket_path.clone();
         let task = std::thread::spawn(move || {
@@ -109,148 +110,51 @@ pub unsafe fn configure_fake_server(language: LanguageId, extra_args: &[&str]) {
     }
 }
 
-#[doc = include_str!("docs/testing.md")]
-pub trait TestProject {
-    fn root(&self) -> &Path;
-
-    fn add_file(&self, relative_path: &str, content: &str) -> Result<PathBuf, TestProjectError> {
-        let path = self.root().join(relative_path);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(&path, content)?;
-        Ok(path)
-    }
-
-    fn file_uri(&self, relative_path: &str) -> lsp_types::Uri {
-        path_to_uri(&self.root().join(relative_path)).expect("Invalid file path")
-    }
-
-    fn file_path_str(&self, relative_path: &str) -> String {
-        self.root().join(relative_path).to_str().expect("Non-UTF8 path").to_string()
-    }
-}
-
-/// Error type for test project operations.
-#[derive(Debug, thiserror::Error)]
-pub enum TestProjectError {
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("Command '{command}' failed:\n{stderr}")]
-    CommandFailed { command: String, stderr: String },
-}
-
-/// A temporary Cargo project for testing.
-pub struct CargoProject {
-    temp_dir: TempDir,
-}
-
-impl TestProject for CargoProject {
-    fn root(&self) -> &Path {
-        self.temp_dir.path()
-    }
-}
-
-impl CargoProject {
-    /// Create a new minimal Cargo project.
-    pub fn new(name: &str) -> Result<Self, TestProjectError> {
-        let temp_dir = TempDir::new()?;
-        let project = Self { temp_dir };
-        project.init_cargo_toml(name)?;
-        project.init_src_dir()?;
-        Ok(project)
-    }
-
-    fn init_cargo_toml(&self, name: &str) -> Result<(), TestProjectError> {
-        let content = format!(
-            r#"[package]
+pub fn cargo_project(name: &str) -> TestWorkspace {
+    let manifest = format!(
+        r#"[package]
 name = "{name}"
 version = "0.1.0"
 edition = "2021"
 "#
-        );
-        fs::write(self.root().join("Cargo.toml"), content)?;
-        Ok(())
-    }
-
-    fn init_src_dir(&self) -> Result<(), TestProjectError> {
-        let src_dir = self.root().join("src");
-        fs::create_dir_all(&src_dir)?;
-
-        let main_content = r#"fn main() {
+    );
+    let main = r#"fn main() {
     println!("Hello, world!");
 }
 "#;
-        fs::write(src_dir.join("main.rs"), main_content)?;
-        Ok(())
-    }
+    TestWorkspace::new().file("Cargo.toml", manifest).file("src/main.rs", main)
 }
 
-const TYPESCRIPT_PACKAGE: &str = "typescript@7.0.2";
-
-/// A temporary Node.js/TypeScript project for testing.
-pub struct NodeProject {
-    temp_dir: TempDir,
-}
-
-impl TestProject for NodeProject {
-    fn root(&self) -> &Path {
-        self.temp_dir.path()
-    }
-}
-
-impl NodeProject {
-    /// Create a new minimal Node/TypeScript project.
-    pub fn new(name: &str) -> Result<Self, TestProjectError> {
-        let temp_dir = TempDir::new()?;
-        let project = Self { temp_dir };
-        project.init_package_json(name)?;
-        project.init_tsconfig()?;
-        project.init_src_dir()?;
-        project.install_typescript()?;
-        Ok(project)
-    }
-
-    fn init_package_json(&self, name: &str) -> Result<(), TestProjectError> {
-        let content = format!(
-            r#"{{
+pub fn node_project(name: &str) -> TestWorkspace {
+    let package = format!(
+        r#"{{
   "name": "{name}",
   "version": "0.1.0"
 }}"#
-        );
-        fs::write(self.root().join("package.json"), content)?;
-        Ok(())
-    }
-
-    fn init_tsconfig(&self) -> Result<(), TestProjectError> {
-        let content = r#"{
+    );
+    let tsconfig = r#"{
   "compilerOptions": {
     "strict": true,
     "noEmit": true
   }
 }"#;
-        fs::write(self.root().join("tsconfig.json"), content)?;
-        Ok(())
-    }
+    let project =
+        TestWorkspace::new().file("package.json", package).file("tsconfig.json", tsconfig).file("src/index.ts", "");
 
-    fn init_src_dir(&self) -> Result<(), TestProjectError> {
-        let src_dir = self.root().join("src");
-        fs::create_dir_all(&src_dir)?;
-        fs::write(src_dir.join("index.ts"), "")?;
-        Ok(())
-    }
-
-    fn install_typescript(&self) -> Result<(), TestProjectError> {
-        let args = ["install", "--save-dev", "--no-audit", "--no-fund", "--prefer-offline", TYPESCRIPT_PACKAGE];
-        let output = Command::new("npm").args(args).current_dir(self.root()).output()?;
-
-        if !output.status.success() {
-            return Err(TestProjectError::CommandFailed {
-                command: format!("npm {}", args.join(" ")),
-
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            });
-        }
-        Ok(())
-    }
+    let args = ["install", "--save-dev", "--no-audit", "--no-fund", "--prefer-offline", TYPESCRIPT_PACKAGE];
+    let output = Command::new("npm").args(args).current_dir(project.root()).output().expect("failed to run npm");
+    assert!(output.status.success(), "npm {} failed:\n{}", args.join(" "), String::from_utf8_lossy(&output.stderr));
+    project
 }
+
+pub fn file_uri(path: &Path) -> lsp_types::Uri {
+    path_to_uri(path).expect("Invalid file path")
+}
+
+pub fn remove_stale_daemon_files(workspace_root: &Path, language: LanguageId) {
+    let socket = socket_path(workspace_root, language);
+    let _ = fs::remove_file(lockfile_path(&socket));
+    let _ = fs::remove_file(socket);
+}
+
+const TYPESCRIPT_PACKAGE: &str = "typescript@7.0.2";

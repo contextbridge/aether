@@ -8,25 +8,23 @@
 //! Run with: `cargo test -p mcp-servers -- lsp_operations`
 
 use crate::common::{call_tool, coding_with_lsp, connect, poll_lsp_tool};
-use aether_lspd::testing::{CargoProject, TestProject};
+use aether_lspd::testing::cargo_project;
 use mcp_utils::client::ClientOptions;
 
 /// Test: hover returns type information for a Rust variable
 #[tokio::test]
 async fn test_hover_falls_back_from_stale_line_hint() {
-    let project = CargoProject::new("hover_test").expect("Failed to create project");
-    project
-        .add_file(
-            "src/main.rs",
-            r#"fn main() {
+    let project = cargo_project("hover_test");
+    project.write(
+        "src/main.rs",
+        r#"fn main() {
     let x: Vec<i32> = vec![1, 2, 3];
     println!("{:?}", x);
 }
 "#,
-        )
-        .expect("Failed to add file");
+    );
 
-    let main_rs = project.file_path_str("src/main.rs");
+    let main_rs = project.path_string("src/main.rs");
     let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
 
     let result = poll_lsp_tool(
@@ -49,11 +47,10 @@ async fn test_hover_falls_back_from_stale_line_hint() {
 /// Test: goto definition resolves to the correct function definition
 #[tokio::test]
 async fn test_goto_definition() {
-    let project = CargoProject::new("definition_test").expect("Failed to create project");
-    project
-        .add_file(
-            "src/main.rs",
-            r#"fn greet() -> &'static str {
+    let project = cargo_project("definition_test");
+    project.write(
+        "src/main.rs",
+        r#"fn greet() -> &'static str {
     "hello"
 }
 
@@ -62,10 +59,9 @@ fn main() {
     println!("{}", msg);
 }
 "#,
-        )
-        .expect("Failed to add file");
+    );
 
-    let main_rs = project.file_path_str("src/main.rs");
+    let main_rs = project.path_string("src/main.rs");
     let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
 
     let result = poll_lsp_tool(
@@ -87,11 +83,10 @@ fn main() {
 /// Test: find references returns all usages of a symbol
 #[tokio::test]
 async fn test_find_references() {
-    let project = CargoProject::new("references_test").expect("Failed to create project");
-    project
-        .add_file(
-            "src/main.rs",
-            r#"fn greet() -> &'static str {
+    let project = cargo_project("references_test");
+    project.write(
+        "src/main.rs",
+        r#"fn greet() -> &'static str {
     "hello"
 }
 
@@ -101,10 +96,9 @@ fn main() {
     println!("{} {}", a, b);
 }
 "#,
-        )
-        .expect("Failed to add file");
+    );
 
-    let main_rs = project.file_path_str("src/main.rs");
+    let main_rs = project.path_string("src/main.rs");
     let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
 
     let result = poll_lsp_tool(
@@ -130,29 +124,25 @@ fn main() {
 /// Test: `lsp_rename` applies workspace edits for a Rust symbol
 #[tokio::test]
 async fn test_lsp_rename_falls_back_from_stale_line_hint() {
-    let project = CargoProject::new("rename_test").expect("Failed to create project");
-    project
-        .add_file(
-            "src/lib.rs",
-            r#"pub fn greet() -> &'static str {
+    let project = cargo_project("rename_test");
+    project.write(
+        "src/lib.rs",
+        r#"pub fn greet() -> &'static str {
     "hello"
 }
 "#,
-        )
-        .expect("Failed to add lib.rs");
-    project
-        .add_file(
-            "src/main.rs",
-            r#"fn main() {
+    );
+    project.write(
+        "src/main.rs",
+        r#"fn main() {
     let a = rename_test::greet();
     let b = rename_test::greet();
     println!("{} {}", a, b);
 }
 "#,
-        )
-        .expect("Failed to add main.rs");
+    );
 
-    let lib_rs = project.file_path_str("src/lib.rs");
+    let lib_rs = project.path_string("src/lib.rs");
     let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
 
     // Wait for rust-analyzer to fully index both files before calling rename.

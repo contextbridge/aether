@@ -8,16 +8,11 @@ use crate::coding::tools::web_fetch::{HttpClient, HttpResponse};
 
 /// In-memory [`HttpClient`] fake that scripts responses per URL.
 ///
-/// Requests to URLs without a scripted result (or without a
-/// [`FakeHttpClient::with_default`] fallback) fail with
-/// [`WebFetchError::RequestFailed`]. The fake is cloneable and records every
-/// fetch for assertions via [`FakeHttpClient::fetch_count`] and
-/// [`FakeHttpClient::fetched_urls`].
+/// Requests to URLs without a scripted result fail with
+/// [`WebFetchError::RequestFailed`].
 #[derive(Debug, Clone)]
 pub struct FakeHttpClient {
     responses: Arc<Mutex<HashMap<String, FakeResponse>>>,
-    fetch_history: Arc<Mutex<Vec<String>>>,
-    default_response: Option<HttpResponse>,
 }
 
 impl Default for FakeHttpClient {
@@ -28,11 +23,7 @@ impl Default for FakeHttpClient {
 
 impl FakeHttpClient {
     pub fn new() -> Self {
-        Self {
-            responses: Arc::new(Mutex::new(HashMap::new())),
-            fetch_history: Arc::new(Mutex::new(Vec::new())),
-            default_response: None,
-        }
+        Self { responses: Arc::new(Mutex::new(HashMap::new())) }
     }
 
     /// Scripts a full response for `url`, including redirects via `final_url`.
@@ -65,33 +56,14 @@ impl FakeHttpClient {
         self.responses.lock().unwrap().insert(url.to_string(), FakeResponse::RequestFailed(message.to_string()));
         self
     }
-
-    /// Responds with `response` for any URL that has no scripted result.
-    pub fn with_default(mut self, response: HttpResponse) -> Self {
-        self.default_response = Some(response);
-        self
-    }
-
-    pub fn fetch_count(&self) -> usize {
-        self.fetch_history.lock().unwrap().len()
-    }
-
-    pub fn fetched_urls(&self) -> Vec<String> {
-        self.fetch_history.lock().unwrap().clone()
-    }
 }
 
 impl HttpClient for FakeHttpClient {
     fn fetch<'a>(&'a self, url: &'a str, _timeout: Duration) -> BoxFuture<'a, Result<HttpResponse, WebFetchError>> {
-        self.fetch_history.lock().unwrap().push(url.to_string());
-
         let responses = self.responses.lock().unwrap();
         Box::pin(std::future::ready(match responses.get(url) {
             Some(response) => response.clone().into_result(),
-            None => self
-                .default_response
-                .clone()
-                .ok_or_else(|| WebFetchError::RequestFailed(format!("No fake response configured for URL: {url}"))),
+            None => Err(WebFetchError::RequestFailed(format!("No fake response configured for URL: {url}"))),
         }))
     }
 }

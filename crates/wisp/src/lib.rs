@@ -79,14 +79,17 @@ pub async fn run_with_session(session: Session, settings: UiSettings) -> Result<
     runtime::run(app, Renderer::new(), event_rx, client_handle).await
 }
 
-fn setup_logging(log_dir: Option<&Path>) {
-    let dir = log_dir.unwrap_or_else(|| Path::new(DEFAULT_LOG_DIR));
+pub fn init_file_logging(dir: &Path, file_name: &str, default_filter: &str) {
     create_dir_all(dir).ok();
     let _ = tracing_subscriber::fmt()
-        .with_writer(daily(dir, "wisp.log"))
+        .with_writer(daily(dir, file_name))
         .with_ansi(false)
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter)))
         .try_init();
+}
+
+fn setup_logging(log_dir: Option<&Path>) {
+    init_file_logging(log_dir.unwrap_or(Path::new(DEFAULT_LOG_DIR)), "wisp.log", "info");
 }
 
 pub const DEFAULT_LOG_DIR: &str = "/tmp/wisp-logs";

@@ -1,5 +1,5 @@
 use crate::session::session_config_view::{LocalConfigKind, LocalConfigOption};
-use crate::session::workspace_status::WorkspaceStatus;
+use crate::session::workspace_status::{WorkspaceStatus, initial_workspace_status};
 use crate::session::WorkspaceAccess;
 use acp_utils::notifications::{AetherCapabilities, McpServerStatus, McpServerStatusEntry};
 use agent_client_protocol::schema::v2::{self as acp, SessionId};
@@ -30,7 +30,7 @@ impl SessionModel {
         } = config;
         let workspace_status = match workspace_access {
             WorkspaceAccess::Local => workspace_status,
-            WorkspaceAccess::Remote => WorkspaceStatus::initial(&working_dir),
+            WorkspaceAccess::Remote => initial_workspace_status(&working_dir),
         };
         Self {
             workspace_access,
@@ -121,7 +121,7 @@ impl SessionModel {
 
     pub fn set_working_dir(&mut self, working_dir: PathBuf) {
         if self.workspace_access == WorkspaceAccess::Remote {
-            self.workspace_status = WorkspaceStatus::initial(&working_dir);
+            self.workspace_status = initial_workspace_status(&working_dir);
         }
         self.working_dir = working_dir;
     }

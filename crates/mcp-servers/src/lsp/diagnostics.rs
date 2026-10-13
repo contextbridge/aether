@@ -110,13 +110,6 @@ pub struct DiagnosticCounts {
     pub total: usize,
 }
 
-impl DiagnosticCounts {
-    /// Returns true if there are any errors
-    pub fn has_errors(&self) -> bool {
-        self.errors > 0
-    }
-}
-
 impl fmt::Display for DiagnosticCounts {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} errors, {} warnings, {} info, {} hints", self.errors, self.warnings, self.infos, self.hints)
@@ -195,16 +188,5 @@ mod tests {
         assert_eq!(counts.infos, 0);
         assert_eq!(counts.hints, 0);
         assert_eq!(counts.total, 3);
-        assert!(counts.has_errors());
-    }
-
-    #[test]
-    fn test_uri_to_path() {
-        // Unix-style path
-        assert_eq!(uri_to_path(&make_uri("/path/to/file.rs")), "/path/to/file.rs");
-
-        // Non-file URI
-        let non_file_uri: Uri = "https://example.com/file.rs".parse().unwrap();
-        assert_eq!(uri_to_path(&non_file_uri), "https://example.com/file.rs");
     }
 }

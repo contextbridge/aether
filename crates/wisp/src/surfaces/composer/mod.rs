@@ -9,7 +9,7 @@ use crate::file_index::FileEntry;
 use crate::request::RequestId;
 use crate::surfaces::input::MouseAction;
 use crate::surfaces::picker::{CommandEntry, CompletionOverlay};
-use crate::surfaces::prompt_search::{self, PromptSearchPicker};
+use crate::surfaces::prompt_search::PromptSearchPicker;
 use crate::view::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::view::filterable_list::FilterableList;
 use crate::view::selection::Direction;
@@ -507,10 +507,9 @@ impl Composer {
         let Some(result) = self.prompt_search().and_then(|picker| picker.selected_result()) else {
             return;
         };
-        let prompt = result.prompt.clone();
-        let cursor = prompt_search::cursor_at_match_end(&prompt, result.match_end);
+        let (prompt, match_end) = (result.prompt.clone(), result.match_end);
         self.buffer.set_text(prompt);
-        self.buffer.set_cursor(cursor);
+        self.buffer.set_cursor(match_end);
     }
 
     /// Applies a keystroke to the open completion list, returning the command it

@@ -3,7 +3,7 @@ use std::error::Error;
 use std::time::Duration;
 
 use aether_core::core::RetryConfig;
-use aether_core::events::{AgentEvent, AgentObserver, LlmCallOutcome, StreamState, ToolEvent, TurnEvent, TurnOutcome};
+use aether_core::events::{AgentEvent, AgentObserver, LlmCallOutcome, StreamState, TurnEvent, TurnOutcome};
 use aether_core::testing::{AgentTrace, TestScenario, test_agent};
 use aether_telemetry::ContentCaptureSettings;
 use aether_telemetry::{
@@ -15,10 +15,7 @@ use common::{SYSTEM_INSTRUCTIONS_JSON, SYSTEM_PROMPT, SYSTEM_PROMPT_SHA256, all_
 
 mod common;
 use llm::testing::llm_response;
-use llm::{
-    LlmCallPurpose, LlmError, LlmResponse, ModelIdentity, ModelPricing, ProviderError, StopReason, TokenUsage,
-    ToolCallRequest,
-};
+use llm::{LlmCallPurpose, LlmError, LlmResponse, ModelIdentity, ModelPricing, ProviderError, StopReason, TokenUsage};
 use opentelemetry::metrics::MeterProvider as _;
 use opentelemetry::trace::{SpanKind, Status, TracerProvider as _};
 use opentelemetry::{Array, Value};
@@ -32,13 +29,7 @@ async fn tool_span_exposes_w3c_parent_context() -> Result<(), Box<dyn Error>> {
     let mut harness = otel_test().redacting().build();
     let observer = harness.observer.as_mut().expect("observer still alive");
     observer.on_event(&AgentEvent::Turn(TurnEvent::Started { content: vec![] }));
-    observer.on_event(&AgentEvent::Tool(ToolEvent::Call {
-        request: ToolCallRequest {
-            id: "call_1".to_string(),
-            name: "subagents__spawn_subagent".to_string(),
-            arguments: "{}".to_string(),
-        },
-    }));
+    observer.on_event(&AgentEvent::tool_call("call_1", "subagents__spawn_subagent", "{}"));
     let context = observer.tool_trace_context("call_1").expect("tool span exposes trace context");
     harness.drop_observer();
     let spans = harness.spans();

@@ -1,4 +1,4 @@
-use crate::common::{CargoProject, DaemonHarness, TestProject, hover_text, use_fake_servers};
+use crate::common::{DaemonHarness, cargo_project, file_uri, hover_text, use_fake_servers};
 use aether_lspd::LanguageId;
 use lsp_types::{DocumentSymbolResponse, GotoDefinitionResponse};
 use std::path::PathBuf;
@@ -7,7 +7,7 @@ use std::path::PathBuf;
 async fn request_helpers_round_trip_through_fake_server() {
     use_fake_servers();
 
-    let project = CargoProject::new("request_contracts").expect("Failed to create project");
+    let project = cargo_project("request_contracts");
     let content = r#"fn example_fn() -> i32 {
     7
 }
@@ -17,11 +17,11 @@ fn main() {
     println!("{}", value);
 }
 "#;
-    project.add_file("src/main.rs", content).expect("Failed to add file");
+    project.write("src/main.rs", content);
 
     let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
     let client = harness.connect().await.expect("Failed to connect");
-    let uri = project.file_uri("src/main.rs");
+    let uri = file_uri(&project.path("src/main.rs"));
 
     let hover = hover_text(client.hover(uri.clone(), 0, 0).await.expect("Hover request failed"));
     assert!(hover.contains("open_count=1"));
@@ -68,12 +68,12 @@ fn main() {
 async fn documents_in_paths_with_spaces_round_trip_through_the_daemon() {
     use_fake_servers();
 
-    let project = CargoProject::new("request_spaces").expect("Failed to create project");
-    project.add_file("src/my mod.rs", "fn main() { let error = 1; }\n").expect("Failed to add file");
+    let project = cargo_project("request_spaces");
+    project.write("src/my mod.rs", "fn main() { let error = 1; }\n");
 
     let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
     let client = harness.connect().await.expect("Failed to connect");
-    let uri = project.file_uri("src/my mod.rs");
+    let uri = file_uri(&project.path("src/my mod.rs"));
 
     assert!(uri.as_str().contains("my%20mod.rs"), "URI must be percent-encoded: {}", uri.as_str());
 
@@ -96,12 +96,12 @@ async fn documents_in_paths_with_spaces_round_trip_through_the_daemon() {
 async fn diagnostic_helpers_round_trip_through_fake_server() {
     use_fake_servers();
 
-    let project = CargoProject::new("request_diagnostics").expect("Failed to create project");
-    project.add_file("src/main.rs", "fn main() { let error = 1; }\n").expect("Failed to add file");
+    let project = cargo_project("request_diagnostics");
+    project.write("src/main.rs", "fn main() { let error = 1; }\n");
 
     let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
     let client = harness.connect().await.expect("Failed to connect");
-    let uri = project.file_uri("src/main.rs");
+    let uri = file_uri(&project.path("src/main.rs"));
 
     client.queue_diagnostic_refresh(uri.clone()).await.expect("Queue diagnostic refresh failed");
 

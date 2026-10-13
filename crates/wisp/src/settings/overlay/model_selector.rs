@@ -1,5 +1,5 @@
 use super::{KeyHint, SettingsChange, SettingsMenuValue, message_for_change, value_match_key};
-use crate::surfaces::input::{Nav, SettingsOutput, UiEvent, is_press};
+use crate::surfaces::input::{Nav, SettingsOutput, UiEvent};
 use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
 use crate::view::filterable_list::FilterableList;
@@ -173,9 +173,7 @@ impl ModelSelector {
     /// those never reach the shared picker navigation.
     #[allow(clippy::needless_pass_by_value)]
     pub(crate) fn on_ui_event(&mut self, event: UiEvent) -> Vec<SettingsOutput> {
-        if let UiEvent::Key(key) = &event
-            && is_press(*key)
-        {
+        if let UiEvent::Key(key) = &event {
             match key.code {
                 KeyCode::Tab => {
                     self.cycle_reasoning(Direction::Forward);
@@ -193,13 +191,6 @@ impl ModelSelector {
             }
         }
         match self.items.on_nav_event(&event) {
-            Nav::Close => self
-                .take_changes()
-                .map(|mut changes| {
-                    changes.push(SettingsOutput::Close);
-                    changes
-                })
-                .unwrap_or_default(),
             Nav::Clicked => {
                 self.toggle_focused();
                 Vec::new()
@@ -208,7 +199,7 @@ impl ModelSelector {
                 self.clamp_reasoning_to_focused();
                 Vec::new()
             }
-            Nav::Activate | Nav::Unhandled => Vec::new(),
+            Nav::Close | Nav::Activate | Nav::Unhandled => Vec::new(),
         }
     }
 }
@@ -222,7 +213,7 @@ impl ModelSelector {
         StatefulWidget::render(view, area, buf, &mut self.items);
         if let Some(error) = &self.validation_error {
             Paragraph::new(error.as_str())
-                .style(Style::new().fg(theme.warning))
+                .style(theme.warning)
                 .render(Rect::new(area.x, area.y + 2, area.width, 1), buf);
         }
         None
@@ -300,7 +291,7 @@ impl StatefulWidget for ModelSelectorView<'_> {
         let (view, selection) = state.view(self.theme, |row| match row {
             ModelSelectorRow::Spacer { .. } => Line::default(),
             ModelSelectorRow::Provider { label, .. } => {
-                Line::styled(format!(" {label}"), Style::new().fg(self.theme.heading))
+                Line::styled(format!(" {label}"), self.theme.heading)
             }
             ModelSelectorRow::Model { value, .. } => {
                 let is_selected = selected.contains(&value.value);
@@ -336,9 +327,9 @@ impl StatefulWidget for ModelSelectorView<'_> {
                         "  {checkbox}{label:name_width$}{reasoning:reasoning_width$}{capabilities:CAPABILITY_WIDTH$}{status}"
                     ),
                     if value.is_disabled {
-                        Style::new().fg(self.theme.text_secondary)
+                        Style::from(self.theme.text_secondary)
                     } else {
-                        Style::new().fg(self.theme.text_primary)
+                        Style::from(self.theme.text_primary)
                     },
                 )
             }
@@ -415,8 +406,8 @@ fn name_parts(name: &str) -> Option<(&str, &str)> {
 
 fn labeled(label: &str, value: &str, theme: &Theme) -> Line<'static> {
     Line::from(vec![
-        Span::styled(format!(" {label}: "), Style::new().fg(theme.text_secondary)),
-        Span::styled(value.to_string(), Style::new().fg(theme.text_primary)),
+        Span::styled(format!(" {label}: "), theme.text_secondary),
+        Span::styled(value.to_string(), theme.text_primary),
     ])
 }
 

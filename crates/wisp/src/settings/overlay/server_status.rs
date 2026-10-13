@@ -1,5 +1,5 @@
 use super::{LiveSettingsData, summarize};
-use crate::surfaces::input::{SettingsOutput, UiEvent, is_press, one};
+use crate::surfaces::input::{SettingsOutput, UiEvent, one};
 use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
 use crate::view::list_view::ListView;
@@ -68,8 +68,8 @@ impl ServerStatusPane {
     #[allow(clippy::needless_pass_by_value)]
     pub(crate) fn on_ui_event(&mut self, event: UiEvent) -> Vec<SettingsOutput> {
         match event {
-            UiEvent::Key(key) if is_press(key) => self.on_key(key),
-            UiEvent::Key(_) | UiEvent::Paste(_) => Vec::new(),
+            UiEvent::Key(key) => self.on_key(key),
+            UiEvent::Paste(_) => Vec::new(),
             UiEvent::Mouse(action, (_, row)) => match action.direction() {
                 Some(direction) => self.scroll(direction),
                 None => self.click(row),
@@ -79,7 +79,6 @@ impl ServerStatusPane {
 
     fn on_key(&mut self, key: KeyEvent) -> Vec<SettingsOutput> {
         match key.code {
-            KeyCode::Esc => vec![SettingsOutput::Close],
             KeyCode::Up => self.scroll(Direction::Backward),
             KeyCode::Down => self.scroll(Direction::Forward),
             KeyCode::Enter => self.activate(),
@@ -128,19 +127,17 @@ impl StatefulWidget for ServerStatusView<'_> {
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         let rows = self.rows.iter().map(|row| match row {
-            ServerStatusRow::Header(label) => Line::styled(label.clone(), Style::new().fg(self.theme.heading)),
+            ServerStatusRow::Header(label) => Line::styled(label.clone(), self.theme.heading),
             ServerStatusRow::Spacer => Line::default(),
             ServerStatusRow::Server { entry, indented } => {
                 let (indicator, detail) = server_status_detail(entry);
                 let prefix = if *indented { "  " } else { "" };
                 let style = match &entry.status {
                     McpServerStatus::Connected { .. } | McpServerStatus::Connecting => {
-                        Style::new().fg(self.theme.text_primary)
+                        Style::from(self.theme.text_primary)
                     }
-                    McpServerStatus::Failed { .. } => Style::new().fg(self.theme.error),
-                    McpServerStatus::Authenticating | McpServerStatus::NeedsOAuth => {
-                        Style::new().fg(self.theme.warning)
-                    }
+                    McpServerStatus::Failed { .. } => Style::from(self.theme.error),
+                    McpServerStatus::Authenticating | McpServerStatus::NeedsOAuth => Style::from(self.theme.warning),
                 };
                 let row_prefix = if area.width > 30 { " " } else { "" };
                 let name_separator = if area.width <= 30 { " " } else { "  " };

@@ -83,10 +83,6 @@ impl WebSearcher {
         Ok(Self::with_client(BraveSearchClient::new()?))
     }
 
-    pub fn with_api_key(api_key: String) -> Self {
-        Self::with_client(BraveSearchClient::with_api_key(api_key))
-    }
-
     /// Performs a web search with the given parameters
     pub async fn search<T, U>(&self, args: WebSearchInput, mut on_retry: T) -> Result<WebSearchOutput, WebSearchError>
     where
@@ -141,12 +137,6 @@ impl WebSearcher {
         let display_meta = ToolDisplayMeta::new("Web search", format!("'{}' ({} results)", query, results.len()));
 
         Ok(WebSearchOutput { results, query: query.to_string(), meta: Some(display_meta.into()) })
-    }
-}
-
-impl Default for WebSearcher {
-    fn default() -> Self {
-        Self::with_api_key(std::env::var("BRAVE_SEARCH_API_KEY").expect("BRAVE_SEARCH_API_KEY must be set"))
     }
 }
 

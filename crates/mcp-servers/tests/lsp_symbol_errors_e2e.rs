@@ -2,7 +2,7 @@
 mod common;
 
 use aether_lspd::LanguageId;
-use aether_lspd::testing::{CargoProject, TestDaemon, TestProject, configure_fake_server};
+use aether_lspd::testing::{TestDaemon, cargo_project, configure_fake_server};
 use common::{call_tool_error, coding_with_lsp, connect};
 use mcp_utils::client::ClientOptions;
 use std::time::Duration;
@@ -10,8 +10,8 @@ use std::time::Duration;
 #[tokio::test]
 async fn symbol_lookup_propagates_language_server_errors() {
     unsafe { configure_fake_server(LanguageId::Rust, &["--fail-on", "textDocument/definition"]) };
-    let project = CargoProject::new("symbol_lookup_errors").expect("create project");
-    project.add_file("src/lib.rs", "pub fn example_fn() {}\n").expect("add source file");
+    let project = cargo_project("symbol_lookup_errors");
+    project.write("src/lib.rs", "pub fn example_fn() {}\n");
     let daemon =
         TestDaemon::spawn(project.root(), LanguageId::Rust, Duration::from_secs(120)).await.expect("start daemon");
     let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;

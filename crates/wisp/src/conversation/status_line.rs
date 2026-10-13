@@ -71,7 +71,7 @@ impl StatusLine {
         // The configured right-hand segments always render; only the exit
         // confirmation replaces them.
         let right = if model.exit_confirmation {
-            vec![Span::styled("Ctrl-C again to exit", Style::new().fg(theme.warning))]
+            vec![Span::styled("Ctrl-C again to exit", theme.warning)]
         } else {
             render_segments(model, &settings.right, theme)
         };
@@ -137,7 +137,7 @@ fn render_segments(
             continue;
         }
         if !spans.is_empty() {
-            spans.push(Span::styled(model.settings.separator.clone(), Style::new().fg(theme.text_secondary)));
+            spans.push(Span::styled(model.settings.separator.clone(), theme.text_secondary));
         }
         spans.extend(segment_spans);
     }
@@ -152,22 +152,22 @@ fn render_segment(
 ) -> Vec<Span<'static>> {
     match segment {
         StatusLineSegmentConfig::Cwd { max_width } => {
-            vec![styled(clamp(&model.workspace.display_dir, *max_width), theme.text_secondary)]
+            vec![Span::styled(clamp(&model.workspace.display_dir, *max_width), theme.text_secondary)]
         }
         StatusLineSegmentConfig::GitRef => model
             .workspace
             .git_ref
             .as_deref()
-            .map(|git_ref| vec![styled(git_ref.to_string(), theme.success)])
+            .map(|git_ref| vec![Span::styled(git_ref.to_string(), theme.success)])
             .unwrap_or_default(),
-        StatusLineSegmentConfig::Agent => vec![styled(model.agent_name.to_string(), theme.info)],
+        StatusLineSegmentConfig::Agent => vec![Span::styled(model.agent_name.to_string(), theme.info)],
         StatusLineSegmentConfig::Mode => config
             .current_display_name(ConfigOptionId::Mode)
-            .map(|mode| vec![styled(mode, theme.text_secondary)])
+            .map(|mode| vec![Span::styled(mode, theme.text_secondary)])
             .unwrap_or_default(),
         StatusLineSegmentConfig::Model { max_width } => config
             .current_display_name(ConfigOptionId::Model)
-            .map(|model| vec![styled(clamp(&model, *max_width), theme.success)])
+            .map(|model| vec![Span::styled(clamp(&model, *max_width), theme.success)])
             .unwrap_or_default(),
         StatusLineSegmentConfig::Reasoning => {
             let levels = config.reasoning_levels();
@@ -176,11 +176,11 @@ fn render_segment(
             }
             let effort = config.reasoning_effort();
             let label = ReasoningEffort::config_str(effort);
-            vec![styled(reasoning_bar(effort, &levels, label.len()), reasoning_color(effort, &levels, theme))]
+            vec![Span::styled(reasoning_bar(effort, &levels, label.len()), reasoning_color(effort, &levels, theme))]
         }
         StatusLineSegmentConfig::Context => model
             .context_usage
-            .map(|usage| vec![styled(context_bar(usage), context_color(usage, theme))])
+            .map(|usage| vec![Span::styled(context_bar(usage), context_color(usage, theme))])
             .unwrap_or_default(),
         StatusLineSegmentConfig::ServerHealth => {
             let count = model.unhealthy_servers;
@@ -189,16 +189,12 @@ fn render_segment(
             }
             let message =
                 if count == 1 { "1 server needs auth".to_string() } else { format!("{count} servers unhealthy") };
-            vec![styled(message, theme.warning)]
+            vec![Span::styled(message, theme.warning)]
         }
         StatusLineSegmentConfig::Text { value, style } => {
-            vec![styled(value.clone(), style.map_or(theme.text_secondary, |style| semantic_color(style, theme)))]
+            vec![Span::styled(value.clone(), style.map_or(theme.text_secondary, |style| semantic_color(style, theme)))]
         }
     }
-}
-
-fn styled(text: String, color: Color) -> Span<'static> {
-    Span::styled(text, Style::new().fg(color))
 }
 
 fn clamp(text: &str, max_width: Option<u16>) -> String {

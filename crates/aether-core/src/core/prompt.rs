@@ -1,8 +1,8 @@
 use crate::core::{AgentError, Result};
 use crate::mcp::PROGRESSIVE_DISCOVERY_INSTRUCTIONS;
 use glob::glob;
-use schemars::{JsonSchema, Schema, SchemaGenerator};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -11,7 +11,7 @@ use tracing::warn;
 use utils::shell_expander::ShellExpander;
 use utils::substitution::substitute_parameters;
 use utils::variables::VarError;
-use utils::{PathOrObject, ResourcePath, is_false, string_or_object_schema};
+use utils::{PathOrObject, ResourcePath};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Prompt {
@@ -30,7 +30,9 @@ pub struct McpInstructions {
 ///
 /// Used by configuration layers to declare prompts before resolution. Convert into
 /// runtime [`Prompt`] values with [`Prompt::from_sources`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(from = "PathOrObject<PromptSourceObject>", into = "PathOrObject<PromptSourceObject>")]
+#[schemars(with = "PathOrObject<PromptSourceObject>", description = include_str!("../docs/prompt_source.md"))]
 pub enum PromptSource {
     Text { text: String },
     File { path: ResourcePath, optional: bool },
@@ -94,41 +96,23 @@ impl From<PromptSourceObject> for PromptSource {
     }
 }
 
-impl<'de> Deserialize<'de> for PromptSource {
-    fn deserialize<T: Deserializer<'de>>(deserializer: T) -> std::result::Result<Self, T::Error> {
-        Ok(match PathOrObject::<PromptSourceObject>::deserialize(deserializer)? {
-            PathOrObject::Path(path) => Self::File { path, optional: false },
+impl From<PathOrObject<PromptSourceObject>> for PromptSource {
+    fn from(source: PathOrObject<PromptSourceObject>) -> Self {
+        match source {
+            PathOrObject::Path(path) => Self::file(path),
             PathOrObject::Object(object) => object.into(),
-        })
-    }
-}
-
-impl Serialize for PromptSource {
-    fn serialize<T: Serializer>(&self, serializer: T) -> std::result::Result<T::Ok, T::Error> {
-        match self {
-            Self::File { path, optional: false } => path.serialize(serializer),
-            Self::File { path, optional } => {
-                Serialize::serialize(&PromptSourceObject::File { path: path.clone(), optional: *optional }, serializer)
-            }
-            Self::Text { text } => Serialize::serialize(&PromptSourceObject::Text { text: text.clone() }, serializer),
-            Self::Glob { pattern, optional } => Serialize::serialize(
-                &PromptSourceObject::Glob { pattern: pattern.clone(), optional: *optional },
-                serializer,
-            ),
         }
     }
 }
 
-impl JsonSchema for PromptSource {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        "PromptSource".into()
-    }
-
-    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
-        string_or_object_schema(
-            include_str!("../docs/prompt_source.md"),
-            &generator.subschema_for::<PromptSourceObject>().to_value(),
-        )
+impl From<PromptSource> for PathOrObject<PromptSourceObject> {
+    fn from(source: PromptSource) -> Self {
+        match source {
+            PromptSource::File { path, optional: false } => Self::Path(path),
+            PromptSource::File { path, optional } => Self::Object(PromptSourceObject::File { path, optional }),
+            PromptSource::Text { text } => Self::Object(PromptSourceObject::Text { text }),
+            PromptSource::Glob { pattern, optional } => Self::Object(PromptSourceObject::Glob { pattern, optional }),
+        }
     }
 }
 
@@ -143,14 +127,14 @@ enum PromptSourceObject {
         /// Path to a prompt file, resolved as a resource path.
         path: ResourcePath,
         /// When true, a missing file is skipped instead of raising an error.
-        #[serde(default, skip_serializing_if = "is_false")]
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         optional: bool,
     },
     Glob {
         /// Glob pattern matching prompt files, resolved as a resource path.
         pattern: ResourcePath,
         /// When true, a zero-match glob is skipped instead of raising an error.
-        #[serde(default, skip_serializing_if = "is_false")]
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         optional: bool,
     },
 }
@@ -226,18 +210,6 @@ impl Prompt {
             }
             Prompt::McpInstructions(instructions) => Ok(format_mcp_instructions(instructions)),
         }
-    }
-
-    /// Resolve multiple `SystemPrompts` and join them with double newlines
-    pub async fn build_all(prompts: &[Prompt]) -> Result<String> {
-        let mut parts = Vec::with_capacity(prompts.len());
-        for p in prompts {
-            let part = p.build().await?;
-            if !part.is_empty() {
-                parts.push(part);
-            }
-        }
-        Ok(parts.join("\n\n"))
     }
 
     async fn resolve_file(path: &Path) -> Result<String> {
@@ -368,44 +340,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn build_all_concatenates_prompts() {
-        let prompts = vec![Prompt::text("Part one"), Prompt::text("Part two")];
-        let result = Prompt::build_all(&prompts).await.unwrap();
-        assert_eq!(result, "Part one\n\nPart two");
-    }
-
-    #[tokio::test]
-    async fn build_all_concatenates_multiple_files() {
+    async fn prompt_cache_concatenates_files() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("AGENTS.md"), "Agent instructions").unwrap();
-        std::fs::write(dir.path().join("SYSTEM.md"), "System prompt").unwrap();
+        write(dir.path().join("AGENTS.md"), "Agent instructions").unwrap();
+        write(dir.path().join("SYSTEM.md"), "System prompt").unwrap();
 
-        let prompts = vec![
+        let mut cache = PromptCache::new(vec![
             Prompt::file(dir.path().join("AGENTS.md"), dir.path()),
             Prompt::file(dir.path().join("SYSTEM.md"), dir.path()),
-        ];
-        let result = Prompt::build_all(&prompts).await.unwrap();
-        assert!(result.contains("Agent instructions"));
-        assert!(result.contains("System prompt"));
-        assert!(result.contains("\n\n"));
+        ]);
+
+        assert_eq!(cache.render().await.unwrap(), "Agent instructions\n\nSystem prompt");
     }
 
     #[tokio::test]
-    async fn build_all_skips_empty_parts() {
-        let prompts = vec![Prompt::text("Part one"), Prompt::text(""), Prompt::text("Part two")];
-        let result = Prompt::build_all(&prompts).await.unwrap();
-        assert_eq!(result, "Part one\n\nPart two");
+    async fn prompt_cache_skips_empty_prompts() {
+        let mut cache = PromptCache::new(vec![Prompt::text("Part one"), Prompt::text(""), Prompt::text("Part two")]);
+        assert_eq!(cache.render().await.unwrap(), "Part one\n\nPart two");
     }
 
     #[tokio::test]
-    async fn prompt_cache_render_matches_build_all_on_first_render() {
-        let prompts = vec![
-            Prompt::text("first"),
-            Prompt::McpInstructions(instructions(&[("srv", "body")])),
-            Prompt::text("last"),
-        ];
-        let expected = Prompt::build_all(&prompts).await.unwrap();
-        let mut cache = PromptCache::new(prompts);
+    async fn prompt_cache_renders_mcp_instructions_in_place() {
+        let mcp = Prompt::McpInstructions(instructions(&[("srv", "body")]));
+        let expected = format!("first\n\n{}\n\nlast", mcp.build().await.unwrap());
+
+        let mut cache = PromptCache::new(vec![Prompt::text("first"), mcp, Prompt::text("last")]);
+
         assert_eq!(cache.render().await.unwrap(), expected);
     }
 

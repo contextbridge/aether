@@ -25,15 +25,10 @@ use llm::{ProviderConnectionOverride, ProviderConnectionOverrides, ReasoningEffo
 use std::collections::BTreeMap;
 use std::env::current_dir;
 use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::{
-    fs::create_dir_all,
-    path::{Path, PathBuf},
-};
 use thiserror::Error;
 use tracing::{info, warn};
-use tracing_appender::rolling::daily;
-use tracing_subscriber::EnvFilter;
 
 use aether_auth::OAuthError;
 use aether_project::SettingsError;
@@ -81,29 +76,14 @@ pub struct AcpArgs {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[schemars(rename = "AetherAcpOptions")]
 pub struct AcpOptions {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_dir: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub providers: Option<BTreeMap<String, ProviderConnectionOverride>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<AetherSettings>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings_file: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffort>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_context: Option<AgentTraceContext>,
-}
-
-/// Outcome of running the ACP server successfully.
-#[derive(Debug)]
-pub enum AcpRunOutcome {
-    /// The client disconnected cleanly (e.g. EOF on stdin).
-    CleanDisconnect,
 }
 
 /// Errors that terminate the ACP server run.
@@ -145,18 +125,14 @@ pub enum AcpOptionsJsonError {
     UnsupportedReasoningEffort(#[from] ReasoningEffortError),
 }
 
-pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
+pub async fn run_acp(args: AcpArgs) -> Result<(), AcpRunError> {
     info!("Starting Aether ACP server");
 
     let cwd = current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let state = Arc::new(create_acp_state(args, &cwd, SessionHooks::default())?);
     let connect_result = state.serve(Stdio::new(), state.stop_token()).await;
     state.shutdown_all().await;
-
-    match connect_result {
-        Ok(()) => Ok(AcpRunOutcome::CleanDisconnect),
-        Err(err) => Err(AcpRunError::Protocol(err)),
-    }
+    connect_result.map_err(AcpRunError::Protocol)
 }
 
 #[derive(Debug)]
@@ -222,7 +198,7 @@ impl AcpRunConfig {
 
 fn create_acp_state(args: AcpArgs, cwd: &Path, hooks: SessionHooks) -> Result<AcpState, AcpRunError> {
     let config = AcpRunConfig::from_args(args)?;
-    setup_logging(&config.log_dir);
+    wisp::init_file_logging(&config.log_dir, "aether-acp.log", "warn");
 
     let initial_selection = if let Some(agent) = config.agent.clone() {
         InitialSessionSelection::agent(agent)
@@ -254,16 +230,6 @@ fn create_acp_state(args: AcpArgs, cwd: &Path, hooks: SessionHooks) -> Result<Ac
         cwd: cwd.to_path_buf(),
         hooks,
     }))
-}
-
-fn setup_logging(log_dir: &Path) {
-    create_dir_all(log_dir).ok();
-    tracing_subscriber::fmt()
-        .with_writer(daily(log_dir, "aether-acp.log"))
-        .with_ansi(false) // No ANSI colors in log files
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")))
-        .pretty()
-        .init();
 }
 
 fn default_log_dir() -> PathBuf {

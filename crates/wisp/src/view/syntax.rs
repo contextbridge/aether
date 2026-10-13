@@ -36,7 +36,7 @@ impl SyntaxHighlighter {
             LanguageHint::InfoString(language),
             || code,
         );
-        let base = Style::new().fg(theme.code_fg).bg(theme.code_bg);
+        let base = Style::from((theme.code_fg, theme.code_bg));
         match highlights {
             Ok(highlights) => code
                 .split('\n')

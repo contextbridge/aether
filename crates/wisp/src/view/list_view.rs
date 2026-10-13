@@ -68,7 +68,7 @@ impl<'a> ListView<'a> {
 
     /// Wraps the list in a titled border, the standard full-pane picker chrome.
     pub fn bordered(self, title: impl Into<String>) -> Self {
-        let style = Style::new().fg(self.theme.text_primary);
+        let style = Style::from(self.theme.text_primary);
         self.block(Block::bordered().title(title.into()).style(style))
     }
 
@@ -84,8 +84,8 @@ impl<'a> ListView<'a> {
         self
     }
 
-    pub fn highlight_style(mut self, style: Style) -> Self {
-        self.highlight = Some(style);
+    pub fn highlight_style(mut self, style: impl Into<Style>) -> Self {
+        self.highlight = Some(style.into());
         self
     }
 
@@ -121,7 +121,7 @@ impl StatefulWidget for ListView<'_> {
 
         if rows.len == 0 {
             selection.set_rows_area(Rect::ZERO);
-            Paragraph::new(empty_message).style(Style::new().fg(theme.muted)).render(inner, buf);
+            Paragraph::new(empty_message).style(theme.muted).render(inner, buf);
             return;
         }
 

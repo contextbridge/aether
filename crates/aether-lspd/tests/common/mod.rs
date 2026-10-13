@@ -1,9 +1,8 @@
 #![allow(dead_code, unused_imports)]
 
-pub mod cargo_project;
 pub mod daemon_harness;
 
-pub use cargo_project::{CargoProject, TestProject};
+pub use aether_lspd::testing::{cargo_project, file_uri};
 pub use daemon_harness::DaemonHarness;
 
 use aether_lspd::testing::configure_fake_server;
@@ -20,6 +19,7 @@ pub fn use_fake_servers() {
         configure_fake_server(LanguageId::TypeScript, &["--pull-diagnostics"]);
         configure_fake_server(LanguageId::Go, &["--crash-on", "initialize"]);
         configure_fake_server(LanguageId::C, &["--fail-on", "initialize"]);
+        configure_fake_server(LanguageId::Python, &["--garble-before", "textDocument/hover"]);
     });
 }
 

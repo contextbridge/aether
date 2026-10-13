@@ -199,6 +199,6 @@ fn assert_buffer_eq_reports_the_first_mismatched_line() {
 #[test]
 fn assert_buffer_eq_ignores_styles_and_trailing_spaces() {
     let mut buffer = Buffer::empty(ratatui::layout::Rect::new(0, 0, 5, 2));
-    buffer.set_string(0, 0, "abc", ratatui::style::Style::default().fg(Color::Red).add_modifier(Modifier::BOLD));
+    buffer.set_string(0, 0, "abc", ratatui::style::Style::from((Color::Red, Modifier::BOLD)));
     assert_buffer_eq(&buffer, &["abc", ""]);
 }

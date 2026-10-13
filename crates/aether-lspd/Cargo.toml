@@ -18,7 +18,7 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-testing = ["dep:tempfile"]
+testing = ["dep:utils", "utils/testing"]
 
 [lints]
 workspace = true
@@ -65,7 +65,7 @@ ignore = { workspace = true }
 thiserror = { workspace = true }
 
 # Testing support (optional)
-tempfile = { workspace = true, optional = true }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.19", optional = true }
 
 # Unix-specific features (daemonization, signals)
 [target.'cfg(unix)'.dependencies]

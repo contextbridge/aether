@@ -17,7 +17,7 @@ use self::form::{FormAction, FormModal};
 use self::frame::{MODAL_HORIZONTAL_PADDING, MODAL_VERTICAL_CHROME, ModalFrame};
 use self::url::UrlModal;
 use crate::session::platform::{BrowserOpener, ClipboardWriter};
-use crate::surfaces::input::{ElicitationOutput, UiEvent, is_press};
+use crate::surfaces::input::{ElicitationOutput, UiEvent};
 use crate::theme::Theme;
 use crate::view::widgets::{KeyHint, SCROLLBAR_WIDTH, key_hints};
 use crate::view::wrap::as_u16;
@@ -118,8 +118,7 @@ impl ElicitationModal {
 impl ElicitationModal {
     pub(crate) fn on_ui_event(&mut self, event: UiEvent) -> Vec<ElicitationOutput> {
         match event {
-            UiEvent::Key(key) if is_press(key) => self.on_key(key),
-            UiEvent::Key(_) => Vec::new(),
+            UiEvent::Key(key) => self.on_key(key),
             UiEvent::Paste(text) => {
                 if let ModalKind::Form(form) = &mut self.kind {
                     form.paste(&text);

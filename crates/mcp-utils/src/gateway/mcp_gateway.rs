@@ -11,6 +11,7 @@ use std::sync::Arc;
 use tokio_stream::wrappers::WatchStream;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
+use utils::mcp_status::McpServerStatusEntry;
 
 #[derive(Clone)]
 pub struct McpGateway {
@@ -30,22 +31,6 @@ pub struct ServerSpec {
 pub struct ConnectedServer {
     client: McpClient,
     tools: Arc<[Tool]>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ServerStatus {
-    pub name: String,
-    pub state: ServerState,
-    pub can_sign_in: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ServerState {
-    Connecting,
-    Authenticating,
-    NeedsOAuth,
-    Failed { error: String },
-    Connected { tool_count: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -79,7 +64,7 @@ impl McpGateway {
         self.connections().iter().filter_map(Connection::connected).collect()
     }
 
-    pub fn statuses(&self) -> Vec<ServerStatus> {
+    pub fn statuses(&self) -> Vec<McpServerStatusEntry> {
         self.connections().iter().map(Connection::status).collect()
     }
 

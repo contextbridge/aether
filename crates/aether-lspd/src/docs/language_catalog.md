@@ -6,7 +6,6 @@ Identifies a programming language for LSP server selection.
 
 - [`from_extension`](LanguageId::from_extension) -- Detect from a file extension (e.g. `"rs"` → `Rust`).
 - [`from_path`](LanguageId::from_path) -- Detect from a file path. Falls back to `PlainText` for unknown extensions.
-- [`from_lsp_id`](crate::from_lsp_id) -- Parse an LSP language ID string (e.g. `"typescriptreact"` → `TypeScriptReact`).
 - [`as_str`](LanguageId::as_str) -- Get the LSP language ID string for this variant.
 - [`detect_project_languages`](crate::detect_project_languages) -- Detect configured languages from project manifests.
 
@@ -28,4 +27,4 @@ Languages that share a server implementation also share a daemon socket. For exa
 
 # Metadata
 
-[`LANGUAGE_METADATA`](crate::LANGUAGE_METADATA) provides a static list of all language entries with their extensions, aliases, and primary extension. Use [`metadata_for`](crate::metadata_for) to look up a single language, or [`extensions_for_alias`](crate::extensions_for_alias) to find all file extensions matching a language name. [`server_metadata_for_language`](crate::server_metadata_for_language) provides server display and installation guidance.
+[`LANGUAGE_METADATA`](crate::LANGUAGE_METADATA) provides a static list of all language entries with their file extensions. Use [`metadata_for`](crate::metadata_for) to look up a single language. [`server_metadata_for_language`](crate::server_metadata_for_language) provides server display and installation guidance.

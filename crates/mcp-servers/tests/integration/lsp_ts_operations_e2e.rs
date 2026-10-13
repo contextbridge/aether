@@ -1,13 +1,13 @@
 use crate::common::{coding_with_lsp, connect, poll_lsp_tool};
-use aether_lspd::testing::{NodeProject, TestProject};
+use aether_lspd::testing::node_project;
 use mcp_utils::client::ClientOptions;
 
 #[tokio::test]
 async fn test_ts_hover_returns_type_info() {
-    let project = NodeProject::new("ts_hover_test").expect("Failed to create project");
-    project.add_file("src/index.ts", "const x: number = 42;\nconsole.log(x);\n").expect("Failed to add file");
+    let project = node_project("ts_hover_test");
+    project.write("src/index.ts", "const x: number = 42;\nconsole.log(x);\n");
 
-    let index_ts = project.file_path_str("src/index.ts");
+    let index_ts = project.path_string("src/index.ts");
     let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
 
     let result = poll_lsp_tool(
@@ -29,19 +29,17 @@ async fn test_ts_hover_returns_type_info() {
 
 #[tokio::test]
 async fn test_ts_goto_definition() {
-    let project = NodeProject::new("ts_def_test").expect("Failed to create project");
-    project
-        .add_file(
-            "src/index.ts",
-            r#"function greet(): string {
+    let project = node_project("ts_def_test");
+    project.write(
+        "src/index.ts",
+        r#"function greet(): string {
     return "hello";
 }
 
 const msg = greet();
 console.log(msg);
 "#,
-        )
-        .expect("Failed to add file");
+    );
 
     let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
 
@@ -63,11 +61,10 @@ console.log(msg);
 
 #[tokio::test]
 async fn test_ts_find_references() {
-    let project = NodeProject::new("ts_refs_test").expect("Failed to create project");
-    project
-        .add_file(
-            "src/index.ts",
-            r#"function greet(): string {
+    let project = node_project("ts_refs_test");
+    project.write(
+        "src/index.ts",
+        r#"function greet(): string {
     return "hello";
 }
 
@@ -75,10 +72,9 @@ const a = greet();
 const b = greet();
 console.log(a, b);
 "#,
-        )
-        .expect("Failed to add file");
+    );
 
-    let index_ts = project.file_path_str("src/index.ts");
+    let index_ts = project.path_string("src/index.ts");
     let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
 
     let result = poll_lsp_tool(

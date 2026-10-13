@@ -10,10 +10,6 @@ impl WorkspacePaths {
         Self { root: root.into() }
     }
 
-    pub fn current() -> Self {
-        Self::new(current_dir())
-    }
-
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -24,10 +20,6 @@ impl WorkspacePaths {
 
     pub fn resolve_file(&self, raw: &str) -> Result<PathBuf, EmptyFilePathError> {
         resolve_file(&self.root, raw)
-    }
-
-    pub fn resolve_dir(&self, raw: Option<&str>) -> PathBuf {
-        resolve_dir(&self.root, raw)
     }
 
     pub fn relative_path(&self, path: &str) -> String {
@@ -68,15 +60,6 @@ pub fn resolve_file(root: &Path, raw: &str) -> Result<PathBuf, EmptyFilePathErro
     Ok(resolve_path(root, PathBuf::from(raw)))
 }
 
-/// Resolves an optional directory against `root`. Missing or whitespace-only
-/// input resolves to `root` itself.
-pub fn resolve_dir(root: &Path, raw: Option<&str>) -> PathBuf {
-    match raw {
-        Some(raw) if !raw.trim().is_empty() => resolve_path(root, PathBuf::from(raw)),
-        _ => root.to_path_buf(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,7 +69,6 @@ mod tests {
         let workspace = WorkspacePaths::new("/workspace");
         assert_eq!(workspace.root(), Path::new("/workspace"));
         assert_eq!(workspace.resolve_path(PathBuf::from("src/main.rs")), PathBuf::from("/workspace/src/main.rs"));
-        assert_eq!(workspace.resolve_dir(None), PathBuf::from("/workspace"));
         assert_eq!(workspace.relative_path("/workspace/src/main.rs"), "src/main.rs");
         assert_eq!(workspace.relative_path("/elsewhere/lib.rs"), "/elsewhere/lib.rs");
     }
@@ -121,11 +103,5 @@ mod tests {
     fn rejects_whitespace_only_required_file_path() {
         let err = resolve_file(Path::new("/workspace"), "  \t ").unwrap_err();
         assert!(err.to_string().contains("file path is required"));
-    }
-
-    #[test]
-    fn optional_empty_dir_resolves_to_root() {
-        assert_eq!(resolve_dir(Path::new("/workspace"), Some("  ")), PathBuf::from("/workspace"));
-        assert_eq!(resolve_dir(Path::new("/workspace"), None), PathBuf::from("/workspace"));
     }
 }

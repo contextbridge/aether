@@ -1,9 +1,8 @@
 use super::agent::{Agent, AgentRunResult, RunError};
 use crate::Task;
-use aether_core::events::{AgentEvent, StreamState, ToolEvent, TurnOutcome};
+use aether_core::events::{AgentEvent, StreamState, TurnOutcome};
 use async_stream::try_stream;
 use futures::Stream;
-use llm::ToolCallResult;
 use std::path::{Path, PathBuf};
 use tokio::fs::{create_dir_all, write};
 
@@ -27,17 +26,8 @@ impl FakeAgent {
     }
 
     pub fn with_tool_call(tool_name: impl Into<String>, result: impl Into<String>) -> Self {
-        let tool_name = tool_name.into();
         Self::new(vec![
-            AgentEvent::Tool(ToolEvent::Result {
-                result: ToolCallResult {
-                    id: "fake_call_1".to_string(),
-                    name: tool_name,
-                    arguments: "{}".to_string(),
-                    result: result.into(),
-                },
-                result_meta: None,
-            }),
+            AgentEvent::tool_result("fake_call_1", &tool_name.into(), "{}", &result.into()),
             AgentEvent::text("fake_2", "Task completed using tools", StreamState::Complete),
             AgentEvent::turn_ended(TurnOutcome::Completed),
         ])

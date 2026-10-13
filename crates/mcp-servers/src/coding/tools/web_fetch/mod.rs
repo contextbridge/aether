@@ -128,11 +128,6 @@ fn non_empty(s: String) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::FakeHttpClient;
-
-    fn input(url: &str) -> WebFetchInput {
-        WebFetchInput { url: url.to_string(), prompt: None, timeout: None }
-    }
 
     #[test]
     fn test_normalize_url() {
@@ -200,52 +195,5 @@ mod tests {
 
         assert_eq!(result.title, Some("Sparse".to_string()));
         assert!(result.markdown.contains("Hi"));
-    }
-
-    #[tokio::test]
-    async fn test_fake_client_returns_configured_response() {
-        let fake = FakeHttpClient::new().with_html(
-            "https://example.com/",
-            "<html><head><title>Example</title></head><body><h1>Hello</h1></body></html>",
-        );
-        let fetcher = WebFetcher::with_client(fake.clone());
-        let result = fetcher.fetch(input("example.com")).await.unwrap();
-
-        assert_eq!(result.status_code, 200);
-        assert_eq!(result.title, Some("Example".to_string()));
-        assert!(result.content.contains("Hello"));
-        assert_eq!(fake.fetch_count(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_fake_client_tracks_fetch_history() {
-        let fake = FakeHttpClient::new()
-            .with_html("https://example.com/page1", "<h1>Page 1</h1>")
-            .with_html("https://example.com/page2", "<h1>Page 2</h1>");
-        let fetcher = WebFetcher::with_client(fake.clone());
-
-        fetcher.fetch(input("https://example.com/page1")).await.unwrap();
-        fetcher.fetch(input("https://example.com/page2")).await.unwrap();
-
-        assert_eq!(fake.fetch_count(), 2);
-        assert_eq!(fake.fetched_urls(), vec!["https://example.com/page1", "https://example.com/page2"]);
-    }
-
-    #[tokio::test]
-    async fn test_fake_client_missing_url_returns_error() {
-        let fetcher = WebFetcher::with_client(FakeHttpClient::new());
-        assert!(fetcher.fetch(input("https://not-configured.com/")).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_fake_client_with_default_response() {
-        let fake = FakeHttpClient::new().with_default(HttpResponse {
-            final_url: "https://fallback.com/".to_string(),
-            status_code: 404,
-            body: "<h1>Not Found</h1>".to_string(),
-            content_type: Some("text/html".to_string()),
-        });
-        let result = WebFetcher::with_client(fake).fetch(input("https://any-url.com/")).await.unwrap();
-        assert_eq!(result.status_code, 404);
     }
 }

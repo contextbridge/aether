@@ -99,7 +99,6 @@ dependencies = [
  "tokio-tungstenite 0.30.0",
  "tokio-util",
  "tracing",
- "tracing-appender",
  "tracing-subscriber",
  "url",
  "uuid",
@@ -118,8 +117,6 @@ dependencies = [
  "aether-utils",
  "async-stream",
  "base16ct 1.0.0",
- "chrono",
- "clap",
  "futures",
  "glob",
  "http",
@@ -203,6 +200,7 @@ version = "0.3.21"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
+ "aether-utils",
  "async-stream",
  "futures",
  "schemars 1.2.2",
@@ -273,6 +271,7 @@ name = "aether-lspd"
 version = "0.3.3"
 dependencies = [
  "aether-lspd",
+ "aether-utils",
  "clap",
  "futures",
  "globset",
@@ -334,6 +333,7 @@ name = "aether-mcp-utils"
 version = "0.7.14"
 dependencies = [
  "aether-auth",
+ "aether-utils",
  "async-stream",
  "aws-credential-types",
  "aws-sigv4",
@@ -367,7 +367,6 @@ dependencies = [
  "schemars 1.2.2",
  "serde",
  "serde_json",
- "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -446,7 +445,6 @@ name = "aether-utils"
 version = "0.2.19"
 dependencies = [
  "futures",
- "noyalib",
  "regex",
  "schemars 1.2.2",
  "serde",

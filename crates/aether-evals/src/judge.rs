@@ -108,8 +108,8 @@ pub enum JudgeError {
         raw_response: String,
     },
 
-    #[error("judge returned invalid judgment: {reason}\nRaw response: {raw_response}")]
-    InvalidJudgment { reason: String, raw_response: String },
+    #[error("judge returned invalid judgment: {0}")]
+    InvalidJudgment(String),
 }
 
 impl Judge {
@@ -132,7 +132,7 @@ impl Judge {
         for criterion in response.criteria {
             let id = criterion.id.clone();
             if responses.insert(id.clone(), criterion).is_some() {
-                return Err(invalid_judgment(format!("duplicate response criterion id `{id}`"), ""));
+                return Err(JudgeError::InvalidJudgment(format!("duplicate response criterion id `{id}`")));
             }
         }
 
@@ -143,13 +143,13 @@ impl Judge {
 
         for criterion in &self.criteria {
             let Some(response) = responses.remove(&criterion.id) else {
-                return Err(invalid_judgment(format!("missing response criterion `{}`", criterion.id), ""));
+                return Err(JudgeError::InvalidJudgment(format!("missing response criterion `{}`", criterion.id)));
             };
             if !response.score.is_finite() || !(0.0..=1.0).contains(&response.score) {
-                return Err(invalid_judgment(
-                    format!("criterion `{}` score must be between 0.0 and 1.0", criterion.id),
-                    "",
-                ));
+                return Err(JudgeError::InvalidJudgment(format!(
+                    "criterion `{}` score must be between 0.0 and 1.0",
+                    criterion.id
+                )));
             }
 
             let passed = response.score >= criterion.threshold;
@@ -169,7 +169,7 @@ impl Judge {
         }
 
         if let Some(id) = responses.keys().next() {
-            return Err(invalid_judgment(format!("unknown response criterion `{id}`"), ""));
+            return Err(JudgeError::InvalidJudgment(format!("unknown response criterion `{id}`")));
         }
 
         let weighted_score = weighted_score / total_weight;
@@ -398,10 +398,6 @@ fn extract_json_object(response: &str) -> &str {
     }
 }
 
-fn invalid_judgment(reason: String, raw_response: &str) -> JudgeError {
-    JudgeError::InvalidJudgment { reason, raw_response: raw_response.to_string() }
-}
-
 fn judge_response_schema() -> String {
     serde_json::to_string_pretty(&JudgeRubricResponse::schema()).unwrap()
 }
@@ -467,19 +463,13 @@ mod tests {
     use super::*;
     use aether_core::events::{AgentEvent, StreamState, TurnOutcome};
     use llm::testing::FakeLlmProvider;
-    use llm::{LlmError, ProviderError, ToolCallRequest, ToolCallResult};
+    use llm::{LlmError, ProviderError};
 
     const VALID_RESPONSE: &str = r#"{"criteria":[{"id":"behavior","score":1.0,"reason":"correct"},{"id":"clarity","score":0.5,"reason":"brief"}],"overall_reason":"good"}"#;
 
     #[test]
     fn transcript_lines_label_each_message_kind() {
-        let call = AgentEvent::Tool(ToolEvent::Call {
-            request: ToolCallRequest {
-                id: "call_1".to_string(),
-                name: "bash".to_string(),
-                arguments: "{}".to_string(),
-            },
-        });
+        let call = AgentEvent::tool_call("call_1", "bash", "{}");
 
         assert_eq!(
             get_transcript_line(&AgentEvent::text("msg_1", "hi", StreamState::Complete), 100).unwrap(),
@@ -498,15 +488,7 @@ mod tests {
 
     #[test]
     fn tool_result_transcript_uses_result_arguments() {
-        let message = AgentEvent::Tool(ToolEvent::Result {
-            result: ToolCallResult {
-                id: "call_1".to_string(),
-                name: "coding__read_file".to_string(),
-                arguments: r#"["Cargo.toml"]"#.to_string(),
-                result: "file contents".to_string(),
-            },
-            result_meta: None,
-        });
+        let message = AgentEvent::tool_result("call_1", "coding__read_file", r#"["Cargo.toml"]"#, "file contents");
 
         assert_eq!(get_transcript_line(&message, 100).unwrap(), "[tool-result] coding__read_file: file contents");
     }
@@ -541,13 +523,7 @@ mod tests {
     #[test]
     fn judge_builder_renders_transcript_context() {
         let messages = vec![
-            AgentEvent::Tool(ToolEvent::Call {
-                request: ToolCallRequest {
-                    id: "call_1".to_string(),
-                    name: "bash".to_string(),
-                    arguments: "{}".to_string(),
-                },
-            }),
+            AgentEvent::tool_call("call_1", "bash", "{}"),
             AgentEvent::text("msg_1", "all done", StreamState::Complete),
         ];
 
@@ -611,7 +587,7 @@ mod tests {
 
             let error = judge.summarize(response).unwrap_err();
 
-            assert!(matches!(error, JudgeError::InvalidJudgment { .. }), "response: {raw_response}");
+            assert!(matches!(error, JudgeError::InvalidJudgment(_)), "response: {raw_response}");
         }
     }
 

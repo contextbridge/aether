@@ -1,5 +1,5 @@
 use crate::renderer::DrawContext;
-use crate::surfaces::input::{Nav, UiEvent, WorkspacePickerOutput, is_press};
+use crate::surfaces::input::{Nav, UiEvent, WorkspacePickerOutput};
 use crate::theme::Theme;
 use crate::view::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::view::filterable_list::FilterableList;
@@ -8,7 +8,6 @@ use acp_utils::notifications::{WorkspaceEntry, WorkspaceMoveTarget};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph, Widget};
 use std::path::{Path, PathBuf};
@@ -75,21 +74,21 @@ impl WorkspacePicker {
     fn render_list(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         self.rows.render_pane("Workspaces", "  (no matching workspaces)", area, buf, theme, |row| match row {
             WorkspaceRow::Existing(entry) => {
-                Line::styled(format!("  {}", entry.path.display()), Style::new().fg(theme.text_secondary))
+                Line::styled(format!("  {}", entry.path.display()), theme.text_secondary)
             }
-            WorkspaceRow::CreateNew => Line::styled(format!("  {CREATE_NEW_LABEL}"), Style::new().fg(theme.info)),
+            WorkspaceRow::CreateNew => Line::styled(format!("  {CREATE_NEW_LABEL}"), theme.info),
         });
     }
 
     fn render_name_input(parent_dir: Option<&Path>, name: &EditBuffer, area: Rect, buf: &mut Buffer, theme: &Theme) {
-        let block = Block::bordered().title(" New workspace ").style(Style::new().fg(theme.text_primary));
+        let block = Block::bordered().title(" New workspace ").style(theme.text_primary);
         let inner = block.inner(area);
         block.render(area, buf);
 
         if let Some(parent) = parent_dir {
             let hint = Line::from(Span::styled(
                 format!("  will be created in {}/", parent.display()),
-                Style::new().fg(theme.muted),
+                theme.muted,
             ));
             Paragraph::new(vec![Line::raw(""), hint]).render(inner, buf);
         }
@@ -107,13 +106,12 @@ impl WorkspacePicker {
     pub(crate) fn on_ui_event(&mut self, event: UiEvent) -> Vec<WorkspacePickerOutput> {
         if matches!(self.mode, Mode::NamingNew { .. }) {
             return match event {
-                UiEvent::Key(key) if is_press(key) => self.on_naming_key(key),
+                UiEvent::Key(key) => self.on_naming_key(key),
                 UiEvent::Paste(text) => self.on_paste(&text),
-                UiEvent::Key(_) | UiEvent::Mouse(..) => Vec::new(),
+                UiEvent::Mouse(..) => Vec::new(),
             };
         }
         if let UiEvent::Key(key) = &event
-            && is_press(*key)
             && key.code == KeyCode::Tab
         {
             return self.activate();

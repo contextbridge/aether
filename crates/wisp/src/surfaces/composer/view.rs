@@ -5,7 +5,6 @@ use crate::view::widgets::RowsView;
 use crate::view::wrap::{fit_prefix, wrap_text_char};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 use std::ops::Range;
@@ -101,7 +100,7 @@ impl Composer {
     /// its `@mention`s highlighted, any attachments, and a closing rule.
     pub fn layout(&self, width: u16, theme: &Theme) -> ComposerLayout {
         let content_width = usize::from(width.saturating_sub(PREFIX_WIDTH).max(1));
-        let rule = Line::styled("─".repeat(usize::from(width)), Style::new().fg(theme.muted));
+        let rule = Line::styled("─".repeat(usize::from(width)), theme.muted);
 
         let mut lines = vec![rule.clone()];
         let cursor = self.push_input_lines(&mut lines, content_width, theme);
@@ -111,7 +110,7 @@ impl Composer {
                 AttachmentKind::Audio => "audio",
                 _ => "file",
             };
-            Line::styled(format!("  attached {label}: {}", attachment.display_name), Style::new().fg(theme.info))
+            Line::styled(format!("  attached {label}: {}", attachment.display_name), theme.info)
         }));
         lines.push(rule);
 
@@ -133,7 +132,7 @@ impl Composer {
 
         for (index, row) in layout.rows.iter().enumerate() {
             let prefix = if index == 0 { "> " } else { "  " };
-            let mut spans = vec![Span::styled(prefix, Style::new().fg(theme.accent))];
+            let mut spans = vec![Span::styled(prefix, theme.accent)];
             spans.extend(styled_input_chunk(&text[row.clone()], row.start, &mentions, theme));
             lines.push(Line::from(spans));
         }
@@ -157,7 +156,7 @@ fn styled_input_chunk(
     let in_mention_at = |relative: usize| mention_ranges.iter().any(|range| range.contains(&(chunk_start + relative)));
 
     if mention_ranges.is_empty() || !chunk.contains('@') {
-        return vec![Span::styled(chunk.to_string(), Style::new().fg(theme.text_primary))];
+        return vec![Span::styled(chunk.to_string(), theme.text_primary)];
     }
 
     let mut spans = Vec::new();
@@ -167,12 +166,12 @@ fn styled_input_chunk(
         let is_info = in_mention_at(relative);
         if is_info != current_info {
             let color = if current_info { theme.info } else { theme.text_primary };
-            spans.push(Span::styled(chunk[run_start..relative].to_string(), Style::new().fg(color)));
+            spans.push(Span::styled(chunk[run_start..relative].to_string(), color));
             run_start = relative;
             current_info = is_info;
         }
     }
     let color = if current_info { theme.info } else { theme.text_primary };
-    spans.push(Span::styled(chunk[run_start..].to_string(), Style::new().fg(color)));
+    spans.push(Span::styled(chunk[run_start..].to_string(), color));
     spans
 }

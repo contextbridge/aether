@@ -78,22 +78,15 @@ fn looks_like_absolute_path(s: &str) -> bool {
 mod tests {
     use super::*;
     use std::fs;
-    use tempfile::TempDir;
+    use utils::testing::TestWorkspace;
 
-    fn setup_files(dir: &TempDir, names: &[&str]) -> Vec<PathBuf> {
-        names
-            .iter()
-            .map(|name| {
-                let p = dir.path().join(name);
-                fs::write(&p, b"test").unwrap();
-                p
-            })
-            .collect()
+    fn setup_files(workspace: &TestWorkspace, names: &[&str]) -> Vec<PathBuf> {
+        names.iter().map(|name| workspace.write(name, b"test")).collect()
     }
 
     #[test]
     fn file_uri_for_png_parses_to_local_path() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TestWorkspace::new();
         let paths = setup_files(&tmp, &["image.png"]);
         let uri = format!("file://{}", paths[0].display());
 
@@ -103,7 +96,7 @@ mod tests {
 
     #[test]
     fn absolute_posix_path_parses_correctly() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TestWorkspace::new();
         let paths = setup_files(&tmp, &["photo.jpg"]);
         let input = paths[0].to_str().unwrap();
 
@@ -113,8 +106,8 @@ mod tests {
 
     #[test]
     fn quoted_path_with_spaces_parses_correctly() {
-        let tmp = TempDir::new().unwrap();
-        let p = tmp.path().join("My File.png");
+        let tmp = TestWorkspace::new();
+        let p = tmp.path("My File.png");
         fs::write(&p, b"test").unwrap();
 
         let single_quoted = format!("'{}'", p.display());
@@ -128,8 +121,8 @@ mod tests {
 
     #[test]
     fn shell_escaped_path_with_spaces_parses_correctly() {
-        let tmp = TempDir::new().unwrap();
-        let p = tmp.path().join("My File.png");
+        let tmp = TestWorkspace::new();
+        let p = tmp.path("My File.png");
         fs::write(&p, b"test").unwrap();
 
         let escaped = p.to_str().unwrap().replace(' ', "\\ ");
@@ -139,7 +132,7 @@ mod tests {
 
     #[test]
     fn multiple_dropped_files_parse_correctly() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TestWorkspace::new();
         let paths = setup_files(&tmp, &["a.png", "b.wav"]);
         let input = format!("{}\n{}", paths[0].display(), paths[1].display());
 
@@ -149,7 +142,7 @@ mod tests {
 
     #[test]
     fn multiple_file_uris_parse_correctly() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TestWorkspace::new();
         let paths = setup_files(&tmp, &["a.png", "b.wav"]);
         let input = format!("file://{}\nfile://{}", paths[0].display(), paths[1].display());
 
@@ -174,9 +167,9 @@ mod tests {
 
     #[test]
     fn directory_shaped_absolute_path_is_parsed_lexically() {
-        let tmp = TempDir::new().unwrap();
-        let input = tmp.path().to_str().unwrap();
-        assert_eq!(parse_dropped_file_paths(input), Some(vec![tmp.path().to_path_buf()]));
+        let tmp = TestWorkspace::new();
+        let input = tmp.root().to_str().unwrap();
+        assert_eq!(parse_dropped_file_paths(input), Some(vec![tmp.root().to_path_buf()]));
     }
 
     #[test]
@@ -187,7 +180,7 @@ mod tests {
 
     #[test]
     fn mixed_valid_and_invalid_returns_none() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TestWorkspace::new();
         let paths = setup_files(&tmp, &["a.png"]);
         let input = format!("{}\nhello world", paths[0].display());
         assert!(parse_dropped_file_paths(&input).is_none());

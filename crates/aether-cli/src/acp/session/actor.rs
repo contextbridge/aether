@@ -372,7 +372,7 @@ impl SessionActor {
         let runtime = tokio::select! {
             biased;
             () = self.cancel.cancelled() => return Err(SessionError::Cancelled),
-            runtime = self.runtime_factory.spawn(target.clone(), spec, messages, usage_seed, self.elicitation_tx.clone()) => runtime?,
+            runtime = self.runtime_factory.spawn(spec, messages, usage_seed, self.elicitation_tx.clone()) => runtime?,
         };
         self.runtimes.insert(target.clone(), runtime);
         Ok(())

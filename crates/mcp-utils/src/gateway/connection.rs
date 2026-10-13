@@ -1,4 +1,4 @@
-use super::{ConnectedServer, GatewayError, ServerSpec, ServerState, ServerStatus};
+use super::{ConnectedServer, GatewayError, ServerSpec};
 use crate::client::{ClientError, ClientOptions, McpClient};
 use aether_auth::OAuthError;
 use async_stream::stream;
@@ -7,6 +7,7 @@ use std::pin::pin;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
+use utils::mcp_status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
 
 pub(super) struct Connection {
     name: String,
@@ -64,13 +65,14 @@ impl Connection {
         outcome.await.unwrap_or(Err(GatewayError::Closed))
     }
 
-    pub(super) fn status(&self) -> ServerStatus {
+    pub(super) fn status(&self) -> McpServerStatusEntry {
         let state = self.state.borrow();
-        ServerStatus {
-            name: self.name.clone(),
-            state: state.status(),
-            can_sign_in: state.allows_sign_in(self.supports_oauth),
-        }
+        let auth = if state.allows_sign_in(self.supports_oauth) {
+            McpServerAuthCapability::OAuth
+        } else {
+            McpServerAuthCapability::Unavailable
+        };
+        McpServerStatusEntry::new(self.name.clone(), state.status()).with_auth_capability(auth)
     }
 }
 
@@ -91,13 +93,13 @@ impl ConnectionState {
             }
     }
 
-    fn status(&self) -> ServerState {
+    fn status(&self) -> McpServerStatus {
         match self {
-            Self::Connecting => ServerState::Connecting,
-            Self::Authenticating => ServerState::Authenticating,
-            Self::NeedsOAuth { .. } => ServerState::NeedsOAuth,
-            Self::Failed { error, .. } => ServerState::Failed { error: error.clone() },
-            Self::Connected(server) => ServerState::Connected { tool_count: server.tools().len() },
+            Self::Connecting => McpServerStatus::Connecting,
+            Self::Authenticating => McpServerStatus::Authenticating,
+            Self::NeedsOAuth { .. } => McpServerStatus::NeedsOAuth,
+            Self::Failed { error, .. } => McpServerStatus::Failed { error: error.clone() },
+            Self::Connected(server) => McpServerStatus::Connected { tool_count: server.tools().len() },
         }
     }
 }

@@ -162,7 +162,55 @@ fn format_session_usage(usage: &llm::SessionUsageEvent) -> String {
 }
 
 #[cfg(test)]
+pub(crate) mod test_events {
+    use aether_core::events::{AgentEvent, ContextEvent, ToolEvent, TurnEvent};
+
+    pub fn tool_progress(progress: f64, total: Option<f64>, message: Option<&str>) -> AgentEvent {
+        AgentEvent::Tool(ToolEvent::Progress {
+            request: llm::ToolCallRequest {
+                id: "tc1".to_string(),
+                name: "bash".to_string(),
+                arguments: "{}".to_string(),
+            },
+            progress,
+            total,
+            message: message.map(str::to_string),
+        })
+    }
+
+    pub fn llm_call_started(attempt: u32) -> AgentEvent {
+        AgentEvent::Turn(TurnEvent::LlmCallStarted {
+            purpose: llm::LlmCallPurpose::Chat,
+            model: llm::ModelIdentity::default(),
+            display_name: "test".to_string(),
+            attempt,
+            max_attempts: 3,
+        })
+    }
+
+    pub fn retry_scheduled(attempt: u32, delay_ms: u64) -> AgentEvent {
+        AgentEvent::Turn(TurnEvent::RetryScheduled {
+            purpose: llm::LlmCallPurpose::Chat,
+            attempt,
+            max_attempts: 3,
+            delay_ms,
+        })
+    }
+
+    pub fn usage_update() -> AgentEvent {
+        AgentEvent::Context(ContextEvent::UsageUpdated {
+            usage: llm::ContextUsage {
+                input_tokens: 100_000.into(),
+                context_limit: Some(200_000.into()),
+                usage_ratio: Some(0.5),
+            },
+        })
+    }
+}
+
+#[cfg(test)]
 mod tests {
+    use super::test_events::{llm_call_started, retry_scheduled, tool_progress, usage_update};
     use super::*;
     use aether_core::events::StreamState;
 
@@ -194,13 +242,7 @@ mod tests {
 
     #[test]
     fn format_text_formats_tool_call() {
-        let message = AgentEvent::Tool(ToolEvent::Call {
-            request: llm::ToolCallRequest {
-                id: "tc1".to_string(),
-                name: "bash".to_string(),
-                arguments: r#"{"cmd":"ls"}"#.to_string(),
-            },
-        });
+        let message = AgentEvent::tool_call("tc1", "bash", r#"{"cmd":"ls"}"#);
         assert_eq!(format_text(&message), Some(r#"Tool call: bash({"cmd":"ls"})"#.to_string()));
     }
 
@@ -214,19 +256,15 @@ mod tests {
 
     #[test]
     fn format_text_formats_tool_result() {
-        assert_eq!(format_text(&tool_result()), Some("Tool result [bash]: ok".to_string()));
+        assert_eq!(
+            format_text(&AgentEvent::tool_result("tc1", "bash", "{}", "ok")),
+            Some("Tool result [bash]: ok".to_string())
+        );
     }
 
     #[test]
     fn format_text_formats_tool_error() {
-        let message = AgentEvent::Tool(ToolEvent::Error {
-            error: llm::ToolCallError {
-                id: "tc1".to_string(),
-                name: "bash".to_string(),
-                arguments: None,
-                error: "not found".to_string(),
-            },
-        });
+        let message = AgentEvent::tool_error("tc1", "bash", "{}", "not found");
         assert_eq!(format_text(&message), Some("Tool error [bash]: not found".to_string()));
     }
 
@@ -242,15 +280,8 @@ mod tests {
 
     #[test]
     fn format_text_formats_retry_events() {
-        let started = AgentEvent::Turn(TurnEvent::LlmCallStarted {
-            purpose: llm::LlmCallPurpose::Chat,
-            model: llm::ModelIdentity::default(),
-            display_name: "test".to_string(),
-            attempt: 0,
-            max_attempts: 3,
-        });
-        assert_eq!(format_text(&started), None);
-        assert_eq!(format_text(&retry_scheduled()), Some("Retrying (1/3) in 10ms".to_string()));
+        assert_eq!(format_text(&llm_call_started(0)), None);
+        assert_eq!(format_text(&retry_scheduled(1, 10)), Some("Retrying (1/3) in 10ms".to_string()));
         let retrying = AgentEvent::Turn(TurnEvent::LlmCallEnded {
             purpose: llm::LlmCallPurpose::Chat,
             outcome: LlmCallOutcome::failed("overloaded", true),
@@ -302,49 +333,5 @@ mod tests {
         assert_eq!(format_text(&result), Some("Context compacted: 10 messages removed. summary here".to_string()));
         assert_eq!(format_text(&usage_update()), Some("Context: 100000 / 200000 tokens (50.0%)".to_string()));
         assert_eq!(format_text(&AgentEvent::Context(ContextEvent::Cleared)), Some("Context cleared".to_string()));
-    }
-
-    fn tool_result() -> AgentEvent {
-        AgentEvent::Tool(ToolEvent::Result {
-            result: llm::ToolCallResult {
-                id: "tc1".to_string(),
-                name: "bash".to_string(),
-                arguments: "{}".to_string(),
-                result: "ok".to_string(),
-            },
-            result_meta: None,
-        })
-    }
-
-    fn tool_progress(progress: f64, total: Option<f64>, message: Option<&str>) -> AgentEvent {
-        AgentEvent::Tool(ToolEvent::Progress {
-            request: llm::ToolCallRequest {
-                id: "tc1".to_string(),
-                name: "bash".to_string(),
-                arguments: "{}".to_string(),
-            },
-            progress,
-            total,
-            message: message.map(str::to_string),
-        })
-    }
-
-    fn retry_scheduled() -> AgentEvent {
-        AgentEvent::Turn(TurnEvent::RetryScheduled {
-            purpose: llm::LlmCallPurpose::Chat,
-            attempt: 1,
-            max_attempts: 3,
-            delay_ms: 10,
-        })
-    }
-
-    fn usage_update() -> AgentEvent {
-        AgentEvent::Context(ContextEvent::UsageUpdated {
-            usage: llm::ContextUsage {
-                input_tokens: 100_000.into(),
-                context_limit: Some(200_000.into()),
-                usage_ratio: Some(0.5),
-            },
-        })
     }
 }

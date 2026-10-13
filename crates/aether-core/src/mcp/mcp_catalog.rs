@@ -5,14 +5,14 @@ use crate::core::McpInstructions;
 use futures::Stream;
 use llm::ToolDefinition;
 use mcp_utils::client::{ClientOptions, ToolCall, ToolCallOptions};
-use mcp_utils::gateway::{ConnectedServer, GatewayError, McpGateway, ServerPrompt, ServerState, ServerStatus};
+use mcp_utils::gateway::{ConnectedServer, GatewayError, McpGateway, ServerPrompt};
 use mcp_utils::model::{GetPromptResult, Tool};
 use mcp_utils::server::{ServerHandle, UnixSocket};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use utils::mcp_status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
+use utils::mcp_status::McpServerStatusEntry;
 
 #[derive(Clone)]
 pub struct McpCatalog {
@@ -186,17 +186,8 @@ impl ToolPolicy {
         Some(if deferred { Tier::Deferred } else { Tier::Direct })
     }
 
-    fn status_entry(&self, status: ServerStatus) -> McpServerStatusEntry {
+    fn status_entry(&self, status: McpServerStatusEntry) -> McpServerStatusEntry {
         let defers_tools = self.exposures.get(&status.name).is_some_and(ToolExposure::defers_tools);
-        let auth =
-            if status.can_sign_in { McpServerAuthCapability::OAuth } else { McpServerAuthCapability::Unavailable };
-        let state = match status.state {
-            ServerState::Connecting => McpServerStatus::Connecting,
-            ServerState::Authenticating => McpServerStatus::Authenticating,
-            ServerState::NeedsOAuth => McpServerStatus::NeedsOAuth,
-            ServerState::Failed { error } => McpServerStatus::Failed { error },
-            ServerState::Connected { tool_count } => McpServerStatus::Connected { tool_count },
-        };
-        McpServerStatusEntry::new(status.name, state).with_auth_capability(auth).with_deferred_tools(defers_tools)
+        status.with_deferred_tools(defers_tools)
     }
 }

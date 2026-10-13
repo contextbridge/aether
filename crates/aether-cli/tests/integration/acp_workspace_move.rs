@@ -2,11 +2,13 @@ use acp_utils::notifications::{
     WorkspaceListParams, WorkspaceListResponse, WorkspaceMoveParams, WorkspaceMoveResponse, WorkspaceMoveTarget,
 };
 use aether_cli::acp::testing::AcpTestHarness;
-use aether_cli::workspace::testing::{clone_repo, git, git_status, init_repo};
+use aether_cli::workspace::DirectoryCloner;
+use aether_cli::workspace::testing::{StdCopyCloner, init_repo};
 use agent_client_protocol::schema::v2::{
     AbsolutePath, ListSessionsRequest, PromptRequest, ResumeSessionRequest, StopReason,
 };
 use std::fs;
+use utils::testing::{git, git_commit};
 
 #[tokio::test(flavor = "current_thread")]
 async fn workspace_list_registers_source_repo_and_marks_it_current() {
@@ -46,7 +48,7 @@ async fn workspace_move_to_new_sibling_clones_changes_and_resets_source() {
         assert_eq!(response.new_cwd, clone.canonicalize().unwrap());
         assert_eq!(fs::read_to_string(clone.join("committed.txt")).unwrap(), "modified\n");
         assert_eq!(fs::read_to_string(clone.join("untracked.txt")).unwrap(), "new file\n");
-        assert!(git_status(&repo).is_empty(), "source should be clean after move");
+        assert!(git(&repo, &["status", "--porcelain"]).is_empty(), "source should be clean after move");
 
         let sessions =
             harness.client_cx.send_request(ListSessionsRequest::new()).block_task().await.expect("list sessions");
@@ -61,7 +63,8 @@ async fn workspace_move_to_existing_clean_target_applies_changes() {
     AcpTestHarness::run(|harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
-        let clone = clone_repo(&repo, tmp.path().join("clone"));
+        let clone = tmp.path().join("clone");
+        StdCopyCloner.clone_dir(&repo, &clone).unwrap();
         harness.append_stored_session_in("s1", "2026-05-01T00:00:00Z", &repo);
 
         fs::write(repo.join("committed.txt"), "edited\n").unwrap();
@@ -72,7 +75,7 @@ async fn workspace_move_to_existing_clean_target_applies_changes() {
 
         assert_eq!(response.new_cwd, clone.canonicalize().unwrap());
         assert_eq!(fs::read_to_string(clone.join("committed.txt")).unwrap(), "edited\n");
-        assert!(git_status(&repo).is_empty(), "source should be clean after move");
+        assert!(git(&repo, &["status", "--porcelain"]).is_empty(), "source should be clean after move");
     })
     .await;
 }
@@ -82,12 +85,12 @@ async fn workspace_move_to_existing_target_on_different_head_fails_actionably() 
     AcpTestHarness::run(|harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
-        let clone = clone_repo(&repo, tmp.path().join("clone"));
+        let clone = tmp.path().join("clone");
+        StdCopyCloner.clone_dir(&repo, &clone).unwrap();
         harness.append_stored_session_in("s1", "2026-05-01T00:00:00Z", &repo);
 
         fs::write(clone.join("target-only.txt"), "target commit\n").unwrap();
-        git(&clone, &["add", "."]);
-        git(&clone, &["commit", "-m", "target diverges"]);
+        git_commit(&clone, "target diverges");
         fs::write(repo.join("committed.txt"), "edited\n").unwrap();
 
         let error = move_workspace(&harness, "s1", WorkspaceMoveTarget::Existing { path: clone })
@@ -105,7 +108,8 @@ async fn workspace_move_to_dirty_target_fails_and_leaves_source_untouched() {
     AcpTestHarness::run(|harness| async move {
         let tmp = tempfile::tempdir().unwrap();
         let repo = init_repo(tmp.path(), "repo");
-        let clone = clone_repo(&repo, tmp.path().join("clone"));
+        let clone = tmp.path().join("clone");
+        StdCopyCloner.clone_dir(&repo, &clone).unwrap();
         harness.append_stored_session_in("s1", "2026-05-01T00:00:00Z", &repo);
 
         fs::write(repo.join("committed.txt"), "edited\n").unwrap();
@@ -184,8 +188,7 @@ async fn workspace_move_relocates_session_to_matching_subdirectory() {
         let sub = repo.join("sub");
         fs::create_dir_all(&sub).unwrap();
         fs::write(sub.join("file.txt"), "content\n").unwrap();
-        git(&repo, &["add", "."]);
-        git(&repo, &["commit", "-m", "add subdir"]);
+        git_commit(&repo, "add subdir");
         harness.append_stored_session_in("s1", "2026-05-01T00:00:00Z", &sub);
 
         let response = move_workspace(&harness, "s1", WorkspaceMoveTarget::New { name: "repo-2".to_string() })

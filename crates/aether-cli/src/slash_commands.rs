@@ -18,11 +18,11 @@ pub(crate) async fn expand_slash_command_in_content(
 }
 
 pub(crate) async fn expand_slash_command_text(mcp: &McpCatalog, text: String) -> String {
-    let Some(slash_command) = parse_slash_command(&text) else {
+    let Some((command_name, args_text)) = parse_slash_command(&text) else {
         return text;
     };
 
-    match expand_slash_command(mcp, slash_command.command_name, slash_command.args_text).await {
+    match expand_slash_command(mcp, command_name, args_text).await {
         Ok(expanded) => {
             info!("Expanded slash command -> {} chars", expanded.len());
             expanded
@@ -45,11 +45,6 @@ pub(crate) async fn prompt_commands(mcp: &McpCatalog) -> Vec<ServerPrompt> {
     prompts
 }
 
-struct SlashCommand<'a> {
-    command_name: &'a str,
-    args_text: &'a str,
-}
-
 #[derive(Error, Debug)]
 enum SlashCommandError {
     #[error("MCP operation failed: {0}")]
@@ -60,17 +55,9 @@ enum SlashCommandError {
     NoTextContent,
 }
 
-fn parse_slash_command(text: &str) -> Option<SlashCommand<'_>> {
-    let slash_command_text = text.strip_prefix('/')?;
-
-    let (command_name, args_text) = if let Some(space_idx) = slash_command_text.find(char::is_whitespace) {
-        let (cmd, args) = slash_command_text.split_at(space_idx);
-        (cmd, args.trim())
-    } else {
-        (slash_command_text, "")
-    };
-
-    Some(SlashCommand { command_name, args_text })
+fn parse_slash_command(text: &str) -> Option<(&str, &str)> {
+    let command = text.strip_prefix('/')?;
+    Some(command.split_once(char::is_whitespace).map_or((command, ""), |(name, args)| (name, args.trim())))
 }
 
 async fn expand_slash_command(

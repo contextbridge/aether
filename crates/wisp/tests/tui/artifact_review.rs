@@ -160,8 +160,7 @@ fn approval_closes_the_route_and_notifies_the_user() {
         let mut app = make_app();
         let meta =
             ArtifactReviewElicitationMeta::new(Some(PathBuf::from("/tmp/plan.md")), "Review /tmp/plan.md", "# Plan")
-                .to_json()
-                .unwrap();
+                .to_meta();
         with_elicitation(&mut app, form_elicitation("review", "Review artifact", ElicitationSchema::new()).meta(meta))
             .await;
         app.key(KeyCode::Char('r').into());
@@ -182,8 +181,7 @@ fn double_ctrl_c_exits_over_artifact_review() {
             "Review /tmp/plan.md",
             "# Plan\nbody",
         )
-        .to_json()
-        .unwrap();
+        .to_meta();
         with_elicitation(&mut app, form_elicitation("review", "Review artifact", ElicitationSchema::new()).meta(meta))
             .await;
         assert!(app.app().full_screen_active());

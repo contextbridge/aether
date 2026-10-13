@@ -2,7 +2,6 @@ use crate::screens::reviewer::{crossterm_event, theme_selection};
 use crate::surfaces::elicitation::ElicitationResponder;
 use crate::surfaces::input::{ArtifactReviewOutput, ReviewOutcome, UiEvent};
 use crate::surfaces::modal::frame::ModalFrame;
-use agent_client_protocol::schema::v2::ElicitationContentValue;
 use crate::view::generation::Generation;
 use crate::{renderer::DrawContext, settings::builtin_review_theme_choices};
 use clankerdiff_ratatui::ReviewCapabilities;
@@ -12,7 +11,6 @@ use crossterm::event::{Event, KeyCode, KeyEventKind};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Position, Rect},
-    style::Style,
     widgets::{Clear, Paragraph, StatefulWidget, Widget},
 };
 use std::sync::Arc;
@@ -68,7 +66,7 @@ impl ArtifactReviewScreen {
         if let Some(error) = &self.error {
             let footer = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, area.height.min(1));
             Paragraph::new(error.as_str())
-                .style(Style::new().fg(cx.theme.error).bg(cx.theme.background))
+                .style((cx.theme.error, cx.theme.background))
                 .render(footer, buf);
         }
         if self.confirming_approval {
@@ -81,7 +79,7 @@ impl ArtifactReviewScreen {
             );
             (&frame).render(area, buf);
             Paragraph::new("Approve this artifact without feedback?")
-                .style(Style::new().fg(cx.theme.text_primary))
+                .style(cx.theme.text_primary)
                 .render(frame.inner(area), buf);
             return None;
         }
@@ -89,9 +87,7 @@ impl ArtifactReviewScreen {
     }
 
     fn submit(&mut self, submission: ArtifactReviewSubmission) -> Vec<ArtifactReviewOutput> {
-        self.responder.accept(Some(submission.fields().map(|(name, value)| {
-            (name.to_string(), ElicitationContentValue::String(value.to_string()))
-        }).collect()));
+        self.responder.accept_strings(submission.fields());
         vec![match submission {
             ArtifactReviewSubmission::Approved => ArtifactReviewOutput::Approved,
             ArtifactReviewSubmission::Feedback { feedback } => ArtifactReviewOutput::Outcome(ReviewOutcome::Submitted(feedback)),

@@ -50,13 +50,16 @@ mod tests {
 
     #[test]
     fn delegation_resolution_distinguishes_missing_and_unexposed_agents() {
-        let model = "anthropic:claude-sonnet-4-5".parse().unwrap();
-        let mut delegate = AgentSpec::bare(&model, None, Vec::new());
-        delegate.name = "delegate".to_string();
-        delegate.exposure = AgentSpecExposure::agent_only();
-        let mut user_only = AgentSpec::bare(&model, None, Vec::new());
-        user_only.name = "user-only".to_string();
-        user_only.exposure = AgentSpecExposure::user_only();
+        let delegate = AgentSpec {
+            name: "delegate".to_string(),
+            exposure: AgentSpecExposure::agent_only(),
+            ..AgentSpec::default()
+        };
+        let user_only = AgentSpec {
+            name: "user-only".to_string(),
+            exposure: AgentSpecExposure::user_only(),
+            ..AgentSpec::default()
+        };
         let registry = AgentRegistry::new(vec![delegate, user_only]);
 
         assert_eq!(registry.resolve_agent_invocable("delegate").unwrap().name, "delegate");

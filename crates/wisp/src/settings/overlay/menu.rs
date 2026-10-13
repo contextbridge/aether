@@ -7,7 +7,6 @@ use crate::view::selection::{Direction, SelectionState};
 use acp_utils::config_option_id::ConfigOptionId;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::StatefulWidget;
 
@@ -141,11 +140,8 @@ impl StatefulWidget for SettingsMenuView<'_> {
     type State = SelectionState;
 
     fn render(self, area: Rect, buffer: &mut Buffer, state: &mut Self::State) {
-        let rows = self
-            .rows
-            .iter()
-            .map(|row| Line::styled(format!(" {}", row.label()), Style::new().fg(self.theme.text_primary)))
-            .collect();
+        let rows =
+            self.rows.iter().map(|row| Line::styled(format!(" {}", row.label()), self.theme.text_primary)).collect();
         let view = ListView::new(rows, self.theme)
             .pane(" (no settings options)")
             .highlight_horizontal_padding(MODAL_HORIZONTAL_PADDING);

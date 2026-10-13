@@ -1,14 +1,14 @@
 use serde::{Deserialize, Serialize};
-use utils::{ReasoningEffort, is_false};
+use utils::ReasoningEffort;
 
-use crate::meta::{from_meta, to_meta};
+use utils::meta::{from_meta, to_meta};
 
 type Meta = serde_json::Map<String, serde_json::Value>;
 
 /// Meta for a top-level `SessionConfigOption` (e.g. the "model" config).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfigOptionMeta {
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub multi_select: bool,
 }
 
@@ -17,9 +17,9 @@ pub struct ConfigOptionMeta {
 pub struct SelectOptionMeta {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reasoning_levels: Vec<ReasoningEffort>,
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub supports_image: bool,
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub supports_audio: bool,
 }
 

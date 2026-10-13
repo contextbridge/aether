@@ -52,7 +52,7 @@ async fn reviews_inline_markdown_without_creating_a_file() -> TestResult {
     let ElicitRequestParams::FormElicitationParams { meta: Some(meta), .. } = &captured[0].request else {
         return Err(test_error("expected artifact metadata in the review UI request").into());
     };
-    let meta = ArtifactReviewElicitationMeta::parse(Some(&meta.0))
+    let meta = ArtifactReviewElicitationMeta::from_meta(Some(&meta.0))
         .ok_or_else(|| test_error("invalid artifact metadata in the review UI request"))?;
     assert_eq!(meta.title, "Database choice");
     assert_eq!(meta.markdown, "# Pick one\n\n- A\n- B");
@@ -395,7 +395,7 @@ impl FormReview {
             .as_ref()
             .or_else(|| request.extensions.get::<RequestMetaObject>())
             .ok_or_else(|| test_error("expected artifact metadata"))?;
-        let meta = ArtifactReviewElicitationMeta::parse(Some(&meta.0))
+        let meta = ArtifactReviewElicitationMeta::from_meta(Some(&meta.0))
             .ok_or_else(|| test_error("invalid artifact metadata"))?;
         Ok(Self { meta, message: message.clone(), schema: serde_json::to_value(requested_schema)? })
     }

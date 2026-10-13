@@ -426,7 +426,7 @@ impl FormModal {
 
         if !self.message.is_empty() {
             let headline =
-                Line::styled(self.message.clone(), Style::new().fg(theme.heading).add_modifier(Modifier::BOLD));
+                Line::styled(self.message.clone(), (theme.heading, Modifier::BOLD));
             for line in wrap_line(headline, width) {
                 rows.row(line);
             }
@@ -448,7 +448,7 @@ impl FormModal {
 
         if let Some(error) = &self.validation_error {
             rows.blank();
-            for line in wrap_line(Line::styled(error.clone(), Style::new().fg(theme.error)), width) {
+            for line in wrap_line(Line::styled(error.clone(), theme.error), width) {
                 rows.row(line);
             }
         }
@@ -456,8 +456,8 @@ impl FormModal {
         if self.confirming_cancel {
             rows.blank();
             let question =
-                Span::styled(format!("Discard {} answers?", self.touched_count()), Style::new().fg(theme.warning));
-            let how = Span::styled("  y discard · any other key keep", Style::new().fg(theme.muted));
+                Span::styled(format!("Discard {} answers?", self.touched_count()), theme.warning);
+            let how = Span::styled("  y discard · any other key keep", theme.muted);
             for line in wrap_line(Line::from(vec![question, how]), width) {
                 rows.row(line);
             }
@@ -470,7 +470,7 @@ impl FormModal {
     fn review_rows(&self, theme: &Theme, width: u16, rows: &mut PageRows) {
         rows.blank();
         let headline =
-            Line::styled("Review your answers", Style::new().fg(theme.text_primary).add_modifier(Modifier::BOLD));
+            Line::styled("Review your answers", (theme.text_primary, Modifier::BOLD));
         for line in wrap_line(headline, width) {
             rows.row(line);
         }
@@ -482,9 +482,9 @@ impl FormModal {
             let value = field.display_value();
             let value = if value.is_empty() { "—".to_string() } else { value };
             let style =
-                if field.value().is_err() { Style::new().fg(theme.error) } else { Style::new().fg(theme.text_primary) };
+                if field.value().is_err() { Style::from(theme.error) } else { Style::from(theme.text_primary) };
             let prefix =
-                vec![Span::styled(format!("{:<label_width$}  ", field.label), Style::new().fg(theme.text_secondary))];
+                vec![Span::styled(format!("{:<label_width$}  ", field.label), theme.text_secondary)];
             for line in wrapped_row(&prefix, &value, style, width) {
                 rows.site(line, RowSite::Review { field: index });
             }
@@ -541,7 +541,7 @@ impl FormModal {
         let mut spans = Vec::new();
         let mut cells = Vec::new();
         let mut column: usize = 0;
-        let dots = Style::new().fg(theme.muted);
+        let dots = Style::from(theme.muted);
 
         let left_cut = shown.start > 0;
         if left_cut {
@@ -555,13 +555,13 @@ impl FormModal {
                 column += 1;
             }
             let style = if page == self.page {
-                Style::new().fg(theme.background).bg(theme.accent).add_modifier(Modifier::BOLD)
+                Style::from((theme.background, theme.accent, Modifier::BOLD))
             } else if page < pages && self.fields[page].value().is_err() {
-                Style::new().fg(theme.error)
+                Style::from(theme.error)
             } else if page < pages && self.fields[page].touched {
-                Style::new().fg(theme.text_secondary)
+                Style::from(theme.text_secondary)
             } else {
-                Style::new().fg(theme.muted)
+                Style::from(theme.muted)
             };
             let label_width = cell - 2;
             spans.push(Span::styled(format!(" {:^label_width$} ", chosen[page]), style));
@@ -578,7 +578,7 @@ impl FormModal {
             let pad = available.saturating_sub(column + counter_width + 1);
             spans.push(Span::raw(" ".repeat(pad)));
             spans.push(Span::raw(" "));
-            spans.push(Span::styled(counter, Style::new().fg(theme.muted)));
+            spans.push(Span::styled(counter, theme.muted));
         }
 
         Strip { line: Line::from(spans), cells }
@@ -720,15 +720,15 @@ fn select_all(kind: &mut FormFieldKind) -> bool {
 fn question_rows(field: &FormField, theme: &Theme, width: u16, rows: &mut PageRows) {
     rows.blank();
     let mut headline =
-        Line::styled(field.label.clone(), Style::new().fg(theme.text_primary).add_modifier(Modifier::BOLD));
+        Line::styled(field.label.clone(), (theme.text_primary, Modifier::BOLD));
     if field.required {
-        headline.spans.push(Span::styled(" *", Style::new().fg(theme.error)));
+        headline.spans.push(Span::styled(" *", theme.error));
     }
     for line in wrap_line(headline, width) {
         rows.row(line);
     }
     if let Some(description) = &field.description {
-        for line in wrap_line(Line::styled(description.clone(), Style::new().fg(theme.muted)), width) {
+        for line in wrap_line(Line::styled(description.clone(), theme.muted), width) {
             rows.row(line);
         }
     }
@@ -772,10 +772,10 @@ fn option_rows(
             None => option.title.clone(),
         };
 
-        let prefix = vec![Span::styled(format!("{:>number_width$}  ", index + 1), Style::new().fg(theme.muted))];
-        for mut line in wrapped_row(&prefix, &tail, Style::new().fg(theme.text_primary), width) {
+        let prefix = vec![Span::styled(format!("{:>number_width$}  ", index + 1), theme.muted)];
+        for mut line in wrapped_row(&prefix, &tail, Style::from(theme.text_primary), width) {
             if focused {
-                let highlight = Style::new().fg(theme.background).bg(theme.accent).add_modifier(Modifier::BOLD);
+                let highlight = Style::from((theme.background, theme.accent, Modifier::BOLD));
                 for span in &mut line.spans {
                     span.style = highlight;
                 }
@@ -790,7 +790,7 @@ fn option_rows(
 /// cursor, sized to the page.
 fn input_rows(buffer: &EditBuffer, theme: &Theme, width: u16, rows: &mut PageRows) {
     rows.blank();
-    let border = Style::new().fg(theme.muted);
+    let border = Style::from(theme.muted);
     let rule = "─".repeat(usize::from(width.saturating_sub(2)));
     rows.row(Line::from(vec![
         Span::styled("╭", border),
@@ -800,7 +800,7 @@ fn input_rows(buffer: &EditBuffer, theme: &Theme, width: u16, rows: &mut PageRow
 
     let content = usize::from(width.saturating_sub(4));
     let (visible, cursor_column) = visible_window(buffer, content.max(1));
-    let text_style = Style::new().fg(theme.text_primary).bg(theme.code_bg);
+    let text_style = Style::from((theme.text_primary, theme.code_bg));
     let padding = content.saturating_sub(visible.width());
     rows.row(Line::from(vec![
         Span::styled("│ ", border),

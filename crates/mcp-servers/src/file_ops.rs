@@ -49,9 +49,6 @@ pub enum FileError {
 
     #[error("{} edit(s) failed for file {path}; no changes were written:\n{}", .failures.len(), format_failures(.failures))]
     EditsFailed { path: String, failures: Vec<EditFailure> },
-
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
 }
 
 /// A single edit that could not be applied. `index` is the

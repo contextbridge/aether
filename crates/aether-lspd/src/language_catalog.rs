@@ -78,10 +78,6 @@ impl LanguageId {
     pub fn from_path(path: &Path) -> Self {
         path.extension().and_then(|e| e.to_str()).and_then(Self::from_extension).unwrap_or(Self::PlainText)
     }
-
-    pub fn primary_extension(self) -> Option<&'static str> {
-        metadata_for(self).and_then(|metadata| metadata.primary_extension)
-    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
@@ -130,8 +126,6 @@ pub struct LanguageServerMetadata {
 #[derive(Debug, Clone, Copy)]
 pub struct LanguageMetadata {
     pub id: LanguageId,
-    pub primary_extension: Option<&'static str>,
-    pub aliases: &'static [&'static str],
     pub extensions: &'static [&'static str],
 }
 
@@ -216,239 +210,73 @@ const PROJECT_LANGUAGE_SPECS: &[(LanguageId, &[&str])] = &[
 
 const LANGUAGE_SPECS: &[LanguageSpec] = &[
     LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::Rust,
-            primary_extension: Some("rs"),
-            aliases: &["rust", "rs"],
-            extensions: &["rs"],
-        },
+        metadata: LanguageMetadata { id: LanguageId::Rust, extensions: &["rs"] },
         server_kind: Some(ServerKind::RustAnalyzer),
     },
     LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::Python,
-            primary_extension: Some("py"),
-            aliases: &["python", "py"],
-            extensions: &["py", "pyi", "pyw"],
-        },
+        metadata: LanguageMetadata { id: LanguageId::Python, extensions: &["py", "pyi", "pyw"] },
         server_kind: Some(ServerKind::Pyright),
     },
     LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::JavaScript,
-            primary_extension: Some("js"),
-            aliases: &["javascript", "js"],
-            extensions: &["js", "mjs"],
-        },
+        metadata: LanguageMetadata { id: LanguageId::JavaScript, extensions: &["js", "mjs"] },
         server_kind: Some(ServerKind::Tsc),
     },
     LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::JavaScriptReact,
-            primary_extension: Some("jsx"),
-            aliases: &["javascript", "js", "javascriptreact", "jsx"],
-            extensions: &["jsx"],
-        },
+        metadata: LanguageMetadata { id: LanguageId::JavaScriptReact, extensions: &["jsx"] },
         server_kind: Some(ServerKind::Tsc),
     },
     LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::TypeScript,
-            primary_extension: Some("ts"),
-            aliases: &["typescript", "ts"],
-            extensions: &["ts"],
-        },
+        metadata: LanguageMetadata { id: LanguageId::TypeScript, extensions: &["ts"] },
         server_kind: Some(ServerKind::Tsc),
     },
     LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::TypeScriptReact,
-            primary_extension: Some("tsx"),
-            aliases: &["typescript", "ts", "typescriptreact", "tsx"],
-            extensions: &["tsx"],
-        },
+        metadata: LanguageMetadata { id: LanguageId::TypeScriptReact, extensions: &["tsx"] },
         server_kind: Some(ServerKind::Tsc),
     },
     LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::Go,
-            primary_extension: Some("go"),
-            aliases: &["go"],
-            extensions: &["go"],
-        },
+        metadata: LanguageMetadata { id: LanguageId::Go, extensions: &["go"] },
         server_kind: Some(ServerKind::Gopls),
     },
+    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::Java, extensions: &["java"] }, server_kind: None },
     LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::Java,
-            primary_extension: Some("java"),
-            aliases: &["java"],
-            extensions: &["java"],
-        },
-        server_kind: None,
-    },
-    LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::C,
-            primary_extension: Some("c"),
-            aliases: &["c"],
-            extensions: &["c", "h"],
-        },
+        metadata: LanguageMetadata { id: LanguageId::C, extensions: &["c", "h"] },
         server_kind: Some(ServerKind::Clangd),
     },
     LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::Cpp,
-            primary_extension: Some("cpp"),
-            aliases: &["cpp", "c++"],
-            extensions: &["cpp", "cxx", "cc", "hpp", "hxx", "hh"],
-        },
+        metadata: LanguageMetadata { id: LanguageId::Cpp, extensions: &["cpp", "cxx", "cc", "hpp", "hxx", "hh"] },
         server_kind: Some(ServerKind::Clangd),
     },
+    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::CSharp, extensions: &["cs"] }, server_kind: None },
+    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::Ruby, extensions: &["rb"] }, server_kind: None },
+    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::Php, extensions: &["php"] }, server_kind: None },
+    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::Swift, extensions: &["swift"] }, server_kind: None },
     LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::CSharp,
-            primary_extension: Some("cs"),
-            aliases: &["csharp", "cs"],
-            extensions: &["cs"],
-        },
+        metadata: LanguageMetadata { id: LanguageId::Kotlin, extensions: &["kt", "kts"] },
         server_kind: None,
     },
+    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::Scala, extensions: &["scala"] }, server_kind: None },
     LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::Ruby,
-            primary_extension: Some("rb"),
-            aliases: &["ruby", "rb"],
-            extensions: &["rb"],
-        },
+        metadata: LanguageMetadata { id: LanguageId::Html, extensions: &["html", "htm"] },
         server_kind: None,
     },
+    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::Css, extensions: &["css"] }, server_kind: None },
+    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::Json, extensions: &["json"] }, server_kind: None },
     LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::Php,
-            primary_extension: Some("php"),
-            aliases: &["php"],
-            extensions: &["php"],
-        },
+        metadata: LanguageMetadata { id: LanguageId::Yaml, extensions: &["yaml", "yml"] },
         server_kind: None,
     },
+    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::Toml, extensions: &["toml"] }, server_kind: None },
     LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::Swift,
-            primary_extension: Some("swift"),
-            aliases: &["swift"],
-            extensions: &["swift"],
-        },
+        metadata: LanguageMetadata { id: LanguageId::Markdown, extensions: &["md", "markdown"] },
         server_kind: None,
     },
+    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::Xml, extensions: &["xml"] }, server_kind: None },
+    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::Sql, extensions: &["sql"] }, server_kind: None },
     LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::Kotlin,
-            primary_extension: Some("kt"),
-            aliases: &["kotlin"],
-            extensions: &["kt", "kts"],
-        },
+        metadata: LanguageMetadata { id: LanguageId::ShellScript, extensions: &["sh", "bash", "zsh"] },
         server_kind: None,
     },
-    LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::Scala,
-            primary_extension: Some("scala"),
-            aliases: &["scala"],
-            extensions: &["scala"],
-        },
-        server_kind: None,
-    },
-    LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::Html,
-            primary_extension: Some("html"),
-            aliases: &["html"],
-            extensions: &["html", "htm"],
-        },
-        server_kind: None,
-    },
-    LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::Css,
-            primary_extension: Some("css"),
-            aliases: &["css"],
-            extensions: &["css"],
-        },
-        server_kind: None,
-    },
-    LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::Json,
-            primary_extension: Some("json"),
-            aliases: &["json"],
-            extensions: &["json"],
-        },
-        server_kind: None,
-    },
-    LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::Yaml,
-            primary_extension: Some("yaml"),
-            aliases: &["yaml", "yml"],
-            extensions: &["yaml", "yml"],
-        },
-        server_kind: None,
-    },
-    LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::Toml,
-            primary_extension: Some("toml"),
-            aliases: &["toml"],
-            extensions: &["toml"],
-        },
-        server_kind: None,
-    },
-    LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::Markdown,
-            primary_extension: Some("md"),
-            aliases: &["markdown", "md"],
-            extensions: &["md", "markdown"],
-        },
-        server_kind: None,
-    },
-    LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::Xml,
-            primary_extension: Some("xml"),
-            aliases: &["xml"],
-            extensions: &["xml"],
-        },
-        server_kind: None,
-    },
-    LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::Sql,
-            primary_extension: Some("sql"),
-            aliases: &["sql"],
-            extensions: &["sql"],
-        },
-        server_kind: None,
-    },
-    LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::ShellScript,
-            primary_extension: Some("sh"),
-            aliases: &["sh", "shell", "bash"],
-            extensions: &["sh", "bash", "zsh"],
-        },
-        server_kind: None,
-    },
-    LanguageSpec {
-        metadata: LanguageMetadata {
-            id: LanguageId::PlainText,
-            primary_extension: None,
-            aliases: &["plaintext", "text", "txt"],
-            extensions: &["txt"],
-        },
-        server_kind: None,
-    },
+    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::PlainText, extensions: &["txt"] }, server_kind: None },
 ];
 
 pub static LANGUAGE_METADATA: LazyLock<Vec<LanguageMetadata>> =
@@ -516,19 +344,6 @@ pub fn metadata_for(id: LanguageId) -> Option<&'static LanguageMetadata> {
     LANGUAGE_METADATA.iter().find(|metadata| metadata.id == id)
 }
 
-pub fn from_lsp_id(lsp_id: &str) -> Option<LanguageId> {
-    LANGUAGE_SPECS.iter().find(|spec| spec.metadata.id.as_str() == lsp_id).map(|spec| spec.metadata.id)
-}
-
-pub fn extensions_for_alias(alias: &str) -> Vec<&'static str> {
-    let lower = alias.to_lowercase();
-    LANGUAGE_SPECS
-        .iter()
-        .filter(|spec| spec.metadata.aliases.iter().any(|candidate| *candidate == lower))
-        .flat_map(|spec| spec.metadata.extensions.iter().copied())
-        .collect()
-}
-
 pub fn detect_project_languages(root: &Path) -> Vec<LanguageId> {
     PROJECT_LANGUAGE_SPECS
         .iter()
@@ -593,40 +408,7 @@ mod tests {
     fn metadata_for_returns_correct_data() {
         let meta = metadata_for(LanguageId::Rust).unwrap();
         assert_eq!(meta.id.as_str(), "rust");
-        assert_eq!(meta.primary_extension, Some("rs"));
-        assert!(meta.aliases.contains(&"rust"));
-        assert!(meta.aliases.contains(&"rs"));
-    }
-
-    #[test]
-    fn from_lsp_id_resolves_known_languages() {
-        assert_eq!(from_lsp_id("rust"), Some(LanguageId::Rust));
-        assert_eq!(from_lsp_id("typescriptreact"), Some(LanguageId::TypeScriptReact));
-        assert_eq!(from_lsp_id("unknown"), None);
-    }
-
-    #[test]
-    fn primary_extension_delegates_to_catalog() {
-        assert_eq!(LanguageId::Rust.primary_extension(), Some("rs"));
-        assert_eq!(LanguageId::Python.primary_extension(), Some("py"));
-        assert_eq!(LanguageId::PlainText.primary_extension(), None);
-    }
-
-    #[test]
-    fn extensions_for_alias_includes_related_variants() {
-        let js_exts = extensions_for_alias("javascript");
-        assert!(js_exts.contains(&"js"));
-        assert!(js_exts.contains(&"mjs"));
-        assert!(js_exts.contains(&"jsx"));
-
-        let ts_exts = extensions_for_alias("typescript");
-        assert!(ts_exts.contains(&"ts"));
-        assert!(ts_exts.contains(&"tsx"));
-
-        let sh_exts = extensions_for_alias("bash");
-        assert!(sh_exts.contains(&"sh"));
-        assert!(sh_exts.contains(&"bash"));
-        assert!(sh_exts.contains(&"zsh"));
+        assert_eq!(meta.extensions, &["rs"]);
     }
 
     #[test]

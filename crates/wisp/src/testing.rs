@@ -94,10 +94,6 @@ impl FakeExecutor {
         &mut self.git
     }
 
-    pub fn filesystem(&self) -> &FakeFilesystem {
-        &self.filesystem
-    }
-
     pub fn filesystem_mut(&mut self) -> &mut FakeFilesystem {
         &mut self.filesystem
     }
@@ -122,7 +118,7 @@ impl FakeExecutor {
         match command {
             Command::Agent(AgentCommand::FetchWorkspaceStatus { cwd, .. }) => {
                 let status = self.git.workspace_status();
-                Some(CommandResult::WorkspaceResolved { cwd: cwd.clone(), status: status.into() })
+                Some(CommandResult::WorkspaceResolved { cwd: cwd.clone(), status })
             }
             Command::GitReview(GitReviewCommand::Open { .. }) => {
                 self.git_completion = None;
@@ -263,16 +259,11 @@ impl FakeAgent {
 pub struct FakeFilesystem {
     files: BTreeMap<PathBuf, Vec<u8>>,
     directories: BTreeSet<PathBuf>,
-    settings: Option<UiSettings>,
 }
 
 impl FakeFilesystem {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn create_dir(&mut self, path: impl Into<PathBuf>) {
-        self.directories.insert(path.into());
     }
 
     pub fn write_file(&mut self, path: impl Into<PathBuf>, contents: impl AsRef<[u8]>) {
@@ -281,38 +272,6 @@ impl FakeFilesystem {
             self.directories.insert(parent.to_path_buf());
         }
         self.files.insert(path, contents.as_ref().to_vec());
-    }
-
-    pub fn remove_file(&mut self, path: &Path) -> bool {
-        self.files.remove(path).is_some()
-    }
-
-    pub fn read_file(&self, path: &Path) -> Option<&[u8]> {
-        self.files.get(path).map(Vec::as_slice)
-    }
-
-    pub fn read_to_string(&self, path: &Path) -> Option<String> {
-        self.read_file(path).and_then(|contents| String::from_utf8(contents.to_vec()).ok())
-    }
-
-    pub fn contains(&self, path: &Path) -> bool {
-        self.files.contains_key(path) || self.directories.contains(path)
-    }
-
-    pub fn files(&self) -> impl Iterator<Item = (&Path, &[u8])> {
-        self.files.iter().map(|(path, contents)| (path.as_path(), contents.as_slice()))
-    }
-
-    pub fn directories(&self) -> impl Iterator<Item = &Path> {
-        self.directories.iter().map(PathBuf::as_path)
-    }
-
-    pub fn save_settings(&mut self, settings: UiSettings) {
-        self.settings = Some(settings);
-    }
-
-    pub fn settings(&self) -> Option<&UiSettings> {
-        self.settings.as_ref()
     }
 
     /// The runtime's file index over the in-memory tree, minus gitignore
@@ -465,10 +424,6 @@ impl FakeGit {
         self.state.lock().unwrap().files.get(path).cloned()
     }
 
-    pub fn files(&self) -> Vec<FakeGitFile> {
-        self.state.lock().unwrap().files.values().cloned().collect()
-    }
-
     pub fn commits(&self) -> Vec<String> {
         self.state.lock().unwrap().commits.clone()
     }
@@ -563,37 +518,6 @@ impl FakeGit {
         }
         let document = DiffDocument { repo_root: state.root.to_string_lossy().into_owned(), files };
         Ok(DiffSnapshot { scope, document: Arc::new(document) })
-    }
-}
-
-/// Deterministic terminal wrapper used by focused golden tests.
-pub struct TestTerminal {
-    terminal: Terminal<TestBackend>,
-}
-
-impl TestTerminal {
-    pub fn new(width: u16, height: u16) -> Self {
-        Self { terminal: test_terminal(TestBackend::new(width, height)) }
-    }
-
-    pub fn terminal(&mut self) -> &mut Terminal<TestBackend> {
-        &mut self.terminal
-    }
-
-    pub fn resize(&mut self, width: u16, height: u16) {
-        self.terminal.backend_mut().resize(width, height);
-    }
-
-    pub fn viewport(&mut self) -> Buffer {
-        viewport_buffer(&mut self.terminal)
-    }
-
-    pub fn history(&mut self) -> Buffer {
-        history_buffer(&mut self.terminal)
-    }
-
-    pub fn conversation(&mut self) -> Buffer {
-        conversation_buffer(&mut self.terminal)
     }
 }
 
@@ -1466,10 +1390,10 @@ impl TestUiBuilder {
             )
             .auth_methods(self.auth_methods.clone()),
             session_response: acp::NewSessionResponse::new("test-session").config_options(self.config_options.clone()),
-            workspace_status: self
-                .workspace_status
-                .clone()
-                .unwrap_or_else(|| WorkspaceStatus::new("~/code/demo", Some("main".to_string()))),
+            workspace_status: self.workspace_status.clone().unwrap_or_else(|| WorkspaceStatus {
+                display_dir: "~/code/demo".to_string(),
+                git_ref: Some("main".to_string()),
+            }),
             working_dir: self.working_dir.clone().unwrap_or_else(|| PathBuf::from(".")),
             workspace_access: self.workspace_access,
             settings: self.settings.clone(),
@@ -1892,18 +1816,6 @@ mod tests {
             .record([Command::Filesystem(FilesystemCommand::ListThemes), Command::Terminal(TerminalCommand::RingBell)]);
 
         assert!(matches!(executor.take_commands()[..], [Command::Filesystem(_), Command::Terminal(_)]));
-    }
-
-    #[test]
-    fn fake_filesystem_persists_files_and_settings_in_memory() {
-        let mut filesystem = FakeFilesystem::new();
-        let path = PathBuf::from("workspace/src/main.rs");
-        filesystem.write_file(&path, "fn main() {}");
-        filesystem.save_settings(UiSettings::default());
-
-        assert_eq!(filesystem.read_to_string(&path).as_deref(), Some("fn main() {}"));
-        assert!(filesystem.contains(Path::new("workspace/src")));
-        assert!(filesystem.settings().is_some());
     }
 
     #[test]

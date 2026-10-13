@@ -30,7 +30,6 @@ pub struct LocalConfigValue {
     pub description: Option<String>,
     pub is_disabled: bool,
     pub meta: SelectOptionMeta,
-    pub raw_meta: Option<acp::Meta>,
 }
 
 impl LocalConfigOption {
@@ -59,7 +58,6 @@ impl LocalConfigOption {
                     is_disabled: value.description.as_deref().is_some_and(|text| text.starts_with("Unavailable:")),
                     description: value.description,
                     meta: SelectOptionMeta::from_meta(value.meta.as_ref()),
-                    raw_meta: value.meta,
                 })
                 .collect(),
                 multi_select: ConfigOptionMeta::from_meta(option.meta.as_ref()).multi_select,

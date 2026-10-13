@@ -19,7 +19,7 @@ OAuth credential storage and authorization flows for Aether. Provides a pluggabl
 - **`OAuthCredentialStorage`** -- Trait for persisting OAuth credentials keyed by provider ID, MCP server ID, or another credential key.
 - **`OAuthCredential`** -- Access token, refresh token, client ID, and expiry timestamp for a single OAuth identity.
 - **`OAuthHandler`** -- Trait implemented by consuming applications to drive the OAuth UI/UX (open a browser, wait for the redirect).
-- **`BrowserOAuthHandler`** -- Default `OAuthHandler` that opens the system browser and listens on a dynamic local port.
+- **`BrowserOAuthHandler`** -- Default `OAuthHandler` that opens the system browser and listens on a local port.
 - **`OsKeyringStore`** -- `OAuthCredentialStorage` backed by the OS keychain (macOS Keychain, Windows Credential Manager, Linux/FreeBSD Secret Service). Available under the `keyring` feature.
 - **`FakeOAuthCredentialStore`** -- In-memory `OAuthCredentialStorage` for tests.
 - **`McpCredentialStore`** -- Per-server adapter that binds an `OAuthCredentialStorage` to one MCP server ID and implements `rmcp::transport::auth::CredentialStore`. Available under the `mcp` feature.

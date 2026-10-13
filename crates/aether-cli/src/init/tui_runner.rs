@@ -2,21 +2,14 @@ use super::InitError;
 use super::build_settings::{Preset, supported_providers};
 use super::harness::HarnessIntegration;
 use clap::ValueEnum;
-use crossterm::cursor::{Hide, Show};
-use crossterm::event::{
-    Event, EventStream, KeyCode, KeyEventKind, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
-};
-use crossterm::execute;
-use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind};
 use futures::StreamExt;
 use llm::catalog::Provider;
-use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
+use ratatui::DefaultTerminal;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
-use std::io::{self, Stdout};
+use std::io;
 
 pub async fn run_wizard(
     provider: Option<Provider>,
@@ -33,7 +26,7 @@ pub async fn run_wizard(
     let provider_options = supported_providers().map(|provider| (format_provider_title(provider), provider)).collect();
     let provider = match provider {
         Some(provider) => provider,
-        None => match run_select(&mut terminal, &mut events, "Choose a provider:", provider_options).await? {
+        None => match pick_one(&mut terminal, &mut events, "Choose a provider:", provider_options).await? {
             Some(provider) => provider,
             None => return Ok(None),
         },
@@ -41,14 +34,14 @@ pub async fn run_wizard(
 
     let preset = match preset {
         Some(preset) => preset,
-        None => match run_select(&mut terminal, &mut events, "Choose a preset:", preset_options()).await? {
+        None => match pick_one(&mut terminal, &mut events, "Choose a preset:", preset_options()).await? {
             Some(preset) => preset,
             None => return Ok(None),
         },
     };
 
     let harnesses = if preset == Preset::BatteriesIncluded && harnesses.is_empty() {
-        match run_multi_select(&mut terminal, &mut events).await? {
+        match pick_harnesses(&mut terminal, &mut events).await? {
             Some(harnesses) => harnesses,
             None => return Ok(None),
         }
@@ -59,59 +52,22 @@ pub async fn run_wizard(
     Ok(Some((provider, preset, harnesses)))
 }
 
-struct WizardTerminal {
-    terminal: Terminal<CrosstermBackend<Stdout>>,
-    keyboard_enhancement: bool,
-}
+struct WizardTerminal(DefaultTerminal);
 
 impl WizardTerminal {
     fn enter() -> io::Result<Self> {
-        enable_raw_mode()?;
-
-        let mut stdout = io::stdout();
-        if let Err(error) = execute!(stdout, EnterAlternateScreen, Hide) {
-            let _ = disable_raw_mode();
-            return Err(error);
-        }
-
-        let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-            | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-            | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
-        let keyboard_enhancement = if execute!(stdout, PushKeyboardEnhancementFlags(flags)).is_ok() {
-            true
-        } else {
-            execute!(stdout, PopKeyboardEnhancementFlags).is_err()
-        };
-
-        match Terminal::new(CrosstermBackend::new(stdout)) {
-            Ok(terminal) => Ok(Self { terminal, keyboard_enhancement }),
-            Err(error) => {
-                let mut stdout = io::stdout();
-                if keyboard_enhancement {
-                    let _ = execute!(stdout, PopKeyboardEnhancementFlags);
-                }
-                let _ = execute!(stdout, Show, LeaveAlternateScreen);
-                let _ = disable_raw_mode();
-                Err(error)
-            }
-        }
+        ratatui::try_init().map(Self).inspect_err(|_| ratatui::restore())
     }
 
     fn draw(&mut self, lines: Vec<Line<'static>>) -> io::Result<()> {
-        self.terminal.draw(|frame| {
-            frame.render_widget(Paragraph::new(lines), frame.area());
-        })?;
+        self.0.draw(|frame| frame.render_widget(Paragraph::new(lines), frame.area()))?;
         Ok(())
     }
 }
 
 impl Drop for WizardTerminal {
     fn drop(&mut self) {
-        if self.keyboard_enhancement {
-            let _ = execute!(self.terminal.backend_mut(), PopKeyboardEnhancementFlags);
-        }
-        let _ = execute!(self.terminal.backend_mut(), Show, LeaveAlternateScreen);
-        let _ = disable_raw_mode();
+        ratatui::restore();
     }
 }
 
@@ -121,13 +77,51 @@ struct SelectOption<T> {
     value: T,
 }
 
-struct MultiSelect<T> {
+struct Picker<T> {
     options: Vec<SelectOption<T>>,
-    selected: Vec<bool>,
+    toggled: Vec<bool>,
     cursor: usize,
+    multi: bool,
 }
 
-async fn run_multi_select(
+impl<T> Picker<T> {
+    fn is_selected(&self, index: usize) -> bool {
+        if self.multi { self.toggled[index] } else { index == self.cursor }
+    }
+
+    fn lines(&self, header: &str) -> Vec<Line<'static>> {
+        let mut lines = header_lines(header);
+        lines.extend(self.options.iter().enumerate().map(|(index, option)| {
+            let marker = match (self.multi, self.is_selected(index)) {
+                (true, true) => "[x] ",
+                (true, false) => "[ ] ",
+                (false, true) => "● ",
+                (false, false) => "○ ",
+            };
+            let description =
+                option.description.as_deref().map(|description| format!(" - {description}")).unwrap_or_default();
+            let style = if self.multi && index == self.cursor {
+                primary_style().add_modifier(Modifier::BOLD)
+            } else if self.is_selected(index) {
+                primary_style()
+            } else {
+                Style::default()
+            };
+            Line::styled(format!("{marker}{}{description}", option.title), style)
+        }));
+
+        let footer = if self.multi {
+            "  ↑/↓ to move · Space to toggle · Enter to confirm · Esc to cancel"
+        } else {
+            "  ↑/↓ to move · Enter to confirm · Esc to cancel"
+        };
+
+        lines.extend(footer_lines(footer));
+        lines
+    }
+}
+
+async fn pick_harnesses(
     terminal: &mut WizardTerminal,
     events: &mut EventStream,
 ) -> Result<Option<Vec<HarnessIntegration>>, InitError> {
@@ -139,12 +133,31 @@ async fn run_multi_select(
             value: *harness,
         })
         .collect::<Vec<_>>();
-    let mut select = MultiSelect { selected: vec![true; options.len()], options, cursor: 0 };
-    let header = "Load prompts, skills, and rules from other harness conventions?";
-    let footer = "  ↑/↓ to move · Space to toggle · Enter to confirm · Esc to cancel";
+    let picker = Picker { toggled: vec![true; options.len()], options, cursor: 0, multi: true };
+    run_picker(terminal, events, "Load prompts, skills, and rules from other harness conventions?", picker).await
+}
 
+async fn pick_one<T>(
+    terminal: &mut WizardTerminal,
+    events: &mut EventStream,
+    header: &str,
+    options: Vec<(String, T)>,
+) -> Result<Option<T>, InitError> {
+    let options =
+        options.into_iter().map(|(title, value)| SelectOption { title, description: None, value }).collect::<Vec<_>>();
+    let picker = Picker { toggled: vec![false; options.len()], options, cursor: 0, multi: false };
+    let chosen = run_picker(terminal, events, header, picker).await?;
+    Ok(chosen.and_then(|values| values.into_iter().next()))
+}
+
+async fn run_picker<T>(
+    terminal: &mut WizardTerminal,
+    events: &mut EventStream,
+    header: &str,
+    mut picker: Picker<T>,
+) -> Result<Option<Vec<T>>, InitError> {
     loop {
-        terminal.draw(render_multi_select(&select, header, footer)).map_err(InitError::Terminal)?;
+        terminal.draw(picker.lines(header)).map_err(InitError::Terminal)?;
 
         let Some(event) = next_event(events).await? else {
             return Ok(None);
@@ -153,26 +166,23 @@ async fn run_multi_select(
             continue;
         };
 
+        let len = picker.options.len();
         match key.code {
             KeyCode::Esc => return Ok(None),
             KeyCode::Enter => {
-                let selected = select
+                let selected = (0..len).map(|index| picker.is_selected(index)).collect::<Vec<_>>();
+                let chosen = picker
                     .options
                     .into_iter()
-                    .zip(select.selected)
-                    .filter_map(|(option, selected)| selected.then_some(option.value))
-                    .collect();
-                return Ok(Some(selected));
+                    .zip(selected)
+                    .filter_map(|(option, chosen)| chosen.then_some(option.value));
+                return Ok(Some(chosen.collect()));
             }
-            KeyCode::Char(' ') if !select.options.is_empty() => {
-                select.selected[select.cursor] = !select.selected[select.cursor];
+            KeyCode::Char(' ') if picker.multi && len > 0 => {
+                picker.toggled[picker.cursor] = !picker.toggled[picker.cursor];
             }
-            KeyCode::Up if !select.options.is_empty() => {
-                select.cursor = (select.cursor + select.options.len() - 1) % select.options.len();
-            }
-            KeyCode::Down if !select.options.is_empty() => {
-                select.cursor = (select.cursor + 1) % select.options.len();
-            }
+            KeyCode::Up if len > 0 => picker.cursor = (picker.cursor + len - 1) % len,
+            KeyCode::Down if len > 0 => picker.cursor = (picker.cursor + 1) % len,
             _ => {}
         }
     }
@@ -196,41 +206,6 @@ fn format_provider_title(provider: Provider) -> String {
     format!("{:<12} {marker}", provider.display_name())
 }
 
-async fn run_select<T>(
-    terminal: &mut WizardTerminal,
-    events: &mut EventStream,
-    prompt: &str,
-    options: Vec<(String, T)>,
-) -> Result<Option<T>, InitError> {
-    let options =
-        options.into_iter().map(|(title, value)| SelectOption { title, description: None, value }).collect::<Vec<_>>();
-    let mut selected = 0;
-    let footer = "  ↑/↓ to move · Enter to confirm · Esc to cancel";
-
-    loop {
-        terminal.draw(render_select(&options, selected, prompt, footer)).map_err(InitError::Terminal)?;
-
-        let Some(event) = next_event(events).await? else {
-            return Ok(None);
-        };
-        let Event::Key(key) = event else {
-            continue;
-        };
-
-        match key.code {
-            KeyCode::Esc => return Ok(None),
-            KeyCode::Enter => return Ok(options.into_iter().nth(selected).map(|option| option.value)),
-            KeyCode::Up if !options.is_empty() => {
-                selected = (selected + options.len() - 1) % options.len();
-            }
-            KeyCode::Down if !options.is_empty() => {
-                selected = (selected + 1) % options.len();
-            }
-            _ => {}
-        }
-    }
-}
-
 async fn next_event(events: &mut EventStream) -> Result<Option<Event>, InitError> {
     loop {
         let Some(event) = events.next().await else {
@@ -242,36 +217,6 @@ async fn next_event(events: &mut EventStream) -> Result<Option<Event>, InitError
         }
         return Ok(Some(event));
     }
-}
-
-fn render_select<T>(options: &[SelectOption<T>], selected: usize, header: &str, footer: &str) -> Vec<Line<'static>> {
-    let mut lines = header_lines(header);
-    lines.extend(options.iter().enumerate().map(|(index, option)| {
-        let marker = if index == selected { "● " } else { "○ " };
-        let style = if index == selected { primary_style() } else { Style::default() };
-        Line::styled(format!("{marker}{}", option.title), style)
-    }));
-    lines.extend(footer_lines(footer));
-    lines
-}
-
-fn render_multi_select<T>(select: &MultiSelect<T>, header: &str, footer: &str) -> Vec<Line<'static>> {
-    let mut lines = header_lines(header);
-    lines.extend(select.options.iter().enumerate().map(|(index, option)| {
-        let marker = if select.selected[index] { "[x] " } else { "[ ] " };
-        let description =
-            option.description.as_deref().map(|description| format!(" - {description}")).unwrap_or_default();
-        let style = if index == select.cursor {
-            primary_style().add_modifier(Modifier::BOLD)
-        } else if select.selected[index] {
-            primary_style()
-        } else {
-            Style::default()
-        };
-        Line::styled(format!("{marker}{}{description}", option.title), style)
-    }));
-    lines.extend(footer_lines(footer));
-    lines
 }
 
 fn header_lines(header: &str) -> Vec<Line<'static>> {

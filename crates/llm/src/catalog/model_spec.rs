@@ -2,6 +2,7 @@ use super::LlmModel;
 use crate::ReasoningEffort;
 use std::fmt;
 use std::str::FromStr;
+use thiserror::Error;
 
 /// A validated model selection: a single model or several alloyed models,
 /// parsed from a comma-separated `provider:model` list.
@@ -54,7 +55,7 @@ impl FromStr for ModelSpec {
                     return Err(ModelSpecError::EmptyEntry);
                 }
                 part.parse::<LlmModel>()
-                    .map_err(|source| ModelSpecError::InvalidModel { model: part.to_string(), source })
+                    .map_err(|reason| ModelSpecError::InvalidModel { model: part.to_string(), reason })
             })
             .collect::<Result<Vec<_>, _>>()
             .map(Self)
@@ -63,66 +64,26 @@ impl FromStr for ModelSpec {
 
 impl fmt::Display for ModelSpec {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (index, model) in self.0.iter().enumerate() {
-            if index > 0 {
-                write!(formatter, ",")?;
-            }
-            write!(formatter, "{model}")?;
-        }
-        Ok(())
+        formatter.write_str(&self.0.iter().map(ToString::to_string).collect::<Vec<_>>().join(","))
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ModelSpecError {
+    #[error("model spec cannot be empty")]
     Empty,
+    #[error("model spec contains an empty entry")]
     EmptyEntry,
-    InvalidModel { model: String, source: String },
+    #[error("invalid model '{model}': {reason}")]
+    InvalidModel { model: String, reason: String },
 }
 
-impl fmt::Display for ModelSpecError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Empty => write!(formatter, "model spec cannot be empty"),
-            Self::EmptyEntry => write!(formatter, "model spec contains an empty entry"),
-            Self::InvalidModel { model, source } => write!(formatter, "invalid model '{model}': {source}"),
-        }
-    }
-}
-
-impl std::error::Error for ModelSpecError {}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ReasoningEffortError {
-    InvalidSpec(ModelSpecError),
+    #[error("{0}")]
+    InvalidSpec(#[from] ModelSpecError),
+    #[error("model '{model}' does not support reasoning{}", supported_efforts(*effort, supported))]
     Unsupported { model: String, effort: ReasoningEffort, supported: Vec<ReasoningEffort> },
-}
-
-impl fmt::Display for ReasoningEffortError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidSpec(source) => write!(formatter, "{source}"),
-            Self::Unsupported { model, supported, .. } if supported.is_empty() => {
-                write!(formatter, "model '{model}' does not support reasoning")
-            }
-            Self::Unsupported { model, effort, supported } => {
-                let supported = supported.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
-                write!(
-                    formatter,
-                    "model '{model}' does not support reasoning effort '{effort}'; supported: {supported}"
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for ReasoningEffortError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::InvalidSpec(source) => Some(source),
-            Self::Unsupported { .. } => None,
-        }
-    }
 }
 
 /// Validate `effort` against every model in a comma-separated model spec.
@@ -133,8 +94,15 @@ pub fn validate_reasoning_effort(
     if effort.is_none() {
         return Ok(());
     }
-    let spec = model_spec.parse::<ModelSpec>().map_err(ReasoningEffortError::InvalidSpec)?;
-    spec.validate_reasoning_effort(effort)
+    model_spec.parse::<ModelSpec>()?.validate_reasoning_effort(effort)
+}
+
+fn supported_efforts(effort: ReasoningEffort, supported: &[ReasoningEffort]) -> String {
+    if supported.is_empty() {
+        return String::new();
+    }
+    let supported = supported.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
+    format!(" effort '{effort}'; supported: {supported}")
 }
 
 #[cfg(test)]

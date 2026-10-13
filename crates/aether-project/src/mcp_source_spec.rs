@@ -1,12 +1,14 @@
 use crate::SettingsError;
 use aether_core::mcp::{McpConfig, McpServerConfig};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use utils::variables::VarError;
-use utils::{PathOrObject, ResourcePath, is_false, string_or_object_schema};
+use utils::{PathOrObject, ResourcePath};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(from = "PathOrObject<McpSourceSpecObject>", into = "PathOrObject<McpSourceSpecObject>")]
+#[schemars(with = "PathOrObject<McpSourceSpecObject>", description = include_str!("docs/mcp_source_spec.md"))]
 pub enum McpSourceSpec {
     File(McpFileSpec),
     Inline(McpConfig),
@@ -100,43 +102,27 @@ impl From<McpFileSpec> for McpSourceSpec {
     }
 }
 
-impl<'de> Deserialize<'de> for McpSourceSpec {
-    fn deserialize<T: Deserializer<'de>>(deserializer: T) -> Result<Self, T::Error> {
-        Ok(match PathOrObject::<McpSourceSpecObject>::deserialize(deserializer)? {
-            PathOrObject::Path(path) => Self::File(McpFileSpec::new(path)),
+impl From<PathOrObject<McpSourceSpecObject>> for McpSourceSpec {
+    fn from(source: PathOrObject<McpSourceSpecObject>) -> Self {
+        match source {
+            PathOrObject::Path(path) => Self::file(path),
             PathOrObject::Object(McpSourceSpecObject::File { path, defer_tools, optional }) => {
                 Self::File(McpFileSpec { path, defer_tools, optional })
             }
             PathOrObject::Object(McpSourceSpecObject::Inline { servers }) => Self::Inline(McpConfig::new(servers)),
-        })
-    }
-}
-
-impl Serialize for McpSourceSpec {
-    fn serialize<T: Serializer>(&self, serializer: T) -> Result<T::Ok, T::Error> {
-        match self {
-            Self::File(McpFileSpec { path, defer_tools: false, optional: false }) => path.serialize(serializer),
-            Self::File(McpFileSpec { path, defer_tools, optional }) => Serialize::serialize(
-                &McpSourceSpecObject::File { path: path.clone(), defer_tools: *defer_tools, optional: *optional },
-                serializer,
-            ),
-            Self::Inline(config) => {
-                Serialize::serialize(&McpSourceSpecObject::Inline { servers: config.servers.clone() }, serializer)
-            }
         }
     }
 }
 
-impl schemars::JsonSchema for McpSourceSpec {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        "McpSourceSpec".into()
-    }
-
-    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        string_or_object_schema(
-            include_str!("docs/mcp_source_spec.md"),
-            &generator.subschema_for::<McpSourceSpecObject>().to_value(),
-        )
+impl From<McpSourceSpec> for PathOrObject<McpSourceSpecObject> {
+    fn from(source: McpSourceSpec) -> Self {
+        match source {
+            McpSourceSpec::File(McpFileSpec { path, defer_tools: false, optional: false }) => Self::Path(path),
+            McpSourceSpec::File(McpFileSpec { path, defer_tools, optional }) => {
+                Self::Object(McpSourceSpecObject::File { path, defer_tools, optional })
+            }
+            McpSourceSpec::Inline(config) => Self::Object(McpSourceSpecObject::Inline { servers: config.servers }),
+        }
     }
 }
 
@@ -145,9 +131,9 @@ impl schemars::JsonSchema for McpSourceSpec {
 enum McpSourceSpecObject {
     File {
         path: ResourcePath,
-        #[serde(rename = "deferTools", default, skip_serializing_if = "is_false")]
+        #[serde(rename = "deferTools", default, skip_serializing_if = "std::ops::Not::not")]
         defer_tools: bool,
-        #[serde(default, skip_serializing_if = "is_false")]
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         optional: bool,
     },
     Inline {

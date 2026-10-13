@@ -3,6 +3,7 @@ use crate::file_watcher::{FileWatcherBatch, FileWatcherHandle};
 use crate::language_catalog::{DiagnosticsMode, LspConfig};
 use crate::path_to_uri;
 use crate::protocol::{LspErrorResponse, LspNotification};
+use futures::{SinkExt, StreamExt};
 use lsp_types::notification::{DidChangeWatchedFiles, Initialized, Notification, PublishDiagnostics};
 use lsp_types::request::{
     Initialize, RegisterCapability, Request, UnregisterCapability, WorkDoneProgressCreate, WorkspaceDiagnosticRefresh,
@@ -18,14 +19,16 @@ use lsp_types::{DocumentSymbolClientCapabilities, DynamicRegistrationClientCapab
 use nix::sys::signal::{Signal, kill};
 #[cfg(unix)]
 use nix::unistd::Pid;
-use serde_json::Value;
+use serde::Deserialize;
+use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::io::ErrorKind;
+use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, oneshot, watch};
+use tokio_util::bytes::{Buf, BytesMut};
+use tokio_util::codec::{Decoder, Encoder, FramedRead, FramedWrite};
 
 const INITIALIZE_REQUEST_ID: i64 = 1;
 
@@ -67,10 +70,10 @@ enum TransportCommand {
 
 struct ProcessTransportActor {
     process: Child,
-    stdin: ChildStdin,
+    reader: FramedRead<ChildStdout, LspCodec>,
+    writer: FramedWrite<ChildStdin, LspCodec>,
     diagnostics_mode: DiagnosticsMode,
     initialized_tx: watch::Sender<bool>,
-    message_rx: mpsc::Receiver<Value>,
     command_rx: mpsc::Receiver<TransportCommand>,
     event_tx: mpsc::Sender<TransportEvent>,
     watcher: FileWatcherHandle,
@@ -100,17 +103,15 @@ impl ProcessTransport {
         let (command_tx, command_rx) = mpsc::channel(100);
         let (event_tx, event_rx) = mpsc::channel(100);
         let (watcher_tx, watcher_rx) = mpsc::channel(64);
-        let (message_tx, message_rx) = mpsc::channel(100);
         let (initialized_tx, initialized_rx) = watch::channel(false);
         let watcher = FileWatcherHandle::spawn(root_path.to_path_buf(), watcher_tx);
-        tokio::spawn(read_lsp_messages(BufReader::new(stdout), message_tx));
 
         let actor = ProcessTransportActor {
             process,
-            stdin,
+            reader: FramedRead::new(stdout, LspCodec),
+            writer: FramedWrite::new(stdin, LspCodec),
             diagnostics_mode: config.diagnostics_mode,
             initialized_tx,
-            message_rx,
             command_rx,
             event_tx,
             watcher,
@@ -175,12 +176,11 @@ impl ProcessTransportActor {
 
         loop {
             tokio::select! {
-                msg = self.message_rx.recv() => {
-                    match msg {
-                        Some(message) => self.handle_lsp_message(message).await,
-                        None => break,
-                    }
-                }
+                message = self.reader.next() => match message {
+                    Some(Ok(message)) => self.handle_lsp_message(message).await,
+                    Some(Err(err)) => tracing::warn!(%err, "Error reading LSP message"),
+                    None => break,
+                },
                 Some(command) = self.command_rx.recv() => {
                     if !self.handle_command(command).await {
                         break;
@@ -214,7 +214,7 @@ impl ProcessTransportActor {
                 true
             }
             TransportCommand::Notification(notification) => {
-                if let Err(err) = send_notification(&mut self.stdin, &notification.method, notification.params).await {
+                if let Err(err) = self.send_notification(&notification.method, notification.params).await {
                     tracing::warn!(%err, "Failed to forward LSP notification");
                 }
                 true
@@ -226,9 +226,8 @@ impl ProcessTransportActor {
         }
     }
 
-    async fn initialize(&mut self, root_path: &Path) -> std::io::Result<()> {
-        let root_uri =
-            crate::path_to_uri(root_path).map_err(|err| std::io::Error::new(ErrorKind::InvalidInput, err))?;
+    async fn initialize(&mut self, root_path: &Path) -> io::Result<()> {
+        let root_uri = crate::path_to_uri(root_path).map_err(|err| io::Error::new(ErrorKind::InvalidInput, err))?;
         let pull_diagnostics = self.diagnostics_mode == DiagnosticsMode::Pull;
 
         let capabilities = ClientCapabilities {
@@ -269,7 +268,7 @@ impl ProcessTransportActor {
             #[allow(deprecated)]
             root_uri: Some(root_uri),
             workspace_folders: Some(vec![WorkspaceFolder {
-                uri: path_to_uri(root_path).map_err(|err| std::io::Error::new(ErrorKind::InvalidInput, err))?,
+                uri: path_to_uri(root_path).map_err(|err| io::Error::new(ErrorKind::InvalidInput, err))?,
                 name: root_path.file_name().and_then(|name| name.to_str()).unwrap_or("workspace").to_string(),
             }]),
             capabilities,
@@ -278,82 +277,59 @@ impl ProcessTransportActor {
         let mut params = serde_json::to_value(&params).unwrap();
         if pull_diagnostics {
             // lsp-types serializes this as `workspace.diagnostic`, but the spec (and servers) read `workspace.diagnostics`.
-            params["capabilities"]["workspace"]["diagnostics"] = serde_json::json!({ "refreshSupport": true });
+            params["capabilities"]["workspace"]["diagnostics"] = json!({ "refreshSupport": true });
         }
 
         self.send_request(INITIALIZE_REQUEST_ID, Initialize::METHOD, params).await?;
 
-        while let Some(message) = self.message_rx.recv().await {
-            if message.get("id").and_then(Value::as_i64) == Some(INITIALIZE_REQUEST_ID) {
-                if let Some(error) = message.get("error") {
-                    return Err(std::io::Error::other(format!("server rejected `initialize`: {error}")));
+        while let Some(message) = self.reader.next().await {
+            let message = match message {
+                Ok(message) => message,
+                Err(err) => {
+                    tracing::warn!(%err, "Error reading LSP message");
+                    continue;
                 }
-                return send_notification(&mut self.stdin, Initialized::METHOD, serde_json::json!({})).await;
+            };
+            if message.id.as_ref().and_then(Value::as_i64) == Some(INITIALIZE_REQUEST_ID) {
+                if let Some(error) = message.error {
+                    return Err(io::Error::other(format!(
+                        "server rejected `initialize`: {} (code {})",
+                        error.message, error.code
+                    )));
+                }
+                return self.send_notification(Initialized::METHOD, json!({})).await;
             }
 
             self.handle_lsp_message(message).await;
         }
 
-        Err(std::io::Error::new(ErrorKind::UnexpectedEof, "LSP closed during initialization"))
+        Err(io::Error::new(ErrorKind::UnexpectedEof, "LSP closed during initialization"))
     }
 
-    async fn handle_lsp_message(&mut self, message: Value) {
-        let has_id = message.get("id").is_some();
-        let method = message.get("method").and_then(Value::as_str);
-
-        match (has_id, method) {
-            (true, Some(method)) => {
-                let id = message.get("id").cloned().unwrap_or(Value::Null);
-                let params = message.get("params").cloned().unwrap_or(Value::Null);
-                match method {
-                    RegisterCapability::METHOD => {
-                        self.handle_register_capability(&id, &params).await;
-                    }
-                    UnregisterCapability::METHOD => {
-                        self.handle_unregister_capability(&id, &params).await;
-                    }
-                    WorkDoneProgressCreate::METHOD => {
-                        let _ = self.send_ok_response(&id).await;
-                    }
-                    WorkspaceDiagnosticRefresh::METHOD => {
-                        let _ = self.send_ok_response(&id).await;
-                        let _ = self.event_tx.send(TransportEvent::DiagnosticsRefreshRequested).await;
-                    }
-                    _ => {
-                        let response = serde_json::json!({
-                            "jsonrpc": "2.0",
-                            "id": id,
-                            "error": {
-                                "code": -32601,
-                                "message": format!("Method not found: {method}")
-                            }
-                        });
-                        let _ = write_lsp_message(&mut self.stdin, &response).await;
-                    }
+    async fn handle_lsp_message(&mut self, message: Incoming) {
+        match (message.id, message.method) {
+            (Some(id), Some(method)) => match method.as_str() {
+                RegisterCapability::METHOD => self.handle_register_capability(&id, message.params).await,
+                UnregisterCapability::METHOD => self.handle_unregister_capability(&id, message.params).await,
+                WorkDoneProgressCreate::METHOD => {
+                    let _ = self.send_ok_response(&id).await;
+                }
+                WorkspaceDiagnosticRefresh::METHOD => {
+                    let _ = self.send_ok_response(&id).await;
+                    let _ = self.event_tx.send(TransportEvent::DiagnosticsRefreshRequested).await;
+                }
+                _ => {
+                    let error = json!({ "code": -32601, "message": format!("Method not found: {method}") });
+                    let _ = self.writer.send(json!({ "jsonrpc": "2.0", "id": id, "error": error })).await;
+                }
+            },
+            (Some(id), None) => {
+                if let Some(tx) = id.as_i64().and_then(|id| self.pending.remove(&id)) {
+                    let _ = tx.send(message.error.map_or(Ok(message.result), |error| Err(TransportError::Lsp(error))));
                 }
             }
-            (true, None) => {
-                if let Some(id) = message.get("id").and_then(Value::as_i64)
-                    && let Some(tx) = self.pending.remove(&id)
-                {
-                    let result = if let Some(error) = message.get("error") {
-                        let code = error
-                            .get("code")
-                            .and_then(Value::as_i64)
-                            .and_then(|code| i32::try_from(code).ok())
-                            .unwrap_or(-1);
-                        let message =
-                            error.get("message").and_then(Value::as_str).unwrap_or("Unknown error").to_string();
-                        Err(TransportError::Lsp(LspErrorResponse { code, message }))
-                    } else {
-                        Ok(message.get("result").cloned().unwrap_or(Value::Null))
-                    };
-                    let _ = tx.send(result);
-                }
-            }
-            (false, Some(method)) if method == PublishDiagnostics::METHOD => {
-                let params = message.get("params").cloned().unwrap_or(Value::Null);
-                if let Ok(diagnostics) = serde_json::from_value(params) {
+            (None, Some(method)) if method == PublishDiagnostics::METHOD => {
+                if let Ok(diagnostics) = serde_json::from_value(message.params) {
                     let _ = self.event_tx.send(TransportEvent::PublishedDiagnostics(diagnostics)).await;
                 }
             }
@@ -361,8 +337,8 @@ impl ProcessTransportActor {
         }
     }
 
-    async fn handle_register_capability(&mut self, id: &Value, params: &Value) {
-        if let Ok(registration_params) = serde_json::from_value::<RegistrationParams>(params.clone()) {
+    async fn handle_register_capability(&mut self, id: &Value, params: Value) {
+        if let Ok(registration_params) = serde_json::from_value::<RegistrationParams>(params) {
             for registration in &registration_params.registrations {
                 if registration.method == DidChangeWatchedFiles::METHOD
                     && let Some(options) = &registration.register_options
@@ -376,8 +352,8 @@ impl ProcessTransportActor {
         let _ = self.send_ok_response(id).await;
     }
 
-    async fn handle_unregister_capability(&mut self, id: &Value, params: &Value) {
-        if let Ok(unregistration_params) = serde_json::from_value::<lsp_types::UnregistrationParams>(params.clone()) {
+    async fn handle_unregister_capability(&mut self, id: &Value, params: Value) {
+        if let Ok(unregistration_params) = serde_json::from_value::<lsp_types::UnregistrationParams>(params) {
             for registration in &unregistration_params.unregisterations {
                 if registration.method == DidChangeWatchedFiles::METHOD {
                     self.watcher.unregister(registration.id.clone());
@@ -388,23 +364,16 @@ impl ProcessTransportActor {
         let _ = self.send_ok_response(id).await;
     }
 
-    async fn send_request(&mut self, id: i64, method: &str, params: Value) -> std::io::Result<()> {
-        let msg = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-            "params": params
-        });
-        write_lsp_message(&mut self.stdin, &msg).await
+    async fn send_request(&mut self, id: i64, method: &str, params: Value) -> io::Result<()> {
+        self.writer.send(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })).await
     }
 
-    async fn send_ok_response(&mut self, id: &Value) -> std::io::Result<()> {
-        let response = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": null
-        });
-        write_lsp_message(&mut self.stdin, &response).await
+    async fn send_notification(&mut self, method: &str, params: Value) -> io::Result<()> {
+        self.writer.send(json!({ "jsonrpc": "2.0", "method": method, "params": params })).await
+    }
+
+    async fn send_ok_response(&mut self, id: &Value) -> io::Result<()> {
+        self.writer.send(json!({ "jsonrpc": "2.0", "id": id, "result": null })).await
     }
 
     fn cleanup_pending(&mut self) {
@@ -434,68 +403,57 @@ fn resolve_command(root_path: &Path, command: &str) -> PathBuf {
     if local_command.exists() { local_command } else { command_path.to_path_buf() }
 }
 
-async fn send_notification(stdin: &mut ChildStdin, method: &str, params: Value) -> std::io::Result<()> {
-    let msg = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": method,
-        "params": params
-    });
-    write_lsp_message(stdin, &msg).await
+#[derive(Deserialize)]
+struct Incoming {
+    id: Option<Value>,
+    method: Option<String>,
+    #[serde(default)]
+    params: Value,
+    #[serde(default)]
+    result: Value,
+    error: Option<LspErrorResponse>,
 }
 
-/// Read frames sequentially on a dedicated task and forward complete messages.
-///
-/// `read_line` and `read_exact` are not cancellation-safe, so a read that gets cancelled mid-frame
-/// causes later responses to be silently lost.
-async fn read_lsp_messages(mut reader: BufReader<ChildStdout>, message_tx: mpsc::Sender<Value>) {
-    loop {
-        match read_lsp_message(&mut reader).await {
-            Ok(Some(message)) => {
-                if message_tx.send(message).await.is_err() {
-                    break;
-                }
+struct LspCodec;
+
+impl Decoder for LspCodec {
+    type Item = Incoming;
+    type Error = io::Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> io::Result<Option<Incoming>> {
+        loop {
+            let Some(header_len) = src.windows(4).position(|window| window == b"\r\n\r\n") else {
+                return Ok(None);
+            };
+            let body_start = header_len + 4;
+            let content_length = String::from_utf8_lossy(&src[..header_len])
+                .lines()
+                .find_map(|line| line.strip_prefix("Content-Length: ")?.trim().parse::<usize>().ok());
+            let Some(content_length) = content_length else {
+                tracing::warn!("Skipping LSP message without a Content-Length header");
+                src.advance(body_start);
+                continue;
+            };
+            if src.len() < body_start + content_length {
+                src.reserve(body_start + content_length - src.len());
+                return Ok(None);
             }
-            Ok(None) => break,
-            Err(err) => {
-                tracing::warn!(%err, "Error reading LSP message");
+            let frame = src.split_to(body_start + content_length);
+            match serde_json::from_slice(&frame[body_start..]) {
+                Ok(message) => return Ok(Some(message)),
+                Err(err) => tracing::warn!(%err, "Skipping invalid LSP message"),
             }
         }
     }
 }
 
-async fn read_lsp_message(reader: &mut BufReader<ChildStdout>) -> std::io::Result<Option<Value>> {
-    let mut content_length: Option<usize> = None;
+impl Encoder<Value> for LspCodec {
+    type Error = io::Error;
 
-    loop {
-        let mut header = String::new();
-        let bytes = reader.read_line(&mut header).await?;
-        if bytes == 0 {
-            return Ok(None);
-        }
-
-        let header = header.trim();
-        if header.is_empty() {
-            break;
-        }
-
-        if let Some(value) = header.strip_prefix("Content-Length: ") {
-            content_length = value.parse().ok();
-        }
+    fn encode(&mut self, message: Value, dst: &mut BytesMut) -> io::Result<()> {
+        let body = serde_json::to_vec(&message)?;
+        dst.extend_from_slice(format!("Content-Length: {}\r\n\r\n", body.len()).as_bytes());
+        dst.extend_from_slice(&body);
+        Ok(())
     }
-
-    let content_length =
-        content_length.ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing Content-Length"))?;
-
-    let mut buf = vec![0u8; content_length];
-    reader.read_exact(&mut buf).await?;
-
-    serde_json::from_slice(&buf).map(Some).map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))
-}
-
-async fn write_lsp_message(stdin: &mut ChildStdin, msg: &Value) -> std::io::Result<()> {
-    let content = serde_json::to_string(msg)?;
-    let header = format!("Content-Length: {}\r\n\r\n", content.len());
-    stdin.write_all(header.as_bytes()).await?;
-    stdin.write_all(content.as_bytes()).await?;
-    stdin.flush().await
 }
