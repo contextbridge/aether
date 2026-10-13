@@ -127,39 +127,28 @@ impl BedrockProvider {
         let (system_blocks, messages) = map_messages(context.messages(), cache_point.as_ref())?;
         let settings = context.model_settings();
         let max_tokens = settings.max_tokens.and_then(|m| i32::try_from(m).ok()).unwrap_or(DEFAULT_MAX_TOKENS);
-        let mut inference_config = InferenceConfiguration::builder().max_tokens(max_tokens);
+        let inference_config = InferenceConfiguration::builder()
+            .max_tokens(max_tokens)
+            .set_temperature(settings.temperature)
+            .set_top_p(settings.top_p)
+            .build();
+        let tool_config =
+            (!context.tools().is_empty()).then(|| map_tools(context.tools(), cache_point.as_ref())).transpose()?;
 
-        if let Some(temp) = settings.temperature {
-            inference_config = inference_config.temperature(temp);
-        }
+        info!(
+            model = %self.model,
+            inference_profile_arn = ?self.inference_profile_arn,
+            "Sending Bedrock converse_stream request"
+        );
 
-        if let Some(top_p) = settings.top_p {
-            inference_config = inference_config.top_p(top_p);
-        }
-
-        let inference_config = inference_config.build();
-
-        let mut request = self
+        let request = self
             .client
             .converse_stream()
             .model_id(self.request_model_id())
             .set_messages(Some(messages))
-            .inference_config(inference_config);
-
-        if !system_blocks.is_empty() {
-            request = request.set_system(Some(system_blocks));
-        }
-
-        if !context.tools().is_empty() {
-            let tool_config = map_tools(context.tools(), cache_point.as_ref())?;
-            request = request.tool_config(tool_config);
-        }
-
-        if let Some(arn) = self.inference_profile_arn.as_deref() {
-            info!(model = %self.model, inference_profile_arn = %arn, "Sending Bedrock converse_stream request");
-        } else {
-            info!(model = %self.model, "Sending Bedrock converse_stream request");
-        }
+            .set_system((!system_blocks.is_empty()).then_some(system_blocks))
+            .inference_config(inference_config)
+            .set_tool_config(tool_config);
 
         let response = request.send().await.map_err(|e| {
             error!(model = %self.model, error = ?e, "Bedrock API error");

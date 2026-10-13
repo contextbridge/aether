@@ -124,8 +124,9 @@ impl AnthropicProvider {
         headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         if self.auth_mode != ProviderAuthMode::None {
-            let api_key = self.get_api_key()?;
-            headers.insert("x-api-key", HeaderValue::from_str(&api_key)?);
+            let mut api_key = HeaderValue::from_str(&self.get_api_key()?)?;
+            api_key.set_sensitive(true);
+            headers.insert("x-api-key", api_key);
         }
         Ok(headers)
     }
@@ -140,7 +141,7 @@ impl AnthropicProvider {
             serde_json::to_string(&request).unwrap_or_else(|_| "<failed to serialize>".to_string())
         );
 
-        debug!("Anthropic request headers: {}", format_headers(&headers));
+        debug!(?headers, "Anthropic request headers");
         open_sse(self.client.post(&url).headers(headers).json(&request), anthropic_code).await
     }
 }
@@ -197,25 +198,6 @@ fn effort_to_budget_tokens(effort: ReasoningEffort) -> Option<u32> {
         ReasoningEffort::High | ReasoningEffort::Xhigh => 10240,
         ReasoningEffort::Max => 32768,
     })
-}
-
-fn should_redact_header(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    lower == "authorization" || lower == "x-api-key" || lower.contains("secret") || lower.contains("token")
-}
-
-fn format_headers(headers: &header::HeaderMap) -> String {
-    let mut parts = Vec::new();
-    for (name, value) in headers {
-        let name_str = name.as_str();
-        let value_str = if should_redact_header(name_str) {
-            "<redacted>".to_string()
-        } else {
-            value.to_str().unwrap_or("<non-utf8>").to_string()
-        };
-        parts.push(format!("{name_str}={value_str}"));
-    }
-    parts.join(", ")
 }
 
 #[cfg(test)]
@@ -286,6 +268,8 @@ mod tests {
         let provider = AnthropicProvider::new(Some("test-api-key".to_string()));
         let headers = provider.build_headers().expect("headers");
         assert_eq!(headers.get("x-api-key").and_then(|value| value.to_str().ok()), Some("test-api-key"));
+        assert!(headers.get("x-api-key").is_some_and(HeaderValue::is_sensitive));
+        assert!(!format!("{headers:?}").contains("test-api-key"));
         assert!(headers.get(AUTHORIZATION).is_none());
         assert!(headers.get("anthropic-beta").is_none());
     }
@@ -431,42 +415,5 @@ mod tests {
     fn test_anthropic_provider_display_name_default() {
         let provider = AnthropicProvider::new(Some("test-api-key".to_string()));
         assert_eq!(provider.display_name(), "Anthropic (claude-sonnet-4-5-20250929)");
-    }
-
-    #[test]
-    fn format_headers_redacts_x_api_key() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-api-key", HeaderValue::from_static("sk-secret-123"));
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-
-        let formatted = format_headers(&headers);
-        assert!(formatted.contains("x-api-key=<redacted>"));
-        assert!(formatted.contains("content-type=application/json"));
-        assert!(!formatted.contains("sk-secret-123"));
-    }
-
-    #[test]
-    fn format_headers_redacts_authorization() {
-        let mut headers = HeaderMap::new();
-        headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer token123"));
-
-        let formatted = format_headers(&headers);
-        assert!(formatted.contains("authorization=<redacted>"));
-        assert!(!formatted.contains("token123"));
-    }
-
-    #[test]
-    fn format_headers_redacts_secret_and_token_headers() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-client-secret", HeaderValue::from_static("mysecret"));
-        headers.insert("x-auth-token", HeaderValue::from_static("mytoken"));
-        headers.insert("accept", HeaderValue::from_static("text/plain"));
-
-        let formatted = format_headers(&headers);
-        assert!(formatted.contains("x-client-secret=<redacted>"));
-        assert!(formatted.contains("x-auth-token=<redacted>"));
-        assert!(formatted.contains("accept=text/plain"));
-        assert!(!formatted.contains("mysecret"));
-        assert!(!formatted.contains("mytoken"));
     }
 }
