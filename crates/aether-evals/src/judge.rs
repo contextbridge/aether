@@ -463,19 +463,13 @@ mod tests {
     use super::*;
     use aether_core::events::{AgentEvent, StreamState, TurnOutcome};
     use llm::testing::FakeLlmProvider;
-    use llm::{LlmError, ProviderError, ToolCallRequest, ToolCallResult};
+    use llm::{LlmError, ProviderError};
 
     const VALID_RESPONSE: &str = r#"{"criteria":[{"id":"behavior","score":1.0,"reason":"correct"},{"id":"clarity","score":0.5,"reason":"brief"}],"overall_reason":"good"}"#;
 
     #[test]
     fn transcript_lines_label_each_message_kind() {
-        let call = AgentEvent::Tool(ToolEvent::Call {
-            request: ToolCallRequest {
-                id: "call_1".to_string(),
-                name: "bash".to_string(),
-                arguments: "{}".to_string(),
-            },
-        });
+        let call = AgentEvent::tool_call("call_1", "bash", "{}");
 
         assert_eq!(
             get_transcript_line(&AgentEvent::text("msg_1", "hi", StreamState::Complete), 100).unwrap(),
@@ -494,15 +488,7 @@ mod tests {
 
     #[test]
     fn tool_result_transcript_uses_result_arguments() {
-        let message = AgentEvent::Tool(ToolEvent::Result {
-            result: ToolCallResult {
-                id: "call_1".to_string(),
-                name: "coding__read_file".to_string(),
-                arguments: r#"["Cargo.toml"]"#.to_string(),
-                result: "file contents".to_string(),
-            },
-            result_meta: None,
-        });
+        let message = AgentEvent::tool_result("call_1", "coding__read_file", r#"["Cargo.toml"]"#, "file contents");
 
         assert_eq!(get_transcript_line(&message, 100).unwrap(), "[tool-result] coding__read_file: file contents");
     }
@@ -537,13 +523,7 @@ mod tests {
     #[test]
     fn judge_builder_renders_transcript_context() {
         let messages = vec![
-            AgentEvent::Tool(ToolEvent::Call {
-                request: ToolCallRequest {
-                    id: "call_1".to_string(),
-                    name: "bash".to_string(),
-                    arguments: "{}".to_string(),
-                },
-            }),
+            AgentEvent::tool_call("call_1", "bash", "{}"),
             AgentEvent::text("msg_1", "all done", StreamState::Complete),
         ];
 

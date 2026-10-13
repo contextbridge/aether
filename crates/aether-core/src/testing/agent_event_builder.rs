@@ -1,6 +1,5 @@
 use crate::events::{AgentEvent, StreamState, ToolEvent};
 use crate::mcp::tool_bridge::encode_structured;
-use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
 use serde::Serialize;
 
 pub fn agent_event(message_id: &str) -> AgentEventBuilder {
@@ -38,15 +37,7 @@ impl AgentEventBuilder {
 
         self.push_tool_call(tool_call_id, name, &request_json);
 
-        self.chunks.push(AgentEvent::Tool(ToolEvent::Result {
-            result: ToolCallResult {
-                id: tool_call_id.to_string(),
-                name: name.to_string(),
-                arguments: request_json,
-                result: encode_structured(&result_value),
-            },
-            result_meta: None,
-        }));
+        self.chunks.push(AgentEvent::tool_result(tool_call_id, name, &request_json, &encode_structured(&result_value)));
 
         self
     }
@@ -64,14 +55,7 @@ impl AgentEventBuilder {
 
         self.push_tool_call(tool_call_id, name, &request_json);
 
-        self.chunks.push(AgentEvent::Tool(ToolEvent::Error {
-            error: ToolCallError {
-                id: tool_call_id.to_string(),
-                name: name.to_string(),
-                arguments: Some(request_json),
-                error: error_result,
-            },
-        }));
+        self.chunks.push(AgentEvent::tool_error(tool_call_id, name, &request_json, &error_result));
 
         self
     }
@@ -86,13 +70,7 @@ impl AgentEventBuilder {
         self.chunks.extend([
             AgentEvent::Tool(ToolEvent::InputStarted { id: tool_call_id.to_string(), name: name.to_string() }),
             AgentEvent::Tool(ToolEvent::InputDelta { id: tool_call_id.to_string(), chunk: arguments.to_string() }),
-            AgentEvent::Tool(ToolEvent::Call {
-                request: ToolCallRequest {
-                    id: tool_call_id.to_string(),
-                    name: name.to_string(),
-                    arguments: arguments.to_string(),
-                },
-            }),
+            AgentEvent::tool_call(tool_call_id, name, arguments),
         ]);
     }
 }

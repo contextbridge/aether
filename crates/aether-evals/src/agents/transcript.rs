@@ -139,8 +139,8 @@ mod tests {
     use super::*;
     use crate::{Agent, FakeAgent, Task};
     use aether_core::events::TurnEvent;
+    use llm::TokenUsage;
     use llm::testing::session_usage_event;
-    use llm::{TokenUsage, ToolCallRequest, ToolCallResult};
 
     #[tokio::test]
     async fn transcript_from_stream() {
@@ -206,20 +206,10 @@ mod tests {
     }
 
     fn tool_call(name: &str) -> AgentEvent {
-        AgentEvent::Tool(ToolEvent::Call {
-            request: ToolCallRequest { id: name.to_string(), name: name.to_string(), arguments: "{}".to_string() },
-        })
+        AgentEvent::tool_call(name, name, "{}")
     }
 
     fn tool_result(name: &str) -> AgentEvent {
-        AgentEvent::Tool(ToolEvent::Result {
-            result: ToolCallResult {
-                id: name.to_string(),
-                name: name.to_string(),
-                arguments: "{}".to_string(),
-                result: "ok".to_string(),
-            },
-            result_meta: None,
-        })
+        AgentEvent::tool_result(name, name, "{}", "ok")
     }
 }
