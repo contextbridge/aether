@@ -22,6 +22,10 @@ pub fn available_models() -> Vec<LlmModel> {
         .collect()
 }
 
+pub fn is_provider_env_var(key: &str) -> bool {
+    LlmModel::ALL_REQUIRED_ENV_VARS.contains(&key) || OPTIONAL_PROVIDER_ENV_VARS.contains(&key)
+}
+
 /// Returns available catalog models plus any locally discovered models.
 pub async fn get_local_models() -> Vec<LlmModel> {
     let mut models = available_models();
@@ -29,6 +33,17 @@ pub async fn get_local_models() -> Vec<LlmModel> {
     models.extend(local);
     models
 }
+
+const OPTIONAL_PROVIDER_ENV_VARS: &[&str] = &[
+    "OLLAMA_HOST",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_BEARER_TOKEN_BEDROCK",
+    "AWS_DEFAULT_REGION",
+    "AWS_PROFILE",
+    "AWS_REGION",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+];
 
 #[cfg(test)]
 mod tests {

@@ -48,10 +48,6 @@ enum MainError {
 #[command(about = "Aether AI coding agent")]
 #[command(version)]
 struct Cli {
-    /// Run inside a Docker sandbox using the given image
-    #[arg(long, global = true)]
-    sandbox_image: Option<String>,
-
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -84,10 +80,6 @@ fn main() -> ExitCode {
     aws_lc_rs::default_provider().install_default().expect("failed to install the Rustls AWS-LC crypto provider");
 
     let cli = Cli::parse();
-
-    if let Some(image) = cli.sandbox_image {
-        return aether_cli::sandbox::exec_in_container(&image);
-    }
 
     let rt = Runtime::new().expect("Failed to create tokio runtime");
     let result: Result<ExitCode, MainError> = match cli.command {
