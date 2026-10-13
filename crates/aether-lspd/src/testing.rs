@@ -11,7 +11,6 @@ use tokio::sync::oneshot;
 use crate::LanguageId;
 use crate::daemon::LspDaemon;
 use crate::error::DaemonError;
-use crate::language_catalog::server_kind_for_language;
 use crate::socket_path::{lockfile_path, socket_path};
 use crate::uri::path_to_uri;
 pub use utils::testing::TestWorkspace;
@@ -95,11 +94,10 @@ pub enum TestDaemonError {
 /// This mutates process-global environment variables. Call it only from an isolated test binary
 /// before starting any daemon or other thread that can read language-server configuration.
 pub unsafe fn configure_fake_server(language: LanguageId, extra_args: &[&str]) {
-    let server_kind = server_kind_for_language(language).expect("language should have a configured server");
+    let env_key = language.server().expect("language should have a configured server").env_key;
     let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/common/fake_lsp_server.py");
     let mut args = vec![script.to_string_lossy().into_owned()];
     args.extend(extra_args.iter().map(ToString::to_string));
-    let env_key = server_kind.env_key();
 
     unsafe {
         std::env::set_var(format!("AETHER_LSPD_SERVER_COMMAND_{env_key}"), "python3");
