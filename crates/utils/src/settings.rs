@@ -1,3 +1,4 @@
+use crate::path::home_dir;
 use serde::{Serialize, de::DeserializeOwned};
 use std::fs;
 use std::io::{self, Write};
@@ -11,12 +12,7 @@ pub struct SettingsStore {
 
 impl SettingsStore {
     pub fn new(env_override: &str, dot_dir: &str) -> Option<Self> {
-        let home = resolve_home(
-            std::env::var(env_override).ok().as_deref(),
-            std::env::var("HOME").ok().as_deref(),
-            std::env::var("USERPROFILE").ok().as_deref(),
-            dot_dir,
-        )?;
+        let home = resolve_home(std::env::var(env_override).ok().as_deref(), home_dir().as_deref(), dot_dir)?;
         Some(Self { home })
     }
 
@@ -38,28 +34,17 @@ impl SettingsStore {
 }
 
 pub fn aether_home() -> Option<PathBuf> {
-    resolve_home(
-        std::env::var("AETHER_HOME").ok().as_deref(),
-        std::env::var("HOME").ok().as_deref(),
-        std::env::var("USERPROFILE").ok().as_deref(),
-        ".aether",
-    )
+    resolve_home(std::env::var("AETHER_HOME").ok().as_deref(), home_dir().as_deref(), ".aether")
 }
 
-pub fn resolve_home(
-    env_override: Option<&str>,
-    home: Option<&str>,
-    userprofile: Option<&str>,
-    dot_dir: &str,
-) -> Option<PathBuf> {
+pub fn resolve_home(env_override: Option<&str>, home: Option<&Path>, dot_dir: &str) -> Option<PathBuf> {
     if let Some(value) = env_override
         && !value.trim().is_empty()
     {
         return Some(PathBuf::from(value));
     }
 
-    let fallback_home = home.or(userprofile)?;
-    Some(PathBuf::from(fallback_home).join(dot_dir))
+    home.map(|home| home.join(dot_dir))
 }
 
 fn load_or_create_at<T: Serialize + DeserializeOwned + Default>(path: &Path) -> T {
@@ -160,31 +145,25 @@ mod tests {
 
     #[test]
     fn resolve_home_prefers_env_override() {
-        let resolved = resolve_home(Some("/tmp/custom"), Some("/home/test"), None, ".app").unwrap();
+        let resolved = resolve_home(Some("/tmp/custom"), Some(Path::new("/home/test")), ".app").unwrap();
         assert_eq!(resolved, PathBuf::from("/tmp/custom"));
     }
 
     #[test]
     fn resolve_home_uses_home_fallback() {
-        let resolved = resolve_home(None, Some("/home/test"), None, ".app").unwrap();
+        let resolved = resolve_home(None, Some(Path::new("/home/test")), ".app").unwrap();
         assert_eq!(resolved, PathBuf::from("/home/test/.app"));
     }
 
     #[test]
-    fn resolve_home_uses_userprofile_fallback() {
-        let resolved = resolve_home(None, None, Some("C:\\Users\\test"), ".app").unwrap();
-        assert_eq!(resolved, PathBuf::from("C:\\Users\\test/.app"));
-    }
-
-    #[test]
     fn resolve_home_ignores_empty_override() {
-        let resolved = resolve_home(Some("  "), Some("/home/test"), None, ".app").unwrap();
+        let resolved = resolve_home(Some("  "), Some(Path::new("/home/test")), ".app").unwrap();
         assert_eq!(resolved, PathBuf::from("/home/test/.app"));
     }
 
     #[test]
     fn resolve_home_returns_none_when_no_home() {
-        assert!(resolve_home(None, None, None, ".app").is_none());
+        assert!(resolve_home(None, None, ".app").is_none());
     }
 
     #[test]

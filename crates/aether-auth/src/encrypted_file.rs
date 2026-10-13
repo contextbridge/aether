@@ -3,7 +3,6 @@ use crate::error::OAuthError;
 use age::scrypt::{Identity, Recipient};
 use age::secrecy::SecretString;
 use async_trait::async_trait;
-use dirs::home_dir;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -11,6 +10,7 @@ use std::env::var;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use utils::settings::aether_home;
 
 const DEFAULT_PASSWORD_ENV: &str = "AETHER_CREDENTIALS_PASSWORD";
 
@@ -96,9 +96,9 @@ impl EncryptedFileOAuthCredentialStorage {
 }
 
 fn default_path() -> Result<PathBuf, OAuthError> {
-    home_dir().map(|home| home.join(".aether").join("credentials.enc")).ok_or_else(|| {
+    aether_home().map(|home| home.join("credentials.enc")).ok_or_else(|| {
         OAuthError::CredentialStore(
-            "Could not determine the home directory for the encrypted credential file".to_string(),
+            "Could not determine the Aether home directory for the encrypted credential file".to_string(),
         )
     })
 }

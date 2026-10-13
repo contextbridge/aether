@@ -1,4 +1,4 @@
-use utils::SettingsStore;
+use utils::settings::aether_home;
 
 use crate::agent_config::AgentConfig;
 use crate::error::SettingsError;
@@ -26,7 +26,7 @@ pub enum CredentialsStoreConfig {
     /// Holds credentials in an encrypted file
     EncryptedFile {
         /// File path for the encrypted credential blob. Defaults to
-        /// `.aether/credentials.enc` in the Aether home directory when unset.
+        /// `credentials.enc` in the Aether home directory when unset.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<PathBuf>,
         /// Environment variable name to read the passphrase from. Uses
@@ -40,7 +40,7 @@ const PROJECT_SETTINGS_PATH: &str = ".aether/settings.json";
 const USER_SETTINGS_FILENAME: &str = "settings.json";
 
 pub fn user_settings_path() -> Option<PathBuf> {
-    SettingsStore::new("AETHER_HOME", ".aether").map(|store| store.home().join(USER_SETTINGS_FILENAME))
+    aether_home().map(|home| home.join(USER_SETTINGS_FILENAME))
 }
 
 pub fn user_settings_exist() -> bool {
@@ -358,8 +358,7 @@ impl AetherSettings {
 }
 
 fn default_sources(project_root: &Path) -> Vec<AetherSettingsSource> {
-    let aether_home = SettingsStore::new("AETHER_HOME", ".aether").map(|store| store.home().to_path_buf());
-    default_sources_for_home(project_root, aether_home.as_deref())
+    default_sources_for_home(project_root, aether_home().as_deref())
 }
 
 fn default_sources_for_home(project_root: &Path, aether_home: Option<&Path>) -> Vec<AetherSettingsSource> {

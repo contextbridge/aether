@@ -25,7 +25,7 @@ pub mod tool_result_truncator;
 pub mod variables;
 
 pub use name_pattern::matches_name_pattern;
-pub use path::home_relative_path;
+pub use path::{home_dir, home_relative_path};
 pub use reasoning::ReasoningEffort;
 pub use resource_path::{PathOrObject, ResourcePath};
 pub use settings::SettingsStore;

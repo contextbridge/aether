@@ -3,10 +3,11 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+use utils::settings::aether_home;
 
 /// Persistent registry of managed workspaces, grouped by repository identity.
 ///
-/// Stored as a JSON array at `~/.aether/workspaces.json`.
+/// Stored as a JSON array at `$AETHER_HOME/workspaces.json`.
 pub struct WorkspaceRegistry {
     path: PathBuf,
 }
@@ -29,8 +30,8 @@ pub enum RegistryError {
 impl WorkspaceRegistry {
     pub fn new() -> io::Result<Self> {
         let home =
-            dirs::home_dir().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Home directory not found"))?;
-        Ok(Self::from_path(home.join(".aether/workspaces.json")))
+            aether_home().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Aether home directory not found"))?;
+        Ok(Self::from_path(home.join("workspaces.json")))
     }
 
     pub fn from_path(path: PathBuf) -> Self {
