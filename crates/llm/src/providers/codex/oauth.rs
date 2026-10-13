@@ -5,7 +5,7 @@ use aether_auth::{
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use oauth2::basic::BasicClient;
-use oauth2::{AuthUrl, AuthorizationCode, ClientId, PkceCodeChallenge, RedirectUrl, TokenUrl};
+use oauth2::{AuthUrl, AuthorizationCode, ClientId, CsrfToken, PkceCodeChallenge, RedirectUrl, Scope, TokenUrl};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use url::Url;
@@ -14,30 +14,24 @@ const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTHORIZE_URL: &str = "https://auth.openai.com/oauth/authorize";
 const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
-const SCOPE: &str = "openid profile email offline_access";
+const SCOPES: [&str; 4] = ["openid", "profile", "email", "offline_access"];
 
 /// Run the full Codex OAuth flow: open browser, capture callback, exchange token, save credentials.
-///
 pub async fn perform_codex_oauth_flow(store: &dyn OAuthCredentialStorage) -> Result<(), LlmError> {
-    let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
-    let state = generate_random_state();
+    let oauth_client = BasicClient::new(ClientId::new(CLIENT_ID.to_string()))
+        .set_auth_uri(AuthUrl::new(AUTHORIZE_URL.to_string()).expect("hardcoded Codex authorize URL is valid"))
+        .set_token_uri(TokenUrl::new(TOKEN_URL.to_string()).expect("hardcoded Codex token URL is valid"))
+        .set_redirect_uri(RedirectUrl::new(REDIRECT_URI.to_string()).expect("hardcoded Codex redirect URI is valid"));
 
-    let auth_url = Url::parse_with_params(
-        AUTHORIZE_URL,
-        &[
-            ("response_type", "code"),
-            ("client_id", CLIENT_ID),
-            ("redirect_uri", REDIRECT_URI),
-            ("scope", SCOPE),
-            ("code_challenge", pkce_challenge.as_str()),
-            ("code_challenge_method", "S256"),
-            ("state", &state),
-            ("id_token_add_organizations", "true"),
-            ("codex_cli_simplified_flow", "true"),
-            ("originator", "codex_cli_rs"),
-        ],
-    )
-    .map_err(|e| OAuthError::TokenExchange(format!("Failed to build auth URL: {e}")))?;
+    let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+    let (auth_url, state) = oauth_client
+        .authorize_url(CsrfToken::new_random)
+        .add_scopes(SCOPES.map(|scope| Scope::new(scope.to_string())))
+        .set_pkce_challenge(pkce_challenge)
+        .add_extra_param("id_token_add_organizations", "true")
+        .add_extra_param("codex_cli_simplified_flow", "true")
+        .add_extra_param("originator", "codex_cli_rs")
+        .url();
 
     // Port 1455 is hardcoded because the Codex API has a fixed redirect URI
     // (http://localhost:1455/auth/callback) registered with OpenAI's OAuth server.
@@ -45,33 +39,12 @@ pub async fn perform_codex_oauth_flow(store: &dyn OAuthCredentialStorage) -> Res
     let callback_url = handler.authorize(auth_url.as_str()).await?;
     let callback = Url::parse(&callback_url)
         .map_err(|error| OAuthError::InvalidCallback(format!("Invalid callback URL: {error}")))?;
-    let mut code = None;
-    let mut callback_state = None;
-    for (name, value) in callback.query_pairs() {
-        match name.as_ref() {
-            "code" => code = Some(value.into_owned()),
-            "state" => callback_state = Some(value.into_owned()),
-            _ => {}
-        }
-    }
-    if callback_state.as_deref() != Some(&state) {
+    let param = |name: &str| callback.query_pairs().find(|(key, _)| key == name).map(|(_, value)| value.into_owned());
+    if param("state").as_deref() != Some(state.secret().as_str()) {
         return Err(OAuthError::StateMismatch.into());
     }
-    let code = code.ok_or_else(|| OAuthError::InvalidCallback("No authorization code in callback".to_string()))?;
-
-    let oauth_client = BasicClient::new(ClientId::new(CLIENT_ID.to_string()))
-        .set_auth_uri(
-            AuthUrl::new(AUTHORIZE_URL.to_string())
-                .map_err(|e| OAuthError::TokenExchange(format!("invalid auth URL: {e}")))?,
-        )
-        .set_token_uri(
-            TokenUrl::new(TOKEN_URL.to_string())
-                .map_err(|e| OAuthError::TokenExchange(format!("invalid token URL: {e}")))?,
-        )
-        .set_redirect_uri(
-            RedirectUrl::new(REDIRECT_URI.to_string())
-                .map_err(|e| OAuthError::TokenExchange(format!("invalid redirect URI: {e}")))?,
-        );
+    let code =
+        param("code").ok_or_else(|| OAuthError::InvalidCallback("No authorization code in callback".to_string()))?;
 
     let http_client = oauth_http_client()?;
 
@@ -186,10 +159,6 @@ pub fn extract_account_id(access_token: &str) -> Result<String, LlmError> {
     Ok(account_id.to_string())
 }
 
-fn generate_random_state() -> String {
-    uuid::Uuid::new_v4().to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,52 +220,6 @@ mod tests {
     fn extract_account_id_invalid_base64() {
         let result = extract_account_id("header.!!!invalid!!!.signature");
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn auth_url_is_well_formed() {
-        let (pkce_challenge, _) = PkceCodeChallenge::new_random_sha256();
-        let state = "test-state";
-
-        let auth_url = Url::parse_with_params(
-            AUTHORIZE_URL,
-            &[
-                ("response_type", "code"),
-                ("client_id", CLIENT_ID),
-                ("redirect_uri", REDIRECT_URI),
-                ("scope", SCOPE),
-                ("code_challenge", pkce_challenge.as_str()),
-                ("code_challenge_method", "S256"),
-                ("state", state),
-                ("id_token_add_organizations", "true"),
-                ("codex_cli_simplified_flow", "true"),
-                ("originator", "codex_cli_rs"),
-            ],
-        )
-        .unwrap();
-
-        let url_str = auth_url.as_str();
-        assert!(url_str.starts_with(AUTHORIZE_URL));
-        assert!(url_str.contains("client_id="));
-        assert!(url_str.contains("redirect_uri="));
-        assert!(url_str.contains("scope="));
-        assert!(url_str.contains("code_challenge="));
-        assert!(url_str.contains("state=test-state"));
-    }
-
-    #[test]
-    fn generate_random_state_is_valid_uuid() {
-        let state = generate_random_state();
-        assert_ne!(state, "");
-        assert!(uuid::Uuid::parse_str(&state).is_ok());
-    }
-
-    #[test]
-    fn oauth_constants_are_valid() {
-        assert!(AUTHORIZE_URL.starts_with("https://"));
-        assert!(TOKEN_URL.starts_with("https://"));
-        assert!(REDIRECT_URI.starts_with("http://localhost:"));
-        assert!(SCOPE.contains("openid"));
     }
 
     #[tokio::test]
