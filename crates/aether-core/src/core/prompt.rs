@@ -228,18 +228,6 @@ impl Prompt {
         }
     }
 
-    /// Resolve multiple `SystemPrompts` and join them with double newlines
-    pub async fn build_all(prompts: &[Prompt]) -> Result<String> {
-        let mut parts = Vec::with_capacity(prompts.len());
-        for p in prompts {
-            let part = p.build().await?;
-            if !part.is_empty() {
-                parts.push(part);
-            }
-        }
-        Ok(parts.join("\n\n"))
-    }
-
     async fn resolve_file(path: &Path) -> Result<String> {
         fs::read_to_string(path)
             .await
@@ -368,44 +356,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn build_all_concatenates_prompts() {
-        let prompts = vec![Prompt::text("Part one"), Prompt::text("Part two")];
-        let result = Prompt::build_all(&prompts).await.unwrap();
-        assert_eq!(result, "Part one\n\nPart two");
-    }
-
-    #[tokio::test]
-    async fn build_all_concatenates_multiple_files() {
+    async fn prompt_cache_concatenates_files() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("AGENTS.md"), "Agent instructions").unwrap();
-        std::fs::write(dir.path().join("SYSTEM.md"), "System prompt").unwrap();
+        write(dir.path().join("AGENTS.md"), "Agent instructions").unwrap();
+        write(dir.path().join("SYSTEM.md"), "System prompt").unwrap();
 
-        let prompts = vec![
+        let mut cache = PromptCache::new(vec![
             Prompt::file(dir.path().join("AGENTS.md"), dir.path()),
             Prompt::file(dir.path().join("SYSTEM.md"), dir.path()),
-        ];
-        let result = Prompt::build_all(&prompts).await.unwrap();
-        assert!(result.contains("Agent instructions"));
-        assert!(result.contains("System prompt"));
-        assert!(result.contains("\n\n"));
+        ]);
+
+        assert_eq!(cache.render().await.unwrap(), "Agent instructions\n\nSystem prompt");
     }
 
     #[tokio::test]
-    async fn build_all_skips_empty_parts() {
-        let prompts = vec![Prompt::text("Part one"), Prompt::text(""), Prompt::text("Part two")];
-        let result = Prompt::build_all(&prompts).await.unwrap();
-        assert_eq!(result, "Part one\n\nPart two");
+    async fn prompt_cache_skips_empty_prompts() {
+        let mut cache = PromptCache::new(vec![Prompt::text("Part one"), Prompt::text(""), Prompt::text("Part two")]);
+        assert_eq!(cache.render().await.unwrap(), "Part one\n\nPart two");
     }
 
     #[tokio::test]
-    async fn prompt_cache_render_matches_build_all_on_first_render() {
-        let prompts = vec![
-            Prompt::text("first"),
-            Prompt::McpInstructions(instructions(&[("srv", "body")])),
-            Prompt::text("last"),
-        ];
-        let expected = Prompt::build_all(&prompts).await.unwrap();
-        let mut cache = PromptCache::new(prompts);
+    async fn prompt_cache_renders_mcp_instructions_in_place() {
+        let mcp = Prompt::McpInstructions(instructions(&[("srv", "body")]));
+        let expected = format!("first\n\n{}\n\nlast", mcp.build().await.unwrap());
+
+        let mut cache = PromptCache::new(vec![Prompt::text("first"), mcp, Prompt::text("last")]);
+
         assert_eq!(cache.render().await.unwrap(), expected);
     }
 

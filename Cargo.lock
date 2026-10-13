@@ -118,8 +118,6 @@ dependencies = [
  "aether-utils",
  "async-stream",
  "base16ct 1.0.0",
- "chrono",
- "clap",
  "futures",
  "glob",
  "http",

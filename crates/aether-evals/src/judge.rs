@@ -108,8 +108,8 @@ pub enum JudgeError {
         raw_response: String,
     },
 
-    #[error("judge returned invalid judgment: {reason}\nRaw response: {raw_response}")]
-    InvalidJudgment { reason: String, raw_response: String },
+    #[error("judge returned invalid judgment: {0}")]
+    InvalidJudgment(String),
 }
 
 impl Judge {
@@ -132,7 +132,7 @@ impl Judge {
         for criterion in response.criteria {
             let id = criterion.id.clone();
             if responses.insert(id.clone(), criterion).is_some() {
-                return Err(invalid_judgment(format!("duplicate response criterion id `{id}`"), ""));
+                return Err(JudgeError::InvalidJudgment(format!("duplicate response criterion id `{id}`")));
             }
         }
 
@@ -143,13 +143,13 @@ impl Judge {
 
         for criterion in &self.criteria {
             let Some(response) = responses.remove(&criterion.id) else {
-                return Err(invalid_judgment(format!("missing response criterion `{}`", criterion.id), ""));
+                return Err(JudgeError::InvalidJudgment(format!("missing response criterion `{}`", criterion.id)));
             };
             if !response.score.is_finite() || !(0.0..=1.0).contains(&response.score) {
-                return Err(invalid_judgment(
-                    format!("criterion `{}` score must be between 0.0 and 1.0", criterion.id),
-                    "",
-                ));
+                return Err(JudgeError::InvalidJudgment(format!(
+                    "criterion `{}` score must be between 0.0 and 1.0",
+                    criterion.id
+                )));
             }
 
             let passed = response.score >= criterion.threshold;
@@ -169,7 +169,7 @@ impl Judge {
         }
 
         if let Some(id) = responses.keys().next() {
-            return Err(invalid_judgment(format!("unknown response criterion `{id}`"), ""));
+            return Err(JudgeError::InvalidJudgment(format!("unknown response criterion `{id}`")));
         }
 
         let weighted_score = weighted_score / total_weight;
@@ -398,10 +398,6 @@ fn extract_json_object(response: &str) -> &str {
     }
 }
 
-fn invalid_judgment(reason: String, raw_response: &str) -> JudgeError {
-    JudgeError::InvalidJudgment { reason, raw_response: raw_response.to_string() }
-}
-
 fn judge_response_schema() -> String {
     serde_json::to_string_pretty(&JudgeRubricResponse::schema()).unwrap()
 }
@@ -611,7 +607,7 @@ mod tests {
 
             let error = judge.summarize(response).unwrap_err();
 
-            assert!(matches!(error, JudgeError::InvalidJudgment { .. }), "response: {raw_response}");
+            assert!(matches!(error, JudgeError::InvalidJudgment(_)), "response: {raw_response}");
         }
     }
 

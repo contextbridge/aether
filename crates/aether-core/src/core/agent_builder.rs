@@ -325,18 +325,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn system_prompt_preserves_add_order() {
-        let builder = AgentBuilder::new(Arc::new(llm::testing::FakeLlmProvider::new(vec![])))
-            .system_prompt(Prompt::text("first"))
-            .system_prompt(Prompt::text("second"))
-            .system_prompt(Prompt::text("third"));
-
-        let rendered = Prompt::build_all(&builder.prompts).await.unwrap();
-
-        assert_eq!(rendered, "first\n\nsecond\n\nthird");
-    }
-
-    #[tokio::test]
     async fn from_spec_applies_context_window_and_model_settings() {
         let settings = ModelSettings { temperature: Some(0.0), max_tokens: Some(128), ..Default::default() };
         let spec = AgentSpec {
