@@ -1,18 +1,19 @@
 use tracing::debug;
 
 use super::auth::MantleAuth;
-use crate::catalog::transport::{ModelTransport, expand_api_template};
+use crate::catalog::transport::ModelTransport;
 use crate::providers::http::{SseData, http_client};
 use crate::providers::openai_responses::mappers::{ResponsesRequestPolicy, build_wire_request};
 use crate::providers::openai_responses::transport::send;
 use crate::providers::response_stream::OpenedStream;
 use crate::{Context, LlmError, Result};
+use utils::variables::Vars;
 
 /// Transport for Bedrock models served through the `OpenAI` Responses API.
 #[derive(Clone)]
 pub struct MantleClient {
     http: reqwest::Client,
-    region: String,
+    template_vars: Vars,
     auth: MantleAuth,
     base_url_override: Option<String>,
 }
@@ -21,7 +22,7 @@ impl MantleClient {
     pub fn new(region: String, auth: MantleAuth, base_url_override: Option<String>) -> Self {
         Self {
             http: http_client(),
-            region,
+            template_vars: Vars::new().with("AWS_REGION", region.clone()).with("AWS_DEFAULT_REGION", region),
             auth,
             base_url_override: base_url_override.map(|url| url.trim_end_matches('/').to_string()),
         }
@@ -40,7 +41,9 @@ impl MantleClient {
         let ModelTransport::OpenAiResponses { base_url_template } = transport;
         let base = match &self.base_url_override {
             Some(base) => base.clone(),
-            None => self.expand(base_url_template)?,
+            None => {
+                self.template_vars.expand(base_url_template).map_err(|e| LlmError::InvalidArgument(e.to_string()))?
+            }
         };
 
         Ok(format!("{}/responses", base.trim_end_matches('/')))
@@ -60,17 +63,6 @@ impl MantleClient {
         let encoded = serde_json::to_vec(&body)?;
         let headers = self.auth.headers("POST", &url, &encoded).await?;
         send(&self.http, &url, headers, body).await
-    }
-
-    /// Resolve a catalog endpoint template. The region this client was built for
-    /// answers the AWS region placeholders; anything else comes from the process
-    /// environment.
-    fn expand(&self, template: &str) -> Result<String> {
-        expand_api_template(template, |name| match name {
-            "AWS_REGION" | "AWS_DEFAULT_REGION" => Some(self.region.clone()),
-            other => std::env::var(other).ok().filter(|value| !value.is_empty()),
-        })
-        .map_err(|e| LlmError::InvalidArgument(e.to_string()))
     }
 }
 
