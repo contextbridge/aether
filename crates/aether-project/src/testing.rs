@@ -10,8 +10,6 @@ use serde_json::{Value, json};
 use crate::prompt_file::{PromptFile, PromptTriggers};
 use crate::{AgentConfig, PromptSource};
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
-use aether_core::mcp::{McpConfig, ToolFilter};
-use llm::{ModelSettings, ProviderConnectionOverrides};
 pub use utils::testing::TestWorkspace;
 
 /// The model id every shared agent fixture resolves to.
@@ -94,14 +92,8 @@ pub fn fake_spec(name: &str, exposure: AgentSpecExposure) -> AgentSpec {
         name: name.to_string(),
         description: format!("{name} agent"),
         model: DEFAULT_MODEL.to_string(),
-        reasoning_effort: None,
-        model_settings: ModelSettings::default(),
-        context_window: None,
-        prompts: vec![],
-        provider_connections: ProviderConnectionOverrides::default(),
-        mcp: McpConfig::default(),
         exposure,
-        tools: ToolFilter::default(),
+        ..AgentSpec::default()
     }
 }
 

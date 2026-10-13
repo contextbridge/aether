@@ -245,7 +245,6 @@ mod tests {
     use super::*;
     use aether_auth::FakeOAuthCredentialStore;
     use aether_core::agent_spec::AgentSpecExposure;
-    use aether_core::mcp::{McpConfig, ToolFilter};
     use agent_client_protocol::schema::v2::{SessionConfigKind, SessionConfigSelectOption, SessionConfigSelectOptions};
     use llm::catalog::{AnthropicModel, BedrockFoundationModel, BedrockModel, DeepSeekModel, GeminiModel};
 
@@ -265,13 +264,8 @@ mod tests {
             description: name.to_lowercase(),
             model: model.to_string(),
             reasoning_effort: effort,
-            model_settings: llm::ModelSettings::default(),
-            context_window: None,
-            prompts: vec![],
-            provider_connections: llm::ProviderConnectionOverrides::default(),
-            mcp: McpConfig::default(),
             exposure: AgentSpecExposure::both(),
-            tools: ToolFilter::default(),
+            ..AgentSpec::default()
         }
     }
 

@@ -11,7 +11,7 @@ use llm::{LlmModel, ModelSettings, ProviderConnectionOverrides, ReasoningEffort}
 ///
 /// This type is produced by validating and resolving authored agent configuration.
 /// All validation happens before constructing these runtime types.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AgentSpec {
     /// The canonical lookup key for this agent.
     pub name: String,
@@ -50,19 +50,14 @@ impl AgentSpec {
             description: "Default agent".to_string(),
             model: model.to_string(),
             reasoning_effort,
-            model_settings: ModelSettings::default(),
-            context_window: None,
             prompts,
-            provider_connections: ProviderConnectionOverrides::default(),
-            mcp: McpConfig::default(),
-            exposure: AgentSpecExposure::none(),
-            tools: ToolFilter::default(),
+            ..Self::default()
         }
     }
 }
 
 /// Defines how an agent can be invoked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct AgentSpecExposure {
     /// Whether this agent can be invoked by users (e.g., as an ACP mode).
     pub user_invocable: bool,
@@ -71,15 +66,6 @@ pub struct AgentSpecExposure {
 }
 
 impl AgentSpecExposure {
-    /// Create an exposure that is neither user nor agent invocable.
-    ///
-    /// Used internally for synthesized default specs (e.g., no-mode sessions).
-    /// Not intended for authored agent definitions — all authored agents must
-    /// have at least one invocation surface.
-    pub fn none() -> Self {
-        Self { user_invocable: false, agent_invocable: false }
-    }
-
     /// Create an exposure that is only user invocable.
     pub fn user_only() -> Self {
         Self { user_invocable: true, agent_invocable: false }
@@ -113,6 +99,6 @@ mod tests {
         assert!(spec.reasoning_effort.is_none());
         assert_eq!(spec.prompts.len(), 1);
         assert!(spec.mcp.is_empty());
-        assert_eq!(spec.exposure, AgentSpecExposure::none());
+        assert_eq!(spec.exposure, AgentSpecExposure::default());
     }
 }

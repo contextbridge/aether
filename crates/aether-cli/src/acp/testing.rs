@@ -995,12 +995,14 @@ fn text_only_model() -> String {
 }
 
 fn fake_agent_spec(name: &str) -> AgentSpec {
-    let model: llm::catalog::LlmModel = "anthropic:claude-sonnet-4-5".parse().expect("test model parses");
-    let mut spec = AgentSpec::bare(&model, None, vec![Prompt::text(&format!("{name} system prompt"))]);
-    spec.name = name.to_string();
-    spec.description = format!("{name} test agent");
-    spec.exposure = AgentSpecExposure::user_only();
-    spec
+    AgentSpec {
+        name: name.to_string(),
+        description: format!("{name} test agent"),
+        model: "anthropic:claude-sonnet-4-5".to_string(),
+        prompts: vec![Prompt::text(&format!("{name} system prompt"))],
+        exposure: AgentSpecExposure::user_only(),
+        ..AgentSpec::default()
+    }
 }
 
 fn conversation_texts(context: &Context) -> Vec<String> {

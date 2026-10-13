@@ -281,10 +281,7 @@ impl AgentBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_spec::AgentSpecExposure;
     use crate::events::TurnEvent;
-    use crate::mcp::{McpConfig, ToolFilter};
-    use llm::ProviderConnectionOverrides;
     use llm::testing::FakeLlmProvider;
 
     #[tokio::test]
@@ -328,17 +325,10 @@ mod tests {
     async fn from_spec_applies_context_window_and_model_settings() {
         let settings = ModelSettings { temperature: Some(0.0), max_tokens: Some(128), ..Default::default() };
         let spec = AgentSpec {
-            name: "alloy".to_string(),
-            description: "alloy".to_string(),
             model: "ollama:llama3.2,llamacpp:local".to_string(),
-            reasoning_effort: None,
             model_settings: settings.clone(),
             context_window: Some(200_000),
-            prompts: vec![],
-            provider_connections: ProviderConnectionOverrides::default(),
-            mcp: McpConfig::default(),
-            exposure: AgentSpecExposure::both(),
-            tools: ToolFilter::default(),
+            ..AgentSpec::default()
         };
 
         let dependencies = AgentDeps::default().with_session_affinity_key("conversation-123");
@@ -351,19 +341,7 @@ mod tests {
 
     #[tokio::test]
     async fn from_spec_accepts_alloy_model_specs() {
-        let spec = AgentSpec {
-            name: "alloy".to_string(),
-            description: "alloy".to_string(),
-            model: "ollama:llama3.2,llamacpp:local".to_string(),
-            reasoning_effort: None,
-            model_settings: ModelSettings::default(),
-            context_window: None,
-            prompts: vec![],
-            provider_connections: ProviderConnectionOverrides::default(),
-            mcp: McpConfig::default(),
-            exposure: AgentSpecExposure::both(),
-            tools: ToolFilter::default(),
-        };
+        let spec = AgentSpec { model: "ollama:llama3.2,llamacpp:local".to_string(), ..AgentSpec::default() };
 
         let builder = AgentBuilder::from_spec(&spec, &AgentDeps::default()).await;
         assert!(builder.is_ok());
