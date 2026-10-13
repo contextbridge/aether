@@ -23,47 +23,24 @@ pub fn truncate_results<T>(items: &mut Vec<T>, max: usize) -> Truncation {
     Truncation { total_count, truncated: (total_count > max).then_some(true) }
 }
 
-/// Visit every symbol in a document-symbol response.
-pub fn for_each_document_symbol(
-    response: &DocumentSymbolResponse,
-    visit: &mut impl FnMut(&str, lsp_types::SymbolKind, &lsp_types::Range, Option<&str>),
-) {
-    match response {
-        DocumentSymbolResponse::Flat(symbols) => {
-            for symbol in symbols {
-                visit(&symbol.name, symbol.kind, &symbol.location.range, symbol.container_name.as_deref());
-            }
-        }
-        DocumentSymbolResponse::Nested(symbols) => {
-            for symbol in symbols {
-                visit_nested_document_symbol(symbol, None, visit);
-            }
-        }
-    }
-}
-
 /// Find an exact symbol in an LSP document-symbol response and return its 1-indexed line.
 pub fn find_document_symbol_line(response: &DocumentSymbolResponse, symbol: &str) -> Option<u32> {
-    let mut line = None;
-    for_each_document_symbol(response, &mut |name, _, selection_range, _| {
-        if line.is_none() && name == symbol {
-            line = Some(selection_range.start.line + 1);
+    match response {
+        DocumentSymbolResponse::Flat(symbols) => {
+            symbols.iter().find(|s| s.name == symbol).map(|s| s.location.range.start.line + 1)
         }
-    });
-    line
+        DocumentSymbolResponse::Nested(symbols) => find_nested_symbol_line(symbols, symbol),
+    }
 }
 
-fn visit_nested_document_symbol(
-    symbol: &DocumentSymbol,
-    container_name: Option<&str>,
-    visit: &mut impl FnMut(&str, lsp_types::SymbolKind, &lsp_types::Range, Option<&str>),
-) {
-    visit(&symbol.name, symbol.kind, &symbol.selection_range, container_name);
-    if let Some(children) = &symbol.children {
-        for child in children {
-            visit_nested_document_symbol(child, Some(&symbol.name), visit);
+fn find_nested_symbol_line(symbols: &[DocumentSymbol], symbol: &str) -> Option<u32> {
+    symbols.iter().find_map(|s| {
+        if s.name == symbol {
+            Some(s.selection_range.start.line + 1)
+        } else {
+            s.children.as_deref().and_then(|children| find_nested_symbol_line(children, symbol))
         }
-    }
+    })
 }
 
 /// Re-export from `aether_lspd` for convenience.
