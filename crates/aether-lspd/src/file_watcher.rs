@@ -2,8 +2,9 @@ use crate::uri::path_to_uri;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use lsp_types::{FileChangeType, FileEvent, FileSystemWatcher, Uri, WatchKind};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::ffi::OsStr;
+use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -60,8 +61,8 @@ impl FileWatcherHandle {
             event_tx,
             msg_rx,
             bridge_rx,
-            forwarded_pending: HashMap::new(),
-            discovered_pending: HashMap::new(),
+            forwarded_pending: BTreeMap::new(),
+            discovered_pending: BTreeSet::new(),
             registrations: HashMap::new(),
             glob_set: GlobSet::empty(),
             watch_kinds: Vec::new(),
@@ -91,8 +92,8 @@ struct FileWatcherActor {
     event_tx: mpsc::Sender<FileWatcherBatch>,
     msg_rx: mpsc::Receiver<FileWatcherMsg>,
     bridge_rx: mpsc::Receiver<notify::Event>,
-    forwarded_pending: HashMap<String, (Uri, FileChangeType)>,
-    discovered_pending: HashMap<String, Uri>,
+    forwarded_pending: BTreeMap<Uri, FileChangeType>,
+    discovered_pending: BTreeSet<Uri>,
     registrations: HashMap<String, Vec<FileSystemWatcher>>,
     glob_set: GlobSet,
     watch_kinds: Vec<WatchKind>,
@@ -168,19 +169,18 @@ impl FileWatcherActor {
                     );
                     continue;
                 }
-                if map_event_kind(ev.kind, WatchKind::Create | WatchKind::Change | WatchKind::Delete).is_none() {
+                if map_event_kind(ev.kind, WatchKind::all()).is_none() {
                     continue;
                 }
                 let Ok(uri) = path_to_uri(path) else {
                     continue;
                 };
-                let key = uri.to_string();
                 tracing::trace!(
                     path = %path.display(),
                     kind = ?ev.kind,
                     "File event: no glob match, tracking URI discovery only"
                 );
-                self.discovered_pending.insert(key, uri);
+                self.discovered_pending.insert(uri);
                 continue;
             }
 
@@ -193,13 +193,12 @@ impl FileWatcherActor {
             let Ok(uri) = path_to_uri(path) else {
                 continue;
             };
-            let key = uri.to_string();
             tracing::debug!(
                 path = %path.display(),
                 change_type = ?change_type,
                 "File event: accumulated for debounced dispatch"
             );
-            self.forwarded_pending.insert(key, (uri, change_type));
+            self.forwarded_pending.insert(uri, change_type);
         }
     }
 
@@ -208,12 +207,9 @@ impl FileWatcherActor {
             return;
         }
 
-        let mut forwarded_changes: Vec<FileEvent> =
-            self.forwarded_pending.drain().map(|(_, (uri, typ))| FileEvent { uri, typ }).collect();
-        forwarded_changes.sort_by(|a, b| a.uri.as_str().cmp(b.uri.as_str()));
-
-        let mut discovered_uris: Vec<Uri> = self.discovered_pending.drain().map(|(_, uri)| uri).collect();
-        discovered_uris.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        let forwarded_changes: Vec<FileEvent> =
+            std::mem::take(&mut self.forwarded_pending).into_iter().map(|(uri, typ)| FileEvent { uri, typ }).collect();
+        let discovered_uris: Vec<Uri> = std::mem::take(&mut self.discovered_pending).into_iter().collect();
 
         tracing::debug!(
             forwarded_changes = forwarded_changes.len(),
@@ -267,7 +263,7 @@ fn build_glob_set(watchers: &[&FileSystemWatcher]) -> Option<(GlobSet, Vec<Watch
         match Glob::new(pattern) {
             Ok(g) => {
                 builder.add(g);
-                kinds.push(w.kind.unwrap_or(WatchKind::Create | WatchKind::Change | WatchKind::Delete));
+                kinds.push(w.kind.unwrap_or(WatchKind::all()));
             }
             Err(e) => {
                 tracing::warn!("Invalid glob pattern '{pattern}': {e}");
@@ -281,6 +277,10 @@ fn build_glob_set(watchers: &[&FileSystemWatcher]) -> Option<(GlobSet, Vec<Watch
         .ok()
         .filter(|gs| !gs.is_empty())
         .map(|gs| (gs, kinds))
+}
+
+pub(crate) fn is_ignored_directory_name(name: &OsStr) -> bool {
+    matches!(name.to_string_lossy().as_ref(), ".git" | "node_modules" | ".next" | "dist" | "build" | "target")
 }
 
 /// Map a `notify::EventKind` to an LSP `FileChangeType`, filtered by requested `WatchKind`.
@@ -301,14 +301,11 @@ fn should_track_implicit_path(kind: EventKind, within_workspace: bool, rel_path:
 
     // Skip noisy build/system directories that can generate thousands of irrelevant
     // changes and binary blobs (which can't be opened as text documents anyway).
-    for component in rel_path.components() {
-        let std::path::Component::Normal(name) = component else {
-            continue;
-        };
-        let component = name.to_string_lossy();
-        if matches!(component.as_ref(), ".git" | "node_modules" | ".next" | "dist" | "build" | "target") {
-            return false;
-        }
+    if rel_path
+        .components()
+        .any(|component| matches!(component, Component::Normal(name) if is_ignored_directory_name(name)))
+    {
+        return false;
     }
 
     // Ignore directory changes for implicit discovery; these can't be synced as
@@ -364,8 +361,8 @@ mod tests {
                 event_tx,
                 msg_rx,
                 bridge_rx,
-                forwarded_pending: HashMap::new(),
-                discovered_pending: HashMap::new(),
+                forwarded_pending: BTreeMap::new(),
+                discovered_pending: BTreeSet::new(),
                 registrations: HashMap::new(),
                 glob_set: GlobSet::empty(),
                 watch_kinds: Vec::new(),
@@ -487,8 +484,7 @@ mod tests {
         actor.accumulate_event(&notify_event(MODIFY_CONTENT, vec!["/tmp/project/src/main.rs"]));
         assert_eq!(actor.forwarded_pending.len(), 1);
         assert!(actor.discovered_pending.is_empty());
-        let (_, change_type) = actor.forwarded_pending.values().next().unwrap();
-        assert_eq!(*change_type, FileChangeType::CHANGED);
+        assert_eq!(actor.forwarded_pending.values().next(), Some(&FileChangeType::CHANGED));
     }
 
     #[test]

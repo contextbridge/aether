@@ -1,7 +1,7 @@
 use crate::diagnostics_store::DiagnosticsStore;
 use crate::document_lifecycle::{AcquireAction, DocumentLifecycle, ReleaseAction};
 use crate::error::DaemonResult;
-use crate::file_watcher::FileWatcherBatch;
+use crate::file_watcher::{FileWatcherBatch, is_ignored_directory_name};
 use crate::language_catalog::{DiagnosticsMode, LanguageId, LspConfig};
 use crate::process_transport::{ProcessTransport, TransportError, TransportEvent};
 use crate::protocol::{LspNotification, extract_document_uri};
@@ -18,7 +18,6 @@ use lsp_types::{
 };
 use serde_json::Value;
 use std::collections::HashSet;
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -232,12 +231,9 @@ impl WorkspaceSession {
             return;
         }
 
-        let params = DidChangeWatchedFilesParams { changes };
-        if let Ok(value) = serde_json::to_value(&params) {
-            self.transport
-                .send_notification(LspNotification { method: DidChangeWatchedFiles::METHOD.to_string(), params: value })
-                .await;
-        }
+        self.transport
+            .send_notification(notification::<DidChangeWatchedFiles>(DidChangeWatchedFilesParams { changes }))
+            .await;
     }
 
     async fn run_refresh_worker(self) {
@@ -306,10 +302,6 @@ fn uri_is_supported(uri: &Uri, supported_extensions: &HashSet<String>) -> bool {
     path_is_supported(Path::new(&path), supported_extensions)
 }
 
-fn is_ignored_directory_name(name: &OsStr) -> bool {
-    matches!(name.to_string_lossy().as_ref(), ".git" | "node_modules" | ".next" | "dist" | "build" | "target")
-}
-
 fn path_is_supported(path: &Path, supported_extensions: &HashSet<String>) -> bool {
     path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| supported_extensions.contains(ext))
 }
@@ -323,26 +315,27 @@ fn reopen_notifications(uri: &Uri, file_path: &str, content: String) -> Vec<LspN
 }
 
 fn open_notification(uri: &Uri, file_path: &str, version: i32, content: String) -> LspNotification {
-    let language_id = LanguageId::from_path(Path::new(file_path));
-    let params = DidOpenTextDocumentParams {
-        text_document: TextDocumentItem {
-            uri: uri.clone(),
-            language_id: language_id.as_str().to_string(),
-            version,
-            text: content,
-        },
-    };
-    LspNotification { method: DidOpenTextDocument::METHOD.to_string(), params: serde_json::to_value(&params).unwrap() }
+    let language_id = LanguageId::from_path(Path::new(file_path)).as_str().to_string();
+    notification::<DidOpenTextDocument>(DidOpenTextDocumentParams {
+        text_document: TextDocumentItem::new(uri.clone(), language_id, version, content),
+    })
 }
 
 fn save_notification(uri: &Uri) -> LspNotification {
-    let params = DidSaveTextDocumentParams { text_document: TextDocumentIdentifier { uri: uri.clone() }, text: None };
-    LspNotification { method: DidSaveTextDocument::METHOD.to_string(), params: serde_json::to_value(&params).unwrap() }
+    notification::<DidSaveTextDocument>(DidSaveTextDocumentParams {
+        text_document: TextDocumentIdentifier::new(uri.clone()),
+        text: None,
+    })
 }
 
 fn close_notification(uri: &Uri) -> LspNotification {
-    let params = DidCloseTextDocumentParams { text_document: TextDocumentIdentifier { uri: uri.clone() } };
-    LspNotification { method: DidCloseTextDocument::METHOD.to_string(), params: serde_json::to_value(&params).unwrap() }
+    notification::<DidCloseTextDocument>(DidCloseTextDocumentParams {
+        text_document: TextDocumentIdentifier::new(uri.clone()),
+    })
+}
+
+fn notification<N: Notification>(params: N::Params) -> LspNotification {
+    LspNotification { method: N::METHOD.to_string(), params: serde_json::to_value(params).unwrap() }
 }
 
 #[cfg(test)]

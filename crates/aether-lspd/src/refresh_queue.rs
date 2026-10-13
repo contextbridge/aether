@@ -2,20 +2,19 @@ use lsp_types::Uri;
 use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, watch};
 
 #[derive(Clone)]
 pub(crate) struct RefreshQueue {
     state: Arc<Mutex<RefreshQueueState>>,
     wake: Arc<Notify>,
-    progress: Arc<Notify>,
+    completed_generation: Arc<watch::Sender<u64>>,
 }
 
 struct RefreshQueueState {
     pending_queue: VecDeque<Uri>,
     pending_set: HashSet<Uri>,
     scheduled_generation: u64,
-    completed_generation: u64,
     bootstrap_in_progress: bool,
     active: bool,
     shutdown: bool,
@@ -28,13 +27,12 @@ impl RefreshQueue {
                 pending_queue: VecDeque::new(),
                 pending_set: HashSet::new(),
                 scheduled_generation: 1,
-                completed_generation: 0,
                 bootstrap_in_progress: true,
                 active: false,
                 shutdown: false,
             })),
             wake: Arc::new(Notify::new()),
-            progress: Arc::new(Notify::new()),
+            completed_generation: Arc::new(watch::Sender::new(0)),
         }
     }
 
@@ -64,50 +62,25 @@ impl RefreshQueue {
     }
 
     pub(crate) fn complete_bootstrap(&self) {
-        let mut should_notify = false;
         {
             let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             state.bootstrap_in_progress = false;
             if !state.active && state.pending_queue.is_empty() {
-                state.completed_generation = state.scheduled_generation;
-                should_notify = true;
+                self.completed_generation.send_replace(state.scheduled_generation);
             }
-        }
-
-        if should_notify {
-            self.progress.notify_waiters();
         }
         self.wake.notify_one();
     }
 
     pub(crate) async fn wait_for_current_generation(&self, timeout: Duration) {
         let target = self.state.lock().unwrap_or_else(PoisonError::into_inner).scheduled_generation;
-        let deadline = tokio::time::Instant::now() + timeout;
-
-        loop {
-            {
-                let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-                if state.completed_generation >= target {
-                    return;
-                }
-            }
-
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                return;
-            }
-
-            tokio::select! {
-                () = self.progress.notified() => {}
-                () = tokio::time::sleep(remaining) => return,
-            }
-        }
+        let mut completed = self.completed_generation.subscribe();
+        let _ = tokio::time::timeout(timeout, completed.wait_for(|generation| *generation >= target)).await;
     }
 
     pub(crate) async fn recv(&self) -> Option<Uri> {
         loop {
             let wake = self.wake.notified();
-            let mut should_notify = false;
             {
                 let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
                 if state.shutdown {
@@ -121,14 +94,13 @@ impl RefreshQueue {
                 }
 
                 state.active = false;
-                if !state.bootstrap_in_progress && state.completed_generation != state.scheduled_generation {
-                    state.completed_generation = state.scheduled_generation;
-                    should_notify = true;
+                if !state.bootstrap_in_progress {
+                    self.completed_generation.send_if_modified(|completed| {
+                        let changed = *completed != state.scheduled_generation;
+                        *completed = state.scheduled_generation;
+                        changed
+                    });
                 }
-            }
-
-            if should_notify {
-                self.progress.notify_waiters();
             }
 
             wake.await;
@@ -141,7 +113,6 @@ impl RefreshQueue {
             state.shutdown = true;
         }
         self.wake.notify_waiters();
-        self.progress.notify_waiters();
     }
 }
 
@@ -164,24 +135,27 @@ mod tests {
         assert_eq!(queue.recv().await, Some(a));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn wait_for_current_generation_resolves_when_drained() {
         let queue = RefreshQueue::new();
         queue.complete_bootstrap();
-
-        let a = uri("file:///a.rs");
-        let b = uri("file:///b.rs");
-        queue.enqueue(vec![a, b]);
+        queue.enqueue(vec![uri("file:///a.rs"), uri("file:///b.rs")]);
 
         let wait_queue = queue.clone();
         let waiter = tokio::spawn(async move {
-            wait_queue.wait_for_current_generation(Duration::from_secs(2)).await;
+            let start = tokio::time::Instant::now();
+            wait_queue.wait_for_current_generation(Duration::from_secs(60)).await;
+            start.elapsed()
         });
 
         assert!(queue.recv().await.is_some());
         assert!(queue.recv().await.is_some());
+        let idle_queue = queue.clone();
+        let idle_receiver = tokio::spawn(async move { idle_queue.recv().await });
 
-        waiter.await.unwrap();
+        assert!(waiter.await.unwrap() < Duration::from_secs(60), "draining the queue should wake the waiter");
+        queue.shutdown();
+        assert_eq!(idle_receiver.await.unwrap(), None);
     }
 
     #[tokio::test]

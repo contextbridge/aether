@@ -16,11 +16,6 @@ pub async fn handle_client(stream: UnixStream, registry: WorkspaceRegistry, clie
     let _ = writer_task.await;
 }
 
-enum ConnectionState {
-    Uninitialized,
-    Bound { binding: WorkspaceBinding },
-}
-
 async fn run_writer(writer: WriteHalf<UnixStream>, mut response_rx: mpsc::Receiver<DaemonResponse>) {
     let mut writer = frame_writer::<_, DaemonResponse>(writer);
     while let Some(response) = response_rx.recv().await {
@@ -38,7 +33,7 @@ async fn run_reader(
     response_tx: mpsc::Sender<DaemonResponse>,
 ) {
     tracing::debug!("Client connected: {}", client_id);
-    let mut state = ConnectionState::Uninitialized;
+    let mut binding: Option<WorkspaceBinding> = None;
     let mut reader = frame_reader::<_, DaemonRequest>(reader);
 
     while let Some(msg) = reader.next().await {
@@ -50,54 +45,41 @@ async fn run_reader(
             }
         };
 
-        match request {
-            DaemonRequest::Ping => {
-                let _ = response_tx.send(DaemonResponse::Pong).await;
-            }
+        let response = match request {
+            DaemonRequest::Ping => DaemonResponse::Pong,
             DaemonRequest::Disconnect => break,
             DaemonRequest::Initialize(init) => match registry.bind(&init.workspace_root, init.language).await {
-                Ok(binding) => {
-                    state = ConnectionState::Bound { binding };
-                    let _ = response_tx.send(DaemonResponse::Initialized).await;
+                Ok(bound) => {
+                    binding = Some(bound);
+                    DaemonResponse::Initialized
                 }
-                Err(err) => {
-                    let _ = response_tx.send(DaemonResponse::Error(ProtocolError::new(err.to_string()))).await;
-                }
+                Err(err) => DaemonResponse::Error(ProtocolError::new(err.to_string())),
             },
-            DaemonRequest::LspCall { client_id, method, params } => {
-                let ConnectionState::Bound { binding } = &state else {
-                    let _ = send_not_initialized(client_id, &response_tx).await;
-                    continue;
-                };
-
-                let result = registry.lsp_call(binding, &method, params).await;
-                let _ = response_tx.send(DaemonResponse::LspResult { client_id, result }).await;
-            }
-            DaemonRequest::GetDiagnostics { client_id, uri } => {
-                let ConnectionState::Bound { binding } = &state else {
-                    let _ = send_not_initialized(client_id, &response_tx).await;
-                    continue;
-                };
-
-                let result = registry.get_diagnostics(binding, uri.as_ref()).await;
-                let _ = response_tx.send(DaemonResponse::LspResult { client_id, result }).await;
-            }
-            DaemonRequest::QueueDiagnosticRefresh { client_id, uri } => {
-                let ConnectionState::Bound { binding } = &state else {
-                    let _ = send_not_initialized(client_id, &response_tx).await;
-                    continue;
-                };
-
-                let result = registry.queue_diagnostic_refresh(binding, uri).map(|()| Value::Null);
-                let _ = response_tx.send(DaemonResponse::LspResult { client_id, result }).await;
-            }
-        }
+            DaemonRequest::LspCall { client_id, method, params } => match &binding {
+                Some(binding) => {
+                    DaemonResponse::LspResult { client_id, result: registry.lsp_call(binding, &method, params).await }
+                }
+                None => not_initialized(client_id),
+            },
+            DaemonRequest::GetDiagnostics { client_id, uri } => match &binding {
+                Some(binding) => DaemonResponse::LspResult {
+                    client_id,
+                    result: registry.get_diagnostics(binding, uri.as_ref()).await,
+                },
+                None => not_initialized(client_id),
+            },
+            DaemonRequest::QueueDiagnosticRefresh { client_id, uri } => match &binding {
+                Some(binding) => DaemonResponse::LspResult {
+                    client_id,
+                    result: registry.queue_diagnostic_refresh(binding, uri).map(|()| Value::Null),
+                },
+                None => not_initialized(client_id),
+            },
+        };
+        let _ = response_tx.send(response).await;
     }
 }
 
-async fn send_not_initialized(
-    client_id: i64,
-    tx: &mpsc::Sender<DaemonResponse>,
-) -> Result<(), mpsc::error::SendError<DaemonResponse>> {
-    tx.send(DaemonResponse::Error(ProtocolError::with_client_id("Not initialized", client_id))).await
+fn not_initialized(client_id: i64) -> DaemonResponse {
+    DaemonResponse::Error(ProtocolError::with_client_id("Not initialized", client_id))
 }
