@@ -7,6 +7,7 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use tracing::warn;
+use utils::fs::write_atomic;
 
 const PROMPT_HISTORY_MAX_ENTRIES: usize = 100;
 const PROMPT_SEARCH_DEFAULT_LIMIT: usize = 20;
@@ -132,19 +133,14 @@ impl PromptHistoryIndex {
     }
 
     fn rewrite_file<'a>(&self, entries: impl IntoIterator<Item = &'a PromptHistoryEntry>) -> io::Result<()> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)?;
+        let mut content = String::new();
+        for entry in entries {
+            let line = serde_json::to_string(entry)
+                .map_err(|error| io::Error::other(format!("failed to serialize prompt history entry: {error}")))?;
+            content.push_str(&line);
+            content.push('\n');
         }
-        let tmp_path = self.path.with_extension("jsonl.tmp");
-        {
-            let mut file = File::create(&tmp_path)?;
-            for entry in entries {
-                let line = serde_json::to_string(entry)
-                    .map_err(|error| io::Error::other(format!("failed to serialize prompt history entry: {error}")))?;
-                writeln!(file, "{line}")?;
-            }
-        }
-        fs::rename(tmp_path, &self.path)
+        write_atomic(&self.path, content.as_bytes())
     }
 }
 

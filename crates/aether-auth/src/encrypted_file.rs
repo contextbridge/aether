@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::env::var;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Mutex;
+use utils::fs::write_atomic;
 use utils::settings::aether_home;
 
 const DEFAULT_PASSWORD_ENV: &str = "AETHER_CREDENTIALS_PASSWORD";
@@ -91,7 +91,7 @@ impl EncryptedFileOAuthCredentialStorage {
             .map_err(|e| OAuthError::CredentialStore(format!("Failed to serialize credentials: {e}")))?;
 
         let ciphertext = Self::encrypt(&plaintext, &self.passphrase, self.scrypt_work_factor)?;
-        write_atomic(&self.path, &ciphertext)
+        Ok(write_atomic(&self.path, &ciphertext)?)
     }
 }
 
@@ -101,24 +101,6 @@ fn default_path() -> Result<PathBuf, OAuthError> {
             "Could not determine the Aether home directory for the encrypted credential file".to_string(),
         )
     })
-}
-
-fn write_atomic(path: &Path, data: &[u8]) -> Result<(), OAuthError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let temp_path = path.with_extension("tmp");
-
-    {
-        let mut file = std::fs::File::create(&temp_path)?;
-        file.write_all(data)?;
-        file.sync_all()?;
-    }
-
-    std::fs::rename(&temp_path, path)?;
-
-    Ok(())
 }
 
 #[async_trait]
@@ -146,7 +128,7 @@ impl OAuthCredentialStorage for EncryptedFileOAuthCredentialStorage {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::write;
+    use std::fs::{create_dir, write};
 
     use super::*;
     use crate::OAuthCredential;
@@ -281,6 +263,14 @@ mod tests {
 
         reopened.delete("mcp:slack").await.unwrap();
         assert!(store.load("mcp:slack").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn save_succeeds_while_a_temp_path_is_occupied() {
+        let store = temp_store("pass");
+        create_dir(store.path.with_extension("tmp")).unwrap();
+        store.save_credential("server-1", test_credential()).await.unwrap();
+        assert!(store.load_credential("server-1").await.unwrap().is_some());
     }
 
     #[test]
