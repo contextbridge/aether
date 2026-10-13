@@ -18,7 +18,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::{fs, path::Path};
-use utils::shell_expander::ShellExpander;
+use utils::shell_expander::expand_shell;
 use utils::substitution::substitute_parameters;
 
 use super::tools::{
@@ -178,7 +178,7 @@ impl SkillsMcp {
         files
     }
 
-    async fn load_skill_file(&self, request: &SkillRequest, expander: &ShellExpander) -> SkillFile {
+    async fn load_skill_file(&self, request: &SkillRequest) -> SkillFile {
         let name = request.name.clone();
         let fallback_path = request.path.clone().unwrap_or_else(|| SKILL_FILENAME.to_string());
         let (prompt, resolved_path, response_path) = match self.resolve_skill_file(request) {
@@ -212,7 +212,7 @@ impl SkillsMcp {
         };
 
         let expand_cwd = prompt.path.parent().map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-        let content = expander.expand(&content, &expand_cwd).await;
+        let content = expand_shell(&content, &expand_cwd).await;
         let available_files = if Self::is_directory_prompt(&prompt) && response_path == SKILL_FILENAME {
             Self::list_available_files(&expand_cwd)
         } else {
@@ -275,9 +275,8 @@ impl ServerHandler for SkillsMcp {
         });
 
         let content = substitute_parameters(&body, &arguments);
-        let expander = ShellExpander::new();
         let cwd = WorkspacePaths::new(self.root_dir.clone()).root().to_path_buf();
-        let content = expander.expand(&content, &cwd).await;
+        let content = expand_shell(&content, &cwd).await;
         let messages = vec![PromptMessage::new_text(Role::User, content)];
 
         Ok(rmcp::model::GetPromptResult::new(messages).with_description(spec.description.clone()).into())
@@ -315,10 +314,9 @@ impl SkillsMcp {
     #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn get_skills(&self, request: Parameters<LoadSkillsInput>) -> Json<LoadSkillsOutput> {
         let Parameters(args) = request;
-        let expander = ShellExpander::new();
         let mut files = Vec::with_capacity(args.requests.len());
         for req in args.requests {
-            files.push(self.load_skill_file(&req, &expander).await);
+            files.push(self.load_skill_file(&req).await);
         }
 
         Json(LoadSkillsOutput { files })
@@ -350,9 +348,8 @@ mod tests {
     }
 
     async fn load(server: &SkillsMcp, name: &str, path: Option<&str>) -> SkillFile {
-        let expander = ShellExpander::new();
         let request = SkillRequest { name: name.to_string(), path: path.map(str::to_string) };
-        server.load_skill_file(&request, &expander).await
+        server.load_skill_file(&request).await
     }
 
     #[test]
@@ -712,7 +709,6 @@ mod tests {
         );
 
         let server = SkillsMcp::new(temp_dir.path(), &[temp_dir.path().to_path_buf()]);
-        let expander = ShellExpander::new();
         let requests = vec![
             SkillRequest { name: "rust".to_string(), path: None },
             SkillRequest { name: "rust".to_string(), path: Some("traits.md".to_string()) },
@@ -721,7 +717,7 @@ mod tests {
 
         let mut files = Vec::with_capacity(requests.len());
         for req in requests {
-            files.push(server.load_skill_file(&req, &expander).await);
+            files.push(server.load_skill_file(&req).await);
         }
 
         assert_eq!(files.len(), 3);
@@ -747,7 +743,6 @@ mod tests {
         create_skill(temp_dir.path(), "exists", "---\ndescription: Exists\nagent-invocable: true\n---\n# Exists", &[]);
 
         let server = SkillsMcp::new(temp_dir.path(), &[temp_dir.path().to_path_buf()]);
-        let expander = ShellExpander::new();
         let requests = vec![
             SkillRequest { name: "exists".to_string(), path: None },
             SkillRequest { name: "nonexistent".to_string(), path: None },
@@ -756,7 +751,7 @@ mod tests {
 
         let mut files = Vec::with_capacity(requests.len());
         for req in requests {
-            files.push(server.load_skill_file(&req, &expander).await);
+            files.push(server.load_skill_file(&req).await);
         }
 
         assert_eq!(files.len(), 3);
