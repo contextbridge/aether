@@ -1,5 +1,6 @@
 //! LSP-powered rename refactoring tool
 
+use std::cmp::Reverse;
 use std::path::Path;
 
 use lsp_types::{DocumentChangeOperation, DocumentChanges, OneOf, ResourceOp, WorkspaceEdit};
@@ -143,15 +144,9 @@ fn collect_document_changes(doc_changes: &DocumentChanges) -> Result<Vec<LspFile
             .iter()
             .filter_map(|doc_edit| collect_text_document_edit(&doc_edit.text_document.uri, &doc_edit.edits))
             .collect()),
-        DocumentChanges::Operations(ops) => ops
-            .iter()
-            .map(collect_document_change_operation)
-            .filter_map(|result| match result {
-                Ok(Some(edit)) => Some(Ok(edit)),
-                Ok(None) => None,
-                Err(error) => Some(Err(error)),
-            })
-            .collect(),
+        DocumentChanges::Operations(ops) => {
+            ops.iter().map(collect_document_change_operation).filter_map(Result::transpose).collect()
+        }
     }
 }
 
@@ -160,14 +155,13 @@ fn collect_document_change_operation(op: &DocumentChangeOperation) -> Result<Opt
         DocumentChangeOperation::Edit(doc_edit) => {
             Ok(collect_text_document_edit(&doc_edit.text_document.uri, &doc_edit.edits))
         }
-        DocumentChangeOperation::Op(ResourceOp::Create(_)) => {
-            Err(LspError::InvalidEdit("Rename returned unsupported workspace operation: create".to_string()))
-        }
-        DocumentChangeOperation::Op(ResourceOp::Rename(_)) => {
-            Err(LspError::InvalidEdit("Rename returned unsupported workspace operation: rename".to_string()))
-        }
-        DocumentChangeOperation::Op(ResourceOp::Delete(_)) => {
-            Err(LspError::InvalidEdit("Rename returned unsupported workspace operation: delete".to_string()))
+        DocumentChangeOperation::Op(op) => {
+            let kind = match op {
+                ResourceOp::Create(_) => "create",
+                ResourceOp::Rename(_) => "rename",
+                ResourceOp::Delete(_) => "delete",
+            };
+            Err(LspError::InvalidEdit(format!("Rename returned unsupported workspace operation: {kind}")))
         }
     }
 }
@@ -198,14 +192,8 @@ async fn apply_workspace_text_edits(changes: &[LspFileEdit]) -> Result<(), LspEr
 
 fn apply_file_text_edits(content: &str, edits: &[lsp_types::TextEdit]) -> Result<String, LspError> {
     let mut edits = edits.to_vec();
-    edits.sort_by(|a, b| {
-        b.range
-            .start
-            .line
-            .cmp(&a.range.start.line)
-            .then(b.range.start.character.cmp(&a.range.start.character))
-            .then(b.range.end.line.cmp(&a.range.end.line))
-            .then(b.range.end.character.cmp(&a.range.end.character))
+    edits.sort_by_key(|e| {
+        Reverse((e.range.start.line, e.range.start.character, e.range.end.line, e.range.end.character))
     });
 
     let mut result = content.to_string();

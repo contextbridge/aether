@@ -179,37 +179,21 @@ impl SkillsMcp {
     }
 
     async fn load_skill_file(&self, request: &SkillRequest) -> SkillFile {
-        let name = request.name.clone();
-        let fallback_path = request.path.clone().unwrap_or_else(|| SKILL_FILENAME.to_string());
-        let (prompt, resolved_path, response_path) = match self.resolve_skill_file(request) {
-            Ok(result) => result,
-            Err(e) => {
-                return SkillFile {
-                    name,
-                    path: fallback_path,
-                    content: None,
-                    error: Some(e.to_string()),
-                    available_files: Vec::new(),
-                };
-            }
-        };
+        self.try_load_skill_file(request).await.unwrap_or_else(|error| SkillFile {
+            name: request.name.clone(),
+            path: request.path.clone().unwrap_or_else(|| SKILL_FILENAME.to_string()),
+            content: None,
+            error: Some(error.to_string()),
+            available_files: Vec::new(),
+        })
+    }
 
-        let content = match fs::read_to_string(&resolved_path) {
-            Ok(content) => content,
-            Err(e) => {
-                let error = match e.kind() {
-                    io::ErrorKind::InvalidData => SkillFileError::InvalidUtf8,
-                    _ => SkillFileError::IoError(e),
-                };
-                return SkillFile {
-                    name,
-                    path: response_path,
-                    content: None,
-                    error: Some(error.to_string()),
-                    available_files: Vec::new(),
-                };
-            }
-        };
+    async fn try_load_skill_file(&self, request: &SkillRequest) -> Result<SkillFile, SkillFileError> {
+        let (prompt, resolved_path, response_path) = self.resolve_skill_file(request)?;
+        let content = fs::read_to_string(&resolved_path).map_err(|e| match e.kind() {
+            io::ErrorKind::InvalidData => SkillFileError::InvalidUtf8,
+            _ => SkillFileError::IoError(e),
+        })?;
 
         let expand_cwd = prompt.path.parent().map_or_else(|| PathBuf::from("."), Path::to_path_buf);
         let content = expand_shell(&content, &expand_cwd).await;
@@ -219,7 +203,13 @@ impl SkillsMcp {
             Vec::new()
         };
 
-        SkillFile { name, path: response_path, content: Some(content), error: None, available_files }
+        Ok(SkillFile {
+            name: request.name.clone(),
+            path: response_path,
+            content: Some(content),
+            error: None,
+            available_files,
+        })
     }
 }
 
