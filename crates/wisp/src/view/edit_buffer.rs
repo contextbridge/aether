@@ -39,11 +39,7 @@ impl EditBuffer {
     }
 
     pub fn set_cursor(&mut self, cursor: usize) {
-        let mut cursor = cursor.min(self.text.len());
-        while !self.text.is_char_boundary(cursor) {
-            cursor -= 1;
-        }
-        self.cursor = cursor;
+        self.cursor = self.text.floor_char_boundary(cursor);
     }
 
     pub fn insert_char(&mut self, character: char) {

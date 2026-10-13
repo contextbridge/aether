@@ -189,14 +189,8 @@ fn progress_event(request: ToolCallRequest, progress: ProgressNotificationParam)
 }
 
 fn task_status_name(status: rmcp::model::TaskStatus) -> String {
-    use rmcp::model::TaskStatus;
-    match status {
-        TaskStatus::Working => "working",
-        TaskStatus::InputRequired => "input_required",
-        TaskStatus::Completed => "completed",
-        TaskStatus::Failed => "failed",
-        TaskStatus::Cancelled => "cancelled",
-        _ => "unknown",
-    }
-    .to_string()
+    serde_json::to_value(status)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "unknown".into())
 }

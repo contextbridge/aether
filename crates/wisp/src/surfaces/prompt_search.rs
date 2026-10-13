@@ -219,10 +219,3 @@ fn prompt_spans(prompt: &str, matched: Range<usize>, base: Color, highlight: Col
         .collect()
 }
 
-pub fn cursor_at_match_end(prompt: &str, match_end: usize) -> usize {
-    let mut idx = match_end.min(prompt.len());
-    while idx > 0 && !prompt.is_char_boundary(idx) {
-        idx -= 1;
-    }
-    idx
-}

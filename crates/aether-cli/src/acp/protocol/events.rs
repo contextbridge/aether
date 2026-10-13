@@ -165,13 +165,6 @@ pub fn map_agent_event_to_notification(msg: &AgentEvent, mode: NotificationMode)
     }
 }
 
-fn json_patch_value(value: serde_json::Value) -> MaybeUndefined<serde_json::Value> {
-    match value {
-        serde_json::Value::Null => MaybeUndefined::Null,
-        value => MaybeUndefined::Value(value),
-    }
-}
-
 fn task_status_to_acp(status: &str) -> ToolCallStatus {
     match status {
         "working" => ToolCallStatus::InProgress,
@@ -238,7 +231,7 @@ fn tool_call_upsert(id: &str, name: &str) -> ToolCallUpdate {
 }
 
 fn map_tool_call_to_notification(request: &ToolCallRequest) -> SessionUpdate {
-    let raw_input = serde_json::from_str(&request.arguments).map_or(MaybeUndefined::Undefined, json_patch_value);
+    let raw_input = MaybeUndefined::from(serde_json::from_str::<Option<serde_json::Value>>(&request.arguments).ok());
     SessionUpdate::ToolCallUpdate(tool_call_upsert(&request.id, &request.name).raw_input(raw_input))
 }
 
