@@ -1,16 +1,14 @@
 use crate::credential::OAuthCredentialStorage;
 use crate::error::OAuthError;
-use age::scrypt::{Identity, Recipient as ScryptRecipient};
+use age::scrypt::{Identity, Recipient};
 use age::secrecy::SecretString;
-use age::{Decryptor, Encryptor};
 use async_trait::async_trait;
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::env::var;
-use std::io::{Read, Write};
-use std::iter::once;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -52,39 +50,17 @@ impl EncryptedFileOAuthCredentialStorage {
     }
 
     fn encrypt(plaintext: &[u8], passphrase: &str, work_factor: Option<u8>) -> Result<Vec<u8>, OAuthError> {
-        let fail = |e| OAuthError::CredentialStore(format!("Encryption failed: {e}"));
-
-        let mut recipient = ScryptRecipient::new(SecretString::from(passphrase));
+        let mut recipient = Recipient::new(SecretString::from(passphrase));
         if let Some(log_n) = work_factor {
             recipient.set_work_factor(log_n);
         }
-
-        let encryptor = Encryptor::with_recipients(once(&recipient as &dyn age::Recipient))
-            .map_err(|e| OAuthError::CredentialStore(format!("Encryption failed: {e}")))?;
-
-        let mut ciphertext = Vec::new();
-        let mut writer = encryptor.wrap_output(&mut ciphertext).map_err(fail)?;
-        writer.write_all(plaintext).map_err(fail)?;
-        writer.finish().map_err(fail)?;
-
-        Ok(ciphertext)
+        age::encrypt(&recipient, plaintext).map_err(|e| OAuthError::CredentialStore(format!("Encryption failed: {e}")))
     }
 
     fn decrypt(ciphertext: &[u8], passphrase: &str) -> Result<Vec<u8>, OAuthError> {
-        let decryptor = Decryptor::new(ciphertext)
-            .map_err(|e| OAuthError::CredentialStore(format!("Invalid encrypted file: {e}")))?;
-
-        let mut reader =
-            decryptor.decrypt(once(&Identity::new(SecretString::from(passphrase)) as &dyn age::Identity)).map_err(
-                |e| OAuthError::CredentialStore(format!("Decryption failed — wrong passphrase or corrupted file: {e}")),
-            )?;
-
-        let mut plaintext = Vec::new();
-        reader
-            .read_to_end(&mut plaintext)
-            .map_err(|e| OAuthError::CredentialStore(format!("Decryption failed: {e}")))?;
-
-        Ok(plaintext)
+        age::decrypt(&Identity::new(SecretString::from(passphrase)), ciphertext).map_err(|e| {
+            OAuthError::CredentialStore(format!("Decryption failed — wrong passphrase or corrupted file: {e}"))
+        })
     }
 
     fn load_store(&self) -> Result<CredentialStore, OAuthError> {
