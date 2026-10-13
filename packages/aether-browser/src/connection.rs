@@ -77,18 +77,16 @@ impl Connection {
 
     fn execute(&mut self, handle: &AcpClientHandle, command: Command) -> Option<Pending> {
         match command {
-            Command::NewSession(request, reply) => {
-                Some(pending(handle.new_session(request), |connection, response| {
-                    if let Ok(response) = &response {
-                        connection.open(response.session_id.clone());
-                    }
-                    reply.respond(response);
-                }))
-            }
+            Command::NewSession(request, reply) => Some(pending(handle.request(request), |connection, response| {
+                if let Ok(response) = &response {
+                    connection.open(response.session_id.clone());
+                }
+                reply.respond(response);
+            })),
             Command::ResumeSession(request, reply) => {
                 let session_id = request.session_id.clone();
                 self.open(session_id.clone());
-                Some(pending(handle.resume_session(request), move |connection, response| {
+                Some(pending(handle.request(request), move |connection, response| {
                     if response.is_err() {
                         connection.end(&session_id);
                     }
@@ -97,7 +95,7 @@ impl Connection {
             }
             Command::Prompt(prompt, reply) => match self.current_session() {
                 Ok(session_id) => {
-                    let response = handle.prompt(PromptRequest::new(session_id, prompt));
+                    let response = handle.request(PromptRequest::new(session_id, prompt));
                     Some(pending(response, |_, response| reply.respond(response)))
                 }
                 Err(error) => {
@@ -108,7 +106,7 @@ impl Connection {
             Command::Cancel(reply) => {
                 let cancelled = self
                     .current_session()
-                    .and_then(|session_id| Ok(handle.cancel(CancelSessionNotification::new(session_id))?));
+                    .and_then(|session_id| Ok(handle.notify(CancelSessionNotification::new(session_id))?));
                 reply.send(cancelled.map(|()| JsValue::UNDEFINED));
                 None
             }

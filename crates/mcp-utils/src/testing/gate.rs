@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use tokio::sync::watch;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Gate {
     state: Arc<watch::Sender<GateState>>,
 }
@@ -14,7 +14,7 @@ struct GateState {
 
 impl Gate {
     pub fn new() -> Self {
-        Self { state: Arc::new(watch::Sender::new(GateState::default())) }
+        Self::default()
     }
 
     pub fn open(&self) {
@@ -30,11 +30,5 @@ impl Gate {
         self.state.send_modify(|state| state.reached = true);
         let mut state = self.state.subscribe();
         let _ = state.wait_for(|state| state.open).await;
-    }
-}
-
-impl Default for Gate {
-    fn default() -> Self {
-        Self::new()
     }
 }

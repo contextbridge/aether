@@ -117,8 +117,8 @@ impl ConversationItem {
     }
 }
 
-impl ConversationId {
-    pub(super) fn next() -> Self {
+impl Default for ConversationId {
+    fn default() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         Self(NEXT.fetch_add(1, Ordering::Relaxed))
     }

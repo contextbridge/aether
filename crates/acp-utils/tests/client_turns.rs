@@ -88,7 +88,7 @@ impl TurnTest {
     async fn submit(&mut self, session: &str) -> PendingPrompt {
         let handle = self.client.handle.clone();
         let request = PromptRequest::new(session.to_owned(), vec![]);
-        let result = spawn_local(async move { handle.prompt(request).await });
+        let result = spawn_local(async move { handle.request(request).await });
         PendingPrompt { responder: self.prompts.recv().await.unwrap().1, result }
     }
 
@@ -100,7 +100,7 @@ impl TurnTest {
         let handle = self.client.handle.clone();
         let request = ResumeSessionRequest::new(session.to_owned(), "/tmp")
             .replay_from(replay.then(|| ReplayFrom::Start(ReplayFromStart::new())));
-        spawn_local(async move { handle.resume_session(request).await })
+        spawn_local(async move { handle.request(request).await })
     }
 
     fn send(&self, notification: UpdateSessionNotification) {

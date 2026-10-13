@@ -24,7 +24,7 @@ pub fn completed_task_payload(result: CallToolResult) -> TaskPayload {
     TaskPayload::Completed { result }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct FakeMcpServer {
     state: FakeMcpState,
     alive: Arc<()>,
@@ -65,7 +65,7 @@ pub struct FakeToolResponse {
 
 impl FakeMcpServer {
     pub fn new() -> Self {
-        Self { state: FakeMcpState::default(), alive: Arc::default() }
+        Self::default()
     }
 
     pub fn math() -> Self {
@@ -373,12 +373,6 @@ where
 {
     fn from(response: T) -> Self {
         Self::new(response)
-    }
-}
-
-impl Default for FakeMcpServer {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
