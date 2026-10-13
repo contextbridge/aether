@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use tokio_stream::StreamExt;
 
-use llm::types::IsoString;
-use llm::{ChatMessage, Context, LlmResponse, MessageId, StreamingModelProvider, TokenUsage};
+use llm::{ChatMessage, Context, LlmResponse, StreamingModelProvider, TokenUsage};
 
 const SUMMARIZATION_PROMPT: &str = include_str!("prompts/summarization.md");
 
@@ -72,13 +71,9 @@ impl Compactor {
 
         let messages_removed = messages_to_summarize.len();
 
-        context.add_message(ChatMessage::User {
-            message_id: MessageId::new(),
-            content: vec![llm::ContentBlock::text(format!(
-                "{SUMMARIZATION_PROMPT}\n\nPlease perform a structured handoff of the conversation above."
-            ))],
-            timestamp: IsoString::now(),
-        });
+        context.add_message(ChatMessage::user(format!(
+            "{SUMMARIZATION_PROMPT}\n\nPlease perform a structured handoff of the conversation above."
+        )));
 
         let mut stream = self.llm.stream_response(&context);
         let mut summary = String::new();
@@ -112,8 +107,6 @@ impl Compactor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use llm::types::IsoString;
-    use llm::{ChatMessage, ContentBlock, MessageId};
 
     #[test]
     fn test_compaction_config_default() {
@@ -142,17 +135,7 @@ mod tests {
         let fake_llm = Arc::new(FakeLlmProvider::with_single_response(summary_response));
         let compactor = Compactor::new(fake_llm);
 
-        let context = Context::new(
-            vec![
-                ChatMessage::system("System"),
-                ChatMessage::User {
-                    message_id: MessageId::new(),
-                    content: vec![ContentBlock::text("Test message")],
-                    timestamp: IsoString::now(),
-                },
-            ],
-            vec![],
-        );
+        let context = Context::new(vec![ChatMessage::system("System"), ChatMessage::user("Test message")], vec![]);
 
         let result = compactor.compact(context).await;
         assert!(result.is_ok());
@@ -173,17 +156,7 @@ mod tests {
         let fake_llm = Arc::new(FakeLlmProvider::with_single_response(error_response));
         let compactor = Compactor::new(fake_llm);
 
-        let context = Context::new(
-            vec![
-                ChatMessage::system("System"),
-                ChatMessage::User {
-                    message_id: MessageId::new(),
-                    content: vec![ContentBlock::text("Test")],
-                    timestamp: IsoString::now(),
-                },
-            ],
-            vec![],
-        );
+        let context = Context::new(vec![ChatMessage::system("System"), ChatMessage::user("Test")], vec![]);
 
         let result = compactor.compact(context).await;
         assert!(matches!(result, Err(CompactionError::SummarizationFailed(_))));
