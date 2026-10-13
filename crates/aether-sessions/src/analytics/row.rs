@@ -11,6 +11,34 @@ pub(crate) struct EventRow {
     pub content: Option<String>,
     pub content_len: i64,
     pub raw_json: String,
+    pub projection: EventProjection,
+}
+
+pub(crate) fn event_row(
+    session_id: &str,
+    event_index: i64,
+    line_number: i64,
+    turn_index: Option<i64>,
+    event: &SessionEvent,
+    raw_json: String,
+) -> EventRow {
+    let content = event.content();
+    let content_len = content.as_ref().map_or(0, |content| clamp_i64(content.chars().count()));
+
+    EventRow {
+        session_id: session_id.to_string(),
+        event_index,
+        line_number,
+        turn_index,
+        content,
+        content_len,
+        raw_json,
+        projection: EventProjection::from(event),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) struct EventProjection {
     pub kind: &'static str,
     pub event_type: &'static str,
     pub outcome: Option<&'static str>,
@@ -41,93 +69,6 @@ pub(crate) struct EventRow {
     pub estimated_cost_usd: Option<f64>,
     pub total_estimated_cost_usd: Option<f64>,
     pub unpriced_calls: Option<i64>,
-}
-
-pub(crate) fn event_row(
-    session_id: &str,
-    event_index: i64,
-    line_number: i64,
-    turn_index: Option<i64>,
-    event: &SessionEvent,
-    raw_json: String,
-) -> EventRow {
-    let content = event.content();
-    let content_len = content.as_ref().map_or(0, |content| clamp_i64(content.chars().count()));
-    let projection = EventProjection::from(event);
-
-    EventRow {
-        session_id: session_id.to_string(),
-        event_index,
-        line_number,
-        turn_index,
-        content,
-        content_len,
-        raw_json,
-        kind: projection.kind,
-        event_type: projection.event_type,
-        outcome: projection.outcome,
-        tool_call_id: projection.tool_call_id,
-        tool_name: projection.tool_name,
-        tool_arguments: projection.tool_arguments,
-        model_name: projection.model_name,
-        message_id: projection.message_id,
-        usage_ratio: projection.usage_ratio,
-        context_limit: projection.context_limit,
-        input_tokens: projection.input_tokens,
-        output_tokens: projection.output_tokens,
-        cache_read_tokens: projection.cache_read_tokens,
-        cache_creation_tokens: projection.cache_creation_tokens,
-        reasoning_tokens: projection.reasoning_tokens,
-        total_input_tokens: projection.total_input_tokens,
-        total_output_tokens: projection.total_output_tokens,
-        total_cache_read_tokens: projection.total_cache_read_tokens,
-        total_cache_creation_tokens: projection.total_cache_creation_tokens,
-        total_reasoning_tokens: projection.total_reasoning_tokens,
-        usage_sequence: projection.usage_sequence,
-        agent_id: projection.agent_id,
-        parent_agent_id: projection.parent_agent_id,
-        task_id: projection.task_id,
-        agent_name: projection.agent_name,
-        call_purpose: projection.call_purpose,
-        provider: projection.provider,
-        estimated_cost_usd: projection.estimated_cost_usd,
-        total_estimated_cost_usd: projection.total_estimated_cost_usd,
-        unpriced_calls: projection.unpriced_calls,
-    }
-}
-
-#[derive(Default)]
-struct EventProjection {
-    kind: &'static str,
-    event_type: &'static str,
-    outcome: Option<&'static str>,
-    tool_call_id: Option<String>,
-    tool_name: Option<String>,
-    tool_arguments: Option<String>,
-    model_name: Option<String>,
-    message_id: Option<String>,
-    usage_ratio: Option<f64>,
-    context_limit: Option<i64>,
-    input_tokens: Option<i64>,
-    output_tokens: Option<i64>,
-    cache_read_tokens: Option<i64>,
-    cache_creation_tokens: Option<i64>,
-    reasoning_tokens: Option<i64>,
-    total_input_tokens: Option<i64>,
-    total_output_tokens: Option<i64>,
-    total_cache_read_tokens: Option<i64>,
-    total_cache_creation_tokens: Option<i64>,
-    total_reasoning_tokens: Option<i64>,
-    usage_sequence: Option<i64>,
-    agent_id: Option<String>,
-    parent_agent_id: Option<String>,
-    task_id: Option<String>,
-    agent_name: Option<String>,
-    call_purpose: Option<String>,
-    provider: Option<String>,
-    estimated_cost_usd: Option<f64>,
-    total_estimated_cost_usd: Option<f64>,
-    unpriced_calls: Option<i64>,
 }
 
 impl From<&SessionEvent> for EventProjection {

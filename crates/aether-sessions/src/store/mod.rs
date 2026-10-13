@@ -183,12 +183,7 @@ impl SessionStore {
     }
 
     fn append_line<T: Serialize>(&self, session_id: &str, value: &T) -> Result<(), SessionStoreError> {
-        fs::create_dir_all(&self.dir)?;
-        let path = self.session_path(session_id);
-        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
-        let line = serde_json::to_string(value)?;
-        writeln!(file, "{line}")?;
-        Ok(())
+        Ok(append_to_jsonl(&self.session_path(session_id), &serde_json::to_string(value)?)?)
     }
 
     fn session_path(&self, session_id: &str) -> PathBuf {
@@ -308,4 +303,11 @@ fn extract_title(content: &[ContentBlock]) -> String {
     let first_line =
         ContentBlock::first_text(content).and_then(|text| text.lines().next()).unwrap_or("Media prompt").trim();
     truncate_for_preview(first_line)
+}
+
+fn append_to_jsonl(path: &Path, line: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    OpenOptions::new().create(true).append(true).open(path)?.write_all(format!("{line}\n").as_bytes())
 }
