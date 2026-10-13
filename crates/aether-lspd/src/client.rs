@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
+use lsp_types::request::{DocumentSymbolRequest, GotoDefinition, HoverRequest, References, Rename, Request};
 use lsp_types::{
     DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
     Location, PartialResultParams, Position, PublishDiagnosticsParams, ReferenceContext, ReferenceParams, RenameParams,
@@ -86,14 +87,11 @@ impl LspClient {
 
     pub async fn goto_definition(&self, uri: Uri, line: u32, character: u32) -> ClientResult<GotoDefinitionResponse> {
         let params = GotoDefinitionParams {
-            text_document_position_params: TextDocumentPositionParams {
-                text_document: TextDocumentIdentifier { uri },
-                position: Position { line, character },
-            },
+            text_document_position_params: position(uri, line, character),
             work_done_progress_params: WorkDoneProgressParams::default(),
             partial_result_params: PartialResultParams::default(),
         };
-        self.call("textDocument/definition", &params, || GotoDefinitionResponse::Array(vec![])).await
+        self.call(GotoDefinition::METHOD, &params, || GotoDefinitionResponse::Array(vec![])).await
     }
 
     pub async fn find_references(
@@ -104,35 +102,29 @@ impl LspClient {
         include_declaration: bool,
     ) -> ClientResult<Vec<Location>> {
         let params = ReferenceParams {
-            text_document_position: TextDocumentPositionParams {
-                text_document: TextDocumentIdentifier { uri },
-                position: Position { line, character },
-            },
+            text_document_position: position(uri, line, character),
             work_done_progress_params: WorkDoneProgressParams::default(),
             partial_result_params: PartialResultParams::default(),
             context: ReferenceContext { include_declaration },
         };
-        self.call("textDocument/references", &params, Vec::new).await
+        self.call(References::METHOD, &params, Vec::new).await
     }
 
     pub async fn hover(&self, uri: Uri, line: u32, character: u32) -> ClientResult<Option<Hover>> {
         let params = HoverParams {
-            text_document_position_params: TextDocumentPositionParams {
-                text_document: TextDocumentIdentifier { uri },
-                position: Position { line, character },
-            },
+            text_document_position_params: position(uri, line, character),
             work_done_progress_params: WorkDoneProgressParams::default(),
         };
-        self.call("textDocument/hover", &params, || None).await
+        self.call(HoverRequest::METHOD, &params, || None).await
     }
 
     pub async fn document_symbol(&self, uri: Uri) -> ClientResult<DocumentSymbolResponse> {
         let params = DocumentSymbolParams {
-            text_document: TextDocumentIdentifier { uri },
+            text_document: TextDocumentIdentifier::new(uri),
             work_done_progress_params: WorkDoneProgressParams::default(),
             partial_result_params: PartialResultParams::default(),
         };
-        self.call("textDocument/documentSymbol", &params, || DocumentSymbolResponse::Flat(vec![])).await
+        self.call(DocumentSymbolRequest::METHOD, &params, || DocumentSymbolResponse::Flat(vec![])).await
     }
 
     pub async fn rename(
@@ -143,14 +135,11 @@ impl LspClient {
         new_name: String,
     ) -> ClientResult<Option<WorkspaceEdit>> {
         let params = RenameParams {
-            text_document_position: TextDocumentPositionParams {
-                text_document: TextDocumentIdentifier { uri },
-                position: Position { line, character },
-            },
+            text_document_position: position(uri, line, character),
             new_name,
             work_done_progress_params: WorkDoneProgressParams::default(),
         };
-        self.call("textDocument/rename", &params, || None).await
+        self.call(Rename::METHOD, &params, || None).await
     }
 
     pub async fn get_diagnostics(&self, uri: Option<Uri>) -> ClientResult<Vec<PublishDiagnosticsParams>> {
@@ -387,4 +376,8 @@ fn find_daemon_binary() -> ClientResult<(PathBuf, Option<&'static str>)> {
 fn which_aether_lspd() -> Option<PathBuf> {
     std::env::var_os("PATH")
         .and_then(|paths| std::env::split_paths(&paths).map(|path| path.join("aether-lspd")).find(|path| path.exists()))
+}
+
+fn position(uri: Uri, line: u32, character: u32) -> TextDocumentPositionParams {
+    TextDocumentPositionParams::new(TextDocumentIdentifier::new(uri), Position::new(line, character))
 }

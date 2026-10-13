@@ -53,46 +53,28 @@ impl DiagnosticsStore {
     }
 
     pub(crate) async fn wait_for_uri_fresh(&self, uri: &Uri, version_before: u64, timeout: Duration) {
-        let deadline = tokio::time::Instant::now() + timeout;
+        let _ = tokio::time::timeout(timeout, self.wait_for_uri_settled(uri, version_before)).await;
+    }
 
+    async fn wait_for_uri_settled(&self, uri: &Uri, version_before: u64) {
         loop {
-            let current_version = self.current_uri_version(uri);
-            if current_version != version_before {
+            let published = self.notify.notified();
+            if self.current_uri_version(uri) != version_before {
                 break;
             }
-
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                return;
-            }
-
-            tokio::select! {
-                () = self.notify.notified() => {}
-                () = tokio::time::sleep(remaining) => return,
-            }
+            published.await;
         }
 
         let mut last_version = self.current_uri_version(uri);
         loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                return;
-            }
-
-            let settle_wait = DIAGNOSTICS_SETTLE_DURATION.min(remaining);
             tokio::select! {
-                () = self.notify.notified() => {
-                    let new_version = self.current_uri_version(uri);
-                    if new_version != last_version {
-                        last_version = new_version;
-                    }
-                }
-                () = tokio::time::sleep(settle_wait) => {
-                    let final_version = self.current_uri_version(uri);
-                    if final_version == last_version {
+                () = self.notify.notified() => last_version = self.current_uri_version(uri),
+                () = tokio::time::sleep(DIAGNOSTICS_SETTLE_DURATION) => {
+                    let version = self.current_uri_version(uri);
+                    if version == last_version {
                         return;
                     }
-                    last_version = final_version;
+                    last_version = version;
                 }
             }
         }
