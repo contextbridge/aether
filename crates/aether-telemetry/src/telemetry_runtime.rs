@@ -3,7 +3,7 @@ use crate::content_capture::ContentCaptureSettings;
 use crate::error::{TelemetryInitError, TelemetryShutdownError};
 use crate::gen_ai_metrics::GenAiMetrics;
 use crate::genai_constants;
-use crate::otel_observer::OtelInstrumentation;
+use crate::otel_observer::{OtelInstrumentation, execute_tool_attributes};
 use crate::span_guard::{ErrorKind, SpanGuard};
 use crate::trace_context::{extract_trace_context, inject_trace_context};
 use aether_core::events::{
@@ -118,15 +118,9 @@ impl ObserverFactory for OtelObserverFactory {
 
     fn tool_call_request(&self, tool_name: &str, parent: Option<&TraceContext>) -> Box<dyn McpRequestInstrumentation> {
         let remote_parent = parent.and_then(extract_trace_context);
-        let attributes = vec![
-            KeyValue::new(genai_constants::GEN_AI_OPERATION_NAME, "execute_tool"),
-            KeyValue::new(genai_constants::GEN_AI_TOOL_NAME, tool_name.to_string()),
-            KeyValue::new(genai_constants::MCP_METHOD_NAME, TOOLS_CALL_METHOD),
-            KeyValue::new(genai_constants::MCP_TOOL_NAME, tool_name.to_string()),
-        ];
         let builder = SpanBuilder::from_name(format!("{TOOLS_CALL_METHOD} {tool_name}"))
             .with_kind(SpanKind::Server)
-            .with_attributes(attributes);
+            .with_attributes(execute_tool_attributes(tool_name, tool_name));
         let context = self
             .instrumentation
             .start_span(builder, remote_parent.as_ref().or(self.instrumentation.root_parent.as_ref()));
