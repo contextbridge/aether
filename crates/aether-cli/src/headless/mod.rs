@@ -145,14 +145,7 @@ impl RunConfig {
         let provider_connections = args.provider_connection.clone().into_overrides();
         let oauth_credential_store = oauth_credential_store_from_config(settings.credentials_store.clone())?;
         let telemetry = settings.telemetry.clone();
-        let selection = match (args.agent, args.model) {
-            (Some(agent), None) => InitialSessionSelection::Agent(agent),
-            (None, Some(model)) => InitialSessionSelection::Model { model, reasoning_effort: None },
-            (None, None) => InitialSessionSelection::Default,
-            (Some(_), Some(_)) => {
-                return Err(CliError::ConflictingArgs("Cannot specify both --agent and --model".to_string()));
-            }
-        };
+        let selection = InitialSessionSelection::from_flags(args.agent, args.model, None)?;
         let resolved = resolve_agent_from_settings(&cwd, settings, provider_connections, &selection)?;
         let mcp_config = args.mcp_config.load(&cwd)?;
 
@@ -180,14 +173,7 @@ impl RunConfig {
         let provider_connections = ProviderConnectionOverrides::new(options.providers.unwrap_or_default());
         let oauth_credential_store = oauth_credential_store_from_config(settings.credentials_store.clone())?;
         let telemetry = settings.telemetry.clone();
-        let selection = match (options.agent, options.model) {
-            (Some(agent), None) => InitialSessionSelection::Agent(agent),
-            (None, Some(model)) => InitialSessionSelection::Model { model, reasoning_effort: None },
-            (None, None) => InitialSessionSelection::Default,
-            (Some(_), Some(_)) => {
-                return Err(CliError::ConflictingArgs("Cannot specify both --agent and --model".to_string()));
-            }
-        };
+        let selection = InitialSessionSelection::from_flags(options.agent, options.model, None)?;
         let resolved = resolve_agent_from_settings(&cwd, settings, provider_connections, &selection)?;
         Ok(Self {
             prompt,
