@@ -62,7 +62,6 @@ schemars = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 futures = { workspace = true }
-dirs = { workspace = true }
 uuid = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.19" }
 tempfile = { workspace = true }

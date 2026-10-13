@@ -1,14 +1,12 @@
 use aether_sessions::analytics::SessionIndexError;
+use aether_sessions::sessions_dir;
 use std::path::PathBuf;
+use utils::settings::aether_home;
 
 pub(crate) fn default_sessions_dir() -> Result<PathBuf, SessionIndexError> {
-    Ok(default_aether_home()?.join("sessions"))
+    sessions_dir().ok_or(SessionIndexError::MissingAetherHome)
 }
 
 pub(crate) fn default_db_path() -> Result<PathBuf, SessionIndexError> {
-    Ok(default_aether_home()?.join("session-index.sqlite"))
-}
-
-fn default_aether_home() -> Result<PathBuf, SessionIndexError> {
-    utils::settings::aether_home().ok_or(SessionIndexError::MissingAetherHome)
+    aether_home().map(|home| home.join("session-index.sqlite")).ok_or(SessionIndexError::MissingAetherHome)
 }

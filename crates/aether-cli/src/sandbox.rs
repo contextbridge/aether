@@ -6,6 +6,8 @@ use std::process::{Command, ExitCode};
 
 use llm::LlmModel;
 use thiserror::Error;
+use utils::home_dir;
+use utils::settings::aether_home;
 
 /// Credentials and settings not covered by `LlmModel::ALL_REQUIRED_ENV_VARS`.
 ///
@@ -79,8 +81,8 @@ fn try_exec_in_container(image: &str) -> Result<ExitCode, SandboxError> {
     check_image(image)?;
 
     let cwd = env::current_dir().map_err(SandboxError::ExecFailed)?;
-    let home = dirs::home_dir().ok_or(SandboxError::HomeNotResolvable)?;
-    let aether_home = resolve_aether_home(&home);
+    let home = home_dir().ok_or(SandboxError::HomeNotResolvable)?;
+    let aether_home = aether_home().ok_or(SandboxError::HomeNotResolvable)?;
     let args: Vec<String> = env::args().collect();
     let inner_args = filter_sandbox_arg(&args);
     let mut env_vars = select_forwarded_vars(env::vars());
@@ -122,10 +124,6 @@ fn check_image(image: &str) -> Result<(), SandboxError> {
     }
 
     Ok(())
-}
-
-fn resolve_aether_home(home: &Path) -> PathBuf {
-    env::var("AETHER_HOME").map_or_else(|_| home.join(".aether"), PathBuf::from)
 }
 
 fn aws_bindings(home: &Path, env_vars: &[(String, String)]) -> AwsBindings {

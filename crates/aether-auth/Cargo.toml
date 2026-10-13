@@ -27,13 +27,13 @@ sigv4 = ["dep:aws-config", "dep:aws-credential-types", "dep:aws-sigv4"]
 [dependencies]
 age = { workspace = true }
 async-trait = { workspace = true }
-dirs = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "sync", "io-util", "net", "time"] }
 tracing = { workspace = true }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.19" }
 
 # keyring feature
 keyring-core = { workspace = true, optional = true }

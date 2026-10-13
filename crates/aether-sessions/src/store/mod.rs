@@ -83,10 +83,13 @@ pub struct SessionStore {
     prompt_history: PromptHistoryIndex,
 }
 
+pub fn sessions_dir() -> Option<PathBuf> {
+    aether_home().map(|home| home.join("sessions"))
+}
+
 impl SessionStore {
     pub fn new() -> Result<Self, SessionStoreError> {
-        let home = aether_home().ok_or(SessionStoreError::MissingAetherHome)?;
-        Ok(Self::from_path(home.join("sessions")))
+        sessions_dir().map(Self::from_path).ok_or(SessionStoreError::MissingAetherHome)
     }
 
     pub fn from_path(dir: PathBuf) -> Self {
