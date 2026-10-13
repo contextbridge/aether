@@ -490,13 +490,7 @@ mod tests {
 
     #[test]
     fn test_tool_call_maps_to_tool_call_notification() -> Result<(), String> {
-        let message = AgentEvent::Tool(ToolEvent::Call {
-            request: ToolCallRequest {
-                id: "call_1".to_string(),
-                name: "coding__read_file".to_string(),
-                arguments: "{}".to_string(),
-            },
-        });
+        let message = AgentEvent::tool_call("call_1", "coding__read_file", "{}");
 
         let notification = map_agent_event_to_session_notification(&message).ok_or("notification")?;
 
@@ -520,11 +514,7 @@ mod tests {
     fn test_tool_progress_with_invalid_json_falls_back_to_simple_message() -> Result<(), String> {
         // Simulate a tool progress message with invalid JSON
         let tool_progress = AgentEvent::Tool(ToolEvent::Progress {
-            request: ToolCallRequest {
-                id: "call_456".to_string(),
-                name: "some_tool".to_string(),
-                arguments: "{}".to_string(),
-            },
+            request: request("{}"),
             progress: 50.0,
             total: None,
             message: Some("not valid json".to_string()),
@@ -551,14 +541,9 @@ mod tests {
 
     #[test]
     fn test_tool_call_notification_includes_original_tool_name() -> Result<(), String> {
-        let request = ToolCallRequest {
-            id: "call_1".to_string(),
-            name: "coding__read_file".to_string(),
-            arguments: "{}".to_string(),
-        };
-
         let notification =
-            map_agent_event_to_session_notification(&AgentEvent::Tool(ToolEvent::Call { request })).unwrap();
+            map_agent_event_to_session_notification(&AgentEvent::tool_call("call_1", "coding__read_file", "{}"))
+                .unwrap();
         let SessionUpdate::ToolCallUpdate(tool_call) = notification else {
             return Err("Expected ToolCall".to_string());
         };
@@ -571,19 +556,9 @@ mod tests {
     fn test_result_with_result_meta_sets_meta() -> Result<(), String> {
         use utils::display_meta::ToolDisplayMeta;
 
-        let result = ToolCallResult {
-            id: "call_1".to_string(),
-            name: "coding__read_file".to_string(),
-            arguments: "{}".to_string(),
-            result: "file contents".to_string(),
-        };
         let rm: ToolResultMeta = ToolDisplayMeta::new("Read file", "Cargo.toml, 156 lines").into();
 
-        let notification = map_agent_event_to_session_notification(&AgentEvent::Tool(ToolEvent::Result {
-            result,
-            result_meta: Some(rm),
-        }))
-        .unwrap();
+        let notification = map_agent_event_to_session_notification(&result_event(Some(rm))).unwrap();
         let update = match notification {
             SessionUpdate::ToolCallUpdate(update) => update,
             other => return Err(format!("Expected ToolCallUpdate, got {other:?}")),
@@ -601,16 +576,13 @@ mod tests {
 
     #[test]
     fn test_result_without_result_meta() -> Result<(), String> {
-        let result = ToolCallResult {
-            id: "call_1".to_string(),
-            name: "external__some_tool".to_string(),
-            arguments: "{}".to_string(),
-            result: "ok".to_string(),
-        };
-
-        let notification =
-            map_agent_event_to_session_notification(&AgentEvent::Tool(ToolEvent::Result { result, result_meta: None }))
-                .unwrap();
+        let notification = map_agent_event_to_session_notification(&AgentEvent::tool_result(
+            "call_1",
+            "external__some_tool",
+            "{}",
+            "ok",
+        ))
+        .unwrap();
         let update = match notification {
             acp::SessionUpdate::ToolCallUpdate(update) => update,
             other => return Err(format!("Expected ToolCallUpdate, got {other:?}")),

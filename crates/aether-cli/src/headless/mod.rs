@@ -67,31 +67,18 @@ pub struct RunConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[schemars(rename = "AetherHeadlessCliOptions")]
 pub struct HeadlessOptions {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub providers: Option<BTreeMap<String, ProviderConnectionOverride>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<AetherSettings>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings_file: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_config: Option<McpConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<OutputFormat>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verbose: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub events: Option<Vec<CliEventKind>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_context: Option<AgentTraceContext>,
 }
 
