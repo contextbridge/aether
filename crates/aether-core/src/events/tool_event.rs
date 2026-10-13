@@ -1,5 +1,4 @@
 use super::SubAgentProgressPayload;
-use llm::types::IsoString;
 use llm::{ChatMessage, ContentBlock, MessageId, ToolCallError, ToolCallRequest, ToolCallResult, ToolDefinition};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -149,11 +148,7 @@ pub fn task_created_result(request: &ToolCallRequest, task_id: &str) -> ToolCall
 const TASK_CANCELLED_BODY: &str = "The background task was cancelled and will not produce a result.";
 
 fn task_result_message(request: &ToolCallRequest, task_id: &str, status: &str, body: &str) -> ChatMessage {
-    ChatMessage::User {
-        message_id: MessageId::task_result(task_id),
-        content: task_result_content(request, task_id, status, body),
-        timestamp: IsoString::now(),
-    }
+    ChatMessage::user_with_id(MessageId::task_result(task_id), task_result_content(request, task_id, status, body))
 }
 
 fn task_result_content(request: &ToolCallRequest, task_id: &str, status: &str, body: &str) -> Vec<ContentBlock> {

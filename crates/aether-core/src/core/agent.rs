@@ -1,11 +1,11 @@
 use crate::context::{
     CompactionConfig, CompactionError, CompactionResult, Compactor, SessionUsageTracker, TokenTracker,
 };
-use crate::core::PromptCache;
 use crate::core::prompt_cache_key::derive_prompt_cache_key;
 use crate::core::queued_input::QueuedInput;
 pub use crate::core::retry_config::RetryConfig;
 use crate::core::tool_execution::{ToolAbortPolicy, ToolExecutionUpdate, ToolExecutions};
+use crate::core::{AgentBuilder, PromptCache};
 use crate::events::{
     AgentCommand, AgentEvent, AgentObserver, Command, CompactionId, CompactionOutcome, ContextEvent, LlmCallOutcome,
     ModelEvent, StreamState, TaskOutcome, TaskOutcomeState, ToolEvent, TraceContext, TurnEvent, TurnOutcome,
@@ -58,20 +58,6 @@ enum StreamKey {
     Tool(String),
 }
 
-pub(crate) struct AgentConfig {
-    pub llm: Arc<dyn StreamingModelProvider>,
-    pub context: Context,
-    pub mcp: McpCatalog,
-    pub tool_timeout: Duration,
-    pub compaction_config: Option<CompactionConfig>,
-    pub auto_continue: AutoContinue,
-    pub retry_config: RetryConfig,
-    pub context_window: Option<u32>,
-    pub prompt_cache: PromptCache,
-    pub observers: Vec<Box<dyn AgentObserver>>,
-    pub session_usage: SessionUsageTracker,
-}
-
 pub struct Agent {
     llm: Arc<dyn StreamingModelProvider>,
     context: Context,
@@ -98,42 +84,56 @@ pub struct Agent {
 
 impl Agent {
     pub(crate) fn new(
-        config: AgentConfig,
+        builder: AgentBuilder,
+        context: Context,
+        prompt_cache: PromptCache,
         command_rx: mpsc::Receiver<Command>,
         message_tx: mpsc::Sender<AgentEvent>,
     ) -> Self {
+        let AgentBuilder {
+            llm,
+            mcp,
+            tool_timeout,
+            compaction_config,
+            max_auto_continues,
+            retry_config,
+            context_window,
+            observers,
+            session_usage,
+            ..
+        } = builder;
         let mut streams: StreamMap<StreamKey, EventStream> = StreamMap::new();
         let input_stream = ReceiverStream::new(command_rx)
             .map(StreamEvent::Command)
             .chain(futures::stream::once(async { StreamEvent::InputClosed }));
         streams.insert(StreamKey::Input, Box::pin(input_stream));
 
-        streams.insert(StreamKey::Mcp, Box::pin(config.mcp.changes().map(|()| StreamEvent::McpChanged)));
+        streams.insert(StreamKey::Mcp, Box::pin(mcp.changes().map(|()| StreamEvent::McpChanged)));
 
-        let context_limit = config.context_window.or_else(|| config.llm.context_window());
+        let context_limit = context_window.or_else(|| llm.context_window());
 
         Self {
-            llm: config.llm,
-            context: config.context,
-            mcp: config.mcp,
+            llm,
+            context,
+            mcp,
             message_tx,
-            observers: Observers(config.observers),
+            observers: Observers(observers),
             streams,
-            tool_timeout: config.tool_timeout,
+            tool_timeout,
             token_tracker: TokenTracker::new(context_limit),
-            compaction_config: config.compaction_config,
-            auto_continue: config.auto_continue,
-            retry_config: config.retry_config,
+            compaction_config,
+            auto_continue: AutoContinue::new(max_auto_continues),
+            retry_config,
             tool_executions: ToolExecutions::default(),
             pending_inputs: VecDeque::new(),
             queued_inputs: VecDeque::new(),
-            context_window: config.context_window,
-            prompt_cache: config.prompt_cache,
+            context_window,
+            prompt_cache,
             turn_active: false,
             llm_call_active: false,
             active_compaction: None,
             active_model: None,
-            session_usage: config.session_usage,
+            session_usage,
         }
     }
 
@@ -459,12 +459,12 @@ impl Agent {
                 outcome: call_outcome,
             }))
             .await;
-            self.emit(AgentEvent::Context(ContextEvent::CompactionEnded {
-                compaction_id,
-                outcome: compaction_outcome,
-            }))
-            .await;
+            self.emit_compaction_ended(compaction_id, compaction_outcome).await;
         }
+    }
+
+    async fn emit_compaction_ended(&mut self, compaction_id: CompactionId, outcome: CompactionOutcome) {
+        self.emit(AgentEvent::Context(ContextEvent::CompactionEnded { compaction_id, outcome })).await;
     }
 
     /// Inject a continuation prompt when the LLM stops due to a resumable reason.
@@ -642,7 +642,7 @@ impl Agent {
         };
         self.emit(AgentEvent::Turn(TurnEvent::LlmCallEnded { purpose: LlmCallPurpose::Compaction, outcome })).await;
 
-        match result {
+        let compaction_outcome = match result {
             Ok(result) => {
                 tracing::info!("Context compacted: {} messages removed", result.messages_removed);
                 let message_id = MessageId::new();
@@ -655,21 +655,14 @@ impl Agent {
                     messages_removed: result.messages_removed,
                 }))
                 .await;
-                self.emit(AgentEvent::Context(ContextEvent::CompactionEnded {
-                    compaction_id,
-                    outcome: CompactionOutcome::Completed,
-                }))
-                .await;
+                CompactionOutcome::Completed
             }
             Err(e) => {
                 tracing::warn!("Context compaction failed: {e}");
-                self.emit(AgentEvent::Context(ContextEvent::CompactionEnded {
-                    compaction_id,
-                    outcome: CompactionOutcome::Failed { error: e.to_string() },
-                }))
-                .await;
+                CompactionOutcome::Failed { error: e.to_string() }
             }
-        }
+        };
+        self.emit_compaction_ended(compaction_id, compaction_outcome).await;
 
         self.start_chat_turn().await;
     }
