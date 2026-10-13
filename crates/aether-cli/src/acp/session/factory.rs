@@ -23,6 +23,7 @@ use super::hooks::SessionHooks;
 use super::model::{Modes, pick_default_model};
 use super::runtime::{ProductionRuntimeFactory, RuntimeFactory};
 use crate::acp::protocol::mcp::map_acp_mcp_servers;
+use crate::acp::state::AcpStateConfig;
 use crate::resolve::{InitialSessionSelection, resolve_agent_from_catalog};
 use crate::settings_args::SettingsSourceArgs;
 use aether_sessions::{SessionStore, SessionStoreError};
@@ -71,26 +72,16 @@ impl PreparedSession {
 }
 
 impl SessionFactory {
-    #[expect(clippy::too_many_arguments, reason = "factory construction supplies all session dependencies")]
-    pub(crate) fn new(
-        settings_source: SettingsSourceArgs,
-        provider_connections: ProviderConnectionOverrides,
-        oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
-        session_store: Arc<SessionStore>,
-        initial_selection: InitialSessionSelection,
-        observer_factory: Option<DynObserverFactory>,
-        runtime_factory: Option<Arc<dyn RuntimeFactory>>,
-        hooks: SessionHooks,
-    ) -> Self {
+    pub(crate) fn new(config: &AcpStateConfig) -> Self {
         Self {
-            settings_source,
-            provider_connections,
-            oauth_credential_store,
-            session_store,
-            initial_selection,
-            observer_factory,
-            runtime_factory,
-            hooks,
+            settings_source: config.settings_source.clone(),
+            provider_connections: config.provider_connections.clone(),
+            oauth_credential_store: Arc::clone(&config.oauth_credential_store),
+            session_store: Arc::clone(&config.session_store),
+            initial_selection: config.initial_selection.clone(),
+            observer_factory: config.telemetry.as_ref().map(|runtime| runtime.observer_factory()),
+            runtime_factory: config.runtime_factory.clone(),
+            hooks: config.hooks.clone(),
             available: OnceCell::new(),
             elicitation: OnceLock::new(),
         }
@@ -109,12 +100,11 @@ impl SessionFactory {
         args: NewSessionRequest,
         cx: Option<&ConnectionTo<Client>>,
     ) -> Result<PreparedSession, Error> {
-        let cwd = args.cwd.clone().into_inner();
-        let mcp_servers = args.mcp_servers.clone();
-        info!("Creating new session with cwd: {:?}", args.cwd);
+        let cwd = args.cwd.into_inner();
+        info!("Creating new session with cwd: {cwd:?}");
         let session_id = uuid::Uuid::new_v4().to_string();
 
-        let mut mode_catalog = self.load_mode_catalog(args.cwd.as_ref()).await?;
+        let mut mode_catalog = self.load_mode_catalog(&cwd).await?;
         let default_model = pick_default_model(&mode_catalog.available).cloned().ok_or_else(|| {
             error!("No models available — set an API key env var (e.g. ANTHROPIC_API_KEY)");
             Error::internal_error()
@@ -123,7 +113,7 @@ impl SessionFactory {
 
         let meta = SessionMeta {
             session_id: session_id.clone(),
-            cwd: args.cwd.clone().into_inner(),
+            cwd: cwd.clone(),
             model: resolved.config.active_model.clone(),
             selected_mode: resolved.config.selected_mode.clone(),
             created_at: IsoString::now().0,
@@ -132,19 +122,10 @@ impl SessionFactory {
             error!("Failed to write session meta: {e}");
         }
 
-        let runtime_factory = self.runtime_factory.clone().unwrap_or_else(|| {
-            self.production_runtime_factory(
-                args.cwd.into_inner(),
-                args.mcp_servers,
-                mode_catalog.specs.catalog(),
-                &session_id,
-            )
-        });
         Ok(self.prepare_session(
             SessionId::new(session_id),
             cwd,
-            mcp_servers,
-            runtime_factory,
+            args.mcp_servers,
             mode_catalog,
             resolved,
             Vec::new(),
@@ -159,17 +140,8 @@ impl SessionFactory {
         cx: &ConnectionTo<Client>,
         replay: bool,
     ) -> Result<PreparedSession, Error> {
-        self.restore(args.session_id, args.cwd.into_inner(), args.mcp_servers, cx, replay).await
-    }
-
-    async fn restore(
-        &self,
-        session_id: SessionId,
-        cwd: PathBuf,
-        mcp_servers: Vec<acp::McpServer>,
-        cx: &ConnectionTo<Client>,
-        replay: bool,
-    ) -> Result<PreparedSession, Error> {
+        let ResumeSessionRequest { session_id, cwd, mcp_servers, .. } = args;
+        let cwd = cwd.into_inner();
         let session_id_string = session_id.0.to_string();
         info!("Restoring session: {session_id_string}");
 
@@ -186,25 +158,7 @@ impl SessionFactory {
 
         let mut mode_catalog = self.load_mode_catalog(&cwd).await?;
         let resolved = resolve_loaded_session(&mut mode_catalog, &meta, &events)?;
-        let runtime_factory = self.runtime_factory.clone().unwrap_or_else(|| {
-            self.production_runtime_factory(
-                cwd.clone(),
-                mcp_servers.clone(),
-                mode_catalog.specs.catalog(),
-                session_id.0.as_ref(),
-            )
-        });
-        Ok(self.prepare_session(
-            session_id,
-            cwd,
-            mcp_servers,
-            runtime_factory,
-            mode_catalog,
-            resolved,
-            events,
-            replay,
-            Some(cx),
-        ))
+        Ok(self.prepare_session(session_id, cwd, mcp_servers, mode_catalog, resolved, events, replay, Some(cx)))
     }
 
     fn production_runtime_factory(
@@ -232,13 +186,20 @@ impl SessionFactory {
         session_id: SessionId,
         cwd: PathBuf,
         mcp_servers: Vec<acp::McpServer>,
-        runtime_factory: Arc<dyn RuntimeFactory>,
         mode_catalog: SessionModeCatalog,
         resolved: ResolvedSession,
         transcript: Vec<SessionEvent>,
         replay: bool,
         cx: Option<&ConnectionTo<Client>>,
     ) -> PreparedSession {
+        let runtime_factory = self.runtime_factory.clone().unwrap_or_else(|| {
+            self.production_runtime_factory(
+                cwd.clone(),
+                mcp_servers.clone(),
+                mode_catalog.specs.catalog(),
+                session_id.0.as_ref(),
+            )
+        });
         let init = SessionActorInit {
             session_id,
             cwd,
