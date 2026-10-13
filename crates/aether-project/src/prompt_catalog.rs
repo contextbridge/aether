@@ -9,7 +9,7 @@
 use crate::error::SettingsError;
 use crate::prompt_file::{PromptFile, SKILL_FILENAME};
 use std::collections::{HashMap, HashSet};
-use std::fs::{DirEntry, read_dir};
+use std::fs::{DirEntry, ReadDir, read_dir};
 use std::path::{Path, PathBuf};
 
 /// A catalog of prompt artifacts discovered from `.aether/skills/`.
@@ -23,17 +23,8 @@ impl PromptCatalog {
     ///
     /// `skills_dir` is typically `<project_root>/.aether/skills` or `<base_dir>/skills`.
     pub fn from_dir(skills_dir: &Path) -> Result<Self, SettingsError> {
-        let mut prompts = Vec::new();
-
-        for entry in read_dir(skills_dir).map_err(|e| SettingsError::IoError(e.to_string()))?.filter_map(Result::ok) {
-            if let Some(p) = get_path(&entry) {
-                match PromptFile::parse(&p) {
-                    Ok(spec) => prompts.push(spec),
-                    Err(err) => tracing::warn!("Skipping invalid skill at {}: {err}", p.display()),
-                }
-            }
-        }
-
+        let entries = read_dir(skills_dir).map_err(|e| SettingsError::IoError(e.to_string()))?;
+        let prompts: Vec<PromptFile> = parse_skills(entries).collect();
         validate_catalog(&prompts)?;
 
         Ok(Self { specs: prompts })
@@ -50,19 +41,7 @@ impl PromptCatalog {
                 tracing::warn!("Skills directory does not exist, skipping: {}", dir.display());
                 continue;
             };
-
-            for entry in entries.filter_map(Result::ok) {
-                if let Some(p) = get_path(&entry) {
-                    match PromptFile::parse(&p) {
-                        Ok(spec) => {
-                            seen.insert(spec.name.clone(), spec);
-                        }
-                        Err(err) => {
-                            tracing::warn!("Skipping invalid skill at {}: {err}", p.display());
-                        }
-                    }
-                }
-            }
+            seen.extend(parse_skills(entries).map(|spec| (spec.name.clone(), spec)));
         }
 
         Self { specs: seen.into_values().collect() }
@@ -97,6 +76,14 @@ impl PromptCatalog {
     pub fn matching_rules(&self, relative_path: &str) -> Vec<&PromptFile> {
         self.specs.iter().filter(|s| s.triggers.matches_read(relative_path)).collect()
     }
+}
+
+fn parse_skills(entries: ReadDir) -> impl Iterator<Item = PromptFile> {
+    entries.filter_map(Result::ok).filter_map(|entry| get_path(&entry)).filter_map(|path| {
+        PromptFile::parse(&path)
+            .inspect_err(|err| tracing::warn!("Skipping invalid skill at {}: {err}", path.display()))
+            .ok()
+    })
 }
 
 fn get_path(entry: &DirEntry) -> Option<PathBuf> {

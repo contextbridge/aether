@@ -55,21 +55,6 @@ pub fn project_settings_exist(project_root: &Path) -> bool {
     project_settings_path(project_root).is_file()
 }
 
-/// Root that file-backed settings resources resolve against for the settings file at
-/// `settings_path`: the project root (the parent of `.aether`) when the settings file lives in a
-/// `.aether` directory, otherwise the settings file's directory.
-pub fn settings_resource_root(settings_path: &Path) -> PathBuf {
-    let Some(settings_dir) = settings_path.parent() else {
-        return PathBuf::from(".");
-    };
-
-    if settings_dir.file_name().and_then(|name| name.to_str()) == Some(".aether") {
-        return settings_dir.parent().unwrap_or(settings_dir).to_path_buf();
-    }
-
-    settings_dir.to_path_buf()
-}
-
 #[doc = include_str!("docs/aether_settings.md")]
 #[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -210,26 +195,6 @@ impl TelemetrySettings {
 }
 
 impl TelemetryContentSettings {
-    pub fn system_instructions(&self) -> bool {
-        self.system_instructions.unwrap_or(false)
-    }
-
-    pub fn input_messages(&self) -> bool {
-        self.input_messages.unwrap_or(false)
-    }
-
-    pub fn output_messages(&self) -> bool {
-        self.output_messages.unwrap_or(false)
-    }
-
-    pub fn tool_definitions(&self) -> bool {
-        self.tool_definitions.unwrap_or(false)
-    }
-
-    pub fn tool_calls(&self) -> bool {
-        self.tool_calls.unwrap_or(false)
-    }
-
     fn merge(&mut self, next: &Self) {
         merge_field(&mut self.system_instructions, next.system_instructions);
         merge_field(&mut self.input_messages, next.input_messages);
@@ -290,20 +255,8 @@ impl AetherSettings {
         })
     }
 
-    pub fn load_file_for_export(path: &Path) -> Result<Self, SettingsError> {
-        let content = read_to_string(path).map_err(|source| {
-            SettingsError::IoError(format!("failed to read settings file '{}': {source}", path.display()))
-        })?;
-        let mut settings = Self::try_from(content.as_str())?;
-        settings.inline_resources(&settings_resource_root(path))?;
-        Ok(settings)
-    }
-
     pub fn merge(mut self, next: Self) -> Self {
-        if next.agent.is_some() {
-            self.agent = next.agent;
-        }
-
+        merge_field(&mut self.agent, next.agent);
         if !next.prompts.is_empty() {
             self.prompts = next.prompts;
         }
@@ -312,10 +265,7 @@ impl AetherSettings {
         }
         self.providers.merge(next.providers);
 
-        if next.credentials_store.is_some() {
-            self.credentials_store = next.credentials_store;
-        }
-
+        merge_field(&mut self.credentials_store, next.credentials_store);
         if let Some(next_telemetry) = next.telemetry {
             self.telemetry.get_or_insert_default().merge(next_telemetry);
         }
@@ -338,13 +288,16 @@ impl AetherSettings {
     /// external file references, suitable for shipping to a machine or
     /// container that does not have the authoring repository mounted.
     pub fn inline_resources(&mut self, root: &Path) -> Result<(), SettingsError> {
-        self.prompts = inline_prompt_sources(&self.prompts, root)?;
-        self.mcps = inline_mcp_sources(&self.mcps, root)?;
-        for agent in &mut self.agents {
-            agent.prompts = inline_prompt_sources(&agent.prompts, root)?;
-            agent.mcps = inline_mcp_sources(&agent.mcps, root)?;
+        for (prompts, mcps) in self.resource_sources_mut() {
+            *prompts = inline_prompt_sources(prompts, root)?;
+            *mcps = inline_mcp_sources(mcps, root)?;
         }
         Ok(())
+    }
+
+    fn resource_sources_mut(&mut self) -> impl Iterator<Item = (&mut Vec<PromptSource>, &mut Vec<McpSourceSpec>)> {
+        std::iter::once((&mut self.prompts, &mut self.mcps))
+            .chain(self.agents.iter_mut().map(|agent| (&mut agent.prompts, &mut agent.mcps)))
     }
 
     fn load_source(project_root: &Path, source: AetherSettingsSource) -> Result<Self, SettingsError> {
@@ -364,7 +317,7 @@ fn default_sources(project_root: &Path) -> Vec<AetherSettingsSource> {
 fn default_sources_for_home(project_root: &Path, aether_home: Option<&Path>) -> Vec<AetherSettingsSource> {
     let mut sources = Vec::new();
     if let Some(aether_home) = aether_home {
-        sources.push(AetherSettingsSource::OptionalFile(SettingsFileSource::new("settings.json", aether_home)));
+        sources.push(AetherSettingsSource::OptionalFile(SettingsFileSource::new(USER_SETTINGS_FILENAME, aether_home)));
     }
     sources.push(AetherSettingsSource::OptionalFile(SettingsFileSource::new(PROJECT_SETTINGS_PATH, project_root)));
     sources
@@ -397,14 +350,10 @@ fn load_file(path: &Path, missing_is_empty: bool) -> Result<AetherSettings, Sett
 
 fn normalize_resource_paths(mut settings: AetherSettings, source_root: Option<&Path>) -> AetherSettings {
     let Some(root) = source_root else { return settings };
-    promote_prompt_sources(&mut settings.prompts, root);
-    promote_mcp_sources(&mut settings.mcps, root);
-
-    for agent in &mut settings.agents {
-        promote_prompt_sources(&mut agent.prompts, root);
-        promote_mcp_sources(&mut agent.mcps, root);
+    for (prompts, mcps) in settings.resource_sources_mut() {
+        promote_prompt_sources(prompts, root);
+        promote_mcp_sources(mcps, root);
     }
-
     settings
 }
 
@@ -649,12 +598,6 @@ mod tests {
     #[test]
     fn project_settings_path_points_at_project_aether_settings() {
         assert_eq!(project_settings_path(Path::new("/repo")), PathBuf::from("/repo/.aether/settings.json"));
-    }
-
-    #[test]
-    fn settings_resource_root_uses_project_root_for_aether_dir_settings() {
-        assert_eq!(settings_resource_root(Path::new("/repo/.aether/settings.json")), PathBuf::from("/repo"));
-        assert_eq!(settings_resource_root(Path::new("/repo/config/settings.json")), PathBuf::from("/repo/config"));
     }
 
     #[test]
