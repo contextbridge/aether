@@ -1,5 +1,5 @@
 use crate::coding::tools::bash::BashEnvironment;
-use crate::{CodingMcp, DefaultCodingTools, ReviewMcp, SkillsMcp, SubAgentsMcp, TasksMcp};
+use crate::{CodingMcp, ReviewMcp, SkillsMcp, SubAgentsMcp, TasksMcp};
 use aether_core::core::AgentDeps;
 use aether_core::mcp::{AETHER_MCP_IPC_SOCKET, McpBuilder, RuntimeServices, ToolFilter, mcp};
 use clap::{Parser, ValueEnum};
@@ -46,7 +46,9 @@ impl Builtin {
     pub fn build(self, args: Vec<String>, services: &RuntimeServices) -> Result<McpServer, clap::Error> {
         let root = services.root_dir.as_path();
         Ok(match self {
-            Self::Coding => CodingMcp::from_args(parse(args)?, root, coding_tools(services)).into(),
+            Self::Coding => {
+                CodingMcp::from_args(parse(args)?, root).with_bash_environment(bash_environment(services)).into()
+            }
             Self::Skills => SkillsMcp::from_args(parse(args)?, root).into(),
             Self::Tasks => TasksMcp::from_args(parse(args)?, root).into(),
             Self::Review => ReviewMcp::from_args(parse(args)?, root).into(),
@@ -59,11 +61,10 @@ fn parse<T: Parser>(args: Vec<String>) -> Result<T, clap::Error> {
     T::try_parse_from(args)
 }
 
-fn coding_tools(services: &RuntimeServices) -> DefaultCodingTools {
+fn bash_environment(services: &RuntimeServices) -> BashEnvironment {
     let environment = BashEnvironment::new().with_current_exe_dir_on_path();
-    let environment = match &services.deferred_tools_socket {
+    match &services.deferred_tools_socket {
         Some(socket) => environment.with_var(AETHER_MCP_IPC_SOCKET, socket.to_string_lossy()),
         None => environment,
-    };
-    DefaultCodingTools::new().with_bash_environment(environment)
+    }
 }

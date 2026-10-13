@@ -38,7 +38,7 @@ pub mod subagents;
 pub mod review;
 
 #[cfg(feature = "coding")]
-pub use coding::{CodingMcp, CodingMcpArgs, CodingTools, DefaultCodingTools, PermissionMode};
+pub use coding::{CodingMcp, CodingMcpArgs, PermissionMode};
 
 #[cfg(feature = "coding")]
 pub use lsp::LspRegistry;

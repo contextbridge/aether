@@ -104,9 +104,8 @@ pub async fn execute_command(
     command.envs(environment.vars());
     command.as_std_mut().process_group(0);
 
-    let child = command
-        .spawn()
-        .map_err(|error| BashError::SpawnFailed { command: args.command.clone(), reason: error.to_string() })?;
+    let spawn_failed = |reason: String| BashError::SpawnFailed { command: args.command.clone(), reason };
+    let child = command.spawn().map_err(|error| spawn_failed(error.to_string()))?;
     let mut process_group = ProcessGroupGuard::new(child.id());
     let mut child_task = tokio::spawn(child.wait_with_output());
 
@@ -132,14 +131,10 @@ pub async fn execute_command(
         }
         None => child_task.await,
     };
-    let output = match output {
-        Ok(output) => output,
-        Err(error) => {
-            return Err(BashError::SpawnFailed { command: args.command.clone(), reason: error.to_string() });
-        }
-    };
-    let output =
-        output.map_err(|error| BashError::SpawnFailed { command: args.command.clone(), reason: error.to_string() })?;
+    let output = output
+        .map_err(|error| error.to_string())
+        .and_then(|output| output.map_err(|error| error.to_string()))
+        .map_err(spawn_failed)?;
     process_group.disarm();
 
     let stdout = String::from_utf8_lossy(&output.stdout);

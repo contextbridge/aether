@@ -1,6 +1,6 @@
 use crate::common::{McpClientExt, TestResult, cancels_prompts, connect, scripted, tool_request};
+use mcp_servers::PermissionMode;
 use mcp_servers::coding::CodingMcp;
-use mcp_servers::{DefaultCodingTools, PermissionMode};
 use mcp_utils::client::{ClientOptions, ElicitationSink};
 use mcp_utils::model::{ElicitationCapability, UrlElicitationCapability};
 use rmcp::model::{ElicitRequestParams, ElicitResult, ElicitationAction, ErrorCode, InputResponses};
@@ -9,7 +9,7 @@ use serde_json::json;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 
-fn coding_mcp(root: &TempDir, mode: PermissionMode) -> CodingMcp<DefaultCodingTools> {
+fn coding_mcp(root: &TempDir, mode: PermissionMode) -> CodingMcp {
     CodingMcp::new(root.path()).with_permission_mode(mode)
 }
 
