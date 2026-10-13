@@ -106,19 +106,11 @@ impl SessionFactory {
 
     pub(crate) async fn prepare_new(
         &self,
-        mut args: NewSessionRequest,
+        args: NewSessionRequest,
         cx: Option<&ConnectionTo<Client>>,
     ) -> Result<PreparedSession, Error> {
         let cwd = args.cwd.clone().into_inner();
         let mcp_servers = args.mcp_servers.clone();
-        // Inside a sandbox container the client sends the *host* cwd, but the
-        // project is mounted at the container's working directory.
-        if std::env::var("AETHER_INSIDE_SANDBOX").is_ok() {
-            let container_cwd = std::env::current_dir().unwrap_or_else(|_| "/workspace".into());
-            info!("Sandbox: remapping cwd {:?} -> {:?}", args.cwd, container_cwd);
-            args.cwd = acp::AbsolutePath::new(container_cwd);
-        }
-
         info!("Creating new session with cwd: {:?}", args.cwd);
         let session_id = uuid::Uuid::new_v4().to_string();
 

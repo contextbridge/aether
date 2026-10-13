@@ -6,7 +6,7 @@ pub fn home_relative_path(path: &Path) -> String {
     home_dir().map_or_else(|| path.display().to_string(), |home| home_relative_path_with_home(path, &home))
 }
 
-pub fn home_dir() -> Option<PathBuf> {
+pub(crate) fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from)
 }
 
