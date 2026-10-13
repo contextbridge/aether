@@ -3,4 +3,4 @@ mod error;
 mod mcp_gateway;
 
 pub use error::GatewayError;
-pub use mcp_gateway::{ConnectedServer, McpGateway, ServerPrompt, ServerSpec, ServerState, ServerStatus};
+pub use mcp_gateway::{ConnectedServer, McpGateway, ServerPrompt, ServerSpec};

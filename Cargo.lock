@@ -334,6 +334,7 @@ name = "aether-mcp-utils"
 version = "0.7.13"
 dependencies = [
  "aether-auth",
+ "aether-utils",
  "async-stream",
  "aws-credential-types",
  "aws-sigv4",

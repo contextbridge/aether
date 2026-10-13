@@ -2,7 +2,7 @@ use aether_auth::{OAuthClientRegistration, OAuthError};
 use mcp_utils::client::{
     ClientError, ClientOptions, Elicitation, ElicitationSink, HttpAuth, McpClient, OAuthSettings, Transport,
 };
-use mcp_utils::gateway::{GatewayError, McpGateway, ServerState};
+use mcp_utils::gateway::{GatewayError, McpGateway};
 use mcp_utils::model::{ElicitResult, ElicitationAction, ElicitationCapability, FormElicitationCapability};
 use mcp_utils::testing::{
     ACCESS_TOKEN, CLIENT_METADATA_URL, FakeAuthServer, FakeMcpServer, OAuthPrompt, client_metadata, elicitation_host,
@@ -10,6 +10,7 @@ use mcp_utils::testing::{
 };
 use tokio::sync::mpsc;
 use tokio::task::{JoinHandle, yield_now};
+use utils::mcp_status::McpServerStatus;
 
 #[tokio::test]
 async fn connect_reports_the_authorization_challenge() {
@@ -142,8 +143,8 @@ async fn gateway_servers_that_demand_oauth_need_it() {
     gateway.ready().await;
 
     let status = &gateway.statuses()[0];
-    assert_eq!(status.state, ServerState::NeedsOAuth);
-    assert!(status.can_sign_in);
+    assert_eq!(status.status, McpServerStatus::NeedsOAuth);
+    assert!(status.can_authenticate());
     assert!(gateway.servers().is_empty());
 }
 
@@ -159,8 +160,8 @@ async fn gateway_servers_that_demand_oauth_fail_without_url_elicitation() {
 
     gateway.ready().await;
     let status = &gateway.statuses()[0];
-    assert!(matches!(status.state, ServerState::Failed { .. }));
-    assert!(!status.can_sign_in);
+    assert!(matches!(status.status, McpServerStatus::Failed { .. }));
+    assert!(!status.can_authenticate());
 }
 
 #[tokio::test]
@@ -176,8 +177,8 @@ async fn gateway_authentication_reconnects_the_server_once_authorized() {
     reqwest::get(callback).await.expect("loopback callback responds");
 
     authentication.await.unwrap().expect("authentication succeeds");
-    assert_eq!(gateway.statuses()[0].state, ServerState::Connected { tool_count: 2 });
-    assert!(gateway.statuses()[0].can_sign_in);
+    assert_eq!(gateway.statuses()[0].status, McpServerStatus::Connected { tool_count: 2 });
+    assert!(gateway.statuses()[0].can_authenticate());
     assert!(gateway.servers()[0].tools().iter().any(|tool| tool.name == "add_numbers"));
     assert!(matches!(host.recv().await, Some(Elicitation::Complete { server, .. }) if server == "linear"));
 }
@@ -189,7 +190,7 @@ async fn gateway_authentication_reports_a_declined_authorization_and_allows_a_re
     gateway.ready().await;
 
     let authentication = authenticate(&gateway, "linear");
-    wait_until(&gateway, |gateway| gateway.statuses()[0].state == ServerState::Authenticating).await;
+    wait_until(&gateway, |gateway| gateway.statuses()[0].status == McpServerStatus::Authenticating).await;
     next_prompt(&mut host).await.elicitation.respond(ElicitResult::new(ElicitationAction::Decline));
 
     let declined = authentication.await.unwrap();
@@ -197,8 +198,8 @@ async fn gateway_authentication_reports_a_declined_authorization_and_allows_a_re
         matches!(declined, Err(GatewayError::Client(ClientError::Auth { server, source: OAuthError::UserCancelled })) if server == "linear")
     );
     let status = gateway.statuses().remove(0);
-    assert!(matches!(status.state, ServerState::Failed { .. }));
-    assert!(status.can_sign_in);
+    assert!(matches!(status.status, McpServerStatus::Failed { .. }));
+    assert!(status.can_authenticate());
     let retry = authenticate(&gateway, "linear");
     drop(next_prompt(&mut host).await);
     assert!(matches!(
