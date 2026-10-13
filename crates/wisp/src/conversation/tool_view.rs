@@ -28,7 +28,7 @@ pub(crate) fn tool_lines(
         Span::raw(" ".repeat(padding)),
         status_glyph(tool.status, spinner_tick, theme),
         Span::raw(" "),
-        Span::styled(tool.title().to_string(), Style::new().fg(theme.text_primary)),
+        Span::styled(tool.title().to_string(), theme.text_primary),
     ]);
     let mut lines = tool_line(tool, prefix, content_width, padding + 2, theme, highlighter);
     for diff in tool.diffs().filter(|_| tool.status == ToolStatus::Success) {
@@ -56,7 +56,7 @@ pub(crate) fn tool_lines(
             }
         } else {
             for change in &diff.changes {
-                let label = Line::styled(diff_change_label(change), Style::new().fg(theme.muted));
+                let label = Line::styled(diff_change_label(change), theme.muted);
                 lines.extend(indent_lines(wrap_line(label, content_width), padding));
             }
         }
@@ -89,7 +89,7 @@ fn sub_agent_tree_lines(
     highlighter: &mut SyntaxHighlighter,
 ) -> Vec<Line<'static>> {
     let pad = " ".repeat(padding);
-    let muted = Style::new().fg(theme.muted);
+    let muted = Style::from(theme.muted);
     let mut lines: Vec<Line<'static>> = Vec::new();
 
     for (index, agent) in sub_agents.iter().enumerate() {
@@ -132,7 +132,7 @@ fn status_glyph(status: ToolStatus, spinner_tick: usize, theme: &Theme) -> Span<
         ToolStatus::Success => ("✓", theme.success),
         ToolStatus::Cancelled | ToolStatus::Failed => ("✗", theme.error),
     };
-    Span::styled(glyph, Style::new().fg(color))
+    Span::styled(glyph, color)
 }
 
 /// The trailing detail on a tool line: the agent's own summary when it supplied
@@ -166,14 +166,14 @@ fn bash_tool_detail(command: &str, display_value: Option<&str>, status: ToolStat
 
 /// The muted detail and, on failure, the error cause that trail a tool line.
 fn tool_suffix(detail: String, status: ToolStatus, theme: &Theme) -> Vec<Span<'static>> {
-    let mut suffix = vec![Span::styled(detail, Style::new().fg(theme.muted))];
+    let mut suffix = vec![Span::styled(detail, theme.muted)];
     let cause = match status {
         ToolStatus::Running | ToolStatus::Success => None,
         ToolStatus::Cancelled => Some(" cancelled"),
         ToolStatus::Failed => Some(" failed"),
     };
     if let Some(cause) = cause {
-        suffix.push(Span::styled(cause, Style::new().fg(theme.error)));
+        suffix.push(Span::styled(cause, theme.error));
     }
     suffix
 }
@@ -220,7 +220,7 @@ fn tool_line(
 }
 
 fn styled_code_line(mut line: Line<'static>, theme: &Theme) -> Line<'static> {
-    line.style = line.style.patch(Style::new().fg(theme.code_fg));
+    line.style = line.style.patch(theme.code_fg);
     line.style.bg = None;
     for span in &mut line.spans {
         span.style.bg = None;

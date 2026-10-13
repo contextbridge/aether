@@ -6,7 +6,7 @@ use clankerdiff_ratatui::diff::DiffScope;
 use ratatui::{
     buffer::{Buffer, Cell},
     layout::{Position, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Modifier},
 };
 use utils::artifact_review::ArtifactReviewElicitationMeta;
 use wisp::{
@@ -73,7 +73,7 @@ fn assert_opaque_viewport(area: Rect, mut render: impl FnMut(Rect, &mut Buffer, 
     let mut clean = Buffer::empty(canvas);
     render(area, &mut clean, &mut cx);
     let mut marker = Cell::default();
-    marker.set_symbol("▓").set_style(Style::new().fg(Color::White).bg(Color::Red).add_modifier(Modifier::UNDERLINED));
+    marker.set_symbol("▓").set_style((Color::White, Color::Red, Modifier::UNDERLINED));
     let mut dirty = Buffer::filled(canvas, marker.clone());
     render(area, &mut dirty, &mut cx);
 

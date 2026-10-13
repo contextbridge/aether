@@ -3,7 +3,7 @@ use crate::view::wrap::tail_to_width;
 use acp_utils::conversation::{Activity, Conversation, ConversationContent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use std::borrow::Cow;
@@ -123,18 +123,18 @@ impl ProgressIndicator {
         let fixed = 1 + label.width() + elapsed.width() + hint.map_or(0, UnicodeWidthStr::width) + 1;
         let room = usize::from(width).saturating_sub(fixed);
         let mut spans = vec![
-            Span::styled(spinner_frame(tick).to_string(), Style::new().fg(self.phase.spinner_color(theme))),
-            Span::styled(label, Style::new().fg(theme.text_secondary)),
+            Span::styled(spinner_frame(tick).to_string(), self.phase.spinner_color(theme)),
+            Span::styled(label, theme.text_secondary),
         ];
         if self.has_thought() && room > 0 {
             spans.push(Span::styled(
                 format!(" {}", tail_to_width(&self.thought, room)),
-                Style::new().fg(theme.blockquote).add_modifier(Modifier::ITALIC | Modifier::DIM),
+                (theme.blockquote, Modifier::ITALIC | Modifier::DIM),
             ));
         }
-        spans.push(Span::styled(elapsed, Style::new().fg(theme.text_secondary)));
+        spans.push(Span::styled(elapsed, theme.text_secondary));
         if let Some(hint) = hint {
-            spans.push(Span::styled(hint.to_string(), Style::new().fg(theme.muted).add_modifier(Modifier::ITALIC)));
+            spans.push(Span::styled(hint.to_string(), (theme.muted, Modifier::ITALIC)));
         }
         Line::from(spans)
     }

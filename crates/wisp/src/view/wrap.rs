@@ -320,7 +320,7 @@ mod tests {
     #[test]
     fn truncate_spans_styles_the_ellipsis_for_the_caller() {
         let spans = vec![Span::raw("hello world")];
-        let result = truncate_spans(&spans, 7, Style::new().fg(Color::Red));
+        let result = truncate_spans(&spans, 7, Style::from(Color::Red));
         let ellipsis = result.last().expect("truncation appends an ellipsis");
         assert_eq!(ellipsis.content, "…");
         assert_eq!(ellipsis.style.fg, Some(Color::Red));
@@ -414,9 +414,9 @@ mod tests {
     #[test]
     fn wrap_line_breaks_at_whitespace_across_span_boundaries() {
         let line = Line::from(vec![
-            Span::styled("@aaaaa", Style::new().fg(Color::Red)),
+            Span::styled("@aaaaa", Color::Red),
             Span::raw(" "),
-            Span::styled("@bbbbbb", Style::new().fg(Color::Blue)),
+            Span::styled("@bbbbbb", Color::Blue),
         ]);
 
         let rows = wrap_line(line, 10);
@@ -429,8 +429,8 @@ mod tests {
     #[test]
     fn wrap_line_drops_whitespace_when_a_new_span_starts_at_the_wrap_boundary() {
         let line = Line::from(vec![
-            Span::styled("abcdefghij", Style::new().fg(Color::Red)),
-            Span::styled(" klm", Style::new().fg(Color::Blue)),
+            Span::styled("abcdefghij", Color::Red),
+            Span::styled(" klm", Color::Blue),
         ]);
 
         let rows = wrap_line(line, 10);
@@ -441,7 +441,7 @@ mod tests {
 
     #[test]
     fn wrap_line_hard_wraps_a_long_styled_token_without_whitespace() {
-        let line = Line::from(Span::styled("@abcdefghijk", Style::new().fg(Color::Green)));
+        let line = Line::from(Span::styled("@abcdefghijk", Color::Green));
 
         let rows = wrap_line(line, 5);
 
@@ -478,7 +478,7 @@ mod tests {
 
     #[test]
     fn wrap_line_merges_adjacent_spans_that_share_a_style() {
-        let style = Style::new().fg(Color::Red);
+        let style = Style::from(Color::Red);
         let line = Line::from(vec![Span::styled("hello ", style), Span::styled("world", style)]);
 
         let rows = wrap_line(line, 20);
@@ -492,7 +492,7 @@ mod tests {
     fn wrap_line_carries_line_style_and_alignment_onto_every_row() {
         let line = Line {
             spans: vec![Span::raw("hello world")],
-            style: Style::new().fg(Color::Red),
+            style: Style::from(Color::Red),
             alignment: Some(Alignment::Center),
         };
 
@@ -529,7 +529,7 @@ mod tests {
 
     #[test]
     fn fit_line_styles_the_ellipsis_with_the_fill() {
-        let fill = Style::new().fg(Color::Red);
+        let fill = Style::from(Color::Red);
         let result = fit_line(Line::from("hello world"), 8, fill);
         assert_eq!(result.spans.last().map(|span| span.style.fg), Some(Some(Color::Red)));
     }

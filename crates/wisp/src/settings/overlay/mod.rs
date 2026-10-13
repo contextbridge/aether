@@ -24,7 +24,6 @@ use agent_client_protocol::schema::v2::{AuthMethod, CreateElicitationRequest, Cr
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
-use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::{Clear, Paragraph, Widget};
 
@@ -395,8 +394,7 @@ impl SettingsOverlay {
         let theme = cx.theme;
         if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
             Clear.render(area, buf);
-            Paragraph::new(Line::styled("(terminal too small)", Style::new().fg(theme.text_secondary)))
-                .render(area, buf);
+            Paragraph::new(Line::styled("(terminal too small)", theme.text_secondary)).render(area, buf);
             return None;
         }
         let footer = key_hints(&self.footer_hints(), theme);

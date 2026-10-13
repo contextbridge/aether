@@ -1,4 +1,4 @@
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Modifier;
 use ratatui::text::Line;
 
 use crate::theme::Theme;
@@ -58,31 +58,31 @@ impl UrlModal {
         let mut lines = wrap_line(
             Line::styled(
                 format!("Request from {}", self.server_name),
-                Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
+                (theme.accent, Modifier::BOLD),
             ),
             width,
         );
         lines.extend(wrap_line(Line::raw(self.message.clone()), width));
 
         if let Some(ref host) = self.host {
-            lines.extend(wrap_line(Line::styled(format!("Host: {host}"), Style::new().fg(theme.muted)), width));
+            lines.extend(wrap_line(Line::styled(format!("Host: {host}"), theme.muted), width));
         }
 
         if !self.warnings.is_empty() {
             lines.push(Line::raw(""));
             for warning in &self.warnings {
-                lines.extend(wrap_line(Line::styled(warning.clone(), Style::new().fg(theme.warning)), width));
+                lines.extend(wrap_line(Line::styled(warning.clone(), theme.warning), width));
             }
         }
 
         if let Some(ref message) = self.copy_message {
             lines.push(Line::raw(""));
-            lines.extend(wrap_line(Line::styled(message.clone(), Style::new().fg(theme.muted)), width));
+            lines.extend(wrap_line(Line::styled(message.clone(), theme.muted), width));
         }
 
         if let Some(ref error) = self.launch_error {
             lines.push(Line::raw(""));
-            lines.extend(wrap_line(Line::styled(error.clone(), Style::new().fg(theme.error)), width));
+            lines.extend(wrap_line(Line::styled(error.clone(), theme.error), width));
         }
 
         lines

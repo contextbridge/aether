@@ -213,7 +213,7 @@ impl ModelSelector {
         StatefulWidget::render(view, area, buf, &mut self.items);
         if let Some(error) = &self.validation_error {
             Paragraph::new(error.as_str())
-                .style(Style::new().fg(theme.warning))
+                .style(theme.warning)
                 .render(Rect::new(area.x, area.y + 2, area.width, 1), buf);
         }
         None
@@ -291,7 +291,7 @@ impl StatefulWidget for ModelSelectorView<'_> {
         let (view, selection) = state.view(self.theme, |row| match row {
             ModelSelectorRow::Spacer { .. } => Line::default(),
             ModelSelectorRow::Provider { label, .. } => {
-                Line::styled(format!(" {label}"), Style::new().fg(self.theme.heading))
+                Line::styled(format!(" {label}"), self.theme.heading)
             }
             ModelSelectorRow::Model { value, .. } => {
                 let is_selected = selected.contains(&value.value);
@@ -327,9 +327,9 @@ impl StatefulWidget for ModelSelectorView<'_> {
                         "  {checkbox}{label:name_width$}{reasoning:reasoning_width$}{capabilities:CAPABILITY_WIDTH$}{status}"
                     ),
                     if value.is_disabled {
-                        Style::new().fg(self.theme.text_secondary)
+                        Style::from(self.theme.text_secondary)
                     } else {
-                        Style::new().fg(self.theme.text_primary)
+                        Style::from(self.theme.text_primary)
                     },
                 )
             }
@@ -406,8 +406,8 @@ fn name_parts(name: &str) -> Option<(&str, &str)> {
 
 fn labeled(label: &str, value: &str, theme: &Theme) -> Line<'static> {
     Line::from(vec![
-        Span::styled(format!(" {label}: "), Style::new().fg(theme.text_secondary)),
-        Span::styled(value.to_string(), Style::new().fg(theme.text_primary)),
+        Span::styled(format!(" {label}: "), theme.text_secondary),
+        Span::styled(value.to_string(), theme.text_primary),
     ])
 }
 

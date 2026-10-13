@@ -53,7 +53,7 @@ impl<'a> ModalFrame<'a> {
         let mut block = Block::default()
             .title_top(Span::styled(
                 format!("{horizontal_padding}{}{horizontal_padding}", self.title),
-                Style::new().fg(self.theme.accent).add_modifier(Modifier::BOLD),
+                (self.theme.accent, Modifier::BOLD),
             ))
             .padding(Padding::symmetric(MODAL_HORIZONTAL_PADDING, MODAL_VERTICAL_PADDING));
 
@@ -61,7 +61,7 @@ impl<'a> ModalFrame<'a> {
             block = block.title_top(
                 Line::from(Span::styled(
                     format!("{horizontal_padding}{name}{horizontal_padding}"),
-                    Style::new().fg(self.theme.muted),
+                    self.theme.muted,
                 ))
                 .right_aligned(),
             );

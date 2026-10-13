@@ -127,19 +127,17 @@ impl StatefulWidget for ServerStatusView<'_> {
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         let rows = self.rows.iter().map(|row| match row {
-            ServerStatusRow::Header(label) => Line::styled(label.clone(), Style::new().fg(self.theme.heading)),
+            ServerStatusRow::Header(label) => Line::styled(label.clone(), self.theme.heading),
             ServerStatusRow::Spacer => Line::default(),
             ServerStatusRow::Server { entry, indented } => {
                 let (indicator, detail) = server_status_detail(entry);
                 let prefix = if *indented { "  " } else { "" };
                 let style = match &entry.status {
                     McpServerStatus::Connected { .. } | McpServerStatus::Connecting => {
-                        Style::new().fg(self.theme.text_primary)
+                        Style::from(self.theme.text_primary)
                     }
-                    McpServerStatus::Failed { .. } => Style::new().fg(self.theme.error),
-                    McpServerStatus::Authenticating | McpServerStatus::NeedsOAuth => {
-                        Style::new().fg(self.theme.warning)
-                    }
+                    McpServerStatus::Failed { .. } => Style::from(self.theme.error),
+                    McpServerStatus::Authenticating | McpServerStatus::NeedsOAuth => Style::from(self.theme.warning),
                 };
                 let row_prefix = if area.width > 30 { " " } else { "" };
                 let name_separator = if area.width <= 30 { " " } else { "  " };

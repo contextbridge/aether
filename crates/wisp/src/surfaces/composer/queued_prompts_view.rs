@@ -28,8 +28,8 @@ impl Widget for QueuedPromptsView<'_> {
         if self.prompts.is_empty() || area.height == 0 {
             return;
         }
-        let label = Style::new().fg(self.theme.muted);
-        let text = Style::new().fg(self.theme.text_secondary);
+        let label = Style::from(self.theme.muted);
+        let text = Style::from(self.theme.text_secondary);
         let shown = if self.prompts.len() > MAX_PROMPT_ROWS + 1 { MAX_PROMPT_ROWS } else { self.prompts.len() };
         let mut lines: Vec<Line<'static>> = self.prompts[..shown]
             .iter()

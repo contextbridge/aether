@@ -11,7 +11,6 @@ use crossterm::event::{Event, KeyCode, KeyEventKind};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Position, Rect},
-    style::Style,
     widgets::{Clear, Paragraph, StatefulWidget, Widget},
 };
 use std::sync::Arc;
@@ -67,7 +66,7 @@ impl ArtifactReviewScreen {
         if let Some(error) = &self.error {
             let footer = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, area.height.min(1));
             Paragraph::new(error.as_str())
-                .style(Style::new().fg(cx.theme.error).bg(cx.theme.background))
+                .style((cx.theme.error, cx.theme.background))
                 .render(footer, buf);
         }
         if self.confirming_approval {
@@ -80,7 +79,7 @@ impl ArtifactReviewScreen {
             );
             (&frame).render(area, buf);
             Paragraph::new("Approve this artifact without feedback?")
-                .style(Style::new().fg(cx.theme.text_primary))
+                .style(cx.theme.text_primary)
                 .render(frame.inner(area), buf);
             return None;
         }

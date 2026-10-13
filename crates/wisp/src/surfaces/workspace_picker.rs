@@ -8,7 +8,6 @@ use acp_utils::notifications::{WorkspaceEntry, WorkspaceMoveTarget};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph, Widget};
 use std::path::{Path, PathBuf};
@@ -75,21 +74,21 @@ impl WorkspacePicker {
     fn render_list(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         self.rows.render_pane("Workspaces", "  (no matching workspaces)", area, buf, theme, |row| match row {
             WorkspaceRow::Existing(entry) => {
-                Line::styled(format!("  {}", entry.path.display()), Style::new().fg(theme.text_secondary))
+                Line::styled(format!("  {}", entry.path.display()), theme.text_secondary)
             }
-            WorkspaceRow::CreateNew => Line::styled(format!("  {CREATE_NEW_LABEL}"), Style::new().fg(theme.info)),
+            WorkspaceRow::CreateNew => Line::styled(format!("  {CREATE_NEW_LABEL}"), theme.info),
         });
     }
 
     fn render_name_input(parent_dir: Option<&Path>, name: &EditBuffer, area: Rect, buf: &mut Buffer, theme: &Theme) {
-        let block = Block::bordered().title(" New workspace ").style(Style::new().fg(theme.text_primary));
+        let block = Block::bordered().title(" New workspace ").style(theme.text_primary);
         let inner = block.inner(area);
         block.render(area, buf);
 
         if let Some(parent) = parent_dir {
             let hint = Line::from(Span::styled(
                 format!("  will be created in {}/", parent.display()),
-                Style::new().fg(theme.muted),
+                theme.muted,
             ));
             Paragraph::new(vec![Line::raw(""), hint]).render(inner, buf);
         }

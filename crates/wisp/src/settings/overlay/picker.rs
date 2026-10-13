@@ -74,7 +74,7 @@ impl StatefulWidget for SettingsPickerView<'_> {
             &format!(" {} search: {}", self.title, state.query()),
             usize::from(header_area.width),
         ))
-        .style(Style::new().fg(self.theme.text_secondary))
+        .style(self.theme.text_secondary)
         .render(header_area, buffer);
 
         let (view, selection) = state.view(self.theme, |value| {
@@ -84,9 +84,9 @@ impl StatefulWidget for SettingsPickerView<'_> {
                 format!("{} ({})", value.name, value.value)
             };
             let style = if value.is_disabled {
-                Style::new().fg(self.theme.text_secondary)
+                Style::from(self.theme.text_secondary)
             } else {
-                Style::new().fg(self.theme.text_primary)
+                Style::from(self.theme.text_primary)
             };
             Line::styled(label, style)
         });

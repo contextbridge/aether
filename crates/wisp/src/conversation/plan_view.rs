@@ -39,7 +39,7 @@ impl Widget for PlanView<'_> {
 }
 
 fn build_plan_lines(entries: &[PlanEntry], theme: &Theme) -> Vec<Line<'static>> {
-    let header_style = Style::new().fg(theme.muted);
+    let header_style = Style::from(theme.muted);
 
     let mut lines = Vec::with_capacity(entries.len() + 2);
     lines.push(Line::default());
@@ -49,26 +49,26 @@ fn build_plan_lines(entries: &[PlanEntry], theme: &Theme) -> Vec<Line<'static>> 
         let mut spans = Vec::new();
         match &entry.status {
             PlanEntryStatus::Completed => {
-                spans.push(Span::styled(format!("  {CHECKBOX_FILLED} "), Style::new().fg(theme.muted)));
+                spans.push(Span::styled(format!("  {CHECKBOX_FILLED} "), theme.muted));
                 spans.push(Span::styled(
                     entry.content.clone(),
-                    Style::new().fg(theme.muted).add_modifier(Modifier::CROSSED_OUT),
+                    (theme.muted, Modifier::CROSSED_OUT),
                 ));
             }
             PlanEntryStatus::Cancelled => {
-                spans.push(Span::styled("  × ", Style::new().fg(theme.muted)));
+                spans.push(Span::styled("  × ", theme.muted));
                 spans.push(Span::styled(
                     entry.content.clone(),
-                    Style::new().fg(theme.muted).add_modifier(Modifier::CROSSED_OUT),
+                    (theme.muted, Modifier::CROSSED_OUT),
                 ));
             }
             PlanEntryStatus::InProgress => {
-                spans.push(Span::styled(format!("  {SQUARE_FILLED} "), Style::new().fg(theme.info)));
-                spans.push(Span::styled(entry.content.clone(), Style::new().fg(theme.text_primary)));
+                spans.push(Span::styled(format!("  {SQUARE_FILLED} "), theme.info));
+                spans.push(Span::styled(entry.content.clone(), theme.text_primary));
             }
             _ => {
-                spans.push(Span::styled(format!("  {CHECKBOX_EMPTY} "), Style::new().fg(theme.muted)));
-                spans.push(Span::styled(entry.content.clone(), Style::new().fg(theme.muted)));
+                spans.push(Span::styled(format!("  {CHECKBOX_EMPTY} "), theme.muted));
+                spans.push(Span::styled(entry.content.clone(), theme.muted));
             }
         }
         lines.push(Line::from(spans));

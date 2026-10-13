@@ -6,7 +6,6 @@ use crate::view::filterable_list::FilterableList;
 use agent_client_protocol::schema::v2::AuthMethod;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::StatefulWidget;
 
@@ -72,15 +71,15 @@ impl StatefulWidget for ProviderLoginView<'_> {
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         let (view, selection) = state.view(self.theme, |entry| {
             let (indicator, detail, style) = match entry.status {
-                ProviderLoginStatus::NeedsLogin => ("⚡", "needs login", Style::new().fg(self.theme.warning)),
-                ProviderLoginStatus::Authenticating => ("⏳", "authenticating...", Style::new().fg(self.theme.warning)),
-                ProviderLoginStatus::LoggedIn => ("✓", "logged in", Style::new().fg(self.theme.success)),
+                ProviderLoginStatus::NeedsLogin => ("⚡", "needs login", self.theme.warning),
+                ProviderLoginStatus::Authenticating => ("⏳", "authenticating...", self.theme.warning),
+                ProviderLoginStatus::LoggedIn => ("✓", "logged in", self.theme.success),
             };
             Line::styled(format!(" {}  {indicator} {detail}", entry.name), style)
         });
         let view = view
             .empty_message(" (no providers need login)")
-            .highlight_style(Style::new().fg(self.theme.background).bg(self.theme.warning))
+            .highlight_style((self.theme.background, self.theme.warning))
             .highlight_horizontal_padding(MODAL_HORIZONTAL_PADDING);
         StatefulWidget::render(view, area, buf, selection);
     }

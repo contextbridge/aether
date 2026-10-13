@@ -4,7 +4,6 @@ use crate::request::RequestId;
 use crate::view::list_view::ListView;
 use crate::view::selection::SelectionState;
 use crate::theme::Theme;
-use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders};
 
@@ -102,10 +101,10 @@ impl CompletionOverlay {
         let empty_message = self.empty_message;
         let (view, selection) = self
             .entries
-            .view(theme, |entry| Line::styled(format!("  {}", entry.label()), Style::new().fg(theme.text_secondary)));
+            .view(theme, |entry| Line::styled(format!("  {}", entry.label()), theme.text_secondary));
         let view = view
             .empty_message(empty_message)
-            .block(Block::new().borders(Borders::TOP).border_style(Style::new().fg(theme.muted)));
+            .block(Block::new().borders(Borders::TOP).border_style(theme.muted));
         (view, selection)
     }
 

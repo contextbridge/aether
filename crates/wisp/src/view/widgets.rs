@@ -80,8 +80,8 @@ pub fn render_vertical_scrollbar(area: Rect, buf: &mut Buffer, content_rows: usi
 /// up, and these footers are long enough that anything wider wraps at 80
 /// columns.
 pub fn key_hints(hints: &[(impl AsRef<str>, impl AsRef<str>)], theme: &Theme) -> Line<'static> {
-    let key_style = Style::new().fg(theme.accent).add_modifier(Modifier::BOLD);
-    let muted = Style::new().fg(theme.muted);
+    let key_style = Style::from((theme.accent, Modifier::BOLD));
+    let muted = Style::from(theme.muted);
     let mut spans = Vec::with_capacity(hints.len() * 3);
     for (key, description) in hints {
         if !spans.is_empty() {
