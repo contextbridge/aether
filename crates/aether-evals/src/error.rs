@@ -1,7 +1,7 @@
 use crate::agents::RunError;
-use crate::git_repo::GitRepoError;
 use std::path::PathBuf;
 use thiserror::Error;
+use utils::git::GitError;
 
 #[derive(Debug, Error)]
 pub enum WorkspaceError {
@@ -24,7 +24,7 @@ pub enum WorkspaceError {
     },
 
     #[error("git workspace setup failed: {0}")]
-    Git(#[from] GitRepoError),
+    Git(#[from] GitError),
 
     #[error("git workspace subdirectory does not exist: {}", path.display())]
     MissingSubdir { path: PathBuf },

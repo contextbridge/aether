@@ -17,7 +17,6 @@ pub use evals::{
     DiffStats, GitBundleSpec, GitDiff, GitRepoSpec, RetainedWorkspaceInfo, Task, ToolCall, Transcript, TranscriptError,
     Workspace, WorkspaceSource, create_git_bundle,
 };
-pub use git_repo::GitRepoError;
 pub use judge::{
     Judge, JudgeBuilder, JudgeContext, JudgeCriterionResponse, JudgeCriterionSpec, JudgeCriterionSummary, JudgeError,
     JudgeRubricResponse, JudgeSummary, judge,

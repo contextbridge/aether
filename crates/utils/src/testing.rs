@@ -2,7 +2,6 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use tempfile::TempDir;
 
 pub struct TestWorkspace {
@@ -98,7 +97,6 @@ pub fn git_commit(dir: &Path, message: &str) -> String {
 }
 
 pub fn git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git").arg("-C").arg(dir).args(args).output().expect("failed to spawn git");
-    assert!(output.status.success(), "git {args:?} failed: {}", String::from_utf8_lossy(&output.stderr));
-    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    let stdout = crate::git::git(Some(dir), args).unwrap_or_else(|error| panic!("{error}"));
+    String::from_utf8_lossy(&stdout).trim().to_owned()
 }

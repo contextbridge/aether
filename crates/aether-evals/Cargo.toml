@@ -28,6 +28,7 @@ tempfile = { workspace = true }
 aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.9.4" }
 llm = { package = "aether-llm", path = "../llm", version = "0.9.13" }
 testcontainers = { workspace = true }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.19" }
 
 [dev-dependencies]
 utils = { package = "aether-utils", path = "../utils", features = ["testing"], version = "0.2.19" }
