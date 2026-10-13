@@ -27,4 +27,4 @@ Languages that share a server implementation also share a daemon socket. For exa
 
 # Metadata
 
-[`LANGUAGE_METADATA`](crate::LANGUAGE_METADATA) provides a static list of all language entries with their file extensions. Use [`metadata_for`](crate::metadata_for) to look up a single language. [`server_metadata_for_language`](crate::server_metadata_for_language) provides server display and installation guidance.
+[`LANGUAGES`](crate::LANGUAGES) lists every language with its LSP language ID, file extensions and language server, if any. [`metadata`](LanguageId::metadata) looks up a single language, and [`server`](LanguageId::server) returns its server's display name and installation guidance.

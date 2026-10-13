@@ -17,10 +17,7 @@ use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use aether_lspd::{
-    ClientError, LANGUAGE_METADATA, LanguageId, LspClient, detect_project_languages, get_config_for_language,
-    server_metadata_for_language, socket_path,
-};
+use aether_lspd::{ClientError, LANGUAGES, LanguageId, LspClient, detect_project_languages, socket_path};
 use futures::future::join_all;
 use lsp_types::{Diagnostic, Uri};
 use tokio::sync::RwLock;
@@ -61,10 +58,10 @@ impl LspRegistry {
     /// LSP server configurations are managed by the daemon.
     pub fn new(root_path: PathBuf) -> Self {
         let root_path = root_path.canonicalize().unwrap_or(root_path);
-        let clients = LANGUAGE_METADATA
+        let clients = LANGUAGES
             .iter()
-            .filter(|metadata| get_config_for_language(metadata.id).is_some())
-            .map(|metadata| (socket_path(&root_path, metadata.id), RwLock::new(None)))
+            .filter(|language| language.server.is_some())
+            .map(|language| (socket_path(&root_path, language.id), RwLock::new(None)))
             .collect();
         Self { clients, root_path }
     }
@@ -260,12 +257,12 @@ async fn connected(slot: &RwLock<Option<Arc<LspClient>>>) -> Option<Arc<LspClien
 
 fn connection_error(language_id: LanguageId, error: ClientError) -> LspError {
     if matches!(&error, ClientError::InitializationFailed(_))
-        && let Some(metadata) = server_metadata_for_language(language_id)
-        && let Some(instructions) = metadata.installation_instructions
+        && let Some(server) = language_id.server()
+        && let Some(instructions) = server.installation_instructions
     {
         return LspError::ServerUnavailable(format!(
             "{} could not start: {error}. {instructions}",
-            metadata.display_name
+            server.display_name
         ));
     }
 

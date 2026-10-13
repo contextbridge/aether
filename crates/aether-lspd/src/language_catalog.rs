@@ -1,75 +1,71 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::Path;
-use std::sync::LazyLock;
 
-#[doc = include_str!("docs/language_catalog.md")]
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub enum LanguageId {
-    Rust,
-    Python,
-    JavaScript,
-    JavaScriptReact,
-    TypeScript,
-    TypeScriptReact,
-    Go,
-    Java,
-    C,
-    Cpp,
-    CSharp,
-    Ruby,
-    Php,
-    Swift,
-    Kotlin,
-    Scala,
-    Html,
-    Css,
-    Json,
-    Yaml,
-    Toml,
-    Markdown,
-    Xml,
-    Sql,
-    ShellScript,
-    PlainText,
+macro_rules! languages {
+    ($($variant:ident => $lsp_id:literal, [$($extension:literal),*], $server:expr;)*) => {
+        #[doc = include_str!("docs/language_catalog.md")]
+        #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
+        pub enum LanguageId {
+            $($variant,)*
+        }
+
+        pub const LANGUAGES: &[LanguageMetadata] = &[
+            $(LanguageMetadata {
+                id: LanguageId::$variant,
+                lsp_id: $lsp_id,
+                extensions: &[$($extension),*],
+                server: $server,
+            },)*
+        ];
+    };
+}
+
+languages! {
+    Rust => "rust", ["rs"], Some(&RUST_ANALYZER);
+    Python => "python", ["py", "pyi", "pyw"], Some(&PYRIGHT);
+    JavaScript => "javascript", ["js", "mjs"], Some(&TSC);
+    JavaScriptReact => "javascriptreact", ["jsx"], Some(&TSC);
+    TypeScript => "typescript", ["ts"], Some(&TSC);
+    TypeScriptReact => "typescriptreact", ["tsx"], Some(&TSC);
+    Go => "go", ["go"], Some(&GOPLS);
+    Java => "java", ["java"], None;
+    C => "c", ["c", "h"], Some(&CLANGD);
+    Cpp => "cpp", ["cpp", "cxx", "cc", "hpp", "hxx", "hh"], Some(&CLANGD);
+    CSharp => "csharp", ["cs"], None;
+    Ruby => "ruby", ["rb"], None;
+    Php => "php", ["php"], None;
+    Swift => "swift", ["swift"], None;
+    Kotlin => "kotlin", ["kt", "kts"], None;
+    Scala => "scala", ["scala"], None;
+    Html => "html", ["html", "htm"], None;
+    Css => "css", ["css"], None;
+    Json => "json", ["json"], None;
+    Yaml => "yaml", ["yaml", "yml"], None;
+    Toml => "toml", ["toml"], None;
+    Markdown => "markdown", ["md", "markdown"], None;
+    Xml => "xml", ["xml"], None;
+    Sql => "sql", ["sql"], None;
+    ShellScript => "shellscript", ["sh", "bash", "zsh"], None;
+    PlainText => "plaintext", ["txt"], None;
 }
 
 impl LanguageId {
     /// Get the LSP language ID string
     pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Rust => "rust",
-            Self::Python => "python",
-            Self::JavaScript => "javascript",
-            Self::JavaScriptReact => "javascriptreact",
-            Self::TypeScript => "typescript",
-            Self::TypeScriptReact => "typescriptreact",
-            Self::Go => "go",
-            Self::Java => "java",
-            Self::C => "c",
-            Self::Cpp => "cpp",
-            Self::CSharp => "csharp",
-            Self::Ruby => "ruby",
-            Self::Php => "php",
-            Self::Swift => "swift",
-            Self::Kotlin => "kotlin",
-            Self::Scala => "scala",
-            Self::Html => "html",
-            Self::Css => "css",
-            Self::Json => "json",
-            Self::Yaml => "yaml",
-            Self::Toml => "toml",
-            Self::Markdown => "markdown",
-            Self::Xml => "xml",
-            Self::Sql => "sql",
-            Self::ShellScript => "shellscript",
-            Self::PlainText => "plaintext",
-        }
+        self.metadata().lsp_id
+    }
+
+    pub fn metadata(self) -> &'static LanguageMetadata {
+        &LANGUAGES[self as usize]
+    }
+
+    pub fn server(self) -> Option<&'static ServerSpec> {
+        self.metadata().server
     }
 
     /// Detect language from a file extension.
     pub fn from_extension(ext: &str) -> Option<Self> {
-        from_extension(ext)
+        LANGUAGES.iter().find(|language| language.extensions.contains(&ext)).map(|language| language.id)
     }
 
     /// Detect language from file path.
@@ -80,268 +76,22 @@ impl LanguageId {
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-pub(crate) enum ServerKind {
-    RustAnalyzer,
-    Tsc,
-    Pyright,
-    Gopls,
-    Clangd,
-}
-
-impl ServerKind {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::RustAnalyzer => "rust-analyzer",
-            Self::Tsc => "tsc",
-            Self::Pyright => "pyright-langserver",
-            Self::Gopls => "gopls",
-            Self::Clangd => "clangd",
-        }
-    }
-
-    pub(crate) fn env_key(self) -> &'static str {
-        match self {
-            Self::RustAnalyzer => "RUST_ANALYZER",
-            Self::Tsc => "TSC",
-            Self::Pyright => "PYRIGHT",
-            Self::Gopls => "GOPLS",
-            Self::Clangd => "CLANGD",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) enum DiagnosticsMode {
-    Push,
-    Pull,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct LanguageServerMetadata {
-    pub display_name: &'static str,
-    pub installation_instructions: Option<&'static str>,
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct LanguageMetadata {
     pub id: LanguageId,
+    pub lsp_id: &'static str,
     pub extensions: &'static [&'static str],
+    pub server: Option<&'static ServerSpec>,
 }
 
-#[derive(Debug, Clone)]
-pub struct LspConfig {
-    pub command: String,
-    pub args: Vec<String>,
-    pub languages: Vec<LanguageId>,
-    pub(crate) diagnostics_mode: DiagnosticsMode,
-}
-
-#[derive(Clone, Copy)]
-struct ServerSpec {
-    kind: ServerKind,
-    command: &'static str,
-    display_name: &'static str,
+#[derive(Debug)]
+pub struct ServerSpec {
+    pub name: &'static str,
+    pub display_name: &'static str,
+    pub installation_instructions: Option<&'static str>,
+    pub(crate) env_key: &'static str,
     args: &'static [&'static str],
     diagnostics_mode: DiagnosticsMode,
-    installation_instructions: Option<&'static str>,
-}
-
-#[derive(Clone, Copy)]
-struct LanguageSpec {
-    metadata: LanguageMetadata,
-    server_kind: Option<ServerKind>,
-}
-
-const SERVER_SPECS: &[ServerSpec] = &[
-    ServerSpec {
-        kind: ServerKind::RustAnalyzer,
-        command: "rust-analyzer",
-        display_name: "rust-analyzer",
-        args: &[],
-        diagnostics_mode: DiagnosticsMode::Push,
-        installation_instructions: None,
-    },
-    ServerSpec {
-        kind: ServerKind::Tsc,
-        command: "tsc",
-        display_name: "TypeScript 7 language server",
-        args: &["--lsp", "--stdio"],
-        diagnostics_mode: DiagnosticsMode::Pull,
-        installation_instructions: Some(
-            "It requires TypeScript 7 or newer. Install it in this workspace with \
-             `npm install --save-dev typescript@^7`, or install it globally with \
-             `npm install --global typescript@^7`, then retry.",
-        ),
-    },
-    ServerSpec {
-        kind: ServerKind::Pyright,
-        command: "pyright-langserver",
-        display_name: "Pyright language server",
-        args: &["--stdio"],
-        diagnostics_mode: DiagnosticsMode::Push,
-        installation_instructions: None,
-    },
-    ServerSpec {
-        kind: ServerKind::Gopls,
-        command: "gopls",
-        display_name: "gopls language server",
-        args: &[],
-        diagnostics_mode: DiagnosticsMode::Push,
-        installation_instructions: None,
-    },
-    ServerSpec {
-        kind: ServerKind::Clangd,
-        command: "clangd",
-        display_name: "clangd language server",
-        args: &[],
-        diagnostics_mode: DiagnosticsMode::Push,
-        installation_instructions: None,
-    },
-];
-
-const PROJECT_LANGUAGE_SPECS: &[(LanguageId, &[&str])] = &[
-    (LanguageId::Rust, &["Cargo.toml"]),
-    (LanguageId::TypeScript, &["package.json"]),
-    (LanguageId::Python, &["pyproject.toml", "setup.py", "requirements.txt"]),
-    (LanguageId::Go, &["go.mod"]),
-    (LanguageId::Cpp, &["CMakeLists.txt"]),
-];
-
-const LANGUAGE_SPECS: &[LanguageSpec] = &[
-    LanguageSpec {
-        metadata: LanguageMetadata { id: LanguageId::Rust, extensions: &["rs"] },
-        server_kind: Some(ServerKind::RustAnalyzer),
-    },
-    LanguageSpec {
-        metadata: LanguageMetadata { id: LanguageId::Python, extensions: &["py", "pyi", "pyw"] },
-        server_kind: Some(ServerKind::Pyright),
-    },
-    LanguageSpec {
-        metadata: LanguageMetadata { id: LanguageId::JavaScript, extensions: &["js", "mjs"] },
-        server_kind: Some(ServerKind::Tsc),
-    },
-    LanguageSpec {
-        metadata: LanguageMetadata { id: LanguageId::JavaScriptReact, extensions: &["jsx"] },
-        server_kind: Some(ServerKind::Tsc),
-    },
-    LanguageSpec {
-        metadata: LanguageMetadata { id: LanguageId::TypeScript, extensions: &["ts"] },
-        server_kind: Some(ServerKind::Tsc),
-    },
-    LanguageSpec {
-        metadata: LanguageMetadata { id: LanguageId::TypeScriptReact, extensions: &["tsx"] },
-        server_kind: Some(ServerKind::Tsc),
-    },
-    LanguageSpec {
-        metadata: LanguageMetadata { id: LanguageId::Go, extensions: &["go"] },
-        server_kind: Some(ServerKind::Gopls),
-    },
-    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::Java, extensions: &["java"] }, server_kind: None },
-    LanguageSpec {
-        metadata: LanguageMetadata { id: LanguageId::C, extensions: &["c", "h"] },
-        server_kind: Some(ServerKind::Clangd),
-    },
-    LanguageSpec {
-        metadata: LanguageMetadata { id: LanguageId::Cpp, extensions: &["cpp", "cxx", "cc", "hpp", "hxx", "hh"] },
-        server_kind: Some(ServerKind::Clangd),
-    },
-    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::CSharp, extensions: &["cs"] }, server_kind: None },
-    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::Ruby, extensions: &["rb"] }, server_kind: None },
-    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::Php, extensions: &["php"] }, server_kind: None },
-    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::Swift, extensions: &["swift"] }, server_kind: None },
-    LanguageSpec {
-        metadata: LanguageMetadata { id: LanguageId::Kotlin, extensions: &["kt", "kts"] },
-        server_kind: None,
-    },
-    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::Scala, extensions: &["scala"] }, server_kind: None },
-    LanguageSpec {
-        metadata: LanguageMetadata { id: LanguageId::Html, extensions: &["html", "htm"] },
-        server_kind: None,
-    },
-    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::Css, extensions: &["css"] }, server_kind: None },
-    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::Json, extensions: &["json"] }, server_kind: None },
-    LanguageSpec {
-        metadata: LanguageMetadata { id: LanguageId::Yaml, extensions: &["yaml", "yml"] },
-        server_kind: None,
-    },
-    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::Toml, extensions: &["toml"] }, server_kind: None },
-    LanguageSpec {
-        metadata: LanguageMetadata { id: LanguageId::Markdown, extensions: &["md", "markdown"] },
-        server_kind: None,
-    },
-    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::Xml, extensions: &["xml"] }, server_kind: None },
-    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::Sql, extensions: &["sql"] }, server_kind: None },
-    LanguageSpec {
-        metadata: LanguageMetadata { id: LanguageId::ShellScript, extensions: &["sh", "bash", "zsh"] },
-        server_kind: None,
-    },
-    LanguageSpec { metadata: LanguageMetadata { id: LanguageId::PlainText, extensions: &["txt"] }, server_kind: None },
-];
-
-pub static LANGUAGE_METADATA: LazyLock<Vec<LanguageMetadata>> =
-    LazyLock::new(|| LANGUAGE_SPECS.iter().map(|spec| spec.metadata).collect());
-
-static CONFIG_MAP: LazyLock<HashMap<LanguageId, LspConfig>> = LazyLock::new(|| {
-    let languages_by_server: HashMap<ServerKind, Vec<LanguageId>> = LANGUAGE_SPECS
-        .iter()
-        .filter_map(|spec| spec.server_kind.map(|kind| (kind, spec.metadata.id)))
-        .fold(HashMap::new(), |mut acc, (kind, id)| {
-            acc.entry(kind).or_default().push(id);
-            acc
-        });
-
-    LANGUAGE_SPECS
-        .iter()
-        .filter_map(|spec| {
-            let server_kind = spec.server_kind?;
-            let server = SERVER_SPECS.iter().find(|server| server.kind == server_kind)?;
-            Some((
-                spec.metadata.id,
-                LspConfig {
-                    command: server.command.to_string(),
-                    args: server.args.iter().map(|arg| (*arg).to_string()).collect(),
-                    languages: languages_by_server.get(&server_kind).cloned().unwrap_or_default(),
-                    diagnostics_mode: server.diagnostics_mode,
-                },
-            ))
-        })
-        .collect()
-});
-
-pub(crate) fn server_kind_for_language(id: LanguageId) -> Option<ServerKind> {
-    LANGUAGE_SPECS.iter().find(|spec| spec.metadata.id == id).and_then(|spec| spec.server_kind)
-}
-
-pub(crate) fn socket_identity_for_language(id: LanguageId) -> &'static str {
-    server_kind_for_language(id).map_or_else(|| id.as_str(), ServerKind::as_str)
-}
-
-pub(crate) fn resolved_config_for_language(language: LanguageId) -> Option<LspConfig> {
-    let mut config = get_config_for_language(language)?.clone();
-    let server_kind = server_kind_for_language(language)?;
-
-    let command_key = format!("AETHER_LSPD_SERVER_COMMAND_{}", server_kind.env_key());
-    if let Some(command) = std::env::var_os(command_key) {
-        config.command = command.to_string_lossy().into_owned();
-    }
-
-    let args_key = format!("AETHER_LSPD_SERVER_ARGS_{}", server_kind.env_key());
-    if let Ok(args) = std::env::var(args_key)
-        && let Ok(parsed) = serde_json::from_str::<Vec<String>>(&args)
-    {
-        config.args = parsed;
-    }
-
-    Some(config)
-}
-
-pub(crate) fn from_extension(ext: &str) -> Option<LanguageId> {
-    LANGUAGE_SPECS.iter().find(|spec| spec.metadata.extensions.contains(&ext)).map(|spec| spec.metadata.id)
-}
-
-pub fn metadata_for(id: LanguageId) -> Option<&'static LanguageMetadata> {
-    LANGUAGE_METADATA.iter().find(|metadata| metadata.id == id)
 }
 
 pub fn detect_project_languages(root: &Path) -> Vec<LanguageId> {
@@ -352,18 +102,97 @@ pub fn detect_project_languages(root: &Path) -> Vec<LanguageId> {
         .collect()
 }
 
-pub fn server_metadata_for_language(language: LanguageId) -> Option<LanguageServerMetadata> {
-    let server_kind = server_kind_for_language(language)?;
-    let server = SERVER_SPECS.iter().find(|server| server.kind == server_kind)?;
-    Some(LanguageServerMetadata {
-        display_name: server.display_name,
-        installation_instructions: server.installation_instructions,
-    })
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum DiagnosticsMode {
+    Push,
+    Pull,
 }
 
-pub fn get_config_for_language(language: LanguageId) -> Option<&'static LspConfig> {
-    CONFIG_MAP.get(&language)
+#[derive(Debug, Clone)]
+pub(crate) struct LspConfig {
+    pub command: String,
+    pub args: Vec<String>,
+    pub languages: Vec<LanguageId>,
+    pub diagnostics_mode: DiagnosticsMode,
 }
+
+pub(crate) fn socket_identity_for_language(id: LanguageId) -> &'static str {
+    id.server().map_or_else(|| id.as_str(), |server| server.name)
+}
+
+pub(crate) fn resolved_config_for_language(language: LanguageId) -> Option<LspConfig> {
+    let server = language.server()?;
+    let command = std::env::var_os(format!("AETHER_LSPD_SERVER_COMMAND_{}", server.env_key))
+        .map_or_else(|| server.name.to_string(), |command| command.to_string_lossy().into_owned());
+    let args = std::env::var(format!("AETHER_LSPD_SERVER_ARGS_{}", server.env_key))
+        .ok()
+        .and_then(|args| serde_json::from_str(&args).ok())
+        .unwrap_or_else(|| server.args.iter().map(ToString::to_string).collect());
+    let languages = LANGUAGES
+        .iter()
+        .filter(|candidate| candidate.server.is_some_and(|candidate| candidate.name == server.name))
+        .map(|candidate| candidate.id)
+        .collect();
+
+    Some(LspConfig { command, args, languages, diagnostics_mode: server.diagnostics_mode })
+}
+
+const RUST_ANALYZER: ServerSpec = ServerSpec {
+    name: "rust-analyzer",
+    display_name: "rust-analyzer",
+    installation_instructions: None,
+    env_key: "RUST_ANALYZER",
+    args: &[],
+    diagnostics_mode: DiagnosticsMode::Push,
+};
+
+const TSC: ServerSpec = ServerSpec {
+    name: "tsc",
+    display_name: "TypeScript 7 language server",
+    installation_instructions: Some(
+        "It requires TypeScript 7 or newer. Install it in this workspace with \
+         `npm install --save-dev typescript@^7`, or install it globally with \
+         `npm install --global typescript@^7`, then retry.",
+    ),
+    env_key: "TSC",
+    args: &["--lsp", "--stdio"],
+    diagnostics_mode: DiagnosticsMode::Pull,
+};
+
+const PYRIGHT: ServerSpec = ServerSpec {
+    name: "pyright-langserver",
+    display_name: "Pyright language server",
+    installation_instructions: None,
+    env_key: "PYRIGHT",
+    args: &["--stdio"],
+    diagnostics_mode: DiagnosticsMode::Push,
+};
+
+const GOPLS: ServerSpec = ServerSpec {
+    name: "gopls",
+    display_name: "gopls language server",
+    installation_instructions: None,
+    env_key: "GOPLS",
+    args: &[],
+    diagnostics_mode: DiagnosticsMode::Push,
+};
+
+const CLANGD: ServerSpec = ServerSpec {
+    name: "clangd",
+    display_name: "clangd language server",
+    installation_instructions: None,
+    env_key: "CLANGD",
+    args: &[],
+    diagnostics_mode: DiagnosticsMode::Push,
+};
+
+const PROJECT_LANGUAGE_SPECS: &[(LanguageId, &[&str])] = &[
+    (LanguageId::Rust, &["Cargo.toml"]),
+    (LanguageId::TypeScript, &["package.json"]),
+    (LanguageId::Python, &["pyproject.toml", "setup.py", "requirements.txt"]),
+    (LanguageId::Go, &["go.mod"]),
+    (LanguageId::Cpp, &["CMakeLists.txt"]),
+];
 
 #[cfg(test)]
 mod tests {
@@ -379,72 +208,28 @@ mod tests {
     }
 
     #[test]
-    fn typescript_server_metadata_has_installation_instructions() {
-        let metadata = server_metadata_for_language(LanguageId::TypeScript).unwrap();
+    fn typescript_server_has_installation_instructions() {
+        let server = LanguageId::TypeScript.server().unwrap();
 
-        assert_eq!(metadata.display_name, "TypeScript 7 language server");
-        assert!(metadata.installation_instructions.unwrap().contains("npm install --save-dev typescript@^7"));
+        assert_eq!(server.display_name, "TypeScript 7 language server");
+        assert!(server.installation_instructions.unwrap().contains("npm install --save-dev typescript@^7"));
     }
 
     #[test]
-    fn typescript_family_shares_server_kind() {
-        assert_eq!(
-            server_kind_for_language(LanguageId::TypeScript),
-            server_kind_for_language(LanguageId::TypeScriptReact)
-        );
-        assert_eq!(
-            socket_identity_for_language(LanguageId::TypeScript),
-            socket_identity_for_language(LanguageId::TypeScriptReact)
-        );
+    fn languages_sharing_a_server_share_a_socket_identity() {
+        assert_eq!(socket_identity_for_language(LanguageId::TypeScript), "tsc");
+        assert_eq!(socket_identity_for_language(LanguageId::TypeScriptReact), "tsc");
+        assert_eq!(socket_identity_for_language(LanguageId::C), "clangd");
+        assert_eq!(socket_identity_for_language(LanguageId::Cpp), "clangd");
+        assert_eq!(socket_identity_for_language(LanguageId::Java), "java");
     }
 
     #[test]
-    fn c_family_shares_server_kind() {
-        assert_eq!(server_kind_for_language(LanguageId::C), server_kind_for_language(LanguageId::Cpp));
-        assert_eq!(socket_identity_for_language(LanguageId::C), socket_identity_for_language(LanguageId::Cpp));
-    }
-
-    #[test]
-    fn metadata_for_returns_correct_data() {
-        let meta = metadata_for(LanguageId::Rust).unwrap();
-        assert_eq!(meta.id.as_str(), "rust");
-        assert_eq!(meta.extensions, &["rs"]);
-    }
-
-    #[test]
-    fn all_languages_have_metadata() {
-        let variants = [
-            LanguageId::Rust,
-            LanguageId::Python,
-            LanguageId::JavaScript,
-            LanguageId::JavaScriptReact,
-            LanguageId::TypeScript,
-            LanguageId::TypeScriptReact,
-            LanguageId::Go,
-            LanguageId::Java,
-            LanguageId::C,
-            LanguageId::Cpp,
-            LanguageId::CSharp,
-            LanguageId::Ruby,
-            LanguageId::Php,
-            LanguageId::Swift,
-            LanguageId::Kotlin,
-            LanguageId::Scala,
-            LanguageId::Html,
-            LanguageId::Css,
-            LanguageId::Json,
-            LanguageId::Yaml,
-            LanguageId::Toml,
-            LanguageId::Markdown,
-            LanguageId::Xml,
-            LanguageId::Sql,
-            LanguageId::ShellScript,
-            LanguageId::PlainText,
-        ];
-
-        for variant in variants {
-            assert!(metadata_for(variant).is_some(), "Missing metadata for {variant:?}");
+    fn metadata_returns_the_language_row() {
+        for language in LANGUAGES {
+            assert_eq!(language.id.metadata().id, language.id);
         }
+        assert_eq!(LanguageId::Rust.metadata().extensions, &["rs"]);
     }
 
     #[test]
@@ -470,17 +255,18 @@ mod tests {
     }
 
     #[test]
-    fn get_config_for_known_languages() {
-        let rust_config = get_config_for_language(LanguageId::Rust);
-        assert!(rust_config.is_some());
-        assert_eq!(rust_config.unwrap().command, "rust-analyzer");
+    fn resolved_config_groups_languages_by_server() {
+        assert_eq!(resolved_config_for_language(LanguageId::Rust).unwrap().command, "rust-analyzer");
 
-        let ts_config = get_config_for_language(LanguageId::TypeScript).unwrap();
+        let ts_config = resolved_config_for_language(LanguageId::TypeScript).unwrap();
         assert_eq!(ts_config.command, "tsc");
         assert_eq!(ts_config.args, ["--lsp", "--stdio"]);
         assert_eq!(ts_config.diagnostics_mode, DiagnosticsMode::Pull);
+        assert_eq!(
+            ts_config.languages,
+            [LanguageId::JavaScript, LanguageId::JavaScriptReact, LanguageId::TypeScript, LanguageId::TypeScriptReact]
+        );
 
-        let plaintext_config = get_config_for_language(LanguageId::PlainText);
-        assert!(plaintext_config.is_none());
+        assert!(resolved_config_for_language(LanguageId::PlainText).is_none());
     }
 }

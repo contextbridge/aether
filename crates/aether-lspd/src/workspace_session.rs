@@ -2,7 +2,7 @@ use crate::diagnostics_store::DiagnosticsStore;
 use crate::document_lifecycle::{AcquireAction, DocumentLifecycle, ReleaseAction};
 use crate::error::DaemonResult;
 use crate::file_watcher::FileWatcherBatch;
-use crate::language_catalog::{DiagnosticsMode, LanguageId, LspConfig, metadata_for};
+use crate::language_catalog::{DiagnosticsMode, LanguageId, LspConfig};
 use crate::process_transport::{ProcessTransport, TransportError, TransportEvent};
 use crate::protocol::{LspNotification, extract_document_uri};
 use crate::refresh_queue::RefreshQueue;
@@ -277,8 +277,7 @@ fn supported_extensions(config: &LspConfig) -> HashSet<String> {
     config
         .languages
         .iter()
-        .filter_map(|language| metadata_for(*language))
-        .flat_map(|metadata| metadata.extensions.iter().copied())
+        .flat_map(|language| language.metadata().extensions.iter().copied())
         .map(ToOwned::to_owned)
         .collect()
 }
