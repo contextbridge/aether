@@ -264,11 +264,6 @@ fn build_elicitation_form(
     artifact: &ArtifactReviewElicitationMeta,
     subject: &str,
 ) -> Result<ElicitRequestParams, String> {
-    let meta = artifact
-        .to_json()
-        .map(RequestMetaObject::from)
-        .map_err(|error| format!("Failed to serialize artifact review metadata: {error}"))?;
-
     let requested_schema = ElicitationSchema::builder()
         .required_enum_schema(
             "decision",
@@ -279,7 +274,7 @@ fn build_elicitation_form(
         .map_err(|error| format!("Failed to build the review form schema: {error}"))?;
 
     Ok(ElicitRequestParams::FormElicitationParams {
-        meta: Some(meta),
+        meta: Some(RequestMetaObject::from(artifact.to_meta())),
         message: format!("Review {subject} and approve or submit feedback."),
         requested_schema,
     })

@@ -1,3 +1,4 @@
+use crate::meta::{from_meta, to_meta};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -60,18 +61,12 @@ impl ArtifactReviewElicitationMeta {
         Self { ui: ARTIFACT_REVIEW_UI_KIND.to_string(), path, title: title.into(), markdown: markdown.into() }
     }
 
-    pub fn to_json(&self) -> Result<Map<String, Value>, serde_json::Error> {
-        serde_json::to_value(self).and_then(|value| match value {
-            Value::Object(map) => Ok(map),
-            _ => Err(serde_json::Error::io(std::io::Error::other(
-                "artifact review metadata did not serialize to an object",
-            ))),
-        })
+    pub fn to_meta(&self) -> Map<String, Value> {
+        to_meta(self, None).unwrap_or_default()
     }
 
-    pub fn parse(meta: Option<&Map<String, Value>>) -> Option<Self> {
-        let parsed = serde_json::from_value::<Self>(Value::Object(meta?.clone())).ok()?;
-        (parsed.ui == ARTIFACT_REVIEW_UI_KIND).then_some(parsed)
+    pub fn from_meta(meta: Option<&Map<String, Value>>) -> Option<Self> {
+        from_meta::<Option<Self>>(meta, None).filter(|parsed| parsed.ui == ARTIFACT_REVIEW_UI_KIND)
     }
 }
 
@@ -118,7 +113,7 @@ mod tests {
     #[test]
     fn metadata_round_trips() {
         let meta = ArtifactReviewElicitationMeta::new(Some(PathBuf::from("docs/question.md")), "Review", "# Question");
-        let parsed = ArtifactReviewElicitationMeta::parse(Some(&meta.to_json().expect("serialize"))).expect("parse");
+        let parsed = ArtifactReviewElicitationMeta::from_meta(Some(&meta.to_meta())).expect("parse");
         assert_eq!(parsed, meta);
         assert_eq!(parsed.ui, "artifactReview");
         assert_eq!(parsed.path.as_deref(), Some(Path::new("docs/question.md")));

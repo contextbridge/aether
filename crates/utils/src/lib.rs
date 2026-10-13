@@ -5,6 +5,7 @@ pub mod display_meta;
 #[cfg(not(target_family = "wasm"))]
 pub mod git;
 pub mod mcp_status;
+pub mod meta;
 pub mod name_pattern;
 pub mod panic;
 pub mod path;

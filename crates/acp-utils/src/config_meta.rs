@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use utils::ReasoningEffort;
 
-use crate::meta::{from_meta, to_meta};
+use utils::meta::{from_meta, to_meta};
 
 type Meta = serde_json::Map<String, serde_json::Value>;
 

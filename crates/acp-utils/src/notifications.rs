@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 pub use utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 pub use utils::mcp_status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
 
-use crate::meta::{from_meta, to_meta};
+use utils::meta::{from_meta, to_meta};
 
 pub const AETHER_META_NAMESPACE: &str = "contextbridge/aether";
 
