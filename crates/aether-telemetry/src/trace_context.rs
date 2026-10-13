@@ -1,10 +1,11 @@
 use aether_core::events::{TRACEPARENT_KEY, TRACESTATE_KEY, TraceContext};
 use opentelemetry::Context;
-use opentelemetry::propagation::{Extractor, Injector, TextMapPropagator};
+use opentelemetry::propagation::TextMapPropagator;
 use opentelemetry::trace::TraceContextExt;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(untagged, rename_all = "camelCase", deny_unknown_fields)]
@@ -27,55 +28,16 @@ pub(crate) fn inject_trace_context(context: &Context) -> Option<TraceContext> {
         return None;
     }
 
-    let mut carrier = W3cCarrier::default();
+    let mut carrier = HashMap::new();
     TraceContextPropagator::new().inject_context(context, &mut carrier);
-    Some(TraceContext { traceparent: carrier.traceparent?, tracestate: carrier.tracestate })
+    Some(TraceContext { traceparent: carrier.remove(TRACEPARENT_KEY)?, tracestate: carrier.remove(TRACESTATE_KEY) })
 }
 
 /// The remote span `trace_context` names, for parenting local spans beneath it.
 /// `None` when the traceparent does not name a valid span.
 pub(crate) fn extract_trace_context(trace_context: &TraceContext) -> Option<Context> {
-    let context = TraceContextPropagator::new().extract(&W3cCarrier::from(trace_context));
+    let mut carrier = HashMap::from([(TRACEPARENT_KEY.to_string(), trace_context.traceparent.clone())]);
+    carrier.extend(trace_context.tracestate.clone().map(|tracestate| (TRACESTATE_KEY.to_string(), tracestate)));
+    let context = TraceContextPropagator::new().extract(&carrier);
     context.span().span_context().is_valid().then_some(context)
-}
-
-/// Adapts [`TraceContext`] to the propagator's carrier API, which the orphan
-/// rule keeps us from implementing on `TraceContext` itself.
-#[derive(Default)]
-struct W3cCarrier {
-    traceparent: Option<String>,
-    tracestate: Option<String>,
-}
-
-impl From<&TraceContext> for W3cCarrier {
-    fn from(trace_context: &TraceContext) -> Self {
-        Self { traceparent: Some(trace_context.traceparent.clone()), tracestate: trace_context.tracestate.clone() }
-    }
-}
-
-impl Injector for W3cCarrier {
-    fn set(&mut self, key: &str, value: String) {
-        match key {
-            TRACEPARENT_KEY => self.traceparent = Some(value),
-            TRACESTATE_KEY => self.tracestate = Some(value),
-            _ => {}
-        }
-    }
-}
-
-impl Extractor for W3cCarrier {
-    fn get(&self, key: &str) -> Option<&str> {
-        match key {
-            TRACEPARENT_KEY => self.traceparent.as_deref(),
-            TRACESTATE_KEY => self.tracestate.as_deref(),
-            _ => None,
-        }
-    }
-
-    fn keys(&self) -> Vec<&str> {
-        [(TRACEPARENT_KEY, &self.traceparent), (TRACESTATE_KEY, &self.tracestate)]
-            .into_iter()
-            .filter_map(|(key, value)| value.is_some().then_some(key))
-            .collect()
-    }
 }
