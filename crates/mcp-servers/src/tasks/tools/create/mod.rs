@@ -62,17 +62,15 @@ pub struct TaskCreateOutput {
 
 /// Create a new task or subtask
 pub fn execute_task_create(input: &TaskCreateInput, store: &mut TaskStore) -> Result<TaskCreateOutput, TaskStoreError> {
-    let normalized_parent_id = input.parent_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let description = input.description.as_deref().map(str::trim).filter(|s| !s.is_empty());
 
-    let task = if let Some(parent_id) = normalized_parent_id {
-        let parent = TaskId::from(parent_id);
-        store.add_subtask(&parent, &input.title)?
+    let task = if let Some(parent_id) = input.parent_id.as_deref() {
+        store.add_subtask(&TaskId::from(parent_id), &input.title)?
     } else {
         store.create_tree(&input.title, description)?
     };
 
-    let is_subtask = normalized_parent_id.is_some();
+    let is_subtask = input.parent_id.is_some();
     let needs_update = input.assignee.is_some() || input.deps.is_some() || (is_subtask && description.is_some());
 
     let task = if needs_update {

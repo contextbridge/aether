@@ -187,25 +187,7 @@ impl Task {
 
     /// Create a new subtask
     pub fn new_subtask(id: TaskId, parent: TaskId, title: String) -> Self {
-        let now = Utc::now();
-        Self {
-            id,
-            title,
-            description: None,
-            status: TaskStatus::Pending,
-            assignee: None,
-            parent: Some(parent),
-            deps: Vec::new(),
-            summary: None,
-            decisions: Vec::new(),
-            facts: Vec::new(),
-            next_steps: Vec::new(),
-            blockers: Vec::new(),
-            files_read: Vec::new(),
-            resources: Vec::new(),
-            created_at: now,
-            updated_at: now,
-        }
+        Self { parent: Some(parent), ..Self::new_root(id, title) }
     }
 
     /// Check if the task can be started (all dependencies completed)
@@ -229,6 +211,7 @@ pub struct TaskUpdate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 
+    /// Status: pending, `in_progress`, completed, or blocked
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<TaskStatus>,
 

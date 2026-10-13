@@ -7,48 +7,13 @@ use crate::tasks::types::{TaskId, TaskStatus, TaskUpdate};
 use utils::display_meta::ToolResultMeta;
 
 /// Input for the `task_update` tool
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct TaskUpdateInput {
     /// Task ID to update
     pub id: String,
 
-    #[serde(default)]
-    pub title: Option<String>,
-
-    #[serde(default)]
-    pub description: Option<String>,
-
-    /// Status: pending, `in_progress`, completed, or blocked
-    #[serde(default)]
-    pub status: Option<TaskStatus>,
-
-    #[serde(default)]
-    pub assignee: Option<String>,
-
-    #[serde(default)]
-    pub deps: Option<Vec<String>>,
-
-    #[serde(default)]
-    pub summary: Option<String>,
-
-    #[serde(default)]
-    pub decisions: Option<Vec<String>>,
-
-    #[serde(default)]
-    pub facts: Option<Vec<String>>,
-
-    #[serde(default, alias = "next_steps")]
-    pub next_steps: Option<Vec<String>>,
-
-    #[serde(default)]
-    pub blockers: Option<Vec<String>>,
-
-    #[serde(default, alias = "files_read")]
-    pub files_read: Option<Vec<String>>,
-
-    #[serde(default)]
-    pub resources: Option<Vec<String>>,
+    #[serde(flatten)]
+    pub update: TaskUpdate,
 }
 
 /// Output for the `task_update` tool
@@ -79,46 +44,32 @@ pub struct TaskUpdateOutput {
 
 /// Update an existing task's fields
 pub fn execute_task_update(input: TaskUpdateInput, store: &mut TaskStore) -> Result<TaskUpdateOutput, TaskStoreError> {
-    let id = TaskId::from(input.id.as_str());
+    let TaskUpdateInput { id, update } = input;
+    let id = TaskId::from(id);
 
     let changes: Vec<String> = [
-        input.title.as_ref().map(|_| "title"),
-        input.description.as_ref().map(|_| "description"),
-        input.status.as_ref().map(|_| "status"),
-        input.assignee.as_ref().map(|_| "assignee"),
-        input.deps.as_ref().map(|_| "deps"),
-        input.summary.as_ref().map(|_| "summary"),
-        input.decisions.as_ref().map(|_| "decisions"),
-        input.facts.as_ref().map(|_| "facts"),
-        input.next_steps.as_ref().map(|_| "next_steps"),
-        input.blockers.as_ref().map(|_| "blockers"),
-        input.files_read.as_ref().map(|_| "files_read"),
-        input.resources.as_ref().map(|_| "resources"),
+        update.title.as_ref().map(|_| "title"),
+        update.description.as_ref().map(|_| "description"),
+        update.status.as_ref().map(|_| "status"),
+        update.assignee.as_ref().map(|_| "assignee"),
+        update.deps.as_ref().map(|_| "deps"),
+        update.summary.as_ref().map(|_| "summary"),
+        update.decisions.as_ref().map(|_| "decisions"),
+        update.facts.as_ref().map(|_| "facts"),
+        update.next_steps.as_ref().map(|_| "next_steps"),
+        update.blockers.as_ref().map(|_| "blockers"),
+        update.files_read.as_ref().map(|_| "files_read"),
+        update.resources.as_ref().map(|_| "resources"),
     ]
     .into_iter()
     .flatten()
     .map(String::from)
     .collect();
 
-    let ready_before: Vec<String> = if input.status == Some(TaskStatus::Completed) {
+    let ready_before: Vec<String> = if update.status == Some(TaskStatus::Completed) {
         store.get_ready().iter().map(|t| t.id.to_string()).collect()
     } else {
         vec![]
-    };
-
-    let update = TaskUpdate {
-        title: input.title,
-        description: input.description,
-        status: input.status,
-        assignee: input.assignee,
-        deps: input.deps.map(|d| d.iter().map(|s| TaskId::from(s.as_str())).collect()),
-        summary: input.summary,
-        decisions: input.decisions,
-        facts: input.facts,
-        next_steps: input.next_steps,
-        blockers: input.blockers,
-        files_read: input.files_read,
-        resources: input.resources,
     };
 
     let task = store.update(&id, update)?;
@@ -163,13 +114,19 @@ mod tests {
     use super::*;
     use crate::testing::TestTaskStore;
 
+    fn update_input(id: &str, update: TaskUpdate) -> TaskUpdateInput {
+        TaskUpdateInput { id: id.to_string(), update }
+    }
+
     #[test]
     fn test_update_title() {
         let mut tasks = TestTaskStore::new();
         let task = tasks.root_task("Original");
 
-        let input =
-            TaskUpdateInput { id: task.id.to_string(), title: Some("Updated title".to_string()), ..Default::default() };
+        let input = update_input(
+            task.id.as_str(),
+            TaskUpdate { title: Some("Updated title".to_string()), ..Default::default() },
+        );
 
         let output = execute_task_update(input, tasks.store_mut()).unwrap();
 
@@ -184,7 +141,7 @@ mod tests {
         let task = tasks.root_task("Task");
 
         let input =
-            TaskUpdateInput { id: task.id.to_string(), status: Some(TaskStatus::InProgress), ..Default::default() };
+            update_input(task.id.as_str(), TaskUpdate { status: Some(TaskStatus::InProgress), ..Default::default() });
 
         let output = execute_task_update(input, tasks.store_mut()).unwrap();
 
@@ -197,14 +154,16 @@ mod tests {
         let mut tasks = TestTaskStore::new();
         let task = tasks.root_task("Task");
 
-        let input = TaskUpdateInput {
-            id: task.id.to_string(),
-            title: Some("New title".to_string()),
-            description: Some("New description".to_string()),
-            status: Some(TaskStatus::InProgress),
-            assignee: Some("worker-1".to_string()),
-            ..Default::default()
-        };
+        let input = update_input(
+            task.id.as_str(),
+            TaskUpdate {
+                title: Some("New title".to_string()),
+                description: Some("New description".to_string()),
+                status: Some(TaskStatus::InProgress),
+                assignee: Some("worker-1".to_string()),
+                ..Default::default()
+            },
+        );
 
         let output = execute_task_update(input, tasks.store_mut()).unwrap();
 
@@ -219,11 +178,8 @@ mod tests {
     fn test_update_nonexistent_task() {
         let mut tasks = TestTaskStore::new();
 
-        let input = TaskUpdateInput {
-            id: "at-nonexistent".to_string(),
-            title: Some("New title".to_string()),
-            ..Default::default()
-        };
+        let input =
+            update_input("at-nonexistent", TaskUpdate { title: Some("New title".to_string()), ..Default::default() });
 
         let result = execute_task_update(input, tasks.store_mut());
         assert!(result.is_err());
@@ -234,11 +190,10 @@ mod tests {
         let mut tasks = TestTaskStore::new();
         let task = tasks.root_task("Task");
 
-        let input = TaskUpdateInput {
-            id: task.id.to_string(),
-            deps: Some(vec!["at-nonexistent".to_string()]),
-            ..Default::default()
-        };
+        let input = update_input(
+            task.id.as_str(),
+            TaskUpdate { deps: Some(vec![TaskId::from("at-nonexistent")]), ..Default::default() },
+        );
 
         let result = execute_task_update(input, tasks.store_mut());
         assert!(result.is_err());
@@ -249,12 +204,14 @@ mod tests {
         let mut tasks = TestTaskStore::new();
         let task = tasks.root_task("Task to complete");
 
-        let input = TaskUpdateInput {
-            id: task.id.to_string(),
-            status: Some(TaskStatus::Completed),
-            summary: Some("Task done successfully".to_string()),
-            ..Default::default()
-        };
+        let input = update_input(
+            task.id.as_str(),
+            TaskUpdate {
+                status: Some(TaskStatus::Completed),
+                summary: Some("Task done successfully".to_string()),
+                ..Default::default()
+            },
+        );
 
         let output = execute_task_update(input, tasks.store_mut()).unwrap();
 
@@ -275,12 +232,14 @@ mod tests {
             .update(&sub2.id, TaskUpdate { deps: Some(vec![sub1.id.clone()]), ..Default::default() })
             .unwrap();
 
-        let input = TaskUpdateInput {
-            id: sub1.id.to_string(),
-            status: Some(TaskStatus::Completed),
-            summary: Some("Subtask 1 done".to_string()),
-            ..Default::default()
-        };
+        let input = update_input(
+            sub1.id.as_str(),
+            TaskUpdate {
+                status: Some(TaskStatus::Completed),
+                summary: Some("Subtask 1 done".to_string()),
+                ..Default::default()
+            },
+        );
 
         let output = execute_task_update(input, tasks.store_mut()).unwrap();
 
@@ -294,15 +253,17 @@ mod tests {
         let mut tasks = TestTaskStore::new();
         let task = tasks.root_task("Research task");
 
-        let input = TaskUpdateInput {
-            id: task.id.to_string(),
-            status: Some(TaskStatus::Completed),
-            summary: Some("Found 3 issues".to_string()),
-            decisions: Some(vec!["Use approach A".to_string()]),
-            facts: Some(vec!["Issue in file X".to_string()]),
-            next_steps: Some(vec!["Fix the issues".to_string()]),
-            ..Default::default()
-        };
+        let input = update_input(
+            task.id.as_str(),
+            TaskUpdate {
+                status: Some(TaskStatus::Completed),
+                summary: Some("Found 3 issues".to_string()),
+                decisions: Some(vec!["Use approach A".to_string()]),
+                facts: Some(vec!["Issue in file X".to_string()]),
+                next_steps: Some(vec!["Fix the issues".to_string()]),
+                ..Default::default()
+            },
+        );
 
         let output = execute_task_update(input, tasks.store_mut()).unwrap();
 

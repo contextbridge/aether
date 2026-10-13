@@ -82,18 +82,6 @@ impl TasksMcp {
             None => Self::new(),
         }
     }
-
-    #[cfg(test)]
-    #[allow(clippy::used_underscore_binding)]
-    fn is_session_scoped(&self) -> bool {
-        self.storage._temp_dir.is_some()
-    }
-
-    #[cfg(test)]
-    #[allow(clippy::used_underscore_binding)]
-    fn temp_path(&self) -> Option<PathBuf> {
-        self.storage._temp_dir.as_ref().map(|d| d.path().to_path_buf())
-    }
 }
 
 #[allow(clippy::unused_async_trait_impl)]
@@ -180,37 +168,53 @@ struct TaskStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tasks::TaskId;
+    use std::fs;
 
-    #[test]
-    fn test_new_is_session_scoped() {
+    #[tokio::test]
+    async fn session_storage_is_removed_on_drop() {
         let server = TasksMcp::new();
-        assert!(server.is_session_scoped());
-        let temp_path = server.temp_path().unwrap();
-        assert!(temp_path.exists());
+        let id = create_task(&server).await;
+        let file = session_task_file(&id).expect("session task file should exist in a temp dir");
 
         drop(server);
-        assert!(!temp_path.exists(), "temp dir should be cleaned up on drop");
+        assert!(!file.exists(), "temp dir should be cleaned up on drop");
     }
 
-    #[test]
-    fn test_new_persistent_uses_provided_dir() {
-        let temp = TempDir::new().unwrap();
-        let server = TasksMcp::new_persistent(temp.path().to_path_buf());
-        assert!(!server.is_session_scoped());
+    #[tokio::test]
+    async fn from_args_without_dir_leaves_base_dir_untouched() {
+        let base = TempDir::new().unwrap();
+        let server = TasksMcp::from_args(TasksMcpArgs::try_parse_from(Vec::<String>::new()).unwrap(), base.path());
+
+        create_task(&server).await;
+        assert_eq!(fs::read_dir(base.path()).unwrap().count(), 0);
     }
 
-    #[test]
-    fn test_from_args_with_dir_is_persistent() {
-        let args = TasksMcpArgs::try_parse_from(["--dir", "tasks"]).unwrap();
-        let server = TasksMcp::from_args(args, Path::new("/workspace"));
+    #[tokio::test]
+    async fn from_args_with_dir_persists_across_servers() {
+        let base = TempDir::new().unwrap();
+        let args = || TasksMcpArgs::try_parse_from(["--dir", "tasks"]).unwrap();
+        let id = create_task(&TasksMcp::from_args(args(), base.path())).await;
 
-        assert!(!server.is_session_scoped());
+        assert!(base.path().join("tasks/.aether-tasks/active").join(id.filename()).exists());
+        let reopened = TasksMcp::from_args(args(), base.path());
+        let Json(listed) = reopened.task_list(Parameters(TaskListInput::default())).await.unwrap();
+        assert_eq!(listed.tasks.len(), 1);
     }
 
-    #[test]
-    fn test_from_args_no_dir_is_session_scoped() {
-        let server =
-            TasksMcp::from_args(TasksMcpArgs::try_parse_from(Vec::<String>::new()).unwrap(), Path::new("/workspace"));
-        assert!(server.is_session_scoped());
+    async fn create_task(server: &TasksMcp) -> TaskId {
+        let input =
+            TaskCreateInput { title: "Task".into(), description: None, parent_id: None, assignee: None, deps: None };
+        let Json(output) = server.task_create(Parameters(input)).await.unwrap();
+        TaskId::from(output.task.id)
+    }
+
+    fn session_task_file(id: &TaskId) -> Option<PathBuf> {
+        fs::read_dir(std::env::temp_dir())
+            .ok()?
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("aether-tasks-"))
+            .map(|entry| entry.path().join("active").join(id.filename()))
+            .find(|path| path.exists())
     }
 }
