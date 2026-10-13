@@ -142,9 +142,11 @@ fn trimmed(output: &Output) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::testing::{clone_repo, git, init_repo};
+    use crate::workspace::DirectoryCloner;
+    use crate::workspace::testing::{StdCopyCloner, init_repo};
     use std::fs;
     use tempfile::TempDir;
+    use utils::testing::git_commit;
 
     #[test]
     fn repo_root_resolves_from_subdirectory() {
@@ -159,10 +161,10 @@ mod tests {
     fn root_commit_hash_is_stable_across_clones() {
         let tmp = TempDir::new().unwrap();
         let repo = init_repo(tmp.path(), "repo");
-        let clone = clone_repo(&repo, tmp.path().join("clone"));
+        let clone = tmp.path().join("clone");
+        StdCopyCloner.clone_dir(&repo, &clone).unwrap();
         fs::write(clone.join("extra.txt"), "diverged\n").unwrap();
-        git(&clone, &["add", "."]);
-        git(&clone, &["commit", "-m", "diverge"]);
+        git_commit(&clone, "diverge");
 
         let original = root_commit_hash(&repo).unwrap();
         assert_ne!(original, "");

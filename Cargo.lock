@@ -201,6 +201,7 @@ version = "0.3.20"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
+ "aether-utils",
  "async-stream",
  "futures",
  "schemars 1.2.2",

@@ -173,40 +173,17 @@ pub enum GitRepoError {
 mod tests {
     use super::*;
     use std::fs;
+    use utils::testing::TestWorkspace;
 
     #[test]
     fn test_git_diff_between_commits() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let repo_path = temp_dir.path();
+        let repo = TestWorkspace::new().file("test.txt", "initial content\n").git_init();
+        let first_commit = repo.commit("Initial commit");
+        repo.write("test.txt", "modified content\n");
+        repo.write("new.txt", "new file\n");
+        let second_commit = repo.commit("Second commit");
 
-        Command::new("git").args(["init"]).current_dir(repo_path).output().unwrap();
-        Command::new("git").args(["config", "user.email", "test@example.com"]).current_dir(repo_path).output().unwrap();
-        Command::new("git").args(["config", "user.name", "Test User"]).current_dir(repo_path).output().unwrap();
-
-        fs::write(repo_path.join("test.txt"), "initial content\n").unwrap();
-        Command::new("git").args(["add", "test.txt"]).current_dir(repo_path).output().unwrap();
-        Command::new("git").args(["commit", "-m", "Initial commit"]).current_dir(repo_path).output().unwrap();
-
-        let first_commit = String::from_utf8(
-            Command::new("git").args(["rev-parse", "HEAD"]).current_dir(repo_path).output().unwrap().stdout,
-        )
-        .unwrap()
-        .trim()
-        .to_string();
-
-        fs::write(repo_path.join("test.txt"), "modified content\n").unwrap();
-        fs::write(repo_path.join("new.txt"), "new file\n").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(repo_path).output().unwrap();
-        Command::new("git").args(["commit", "-m", "Second commit"]).current_dir(repo_path).output().unwrap();
-
-        let second_commit = String::from_utf8(
-            Command::new("git").args(["rev-parse", "HEAD"]).current_dir(repo_path).output().unwrap().stdout,
-        )
-        .unwrap()
-        .trim()
-        .to_string();
-
-        let git_repo = GitRepo::from_path(repo_path);
+        let git_repo = GitRepo::from_path(repo.root());
         let diff = git_repo.diff(&first_commit, &second_commit).unwrap();
 
         assert!(diff.contains("test.txt"), "Diff should mention test.txt");
@@ -219,38 +196,13 @@ mod tests {
 
     #[test]
     fn test_unified_diff_function() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let repo_path = temp_dir.path();
+        let repo = TestWorkspace::new().file("test.txt", "initial content\n").git_init();
+        let first_commit = repo.commit("Initial commit");
+        repo.write("test.txt", "modified content\n");
+        let second_commit = repo.commit("Second commit");
+        repo.write("test.txt", "unstaged content\n");
 
-        Command::new("git").args(["init"]).current_dir(repo_path).output().unwrap();
-        Command::new("git").args(["config", "user.email", "test@example.com"]).current_dir(repo_path).output().unwrap();
-        Command::new("git").args(["config", "user.name", "Test User"]).current_dir(repo_path).output().unwrap();
-
-        fs::write(repo_path.join("test.txt"), "initial content\n").unwrap();
-        Command::new("git").args(["add", "test.txt"]).current_dir(repo_path).output().unwrap();
-        Command::new("git").args(["commit", "-m", "Initial commit"]).current_dir(repo_path).output().unwrap();
-
-        let first_commit = String::from_utf8(
-            Command::new("git").args(["rev-parse", "HEAD"]).current_dir(repo_path).output().unwrap().stdout,
-        )
-        .unwrap()
-        .trim()
-        .to_string();
-
-        fs::write(repo_path.join("test.txt"), "modified content\n").unwrap();
-        Command::new("git").args(["add", "test.txt"]).current_dir(repo_path).output().unwrap();
-        Command::new("git").args(["commit", "-m", "Second commit"]).current_dir(repo_path).output().unwrap();
-
-        let second_commit = String::from_utf8(
-            Command::new("git").args(["rev-parse", "HEAD"]).current_dir(repo_path).output().unwrap().stdout,
-        )
-        .unwrap()
-        .trim()
-        .to_string();
-
-        fs::write(repo_path.join("test.txt"), "unstaged content\n").unwrap();
-
-        let git_repo = GitRepo::from_path(repo_path);
+        let git_repo = GitRepo::from_path(repo.root());
 
         let diff = git_repo.diff_range(&first_commit, Some(&second_commit)).unwrap();
         assert!(diff.contains("modified content") || diff.contains("+modified content"));
@@ -264,43 +216,15 @@ mod tests {
 
     #[test]
     fn test_blobless_clone_and_checkout() {
-        let source_dir = tempfile::tempdir().unwrap();
-        let source_path = source_dir.path();
+        let source = TestWorkspace::new().file("test.txt", "initial content\n").git_init();
+        let first_commit = source.commit("Initial commit");
+        source.write("test.txt", "modified content\n");
+        let second_commit = source.commit("Second commit");
 
-        Command::new("git").args(["init"]).current_dir(source_path).output().unwrap();
-        Command::new("git")
-            .args(["config", "user.email", "test@example.com"])
-            .current_dir(source_path)
-            .output()
-            .unwrap();
-        Command::new("git").args(["config", "user.name", "Test User"]).current_dir(source_path).output().unwrap();
+        let clone = TestWorkspace::new();
+        let repo = GitRepo::clone(source.root(), clone.root(), CloneMode::Blobless).unwrap();
 
-        fs::write(source_path.join("test.txt"), "initial content\n").unwrap();
-        Command::new("git").args(["add", "test.txt"]).current_dir(source_path).output().unwrap();
-        Command::new("git").args(["commit", "-m", "Initial commit"]).current_dir(source_path).output().unwrap();
-
-        let first_commit = String::from_utf8(
-            Command::new("git").args(["rev-parse", "HEAD"]).current_dir(source_path).output().unwrap().stdout,
-        )
-        .unwrap()
-        .trim()
-        .to_string();
-
-        fs::write(source_path.join("test.txt"), "modified content\n").unwrap();
-        Command::new("git").args(["add", "test.txt"]).current_dir(source_path).output().unwrap();
-        Command::new("git").args(["commit", "-m", "Second commit"]).current_dir(source_path).output().unwrap();
-
-        let second_commit = String::from_utf8(
-            Command::new("git").args(["rev-parse", "HEAD"]).current_dir(source_path).output().unwrap().stdout,
-        )
-        .unwrap()
-        .trim()
-        .to_string();
-
-        let clone_dir = tempfile::tempdir().unwrap();
-        let repo = GitRepo::clone(source_path.to_str().unwrap(), clone_dir.path(), CloneMode::Blobless).unwrap();
-
-        let entries: Vec<_> = fs::read_dir(clone_dir.path())
+        let entries: Vec<_> = fs::read_dir(clone.root())
             .unwrap()
             .filter_map(std::result::Result::ok)
             .filter(|e| e.file_name() != ".git")
@@ -309,7 +233,7 @@ mod tests {
 
         repo.checkout(&first_commit).unwrap();
 
-        let content = fs::read_to_string(clone_dir.path().join("test.txt")).unwrap();
+        let content = fs::read_to_string(clone.path("test.txt")).unwrap();
         assert_eq!(content, "initial content\n");
 
         let diff = repo.diff(&first_commit, &second_commit).unwrap();

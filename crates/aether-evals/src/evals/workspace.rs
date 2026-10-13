@@ -227,8 +227,7 @@ fn copy_dir_contents(src: &Path, dst: &Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use std::fs::{read_to_string, remove_dir_all};
-    use std::process::Command;
-    use tempfile::TempDir;
+    use utils::testing::{TestWorkspace, git};
 
     #[test]
     fn persist_reports_root_and_path_for_local_workspace() {
@@ -248,7 +247,7 @@ mod tests {
         let bundle_path = bundle_dir.path().join("repo.bundle");
         create_git_bundle(
             &GitRepoSpec {
-                url: format!("file://{}", repo.path().display()),
+                url: format!("file://{}", repo.root().display()),
                 start_commit: start.clone(),
                 gold_commit: gold.clone(),
                 subdir: None,
@@ -283,7 +282,7 @@ mod tests {
     fn capture_git_diffs_includes_committed_agent_changes() {
         let (repo, start, gold) = init_repo();
         let workspace = Workspace::from_git_repo(GitRepoSpec {
-            url: format!("file://{}", repo.path().display()),
+            url: format!("file://{}", repo.root().display()),
             start_commit: start,
             gold_commit: gold,
             subdir: None,
@@ -310,7 +309,7 @@ mod tests {
     fn capture_git_diffs_includes_staged_unstaged_added_and_deleted_changes() {
         let (repo, start, gold) = init_repo();
         let workspace = Workspace::from_git_repo(GitRepoSpec {
-            url: format!("file://{}", repo.path().display()),
+            url: format!("file://{}", repo.root().display()),
             start_commit: start,
             gold_commit: gold,
             subdir: None,
@@ -351,32 +350,15 @@ mod tests {
         assert!(matches!(result, Err(WorkspaceError::MissingBundle { .. })));
     }
 
-    fn init_repo() -> (TempDir, String, String) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path();
-        git(path, &["init", "--initial-branch", "main"]);
-        git(path, &["config", "user.email", "eval@example.com"]);
-        git(path, &["config", "user.name", "Eval"]);
-
-        write(path.join("root.txt"), "root v1\n").unwrap();
-        write(path.join("deleted.txt"), "before deleted\n").unwrap();
-        create_dir_all(path.join("pkg")).unwrap();
-        write(path.join("pkg").join("inner.txt"), "inner v1\n").unwrap();
-        git(path, &["add", "."]);
-        git(path, &["commit", "-m", "start"]);
-        let start = git(path, &["rev-parse", "HEAD"]);
-
-        write(path.join("root.txt"), "root v2\n").unwrap();
-        git(path, &["add", "."]);
-        git(path, &["commit", "-m", "gold"]);
-        let gold = git(path, &["rev-parse", "HEAD"]);
-
-        (dir, start, gold)
-    }
-
-    fn git(repo: &Path, args: &[&str]) -> String {
-        let output = Command::new("git").arg("-C").arg(repo).args(args).output().unwrap();
-        assert!(output.status.success(), "git {args:?} failed: {}", String::from_utf8_lossy(&output.stderr));
-        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    fn init_repo() -> (TestWorkspace, String, String) {
+        let repo = TestWorkspace::new()
+            .file("root.txt", "root v1\n")
+            .file("deleted.txt", "before deleted\n")
+            .file("pkg/inner.txt", "inner v1\n")
+            .git_init();
+        let start = repo.commit("start");
+        repo.write("root.txt", "root v2\n");
+        let gold = repo.commit("gold");
+        (repo, start, gold)
     }
 }

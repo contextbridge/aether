@@ -2,6 +2,7 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use tempfile::TempDir;
 
 pub struct TestWorkspace {
@@ -63,4 +64,41 @@ impl TestWorkspace {
     pub fn path_string(&self, path: impl AsRef<Path>) -> String {
         self.path(path).to_string_lossy().into_owned()
     }
+
+    pub fn git_init(self) -> Self {
+        git_init(self.root());
+        self
+    }
+
+    pub fn commit(&self, message: &str) -> String {
+        git_commit(self.root(), message)
+    }
+
+    pub fn git(&self, args: &[&str]) -> String {
+        git(self.root(), args)
+    }
+}
+
+pub fn git_init(dir: &Path) {
+    git(dir, &["-c", "init.templateDir=", "init", "--quiet", "--initial-branch=main"]);
+    for (key, value) in [
+        ("user.name", "Test"),
+        ("user.email", "test@example.com"),
+        ("commit.gpgsign", "false"),
+        ("core.hooksPath", "/dev/null"),
+    ] {
+        git(dir, &["config", key, value]);
+    }
+}
+
+pub fn git_commit(dir: &Path, message: &str) -> String {
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "--quiet", "-m", message]);
+    git(dir, &["rev-parse", "HEAD"])
+}
+
+pub fn git(dir: &Path, args: &[&str]) -> String {
+    let output = Command::new("git").arg("-C").arg(dir).args(args).output().expect("failed to spawn git");
+    assert!(output.status.success(), "git {args:?} failed: {}", String::from_utf8_lossy(&output.stderr));
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }

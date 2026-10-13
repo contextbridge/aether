@@ -6,6 +6,7 @@ use thiserror::Error;
 
 mod git;
 mod registry;
+#[cfg(any(test, feature = "testing"))]
 #[doc(hidden)]
 pub mod testing;
 

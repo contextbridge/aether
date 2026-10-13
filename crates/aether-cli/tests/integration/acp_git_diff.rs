@@ -1,11 +1,12 @@
 use acp_utils::notifications::{GitDiffClosePayload, GitDiffCommandPayload, WorkspaceStatusPayload};
 use aether_cli::acp::testing::AcpTestHarness;
-use aether_cli::workspace::testing::{git, init_repo};
+use aether_cli::workspace::testing::init_repo;
 use agent_client_protocol::schema::v2::AbsolutePath;
 use clankerdiff_core::{DiffScope, RepositoryAction};
 use clankerdiff_protocol::client::ClientCommand;
 use clankerdiff_protocol::shared::{DocumentUpdate, Event, FileEntry, LIVE_PROTOCOL_VERSION};
 use std::fs;
+use utils::testing::git;
 
 #[tokio::test(flavor = "current_thread")]
 async fn git_diff_open_publishes_snapshot_over_duplex() {
