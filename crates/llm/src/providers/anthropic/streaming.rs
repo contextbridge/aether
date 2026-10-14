@@ -26,11 +26,11 @@ pub(super) fn decode_line(line: &str, turn: &mut StreamAssembler<u32>) -> Result
 
 fn decode_event(event: StreamEvent, turn: &mut StreamAssembler<u32>) -> Result<Vec<LlmResponse>> {
     let response = match event {
-        StreamEvent::ContentBlockStart { data } => match data.content_block {
+        StreamEvent::ContentBlockStart(data) => match data.content_block {
             ContentBlockStartData::ToolUse { id, name } => Some(turn.start_tool(data.index, id, name)),
             ContentBlockStartData::Text { .. } | ContentBlockStartData::Thinking { .. } => None,
         },
-        StreamEvent::ContentBlockDelta { data } => match data.delta {
+        StreamEvent::ContentBlockDelta(data) => match data.delta {
             ContentBlockDeltaData::TextDelta { text } => {
                 (!text.is_empty()).then_some(LlmResponse::Text { chunk: text })
             }
@@ -39,21 +39,21 @@ fn decode_event(event: StreamEvent, turn: &mut StreamAssembler<u32>) -> Result<V
             }
             ContentBlockDeltaData::InputJsonDelta { partial_json } => turn.append_tool_args(&data.index, partial_json),
         },
-        StreamEvent::ContentBlockStop { data } => turn.complete_tool(&data.index),
-        StreamEvent::MessageDelta { data } => {
+        StreamEvent::ContentBlockStop(data) => turn.complete_tool(&data.index),
+        StreamEvent::MessageDelta(data) => {
             if let Some(stop_reason) = data.delta.stop_reason.as_deref() {
                 turn.stop(map_anthropic_stop_reason(stop_reason));
             }
             data.usage.as_ref().map(|usage| LlmResponse::Usage { tokens: usage.into() })
         }
-        StreamEvent::MessageStop { .. } => {
+        StreamEvent::MessageStop => {
             turn.allow_eof();
             None
         }
-        StreamEvent::Error { data } => {
+        StreamEvent::Error(data) => {
             return Err(map_anthropic_stream_error(&data.error.error_type, &data.error.message));
         }
-        StreamEvent::MessageStart { .. } | StreamEvent::Ping => None,
+        StreamEvent::MessageStart | StreamEvent::Ping => None,
     };
 
     Ok(response.into_iter().collect())
@@ -258,17 +258,17 @@ mod tests {
 
         let message_start_json = r#"{"type": "message_start", "message": {"id": "msg_123", "type": "message", "role": "assistant", "content": [], "model": "claude-3", "stop_reason": null, "stop_sequence": null, "usage": {"input_tokens": 10, "output_tokens": 0}}}"#;
         let event: StreamEvent = serde_json::from_str(message_start_json).unwrap();
-        assert!(matches!(event, StreamEvent::MessageStart { .. }));
+        assert!(matches!(event, StreamEvent::MessageStart));
 
         let content_block_start_json =
             r#"{"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}"#;
         let event: StreamEvent = serde_json::from_str(content_block_start_json).unwrap();
-        assert!(matches!(event, StreamEvent::ContentBlockStart { .. }));
+        assert!(matches!(event, StreamEvent::ContentBlockStart(_)));
 
         let content_block_delta_json =
             r#"{"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}}"#;
         let event: StreamEvent = serde_json::from_str(content_block_delta_json).unwrap();
-        assert!(matches!(event, StreamEvent::ContentBlockDelta { .. }));
+        assert!(matches!(event, StreamEvent::ContentBlockDelta(_)));
 
         let ping_json = r#"{"type": "ping"}"#;
         let event: StreamEvent = serde_json::from_str(ping_json).unwrap();
@@ -277,7 +277,7 @@ mod tests {
         let error_json =
             r#"{"type": "error", "error": {"type": "rate_limit_error", "message": "Rate limit exceeded"}}"#;
         let event: StreamEvent = serde_json::from_str(error_json).unwrap();
-        assert!(matches!(event, StreamEvent::Error { .. }));
+        assert!(matches!(event, StreamEvent::Error(_)));
     }
 
     async fn collect_responses(lines: Vec<String>) -> Vec<LlmResponse> {

@@ -1,6 +1,6 @@
 use async_openai::types::chat::{
     ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls, ChatCompletionStreamOptions, ChatCompletionTools,
-    FunctionCall, Role,
+    FunctionCall,
 };
 use serde::{Deserialize, Serialize};
 
@@ -10,12 +10,11 @@ use crate::{ChatMessage, ContentBlock, TokenUsage};
 /// This handles quirks from providers like `OpenRouter`, Z.ai, and potentially others.
 ///
 /// Common deviations handled:
-/// - Missing 'object' field (z.ai)
 /// - Negative token counts (openrouter)
 /// - Additional finish reasons like 'error' (openrouter)
-/// - Optional `system_fingerprint` and usage fields
+/// - Optional usage fields
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FinishReason {
     Stop,
@@ -28,22 +27,10 @@ pub enum FinishReason {
     ModelContextWindowExceeded,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ChatCompletionStreamResponse {
-    pub id: String,
     pub choices: Vec<ChatCompletionStreamChoice>,
-    pub created: u64,
-    pub model: String,
-    #[serde(default)]
-    pub system_fingerprint: Option<String>,
-    #[serde(default = "default_object")]
-    pub object: String,
-    #[serde(default)]
     pub usage: Option<Usage>,
-}
-
-fn default_object() -> String {
-    "chat.completion.chunk".to_string()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -188,75 +175,57 @@ fn map_user_content(parts: &[ContentBlock]) -> crate::Result<UserContent> {
     Ok(UserContent::Parts(items))
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ChatCompletionStreamChoice {
-    pub index: i32,
     pub delta: ChatCompletionStreamResponseDelta,
     pub finish_reason: Option<FinishReason>,
-    #[serde(default)]
-    pub logprobs: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct ChatCompletionStreamResponseDelta {
-    pub role: Option<Role>,
     pub content: Option<String>,
-    #[serde(default)]
     pub reasoning_content: Option<String>,
     pub tool_calls: Option<Vec<ToolCallDelta>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ToolCallDelta {
     pub index: i32,
     pub id: Option<String>,
-    #[serde(rename = "type")]
-    pub tool_type: Option<String>,
     pub function: Option<FunctionCallDelta>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct FunctionCallDelta {
     pub name: Option<String>,
     pub arguments: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct PromptTokensDetails {
-    #[serde(default)]
     pub cached_tokens: Option<u32>,
     /// `OpenRouter`-specific: tokens written to cache (cache creation).
     /// Only returned for models with explicit caching and cache write pricing.
-    #[serde(default)]
     pub cache_write_tokens: Option<u32>,
     /// `OpenAI` + `OpenRouter`: input audio tokens.
-    #[serde(default)]
     pub audio_tokens: Option<u32>,
     /// `OpenRouter`-specific: input video tokens.
-    #[serde(default)]
     pub video_tokens: Option<u32>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct CompletionTokensDetails {
-    #[serde(default)]
     pub reasoning_tokens: Option<u32>,
-    #[serde(default)]
     pub audio_tokens: Option<u32>,
-    #[serde(default)]
     pub accepted_prediction_tokens: Option<u32>,
-    #[serde(default)]
     pub rejected_prediction_tokens: Option<u32>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Usage {
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
-    pub total_tokens: i64,
-    #[serde(default)]
     pub prompt_tokens_details: Option<PromptTokensDetails>,
-    #[serde(default)]
     pub completion_tokens_details: Option<CompletionTokensDetails>,
 }
 

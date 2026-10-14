@@ -11,26 +11,13 @@ use tokio_stream::StreamExt;
 #[tokio::test]
 async fn test_openrouter_negative_token_handling() {
     let stream_items = vec![Ok::<ChatCompletionStreamResponse, std::io::Error>(ChatCompletionStreamResponse {
-        id: "gen-123".to_string(),
         choices: vec![ChatCompletionStreamChoice {
-            index: 0,
-            delta: ChatCompletionStreamResponseDelta {
-                role: None,
-                content: None,
-                reasoning_content: None,
-                tool_calls: None,
-            },
+            delta: ChatCompletionStreamResponseDelta { content: None, reasoning_content: None, tool_calls: None },
             finish_reason: Some(openai_compatible::types::FinishReason::Stop),
-            logprobs: None,
         }],
-        created: 1_234_567_890,
-        model: "openai/gpt-3.5-turbo".to_string(),
-        system_fingerprint: None,
-        object: "chat.completion.chunk".to_string(),
         usage: Some(Usage {
             prompt_tokens: -5,
             completion_tokens: 10,
-            total_tokens: 5,
             prompt_tokens_details: None,
             completion_tokens_details: None,
         }),
@@ -63,56 +50,30 @@ async fn test_openrouter_usage_in_separate_final_chunk() {
     let stream_items: Vec<Result<ChatCompletionStreamResponse, std::io::Error>> = vec![
         // Chunk 1: content
         Ok(ChatCompletionStreamResponse {
-            id: "gen-123".to_string(),
             choices: vec![ChatCompletionStreamChoice {
-                index: 0,
                 delta: ChatCompletionStreamResponseDelta {
-                    role: None,
                     content: Some("Hello world".to_string()),
                     reasoning_content: None,
                     tool_calls: None,
                 },
                 finish_reason: None,
-                logprobs: None,
             }],
-            created: 1_234_567_890,
-            model: "openai/gpt-3.5-turbo".to_string(),
-            system_fingerprint: None,
-            object: "chat.completion.chunk".to_string(),
             usage: None,
         }),
         // Chunk 2: finish_reason but no usage
         Ok(ChatCompletionStreamResponse {
-            id: "gen-123".to_string(),
             choices: vec![ChatCompletionStreamChoice {
-                index: 0,
-                delta: ChatCompletionStreamResponseDelta {
-                    role: None,
-                    content: None,
-                    reasoning_content: None,
-                    tool_calls: None,
-                },
+                delta: ChatCompletionStreamResponseDelta { content: None, reasoning_content: None, tool_calls: None },
                 finish_reason: Some(openai_compatible::types::FinishReason::Stop),
-                logprobs: None,
             }],
-            created: 1_234_567_890,
-            model: "openai/gpt-3.5-turbo".to_string(),
-            system_fingerprint: None,
-            object: "chat.completion.chunk".to_string(),
             usage: None,
         }),
         // Chunk 3: usage in separate final chunk with empty choices
         Ok(ChatCompletionStreamResponse {
-            id: "gen-123".to_string(),
             choices: vec![],
-            created: 1_234_567_890,
-            model: "openai/gpt-3.5-turbo".to_string(),
-            system_fingerprint: None,
-            object: "chat.completion.chunk".to_string(),
             usage: Some(Usage {
                 prompt_tokens: 15,
                 completion_tokens: 25,
-                total_tokens: 40,
                 prompt_tokens_details: None,
                 completion_tokens_details: None,
             }),
