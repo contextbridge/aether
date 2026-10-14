@@ -1,5 +1,5 @@
 use super::oauth::CodexTokenManager;
-use crate::provider::{LlmResponseStream, StreamingModelProvider, get_context_window};
+use crate::provider::{LlmResponseStream, StreamingModelProvider};
 use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
 use crate::providers::http::{SseData, http_client};
 use crate::providers::openai_responses::mappers::{ResponsesRequestPolicy, build_wire_request};
@@ -97,10 +97,6 @@ impl StreamingModelProvider for CodexProvider {
         format!("{}:{}", super::PROVIDER_ID, self.model).parse().ok()
     }
 
-    fn context_window(&self) -> Option<u32> {
-        get_context_window(super::PROVIDER_ID, &self.model)
-    }
-
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
         let provider = self.clone();
         let context = context.clone();
@@ -114,10 +110,6 @@ impl StreamingModelProvider for CodexProvider {
             decode_responses(),
             self.idle_timeout,
         )
-    }
-
-    fn display_name(&self) -> String {
-        format!("Codex ({})", self.model)
     }
 }
 

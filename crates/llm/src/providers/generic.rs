@@ -3,7 +3,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use crate::catalog::Provider;
-use crate::provider::{get_context_window, validate_reasoning};
+use crate::provider::validate_reasoning;
 use crate::providers::http::{SseData, http_client};
 pub use crate::providers::openai_compatible::ChatRequestPolicy;
 use crate::providers::openai_compatible::streaming::decode_sse_chunk;
@@ -212,15 +212,6 @@ impl StreamingModelProvider for GenericProvider {
             Api::Responses(policy) => self.stream_responses(context, policy),
         };
         stream.unwrap_or_else(error_stream)
-    }
-
-    fn display_name(&self) -> String {
-        let name = self.config.provider.display_name();
-        if self.model.is_empty() { name.to_string() } else { format!("{name} ({})", self.model) }
-    }
-
-    fn context_window(&self) -> Option<u32> {
-        get_context_window(self.config.provider.parser_name(), &self.model)
     }
 
     fn model(&self) -> Option<LlmModel> {

@@ -1,9 +1,7 @@
 use super::mappers::{map_messages, map_tools};
 use super::streaming::decode_line;
 use super::types::{CacheControl, ContentBlock, Request, Thinking};
-use crate::provider::{
-    LlmResponseStream, ProviderFactory, StreamingModelProvider, get_context_window, validate_reasoning,
-};
+use crate::provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider, validate_reasoning};
 use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
 use crate::providers::http::{SseData, anthropic_code, http_client, open_sse};
 use crate::providers::response_stream::{OpenedStream, response_stream};
@@ -138,10 +136,6 @@ impl AnthropicProvider {
 }
 
 impl ProviderFactory for AnthropicProvider {
-    fn from_env() -> impl Future<Output = Result<Self>> + Send {
-        ready(Ok(Self::new(None)))
-    }
-
     fn from_env_with_connection(connection: ProviderConnectionConfig) -> impl Future<Output = Result<Self>> + Send {
         ready(Ok(Self::new(None).with_connection(connection)))
     }
@@ -154,10 +148,6 @@ impl ProviderFactory for AnthropicProvider {
 impl StreamingModelProvider for AnthropicProvider {
     fn model(&self) -> Option<crate::LlmModel> {
         format!("anthropic:{}", self.model).parse().ok()
-    }
-
-    fn context_window(&self) -> Option<u32> {
-        get_context_window("anthropic", &self.model)
     }
 
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
@@ -173,10 +163,6 @@ impl StreamingModelProvider for AnthropicProvider {
             |line, turn| decode_line(&line, turn),
             self.idle_timeout,
         )
-    }
-
-    fn display_name(&self) -> String {
-        format!("Anthropic ({})", self.model)
     }
 }
 
