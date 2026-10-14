@@ -74,10 +74,6 @@ impl CodexProvider {
     }
 
     /// Send the request and return a stream of SSE lines parsed into typed events.
-    ///
-    /// Uses manual SSE parsing because the Codex API does not return a
-    /// `Content-Type: text/event-stream` header, which `reqwest_eventsource`
-    /// (used by `async-openai`'s `create_stream`) requires.
     async fn send_request(&self, request: serde_json::Value, headers: HeaderMap) -> Result<OpenedStream<SseData>> {
         let url = format!("{}/responses", self.base_url);
 

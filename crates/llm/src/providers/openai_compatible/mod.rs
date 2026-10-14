@@ -1,6 +1,5 @@
 #![doc = include_str!(concat!(env!("OUT_DIR"), "/docs/openai_compatible.md"))]
 
-pub mod config;
 pub mod streaming;
 pub mod types;
 
@@ -11,8 +10,7 @@ use utils::ReasoningEffort;
 use crate::{Context, LlmError, ToolDefinition};
 use types::CompatibleChatRequest;
 
-pub use config::AetherOpenAiConfig;
-pub use streaming::{create_custom_stream_generic, process_compatible_stream};
+pub use streaming::process_compatible_stream;
 pub use types::ChatCompletionStreamResponse;
 
 #[derive(Debug, Clone, Copy)]

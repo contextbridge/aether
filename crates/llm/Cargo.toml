@@ -55,7 +55,6 @@ uuid = { workspace = true }
 
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "net", "time"] }
 tokio-stream = { workspace = true }
-tower = { workspace = true, features = ["util"] }
 
 schemars = { workspace = true }
 secrecy = { workspace = true }
