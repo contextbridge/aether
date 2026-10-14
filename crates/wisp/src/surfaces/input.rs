@@ -1,6 +1,7 @@
 use crate::command::GitReviewCommand;
+use crate::settings::overlay::SettingsChange;
 use crate::view::filterable_list::FilterableList;
-use crate::view::selection::Direction;
+use crate::view::selection::{Direction, SelectionState};
 use acp_utils::notifications::WorkspaceMoveTarget;
 use agent_client_protocol::schema::v2::SessionId;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -16,64 +17,22 @@ pub(crate) fn is_composed_char(key: KeyEvent) -> bool {
     matches!(key.code, KeyCode::Char(_)) && key.modifiers.intersects(COMPOSED_MODIFIERS)
 }
 
+/// What a surface asks of the app. Every overlay, route and pane reports
+/// through this one enum, so the app acts on each request in one place.
 #[derive(Debug)]
-pub enum SessionPickerOutput {
+pub enum UiOutput {
     Close,
-    Resume { session_id: SessionId, cwd: PathBuf },
-    Preview(String),
-}
-
-#[derive(Debug)]
-pub enum WorkspacePickerOutput {
-    Close,
-    Move { target: WorkspaceMoveTarget },
-}
-
-#[derive(Debug)]
-pub enum SettingsOutput {
-    Close,
-    SetConfigOption { config_id: String, value: String },
+    ConfigChange(SettingsChange),
     SetTheme(String),
     AuthenticateServer(String),
     AuthenticateProvider(String),
-}
-
-#[derive(Debug)]
-pub enum ElicitationOutput {
-    Close,
-}
-
-/// How a review screen ended. Both full-screen reviews report through this, so
-/// the root translates every review the same way: a cancellation closes the
-/// route, a submission carries the text the review produced.
-#[derive(Debug)]
-pub enum ReviewOutcome {
-    Cancelled,
-    Submitted(String),
-}
-
-#[derive(Debug)]
-pub enum GitReviewOutput {
-    SetTheme(String),
-    Outcome(ReviewOutcome),
-    Command(GitReviewCommand),
-}
-
-#[derive(Debug)]
-pub enum ArtifactReviewOutput {
-    Approved,
-    Outcome(ReviewOutcome),
-    SetTheme(String),
-}
-
-#[derive(Debug)]
-pub enum RootOutput {
-    Session(SessionPickerOutput),
-    Workspace(WorkspacePickerOutput),
-    Settings(SettingsOutput),
-    Elicitation(ElicitationOutput),
-    GitReview(GitReviewOutput),
-    ArtifactReview(ArtifactReviewOutput),
+    ResumeSession { session_id: SessionId, cwd: PathBuf },
+    PreviewSession(String),
+    MoveWorkspace(WorkspaceMoveTarget),
+    ArtifactApproved,
+    ArtifactFeedback(String),
+    SubmitReview(String),
+    GitReview(GitReviewCommand),
 }
 
 pub enum UiEvent {
@@ -110,7 +69,7 @@ impl MouseAction {
     }
 }
 
-/// What a navigation event asked of the pane hosting a [`FilterableList`].
+/// What a navigation event asked of the pane hosting a list.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Nav {
     /// The pane should close.
@@ -125,48 +84,45 @@ pub(crate) enum Nav {
     Unhandled,
 }
 
-impl<T> FilterableList<T> {
-    /// The controller every typeahead picker shares: Esc closes, Up/Down and
-    /// the scroll wheel move, Enter activates, a click selects, Backspace and
-    /// printable characters edit the filter query. The hosting pane matches on
-    /// the outcome and adds only its own behavior.
-    pub(crate) fn on_nav_event(&mut self, event: &UiEvent) -> Nav {
-        match event {
-            UiEvent::Key(key) => self.on_nav_key(*key),
-            UiEvent::Paste(_) => Nav::Unhandled,
-            UiEvent::Mouse(action, (_, row)) => match action.direction() {
-                Some(direction) => {
-                    self.step(direction);
-                    Nav::Moved
-                }
-                None if self.select_at(*row) => Nav::Clicked,
-                None => Nav::Unhandled,
+impl SelectionState {
+    pub(crate) fn on_nav_event(&mut self, event: &UiEvent, len: usize, selectable: impl Fn(usize) -> bool) -> Nav {
+        let direction = match event {
+            UiEvent::Key(key) => match key.code {
+                KeyCode::Esc => return Nav::Close,
+                KeyCode::Enter => return Nav::Activate,
+                KeyCode::Up => Direction::Backward,
+                KeyCode::Down => Direction::Forward,
+                _ => return Nav::Unhandled,
             },
-        }
+            UiEvent::Paste(_) => return Nav::Unhandled,
+            UiEvent::Mouse(action, (_, row)) => match action.direction() {
+                Some(direction) => direction,
+                None if self.select_at(*row, len, selectable) => return Nav::Clicked,
+                None => return Nav::Unhandled,
+            },
+        };
+        self.step(len, direction, selectable);
+        Nav::Moved
     }
+}
 
-    fn on_nav_key(&mut self, key: KeyEvent) -> Nav {
-        match key.code {
-            KeyCode::Esc => Nav::Close,
-            KeyCode::Enter => Nav::Activate,
-            KeyCode::Up => {
-                self.step(Direction::Backward);
-                Nav::Moved
+impl<T> FilterableList<T> {
+    pub(crate) fn on_nav_event(&mut self, event: &UiEvent) -> Nav {
+        if let UiEvent::Key(key) = event {
+            match key.code {
+                KeyCode::Backspace => {
+                    self.pop_query_char();
+                    return Nav::Moved;
+                }
+                KeyCode::Char(c) if !c.is_control() && !is_composed_char(*key) => {
+                    self.push_query_char(c);
+                    return Nav::Moved;
+                }
+                _ => {}
             }
-            KeyCode::Down => {
-                self.step(Direction::Forward);
-                Nav::Moved
-            }
-            KeyCode::Backspace => {
-                self.pop_query_char();
-                Nav::Moved
-            }
-            KeyCode::Char(c) if !c.is_control() && !is_composed_char(key) => {
-                self.push_query_char(c);
-                Nav::Moved
-            }
-            _ => Nav::Unhandled,
         }
+        let (selection, len, selectable) = self.navigation();
+        selection.on_nav_event(event, len, selectable)
     }
 }
 

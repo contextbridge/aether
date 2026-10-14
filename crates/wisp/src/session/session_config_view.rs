@@ -22,7 +22,7 @@ pub enum LocalConfigKind {
     Boolean { current_value: bool },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LocalConfigValue {
     pub value: String,
     pub name: String,
