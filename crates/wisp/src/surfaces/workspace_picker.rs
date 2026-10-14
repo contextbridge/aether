@@ -3,7 +3,7 @@ use crate::surfaces::input::{Nav, UiEvent, UiOutput};
 use crate::theme::Theme;
 use crate::view::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::view::filterable_list::FilterableList;
-use crate::view::widgets::TextInput;
+use crate::view::widgets::visible_window;
 use acp_utils::notifications::{WorkspaceEntry, WorkspaceMoveTarget};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
@@ -93,11 +93,9 @@ impl WorkspacePicker {
             Paragraph::new(vec![Line::raw(""), hint]).render(inner, buf);
         }
 
-        let field = theme.surface_style();
-        TextInput::new(name)
-            .prefix("  Name: ")
-            .prefix_style(field)
-            .style(field)
+        let prefix = "  Name: ";
+        let (visible, _) = visible_window(name, usize::from(inner.width).saturating_sub(prefix.len()));
+        Paragraph::new(Line::styled(format!("{prefix}{visible}"), theme.surface_style()))
             .render(Rect { height: 1, ..inner }, buf);
     }
 }

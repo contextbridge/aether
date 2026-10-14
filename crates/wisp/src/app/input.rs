@@ -5,6 +5,7 @@ use crate::renderer::DrawContext;
 use crate::screens::git_diff::GitDiffScreen;
 use crate::session::WorkspaceAccess;
 use crate::session::session_config_view::LocalConfigView;
+use crate::settings::KeyAction;
 use crate::surfaces::composer::ComposerOutcome;
 use crate::surfaces::dropped_files::parse_dropped_file_paths;
 use crate::surfaces::input::{MouseAction, UiEvent};
@@ -58,7 +59,7 @@ impl App {
         };
         // Exit handling must precede route and overlay dispatch so no modal can swallow it.
         if let UiEvent::Key(key) = &event
-            && self.ui.keybindings.exit.matches(*key)
+            && self.ui.keybindings.matches(KeyAction::Exit, *key)
         {
             self.arm_or_confirm_exit();
             return;
@@ -75,7 +76,7 @@ impl App {
             return;
         }
         if let UiEvent::Key(key) = &event
-            && self.ui.keybindings.toggle_git_diff.matches(*key)
+            && self.ui.keybindings.matches(KeyAction::ToggleGitDiff, *key)
             && matches!(&self.route, Route::GitReview(screen) if screen.is_browsing())
         {
             self.close_active();
@@ -125,7 +126,7 @@ impl App {
     }
 
     fn on_composer_key(&mut self, key: KeyEvent) {
-        if self.ui.keybindings.open_prompt_search.matches(key)
+        if self.ui.keybindings.matches(KeyAction::OpenPromptSearch, key)
             && self.session.capabilities().prompt_search
             && !self.composer.has_completion()
         {
@@ -133,7 +134,7 @@ impl App {
             return;
         }
 
-        if self.ui.keybindings.toggle_git_diff.matches(key) {
+        if self.ui.keybindings.matches(KeyAction::ToggleGitDiff, key) {
             let screen = GitDiffScreen::new();
             self.open_route(Route::GitReview(Box::new(screen)));
             self.queue(Command::GitReview(GitReviewCommand::Open {
@@ -154,24 +155,24 @@ impl App {
             return;
         }
 
-        if self.ui.keybindings.cycle_reasoning.matches(key) {
+        if self.ui.keybindings.matches(KeyAction::CycleReasoning, key) {
             self.apply_config_cycle(cycle_reasoning_option(self.session.config_options()));
             return;
         }
 
-        if self.ui.keybindings.cycle_mode.matches(key) {
+        if self.ui.keybindings.matches(KeyAction::CycleMode, key) {
             let view = LocalConfigView::new(self.session.config_options());
             let next = view.next_mode().map(|(id, value)| (id.to_string(), value.to_string()));
             self.apply_config_cycle(next);
             return;
         }
 
-        if self.ui.keybindings.submit.matches(key) {
+        if self.ui.keybindings.matches(KeyAction::Submit, key) {
             self.submit();
             return;
         }
 
-        if self.ui.keybindings.cancel.matches(key) {
+        if self.ui.keybindings.matches(KeyAction::Cancel, key) {
             if self.waiting_for_response() {
                 self.queue(Command::Agent(AgentCommand::Cancel { session_id: self.session.session_id().clone() }));
             }
@@ -180,8 +181,8 @@ impl App {
 
         if let KeyCode::Char(character) = key.code {
             let opens_command_picker =
-                self.ui.keybindings.open_command_picker.matches(key) && self.composer.text().is_empty();
-            if opens_command_picker || self.ui.keybindings.open_file_picker.matches(key) {
+                self.ui.keybindings.matches(KeyAction::OpenCommandPicker, key) && self.composer.text().is_empty();
+            if opens_command_picker || self.ui.keybindings.matches(KeyAction::OpenFilePicker, key) {
                 self.composer.insert_char(character);
                 if opens_command_picker {
                     self.composer.open_command_picker(self.available_commands.clone());
@@ -196,9 +197,6 @@ impl App {
         }
 
         match key.code {
-            KeyCode::Char(character) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                self.composer.insert_char(character);
-            }
             // Up/Down fall through to prompt history once the cursor is on the
             // first or last line of the composer.
             KeyCode::Up if !self.composer.move_up() => {

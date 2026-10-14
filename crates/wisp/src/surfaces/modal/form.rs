@@ -49,8 +49,7 @@ struct BodyView {
     rows: Vec<RowSite>,
     /// Where each tab cell was drawn and the page it picks, so a click can
     /// jump between questions.
-    strip_cells: Vec<Rect>,
-    strip_pages: Vec<usize>,
+    strip: Vec<(Rect, usize)>,
 }
 
 #[derive(Clone, Copy)]
@@ -79,9 +78,6 @@ pub(super) enum FormFieldKind {
     Single { options: Vec<SelectOption>, selected: usize },
     Multi { options: Vec<SelectOption>, selected: Vec<bool>, cursor: usize },
 }
-
-/// A field's display label and its optional description.
-type Labelling = (String, Option<String>);
 
 pub(super) struct SelectOption {
     value: String,
@@ -197,13 +193,11 @@ impl FormModal {
         self.fields.iter().filter(|field| field.touched).count()
     }
 
-    fn text_buffer(&mut self) -> Option<&mut EditBuffer> {
-        match self.focused_kind()? {
-            FormFieldKind::Text(buffer) | FormFieldKind::Integer(buffer) | FormFieldKind::Number(buffer) => {
-                Some(buffer)
-            }
-            _ => None,
+    fn answer(&mut self, edit: impl FnOnce(&mut FormFieldKind) -> bool) -> FormAction {
+        if self.focused_kind().is_some_and(edit) {
+            self.touch();
         }
+        FormAction::None
     }
 }
 
@@ -231,8 +225,8 @@ impl FormModal {
             }
             KeyCode::Up | KeyCode::Left => self.vertical(Direction::Backward),
             KeyCode::Down | KeyCode::Right => self.vertical(Direction::Forward),
-            KeyCode::Char(' ') if !is_composed_char(key) => self.space(),
-            KeyCode::Char('a' | 'A') if !is_composed_char(key) && self.multi_page() => self.toggle_all(),
+            KeyCode::Char(' ') if !is_composed_char(key) => self.answer(toggle_at_cursor),
+            KeyCode::Char('a' | 'A') if !is_composed_char(key) && self.multi_page() => self.answer(select_all),
             KeyCode::Char(digit @ '1'..='9') if !is_composed_char(key) && self.choice_page() => self.pick_digit(digit),
             _ => self.type_key(key),
         }
@@ -272,71 +266,38 @@ impl FormModal {
     /// everywhere else.
     pub(super) fn vertical(&mut self, direction: Direction) -> FormAction {
         if self.choice_page() {
-            let answered = self.focused_kind().is_some_and(|kind| step_option(kind, direction));
-            if answered {
-                self.touch();
-            }
-        } else {
-            self.move_page(direction);
+            return self.answer(|kind| step_option(kind, direction));
         }
-        FormAction::None
-    }
-
-    fn space(&mut self) -> FormAction {
-        let toggled = self.focused_kind().is_some_and(toggle_at_cursor);
-        if toggled {
-            self.touch();
-        }
-        FormAction::None
-    }
-
-    fn toggle_all(&mut self) -> FormAction {
-        let changed = self.focused_kind().is_some_and(select_all);
-        if changed {
-            self.touch();
-        }
+        self.move_page(direction);
         FormAction::None
     }
 
     fn pick_digit(&mut self, digit: char) -> FormAction {
         let index = (digit.to_digit(10).unwrap_or(1) - 1) as usize;
-        let answered = self.focused_kind().is_some_and(|kind| set_option(kind, index));
-        if answered {
-            self.touch();
-        }
-        FormAction::None
+        self.answer(|kind| set_option(kind, index))
     }
 
     fn type_key(&mut self, key: KeyEvent) -> FormAction {
-        let edited = self.text_buffer().is_some_and(|buffer| {
-            let before = buffer.text().to_string();
-            apply_edit_key(buffer, key);
-            buffer.text() != before
-        });
-        if edited {
-            self.touch();
-        }
-        FormAction::None
+        self.answer(|kind| {
+            kind.text_buffer().is_some_and(|buffer| {
+                let before = buffer.text().to_string();
+                apply_edit_key(buffer, key);
+                buffer.text() != before
+            })
+        })
     }
 
     pub(super) fn paste(&mut self, text: &str) {
-        if let Some(buffer) = self.text_buffer()
-            && !text.is_empty()
-        {
-            buffer.insert_paste(text);
-            self.touch();
+        if !text.is_empty() {
+            self.answer(|kind| kind.text_buffer().map(|buffer| buffer.insert_paste(text)).is_some());
         }
     }
 
     /// Focuses whatever the pointer lands on: a tab cell picks its page, an
     /// option row answers, a review row reopens its question.
     pub(super) fn click(&mut self, column: u16, row: u16) {
-        if let Some(page) = self
-            .body
-            .strip_cells
-            .iter()
-            .zip(self.body.strip_pages.iter())
-            .find_map(|(cell, &page)| cell.contains(Position::new(column, row)).then_some(page))
+        if let Some(page) =
+            self.body.strip.iter().find_map(|(cell, page)| cell.contains(Position::new(column, row)).then_some(*page))
         {
             self.goto_page(page);
             return;
@@ -344,10 +305,7 @@ impl FormModal {
         let Some(site) = self.site_at(row) else { return };
         match site {
             RowSite::Option { option } => {
-                let answered = self.focused_kind().is_some_and(|kind| set_option(kind, option));
-                if answered {
-                    self.touch();
-                }
+                self.answer(|kind| set_option(kind, option));
             }
             RowSite::Review { field } => self.goto_page(field),
             RowSite::Inert => {}
@@ -425,8 +383,7 @@ impl FormModal {
         let mut rows = PageRows::default();
 
         if !self.message.is_empty() {
-            let headline =
-                Line::styled(self.message.clone(), (theme.heading, Modifier::BOLD));
+            let headline = Line::styled(self.message.clone(), (theme.heading, Modifier::BOLD));
             for line in wrap_line(headline, width) {
                 rows.row(line);
             }
@@ -455,8 +412,7 @@ impl FormModal {
 
         if self.confirming_cancel {
             rows.blank();
-            let question =
-                Span::styled(format!("Discard {} answers?", self.touched_count()), theme.warning);
+            let question = Span::styled(format!("Discard {} answers?", self.touched_count()), theme.warning);
             let how = Span::styled("  y discard · any other key keep", theme.muted);
             for line in wrap_line(Line::from(vec![question, how]), width) {
                 rows.row(line);
@@ -469,8 +425,7 @@ impl FormModal {
 
     fn review_rows(&self, theme: &Theme, width: u16, rows: &mut PageRows) {
         rows.blank();
-        let headline =
-            Line::styled("Review your answers", (theme.text_primary, Modifier::BOLD));
+        let headline = Line::styled("Review your answers", (theme.text_primary, Modifier::BOLD));
         for line in wrap_line(headline, width) {
             rows.row(line);
         }
@@ -481,10 +436,8 @@ impl FormModal {
         for (index, field) in self.fields.iter().enumerate() {
             let value = field.display_value();
             let value = if value.is_empty() { "—".to_string() } else { value };
-            let style =
-                if field.value().is_err() { Style::from(theme.error) } else { Style::from(theme.text_primary) };
-            let prefix =
-                vec![Span::styled(format!("{:<label_width$}  ", field.label), theme.text_secondary)];
+            let style = if field.value().is_err() { Style::from(theme.error) } else { Style::from(theme.text_primary) };
+            let prefix = vec![Span::styled(format!("{:<label_width$}  ", field.label), theme.text_secondary)];
             for line in wrapped_row(&prefix, &value, style, width) {
                 rows.site(line, RowSite::Review { field: index });
             }
@@ -605,20 +558,18 @@ impl FormModal {
         self.body.area = rows_area;
         self.body.rows = page.sites;
         self.body.scroll = scroll;
-        self.body.strip_cells = Vec::new();
-        self.body.strip_pages = Vec::new();
+        self.body.strip = Vec::new();
         if let Some((row, cells)) = page.strip
             && let Some(y) = row.checked_sub(scroll).filter(|y| *y < height)
         {
-            for cell in cells {
-                self.body.strip_cells.push(Rect::new(
-                    rows_area.x.saturating_add(cell.column),
-                    rows_area.y + as_u16(y),
-                    cell.width,
-                    1,
-                ));
-                self.body.strip_pages.push(cell.page);
-            }
+            self.body.strip = cells
+                .into_iter()
+                .map(|cell| {
+                    let area =
+                        Rect::new(rows_area.x.saturating_add(cell.column), rows_area.y + as_u16(y), cell.width, 1);
+                    (area, cell.page)
+                })
+                .collect();
         }
 
         RowsView::from_lines(page.lines.iter().skip(scroll).cloned()).render(rows_area, buf);
@@ -719,8 +670,7 @@ fn select_all(kind: &mut FormFieldKind) -> bool {
 /// and the control that answers it.
 fn question_rows(field: &FormField, theme: &Theme, width: u16, rows: &mut PageRows) {
     rows.blank();
-    let mut headline =
-        Line::styled(field.label.clone(), (theme.text_primary, Modifier::BOLD));
+    let mut headline = Line::styled(field.label.clone(), (theme.text_primary, Modifier::BOLD));
     if field.required {
         headline.spans.push(Span::styled(" *", theme.error));
     }
@@ -846,32 +796,24 @@ fn boolean_index(value: bool) -> usize {
 impl FormField {
     fn from_schema(name: &str, prop: &ElicitationPropertySchema, required: &[&str]) -> Option<Self> {
         use FormFieldKind::{Boolean, Integer, Number};
-        let (labelling, kind) = match prop {
-            ElicitationPropertySchema::Boolean(value) => (
-                labelling(value.title.as_deref(), value.description.as_deref(), name),
-                Boolean(value.default.unwrap_or(false)),
-            ),
-            ElicitationPropertySchema::Integer(value) => (
-                labelling(value.title.as_deref(), value.description.as_deref(), name),
-                Integer(stringified_default(value.default).into()),
-            ),
-            ElicitationPropertySchema::Number(value) => (
-                labelling(value.title.as_deref(), value.description.as_deref(), name),
-                Number(stringified_default(value.default).into()),
-            ),
-            ElicitationPropertySchema::String(value) => {
-                (labelling(value.title.as_deref(), value.description.as_deref(), name), string_kind(value))
+        let (title, description, kind) = match prop {
+            ElicitationPropertySchema::Boolean(value) => {
+                (&value.title, &value.description, Boolean(value.default.unwrap_or(false)))
             }
-            ElicitationPropertySchema::Array(value) => {
-                (labelling(value.title.as_deref(), value.description.as_deref(), name), multi_kind(value)?)
+            ElicitationPropertySchema::Integer(value) => {
+                (&value.title, &value.description, Integer(stringified_default(value.default).into()))
             }
+            ElicitationPropertySchema::Number(value) => {
+                (&value.title, &value.description, Number(stringified_default(value.default).into()))
+            }
+            ElicitationPropertySchema::String(value) => (&value.title, &value.description, string_kind(value)),
+            ElicitationPropertySchema::Array(value) => (&value.title, &value.description, multi_kind(value)?),
             _ => return None,
         };
-        let (label, description) = labelling;
         Some(Self {
             name: name.to_string(),
-            label,
-            description,
+            label: title.as_deref().unwrap_or(name).to_string(),
+            description: description.clone(),
             required: required.contains(&name),
             touched: false,
             kind,
@@ -881,24 +823,21 @@ impl FormField {
     fn value(&self) -> Result<Option<ElicitationContentValue>, String> {
         let missing = || format!("{} is required", self.label);
         match &self.kind {
-            FormFieldKind::Text(value) => {
-                if self.required && value.is_empty() {
+            FormFieldKind::Text(value) | FormFieldKind::Integer(value) | FormFieldKind::Number(value)
+                if value.is_empty() =>
+            {
+                if self.required {
                     Err(missing())
                 } else {
-                    Ok((!value.is_empty()).then(|| ElicitationContentValue::String(value.text().to_string())))
+                    Ok(None)
                 }
             }
+            FormFieldKind::Text(value) => Ok(Some(ElicitationContentValue::String(value.text().to_string()))),
             FormFieldKind::Integer(value) => {
-                if value.is_empty() {
-                    return if self.required { Err(missing()) } else { Ok(None) };
-                }
                 let invalid = || format!("{} must be an integer", self.label);
                 value.text().parse::<i64>().map(ElicitationContentValue::Integer).map(Some).map_err(|_| invalid())
             }
             FormFieldKind::Number(value) => {
-                if value.is_empty() {
-                    return if self.required { Err(missing()) } else { Ok(None) };
-                }
                 let invalid = || format!("{} must be a number", self.label);
                 value
                     .text()
@@ -949,10 +888,13 @@ impl FormField {
     }
 }
 
-/// A field's display label and description: the schema's own title and
-/// description, falling back to the property name.
-fn labelling(title: Option<&str>, description: Option<&str>, name: &str) -> Labelling {
-    (title.unwrap_or(name).to_string(), description.map(str::to_string))
+impl FormFieldKind {
+    fn text_buffer(&mut self) -> Option<&mut EditBuffer> {
+        match self {
+            Self::Text(buffer) | Self::Integer(buffer) | Self::Number(buffer) => Some(buffer),
+            _ => None,
+        }
+    }
 }
 
 fn string_kind(schema: &StringPropertySchema) -> FormFieldKind {
