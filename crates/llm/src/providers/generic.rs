@@ -7,6 +7,7 @@ use crate::catalog::Provider;
 use crate::provider::{get_context_window, validate_reasoning};
 use crate::providers::http::{http_client, openai_client};
 pub use crate::providers::openai_compatible::ChatRequestPolicy;
+use crate::providers::openai_compatible::types::CompatibleChatRequest;
 use crate::providers::openai_compatible::{
     AetherOpenAiConfig, PromptCacheKeySource, build_chat_request, create_custom_stream_generic,
 };
@@ -92,6 +93,24 @@ pub const FIREWORKS: ProviderConfig = ProviderConfig {
     }),
 };
 
+pub const GEMINI: ProviderConfig = ProviderConfig {
+    provider: Provider::Gemini,
+    api_base: Some("https://generativelanguage.googleapis.com/v1beta/openai"),
+    default_model: "",
+    api: Api::ChatCompletions(ChatRequestPolicy::DEFAULT),
+};
+
+pub const OPENROUTER: ProviderConfig = ProviderConfig {
+    provider: Provider::OpenRouter,
+    api_base: Some("https://openrouter.ai/api/v1"),
+    default_model: "",
+    api: Api::ChatCompletions(ChatRequestPolicy {
+        prompt_cache_key: PromptCacheKeySource::Prefix,
+        customize: Some(openrouter_request),
+        ..ChatRequestPolicy::DEFAULT
+    }),
+};
+
 pub const OLLAMA: ProviderConfig = ProviderConfig {
     provider: Provider::Ollama,
     api_base: Some("http://localhost:11434/v1"),
@@ -109,8 +128,19 @@ pub const LLAMACPP: ProviderConfig = ProviderConfig {
 const LOCAL_CHAT: ChatRequestPolicy =
     ChatRequestPolicy { tool_call_reasoning_placeholder: false, ..ChatRequestPolicy::DEFAULT };
 
-pub(crate) const BUILT_INS: &[&ProviderConfig] =
-    &[&OPENAI, &XIAOMI, &DEEPSEEK, &MOONSHOT, &ZAI, &AZURE_FOUNDRY, &FIREWORKS, &OLLAMA, &LLAMACPP];
+pub(crate) const BUILT_INS: &[&ProviderConfig] = &[
+    &OPENAI,
+    &XIAOMI,
+    &DEEPSEEK,
+    &MOONSHOT,
+    &ZAI,
+    &AZURE_FOUNDRY,
+    &FIREWORKS,
+    &GEMINI,
+    &OPENROUTER,
+    &OLLAMA,
+    &LLAMACPP,
+];
 
 /// A provider whose behavior is fully described by a [`ProviderConfig`].
 pub struct GenericProvider {
@@ -234,9 +264,22 @@ impl GenericProvider {
     }
 }
 
+fn openrouter_request(request: &mut CompatibleChatRequest, context: &Context) {
+    request.extra.insert("usage".into(), serde_json::json!({ "include": true }));
+    request.extra.insert("cache_control".into(), serde_json::json!({ "type": "ephemeral" }));
+    if let Some(session_id) = context.session_affinity_key() {
+        request.extra.insert("session_id".into(), session_id.into());
+    }
+    if request.reasoning_effort == Some("none") {
+        request.reasoning_effort = None;
+        request.extra.insert("reasoning".into(), serde_json::json!({ "effort": "none" }));
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use futures::StreamExt;
+    use futures::{StreamExt, stream};
+    use reqwest::{Body, Method};
     use serde_json::json;
 
     use super::*;
@@ -247,6 +290,95 @@ mod tests {
         AssistantReasoning, ChatMessage, ContentBlock, LlmResponse, MessageId, ProviderErrorKind, ReasoningEffort,
         ToolCallRequest, ToolDefinition,
     };
+
+    #[tokio::test]
+    async fn gemini_disables_reasoning_with_none() {
+        let model = reasoning_off_model(Provider::Gemini);
+        let mut server = CaptureServer::start_chat_completions().await;
+        let provider = capture_backed_provider(&server, &GEMINI).with_model(&model.model_id());
+        let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
+        context.set_reasoning_effort(ReasoningEffort::Disabled);
+
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+
+        assert_successful_stream(&responses);
+        assert_eq!(server.captured().await.body["reasoning_effort"], "none");
+    }
+
+    #[tokio::test]
+    async fn openrouter_requests_usage_caching_and_session_routing() {
+        let mut server = CaptureServer::start_chat_completions().await;
+        let provider = capture_backed_provider(&server, &OPENROUTER).with_model("anthropic/claude-haiku-4.5");
+        let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
+        context.set_prompt_cache_key(Some("prefix-abc".to_string()));
+        context.set_session_affinity_key(Some("conversation-abc".to_string()));
+        context.set_reasoning_effort(ReasoningEffort::High);
+
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        let body = server.captured().await.body;
+
+        assert_successful_stream(&responses);
+        assert_eq!(body["model"], "anthropic/claude-haiku-4.5");
+        assert_eq!(body["prompt_cache_key"], "prefix-abc");
+        assert_eq!(body["session_id"], "conversation-abc");
+        assert_eq!(body["reasoning_effort"], "high");
+        assert_eq!(body["cache_control"]["type"], "ephemeral");
+        assert_eq!(body["usage"]["include"], true);
+        assert_eq!(provider.display_name(), "OpenRouter (anthropic/claude-haiku-4.5)");
+    }
+
+    #[tokio::test]
+    async fn openrouter_disables_reasoning_through_its_unified_reasoning_object() {
+        let model = reasoning_off_model(Provider::OpenRouter);
+        let mut server = CaptureServer::start_chat_completions().await;
+        let provider = capture_backed_provider(&server, &OPENROUTER).with_model(&model.model_id());
+        let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
+        context.set_reasoning_effort(ReasoningEffort::Disabled);
+
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        let body = server.captured().await.body;
+
+        assert_successful_stream(&responses);
+        assert_eq!(body["reasoning"], json!({ "effort": "none" }));
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[tokio::test]
+    async fn chat_rate_limit_rejection_is_a_retryable_provider_error() {
+        let body = r#"{"error":{"message":"Rate limit exceeded: free-models-per-day","code":429}}"#;
+        let error = rejected_chat_request(429, move || body).await;
+        let provider_error = error.provider().expect("a 429 must classify as a provider error");
+
+        assert_eq!(provider_error.kind, ProviderErrorKind::RateLimit);
+        assert_eq!(provider_error.http_status, Some(429));
+        assert_eq!(provider_error.code.as_deref(), Some("429"));
+        assert_eq!(provider_error.request_id.as_deref(), Some("request-123"));
+        assert!(provider_error.message.contains("free-models-per-day"));
+        assert!(error.is_retryable(), "429 must be retryable, got {error}");
+    }
+
+    #[tokio::test]
+    async fn chat_rejection_preserves_string_error_codes() {
+        let error =
+            rejected_chat_request(429, || r#"{"error":{"code":"rate_limit_exceeded","message":"slow down"}}"#).await;
+        let provider_error = error.provider().unwrap();
+
+        assert_eq!(provider_error.code.as_deref(), Some("rate_limit_exceeded"));
+        assert!(provider_error.message.contains("slow down"));
+        assert!(error.is_retryable());
+    }
+
+    #[tokio::test]
+    async fn chat_rejection_keeps_http_status_when_the_error_body_fails_to_read() {
+        let body = || Body::wrap_stream(stream::iter([Err::<String, _>(std::io::Error::other("connection reset"))]));
+        let error = rejected_chat_request(429, body).await;
+        let provider_error = error.provider().unwrap();
+
+        assert_eq!(provider_error.http_status, Some(429));
+        assert_eq!(provider_error.request_id.as_deref(), Some("request-123"));
+        assert_eq!(provider_error.kind, ProviderErrorKind::RateLimit);
+        assert!(error.is_retryable());
+    }
 
     #[tokio::test]
     async fn disabled_toggle_and_unknown_models_never_send_requests() {
@@ -587,6 +719,37 @@ mod tests {
     fn assert_successful_stream(responses: &[Result<LlmResponse>]) {
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
         assert!(responses.iter().any(|response| matches!(response, Ok(LlmResponse::Done { .. }))));
+    }
+
+    fn reasoning_off_model(provider: Provider) -> &'static LlmModel {
+        LlmModel::all()
+            .iter()
+            .find(|model| model.provider_enum() == provider && model.supports_reasoning_off())
+            .expect("the catalog has a model that can turn reasoning off")
+    }
+
+    async fn rejected_chat_request<B: Into<Body>>(
+        status: u16,
+        body: impl Fn() -> B + Send + Sync + 'static,
+    ) -> LlmError {
+        let service = FakeHttpService::default();
+        service.route(Method::POST, "https://openrouter.ai/api/v1/chat/completions", move || {
+            http::Response::builder()
+                .status(status)
+                .header("content-type", "text/event-stream")
+                .header("x-request-id", "request-123")
+                .body(body().into())
+                .unwrap()
+                .into()
+        });
+        let mut provider = GenericProvider::new("key".to_string(), &OPENROUTER).unwrap();
+        provider.chat_client = openai_client(provider.openai_config.clone(), service.clone());
+        let context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
+
+        let mut events = provider.stream_response(&context).collect::<Vec<_>>().await;
+
+        assert_eq!(events.len(), 1, "a rejected request must yield exactly one error: {events:?}");
+        events.pop().unwrap().expect_err("request must fail")
     }
 
     fn capture_backed_provider(server: &CaptureServer, config: &'static ProviderConfig) -> GenericProvider {

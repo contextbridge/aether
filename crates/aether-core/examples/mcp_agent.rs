@@ -5,7 +5,8 @@ use aether_core::{
     events::{Command, TurnOutcome, UserCommand},
     mcp::mcp,
 };
-use llm::{ContentBlock, providers::openrouter::OpenRouterProvider};
+use llm::ContentBlock;
+use llm::providers::generic::{GenericProvider, OPENROUTER};
 
 use std::io::{self, Write};
 
@@ -14,7 +15,7 @@ use std::io::{self, Write};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
-    let llm = OpenRouterProvider::default("z-ai/glm-4.5-air")?;
+    let llm = GenericProvider::from_env(&OPENROUTER)?.with_model("z-ai/glm-4.5-air");
     let config = McpConfig::from_json_file("examples/mcp.json")?;
     let mcp = mcp(std::env::current_dir()?).with_config(config)?.spawn()?;
     mcp.ready().await;
