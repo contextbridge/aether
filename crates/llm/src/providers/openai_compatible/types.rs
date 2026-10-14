@@ -97,7 +97,10 @@ pub(crate) struct CompatibleChatRequest {
     pub prompt_cache_key: Option<String>,
 }
 
-pub(crate) fn map_messages(messages: &[ChatMessage]) -> crate::Result<Vec<CompatibleChatMessage>> {
+pub(crate) fn map_messages(
+    messages: &[ChatMessage],
+    tool_call_reasoning_placeholder: bool,
+) -> crate::Result<Vec<CompatibleChatMessage>> {
     let mut result = Vec::new();
 
     for message in messages {
@@ -122,7 +125,7 @@ pub(crate) fn map_messages(messages: &[ChatMessage]) -> crate::Result<Vec<Compat
 
                 let reasoning_content = if reasoning.summary_text.is_some() {
                     reasoning.summary_text.clone()
-                } else if has_tool_calls {
+                } else if has_tool_calls && tool_call_reasoning_placeholder {
                     Some(".".to_string())
                 } else {
                     None
@@ -253,7 +256,7 @@ impl From<Usage> for TokenUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::openai_compatible::build_chat_request;
+    use crate::providers::openai_compatible::{ChatRequestPolicy, build_chat_request};
     use crate::types::IsoString;
     use crate::{AssistantReasoning, Context, MessageId, ModelSettings, ToolCallRequest, ToolDefinition};
 
@@ -284,7 +287,7 @@ mod tests {
     #[test]
     fn test_build_request_includes_reasoning_content_on_assistant_tool_message() {
         let context = context_with_assistant_message(assistant_with_tool_call(Some("trace chunk")));
-        let request = build_chat_request("test-model", &context, None).unwrap();
+        let request = build_chat_request("test-model", &context, &ChatRequestPolicy::DEFAULT).unwrap();
 
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["messages"][1]["role"], "assistant");
@@ -310,7 +313,9 @@ mod tests {
             vec![],
         );
 
-        let json = serde_json::to_value(build_chat_request("test-model", &context, None).unwrap()).unwrap();
+        let json =
+            serde_json::to_value(build_chat_request("test-model", &context, &ChatRequestPolicy::DEFAULT).unwrap())
+                .unwrap();
         assert_eq!(json["messages"][0], serde_json::json!({ "role": "user", "content": "Error: boom" }));
         assert_eq!(
             json["messages"][1],
@@ -324,13 +329,16 @@ mod tests {
 
         let mut context = Context::new(vec![user()], vec![]);
         context.set_model_settings(ModelSettings { temperature: Some(0.0), top_p: Some(0.5), max_tokens: Some(64) });
-        let json = serde_json::to_value(build_chat_request("test-model", &context, None).unwrap()).unwrap();
+        let json =
+            serde_json::to_value(build_chat_request("test-model", &context, &ChatRequestPolicy::DEFAULT).unwrap())
+                .unwrap();
         assert_eq!(json["temperature"], 0.0);
         assert_eq!(json["top_p"], 0.5);
         assert_eq!(json["max_tokens"], 64);
 
         let unset = Context::new(vec![user()], vec![]);
-        let json = serde_json::to_value(build_chat_request("test-model", &unset, None).unwrap()).unwrap();
+        let json = serde_json::to_value(build_chat_request("test-model", &unset, &ChatRequestPolicy::DEFAULT).unwrap())
+            .unwrap();
         assert!(json.get("temperature").is_none());
         assert!(json.get("top_p").is_none());
         assert!(json.get("max_tokens").is_none());
@@ -339,7 +347,7 @@ mod tests {
     #[test]
     fn test_build_request_includes_stream_options_with_usage() {
         let context = crate::Context::new(vec![ChatMessage::user("hello")], vec![]);
-        let request = build_chat_request("test-model", &context, None).unwrap();
+        let request = build_chat_request("test-model", &context, &ChatRequestPolicy::DEFAULT).unwrap();
 
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["stream_options"]["include_usage"], true);
@@ -348,11 +356,15 @@ mod tests {
     #[test]
     fn test_build_request_sends_empty_reasoning_content_on_tool_call_when_none() {
         let context = context_with_assistant_message(assistant_with_tool_call(None));
-        let request = build_chat_request("test-model", &context, None).unwrap();
+        let request = build_chat_request("test-model", &context, &ChatRequestPolicy::DEFAULT).unwrap();
 
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["messages"][1]["role"], "assistant");
         assert_eq!(json["messages"][1]["reasoning_content"], ".");
+
+        let policy = ChatRequestPolicy { tool_call_reasoning_placeholder: false, ..ChatRequestPolicy::DEFAULT };
+        let json = serde_json::to_value(build_chat_request("test-model", &context, &policy).unwrap()).unwrap();
+        assert!(json["messages"][1].get("reasoning_content").is_none());
     }
 
     #[test]

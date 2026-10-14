@@ -3,7 +3,7 @@ use crate::provider::{get_context_window, validate_reasoning};
 use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
 use crate::providers::http::{http_client, openai_client};
 use crate::providers::openai_compatible::{
-    AetherOpenAiConfig, build_chat_request, streaming::create_custom_stream_generic,
+    AetherOpenAiConfig, ChatRequestPolicy, build_chat_request, streaming::create_custom_stream_generic,
 };
 use crate::providers::response_stream::error_stream;
 use crate::{
@@ -35,7 +35,7 @@ impl OpenRouterProvider {
 
     fn try_stream_response(&self, context: &Context) -> Result<LlmResponseStream> {
         validate_reasoning(context, self.model().as_ref())?;
-        let mut request = build_chat_request(&self.model, context, None)?;
+        let mut request = build_chat_request(&self.model, context, &ChatRequestPolicy::DEFAULT)?;
         request.prompt_cache_key = context.prompt_cache_key().map(String::from);
         let request = OpenRouterChatRequest::from_compatible(request, context.session_affinity_key());
         Ok(create_custom_stream_generic(&self.client, request, self.idle_timeout))

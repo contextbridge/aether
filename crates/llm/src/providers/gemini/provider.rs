@@ -1,7 +1,9 @@
 use crate::provider::{get_context_window, validate_reasoning};
 use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
 use crate::providers::http::{http_client, openai_client};
-use crate::providers::openai_compatible::{AetherOpenAiConfig, build_chat_request, create_custom_stream_generic};
+use crate::providers::openai_compatible::{
+    AetherOpenAiConfig, ChatRequestPolicy, build_chat_request, create_custom_stream_generic,
+};
 use crate::providers::response_stream::error_stream;
 use crate::{
     Context, LlmError, LlmResponseStream, ProviderAuthMode, ProviderConnectionConfig, ProviderFactory, Result,
@@ -68,7 +70,7 @@ impl GeminiProvider {
     fn try_stream_response(&self, context: &Context) -> Result<LlmResponseStream> {
         validate_reasoning(context, self.model().as_ref())?;
         let api_key = self.get_api_key()?;
-        let request = build_chat_request(&self.model, context, None)?;
+        let request = build_chat_request(&self.model, context, &ChatRequestPolicy::DEFAULT)?;
 
         tracing::info!("Using Gemini API with API key (OpenAI-compatible endpoint)");
         Ok(create_custom_stream_generic(&self.build_openai_client(&api_key), request, self.idle_timeout))

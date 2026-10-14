@@ -1,12 +1,12 @@
 use async_openai::Client;
 use async_openai::config::{Config, OpenAIConfig};
 use reqwest::Url;
-use schemars::Schema;
 use std::time::Duration;
 
 use crate::catalog::Provider;
 use crate::provider::{get_context_window, validate_reasoning};
 use crate::providers::http::{http_client, openai_client};
+pub use crate::providers::openai_compatible::ChatRequestPolicy;
 use crate::providers::openai_compatible::{
     AetherOpenAiConfig, PromptCacheKeySource, build_chat_request, create_custom_stream_generic,
 };
@@ -30,7 +30,7 @@ pub struct ProviderConfig {
 }
 
 pub enum Api {
-    ChatCompletions { tool_schema_transform: Option<fn(&mut Schema)>, prompt_cache_key: PromptCacheKeySource },
+    ChatCompletions(ChatRequestPolicy),
     Responses(ResponsesRequestPolicy),
 }
 
@@ -52,42 +52,65 @@ pub const DEEPSEEK: ProviderConfig = ProviderConfig {
     provider: Provider::DeepSeek,
     api_base: Some("https://api.deepseek.com"),
     default_model: "deepseek-v4-flash",
-    api: Api::ChatCompletions { tool_schema_transform: None, prompt_cache_key: PromptCacheKeySource::Omit },
+    api: Api::ChatCompletions(ChatRequestPolicy::DEFAULT),
 };
 
 pub const MOONSHOT: ProviderConfig = ProviderConfig {
     provider: Provider::Moonshot,
     api_base: Some("https://api.moonshot.ai/v1"),
     default_model: "moonshot-v1-8k",
-    api: Api::ChatCompletions {
+    api: Api::ChatCompletions(ChatRequestPolicy {
         tool_schema_transform: Some(normalize_for_moonshot),
-        prompt_cache_key: PromptCacheKeySource::Omit,
-    },
+        ..ChatRequestPolicy::DEFAULT
+    }),
 };
 
 pub const ZAI: ProviderConfig = ProviderConfig {
     provider: Provider::ZAi,
     api_base: Some("https://api.z.ai/api/coding/paas/v4"),
     default_model: "GLM-4.6",
-    api: Api::ChatCompletions { tool_schema_transform: None, prompt_cache_key: PromptCacheKeySource::Omit },
+    api: Api::ChatCompletions(ChatRequestPolicy::DEFAULT),
 };
 
 pub const AZURE_FOUNDRY: ProviderConfig = ProviderConfig {
     provider: Provider::AzureFoundry,
     api_base: None,
     default_model: "gpt-5.5",
-    api: Api::ChatCompletions { tool_schema_transform: None, prompt_cache_key: PromptCacheKeySource::Prefix },
+    api: Api::ChatCompletions(ChatRequestPolicy {
+        prompt_cache_key: PromptCacheKeySource::Prefix,
+        ..ChatRequestPolicy::DEFAULT
+    }),
 };
 
 pub const FIREWORKS: ProviderConfig = ProviderConfig {
     provider: Provider::Fireworks,
     api_base: Some("https://api.fireworks.ai/inference/v1"),
     default_model: "accounts/fireworks/models/glm-5p1",
-    api: Api::ChatCompletions { tool_schema_transform: None, prompt_cache_key: PromptCacheKeySource::SessionAffinity },
+    api: Api::ChatCompletions(ChatRequestPolicy {
+        prompt_cache_key: PromptCacheKeySource::SessionAffinity,
+        ..ChatRequestPolicy::DEFAULT
+    }),
 };
 
+pub const OLLAMA: ProviderConfig = ProviderConfig {
+    provider: Provider::Ollama,
+    api_base: Some("http://localhost:11434/v1"),
+    default_model: "",
+    api: Api::ChatCompletions(LOCAL_CHAT),
+};
+
+pub const LLAMACPP: ProviderConfig = ProviderConfig {
+    provider: Provider::LlamaCpp,
+    api_base: Some("http://localhost:8080/v1"),
+    default_model: "",
+    api: Api::ChatCompletions(LOCAL_CHAT),
+};
+
+const LOCAL_CHAT: ChatRequestPolicy =
+    ChatRequestPolicy { tool_call_reasoning_placeholder: false, ..ChatRequestPolicy::DEFAULT };
+
 pub(crate) const BUILT_INS: &[&ProviderConfig] =
-    &[&OPENAI, &XIAOMI, &DEEPSEEK, &MOONSHOT, &ZAI, &AZURE_FOUNDRY, &FIREWORKS];
+    &[&OPENAI, &XIAOMI, &DEEPSEEK, &MOONSHOT, &ZAI, &AZURE_FOUNDRY, &FIREWORKS, &OLLAMA, &LLAMACPP];
 
 /// A provider whose behavior is fully described by a [`ProviderConfig`].
 pub struct GenericProvider {
@@ -109,12 +132,11 @@ impl GenericProvider {
         config: &'static ProviderConfig,
         connection: ProviderConnectionConfig,
     ) -> Result<Self> {
-        let api_key = match connection.auth_mode {
-            ProviderAuthMode::Default => {
-                let env_var = config.provider.required_env_var().expect("generic providers require an API key");
+        let api_key = match (connection.auth_mode, config.provider.required_env_var()) {
+            (ProviderAuthMode::Default, Some(env_var)) => {
                 std::env::var(env_var).map_err(|_| LlmError::MissingApiKey(env_var.to_string()))?
             }
-            ProviderAuthMode::None => String::new(),
+            _ => String::new(),
         };
         Self::new_with_connection(api_key, config, connection)
     }
@@ -132,11 +154,14 @@ impl GenericProvider {
             .base_url
             .or_else(|| config.api_base.map(str::to_string))
             .ok_or_else(|| LlmError::MissingProviderUrl { provider: config.provider.parser_name().to_string() })?;
+        let mut api_base = api_base.trim_end_matches('/').to_string();
+        if config.provider.is_local() && !api_base.ends_with("/v1") {
+            api_base.push_str("/v1");
+        }
+        let auth_mode = if api_key.is_empty() { ProviderAuthMode::None } else { connection.auth_mode };
 
-        let openai_config = AetherOpenAiConfig::new(
-            OpenAIConfig::new().with_api_key(api_key).with_api_base(api_base.trim_end_matches('/')),
-            connection.auth_mode,
-        );
+        let openai_config =
+            AetherOpenAiConfig::new(OpenAIConfig::new().with_api_key(api_key).with_api_base(api_base), auth_mode);
 
         let http = http_client();
         Ok(Self {
@@ -161,16 +186,15 @@ impl GenericProvider {
 impl StreamingModelProvider for GenericProvider {
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
         let stream = match &self.config.api {
-            Api::ChatCompletions { tool_schema_transform, prompt_cache_key } => {
-                self.stream_chat_completions(context, *tool_schema_transform, *prompt_cache_key)
-            }
+            Api::ChatCompletions(policy) => self.stream_chat_completions(context, policy),
             Api::Responses(policy) => self.stream_responses(context, policy),
         };
         stream.unwrap_or_else(error_stream)
     }
 
     fn display_name(&self) -> String {
-        format!("{} ({})", self.config.provider.display_name(), self.model)
+        let name = self.config.provider.display_name();
+        if self.model.is_empty() { name.to_string() } else { format!("{name} ({})", self.model) }
     }
 
     fn context_window(&self) -> Option<u32> {
@@ -183,16 +207,10 @@ impl StreamingModelProvider for GenericProvider {
 }
 
 impl GenericProvider {
-    fn stream_chat_completions(
-        &self,
-        context: &Context,
-        tool_schema_transform: Option<fn(&mut Schema)>,
-        prompt_cache_key: PromptCacheKeySource,
-    ) -> Result<LlmResponseStream> {
+    fn stream_chat_completions(&self, context: &Context, policy: &ChatRequestPolicy) -> Result<LlmResponseStream> {
         validate_reasoning(context, self.model().as_ref())?;
         let model = self.request_model.as_deref().unwrap_or(&self.model);
-        let mut request = build_chat_request(model, context, tool_schema_transform)?;
-        request.prompt_cache_key = prompt_cache_key.resolve(context).map(String::from);
+        let request = build_chat_request(model, context, policy)?;
         Ok(create_custom_stream_generic(&self.chat_client, request, self.idle_timeout))
     }
 
@@ -222,12 +240,12 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::providers::test_capture_server::{CaptureServer, ResponseSpec};
+    use crate::providers::test_capture_server::{CaptureServer, ResponseSpec, hello_context};
     use crate::testing::FakeHttpService;
     use crate::types::IsoString;
     use crate::{
         AssistantReasoning, ChatMessage, ContentBlock, LlmResponse, MessageId, ProviderErrorKind, ReasoningEffort,
-        ToolDefinition,
+        ToolCallRequest, ToolDefinition,
     };
 
     #[tokio::test]
@@ -330,6 +348,55 @@ mod tests {
             assert!(captured.body.get("prompt_cache_key").is_none());
             assert!(captured.body.get("session_id").is_none());
         }
+    }
+
+    #[tokio::test]
+    async fn local_providers_send_bare_chat_requests_under_v1() {
+        for (config, display_name) in [(&OLLAMA, "Ollama (test-model)"), (&LLAMACPP, "LlamaCpp (test-model)")] {
+            let mut server = CaptureServer::start_chat_completions().await;
+            let connection = ProviderConnectionConfig { base_url: Some(server.base_url.clone()), ..Default::default() };
+            let provider =
+                GenericProvider::from_env_with_connection(config, connection).unwrap().with_model("test-model");
+            let tool_call = ChatMessage::Assistant {
+                message_id: MessageId::new(),
+                content: String::new(),
+                reasoning: AssistantReasoning::default(),
+                timestamp: IsoString::now(),
+                tool_calls: vec![ToolCallRequest { id: "call_1".into(), name: "tool".into(), arguments: "{}".into() }],
+            };
+            let mut context = Context::new(vec![ChatMessage::user("Hello"), tool_call], vec![]);
+            context.set_prompt_cache_key(Some("prefix-abc".to_string()));
+            context.set_session_affinity_key(Some("conversation-abc".to_string()));
+
+            let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+            let captured = server.captured().await;
+
+            assert_successful_stream(&responses);
+            assert_eq!(captured.path, "/v1/chat/completions");
+            assert_eq!(captured.body["model"], "test-model");
+            assert!(captured.headers.get("authorization").is_none());
+            assert!(captured.body.get("prompt_cache_key").is_none());
+            assert!(captured.body["messages"][1].get("reasoning_content").is_none());
+            assert_eq!(provider.display_name(), display_name);
+        }
+    }
+
+    #[tokio::test]
+    async fn local_provider_honors_configured_idle_timeout() {
+        let spec =
+            ResponseSpec::sse(include_str!("../../tests/fixtures/openai/01_minimal.sse")).paced(Duration::from_mins(2));
+        let mut server = CaptureServer::start_with_spec(spec).await;
+        let connection = ProviderConnectionConfig {
+            base_url: Some(server.base_url.clone()),
+            idle_timeout: Duration::from_mins(1),
+            ..Default::default()
+        };
+        let provider = GenericProvider::from_env_with_connection(&OLLAMA, connection).unwrap().with_model("test-model");
+
+        let responses = server.collect_on_paused_clock(provider.stream_response(&hello_context())).await;
+
+        let error = responses.last().and_then(|response| response.as_ref().err()).and_then(LlmError::provider);
+        assert_eq!(error.map(|error| error.kind), Some(ProviderErrorKind::Timeout), "{responses:?}");
     }
 
     #[tokio::test]
