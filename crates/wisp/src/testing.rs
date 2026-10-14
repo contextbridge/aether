@@ -8,7 +8,7 @@ use crate::app::message::Message;
 use crate::app::{App, AppConfig};
 use crate::attachment::{AttachmentOutcome, PromptAttachment, build_attachments_with};
 use crate::command::{AgentCommand, Command, CommandResult, FilesystemCommand, GitReviewCommand, PromptRejection};
-use crate::file_index::{FileEntry, MAX_INDEXED_FILES, file_entries};
+use crate::file_index::{MAX_INDEXED_FILES, file_entries};
 use crate::git_review::{
     ClientState, ConnectionState, DiffDocument, DiffReviewEvent, DiffScope, DiffSnapshot, FileDiff, FileStatus,
     LIVE_PROTOCOL_VERSION, RemoteError, RemoteErrorCode, RepositoryAction, ServerEvent, StageState,
@@ -276,7 +276,7 @@ impl FakeFilesystem {
 
     /// The runtime's file index over the in-memory tree, minus gitignore
     /// semantics, which need a real repository.
-    pub fn index_files(&self, root: &Path) -> Vec<FileEntry> {
+    pub fn index_files(&self, root: &Path) -> Vec<PromptAttachment> {
         let paths = self.files.keys().filter(|path| path.starts_with(root)).cloned();
         file_entries(root, paths, MAX_INDEXED_FILES)
     }

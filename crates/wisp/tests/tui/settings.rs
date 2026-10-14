@@ -1,5 +1,7 @@
 use super::support::*;
+use std::collections::BTreeMap;
 use utils::ReasoningEffort;
+use wisp::settings::KeyAction;
 use wisp::theme::{ThemeApplicationError, ThemeLoadError};
 
 fn server_status_entry(name: &str, status: McpServerStatus) -> McpServerStatusEntry {
@@ -2100,9 +2102,10 @@ fn config_option_update_keeps_every_option_and_the_theme_row() {
 
 #[test]
 fn configured_keybinding_replaces_the_default_chord() {
-    let mut settings = UiSettings::default();
-    settings.keybindings =
-        Some(wisp::settings::KeybindingsSettings { toggle_git_diff: Some("ctrl+d".to_string()), ..Default::default() });
+    let settings = UiSettings {
+        keybindings: BTreeMap::from([(KeyAction::ToggleGitDiff, "ctrl+d".to_string())]),
+        ..UiSettings::default()
+    };
     let mut ui = TestUiBuilder::new().settings(settings).build();
 
     ui.key(ctrl('g'));
@@ -2122,12 +2125,13 @@ fn configured_keybinding_replaces_the_default_chord() {
 
 #[test]
 fn configured_picker_bindings_fire_on_chords() {
-    let mut settings = UiSettings::default();
-    settings.keybindings = Some(wisp::settings::KeybindingsSettings {
-        open_command_picker: Some("ctrl+p".to_string()),
-        open_file_picker: Some("ctrl+f".to_string()),
-        ..Default::default()
-    });
+    let settings = UiSettings {
+        keybindings: BTreeMap::from([
+            (KeyAction::OpenCommandPicker, "ctrl+p".to_string()),
+            (KeyAction::OpenFilePicker, "ctrl+f".to_string()),
+        ]),
+        ..UiSettings::default()
+    };
     let directory = TempDir::new().unwrap();
     let mut ui = TestUiBuilder::new().settings(settings).working_dir(directory.path().to_path_buf()).build();
 

@@ -1,77 +1,28 @@
 use std::path::PathBuf;
+use url::Url;
 
 /// Attempts to parse a paste payload as one or more dropped file paths.
 ///
 /// Returns `Some(paths)` when the payload is high-confidence file-drop content,
 /// `None` when it looks like ordinary user text and should remain a normal paste.
 pub fn parse_dropped_file_paths(pasted: &str) -> Option<Vec<PathBuf>> {
-    let trimmed = pasted.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let candidates: Vec<&str> = trimmed.lines().collect();
-    let mut paths = Vec::new();
-
-    for candidate in candidates {
-        let candidate = candidate.trim();
-        if candidate.is_empty() {
-            continue;
-        }
-        let path = try_parse_single_path(candidate)?;
-        paths.push(path);
-    }
-
-    if paths.is_empty() {
-        return None;
-    }
-
-    Some(paths)
+    pasted
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(parse_single_path)
+        .collect::<Option<Vec<_>>>()
+        .filter(|paths| !paths.is_empty())
 }
 
-fn try_parse_single_path(input: &str) -> Option<PathBuf> {
-    if let Some(path) = try_parse_file_uri(input) {
-        return Some(path);
+fn parse_single_path(input: &str) -> Option<PathBuf> {
+    if input.starts_with("file://") {
+        return Url::parse(input).ok()?.to_file_path().ok();
     }
-
-    if let Some(path) = try_parse_quoted_path(input) {
-        return Some(path);
+    match ['\'', '"'].iter().find_map(|&quote| input.strip_prefix(quote)?.strip_suffix(quote)) {
+        Some(inner) => inner.starts_with('/').then(|| PathBuf::from(inner)),
+        None => input.starts_with('/').then(|| PathBuf::from(input.replace("\\ ", " "))),
     }
-
-    if input.contains("\\ ") && looks_like_absolute_path(input.split("\\ ").next().unwrap_or("")) {
-        let unescaped = input.replace("\\ ", " ");
-        return Some(PathBuf::from(unescaped));
-    }
-
-    if looks_like_absolute_path(input) {
-        return Some(PathBuf::from(input));
-    }
-
-    None
-}
-
-fn try_parse_file_uri(input: &str) -> Option<PathBuf> {
-    let input = input.trim();
-    if !input.starts_with("file://") {
-        return None;
-    }
-    url::Url::parse(input).ok().and_then(|u| u.to_file_path().ok())
-}
-
-fn try_parse_quoted_path(input: &str) -> Option<PathBuf> {
-    let input = input.trim();
-    let inner =
-        if (input.starts_with('\'') && input.ends_with('\'')) || (input.starts_with('"') && input.ends_with('"')) {
-            &input[1..input.len() - 1]
-        } else {
-            return None;
-        };
-
-    if looks_like_absolute_path(inner) { Some(PathBuf::from(inner)) } else { None }
-}
-
-fn looks_like_absolute_path(s: &str) -> bool {
-    s.starts_with('/')
 }
 
 #[cfg(test)]

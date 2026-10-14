@@ -1,4 +1,4 @@
-use crate::file_index::FileEntry;
+use crate::attachment::PromptAttachment;
 use crate::view::filterable_list::FilterableList;
 use crate::request::RequestId;
 use crate::view::list_view::ListView;
@@ -19,7 +19,7 @@ pub struct CommandEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompletionEntry {
     Command(CommandEntry),
-    File(FileEntry),
+    File(PromptAttachment),
 }
 
 /// The inline completion list the composer shows after a `/` or `@` trigger.
@@ -47,7 +47,7 @@ impl CompletionOverlay {
 
     /// Fills in the results of the walk this overlay is waiting on, ignoring
     /// anything that arrives for a request it did not make.
-    pub fn set_files(&mut self, request_id: RequestId, files: Vec<FileEntry>) {
+    pub fn set_files(&mut self, request_id: RequestId, files: Vec<PromptAttachment>) {
         if self.pending_index != Some(request_id) {
             return;
         }
@@ -84,7 +84,7 @@ impl CompletionOverlay {
         }
     }
 
-    pub fn selected_file(&self) -> Option<FileEntry> {
+    pub fn selected_file(&self) -> Option<PromptAttachment> {
         match self.entries.selected_entry()? {
             CompletionEntry::File(file) => Some(file.clone()),
             CompletionEntry::Command(_) => None,

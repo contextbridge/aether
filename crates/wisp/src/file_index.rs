@@ -1,20 +1,15 @@
+use crate::attachment::PromptAttachment;
 use std::path::{Path, PathBuf};
 
 pub(crate) const MAX_INDEXED_FILES: usize = 50_000;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileEntry {
-    pub path: PathBuf,
-    pub display_name: String,
-}
-
 /// Walks the working tree for the files the `@` picker can offer.
-pub fn index_files(root: &Path) -> Vec<FileEntry> {
+pub fn index_files(root: &Path) -> Vec<PromptAttachment> {
     index_files_up_to(root, MAX_INDEXED_FILES)
 }
 
 #[cfg(feature = "testing")]
-pub fn index_files_with_limit(root: &Path, limit: usize) -> Vec<FileEntry> {
+pub fn index_files_with_limit(root: &Path, limit: usize) -> Vec<PromptAttachment> {
     index_files_up_to(root, limit)
 }
 
@@ -22,12 +17,12 @@ pub(crate) fn file_entries(
     root: &Path,
     paths: impl IntoIterator<Item = PathBuf>,
     limit: usize,
-) -> Vec<FileEntry> {
+) -> Vec<PromptAttachment> {
     let mut entries: Vec<_> = paths
         .into_iter()
         .filter(|path| !excluded(path))
         .take(limit)
-        .map(|path| FileEntry {
+        .map(|path| PromptAttachment {
             display_name: path.strip_prefix(root).unwrap_or(&path).to_string_lossy().replace('\\', "/"),
             path,
         })
@@ -36,7 +31,7 @@ pub(crate) fn file_entries(
     entries
 }
 
-fn index_files_up_to(root: &Path, limit: usize) -> Vec<FileEntry> {
+fn index_files_up_to(root: &Path, limit: usize) -> Vec<PromptAttachment> {
     let paths = ignore::WalkBuilder::new(root)
         .git_ignore(true)
         .git_global(true)

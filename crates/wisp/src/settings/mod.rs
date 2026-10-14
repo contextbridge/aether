@@ -11,6 +11,7 @@ pub(crate) use themes::{builtin_review_theme_choices, review_theme_choices};
 pub use themes::{list_theme_files, load_theme_file};
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use tracing::warn;
 use utils::settings::SettingsStore;
 
@@ -25,33 +26,22 @@ pub struct UiSettings {
     pub content_padding: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_line: Option<StatusLineSettings>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub keybindings: Option<KeybindingsSettings>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub keybindings: BTreeMap<KeyAction, String>,
 }
 
-/// Overrides for the global command bindings, as `"ctrl+g"`-style strings.
-/// Absent entries keep their defaults.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct KeybindingsSettings {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exit: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cancel: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub submit: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub open_command_picker: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub open_file_picker: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub toggle_git_diff: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cycle_reasoning: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cycle_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub open_prompt_search: Option<String>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KeyAction {
+    Exit,
+    Cancel,
+    Submit,
+    OpenCommandPicker,
+    OpenFilePicker,
+    ToggleGitDiff,
+    CycleReasoning,
+    CycleMode,
+    OpenPromptSearch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,48 +181,24 @@ impl StatusLineSettings {
     }
 }
 
-/// The bare-name spelling of every segment that takes no options.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-enum SegmentName {
-    Cwd,
-    GitRef,
-    Agent,
-    Mode,
-    Model,
-    Reasoning,
-    Context,
-    ServerHealth,
-}
-
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum SegmentWire {
-    Name(SegmentName),
+    Name(String),
     Config(StatusLineSegmentConfig),
-}
-
-impl From<SegmentWire> for StatusLineSegmentConfig {
-    fn from(wire: SegmentWire) -> Self {
-        match wire {
-            SegmentWire::Config(config) => config,
-            SegmentWire::Name(SegmentName::Cwd) => Self::Cwd { max_width: None },
-            SegmentWire::Name(SegmentName::GitRef) => Self::GitRef,
-            SegmentWire::Name(SegmentName::Agent) => Self::Agent,
-            SegmentWire::Name(SegmentName::Mode) => Self::Mode,
-            SegmentWire::Name(SegmentName::Model) => Self::Model { max_width: None },
-            SegmentWire::Name(SegmentName::Reasoning) => Self::Reasoning,
-            SegmentWire::Name(SegmentName::Context) => Self::Context,
-            SegmentWire::Name(SegmentName::ServerHealth) => Self::ServerHealth,
-        }
-    }
 }
 
 fn deserialize_segments<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<Vec<StatusLineSegmentConfig>>, D::Error> {
     let segments = Option::<Vec<SegmentWire>>::deserialize(deserializer)?;
-    Ok(segments.map(|segments| segments.into_iter().map(Into::into).collect()))
+    let parse = |segment| match segment {
+        SegmentWire::Name(name) => {
+            serde_json::from_value(serde_json::json!({ "type": name })).map_err(serde::de::Error::custom)
+        }
+        SegmentWire::Config(config) => Ok(config),
+    };
+    segments.map(|segments| segments.into_iter().map(parse).collect()).transpose()
 }
 
 fn default_separator() -> String {
