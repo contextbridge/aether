@@ -11,13 +11,6 @@ type ModelsDevData = HashMap<String, ProviderData>;
 
 #[derive(Debug, Deserialize)]
 struct ProviderData {
-    #[allow(dead_code)]
-    id: String,
-    #[allow(dead_code)]
-    name: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    env: Vec<String>,
     #[serde(default)]
     models: HashMap<String, ModelData>,
 }
@@ -33,7 +26,6 @@ struct ModelData {
     #[serde(default)]
     reasoning_options: Vec<ReasoningOption>,
     #[serde(default)]
-    #[allow(dead_code)]
     cost: Option<CostData>,
     #[serde(default)]
     limit: Option<LimitData>,
@@ -82,9 +74,6 @@ struct CostData {
 struct LimitData {
     #[serde(default)]
     context: u32,
-    #[serde(default)]
-    #[allow(dead_code)]
-    output: u32,
 }
 
 impl CostData {
@@ -101,11 +90,10 @@ struct ProviderConfig {
     source_dev_id: Option<&'static str>,
     /// Additional models.dev keys whose models are merged into this provider
     extra_source_ids: &'static [&'static str],
-    /// When set, the provider exposes exactly these models with these context
-    /// windows (e.g. subscription-gated providers whose limits differ from the
-    /// source metadata). Every entry must exist and be tool-capable in the
-    /// source data.
-    explicit_models: Option<&'static [ExplicitModel]>,
+    /// When set, the provider exposes only these models (e.g. subscription-gated providers).
+    explicit_models: Option<&'static [&'static str]>,
+    /// Context window applied to every model.
+    explicit_context_window: Option<u32>,
     /// Our Rust enum name (e.g. "Gemini")
     enum_name: &'static str,
     /// Our internal provider name used for parsing (e.g. "gemini")
@@ -134,13 +122,6 @@ struct ProviderConfig {
     is_hybrid_dynamic: bool,
 }
 
-/// A model exposed by a provider with an explicit model list.
-struct ExplicitModel {
-    id: &'static str,
-    context_window: u32,
-    supports_reasoning_off: bool,
-}
-
 impl ProviderConfig {
     /// Shorthand for providers with default `source_dev_id`, `explicit_models`, and `oauth_provider_id`.
     const fn standard(
@@ -155,6 +136,7 @@ impl ProviderConfig {
             source_dev_id: None,
             extra_source_ids: &[],
             explicit_models: None,
+            explicit_context_window: None,
             enum_name,
             parser_name,
             genai_provider_name: parser_name,
@@ -178,10 +160,6 @@ impl ProviderConfig {
         let mut config = Self::standard(dev_id, enum_name, parser_name, display_name, Some(env_var));
         config.uses_openai_compatible_api = true;
         config
-    }
-
-    fn explicit_model(&self, model_id: &str) -> Option<&'static ExplicitModel> {
-        self.explicit_models.and_then(|models| models.iter().find(|model| model.id == model_id))
     }
 
     /// Inner catalog-enum name. For hybrid providers the outer `{enum_name}Model`
@@ -232,20 +210,13 @@ const PROVIDERS: &[ProviderConfig] = &[
         )
     },
     ProviderConfig {
-        dev_id: "codex",
         source_dev_id: Some("openai"),
-        extra_source_ids: &[],
         explicit_models: Some(CODEX_SUBSCRIPTION_MODELS),
-        enum_name: "Codex",
-        parser_name: "codex",
+        explicit_context_window: Some(272_000),
         genai_provider_name: "openai",
-        display_name: "Codex",
-        env_var: None,
         oauth_provider_id: Some("codex"),
         fallback_reasoning_levels: &["low", "medium", "high", "xhigh"],
-        use_model_transport: false,
-        uses_openai_compatible_api: false,
-        is_hybrid_dynamic: false,
+        ..ProviderConfig::standard("codex", "Codex", "codex", "Codex", None)
     },
     ProviderConfig::openai_compatible("deepseek", "DeepSeek", "deepseek", "DeepSeek", "DEEPSEEK_API_KEY"),
     ProviderConfig {
@@ -290,48 +261,18 @@ const DYNAMIC_PROVIDERS: &[DynamicProviderConfig] = &[
     },
 ];
 
-const CODEX_SUBSCRIPTION_CONTEXT_WINDOW: u32 = 272_000;
-
-const CODEX_SUBSCRIPTION_MODELS: &[ExplicitModel] = &[
-    ExplicitModel {
-        id: "gpt-6.1-sol",
-        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
-        supports_reasoning_off: false,
-    },
-    ExplicitModel { id: "gpt-6-sol", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW, supports_reasoning_off: false },
-    ExplicitModel {
-        id: "gpt-6-astra",
-        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
-        supports_reasoning_off: false,
-    },
-    ExplicitModel {
-        id: "gpt-6-luna",
-        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
-        supports_reasoning_off: false,
-    },
-    ExplicitModel {
-        id: "gpt-5.6-sol",
-        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
-        supports_reasoning_off: false,
-    },
-    ExplicitModel {
-        id: "gpt-5.6-terra",
-        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
-        supports_reasoning_off: false,
-    },
-    ExplicitModel {
-        id: "gpt-5.6-luna",
-        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
-        supports_reasoning_off: false,
-    },
-    ExplicitModel { id: "gpt-5.5", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW, supports_reasoning_off: false },
-    ExplicitModel { id: "gpt-5.4", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW, supports_reasoning_off: false },
-    ExplicitModel {
-        id: "gpt-5.4-mini",
-        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
-        supports_reasoning_off: false,
-    },
-    ExplicitModel { id: "gpt-5.2", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW, supports_reasoning_off: false },
+const CODEX_SUBSCRIPTION_MODELS: &[&str] = &[
+    "gpt-6.1-sol",
+    "gpt-6-sol",
+    "gpt-6-astra",
+    "gpt-6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.2",
 ];
 
 #[derive(Debug, Clone)]
@@ -453,23 +394,23 @@ fn validate_provider_config(cfg: &ProviderConfig, provider: &ProviderData) -> Re
         return Ok(());
     };
     let mut seen = HashSet::new();
-    for configured in explicit_models {
-        if !seen.insert(configured.id) {
+    for &model_id in explicit_models {
+        if !seen.insert(model_id) {
             return Err(CodegenError::DuplicateConfiguredModel {
                 provider_id: cfg.dev_id.to_string(),
-                model_id: configured.id.to_string(),
+                model_id: model_id.to_string(),
             });
         }
-        let Some(model) = provider.models.get(configured.id) else {
+        let Some(model) = provider.models.get(model_id) else {
             return Err(CodegenError::ConfiguredModelNotFound {
                 provider_id: cfg.dev_id.to_string(),
-                model_id: configured.id.to_string(),
+                model_id: model_id.to_string(),
             });
         };
         if model.tool_call != Some(true) {
             return Err(CodegenError::ConfiguredModelUnavailable {
                 provider_id: cfg.dev_id.to_string(),
-                model_id: configured.id.to_string(),
+                model_id: model_id.to_string(),
             });
         }
     }
@@ -484,15 +425,14 @@ fn collect_models_from(
         .values()
         .filter(|m| m.tool_call == Some(true))
         .filter(|m| !is_alias(&m.id))
-        .filter(|m| cfg.explicit_models.is_none() || cfg.explicit_model(&m.id).is_some())
+        .filter(|m| cfg.explicit_models.is_none_or(|ids| ids.contains(&m.id.as_str())))
         .map(|m| {
             let reasoning_levels =
                 if m.reasoning.unwrap_or(false) { reasoning_levels_for_model(cfg, m)? } else { Vec::new() };
             let input_modalities =
                 m.modalities.as_ref().map_or_else(|| vec!["text".to_string()], |md| md.input.clone());
-            let source_context_window = m.limit.as_ref().map_or(0, |l| l.context);
             let context_window =
-                cfg.explicit_model(&m.id).map_or(source_context_window, |explicit| explicit.context_window);
+                cfg.explicit_context_window.unwrap_or_else(|| m.limit.as_ref().map_or(0, |l| l.context));
             let pricing = if cfg.dev_id == "codex" { None } else { m.cost.clone() };
             Ok(ModelInfo {
                 variant_name: model_id_to_variant(&m.id),
@@ -531,11 +471,8 @@ fn transport_for_model(cfg: &ProviderConfig, model: &ModelData) -> Result<Option
 }
 
 fn disabled_support_for_model(cfg: &ProviderConfig, model: &ModelData) -> &'static str {
-    if !model.reasoning.unwrap_or(false) {
+    if !model.reasoning.unwrap_or(false) || cfg.explicit_models.is_some() {
         return "Unsupported";
-    }
-    if let Some(explicit) = cfg.explicit_model(&model.id) {
-        return if explicit.supports_reasoning_off { "Effort" } else { "Unsupported" };
     }
     if model.reasoning_options.iter().any(|option| {
         matches!(option,
@@ -2291,20 +2228,18 @@ mod tests {
         let mut root = serde_json::Map::new();
         for cfg in PROVIDERS {
             let json_key = cfg.json_key();
-            root.entry(json_key.to_string())
-                .or_insert_with(|| json!({"id": json_key, "name": json_key, "env": [], "models": {}}));
+            root.entry(json_key.to_string()).or_insert_with(|| json!({"models": {}}));
             for &extra in cfg.extra_source_ids {
-                root.entry(extra.to_string())
-                    .or_insert_with(|| json!({"id": extra, "name": extra, "env": [], "models": {}}));
+                root.entry(extra.to_string()).or_insert_with(|| json!({"models": {}}));
             }
         }
         let openai = root.get_mut("openai").unwrap()["models"].as_object_mut().unwrap();
-        for model in CODEX_SUBSCRIPTION_MODELS {
+        for &id in CODEX_SUBSCRIPTION_MODELS {
             openai.insert(
-                model.id.to_string(),
+                id.to_string(),
                 json!({
-                    "id": model.id,
-                    "name": model.id,
+                    "id": id,
+                    "name": id,
                     "tool_call": true,
                     "reasoning": true,
                     "reasoning_options": [{"type": "effort", "values": ["low", "medium", "high", "xhigh"]}],
