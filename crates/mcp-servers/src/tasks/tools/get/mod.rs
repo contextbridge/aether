@@ -17,9 +17,7 @@ pub struct TaskGetInput {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskGetOutput {
-    pub status: String,
     pub task: Task,
-    pub message: String,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub meta: Option<ToolResultMeta>,
@@ -33,12 +31,7 @@ pub fn execute_task_get(input: TaskGetInput, store: &TaskStore) -> Result<TaskGe
 
     let display_meta = ToolDisplayMeta::new("Todo", task.title.clone());
 
-    Ok(TaskGetOutput {
-        status: "success".to_string(),
-        message: format!("Retrieved task '{}'", task.title),
-        task: task.clone(),
-        meta: Some(display_meta.into()),
-    })
+    Ok(TaskGetOutput { task: task.clone(), meta: Some(display_meta.into()) })
 }
 
 #[cfg(test)]
@@ -55,12 +48,10 @@ mod tests {
 
         let output = execute_task_get(TaskGetInput { id: created.id.to_string() }, tasks.store()).unwrap();
 
-        assert_eq!(output.status, "success");
         assert_eq!(output.task.id.to_string(), created.id.to_string());
         assert_eq!(output.task.title, "Research topic");
         assert_eq!(output.task.description, Some("Detailed description".to_string()));
         assert_eq!(output.task.status, TaskStatus::Pending);
-        assert!(output.message.contains("Retrieved task"));
     }
 
     #[test]

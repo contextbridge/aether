@@ -45,14 +45,8 @@ pub struct TaskCreateInput {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskCreateOutput {
-    /// Status of the operation
-    pub status: String,
-
     /// The created task
     pub task: TaskSummary,
-
-    /// Human-readable message
-    pub message: String,
 
     /// Display metadata for human-friendly rendering
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
@@ -89,14 +83,7 @@ pub fn execute_task_create(input: &TaskCreateInput, store: &mut TaskStore) -> Re
         task
     };
 
-    let task_type = if is_subtask { "subtask" } else { "task tree" };
-
-    Ok(TaskCreateOutput {
-        status: "success".to_string(),
-        message: format!("Created {} '{}' with ID {}", task_type, task.title, task.id),
-        task: TaskSummary::from(&task),
-        meta: Some(task_result_meta(store, &task.title)),
-    })
+    Ok(TaskCreateOutput { task: TaskSummary::from(&task), meta: Some(task_result_meta(store, &task.title)) })
 }
 
 #[cfg(test)]
@@ -119,10 +106,9 @@ mod tests {
 
         let output = execute_task_create(&input, tasks.store_mut()).unwrap();
 
-        assert_eq!(output.status, "success");
         assert_eq!(output.task.title, "Research AI agents");
         assert_eq!(output.task.assignee, Some("orchestrator".to_string()));
-        assert!(output.message.contains("task tree"));
+        assert_eq!(output.task.parent, None);
     }
 
     #[test]
@@ -148,10 +134,8 @@ mod tests {
 
         let output = execute_task_create(&sub_input, tasks.store_mut()).unwrap();
 
-        assert_eq!(output.status, "success");
         assert_eq!(output.task.title, "Subtask 1");
         assert_eq!(output.task.parent, Some(root.task.id));
-        assert!(output.message.contains("subtask"));
     }
 
     #[test]
@@ -248,7 +232,6 @@ mod tests {
         let output = execute_task_create(&input, tasks.store_mut()).unwrap();
 
         assert_eq!(output.task.parent, None);
-        assert!(output.message.contains("task tree"));
     }
 
     #[test]
@@ -265,7 +248,6 @@ mod tests {
         let output = execute_task_create(&input, tasks.store_mut()).unwrap();
 
         assert_eq!(output.task.parent, None);
-        assert!(output.message.contains("task tree"));
     }
 
     #[test]
@@ -308,26 +290,5 @@ mod tests {
 
         assert_eq!(input.title, "Task with snake_case");
         assert_eq!(input.parent_id, Some("at-parent".to_string()));
-    }
-
-    #[test]
-    fn test_output_uses_camel_case() {
-        let mut tasks = TestTaskStore::new();
-
-        let input = TaskCreateInput {
-            title: "Test camelCase output".to_string(),
-            description: None,
-            parent_id: None,
-            assignee: None,
-            deps: None,
-        };
-
-        let output = execute_task_create(&input, tasks.store_mut()).unwrap();
-        let json = serde_json::to_string(&output).unwrap();
-
-        // Verify output uses camelCase field names
-        assert!(json.contains("\"status\""));
-        assert!(json.contains("\"task\""));
-        assert!(json.contains("\"message\""));
     }
 }

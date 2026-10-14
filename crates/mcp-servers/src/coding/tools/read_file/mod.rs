@@ -22,7 +22,6 @@ pub struct ReadFileArgs {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadFileResult {
-    pub status: String,
     pub file_path: String,
     pub content: String,
     pub total_lines: usize,
@@ -70,7 +69,6 @@ pub async fn read_file_contents(args: ReadFileArgs) -> Result<ReadFileResult, Fi
     let display_meta = ToolDisplayMeta::new("Read file", format!("{}, {total_lines} lines", basename(&args.file_path)));
 
     Ok(ReadFileResult {
-        status: "success".to_string(),
         file_path: args.file_path,
         content: formatted_content,
         total_lines,
@@ -107,7 +105,6 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(result.status, "success");
         assert_eq!(result.total_lines, 3);
         assert_eq!(result.lines_shown, 3);
         assert_eq!(result.next_offset, None);

@@ -288,15 +288,9 @@ impl SkillsMcp {
             })
             .collect();
         skills.sort_by(|a, b| a.name.cmp(&b.name));
-        let count = skills.len();
+        let meta = Some(ToolDisplayMeta::new("Skills", format!("{} skills", skills.len())).into());
 
-        Json(ListSkillsOutput {
-            status: "success".to_string(),
-            skills,
-            count,
-            message: format!("Found {count} skills"),
-            meta: Some(ToolDisplayMeta::new("Skills", format!("{count} skills")).into()),
-        })
+        Json(ListSkillsOutput { skills, meta })
     }
 
     #[doc = include_str!("tools/get_skills/description.md")]
@@ -391,10 +385,6 @@ mod tests {
 
         let server = SkillsMcp::new(temp_dir.path(), &[temp_dir.path().to_path_buf()]);
         let Json(output) = server.list_skills(Parameters(ListSkillsInput::default())).await;
-
-        assert_eq!(output.status, "success");
-        assert_eq!(output.count, 2);
-        assert_eq!(output.message, "Found 2 skills");
 
         let names: Vec<_> = output.skills.iter().map(|skill| skill.name.clone()).collect();
         assert_eq!(names, vec!["alpha-flat".to_string(), "zeta".to_string()]);

@@ -31,17 +31,8 @@ pub struct TaskListInput {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskListOutput {
-    /// Status of the operation
-    pub status: String,
-
     /// Matching tasks
     pub tasks: Vec<TaskSummary>,
-
-    /// Total count of matching tasks
-    pub count: usize,
-
-    /// Human-readable message
-    pub message: String,
 
     /// Display metadata for human-friendly rendering
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
@@ -67,40 +58,10 @@ pub fn execute_task_list(input: &TaskListInput, store: &TaskStore) -> TaskListOu
             .collect()
     };
 
-    let count = tasks.len();
-    let filter_desc = build_filter_description(input);
-
-    let message = if count == 0 {
-        format!("No tasks found{filter_desc}")
-    } else if count == 1 {
-        format!("Found 1 task{filter_desc}")
-    } else {
-        format!("Found {count} tasks{filter_desc}")
-    };
-
     let done = tasks.iter().filter(|t| t.status == TaskStatus::Completed).count();
-    let display_meta = ToolDisplayMeta::new("Todo", format!("{done}/{count} tasks"));
+    let display_meta = ToolDisplayMeta::new("Todo", format!("{done}/{} tasks", tasks.len()));
 
-    TaskListOutput { status: "success".to_string(), tasks, count, message, meta: Some(display_meta.into()) }
-}
-
-fn build_filter_description(input: &TaskListInput) -> String {
-    let mut parts = Vec::new();
-
-    if input.ready_only.unwrap_or(false) {
-        parts.push("ready to start".to_string());
-    }
-    if let Some(tree_id) = &input.tree_id {
-        parts.push(format!("in tree {tree_id}"));
-    }
-    if let Some(assignee) = &input.assignee {
-        parts.push(format!("assigned to {assignee}"));
-    }
-    if let Some(status) = input.status {
-        parts.push(format!("with status {status}"));
-    }
-
-    if parts.is_empty() { String::new() } else { format!(" ({})", parts.join(", ")) }
+    TaskListOutput { tasks, meta: Some(display_meta.into()) }
 }
 
 #[cfg(test)]
@@ -119,8 +80,7 @@ mod tests {
 
         let output = execute_task_list(&TaskListInput::default(), tasks.store());
 
-        assert_eq!(output.count, 3);
-        assert!(output.message.contains("Found 3 tasks"));
+        assert_eq!(output.tasks.len(), 3);
     }
 
     #[test]
@@ -139,8 +99,7 @@ mod tests {
             tasks.store(),
         );
 
-        assert_eq!(output.count, 3);
-        assert!(output.message.contains("in tree"));
+        assert_eq!(output.tasks.len(), 3);
     }
 
     #[test]
@@ -165,7 +124,7 @@ mod tests {
             tasks.store(),
         );
 
-        assert_eq!(output.count, 1);
+        assert_eq!(output.tasks.len(), 1);
         assert_eq!(output.tasks[0].assignee, Some("worker-1".to_string()));
     }
 
@@ -186,7 +145,7 @@ mod tests {
             tasks.store(),
         );
 
-        assert_eq!(output.count, 1);
+        assert_eq!(output.tasks.len(), 1);
         assert_eq!(output.tasks[0].status, TaskStatus::InProgress);
     }
 
@@ -205,7 +164,7 @@ mod tests {
 
         let output = execute_task_list(&TaskListInput { ready_only: Some(true), ..Default::default() }, tasks.store());
 
-        assert_eq!(output.count, 2);
+        assert_eq!(output.tasks.len(), 2);
 
         tasks
             .store_mut()
@@ -221,7 +180,7 @@ mod tests {
 
         let output = execute_task_list(&TaskListInput { ready_only: Some(true), ..Default::default() }, tasks.store());
 
-        assert_eq!(output.count, 2);
+        assert_eq!(output.tasks.len(), 2);
         let ready_ids: Vec<_> = output.tasks.iter().map(|t| t.id.as_str()).collect();
         assert!(ready_ids.contains(&sub2.id.as_str()));
     }
@@ -232,8 +191,7 @@ mod tests {
 
         let output = execute_task_list(&TaskListInput::default(), tasks.store());
 
-        assert_eq!(output.count, 0);
-        assert!(output.message.contains("No tasks found"));
+        assert_eq!(output.tasks.len(), 0);
     }
 
     #[test]
@@ -245,6 +203,6 @@ mod tests {
             tasks.store(),
         );
 
-        assert_eq!(output.count, 0);
+        assert_eq!(output.tasks.len(), 0);
     }
 }

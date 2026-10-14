@@ -64,10 +64,6 @@ async fn test_list_skills_only_returns_agent_invocable_entries() -> TestResult {
 
     let parsed = mcp.call("list_skills", ListSkillsInput::default()).await?;
 
-    assert_eq!(parsed["status"], "success");
-    assert_eq!(parsed["count"], 2);
-    assert_eq!(parsed["message"], "Found 2 skills");
-
     let skills = parsed["skills"].as_array().expect("Expected skills array");
     let names: Vec<_> = skills.iter().map(|entry| entry["name"].as_str().unwrap()).collect();
     assert_eq!(names, vec!["alpha-flat", "zeta"]);

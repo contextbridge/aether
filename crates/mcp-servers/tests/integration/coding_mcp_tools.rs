@@ -16,7 +16,6 @@ async fn read_file_supports_paging_and_snake_case_arguments() -> TestResult {
     let path = workspace.write("notes.txt", "line 1\nline 2\nline 3\nline 4\nline 5");
     let result =
         workspace.client.call("read_file", serde_json::json!({ "file_path": path, "offset": 2, "limit": 2 })).await?;
-    assert_eq!(result["status"], "success");
     assert_eq!(result["content"], "    2\tline 2\n    3\tline 3");
     assert_eq!(result["totalLines"], 5);
     assert_eq!(result["linesShown"], 2);
@@ -166,7 +165,6 @@ async fn edit_file_supports_batch_edits_and_response_metadata() -> TestResult {
             }),
         )
         .await?;
-    assert_eq!(result["status"], "success");
     assert_eq!(result["replacementsMade"], 2);
     assert_eq!(result["_meta"]["file_diff"]["old_text"], "alpha\nbeta\ngamma\n");
     assert_eq!(result["_meta"]["file_diff"]["new_text"], "ALPHA\nbeta\nGAMMA\n");
