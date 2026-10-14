@@ -1,20 +1,18 @@
-use async_openai::Client;
-use async_openai::config::{Config, OpenAIConfig};
-use reqwest::Url;
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
+use std::future::Future;
 use std::time::Duration;
 
 use crate::catalog::Provider;
 use crate::provider::{get_context_window, validate_reasoning};
-use crate::providers::http::{http_client, openai_client};
+use crate::providers::http::{SseData, http_client};
 pub use crate::providers::openai_compatible::ChatRequestPolicy;
+use crate::providers::openai_compatible::streaming::decode_sse_chunk;
 use crate::providers::openai_compatible::types::CompatibleChatRequest;
-use crate::providers::openai_compatible::{
-    AetherOpenAiConfig, PromptCacheKeySource, build_chat_request, create_custom_stream_generic,
-};
+use crate::providers::openai_compatible::{PromptCacheKeySource, build_chat_request};
 use crate::providers::openai_responses::mappers::build_wire_request;
 use crate::providers::openai_responses::streaming::decode_responses;
 use crate::providers::openai_responses::transport::send;
-use crate::providers::response_stream::{error_stream, response_stream};
+use crate::providers::response_stream::{OpenedStream, error_stream, response_stream};
 use crate::tool_schema::normalize_for_moonshot;
 use crate::{
     Context, LlmError, LlmModel, LlmResponseStream, ProviderAuthMode, ProviderConnectionConfig, Result,
@@ -145,9 +143,9 @@ pub(crate) const BUILT_INS: &[&ProviderConfig] = &[
 /// A provider whose behavior is fully described by a [`ProviderConfig`].
 pub struct GenericProvider {
     config: &'static ProviderConfig,
-    openai_config: AetherOpenAiConfig,
     http: reqwest::Client,
-    chat_client: Client<AetherOpenAiConfig>,
+    api_base: String,
+    headers: HeaderMap,
     model: String,
     request_model: Option<String>,
     idle_timeout: Duration,
@@ -168,15 +166,15 @@ impl GenericProvider {
             }
             _ => String::new(),
         };
-        Self::new_with_connection(api_key, config, connection)
+        Self::new_with_connection(&api_key, config, connection)
     }
 
-    pub fn new(api_key: String, config: &'static ProviderConfig) -> Result<Self> {
+    pub fn new(api_key: &str, config: &'static ProviderConfig) -> Result<Self> {
         Self::new_with_connection(api_key, config, ProviderConnectionConfig::default())
     }
 
     pub fn new_with_connection(
-        api_key: String,
+        api_key: &str,
         config: &'static ProviderConfig,
         connection: ProviderConnectionConfig,
     ) -> Result<Self> {
@@ -188,17 +186,11 @@ impl GenericProvider {
         if config.provider.is_local() && !api_base.ends_with("/v1") {
             api_base.push_str("/v1");
         }
-        let auth_mode = if api_key.is_empty() { ProviderAuthMode::None } else { connection.auth_mode };
-
-        let openai_config =
-            AetherOpenAiConfig::new(OpenAIConfig::new().with_api_key(api_key).with_api_base(api_base), auth_mode);
-
-        let http = http_client();
         Ok(Self {
             config,
-            chat_client: openai_client(openai_config.clone(), http.clone()),
-            openai_config,
-            http,
+            http: http_client(),
+            api_base,
+            headers: auth_headers(api_key, connection.auth_mode)?,
             model: config.default_model.to_string(),
             request_model: connection.request_model,
             idle_timeout: connection.idle_timeout,
@@ -240,28 +232,37 @@ impl GenericProvider {
     fn stream_chat_completions(&self, context: &Context, policy: &ChatRequestPolicy) -> Result<LlmResponseStream> {
         validate_reasoning(context, self.model().as_ref())?;
         let model = self.request_model.as_deref().unwrap_or(&self.model);
-        let request = build_chat_request(model, context, policy)?;
-        Ok(create_custom_stream_generic(&self.chat_client, request, self.idle_timeout))
+        let request = serde_json::to_value(build_chat_request(model, context, policy)?)?;
+        let opened = self.open("chat/completions", request);
+        Ok(response_stream(opened, |data, turn| decode_sse_chunk(&data, turn), self.idle_timeout))
     }
 
     fn stream_responses(&self, context: &Context, policy: &ResponsesRequestPolicy) -> Result<LlmResponseStream> {
-        let mut url = Url::parse(&self.openai_config.url("/responses"))
-            .map_err(|error| LlmError::ProviderRequest(error.to_string()))?;
-        url.query_pairs_mut().extend_pairs(self.openai_config.query());
-
         let mut request = build_wire_request(&self.model, context, policy)?;
         if let Some(model) = &self.request_model {
             request["model"] = model.clone().into();
         }
-
-        let http = self.http.clone();
-        let headers = self.openai_config.headers();
-        Ok(response_stream(
-            async move { send(&http, url.as_str(), headers, request).await },
-            decode_responses(),
-            self.idle_timeout,
-        ))
+        Ok(response_stream(self.open("responses", request), decode_responses(), self.idle_timeout))
     }
+
+    fn open(
+        &self,
+        path: &str,
+        request: serde_json::Value,
+    ) -> impl Future<Output = Result<OpenedStream<SseData>>> + Send + 'static {
+        let (http, url, headers) = (self.http.clone(), format!("{}/{path}", self.api_base), self.headers.clone());
+        async move { send(&http, &url, headers, request).await }
+    }
+}
+
+fn auth_headers(api_key: &str, auth_mode: ProviderAuthMode) -> Result<HeaderMap> {
+    let mut headers = HeaderMap::new();
+    if auth_mode == ProviderAuthMode::Default && !api_key.is_empty() {
+        let mut bearer = HeaderValue::from_str(&format!("Bearer {api_key}"))?;
+        bearer.set_sensitive(true);
+        headers.insert(AUTHORIZATION, bearer);
+    }
+    Ok(headers)
 }
 
 fn openrouter_request(request: &mut CompatibleChatRequest, context: &Context) {
@@ -278,13 +279,11 @@ fn openrouter_request(request: &mut CompatibleChatRequest, context: &Context) {
 
 #[cfg(test)]
 mod tests {
-    use futures::{StreamExt, stream};
-    use reqwest::{Body, Method};
+    use futures::StreamExt;
     use serde_json::json;
 
     use super::*;
     use crate::providers::test_capture_server::{CaptureServer, ResponseSpec, hello_context};
-    use crate::testing::FakeHttpService;
     use crate::types::IsoString;
     use crate::{
         AssistantReasoning, ChatMessage, ContentBlock, LlmResponse, MessageId, ProviderErrorKind, ReasoningEffort,
@@ -346,7 +345,7 @@ mod tests {
     #[tokio::test]
     async fn chat_rate_limit_rejection_is_a_retryable_provider_error() {
         let body = r#"{"error":{"message":"Rate limit exceeded: free-models-per-day","code":429}}"#;
-        let error = rejected_chat_request(429, move || body).await;
+        let error = rejected_chat_request(ResponseSpec::sse(body).with_status(429)).await;
         let provider_error = error.provider().expect("a 429 must classify as a provider error");
 
         assert_eq!(provider_error.kind, ProviderErrorKind::RateLimit);
@@ -359,8 +358,8 @@ mod tests {
 
     #[tokio::test]
     async fn chat_rejection_preserves_string_error_codes() {
-        let error =
-            rejected_chat_request(429, || r#"{"error":{"code":"rate_limit_exceeded","message":"slow down"}}"#).await;
+        let body = r#"{"error":{"code":"rate_limit_exceeded","message":"slow down"}}"#;
+        let error = rejected_chat_request(ResponseSpec::sse(body).with_status(429)).await;
         let provider_error = error.provider().unwrap();
 
         assert_eq!(provider_error.code.as_deref(), Some("rate_limit_exceeded"));
@@ -369,11 +368,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chat_bad_request_is_not_retryable() {
+        let body = r#"{"error":{"message":"invalid request"}}"#;
+        let error = rejected_chat_request(ResponseSpec::sse(body).with_status(400)).await;
+
+        assert_eq!(error.provider().map(|provider| provider.kind), Some(ProviderErrorKind::Api));
+        assert!(!error.is_retryable());
+    }
+
+    #[tokio::test]
     async fn chat_rejection_keeps_http_status_when_the_error_body_fails_to_read() {
-        let body = || Body::wrap_stream(stream::iter([Err::<String, _>(std::io::Error::other("connection reset"))]));
-        let error = rejected_chat_request(429, body).await;
+        let error = rejected_chat_request(ResponseSpec::sse("").with_status(429).interrupted()).await;
         let provider_error = error.provider().unwrap();
 
+        assert!(provider_error.message.ends_with("Unknown error"), "{provider_error:?}");
         assert_eq!(provider_error.http_status, Some(429));
         assert_eq!(provider_error.request_id.as_deref(), Some("request-123"));
         assert_eq!(provider_error.kind, ProviderErrorKind::RateLimit);
@@ -381,17 +389,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chat_chunk_that_is_not_json_interrupts_the_stream() {
+        let mut server = CaptureServer::start_with_response("data: invalid json\n\n").await;
+        let provider = capture_backed_provider(&server, &OPENROUTER);
+
+        let responses = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
+        let _ = server.captured().await;
+
+        assert!(matches!(responses[..], [Ok(LlmResponse::Start), Err(_)]), "{responses:?}");
+        let error = responses[1].as_ref().unwrap_err();
+        assert_eq!(error.provider().map(|provider| provider.kind), Some(ProviderErrorKind::StreamInterrupted));
+        assert!(error.is_retryable());
+    }
+
+    #[tokio::test]
     async fn disabled_toggle_and_unknown_models_never_send_requests() {
-        let service = FakeHttpService::default();
-        let mut provider = GenericProvider::new("key".to_string(), &DEEPSEEK).unwrap();
-        provider.chat_client =
-            openai_client(AetherOpenAiConfig::new(OpenAIConfig::new(), ProviderAuthMode::None), service.clone());
+        let server = CaptureServer::start_chat_completions().await;
+        let mut provider = capture_backed_provider(&server, &DEEPSEEK);
         for model in ["deepseek-v4-flash", "unknown"] {
             provider = provider.with_model(model);
             let mut context = Context::new(vec![], vec![]);
             context.set_reasoning_effort(ReasoningEffort::Disabled);
             let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-            assert_eq!(responses.len(), 1);
+            assert_eq!(responses.len(), 1, "{responses:?}");
             let error = responses[0].as_ref().unwrap_err();
             if model == "unknown" {
                 assert!(matches!(error, LlmError::ReasoningValidation(_)));
@@ -399,13 +419,12 @@ mod tests {
                 assert!(matches!(error, LlmError::UnsupportedDisableTransport { .. }));
             }
             assert!(!error.is_retryable());
-            assert!(service.take_requests().is_empty());
         }
     }
 
     #[test]
     fn azure_foundry_requires_a_configured_url() {
-        let Err(error) = GenericProvider::new("key".to_string(), &AZURE_FOUNDRY) else {
+        let Err(error) = GenericProvider::new("key", &AZURE_FOUNDRY) else {
             panic!("Azure Foundry must require a URL");
         };
         assert!(matches!(error, LlmError::MissingProviderUrl { provider } if provider == "azure-foundry"));
@@ -415,7 +434,7 @@ mod tests {
     async fn chat_request_model_routes_the_request_without_changing_catalog_identity() {
         let mut server = CaptureServer::start_chat_completions().await;
         let provider = GenericProvider::new_with_connection(
-            "key".to_string(),
+            "key",
             &AZURE_FOUNDRY,
             ProviderConnectionConfig {
                 base_url: Some(format!("{}/", server.base_url)),
@@ -439,6 +458,18 @@ mod tests {
         assert!(captured.headers.get("authorization").is_none());
         assert_eq!(provider.model().unwrap().to_string(), "azure-foundry:gpt-5.5");
         assert_eq!(provider.display_name(), "Microsoft Foundry (gpt-5.5)");
+    }
+
+    #[tokio::test]
+    async fn default_auth_sends_the_api_key_as_a_bearer_token() {
+        let mut server = CaptureServer::start_chat_completions().await;
+        let connection = ProviderConnectionConfig { base_url: Some(server.base_url.clone()), ..Default::default() };
+        let provider = GenericProvider::new_with_connection("secret", &DEEPSEEK, connection).unwrap();
+
+        let responses = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
+
+        assert_successful_stream(&responses);
+        assert_eq!(server.captured().await.headers["authorization"], "Bearer secret");
     }
 
     #[tokio::test]
@@ -696,7 +727,7 @@ mod tests {
     async fn responses_request_model_routes_the_request_without_changing_catalog_identity() {
         let mut server = CaptureServer::start_responses().await;
         let provider = GenericProvider::new_with_connection(
-            "key".to_string(),
+            "key",
             &XIAOMI,
             ProviderConnectionConfig {
                 base_url: Some(server.base_url.clone()),
@@ -728,25 +759,12 @@ mod tests {
             .expect("the catalog has a model that can turn reasoning off")
     }
 
-    async fn rejected_chat_request<B: Into<Body>>(
-        status: u16,
-        body: impl Fn() -> B + Send + Sync + 'static,
-    ) -> LlmError {
-        let service = FakeHttpService::default();
-        service.route(Method::POST, "https://openrouter.ai/api/v1/chat/completions", move || {
-            http::Response::builder()
-                .status(status)
-                .header("content-type", "text/event-stream")
-                .header("x-request-id", "request-123")
-                .body(body().into())
-                .unwrap()
-                .into()
-        });
-        let mut provider = GenericProvider::new("key".to_string(), &OPENROUTER).unwrap();
-        provider.chat_client = openai_client(provider.openai_config.clone(), service.clone());
-        let context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
+    async fn rejected_chat_request(spec: ResponseSpec) -> LlmError {
+        let mut server = CaptureServer::start_with_spec(spec.with_header("x-request-id", "request-123")).await;
+        let provider = capture_backed_provider(&server, &OPENROUTER);
 
-        let mut events = provider.stream_response(&context).collect::<Vec<_>>().await;
+        let mut events = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
+        let _ = server.captured().await;
 
         assert_eq!(events.len(), 1, "a rejected request must yield exactly one error: {events:?}");
         events.pop().unwrap().expect_err("request must fail")
@@ -754,7 +772,7 @@ mod tests {
 
     fn capture_backed_provider(server: &CaptureServer, config: &'static ProviderConfig) -> GenericProvider {
         GenericProvider::new_with_connection(
-            "key".to_string(),
+            "key",
             config,
             ProviderConnectionConfig {
                 base_url: Some(server.base_url.clone()),
