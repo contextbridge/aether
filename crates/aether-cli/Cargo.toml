@@ -44,7 +44,7 @@ mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", feature
 wisp = { package = "aether-wisp", path = "../wisp", version = "0.7.15" }
 ratatui = { workspace = true }
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["websocket"], version = "0.5.14" }
-agent-client-protocol = { workspace = true }
+agent-client-protocol = { workspace = true, features = ["stdio"] }
 clankerdiff-core = { workspace = true }
 clankerdiff-protocol = { workspace = true }
 clankerdiff-server = { workspace = true }
