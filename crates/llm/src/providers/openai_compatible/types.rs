@@ -95,6 +95,8 @@ pub(crate) struct CompatibleChatRequest {
     /// OpenAI-style prompt-cache affinity. Only set for providers that document support.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 pub(crate) fn map_messages(

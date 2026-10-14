@@ -6,9 +6,7 @@ use crate::providers::bedrock::BedrockProvider;
 use crate::providers::codex::CodexProvider;
 use crate::providers::{
     anthropic::AnthropicProvider,
-    gemini::GeminiProvider,
     generic::{self, GenericProvider},
-    openrouter::OpenRouterProvider,
 };
 use crate::{
     LlmError, ProviderConnectionConfig, ProviderConnectionOverrides, ProviderFactory, StreamingModelProvider,
@@ -37,10 +35,7 @@ impl ModelProviderParser {
 impl Default for ModelProviderParser {
     /// Create a parser with all built-in providers registered
     fn default() -> Self {
-        let mut parser = Self::new(HashMap::new())
-            .with_provider::<AnthropicProvider>("anthropic")
-            .with_provider::<GeminiProvider>("gemini")
-            .with_provider::<OpenRouterProvider>("openrouter");
+        let mut parser = Self::new(HashMap::new()).with_provider::<AnthropicProvider>("anthropic");
 
         for config in generic::BUILT_INS {
             parser = parser.with_generic_provider(config);

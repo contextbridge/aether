@@ -3,7 +3,7 @@ use aether_core::events::{
     AgentEvent, Command, ContextEvent, MessageEvent, ModelEvent, ToolEvent, TurnEvent, TurnOutcome, UserCommand,
 };
 use llm::ContentBlock;
-use llm::providers::openrouter::OpenRouterProvider;
+use llm::providers::generic::{GenericProvider, OPENROUTER};
 use std::io::{self, Write};
 
 #[allow(clippy::too_many_lines)]
@@ -11,7 +11,7 @@ use std::io::{self, Write};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
-    let llm = OpenRouterProvider::default("z-ai/glm-4.5-air")?;
+    let llm = GenericProvider::from_env(&OPENROUTER)?.with_model("z-ai/glm-4.5-air");
     let (tx, mut rx, _handle) = agent(llm).system_prompt(Prompt::text("You are a helpful assistant.")).spawn().await?;
 
     tx.send(Command::UserCommand(UserCommand::Text {

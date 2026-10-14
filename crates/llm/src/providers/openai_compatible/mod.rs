@@ -17,9 +17,10 @@ pub use types::ChatCompletionStreamResponse;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ChatRequestPolicy {
-    pub tool_schema_transform: Option<fn(&mut Schema)>,
-    pub prompt_cache_key: PromptCacheKeySource,
-    pub tool_call_reasoning_placeholder: bool,
+    pub(crate) tool_schema_transform: Option<fn(&mut Schema)>,
+    pub(crate) prompt_cache_key: PromptCacheKeySource,
+    pub(crate) tool_call_reasoning_placeholder: bool,
+    pub(crate) customize: Option<fn(&mut CompatibleChatRequest, &Context)>,
 }
 
 impl ChatRequestPolicy {
@@ -27,6 +28,7 @@ impl ChatRequestPolicy {
         tool_schema_transform: None,
         prompt_cache_key: PromptCacheKeySource::Omit,
         tool_call_reasoning_placeholder: true,
+        customize: None,
     };
 }
 
@@ -73,7 +75,7 @@ pub(crate) fn build_chat_request(
         if context.tools().is_empty() { None } else { Some(map_tools(context.tools(), policy.tool_schema_transform)?) };
     let settings = context.model_settings();
 
-    Ok(CompatibleChatRequest {
+    let mut request = CompatibleChatRequest {
         model: model.to_string(),
         messages,
         stream: Some(true),
@@ -84,7 +86,12 @@ pub(crate) fn build_chat_request(
         top_p: settings.top_p,
         max_tokens: settings.max_tokens,
         prompt_cache_key: policy.prompt_cache_key.resolve(context).map(String::from),
-    })
+        extra: serde_json::Map::new(),
+    };
+    if let Some(customize) = policy.customize {
+        customize(&mut request, context);
+    }
+    Ok(request)
 }
 
 fn map_tools(
