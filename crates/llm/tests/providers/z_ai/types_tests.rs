@@ -1,4 +1,3 @@
-use async_openai::types::chat::Role;
 use llm::providers::openai_compatible::ChatCompletionStreamResponse;
 
 /// Test that we can deserialize the actual Z.ai response format
@@ -27,17 +26,8 @@ fn test_deserialize_zai_response_missing_object_field() {
     assert!(result.is_ok(), "Failed to deserialize Z.ai response: {:?}", result.err());
 
     let response = result.unwrap();
-    assert_eq!(response.id, "202510181239034578873d49744455");
-    assert_eq!(response.model, "glm-4.6");
-    assert_eq!(response.created, 1_760_762_344);
-    // Should have default object value
-    assert_eq!(response.object, "chat.completion.chunk");
     assert_eq!(response.choices.len(), 1);
-
-    let choice = &response.choices[0];
-    assert_eq!(choice.index, 0);
-    assert_eq!(choice.delta.role, Some(Role::Assistant));
-    assert_eq!(choice.delta.content, Some("\n".to_string()));
+    assert_eq!(response.choices[0].delta.content, Some("\n".to_string()));
 }
 
 #[test]
@@ -101,7 +91,6 @@ fn test_deserialize_zai_response_with_tool_calls() {
     let tool_call = &tool_calls[0];
     assert_eq!(tool_call.index, 0);
     assert_eq!(tool_call.id, Some("call_abc123".to_string()));
-    assert_eq!(tool_call.tool_type, Some("function".to_string()));
 
     let function = tool_call.function.as_ref().unwrap();
     assert_eq!(function.name, Some("get_weather".to_string()));

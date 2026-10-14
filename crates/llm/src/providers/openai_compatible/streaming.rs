@@ -290,7 +290,7 @@ mod tests {
             chat_stream()
                 .text(&["done"])
                 .finish(FinishReason::Stop)
-                .usage(Usage { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, ..Default::default() })
+                .usage(Usage { prompt_tokens: 10, completion_tokens: 5, ..Default::default() })
                 .build(),
         )
         .await;
@@ -305,7 +305,6 @@ mod tests {
                 .usage(Usage {
                     prompt_tokens: 100,
                     completion_tokens: 50,
-                    total_tokens: 150,
                     prompt_tokens_details: Some(PromptTokensDetails { cached_tokens: Some(30), ..Default::default() }),
                     completion_tokens_details: None,
                 })
@@ -332,7 +331,6 @@ mod tests {
                 .usage(Usage {
                     prompt_tokens: 1000,
                     completion_tokens: 500,
-                    total_tokens: 1500,
                     prompt_tokens_details: Some(PromptTokensDetails {
                         cached_tokens: Some(100),
                         cache_write_tokens: Some(50),
@@ -375,7 +373,6 @@ mod tests {
                 .usage(Usage {
                     prompt_tokens: 200,
                     completion_tokens: 100,
-                    total_tokens: 300,
                     prompt_tokens_details: Some(PromptTokensDetails {
                         cached_tokens: Some(80),
                         audio_tokens: Some(12),
@@ -479,7 +476,6 @@ mod tests {
                 tool_calls: Some(vec![ToolCallDelta {
                     index,
                     id: id.map(ToString::to_string),
-                    tool_type: Some("function".to_string()),
                     function: Some(FunctionCallDelta {
                         name: name.map(ToString::to_string),
                         arguments: arguments.map(ToString::to_string),
@@ -512,21 +508,13 @@ mod tests {
     }
 
     fn chunk(choices: Vec<ChatCompletionStreamChoice>, usage: Option<Usage>) -> ChatCompletionStreamResponse {
-        ChatCompletionStreamResponse {
-            id: "chunk".to_string(),
-            choices,
-            created: 1,
-            model: "test".to_string(),
-            system_fingerprint: None,
-            object: "chat.completion.chunk".to_string(),
-            usage,
-        }
+        ChatCompletionStreamResponse { choices, usage }
     }
 
     fn choice(
         delta: ChatCompletionStreamResponseDelta,
         finish_reason: Option<FinishReason>,
     ) -> ChatCompletionStreamChoice {
-        ChatCompletionStreamChoice { index: 0, delta, finish_reason, logprobs: None }
+        ChatCompletionStreamChoice { delta, finish_reason }
     }
 }
