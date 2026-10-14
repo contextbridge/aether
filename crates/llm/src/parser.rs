@@ -8,7 +8,6 @@ use crate::providers::{
     anthropic::AnthropicProvider,
     gemini::GeminiProvider,
     generic::{self, GenericProvider},
-    local::{llama_cpp::LlamaCppProvider, ollama::OllamaProvider},
     openrouter::OpenRouterProvider,
 };
 use crate::{
@@ -41,9 +40,7 @@ impl Default for ModelProviderParser {
         let mut parser = Self::new(HashMap::new())
             .with_provider::<AnthropicProvider>("anthropic")
             .with_provider::<GeminiProvider>("gemini")
-            .with_provider::<OpenRouterProvider>("openrouter")
-            .with_provider::<OllamaProvider>("ollama")
-            .with_provider::<LlamaCppProvider>("llamacpp");
+            .with_provider::<OpenRouterProvider>("openrouter");
 
         for config in generic::BUILT_INS {
             parser = parser.with_generic_provider(config);
@@ -334,8 +331,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_with_custom_provider() {
-        let parser = ModelProviderParser::default().with_provider::<OllamaProvider>("custom");
+    async fn test_with_generic_provider() {
+        let parser = ModelProviderParser::new(HashMap::new()).with_generic_provider(&generic::OLLAMA);
 
         let model = LlmModel::Ollama("test-model".to_string());
         let result = parser.create_provider(&model).await;

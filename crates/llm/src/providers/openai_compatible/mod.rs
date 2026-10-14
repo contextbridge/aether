@@ -4,17 +4,31 @@ pub mod config;
 pub mod streaming;
 pub mod types;
 
-use async_openai::types::chat::ChatCompletionStreamOptions;
+use async_openai::types::chat::{ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionTools, FunctionObject};
 use schemars::Schema;
 use utils::ReasoningEffort;
 
-use crate::providers::openai::mappers::map_tools;
-use crate::{Context, LlmError};
+use crate::{Context, LlmError, ToolDefinition};
 use types::CompatibleChatRequest;
 
 pub use config::AetherOpenAiConfig;
 pub use streaming::{create_custom_stream_generic, process_compatible_stream};
 pub use types::ChatCompletionStreamResponse;
+
+#[derive(Debug, Clone, Copy)]
+pub struct ChatRequestPolicy {
+    pub tool_schema_transform: Option<fn(&mut Schema)>,
+    pub prompt_cache_key: PromptCacheKeySource,
+    pub tool_call_reasoning_placeholder: bool,
+}
+
+impl ChatRequestPolicy {
+    pub const DEFAULT: Self = Self {
+        tool_schema_transform: None,
+        prompt_cache_key: PromptCacheKeySource::Omit,
+        tool_call_reasoning_placeholder: true,
+    };
+}
 
 /// Selects what `prompt_cache_key` is sent to a LLM provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,11 +66,11 @@ pub(crate) fn reasoning_effort_param(effort: ReasoningEffort) -> Option<&'static
 pub(crate) fn build_chat_request(
     model: &str,
     context: &Context,
-    tool_schema_transform: Option<fn(&mut Schema)>,
+    policy: &ChatRequestPolicy,
 ) -> Result<CompatibleChatRequest, LlmError> {
-    let messages = types::map_messages(context.messages())?;
+    let messages = types::map_messages(context.messages(), policy.tool_call_reasoning_placeholder)?;
     let tools =
-        if context.tools().is_empty() { None } else { Some(map_tools(context.tools(), tool_schema_transform)?) };
+        if context.tools().is_empty() { None } else { Some(map_tools(context.tools(), policy.tool_schema_transform)?) };
     let settings = context.model_settings();
 
     Ok(CompatibleChatRequest {
@@ -69,6 +83,54 @@ pub(crate) fn build_chat_request(
         temperature: settings.temperature,
         top_p: settings.top_p,
         max_tokens: settings.max_tokens,
-        prompt_cache_key: None,
+        prompt_cache_key: policy.prompt_cache_key.resolve(context).map(String::from),
     })
+}
+
+fn map_tools(
+    tools: &[ToolDefinition],
+    tool_schema_transform: Option<fn(&mut Schema)>,
+) -> Result<Vec<ChatCompletionTools>, LlmError> {
+    tools
+        .iter()
+        .map(|tool| {
+            Ok(ChatCompletionTools::Function(ChatCompletionTool {
+                function: FunctionObject {
+                    name: tool.name.clone(),
+                    description: Some(tool.description.clone()),
+                    parameters: Some(tool.parameters_with(tool_schema_transform)?),
+                    strict: Some(false),
+                },
+            }))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ChatMessage;
+    use crate::tool_schema::normalize_for_moonshot;
+
+    #[test]
+    fn tool_schema_transform_applies_to_every_tool() {
+        let parameters = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "MySchema",
+            "type": "object",
+            "properties": { "q": { "type": "string", "format": "uri" } }
+        });
+        let context =
+            Context::new(vec![ChatMessage::user("hi")], vec![ToolDefinition::new("search", "Search", parameters)]);
+        let policy =
+            ChatRequestPolicy { tool_schema_transform: Some(normalize_for_moonshot), ..ChatRequestPolicy::DEFAULT };
+
+        let request = serde_json::to_value(build_chat_request("model", &context, &policy).unwrap()).unwrap();
+
+        let params = &request["tools"][0]["function"]["parameters"];
+        assert!(params.get("$schema").is_none());
+        assert!(params.get("title").is_none());
+        assert!(params["properties"]["q"].get("format").is_none());
+        assert_eq!(params["type"], "object");
+    }
 }
