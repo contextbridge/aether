@@ -4,7 +4,9 @@ This trait is separate from [`StreamingModelProvider`] because construction meth
 
 # Methods
 
-- **`async from_env() -> Result<Self>`** -- Create a provider from environment variables (e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). Returns [`LlmError::MissingApiKey`](crate::LlmError::MissingApiKey) if the required variable is not set.
+- **`async from_env_with_connection(connection) -> Result<Self>`** -- Create a provider from environment variables (e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) with [`ProviderConnectionConfig`](crate::ProviderConnectionConfig) overrides. Returns [`LlmError::MissingApiKey`](crate::LlmError::MissingApiKey) if the required variable is not set.
+
+- **`async from_env() -> Result<Self>`** -- `from_env_with_connection` with the default connection.
 
 - **`with_model(self, model: &str) -> Self`** -- Set or override the model for this provider. Returns `self` for builder-style chaining.
 

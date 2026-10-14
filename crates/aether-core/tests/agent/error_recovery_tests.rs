@@ -187,10 +187,6 @@ impl StreamingModelProvider for PanickingLlm {
     fn display_name(&self) -> String {
         "panicking".to_string()
     }
-
-    fn context_window(&self) -> Option<u32> {
-        None
-    }
 }
 
 async fn assert_observer_panic_isolated(observer: FakeAgentObserver) -> TestResult<()> {
