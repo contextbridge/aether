@@ -213,6 +213,14 @@ impl ChatMessage {
             ChatMessage::ToolCallResult(_) => None,
         }
     }
+
+    pub fn as_user_note(&self) -> Option<String> {
+        match self {
+            ChatMessage::Summary { content, .. } => Some(format!("[Previous conversation handoff]\n\n{content}")),
+            ChatMessage::Error { message, .. } => Some(format!("Error: {message}")),
+            _ => None,
+        }
+    }
 }
 
 fn serialize_llm_model<S: serde::Serializer>(model: &LlmModel, s: S) -> Result<S::Ok, S::Error> {

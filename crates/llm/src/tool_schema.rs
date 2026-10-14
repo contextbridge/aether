@@ -2,6 +2,22 @@ use schemars::Schema;
 use schemars::transform::{RemoveRefSiblings, Transform, transform_subschemas};
 use serde_json::{Map, Value, json};
 
+use crate::{LlmError, ToolDefinition};
+
+impl ToolDefinition {
+    pub fn parameters_with(&self, transform: Option<fn(&mut Schema)>) -> Result<Value, LlmError> {
+        let Some(transform) = transform else {
+            return Ok(self.parameters.clone());
+        };
+        let mut schema = Schema::try_from(self.parameters.clone()).map_err(|error| LlmError::ToolParameterParsing {
+            tool_name: self.name.clone(),
+            error: error.to_string(),
+        })?;
+        transform(&mut schema);
+        Ok(schema.into())
+    }
+}
+
 pub fn normalize_for_moonshot(schema: &mut Schema) {
     RemoveRefSiblings::default().transform(schema);
     MoonshotMfjsTransformer.transform(schema);

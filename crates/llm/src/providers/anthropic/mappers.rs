@@ -1,5 +1,5 @@
 use super::types::{Content, ContentBlock as AnthropicContentBlock, ImageSource, Message, Role, Tool};
-use crate::{ChatMessage, ContentBlock, LlmError, Result, ToolDefinition};
+use crate::{ChatMessage, ContentBlock, LlmError, Result, ToolDefinition, tool_result_parts};
 
 pub fn map_messages(messages: &[ChatMessage]) -> Result<(Option<String>, Vec<Message>)> {
     let mut system_prompt = None;
@@ -38,28 +38,19 @@ pub fn map_messages(messages: &[ChatMessage]) -> Result<(Option<String>, Vec<Mes
                 }
             }
             ChatMessage::ToolCallResult(result) => {
-                let (tool_use_id, content, is_error) = match result {
-                    Ok(tool_result) => (&tool_result.id, &tool_result.result, false),
-                    Err(tool_error) => (&tool_error.id, &tool_error.error, true),
-                };
+                let (tool_use_id, content, is_error) = tool_result_parts(result);
                 anthropic_messages.push(Message {
                     role: Role::User,
                     content: Content::Blocks(vec![AnthropicContentBlock::ToolResult {
-                        tool_use_id: tool_use_id.clone(),
-                        content: content.clone(),
+                        tool_use_id: tool_use_id.to_string(),
+                        content: content.to_string(),
                         is_error: Some(is_error),
                     }]),
                 });
             }
-            ChatMessage::Error { message, .. } => {
-                anthropic_messages
-                    .push(Message { role: Role::User, content: Content::Text(format!("Error: {message}")) });
-            }
-            ChatMessage::Summary { content, .. } => {
-                anthropic_messages.push(Message {
-                    role: Role::User,
-                    content: Content::Text(format!("[Previous conversation handoff]\n\n{content}")),
-                });
+            ChatMessage::Error { .. } | ChatMessage::Summary { .. } => {
+                let note = message.as_user_note();
+                anthropic_messages.extend(note.map(|note| Message { role: Role::User, content: Content::Text(note) }));
             }
         }
     }
