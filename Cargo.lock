@@ -344,6 +344,7 @@ dependencies = [
  "rmcp",
  "serde",
  "serde_json",
+ "sse-stream 0.2.6",
  "sse-stream 0.3.0",
  "thiserror 2.0.21",
  "tokio",
