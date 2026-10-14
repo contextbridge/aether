@@ -19,10 +19,7 @@ pub struct SkillListItem {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ListSkillsOutput {
-    pub status: String,
     pub skills: Vec<SkillListItem>,
-    pub count: usize,
-    pub message: String,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub meta: Option<ToolResultMeta>,

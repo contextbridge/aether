@@ -61,16 +61,13 @@ Request:
 Response:
 ```json
 {
-  "status": "success",
   "skills": [
     {
       "name": "rust",
       "description": "Rust best practices and project conventions",
       "tags": ["rust", "testing"]
     }
-  ],
-  "count": 1,
-  "message": "Found 1 skills"
+  ]
 }
 ```
 

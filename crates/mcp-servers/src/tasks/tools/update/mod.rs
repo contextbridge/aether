@@ -20,14 +20,8 @@ pub struct TaskUpdateInput {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskUpdateOutput {
-    /// Status of the operation
-    pub status: String,
-
     /// The updated task
     pub task: TaskSummary,
-
-    /// Human-readable message
-    pub message: String,
 
     /// Fields that were changed
     pub changes: Vec<String>,
@@ -85,24 +79,8 @@ pub fn execute_task_update(input: TaskUpdateInput, store: &mut TaskStore) -> Res
         vec![]
     };
 
-    let message = if changes.is_empty() {
-        format!("No changes made to task {id}")
-    } else if task.status == TaskStatus::Completed {
-        if newly_ready.is_empty() {
-            format!("Completed task '{}'", task.title)
-        } else if newly_ready.len() == 1 {
-            format!("Completed task '{}'. 1 task is now ready: {}", task.title, newly_ready[0].title)
-        } else {
-            format!("Completed task '{}'. {} tasks are now ready", task.title, newly_ready.len())
-        }
-    } else {
-        format!("Updated {} on task {}", changes.join(", "), id)
-    };
-
     Ok(TaskUpdateOutput {
-        status: "success".to_string(),
         task: TaskSummary::from(&task),
-        message,
         changes,
         newly_ready,
         meta: Some(task_result_meta(store, &task.title)),
@@ -130,7 +108,6 @@ mod tests {
 
         let output = execute_task_update(input, tasks.store_mut()).unwrap();
 
-        assert_eq!(output.status, "success");
         assert_eq!(output.task.title, "Updated title");
         assert_eq!(output.changes, vec!["title"]);
     }
@@ -216,7 +193,6 @@ mod tests {
         let output = execute_task_update(input, tasks.store_mut()).unwrap();
 
         assert_eq!(output.task.status, TaskStatus::Completed);
-        assert!(output.message.contains("Completed task"));
     }
 
     #[test]
@@ -245,7 +221,6 @@ mod tests {
 
         assert_eq!(output.newly_ready.len(), 1);
         assert_eq!(output.newly_ready[0].id, sub2.id.to_string());
-        assert!(output.message.contains("1 task is now ready"));
     }
 
     #[test]
