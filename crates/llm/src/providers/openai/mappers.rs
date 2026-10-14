@@ -9,7 +9,7 @@ use async_openai::types::chat::{
 };
 use schemars::Schema;
 
-use crate::{ChatMessage, ContentBlock, LlmError, Result, ToolDefinition};
+use crate::{ChatMessage, ContentBlock, LlmError, Result, ToolDefinition, tool_result_parts};
 
 fn map_message(msg: ChatMessage) -> Result<Option<ChatCompletionRequestMessage>> {
     match msg {
@@ -49,36 +49,20 @@ fn map_message(msg: ChatMessage) -> Result<Option<ChatCompletionRequestMessage>>
             })))
         }
         ChatMessage::ToolCallResult(result) => {
-            let (content, id) = match result {
-                Ok(r) => (r.result, r.id),
-                Err(e) => (e.error, e.id),
-            };
+            let (id, content, _) = tool_result_parts(&result);
             Ok(Some(ChatCompletionRequestMessage::Tool(ChatCompletionRequestToolMessage {
-                content: ChatCompletionRequestToolMessageContent::Text(content),
-                tool_call_id: id,
+                content: ChatCompletionRequestToolMessageContent::Text(content.to_string()),
+                tool_call_id: id.to_string(),
             })))
         }
-        ChatMessage::Summary { content, .. } => {
-            Ok(Some(ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
-                content: format!("[Previous conversation handoff]\n\n{content}").into(),
-                name: None,
-            })))
-        }
-        ChatMessage::Error { .. } => Ok(None),
+        ChatMessage::Summary { .. } | ChatMessage::Error { .. } => Ok(msg.as_user_note().map(|note| {
+            ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage { content: note.into(), name: None })
+        })),
     }
 }
 
 pub fn map_messages(messages: &[ChatMessage]) -> Result<Vec<ChatCompletionRequestMessage>> {
-    messages
-        .iter()
-        .cloned()
-        .map(map_message)
-        .filter_map(|result| match result {
-            Ok(Some(message)) => Some(Ok(message)),
-            Ok(None) => None,
-            Err(error) => Some(Err(error)),
-        })
-        .collect()
+    messages.iter().cloned().map(map_message).filter_map(Result::transpose).collect()
 }
 
 pub fn map_tools(
@@ -133,18 +117,11 @@ fn tool_definition_to_openai(
     tool: &ToolDefinition,
     tool_schema_transform: Option<fn(&mut Schema)>,
 ) -> Result<ChatCompletionTools> {
-    let mut schema = Schema::try_from(tool.parameters.clone())
-        .map_err(|error| LlmError::ToolParameterParsing { tool_name: tool.name.clone(), error: error.to_string() })?;
-
-    if let Some(transform) = tool_schema_transform {
-        transform(&mut schema);
-    }
-
     Ok(ChatCompletionTools::Function(ChatCompletionTool {
         function: FunctionObject {
             name: tool.name.clone(),
             description: Some(tool.description.clone()),
-            parameters: Some(schema.into()),
+            parameters: Some(tool.parameters_with(tool_schema_transform)?),
             strict: Some(false),
         },
     }))

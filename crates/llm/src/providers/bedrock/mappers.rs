@@ -9,7 +9,9 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::Value;
 use std::{collections::HashMap, fmt::Display, result};
 
-use crate::{ChatMessage, ContentBlock, LlmError, Result, ToolCallError, ToolCallResult, ToolDefinition};
+use crate::{
+    ChatMessage, ContentBlock, LlmError, Result, ToolCallError, ToolCallResult, ToolDefinition, tool_result_parts,
+};
 
 fn bedrock_err(e: impl Display) -> LlmError {
     LlmError::ProviderRequest(e.to_string())
@@ -44,14 +46,11 @@ pub fn map_messages(
                 bedrock_messages.push(map_assistant_message(content, tool_calls)?);
             }
 
-            ChatMessage::Error { message, .. } => {
+            ChatMessage::Error { .. } | ChatMessage::Summary { .. } => {
                 flush_tool_results(&mut pending_tool_results, &mut bedrock_messages)?;
-                bedrock_messages.push(build_user_message(&format!("Error: {message}"))?);
-            }
-
-            ChatMessage::Summary { content, .. } => {
-                flush_tool_results(&mut pending_tool_results, &mut bedrock_messages)?;
-                bedrock_messages.push(build_user_message(&format!("[Previous conversation handoff]\n\n{content}"))?);
+                if let Some(note) = message.as_user_note() {
+                    bedrock_messages.push(build_user_message(&note)?);
+                }
             }
         }
     }
@@ -193,14 +192,12 @@ fn flush_tool_results(pending_tool_results: &mut Vec<ToolResultBlock>, messages:
 }
 
 fn build_tool_result_block(result: &result::Result<ToolCallResult, ToolCallError>) -> Result<ToolResultBlock> {
-    let (id, content_text, status) = match result {
-        Ok(tool_result) => (&tool_result.id, &tool_result.result, ToolResultStatus::Success),
-        Err(tool_error) => (&tool_error.id, &tool_error.error, ToolResultStatus::Error),
-    };
+    let (id, content_text, is_error) = tool_result_parts(result);
+    let status = if is_error { ToolResultStatus::Error } else { ToolResultStatus::Success };
 
     ToolResultBlock::builder()
         .tool_use_id(id)
-        .content(ToolResultContentBlock::Text(content_text.clone()))
+        .content(ToolResultContentBlock::Text(content_text.to_string()))
         .status(status)
         .build()
         .map_err(bedrock_err)

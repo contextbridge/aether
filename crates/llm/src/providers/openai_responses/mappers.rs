@@ -8,10 +8,11 @@ use async_openai::types::responses::{
 use schemars::Schema;
 
 use crate::catalog::Provider;
-use crate::providers::openai_compatible::PromptCacheKeySource;
+use crate::providers::openai_compatible::{PromptCacheKeySource, reasoning_effort_param};
 use crate::tool_schema::normalize_for_xiaomi;
 use crate::{
     ChatMessage, ContentBlock, Context, LlmError, LlmModel, ReasoningEffort, Result, ToolCallRequest, ToolDefinition,
+    tool_result_parts,
 };
 
 /// The per-provider decisions that shape an otherwise identical Responses request.
@@ -138,25 +139,17 @@ pub(crate) fn build_wire_request(
     context: &Context,
     policy: &ResponsesRequestPolicy,
 ) -> Result<serde_json::Value> {
-    let effort = policy.effort(context);
+    let wire_effort = policy.effort(context).and_then(|effort| match effort {
+        ReasoningEffort::Disabled if policy.provider == Provider::Codex => Some(effort.as_str()),
+        effort => reasoning_effort_param(effort),
+    });
     let mut body = serde_json::to_value(build_typed_request(model, context, policy)?)?;
 
     // async-openai's `ReasoningEffort` cannot express `max`, so the effort is
     // written onto the serialized body instead of the typed request. Safe because
     // `build_typed_request` emits `reasoning` whenever `policy.effort` is set.
-    if let Some(effort) = effort {
-        let wire = match effort {
-            ReasoningEffort::Default => return Ok(body),
-            ReasoningEffort::Disabled if policy.provider == Provider::Codex => "disabled",
-            ReasoningEffort::Disabled => "none",
-            ReasoningEffort::Minimal => "minimal",
-            ReasoningEffort::Low => "low",
-            ReasoningEffort::Medium => "medium",
-            ReasoningEffort::High => "high",
-            ReasoningEffort::Xhigh => "xhigh",
-            ReasoningEffort::Max => "max",
-        };
-        body["reasoning"]["effort"] = wire.into();
+    if let Some(wire_effort) = wire_effort {
+        body["reasoning"]["effort"] = wire_effort.into();
     }
     Ok(body)
 }
@@ -264,35 +257,21 @@ fn map_messages(
                     items.push(InputItem::Item(Item::FunctionCall(tc.into())));
                 }
             }
-            ChatMessage::ToolCallResult(result) => match result {
-                Ok(r) => {
-                    items.push(InputItem::Item(Item::FunctionCallOutput(FunctionCallOutputItemParam {
-                        call_id: Some(r.id.clone()),
-                        output: FunctionCallOutput::Text(r.result.clone()),
-                        id: None,
-                        status: None,
-                        name: None,
-                        namespace: None,
-                        caller: None,
-                    })));
-                }
-                Err(e) => {
-                    items.push(InputItem::Item(Item::FunctionCallOutput(FunctionCallOutputItemParam {
-                        call_id: Some(e.id.clone()),
-                        output: FunctionCallOutput::Text(format!("Error: {}", e.error)),
-                        id: None,
-                        status: None,
-                        name: None,
-                        namespace: None,
-                        caller: None,
-                    })));
-                }
-            },
-            ChatMessage::Error { message, .. } => {
-                items.push(easy_message(Role::User, format!("[Error: {message}]")));
+            ChatMessage::ToolCallResult(result) => {
+                let (call_id, content, is_error) = tool_result_parts(result);
+                let output = if is_error { format!("Error: {content}") } else { content.to_string() };
+                items.push(InputItem::Item(Item::FunctionCallOutput(FunctionCallOutputItemParam {
+                    call_id: Some(call_id.to_string()),
+                    output: FunctionCallOutput::Text(output),
+                    id: None,
+                    status: None,
+                    name: None,
+                    namespace: None,
+                    caller: None,
+                })));
             }
-            ChatMessage::Summary { content, .. } => {
-                items.push(easy_message(Role::User, format!("[Summary of previous conversation]\n{content}")));
+            ChatMessage::Error { .. } | ChatMessage::Summary { .. } => {
+                items.extend(msg.as_user_note().map(|note| easy_message(Role::User, note)));
             }
         }
     }
@@ -305,20 +284,10 @@ fn map_tools(tools: &[ToolDefinition], policy: &ResponsesRequestPolicy) -> Resul
     tools
         .iter()
         .map(|tool| {
-            let parameters = match policy.tool_schema_transform {
-                Some(transform) => {
-                    let mut schema = Schema::try_from(tool.parameters.clone()).map_err(|error| {
-                        LlmError::ToolParameterParsing { tool_name: tool.name.clone(), error: error.to_string() }
-                    })?;
-                    transform(&mut schema);
-                    schema.into()
-                }
-                None => tool.parameters.clone(),
-            };
             Ok(Tool::Function(FunctionTool {
                 name: tool.name.clone(),
                 description: Some(tool.description.clone()),
-                parameters: Some(parameters),
+                parameters: Some(tool.parameters_with(policy.tool_schema_transform)?),
                 strict: policy.tool_strict,
                 defer_loading: None,
                 r#async: None,
@@ -586,7 +555,7 @@ mod tests {
         if let InputItem::EasyMessage(msg) = &items[0] {
             assert_eq!(msg.role, Role::User);
             if let EasyInputContent::Text(text) = &msg.content {
-                assert!(text.contains("Summary"));
+                assert!(text.starts_with("[Previous conversation handoff]"));
                 assert!(text.contains("Rust"));
             } else {
                 panic!("Expected Text content");

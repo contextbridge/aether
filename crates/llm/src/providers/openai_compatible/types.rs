@@ -4,7 +4,7 @@ use async_openai::types::chat::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{ChatMessage, ContentBlock, TokenUsage};
+use crate::{ChatMessage, ContentBlock, TokenUsage, tool_result_parts};
 
 /// Unified custom types for OpenAI-compatible APIs that deviate slightly from the standard.
 /// This handles quirks from providers like `OpenRouter`, Z.ai, and potentially others.
@@ -130,18 +130,16 @@ pub(crate) fn map_messages(messages: &[ChatMessage]) -> crate::Result<Vec<Compat
 
                 Some(CompatibleChatMessage::Assistant { content: content.clone(), reasoning_content, tool_calls })
             }
-            ChatMessage::ToolCallResult(r) => {
-                let (content, tool_call_id) = match r {
-                    Ok(tool_result) => (tool_result.result.clone(), tool_result.id.clone()),
-                    Err(tool_error) => (tool_error.error.clone(), tool_error.id.clone()),
-                };
-
-                Some(CompatibleChatMessage::Tool { content, tool_call_id })
+            ChatMessage::ToolCallResult(result) => {
+                let (tool_call_id, content, _) = tool_result_parts(result);
+                Some(CompatibleChatMessage::Tool {
+                    content: content.to_string(),
+                    tool_call_id: tool_call_id.to_string(),
+                })
             }
-            ChatMessage::Summary { content, .. } => Some(CompatibleChatMessage::User {
-                content: UserContent::Text(format!("[Previous conversation handoff]\n\n{content}")),
-            }),
-            ChatMessage::Error { .. } => None,
+            ChatMessage::Summary { .. } | ChatMessage::Error { .. } => {
+                message.as_user_note().map(|note| CompatibleChatMessage::User { content: UserContent::Text(note) })
+            }
         };
 
         if let Some(msg) = mapped {
@@ -223,9 +221,13 @@ pub struct CompletionTokensDetails {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Usage {
+    #[serde(alias = "input_tokens")]
     pub prompt_tokens: i64,
+    #[serde(alias = "output_tokens")]
     pub completion_tokens: i64,
+    #[serde(alias = "input_tokens_details")]
     pub prompt_tokens_details: Option<PromptTokensDetails>,
+    #[serde(alias = "output_tokens_details")]
     pub completion_tokens_details: Option<CompletionTokensDetails>,
 }
 
@@ -287,6 +289,33 @@ mod tests {
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["messages"][1]["role"], "assistant");
         assert_eq!(json["messages"][1]["reasoning_content"], "trace chunk");
+    }
+
+    #[test]
+    fn test_build_request_sends_errors_and_summaries_as_user_notes() {
+        let context = Context::new(
+            vec![
+                ChatMessage::Error {
+                    message_id: MessageId::new(),
+                    message: "boom".to_string(),
+                    timestamp: IsoString::now(),
+                },
+                ChatMessage::Summary {
+                    message_id: MessageId::new(),
+                    content: "earlier work".to_string(),
+                    timestamp: IsoString::now(),
+                    messages_compacted: 2,
+                },
+            ],
+            vec![],
+        );
+
+        let json = serde_json::to_value(build_chat_request("test-model", &context, None).unwrap()).unwrap();
+        assert_eq!(json["messages"][0], serde_json::json!({ "role": "user", "content": "Error: boom" }));
+        assert_eq!(
+            json["messages"][1],
+            serde_json::json!({ "role": "user", "content": "[Previous conversation handoff]\n\nearlier work" })
+        );
     }
 
     #[test]

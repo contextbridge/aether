@@ -37,6 +37,14 @@ impl PromptCacheKeySource {
     }
 }
 
+pub(crate) fn reasoning_effort_param(effort: ReasoningEffort) -> Option<&'static str> {
+    match effort {
+        ReasoningEffort::Default => None,
+        ReasoningEffort::Disabled => Some("none"),
+        effort => Some(effort.as_str()),
+    }
+}
+
 /// Build a chat completion request from a context
 ///
 /// This is shared logic for OpenAI-compatible providers like `OpenRouter` and Z.ai.
@@ -57,16 +65,7 @@ pub(crate) fn build_chat_request(
         stream: Some(true),
         tools,
         stream_options: Some(ChatCompletionStreamOptions { include_usage: Some(true), include_obfuscation: None }),
-        reasoning_effort: match context.reasoning_effort() {
-            ReasoningEffort::Default => None,
-            ReasoningEffort::Disabled => Some("none"),
-            ReasoningEffort::Minimal => Some("minimal"),
-            ReasoningEffort::Low => Some("low"),
-            ReasoningEffort::Medium => Some("medium"),
-            ReasoningEffort::High => Some("high"),
-            ReasoningEffort::Xhigh => Some("xhigh"),
-            ReasoningEffort::Max => Some("max"),
-        },
+        reasoning_effort: reasoning_effort_param(context.reasoning_effort()),
         temperature: settings.temperature,
         top_p: settings.top_p,
         max_tokens: settings.max_tokens,

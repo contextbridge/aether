@@ -1,4 +1,4 @@
-use crate::{TokenUsage, Tokens};
+use crate::TokenUsage;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -130,17 +130,12 @@ pub struct Usage {
 
 impl From<&Usage> for TokenUsage {
     fn from(usage: &Usage) -> Self {
-        let cache_read = usage.cache_read_input_tokens.map(Tokens::from);
-        let cache_creation = usage.cache_creation_input_tokens.map(Tokens::from);
-        // Anthropic's input_tokens excludes cached tokens; TokenUsage counts the whole prompt.
-        let cached = cache_read.unwrap_or_default() + cache_creation.unwrap_or_default();
-        TokenUsage {
-            input_tokens: Tokens::from(usage.input_tokens) + cached,
-            output_tokens: usage.output_tokens.into(),
-            cache_read_tokens: cache_read,
-            cache_creation_tokens: cache_creation,
-            ..TokenUsage::default()
-        }
+        TokenUsage::from_uncached_input(
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cache_read_input_tokens,
+            usage.cache_creation_input_tokens,
+        )
     }
 }
 

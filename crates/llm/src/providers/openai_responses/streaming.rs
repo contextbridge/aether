@@ -1,41 +1,10 @@
-use async_openai::types::responses::{OutputItem, ReasoningItem, ResponseUsage, Status};
-use serde::{Deserialize, Deserializer, de::Error as _};
+use async_openai::types::responses::{OutputItem, ReasoningItem, Status};
+use serde::Deserialize;
 use tracing::debug;
 
+use crate::providers::openai_compatible::types::Usage;
 use crate::providers::response_stream::StreamAssembler;
-use crate::{LlmResponse, ProviderError, ProviderErrorKind, Result, StopReason, TokenUsage};
-
-#[derive(Debug)]
-pub struct ResponsesUsage {
-    usage: ResponseUsage,
-    cache_write_tokens: Option<u32>,
-}
-
-impl<'de> Deserialize<'de> for ResponsesUsage {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        let extension = serde_json::from_value::<ResponsesUsageExtension>(value.clone()).map_err(D::Error::custom)?;
-        let usage = serde_json::from_value(value).map_err(D::Error::custom)?;
-
-        Ok(Self { usage, cache_write_tokens: extension.input_tokens_details.cache_write_tokens })
-    }
-}
-
-impl From<ResponsesUsage> for TokenUsage {
-    fn from(usage: ResponsesUsage) -> Self {
-        TokenUsage {
-            input_tokens: usage.usage.input_tokens.into(),
-            output_tokens: usage.usage.output_tokens.into(),
-            cache_read_tokens: Some(usage.usage.input_tokens_details.cached_tokens.into()),
-            cache_creation_tokens: usage.cache_write_tokens.map(Into::into),
-            reasoning_tokens: Some(usage.usage.output_tokens_details.reasoning_tokens.into()),
-            ..TokenUsage::default()
-        }
-    }
-}
+use crate::{LlmResponse, ProviderError, ProviderErrorKind, Result, StopReason};
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
@@ -110,7 +79,7 @@ pub struct ResponsesCompletedEvent {
 #[derive(Debug, Deserialize)]
 pub struct ResponsesCompleted {
     #[serde(default)]
-    pub usage: Option<ResponsesUsage>,
+    pub usage: Option<Usage>,
     #[serde(default)]
     pub status: Option<Status>,
 }
@@ -139,18 +108,6 @@ pub(crate) fn decode_responses() -> impl FnMut(String, &mut StreamAssembler<u32>
         }
         decode_event(event, turn)
     }
-}
-
-#[derive(Deserialize, Default)]
-struct ResponsesUsageExtension {
-    #[serde(default)]
-    input_tokens_details: ResponsesInputTokenDetailsExtension,
-}
-
-#[derive(Deserialize, Default)]
-struct ResponsesInputTokenDetailsExtension {
-    #[serde(default)]
-    cache_write_tokens: Option<u32>,
 }
 
 fn map_responses_error(code: Option<String>, message: String, fallback: ProviderErrorKind) -> ProviderError {
@@ -220,7 +177,7 @@ mod tests {
     use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
     use crate::providers::response_stream::{OpenedStream, response_stream};
     use crate::testing::llm_response;
-    use crate::{LlmError, LlmResponseStream};
+    use crate::{LlmError, LlmResponseStream, TokenUsage};
     use futures::{FutureExt, Stream, StreamExt, stream};
     use serde_json::{Value, json};
     use std::future::ready;
