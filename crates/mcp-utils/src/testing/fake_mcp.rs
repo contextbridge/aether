@@ -4,13 +4,14 @@ use rmcp::{
         CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ClientCapabilities,
         ContentBlock, CreateTaskResult, DetailedTask, DiscoverRequestMethod, DiscoverResult, ElicitResult,
         GetPromptRequestParams, GetPromptResponse, GetPromptResult, GetTaskParams, GetTaskResult, Implementation,
-        ListPromptsResult, ListToolsResult, PaginatedRequestParams, ProgressNotificationParam, ProgressToken, Prompt,
-        PromptMessage, PromptsCapability, ProtocolVersion, ResultType, Role, ServerCapabilities, ServerConfig,
-        TaskPayload, Tool, ToolAnnotations, UpdateTaskParams,
+        ListPromptsResult, ListToolsResult, NumberOrString, PaginatedRequestParams, ProgressNotificationParam,
+        ProgressToken, Prompt, PromptMessage, PromptsCapability, ProtocolVersion, ResultType, Role, ServerCapabilities,
+        ServerConfig, TaskPayload, Tool, ToolAnnotations, UpdateTaskParams,
     },
     service::RequestContext,
 };
 use serde_json::{Value, json};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::future::Future;
 use std::sync::{Arc, Mutex, Weak};
@@ -58,9 +59,9 @@ pub struct FakeTool {
 
 #[derive(Clone)]
 pub struct FakeToolResponse {
-    response: CallToolResponse,
+    pub(super) response: CallToolResponse,
     gate: Option<Gate>,
-    progress: Vec<FakeProgress>,
+    progress: Vec<ProgressNotificationParam>,
 }
 
 impl FakeMcpServer {
@@ -127,6 +128,11 @@ impl FakeMcpServer {
         self
     }
 
+    pub fn with_protocol_versions(self, versions: impl Into<Vec<ProtocolVersion>>) -> Self {
+        self.state.lock().protocol_versions = Some(versions.into());
+        self
+    }
+
     pub fn state(&self) -> FakeMcpState {
         self.state.clone()
     }
@@ -159,6 +165,10 @@ impl FakeMcpState {
 
     pub fn client_capabilities(&self) -> Option<ClientCapabilities> {
         self.lock().client_capabilities.clone()
+    }
+
+    pub fn protocol_version(&self) -> Option<ProtocolVersion> {
+        self.lock().protocol_version.clone()
     }
 
     pub fn script_task(&self, task_id: impl Into<String>, states: impl IntoIterator<Item = DetailedTask>) {
@@ -206,15 +216,16 @@ impl FakeMcpState {
         }
     }
 
-    fn list_tools(&self, peer: Peer<RoleServer>) -> Result<Vec<Tool>, McpError> {
+    fn list_tools(&self, context: &RequestContext<RoleServer>) -> Result<Vec<Tool>, McpError> {
         self.record(|inner| {
             inner.tool_list_requests += 1;
+            inner.protocol_version = context.protocol_version();
             if inner.tool_list_failures > 0 {
                 inner.tool_list_failures -= 1;
                 return Err(McpError::internal_error("scripted tools/list failure", None));
             }
             if inner.client.as_ref().is_none_or(Peer::is_transport_closed) {
-                inner.client = Some(peer);
+                inner.client = Some(context.peer.clone());
             }
             Ok(inner.tools.values().map(|tool| tool.definition.clone()).collect())
         })
@@ -357,12 +368,14 @@ impl FakeToolResponse {
     }
 
     pub fn progress(mut self, progress: f64, total: Option<f64>) -> Self {
-        self.progress.push(FakeProgress { progress, total, message: None });
+        let mut notification = progress_notification(progress);
+        notification.total = total;
+        self.progress.push(notification);
         self
     }
 
     pub fn progress_message(mut self, progress: f64, message: impl Into<String>) -> Self {
-        self.progress.push(FakeProgress { progress, total: None, message: Some(message.into()) });
+        self.progress.push(progress_notification(progress).with_message(message));
         self
     }
 }
@@ -389,6 +402,10 @@ impl ServerHandler for FakeMcpServer {
             ServerHandler::supported_protocol_versions(self).into_owned(),
             ServerHandler::get_info(self),
         )))
+    }
+
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        self.state.lock().protocol_versions.clone().map_or(Cow::Borrowed(ProtocolVersion::KNOWN_VERSIONS), Cow::Owned)
     }
 
     fn get_info(&self) -> ServerConfig {
@@ -455,7 +472,7 @@ impl ServerHandler for FakeMcpServer {
         }
         let supports_cache_hints =
             context.protocol_version().is_some_and(|version| version >= ProtocolVersion::V_2026_07_28);
-        self.state.list_tools(context.peer).map(|tools| ListToolsResult {
+        self.state.list_tools(&context).map(|tools| ListToolsResult {
             result_type: Some(ResultType::COMPLETE),
             tools,
             meta: None,
@@ -515,7 +532,7 @@ impl ServerHandler for FakeMcpServer {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
         let response = self.state.response_for(&request, context.meta.0.0.clone());
-        let Some(response) = response else {
+        let Some(mut response) = response else {
             return Err(McpError::invalid_params(format!("unknown tool: {}", request.name), None));
         };
 
@@ -523,11 +540,11 @@ impl ServerHandler for FakeMcpServer {
             gate.pass().await;
         }
         if let Some(token) = context.meta.get_progress_token() {
-            let notifications: Vec<_> =
-                response.progress.iter().map(|progress| progress.notification(&token)).collect();
+            let notifications = std::mem::take(&mut response.progress);
             let peer = context.peer.clone();
             let notify = async move {
-                for notification in notifications {
+                for mut notification in notifications {
+                    notification.progress_token = token.clone();
                     let _ = peer.notify_progress(notification).await;
                 }
             };
@@ -565,27 +582,13 @@ struct FakeMcpStateInner {
     tool_list_requests: usize,
     tool_list_failures: usize,
     legacy_protocol: bool,
+    protocol_versions: Option<Vec<ProtocolVersion>>,
+    protocol_version: Option<ProtocolVersion>,
     client: Option<Peer<RoleServer>>,
 }
 
-#[derive(Clone)]
-struct FakeProgress {
-    progress: f64,
-    total: Option<f64>,
-    message: Option<String>,
-}
-
-impl FakeProgress {
-    fn notification(&self, token: &ProgressToken) -> ProgressNotificationParam {
-        let mut notification = ProgressNotificationParam::new(token.clone(), self.progress);
-        if let Some(total) = self.total {
-            notification = notification.with_total(total);
-        }
-        if let Some(message) = &self.message {
-            notification = notification.with_message(message.clone());
-        }
-        notification
-    }
+fn progress_notification(progress: f64) -> ProgressNotificationParam {
+    ProgressNotificationParam::new(ProgressToken(NumberOrString::Number(0)), progress)
 }
 
 fn add_numbers() -> FakeTool {

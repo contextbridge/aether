@@ -132,37 +132,24 @@ mod tests {
 
     use super::*;
     use crate::OAuthCredential;
+    use crate::credential::assert_storage_contract;
 
     /// `N = 2^10`, fast enough that the KDF stops dominating the suite.
     const TEST_WORK_FACTOR: u8 = 10;
 
     #[tokio::test]
-    async fn save_then_load_round_trips() {
-        let store = temp_store("correct-passphrase");
-        let cred = test_credential();
-
-        store.save_credential("server-1", cred.clone()).await.unwrap();
-        let loaded = store.load_credential("server-1").await.unwrap().unwrap();
-
-        assert_eq!(loaded.client_id, "client_1");
-        assert_eq!(loaded.access_token, "tok_abc");
-        assert_eq!(loaded.refresh_token.as_deref(), Some("ref_xyz"));
+    async fn satisfies_the_storage_contract() {
+        assert_storage_contract(&temp_store("pass")).await;
     }
 
     #[tokio::test]
-    async fn load_returns_none_for_missing_key() {
-        let store = temp_store("pass");
-        assert!(store.load_credential("nonexistent").await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn delete_removes_credential() {
+    async fn credentials_persist_across_instances() {
         let store = temp_store("pass");
         store.save_credential("server-1", test_credential()).await.unwrap();
-        assert!(store.contains("server-1"));
 
-        store.delete("server-1").await.unwrap();
-        assert!(!store.contains("server-1"));
+        let reopened = EncryptedFileOAuthCredentialStorage::new(store.path.clone(), "pass".to_string());
+
+        assert_eq!(reopened.load_credential("server-1").await.unwrap(), Some(test_credential()));
     }
 
     #[tokio::test]
@@ -175,56 +162,6 @@ mod tests {
         let err = wrong_store.load_credential("server-1").await.unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("Decryption failed"), "Expected decryption error, got: {msg}");
-    }
-
-    #[tokio::test]
-    async fn multiple_credentials_are_isolated() {
-        let store = temp_store("pass");
-
-        let cred_a = OAuthCredential {
-            client_id: "a".to_string(),
-            access_token: "token_a".to_string(),
-            refresh_token: None,
-            expires_at: None,
-        };
-        let cred_b = OAuthCredential {
-            client_id: "b".to_string(),
-            access_token: "token_b".to_string(),
-            refresh_token: None,
-            expires_at: None,
-        };
-
-        store.save_credential("server-a", cred_a).await.unwrap();
-        store.save_credential("server-b", cred_b).await.unwrap();
-
-        let loaded_a = store.load_credential("server-a").await.unwrap().unwrap();
-        let loaded_b = store.load_credential("server-b").await.unwrap().unwrap();
-
-        assert_eq!(loaded_a.access_token, "token_a");
-        assert_eq!(loaded_b.access_token, "token_b");
-    }
-
-    #[tokio::test]
-    async fn save_overwrites_existing_credential() {
-        let store = temp_store("pass");
-        let cred_v1 = OAuthCredential {
-            client_id: "c".to_string(),
-            access_token: "v1".to_string(),
-            refresh_token: None,
-            expires_at: None,
-        };
-        let cred_v2 = OAuthCredential {
-            client_id: "c".to_string(),
-            access_token: "v2".to_string(),
-            refresh_token: None,
-            expires_at: None,
-        };
-
-        store.save_credential("server", cred_v1).await.unwrap();
-        store.save_credential("server", cred_v2).await.unwrap();
-
-        let loaded = store.load_credential("server").await.unwrap().unwrap();
-        assert_eq!(loaded.access_token, "v2");
     }
 
     #[tokio::test]
@@ -246,23 +183,7 @@ mod tests {
 
         write(&store.path, ciphertext).unwrap();
         let credential = store.load_credential("codex").await.unwrap().expect("existing credential");
-        assert_eq!(credential.access_token, "tok_abc");
-    }
-
-    #[tokio::test]
-    async fn secrets_round_trip_through_encrypted_file() {
-        let store = temp_store("pass");
-        let secret = serde_json::json!({"client_id": "c", "granted_scopes": ["read"]});
-
-        store.save("mcp:slack", secret.clone()).await.unwrap();
-        store.save_credential("slack", test_credential()).await.unwrap();
-        let reopened = EncryptedFileOAuthCredentialStorage::new(store.path.clone(), "pass".to_string())
-            .with_scrypt_work_factor(TEST_WORK_FACTOR);
-        assert_eq!(reopened.load("mcp:slack").await.unwrap(), Some(secret));
-        assert!(reopened.load_credential("slack").await.unwrap().is_some());
-
-        reopened.delete("mcp:slack").await.unwrap();
-        assert!(store.load("mcp:slack").await.unwrap().is_none());
+        assert_eq!(credential, test_credential());
     }
 
     #[tokio::test]
@@ -273,22 +194,8 @@ mod tests {
         assert!(store.load_credential("server-1").await.unwrap().is_some());
     }
 
-    #[test]
-    fn encrypt_decrypt_round_trips() {
-        let plaintext = b"hello, world!";
-        let ciphertext =
-            EncryptedFileOAuthCredentialStorage::encrypt(plaintext, "passphrase", Some(TEST_WORK_FACTOR)).unwrap();
-        let decrypted = EncryptedFileOAuthCredentialStorage::decrypt(&ciphertext, "passphrase").unwrap();
-        assert_eq!(decrypted, plaintext);
-    }
-
     fn test_credential() -> OAuthCredential {
-        OAuthCredential {
-            client_id: "client_1".to_string(),
-            access_token: "tok_abc".to_string(),
-            refresh_token: Some("ref_xyz".to_string()),
-            expires_at: Some(9_999_999_999_999),
-        }
+        OAuthCredential::new("client_1", "tok_abc").refresh_token("ref_xyz").expires_at(9_999_999_999_999)
     }
 
     fn temp_store(passphrase: &str) -> EncryptedFileOAuthCredentialStorage {

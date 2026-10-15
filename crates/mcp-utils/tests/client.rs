@@ -6,55 +6,40 @@ use mcp_utils::client::{
 };
 use mcp_utils::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, CustomNotification, DEFAULT_MRTR_MAX_ROUNDS, DetailedTask,
-    DiscoverResult, ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationCapability, ErrorCode, ErrorData,
-    FormElicitationCapability, Implementation, InitializeRequestParams, InitializeResult, InputRequests,
-    InputRequiredResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion, ServerCapabilities, ServerConfig,
-    ServerNotification, Task, TaskPayload, TaskStatus, Tool, UrlElicitationCapability,
+    ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationCapability, ErrorData, FormElicitationCapability,
+    InputRequests, InputRequiredResult, ProtocolVersion, ServerCapabilities, ServerConfig, ServerNotification, Task,
+    TaskPayload, TaskStatus, Tool, UrlElicitationCapability,
 };
 use mcp_utils::testing::{
     ElicitationScript, FakeMcpServer, FakeMcpState, FakeTask, FakeTool, FakeToolResponse, accept_with_name, call,
     cancelled_task, completed_task, connect, elicitation_host, failed_task, input_requests, input_required_task,
     name_input, task, url_request, working_task,
 };
-use rmcp::{
-    RoleServer, ServerHandler,
-    service::{NotificationContext, RequestContext},
-};
+use rmcp::{RoleServer, ServerHandler, service::RequestContext};
 use serde_json::{Map, json};
-use std::borrow::Cow;
-use std::future::{Ready, ready};
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 #[tokio::test]
 async fn connect_prefers_stateless_discovery_for_modern_servers() {
-    let negotiated = Negotiated::default();
-    let client = connect("versioned", ModernOnlyServer(negotiated.clone()), &ClientOptions::default()).await;
+    let server = FakeMcpServer::new().with_protocol_versions([ProtocolVersion::V_2026_07_28]);
 
-    client.list_tools().await.expect("list tools");
-
-    assert_eq!(negotiated.observed().await, ProtocolVersion::V_2026_07_28);
+    assert_eq!(negotiated_version(server).await, ProtocolVersion::V_2026_07_28);
 }
 
 #[tokio::test]
 async fn connect_selects_an_older_mutually_supported_revision() {
-    let negotiated = Negotiated::default();
-    let client = connect("versioned", June2025Server(negotiated.clone()), &ClientOptions::default()).await;
+    let server = FakeMcpServer::new().with_protocol_versions([ProtocolVersion::V_2025_06_18]);
 
-    client.list_tools().await.expect("list tools");
-
-    assert_eq!(negotiated.observed().await, ProtocolVersion::V_2025_06_18);
+    assert_eq!(negotiated_version(server).await, ProtocolVersion::V_2025_06_18);
 }
 
 #[tokio::test]
 async fn connect_falls_back_to_legacy_initialization() {
-    let negotiated = Negotiated::default();
+    let server = FakeMcpServer::new().with_legacy_protocol();
 
-    let _client = connect("versioned", LegacyOnlyServer(negotiated.clone()), &ClientOptions::default()).await;
-
-    assert_eq!(negotiated.observed().await, ProtocolVersion::V_2025_11_25);
+    assert_eq!(negotiated_version(server).await, ProtocolVersion::V_2025_11_25);
 }
 
 #[tokio::test]
@@ -642,6 +627,13 @@ async fn advertised(options: ClientOptions) -> Advertised {
     }
 }
 
+async fn negotiated_version(server: FakeMcpServer) -> ProtocolVersion {
+    let state = server.state();
+    let client = connect("versioned", server, &ClientOptions::default()).await;
+    client.list_tools().await.expect("list tools");
+    state.protocol_version().expect("tools/list carries a protocol version")
+}
+
 struct ElicitationTest {
     server: FakeMcpServer,
 }
@@ -682,107 +674,5 @@ impl ServerHandler for CompletionServer {
             CustomNotification::new("notifications/elicitation/complete", Some(json!({ "elicitationId": "oauth-1" })));
         context.peer.send_notification(ServerNotification::CustomNotification(completion)).await.ok();
         Ok(CallToolResult::success(Vec::new()).into())
-    }
-}
-
-#[derive(Clone)]
-struct Negotiated(Arc<watch::Sender<Option<ProtocolVersion>>>);
-
-impl Default for Negotiated {
-    fn default() -> Self {
-        Self(Arc::new(watch::channel(None).0))
-    }
-}
-
-impl Negotiated {
-    async fn observed(&self) -> ProtocolVersion {
-        let mut observed = self.0.subscribe();
-        observed.wait_for(Option::is_some).await.expect("recorder alive").clone().expect("checked by wait_for")
-    }
-
-    fn record(&self, version: Option<ProtocolVersion>) {
-        self.0.send_replace(version);
-    }
-
-    fn list_tools(&self, context: &RequestContext<RoleServer>) -> Ready<Result<ListToolsResult, ErrorData>> {
-        self.record(context.protocol_version());
-        ready(Ok(ListToolsResult::with_all_items(Vec::new())))
-    }
-}
-
-#[derive(Clone, Default)]
-struct ModernOnlyServer(Negotiated);
-
-impl ServerHandler for ModernOnlyServer {
-    fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("modern-only", "1.0.0"))
-            .with_protocol_version(ProtocolVersion::V_2026_07_28)
-    }
-
-    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
-        Cow::Owned(vec![ProtocolVersion::V_2026_07_28])
-    }
-
-    fn initialize(
-        &self,
-        _request: InitializeRequestParams,
-        _context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<InitializeResult, ErrorData>> + Send + '_ {
-        ready(Err(ErrorData::new(ErrorCode::METHOD_NOT_FOUND, "initialize is not supported", None)))
-    }
-
-    fn list_tools(
-        &self,
-        _request: Option<PaginatedRequestParams>,
-        context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<ListToolsResult, ErrorData>> + Send + '_ {
-        self.0.list_tools(&context)
-    }
-}
-
-#[derive(Clone, Default)]
-struct June2025Server(Negotiated);
-
-impl ServerHandler for June2025Server {
-    fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("older-revision", "1.0.0"))
-            .with_protocol_version(ProtocolVersion::V_2025_06_18)
-    }
-
-    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
-        Cow::Owned(vec![ProtocolVersion::V_2025_06_18])
-    }
-
-    fn list_tools(
-        &self,
-        _request: Option<PaginatedRequestParams>,
-        context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<ListToolsResult, ErrorData>> + Send + '_ {
-        self.0.list_tools(&context)
-    }
-}
-
-#[derive(Clone, Default)]
-struct LegacyOnlyServer(Negotiated);
-
-impl ServerHandler for LegacyOnlyServer {
-    fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("legacy", "1.0.0"))
-            .with_protocol_version(ProtocolVersion::V_2025_11_25)
-    }
-
-    fn discover(
-        &self,
-        _context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<DiscoverResult, ErrorData>> + Send + '_ {
-        ready(Err(ErrorData::new(ErrorCode::METHOD_NOT_FOUND, "server/discover is not supported", None)))
-    }
-
-    fn on_initialized(&self, context: NotificationContext<RoleServer>) -> impl Future<Output = ()> + Send + '_ {
-        self.0.record(context.peer.peer_info().map(|info| info.protocol_version.clone()));
-        ready(())
     }
 }
