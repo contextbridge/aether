@@ -540,9 +540,9 @@ dependencies = [
 
 [[package]]
 name = "agent-client-protocol"
-version = "2.2.0"
+version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13f780597b2c88ab83d02509bcc3e86366751f86fa12114005e35c55ed691763"
+checksum = "6e582d0a6aed50feeea4d4ed3c57919db2f614a5cec42cd7acd1717231fa4f2f"
 dependencies = [
  "agent-client-protocol-derive",
  "agent-client-protocol-schema",
@@ -564,9 +564,9 @@ dependencies = [
 
 [[package]]
 name = "agent-client-protocol-derive"
-version = "2.2.0"
+version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4893bfb11e0e193aa5a64611a126ee87567acb1879556519c902722899229de"
+checksum = "26b57a6a7fae5ebd4368712bfcd0a366a20e1370ac3f3fcd83379b37637501c9"
 dependencies = [
  "quote",
  "syn 3.0.6",
@@ -574,9 +574,9 @@ dependencies = [
 
 [[package]]
 name = "agent-client-protocol-schema"
-version = "1.9.1"
+version = "1.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d595a79e1665d02c91c7dd1bedd118501e75cc0a3d5b1651b5150ec4c5c1e0d"
+checksum = "7c3ffd489b0e2f96a134d7966c2f43d874d91299e951b66093b91b54b00b7f8f"
 dependencies = [
  "anyhow",
  "derive_more",
@@ -585,7 +585,6 @@ dependencies = [
  "serde_json",
  "serde_with",
  "strum",
- "tracing",
 ]
 
 [[package]]

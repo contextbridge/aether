@@ -34,7 +34,7 @@ name = "fake_agent_server"
 required-features = ["testing", "websocket"]
 
 [dependencies]
-agent-client-protocol = { workspace = true }
+agent-client-protocol = { workspace = true, features = ["schemars"] }
 clankerdiff-protocol = { workspace = true }
 futures = { workspace = true }
 tokio-util = { workspace = true }
