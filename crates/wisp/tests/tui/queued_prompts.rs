@@ -1,6 +1,5 @@
 use super::support::*;
 use std::borrow::Cow;
-use wisp::command::TerminalCommand;
 
 #[test]
 fn a_prompt_sent_during_a_turn_is_queued_until_the_agent_inserts_it() {
@@ -14,13 +13,13 @@ fn a_prompt_sent_during_a_turn_is_queued_until_the_agent_inserts_it() {
     assert!(matches!(ui.next_agent_command(), Some(AgentCommand::Prompt { text, .. }) if text == "second"));
     assert!(ui.app().composer().is_empty());
     assert_eq!(queued_texts(&ui), ["second"]);
-    assert!(ui.viewport_text().contains("queued › second"), "{}", ui.viewport_text());
+    ui.assert_viewport_contains("queued › second");
     assert_eq!(transcript(&ui), ["first", "first reply"]);
 
     ui.insert_queued_prompts();
 
     assert_eq!(queued_texts(&ui).len(), 0);
-    assert!(!ui.viewport_text().contains("queued ›"));
+    ui.assert_viewport_not_contains("queued ›");
     assert_eq!(transcript(&ui), ["first", "first reply", "second"]);
     assert!(ui.app().waiting_for_response(), "the inserted prompt joins the running turn");
 }
@@ -50,15 +49,13 @@ fn a_multi_line_queued_prompt_shows_its_first_line() {
     ui.type_text("line two");
     ui.key(key(KeyCode::Enter));
 
-    let viewport = ui.viewport_text();
-
-    assert!(viewport.contains("queued › line one …"), "{viewport}");
-    assert!(!viewport.contains("line two"), "{viewport}");
+    ui.assert_viewport_contains("queued › line one …");
+    ui.assert_viewport_not_contains("line two");
 }
 
 #[test]
 fn prompts_rejected_by_a_cancel_return_to_the_composer_in_order() {
-    let mut ui = make_app();
+    let mut ui = TestUi::new();
     ui.submit("first");
     ui.submit("second");
     ui.submit("third");
@@ -77,7 +74,7 @@ fn prompts_rejected_by_a_cancel_return_to_the_composer_in_order() {
 
 #[test]
 fn a_rejected_prompt_is_restored_after_the_draft_being_typed() {
-    let mut ui = make_app();
+    let mut ui = TestUi::new();
     ui.submit("first");
     ui.submit("second");
     ui.type_text("draft");
@@ -89,7 +86,7 @@ fn a_rejected_prompt_is_restored_after_the_draft_being_typed() {
 
 #[test]
 fn a_rejected_prompt_keeps_its_file_mentions() {
-    let mut ui = make_app_in("/workspace".into());
+    let mut ui = TestUiBuilder::new().working_dir("/workspace").build();
     ui.executor_mut().filesystem_mut().write_file("/workspace/context.txt", b"attached context");
     ui.submit("first");
     ui.key(key(KeyCode::Char('@')));
@@ -108,7 +105,7 @@ fn a_rejected_prompt_keeps_its_file_mentions() {
 
 #[test]
 fn a_prompt_the_agent_fails_returns_to_the_composer_with_a_notice() {
-    let mut ui = make_app();
+    let mut ui = TestUi::new();
     ui.reject_prompts(PromptRejection::Failed("overloaded".into()));
 
     ui.submit("hello");
@@ -120,7 +117,7 @@ fn a_prompt_the_agent_fails_returns_to_the_composer_with_a_notice() {
 
 #[test]
 fn the_bell_waits_until_no_prompt_is_queued() {
-    let mut ui = make_app();
+    let mut ui = TestUi::new();
     ui.submit("first");
     ui.submit("second");
     ui.take_commands();
@@ -138,8 +135,4 @@ fn queued_texts(ui: &TestUi) -> Vec<&str> {
 
 fn transcript(ui: &TestUi) -> Vec<String> {
     ui.app().conversation_items().iter().filter_map(|item| item.text().map(Cow::into_owned)).collect()
-}
-
-fn bells(ui: &mut TestUi) -> usize {
-    ui.take_commands().iter().filter(|command| matches!(command, Command::Terminal(TerminalCommand::RingBell))).count()
 }

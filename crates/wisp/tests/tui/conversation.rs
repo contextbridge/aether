@@ -1,26 +1,23 @@
 use super::support::*;
-use unicode_width::UnicodeWidthStr;
 
 #[test]
 fn submit_sends_prompt_and_clears_composer() {
-    let mut app = make_app();
+    let mut app = TestUi::new();
 
     app.submit("hello agent");
 
-    match app.next_agent_command().unwrap() {
-        AgentCommand::Prompt { session_id, text, content, .. } => {
-            assert_eq!(session_id.0.as_ref(), "test-session");
-            assert_eq!(text, "hello agent");
-            assert!(content.is_none());
-        }
-        other => panic!("expected Prompt command, got {other:?}"),
-    }
+    let cmd = app.next_agent_command();
+    assert!(
+        matches!(&cmd, Some(AgentCommand::Prompt { session_id, text, content: None, .. })
+            if session_id.0.as_ref() == "test-session" && text == "hello agent"),
+        "{cmd:?}"
+    );
     assert!(app.app().composer().is_empty());
 }
 
 #[test]
 fn esc_cancels_only_while_busy() {
-    let mut app = make_app();
+    let mut app = TestUi::new();
 
     app.key(key(KeyCode::Esc));
     assert!(app.next_command().is_none());
@@ -34,7 +31,7 @@ fn esc_cancels_only_while_busy() {
 
 #[test]
 fn double_ctrl_c_exits_and_first_press_clears_composer() {
-    let mut app = make_app();
+    let mut app = TestUi::new();
     app.type_text("draft");
 
     app.key(ctrl('c'));
@@ -48,7 +45,7 @@ fn double_ctrl_c_exits_and_first_press_clears_composer() {
 
 #[test]
 fn ctrl_c_confirmation_disarms_after_window() {
-    let mut app = make_app();
+    let mut app = TestUi::new();
 
     app.key(ctrl('c'));
     app.tick(Instant::now() + Duration::from_secs(2));
@@ -60,17 +57,14 @@ fn ctrl_c_confirmation_disarms_after_window() {
 
 #[test]
 fn double_ctrl_c_exits_over_session_picker() {
-    let mut app = make_app();
-    app.type_text("/resume");
-    app.key(key(KeyCode::Tab));
-    let _ = app.next_agent_command().unwrap();
-    app.deliver_result(sessions_listed(vec![session_info("other", "/tmp/elsewhere", "Other", "2025-01-01T00:00:00Z")]));
+    let mut app = TestUi::new();
+    app.open_session_picker(vec![session_info("other", "/tmp/elsewhere", "Other", "2025-01-01T00:00:00Z")]);
     assert_ctrl_c_exits(&mut app);
 }
 
 #[test]
 fn ctrl_c_during_streaming_arms_exit_without_cancelling() {
-    let mut app = make_app();
+    let mut app = TestUi::new();
     app.submit("stream me");
     app.next_agent_command().unwrap();
     app.acp_event(text_chunk("partial reply"));
@@ -90,7 +84,7 @@ fn ctrl_c_during_streaming_arms_exit_without_cancelling() {
 
 #[test]
 fn double_ctrl_c_exits_over_an_open_completion_overlay() {
-    let mut app = make_app();
+    let mut app = TestUi::new();
 
     // The completion overlay is composer-owned, not a modal Layer.
     app.type_text("/");
@@ -106,7 +100,7 @@ fn double_ctrl_c_exits_over_an_open_completion_overlay() {
 
 #[test]
 fn connection_closed_requests_exit() {
-    let mut app = make_app();
+    let mut app = TestUi::new();
 
     app.acp_event(AcpEvent::ConnectionClosed);
 
@@ -115,7 +109,7 @@ fn connection_closed_requests_exit() {
 
 #[test]
 fn alt_enter_inserts_newline_instead_of_submitting() {
-    let mut app = make_app();
+    let mut app = TestUi::new();
     app.type_text("line one");
 
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
@@ -129,15 +123,12 @@ fn alt_enter_inserts_newline_instead_of_submitting() {
 fn context_clear_discards_conversation_retained_in_the_live_viewport() {
     let mut ui = TestUi::new();
     ui.submit("old retained message");
-    ui.draw();
     ui.assert_viewport_contains("old retained message");
 
     ui.acp_event(context_cleared());
-    ui.draw();
 
-    let viewport = ui.viewport_text();
-    assert!(!viewport.contains("old retained message"), "{viewport}");
-    assert!(!viewport.contains("[wisp] Context cleared"), "{viewport}");
+    ui.assert_viewport_not_contains("old retained message");
+    ui.assert_viewport_not_contains("[wisp] Context cleared");
 }
 
 #[test]
@@ -145,7 +136,6 @@ fn fitting_user_message_remains_in_the_live_viewport() {
     let mut ui = TestUi::new();
 
     ui.submit("hello viewport");
-    ui.draw();
 
     ui.assert_viewport_contains("hello viewport");
     ui.assert_history_not_contains("hello viewport");
@@ -156,19 +146,12 @@ fn completed_stream_lines_remain_live_until_they_overflow() {
     let mut ui = TestUi::new();
     ui.submit("hi");
 
-    let mut completed = String::new();
-    for index in 0..20 {
-        writeln!(completed, "line-{index}\n").unwrap();
-    }
-    ui.acp_event(text_chunk(&format!("{completed}partial")));
-    ui.draw();
+    ui.acp_event(text_chunk(&format!("{}partial", numbered_lines("line", 20))));
 
-    let scrollback = ui.history_text();
-    let viewport = ui.viewport_text();
-    assert!(scrollback.contains("line-0"));
-    assert!(!scrollback.contains("partial"));
-    assert!(viewport.contains("line-19"));
-    assert!(viewport.contains("partial"));
+    ui.assert_history_contains("line-0");
+    ui.assert_history_not_contains("partial");
+    ui.assert_viewport_contains("line-19");
+    ui.assert_viewport_contains("partial");
 }
 
 #[test]
@@ -181,18 +164,15 @@ fn overflowing_single_paragraph_stream_enters_scrollback_before_completion() {
         ui.draw();
     }
     ui.acp_event(text_chunk("still-streaming"));
-    ui.draw();
 
     let streaming_history = ui.history_text();
     ui.assert_viewport_not_contains("stream-line-0");
     ui.assert_viewport_contains("still-streaming");
     assert_eq!(streaming_history.matches("stream-line-0").count(), 1, "streaming history:\n{streaming_history}");
 
-    ui.draw();
     assert_eq!(ui.history_text().matches("stream-line-0").count(), 1, "unchanged redraw duplicated history");
 
     ui.complete_prompt(acp::StopReason::EndTurn);
-    ui.draw();
     let completed_conversation = ui.conversation_text();
     assert_eq!(
         completed_conversation.matches("stream-line-0").count(),
@@ -212,7 +192,6 @@ fn overflowing_open_fence_enters_scrollback_before_completion() {
         ui.draw();
     }
     ui.acp_event(text_chunk("fence-tail-marker"));
-    ui.draw();
 
     assert_eq!(ui.history_text().matches("fence-start-marker").count(), 1);
     ui.assert_viewport_contains("fence-tail-marker");
@@ -235,7 +214,6 @@ fn stream_after_a_completed_tool_commits_incrementally() {
     ui.assert_viewport_contains("after-tool-line-29");
 
     ui.complete_prompt(acp::StopReason::EndTurn);
-    ui.draw();
     let conversation = ui.conversation_text();
     assert_eq!(conversation.matches("after-tool-line-0").count(), 1, "completed conversation:\n{conversation}");
     assert_eq!(conversation.matches("Reading main.rs").count(), 1, "completed conversation:\n{conversation}");
@@ -254,12 +232,11 @@ fn thought_chunks_preserve_identity_without_rendering_in_the_transcript() {
     let thoughts =
         ui.app().conversation_items().iter().filter(|item| matches!(item.content(), ConversationContent::Thought(_)));
     assert_eq!(thoughts.count(), 1, "every chunk extends the same thought");
-    assert!(!ui.conversation_text().contains("pondering-line-0"), "the transcript never renders the thought");
+    ui.assert_conversation_not_contains("pondering-line-0");
 
-    let status = ui.viewport_text();
-    assert!(status.contains("pondering-line-29"), "the progress band should preview the latest thought:\n{status}");
-    assert!(status.contains("Thinking…"), "thought chunks should drive the progress-band activity, got:\n{status}");
-    assert!(status.contains("esc to interrupt"), "{status}");
+    ui.assert_viewport_contains("pondering-line-29");
+    ui.assert_viewport_contains("Thinking…");
+    ui.assert_viewport_contains("esc to interrupt");
 }
 
 #[test]
@@ -267,16 +244,10 @@ fn partially_committed_assistant_is_not_duplicated_when_a_tool_starts() {
     let mut ui = TestUi::new();
     ui.submit("stream then use a tool");
 
-    let mut reply = String::from("assistant-start-marker\n");
-    for index in 0..30 {
-        writeln!(reply, "assistant-line-{index}").unwrap();
-    }
-    ui.acp_event(text_chunk(&reply));
-    ui.draw();
+    ui.acp_event(text_chunk(&format!("assistant-start-marker\n{}", numbered_lines("assistant-line", 30))));
     ui.assert_history_contains("assistant-start-marker");
 
     ui.acp_event(tool_call("tool-1", "Reading after stream"));
-    ui.draw();
 
     assert_eq!(ui.conversation_text().matches("assistant-start-marker").count(), 1);
     ui.assert_viewport_contains("Reading after stream");
@@ -291,17 +262,14 @@ fn resizing_a_partially_committed_stream_keeps_new_content_visible() {
     for index in 0..30 {
         ui.acp_event(text_chunk(&format!("resize-line-{index}-abcdefghij\n")));
     }
-    ui.draw();
     ui.assert_history_contains("resize-line-0");
 
     ui.resize(60, 15);
     ui.acp_event(text_chunk("after-resize"));
-    ui.draw();
 
     ui.assert_viewport_contains("after-resize");
 
     ui.complete_prompt(acp::StopReason::EndTurn);
-    ui.draw();
     let conversation = ui.conversation_text();
     assert_eq!(conversation.matches("resize-line-0").count(), 1, "completed conversation:\n{conversation}");
     assert_eq!(conversation.matches("after-resize").count(), 1, "completed conversation:\n{conversation}");
@@ -314,14 +282,11 @@ fn completed_streaming_text_remains_adjacent_to_the_composer_once() {
 
     ui.acp_event(text_chunk("streamed "));
     ui.acp_event(text_chunk("answer"));
-    ui.draw();
 
     ui.assert_viewport_contains("streamed answer");
     ui.assert_history_not_contains("streamed answer");
 
     ui.complete_prompt(acp::StopReason::EndTurn);
-    ui.draw();
-    ui.draw();
 
     let conversation = ui.conversation_text();
     assert_eq!(conversation.matches("streamed answer").count(), 1);
@@ -337,7 +302,6 @@ fn streamed_markdown_blocks_keep_blank_separators() {
         ui.acp_event(text_chunk(chunk));
     }
     ui.complete_prompt(acp::StopReason::EndTurn);
-    ui.draw();
 
     let conversation = ui.conversation();
     let heading = row_containing(&conversation, "### Root").expect("heading should render");
@@ -355,25 +319,21 @@ fn running_tool_holds_later_content_out_of_committed_history() {
 
     ui.acp_event(tool_call("tool-1", "Reading main.rs"));
     ui.acp_event(text_chunk("tool output summary"));
-    ui.draw();
 
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("Reading main.rs"));
-    assert!(!ui.history_text().contains("Reading main.rs"));
+    ui.assert_viewport_contains("Reading main.rs");
+    ui.assert_history_not_contains("Reading main.rs");
 
     ui.acp_event(tool_completed("tool-1"));
     ui.complete_prompt(acp::StopReason::EndTurn);
-    ui.draw();
 
-    let conversation = ui.conversation_text();
-    assert!(conversation.contains("Reading main.rs"));
-    assert!(conversation.contains("tool output summary"));
+    ui.assert_conversation_contains("Reading main.rs");
+    ui.assert_conversation_contains("tool output summary");
     assert!(ui.app().conversation_items().iter().all(|item| item.state() == ItemState::Sealed));
 }
 
 #[test]
 fn cancelled_prompt_marks_running_tool_as_error() {
-    let mut app = make_app();
+    let mut app = TestUi::new();
     app.submit("run a tool");
     app.acp_event(tool_call("tool-1", "Slow tool"));
 
@@ -403,31 +363,16 @@ fn raw_input_updates_replace_and_show_after_completion() {
     ui.acp_event(tool_call("tool-1", "Edit file"));
     ui.acp_event(tool_call_update_with_raw("tool-1", serde_json::Value::String("first ".to_string())));
     ui.acp_event(tool_call_update_with_raw("tool-1", serde_json::Value::String("second".to_string())));
-    ui.acp_event(tool_completed_status("tool-1"));
+    ui.acp_event(tool_completed("tool-1"));
 
-    ui.draw();
-
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("second"), "replacement input must appear: {viewport}");
-    assert!(!viewport.contains("first"), "replaced input must disappear: {viewport}");
+    ui.assert_viewport_contains("second");
+    ui.assert_viewport_not_contains("first");
 }
 
 fn tool_call_update_with_display_value(id: &str, display_value: &str) -> AcpEvent {
     let mut meta = serde_json::Map::new();
     meta.insert("display_value".to_string(), serde_json::Value::String(display_value.to_string()));
     session_update(acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(id.to_string()).meta(meta)))
-}
-
-fn tool_completed_status(id: &str) -> AcpEvent {
-    session_update(acp::SessionUpdate::ToolCallUpdate(
-        acp::ToolCallUpdate::new(id.to_string()).status(acp::ToolCallStatus::Completed),
-    ))
-}
-
-fn tool_failed_status(id: &str) -> AcpEvent {
-    session_update(acp::SessionUpdate::ToolCallUpdate(
-        acp::ToolCallUpdate::new(id.to_string()).status(acp::ToolCallStatus::Failed),
-    ))
 }
 
 #[test]
@@ -439,28 +384,10 @@ fn completed_bash_tool_renders_the_command_with_shell_syntax_highlighting() {
         .raw_input(serde_json::json!({"command": "if true; then echo $HOME; fi", "description": "Check shell syntax"}))
         .name("coding__bash");
     ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(tool)));
-    ui.acp_event(tool_completed_status("bash-1"));
+    ui.acp_event(tool_completed("bash-1"));
 
-    ui.draw();
-
-    let conversation = ui.conversation();
-    let command = "if true; then echo $HOME; fi";
-    let row = row_containing(&conversation, command).expect("rendered Bash command");
-    let text = row_text(&conversation, row);
-    assert!(text.contains(&format!("Bash {command}")), "command should share the tool row: {text:?}");
-    let command_start = u16::try_from(text[..text.find(command).expect("command position")].width()).unwrap();
-    let gap = conversation.cell((conversation.area.left() + command_start - 1, row)).expect("gap before command");
-    assert_eq!(gap.bg, Color::Reset, "the gap should not set a background");
-    let cells = (command_start..command_start + u16::try_from(command.width()).unwrap())
-        .filter_map(|offset| conversation.cell((conversation.area.left() + offset, row)))
-        .filter(|cell| cell.symbol() != " ")
-        .collect::<Vec<_>>();
-    assert!(cells.iter().all(|cell| cell.bg == Color::Reset), "command should sit on the terminal background");
-    let keyword = cells.iter().find(|cell| cell.symbol() == "i").expect("if keyword");
-    let variable = cells.iter().find(|cell| cell.symbol() == "$").expect("shell variable");
-    assert_ne!(keyword.fg, variable.fg, "shell keywords and variables should use distinct token colors");
-    let text = buffer_text(&conversation);
-    assert!(!text.contains("description"), "only the command field should be rendered as shell code: {text}");
+    assert_shell_command_highlighted(&mut ui, "Bash", "if true; then echo $HOME; fi");
+    ui.assert_conversation_not_contains("description");
 }
 
 #[test]
@@ -468,8 +395,6 @@ fn completed_bash_tool_shows_its_command_once_followed_by_the_exit_status() {
     let mut ui = TestUi::with_dimensions(100, 15);
     ui.submit("run shell command");
     ran_bash_tool(&mut ui, "cargo test", "cargo test (exit 2)");
-
-    ui.draw();
 
     let viewport = ui.viewport_text();
     assert!(viewport.contains("Ran cargo test (exit 2)"), "{viewport}");
@@ -482,8 +407,6 @@ fn completed_multiline_bash_tool_shows_the_full_command_instead_of_its_truncated
     let mut ui = TestUi::with_dimensions(100, 15);
     ui.submit("run shell command");
     ran_bash_tool(&mut ui, command, "python3 - <<'PY' from pathlib import ... (exit 0)");
-
-    ui.draw();
 
     let viewport = ui.viewport_text();
     assert!(viewport.contains("Ran python3 - <<'PY' (exit 0)"), "{viewport}");
@@ -513,11 +436,9 @@ fn non_bash_tool_with_a_command_argument_keeps_generic_rendering() {
         .raw_input(serde_json::json!({"command": "if true; then echo no; fi"}))
         .name("other__execute");
     ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(tool)));
-    ui.acp_event(tool_completed_status("other-1"));
+    ui.acp_event(tool_completed("other-1"));
 
-    ui.draw();
-
-    assert!(ui.viewport_text().contains(r#"{"command":"if true; then echo no; fi"}"#));
+    ui.assert_viewport_contains(r#"{"command":"if true; then echo no; fi"}"#);
     assert!(!has_cell(&ui.conversation(), "i", |cell| cell.bg == ui.app().theme().code_bg));
 }
 
@@ -528,11 +449,8 @@ fn running_tool_hides_raw_arguments() {
     let raw = serde_json::json!({"path": "/src/main.rs"});
     ui.acp_event(tool_call_with_raw("tool-1", "Read file", raw));
 
-    ui.draw();
-
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("Read file"), "title must be visible: {viewport}");
-    assert!(!viewport.contains("/src/main.rs"), "raw args must be hidden while running: {viewport}");
+    ui.assert_viewport_contains("Read file");
+    ui.assert_viewport_not_contains("/src/main.rs");
 }
 
 #[test]
@@ -541,12 +459,9 @@ fn completed_tool_shows_raw_arguments() {
     ui.submit("run tool");
     let raw = serde_json::json!({"path": "/src/main.rs"});
     ui.acp_event(tool_call_with_raw("tool-1", "Read file", raw));
-    ui.acp_event(tool_completed_status("tool-1"));
+    ui.acp_event(tool_completed("tool-1"));
 
-    ui.draw();
-
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("/src/main.rs"), "raw args must be visible after completion: {viewport}");
+    ui.assert_viewport_contains("/src/main.rs");
 }
 
 #[test]
@@ -556,13 +471,10 @@ fn display_value_overrides_raw_arguments_in_rendered_output() {
     let raw = serde_json::json!({"path": "/src/main.rs"});
     ui.acp_event(tool_call_with_raw("tool-1", "Read file", raw));
     ui.acp_event(tool_call_update_with_display_value("tool-1", "42 lines read"));
-    ui.acp_event(tool_completed_status("tool-1"));
+    ui.acp_event(tool_completed("tool-1"));
 
-    ui.draw();
-
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("42 lines read"), "display_value must be visible: {viewport}");
-    assert!(!viewport.contains("/src/main.rs"), "raw args must be hidden when display_value is set: {viewport}");
+    ui.assert_viewport_contains("42 lines read");
+    ui.assert_viewport_not_contains("/src/main.rs");
 }
 
 #[test]
@@ -570,101 +482,36 @@ fn error_cause_is_visible_in_rendered_output() {
     let mut ui = TestUi::with_dimensions(80, 15);
     ui.submit("run tool");
     ui.acp_event(tool_call("tool-1", "Failing tool"));
-    ui.acp_event(tool_failed_status("tool-1"));
+    ui.acp_event(tool_status("tool-1", acp::ToolCallStatus::Failed));
 
-    ui.draw();
-
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("failed"), "error cause must be visible: {viewport}");
-    assert!(!viewport.contains("(failed)"), "error cause must NOT have parentheses: {viewport}");
+    ui.assert_viewport_contains("failed");
+    ui.assert_viewport_not_contains("(failed)");
 }
 
 #[test]
-fn truncation_adds_visible_ellipsis_for_long_arguments() {
-    let mut ui = TestUi::with_dimensions(250, 15);
-    ui.submit("run tool");
-    let long = "x".repeat(300);
-    ui.acp_event(tool_call_with_raw("tool-1", "Long arg", serde_json::Value::String(long)));
-    ui.acp_event(tool_completed_status("tool-1"));
+fn completed_tool_arguments_truncate_at_200_characters_not_bytes() {
+    let cases: [(String, &[&str], &[&str]); 5] = [
+        ("hello world".to_string(), &["hello world"], &["…"]),
+        ("x".repeat(199), &[], &["…"]),
+        ("x".repeat(300), &["…"], &[]),
+        (format!("{}{}", "a".repeat(100), "界".repeat(50)), &["界"], &["…"]),
+        (format!("{}こんにちは世界", "a".repeat(195)), &["…", "ん"], &["ち"]),
+    ];
+    for (argument, shown, hidden) in cases {
+        let mut ui = TestUi::with_dimensions(250, 15);
+        ui.submit("run tool");
+        ui.acp_event(tool_call_with_raw("tool-1", "Arg tool", serde_json::Value::String(argument.clone())));
+        ui.acp_event(tool_completed("tool-1"));
 
-    ui.draw();
-
-    let buffer = ui.viewport();
-    let arg_row = row_containing(&buffer, "Long arg").expect("long arg row");
-    assert!(row_text(&buffer, arg_row).contains('…'), "truncated args must show ellipsis");
-}
-
-#[test]
-fn truncation_keeps_short_arguments_unchanged() {
-    let mut ui = TestUi::with_dimensions(250, 15);
-    ui.submit("run tool");
-    let short = "hello world";
-    ui.acp_event(tool_call_with_raw("tool-1", "Short arg", serde_json::Value::String(short.to_string())));
-    ui.acp_event(tool_completed_status("tool-1"));
-
-    ui.draw();
-
-    let buffer = ui.viewport();
-    let arg_row = row_containing(&buffer, short).expect("short arg row");
-    assert!(row_text(&buffer, arg_row).contains(short), "short args must appear in full");
-    assert!(!row_text(&buffer, arg_row).contains('…'), "short args must NOT have ellipsis");
-}
-
-#[test]
-fn truncation_is_unicode_safe_no_split_characters() {
-    let mut ui = TestUi::with_dimensions(250, 15);
-    ui.submit("run tool");
-    let prefix = "a".repeat(195);
-    let unicode_arg = format!("{prefix}こんにちは世界");
-    ui.acp_event(tool_call_with_raw("tool-1", "Unicode tool", serde_json::Value::String(unicode_arg)));
-    ui.acp_event(tool_completed_status("tool-1"));
-
-    ui.draw();
-
-    let buffer = ui.viewport();
-    let arg_row = row_containing(&buffer, "Unicode tool").expect("unicode arg row");
-    let row = row_text(&buffer, arg_row);
-    assert!(row.contains('…'), "truncated Unicode args must show ellipsis");
-    assert!(row.contains('ん'), "char-based truncation must preserve leading multi-byte chars");
-    assert!(!row.contains('ち'), "truncation must stop at char boundary (199 chars)");
-}
-
-#[test]
-fn char_based_truncation_preserves_multi_byte_under_200_chars() {
-    let mut ui = TestUi::with_dimensions(250, 15);
-    ui.submit("run tool");
-    // 100 ASCII chars + 50 × '界' (3 bytes each) = 150 chars, but 100 + 150 = 250 bytes
-    // This is under 200 chars so it must NOT be truncated even though it exceeds 200 bytes.
-    let half = "a".repeat(100);
-    let unicode_half = "界".repeat(50);
-    let arg = format!("{half}{unicode_half}");
-    assert!(arg.len() > 200, "arg must exceed 200 bytes for this test");
-    assert!(arg.chars().count() < 200, "arg must be under 200 chars (with leading space)");
-    ui.acp_event(tool_call_with_raw("tool-1", "Unicode tool", serde_json::Value::String(arg)));
-    ui.acp_event(tool_completed_status("tool-1"));
-
-    ui.draw();
-
-    let buffer = ui.viewport();
-    let arg_row = row_containing(&buffer, "界").expect("arg row");
-    let row = row_text(&buffer, arg_row);
-    assert!(!row.contains('…'), "under 200 chars must not be truncated");
-    assert!(row.contains('界'), "multi-byte chars must appear in full");
-}
-
-#[test]
-fn truncation_boundary_exactly_200_bytes_no_ellipsis() {
-    let mut ui = TestUi::with_dimensions(250, 15);
-    ui.submit("run tool");
-    let exactly_199 = "x".repeat(199);
-    ui.acp_event(tool_call_with_raw("tool-1", "199-char arg", serde_json::Value::String(exactly_199)));
-    ui.acp_event(tool_completed_status("tool-1"));
-
-    ui.draw();
-
-    let buffer = ui.viewport();
-    let arg_row = row_containing(&buffer, "199-char arg").expect("199-char arg row");
-    assert!(!row_text(&buffer, arg_row).contains('…'), "199-char args must not be truncated (fit in 200 with space)");
+        let viewport = ui.viewport();
+        let row = row_text(&viewport, row_containing(&viewport, "Arg tool").expect("tool row"));
+        for text in shown {
+            assert!(row.contains(text), "{argument:?} should show {text:?}: {row}");
+        }
+        for text in hidden {
+            assert!(!row.contains(text), "{argument:?} should not show {text:?}: {row}");
+        }
+    }
 }
 
 #[test]
@@ -673,14 +520,10 @@ fn truncation_preserved_in_scrollback() {
     ui.submit("run tool");
     let long = "x".repeat(300);
     ui.acp_event(tool_call_with_raw("tool-1", "Long arg", serde_json::Value::String(long)));
-    ui.acp_event(tool_completed_status("tool-1"));
+    ui.acp_event(tool_completed("tool-1"));
     ui.complete_prompt(acp::StopReason::EndTurn);
 
-    ui.draw();
-    ui.draw();
-
-    let conversation = ui.conversation_text();
-    assert!(conversation.contains('…'), "truncation must survive drain to scrollback: {conversation}");
+    ui.assert_conversation_contains("…");
 }
 
 #[test]
@@ -689,11 +532,8 @@ fn tool_arguments_preserved_in_scrollback_exactly_once() {
     let raw = serde_json::json!({"path": "/src/main.rs"});
     ui.submit("run tool");
     ui.acp_event(tool_call_with_raw("tool-1", "Read file", raw));
-    ui.acp_event(tool_completed_status("tool-1"));
+    ui.acp_event(tool_completed("tool-1"));
     ui.complete_prompt(acp::StopReason::EndTurn);
-
-    ui.draw();
-    ui.draw();
 
     let conversation = ui.conversation_text();
     let occurrences = conversation.matches("/src/main.rs").count();
@@ -714,12 +554,9 @@ fn diff_not_rendered_while_tool_is_running() {
     let update = acp::ToolCallUpdate::new("tool-1").content(vec![acp::ToolCallContent::Diff(diff)]);
     ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(update)));
 
-    ui.draw();
-
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("Edit file"), "title must be visible: {viewport}");
-    assert!(!viewport.contains("old content"), "diff must NOT render while running: {viewport}");
-    assert!(!viewport.contains("new content"), "diff must NOT render while running: {viewport}");
+    ui.assert_viewport_contains("Edit file");
+    ui.assert_viewport_not_contains("old content");
+    ui.assert_viewport_not_contains("new content");
 }
 
 #[test]
@@ -738,13 +575,9 @@ fn diff_not_rendered_after_failed_status() {
     ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(update)));
     ui.complete_prompt(acp::StopReason::EndTurn);
 
-    ui.draw();
-    ui.draw();
-
-    let conversation = ui.conversation_text();
-    assert!(!conversation.contains("old content"), "diff must NOT render after failure: {conversation}");
-    assert!(!conversation.contains("new content"), "diff must NOT render after failure: {conversation}");
-    assert!(conversation.contains("failed"), "error cause must be visible: {conversation}");
+    ui.assert_conversation_not_contains("old content");
+    ui.assert_conversation_not_contains("new content");
+    ui.assert_conversation_contains("failed");
 }
 
 #[test]
@@ -752,8 +585,6 @@ fn short_streaming_message_renders_above_progress_band_and_composer() {
     let mut ui = TestUi::new();
     ui.submit("prompt");
     ui.acp_event(text_chunk("short answer"));
-
-    ui.draw();
 
     let prompt_row = ui.viewport_row("prompt").unwrap();
     let message_row = ui.viewport_row("short answer").unwrap();
@@ -772,10 +603,8 @@ fn composer_echo_and_status_line_render_in_viewport() {
     let mut ui = TestUi::new();
 
     ui.type_text("typing");
-    ui.draw();
 
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("> typing"));
-    assert!(viewport.contains("~/code/demo · main"));
-    assert!(viewport.contains("aether"));
+    ui.assert_viewport_contains("> typing");
+    ui.assert_viewport_contains("~/code/demo · main");
+    ui.assert_viewport_contains("aether");
 }
