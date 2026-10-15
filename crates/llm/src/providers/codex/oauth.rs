@@ -1,6 +1,6 @@
 use crate::LlmError;
 use aether_auth::{
-    BrowserOAuthHandler, OAuthCredential, OAuthCredentialStorage, OAuthError, OAuthHandler, OAuthHttpClient,
+    BrowserOAuthHandler, OAuthCredential, OAuthCredentialStorage, OAuthError, OAuthHandler, oauth_http_client,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -46,7 +46,7 @@ pub async fn perform_codex_oauth_flow(store: &dyn OAuthCredentialStorage) -> Res
     let code =
         param("code").ok_or_else(|| OAuthError::InvalidCallback("No authorization code in callback".to_string()))?;
 
-    let http_client = OAuthHttpClient::new()?;
+    let http_client = oauth_http_client()?;
 
     let token_response = oauth_client
         .exchange_code(AuthorizationCode::new(code))
