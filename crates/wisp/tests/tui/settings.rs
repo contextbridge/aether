@@ -424,6 +424,34 @@ fn server_status_summary_updates_in_menu() {
     assert!(viewport.contains("1 connected") || viewport.contains("1 failed"), "should show summary:\n{viewport}");
 }
 
+#[test]
+fn provider_login_summary_updates_in_menu_after_login() {
+    let mut ui =
+        TestUiBuilder::new().auth_methods(vec![auth_method("codex", "Codex", None)]).dimensions(80, 24).build();
+    open_provider_logins(&mut ui);
+    ui.key(key(KeyCode::Enter));
+
+    ui.deliver_result(CommandResult::AuthenticationCompleted {
+        method_id: "codex".into(),
+        result: Ok(acp::LoginAuthResponse::new()),
+    });
+    ui.key(key(KeyCode::Esc));
+
+    ui.assert_viewport_contains("Provider Logins: 1 logged in");
+}
+
+#[test]
+fn provider_logins_row_is_shown_only_while_there_are_providers() {
+    let mut ui = TestUi::with_dimensions(80, 24);
+    ui.run_command("/settings");
+
+    ui.acp_event(auth_methods_updated(vec![auth_method("codex", "Codex", None)]));
+    ui.assert_viewport_contains("Provider Logins: 1 needs login");
+
+    ui.acp_event(auth_methods_updated(vec![]));
+    ui.assert_viewport_not_contains("Provider Logins");
+}
+
 fn deferred_server_entry(name: &str, status: McpServerStatus) -> McpServerStatusEntry {
     McpServerStatusEntry::new(name, status).with_deferred_tools(true)
 }
