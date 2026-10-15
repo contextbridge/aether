@@ -306,6 +306,7 @@ dependencies = [
  "htmd",
  "libc",
  "lsp-types",
+ "regex",
  "reqwest",
  "rmcp",
  "schemars 1.2.2",

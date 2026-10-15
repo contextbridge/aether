@@ -19,8 +19,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::{fs, path::Path};
 use utils::shell_expander::expand_shell;
-use utils::substitution::substitute_parameters;
 
+use super::substitution::substitute_parameters;
 use super::tools::{
     ListSkillsInput, ListSkillsOutput, LoadSkillsInput, LoadSkillsOutput, SkillFile, SkillListItem, SkillRequest,
 };
@@ -255,17 +255,14 @@ impl ServerHandler for SkillsMcp {
             .find(|s| s.name == request.name.as_str())
             .ok_or_else(|| McpError::invalid_params(format!("Prompt '{}' not found", request.name), None))?;
 
-        let body = spec.body.clone();
+        let arguments: HashMap<String, String> = request
+            .arguments
+            .iter()
+            .flatten()
+            .filter_map(|(name, value)| value.as_str().map(|value| (name.clone(), value.to_string())))
+            .collect();
 
-        let arguments = request.arguments.as_ref().map(|json_map| {
-            json_map
-                .iter()
-                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                .collect::<HashMap<String, String>>()
-        });
-
-        let content = substitute_parameters(&body, &arguments);
-        let content = expand_shell(&content, &self.root_dir).await;
+        let content = substitute_parameters(&expand_shell(&spec.body, &self.root_dir).await, &arguments);
         let messages = vec![PromptMessage::new_text(Role::User, content)];
 
         Ok(rmcp::model::GetPromptResult::new(messages).with_description(spec.description.clone()).into())
