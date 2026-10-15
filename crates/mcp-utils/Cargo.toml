@@ -36,6 +36,7 @@ client = [
     "dep:serde",
     "dep:serde_json",
     "dep:sse-stream",
+    "dep:sse-stream-rmcp",
     "dep:tokio-stream",
     "dep:utils",
     "rmcp/transport-streamable-http-client-reqwest",
@@ -60,6 +61,8 @@ reqwest = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 sse-stream = { workspace = true, optional = true }
+# rmcp 3.5's StreamableHttpClient trait uses Sse from sse-stream 0.2.x.
+sse-stream-rmcp = { package = "sse-stream", version = "0.2.6", optional = true }
 tokio-stream = { workspace = true, features = ["sync"], optional = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.19", optional = true }
 

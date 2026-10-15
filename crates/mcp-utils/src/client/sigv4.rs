@@ -6,7 +6,7 @@ use rmcp::transport::auth::AuthError;
 use rmcp::transport::streamable_http_client::{
     SseError, StreamableHttpClient, StreamableHttpError, StreamableHttpPostResponse,
 };
-use sse_stream::Sse;
+use sse_stream_rmcp::Sse;
 use std::collections::HashMap;
 use std::sync::Arc;
 
