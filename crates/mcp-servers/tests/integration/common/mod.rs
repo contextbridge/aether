@@ -17,7 +17,7 @@ use rmcp::model::{
     TaskStatus,
 };
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -49,10 +49,6 @@ pub fn tool_request(tool: &str, arguments: impl Serialize) -> CallToolRequestPar
 
 pub fn taskless() -> ClientOptions {
     ClientOptions::default().without_tasks()
-}
-
-pub fn coding_with_lsp(project: &TestWorkspace) -> CodingMcp {
-    CodingMcp::new(project.root()).with_lsp()
 }
 
 pub trait McpClientExt {
@@ -90,19 +86,19 @@ pub struct CodingWorkspace {
 
 impl CodingWorkspace {
     pub async fn new() -> Self {
-        Self::start(|root| CodingMcp::new(root)).await
+        Self::with(TestWorkspace::new(), |root| CodingMcp::new(root)).await
     }
 
-    pub async fn new_with_lsp() -> Self {
-        Self::start(|root| CodingMcp::new(root).with_lsp()).await
+    pub async fn with_lsp(workspace: TestWorkspace) -> Self {
+        Self::with(workspace, |root| CodingMcp::new(root).with_lsp()).await
     }
 
     pub async fn with_http(http: FakeHttpClient) -> Self {
-        Self::start(|root| CodingMcp::new(root).with_web_fetcher(WebFetcher::with_client(http))).await
+        Self::with(TestWorkspace::new(), |root| CodingMcp::new(root).with_web_fetcher(WebFetcher::with_client(http)))
+            .await
     }
 
-    async fn start(configure: impl FnOnce(&Path) -> CodingMcp) -> Self {
-        let workspace = TestWorkspace::new();
+    pub async fn with(workspace: TestWorkspace, configure: impl FnOnce(&Path) -> CodingMcp) -> Self {
         let client = connect(configure(workspace.root()), ClientOptions::default()).await;
         Self { workspace, client }
     }
@@ -122,6 +118,30 @@ impl CodingWorkspace {
     pub fn read(&self, relative_path: impl AsRef<Path>) -> TestResult<String> {
         Ok(read_to_string(self.path(relative_path))?)
     }
+
+    pub async fn read_then_edit(&self, relative_path: &str, old: &str, new: &str) -> TestResult {
+        let path = self.path(relative_path);
+        self.client.call("read_file", json!({ "filePath": path })).await?;
+        self.client
+            .call("edit_file", json!({ "filePath": path, "edits": [{ "oldString": old, "newString": new }] }))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn poll_errors(&self, relative_path: Option<&str>, predicate: impl Fn(&Value) -> bool) -> Value {
+        let args = relative_path.map_or_else(|| json!({}), |path| json!({ "filePath": self.path(path) }));
+        poll_lsp_tool(&self.client, "lsp_check_errors", args, predicate).await
+    }
+
+    pub async fn poll_symbol(
+        &self,
+        relative_path: &str,
+        mut lookup: Value,
+        predicate: impl Fn(&Value) -> bool,
+    ) -> Value {
+        lookup["file_path"] = json!(self.path(relative_path));
+        poll_lsp_tool(&self.client, "lsp_symbol", lookup, predicate).await
+    }
 }
 
 pub async fn call_tool_error(client: &McpClient, name: &str, args: Value) -> String {
@@ -134,14 +154,6 @@ pub async fn call_tool_error(client: &McpClient, name: &str, args: Value) -> Str
         }
         Err(error) => error.to_string(),
     }
-}
-
-pub async fn call_tool(client: &McpClient, name: &str, args: Value) -> Value {
-    client.call(name, args).await.unwrap_or_else(|error| panic!("Tool '{name}' did not return valid JSON: {error}"))
-}
-
-pub async fn try_call_tool(client: &McpClient, name: &str, args: Value) -> Option<Value> {
-    client.call(name, args).await.inspect_err(|error| eprintln!("[try_call_tool] {name}: {error}")).ok()
 }
 
 pub async fn call_task(client: &McpClient, tool: &str, arguments: Value) -> TestResult<CallToolResult> {
@@ -168,61 +180,30 @@ pub async fn await_terminal_task(client: &McpClient, task_id: &str) -> TestResul
     }
 }
 
-pub async fn poll_diagnostics(
-    client: &McpClient,
-    file_path: Option<&str>,
-    predicate: impl Fn(&serde_json::Value) -> bool,
-) -> serde_json::Value {
-    let args = match file_path {
-        Some(path) => serde_json::json!({ "filePath": path }),
-        None => serde_json::json!({}),
-    };
-    poll_lsp_tool(client, "lsp_check_errors", args, predicate).await
-}
-
-pub async fn poll_lsp_tool(
-    client: &McpClient,
-    tool_name: &str,
-    args: serde_json::Value,
-    predicate: impl Fn(&serde_json::Value) -> bool,
-) -> serde_json::Value {
+pub async fn poll_lsp_tool(client: &McpClient, tool: &str, args: Value, predicate: impl Fn(&Value) -> bool) -> Value {
     let start = Instant::now();
-    let mut last_result = None;
+    let mut last = String::from("(no response)");
     while start.elapsed() < POLL_TIMEOUT {
-        if let Some(result) = try_call_tool(client, tool_name, args.clone()).await {
-            if predicate(&result) {
-                return result;
-            }
-            last_result = Some(result);
+        match client.call(tool, &args).await {
+            Ok(result) if predicate(&result) => return result,
+            Ok(result) => last = result.to_string(),
+            Err(error) => last = error.to_string(),
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
-    panic!(
-        "poll_lsp_tool({tool_name}) timed out after {POLL_TIMEOUT:?}. Last result: {}",
-        last_result.as_ref().map_or_else(|| "(no valid response)".to_string(), ToString::to_string)
-    );
+    panic!("poll_lsp_tool({tool}) timed out after {POLL_TIMEOUT:?}. Last result: {last}");
 }
 
-fn error_count(result: &serde_json::Value) -> Option<u64> {
+fn error_count(result: &Value) -> Option<u64> {
     result.get("summary")?.get("errors")?.as_u64()
 }
 
-pub fn has_errors(result: &serde_json::Value) -> bool {
+pub fn has_errors(result: &Value) -> bool {
     error_count(result).is_some_and(|n| n > 0)
 }
 
-pub fn has_no_errors(result: &serde_json::Value) -> bool {
+pub fn has_no_errors(result: &Value) -> bool {
     error_count(result).is_some_and(|n| n == 0)
-}
-
-pub async fn cleanup_daemon(project: &TestWorkspace) {
-    use aether_lspd::{LanguageId, socket_path};
-    for lang in [LanguageId::Rust, LanguageId::TypeScript] {
-        let sock = socket_path(project.root(), lang);
-        let _ = tokio::fs::remove_file(&sock).await;
-        let _ = tokio::fs::remove_file(sock.with_extension("lock")).await;
-        let _ = tokio::fs::remove_file(sock.with_extension("log")).await;
-    }
 }
 
 /// A skills server serving the `skills` directory of `test_dir`.

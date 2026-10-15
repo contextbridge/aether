@@ -3,7 +3,7 @@ mod common;
 
 use aether_lspd::testing::{TestDaemon, configure_fake_server};
 use aether_lspd::{LanguageId, socket_path};
-use common::{call_tool, call_tool_error, connect};
+use common::{McpClientExt, call_tool_error, connect};
 use mcp_servers::coding::CodingMcp;
 use mcp_utils::client::ClientOptions;
 use std::time::Duration;
@@ -29,7 +29,7 @@ async fn symbol_lookup_recovers_after_language_server_timeout() {
     let error = call_tool_error(&client, "lsp_symbol", lookup("definition")).await;
     assert!(error.contains("timed out after 1s"), "unexpected definition error: {error}");
 
-    let result = call_tool(&client, "lsp_symbol", lookup("hover")).await;
+    let result = client.call("lsp_symbol", lookup("hover")).await.expect("hover after recovery");
     let hover = result["hoverContents"].as_str().unwrap_or_default();
     assert!(hover.contains("export function example_fn"), "{result}");
 

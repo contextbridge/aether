@@ -6,7 +6,7 @@ use mcp_servers::CodingMcp;
 use mcp_servers::coding::tools::bash::BashInput;
 use mcp_servers::coding::tools::read_file::ReadFileArgs;
 use mcp_servers::coding::tools::web_fetch::{HttpResponse, WebFetchInput};
-use mcp_servers::testing::FakeHttpClient;
+use mcp_servers::testing::{FakeHttpClient, TestWorkspace};
 use std::fs::{canonicalize, read_to_string};
 use utils::tool_result_truncator::saved_path;
 
@@ -193,4 +193,15 @@ async fn coding_tool_catalog_uses_bash_for_search_and_directory_listings() -> Te
         assert!(!names.contains(&removed), "unexpected removed tool {removed}: {names:?}");
     }
     Ok(())
+}
+
+#[tokio::test]
+async fn instructions_list_lsp_tools_only_when_lsp_is_enabled() {
+    let without_lsp = CodingWorkspace::new().await.client.instructions().unwrap_or_default();
+    let with_lsp = CodingWorkspace::with_lsp(TestWorkspace::new()).await.client.instructions().unwrap_or_default();
+
+    for tool in ["lsp_check_errors", "lsp_symbol", "lsp_rename"] {
+        assert!(!without_lsp.contains(tool), "{without_lsp}");
+        assert!(with_lsp.contains(tool), "{with_lsp}");
+    }
 }

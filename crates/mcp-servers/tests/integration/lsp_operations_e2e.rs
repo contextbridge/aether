@@ -1,55 +1,37 @@
 //! End-to-end tests for LSP operations (hover, definition, references, rename)
 //! through the MCP tool layer, using Rust projects with rust-analyzer.
 //!
-//! Requirements:
-//! - `rust-analyzer` must be installed and in PATH
-//! - `aether-lspd` binary must be built (`cargo build -p aether-lspd`)
-//!
-//! Run with: `cargo test -p mcp-servers -- lsp_operations`
 
-use crate::common::{call_tool, coding_with_lsp, connect, poll_lsp_tool};
+use crate::common::{CodingWorkspace, McpClientExt, TestResult};
 use aether_lspd::testing::cargo_project;
-use mcp_utils::client::ClientOptions;
+use serde_json::json;
 
-/// Test: hover returns type information for a Rust variable
 #[tokio::test]
 async fn test_hover_falls_back_from_stale_line_hint() {
-    let project = cargo_project("hover_test");
-    project.write(
-        "src/main.rs",
+    let project = rust_main(
+        "hover_test",
         r#"fn main() {
     let x: Vec<i32> = vec![1, 2, 3];
     println!("{:?}", x);
 }
 "#,
-    );
-
-    let main_rs = project.path_string("src/main.rs");
-    let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
-
-    let result = poll_lsp_tool(
-        &client,
-        "lsp_symbol",
-        serde_json::json!({
-            "operation": "hover",
-            "file_path": main_rs,
-            "symbol": "x",
-            "line": 1
-        }),
-        |r| r.get("hoverContents").and_then(|h| h.as_str()).is_some_and(|s| s.contains("Vec")),
     )
     .await;
+
+    let result = project
+        .poll_symbol("src/main.rs", json!({ "operation": "hover", "symbol": "x", "line": 1 }), |r| {
+            r["hoverContents"].as_str().is_some_and(|hover| hover.contains("Vec"))
+        })
+        .await;
 
     let hover = result["hoverContents"].as_str().unwrap();
     assert!(hover.contains("Vec") && hover.contains("i32"), "Expected hover to contain Vec<i32>, got: {hover}");
 }
 
-/// Test: goto definition resolves to the correct function definition
 #[tokio::test]
 async fn test_goto_definition() {
-    let project = cargo_project("definition_test");
-    project.write(
-        "src/main.rs",
+    let project = rust_main(
+        "definition_test",
         r#"fn greet() -> &'static str {
     "hello"
 }
@@ -59,33 +41,22 @@ fn main() {
     println!("{}", msg);
 }
 "#,
-    );
-
-    let main_rs = project.path_string("src/main.rs");
-    let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
-
-    let result = poll_lsp_tool(
-        &client,
-        "lsp_symbol",
-        serde_json::json!({
-            "operation": "definition",
-            "file_path": main_rs,
-            "symbol": "greet",
-            "line": 6
-        }),
-        |r| r["locations"].as_str().is_some_and(|locations| !locations.is_empty()),
     )
     .await;
+
+    let result = project
+        .poll_symbol("src/main.rs", json!({ "operation": "definition", "symbol": "greet", "line": 6 }), |r| {
+            r["locations"].as_str().is_some_and(|locations| !locations.is_empty())
+        })
+        .await;
 
     assert_eq!(result["locations"], "src/main.rs: 1", "Expected definition at line 1 (1-indexed)");
 }
 
-/// Test: find references returns all usages of a symbol
 #[tokio::test]
 async fn test_find_references() {
-    let project = cargo_project("references_test");
-    project.write(
-        "src/main.rs",
+    let project = rust_main(
+        "references_test",
         r#"fn greet() -> &'static str {
     "hello"
 }
@@ -96,23 +67,14 @@ fn main() {
     println!("{} {}", a, b);
 }
 "#,
-    );
-
-    let main_rs = project.path_string("src/main.rs");
-    let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
-
-    let result = poll_lsp_tool(
-        &client,
-        "lsp_symbol",
-        serde_json::json!({
-            "operation": "references",
-            "file_path": main_rs,
-            "symbol": "greet",
-            "line": 1
-        }),
-        |r| r["totalCount"].as_u64().is_some_and(|count| count >= 2),
     )
     .await;
+
+    let result = project
+        .poll_symbol("src/main.rs", json!({ "operation": "references", "symbol": "greet", "line": 1 }), |r| {
+            r["totalCount"].as_u64().is_some_and(|count| count >= 2)
+        })
+        .await;
 
     let locations = result["locations"].as_str().unwrap();
     assert!(
@@ -121,64 +83,35 @@ fn main() {
     );
 }
 
-/// Test: `lsp_rename` applies workspace edits for a Rust symbol
 #[tokio::test]
-async fn test_lsp_rename_falls_back_from_stale_line_hint() {
-    let project = cargo_project("rename_test");
-    project.write(
-        "src/lib.rs",
-        r#"pub fn greet() -> &'static str {
-    "hello"
-}
-"#,
-    );
-    project.write(
-        "src/main.rs",
-        r#"fn main() {
+async fn test_lsp_rename_falls_back_from_stale_line_hint() -> TestResult {
+    let project =
+        cargo_project("rename_test").file("src/lib.rs", "pub fn greet() -> &'static str {\n    \"hello\"\n}\n").file(
+            "src/main.rs",
+            r#"fn main() {
     let a = rename_test::greet();
     let b = rename_test::greet();
     println!("{} {}", a, b);
 }
 "#,
-    );
+        );
+    let project = CodingWorkspace::with_lsp(project).await;
+    let lib_rs = project.path("src/lib.rs");
 
-    let lib_rs = project.path_string("src/lib.rs");
-    let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
+    project
+        .poll_symbol("src/lib.rs", json!({ "operation": "references", "symbol": "greet", "line": 1 }), |r| {
+            r["locations"].as_str().is_some_and(|locations| locations.contains("src/main.rs"))
+        })
+        .await;
 
-    // Wait for rust-analyzer to fully index both files before calling rename.
-    // Rename is a side-effecting operation that writes to disk, so it must not
-    // be polled — a partial rename on the first attempt would corrupt state for
-    // subsequent retries. We verify indexing is complete by polling references
-    // until rust-analyzer sees usages in main.rs.
-    poll_lsp_tool(
-        &client,
-        "lsp_symbol",
-        serde_json::json!({
-            "operation": "references",
-            "file_path": lib_rs,
-            "symbol": "greet",
-            "line": 1
-        }),
-        |r| r["locations"].as_str().is_some_and(|locations| locations.contains("src/main.rs")),
-    )
-    .await;
+    let result = project
+        .client
+        .call("lsp_rename", json!({ "file_path": lib_rs, "symbol": "greet", "new_name": "say_hello", "line": 2 }))
+        .await?;
 
-    let result = call_tool(
-        &client,
-        "lsp_rename",
-        serde_json::json!({
-            "file_path": lib_rs,
-            "symbol": "greet",
-            "new_name": "say_hello",
-            "line": 2
-        }),
-    )
-    .await;
-
-    assert_eq!(result["success"].as_bool(), Some(true));
-    assert_eq!(result["oldName"].as_str(), Some("greet"));
-    assert_eq!(result["newName"].as_str(), Some("say_hello"));
-
+    assert_eq!(result["success"], true);
+    assert_eq!(result["oldName"], "greet");
+    assert_eq!(result["newName"], "say_hello");
     let files_affected = result["filesAffected"].as_u64().unwrap();
     let total_edits = result["totalEdits"].as_u64().unwrap();
     assert!(files_affected >= 2, "expected at least 2 files, got {files_affected}");
@@ -188,17 +121,13 @@ async fn test_lsp_rename_falls_back_from_stale_line_hint() {
     assert!(changes.contains("src/lib.rs: 1"), "expected lib.rs in changes, got {changes}");
     assert!(changes.contains("src/main.rs: 2, 3"), "expected main.rs in changes, got {changes}");
 
-    let lib_content =
-        std::fs::read_to_string(project.root().join("src/lib.rs")).expect("failed to read lib.rs after rename");
-    let main_content =
-        std::fs::read_to_string(project.root().join("src/main.rs")).expect("failed to read main.rs after rename");
+    for file in ["src/lib.rs", "src/main.rs"] {
+        let content = project.read(file)?;
+        assert!(content.contains("say_hello") && !content.contains("greet"), "expected {file} renamed: {content}");
+    }
+    Ok(())
+}
 
-    assert!(
-        lib_content.contains("say_hello") && !lib_content.contains("greet"),
-        "expected lib.rs to be renamed, got: {lib_content}"
-    );
-    assert!(
-        main_content.contains("say_hello") && !main_content.contains("greet"),
-        "expected main.rs to be renamed, got: {main_content}"
-    );
+async fn rust_main(name: &str, main_rs: &str) -> CodingWorkspace {
+    CodingWorkspace::with_lsp(cargo_project(name).file("src/main.rs", main_rs)).await
 }
