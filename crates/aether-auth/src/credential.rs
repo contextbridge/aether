@@ -1,9 +1,14 @@
 use async_trait::async_trait;
 use oauth2::basic::BasicClient;
-use oauth2::reqwest::redirect::Policy;
-use oauth2::{ClientId, RefreshToken, TokenResponse, TokenUrl};
+use oauth2::http;
+use oauth2::{
+    AsyncHttpClient, ClientId, HttpClientError, HttpRequest, HttpResponse, RefreshToken, TokenResponse, TokenUrl,
+};
+use reqwest::redirect::Policy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 use crate::OAuthError;
@@ -72,7 +77,7 @@ impl OAuthCredential {
         })?;
 
         let oauth_client = BasicClient::new(ClientId::new(self.client_id.clone())).set_token_uri(token_url.clone());
-        let http_client = oauth_http_client()?;
+        let http_client = OAuthHttpClient::new()?;
         let token_response = oauth_client
             .exchange_refresh_token(&RefreshToken::new(old_refresh_token.clone()))
             .request_async(&http_client)
@@ -116,15 +121,36 @@ pub trait OAuthCredentialStorage: Send + Sync {
     }
 }
 
-fn expires_at_from_duration(duration: Option<Duration>) -> Option<u64> {
-    duration.map(|duration| current_unix_time_millis().saturating_add(duration_millis(duration)))
+pub struct OAuthHttpClient(reqwest::Client);
+
+impl OAuthHttpClient {
+    pub fn new() -> Result<Self, OAuthError> {
+        reqwest::Client::builder()
+            .redirect(Policy::none())
+            .build()
+            .map(Self)
+            .map_err(|e| OAuthError::TokenExchange(format!("failed to build HTTP client: {e}")))
+    }
 }
 
-pub fn oauth_http_client() -> Result<oauth2::reqwest::Client, OAuthError> {
-    oauth2::reqwest::Client::builder()
-        .redirect(Policy::none())
-        .build()
-        .map_err(|e| OAuthError::TokenExchange(format!("failed to build HTTP client: {e}")))
+impl<'c> AsyncHttpClient<'c> for OAuthHttpClient {
+    type Error = HttpClientError<reqwest::Error>;
+    type Future = Pin<Box<dyn Future<Output = Result<HttpResponse, Self::Error>> + Send + 'c>>;
+
+    fn call(&'c self, request: HttpRequest) -> Self::Future {
+        Box::pin(async move {
+            let response = self.0.execute(request.try_into().map_err(Box::new)?).await.map_err(Box::new)?;
+            let mut builder = http::Response::builder().status(response.status()).version(response.version());
+            for (name, value) in response.headers() {
+                builder = builder.header(name, value);
+            }
+            builder.body(response.bytes().await.map_err(Box::new)?.to_vec()).map_err(HttpClientError::Http)
+        })
+    }
+}
+
+fn expires_at_from_duration(duration: Option<Duration>) -> Option<u64> {
+    duration.map(|duration| current_unix_time_millis().saturating_add(duration_millis(duration)))
 }
 
 fn current_unix_time_millis() -> u64 {
