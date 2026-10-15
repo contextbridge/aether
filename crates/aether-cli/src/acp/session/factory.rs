@@ -15,7 +15,7 @@ use std::sync::{Arc, OnceLock};
 use tokio::sync::OnceCell;
 use tracing::{error, info, warn};
 
-use super::actor::{SessionActor, SessionActorInit, SessionHandle};
+use super::actor::SessionActorInit;
 use super::agent_key::AgentKey;
 use super::agents::SessionAgents;
 use super::config::SessionConfigState;
@@ -41,34 +41,6 @@ pub(crate) struct SessionFactory {
     hooks: SessionHooks,
     available: OnceCell<Vec<LlmModel>>,
     elicitation: OnceLock<ElicitationCapability>,
-}
-
-/// The fully-built session ready to be registered with [`AcpState`](crate::acp::state::AcpState).
-pub(crate) struct CreatedSession {
-    pub session_id: SessionId,
-    pub handle: SessionHandle,
-    pub config_options: Vec<acp::SessionConfigOption>,
-}
-
-pub(crate) struct PreparedSession {
-    init: SessionActorInit,
-    available: Vec<LlmModel>,
-}
-
-impl PreparedSession {
-    pub(crate) async fn start(self) -> Result<CreatedSession, Error> {
-        let session_id = self.init.session_id.clone();
-        let config_options = self.init.config.config_options(
-            &self.init.modes,
-            &self.available,
-            self.init.oauth_credential_store.as_ref(),
-        );
-        let handle = SessionActor::spawn(self.init).await.map_err(|e| {
-            error!("Failed to start session actor: {e}");
-            Error::internal_error()
-        })?;
-        Ok(CreatedSession { session_id, handle, config_options })
-    }
 }
 
 impl SessionFactory {
@@ -99,7 +71,7 @@ impl SessionFactory {
         &self,
         args: NewSessionRequest,
         cx: Option<&ConnectionTo<Client>>,
-    ) -> Result<PreparedSession, Error> {
+    ) -> Result<SessionActorInit, Error> {
         let cwd = args.cwd.into_inner();
         info!("Creating new session with cwd: {cwd:?}");
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -139,7 +111,7 @@ impl SessionFactory {
         args: ResumeSessionRequest,
         cx: &ConnectionTo<Client>,
         replay: bool,
-    ) -> Result<PreparedSession, Error> {
+    ) -> Result<SessionActorInit, Error> {
         let ResumeSessionRequest { session_id, cwd, mcp_servers, .. } = args;
         let cwd = cwd.into_inner();
         let session_id_string = session_id.0.to_string();
@@ -191,7 +163,7 @@ impl SessionFactory {
         transcript: Vec<SessionEvent>,
         replay: bool,
         cx: Option<&ConnectionTo<Client>>,
-    ) -> PreparedSession {
+    ) -> SessionActorInit {
         let runtime_factory = self.runtime_factory.clone().unwrap_or_else(|| {
             self.production_runtime_factory(
                 cwd.clone(),
@@ -200,7 +172,7 @@ impl SessionFactory {
                 session_id.0.as_ref(),
             )
         });
-        let init = SessionActorInit {
+        SessionActorInit {
             session_id,
             cwd,
             mcp_servers,
@@ -215,8 +187,7 @@ impl SessionFactory {
             modes: mode_catalog.modes,
             config: resolved.config,
             hooks: self.hooks.clone(),
-        };
-        PreparedSession { init, available: mode_catalog.available }
+        }
     }
 
     fn resolve_new_session(
