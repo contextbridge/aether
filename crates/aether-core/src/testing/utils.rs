@@ -251,7 +251,7 @@ impl TestAgentBuilder {
         self.configure(|agent| agent.messages(messages))
     }
 
-    /// Set the system prompt. Multiple prompts are concatenated with double
+    /// Set the system prompt. Multiple prompts are concatenated with double newlines.
     pub fn system_prompt(self, prompt: Prompt) -> Self {
         self.configure(|agent| agent.system_prompt(prompt))
     }

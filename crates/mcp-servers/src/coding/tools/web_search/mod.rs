@@ -149,12 +149,12 @@ mod tests {
         vals.iter().map(std::string::ToString::to_string).collect()
     }
 
-    fn searcher_with(results: Vec<SearchResult>) -> WebSearcher {
-        WebSearcher::with_client(FakeSearchClient::new([Ok(results)]))
+    fn searcher_with(query: &str, results: Vec<SearchResult>) -> WebSearcher {
+        WebSearcher::with_client(FakeSearchClient::default().with_results(query, results))
     }
 
-    fn rate_limited(retry_after: Option<Duration>) -> Result<Vec<SearchResult>, WebSearchError> {
-        Err(WebSearchError::RateLimited { message: "too many requests".to_string(), retry_after })
+    fn rate_limited(retry_after: Option<Duration>) -> WebSearchError {
+        WebSearchError::RateLimited { message: "too many requests".to_string(), retry_after }
     }
 
     #[tokio::test]
@@ -167,7 +167,7 @@ mod tests {
         ];
 
         for (allowed_domains, blocked_domains, expected) in cases {
-            let searcher = searcher_with(urls.iter().map(|url| make_result(url)).collect());
+            let searcher = searcher_with("rust", urls.iter().map(|url| make_result(url)).collect());
             let query = WebSearchInput { allowed_domains, blocked_domains, ..input("rust") };
             let output = searcher.search(query, |_| async {}).await.unwrap();
             let urls: Vec<_> = output.results.iter().map(|r| r.url.as_str()).collect();
@@ -184,8 +184,9 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn retries_rate_limited_search_after_retry_after_period() {
-        let client =
-            FakeSearchClient::new([rate_limited(Some(Duration::ZERO)), Ok(vec![make_result("https://example.com")])]);
+        let client = FakeSearchClient::default()
+            .with_results("rust", vec![make_result("https://example.com")])
+            .with_failures("rust", [rate_limited(Some(Duration::ZERO))]);
         let searcher = WebSearcher::with_client(client);
 
         let retry_delays = Arc::new(Mutex::new(Vec::new()));
@@ -206,7 +207,9 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn retries_rate_limited_search_when_retry_after_header_is_missing() {
-        let client = FakeSearchClient::new([rate_limited(None), Ok(vec![make_result("https://example.com")])]);
+        let client = FakeSearchClient::default()
+            .with_results("rust", vec![make_result("https://example.com")])
+            .with_failures("rust", [rate_limited(None)]);
         let searcher = WebSearcher::with_client(client);
 
         let retry_delays = Arc::new(Mutex::new(Vec::new()));
@@ -227,9 +230,9 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn returns_rate_limited_error_after_retry_budget_is_exhausted() {
-        let mut responses = vec![rate_limited(Some(Duration::ZERO)); 4];
-        responses.push(Err(WebSearchError::ApiError("retry budget was exceeded".to_string())));
-        let searcher = WebSearcher::with_client(FakeSearchClient::new(responses));
+        let mut failures = vec![rate_limited(Some(Duration::ZERO)); 4];
+        failures.push(WebSearchError::ApiError("retry budget was exceeded".to_string()));
+        let searcher = WebSearcher::with_client(FakeSearchClient::default().with_failures("rust", failures));
         let result = searcher.search(input("rust"), |_| async {}).await;
 
         assert!(matches!(result, Err(WebSearchError::RateLimited { .. })));
@@ -237,7 +240,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_count_limiting() {
-        let searcher = searcher_with((0..30).map(|i| make_result(&format!("https://example.com/{i}"))).collect());
+        let searcher =
+            searcher_with("test query", (0..30).map(|i| make_result(&format!("https://example.com/{i}"))).collect());
 
         let output = searcher.search(WebSearchInput { count: Some(15), ..input("test query") }, |_| async {}).await;
         assert_eq!(output.unwrap().results.len(), 15);
