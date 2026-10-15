@@ -3,13 +3,14 @@
 //! Compiled for the crate's own tests and for any consumer that enables the
 //! `testing` feature. Prefer these over hand-rolling per-suite fixtures.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
 use crate::prompt_file::{PromptFile, PromptTriggers};
-use crate::{AgentConfig, PromptSource};
+use crate::{AetherSettings, AgentConfig, McpSourceSpec, PromptSource};
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
+use aether_core::core::Prompt;
 pub use utils::testing::TestWorkspace;
 
 /// The model id every shared agent fixture resolves to.
@@ -63,6 +64,14 @@ pub fn agent_json_with(name: &str, description: &str, extra: Value) -> Value {
 /// A user-invocable [`AgentConfig`] named `name` whose prompt is the file `PROMPT.md`.
 pub fn agent_config(name: &str) -> AgentConfig {
     AgentConfig { prompts: vec![PromptSource::file("PROMPT.md")], ..settings_agent(name, &format!("{name} agent")) }
+}
+
+pub fn settings_with_mcps(mcps: Vec<McpSourceSpec>) -> AetherSettings {
+    AetherSettings { agents: vec![AgentConfig { mcps, ..agent_config("alpha") }], ..AetherSettings::default() }
+}
+
+pub fn has_prompt_file(spec: &AgentSpec, expected: impl AsRef<Path>) -> bool {
+    spec.prompts.iter().any(|prompt| matches!(prompt, Prompt::File { path, .. } if path.ends_with(&expected)))
 }
 
 /// A [`PromptFile`] with valid defaults, built fluently for tests that exercise

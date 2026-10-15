@@ -301,7 +301,7 @@ async fn test_simple_message_content() -> Result<(), Box<dyn Error>> {
     let result =
         test_agent().llm_responses(&llm_responses).user_text("Just a simple message").run_with_context().await?;
 
-    let contexts = result.captured_contexts.lock().unwrap();
+    let contexts = result.contexts();
     let first_context = &contexts[0];
     let messages = first_context.messages();
 
@@ -473,7 +473,7 @@ async fn test_reasoning_content_is_saved_in_context_after_tool_call() -> Result<
 
     let result = test_agent().llm_responses(&llm_responses).user_text("do something").run_with_context().await?;
 
-    let contexts = result.captured_contexts.lock().unwrap();
+    let contexts = result.contexts();
     let second_context = contexts.get(1).expect("expected second LLM request context");
 
     let assistant_with_tool_call = second_context.messages().iter().find(|message| {
