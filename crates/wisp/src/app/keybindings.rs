@@ -13,35 +13,35 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
+/// The user's overrides; every other action uses its default binding.
 #[derive(Clone, Debug)]
 pub struct Keybindings(BTreeMap<KeyAction, KeyBinding>);
 
 impl Keybindings {
-    /// Resolves the configured bindings over the defaults. An entry that does
-    /// not parse keeps its default and logs a warning rather than dropping the
-    /// command.
+    /// Parses the configured overrides. An entry that does not parse keeps its
+    /// default and logs a warning rather than dropping the command.
     pub fn from_settings(settings: &UiSettings) -> Self {
-        let mut bindings = Self::default();
+        let mut overrides = BTreeMap::new();
         for (&action, text) in &settings.keybindings {
             match text.parse() {
                 Ok(parsed) => {
-                    bindings.0.insert(action, parsed);
+                    overrides.insert(action, parsed);
                 }
                 Err(KeyBindingParseError(input)) => {
                     tracing::warn!("ignoring unparseable keybinding {action:?} = {input:?}");
                 }
             }
         }
-        bindings
+        Self(overrides)
     }
 
     /// Whether `key` triggers `action`, per the module's modifier policy.
     pub fn matches(&self, action: KeyAction, key: KeyEvent) -> bool {
-        self.0.get(&action).is_some_and(|binding| binding.matches(key))
+        self.0.get(&action).copied().unwrap_or_else(|| action.default_binding()).matches(key)
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KeyBinding {
     pub code: KeyCode,
     pub modifiers: KeyModifiers,
@@ -89,20 +89,20 @@ impl FromStr for KeyBinding {
     }
 }
 
-impl Default for Keybindings {
-    fn default() -> Self {
-        let defaults = [
-            (KeyAction::Exit, KeyCode::Char('c'), KeyModifiers::CONTROL),
-            (KeyAction::Cancel, KeyCode::Esc, KeyModifiers::NONE),
-            (KeyAction::Submit, KeyCode::Enter, KeyModifiers::NONE),
-            (KeyAction::OpenCommandPicker, KeyCode::Char('/'), KeyModifiers::NONE),
-            (KeyAction::OpenFilePicker, KeyCode::Char('@'), KeyModifiers::NONE),
-            (KeyAction::ToggleGitDiff, KeyCode::Char('g'), KeyModifiers::CONTROL),
-            (KeyAction::CycleReasoning, KeyCode::Tab, KeyModifiers::NONE),
-            (KeyAction::CycleMode, KeyCode::BackTab, KeyModifiers::SHIFT),
-            (KeyAction::OpenPromptSearch, KeyCode::Char('r'), KeyModifiers::CONTROL),
-        ];
-        Self(defaults.into_iter().map(|(action, code, modifiers)| (action, KeyBinding::new(code, modifiers))).collect())
+impl KeyAction {
+    fn default_binding(self) -> KeyBinding {
+        let (code, modifiers) = match self {
+            Self::Exit => (KeyCode::Char('c'), KeyModifiers::CONTROL),
+            Self::Cancel => (KeyCode::Esc, KeyModifiers::NONE),
+            Self::Submit => (KeyCode::Enter, KeyModifiers::NONE),
+            Self::OpenCommandPicker => (KeyCode::Char('/'), KeyModifiers::NONE),
+            Self::OpenFilePicker => (KeyCode::Char('@'), KeyModifiers::NONE),
+            Self::ToggleGitDiff => (KeyCode::Char('g'), KeyModifiers::CONTROL),
+            Self::CycleReasoning => (KeyCode::Tab, KeyModifiers::NONE),
+            Self::CycleMode => (KeyCode::BackTab, KeyModifiers::SHIFT),
+            Self::OpenPromptSearch => (KeyCode::Char('r'), KeyModifiers::CONTROL),
+        };
+        KeyBinding::new(code, modifiers)
     }
 }
 
@@ -171,6 +171,7 @@ mod tests {
         };
         let bindings = Keybindings::from_settings(&settings);
         assert!(bindings.matches(KeyAction::ToggleGitDiff, KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL)));
+        assert!(!bindings.matches(KeyAction::ToggleGitDiff, KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL)));
         assert!(bindings.matches(KeyAction::Submit, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
     }
 }
