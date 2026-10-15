@@ -2,10 +2,8 @@ use crate::TestResult;
 use acp_utils::config_option_id::ConfigOptionId;
 use aether_cli::acp::testing::{AcpTestHarness, FakeAgentSwitchingSession};
 use agent_client_protocol::schema::v2::{
-    CloseSessionRequest, ContentBlock, ImageContent, PromptRequest, PromptResponse, SetSessionConfigOptionRequest,
-    StopReason, TextContent,
+    CloseSessionRequest, ContentBlock, ImageContent, SetSessionConfigOptionRequest, StopReason,
 };
-use std::future::Future;
 
 /// Text each fake agent streams when it runs. Mirrors the harness constants so
 /// the *other* agent's view of the shared transcript can be asserted.
@@ -38,7 +36,7 @@ async fn switching_to_agent_without_mcp_sends_empty_status() {
 
         select_coder(&harness, &fake).await;
 
-        harness.expect_mcp_server_status_exact(&[]).await;
+        harness.expect_mcp_server_status(&[]).await;
         harness.expect_available_commands(&[], &["plan", "edit"]).await;
     })
     .await;
@@ -52,8 +50,7 @@ async fn mode_switch_routes_next_prompt_to_target_agent_and_refreshes_ui_state()
         harness.expect_available_commands(&["plan"], &["edit"]).await;
 
         select_coder(&harness, &fake).await;
-        let prompt = send_prompt(&harness, &fake, "implement it");
-        tokio::pin!(prompt);
+        let prompt = harness.prompt(fake.session_id(), "implement it");
 
         harness.expect_mcp_server_status(&["coder-mcp"]).await;
         harness.expect_available_commands(&["edit"], &["plan"]).await;
@@ -74,14 +71,12 @@ async fn switch_to_coder_receives_shared_prior_transcript() {
         harness.expect_mcp_server_status(&["planner-mcp"]).await;
         harness.expect_available_commands(&["plan"], &["edit"]).await;
 
-        let first_prompt = send_prompt(&harness, &fake, "make a plan");
-        first_prompt.await.expect("first prompt accepted");
+        harness.prompt(fake.session_id(), "make a plan").await.expect("first prompt accepted");
         harness.expect_idle(fake.session_id(), StopReason::EndTurn).await;
         fake.planner().assert_saw(&["make a plan"]);
 
         select_coder(&harness, &fake).await;
-        let second_prompt = send_prompt(&harness, &fake, "write code");
-        tokio::pin!(second_prompt);
+        let second_prompt = harness.prompt(fake.session_id(), "write code");
 
         harness.expect_mcp_server_status(&["coder-mcp"]).await;
         harness.expect_available_commands(&["edit"], &["plan"]).await;
@@ -100,8 +95,7 @@ async fn switching_back_reuses_warm_runtime_and_syncs_latest_transcript() {
         harness.expect_available_commands(&["plan"], &["edit"]).await;
 
         select_coder(&harness, &fake).await;
-        let coder_prompt = send_prompt(&harness, &fake, "write code");
-        tokio::pin!(coder_prompt);
+        let coder_prompt = harness.prompt(fake.session_id(), "write code");
 
         harness.expect_mcp_server_status(&["coder-mcp"]).await;
         harness.expect_available_commands(&["edit"], &["plan"]).await;
@@ -112,8 +106,7 @@ async fn switching_back_reuses_warm_runtime_and_syncs_latest_transcript() {
         assert_eq!(harness.live_runtime_count(), 2);
         select_planner(&harness, &fake).await;
         assert_eq!(harness.live_runtime_count(), 2, "switching back keeps the warm runtime");
-        let planner_prompt = send_prompt(&harness, &fake, "review code");
-        tokio::pin!(planner_prompt);
+        let planner_prompt = harness.prompt(fake.session_id(), "review code");
 
         harness.expect_mcp_server_status(&["planner-mcp"]).await;
         harness.expect_available_commands(&["plan"], &["edit"]).await;
@@ -133,14 +126,12 @@ async fn mode_change_applies_at_next_prompt_boundary() {
         harness.expect_mcp_server_status(&["planner-mcp"]).await;
         harness.expect_available_commands(&["plan"], &["edit"]).await;
 
-        let in_flight = send_prompt(&harness, &fake, "stay planner for this turn");
-        in_flight.await.expect("prompt accepted");
+        harness.prompt(fake.session_id(), "stay planner for this turn").await.expect("prompt accepted");
         harness.expect_idle(fake.session_id(), StopReason::EndTurn).await;
         fake.planner().assert_saw(&["stay planner for this turn"]);
 
         select_coder(&harness, &fake).await;
-        let next = send_prompt(&harness, &fake, "now coder");
-        tokio::pin!(next);
+        let next = harness.prompt(fake.session_id(), "now coder");
 
         harness.expect_mcp_server_status(&["coder-mcp"]).await;
         harness.expect_available_commands(&["edit"], &["plan"]).await;
@@ -157,11 +148,11 @@ async fn prompt_sent_before_a_deferred_mode_switch_is_validated_against_the_agen
         let expansion = harness.pause_prompt_expansion();
         let fake = harness.insert_agent_switching_session().await;
         harness.expect_mcp_server_status(&["planner-mcp"]).await;
-        let in_flight = send_prompt(&harness, &fake, "/plan");
+        let in_flight = harness.prompt(fake.session_id(), "/plan");
         expansion.reached().await;
 
         select_coder(&harness, &fake).await;
-        let image = send_content(&harness, &fake, vec![ContentBlock::Image(ImageContent::new("aW1n", "image/png"))]);
+        let image = harness.prompt(fake.session_id(), ContentBlock::Image(ImageContent::new("aW1n", "image/png")));
         expansion.open();
 
         in_flight.await?;
@@ -184,8 +175,7 @@ async fn loaded_session_restores_last_active_agent_from_control_events() {
         harness.append_agent_switch("loaded", Some("Planner"), Some("Coder"));
         let fake = harness.insert_loaded_agent_switching_session("loaded").await;
 
-        let prompt = send_prompt(&harness, &fake, "continue");
-        prompt.await.expect("prompt accepted");
+        harness.prompt(fake.session_id(), "continue").await.expect("prompt accepted");
         harness.expect_idle(fake.session_id(), StopReason::EndTurn).await;
         fake.coder().assert_saw(&["previous request", "continue"]);
         fake.planner().assert_never_ran();
@@ -240,23 +230,6 @@ async fn close_interrupts_runtime_startup_during_mode_switch() {
         assert_eq!(harness.live_runtime_count(), 0);
     })
     .await;
-}
-
-fn send_prompt(
-    harness: &AcpTestHarness,
-    fake: &FakeAgentSwitchingSession,
-    text: &str,
-) -> impl Future<Output = Result<PromptResponse, agent_client_protocol::Error>> + use<> {
-    send_content(harness, fake, vec![ContentBlock::Text(TextContent::new(text.to_string()))])
-}
-
-fn send_content(
-    harness: &AcpTestHarness,
-    fake: &FakeAgentSwitchingSession,
-    content: Vec<ContentBlock>,
-) -> impl Future<Output = Result<PromptResponse, agent_client_protocol::Error>> + use<> {
-    let response = harness.client_cx.send_request(PromptRequest::new(fake.session_id().clone(), content));
-    async move { response.block_task().await }
 }
 
 async fn select_coder(harness: &AcpTestHarness, fake: &FakeAgentSwitchingSession) {

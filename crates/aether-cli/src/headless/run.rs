@@ -141,57 +141,30 @@ mod tests {
     use crate::output::test_events::{llm_call_started, retry_scheduled, tool_progress, usage_update};
 
     #[test]
-    fn event_kind_none_for_non_output_fragments() {
-        assert_eq!(event_kind(&AgentEvent::text("id", "x", StreamState::Partial)), None);
-        assert_eq!(event_kind(&AgentEvent::thought("id", "x", StreamState::Partial)), None);
-        assert_eq!(
-            event_kind(&AgentEvent::Tool(ToolEvent::InputStarted { id: "tc1".to_string(), name: "bash".to_string() })),
-            None,
-        );
-        assert_eq!(
-            event_kind(&AgentEvent::Tool(ToolEvent::InputDelta { id: "tc1".to_string(), chunk: "x".to_string() })),
-            None,
-        );
-    }
-
-    #[test]
-    fn event_kind_turn_ended_is_filterable() {
-        assert_eq!(event_kind(&AgentEvent::turn_ended(TurnOutcome::Completed)), Some(CliEventKind::TurnEnded));
-    }
-
-    #[test]
-    fn should_emit_empty_filter_rejects_non_output_events() {
-        assert!(should_emit(&AgentEvent::tool_call("tc1", "bash", "{}"), &[]));
-        assert!(should_emit(&AgentEvent::turn_ended(TurnOutcome::failed("e")), &[]));
-        assert!(should_emit(&AgentEvent::turn_ended(TurnOutcome::Completed), &[]));
-        assert!(!should_emit(&AgentEvent::text("id", "x", StreamState::Partial), &[]));
-        assert!(!should_emit(
-            &AgentEvent::Tool(ToolEvent::InputDelta { id: "tc1".to_string(), chunk: "x".to_string() }),
-            &[],
-        ));
-    }
-
-    #[test]
-    fn should_emit_single_type_whitelist() {
-        let filter = &[CliEventKind::ToolCall];
-        assert!(should_emit(&AgentEvent::tool_call("tc1", "bash", "{}"), filter));
-        assert!(!should_emit(&AgentEvent::tool_result("tc1", "bash", "{}", "ok"), filter));
-        assert!(!should_emit(&AgentEvent::turn_ended(TurnOutcome::Completed), filter));
-    }
-
-    #[test]
-    fn should_emit_multi_type_whitelist() {
-        let filter = &[CliEventKind::ToolCall, CliEventKind::ToolResult];
-        assert!(should_emit(&AgentEvent::tool_call("tc1", "bash", "{}"), filter));
-        assert!(should_emit(&AgentEvent::tool_result("tc1", "bash", "{}", "ok"), filter));
-        assert!(!should_emit(&AgentEvent::turn_ended(TurnOutcome::Completed), filter));
-    }
-
-    #[test]
-    fn should_emit_turn_ended_respects_filter() {
-        let msg = AgentEvent::turn_ended(TurnOutcome::Completed);
-        assert!(should_emit(&msg, &[CliEventKind::TurnEnded]));
-        assert!(!should_emit(&msg, &[CliEventKind::ToolCall]));
+    fn should_emit_skips_fragments_and_applies_the_event_filter() {
+        let call = AgentEvent::tool_call("tc1", "bash", "{}");
+        let result = AgentEvent::tool_result("tc1", "bash", "{}", "ok");
+        let done = AgentEvent::turn_ended(TurnOutcome::Completed);
+        let calls = &[CliEventKind::ToolCall][..];
+        let calls_and_results = &[CliEventKind::ToolCall, CliEventKind::ToolResult][..];
+        let cases: [(AgentEvent, &[CliEventKind], bool); 13] = [
+            (call.clone(), &[], true),
+            (AgentEvent::turn_ended(TurnOutcome::failed("e")), &[], true),
+            (done.clone(), &[], true),
+            (AgentEvent::text("id", "x", StreamState::Partial), &[], false),
+            (AgentEvent::thought("id", "x", StreamState::Partial), &[], false),
+            (AgentEvent::Tool(ToolEvent::InputStarted { id: "tc1".into(), name: "bash".into() }), &[], false),
+            (AgentEvent::Tool(ToolEvent::InputDelta { id: "tc1".into(), chunk: "x".into() }), &[], false),
+            (result.clone(), calls, false),
+            (done.clone(), calls, false),
+            (call, calls_and_results, true),
+            (result, calls_and_results, true),
+            (done.clone(), calls_and_results, false),
+            (done, &[CliEventKind::TurnEnded], true),
+        ];
+        for (event, filter, expected) in cases {
+            assert_eq!(should_emit(&event, filter), expected, "{event:?} with filter {filter:?}");
+        }
     }
 
     #[test]
@@ -271,28 +244,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stream_output_turn_ended_breaks_loop_under_filter() {
-        let (tx, mut rx) = mpsc::channel(4);
-        tx.send(AgentEvent::turn_ended(TurnOutcome::Completed)).await.unwrap();
-        let filter = vec![CliEventKind::ToolCall];
-        let code = stream_output(&mut rx, OutputFormat::Text, &filter).await;
-        assert_eq!(code, ExitCode::SUCCESS);
-    }
-
-    #[tokio::test]
-    async fn stream_output_failed_turn_exits_with_failure() {
-        let (tx, mut rx) = mpsc::channel(4);
-        tx.send(AgentEvent::turn_ended(TurnOutcome::failed("boom"))).await.unwrap();
-        let code = stream_output(&mut rx, OutputFormat::Text, &[]).await;
-        assert_eq!(code, ExitCode::FAILURE);
-    }
-
-    #[tokio::test]
-    async fn stream_output_channel_closed_before_turn_ended_exits_with_failure() {
-        let (tx, mut rx) = mpsc::channel(4);
-        tx.send(AgentEvent::Turn(TurnEvent::Started { content: vec![] })).await.unwrap();
-        drop(tx);
-        let code = stream_output(&mut rx, OutputFormat::Text, &[]).await;
-        assert_eq!(code, ExitCode::FAILURE);
+    async fn stream_output_exit_code_follows_the_turn_outcome_or_closed_channel() {
+        let cases = [
+            (AgentEvent::turn_ended(TurnOutcome::Completed), &[CliEventKind::ToolCall][..], ExitCode::SUCCESS),
+            (AgentEvent::turn_ended(TurnOutcome::failed("boom")), &[], ExitCode::FAILURE),
+            (AgentEvent::Turn(TurnEvent::Started { content: vec![] }), &[], ExitCode::FAILURE),
+        ];
+        for (event, filter, expected) in cases {
+            let (tx, mut rx) = mpsc::channel(1);
+            tx.send(event).await.unwrap();
+            drop(tx);
+            assert_eq!(stream_output(&mut rx, OutputFormat::Text, filter).await, expected);
+        }
     }
 }

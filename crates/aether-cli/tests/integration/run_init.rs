@@ -8,6 +8,15 @@ use mcp_servers::McpBuilderExt;
 use std::collections::BTreeMap;
 use std::path::Path;
 
+fn apply(
+    target: InitTarget,
+    provider: Provider,
+    preset: Preset,
+    harnesses: &[HarnessIntegration],
+) -> Result<InitOutcome, InitError> {
+    apply_init(target, provider, preset, harnesses, OverwriteMode::PreserveExisting)
+}
+
 fn load(settings_path: &Path) -> AetherSettings {
     let content = std::fs::read_to_string(settings_path).expect("settings.json");
     AetherSettings::try_from(content.as_str()).expect("settings parses")
@@ -34,14 +43,7 @@ fn inline_servers(spec: &McpSourceSpec) -> &BTreeMap<String, McpServerConfig> {
 #[test]
 fn writes_user_minimal_preset_for_codex() {
     let dir = tempfile::tempdir().unwrap();
-    let outcome = apply_init(
-        InitTarget::user(dir.path()),
-        Provider::Codex,
-        Preset::Minimal,
-        &[],
-        OverwriteMode::PreserveExisting,
-    )
-    .expect("apply_init");
+    let outcome = apply(InitTarget::user(dir.path()), Provider::Codex, Preset::Minimal, &[]).expect("apply_init");
 
     assert!(matches!(outcome, InitOutcome::Applied { .. }), "{outcome:?}");
     assert!(dir.path().join("settings.json").is_file());
@@ -65,14 +67,7 @@ fn writes_user_minimal_preset_for_codex() {
 #[test]
 fn writes_project_minimal_preset_for_codex() {
     let dir = tempfile::tempdir().unwrap();
-    let outcome = apply_init(
-        InitTarget::project(dir.path()),
-        Provider::Codex,
-        Preset::Minimal,
-        &[],
-        OverwriteMode::PreserveExisting,
-    )
-    .expect("apply_init");
+    let outcome = apply(InitTarget::project(dir.path()), Provider::Codex, Preset::Minimal, &[]).expect("apply_init");
 
     assert!(matches!(outcome, InitOutcome::Applied { .. }), "{outcome:?}");
     assert!(dir.path().join(".aether/settings.json").is_file());
@@ -101,14 +96,8 @@ fn writes_project_minimal_preset_for_codex() {
 #[test]
 fn writes_project_batteries_preset_for_anthropic() {
     let dir = tempfile::tempdir().unwrap();
-    let outcome = apply_init(
-        InitTarget::project(dir.path()),
-        Provider::Anthropic,
-        Preset::BatteriesIncluded,
-        &[],
-        OverwriteMode::PreserveExisting,
-    )
-    .expect("apply_init");
+    let outcome = apply(InitTarget::project(dir.path()), Provider::Anthropic, Preset::BatteriesIncluded, &[])
+        .expect("apply_init");
 
     assert!(matches!(outcome, InitOutcome::Applied { .. }), "{outcome:?}");
     assert!(dir.path().join(".aether/agents/codebase-explorer/AGENTS.md").is_file());
@@ -149,14 +138,8 @@ fn writes_project_batteries_preset_for_anthropic() {
 fn batteries_included_harness_configurations() {
     for case in &harness_cases() {
         let dir = tempfile::tempdir().unwrap();
-        apply_init(
-            InitTarget::project(dir.path()),
-            Provider::Anthropic,
-            Preset::BatteriesIncluded,
-            &case.harnesses,
-            OverwriteMode::PreserveExisting,
-        )
-        .unwrap_or_else(|e| panic!("{}: apply_init failed: {e}", case.name));
+        apply(InitTarget::project(dir.path()), Provider::Anthropic, Preset::BatteriesIncluded, &case.harnesses)
+            .unwrap_or_else(|e| panic!("{}: apply_init failed: {e}", case.name));
 
         let settings = load(&dir.path().join(".aether/settings.json"));
 
@@ -190,12 +173,11 @@ fn batteries_included_harness_configurations() {
 #[test]
 fn batteries_included_harness_skills_dirs_are_ordered_before_project_skills() {
     let dir = tempfile::tempdir().unwrap();
-    apply_init(
+    apply(
         InitTarget::project(dir.path()),
         Provider::Anthropic,
         Preset::BatteriesIncluded,
         &[HarnessIntegration::Agents],
-        OverwriteMode::PreserveExisting,
     )
     .expect("apply_init");
 
@@ -222,14 +204,7 @@ fn refuses_to_overwrite_existing_user_settings_without_force() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("settings.json"), "{}").unwrap();
 
-    let outcome = apply_init(
-        InitTarget::user(dir.path()),
-        Provider::Codex,
-        Preset::Minimal,
-        &[],
-        OverwriteMode::PreserveExisting,
-    )
-    .expect("apply_init");
+    let outcome = apply(InitTarget::user(dir.path()), Provider::Codex, Preset::Minimal, &[]).expect("apply_init");
 
     assert!(matches!(outcome, InitOutcome::AlreadyInitialized { .. }), "{outcome:?}");
     assert_eq!(std::fs::read_to_string(dir.path().join("settings.json")).unwrap(), "{}");
@@ -241,14 +216,7 @@ fn refuses_to_overwrite_existing_project_settings_without_force() {
     std::fs::create_dir_all(dir.path().join(".aether")).unwrap();
     std::fs::write(dir.path().join(".aether/settings.json"), "{}").unwrap();
 
-    let outcome = apply_init(
-        InitTarget::project(dir.path()),
-        Provider::Codex,
-        Preset::Minimal,
-        &[],
-        OverwriteMode::PreserveExisting,
-    )
-    .expect("apply_init");
+    let outcome = apply(InitTarget::project(dir.path()), Provider::Codex, Preset::Minimal, &[]).expect("apply_init");
 
     assert!(matches!(outcome, InitOutcome::AlreadyInitialized { .. }), "{outcome:?}");
     assert_eq!(std::fs::read_to_string(dir.path().join(".aether/settings.json")).unwrap(), "{}");
@@ -283,14 +251,7 @@ async fn every_inline_mcp_in_init_presets_spawns_with_its_args() {
             [vec![], vec![HarnessIntegration::Claude], vec![HarnessIntegration::Claude, HarnessIntegration::Agents]]
         {
             let dir = tempfile::tempdir().unwrap();
-            apply_init(
-                InitTarget::user(dir.path()),
-                Provider::Anthropic,
-                preset,
-                &harnesses,
-                OverwriteMode::PreserveExisting,
-            )
-            .expect("apply_init");
+            apply(InitTarget::user(dir.path()), Provider::Anthropic, preset, &harnesses).expect("apply_init");
             let settings = load(&dir.path().join("settings.json"));
 
             for agent in &settings.agents {
@@ -312,14 +273,8 @@ async fn every_inline_mcp_in_init_presets_spawns_with_its_args() {
 #[test]
 fn unsupported_provider_returns_error_without_writing_files() {
     let dir = tempfile::tempdir().unwrap();
-    let err = apply_init(
-        InitTarget::user(dir.path()),
-        Provider::Gemini,
-        Preset::Minimal,
-        &[],
-        OverwriteMode::PreserveExisting,
-    )
-    .expect_err("Gemini has no preset");
+    let err =
+        apply(InitTarget::user(dir.path()), Provider::Gemini, Preset::Minimal, &[]).expect_err("Gemini has no preset");
 
     assert!(matches!(err, InitError::UnsupportedProvider { provider: Provider::Gemini, .. }), "{err:?}");
     assert!(!dir.path().join("settings.json").exists(), "no settings.json should be written");

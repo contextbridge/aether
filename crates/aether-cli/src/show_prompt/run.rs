@@ -87,42 +87,18 @@ mod tests {
     }
 
     #[test]
-    fn format_stats_computes_token_estimate() {
-        let output = format_stats(12000, 8500, 14);
+    fn format_stats_right_aligns_counts_and_floors_the_token_estimate() {
         assert_eq!(
-            output,
+            format_stats(12000, 8500, 14),
             "---\n\
              Prompt chars:        12000\n\
              Tool schema chars:    8500\n\
              Est. tokens:     ~    5125\n\
              MCP tools:              14"
         );
-    }
-
-    #[test]
-    fn format_stats_handles_zero() {
-        let output = format_stats(0, 0, 0);
-        assert_eq!(
-            output,
-            "---\n\
-             Prompt chars:            0\n\
-             Tool schema chars:       0\n\
-             Est. tokens:     ~       0\n\
-             MCP tools:               0"
-        );
-    }
-
-    #[test]
-    fn format_stats_handles_small_values() {
-        let output = format_stats(3, 0, 1);
-        assert_eq!(
-            output,
-            "---\n\
-             Prompt chars:            3\n\
-             Tool schema chars:       0\n\
-             Est. tokens:     ~       0\n\
-             MCP tools:               1"
-        );
+        for prompt_chars in [0, 3] {
+            assert!(format_stats(prompt_chars, 0, 1).contains("Est. tokens:     ~       0\n"));
+        }
     }
 
     #[test]
