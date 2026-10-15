@@ -1,11 +1,11 @@
 use super::agent::RetryConfig;
 use crate::agent_spec::AgentSpec;
 use crate::context::{CompactionConfig, SessionUsageTracker};
-use crate::core::{Agent, AgentDeps, Prompt, PromptCache, Result};
+use crate::core::{Agent, AgentDeps, Prompt, Result};
 use crate::events::{AgentEvent, AgentObserver, Command, TurnOutcome};
 use crate::mcp::McpCatalog;
 use llm::parser::ModelProviderParser;
-use llm::{ChatMessage, Context, ModelSettings, SessionUsageEvent, StreamingModelProvider};
+use llm::{ChatMessage, ModelSettings, SessionUsageEvent, StreamingModelProvider};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -241,23 +241,10 @@ impl AgentBuilder {
         self
     }
 
-    pub async fn spawn(mut self) -> Result<(Sender<Command>, Receiver<AgentEvent>, AgentHandle)> {
-        let mut prompt_cache = PromptCache::new(std::mem::take(&mut self.prompts));
-        let system_content = prompt_cache.render().await?;
-        let mut messages = Vec::new();
-
-        if !system_content.is_empty() {
-            messages.push(ChatMessage::system(system_content));
-        }
-
-        messages.extend(std::mem::take(&mut self.initial_messages));
+    pub async fn spawn(self) -> Result<(Sender<Command>, Receiver<AgentEvent>, AgentHandle)> {
         let (command_tx, command_rx) = mpsc::channel::<Command>(self.channel_capacity);
         let (message_tx, agent_event_rx) = mpsc::channel::<AgentEvent>(self.channel_capacity);
-        let mut context = Context::new(messages, Vec::new());
-        context.set_model_settings(std::mem::take(&mut self.model_settings));
-        context.set_session_affinity_key(Some(std::mem::take(&mut self.session_affinity_key)));
-
-        let agent = Agent::new(self, context, prompt_cache, command_rx, message_tx);
+        let agent = Agent::new(self, command_rx, message_tx).await?;
         let handle = AbortOnDropHandle::new(tokio::spawn(agent.run()));
 
         Ok((command_tx, agent_event_rx, AgentHandle { handle }))
