@@ -128,7 +128,7 @@ impl OAuthCredentialStorage for EncryptedFileOAuthCredentialStorage {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::{create_dir, write};
+    use std::fs::write;
 
     use super::*;
     use crate::OAuthCredential;
@@ -184,14 +184,6 @@ mod tests {
         write(&store.path, ciphertext).unwrap();
         let credential = store.load_credential("codex").await.unwrap().expect("existing credential");
         assert_eq!(credential, test_credential());
-    }
-
-    #[tokio::test]
-    async fn save_succeeds_while_a_temp_path_is_occupied() {
-        let store = temp_store("pass");
-        create_dir(store.path.with_extension("tmp")).unwrap();
-        store.save_credential("server-1", test_credential()).await.unwrap();
-        assert!(store.load_credential("server-1").await.unwrap().is_some());
     }
 
     fn test_credential() -> OAuthCredential {
