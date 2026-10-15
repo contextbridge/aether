@@ -401,22 +401,28 @@ impl AcpState {
         sender.send(command).await.map_err(|_| Error::internal_error())
     }
 
-    /// Moves the session's uncommitted changes to the target workspace, then
-    /// relocates the stored session to the target directory.
+    /// Moves the session's uncommitted changes to the target workspace, stops
+    /// the session, then relocates the stored session to the target directory.
     pub(crate) async fn workspace_move(&self, params: &WorkspaceMoveParams) -> Result<WorkspaceMoveResponse, Error> {
         let target = params.target.clone();
-        let session_id = params.session_id.clone();
-        let response = self
-            .run_workspace_request(session_id.clone(), move |session_store, manager, src_cwd| {
-                let new_cwd = manager.move_to(&src_cwd, &target).map_err(WorkspaceRequestError::Workspace)?;
-                session_store.relocate(&session_id, &new_cwd).map_err(WorkspaceRequestError::Relocate)?;
-                Ok(WorkspaceMoveResponse { new_cwd })
+        let new_cwd = self
+            .run_workspace_request(params.session_id.clone(), move |_session_store, manager, src_cwd| {
+                manager.move_to(&src_cwd, &target).map_err(WorkspaceRequestError::Workspace)
             })
             .await?;
 
-        self.registry.stop_matching(Some(&params.session_id)).await;
-        info!("Moved session {} to workspace {}", params.session_id, response.new_cwd.display());
-        Ok(response)
+        let mut active = self.registry.lock().await;
+        active.stop_matching(Some(&params.session_id)).await;
+        let (session_store, session_id, relocated_cwd) =
+            (Arc::clone(&self.session_store), params.session_id.clone(), new_cwd.clone());
+        spawn_blocking(move || session_store.relocate(&session_id, &relocated_cwd))
+            .await
+            .map_err(|e| internal_error(format!("workspace task failed: {e}")))?
+            .map_err(|e| internal_error(format!("failed to relocate session: {e}")))?;
+        drop(active);
+
+        info!("Moved session {} to workspace {}", params.session_id, new_cwd.display());
+        Ok(WorkspaceMoveResponse { new_cwd })
     }
 
     async fn run_workspace_request<T, F>(&self, session_id: String, op: F) -> Result<T, Error>
@@ -602,7 +608,6 @@ fn respond_err<T: agent_client_protocol::JsonRpcResponse>(responder: Responder<T
 enum WorkspaceRequestError {
     UnknownSession(String),
     Workspace(WorkspaceError),
-    Relocate(SessionStoreError),
 }
 
 fn workspace_request_error(e: WorkspaceRequestError) -> Error {
@@ -611,7 +616,6 @@ fn workspace_request_error(e: WorkspaceRequestError) -> Error {
             Error::invalid_params().data(format!("unknown session: {session_id}"))
         }
         WorkspaceRequestError::Workspace(e) => workspace_error(&e),
-        WorkspaceRequestError::Relocate(e) => internal_error(format!("failed to relocate session: {e}")),
     }
 }
 

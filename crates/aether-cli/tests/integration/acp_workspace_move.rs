@@ -229,6 +229,34 @@ async fn live_workspace_move_stops_old_actor_and_allows_restore_in_new_cwd() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn live_workspace_move_keeps_every_event_persisted_before_the_move() {
+    AcpTestHarness::run(|mut harness| async move {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = init_repo(tmp.path(), "repo");
+        let live = "live".into();
+        harness.append_stored_session_in("live", "2026-05-01T00:00:00Z", &repo);
+        harness
+            .client_cx
+            .send_request(ResumeSessionRequest::new("live", AbsolutePath::new(repo)))
+            .block_task()
+            .await
+            .expect("restore source");
+        harness.prompt(&live, "before the move").await.expect("prompt accepted");
+        harness.expect_idle(&live, StopReason::EndTurn).await;
+        let persisted = harness.stored_events(&live);
+
+        move_workspace(&harness, "live", WorkspaceMoveTarget::New { name: "moved".into() })
+            .await
+            .expect("move live workspace");
+
+        assert!(harness.prompt(&live, "after the move").await.is_err(), "move must remove the old actor");
+        assert_eq!(harness.stored_events(&live), persisted);
+        harness.shutdown().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn failed_and_unrelated_moves_preserve_live_actor() {
     AcpTestHarness::run(|mut harness| async move {
         let tmp = tempfile::tempdir().unwrap();
