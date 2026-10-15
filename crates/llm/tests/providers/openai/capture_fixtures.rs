@@ -10,7 +10,7 @@
 
 use serde_json::{Value, json};
 
-use crate::providers::common::{post_json_capture, require_env, write_fixture};
+use crate::providers::common::{MINIMAL_PROMPT, chat_body, chat_tool_body, post_bearer_capture, write_fixture};
 
 const MODEL: &str = "gpt-4o-mini";
 const REASONING_MODEL: &str = "gpt-5-mini";
@@ -24,99 +24,42 @@ const REASONING_PROMPT: &str = "A clock currently shows 3:15. Compute the exact 
 #[tokio::test]
 #[ignore = "captures live fixture, requires OPENAI_API_KEY"]
 async fn capture_openai_01_minimal() {
-    let bytes = send(
-        CHAT_URL,
-        &json!({
-            "model": MODEL,
-            "stream": true,
-            "stream_options": {"include_usage": true},
-            "messages": [{"role": "user", "content": "Reply with exactly: hi"}],
-        }),
-    )
-    .await;
-    write_fixture("openai", "01_minimal", &bytes);
+    write_fixture("openai", "01_minimal", &send(CHAT_URL, &chat_body(MODEL, MINIMAL_PROMPT)).await);
 }
 
 #[tokio::test]
 #[ignore = "captures live fixture, requires OPENAI_API_KEY"]
 async fn capture_openai_02_tool_call() {
-    let bytes = send(
-        CHAT_URL,
-        &json!({
-            "model": MODEL,
-            "stream": true,
-            "stream_options": {"include_usage": true},
-            "tools": [{
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "description": "Get the current weather for a city.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"city": {"type": "string"}},
-                        "required": ["city"],
-                    },
-                },
-            }],
-            "tool_choice": "auto",
-            "messages": [{"role": "user", "content": "What's the weather in Tokyo? Use the tool."}],
-        }),
-    )
-    .await;
-    write_fixture("openai", "02_tool_call", &bytes);
+    write_fixture("openai", "02_tool_call", &send(CHAT_URL, &chat_tool_body(MODEL)).await);
 }
 
 #[tokio::test]
 #[ignore = "captures live fixture, requires OPENAI_API_KEY"]
 async fn capture_openai_03_reasoning() {
-    let bytes = send(
-        CHAT_URL,
-        &json!({
-            "model": REASONING_MODEL,
-            "stream": true,
-            "stream_options": {"include_usage": true},
-            "reasoning_effort": "medium",
-            "messages": [{"role": "user", "content": REASONING_PROMPT}],
-        }),
-    )
-    .await;
-    write_fixture("openai", "03_reasoning", &bytes);
+    let mut body = chat_body(REASONING_MODEL, REASONING_PROMPT);
+    body["reasoning_effort"] = json!("medium");
+    write_fixture("openai", "03_reasoning", &send(CHAT_URL, &body).await);
 }
 
 #[tokio::test]
 #[ignore = "captures live fixture, requires OPENAI_API_KEY"]
 async fn capture_openai_responses_01_minimal() {
-    let bytes = send(
-        RESPONSES_URL,
-        &json!({
-            "model": REASONING_MODEL,
-            "stream": true,
-            "input": "Reply with exactly: hi",
-        }),
-    )
-    .await;
-    write_fixture("openai_responses", "01_minimal", &bytes);
+    let body = json!({ "model": REASONING_MODEL, "stream": true, "input": MINIMAL_PROMPT });
+    write_fixture("openai_responses", "01_minimal", &send(RESPONSES_URL, &body).await);
 }
 
 #[tokio::test]
 #[ignore = "captures live fixture, requires OPENAI_API_KEY"]
 async fn capture_openai_responses_02_reasoning() {
-    let bytes = send(
-        RESPONSES_URL,
-        &json!({
-            "model": REASONING_MODEL,
-            "stream": true,
-            "reasoning": {"effort": "medium"},
-            "input": REASONING_PROMPT,
-        }),
-    )
-    .await;
-    write_fixture("openai_responses", "02_reasoning", &bytes);
+    let body = json!({
+        "model": REASONING_MODEL,
+        "stream": true,
+        "reasoning": {"effort": "medium"},
+        "input": REASONING_PROMPT,
+    });
+    write_fixture("openai_responses", "02_reasoning", &send(RESPONSES_URL, &body).await);
 }
 
 async fn send(url: &str, body: &Value) -> Vec<u8> {
-    let key = require_env("OPENAI_API_KEY");
-    let auth = format!("Bearer {key}");
-    let client = reqwest::Client::new();
-    post_json_capture(&client, url, &[("authorization", auth.as_str())], body).await
+    post_bearer_capture(url, "OPENAI_API_KEY", body).await
 }

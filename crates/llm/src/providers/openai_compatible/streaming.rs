@@ -1,16 +1,17 @@
 use super::types::{ChatCompletionStreamResponse, FinishReason, FunctionCallDelta, ToolCallDelta};
 use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
 use crate::providers::response_stream::{OpenedStream, StreamAssembler, response_stream};
-use crate::{LlmError, LlmResponse, LlmResponseStream, ProviderError, Result, StopReason};
-use futures::{Stream, StreamExt};
+use crate::{LlmResponse, LlmResponseStream, ProviderError, Result, StopReason};
+use futures::Stream;
 use std::future::ready;
 use tracing::debug;
 
-pub fn process_compatible_stream<E: Into<LlmError> + Send + 'static>(
-    chunks: impl Stream<Item = std::result::Result<ChatCompletionStreamResponse, E>> + Send + 'static,
-) -> LlmResponseStream {
-    let chunks = chunks.map(|chunk| chunk.map_err(Into::into));
-    response_stream(ready(Ok(OpenedStream::new(chunks))), decode_chunk, DEFAULT_STREAM_IDLE_TIMEOUT)
+pub fn process_compatible_stream(data: impl Stream<Item = Result<String>> + Send + 'static) -> LlmResponseStream {
+    response_stream(
+        ready(Ok(OpenedStream::new(data))),
+        |data, turn| decode_sse_chunk(&data, turn),
+        DEFAULT_STREAM_IDLE_TIMEOUT,
+    )
 }
 
 pub(crate) fn decode_sse_chunk(data: &str, turn: &mut StreamAssembler<i32>) -> Result<Vec<LlmResponse>> {
@@ -82,12 +83,14 @@ mod tests {
     };
     use crate::testing::llm_response;
     use crate::{ProviderErrorKind, TokenUsage};
-    use futures::stream;
+    use futures::{StreamExt, stream};
+    use serde_json::json;
 
     #[tokio::test]
     async fn error_finish_reasons_yield_retryable_server_errors() {
-        for reason in [FinishReason::Error, FinishReason::NetworkError] {
-            let responses = process_chunks(chat_stream().finish(reason).build()).await;
+        for reason in ["error", "network_error"] {
+            let chunk = json!({ "choices": [{ "delta": { "content": "" }, "finish_reason": reason }] }).to_string();
+            let responses: Vec<_> = process_compatible_stream(stream::iter([Ok(chunk)])).collect().await;
 
             let err = responses.last().unwrap().as_ref().expect_err("an error finish reason must surface as Err");
             assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::Server), "{err:?}");
@@ -114,9 +117,10 @@ mod tests {
     #[tokio::test]
     async fn stream_error_mid_tool_call_does_not_complete_it() {
         let chunks = chat_stream().tool_start(0, "call_1", "bash").tool_args(0, r#"{"command":"#).build();
-        let items = chunks.into_iter().map(Ok).chain([Err(ProviderError::stream_interrupted("connection lost"))]);
+        let items =
+            chunks.into_iter().map(Ok).chain([Err(ProviderError::stream_interrupted("connection lost").into())]);
 
-        let responses: Vec<_> = process_compatible_stream(stream::iter(items)).collect().await;
+        let responses = process_chunks(items).await;
 
         assert!(
             matches!(
@@ -235,6 +239,19 @@ mod tests {
         .await;
 
         assert_eq!(responses, llm_response().text(&["done"]).usage(10, 5).build_with_stop_reason(StopReason::EndTurn));
+    }
+
+    #[tokio::test]
+    async fn negative_token_counts_are_clamped_to_zero() {
+        let tokens = collect_first_usage(
+            chat_stream().usage(Usage { prompt_tokens: -5, completion_tokens: 10, ..Default::default() }).build(),
+        )
+        .await;
+
+        assert_eq!(
+            tokens,
+            Some(TokenUsage { input_tokens: 0.into(), output_tokens: 10.into(), ..TokenUsage::default() })
+        );
     }
 
     #[tokio::test]
@@ -360,11 +377,14 @@ mod tests {
     }
 
     async fn collect_responses(chunks: Vec<ChatCompletionStreamResponse>) -> Vec<LlmResponse> {
-        process_chunks(chunks).await.into_iter().map(Result::unwrap).collect()
+        process_chunks(chunks.into_iter().map(Ok)).await.into_iter().map(Result::unwrap).collect()
     }
 
-    async fn process_chunks(chunks: Vec<ChatCompletionStreamResponse>) -> Vec<Result<LlmResponse>> {
-        process_compatible_stream(stream::iter(chunks.into_iter().map(Ok::<_, LlmError>))).collect().await
+    async fn process_chunks(
+        chunks: impl IntoIterator<Item = Result<ChatCompletionStreamResponse>, IntoIter: Send + 'static>,
+    ) -> Vec<Result<LlmResponse>> {
+        let opened = ready(Ok(OpenedStream::new(stream::iter(chunks))));
+        response_stream(opened, decode_chunk, DEFAULT_STREAM_IDLE_TIMEOUT).collect().await
     }
 
     async fn collect_first_usage(chunks: Vec<ChatCompletionStreamResponse>) -> Option<TokenUsage> {
