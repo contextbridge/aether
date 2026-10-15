@@ -2,7 +2,7 @@ use crate::LlmError;
 use crate::LlmModel;
 use crate::ProviderConnectionConfig;
 use crate::Result as LlmResult;
-use crate::catalog::ReasoningEffortError;
+use crate::catalog::{Provider, ReasoningEffortError};
 use std::future::Future;
 use std::pin::Pin;
 use tokio_stream::Stream;
@@ -38,11 +38,8 @@ pub trait StreamingModelProvider: Send + Sync {
 
     /// Provider and model, e.g. `Anthropic (claude-sonnet-4-5)`.
     fn display_name(&self) -> String {
-        match self.model() {
-            Some(model) if model.model_id().is_empty() => model.provider_display_name().to_string(),
-            Some(model) => format!("{} ({})", model.provider_display_name(), model.model_id()),
-            None => "Unknown model".to_string(),
-        }
+        self.model()
+            .map_or_else(|| "Unknown model".to_string(), |model| display_name(model.provider_enum(), &model.model_id()))
     }
 
     /// Context window size in tokens for the current model.
@@ -56,6 +53,14 @@ pub trait StreamingModelProvider: Send + Sync {
     /// (e.g. test fakes).
     fn model(&self) -> Option<LlmModel> {
         None
+    }
+}
+
+pub(crate) fn display_name(provider: Provider, model_id: &str) -> String {
+    if model_id.is_empty() {
+        provider.display_name().to_string()
+    } else {
+        format!("{} ({model_id})", provider.display_name())
     }
 }
 

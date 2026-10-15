@@ -1,5 +1,6 @@
 use super::oauth::CodexTokenManager;
-use crate::provider::{LlmResponseStream, StreamingModelProvider};
+use crate::catalog::Provider;
+use crate::provider::{LlmResponseStream, StreamingModelProvider, display_name};
 use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
 use crate::providers::http::{SseData, http_client};
 use crate::providers::openai_responses::mappers::{ResponsesRequestPolicy, build_wire_request};
@@ -93,6 +94,10 @@ impl CodexProvider {
 }
 
 impl StreamingModelProvider for CodexProvider {
+    fn display_name(&self) -> String {
+        display_name(Provider::Codex, &self.model)
+    }
+
     fn model(&self) -> Option<crate::LlmModel> {
         format!("{}:{}", super::PROVIDER_ID, self.model).parse().ok()
     }
@@ -150,6 +155,7 @@ mod tests {
     fn display_name_includes_model() {
         let provider = create_test_provider();
         assert_eq!(provider.display_name(), "Codex (gpt-5.5)");
+        assert_eq!(create_test_provider().with_model("gpt-custom").display_name(), "Codex (gpt-custom)");
     }
 
     #[tokio::test]

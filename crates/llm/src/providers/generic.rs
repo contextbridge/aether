@@ -3,7 +3,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use crate::catalog::Provider;
-use crate::provider::validate_reasoning;
+use crate::provider::{display_name, validate_reasoning};
 use crate::providers::http::{SseData, http_client};
 pub use crate::providers::openai_compatible::ChatRequestPolicy;
 use crate::providers::openai_compatible::streaming::decode_sse_chunk;
@@ -212,6 +212,10 @@ impl StreamingModelProvider for GenericProvider {
             Api::Responses(policy) => self.stream_responses(context, policy),
         };
         stream.unwrap_or_else(error_stream)
+    }
+
+    fn display_name(&self) -> String {
+        display_name(self.config.provider, &self.model)
     }
 
     fn model(&self) -> Option<LlmModel> {
@@ -467,6 +471,15 @@ mod tests {
             }
             assert!(!error.is_retryable());
         }
+    }
+
+    #[test]
+    fn display_name_names_models_outside_the_catalog() {
+        let provider = GenericProvider::new("key", &DEEPSEEK).unwrap().with_model("my-custom-model");
+        assert_eq!(provider.display_name(), "DeepSeek (my-custom-model)");
+
+        let provider = GenericProvider::new("key", &GEMINI).unwrap();
+        assert_eq!(provider.display_name(), "Gemini");
     }
 
     #[test]
