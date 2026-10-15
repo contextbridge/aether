@@ -1,427 +1,118 @@
-//! End-to-end tests for LSP diagnostics through the MCP tool layer.
 //!
-//! These tests verify the full pipeline:
-//!   file edits → LSP daemon → rust-analyzer diagnostics → queryable via `lsp_check_errors`
-//!
-//! Requirements:
-//! - `rust-analyzer` must be installed and in PATH
-//! - `aether-lspd` binary must be built (`cargo build -p aether-lspd`)
-//!
-//! Run with: `cargo test -p mcp-servers -- lsp_diagnostics`
 
-use crate::common::{call_tool, coding_with_lsp, connect, has_errors, has_no_errors, poll_diagnostics, try_call_tool};
+use crate::common::{CodingWorkspace, TestResult, has_errors, has_no_errors};
 use aether_lspd::testing::cargo_project;
-use mcp_utils::client::{ClientOptions, McpClient};
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use serde_json::Value;
+use std::fs::canonicalize;
+use std::path::{Path, PathBuf};
 
-async fn poll_workspace_diagnostics(
-    client: &McpClient,
-    predicate: impl Fn(&serde_json::Value) -> bool,
-    timeout: Duration,
-) -> serde_json::Value {
-    let start = Instant::now();
-    let mut last_result = None;
+const MAIN_RS: &str = "src/main.rs";
+const NOT_AN_INT: &str = "\"not an int\"";
 
-    while start.elapsed() < timeout {
-        if let Some(result) = try_call_tool(client, "lsp_check_errors", serde_json::json!({})).await {
-            if predicate(&result) {
-                return result;
-            }
-            last_result = Some(result);
-        }
+#[tokio::test]
+async fn test_mcp_edit_produces_diagnostics() -> TestResult {
+    let project = rust_project("mcp_edit_diag", NOT_AN_INT).await;
 
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-
-    panic!(
-        "workspace diagnostics timed out after {timeout:?}. Last result: {}",
-        last_result.as_ref().map_or_else(|| "(no valid response)".to_string(), std::string::ToString::to_string)
-    );
+    project.poll_errors(Some(MAIN_RS), has_errors).await;
+    project.read_then_edit(MAIN_RS, NOT_AN_INT, "42").await?;
+    project.poll_errors(Some(MAIN_RS), has_no_errors).await;
+    project.read_then_edit(MAIN_RS, "42", "true").await?;
+    project.poll_errors(Some(MAIN_RS), has_errors).await;
+    Ok(())
 }
 
-fn file_error_count(result: &serde_json::Value, file_path: &str) -> usize {
-    let expected_path = canonical_path(file_path);
+#[tokio::test]
+async fn test_diagnostics_available_after_edit_without_polling() -> TestResult {
+    let project = rust_project("diag_after_edit_no_poll", "42").await;
+
+    project.poll_errors(Some(MAIN_RS), has_no_errors).await;
+    project.read_then_edit(MAIN_RS, "42", NOT_AN_INT).await?;
+    project.poll_errors(Some(MAIN_RS), has_errors).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_diagnostics_all_files_after_edit() -> TestResult {
+    let project = rust_project("diag_all_files", "42").await;
+
+    project.poll_errors(Some(MAIN_RS), has_no_errors).await;
+    project.read_then_edit(MAIN_RS, "42", NOT_AN_INT).await?;
+    project.poll_errors(None, has_errors).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_workspace_diagnostics_after_edit_without_file_check() -> TestResult {
+    let project = rust_project("diag_workspace_after_edit", "42").await;
+    let main_rs = project.path(MAIN_RS);
+
+    project.poll_errors(None, has_no_errors).await;
+    project.read_then_edit(MAIN_RS, "42", NOT_AN_INT).await?;
+    project.poll_errors(None, |result| file_error_count(result, &main_rs) > 0).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_workspace_diagnostics_clear_after_fix_without_file_check() -> TestResult {
+    let project = rust_project("diag_workspace_fix", NOT_AN_INT).await;
+    let main_rs = project.path(MAIN_RS);
+
+    project.poll_errors(None, |result| file_error_count(result, &main_rs) > 0).await;
+    project.read_then_edit(MAIN_RS, NOT_AN_INT, "42").await?;
+    project.poll_errors(None, |result| file_error_count(result, &main_rs) == 0).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_diagnostics_all_files_after_external_edit() {
+    let project = rust_project("diag_all_ext_edit", "42").await;
+
+    project.poll_errors(Some(MAIN_RS), has_no_errors).await;
+    project.write(MAIN_RS, &main_rs(NOT_AN_INT));
+    project.poll_errors(None, has_errors).await;
+}
+
+#[tokio::test]
+async fn test_external_file_change_produces_diagnostics() {
+    let project = rust_project("ext_write_diag", NOT_AN_INT).await;
+
+    project.poll_errors(Some(MAIN_RS), has_errors).await;
+    project.write(MAIN_RS, &main_rs("42"));
+    project.poll_errors(Some(MAIN_RS), has_no_errors).await;
+    project.write(MAIN_RS, &main_rs("true"));
+    project.poll_errors(Some(MAIN_RS), has_errors).await;
+}
+
+#[tokio::test]
+async fn test_diagnostics_all_files_discovers_file_watcher_uris() {
+    let project = rust_project("diag_fw_discover", "42").await;
+
+    project.poll_errors(None, has_no_errors).await;
+    project.write(MAIN_RS, &main_rs(NOT_AN_INT));
+    project.poll_errors(None, has_errors).await;
+}
+
+async fn rust_project(name: &str, value: &str) -> CodingWorkspace {
+    CodingWorkspace::with_lsp(cargo_project(name).file(MAIN_RS, main_rs(value))).await
+}
+
+fn main_rs(value: &str) -> String {
+    format!("fn main() {{\n    let x: i32 = {value};\n    println!(\"{{}}\", x);\n}}\n")
+}
+
+fn file_error_count(result: &Value, file: &Path) -> usize {
     let root = PathBuf::from(result["workspaceRoot"].as_str().unwrap_or_default());
+    let file = canonical(file);
     result["diagnostics"]
         .as_object()
         .into_iter()
         .flatten()
-        .filter(|(file, _)| canonical_path(&root.join(file).to_string_lossy()) == expected_path)
+        .filter(|(path, _)| canonical(&root.join(path)) == file)
         .flat_map(|(_, diagnostics)| diagnostics.as_array().into_iter().flatten())
         .filter(|diagnostic| diagnostic.as_str().is_some_and(|diagnostic| diagnostic.contains(" error")))
         .count()
 }
 
-fn canonical_path(path: &str) -> String {
-    std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path)).to_string_lossy().to_string()
-}
-
-/// Test: MCP `edit_file` tool → rust-analyzer picks up change → diagnostics queryable
-#[tokio::test]
-async fn test_mcp_edit_produces_diagnostics() {
-    let project = cargo_project("mcp_edit_diag");
-    project.write(
-        "src/main.rs",
-        r#"fn main() {
-    let x: i32 = "not an int";
-    println!("{}", x);
-}
-"#,
-    );
-
-    let main_rs = project.path_string("src/main.rs");
-
-    let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
-
-    let result = poll_diagnostics(&client, Some(&main_rs), has_errors).await;
-    let errors = result["summary"]["errors"].as_u64().unwrap();
-    assert!(errors > 0, "Expected type error diagnostics");
-
-    call_tool(&client, "read_file", serde_json::json!({ "filePath": main_rs })).await;
-
-    call_tool(
-        &client,
-        "edit_file",
-        serde_json::json!({
-            "filePath": main_rs,
-            "edits": [{ "oldString": "\"not an int\"", "newString": "42" }]
-        }),
-    )
-    .await;
-
-    poll_diagnostics(&client, Some(&main_rs), has_no_errors).await;
-
-    call_tool(&client, "read_file", serde_json::json!({ "filePath": main_rs })).await;
-
-    call_tool(
-        &client,
-        "edit_file",
-        serde_json::json!({
-            "filePath": main_rs,
-            "edits": [{ "oldString": "42", "newString": "true" }]
-        }),
-    )
-    .await;
-
-    let result = poll_diagnostics(&client, Some(&main_rs), has_errors).await;
-    let errors = result["summary"]["errors"].as_u64().unwrap();
-    assert!(errors > 0, "Expected type error after re-introducing bug");
-}
-
-/// Regression test: after `edit_file`, a SINGLE `lsp_check_errors` call (no polling)
-/// should eventually return fresh diagnostics. This verifies the daemon waits for
-/// the LSP to re-publish diagnostics after syncing a changed document.
-#[tokio::test]
-async fn test_diagnostics_available_after_edit_without_polling() {
-    let project = cargo_project("diag_after_edit_no_poll");
-    project.write(
-        "src/main.rs",
-        r#"fn main() {
-    let x: i32 = 42;
-    println!("{}", x);
-}
-"#,
-    );
-
-    let main_rs = project.path_string("src/main.rs");
-
-    let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
-
-    poll_diagnostics(&client, Some(&main_rs), has_no_errors).await;
-
-    call_tool(&client, "read_file", serde_json::json!({ "filePath": main_rs })).await;
-
-    call_tool(
-        &client,
-        "edit_file",
-        serde_json::json!({
-            "filePath": main_rs,
-            "edits": [{ "oldString": "42", "newString": "\"not an int\"" }]
-        }),
-    )
-    .await;
-
-    poll_diagnostics(&client, Some(&main_rs), has_errors).await;
-}
-
-/// Regression test: after `edit_file`, calling `lsp_check_errors` in workspace scope
-/// should still return fresh diagnostics. This verifies the daemon syncs all open
-/// documents before returning the cache.
-#[tokio::test]
-async fn test_diagnostics_all_files_after_edit() {
-    let project = cargo_project("diag_all_files");
-    project.write(
-        "src/main.rs",
-        r#"fn main() {
-    let x: i32 = 42;
-    println!("{}", x);
-}
-"#,
-    );
-
-    let main_rs = project.path_string("src/main.rs");
-
-    let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
-
-    poll_diagnostics(&client, Some(&main_rs), has_no_errors).await;
-
-    call_tool(&client, "read_file", serde_json::json!({ "filePath": main_rs })).await;
-
-    call_tool(
-        &client,
-        "edit_file",
-        serde_json::json!({
-            "filePath": main_rs,
-            "edits": [{ "oldString": "42", "newString": "\"not an int\"" }]
-        }),
-    )
-    .await;
-
-    poll_diagnostics(&client, None, has_errors).await;
-}
-
-/// Regression test: after `edit_file`, an immediate workspace-scoped
-/// `lsp_check_errors` call should report the new error even when no file-scoped
-/// diagnostics request has ever been made.
-#[tokio::test]
-async fn test_workspace_diagnostics_after_edit_without_file_check() {
-    let project = cargo_project("diag_workspace_after_edit");
-    project.write(
-        "src/main.rs",
-        r#"fn main() {
-    let x: i32 = 42;
-    println!("{}", x);
-}
-"#,
-    );
-
-    let main_rs = project.path_string("src/main.rs");
-
-    let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
-
-    poll_diagnostics(&client, None, has_no_errors).await;
-
-    call_tool(&client, "read_file", serde_json::json!({ "filePath": main_rs })).await;
-
-    call_tool(
-        &client,
-        "edit_file",
-        serde_json::json!({
-            "filePath": main_rs,
-            "edits": [{ "oldString": "42", "newString": "\"not an int\"" }]
-        }),
-    )
-    .await;
-
-    poll_workspace_diagnostics(&client, |result| file_error_count(result, &main_rs) > 0, Duration::from_secs(30)).await;
-}
-
-/// Regression test: once workspace diagnostics have recorded an error, fixing the
-/// file via `edit_file` should immediately clear the workspace result without any
-/// file-scoped diagnostics request.
-#[tokio::test]
-async fn test_workspace_diagnostics_clear_after_fix_without_file_check() {
-    let project = cargo_project("diag_workspace_fix");
-    project.write(
-        "src/main.rs",
-        r#"fn main() {
-    let x: i32 = "not an int";
-    println!("{}", x);
-}
-"#,
-    );
-
-    let main_rs = project.path_string("src/main.rs");
-
-    let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
-
-    let initial =
-        poll_workspace_diagnostics(&client, |result| file_error_count(result, &main_rs) > 0, Duration::from_mins(1))
-            .await;
-    assert!(
-        file_error_count(&initial, &main_rs) > 0,
-        "Expected bootstrap workspace diagnostics to report the initial error. Full result: {initial}"
-    );
-
-    call_tool(&client, "read_file", serde_json::json!({ "filePath": main_rs })).await;
-
-    call_tool(
-        &client,
-        "edit_file",
-        serde_json::json!({
-            "filePath": main_rs,
-            "edits": [{ "oldString": "\"not an int\"", "newString": "42" }]
-        }),
-    )
-    .await;
-
-    let result =
-        poll_workspace_diagnostics(&client, |r| file_error_count(r, &main_rs) == 0, Duration::from_mins(1)).await;
-    assert_eq!(
-        file_error_count(&result, &main_rs),
-        0,
-        "Expected workspace diagnostics to clear after fixing the file. \
-         Full result: {result}"
-    );
-}
-
-/// Regression test: after an EXTERNAL file edit (e.g. user's editor), calling
-/// `lsp_check_errors` in workspace scope should detect the change and return
-/// fresh diagnostics. This verifies the daemon syncs files from the diagnostics
-/// cache, not just previously-opened documents.
-#[tokio::test]
-async fn test_diagnostics_all_files_after_external_edit() {
-    let project = cargo_project("diag_all_ext_edit");
-    project.write(
-        "src/main.rs",
-        r#"fn main() {
-    let x: i32 = 42;
-    println!("{}", x);
-}
-"#,
-    );
-
-    let main_rs = project.path_string("src/main.rs");
-    let main_rs_path = project.root().join("src/main.rs");
-
-    let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
-
-    poll_diagnostics(&client, Some(&main_rs), has_no_errors).await;
-
-    std::fs::write(
-        &main_rs_path,
-        r#"fn main() {
-    let x: i32 = "not an int";
-    println!("{}", x);
-}
-"#,
-    )
-    .expect("Failed to write file");
-
-    poll_diagnostics(&client, None, has_errors).await;
-}
-
-/// Regression test: after an EXTERNAL file edit, a SINGLE workspace-scoped
-/// `lsp_check_errors` call (no polling) should return errors. The file watcher keeps the
-/// diagnostics cache fresh, so the daemon should simply return whatever is cached.
-#[tokio::test]
-async fn test_diagnostics_all_files_after_external_edit_single_call() {
-    let project = cargo_project("diag_ext_single_call");
-    project.write(
-        "src/main.rs",
-        r#"fn main() {
-    let x: i32 = 42;
-    println!("{}", x);
-}
-"#,
-    );
-
-    let main_rs = project.path_string("src/main.rs");
-    let main_rs_path = project.root().join("src/main.rs");
-
-    let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
-
-    poll_diagnostics(&client, Some(&main_rs), has_no_errors).await;
-
-    std::fs::write(
-        &main_rs_path,
-        r#"fn main() {
-    let x: i32 = "not an int";
-    println!("{}", x);
-}
-"#,
-    )
-    .expect("Failed to write file");
-
-    poll_diagnostics(&client, None, has_errors).await;
-}
-
-/// Test: External `fs::write` → file watcher → diagnostics queryable
-#[tokio::test]
-async fn test_external_file_change_produces_diagnostics() {
-    let project = cargo_project("ext_write_diag");
-    project.write(
-        "src/main.rs",
-        r#"fn main() {
-    let x: i32 = "not an int";
-    println!("{}", x);
-}
-"#,
-    );
-
-    let main_rs = project.path_string("src/main.rs");
-    let main_rs_path = project.root().join("src/main.rs");
-
-    let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
-
-    let result = poll_diagnostics(&client, Some(&main_rs), has_errors).await;
-    let errors = result["summary"]["errors"].as_u64().unwrap();
-    assert!(errors > 0, "Expected type error diagnostics");
-
-    std::fs::write(
-        &main_rs_path,
-        r#"fn main() {
-    let x: i32 = 42;
-    println!("{}", x);
-}
-"#,
-    )
-    .expect("Failed to write file");
-
-    poll_diagnostics(&client, Some(&main_rs), has_no_errors).await;
-
-    std::fs::write(
-        &main_rs_path,
-        r#"fn main() {
-    let x: i32 = true;
-    println!("{}", x);
-}
-"#,
-    )
-    .expect("Failed to write file");
-
-    let result = poll_diagnostics(&client, Some(&main_rs), has_errors).await;
-    let errors = result["summary"]["errors"].as_u64().unwrap();
-    assert!(errors > 0, "Expected type error after external write");
-}
-
-/// Regression test: files discovered ONLY via the file watcher (never opened or
-/// present in the diagnostics cache) should still appear in workspace scope.
-///
-/// Unlike every other test in this file, this test does NOT prime the diagnostics
-/// cache by calling `poll_diagnostics` with a file path first. Instead, it polls
-/// workspace-scope diagnostics (which does NOT open documents) until initial
-/// indexing completes, then edits the file externally so the file watcher fires
-/// `didChangeWatchedFiles`. If the daemon only consults `diagnostics_cache.keys()`
-/// for workspace scope, this file will be invisible.
-#[tokio::test]
-async fn test_diagnostics_all_files_discovers_file_watcher_uris() {
-    let project = cargo_project("diag_fw_discover");
-    project.write(
-        "src/main.rs",
-        r#"fn main() {
-    let x: i32 = 42;
-    println!("{}", x);
-}
-"#,
-    );
-
-    let main_rs_path = project.root().join("src/main.rs");
-
-    let client = connect(coding_with_lsp(&project), ClientOptions::default()).await;
-
-    poll_diagnostics(&client, None, has_no_errors).await;
-
-    std::fs::write(
-        &main_rs_path,
-        r#"fn main() {
-    let x: i32 = "not an int";
-    println!("{}", x);
-}
-"#,
-    )
-    .expect("Failed to write file");
-
-    poll_diagnostics(&client, None, has_errors).await;
+fn canonical(path: &Path) -> PathBuf {
+    canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }

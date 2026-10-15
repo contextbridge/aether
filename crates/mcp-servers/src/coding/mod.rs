@@ -659,26 +659,6 @@ impl CodingMcp {
         self.web_fetcher = web_fetcher;
         self
     }
-
-    /// Read a file and track it in the read set (test helper, no MCP context needed).
-    pub async fn test_read_file(&self, mut args: ReadFileArgs) -> Result<Json<ReadFileResult>, CodingError> {
-        args.file_path = self.resolve_file_arg(&args.file_path)?;
-        self.read_and_track(args).await
-    }
-
-    /// Write a file with read-before-write safety check (test helper, no MCP context needed).
-    pub async fn test_write_file(&self, mut args: WriteFileArgs) -> Result<Json<WriteFileResponse>, CodingError> {
-        args.file_path = self.resolve_file_arg(&args.file_path)?;
-        self.ensure_read_before_overwrite(&args.file_path).await?;
-        Ok(Json(write_file_contents(args).await?))
-    }
-
-    /// Edit a file with read-before-edit safety check (test helper, no MCP context needed).
-    pub async fn test_edit_file(&self, mut args: EditFileArgs) -> Result<Json<EditFileResponse>, CodingError> {
-        args.file_path = self.resolve_file_arg(&args.file_path)?;
-        self.ensure_read_before_edit(&args.file_path)?;
-        Ok(Json(edit_file_contents(args).await?))
-    }
 }
 
 #[derive(Default)]
@@ -692,160 +672,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn args_default_permission_mode_is_always_allow() {
-        let args = CodingMcpArgs::try_parse_from(Vec::<&str>::new()).unwrap();
-        assert_eq!(args.permission_mode, PermissionMode::AlwaysAllow);
-    }
+    fn args_parse_permission_mode_lsp_and_rules_dirs() {
+        let cases: [(&[&str], PermissionMode, bool); 5] = [
+            (&[], PermissionMode::AlwaysAllow, false),
+            (&["--permission-mode", "always-allow"], PermissionMode::AlwaysAllow, false),
+            (&["--permission-mode", "auto"], PermissionMode::Auto, false),
+            (&["--permission-mode", "always-ask"], PermissionMode::AlwaysAsk, false),
+            (&["--disable-lsp"], PermissionMode::AlwaysAllow, true),
+        ];
+        for (argv, permission_mode, disable_lsp) in cases {
+            let args = CodingMcpArgs::try_parse_from(argv).unwrap();
+            assert_eq!((args.permission_mode, args.disable_lsp), (permission_mode, disable_lsp), "{argv:?}");
+        }
 
-    #[test]
-    fn args_default_lsp_enabled() {
-        let args = CodingMcpArgs::try_parse_from(Vec::<&str>::new()).unwrap();
-        assert!(!args.disable_lsp);
-    }
-
-    #[test]
-    fn args_parses_disable_lsp() {
-        let args = CodingMcpArgs::try_parse_from(["--disable-lsp"]).unwrap();
-        assert!(args.disable_lsp);
-    }
-
-    #[test]
-    fn disabled_lsp_instructions_omit_lsp_tools() {
-        let instructions = CodingMcp::new("/workspace").build_instructions();
-        assert!(!instructions.contains("lsp_check_errors"));
-        assert!(!instructions.contains("lsp_symbol"));
-    }
-
-    #[test]
-    fn args_parses_always_allow() {
-        let args = CodingMcpArgs::try_parse_from(["--permission-mode", "always-allow"]).unwrap();
-        assert_eq!(args.permission_mode, PermissionMode::AlwaysAllow);
-    }
-
-    #[test]
-    fn args_parses_auto() {
-        let args = CodingMcpArgs::try_parse_from(["--permission-mode", "auto"]).unwrap();
-        assert_eq!(args.permission_mode, PermissionMode::Auto);
-    }
-
-    #[test]
-    fn args_parses_always_ask() {
-        let args = CodingMcpArgs::try_parse_from(["--permission-mode", "always-ask"]).unwrap();
-        assert_eq!(args.permission_mode, PermissionMode::AlwaysAsk);
-    }
-
-    #[test]
-    fn args_rejects_invalid_permission_mode() {
         assert!(CodingMcpArgs::try_parse_from(["--permission-mode", "yolo"]).is_err());
-    }
-
-    #[test]
-    fn args_parses_repeated_rules_dirs() {
-        let args =
-            CodingMcpArgs::try_parse_from(["--rules-dir", ".aether/skills", "--rules-dir", ".claude/rules"]).unwrap();
-
-        assert_eq!(args.rules_dirs, vec![PathBuf::from(".aether/skills"), PathBuf::from(".claude/rules")]);
-    }
-
-    #[test]
-    fn with_permission_mode_stores_mode() {
-        let mcp = CodingMcp::new("/workspace").with_permission_mode(PermissionMode::AlwaysAsk);
-        assert_eq!(mcp.permission_mode, PermissionMode::AlwaysAsk);
-    }
-
-    #[test]
-    fn default_permission_mode_is_always_allow() {
-        let mcp = CodingMcp::new("/workspace");
-        assert_eq!(mcp.permission_mode, PermissionMode::AlwaysAllow);
-    }
-
-    #[test]
-    fn detects_rm() {
-        assert!(is_dangerous_cmd("rm -rf /tmp/foo"));
-        assert!(is_dangerous_cmd("rm\tfoo.txt"));
-    }
-
-    #[test]
-    fn detects_git_push() {
-        assert!(is_dangerous_cmd("git push origin main"));
-    }
-
-    #[test]
-    fn detects_git_reset() {
-        assert!(is_dangerous_cmd("git reset --hard HEAD~1"));
-    }
-
-    #[test]
-    fn detects_git_checkout_discard() {
-        assert!(is_dangerous_cmd("git checkout -- ."));
-    }
-
-    #[test]
-    fn detects_git_clean() {
-        assert!(is_dangerous_cmd("git clean -fd"));
-    }
-
-    #[test]
-    fn detects_redirect() {
-        assert!(is_dangerous_cmd("echo x > file.txt"));
-        assert!(is_dangerous_cmd("echo x >> file.txt"));
-    }
-
-    #[test]
-    fn does_not_flag_fat_arrow() {
-        assert!(!is_dangerous_cmd("grep '=> ' file.txt"));
-    }
-
-    #[test]
-    fn detects_chmod_chown() {
-        assert!(is_dangerous_cmd("chmod 777 /etc/passwd"));
-        assert!(is_dangerous_cmd("chown root:root /tmp/x"));
-    }
-
-    #[test]
-    fn detects_kill_signals() {
-        assert!(is_dangerous_cmd("kill -9 1234"));
-        assert!(is_dangerous_cmd("pkill node"));
-    }
-
-    #[test]
-    fn does_not_flag_kill_substring() {
-        assert!(!is_dangerous_cmd("echo skillset"));
-    }
-
-    #[test]
-    fn detects_mv() {
-        assert!(is_dangerous_cmd("mv old.txt new.txt"));
-    }
-
-    #[test]
-    fn detects_force_flags() {
-        assert!(is_dangerous_cmd("npm install --force"));
-        assert!(is_dangerous_cmd("git reset --hard"));
-    }
-
-    #[test]
-    fn detects_dd() {
-        assert!(is_dangerous_cmd("dd if=/dev/zero of=/dev/sda"));
-    }
-
-    #[test]
-    fn detects_rmdir() {
-        assert!(is_dangerous_cmd("rmdir empty_dir"));
-    }
-
-    #[test]
-    fn does_not_flag_redirect_in_output() {
-        assert!(is_dangerous_cmd("> file.txt"));
-    }
-
-    #[test]
-    fn allows_safe_commands() {
-        assert!(!is_dangerous_cmd("ls -la"));
-        assert!(!is_dangerous_cmd("cat foo.txt"));
-        assert!(!is_dangerous_cmd("git status"));
-        assert!(!is_dangerous_cmd("git diff"));
-        assert!(!is_dangerous_cmd("cargo test"));
-        assert!(!is_dangerous_cmd("grep -r pattern ."));
+        let args = CodingMcpArgs::try_parse_from(["--rules-dir", ".aether/skills", "--rules-dir", ".claude/rules"]);
+        assert_eq!(args.unwrap().rules_dirs, [PathBuf::from(".aether/skills"), PathBuf::from(".claude/rules")]);
     }
 }

@@ -119,25 +119,7 @@ impl fmt::Display for DiagnosticCounts {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lsp_types::{Position, Range};
-
-    fn make_diagnostic(severity: DiagnosticSeverity, message: &str, line: u32) -> Diagnostic {
-        Diagnostic {
-            range: Range { start: Position { line, character: 0 }, end: Position { line, character: 10 } },
-            severity: Some(severity),
-            code: None,
-            code_description: None,
-            source: Some("test".to_string()),
-            message: message.to_string(),
-            related_information: None,
-            tags: None,
-            data: None,
-        }
-    }
-
-    fn make_uri(path: &str) -> Uri {
-        format!("file://{path}").parse().unwrap()
-    }
+    use crate::lsp::test_fixtures::{diagnostic, uri};
 
     #[test]
     fn test_severity_conversion() {
@@ -150,17 +132,17 @@ mod tests {
 
     #[test]
     fn test_formatted_diagnostic() {
-        let uri = make_uri("/path/to/file.rs");
-        let diagnostic = make_diagnostic(DiagnosticSeverity::ERROR, "test error", 5);
-
-        let formatted = FormattedDiagnostic::from_diagnostic(&uri, &diagnostic);
+        let formatted = FormattedDiagnostic::from_diagnostic(
+            &uri("/path/to/file.rs"),
+            &diagnostic(DiagnosticSeverity::ERROR, "test error", 5),
+        );
 
         assert_eq!(formatted.file, "/path/to/file.rs");
         assert_eq!(formatted.line, 6); // 1-indexed
         assert_eq!(formatted.column, 1);
         assert_eq!(formatted.severity, Severity::Error);
         assert_eq!(formatted.message, "test error");
-        assert_eq!(formatted.to_string(), "6:1 error: test error");
+        assert_eq!(formatted.to_string(), "6:1 error[E0308]: test error");
     }
 
     #[test]
@@ -172,14 +154,14 @@ mod tests {
 
     #[test]
     fn test_count_by_severity() {
-        let uri = make_uri("/path/to/file.rs");
+        let file = uri("/path/to/file.rs");
         let diagnostics = [
-            make_diagnostic(DiagnosticSeverity::ERROR, "error 1", 0),
-            make_diagnostic(DiagnosticSeverity::ERROR, "error 2", 1),
-            make_diagnostic(DiagnosticSeverity::WARNING, "warning 1", 2),
+            diagnostic(DiagnosticSeverity::ERROR, "error 1", 0),
+            diagnostic(DiagnosticSeverity::ERROR, "error 2", 1),
+            diagnostic(DiagnosticSeverity::WARNING, "warning 1", 2),
         ];
 
-        let formatted: Vec<_> = diagnostics.iter().map(|d| FormattedDiagnostic::from_diagnostic(&uri, d)).collect();
+        let formatted: Vec<_> = diagnostics.iter().map(|d| FormattedDiagnostic::from_diagnostic(&file, d)).collect();
 
         let counts = count_by_severity(&formatted);
 

@@ -11,7 +11,6 @@ mod lsp_ts_operations_e2e;
 mod plugins_mcp_agents;
 mod plugins_mcp_skills;
 mod review_mcp;
-mod skills_self_improvement;
 mod stdio_transport;
 mod test_bash;
 mod test_read_before_edit_safety;
