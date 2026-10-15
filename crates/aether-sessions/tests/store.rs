@@ -107,6 +107,22 @@ fn prompt_search_is_smart_case_unicode_safe_and_retains_recent_entries() {
 }
 
 #[test]
+fn prompt_history_appends_until_compaction_and_keeps_the_newest_entries() {
+    let store = TestStore::new().session("session-1", &[]);
+    for index in 0..250 {
+        store.append("session-1", &user_message(&format!("prompt {index};")));
+    }
+
+    let lines = fs::read_to_string(store.path().join("prompt-history.jsonl")).unwrap().lines().count();
+    assert!((101..=200).contains(&lines), "history file holds {lines} lines");
+    let reloaded = SessionStore::from_path(store.path().to_path_buf());
+    for sessions in [store.store(), &reloaded] {
+        assert_eq!(sessions.search_prompts("prompt 149;", None).unwrap().results.len(), 0);
+        assert_eq!(sessions.search_prompts("prompt 150;", None).unwrap().results.len(), 1);
+    }
+}
+
+#[test]
 fn relocating_updates_metadata_and_derived_prompt_entries() {
     let store = TestStore::new().session("session-1", &[user_message("move me")]);
 
