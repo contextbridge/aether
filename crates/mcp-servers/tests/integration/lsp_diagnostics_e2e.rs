@@ -1,5 +1,3 @@
-//!
-
 use crate::common::{CodingWorkspace, TestResult, has_errors, has_no_errors};
 use aether_lspd::testing::cargo_project;
 use serde_json::Value;
