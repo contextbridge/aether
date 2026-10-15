@@ -44,7 +44,8 @@ mod tests {
     fn test_get_root_task() {
         let mut tasks = TestTaskStore::new();
 
-        let created = tasks.store_mut().create_tree("Research topic", Some("Detailed description")).unwrap();
+        let description = TaskUpdate { description: Some("Detailed description".to_string()), ..Default::default() };
+        let created = tasks.store_mut().create(None, "Research topic", description).unwrap();
 
         let output = execute_task_get(TaskGetInput { id: created.id.to_string() }, tasks.store()).unwrap();
 

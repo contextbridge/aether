@@ -80,43 +80,30 @@ impl TaskStore {
         Ok(())
     }
 
-    /// Create a new task tree with a root task
-    pub fn create_tree(&mut self, title: &str, description: Option<&str>) -> Result<Task, TaskStoreError> {
-        let hash = self.generate_hash();
-        let id = TaskId::new_root(&hash);
-
-        if self.index.contains(&id) {
-            return Err(TaskStoreError::AlreadyExists { id: id.to_string() });
+    pub fn create(&mut self, parent: Option<&TaskId>, title: &str, fields: TaskUpdate) -> Result<Task, TaskStoreError> {
+        if let Some(parent) = parent.filter(|parent| !self.index.contains(parent)) {
+            return Err(TaskStoreError::ParentNotFound { id: parent.to_string() });
         }
+        self.ensure_deps_exist(fields.deps.as_deref())?;
 
-        let mut task = Task::new_root(id, title.to_string());
-        task.description = description.map(String::from);
-
-        let file_path = self.active_dir().join(task.id.filename());
-        write_task_to_file(&task, &file_path)?;
-        self.index.insert(task.clone(), file_path);
-
-        Ok(task)
-    }
-
-    /// Add a subtask to an existing root task
-    pub fn add_subtask(&mut self, parent_id: &TaskId, title: &str) -> Result<Task, TaskStoreError> {
-        let root_id = parent_id.root();
-
-        if !self.index.contains(&root_id) {
-            return Err(TaskStoreError::ParentNotFound { id: parent_id.to_string() });
-        }
-
-        let subtask_index = self.index.next_subtask_index(&root_id);
-        let subtask_id = TaskId::new_subtask(parent_id, subtask_index);
-
-        let task = Task::new_subtask(subtask_id, parent_id.clone(), title.to_string());
-
-        let file_path = self
-            .index
-            .get_tree_path(&root_id)
-            .cloned()
-            .ok_or_else(|| TaskStoreError::TreeNotFound { id: root_id.to_string() })?;
+        let (mut task, file_path) = if let Some(parent) = parent {
+            let root_id = parent.root();
+            let id = TaskId::new_subtask(parent, self.index.next_subtask_index(&root_id));
+            let file_path = self
+                .index
+                .get_tree_path(&root_id)
+                .cloned()
+                .ok_or_else(|| TaskStoreError::TreeNotFound { id: root_id.to_string() })?;
+            (Task::new_subtask(id, parent.clone(), title.to_string()), file_path)
+        } else {
+            let id = TaskId::new_root(&self.generate_hash());
+            if self.index.contains(&id) {
+                return Err(TaskStoreError::AlreadyExists { id: id.to_string() });
+            }
+            let file_path = self.active_dir().join(id.filename());
+            (Task::new_root(id, title.to_string()), file_path)
+        };
+        fields.apply_to(&mut task);
 
         write_task_to_file(&task, &file_path)?;
         self.index.insert(task.clone(), file_path);
@@ -126,13 +113,7 @@ impl TaskStore {
 
     /// Update a task's fields
     pub fn update(&mut self, id: &TaskId, updates: TaskUpdate) -> Result<Task, TaskStoreError> {
-        if let Some(deps) = &updates.deps {
-            for dep_id in deps {
-                if !self.index.contains(dep_id) {
-                    return Err(TaskStoreError::DependencyNotFound { id: dep_id.to_string() });
-                }
-            }
-        }
+        self.ensure_deps_exist(updates.deps.as_deref())?;
 
         let mut task = self.index.get(id).cloned().ok_or_else(|| TaskStoreError::NotFound { id: id.to_string() })?;
 
@@ -190,6 +171,13 @@ impl TaskStore {
 
     fn active_dir(&self) -> PathBuf {
         self.root.join("active")
+    }
+
+    fn ensure_deps_exist(&self, deps: Option<&[TaskId]>) -> Result<(), TaskStoreError> {
+        match deps.into_iter().flatten().find(|dep| !self.index.contains(dep)) {
+            Some(dep) => Err(TaskStoreError::DependencyNotFound { id: dep.to_string() }),
+            None => Ok(()),
+        }
     }
 
     fn generate_hash(&self) -> String {
@@ -267,7 +255,8 @@ mod tests {
     fn test_create_tree() {
         let mut tasks = TestTaskStore::new();
 
-        let task = tasks.store_mut().create_tree("Research topic X", Some("Detailed description")).unwrap();
+        let description = TaskUpdate { description: Some("Detailed description".to_string()), ..Default::default() };
+        let task = tasks.store_mut().create(None, "Research topic X", description).unwrap();
 
         assert!(task.id.is_root());
         assert_eq!(task.title, "Research topic X");
@@ -440,7 +429,7 @@ mod tests {
     fn test_error_parent_not_found() {
         let mut tasks = TestTaskStore::new();
 
-        let result = tasks.store_mut().add_subtask(&TaskId::from("at-nonexistent"), "Orphan");
+        let result = tasks.store_mut().create(Some(&TaskId::from("at-nonexistent")), "Orphan", TaskUpdate::default());
         assert!(matches!(result, Err(TaskStoreError::ParentNotFound { .. })));
     }
 
@@ -461,7 +450,7 @@ mod tests {
         let mut tasks = TestTaskStore::new();
         let store = tasks.store_mut();
 
-        let task = store.create_tree("Test task", None).unwrap();
+        let task = store.create(None, "Test task", TaskUpdate::default()).unwrap();
         assert_eq!(store.len(), 1);
 
         store.init().unwrap();

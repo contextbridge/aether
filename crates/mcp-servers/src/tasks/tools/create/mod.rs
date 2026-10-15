@@ -56,32 +56,14 @@ pub struct TaskCreateOutput {
 
 /// Create a new task or subtask
 pub fn execute_task_create(input: &TaskCreateInput, store: &mut TaskStore) -> Result<TaskCreateOutput, TaskStoreError> {
-    let description = input.description.as_deref().map(str::trim).filter(|s| !s.is_empty());
-
-    let task = if let Some(parent_id) = input.parent_id.as_deref() {
-        store.add_subtask(&TaskId::from(parent_id), &input.title)?
-    } else {
-        store.create_tree(&input.title, description)?
+    let fields = TaskUpdate {
+        description: input.description.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned),
+        assignee: input.assignee.clone(),
+        deps: input.deps.as_ref().map(|deps| deps.iter().map(|id| TaskId::from(id.as_str())).collect()),
+        ..Default::default()
     };
-
-    let is_subtask = input.parent_id.is_some();
-    let needs_update = input.assignee.is_some() || input.deps.is_some() || (is_subtask && description.is_some());
-
-    let task = if needs_update {
-        let update = TaskUpdate {
-            description: if is_subtask {
-                description.map(str::to_owned)
-            } else {
-                None // Already set during create_tree
-            },
-            assignee: input.assignee.clone(),
-            deps: input.deps.as_ref().map(|d| d.iter().map(|s| TaskId::from(s.as_str())).collect()),
-            ..Default::default()
-        };
-        store.update(&task.id, update)?
-    } else {
-        task
-    };
+    let parent = input.parent_id.as_deref().map(TaskId::from);
+    let task = store.create(parent.as_ref(), &input.title, fields)?;
 
     Ok(TaskCreateOutput { task: TaskSummary::from(&task), meta: Some(task_result_meta(store, &task.title)) })
 }
@@ -264,6 +246,48 @@ mod tests {
 
         let result = execute_task_create(&input, tasks.store_mut());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn invalid_deps_create_nothing() {
+        let mut tasks = TestTaskStore::new();
+        let root = tasks.root_task("Root");
+
+        for parent_id in [None, Some(root.id.to_string())] {
+            let input = TaskCreateInput {
+                title: "Blocked".to_string(),
+                description: None,
+                parent_id,
+                assignee: None,
+                deps: Some(vec!["at-missing".to_string()]),
+            };
+
+            let result = execute_task_create(&input, tasks.store_mut());
+
+            assert!(matches!(result, Err(TaskStoreError::DependencyNotFound { .. })), "{result:?}");
+        }
+        tasks.reopen();
+        assert_eq!(tasks.store().len(), 1);
+    }
+
+    #[test]
+    fn subtask_of_a_missing_subtask_is_rejected() {
+        let mut tasks = TestTaskStore::new();
+        let root = tasks.root_task("Root");
+
+        let input = TaskCreateInput {
+            title: "Orphan".to_string(),
+            description: None,
+            parent_id: Some(format!("{}.99", root.id)),
+            assignee: None,
+            deps: None,
+        };
+
+        let result = execute_task_create(&input, tasks.store_mut());
+
+        assert!(matches!(result, Err(TaskStoreError::ParentNotFound { .. })), "{result:?}");
+        tasks.reopen();
+        assert_eq!(tasks.store().len(), 1);
     }
 
     #[test]
