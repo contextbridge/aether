@@ -1,5 +1,6 @@
 use super::support::*;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+use utils::ReasoningEffort;
 
 const MODELS: &[(&str, &str)] = &[("a", "Alpha"), ("b", "Beta")];
 
@@ -64,6 +65,52 @@ mod picker_click {
                 "clicking row {row} under filter {filter:?}"
             );
         }
+    }
+
+    #[test]
+    fn session_picker_click_requests_the_clicked_session_preview() {
+        let mut ui = TestUiBuilder::new().session_preview().dimensions(120, 24).build();
+        ui.open_session_picker(vec![
+            session_info("sess-1", "/tmp/one", "Session One", ""),
+            session_info("sess-2", "/tmp/two", "Session Two", ""),
+        ]);
+        assert!(matches!(ui.next_agent_command(), Some(AgentCommand::SessionPreview { .. })));
+
+        let row = ui.viewport_row("Session Two").expect("second session row");
+        ui.terminal_event(click(2, row));
+
+        let command = ui.next_agent_command();
+        assert!(
+            matches!(&command, Some(AgentCommand::SessionPreview { session_id }) if session_id == "sess-2"),
+            "expected a preview of the clicked session, got {command:?}"
+        );
+    }
+
+    #[test]
+    fn model_selector_click_clamps_reasoning_to_the_clicked_model() {
+        let levels =
+            |levels: &[ReasoningEffort]| SelectOptionMeta { reasoning_levels: levels.to_vec(), ..Default::default() };
+        let opus = model_choice(
+            "anthropic:opus",
+            "Anthropic / Opus",
+            levels(&[ReasoningEffort::Low, ReasoningEffort::Medium, ReasoningEffort::High]),
+        );
+        let chat = model_choice("deepseek:chat", "DeepSeek / Chat", levels(&[ReasoningEffort::Low]));
+        let mut ui = TestUiBuilder::new()
+            .config_options(vec![
+                model_picker("anthropic:opus", vec![opus, chat]),
+                reasoning_option("high", &["low", "medium", "high"]),
+            ])
+            .dimensions(80, 24)
+            .build();
+        open_first_config_option(&mut ui);
+
+        let row = ui.viewport_row("Chat").expect("DeepSeek chat row");
+        ui.terminal_event(click(10, row));
+        ui.key(key(KeyCode::Esc));
+
+        assert_sets_config_option(&mut ui, "model", "anthropic:opus,deepseek:chat");
+        assert_sets_config_option(&mut ui, "reasoning_effort", "low");
     }
 
     #[test]

@@ -153,8 +153,8 @@ impl SessionPicker {
         match self.sessions.on_nav_event(&event) {
             Nav::Close => vec![UiOutput::Close],
             Nav::Activate => self.activate(),
-            Nav::Moved => self.preview_request(),
-            Nav::Clicked | Nav::Unhandled => Vec::new(),
+            Nav::Moved | Nav::Clicked => self.preview_request(),
+            Nav::Unhandled => Vec::new(),
         }
     }
 
