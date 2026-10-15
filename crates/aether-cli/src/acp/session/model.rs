@@ -289,40 +289,23 @@ mod tests {
         FakeOAuthCredentialStore::new()
     }
 
+    fn model_option() -> SessionConfigOption {
+        build_model_config_option(&test_models(), "anthropic:claude-sonnet-4-5", LlmModel::all(), &fake_store())
+    }
+
     fn config_opts(model: &str, effort: Option<ReasoningEffort>) -> Vec<SessionConfigOption> {
         test_validated_modes().config_options(&test_models(), None, model, effort, LlmModel::all(), &fake_store())
     }
 
     #[test]
-    fn mode_config_option_has_mode_category() {
-        let option = test_validated_modes().config_options(
-            &test_models(),
-            Some("Planner"),
-            "anthropic:claude-sonnet-4-5",
-            Some(ReasoningEffort::High),
-            LlmModel::all(),
-            &fake_store(),
-        );
-        let mode = find_option(&option, "mode");
-        assert_eq!(mode.category, Some(SessionConfigOptionCategory::Mode));
+    fn config_options_include_mode_option_with_mode_category() {
+        let options = config_opts("anthropic:claude-sonnet-4-5", Some(ReasoningEffort::High));
+        assert_eq!(find_option(&options, "mode").category, Some(SessionConfigOptionCategory::Mode));
     }
 
     #[test]
     fn resolve_rejects_unknown_mode() {
         assert!(test_validated_modes().resolve("Unknown").is_none());
-    }
-
-    #[test]
-    fn config_options_includes_mode_option_when_configured() {
-        let options = test_validated_modes().config_options(
-            &test_models(),
-            Some("Planner"),
-            "anthropic:claude-sonnet-4-5",
-            Some(ReasoningEffort::High),
-            LlmModel::all(),
-            &fake_store(),
-        );
-        assert!(has_option_id(&options, "mode"));
     }
 
     #[test]
@@ -373,15 +356,13 @@ mod tests {
 
     #[test]
     fn build_model_config_option_includes_multi_select_meta() {
-        let opt =
-            build_model_config_option(&test_models(), "anthropic:claude-sonnet-4-5", LlmModel::all(), &fake_store());
+        let opt = model_option();
         assert!(ConfigOptionMeta::from_meta(opt.meta.as_ref()).multi_select);
     }
 
     #[test]
     fn collapsed_entry_for_fully_unavailable_provider() {
-        let opt =
-            build_model_config_option(&test_models(), "anthropic:claude-sonnet-4-5", LlmModel::all(), &fake_store());
+        let opt = model_option();
         let options = select_options(&opt);
 
         let moonshot = options
@@ -406,8 +387,7 @@ mod tests {
 
     #[test]
     fn mixed_provider_lists_models_individually() {
-        let opt =
-            build_model_config_option(&test_models(), "anthropic:claude-sonnet-4-5", LlmModel::all(), &fake_store());
+        let opt = model_option();
         let options = select_options(&opt);
 
         assert!(

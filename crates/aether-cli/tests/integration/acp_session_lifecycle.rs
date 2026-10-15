@@ -1,16 +1,13 @@
 use aether_cli::acp::testing::AcpTestHarness;
-use aether_core::core::agent;
 use agent_client_protocol::Error;
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::v2::{
     AbsolutePath, CloseSessionRequest, CloseSessionResponse, ContentBlock, ListSessionsRequest, ListSessionsResponse,
-    PromptRequest, ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate, StopReason,
-    TextContent, ToolCallStatus,
+    ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate, StopReason, ToolCallStatus,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use llm::LlmResponse;
-use llm::testing::FakeLlmProvider;
+use llm::testing::{FakeLlmProvider, llm_response};
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -89,14 +86,7 @@ async fn close_removes_idle_session_but_preserves_persisted_log() {
         assert_eq!(stored.sessions.len(), 1);
         assert_eq!(stored.sessions[0].session_id.0.as_ref(), "agent-switching-session");
 
-        let prompt = harness
-            .client_cx
-            .send_request(PromptRequest::new(
-                fake.session_id().clone(),
-                vec![ContentBlock::Text(TextContent::new("after close"))],
-            ))
-            .block_task()
-            .await;
+        let prompt = harness.prompt(fake.session_id(), "after close").await;
         assert!(prompt.is_err(), "a closed session must no longer accept prompts");
     })
     .await;
@@ -106,17 +96,11 @@ async fn close_removes_idle_session_but_preserves_persisted_log() {
 async fn close_cancels_prompt_before_returning() {
     AcpTestHarness::run(|mut harness| async move {
         let release = Arc::new(Notify::new());
-        let llm = FakeLlmProvider::new(vec![vec![LlmResponse::Start, LlmResponse::text("hello"), LlmResponse::done()]])
-            .pause_turn_after(0, 1, Arc::clone(&release));
-        let (agent_tx, agent_rx, agent_handle) = agent(llm).spawn().await.expect("agent spawns");
-        let session_id = SessionId::new("prompting-session");
-        harness.insert_stub_session(agent_tx, agent_rx, agent_handle, session_id.clone(), "fake:fake").await;
+        let llm =
+            FakeLlmProvider::new(vec![llm_response().text(&["hello"]).build()]).pause_turn_after(0, 1, release.clone());
+        let session_id = harness.insert_fake_session(llm, "prompting-session").await;
 
-        let prompt = harness
-            .client_cx
-            .send_request(PromptRequest::new(session_id.clone(), vec![ContentBlock::Text(TextContent::new("hi"))]))
-            .block_task();
-        prompt.await.expect("prompt accepted");
+        harness.prompt(&session_id, "hi").await.expect("prompt accepted");
         loop {
             let notification = harness.peer.next_session_notification().await;
             if let SessionUpdate::AgentMessageChunk(chunk) = notification.update
@@ -187,12 +171,7 @@ async fn resume_restores_transcript_without_replay_and_replaces_active_session()
         let resume = harness.client_cx.send_request(ResumeSessionRequest::new(session_id.clone(), AbsolutePath::new("/tmp"))).block_task();
         resume.await.expect("resume succeeds");
 
-        let prompt = harness
-            .client_cx
-            .send_request(PromptRequest::new(session_id.clone(), vec![ContentBlock::Text(TextContent::new("next prompt"))]))
-            .block_task()
-            .await
-            .expect("prompt on resumed session succeeds");
+        let prompt = harness.prompt(&session_id, "next prompt").await.expect("prompt on resumed session succeeds");
         loop {
             let notification = harness.peer.next_session_notification().await;
             match notification.update {

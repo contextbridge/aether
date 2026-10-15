@@ -33,14 +33,14 @@ async fn login_and_logout_publish_credential_and_config_state() {
         assert!(!harness.oauth_store.contains("codex"));
         harness.client_cx.send_request(acp::LoginAuthRequest::new("codex")).block_task().await.unwrap();
         assert!(harness.oauth_store.contains("codex"));
-        let methods = harness.auth_updates.recv().await.unwrap().auth_methods;
+        let methods = harness.peer.next_auth_methods_update().await.auth_methods;
         assert!(authenticated(&methods));
         let logged_in = next_config(&mut harness, session.session_id()).await;
 
         harness.client_cx.send_request(acp::LogoutAuthRequest::new()).block_task().await.unwrap();
         assert!(harness.oauth_store.load("codex").await.unwrap().is_none());
         assert!(harness.oauth_store.contains("unrelated-provider"));
-        let methods = harness.auth_updates.recv().await.unwrap().auth_methods;
+        let methods = harness.peer.next_auth_methods_update().await.auth_methods;
         assert!(!authenticated(&methods));
         let logged_out = next_config(&mut harness, session.session_id()).await;
         assert_ne!(logged_in, logged_out, "credential state changes the model login hints");

@@ -225,45 +225,24 @@ mod tests {
     }
 
     #[test]
-    fn agent_conflicts_with_model() {
-        let err = TestCli::try_parse_from(["test", "--agent", "planner", "--model", "anthropic:claude-sonnet-4-5"])
-            .expect_err("agent and model should conflict");
-        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
-    }
+    fn selection_flags_conflict_or_require_each_other() {
+        use clap::error::ErrorKind::{ArgumentConflict, MissingRequiredArgument};
+        let options_json = r#"{"model":"anthropic:claude-sonnet-4-5"}"#;
+        let cases = [
+            (vec!["--agent", "planner", "--model", "anthropic:claude-sonnet-4-5"], ArgumentConflict),
+            (vec!["--agent", "planner", "--reasoning-effort", "high"], ArgumentConflict),
+            (vec!["--reasoning-effort", "high"], MissingRequiredArgument),
+            (vec!["--options-json", options_json, "--model", "anthropic:claude-sonnet-4-5"], ArgumentConflict),
+        ];
+        for (args, expected) in cases {
+            let err = TestCli::try_parse_from(std::iter::once("test").chain(args.clone())).unwrap_err();
+            assert_eq!(err.kind(), expected, "{args:?}");
+        }
 
-    #[test]
-    fn agent_conflicts_with_reasoning_effort() {
-        let err = TestCli::try_parse_from(["test", "--agent", "planner", "--reasoning-effort", "high"])
-            .expect_err("agent and reasoning effort should conflict");
-        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
-    }
-
-    #[test]
-    fn reasoning_effort_requires_model() {
-        let err = TestCli::try_parse_from(["test", "--reasoning-effort", "high"])
-            .expect_err("reasoning effort should require model");
-        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
-    }
-
-    #[test]
-    fn reasoning_effort_with_model_is_allowed() {
         let cli =
             TestCli::try_parse_from(["test", "--model", "anthropic:claude-sonnet-4-5", "--reasoning-effort", "high"])
                 .expect("reasoning effort can configure an explicit model session");
         assert_eq!(cli.args.reasoning_effort, Some(ReasoningEffort::High));
-    }
-
-    #[test]
-    fn options_json_conflicts_with_individual_flags() {
-        let err = TestCli::try_parse_from([
-            "test",
-            "--options-json",
-            r#"{"model":"anthropic:claude-sonnet-4-5"}"#,
-            "--model",
-            "anthropic:claude-sonnet-4-5",
-        ])
-        .expect_err("options JSON should conflict with individual ACP flags");
-        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]

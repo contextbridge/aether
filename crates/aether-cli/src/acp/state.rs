@@ -672,7 +672,6 @@ pub(crate) fn validate_prompt_support(model_value: &str, content: &[ContentBlock
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aether_sessions::SessionStore;
 
     const SONNET: &str = "anthropic:claude-sonnet-4-5";
     const AUDIO_ONLY: &str = "bedrock:mistral.voxtral-small-24b-2507";
@@ -684,66 +683,6 @@ mod tests {
             .find(|model| !model.supports_image() && !model.supports_audio())
             .cloned()
             .expect("catalog contains a text-only model")
-    }
-
-    fn fake_oauth_store() -> Arc<dyn OAuthCredentialStorage> {
-        Arc::new(aether_auth::FakeOAuthCredentialStore::new())
-    }
-
-    fn test_state() -> AcpState {
-        let session_store = Arc::new(SessionStore::from_path(PathBuf::from("/tmp/aether-test-sessions")));
-        let workspace_manager =
-            Arc::new(WorkspaceManager::from_registry_path(PathBuf::from("/tmp/aether-test-workspaces.json")));
-        AcpState::new(AcpStateConfig {
-            session_store,
-            workspace_manager,
-            oauth_credential_store: fake_oauth_store(),
-            initial_selection: InitialSessionSelection::default(),
-            settings_source: SettingsSourceArgs::default(),
-            provider_connections: ProviderConnectionOverrides::default(),
-            telemetry: None,
-            runtime_factory: None,
-            cwd: PathBuf::from("/tmp"),
-            hooks: SessionHooks::default(),
-        })
-    }
-
-    #[tokio::test]
-    async fn initialize_advertises_session_lifecycle_support() {
-        let state = test_state();
-        let response = state
-            .initialize(InitializeRequest::new(ProtocolVersion::V2, Implementation::new("test", "1")))
-            .await
-            .expect("initialize succeeds");
-        let json = serde_json::to_string(&response).expect("response serializes");
-        assert_eq!(response.protocol_version, ProtocolVersion::V2);
-        let session = response.capabilities.session.unwrap();
-        assert!(session.prompt.is_some());
-        let mcp = session.mcp.unwrap();
-        assert!(mcp.stdio.is_some());
-        assert!(mcp.http.is_some());
-        for obsolete in ["loadSession", "resume", "close", "list", "sse"] {
-            assert!(!json.contains(&format!("\"{obsolete}\":")));
-        }
-    }
-
-    #[tokio::test]
-    async fn initialize_advertises_aether_capabilities_once() {
-        let state = test_state();
-        let response = state
-            .initialize(InitializeRequest::new(ProtocolVersion::V2, Implementation::new("test", "1")))
-            .await
-            .expect("initialize succeeds");
-        assert_eq!(
-            AetherCapabilities::from_meta(
-                response.capabilities.session.as_ref().unwrap().prompt.as_ref().unwrap().meta.as_ref()
-            ),
-            AetherCapabilities::default()
-        );
-        let capabilities = AetherCapabilities::from_meta(response.capabilities.session.as_ref().unwrap().meta.as_ref());
-        assert!(capabilities.prompt_search);
-        assert!(capabilities.session_preview);
-        assert!(capabilities.workspace_move);
     }
 
     #[test]

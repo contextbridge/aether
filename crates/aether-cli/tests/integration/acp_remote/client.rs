@@ -68,17 +68,11 @@ async fn remote_client_reports_occupied_server_without_disturbing_owner() {
         assert_eq!(session.response.session_id, id);
         assert!(matches!(run_client(args).await, Err(ClientRunError::ServerOccupied)));
         session.client.handle.request(PromptRequest::new(id.clone(), vec!["hello".into()])).await.unwrap();
-        let mut detached = server.subscribe();
-        let seen = *detached.borrow();
-        session.client.handle.disconnect().await;
-        detached.wait_for(|g| *g > seen).await.unwrap();
+        harness.until_detached(session.client.handle.disconnect()).await;
         let (socket, _) = tokio_tungstenite::connect_async(server.url()).await.unwrap();
         let session = wisp::Session::connect_remote_to(WebSocketTransport::new(socket), None).await.unwrap();
         assert_eq!(session.response.session_id, id);
-        let mut detached = server.subscribe();
-        let seen = *detached.borrow();
-        session.client.handle.disconnect().await;
-        detached.wait_for(|g| *g > seen).await.unwrap();
+        harness.until_detached(session.client.handle.disconnect()).await;
         server.shutdown().await;
         harness.shutdown().await;
     })
@@ -93,10 +87,7 @@ async fn remote_client_fresh_startup_then_live_and_saved_resume() {
         let session = wisp::Session::connect_remote_to(WebSocketTransport::new(socket), None).await.unwrap();
         let id = session.response.session_id.clone();
         assert_eq!(session.working_dir, std::path::PathBuf::from("/tmp"));
-        let mut detached = server.subscribe();
-        let seen = *detached.borrow();
-        session.client.handle.disconnect().await;
-        detached.wait_for(|g| *g > seen).await.unwrap();
+        harness.until_detached(session.client.handle.disconnect()).await;
         for saved in [false, true] {
             let (socket, _) = tokio_tungstenite::connect_async(server.url()).await.unwrap();
             let session = wisp::Session::connect_remote_to(WebSocketTransport::new(socket), saved.then(|| id.clone()))
@@ -106,10 +97,7 @@ async fn remote_client_fresh_startup_then_live_and_saved_resume() {
             if !saved {
                 session.client.handle.request(CloseSessionRequest::new(id.clone())).await.unwrap();
             }
-            let mut detached = server.subscribe();
-            let seen = *detached.borrow();
-            session.client.handle.disconnect().await;
-            detached.wait_for(|g| *g > seen).await.unwrap();
+            harness.until_detached(session.client.handle.disconnect()).await;
         }
         server.shutdown().await;
         harness.shutdown().await;
