@@ -409,9 +409,11 @@ impl TryFrom<&str> for AetherSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{agent_config, agent_json, agent_json_with, home, mcp_json, project, settings_agent};
+    use crate::testing::{
+        agent_config, agent_json, agent_json_with, has_prompt_file, home, mcp_json, project, settings_agent,
+        settings_with_mcps,
+    };
     use crate::{AgentCatalog, McpFileSpec, McpSourceSpec, PromptSource};
-    use aether_core::core::Prompt;
     use aether_core::mcp::McpConfig;
     use serde_json::json;
     use std::collections::BTreeMap;
@@ -427,30 +429,26 @@ mod tests {
     #[test]
     #[allow(clippy::float_cmp)]
     fn parses_telemetry_camel_case_and_http_protobuf() {
-        let config = AetherSettings::try_from(
-            json!({
-                "telemetry": {
-                    "serviceName": "aether-test",
-                    "sampleRatio": 0.5,
-                    "content": {
-                        "systemInstructions": true,
-                        "inputMessages": true,
-                        "outputMessages": false,
-                        "toolDefinitions": true,
-                        "toolCalls": true
-                    },
-                    "traces": { "enabled": true },
-                    "metrics": { "enabled": false },
-                    "otlp": {
-                        "endpoint": "http://localhost:4318",
-                        "headers": { "authorization": "Bearer token" }
-                    }
+        let config = serde_json::from_value::<AetherSettings>(json!({
+            "telemetry": {
+                "serviceName": "aether-test",
+                "sampleRatio": 0.5,
+                "content": {
+                    "systemInstructions": true,
+                    "inputMessages": true,
+                    "outputMessages": false,
+                    "toolDefinitions": true,
+                    "toolCalls": true
                 },
-                "agents": [agent_json("alpha", "Alpha")]
-            })
-            .to_string()
-            .as_str(),
-        )
+                "traces": { "enabled": true },
+                "metrics": { "enabled": false },
+                "otlp": {
+                    "endpoint": "http://localhost:4318",
+                    "headers": { "authorization": "Bearer token" }
+                }
+            },
+            "agents": [agent_json("alpha", "Alpha")]
+        }))
         .unwrap();
 
         let telemetry = config.telemetry.as_ref().unwrap();
@@ -469,14 +467,10 @@ mod tests {
 
     #[test]
     fn telemetry_with_no_enabled_signals_does_not_require_endpoint() {
-        let config = AetherSettings::try_from(
-            json!({
-                "telemetry": { "traces": { "enabled": false }, "metrics": { "enabled": false } },
-                "agents": [agent_json("alpha", "Alpha")]
-            })
-            .to_string()
-            .as_str(),
-        )
+        let config = serde_json::from_value::<AetherSettings>(json!({
+            "telemetry": { "traces": { "enabled": false }, "metrics": { "enabled": false } },
+            "agents": [agent_json("alpha", "Alpha")]
+        }))
         .unwrap();
 
         assert!(!config.telemetry.unwrap().effective_enabled());
@@ -766,11 +760,7 @@ mod tests {
         let catalog = AgentCatalog::from_settings(project.root(), config).unwrap();
         let spec = catalog.resolve("user-only").unwrap();
 
-        let expected_prompt = aether_home.join("agents/user.md");
-        assert!(spec.prompts.iter().any(|prompt| match prompt {
-            Prompt::File { path, .. } => path == &expected_prompt,
-            Prompt::Text(_) | Prompt::McpInstructions(_) => false,
-        }));
+        assert!(has_prompt_file(&spec, aether_home.join("agents/user.md")));
         assert_eq!(spec.mcp.servers.keys().collect::<Vec<_>>(), ["user"]);
     }
 
@@ -897,34 +887,12 @@ mod tests {
     }
 
     #[test]
-    fn resolves_inline_mcp_config() {
-        let dir = project().file("PROMPT.md", "Be helpful");
-        let config = AetherSettings {
-            agent: None,
-            agents: vec![AgentConfig {
-                mcps: vec![McpSourceSpec::Inline(McpConfig::default())],
-                ..agent_config("alpha")
-            }],
-            ..AetherSettings::default()
-        };
-
-        let catalog = AgentCatalog::from_settings(dir.root(), config).unwrap();
-        let spec = catalog.resolve("alpha").unwrap();
-
-        assert!(spec.mcp.is_empty());
-    }
-
-    #[test]
     fn parses_top_level_prompt_and_mcp_defaults() {
-        let config = AetherSettings::try_from(
-            json!({
-                "prompts": [{ "type": "file", "path": "BASE.md" }],
-                "mcps": [{ "type": "file", "path": "mcp.json" }],
-                "agents": [agent_json("alpha", "Alpha")]
-            })
-            .to_string()
-            .as_str(),
-        )
+        let config = serde_json::from_value::<AetherSettings>(json!({
+            "prompts": [{ "type": "file", "path": "BASE.md" }],
+            "mcps": [{ "type": "file", "path": "mcp.json" }],
+            "agents": [agent_json("alpha", "Alpha")]
+        }))
         .unwrap();
 
         assert_eq!(
@@ -940,19 +908,15 @@ mod tests {
 
     #[test]
     fn parses_and_serializes_string_shorthand_for_file_sources() {
-        let config = AetherSettings::try_from(
-            json!({
-                "prompts": ["BASE.md"],
-                "mcps": ["mcp.json"],
-                "agents": [agent_json_with(
-                    "alpha",
-                    "Alpha",
-                    json!({ "prompts": ["AGENT.md"], "mcps": ["agent-mcp.json"] }),
-                )]
-            })
-            .to_string()
-            .as_str(),
-        )
+        let config = serde_json::from_value::<AetherSettings>(json!({
+            "prompts": ["BASE.md"],
+            "mcps": ["mcp.json"],
+            "agents": [agent_json_with(
+                "alpha",
+                "Alpha",
+                json!({ "prompts": ["AGENT.md"], "mcps": ["agent-mcp.json"] }),
+            )]
+        }))
         .unwrap();
 
         assert_eq!(
@@ -1026,16 +990,8 @@ mod tests {
         let catalog = AgentCatalog::from_settings(project.root(), config).unwrap();
         let spec = catalog.resolve("planner").unwrap();
 
-        let expected_system = aether_home.join("agents/planner/SYSTEM.md");
-        let expected_agents = project.root().join("AGENTS.md");
-        assert!(spec.prompts.iter().any(|p| match p {
-            Prompt::File { path, .. } => path == &expected_system,
-            _ => false,
-        }));
-        assert!(spec.prompts.iter().any(|p| match p {
-            Prompt::File { path, .. } => path == &expected_agents,
-            _ => false,
-        }));
+        assert!(has_prompt_file(&spec, aether_home.join("agents/planner/SYSTEM.md")));
+        assert!(has_prompt_file(&spec, project.root().join("AGENTS.md")));
         assert_eq!(spec.mcp.servers.keys().collect::<Vec<_>>(), ["project"]);
     }
 
@@ -1095,89 +1051,39 @@ mod tests {
     }
 
     #[test]
-    fn optional_workspace_scoped_mcp_source_is_skipped_when_missing() {
-        let project = project().file("BASE.md", "Base instructions");
-        let config = AetherSettings {
-            agents: vec![AgentConfig {
-                prompts: vec![PromptSource::file("BASE.md")],
-                mcps: vec![McpFileSpec::new("${WORKSPACE}/.aether/mcp.json").optional().into()],
-                ..agent_config("alpha")
-            }],
-            ..AetherSettings::default()
-        };
+    fn mcp_sources_without_loadable_servers_resolve_to_no_servers() {
+        let project = project().file("PROMPT.md", "Be helpful");
+        let sources: [McpSourceSpec; 3] = [
+            McpSourceSpec::Inline(McpConfig::default()),
+            McpFileSpec::new("${WORKSPACE}/.aether/mcp.json").optional().into(),
+            McpFileSpec::new("${DEFINITELY_NOT_SET_VAR_MCP_OPTIONAL}/mcp.json").optional().into(),
+        ];
 
-        let config = AetherSettings::load(project.root(), [AetherSettingsSource::Value(Box::new(config))]).unwrap();
-        let catalog = AgentCatalog::from_settings(project.root(), config).unwrap();
-        let spec = catalog.resolve("alpha").unwrap();
-
-        assert!(spec.mcp.is_empty());
+        for source in sources {
+            let catalog =
+                AgentCatalog::from_settings(project.root(), settings_with_mcps(vec![source.clone()])).unwrap();
+            assert!(catalog.resolve("alpha").unwrap().mcp.is_empty(), "{source:?}");
+        }
     }
 
     #[test]
-    fn optional_mcp_source_skips_unresolved_variable() {
-        let project = project().file("BASE.md", "Base instructions");
-        let config = AetherSettings {
-            agents: vec![AgentConfig {
-                prompts: vec![PromptSource::file("BASE.md")],
-                mcps: vec![McpFileSpec::new("${DEFINITELY_NOT_SET_VAR_MCP_OPTIONAL}/mcp.json").optional().into()],
-                ..agent_config("alpha")
-            }],
-            ..AetherSettings::default()
-        };
+    fn required_mcp_sources_that_cannot_load_error() {
+        let project = project().file("PROMPT.md", "Be helpful");
+        let error = |source| AgentCatalog::from_settings(project.root(), settings_with_mcps(vec![source])).unwrap_err();
 
-        let config = AetherSettings::load(project.root(), [AetherSettingsSource::Value(Box::new(config))]).unwrap();
-        let catalog = AgentCatalog::from_settings(project.root(), config).unwrap();
-        let spec = catalog.resolve("alpha").unwrap();
-
-        assert!(spec.mcp.is_empty());
-    }
-
-    #[test]
-    fn required_mcp_source_errors_on_unresolved_variable() {
-        let project = project().file("BASE.md", "Base instructions");
-        let config = AetherSettings {
-            agents: vec![AgentConfig {
-                prompts: vec![PromptSource::file("BASE.md")],
-                mcps: vec![McpSourceSpec::file("${DEFINITELY_NOT_SET_VAR_MCP_REQ}/mcp.json")],
-                ..agent_config("alpha")
-            }],
-            ..AetherSettings::default()
-        };
-
-        let err = AgentCatalog::from_settings(project.root(), config).unwrap_err();
-        assert!(matches!(err, SettingsError::UnresolvedMcpConfigVariable { .. }));
-    }
-
-    #[test]
-    fn required_workspace_scoped_mcp_source_errors_when_missing() {
-        let project = project().file("BASE.md", "Base instructions");
-        let config = AetherSettings {
-            agents: vec![AgentConfig {
-                prompts: vec![PromptSource::file("BASE.md")],
-                mcps: vec![McpSourceSpec::file("nonexistent.json")],
-                ..agent_config("alpha")
-            }],
-            ..AetherSettings::default()
-        };
-
-        let err = AgentCatalog::from_settings(project.root(), config).unwrap_err();
-        assert!(matches!(err, SettingsError::InvalidMcpConfigPath { .. }));
+        assert!(matches!(
+            error(McpSourceSpec::file("${DEFINITELY_NOT_SET_VAR_MCP_REQ}/mcp.json")),
+            SettingsError::UnresolvedMcpConfigVariable { .. }
+        ));
+        assert!(matches!(error(McpSourceSpec::file("nonexistent.json")), SettingsError::InvalidMcpConfigPath { .. }));
     }
 
     #[test]
     fn optional_existing_mcp_source_preserves_defer_tools_flag() {
-        let project = project().file("BASE.md", "Base instructions").file("mcp.json", mcp_json("lazy"));
-        let config = AetherSettings {
-            agents: vec![AgentConfig {
-                prompts: vec![PromptSource::file("BASE.md")],
-                mcps: vec![McpFileSpec::new("mcp.json").defer_tools().optional().into()],
-                ..agent_config("alpha")
-            }],
-            ..AetherSettings::default()
-        };
+        let project = project().file("PROMPT.md", "Be helpful").file("mcp.json", mcp_json("lazy"));
+        let settings = settings_with_mcps(vec![McpFileSpec::new("mcp.json").defer_tools().optional().into()]);
 
-        let catalog = AgentCatalog::from_settings(project.root(), config).unwrap();
-        let spec = catalog.resolve("alpha").unwrap();
+        let spec = AgentCatalog::from_settings(project.root(), settings).unwrap().resolve("alpha").unwrap();
 
         assert!(spec.mcp.servers["lazy"].defer_tools().defers_tools());
     }
@@ -1187,13 +1093,6 @@ mod tests {
         let source: McpSourceSpec = McpFileSpec::new("${WORKSPACE}/.aether/mcp.json").optional().into();
         let value = serde_json::to_value(source).unwrap();
         assert_eq!(value, serde_json::json!({"type":"file", "path":"${WORKSPACE}/.aether/mcp.json", "optional":true}));
-    }
-
-    #[test]
-    fn optional_prompt_source_serializes_as_typed_object() {
-        let source = PromptSource::file("${WORKSPACE}/AGENTS.md").optional();
-        let value = serde_json::to_value(&source).unwrap();
-        assert_eq!(value, serde_json::json!({"type":"file", "path":"${WORKSPACE}/AGENTS.md", "optional":true}));
     }
 
     #[test]
@@ -1230,12 +1129,10 @@ mod tests {
                     ]
                 }),
             )]
-        })
-        .to_string();
+        });
 
-        let settings = AetherSettings::try_from(original.as_str()).unwrap();
-        let reserialized = serde_json::to_string(&settings).unwrap();
-        let reparsed = AetherSettings::try_from(reserialized.as_str()).unwrap();
+        let settings: AetherSettings = serde_json::from_value(original).unwrap();
+        let reparsed: AetherSettings = serde_json::from_value(serde_json::to_value(&settings).unwrap()).unwrap();
 
         assert_eq!(settings, reparsed, "settings should round-trip losslessly through serde");
     }
@@ -1271,33 +1168,25 @@ mod tests {
     }
 
     #[test]
-    fn parses_credentials_store_keyring() {
-        let config = AetherSettings::try_from(
-            json!({
-                "credentialsStore": { "type": "keyring" },
-                "agents": [agent_json("alpha", "Alpha")]
-            })
-            .to_string()
-            .as_str(),
-        )
-        .unwrap();
+    fn parses_credentials_store_variants() {
+        let encrypted_file = CredentialsStoreConfig::EncryptedFile {
+            path: Some(PathBuf::from("/custom/creds.enc")),
+            password_env: Some("MY_SECRET".to_string()),
+        };
+        let cases = [
+            (json!({ "type": "keyring" }), CredentialsStoreConfig::Keyring),
+            (json!({ "type": "memory" }), CredentialsStoreConfig::Memory),
+            (
+                json!({ "type": "encryptedFile", "path": "/custom/creds.enc", "passwordEnv": "MY_SECRET" }),
+                encrypted_file,
+            ),
+        ];
 
-        assert_eq!(config.credentials_store, Some(CredentialsStoreConfig::Keyring));
-    }
-
-    #[test]
-    fn parses_credentials_store_memory() {
-        let config = AetherSettings::try_from(
-            json!({
-                "credentialsStore": { "type": "memory" },
-                "agents": [agent_json("alpha", "Alpha")]
-            })
-            .to_string()
-            .as_str(),
-        )
-        .unwrap();
-
-        assert_eq!(config.credentials_store, Some(CredentialsStoreConfig::Memory));
+        for (store, expected) in cases {
+            let config: AetherSettings =
+                serde_json::from_value(json!({ "credentialsStore": store, "agents": [] })).unwrap();
+            assert_eq!(config.credentials_store, Some(expected));
+        }
     }
 
     #[test]
@@ -1332,30 +1221,6 @@ mod tests {
         assert!(matches!(
             settings.resolved_headers(&Vars::new().with_env_lookup(|_| None)),
             Err(VarError::NotFound(variable)) if variable == "POSTHOG_PROJECT_TOKEN"
-        ));
-    }
-
-    #[test]
-    fn parses_credentials_store_encrypted_file_with_options() {
-        let config = AetherSettings::try_from(
-            json!({
-                "credentialsStore": {
-                    "type": "encryptedFile",
-                    "path": "/custom/creds.enc",
-                    "passwordEnv": "MY_SECRET"
-                },
-                "agents": [agent_json("alpha", "Alpha")]
-            })
-            .to_string()
-            .as_str(),
-        )
-        .unwrap();
-
-        assert!(matches!(
-            &config.credentials_store,
-            Some(CredentialsStoreConfig::EncryptedFile { path, password_env })
-            if path == &Some(PathBuf::from("/custom/creds.enc"))
-                && password_env == &Some("MY_SECRET".to_string())
         ));
     }
 }

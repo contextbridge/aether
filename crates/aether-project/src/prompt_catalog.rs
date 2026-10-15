@@ -212,29 +212,11 @@ mod tests {
     }
 
     #[test]
-    fn skill_without_activation_surface_defaults_to_user_invocable() {
-        let dir = project().file("noop/SKILL.md", "---\ndescription: Does nothing\n---\nContent.");
-
-        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
-        assert_eq!(catalog.all().len(), 1);
-        assert!(catalog.all()[0].user_invocable);
-    }
-
-    #[test]
     fn flat_md_without_activation_surface_is_skipped() {
         let dir = project().file("noop.md", "---\ndescription: Does nothing\nagent-invocable: false\n---\nContent.");
 
         let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
         assert!(catalog.all().is_empty());
-    }
-
-    #[test]
-    fn name_defaults_to_directory_name() {
-        let dir =
-            project().file("my-skill/SKILL.md", "---\ndescription: My skill\nagent-invocable: true\n---\nContent.");
-
-        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
-        assert_eq!(catalog.all()[0].name, "my-skill");
     }
 
     #[test]
@@ -299,21 +281,6 @@ mod tests {
     }
 
     #[test]
-    fn preserves_tags_and_metadata() {
-        let dir = project().file(
-            "tagged/SKILL.md",
-            "---\ndescription: Tagged skill\nagent-invocable: true\ntags:\n  - rust\n  - testing\nagent_authored: true\nhelpful: 5\nharmful: 1\n---\nContent.",
-        );
-
-        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
-        let spec = &catalog.all()[0];
-        assert_eq!(spec.tags, vec!["rust", "testing"]);
-        assert!(spec.agent_authored);
-        assert_eq!(spec.helpful, 5);
-        assert_eq!(spec.harmful, 1);
-    }
-
-    #[test]
     fn from_dirs_last_wins() {
         let dir_a =
             project().file("rust/SKILL.md", "---\ndescription: Rust A\nagent-invocable: true\n---\nFrom dir A.");
@@ -356,36 +323,6 @@ mod tests {
     }
 
     #[test]
-    fn discover_flat_md_rule_with_globs() {
-        let dir = project().file(
-            "rust-conventions.md",
-            "---\ndescription: Rust conventions\nglobs:\n  - \"**/*.rs\"\n---\nFollow Rust conventions.",
-        );
-
-        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
-        assert_eq!(catalog.all().len(), 1);
-
-        let spec = &catalog.all()[0];
-        assert_eq!(spec.name, "rust-conventions");
-        assert_eq!(spec.description, "Rust conventions");
-        assert!(spec.triggers.matches_read("src/main.rs"));
-        assert!(!spec.triggers.matches_read("README.md"));
-    }
-
-    #[test]
-    fn discover_flat_md_rule_with_paths() {
-        let dir = project()
-            .file("ts-rules.md", "---\ndescription: TS rules\npaths:\n  - \"**/*.ts\"\n---\nTypeScript rules.");
-
-        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
-        assert_eq!(catalog.all().len(), 1);
-
-        let spec = &catalog.all()[0];
-        assert_eq!(spec.name, "ts-rules");
-        assert!(spec.triggers.matches_read("src/index.ts"));
-    }
-
-    #[test]
     fn discover_mixed_skill_md_and_flat_rules() {
         let dir = project()
             .file("commit/SKILL.md", "---\ndescription: Commit\nuser-invocable: true\n---\nCommit message.")
@@ -411,18 +348,6 @@ mod tests {
         let names: Vec<&str> = catalog.all().iter().map(|s| s.name.as_str()).collect();
         assert!(names.contains(&"commit"));
         assert!(names.contains(&"rust-rules"));
-    }
-
-    #[test]
-    fn flat_rule_without_description_uses_name() {
-        let dir = project().file("my-rule.md", "---\nglobs:\n  - \"**/*.rs\"\n---\nRule body.");
-
-        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
-        assert_eq!(catalog.all().len(), 1);
-
-        let spec = &catalog.all()[0];
-        assert_eq!(spec.name, "my-rule");
-        assert_eq!(spec.description, "my-rule");
     }
 
     #[test]

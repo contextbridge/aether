@@ -29,7 +29,7 @@ async fn replace_conversation_preserves_system_prompt_for_next_request() {
         .await
         .unwrap();
 
-    let contexts = result.captured_contexts.lock().unwrap();
+    let contexts = result.contexts();
     let messages = contexts.last().expect("provider should receive a context").messages();
     assert!(matches!(messages[0], ChatMessage::System { ref content, .. } if content == "original system"));
     assert!(
