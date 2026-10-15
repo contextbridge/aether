@@ -5,7 +5,7 @@ use crate::core::prompt_cache_key::derive_prompt_cache_key;
 use crate::core::queued_input::QueuedInput;
 pub use crate::core::retry_config::RetryConfig;
 use crate::core::tool_execution::{ToolAbortPolicy, ToolExecutionUpdate, ToolExecutions};
-use crate::core::{AgentBuilder, PromptCache};
+use crate::core::{AgentBuilder, AgentError, PromptCache};
 use crate::events::{
     AgentCommand, AgentEvent, AgentObserver, Command, CompactionId, CompactionOutcome, ContextEvent, LlmCallOutcome,
     ModelEvent, StreamState, TaskOutcome, TaskOutcomeState, ToolEvent, TraceContext, TurnEvent, TurnOutcome,
@@ -83,25 +83,35 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub(crate) fn new(
+    pub(crate) async fn new(
         builder: AgentBuilder,
-        context: Context,
-        prompt_cache: PromptCache,
         command_rx: mpsc::Receiver<Command>,
         message_tx: mpsc::Sender<AgentEvent>,
-    ) -> Self {
+    ) -> Result<Self, AgentError> {
         let AgentBuilder {
             llm,
+            prompts,
+            initial_messages,
             mcp,
+            channel_capacity: _,
             tool_timeout,
             compaction_config,
             max_auto_continues,
             retry_config,
             context_window,
+            model_settings,
             observers,
             session_usage,
-            ..
+            session_affinity_key,
         } = builder;
+
+        let mut prompt_cache = PromptCache::new(prompts);
+        let system_content = prompt_cache.render().await?;
+        let system_message = (!system_content.is_empty()).then(|| ChatMessage::system(system_content));
+        let mut context = Context::new(system_message.into_iter().chain(initial_messages).collect(), Vec::new());
+        context.set_model_settings(model_settings);
+        context.set_session_affinity_key(Some(session_affinity_key));
+
         let mut streams: StreamMap<StreamKey, EventStream> = StreamMap::new();
         let input_stream = ReceiverStream::new(command_rx)
             .map(StreamEvent::Command)
@@ -112,7 +122,7 @@ impl Agent {
 
         let context_limit = context_window.or_else(|| llm.context_window());
 
-        Self {
+        Ok(Self {
             llm,
             context,
             mcp,
@@ -134,7 +144,7 @@ impl Agent {
             active_compaction: None,
             active_model: None,
             session_usage,
-        }
+        })
     }
 
     pub fn current_model_display_name(&self) -> String {
@@ -459,12 +469,12 @@ impl Agent {
                 outcome: call_outcome,
             }))
             .await;
-            self.emit_compaction_ended(compaction_id, compaction_outcome).await;
+            self.emit(AgentEvent::Context(ContextEvent::CompactionEnded {
+                compaction_id,
+                outcome: compaction_outcome,
+            }))
+            .await;
         }
-    }
-
-    async fn emit_compaction_ended(&mut self, compaction_id: CompactionId, outcome: CompactionOutcome) {
-        self.emit(AgentEvent::Context(ContextEvent::CompactionEnded { compaction_id, outcome })).await;
     }
 
     /// Inject a continuation prompt when the LLM stops due to a resumable reason.
@@ -662,7 +672,8 @@ impl Agent {
                 CompactionOutcome::Failed { error: e.to_string() }
             }
         };
-        self.emit_compaction_ended(compaction_id, compaction_outcome).await;
+        self.emit(AgentEvent::Context(ContextEvent::CompactionEnded { compaction_id, outcome: compaction_outcome }))
+            .await;
 
         self.start_chat_turn().await;
     }
