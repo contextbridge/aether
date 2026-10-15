@@ -1,47 +1,25 @@
 use super::types::{ChatCompletionStreamResponse, FinishReason, FunctionCallDelta, ToolCallDelta};
 use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
 use crate::providers::response_stream::{OpenedStream, StreamAssembler, response_stream};
-use crate::{LlmError, LlmResponse, LlmResponseStream, ProviderError, Result, StopReason};
-use async_openai::{Client, config::Config};
-use futures::{Stream, StreamExt};
-use serde::Serialize;
+use crate::{LlmResponse, LlmResponseStream, ProviderError, Result, StopReason};
+use futures::Stream;
 use std::future::ready;
-use std::time::Duration;
-use tracing::{debug, warn};
+use tracing::debug;
 
-/// Generic streaming function that accepts any serializable request type.
-/// This enables providers to use custom request types while reusing the streaming logic.
-pub fn create_custom_stream_generic<T, U>(client: &Client<T>, request: U, idle_timeout: Duration) -> LlmResponseStream
-where
-    T: Config + Clone + 'static,
-    U: Serialize + Send + 'static,
-{
-    let client = client.clone();
-
+pub fn process_compatible_stream(data: impl Stream<Item = Result<String>> + Send + 'static) -> LlmResponseStream {
     response_stream(
-        async move {
-            let chunks =
-                client.chat().create_stream_byot::<U, ChatCompletionStreamResponse>(request).await.map_err(|e| {
-                    warn!("create_stream_byot failed: {e}");
-                    LlmError::from(e)
-                })?;
-            Ok(OpenedStream::new(chunks.map(|chunk| {
-                chunk.map_err(|e| {
-                    warn!("Stream error from API: {e}");
-                    ProviderError::stream_interrupted(e.to_string()).into()
-                })
-            })))
-        },
-        decode_chunk,
-        idle_timeout,
+        ready(Ok(OpenedStream::new(data))),
+        |data, turn| decode_sse_chunk(&data, turn),
+        DEFAULT_STREAM_IDLE_TIMEOUT,
     )
 }
 
-pub fn process_compatible_stream<E: Into<LlmError> + Send + 'static>(
-    chunks: impl Stream<Item = std::result::Result<ChatCompletionStreamResponse, E>> + Send + 'static,
-) -> LlmResponseStream {
-    let chunks = chunks.map(|chunk| chunk.map_err(Into::into));
-    response_stream(ready(Ok(OpenedStream::new(chunks))), decode_chunk, DEFAULT_STREAM_IDLE_TIMEOUT)
+pub(crate) fn decode_sse_chunk(data: &str, turn: &mut StreamAssembler<i32>) -> Result<Vec<LlmResponse>> {
+    let chunk = serde_json::from_str::<ChatCompletionStreamResponse>(data).map_err(|error| {
+        debug!(data, %error, "Failed to decode chat completion SSE chunk");
+        ProviderError::stream_interrupted(format!("Invalid chat completion SSE chunk: {error}"))
+    })?;
+    decode_chunk(chunk, turn)
 }
 
 fn decode_chunk(mut chunk: ChatCompletionStreamResponse, turn: &mut StreamAssembler<i32>) -> Result<Vec<LlmResponse>> {
@@ -99,56 +77,20 @@ fn map_finish_reason(reason: FinishReason) -> Result<StopReason> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::http::openai_client;
     use crate::providers::openai_compatible::types::{
         ChatCompletionStreamChoice, ChatCompletionStreamResponseDelta, CompletionTokensDetails, PromptTokensDetails,
         Usage,
     };
-    use crate::testing::{FakeHttpService, llm_response};
+    use crate::testing::llm_response;
     use crate::{ProviderErrorKind, TokenUsage};
-    use async_openai::config::OpenAIConfig;
-    use futures::stream;
-    use reqwest::{Body, Method};
-
-    #[tokio::test]
-    async fn transport_errors_preserve_request_and_stream_classification() {
-        let request = serde_json::json!({ "model": "test-model", "messages": [], "stream": true });
-        for (status, body, kind, retryable) in [
-            (400, r#"{"error":{"message":"invalid request"}}"#, ProviderErrorKind::Api, false),
-            (200, "data: invalid json\n\n", ProviderErrorKind::StreamInterrupted, true),
-        ] {
-            let service = FakeHttpService::default();
-            service.route(Method::POST, "https://api.openai.com/v1/chat/completions", move || {
-                http::Response::builder()
-                    .status(status)
-                    .header("content-type", "text/event-stream")
-                    .body(Body::from(body))
-                    .unwrap()
-                    .into()
-            });
-            let client = openai_client(OpenAIConfig::new().with_api_key("test-key"), service.clone());
-            let responses = create_custom_stream_generic(&client, request.clone(), DEFAULT_STREAM_IDLE_TIMEOUT)
-                .collect::<Vec<_>>()
-                .await;
-
-            assert_eq!(responses.len(), if status == 200 { 2 } else { 1 }, "{responses:?}");
-            if status == 200 {
-                assert!(matches!(responses[0], Ok(LlmResponse::Start)));
-            }
-            let error = responses.last().unwrap().as_ref().expect_err("transport failure must surface as Err");
-            assert_eq!(error.provider().map(|provider| provider.kind), Some(kind));
-            assert_eq!(error.is_retryable(), retryable);
-
-            let sent = service.take_requests().pop().unwrap();
-            let body: serde_json::Value = serde_json::from_slice(sent.body().unwrap().as_bytes().unwrap()).unwrap();
-            assert_eq!(body, request);
-        }
-    }
+    use futures::{StreamExt, stream};
+    use serde_json::json;
 
     #[tokio::test]
     async fn error_finish_reasons_yield_retryable_server_errors() {
-        for reason in [FinishReason::Error, FinishReason::NetworkError] {
-            let responses = process_chunks(chat_stream().finish(reason).build()).await;
+        for reason in ["error", "network_error"] {
+            let chunk = json!({ "choices": [{ "delta": { "content": "" }, "finish_reason": reason }] }).to_string();
+            let responses: Vec<_> = process_compatible_stream(stream::iter([Ok(chunk)])).collect().await;
 
             let err = responses.last().unwrap().as_ref().expect_err("an error finish reason must surface as Err");
             assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::Server), "{err:?}");
@@ -175,9 +117,10 @@ mod tests {
     #[tokio::test]
     async fn stream_error_mid_tool_call_does_not_complete_it() {
         let chunks = chat_stream().tool_start(0, "call_1", "bash").tool_args(0, r#"{"command":"#).build();
-        let items = chunks.into_iter().map(Ok).chain([Err(ProviderError::stream_interrupted("connection lost"))]);
+        let items =
+            chunks.into_iter().map(Ok).chain([Err(ProviderError::stream_interrupted("connection lost").into())]);
 
-        let responses: Vec<_> = process_compatible_stream(stream::iter(items)).collect().await;
+        let responses = process_chunks(items).await;
 
         assert!(
             matches!(
@@ -290,12 +233,25 @@ mod tests {
             chat_stream()
                 .text(&["done"])
                 .finish(FinishReason::Stop)
-                .usage(Usage { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, ..Default::default() })
+                .usage(Usage { prompt_tokens: 10, completion_tokens: 5, ..Default::default() })
                 .build(),
         )
         .await;
 
         assert_eq!(responses, llm_response().text(&["done"]).usage(10, 5).build_with_stop_reason(StopReason::EndTurn));
+    }
+
+    #[tokio::test]
+    async fn negative_token_counts_are_clamped_to_zero() {
+        let tokens = collect_first_usage(
+            chat_stream().usage(Usage { prompt_tokens: -5, completion_tokens: 10, ..Default::default() }).build(),
+        )
+        .await;
+
+        assert_eq!(
+            tokens,
+            Some(TokenUsage { input_tokens: 0.into(), output_tokens: 10.into(), ..TokenUsage::default() })
+        );
     }
 
     #[tokio::test]
@@ -305,7 +261,6 @@ mod tests {
                 .usage(Usage {
                     prompt_tokens: 100,
                     completion_tokens: 50,
-                    total_tokens: 150,
                     prompt_tokens_details: Some(PromptTokensDetails { cached_tokens: Some(30), ..Default::default() }),
                     completion_tokens_details: None,
                 })
@@ -332,7 +287,6 @@ mod tests {
                 .usage(Usage {
                     prompt_tokens: 1000,
                     completion_tokens: 500,
-                    total_tokens: 1500,
                     prompt_tokens_details: Some(PromptTokensDetails {
                         cached_tokens: Some(100),
                         cache_write_tokens: Some(50),
@@ -375,7 +329,6 @@ mod tests {
                 .usage(Usage {
                     prompt_tokens: 200,
                     completion_tokens: 100,
-                    total_tokens: 300,
                     prompt_tokens_details: Some(PromptTokensDetails {
                         cached_tokens: Some(80),
                         audio_tokens: Some(12),
@@ -424,11 +377,14 @@ mod tests {
     }
 
     async fn collect_responses(chunks: Vec<ChatCompletionStreamResponse>) -> Vec<LlmResponse> {
-        process_chunks(chunks).await.into_iter().map(Result::unwrap).collect()
+        process_chunks(chunks.into_iter().map(Ok)).await.into_iter().map(Result::unwrap).collect()
     }
 
-    async fn process_chunks(chunks: Vec<ChatCompletionStreamResponse>) -> Vec<Result<LlmResponse>> {
-        process_compatible_stream(stream::iter(chunks.into_iter().map(Ok::<_, LlmError>))).collect().await
+    async fn process_chunks(
+        chunks: impl IntoIterator<Item = Result<ChatCompletionStreamResponse>, IntoIter: Send + 'static>,
+    ) -> Vec<Result<LlmResponse>> {
+        let opened = ready(Ok(OpenedStream::new(stream::iter(chunks))));
+        response_stream(opened, decode_chunk, DEFAULT_STREAM_IDLE_TIMEOUT).collect().await
     }
 
     async fn collect_first_usage(chunks: Vec<ChatCompletionStreamResponse>) -> Option<TokenUsage> {
@@ -479,7 +435,6 @@ mod tests {
                 tool_calls: Some(vec![ToolCallDelta {
                     index,
                     id: id.map(ToString::to_string),
-                    tool_type: Some("function".to_string()),
                     function: Some(FunctionCallDelta {
                         name: name.map(ToString::to_string),
                         arguments: arguments.map(ToString::to_string),
@@ -512,21 +467,13 @@ mod tests {
     }
 
     fn chunk(choices: Vec<ChatCompletionStreamChoice>, usage: Option<Usage>) -> ChatCompletionStreamResponse {
-        ChatCompletionStreamResponse {
-            id: "chunk".to_string(),
-            choices,
-            created: 1,
-            model: "test".to_string(),
-            system_fingerprint: None,
-            object: "chat.completion.chunk".to_string(),
-            usage,
-        }
+        ChatCompletionStreamResponse { choices, usage }
     }
 
     fn choice(
         delta: ChatCompletionStreamResponseDelta,
         finish_reason: Option<FinishReason>,
     ) -> ChatCompletionStreamChoice {
-        ChatCompletionStreamChoice { index: 0, delta, finish_reason, logprobs: None }
+        ChatCompletionStreamChoice { delta, finish_reason }
     }
 }

@@ -1,8 +1,9 @@
+use crate::fs::write_atomic;
+use crate::path::home_dir;
 use serde::{Serialize, de::DeserializeOwned};
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
 pub struct SettingsStore {
@@ -11,12 +12,7 @@ pub struct SettingsStore {
 
 impl SettingsStore {
     pub fn new(env_override: &str, dot_dir: &str) -> Option<Self> {
-        let home = resolve_home(
-            std::env::var(env_override).ok().as_deref(),
-            std::env::var("HOME").ok().as_deref(),
-            std::env::var("USERPROFILE").ok().as_deref(),
-            dot_dir,
-        )?;
+        let home = resolve_home(std::env::var(env_override).ok().as_deref(), home_dir().as_deref(), dot_dir)?;
         Some(Self { home })
     }
 
@@ -38,28 +34,17 @@ impl SettingsStore {
 }
 
 pub fn aether_home() -> Option<PathBuf> {
-    resolve_home(
-        std::env::var("AETHER_HOME").ok().as_deref(),
-        std::env::var("HOME").ok().as_deref(),
-        std::env::var("USERPROFILE").ok().as_deref(),
-        ".aether",
-    )
+    resolve_home(std::env::var("AETHER_HOME").ok().as_deref(), home_dir().as_deref(), ".aether")
 }
 
-pub fn resolve_home(
-    env_override: Option<&str>,
-    home: Option<&str>,
-    userprofile: Option<&str>,
-    dot_dir: &str,
-) -> Option<PathBuf> {
+pub fn resolve_home(env_override: Option<&str>, home: Option<&Path>, dot_dir: &str) -> Option<PathBuf> {
     if let Some(value) = env_override
         && !value.trim().is_empty()
     {
         return Some(PathBuf::from(value));
     }
 
-    let fallback_home = home.or(userprofile)?;
-    Some(PathBuf::from(fallback_home).join(dot_dir))
+    home.map(|home| home.join(dot_dir))
 }
 
 fn load_or_create_at<T: Serialize + DeserializeOwned + Default>(path: &Path) -> T {
@@ -88,29 +73,10 @@ fn load_or_create_at<T: Serialize + DeserializeOwned + Default>(path: &Path) -> 
 }
 
 fn save_to_path<T: Serialize>(path: &Path, settings: &T) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let temp_path = temp_path_for(path);
-    let serialized = serde_json::to_vec_pretty(settings)
+    let mut serialized = serde_json::to_vec_pretty(settings)
         .map_err(|error| io::Error::other(format!("Failed to serialize settings: {error}")))?;
-
-    {
-        let mut file = fs::File::create(&temp_path)?;
-        file.write_all(&serialized)?;
-        file.write_all(b"\n")?;
-        file.sync_all()?;
-    }
-
-    fs::rename(&temp_path, path)?;
-    Ok(())
-}
-
-fn temp_path_for(path: &Path) -> PathBuf {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |duration| duration.as_nanos());
-    let pid = std::process::id();
-    path.with_extension(format!("json.tmp.{pid}.{nanos}"))
+    serialized.push(b'\n');
+    write_atomic(path, &serialized)
 }
 
 #[cfg(test)]
@@ -160,53 +126,25 @@ mod tests {
 
     #[test]
     fn resolve_home_prefers_env_override() {
-        let resolved = resolve_home(Some("/tmp/custom"), Some("/home/test"), None, ".app").unwrap();
+        let resolved = resolve_home(Some("/tmp/custom"), Some(Path::new("/home/test")), ".app").unwrap();
         assert_eq!(resolved, PathBuf::from("/tmp/custom"));
     }
 
     #[test]
     fn resolve_home_uses_home_fallback() {
-        let resolved = resolve_home(None, Some("/home/test"), None, ".app").unwrap();
+        let resolved = resolve_home(None, Some(Path::new("/home/test")), ".app").unwrap();
         assert_eq!(resolved, PathBuf::from("/home/test/.app"));
     }
 
     #[test]
-    fn resolve_home_uses_userprofile_fallback() {
-        let resolved = resolve_home(None, None, Some("C:\\Users\\test"), ".app").unwrap();
-        assert_eq!(resolved, PathBuf::from("C:\\Users\\test/.app"));
-    }
-
-    #[test]
     fn resolve_home_ignores_empty_override() {
-        let resolved = resolve_home(Some("  "), Some("/home/test"), None, ".app").unwrap();
+        let resolved = resolve_home(Some("  "), Some(Path::new("/home/test")), ".app").unwrap();
         assert_eq!(resolved, PathBuf::from("/home/test/.app"));
     }
 
     #[test]
     fn resolve_home_returns_none_when_no_home() {
-        assert!(resolve_home(None, None, None, ".app").is_none());
-    }
-
-    #[test]
-    fn atomic_save_overwrites_and_cleans_temp_files() {
-        let temp_dir = TempDir::new().unwrap();
-        let path = temp_dir.path().join("settings.json");
-
-        let first = FakeSettings { name: "first".to_string() };
-        save_to_path(&path, &first).unwrap();
-
-        let second = FakeSettings { name: "second".to_string() };
-        save_to_path(&path, &second).unwrap();
-
-        let loaded: FakeSettings = load_or_create_at(&path);
-        assert_eq!(loaded, second);
-
-        let temp_count = fs::read_dir(temp_dir.path())
-            .unwrap()
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp."))
-            .count();
-        assert_eq!(temp_count, 0, "temporary files should be cleaned up");
+        assert!(resolve_home(None, None, ".app").is_none());
     }
 
     #[test]

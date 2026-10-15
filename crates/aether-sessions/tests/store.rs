@@ -5,6 +5,7 @@ use aether_sessions::testing::{
 };
 use aether_sessions::{ScanLimits, SessionStore, SessionStoreError};
 use llm::ContentBlock;
+use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -114,6 +115,24 @@ fn relocating_updates_metadata_and_derived_prompt_entries() {
     assert_eq!(store.store().session_cwd("session-1"), Some(PathBuf::from("/tmp/new-project")));
     let response = store.store().search_prompts("move me", None).expect("search succeeds");
     assert_eq!(response.results[0].cwd, PathBuf::from("/tmp/new-project"));
+}
+
+#[test]
+fn relocating_succeeds_while_a_temp_path_is_occupied() {
+    let store = TestStore::new().session("session-1", &[user_message("move me")]);
+    fs::create_dir(store.path().join("session-1.jsonl.tmp")).unwrap();
+    store.store().relocate("session-1", Path::new("/tmp/new-project")).expect("relocation succeeds");
+
+    assert_eq!(store.store().session_cwd("session-1"), Some(PathBuf::from("/tmp/new-project")));
+}
+
+#[test]
+fn rebuilding_prompt_history_succeeds_while_a_temp_path_is_occupied() {
+    let store = TestStore::new().session("session-1", &[user_message("find me")]);
+    fs::create_dir(store.path().join("prompt-history.jsonl.tmp")).unwrap();
+    store.store().rebuild_prompt_history().expect("rebuild succeeds");
+
+    assert_eq!(store.store().search_prompts("find me", None).unwrap().results.len(), 1);
 }
 
 #[test]

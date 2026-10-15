@@ -1,5 +1,7 @@
 use super::support::*;
+use std::collections::BTreeMap;
 use utils::ReasoningEffort;
+use wisp::settings::KeyAction;
 use wisp::theme::{ThemeApplicationError, ThemeLoadError};
 
 fn server_status_entry(name: &str, status: McpServerStatus) -> McpServerStatusEntry {
@@ -8,10 +10,6 @@ fn server_status_entry(name: &str, status: McpServerStatus) -> McpServerStatusEn
 
 fn oauth_server(name: &str, status: McpServerStatus) -> McpServerStatusEntry {
     McpServerStatusEntry::new(name, status).with_auth_capability(McpServerAuthCapability::OAuth)
-}
-
-fn mcp_notification(servers: Vec<McpServerStatusEntry>) -> AcpEvent {
-    AcpEvent::McpNotification(McpNotification::ServerStatus { servers })
 }
 
 fn auth_complete(method_id: &str) -> CommandResult {
@@ -40,16 +38,14 @@ fn auth_methods_updated(methods: Vec<acp::AuthMethod>) -> AcpEvent {
 /// Walks settings down to the MCP servers pane and authenticates the selected
 /// server: the flow that makes the agent hand back an OAuth URL.
 fn authenticate_selected_oauth_server(ui: &mut TestUi) {
-    open_first_config_option(ui);
+    open_mcp_servers(ui);
     ui.key(key(KeyCode::Enter));
 }
 
 #[test]
 fn settings_modal_header_and_footer_match_the_content_padding() -> Result<(), Box<dyn std::error::Error>> {
     let mut ui = TestUi::new();
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    ui.draw();
+    ui.run_command("/settings");
 
     let buffer = ui.viewport();
     let background = Theme::default().background;
@@ -111,20 +107,15 @@ fn settings_overlay_shows_mcp_servers_entry() {
 
     ui.acp_event(mcp_notification(vec![server_status_entry("github", McpServerStatus::Connected { tool_count: 3 })]));
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-
-    assert!(viewport.contains("MCP Servers"), "settings should show MCP Servers entry:\n{viewport}");
+    ui.assert_viewport_contains("MCP Servers");
 }
 
 #[test]
 fn double_ctrl_c_exits_over_settings_overlay() {
     let mut ui = TestUi::new();
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
     assert!(ui.app().has_modal());
     assert_ctrl_c_exits(&mut ui);
 }
@@ -133,26 +124,18 @@ fn double_ctrl_c_exits_over_settings_overlay() {
 fn settings_overlay_shows_provider_logins_when_auth_methods_present() {
     let mut ui = TestUiBuilder::new().auth_methods(vec![auth_method("codex", "Codex", None)]).build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-
-    assert!(viewport.contains("Provider Logins"), "settings should show Provider Logins:\n{viewport}");
+    ui.assert_viewport_contains("Provider Logins");
 }
 
 #[test]
 fn settings_overlay_no_provider_logins_when_auth_methods_empty() {
     let mut ui = TestUi::new();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-
-    assert!(!viewport.contains("Provider Logins"), "should not show Provider Logins when empty:\n{viewport}");
+    ui.assert_viewport_not_contains("Provider Logins");
 }
 
 #[test]
@@ -165,36 +148,23 @@ fn mcp_server_status_pane_renders_entries() {
         server_status_entry("slack", McpServerStatus::Failed { error: "timeout".to_string() }),
     ]));
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    // Navigate to MCP Servers entry (after Theme entry)
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_mcp_servers(&mut ui);
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-
-    assert!(viewport.contains("github"), "should show github:\n{viewport}");
-    assert!(viewport.contains("5 tools"), "should show tool count:\n{viewport}");
-    assert!(viewport.contains("linear"), "should show linear:\n{viewport}");
-    assert!(viewport.contains("needs auth"), "should show auth needed:\n{viewport}");
-    assert!(viewport.contains("slack"), "should show slack:\n{viewport}");
-    assert!(viewport.contains("timeout"), "should show error:\n{viewport}");
+    ui.assert_viewport_contains("github");
+    ui.assert_viewport_contains("5 tools");
+    ui.assert_viewport_contains("linear");
+    ui.assert_viewport_contains("needs auth");
+    ui.assert_viewport_contains("slack");
+    ui.assert_viewport_contains("timeout");
 }
 
 #[test]
 fn mcp_server_status_empty_shows_placeholder() {
     let mut ui = TestUi::new();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_mcp_servers(&mut ui);
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-
-    assert!(viewport.contains("no MCP servers configured"), "should show placeholder:\n{viewport}");
+    ui.assert_viewport_contains("no MCP servers configured");
 }
 
 #[test]
@@ -203,17 +173,10 @@ fn selecting_oauth_server_emits_authenticate_mcp_server() {
 
     ui.acp_event(mcp_notification(vec![oauth_server("linear", McpServerStatus::NeedsOAuth)]));
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_mcp_servers(&mut ui);
     ui.key(key(KeyCode::Enter));
 
-    let cmd = ui.next_agent_command().unwrap();
-    match cmd {
-        AgentCommand::AuthenticateMcpServer { server_name, .. } => assert_eq!(server_name, "linear"),
-        other => panic!("expected AuthenticateMcpServer, got: {other:?}"),
-    }
+    assert_authenticates_mcp_server(&mut ui, "linear");
 }
 
 #[test]
@@ -222,10 +185,7 @@ fn selecting_non_oauth_server_is_noop() {
 
     ui.acp_event(mcp_notification(vec![server_status_entry("github", McpServerStatus::Connected { tool_count: 5 })]));
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_mcp_servers(&mut ui);
     ui.key(key(KeyCode::Enter));
 
     assert_no_commands(&mut ui, "should not emit command for non-OAuth server");
@@ -235,19 +195,11 @@ fn selecting_non_oauth_server_is_noop() {
 fn provider_login_emits_authenticate() {
     let mut ui = TestUiBuilder::new().auth_methods(vec![auth_method("codex", "Codex", None)]).build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    // Navigate to Provider Logins (menu: Theme, MCP Servers, Provider Logins)
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_provider_logins(&mut ui);
     ui.key(key(KeyCode::Enter));
 
-    let cmd = ui.next_agent_command().unwrap();
-    match cmd {
-        AgentCommand::Authenticate { method_id } => assert_eq!(method_id, "codex"),
-        other => panic!("expected Authenticate, got: {other:?}"),
-    }
+    let cmd = ui.next_agent_command();
+    assert!(matches!(&cmd, Some(AgentCommand::Authenticate { method_id }) if method_id == "codex"), "{cmd:?}");
 }
 
 #[test]
@@ -255,54 +207,36 @@ fn authenticate_complete_updates_correct_entry() {
     let mut ui =
         TestUiBuilder::new().auth_methods(vec![auth_method("a", "A", None), auth_method("b", "B", None)]).build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_provider_logins(&mut ui);
     ui.key(key(KeyCode::Enter));
 
     ui.deliver_result(auth_complete("a"));
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("logged in"), "should show logged in for 'a':\n{viewport}");
+    ui.assert_viewport_contains("logged in");
 }
 
 #[test]
 fn authenticate_failed_resets_to_needs_login() {
     let mut ui = TestUiBuilder::new().auth_methods(vec![auth_method("x", "X", None)]).build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_provider_logins(&mut ui);
     ui.key(key(KeyCode::Enter));
 
     ui.deliver_result(auth_failed("x"));
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("needs login"), "should show needs login after failure:\n{viewport}");
+    ui.assert_viewport_contains("needs login");
 }
 
 #[test]
 fn auth_methods_updated_replaces_provider_entries() {
     let mut ui = TestUiBuilder::new().auth_methods(vec![auth_method("old", "Old", None)]).build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_provider_logins(&mut ui);
 
     ui.acp_event(auth_methods_updated(vec![auth_method("new", "New", None)]));
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("New"), "should show new provider:\n{viewport}");
-    assert!(!viewport.contains("Old"), "should not show old provider:\n{viewport}");
+    ui.assert_viewport_contains("New");
+    ui.assert_viewport_not_contains("Old");
 }
 
 #[test]
@@ -310,8 +244,7 @@ fn esc_on_settings_elicitation_cancels_it_and_keeps_the_overlay_open() {
     block_on_local(async {
         let mut ui = TestUi::new();
 
-        ui.type_text("/settings");
-        ui.key(key(KeyCode::Tab));
+        ui.run_command("/settings");
         assert!(ui.app().has_modal());
 
         let response_rx = with_elicitation(&mut ui, url_elicitation("test", "https://example.com", "el-1")).await;
@@ -336,12 +269,9 @@ fn oauth_url_prompt_is_shown_in_settings_overlay() {
 
         with_elicitation(&mut ui, url_elicitation("linear", "https://linear.app/oauth", "aether-oauth")).await;
 
-        ui.draw();
-        let viewport = ui.viewport_text();
-
-        assert!(viewport.contains("linear.app"), "should show the host being authorized:\n{viewport}");
-        assert!(viewport.contains("open browser"), "should offer to open the browser:\n{viewport}");
-        assert!(viewport.contains("linear"), "the pane that started the request should stay visible:\n{viewport}");
+        ui.assert_viewport_contains("linear.app");
+        ui.assert_viewport_contains("open browser");
+        ui.assert_viewport_contains("linear");
     });
 }
 
@@ -392,10 +322,8 @@ fn url_elicitation_enter_accepts_and_clears_settings_prompt() {
         let response = response_rx.await.unwrap();
         assert!(matches!(&response.action, ElicitationAction::Accept(_)));
 
-        ui.draw();
-        let viewport = ui.viewport_text();
-        assert!(viewport.contains("Configuration"), "the settings overlay should stay open:\n{viewport}");
-        assert!(!viewport.contains("open browser"), "the finished prompt should be gone:\n{viewport}");
+        ui.assert_viewport_contains("Configuration");
+        ui.assert_viewport_not_contains("open browser");
     });
 }
 
@@ -403,8 +331,7 @@ fn url_elicitation_enter_accepts_and_clears_settings_prompt() {
 fn form_elicitation_is_answered_inside_the_settings_overlay() {
     block_on_local(async {
         let mut ui = TestUiBuilder::new().dimensions(80, 30).build();
-        ui.type_text("/settings");
-        ui.key(key(KeyCode::Tab));
+        ui.run_command("/settings");
 
         let response_rx = with_elicitation(
             &mut ui,
@@ -416,9 +343,7 @@ fn form_elicitation_is_answered_inside_the_settings_overlay() {
         )
         .await;
 
-        ui.draw();
-        let viewport = ui.viewport_text();
-        assert!(viewport.contains("Paste an API token"), "the request should be visible:\n{viewport}");
+        ui.assert_viewport_contains("Paste an API token");
 
         ui.type_text("secret");
         ui.key(key(KeyCode::Enter));
@@ -435,19 +360,14 @@ fn server_status_updated_while_pane_open_refreshes() {
 
     ui.acp_event(mcp_notification(vec![server_status_entry("a", McpServerStatus::Connected { tool_count: 1 })]));
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_mcp_servers(&mut ui);
 
     ui.acp_event(mcp_notification(vec![server_status_entry(
         "a",
         McpServerStatus::Failed { error: "crash".to_string() },
     )]));
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("crash"), "should show updated status:\n{viewport}");
+    ui.assert_viewport_contains("crash");
 }
 
 #[test]
@@ -459,19 +379,12 @@ fn provider_login_pane_shows_all_statuses() {
         ])
         .build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_provider_logins(&mut ui);
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-
-    assert!(viewport.contains("NeedsLogin"), "should show NeedsLogin:\n{viewport}");
-    assert!(viewport.contains("needs login"), "should show needs login status:\n{viewport}");
-    assert!(viewport.contains("Authed"), "should show Authed:\n{viewport}");
-    assert!(viewport.contains("logged in"), "should show logged in status:\n{viewport}");
+    ui.assert_viewport_contains("NeedsLogin");
+    ui.assert_viewport_contains("needs login");
+    ui.assert_viewport_contains("Authed");
+    ui.assert_viewport_contains("logged in");
 }
 
 #[test]
@@ -480,31 +393,20 @@ fn esc_from_server_status_returns_to_menu() {
 
     ui.acp_event(mcp_notification(vec![server_status_entry("a", McpServerStatus::Connected { tool_count: 1 })]));
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_mcp_servers(&mut ui);
     ui.key(key(KeyCode::Esc));
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("MCP Servers"), "should be back at menu:\n{viewport}");
+    ui.assert_viewport_contains("MCP Servers");
 }
 
 #[test]
 fn esc_from_provider_login_returns_to_menu() {
     let mut ui = TestUiBuilder::new().auth_methods(vec![auth_method("x", "X", None)]).build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_provider_logins(&mut ui);
     ui.key(key(KeyCode::Esc));
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("Provider Logins"), "should be back at menu:\n{viewport}");
+    ui.assert_viewport_contains("Provider Logins");
 }
 
 #[test]
@@ -516,10 +418,8 @@ fn server_status_summary_updates_in_menu() {
         server_status_entry("b", McpServerStatus::Failed { error: "err".to_string() }),
     ]));
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
 
-    ui.draw();
     let viewport = ui.viewport_text();
     assert!(viewport.contains("1 connected") || viewport.contains("1 failed"), "should show summary:\n{viewport}");
 }
@@ -544,19 +444,13 @@ fn server_status_pane_groups_model_visible_and_deferred_with_headers() {
         deferred_oauth_server("linear", McpServerStatus::NeedsOAuth),
     ]));
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_mcp_servers(&mut ui);
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-
-    assert!(viewport.contains("Model-visible"), "should show Model-visible header:\n{viewport}");
-    assert!(viewport.contains("Deferred"), "should show Deferred header:\n{viewport}");
-    assert!(viewport.contains("github"), "should show github:\n{viewport}");
-    assert!(viewport.contains("math"), "should show math:\n{viewport}");
-    assert!(viewport.contains("linear"), "should show linear:\n{viewport}");
+    ui.assert_viewport_contains("Model-visible");
+    ui.assert_viewport_contains("Deferred");
+    ui.assert_viewport_contains("github");
+    ui.assert_viewport_contains("math");
+    ui.assert_viewport_contains("linear");
 }
 
 #[test]
@@ -568,19 +462,10 @@ fn server_status_pane_only_model_visible_renders_no_headers() {
         server_status_entry("slack", McpServerStatus::Failed { error: "err".to_string() }),
     ]));
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_mcp_servers(&mut ui);
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-
-    assert!(
-        !viewport.contains("Model-visible"),
-        "should not show Model-visible header when all model-visible:\n{viewport}"
-    );
-    assert!(!viewport.contains("Deferred"), "should not show Deferred header when no deferred:\n{viewport}");
+    ui.assert_viewport_not_contains("Model-visible");
+    ui.assert_viewport_not_contains("Deferred");
 }
 
 #[test]
@@ -592,16 +477,10 @@ fn server_status_pane_only_deferred_shows_deferred_header() {
         deferred_oauth_server("linear", McpServerStatus::NeedsOAuth),
     ]));
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_mcp_servers(&mut ui);
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-
-    assert!(!viewport.contains("Model-visible"), "should not show Model-visible header when all deferred:\n{viewport}");
-    assert!(viewport.contains("Deferred"), "should show Deferred header:\n{viewport}");
+    ui.assert_viewport_not_contains("Model-visible");
+    ui.assert_viewport_contains("Deferred");
 }
 
 #[test]
@@ -614,10 +493,7 @@ fn server_status_navigation_skips_headers_and_spacers() {
         deferred_oauth_server("linear", McpServerStatus::NeedsOAuth),
     ]));
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_mcp_servers(&mut ui);
 
     // First server: github (Model-visible section, row index 1)
     ui.key(key(KeyCode::Enter));
@@ -631,11 +507,7 @@ fn server_status_navigation_skips_headers_and_spacers() {
     // Move down once: should land on linear (Deferred section, row index 5)
     ui.key(key(KeyCode::Down));
     ui.key(key(KeyCode::Enter));
-    let cmd = ui.next_agent_command().unwrap();
-    match cmd {
-        AgentCommand::AuthenticateMcpServer { server_name, .. } => assert_eq!(server_name, "linear"),
-        other => panic!("expected AuthenticateMcpServer, got: {other:?}"),
-    }
+    assert_authenticates_mcp_server(&mut ui, "linear");
 
     // Move up: should go back to math, not land on Deferred header or Spacer
     ui.key(key(KeyCode::Up));
@@ -654,17 +526,10 @@ fn deferred_oauth_server_sends_original_server_name() {
 
     ui.acp_event(mcp_notification(vec![deferred_oauth_server("linear", McpServerStatus::NeedsOAuth)]));
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_mcp_servers(&mut ui);
     ui.key(key(KeyCode::Enter));
 
-    let cmd = ui.next_agent_command().unwrap();
-    match cmd {
-        AgentCommand::AuthenticateMcpServer { server_name, .. } => assert_eq!(server_name, "linear"),
-        other => panic!("expected AuthenticateMcpServer, got: {other:?}"),
-    }
+    assert_authenticates_mcp_server(&mut ui, "linear");
 }
 
 #[test]
@@ -672,8 +537,7 @@ fn connection_closed_cancels_settings_elicitation() {
     block_on_local(async {
         let mut ui = TestUi::new();
 
-        ui.type_text("/settings");
-        ui.key(key(KeyCode::Tab));
+        ui.run_command("/settings");
         assert!(ui.app().has_modal());
 
         let response_rx =
@@ -691,8 +555,7 @@ fn new_session_created_cancels_settings_elicitation() {
     block_on_local(async {
         let mut ui = TestUi::new();
 
-        ui.type_text("/settings");
-        ui.key(key(KeyCode::Tab));
+        ui.run_command("/settings");
         assert!(ui.app().has_modal());
 
         let response_rx =
@@ -714,10 +577,7 @@ fn server_status_update_entries_preserves_selection_across_group_boundaries() {
         deferred_oauth_server("linear", McpServerStatus::NeedsOAuth),
     ]));
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_mcp_servers(&mut ui);
 
     // Navigate to linear (Deferred section, after header + spacer)
     ui.key(key(KeyCode::Down));
@@ -729,19 +589,14 @@ fn server_status_update_entries_preserves_selection_across_group_boundaries() {
     ]));
 
     ui.key(key(KeyCode::Enter));
-    let cmd = ui.next_agent_command().unwrap();
-    match cmd {
-        AgentCommand::AuthenticateMcpServer { server_name, .. } => assert_eq!(server_name, "linear"),
-        other => panic!("expected AuthenticateMcpServer for linear, got: {other:?}"),
-    }
+    assert_authenticates_mcp_server(&mut ui, "linear");
 }
 
 #[test]
 fn settings_builtin_opens_overlay_and_clears_composer() {
     let mut ui = TestUi::new();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
 
     // Composer should be cleared
     assert_eq!(ui.app().composer().text(), "");
@@ -758,17 +613,14 @@ fn settings_builtin_is_listed_in_command_picker() {
     ui.key(key(KeyCode::Char('/')));
     assert!(ui.app().composer().has_completion());
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("/settings"), "built-in /settings should be in command picker:\n{viewport}");
+    ui.assert_viewport_contains("/settings");
 }
 
 #[test]
 fn settings_esc_closes_overlay() {
     let mut ui = TestUi::new();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
     assert!(ui.app().has_modal());
 
     ui.key(key(KeyCode::Esc));
@@ -781,11 +633,9 @@ fn settings_overlay_renders_on_terminal() {
         .config_options(vec![select_option("model", "gpt-4o"), select_option("mode", "code")])
         .build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
     assert!(ui.app().has_modal());
 
-    ui.draw();
     let viewport = ui.viewport_text();
     assert!(
         viewport.contains("model") || viewport.contains("gpt-4o"),
@@ -803,11 +653,9 @@ fn settings_overlay_renders_on_terminal() {
 fn settings_over_renders_with_no_config_options() {
     let mut ui = TestUi::new();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
     assert!(ui.app().has_modal());
 
-    ui.draw();
     let viewport = ui.viewport_text();
     assert!(
         viewport.contains("no settings options") || viewport.contains("Configuration"),
@@ -816,16 +664,12 @@ fn settings_over_renders_with_no_config_options() {
 }
 
 #[test]
-fn settings_overlay_render_clears_only_the_modal_rectangle() {
+fn settings_overlay_renders_borderless_chrome_over_only_the_modal_rectangle() {
     let options = vec![LocalConfigOption::from_acp(select_option("model", "gpt-4o"))];
     let mut overlay = SettingsOverlay::new(&options, Vec::new(), &[]);
     let area = ratatui::layout::Rect::new(0, 0, 40, 15);
-    let mut buffer = Buffer::filled(area, Cell::new("X"));
-    let theme = Theme::default();
-    let mut highlighter = SyntaxHighlighter::new();
-    let mut cx = DrawContext { theme: &theme, highlighter: &mut highlighter, theme_generation: Generation::default() };
 
-    overlay.render(area, &mut buffer, &mut cx);
+    let buffer = render_surface(Buffer::filled(area, Cell::new("X")), |buffer, cx| overlay.render(area, buffer, cx));
 
     let modal = area.centered(ratatui::layout::Constraint::Percentage(80), ratatui::layout::Constraint::Percentage(80));
     assert_eq!(buffer.cell((area.x, area.y)).unwrap().symbol(), "X");
@@ -836,21 +680,6 @@ fn settings_overlay_render_clears_only_the_modal_rectangle() {
         "the modal rectangle should be cleared:\n{}",
         buffer_text(&buffer)
     );
-}
-
-#[test]
-fn settings_overlay_uses_borderless_modal_chrome_and_padded_highlights() {
-    let options = vec![LocalConfigOption::from_acp(select_option("model", "gpt-4o"))];
-    let mut overlay = SettingsOverlay::new(&options, Vec::new(), &[]);
-    let area = ratatui::layout::Rect::new(0, 0, 40, 15);
-    let mut buffer = Buffer::filled(area, Cell::new("X"));
-    let theme = Theme::default();
-    let mut highlighter = SyntaxHighlighter::new();
-    let mut cx = DrawContext { theme: &theme, highlighter: &mut highlighter, theme_generation: Generation::default() };
-
-    overlay.render(area, &mut buffer, &mut cx);
-
-    let modal = area.centered(ratatui::layout::Constraint::Percentage(80), ratatui::layout::Constraint::Percentage(80));
     assert!(
         (modal.top()..modal.bottom()).all(|y| {
             (modal.left()..modal.right()).all(|x| {
@@ -870,11 +699,12 @@ fn settings_overlay_uses_borderless_modal_chrome_and_padded_highlights() {
         .expect("the modal footer should be rendered");
     assert_eq!(footer_column, modal.x + 2);
 
+    let accent = Theme::default().accent;
     let highlighted_row = (modal.top()..modal.bottom())
-        .find(|&y| buffer.cell((modal.x + 2, y)).is_some_and(|cell| cell.bg == theme.accent))
+        .find(|&y| buffer.cell((modal.x + 2, y)).is_some_and(|cell| cell.bg == accent))
         .expect("the selected settings row should be highlighted");
-    assert_eq!(buffer.cell((modal.x, highlighted_row)).unwrap().bg, theme.accent);
-    assert_eq!(buffer.cell((modal.x + 1, highlighted_row)).unwrap().bg, theme.accent);
+    assert_eq!(buffer.cell((modal.x, highlighted_row)).unwrap().bg, accent);
+    assert_eq!(buffer.cell((modal.x + 1, highlighted_row)).unwrap().bg, accent);
 }
 
 #[test]
@@ -885,16 +715,10 @@ fn settings_overlay_clears_conversation_content_behind_it() {
 
     ui.draw();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    ui.draw();
+    ui.run_command("/settings");
 
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("Configuration"), "settings overlay should render:\n{viewport}");
-    assert!(
-        !viewport.contains("CHAT_CONTENT_MUST_NOT_SHOW_THROUGH_SETTINGS"),
-        "conversation content must be cleared behind settings:\n{viewport}"
-    );
+    ui.assert_viewport_contains("Configuration");
+    ui.assert_viewport_not_contains("CHAT_CONTENT_MUST_NOT_SHOW_THROUGH_SETTINGS");
 }
 
 #[test]
@@ -912,23 +736,18 @@ fn settings_overlay_still_valid_after_scrollback() {
     ui.draw();
     ui.draw();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
     assert!(ui.app().has_modal());
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("Configuration"), "settings overlay should render after scrollback:\n{viewport}");
+    ui.assert_viewport_contains("Configuration");
 }
 
 #[test]
 fn settings_overlay_renders_at_narrow_width() {
     let mut ui = TestUiBuilder::new().config_options(vec![select_option("model", "gpt-4o")]).dimensions(30, 15).build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
 
-    ui.draw();
     let viewport = ui.viewport_text();
     assert!(
         viewport.contains("model") || viewport.contains("gpt-4o"),
@@ -942,11 +761,9 @@ fn settings_overlay_renders_at_short_height() {
         .config_options(vec![select_option("model", "gpt-4o"), select_option("mode", "code")])
         .build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
 
     ui.resize(40, 8);
-    ui.draw();
     let viewport = ui.viewport_text();
     assert!(
         viewport.contains("model") || viewport.contains("too small"),
@@ -957,118 +774,33 @@ fn settings_overlay_renders_at_short_height() {
 #[test]
 fn settings_selecting_option_emits_config_option() {
     let mut ui = TestUiBuilder::new()
-        .config_options(vec![acp::SessionConfigOption::select(
-            "model",
-            "Model",
-            "gpt-4o",
-            vec![
-                acp::SessionConfigSelectOption::new("gpt-4o", "GPT-4o"),
-                acp::SessionConfigSelectOption::new("claude", "Claude"),
-            ],
-        )])
+        .config_options(vec![select("model", "Model", "gpt-4o", &[("gpt-4o", "GPT-4o"), ("claude", "Claude")])])
         .build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    assert!(ui.app().has_modal());
-
-    // Down past the Theme entry, Enter to open picker, Down to second option, Enter to confirm
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_first_config_option(&mut ui);
     ui.key(key(KeyCode::Down));
     ui.key(key(KeyCode::Enter));
 
-    // Should have emitted a set_config_option command
-    let cmd = ui.next_agent_command().expect("expected set_config_option");
-    match cmd {
-        AgentCommand::SetConfigOption { config_id, value, .. } => {
-            assert_eq!(config_id, "model");
-            assert_eq!(value, acp::SessionConfigOptionValue::id("claude"));
-        }
-        other => panic!("expected SetConfigOption, got: {other:?}"),
-    }
+    assert_sets_config_option(&mut ui, "model", "claude");
 }
 
 #[test]
-fn settings_multi_select_opens_model_selector() {
-    let mut ui = TestUiBuilder::new()
-        .config_options(vec![{
-            let mut opt = acp::SessionConfigOption::select(
-                "model",
-                "Model",
-                "",
-                vec![
-                    acp::SessionConfigSelectOption::new("anthropic:opus", "Anthropic / Opus"),
-                    acp::SessionConfigSelectOption::new("anthropic:sonnet", "Anthropic / Sonnet"),
-                ],
-            );
-            let mut meta = serde_json::Map::new();
-            meta.insert("multi_select".to_string(), serde_json::Value::Bool(true));
-            opt = opt.meta(Some(meta));
-            opt
-        }])
-        .build();
+fn settings_multi_select_opens_the_model_selector_and_commits_toggles() {
+    let models = choices(&[("anthropic:opus", "Anthropic / Opus"), ("anthropic:sonnet", "Anthropic / Sonnet")]);
+    let mut ui = TestUiBuilder::new().config_options(vec![model_picker("", models)]).build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    assert!(ui.app().has_modal());
-
-    // Down past the Theme entry, then Enter should open model selector since multi_select is true
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
-
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("Model search"), "should show model selector:\n{viewport}");
-}
-
-#[test]
-fn settings_multi_select_toggle_and_confirm() {
-    let mut ui = TestUiBuilder::new()
-        .config_options(vec![{
-            let mut opt = acp::SessionConfigOption::select(
-                "model",
-                "Model",
-                "",
-                vec![
-                    acp::SessionConfigSelectOption::new("anthropic:opus", "Anthropic / Opus"),
-                    acp::SessionConfigSelectOption::new("anthropic:sonnet", "Anthropic / Sonnet"),
-                ],
-            );
-            let mut meta = serde_json::Map::new();
-            meta.insert("multi_select".to_string(), serde_json::Value::Bool(true));
-            opt = opt.meta(Some(meta));
-            opt
-        }])
-        .build();
-
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_first_config_option(&mut ui);
+    ui.assert_viewport_contains("Model search");
 
     ui.key(key(KeyCode::Enter));
     ui.key(key(KeyCode::Esc));
-
-    let cmd = ui.next_agent_command().expect("expected set_config_option");
-    match cmd {
-        AgentCommand::SetConfigOption { config_id, value, .. } => {
-            assert_eq!(config_id, "model");
-            assert_eq!(value, acp::SessionConfigOptionValue::id("anthropic:opus"));
-        }
-        other => panic!("expected SetConfigOption, got: {other:?}"),
-    }
+    assert_sets_config_option(&mut ui, "model", "anthropic:opus");
 }
 
 #[test]
 fn model_selector_space_types_into_search_instead_of_toggling() {
     let mut ui = TestUiBuilder::new()
-        .config_options(vec![multi_select_option(
-            "model",
-            "Model",
-            "",
-            &[("anthropic:opus", "Opus"), ("anthropic:sonnet", "Sonnet")],
-        )])
+        .config_options(vec![model_picker("", choices(&[("anthropic:opus", "Opus"), ("anthropic:sonnet", "Sonnet")]))])
         .build();
     open_first_config_option(&mut ui);
 
@@ -1089,14 +821,10 @@ fn model_selector_space_types_into_search_instead_of_toggling() {
 fn config_option_update_refreshes_settings_overlay() {
     let mut ui = TestUiBuilder::new().config_options(vec![select_option("model", "gpt-4o")]).build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
     assert!(ui.app().has_modal());
 
-    ui.acp_event(session_update(acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(vec![
-        select_option("model", "sonnet"),
-        select_option("mode", "code"),
-    ]))));
+    ui.acp_event(config_update(vec![select_option("model", "sonnet"), select_option("mode", "code")]));
 
     // Overlay should still be open with updated options
     assert!(ui.app().has_modal());
@@ -1108,8 +836,7 @@ fn config_option_update_refreshes_settings_overlay() {
 fn config_option_update_failed_shows_in_transcript() {
     let mut ui = TestUi::new();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
     assert!(ui.app().has_modal());
 
     ui.deliver_result(CommandResult::ConfigOptionsUpdated {
@@ -1130,8 +857,7 @@ fn config_option_update_failed_shows_in_transcript() {
 fn connection_closed_clears_settings_overlay() {
     let mut ui = TestUi::new();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
     assert!(ui.app().has_modal());
 
     ui.acp_event(AcpEvent::ConnectionClosed);
@@ -1143,8 +869,7 @@ fn connection_closed_clears_settings_overlay() {
 fn new_session_clears_settings_overlay() {
     let mut ui = TestUi::new();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
     assert!(ui.app().has_modal());
 
     // New session created should close settings overlay
@@ -1159,8 +884,7 @@ fn new_session_clears_settings_overlay() {
 fn settings_composer_capture_prevents_normal_input() {
     let mut ui = TestUiBuilder::new().config_options(vec![select_option("model", "gpt-4o")]).build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
     let composer_text_before = ui.app().composer().text().to_string();
 
     // Typing while settings overlay is open should not modify composer
@@ -1174,72 +898,58 @@ fn settings_composer_capture_prevents_normal_input() {
 fn settings_theme_entry_is_injected_first() {
     let mut ui = TestUiBuilder::new().config_options(vec![select_option("model", "gpt-4o")]).build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
     assert!(ui.app().has_modal());
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("Theme:"), "Theme entry should render first:\n{viewport}");
+    ui.assert_viewport_contains("Theme:");
 }
 
 #[test]
 fn settings_theme_picker_opens_and_shows_default() {
     let mut ui = TestUiBuilder::new().config_options(vec![select_option("model", "gpt-4o")]).build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
     ui.key(key(KeyCode::Enter));
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("Sage"), "Theme picker should show Default option:\n{viewport}");
-    assert!(viewport.contains("Theme"), "Theme picker should have Theme header:\n{viewport}");
+    ui.assert_viewport_contains("Sage");
+    ui.assert_viewport_contains("Theme");
 }
 
 #[test]
 fn settings_theme_selection_returns_to_menu() {
     let mut ui = TestUiBuilder::new().config_options(vec![select_option("model", "gpt-4o")]).build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
     ui.key(key(KeyCode::Enter));
     ui.key(key(KeyCode::Enter));
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("Theme: Sage"), "Should return to menu with Default selected:\n{viewport}");
+    ui.assert_viewport_contains("Theme: Sage");
 }
 
 #[test]
 fn settings_theme_empty_file_list_shows_only_default() {
     let mut ui = TestUiBuilder::new().build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
     ui.key(key(KeyCode::Enter));
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("Sage"), "Should show Default theme option:\n{viewport}");
+    ui.assert_viewport_contains("Sage");
 }
 
 #[test]
 fn opening_settings_requests_the_theme_list() {
     let mut ui = TestUiBuilder::new().build();
-    open_settings(&mut ui);
+    ui.run_command("/settings");
 
-    let commands = ui.take_commands();
-    assert!(
-        commands.iter().any(|command| matches!(command, Command::Filesystem(FilesystemCommand::ListThemes))),
-        "opening settings must ask for the theme list"
-    );
+    let theme_listings =
+        ui.count_commands(|command| matches!(command, Command::Filesystem(FilesystemCommand::ListThemes)));
+    assert_eq!(theme_listings, 1, "opening settings must ask for the theme list");
 }
 
 #[test]
 fn listed_themes_appear_in_the_theme_picker() {
     let mut ui = TestUiBuilder::new().build();
-    open_settings(&mut ui);
+    ui.run_command("/settings");
     ui.deliver_result(CommandResult::ThemesListed(vec!["dracula.json".to_string(), "kanagawa.json".to_string()]));
 
     ui.key(key(KeyCode::Enter));
@@ -1257,7 +967,7 @@ fn listed_themes_appear_in_the_theme_picker() {
 #[test]
 fn settings_menu_has_a_single_theme_row_after_themes_load() {
     let mut ui = TestUiBuilder::new().build();
-    open_settings(&mut ui);
+    ui.run_command("/settings");
     ui.deliver_result(CommandResult::ThemesListed(vec!["dracula.json".to_string()]));
 
     let text = overlay_text(&mut ui);
@@ -1271,8 +981,7 @@ fn invalid_startup_theme_is_visible_without_overwriting_the_selection() {
         ..wisp::settings::UiSettings::default()
     };
     let mut ui = TestUiBuilder::new().settings(settings).dimensions(120, 15).build();
-    ui.draw();
-    assert!(ui.viewport_text().contains("Could not load selected theme"), "{}", ui.viewport_text());
+    ui.assert_viewport_contains("Could not load selected theme");
     assert_eq!(ui.app().ui_settings().theme.selection_id(), "file:../invalid.json");
     assert_eq!(ui.app().theme().review().revision(), Theme::default().review().revision());
 }
@@ -1280,28 +989,14 @@ fn invalid_startup_theme_is_visible_without_overwriting_the_selection() {
 #[test]
 fn failed_queued_theme_retains_the_last_successful_selection() {
     let mut ui = TestUiBuilder::new().build();
-    open_settings(&mut ui);
+    ui.run_command("/settings");
     ui.deliver_result(CommandResult::ThemesListed(vec!["first.json".into(), "second.json".into()]));
     select_theme(&mut ui, "first");
     select_theme(&mut ui, "second");
-    let first = ui
-        .take_commands()
-        .into_iter()
-        .find_map(|command| match command {
-            Command::Filesystem(FilesystemCommand::ApplyTheme { settings, .. }) => Some(settings),
-            _ => None,
-        })
-        .expect("first change starts immediately");
+    let first = take_applied_theme(&mut ui);
     let theme = Theme::from_review(clankerdiff_ratatui::theme::ReviewTheme::builtin("ayu-dark").unwrap());
     ui.deliver_result(CommandResult::ThemeApplied(Ok((first, theme.clone()))));
-    let second = ui
-        .take_commands()
-        .into_iter()
-        .find_map(|command| match command {
-            Command::Filesystem(FilesystemCommand::ApplyTheme { settings, .. }) => Some(settings),
-            _ => None,
-        })
-        .expect("second change starts after the first completes");
+    let second = take_applied_theme(&mut ui);
     assert_eq!(second.theme.selection_id(), "file:second.json");
     ui.deliver_result(CommandResult::ThemeApplied(Err(ThemeApplicationError::Load(ThemeLoadError::Io(
         std::io::Error::new(std::io::ErrorKind::NotFound, "theme missing"),
@@ -1321,7 +1016,7 @@ fn malformed_theme_file_selections_are_rejected_during_deserialization() {
 #[test]
 fn rapid_theme_changes_settle_on_the_newest_choice() {
     let mut ui = TestUiBuilder::new().build();
-    open_settings(&mut ui);
+    ui.run_command("/settings");
     ui.deliver_result(CommandResult::ThemesListed(vec!["first.json".to_string(), "second.json".to_string()]));
 
     select_theme(&mut ui, "first");
@@ -1339,71 +1034,50 @@ fn rapid_theme_changes_settle_on_the_newest_choice() {
 fn theme_entry_preserved_after_config_option_update() {
     let mut ui = TestUiBuilder::new().config_options(vec![select_option("model", "gpt-4o")]).build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
     assert!(ui.app().has_modal());
 
     // ConfigOptionUpdate arrives — Theme entry must still be first
-    ui.acp_event(session_update(acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(vec![
-        select_option("model", "sonnet"),
-    ]))));
+    ui.acp_event(config_update(vec![select_option("model", "sonnet")]));
     assert!(ui.app().has_modal());
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("Theme:"), "Theme entry must survive ConfigOptionUpdate:\n{viewport}");
+    ui.assert_viewport_contains("Theme:");
 }
 
 #[test]
 fn theme_selection_keeps_overlay_open_and_refreshes_display() {
     let mut ui = TestUiBuilder::new().config_options(vec![select_option("model", "gpt-4o")]).build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
     ui.key(key(KeyCode::Enter));
     ui.key(key(KeyCode::Enter));
 
     // Overlay must stay open
     assert!(ui.app().has_modal(), "Overlay must stay open after theme selection");
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("Theme: Sage"), "Theme should show Default after selection:\n{viewport}");
+    ui.assert_viewport_contains("Theme: Sage");
 }
 
 #[test]
 fn model_selector_provider_heading_does_not_skip_rows() {
     let mut ui = TestUiBuilder::new()
         .dimensions(40, 20)
-        .config_options(vec![{
-            let mut opt = acp::SessionConfigOption::select(
-                "model",
-                "Model",
-                "",
-                vec![
-                    acp::SessionConfigSelectOption::new("openai:gpt-4o", "OpenAI / GPT-4o"),
-                    acp::SessionConfigSelectOption::new("openai:gpt-3.5", "OpenAI / GPT-3.5"),
-                    acp::SessionConfigSelectOption::new("anthropic:opus", "Anthropic / Opus"),
-                    acp::SessionConfigSelectOption::new("anthropic:sonnet", "Anthropic / Sonnet"),
-                ],
-            );
-            let mut meta = serde_json::Map::new();
-            meta.insert("multi_select".to_string(), serde_json::Value::Bool(true));
-            opt = opt.meta(Some(meta));
-            opt
-        }])
+        .config_options(vec![model_picker(
+            "",
+            choices(&[
+                ("openai:gpt-4o", "OpenAI / GPT-4o"),
+                ("openai:gpt-3.5", "OpenAI / GPT-3.5"),
+                ("anthropic:opus", "Anthropic / Opus"),
+                ("anthropic:sonnet", "Anthropic / Sonnet"),
+            ]),
+        )])
         .build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_first_config_option(&mut ui);
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("OpenAI"), "OpenAI heading should be visible:\n{viewport}");
-    assert!(viewport.contains("GPT-4o"), "GPT-4o should be visible:\n{viewport}");
-    assert!(viewport.contains("GPT-3.5"), "GPT-3.5 should be visible:\n{viewport}");
+    ui.assert_viewport_contains("OpenAI");
+    ui.assert_viewport_contains("GPT-4o");
+    ui.assert_viewport_contains("GPT-3.5");
 
     ui.key(key(KeyCode::Down));
     ui.key(key(KeyCode::Down));
@@ -1424,86 +1098,49 @@ fn model_selector_skips_disabled_models_and_scrolls_to_the_end() {
             if index == 5 { option.description("Unavailable: missing credentials") } else { option }
         })
         .collect();
-    let mut model_option = acp::SessionConfigOption::select("model", "Model", "", options);
-    let mut meta = serde_json::Map::new();
-    meta.insert("multi_select".to_string(), serde_json::Value::Bool(true));
-    model_option = model_option.meta(Some(meta));
-    let mut ui = TestUiBuilder::new().config_options(vec![model_option]).build();
+    let mut ui = TestUiBuilder::new().config_options(vec![model_picker("", options)]).build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_first_config_option(&mut ui);
     for _ in 0..13 {
         ui.key(key(KeyCode::Down));
     }
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("Model 14"), "last enabled model should be focused and visible:\n{viewport}");
+    ui.assert_viewport_contains("Model 14");
 
     ui.key(key(KeyCode::Down));
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("Model 14"), "selection should remain at the end of the list:\n{viewport}");
+    ui.assert_viewport_contains("Model 14");
 }
 
 #[test]
 fn model_selector_focused_item_visible_with_provider_headings() {
     let mut ui = TestUiBuilder::new()
-        .config_options(vec![{
-            let mut opt = acp::SessionConfigOption::select(
-                "model",
-                "Model",
-                "",
-                vec![
-                    acp::SessionConfigSelectOption::new("openai:gpt-4o", "OpenAI / GPT-4o"),
-                    acp::SessionConfigSelectOption::new("anthropic:opus", "Anthropic / Opus"),
-                    acp::SessionConfigSelectOption::new("anthropic:sonnet", "Anthropic / Sonnet"),
-                    acp::SessionConfigSelectOption::new("google:gemini", "Google / Gemini"),
-                    acp::SessionConfigSelectOption::new("google:palm", "Google / PaLM"),
-                ],
-            );
-            let mut meta = serde_json::Map::new();
-            meta.insert("multi_select".to_string(), serde_json::Value::Bool(true));
-            opt = opt.meta(Some(meta));
-            opt
-        }])
+        .config_options(vec![model_picker(
+            "",
+            choices(&[
+                ("openai:gpt-4o", "OpenAI / GPT-4o"),
+                ("anthropic:opus", "Anthropic / Opus"),
+                ("anthropic:sonnet", "Anthropic / Sonnet"),
+                ("google:gemini", "Google / Gemini"),
+                ("google:palm", "Google / PaLM"),
+            ]),
+        )])
         .build();
 
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
+    open_first_config_option(&mut ui);
 
     // Move down through all items — last item should be visible
     for _ in 0..4 {
         ui.key(key(KeyCode::Down));
     }
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("PaLM"), "Focused last item with headings should be visible:\n{viewport}");
+    ui.assert_viewport_contains("PaLM");
 }
 
 /// Opens the settings overlay with `options` and returns what the menu draws.
 fn settings_menu_text(options: Vec<acp::SessionConfigOption>) -> String {
     let mut ui = TestUiBuilder::new().config_options(options).build();
-    open_settings(&mut ui);
+    ui.run_command("/settings");
     overlay_text(&mut ui)
-}
-
-fn open_settings(ui: &mut TestUi) {
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
-}
-
-/// Opens settings and activates the first agent config option: the row under
-/// the client-side Theme entry the menu always injects ahead of them.
-fn open_first_config_option(ui: &mut TestUi) {
-    open_settings(ui);
-    ui.key(key(KeyCode::Down));
-    ui.key(key(KeyCode::Enter));
 }
 
 fn assert_no_commands(ui: &mut TestUi, message: &str) {
@@ -1544,22 +1181,7 @@ fn settle_theme_tasks_newest_first(ui: &mut TestUi) {
 /// Draws the open overlay at a generous size and returns what it renders.
 fn overlay_text(ui: &mut TestUi) -> String {
     ui.resize(80, 24);
-    ui.draw();
     ui.viewport_text()
-}
-
-fn multi_select_option(id: &str, name: &str, current: &str, values: &[(&str, &str)]) -> acp::SessionConfigOption {
-    as_multi_select(select_with_values(id, name, current, values))
-}
-
-fn as_multi_select(option: acp::SessionConfigOption) -> acp::SessionConfigOption {
-    let mut meta = serde_json::Map::new();
-    meta.insert("multi_select".to_string(), serde_json::Value::Bool(true));
-    option.meta(Some(meta))
-}
-
-fn model(value: &str, name: &str, meta: SelectOptionMeta) -> acp::SessionConfigSelectOption {
-    acp::SessionConfigSelectOption::new(value.to_string(), name.to_string()).meta(meta.into_meta())
 }
 
 fn model_selector_ui(option: acp::SessionConfigOption) -> TestUi {
@@ -1574,10 +1196,7 @@ fn capability_column_for(text: &str, model: &str) -> usize {
 }
 
 fn cell_fg(buffer: &Buffer, row: u16, needle: &str) -> Option<Color> {
-    let symbols: String =
-        (buffer.area.left()..buffer.area.right()).filter_map(|x| buffer.cell((x, row))).map(Cell::symbol).collect();
-    let start = buffer.area.left() + u16::try_from(symbols.find(needle)?).ok()?;
-    buffer.cell((start, row)).map(|cell| cell.fg)
+    row_cells(buffer, row).get(row_text(buffer, row).find(needle)?).map(|cell| cell.fg)
 }
 
 fn is_blank(line: &str) -> bool {
@@ -1595,19 +1214,11 @@ fn assert_capability_columns_align(text: &str) {
     assert!(columns.iter().all(|&found| found == column), "capability columns should line up across rows:\n{text}");
 }
 
-fn select_with_values(id: &str, name: &str, current: &str, values: &[(&str, &str)]) -> acp::SessionConfigOption {
-    let options: Vec<acp::SessionConfigSelectOption> = values
-        .iter()
-        .map(|(value, label)| acp::SessionConfigSelectOption::new((*value).to_string(), (*label).to_string()))
-        .collect();
-    acp::SessionConfigOption::select(id.to_string(), name.to_string(), current.to_string(), options)
-}
-
 #[test]
 fn settings_menu_lists_each_option_with_its_current_value() {
     let text = settings_menu_text(vec![
-        select_with_values("model", "Model", "claude", &[("gpt-4o", "GPT-4o"), ("claude", "Claude")]),
-        select_with_values("mode", "Mode", "code", &[("code", "Code"), ("chat", "Chat")]),
+        select("model", "Model", "claude", &[("gpt-4o", "GPT-4o"), ("claude", "Claude")]),
+        select("mode", "Mode", "code", &[("code", "Code"), ("chat", "Chat")]),
     ]);
 
     assert!(text.contains("Model: Claude"), "menu should show the current model:\n{text}");
@@ -1618,8 +1229,8 @@ fn settings_menu_lists_each_option_with_its_current_value() {
 fn settings_menu_hides_reasoning_effort() {
     // Reasoning effort is edited from inside the model selector, not as its own row.
     let text = settings_menu_text(vec![
-        select_with_values("model", "Model", "gpt-4o", &[("gpt-4o", "GPT-4o")]),
-        select_with_values("reasoning_effort", "Reasoning", "high", &[("low", "Low"), ("high", "High")]),
+        select("model", "Model", "gpt-4o", &[("gpt-4o", "GPT-4o")]),
+        select("reasoning_effort", "Reasoning", "high", &[("low", "Low"), ("high", "High")]),
     ]);
 
     assert!(text.contains("Model"), "menu should still show model:\n{text}");
@@ -1629,8 +1240,8 @@ fn settings_menu_hides_reasoning_effort() {
 #[test]
 fn settings_menu_hides_options_with_no_values() {
     let text = settings_menu_text(vec![
-        select_with_values("model", "Model", "gpt-4o", &[("gpt-4o", "GPT-4o")]),
-        select_with_values("empty", "Empty", "", &[]),
+        select("model", "Model", "gpt-4o", &[("gpt-4o", "GPT-4o")]),
+        select("empty", "Empty", "", &[]),
     ]);
 
     assert!(text.contains("Model"), "menu should show model:\n{text}");
@@ -1639,11 +1250,9 @@ fn settings_menu_hides_options_with_no_values() {
 
 #[test]
 fn settings_menu_shows_every_selected_model_for_a_multi_select() {
-    let text = settings_menu_text(vec![multi_select_option(
-        "model",
-        "Model",
+    let text = settings_menu_text(vec![model_picker(
         "anthropic:opus,anthropic:sonnet",
-        &[("anthropic:opus", "Opus"), ("anthropic:sonnet", "Sonnet")],
+        choices(&[("anthropic:opus", "Opus"), ("anthropic:sonnet", "Sonnet")]),
     )]);
 
     assert!(text.contains("Opus, Sonnet"), "menu should name both selected models:\n{text}");
@@ -1651,9 +1260,8 @@ fn settings_menu_shows_every_selected_model_for_a_multi_select() {
 
 #[test]
 fn settings_menu_selection_wraps() {
-    let mut ui =
-        TestUiBuilder::new().config_options(vec![select_with_values("model", "Model", "a", &[("a", "A")])]).build();
-    open_settings(&mut ui);
+    let mut ui = TestUiBuilder::new().config_options(vec![select("model", "Model", "a", &[("a", "A")])]).build();
+    ui.run_command("/settings");
 
     // Rows run Theme, Model, MCP Servers. Up from the first wraps to the last,
     // so Enter opens the server pane rather than the theme picker.
@@ -1666,21 +1274,18 @@ fn settings_menu_selection_wraps() {
 
 #[test]
 fn settings_overlay_renders_placeholder_when_the_terminal_is_tiny() {
-    let mut ui =
-        TestUiBuilder::new().config_options(vec![select_with_values("model", "Model", "a", &[("a", "A")])]).build();
-    open_settings(&mut ui);
+    let mut ui = TestUiBuilder::new().config_options(vec![select("model", "Model", "a", &[("a", "A")])]).build();
+    ui.run_command("/settings");
 
     ui.resize(5, 4);
-    ui.draw();
-    let text = ui.viewport_text();
 
-    assert!(text.contains("term"), "should explain why nothing is drawn:\n{text}");
+    ui.assert_viewport_contains("term");
 }
 
 #[test]
 fn settings_picker_filters_by_typed_query() {
     let mut ui = TestUiBuilder::new()
-        .config_options(vec![select_with_values(
+        .config_options(vec![select(
             "model",
             "Model",
             "gpt-4o",
@@ -1719,9 +1324,8 @@ fn settings_picker_shows_unavailable_options_with_their_reason() {
 
 #[test]
 fn settings_picker_esc_returns_to_the_menu_without_changing_anything() {
-    let mut ui = TestUiBuilder::new()
-        .config_options(vec![select_with_values("model", "Model", "a", &[("a", "A"), ("b", "B")])])
-        .build();
+    let mut ui =
+        TestUiBuilder::new().config_options(vec![select("model", "Model", "a", &[("a", "A"), ("b", "B")])]).build();
     open_first_config_option(&mut ui);
     ui.key(key(KeyCode::Down));
 
@@ -1735,9 +1339,8 @@ fn settings_picker_esc_returns_to_the_menu_without_changing_anything() {
 
 #[test]
 fn settings_picker_confirming_the_current_value_sends_nothing() {
-    let mut ui = TestUiBuilder::new()
-        .config_options(vec![select_with_values("model", "Model", "a", &[("a", "A"), ("b", "B")])])
-        .build();
+    let mut ui =
+        TestUiBuilder::new().config_options(vec![select("model", "Model", "a", &[("a", "A"), ("b", "B")])]).build();
     open_first_config_option(&mut ui);
 
     ui.key(key(KeyCode::Enter));
@@ -1747,9 +1350,8 @@ fn settings_picker_confirming_the_current_value_sends_nothing() {
 
 #[test]
 fn settings_picker_confirm_updates_the_menu_immediately() {
-    let mut ui = TestUiBuilder::new()
-        .config_options(vec![select_with_values("model", "Model", "a", &[("a", "A"), ("b", "B")])])
-        .build();
+    let mut ui =
+        TestUiBuilder::new().config_options(vec![select("model", "Model", "a", &[("a", "A"), ("b", "B")])]).build();
     open_first_config_option(&mut ui);
     ui.key(key(KeyCode::Down));
     ui.key(key(KeyCode::Enter));
@@ -1760,17 +1362,15 @@ fn settings_picker_confirm_updates_the_menu_immediately() {
 
 #[test]
 fn model_selector_shows_capability_tags_and_provider_stripped_names() {
-    let option = acp::SessionConfigOption::select(
-        "model",
-        "Model",
+    let option = model_picker(
         "",
-        vec![model(
+        vec![model_choice(
             "anthropic:opus",
             "Anthropic / Opus",
             SelectOptionMeta { supports_image: true, ..Default::default() },
         )],
     );
-    let mut ui = model_selector_ui(as_multi_select(option));
+    let mut ui = model_selector_ui(option);
 
     let text = overlay_text(&mut ui);
     assert!(text.contains("Anthropic"), "should show the provider heading:\n{text}");
@@ -1781,17 +1381,12 @@ fn model_selector_shows_capability_tags_and_provider_stripped_names() {
 
 #[test]
 fn model_selector_provider_headings_have_a_blank_row_above() {
-    let option = acp::SessionConfigOption::select(
-        "model",
-        "Model",
-        "",
-        vec![
-            acp::SessionConfigSelectOption::new("openai:gpt-4o", "OpenAI / GPT-4o"),
-            acp::SessionConfigSelectOption::new("openai:gpt-3.5", "OpenAI / GPT-3.5"),
-            acp::SessionConfigSelectOption::new("anthropic:opus", "Anthropic / Opus"),
-        ],
-    );
-    let mut ui = model_selector_ui(as_multi_select(option));
+    let models = [
+        ("openai:gpt-4o", "OpenAI / GPT-4o"),
+        ("openai:gpt-3.5", "OpenAI / GPT-3.5"),
+        ("anthropic:opus", "Anthropic / Opus"),
+    ];
+    let mut ui = model_selector_ui(model_picker("", choices(&models)));
 
     let text = overlay_text(&mut ui);
     let lines: Vec<&str> = text.lines().collect();
@@ -1812,13 +1407,9 @@ fn model_selector_provider_headings_have_a_blank_row_above() {
 fn model_selector_groups_collapsed_unavailable_providers_under_one_heading() {
     let collapsed = acp::SessionConfigSelectOption::new("__unavailable:bedrock", "Bedrock (5 models)")
         .description("Unavailable: set AWS_BEARER_TOKEN_BEDROCK");
-    let option = acp::SessionConfigOption::select(
-        "model",
-        "Model",
-        "",
-        vec![collapsed, acp::SessionConfigSelectOption::new("openai:gpt-4o", "OpenAI / GPT-4o")],
-    );
-    let mut ui = model_selector_ui(as_multi_select(option));
+    let option =
+        model_picker("", vec![collapsed, acp::SessionConfigSelectOption::new("openai:gpt-4o", "OpenAI / GPT-4o")]);
+    let mut ui = model_selector_ui(option);
     ui.type_text("bedrock");
 
     let text = overlay_text(&mut ui);
@@ -1829,8 +1420,7 @@ fn model_selector_groups_collapsed_unavailable_providers_under_one_heading() {
 
 #[test]
 fn model_selector_has_no_column_title_row() {
-    let mut ui =
-        model_selector_ui(multi_select_option("model", "Model", "", &[("anthropic:opus", "Anthropic / Opus")]));
+    let mut ui = model_selector_ui(model_picker("", choices(&[("anthropic:opus", "Anthropic / Opus")])));
 
     let text = overlay_text(&mut ui);
     for column in ["Effort", "Capabilities", "Status"] {
@@ -1840,12 +1430,7 @@ fn model_selector_has_no_column_title_row() {
 
 #[test]
 fn model_selector_header_labels_are_dimmer_than_the_text_they_label() {
-    let mut ui = model_selector_ui(multi_select_option(
-        "model",
-        "Model",
-        "anthropic:opus",
-        &[("anthropic:opus", "Anthropic / Opus")],
-    ));
+    let mut ui = model_selector_ui(model_picker("anthropic:opus", choices(&[("anthropic:opus", "Anthropic / Opus")])));
     ui.type_text("op");
     ui.resize(80, 24);
     ui.draw();
@@ -1863,13 +1448,7 @@ fn model_selector_header_labels_are_dimmer_than_the_text_they_label() {
 
 #[test]
 fn model_selector_strips_colon_separated_provider_prefixes() {
-    let option = acp::SessionConfigOption::select(
-        "model",
-        "Model",
-        "",
-        vec![acp::SessionConfigSelectOption::new("deepseek:v3", "DeepSeek: DeepSeek-V3")],
-    );
-    let mut ui = model_selector_ui(as_multi_select(option));
+    let mut ui = model_selector_ui(model_picker("", choices(&[("deepseek:v3", "DeepSeek: DeepSeek-V3")])));
 
     let text = overlay_text(&mut ui);
     assert!(
@@ -1882,26 +1461,13 @@ fn model_selector_strips_colon_separated_provider_prefixes() {
 
 #[test]
 fn model_selector_uses_acp_groups_as_provider_headings() {
-    let mut option =
-        acp::SessionConfigOption::select("model", "Model", "", Vec::<acp::SessionConfigSelectOption>::new());
-    if let acp::SessionConfigKind::Select(select) = &mut option.kind {
-        select.options = acp::SessionConfigSelectOptions::Grouped(vec![
-            acp::SessionConfigSelectGroup::new(
-                "anthropic",
-                "Anthropic",
-                vec![
-                    acp::SessionConfigSelectOption::new("anthropic:opus", "Opus"),
-                    acp::SessionConfigSelectOption::new("anthropic:sonnet", "Sonnet"),
-                ],
-            ),
-            acp::SessionConfigSelectGroup::new(
-                "openai",
-                "OpenAI",
-                vec![acp::SessionConfigSelectOption::new("openai:gpt", "GPT")],
-            ),
-        ]);
-    }
-    let mut ui = model_selector_ui(as_multi_select(option));
+    let mut ui = model_selector_ui(model_picker(
+        "",
+        vec![
+            option_group("Anthropic", choices(&[("anthropic:opus", "Opus"), ("anthropic:sonnet", "Sonnet")])),
+            option_group("OpenAI", choices(&[("openai:gpt", "GPT")])),
+        ],
+    ));
 
     let text = ui.viewport_text();
     let anthropic = text.find("Anthropic").expect("Anthropic heading");
@@ -1919,7 +1485,7 @@ fn model_selector_uses_acp_groups_as_provider_headings() {
 
 #[test]
 fn model_selector_shows_reasoning_bar_on_the_focused_row() {
-    let with_reasoning = model(
+    let with_reasoning = model_choice(
         "anthropic:opus",
         "Anthropic / Opus",
         SelectOptionMeta {
@@ -1928,10 +1494,13 @@ fn model_selector_shows_reasoning_bar_on_the_focused_row() {
             ..Default::default()
         },
     );
-    let plain =
-        model("deepseek:chat", "DeepSeek / Chat", SelectOptionMeta { supports_image: true, ..Default::default() });
-    let option = acp::SessionConfigOption::select("model", "Model", "", vec![with_reasoning, plain]);
-    let mut ui = model_selector_ui(as_multi_select(option));
+    let plain = model_choice(
+        "deepseek:chat",
+        "DeepSeek / Chat",
+        SelectOptionMeta { supports_image: true, ..Default::default() },
+    );
+    let option = model_picker("", vec![with_reasoning, plain]);
+    let mut ui = model_selector_ui(option);
 
     let text = ui.viewport_text();
     assert!(text.contains("default [···]"), "the focused reasoning model should show the effort bar inline:\n{text}");
@@ -1956,7 +1525,7 @@ fn model_selector_shows_reasoning_bar_on_the_focused_row() {
 
 #[test]
 fn model_selector_requires_explicit_choice_when_disabled_is_incompatible() {
-    let off_model = model(
+    let off_model = model_choice(
         "anthropic:opus",
         "Anthropic / Opus",
         SelectOptionMeta {
@@ -1964,41 +1533,33 @@ fn model_selector_requires_explicit_choice_when_disabled_is_incompatible() {
             ..Default::default()
         },
     );
-    let mandatory = model(
+    let mandatory = model_choice(
         "codex:gpt",
         "Codex / GPT",
         SelectOptionMeta { reasoning_levels: vec![ReasoningEffort::High], ..Default::default() },
     );
     let mut ui = TestUiBuilder::new()
         .config_options(vec![
-            as_multi_select(acp::SessionConfigOption::select(
-                "model",
-                "Model",
-                "anthropic:opus",
-                vec![off_model, mandatory],
-            )),
+            model_picker("anthropic:opus", vec![off_model, mandatory]),
             reasoning_option("disabled", &["default", "disabled", "high"]),
         ])
         .build();
     open_first_config_option(&mut ui);
-    assert!(ui.viewport_text().contains("disabled [·]"));
+    ui.assert_viewport_contains("disabled [·]");
     ui.key(key(KeyCode::Enter));
     ui.key(key(KeyCode::Down));
     ui.key(key(KeyCode::Enter));
     ui.key(key(KeyCode::Esc));
     assert_no_commands(&mut ui, "incompatible Disabled must not commit");
-    let text = ui.viewport_text();
-    assert!(text.contains("Cannot disable reasoning"), "{text}");
+    ui.assert_viewport_contains("Cannot disable reasoning");
     ui.key(key(KeyCode::Tab));
     ui.key(key(KeyCode::Esc));
-    let command = ui.next_agent_command().expect("explicit Default change");
-    assert!(matches!(command, AgentCommand::SetConfigOption { ref config_id, ref value, .. }
-        if config_id == "reasoning_effort" && value == &acp::SessionConfigOptionValue::id("default")));
+    assert_sets_config_option(&mut ui, "reasoning_effort", "default");
 }
 
 #[test]
 fn model_selector_does_not_commit_reasoning_when_only_focus_moves() {
-    let reasoning_model = model(
+    let reasoning_model = model_choice(
         "anthropic:opus",
         "Anthropic / Opus",
         SelectOptionMeta {
@@ -2006,15 +1567,10 @@ fn model_selector_does_not_commit_reasoning_when_only_focus_moves() {
             ..Default::default()
         },
     );
-    let plain_model = model("deepseek:chat", "DeepSeek / Chat", SelectOptionMeta::default());
+    let plain_model = model_choice("deepseek:chat", "DeepSeek / Chat", SelectOptionMeta::default());
     let mut ui = TestUiBuilder::new()
         .config_options(vec![
-            as_multi_select(acp::SessionConfigOption::select(
-                "model",
-                "Model",
-                "anthropic:opus",
-                vec![reasoning_model, plain_model],
-            )),
+            model_picker("anthropic:opus", vec![reasoning_model, plain_model]),
             reasoning_option("high", &["low", "medium", "high"]),
         ])
         .build();
@@ -2028,9 +1584,8 @@ fn model_selector_does_not_commit_reasoning_when_only_focus_moves() {
 
 #[test]
 fn model_selector_toggling_twice_leaves_nothing_to_commit() {
-    let mut ui = TestUiBuilder::new()
-        .config_options(vec![multi_select_option("model", "Model", "", &[("anthropic:opus", "Opus")])])
-        .build();
+    let mut ui =
+        TestUiBuilder::new().config_options(vec![model_picker("", choices(&[("anthropic:opus", "Opus")]))]).build();
     open_first_config_option(&mut ui);
 
     ui.key(key(KeyCode::Enter));
@@ -2043,11 +1598,9 @@ fn model_selector_toggling_twice_leaves_nothing_to_commit() {
 #[test]
 fn model_selector_preselects_the_current_value() {
     let mut ui = TestUiBuilder::new()
-        .config_options(vec![multi_select_option(
-            "model",
-            "Model",
+        .config_options(vec![model_picker(
             "anthropic:opus,anthropic:sonnet",
-            &[("anthropic:opus", "Opus"), ("anthropic:sonnet", "Sonnet")],
+            choices(&[("anthropic:opus", "Opus"), ("anthropic:sonnet", "Sonnet")]),
         )])
         .build();
     open_first_config_option(&mut ui);
@@ -2060,11 +1613,9 @@ fn model_selector_preselects_the_current_value() {
 #[test]
 fn model_selector_toggles_only_what_the_query_left_visible() {
     let mut ui = TestUiBuilder::new()
-        .config_options(vec![multi_select_option(
-            "model",
-            "Model",
+        .config_options(vec![model_picker(
             "",
-            &[("anthropic:opus", "Opus"), ("openai:gpt-4o", "GPT-4o"), ("google:gemini", "Gemini")],
+            choices(&[("anthropic:opus", "Opus"), ("openai:gpt-4o", "GPT-4o"), ("google:gemini", "Gemini")]),
         )])
         .build();
     open_first_config_option(&mut ui);
@@ -2073,24 +1624,18 @@ fn model_selector_toggles_only_what_the_query_left_visible() {
     ui.key(key(KeyCode::Enter));
     ui.key(key(KeyCode::Esc));
 
-    match ui.next_agent_command().expect("expected the filtered model to be committed") {
-        AgentCommand::SetConfigOption { value, .. } => {
-            assert_eq!(value, acp::SessionConfigOptionValue::id("openai:gpt-4o"));
-        }
-        other => panic!("expected SetConfigOption, got: {other:?}"),
-    }
+    assert_sets_config_option(&mut ui, "model", "openai:gpt-4o");
 }
 
 #[test]
 fn config_option_update_keeps_every_option_and_the_theme_row() {
-    let mut ui =
-        TestUiBuilder::new().config_options(vec![select_with_values("model", "Model", "a", &[("a", "A")])]).build();
-    open_settings(&mut ui);
+    let mut ui = TestUiBuilder::new().config_options(vec![select("model", "Model", "a", &[("a", "A")])]).build();
+    ui.run_command("/settings");
 
-    ui.acp_event(session_update(acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(vec![
-        select_with_values("model", "Model", "b", &[("a", "A"), ("b", "B")]),
-        select_with_values("mode", "Mode", "code", &[("code", "Code")]),
-    ]))));
+    ui.acp_event(config_update(vec![
+        select("model", "Model", "b", &[("a", "A"), ("b", "B")]),
+        select("mode", "Mode", "code", &[("code", "Code")]),
+    ]));
 
     let text = overlay_text(&mut ui);
     assert!(text.contains("Theme"), "the client-side theme row must survive an agent push:\n{text}");
@@ -2100,36 +1645,33 @@ fn config_option_update_keeps_every_option_and_the_theme_row() {
 
 #[test]
 fn configured_keybinding_replaces_the_default_chord() {
-    let mut settings = UiSettings::default();
-    settings.keybindings =
-        Some(wisp::settings::KeybindingsSettings { toggle_git_diff: Some("ctrl+d".to_string()), ..Default::default() });
+    let settings = UiSettings {
+        keybindings: BTreeMap::from([(KeyAction::ToggleGitDiff, "ctrl+d".to_string())]),
+        ..UiSettings::default()
+    };
     let mut ui = TestUiBuilder::new().settings(settings).build();
 
     ui.key(ctrl('g'));
-    ui.draw();
-    assert!(!ui.viewport_text().contains("Git Diff"), "default chord must be unbound after rebinding");
+    ui.assert_viewport_not_contains("Git Diff");
 
     ui.key(ctrl('d'));
-    ui.draw();
-    assert!(ui.viewport_text().contains("Git Diff"), "configured chord must open the git diff");
+    ui.assert_viewport_contains("Git Diff");
     ui.key(ctrl('g'));
-    ui.draw();
-    assert!(ui.viewport_text().contains("Git Diff"), "the old chord remains unbound in review");
+    ui.assert_viewport_contains("Git Diff");
     ui.key(ctrl('d'));
-    ui.draw();
-    assert!(!ui.viewport_text().contains("Git Diff"), "configured chord must close the git diff");
+    ui.assert_viewport_not_contains("Git Diff");
 }
 
 #[test]
 fn configured_picker_bindings_fire_on_chords() {
-    let mut settings = UiSettings::default();
-    settings.keybindings = Some(wisp::settings::KeybindingsSettings {
-        open_command_picker: Some("ctrl+p".to_string()),
-        open_file_picker: Some("ctrl+f".to_string()),
-        ..Default::default()
-    });
-    let directory = TempDir::new().unwrap();
-    let mut ui = TestUiBuilder::new().settings(settings).working_dir(directory.path().to_path_buf()).build();
+    let settings = UiSettings {
+        keybindings: BTreeMap::from([
+            (KeyAction::OpenCommandPicker, "ctrl+p".to_string()),
+            (KeyAction::OpenFilePicker, "ctrl+f".to_string()),
+        ]),
+        ..UiSettings::default()
+    };
+    let mut ui = TestUiBuilder::new().settings(settings).working_dir("/workspace").build();
 
     ui.key(ctrl('p'));
     assert!(ui.app().composer().has_completion(), "a configured chord must open the command picker");

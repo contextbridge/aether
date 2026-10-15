@@ -13,7 +13,7 @@ use tracing::{error, warn};
 use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
 
 use crate::providers::response_stream::{OpenedStream, StreamAssembler, response_stream};
-use crate::{LlmError, LlmResponse, LlmResponseStream, ProviderError, StopReason, TokenUsage, Tokens};
+use crate::{LlmError, LlmResponse, LlmResponseStream, ProviderError, StopReason, TokenUsage};
 
 pub fn process_bedrock_stream(
     events: impl Stream<Item = crate::Result<ConverseStreamOutput>> + Send + 'static,
@@ -39,17 +39,12 @@ pub(crate) fn converse_events(
 
 impl From<&BedrockTokenUsage> for TokenUsage {
     fn from(usage: &BedrockTokenUsage) -> Self {
-        let cache_read = usage.cache_read_input_tokens().and_then(|v| u32::try_from(v).ok()).map(Tokens::from);
-        let cache_creation = usage.cache_write_input_tokens().and_then(|v| u32::try_from(v).ok()).map(Tokens::from);
-        // Bedrock's input_tokens excludes cached tokens; TokenUsage counts the whole prompt.
-        let cached = cache_read.unwrap_or_default() + cache_creation.unwrap_or_default();
-        TokenUsage {
-            input_tokens: Tokens::from(u32::try_from(usage.input_tokens).unwrap_or(0)) + cached,
-            output_tokens: u32::try_from(usage.output_tokens).unwrap_or(0).into(),
-            cache_read_tokens: cache_read,
-            cache_creation_tokens: cache_creation,
-            ..TokenUsage::default()
-        }
+        TokenUsage::from_uncached_input(
+            u32::try_from(usage.input_tokens).unwrap_or(0),
+            u32::try_from(usage.output_tokens).unwrap_or(0),
+            usage.cache_read_input_tokens().and_then(|v| u32::try_from(v).ok()),
+            usage.cache_write_input_tokens().and_then(|v| u32::try_from(v).ok()),
+        )
     }
 }
 

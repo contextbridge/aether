@@ -5,9 +5,8 @@ pub(crate) use view::ComposerBodyView;
 
 use crate::attachment::{AttachmentKind, PromptAttachment, classify_attachment};
 use crate::command::FilesystemCommand;
-use crate::file_index::FileEntry;
 use crate::request::RequestId;
-use crate::surfaces::input::MouseAction;
+use crate::surfaces::input::{MouseAction, is_composed_char};
 use crate::surfaces::picker::{CommandEntry, CompletionOverlay};
 use crate::surfaces::prompt_search::PromptSearchPicker;
 use crate::view::edit_buffer::{EditBuffer, apply_edit_key};
@@ -20,26 +19,16 @@ use ratatui::text::Line;
 use std::collections::HashSet;
 use unicode_width::UnicodeWidthStr;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SelectedFileMention {
-    pub path: std::path::PathBuf,
-    pub display_name: String,
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Submission {
     pub text: String,
-    pub mentions: Vec<SelectedFileMention>,
+    pub mentions: Vec<PromptAttachment>,
     pub media: Vec<PromptAttachment>,
 }
 
 impl Submission {
     pub fn attachments(&self) -> Vec<PromptAttachment> {
-        let mentions = self.mentions.iter().map(|mention| PromptAttachment {
-            path: mention.path.clone(),
-            display_name: mention.display_name.clone(),
-        });
-        mentions.chain(self.media.iter().cloned()).collect()
+        self.mentions.iter().chain(&self.media).cloned().collect()
     }
 }
 
@@ -47,7 +36,7 @@ impl Submission {
 pub struct Composer {
     buffer: EditBuffer,
     overlay: Option<Overlay>,
-    mentions: Vec<SelectedFileMention>,
+    mentions: Vec<PromptAttachment>,
     pending_media: Vec<PromptAttachment>,
     history: PromptHistory,
     /// Columns the last layout wrapped the input at. Unset until the composer
@@ -159,7 +148,7 @@ impl Composer {
         self.buffer.is_empty() && self.pending_media.is_empty()
     }
 
-    pub fn selected_mentions(&self) -> Vec<SelectedFileMention> {
+    pub fn selected_mentions(&self) -> Vec<PromptAttachment> {
         // Match whole whitespace-delimited tokens so that `@foo` does not also match the
         // longer mention `@foobar`. The insertion path always writes `@<display> `, so a
         // complete token comparison is the correct granularity.
@@ -335,7 +324,7 @@ impl Composer {
         FilesystemCommand::IndexFiles { request_id, root: root.to_path_buf() }
     }
 
-    pub fn on_files_indexed(&mut self, request_id: RequestId, files: Vec<FileEntry>) {
+    pub fn on_files_indexed(&mut self, request_id: RequestId, files: Vec<PromptAttachment>) {
         if let Some(overlay) = self.completion_mut() {
             overlay.set_files(request_id, files);
         }
@@ -483,13 +472,7 @@ impl Composer {
                 None
             }
             KeyCode::Backspace => Some(picker.backspace()),
-            KeyCode::Char(c)
-                if !key
-                    .modifiers
-                    .intersects(crossterm::event::KeyModifiers::CONTROL | crossterm::event::KeyModifiers::ALT) =>
-            {
-                Some(picker.push_char(c))
-            }
+            KeyCode::Char(c) if !is_composed_char(key) => Some(picker.push_char(c)),
             _ => None,
         }
     }
@@ -538,11 +521,7 @@ impl Composer {
                 self.backspace();
                 self.refresh_overlay_query();
             }
-            KeyCode::Char(character)
-                if !key
-                    .modifiers
-                    .intersects(crossterm::event::KeyModifiers::CONTROL | crossterm::event::KeyModifiers::ALT) =>
-            {
+            KeyCode::Char(character) if !is_composed_char(key) => {
                 self.insert_char(character);
                 if character.is_whitespace() {
                     self.close_overlay();
@@ -572,10 +551,10 @@ impl Composer {
         Some(command)
     }
 
-    pub fn accept_file(&mut self) -> Option<FileEntry> {
+    pub fn accept_file(&mut self) -> Option<PromptAttachment> {
         let file = self.completion()?.selected_file()?;
         self.replace_token('@', &format!("@{} ", file.display_name));
-        self.mentions.push(SelectedFileMention { path: file.path.clone(), display_name: file.display_name.clone() });
+        self.mentions.push(file.clone());
         self.overlay = None;
         Some(file)
     }

@@ -48,10 +48,6 @@ enum MainError {
 #[command(about = "Aether AI coding agent")]
 #[command(version)]
 struct Cli {
-    /// Run inside a Docker sandbox using the given image
-    #[arg(long, global = true)]
-    sandbox_image: Option<String>,
-
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -85,31 +81,27 @@ fn main() -> ExitCode {
 
     let cli = Cli::parse();
 
-    if let Some(image) = cli.sandbox_image {
-        return aether_cli::sandbox::exec_in_container(&image);
-    }
-
     let rt = Runtime::new().expect("Failed to create tokio runtime");
     let result: Result<ExitCode, MainError> = match cli.command {
         Some(Command::Headless(args)) => rt.block_on(run_headless(args)).map_err(Into::into),
 
         Some(Command::Generate(args)) => rt.block_on(run_generate_command(args)).map_err(Into::into),
 
-        Some(Command::Acp(args)) => rt.block_on(run_acp(args)).map(|()| ExitCode::SUCCESS).map_err(Into::into),
+        Some(Command::Acp(args)) => success(rt.block_on(run_acp(args))),
 
-        Some(Command::Server(args)) => rt.block_on(run_server(args)).map(|()| ExitCode::SUCCESS).map_err(Into::into),
+        Some(Command::Server(args)) => success(rt.block_on(run_server(args))),
 
-        Some(Command::Client(args)) => rt.block_on(run_client(args)).map(|()| ExitCode::SUCCESS).map_err(Into::into),
+        Some(Command::Client(args)) => success(rt.block_on(run_client(args))),
 
-        Some(Command::ShowPrompt(args)) => {
-            rt.block_on(run_prompt(args)).map(|()| ExitCode::SUCCESS).map_err(Into::into)
+        Some(Command::ShowPrompt(args)) => success(rt.block_on(run_prompt(args))),
+
+        Some(Command::Mcp(args)) => success(rt.block_on(run_mcp_command(args))),
+
+        Some(Command::Settings(SettingsCommand::Init(args))) => {
+            success(rt.block_on(run_init(args.into())).map(|outcome| print_next_steps(&outcome)))
         }
 
-        Some(Command::Mcp(args)) => rt.block_on(run_mcp_command(args)).map(|()| ExitCode::SUCCESS).map_err(Into::into),
-
-        Some(Command::Settings(SettingsCommand::Init(args))) => rt.block_on(run_init_command(args.into())),
-
-        Some(Command::Lspd(args)) => aether_lspd::run_lspd(args).map(|()| ExitCode::SUCCESS).map_err(Into::into),
+        Some(Command::Lspd(args)) => success(aether_lspd::run_lspd(args)),
 
         None => rt.block_on(run_default_command()),
     };
@@ -126,17 +118,14 @@ fn main() -> ExitCode {
     }
 }
 
-async fn run_init_command(request: InitRequest) -> Result<ExitCode, MainError> {
-    let outcome = run_init(request).await?;
-    if let Some(msg) = next_steps_message(&outcome) {
+fn success<E: Into<MainError>>(result: Result<(), E>) -> Result<ExitCode, MainError> {
+    result.map(|()| ExitCode::SUCCESS).map_err(Into::into)
+}
+
+fn print_next_steps(outcome: &InitOutcome) {
+    if let Some(msg) = next_steps_message(outcome) {
         println!("{msg}");
     }
-
-    Ok(match outcome {
-        InitOutcome::Applied { .. } | InitOutcome::AlreadyInitialized { .. } | InitOutcome::Cancelled => {
-            ExitCode::SUCCESS
-        }
-    })
 }
 
 async fn run_default_command() -> Result<ExitCode, MainError> {
@@ -160,20 +149,14 @@ async fn run_default_command() -> Result<ExitCode, MainError> {
         .is_none()
     {
         let outcome = run_init(InitRequest::user_onboarding()).await?;
-        if let Some(msg) = next_steps_message(&outcome) {
-            println!("{msg}");
-        }
-
-        match outcome {
-            InitOutcome::Cancelled | InitOutcome::Applied { missing_env_var: Some(_), .. } => {
-                return Ok(ExitCode::SUCCESS);
-            }
-            InitOutcome::Applied { missing_env_var: None, .. } | InitOutcome::AlreadyInitialized { .. } => {}
+        print_next_steps(&outcome);
+        if matches!(outcome, InitOutcome::Cancelled | InitOutcome::Applied { missing_env_var: Some(_), .. }) {
+            return Ok(ExitCode::SUCCESS);
         }
     }
 
     let settings = load_or_create_settings().with_default_status_line(default_status_line());
-    run_tui("aether acp", settings, None).await.map(|()| ExitCode::SUCCESS).map_err(Into::into)
+    success(run_tui("aether acp", settings, None).await)
 }
 
 fn default_status_line() -> StatusLineSettings {

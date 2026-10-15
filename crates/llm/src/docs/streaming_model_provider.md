@@ -6,11 +6,11 @@ The trait follows a streaming design: [`stream_response`](StreamingModelProvider
 
 - **`stream_response(&self, context: &Context) -> LlmResponseStream`** -- Send the conversation [`Context`] to the model and receive a stream of response events. The stream follows the lifecycle: `Start` -> `Text`/`Reasoning`/`ToolRequest*` -> `Usage` -> `Done`.
 
-- **`display_name(&self) -> String`** -- A human-readable name for this provider (e.g. `"Anthropic"`, `"OpenRouter"`). Used in UI and logging.
-
-- **`context_window(&self) -> Option<u32>`** -- The model's context window size in tokens. Returns `None` for models where the window is unknown (e.g. Ollama, llama.cpp).
-
 - **`model(&self) -> Option<LlmModel>`** -- The [`LlmModel`] this provider is configured to use. Returns `None` for test fakes or when the model identity is unknown at compile time.
+
+- **`display_name(&self) -> String`** -- A human-readable provider and model (e.g. `"Anthropic (claude-sonnet-4-5)"`). Used in UI and logging. Defaults to the [`model`](StreamingModelProvider::model)'s provider display name and ID.
+
+- **`context_window(&self) -> Option<u32>`** -- The model's context window size in tokens. Defaults to the [`model`](StreamingModelProvider::model)'s catalog entry; `None` where the window is unknown (e.g. Ollama, llama.cpp).
 
 # Blanket implementations
 

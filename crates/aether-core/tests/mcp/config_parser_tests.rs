@@ -1,9 +1,9 @@
-use aether_auth::{OAuthClientRegistration, SigV4Credentials};
+use aether_auth::SigV4Credentials;
 use aether_core::mcp::{
     McpConfig, McpServerConfig, ParseError, StdioServerConfig, ToolExposure, ToolFilter, ToolMatcher, http_transport,
 };
 use http::header::{AUTHORIZATION, HeaderMap, HeaderValue};
-use mcp_utils::client::{HttpAuth, OAuthSettings, Transport};
+use mcp_utils::client::{HttpAuth, OAuthClientRegistration, OAuthSettings, Transport};
 use mcp_utils::model::{Tool, ToolAnnotations};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

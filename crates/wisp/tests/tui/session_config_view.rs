@@ -1,18 +1,13 @@
-use acp_utils::config_meta::SelectOptionMeta;
-use acp_utils::config_option_id::ConfigOptionId;
-use agent_client_protocol::schema::v2::{SessionConfigOption, SessionConfigSelectGroup, SessionConfigSelectOption};
+use super::support::{ConfigOptionId, LocalConfigOption, SelectOptionMeta, model_choice, option_group, select};
+use agent_client_protocol::schema::v2::SessionConfigOption;
 use utils::ReasoningEffort;
-use wisp::session::session_config_view::{LocalConfigOption, LocalConfigView};
+use wisp::session::session_config_view::LocalConfigView;
 
 #[test]
 fn control_states_survive_projection_without_default_becoming_a_capability() {
     for effort in [ReasoningEffort::Default, ReasoningEffort::Disabled] {
-        let options = [LocalConfigOption::from_acp(SessionConfigOption::select(
-            "reasoning_effort",
-            "Reasoning",
-            effort.as_str(),
-            vec![option("default", "Default"), option("disabled", "Disabled"), option("low", "Low")],
-        ))];
+        let levels = [("default", "Default"), ("disabled", "Disabled"), ("low", "Low")];
+        let options = [LocalConfigOption::from_acp(select("reasoning_effort", "Reasoning", effort.as_str(), &levels))];
         let view = LocalConfigView::new(&options);
         assert_eq!(view.reasoning_effort(), Some(effort));
         assert_eq!(view.reasoning_levels(), vec![ReasoningEffort::Disabled, ReasoningEffort::Low]);
@@ -42,29 +37,16 @@ fn projects_v2_wire_ids_and_tolerates_unknown_categories() {
     assert_eq!(view.next_mode(), None);
 }
 
-fn option(value: &str, name: &str) -> SessionConfigSelectOption {
-    SessionConfigSelectOption::new(value.to_string(), name.to_string())
-}
-
 #[test]
 fn projects_grouped_choices_current_display_and_model_metadata() {
-    let image = option("image", "Image")
-        .meta(SelectOptionMeta { reasoning_levels: vec![], supports_image: true, supports_audio: false }.into_meta());
-    let audio = option("audio", "Audio")
-        .meta(SelectOptionMeta { reasoning_levels: vec![], supports_image: false, supports_audio: true }.into_meta());
-    let mut model =
-        SessionConfigOption::select("model", "Model", "image,audio", Vec::<SessionConfigSelectOption>::new());
-    if let agent_client_protocol::schema::v2::SessionConfigKind::Select(select) = &mut model.kind {
-        select.options = agent_client_protocol::schema::v2::SessionConfigSelectOptions::Grouped(vec![
-            SessionConfigSelectGroup::new("media", "Media", vec![image, audio]),
-        ]);
-    }
-    let reasoning = SessionConfigOption::select(
-        "reasoning_effort",
-        "Reasoning",
-        "high",
-        vec![option("low", "Low"), option("high", "High")],
+    let image = SelectOptionMeta { supports_image: true, ..Default::default() };
+    let audio = SelectOptionMeta { supports_audio: true, ..Default::default() };
+    let media = option_group(
+        "Media",
+        vec![model_choice("image", "Image", image.clone()), model_choice("audio", "Audio", audio.clone())],
     );
+    let model = SessionConfigOption::select("model", "Model", "image,audio", vec![media]);
+    let reasoning = select("reasoning_effort", "Reasoning", "high", &[("low", "Low"), ("high", "High")]);
     let options: Vec<LocalConfigOption> = [model, reasoning].into_iter().map(LocalConfigOption::from_acp).collect();
     let view = LocalConfigView::new(&options);
 
@@ -73,13 +55,7 @@ fn projects_grouped_choices_current_display_and_model_metadata() {
     let model_options = view.flattened_options(ConfigOptionId::Model);
     assert_eq!(model_options.len(), 2);
     assert!(model_options.iter().all(|option| option.group.as_deref() == Some("Media")));
-    assert_eq!(
-        view.selected_model_metadata(),
-        vec![
-            SelectOptionMeta { reasoning_levels: vec![], supports_image: true, supports_audio: false },
-            SelectOptionMeta { reasoning_levels: vec![], supports_image: false, supports_audio: true },
-        ]
-    );
+    assert_eq!(view.selected_model_metadata(), vec![image, audio]);
     assert_eq!(view.reasoning_levels(), vec![ReasoningEffort::Low, ReasoningEffort::High]);
     assert_eq!(view.reasoning_effort(), Some(ReasoningEffort::High));
 }

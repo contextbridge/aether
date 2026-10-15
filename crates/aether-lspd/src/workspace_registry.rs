@@ -1,6 +1,6 @@
 use crate::error::{DaemonError, DaemonResult};
 use crate::language_catalog::LanguageId;
-use crate::language_catalog::{ServerKind, resolved_config_for_language, server_kind_for_language};
+use crate::language_catalog::resolved_config_for_language;
 use crate::process_transport::TransportError;
 use crate::protocol::{LSP_REQUEST_TIMED_OUT, LSP_TRANSPORT_CLOSED, LspErrorResponse};
 use crate::workspace_session::WorkspaceSession;
@@ -13,7 +13,7 @@ use std::time::Duration;
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub(crate) struct WorkspaceKey {
     pub(crate) workspace_root: PathBuf,
-    pub(crate) server_kind: ServerKind,
+    pub(crate) server: &'static str,
 }
 
 /// A client's resolved attachment to one workspace/language-server pair.
@@ -161,9 +161,10 @@ impl WorkspaceRegistry {
 impl WorkspaceKey {
     pub(crate) fn new(workspace_root: &Path, language: LanguageId) -> DaemonResult<Self> {
         let workspace_root = workspace_root.canonicalize().unwrap_or_else(|_| workspace_root.to_path_buf());
-        let server_kind = server_kind_for_language(language)
+        let server = language
+            .server()
             .ok_or_else(|| DaemonError::LspSpawnFailed(format!("No LSP configured for language: {language:?}")))?;
-        Ok(Self { workspace_root, server_kind })
+        Ok(Self { workspace_root, server: server.name })
     }
 }
 

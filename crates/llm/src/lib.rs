@@ -20,7 +20,7 @@ mod tools;
 pub mod types;
 pub mod usage;
 
-pub use catalog::LlmModel;
+pub use catalog::{LlmModel, is_provider_env_var};
 pub use chat_message::{AssistantReasoning, ChatMessage, ContentBlock, EncryptedReasoningContent};
 pub use context::Context;
 pub use credential::ProviderCredential;

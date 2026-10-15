@@ -1,39 +1,16 @@
-use std::path::PathBuf;
-use std::sync::Arc;
-
-use clankerdiff_client::ConnectionState;
-use clankerdiff_ratatui::diff::DiffScope;
-use ratatui::{
-    buffer::{Buffer, Cell},
-    layout::{Position, Rect},
-    style::{Color, Modifier},
-};
-use utils::artifact_review::ArtifactReviewElicitationMeta;
-use wisp::{
-    git_review::{ClientState, DiffDocument, DiffSnapshot, FileDiff},
-    renderer::DrawContext,
-    screens::{artifact_review::ArtifactReviewScreen, git_diff::GitDiffScreen},
-    surfaces::elicitation::ElicitationResponder,
-    theme::Theme,
-    view::{generation::Generation, syntax::SyntaxHighlighter},
-};
+use super::support::{Buffer, Cell, Color, Modifier, Position, git_diff_screen, plan_meta, render_surface};
+use ratatui::layout::Rect;
+use wisp::git_review::FileDiff;
+use wisp::renderer::DrawContext;
+use wisp::screens::artifact_review::ArtifactReviewScreen;
+use wisp::surfaces::elicitation::ElicitationResponder;
 
 #[test]
 fn git_review_clears_underlying_content_only_inside_its_viewport() {
     for y in [0, 2] {
         for lines in [1, 60] {
             let new = "fn added() {}\n".repeat(lines);
-            let mut screen = GitDiffScreen::new();
-            let document = DiffDocument {
-                repo_root: "/workspace".into(),
-                files: vec![FileDiff::from_texts("src/lib.rs", "", &new).unwrap()],
-            };
-            let state = ClientState {
-                connection: ConnectionState::Connected,
-                snapshot: Some(Arc::new(DiffSnapshot { scope: DiffScope::Both, document: Arc::new(document) })),
-                ..ClientState::default()
-            };
-            screen.install(&state);
+            let mut screen = git_diff_screen(vec![FileDiff::from_texts("src/lib.rs", "", &new).unwrap()]);
             assert_opaque_viewport(Rect::new(3, y, 120, 24), |area, buffer, cx| {
                 screen.render(area, buffer, cx);
             });
@@ -46,14 +23,7 @@ fn artifact_review_clears_underlying_content_only_inside_its_viewport() {
     for y in [0, 2] {
         for lines in [1, 60] {
             let markdown = format!("# Plan\n\n{}", "Implement this.\n\n".repeat(lines));
-            let mut screen = ArtifactReviewScreen::new(
-                ArtifactReviewElicitationMeta::new(
-                    Some(PathBuf::from("/workspace/plan.md")),
-                    "Review /workspace/plan.md",
-                    &markdown,
-                ),
-                ElicitationResponder::from_fn(|_| {}),
-            );
+            let mut screen = ArtifactReviewScreen::new(plan_meta(&markdown), ElicitationResponder::from_fn(|_| {}));
             assert_opaque_viewport(Rect::new(3, y, 120, 24), |area, buffer, cx| {
                 screen.render(area, buffer, cx);
             });
@@ -67,16 +37,10 @@ fn artifact_review_clears_underlying_content_only_inside_its_viewport() {
 
 fn assert_opaque_viewport(area: Rect, mut render: impl FnMut(Rect, &mut Buffer, &mut DrawContext<'_>)) {
     let canvas = Rect::new(0, 0, 126, 28);
-    let theme = Theme::default();
-    let mut highlighter = SyntaxHighlighter::new();
-    let mut cx = DrawContext { theme: &theme, highlighter: &mut highlighter, theme_generation: Generation::default() };
-    let mut clean = Buffer::empty(canvas);
-    render(area, &mut clean, &mut cx);
+    let clean = render_surface(Buffer::empty(canvas), |buffer, cx| render(area, buffer, cx));
     let mut marker = Cell::default();
     marker.set_symbol("▓").set_style((Color::White, Color::Red, Modifier::UNDERLINED));
-    let mut dirty = Buffer::filled(canvas, marker.clone());
-    render(area, &mut dirty, &mut cx);
-
+    let dirty = render_surface(Buffer::filled(canvas, marker.clone()), |buffer, cx| render(area, buffer, cx));
     for y in canvas.top()..canvas.bottom() {
         for x in canvas.left()..canvas.right() {
             let position = Position::new(x, y);

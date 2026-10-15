@@ -26,11 +26,17 @@ pub(crate) struct ResponseSpec {
     pub(crate) body: String,
     pub(crate) headers: HashMap<String, String>,
     gap: Option<Duration>,
+    interrupted: bool,
 }
 
 impl ResponseSpec {
     pub(crate) fn sse(body: &str) -> Self {
-        Self { status: 200, body: body.to_string(), headers: HashMap::new(), gap: None }
+        Self { status: 200, body: body.to_string(), headers: HashMap::new(), gap: None, interrupted: false }
+    }
+
+    pub(crate) fn with_status(mut self, status: u16) -> Self {
+        self.status = status;
+        self
     }
 
     pub(crate) fn with_header(mut self, name: &str, value: &str) -> Self {
@@ -43,7 +49,20 @@ impl ResponseSpec {
         self
     }
 
+    /// Drop the connection after sending the response headers.
+    pub(crate) fn interrupted(mut self) -> Self {
+        self.interrupted = true;
+        self
+    }
+
     fn response_body(&self) -> Body {
+        if self.interrupted {
+            // Yielding first lets the server flush the headers before the body fails.
+            return Body::from_stream(stream::once(async {
+                tokio::task::yield_now().await;
+                Err::<String, _>(std::io::Error::other("connection reset"))
+            }));
+        }
         let Some(gap) = self.gap else {
             return Body::from(self.body.clone());
         };

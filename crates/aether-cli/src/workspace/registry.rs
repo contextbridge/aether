@@ -3,10 +3,12 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+use utils::fs::write_atomic;
+use utils::settings::aether_home;
 
 /// Persistent registry of managed workspaces, grouped by repository identity.
 ///
-/// Stored as a JSON array at `~/.aether/workspaces.json`.
+/// Stored as a JSON array at `$AETHER_HOME/workspaces.json`.
 pub struct WorkspaceRegistry {
     path: PathBuf,
 }
@@ -29,8 +31,8 @@ pub enum RegistryError {
 impl WorkspaceRegistry {
     pub fn new() -> io::Result<Self> {
         let home =
-            dirs::home_dir().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Home directory not found"))?;
-        Ok(Self::from_path(home.join(".aether/workspaces.json")))
+            aether_home().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Aether home directory not found"))?;
+        Ok(Self::from_path(home.join("workspaces.json")))
     }
 
     pub fn from_path(path: PathBuf) -> Self {
@@ -76,14 +78,9 @@ impl WorkspaceRegistry {
     }
 
     fn write(&self, records: &[WorkspaceRecord]) -> Result<(), RegistryError> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|e| self.io_error(e))?;
-        }
         let content = serde_json::to_string_pretty(records)
             .map_err(|source| RegistryError::Parse { path: self.path.clone(), source })?;
-        let tmp_path = self.path.with_extension("json.tmp");
-        fs::write(&tmp_path, content).map_err(|e| self.io_error(e))?;
-        fs::rename(&tmp_path, &self.path).map_err(|e| self.io_error(e))
+        write_atomic(&self.path, content.as_bytes()).map_err(|e| self.io_error(e))
     }
 
     fn io_error(&self, source: io::Error) -> RegistryError {
@@ -164,6 +161,15 @@ mod tests {
 
         let reread = registry.workspaces_for("repo1").unwrap();
         assert_eq!(reread.len(), 1);
+    }
+
+    #[test]
+    fn register_succeeds_while_a_temp_path_is_occupied() {
+        let (dir, registry) = temp_registry();
+        let a = make_dir(&dir, "a");
+        fs::create_dir(dir.path().join("workspaces.json.tmp")).unwrap();
+        registry.register("repo1", &a).unwrap();
+        assert_eq!(registry.workspaces_for("repo1").unwrap().len(), 1);
     }
 
     #[test]

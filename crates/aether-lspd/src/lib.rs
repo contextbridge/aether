@@ -40,10 +40,7 @@ pub enum LspdRunError {
     Daemon(#[from] DaemonError),
 }
 pub use language_catalog::LanguageId;
-pub use language_catalog::{
-    LANGUAGE_METADATA, LanguageMetadata, LanguageServerMetadata, LspConfig, detect_project_languages,
-    get_config_for_language, metadata_for, server_metadata_for_language,
-};
+pub use language_catalog::{LANGUAGES, LanguageMetadata, ServerSpec, detect_project_languages};
 pub use socket_path::{ensure_socket_dir, lockfile_path, log_file_path, socket_path};
 
 pub use protocol::{

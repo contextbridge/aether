@@ -29,7 +29,6 @@ Full API documentation is available on [docs.rs](https://docs.rs/aether-mcp-serv
 
 Key entry points:
 - [`CodingMcp`] -- file I/O, shell, search, and LSP tools
-- [`CodingTools`](coding::CodingTools) -- trait for custom tool backends
 - [`LspRegistry`](lsp::LspRegistry) -- manages LSP daemon connections
 - [`TasksMcp`](tasks::TasksMcp) -- hierarchical task management
 - [`SkillsMcp`](skills::SkillsMcp) -- skill prompts and slash commands

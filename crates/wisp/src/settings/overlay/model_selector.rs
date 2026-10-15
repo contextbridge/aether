@@ -1,5 +1,6 @@
-use super::{KeyHint, SettingsChange, SettingsMenuValue, message_for_change, value_match_key};
-use crate::surfaces::input::{Nav, SettingsOutput, UiEvent};
+use super::{KeyHint, SettingsChange, value_match_key};
+use crate::session::session_config_view::LocalConfigValue;
+use crate::surfaces::input::{Nav, UiEvent, UiOutput};
 use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
 use crate::view::filterable_list::FilterableList;
@@ -32,11 +33,11 @@ pub(super) struct ModelSelector {
 pub(super) enum ModelSelectorRow {
     Provider { label: String, match_key: String },
     Spacer { match_key: String },
-    Model { value: SettingsMenuValue, match_key: String },
+    Model { value: LocalConfigValue, match_key: String },
 }
 
 impl ModelSelectorRow {
-    fn model(&self) -> Option<&SettingsMenuValue> {
+    fn model(&self) -> Option<&LocalConfigValue> {
         match self {
             Self::Model { value, .. } => Some(value),
             _ => None,
@@ -56,25 +57,6 @@ impl ModelSelectorRow {
     }
 }
 
-pub(super) struct ModelSelectorView<'a> {
-    selected: &'a BTreeSet<String>,
-    /// The focused model's value, so only its row carries the reasoning bar.
-    focused_value: Option<&'a str>,
-    reasoning_effort: Option<ReasoningEffort>,
-    theme: &'a Theme,
-}
-
-impl<'a> ModelSelectorView<'a> {
-    pub(super) fn new(
-        selected: &'a BTreeSet<String>,
-        focused_value: Option<&'a str>,
-        reasoning_effort: Option<ReasoningEffort>,
-        theme: &'a Theme,
-    ) -> Self {
-        Self { selected, focused_value, reasoning_effort, theme }
-    }
-}
-
 /// Header rows above the model list: search, current selection, and a blank
 /// separator before the first provider heading.
 const HEADER_ROWS: u16 = 3;
@@ -85,7 +67,7 @@ const STATUS_WIDTH: usize = 18;
 impl ModelSelector {
     pub(super) fn new(
         config_id: String,
-        items: Vec<SettingsMenuValue>,
+        items: Vec<LocalConfigValue>,
         current_selection: &str,
         current_reasoning_effort: Option<&str>,
     ) -> Self {
@@ -172,7 +154,7 @@ impl ModelSelector {
     /// Enter toggles the focused model, and Tab cycles reasoning effort, so
     /// those never reach the shared picker navigation.
     #[allow(clippy::needless_pass_by_value)]
-    pub(crate) fn on_ui_event(&mut self, event: UiEvent) -> Vec<SettingsOutput> {
+    pub(crate) fn on_ui_event(&mut self, event: UiEvent) -> Vec<UiOutput> {
         if let UiEvent::Key(key) = &event {
             match key.code {
                 KeyCode::Tab => {
@@ -201,22 +183,6 @@ impl ModelSelector {
             }
             Nav::Close | Nav::Activate | Nav::Unhandled => Vec::new(),
         }
-    }
-}
-
-impl ModelSelector {
-    pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) -> Option<Position> {
-        let focused_value =
-            self.items.selected_entry().and_then(ModelSelectorRow::model).map(|value| value.value.clone());
-        let view =
-            ModelSelectorView::new(&self.selected_models, focused_value.as_deref(), self.reasoning_effort, theme);
-        StatefulWidget::render(view, area, buf, &mut self.items);
-        if let Some(error) = &self.validation_error {
-            Paragraph::new(error.as_str())
-                .style(theme.warning)
-                .render(Rect::new(area.x, area.y + 2, area.width, 1), buf);
-        }
-        None
     }
 }
 
@@ -254,13 +220,12 @@ impl ModelSelector {
     }
 }
 
-impl StatefulWidget for ModelSelectorView<'_> {
-    type State = FilterableList<ModelSelectorRow>;
-
-    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+impl ModelSelector {
+    pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) -> Option<Position> {
         let [header_area, list_area] =
             Layout::vertical([Constraint::Length(HEADER_ROWS), Constraint::Min(0)]).areas(area);
-        let reasoning_width = state
+        let reasoning_width = self
+            .items
             .entries()
             .iter()
             .filter_map(ModelSelectorRow::model)
@@ -270,32 +235,32 @@ impl StatefulWidget for ModelSelectorView<'_> {
         let name_width = usize::from(list_area.width)
             .saturating_sub(CHECKBOX_WIDTH + CAPABILITY_WIDTH + STATUS_WIDTH + reasoning_width + 1)
             .max(12);
-        let selected_names = state
+        let selected = &self.selected_models;
+        let selected_names = self
+            .items
             .entries()
             .iter()
             .filter_map(ModelSelectorRow::model)
-            .filter(|item| self.selected.contains(&item.value))
+            .filter(|item| selected.contains(&item.value))
             .map(model_label)
             .collect::<Vec<_>>()
             .join(", ");
         let header = vec![
-            labeled("Model search", state.query(), self.theme),
-            labeled("Selected", &selected_names, self.theme),
+            labeled("Model search", self.items.query(), theme),
+            labeled("Selected", &selected_names, theme),
             Line::default(),
         ];
         Paragraph::new(header).render(header_area, buf);
 
-        let selected = self.selected;
-        let focused_value = self.focused_value;
+        let focused_value =
+            self.items.selected_entry().and_then(ModelSelectorRow::model).map(|value| value.value.clone());
         let reasoning_effort = self.reasoning_effort;
-        let (view, selection) = state.view(self.theme, |row| match row {
+        let (view, selection) = self.items.view(theme, |row| match row {
             ModelSelectorRow::Spacer { .. } => Line::default(),
-            ModelSelectorRow::Provider { label, .. } => {
-                Line::styled(format!(" {label}"), self.theme.heading)
-            }
+            ModelSelectorRow::Provider { label, .. } => Line::styled(format!(" {label}"), theme.heading),
             ModelSelectorRow::Model { value, .. } => {
                 let is_selected = selected.contains(&value.value);
-                let is_focused = focused_value == Some(value.value.as_str());
+                let is_focused = focused_value.as_deref() == Some(value.value.as_str());
                 let status = if value.is_disabled {
                     value
                         .description
@@ -327,9 +292,9 @@ impl StatefulWidget for ModelSelectorView<'_> {
                         "  {checkbox}{label:name_width$}{reasoning:reasoning_width$}{capabilities:CAPABILITY_WIDTH$}{status}"
                     ),
                     if value.is_disabled {
-                        Style::from(self.theme.text_secondary)
+                        Style::from(theme.text_secondary)
                     } else {
-                        Style::from(self.theme.text_primary)
+                        Style::from(theme.text_primary)
                     },
                 )
             }
@@ -340,11 +305,17 @@ impl StatefulWidget for ModelSelectorView<'_> {
             buf,
             selection,
         );
+        if let Some(error) = &self.validation_error {
+            Paragraph::new(error.as_str())
+                .style(theme.warning)
+                .render(Rect::new(area.x, area.y + 2, area.width, 1), buf);
+        }
+        None
     }
 }
 
-fn build_rows(items: Vec<SettingsMenuValue>) -> Vec<ModelSelectorRow> {
-    let mut groups: Vec<(String, String, Vec<SettingsMenuValue>)> = Vec::new();
+fn build_rows(items: Vec<LocalConfigValue>) -> Vec<ModelSelectorRow> {
+    let mut groups: Vec<(String, String, Vec<LocalConfigValue>)> = Vec::new();
     for item in items {
         let (key, label) = provider(&item);
         if let Some((_, _, models)) = groups.iter_mut().find(|(existing, _, _)| *existing == key) {
@@ -376,7 +347,7 @@ fn build_rows(items: Vec<SettingsMenuValue>) -> Vec<ModelSelectorRow> {
 /// per provider, whose value carries this prefix.
 const UNAVAILABLE_VALUE_PREFIX: &str = "__unavailable:";
 
-fn provider(value: &SettingsMenuValue) -> (String, String) {
+fn provider(value: &LocalConfigValue) -> (String, String) {
     if let Some(group) = &value.group {
         return (group.to_lowercase(), group.clone());
     }
@@ -394,7 +365,7 @@ fn provider(value: &SettingsMenuValue) -> (String, String) {
     (key.to_lowercase(), label)
 }
 
-fn model_label(value: &SettingsMenuValue) -> &str {
+fn model_label(value: &LocalConfigValue) -> &str {
     name_parts(&value.name).map_or(value.name.as_str(), |(_, model)| model)
 }
 
@@ -412,7 +383,7 @@ fn labeled(label: &str, value: &str, theme: &Theme) -> Line<'static> {
 }
 
 impl ModelSelector {
-    pub(crate) fn take_changes(&mut self) -> Option<Vec<SettingsOutput>> {
+    pub(crate) fn take_changes(&mut self) -> Option<Vec<UiOutput>> {
         let invalid = self.reasoning_effort == Some(ReasoningEffort::Disabled)
             && self.items.entries().iter().filter_map(ModelSelectorRow::model).any(|value| {
                 self.selected_models.contains(&value.value)
@@ -422,7 +393,7 @@ impl ModelSelector {
             self.validation_error = Some("Cannot disable reasoning; choose Default or a supported level".to_string());
             return None;
         }
-        Some(self.pending_changes().iter().map(message_for_change).collect())
+        Some(self.pending_changes().into_iter().map(UiOutput::ConfigChange).collect())
     }
 
     pub(crate) fn footer(&self) -> Vec<KeyHint> {

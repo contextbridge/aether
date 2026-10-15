@@ -3,10 +3,7 @@ use super::support::*;
 #[test]
 fn remote_workspace_move_keeps_paths_server_side() {
     let mut ui = TestUiBuilder::new().remote_workspace().workspace_move().dimensions(120, 24).build();
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    assert!(matches!(ui.next_agent_command(), Some(AgentCommand::ListWorkspaces { .. })));
-    ui.deliver_result(workspaces_listed(vec![workspace_entry("/server/next", false)]));
+    open_workspace_picker(&mut ui, vec![workspace_entry("/server/next", false)]);
     ui.assert_viewport_contains("/server/next");
     ui.key(key(KeyCode::Enter));
     assert!(matches!(ui.next_agent_command(), Some(AgentCommand::MoveWorkspace { .. })));
@@ -16,18 +13,11 @@ fn remote_workspace_move_keeps_paths_server_side() {
         session_id: "test-session".into(),
         result: Ok(acp::ResumeSessionResponse::new()),
     });
-    assert!(
-        ui.take_commands()
-            .iter()
-            .any(|command| matches!(command, Command::Agent(AgentCommand::FetchWorkspaceStatus { .. }))),
-        "workspace move fetches agent-side status after resume"
-    );
+    let status_fetches =
+        ui.count_commands(|command| matches!(command, Command::Agent(AgentCommand::FetchWorkspaceStatus { .. })));
+    assert_eq!(status_fetches, 1, "workspace move fetches agent-side status after resume");
     ui.settle_tasks();
     ui.assert_viewport_contains("/server/next");
-}
-
-fn make_ui_with_workspace_move() -> TestUi {
-    TestUiBuilder::new().workspace_move().build()
 }
 
 #[test]
@@ -37,57 +27,48 @@ fn workspace_move_command_hidden_without_capability() {
     ui.key(key(KeyCode::Char('/')));
     assert!(ui.app().composer().has_completion());
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("/clear"), "{viewport}");
-    assert!(!viewport.contains("/move"), "{viewport}");
+    ui.assert_viewport_contains("/clear");
+    ui.assert_viewport_not_contains("/move");
 }
 
 #[test]
 fn workspace_move_command_visible_with_capability() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = TestUiBuilder::new().workspace_move().build();
 
     ui.key(key(KeyCode::Char('/')));
     assert!(ui.app().composer().has_completion());
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("/move"), "{viewport}");
+    ui.assert_viewport_contains("/move");
 }
 
 #[test]
 fn workspace_move_command_rejected_when_prompt_in_flight() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = TestUiBuilder::new().workspace_move().build();
 
     ui.submit("hello");
     let _ = ui.next_agent_command().unwrap();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/move");
 
     assert!(ui.app().waiting_for_response());
-    ui.draw();
     let viewport = ui.viewport_text();
     assert!(viewport.lines().any(|l| l.contains("Cannot move") && l.contains("workspace")), "{viewport}");
-    assert!(viewport.lines().any(|l| l.contains("prompt is running")), "{viewport}");
+    ui.assert_viewport_contains("prompt is running");
 }
 
 #[test]
 fn workspace_move_command_rejected_when_already_listing() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = TestUiBuilder::new().workspace_move().build();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/move");
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::ListingWorkspaces));
 
     let list_cmd = ui.next_agent_command().unwrap();
     assert!(matches!(list_cmd, AgentCommand::ListWorkspaces { .. }));
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/move");
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::ListingWorkspaces));
 
-    ui.draw();
     let viewport = ui.viewport_text();
     let collapsed = viewport.replace('\n', " ");
     let words: Vec<&str> = collapsed.split_whitespace().collect();
@@ -97,17 +78,15 @@ fn workspace_move_command_rejected_when_already_listing() {
 
 #[test]
 fn workspace_list_send_failure_resets_state() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = TestUiBuilder::new().workspace_move().build();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/move");
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::ListingWorkspaces));
     let _ = ui.next_agent_command().unwrap();
 
     ui.deliver_result(CommandResult::WorkspacesListed(Err("send failed".into())));
 
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::Idle));
-    ui.draw();
     let viewport = ui.viewport_text();
     let joined = viewport.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(joined.contains("Failed to list workspaces"), "{viewport}");
@@ -115,17 +94,15 @@ fn workspace_list_send_failure_resets_state() {
 
 #[test]
 fn workspace_list_failed_event_resets_state() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = TestUiBuilder::new().workspace_move().build();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/move");
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::ListingWorkspaces));
     let _ = ui.next_agent_command().unwrap();
 
     ui.deliver_result(workspace_list_failed("network error"));
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::Idle));
 
-    ui.draw();
     let viewport = ui.viewport_text();
     let collapsed = viewport.replace('\n', " ");
     let words: Vec<&str> = collapsed.split_whitespace().collect();
@@ -135,69 +112,52 @@ fn workspace_list_failed_event_resets_state() {
 
 #[test]
 fn workspace_picker_opens_with_existing_workspaces() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = TestUiBuilder::new().workspace_move().build();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::ListingWorkspaces));
-    let _ = ui.next_agent_command().unwrap();
-
-    ui.deliver_result(workspaces_listed(vec![
-        workspace_entry("/home/user/code/current", true),
-        workspace_entry("/home/user/code/other", false),
-        workspace_entry("/tmp/sandbox", false),
-    ]));
+    open_workspace_picker(
+        &mut ui,
+        vec![
+            workspace_entry("/home/user/code/current", true),
+            workspace_entry("/home/user/code/other", false),
+            workspace_entry("/tmp/sandbox", false),
+        ],
+    );
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::PickingWorkspace));
     assert!(ui.app().has_modal());
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("/home/user/code/other"), "{viewport}");
-    assert!(viewport.contains("/tmp/sandbox"), "{viewport}");
-    assert!(!viewport.contains("/home/user/code/current"), "current workspace should be excluded:\n{viewport}");
-    assert!(viewport.contains("Create new workspace"), "{viewport}");
+    ui.assert_viewport_contains("/home/user/code/other");
+    ui.assert_viewport_contains("/tmp/sandbox");
+    ui.assert_viewport_not_contains("/home/user/code/current");
+    ui.assert_viewport_contains("Create new workspace");
 }
 
 #[test]
 fn double_ctrl_c_exits_over_workspace_picker() {
-    let mut ui = make_ui_with_workspace_move();
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
-    ui.deliver_result(workspaces_listed(vec![workspace_entry("/tmp/sandbox", false)]));
+    let mut ui = TestUiBuilder::new().workspace_move().build();
+    open_workspace_picker(&mut ui, vec![workspace_entry("/tmp/sandbox", false)]);
     assert!(ui.app().has_modal());
     assert_ctrl_c_exits(&mut ui);
 }
 
 #[test]
 fn workspace_picker_shows_empty_state_when_no_workspaces() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = TestUiBuilder::new().workspace_move().build();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
-
-    ui.deliver_result(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
+    open_workspace_picker(&mut ui, vec![workspace_entry("/home/user/code/current", true)]);
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::PickingWorkspace));
     assert!(ui.app().has_modal());
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(!viewport.contains("No other workspaces available"), "{viewport}");
+    ui.assert_viewport_not_contains("No other workspaces available");
 }
 
 #[test]
 fn workspace_picker_esc_closes_and_resets_state() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = TestUiBuilder::new().workspace_move().build();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
-
-    ui.deliver_result(workspaces_listed(vec![
-        workspace_entry("/home/user/code/current", true),
-        workspace_entry("/home/user/code/other", false),
-    ]));
+    open_workspace_picker(
+        &mut ui,
+        vec![workspace_entry("/home/user/code/current", true), workspace_entry("/home/user/code/other", false)],
+    );
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::PickingWorkspace));
     assert!(ui.app().has_modal());
 
@@ -208,89 +168,45 @@ fn workspace_picker_esc_closes_and_resets_state() {
 
 #[test]
 fn workspace_picker_enter_selects_existing_workspace() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = TestUiBuilder::new().workspace_move().build();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    move_to_other_workspace(&mut ui);
 
-    ui.deliver_result(workspaces_listed(vec![
-        workspace_entry("/home/user/code/current", true),
-        workspace_entry("/home/user/code/other", false),
-    ]));
-
-    ui.key(key(KeyCode::Enter));
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::MovingWorkspace));
     assert!(!ui.app().has_modal());
-
-    let cmd = ui.next_agent_command().unwrap();
-    match cmd {
-        AgentCommand::MoveWorkspace { session_id, target } => {
-            assert_eq!(session_id, "test-session");
-            match target {
-                acp_utils::notifications::WorkspaceMoveTarget::Existing { path } => {
-                    assert_eq!(path, std::path::PathBuf::from("/home/user/code/other"));
-                }
-                other @ acp_utils::notifications::WorkspaceMoveTarget::New { .. } => {
-                    panic!("expected Existing, got {other:?}")
-                }
-            }
-        }
-        other => panic!("expected MoveWorkspace, got {other:?}"),
-    }
 }
 
 #[test]
 fn workspace_picker_enter_selects_create_new_and_shows_naming_mode() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = TestUiBuilder::new().workspace_move().build();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    open_workspace_picker(&mut ui, vec![workspace_entry("/home/user/code/current", true)]);
 
-    ui.deliver_result(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
-
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("Create new workspace"), "{viewport}");
+    ui.assert_viewport_contains("Create new workspace");
 
     ui.key(key(KeyCode::Enter));
-    ui.draw();
-    let viewport2 = ui.viewport_text();
-    assert!(viewport2.contains("New workspace"), "{viewport2}");
+    ui.assert_viewport_contains("New workspace");
 }
 
 #[test]
 fn workspace_naming_new_esc_returns_to_list_mode() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = TestUiBuilder::new().workspace_move().build();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
-
-    ui.deliver_result(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
+    open_workspace_picker(&mut ui, vec![workspace_entry("/home/user/code/current", true)]);
 
     ui.key(key(KeyCode::Enter));
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("New workspace"), "{viewport}");
+    ui.assert_viewport_contains("New workspace");
 
     ui.key(key(KeyCode::Esc));
     assert!(ui.app().has_modal());
-    ui.draw();
-    let viewport2 = ui.viewport_text();
-    assert!(viewport2.contains("Create new workspace"), "{viewport2}");
+    ui.assert_viewport_contains("Create new workspace");
 }
 
 #[test]
 fn workspace_naming_new_enter_with_name_emits_move_target() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = TestUiBuilder::new().workspace_move().build();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
-
-    ui.deliver_result(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
+    open_workspace_picker(&mut ui, vec![workspace_entry("/home/user/code/current", true)]);
 
     ui.key(key(KeyCode::Enter));
     ui.paste("my-new-workspace");
@@ -300,88 +216,59 @@ fn workspace_naming_new_enter_with_name_emits_move_target() {
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::MovingWorkspace));
     assert!(!ui.app().has_modal());
 
-    let cmd = ui.next_agent_command().unwrap();
-    match cmd {
-        AgentCommand::MoveWorkspace { session_id, target } => {
-            assert_eq!(session_id, "test-session");
-            match target {
-                acp_utils::notifications::WorkspaceMoveTarget::New { name } => {
-                    assert_eq!(name, "my-new-workspace");
-                }
-                other @ acp_utils::notifications::WorkspaceMoveTarget::Existing { .. } => {
-                    panic!("expected New, got {other:?}")
-                }
-            }
-        }
-        other => panic!("expected MoveWorkspace, got {other:?}"),
-    }
+    let cmd = ui.next_agent_command();
+    assert!(
+        matches!(&cmd, Some(AgentCommand::MoveWorkspace { session_id, target: WorkspaceMoveTarget::New { name } })
+            if session_id == "test-session" && name == "my-new-workspace"),
+        "{cmd:?}"
+    );
 }
 
 #[test]
 fn workspace_picker_filtering_hides_non_matching() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = TestUiBuilder::new().workspace_move().build();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    open_workspace_picker(
+        &mut ui,
+        vec![
+            workspace_entry("/home/user/code/current", true),
+            workspace_entry("/home/user/code/project-a", false),
+            workspace_entry("/tmp/test", false),
+        ],
+    );
 
-    ui.deliver_result(workspaces_listed(vec![
-        workspace_entry("/home/user/code/current", true),
-        workspace_entry("/home/user/code/project-a", false),
-        workspace_entry("/tmp/test", false),
-    ]));
-
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("project-a"), "{viewport}");
-    assert!(viewport.contains("/tmp/test"), "{viewport}");
+    ui.assert_viewport_contains("project-a");
+    ui.assert_viewport_contains("/tmp/test");
 
     // Use a query that only matches one entry
     ui.key(key(KeyCode::Char('j')));
-    ui.draw();
-    let viewport2 = ui.viewport_text();
-    assert!(viewport2.contains("project-a"), "{viewport2}");
-    assert!(!viewport2.contains("/tmp/test"), "{viewport2}");
-    assert!(!viewport2.contains("Create new"), "{viewport2}");
+    ui.assert_viewport_contains("project-a");
+    ui.assert_viewport_not_contains("/tmp/test");
+    ui.assert_viewport_not_contains("Create new");
 }
 
 #[test]
 fn workspace_move_success_updates_cwd_and_reloads_session() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = TestUiBuilder::new().workspace_move().build();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
-
-    ui.deliver_result(workspaces_listed(vec![
-        workspace_entry("/home/user/code/current", true),
-        workspace_entry("/home/user/code/other", false),
-    ]));
-
-    ui.key(key(KeyCode::Enter));
+    move_to_other_workspace(&mut ui);
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::MovingWorkspace));
-
-    let cmd = ui.next_agent_command().unwrap();
-    assert!(matches!(cmd, AgentCommand::MoveWorkspace { .. }));
 
     ui.deliver_result(workspace_moved("/home/user/code/other"));
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::LoadingWorkspaceSession { .. }));
 
-    let load_cmd = ui.next_agent_command().unwrap();
-    match load_cmd {
-        AgentCommand::ResumeSession { session_id, cwd } => {
-            assert_eq!(session_id.0.as_ref(), "test-session");
-            assert_eq!(cwd, std::path::Path::new("/home/user/code/other"));
-        }
-        other => panic!("expected LoadSession, got {other:?}"),
-    }
+    let load_cmd = ui.next_agent_command();
+    assert!(
+        matches!(&load_cmd, Some(AgentCommand::ResumeSession { session_id, cwd })
+            if session_id.0.as_ref() == "test-session" && cwd == std::path::Path::new("/home/user/code/other")),
+        "{load_cmd:?}"
+    );
     assert!(
         matches!(ui.next_agent_command(), Some(AgentCommand::FetchWorkspaceStatus { .. })),
         "workspace move refreshes agent-side status after resume"
     );
 
-    ui.type_text("/clear");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/clear");
     assert!(ui.next_agent_command().is_none(), "workspace replay still owns the transition");
     ui.submit("wait for replay");
     assert!(ui.next_agent_command().is_none());
@@ -393,19 +280,9 @@ fn workspace_move_success_updates_cwd_and_reloads_session() {
 
 #[test]
 fn workspace_move_success_replays_loaded_session_updates() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = TestUiBuilder::new().workspace_move().build();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
-
-    ui.deliver_result(workspaces_listed(vec![
-        workspace_entry("/home/user/code/current", true),
-        workspace_entry("/home/user/code/other", false),
-    ]));
-
-    ui.key(key(KeyCode::Enter));
-    let _ = ui.next_agent_command().unwrap();
+    move_to_other_workspace(&mut ui);
 
     ui.deliver_result(workspace_moved("/home/user/code/other"));
     let _ = ui.next_agent_command().unwrap();
@@ -414,9 +291,8 @@ fn workspace_move_success_replays_loaded_session_updates() {
     ui.deliver_result(session_loaded("test-session", vec![]));
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::Idle));
 
-    ui.draw();
+    ui.assert_viewport_contains("buffered-message");
     let viewport = ui.viewport_text();
-    assert!(viewport.lines().any(|l| l.contains("buffered-message")), "{viewport}");
     let collapsed = viewport.replace('\n', " ");
     let words: Vec<&str> = collapsed.split_whitespace().collect();
     let joined = words.join(" ");
@@ -430,22 +306,12 @@ fn workspace_move_success_replays_loaded_session_updates() {
 
 #[test]
 fn workspace_move_load_session_failure_recovers() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = TestUiBuilder::new().workspace_move().build();
     ui.submit("keep this transcript");
     ui.next_agent_command().unwrap();
     ui.complete_prompt(acp::StopReason::EndTurn);
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
-
-    ui.deliver_result(workspaces_listed(vec![
-        workspace_entry("/home/user/code/current", true),
-        workspace_entry("/home/user/code/other", false),
-    ]));
-
-    ui.key(key(KeyCode::Enter));
-    let _ = ui.next_agent_command().unwrap();
+    move_to_other_workspace(&mut ui);
 
     ui.deliver_result(workspace_moved("/home/user/code/other"));
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::LoadingWorkspaceSession { .. }));
@@ -458,7 +324,6 @@ fn workspace_move_load_session_failure_recovers() {
     });
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::Idle));
 
-    ui.draw();
     let viewport = ui.viewport_text();
     let joined = viewport.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(joined.contains("Failed to resume session"), "{viewport}");
@@ -470,19 +335,9 @@ fn workspace_move_load_session_failure_recovers() {
 
 #[test]
 fn workspace_move_server_side_load_failure_recovers() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = TestUiBuilder::new().workspace_move().build();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
-
-    ui.deliver_result(workspaces_listed(vec![
-        workspace_entry("/home/user/code/current", true),
-        workspace_entry("/home/user/code/other", false),
-    ]));
-
-    ui.key(key(KeyCode::Enter));
-    let _ = ui.next_agent_command().unwrap();
+    move_to_other_workspace(&mut ui);
 
     ui.deliver_result(workspace_moved("/home/user/code/other"));
     let _ = ui.next_agent_command().unwrap();
@@ -495,61 +350,33 @@ fn workspace_move_server_side_load_failure_recovers() {
     );
 
     ui.acp_event(session_update_for("test-session", user_message_chunk("after the failure")));
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(
-        viewport.lines().any(|l| l.contains("after the failure")),
-        "updates for the current session should still render after the load fails:\n{viewport}"
-    );
+    ui.assert_viewport_contains("after the failure");
 }
 
 #[test]
 fn workspace_move_failed_event_resets_state() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = TestUiBuilder::new().workspace_move().build();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
-
-    ui.deliver_result(workspaces_listed(vec![
-        workspace_entry("/home/user/code/current", true),
-        workspace_entry("/home/user/code/other", false),
-    ]));
-
-    ui.key(key(KeyCode::Enter));
-    let _ = ui.next_agent_command().unwrap();
+    move_to_other_workspace(&mut ui);
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::MovingWorkspace));
 
     ui.deliver_result(workspace_move_failed("permission denied"));
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::Idle));
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.lines().any(|l| l.contains("Workspace move failed")), "{viewport}");
-    assert!(viewport.lines().any(|l| l.contains("permission denied")), "{viewport}");
+    ui.assert_viewport_contains("Workspace move failed");
+    ui.assert_viewport_contains("permission denied");
 }
 
 #[test]
 fn workspace_move_send_failure_resets_state() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = TestUiBuilder::new().workspace_move().build();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
-
-    ui.deliver_result(workspaces_listed(vec![
-        workspace_entry("/home/user/code/current", true),
-        workspace_entry("/home/user/code/other", false),
-    ]));
-
-    ui.key(key(KeyCode::Enter));
+    move_to_other_workspace(&mut ui);
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::MovingWorkspace));
-    let _ = ui.next_agent_command().unwrap();
 
     ui.deliver_result(CommandResult::WorkspaceMoved(Err("send failed".into())));
     assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::Idle));
 
-    ui.draw();
     let viewport = ui.viewport_text();
     let joined = viewport.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(joined.contains("Workspace move failed"), "{viewport}");
@@ -557,34 +384,24 @@ fn workspace_move_send_failure_resets_state() {
 
 #[test]
 fn workspace_picker_renders_on_narrow_terminal() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = TestUiBuilder::new().workspace_move().build();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
+    open_workspace_picker(
+        &mut ui,
+        vec![workspace_entry("/home/user/code/current", true), workspace_entry("/home/user/code/project-a", false)],
+    );
 
-    ui.deliver_result(workspaces_listed(vec![
-        workspace_entry("/home/user/code/current", true),
-        workspace_entry("/home/user/code/project-a", false),
-    ]));
-
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("project-a"), "{viewport}");
+    ui.assert_viewport_contains("project-a");
 }
 
 #[test]
 fn workspace_move_picker_closes_when_connection_closes() {
-    let mut ui = make_ui_with_workspace_move();
+    let mut ui = TestUiBuilder::new().workspace_move().build();
 
-    ui.type_text("/move");
-    ui.key(key(KeyCode::Tab));
-    let _ = ui.next_agent_command().unwrap();
-
-    ui.deliver_result(workspaces_listed(vec![
-        workspace_entry("/home/user/code/current", true),
-        workspace_entry("/home/user/code/other", false),
-    ]));
+    open_workspace_picker(
+        &mut ui,
+        vec![workspace_entry("/home/user/code/current", true), workspace_entry("/home/user/code/other", false)],
+    );
     assert!(ui.app().has_modal());
 
     ui.acp_event(AcpEvent::ConnectionClosed);

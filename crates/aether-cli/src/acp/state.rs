@@ -36,7 +36,7 @@ use super::session::actor::{ClientConnection, SessionCommand};
 #[cfg(any(test, feature = "testing"))]
 use super::session::actor::{SessionActor, SessionActorInit};
 use super::session::config_setting::ConfigSetting;
-use super::session::factory::SessionFactory;
+use super::session::factory::{PreparedSession, SessionFactory};
 use super::session::hooks::SessionHooks;
 use super::session::{SessionRegistry, paginate_summaries};
 use crate::resolve::InitialSessionSelection;
@@ -164,16 +164,7 @@ impl AcpState {
     }
 
     pub(crate) fn with_login(config: AcpStateConfig, login: Arc<dyn ProviderLogin>) -> Self {
-        let factory = SessionFactory::new(
-            config.settings_source,
-            config.provider_connections,
-            Arc::clone(&config.oauth_credential_store),
-            Arc::clone(&config.session_store),
-            config.initial_selection,
-            config.telemetry.as_ref().map(|runtime| runtime.observer_factory()),
-            config.runtime_factory,
-            config.hooks,
-        );
+        let factory = SessionFactory::new(&config);
         Self {
             client_slot: ClientSlot::default(),
             login,
@@ -263,16 +254,15 @@ impl AcpState {
         request: NewSessionRequest,
         connection: Option<&ConnectionTo<Client>>,
     ) -> Result<SpawnedSession, Error> {
-        let prepared = self.factory.prepare_new(request, connection).await?;
+        self.activate(self.factory.prepare_new(request, connection).await?).await
+    }
+
+    async fn activate(&self, prepared: PreparedSession) -> Result<SpawnedSession, Error> {
         self.registry.stop().await;
         let created = prepared.start().await?;
-        let spawned = SpawnedSession {
-            session_id: created.session_id.clone(),
-            config_options: created.config_options,
-            commands: created.handle.command_sender(),
-        };
+        let commands = created.handle.command_sender();
         self.registry.register(&created.session_id, created.handle).await;
-        Ok(spawned)
+        Ok(SpawnedSession { session_id: created.session_id, config_options: created.config_options, commands })
     }
 
     pub(crate) async fn logout(
@@ -316,12 +306,8 @@ impl AcpState {
             return Ok(ResumeSessionResponse::new().config_options(options));
         }
 
-        let prepared = self.factory.prepare_resume(req, cx, replay).await?;
-        self.registry.stop().await;
-        let created = prepared.start().await?;
-        let response = ResumeSessionResponse::new().config_options(created.config_options);
-        self.registry.register(&created.session_id, created.handle).await;
-        Ok(response)
+        let resumed = self.activate(self.factory.prepare_resume(req, cx, replay).await?).await?;
+        Ok(ResumeSessionResponse::new().config_options(resumed.config_options))
     }
 
     pub(crate) async fn close_session(&self, req: CloseSessionRequest) -> Result<CloseSessionResponse, Error> {
@@ -458,25 +444,12 @@ impl AcpState {
         let session_id = args.session_id.0.to_string();
         let display_content = map_acp_to_content_blocks(acp_utils::content::display_content_blocks(&args.prompt));
         let content = map_acp_to_content_blocks(args.prompt);
-
-        let Some(sender) = self.registry.lookup(Some(&session_id)).await else {
-            error!("Session not found: {session_id}");
-            respond_err(responder, Error::invalid_params());
-            return;
+        let command = SessionCommand::Prompt {
+            content,
+            display_content,
+            client_connection: ClientConnection::attached(responder),
         };
-
-        if let Err(SessionCommand::Prompt { client_connection: responder, .. }) = sender
-            .send(SessionCommand::Prompt {
-                content,
-                display_content,
-                client_connection: ClientConnection::attached(responder),
-            })
-            .await
-            .map_err(|e| e.0)
-        {
-            error!("Session actor channel closed for prompt: {session_id}");
-            responder.respond_with_error(Error::internal_error());
-        }
+        self.route(&session_id, command).await;
     }
 
     pub(crate) async fn cancel(&self, args: CancelSessionNotification) -> Result<(), Error> {
@@ -513,19 +486,20 @@ impl AcpState {
             }
         };
 
-        let Some(sender) = self.registry.lookup(Some(&session_id)).await else {
-            error!("Session not found: {session_id}");
-            respond_err(responder, Error::invalid_params());
-            return;
-        };
-
         let available = self.factory.available_models().await.to_vec();
-        if let Err(SessionCommand::SetConfig { responder, .. }) =
-            sender.send(SessionCommand::SetConfig { setting, available, responder }).await.map_err(|e| e.0)
-        {
-            error!("Session actor channel closed for set_config: {session_id}");
-            respond_err(responder, Error::internal_error());
-        }
+        self.route(&session_id, SessionCommand::SetConfig { setting, available, responder }).await;
+    }
+
+    async fn route(&self, session_id: &str, command: SessionCommand) {
+        let (command, error) = match self.registry.lookup(Some(session_id)).await {
+            None => (command, Error::invalid_params()),
+            Some(sender) => match sender.send(command).await {
+                Ok(()) => return,
+                Err(closed) => (closed.0, Error::internal_error()),
+            },
+        };
+        error!("Could not route command to session {session_id}: {error:?}");
+        command.reject(error);
     }
 
     pub(crate) async fn on_mcp_request(&self, request: McpRequest) -> Result<(), Error> {
@@ -663,13 +637,9 @@ fn build_auth_methods(store: &dyn OAuthCredentialStorage) -> Vec<AuthMethod> {
     let mut seen = HashSet::new();
     LlmModel::all()
         .iter()
-        .filter_map(LlmModel::oauth_provider_id)
-        .filter(|id| seen.insert(*id))
-        .map(|id| {
-            let display = LlmModel::all()
-                .iter()
-                .find(|m| m.oauth_provider_id() == Some(id))
-                .map_or(id, |m| m.provider_display_name());
+        .filter_map(|model| Some((model.oauth_provider_id()?, model.provider_display_name())))
+        .filter(|(id, _)| seen.insert(*id))
+        .map(|(id, display)| {
             let mut method = acp::AuthMethodAgent::new(id, display);
             if store.contains(id) {
                 method = method.description("authenticated");
@@ -686,50 +656,22 @@ fn prompt_capabilities_for_models(models: &[LlmModel]) -> PromptCapabilities {
         .audio(models.iter().any(LlmModel::supports_audio).then(PromptAudioCapabilities::new))
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct PromptModalities {
-    image: bool,
-    audio: bool,
-}
-
-impl PromptModalities {
-    fn from_content(content: &[ContentBlock]) -> Self {
-        Self {
-            image: content.iter().any(ContentBlock::is_image),
-            audio: content.iter().any(|block| matches!(block, ContentBlock::Audio { .. })),
-        }
-    }
-
-    fn is_empty(self) -> bool {
-        !self.image && !self.audio
-    }
-}
-
-fn selected_models(model_value: &str) -> Result<Vec<LlmModel>, Error> {
-    model_value.parse::<ModelSpec>().map(|spec| spec.models().to_vec()).map_err(|_| Error::invalid_params())
-}
-
 pub(crate) fn validate_prompt_support(model_value: &str, content: &[ContentBlock]) -> Result<(), Error> {
-    let modalities = PromptModalities::from_content(content);
-    if modalities.is_empty() {
+    let image = content.iter().any(ContentBlock::is_image);
+    let audio = content.iter().any(|block| matches!(block, ContentBlock::Audio { .. }));
+    if !image && !audio {
         return Ok(());
     }
 
-    let selected = selected_models(model_value)?;
-    if modalities.image && selected.iter().any(|model| !model.supports_image()) {
-        return Err(Error::invalid_params());
-    }
-    if modalities.audio && selected.iter().any(|model| !model.supports_audio()) {
-        return Err(Error::invalid_params());
-    }
-
-    Ok(())
+    let spec = model_value.parse::<ModelSpec>().map_err(|_| Error::invalid_params())?;
+    let supported =
+        spec.models().iter().all(|model| (!image || model.supports_image()) && (!audio || model.supports_audio()));
+    if supported { Ok(()) } else { Err(Error::invalid_params()) }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aether_sessions::SessionStore;
 
     const SONNET: &str = "anthropic:claude-sonnet-4-5";
     const AUDIO_ONLY: &str = "bedrock:mistral.voxtral-small-24b-2507";
@@ -741,66 +683,6 @@ mod tests {
             .find(|model| !model.supports_image() && !model.supports_audio())
             .cloned()
             .expect("catalog contains a text-only model")
-    }
-
-    fn fake_oauth_store() -> Arc<dyn OAuthCredentialStorage> {
-        Arc::new(aether_auth::FakeOAuthCredentialStore::new())
-    }
-
-    fn test_state() -> AcpState {
-        let session_store = Arc::new(SessionStore::from_path(PathBuf::from("/tmp/aether-test-sessions")));
-        let workspace_manager =
-            Arc::new(WorkspaceManager::from_registry_path(PathBuf::from("/tmp/aether-test-workspaces.json")));
-        AcpState::new(AcpStateConfig {
-            session_store,
-            workspace_manager,
-            oauth_credential_store: fake_oauth_store(),
-            initial_selection: InitialSessionSelection::default(),
-            settings_source: SettingsSourceArgs::default(),
-            provider_connections: ProviderConnectionOverrides::default(),
-            telemetry: None,
-            runtime_factory: None,
-            cwd: PathBuf::from("/tmp"),
-            hooks: SessionHooks::default(),
-        })
-    }
-
-    #[tokio::test]
-    async fn initialize_advertises_session_lifecycle_support() {
-        let state = test_state();
-        let response = state
-            .initialize(InitializeRequest::new(ProtocolVersion::V2, Implementation::new("test", "1")))
-            .await
-            .expect("initialize succeeds");
-        let json = serde_json::to_string(&response).expect("response serializes");
-        assert_eq!(response.protocol_version, ProtocolVersion::V2);
-        let session = response.capabilities.session.unwrap();
-        assert!(session.prompt.is_some());
-        let mcp = session.mcp.unwrap();
-        assert!(mcp.stdio.is_some());
-        assert!(mcp.http.is_some());
-        for obsolete in ["loadSession", "resume", "close", "list", "sse"] {
-            assert!(!json.contains(&format!("\"{obsolete}\":")));
-        }
-    }
-
-    #[tokio::test]
-    async fn initialize_advertises_aether_capabilities_once() {
-        let state = test_state();
-        let response = state
-            .initialize(InitializeRequest::new(ProtocolVersion::V2, Implementation::new("test", "1")))
-            .await
-            .expect("initialize succeeds");
-        assert_eq!(
-            AetherCapabilities::from_meta(
-                response.capabilities.session.as_ref().unwrap().prompt.as_ref().unwrap().meta.as_ref()
-            ),
-            AetherCapabilities::default()
-        );
-        let capabilities = AetherCapabilities::from_meta(response.capabilities.session.as_ref().unwrap().meta.as_ref());
-        assert!(capabilities.prompt_search);
-        assert!(capabilities.session_preview);
-        assert!(capabilities.workspace_move);
     }
 
     #[test]

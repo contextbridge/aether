@@ -11,7 +11,7 @@ pub use session::hooks::{IdleHook, SessionHooks};
 use crate::acp::state::{AcpState, AcpStateConfig};
 use crate::credentials::oauth_credential_store_from_config;
 use crate::provider_connection_args::ProviderConnectionArgs;
-use crate::resolve::InitialSessionSelection;
+use crate::resolve::{InitialSessionSelection, SelectionConflict};
 use crate::settings_args::{ConflictingSettingsSources, SettingsSourceArgs};
 use crate::telemetry::build_telemetry_runtime;
 use crate::workspace::WorkspaceManager;
@@ -117,10 +117,8 @@ pub enum AcpOptionsJsonError {
     Parse(#[from] serde_json::Error),
     #[error(transparent)]
     ConflictingSettingsSources(#[from] ConflictingSettingsSources),
-    #[error("agent and model cannot both be supplied")]
-    ConflictingAgentSelection,
-    #[error("reasoningEffort requires model")]
-    ReasoningEffortWithoutModel,
+    #[error(transparent)]
+    Selection(#[from] SelectionConflict),
     #[error("invalid reasoningEffort: {0}")]
     UnsupportedReasoningEffort(#[from] ReasoningEffortError),
 }
@@ -138,9 +136,7 @@ pub async fn run_acp(args: AcpArgs) -> Result<(), AcpRunError> {
 #[derive(Debug)]
 struct AcpRunConfig {
     log_dir: PathBuf,
-    agent: Option<String>,
-    model: Option<String>,
-    reasoning_effort: Option<ReasoningEffort>,
+    initial_selection: InitialSessionSelection,
     trace_context: Option<AgentTraceContext>,
     provider_connections: ProviderConnectionOverrides,
     settings_source: SettingsSourceArgs,
@@ -152,61 +148,42 @@ impl AcpRunConfig {
             return Self::from_options(serde_json::from_str(&json)?);
         }
 
-        let config = Self {
+        Self {
             log_dir: args.log_dir.unwrap_or_else(default_log_dir),
-            agent: args.agent,
-            model: args.model,
-            reasoning_effort: args.reasoning_effort,
+            initial_selection: InitialSessionSelection::from_flags(args.agent, args.model, args.reasoning_effort)?,
             trace_context: None,
             provider_connections: args.provider_connection.into_overrides(),
             settings_source: args.settings_source,
-        };
-        config.validate_reasoning_effort()?;
-        Ok(config)
+        }
+        .validated()
     }
 
     fn from_options(options: AcpOptions) -> Result<Self, AcpOptionsJsonError> {
-        if options.agent.is_some() && options.model.is_some() {
-            return Err(AcpOptionsJsonError::ConflictingAgentSelection);
-        }
-        if options.reasoning_effort.is_some() && options.model.is_none() {
-            return Err(AcpOptionsJsonError::ReasoningEffortWithoutModel);
-        }
-
-        let settings_source = SettingsSourceArgs::from_json_options(options.settings, options.settings_file)?;
-
-        let config = Self {
+        Self {
             log_dir: options.log_dir.unwrap_or_else(default_log_dir),
-            agent: options.agent,
-            model: options.model,
-            reasoning_effort: options.reasoning_effort,
+            initial_selection: InitialSessionSelection::from_flags(
+                options.agent,
+                options.model,
+                options.reasoning_effort,
+            )?,
             trace_context: options.trace_context,
             provider_connections: ProviderConnectionOverrides::new(options.providers.unwrap_or_default()),
-            settings_source,
-        };
-        config.validate_reasoning_effort()?;
-        Ok(config)
+            settings_source: SettingsSourceArgs::from_json_options(options.settings, options.settings_file)?,
+        }
+        .validated()
     }
 
-    fn validate_reasoning_effort(&self) -> Result<(), AcpOptionsJsonError> {
-        if let Some(model) = self.model.as_deref() {
-            validate_reasoning_effort(model, self.reasoning_effort)?;
+    fn validated(self) -> Result<Self, AcpOptionsJsonError> {
+        if let InitialSessionSelection::Model { model, reasoning_effort } = &self.initial_selection {
+            validate_reasoning_effort(model, *reasoning_effort)?;
         }
-        Ok(())
+        Ok(self)
     }
 }
 
 fn create_acp_state(args: AcpArgs, cwd: &Path, hooks: SessionHooks) -> Result<AcpState, AcpRunError> {
     let config = AcpRunConfig::from_args(args)?;
     wisp::init_file_logging(&config.log_dir, "aether-acp.log", "warn");
-
-    let initial_selection = if let Some(agent) = config.agent.clone() {
-        InitialSessionSelection::agent(agent)
-    } else if let Some(model) = config.model.clone() {
-        InitialSessionSelection::model(model, config.reasoning_effort)
-    } else {
-        InitialSessionSelection::default()
-    };
 
     let settings = config.settings_source.load_settings(cwd)?;
     let telemetry = match build_telemetry_runtime(settings.telemetry.as_ref(), config.trace_context) {
@@ -222,7 +199,7 @@ fn create_acp_state(args: AcpArgs, cwd: &Path, hooks: SessionHooks) -> Result<Ac
         session_store: Arc::new(SessionStore::new().map_err(AcpRunError::SessionStore)?),
         workspace_manager: Arc::new(WorkspaceManager::new().map_err(AcpRunError::WorkspaceManager)?),
         oauth_credential_store: oauth_credential_store_from_config(settings.credentials_store)?,
-        initial_selection,
+        initial_selection: config.initial_selection,
         settings_source: config.settings_source,
         provider_connections: config.provider_connections,
         telemetry,
@@ -248,45 +225,24 @@ mod tests {
     }
 
     #[test]
-    fn agent_conflicts_with_model() {
-        let err = TestCli::try_parse_from(["test", "--agent", "planner", "--model", "anthropic:claude-sonnet-4-5"])
-            .expect_err("agent and model should conflict");
-        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
-    }
+    fn selection_flags_conflict_or_require_each_other() {
+        use clap::error::ErrorKind::{ArgumentConflict, MissingRequiredArgument};
+        let options_json = r#"{"model":"anthropic:claude-sonnet-4-5"}"#;
+        let cases = [
+            (vec!["--agent", "planner", "--model", "anthropic:claude-sonnet-4-5"], ArgumentConflict),
+            (vec!["--agent", "planner", "--reasoning-effort", "high"], ArgumentConflict),
+            (vec!["--reasoning-effort", "high"], MissingRequiredArgument),
+            (vec!["--options-json", options_json, "--model", "anthropic:claude-sonnet-4-5"], ArgumentConflict),
+        ];
+        for (args, expected) in cases {
+            let err = TestCli::try_parse_from(std::iter::once("test").chain(args.clone())).unwrap_err();
+            assert_eq!(err.kind(), expected, "{args:?}");
+        }
 
-    #[test]
-    fn agent_conflicts_with_reasoning_effort() {
-        let err = TestCli::try_parse_from(["test", "--agent", "planner", "--reasoning-effort", "high"])
-            .expect_err("agent and reasoning effort should conflict");
-        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
-    }
-
-    #[test]
-    fn reasoning_effort_requires_model() {
-        let err = TestCli::try_parse_from(["test", "--reasoning-effort", "high"])
-            .expect_err("reasoning effort should require model");
-        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
-    }
-
-    #[test]
-    fn reasoning_effort_with_model_is_allowed() {
         let cli =
             TestCli::try_parse_from(["test", "--model", "anthropic:claude-sonnet-4-5", "--reasoning-effort", "high"])
                 .expect("reasoning effort can configure an explicit model session");
         assert_eq!(cli.args.reasoning_effort, Some(ReasoningEffort::High));
-    }
-
-    #[test]
-    fn options_json_conflicts_with_individual_flags() {
-        let err = TestCli::try_parse_from([
-            "test",
-            "--options-json",
-            r#"{"model":"anthropic:claude-sonnet-4-5"}"#,
-            "--model",
-            "anthropic:claude-sonnet-4-5",
-        ])
-        .expect_err("options JSON should conflict with individual ACP flags");
-        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]
@@ -301,8 +257,13 @@ mod tests {
         let config = AcpRunConfig::from_args(cli.args).unwrap();
 
         assert_eq!(config.log_dir, PathBuf::from("/tmp/custom-aether-logs"));
-        assert_eq!(config.model.as_deref(), Some("anthropic:claude-sonnet-4-5"));
-        assert_eq!(config.reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(
+            config.initial_selection,
+            InitialSessionSelection::Model {
+                model: "anthropic:claude-sonnet-4-5".to_string(),
+                reasoning_effort: Some(ReasoningEffort::High),
+            }
+        );
         assert!(config.trace_context.is_none());
         assert!(config.settings_source.settings_json.as_deref().unwrap().contains(r#""agents":[]"#));
         let bedrock = config.provider_connections.config_for("bedrock");
@@ -330,6 +291,6 @@ mod tests {
         })
         .unwrap_err();
 
-        assert!(matches!(err, AcpOptionsJsonError::ReasoningEffortWithoutModel));
+        assert!(matches!(err, AcpOptionsJsonError::Selection(SelectionConflict::ReasoningEffortWithoutModel)));
     }
 }

@@ -215,123 +215,59 @@ mod tests {
     use aether_core::events::StreamState;
 
     #[test]
-    fn format_text_formats_complete_text() {
-        assert_eq!(
-            format_text(&AgentEvent::text("id", "hello world", StreamState::Complete)),
-            Some("hello world".to_string())
-        );
-    }
-
-    #[test]
-    fn format_text_skips_incomplete_text() {
-        assert_eq!(format_text(&AgentEvent::text("id", "partial", StreamState::Partial)), None);
-    }
-
-    #[test]
-    fn format_text_formats_complete_thought() {
-        assert_eq!(
-            format_text(&AgentEvent::thought("id", "reasoning here", StreamState::Complete)),
-            Some("Thought: reasoning here".to_string())
-        );
-    }
-
-    #[test]
-    fn format_text_skips_incomplete_thought() {
-        assert_eq!(format_text(&AgentEvent::thought("id", "partial", StreamState::Partial)), None);
-    }
-
-    #[test]
-    fn format_text_formats_tool_call() {
-        let message = AgentEvent::tool_call("tc1", "bash", r#"{"cmd":"ls"}"#);
-        assert_eq!(format_text(&message), Some(r#"Tool call: bash({"cmd":"ls"})"#.to_string()));
-    }
-
-    #[test]
-    fn format_text_skips_streamed_tool_input() {
-        let started = AgentEvent::Tool(ToolEvent::InputStarted { id: "tc1".to_string(), name: "bash".to_string() });
-        let delta = AgentEvent::Tool(ToolEvent::InputDelta { id: "tc1".to_string(), chunk: "partial".to_string() });
-        assert_eq!(format_text(&started), None);
-        assert_eq!(format_text(&delta), None);
-    }
-
-    #[test]
-    fn format_text_formats_tool_result() {
-        assert_eq!(
-            format_text(&AgentEvent::tool_result("tc1", "bash", "{}", "ok")),
-            Some("Tool result [bash]: ok".to_string())
-        );
-    }
-
-    #[test]
-    fn format_text_formats_tool_error() {
-        let message = AgentEvent::tool_error("tc1", "bash", "{}", "not found");
-        assert_eq!(format_text(&message), Some("Tool error [bash]: not found".to_string()));
-    }
-
-    #[test]
-    fn format_text_formats_turn_outcomes() {
-        assert_eq!(
-            format_text(&AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::failed("boom") })),
-            Some("Error: boom".to_string())
-        );
-        assert_eq!(format_text(&AgentEvent::turn_ended(TurnOutcome::Cancelled)), Some("Cancelled".to_string()));
-        assert_eq!(format_text(&AgentEvent::turn_ended(TurnOutcome::Completed)), Some("Done".to_string()));
-    }
-
-    #[test]
-    fn format_text_formats_retry_events() {
-        assert_eq!(format_text(&llm_call_started(0)), None);
-        assert_eq!(format_text(&retry_scheduled(1, 10)), Some("Retrying (1/3) in 10ms".to_string()));
-        let retrying = AgentEvent::Turn(TurnEvent::LlmCallEnded {
-            purpose: llm::LlmCallPurpose::Chat,
-            outcome: LlmCallOutcome::failed("overloaded", true),
-        });
-        assert_eq!(format_text(&retrying), Some("LLM call failed (will retry): overloaded".to_string()));
-        let terminal = AgentEvent::Turn(TurnEvent::LlmCallEnded {
-            purpose: llm::LlmCallPurpose::Chat,
-            outcome: LlmCallOutcome::failed("boom", false),
-        });
-        assert_eq!(format_text(&terminal), None);
-    }
-
-    #[test]
-    fn format_text_formats_auto_continue_and_model_switch() {
-        let continuing = AgentEvent::Turn(TurnEvent::AutoContinue {
+    fn format_text_renders_or_skips_each_event() {
+        let llm_call_failed = |error, will_retry| {
+            AgentEvent::Turn(TurnEvent::LlmCallEnded {
+                purpose: llm::LlmCallPurpose::Chat,
+                outcome: LlmCallOutcome::failed(error, will_retry),
+            })
+        };
+        let auto_continue = AgentEvent::Turn(TurnEvent::AutoContinue {
             attempt: 2,
             max_attempts: 5,
             message_id: llm::MessageId::new(),
             content: vec![],
         });
-        assert_eq!(format_text(&continuing), Some("Continuing (2/5)...".to_string()));
         let switched =
-            AgentEvent::Model(ModelEvent::Switched { previous: "old-model".to_string(), new: "new-model".to_string() });
-        assert_eq!(format_text(&switched), Some("Model switched: old-model -> new-model".to_string()));
-    }
-
-    #[test]
-    fn format_text_formats_tool_progress() {
-        assert_eq!(
-            format_text(&tool_progress(50.0, Some(100.0), Some("halfway"))),
-            Some("Tool progress [bash]: 50/100 - halfway".to_string())
-        );
-        assert_eq!(format_text(&tool_progress(42.0, None, None)), Some("Tool progress [bash]: 42".to_string()));
-    }
-
-    #[test]
-    fn format_text_formats_context_events() {
-        let started = AgentEvent::Context(ContextEvent::CompactionStarted {
+            AgentEvent::Model(ModelEvent::Switched { previous: "old-model".into(), new: "new-model".into() });
+        let compaction_started = AgentEvent::Context(ContextEvent::CompactionStarted {
             compaction_id: "compaction".into(),
             message_count: 42,
         });
-        assert_eq!(format_text(&started), Some("Context compaction started (42 messages)".to_string()));
-        let result = AgentEvent::Context(ContextEvent::CompactionResult {
+        let compacted = AgentEvent::Context(ContextEvent::CompactionResult {
             compaction_id: "compaction".into(),
             message_id: llm::MessageId::new(),
-            summary: "summary here".to_string(),
+            summary: "summary here".into(),
             messages_removed: 10,
         });
-        assert_eq!(format_text(&result), Some("Context compacted: 10 messages removed. summary here".to_string()));
-        assert_eq!(format_text(&usage_update()), Some("Context: 100000 / 200000 tokens (50.0%)".to_string()));
-        assert_eq!(format_text(&AgentEvent::Context(ContextEvent::Cleared)), Some("Context cleared".to_string()));
+        let cases = [
+            (AgentEvent::text("id", "hello world", StreamState::Complete), Some("hello world")),
+            (AgentEvent::text("id", "partial", StreamState::Partial), None),
+            (AgentEvent::thought("id", "reasoning here", StreamState::Complete), Some("Thought: reasoning here")),
+            (AgentEvent::thought("id", "partial", StreamState::Partial), None),
+            (AgentEvent::tool_call("tc1", "bash", r#"{"cmd":"ls"}"#), Some(r#"Tool call: bash({"cmd":"ls"})"#)),
+            (AgentEvent::Tool(ToolEvent::InputStarted { id: "tc1".into(), name: "bash".into() }), None),
+            (AgentEvent::Tool(ToolEvent::InputDelta { id: "tc1".into(), chunk: "partial".into() }), None),
+            (AgentEvent::tool_result("tc1", "bash", "{}", "ok"), Some("Tool result [bash]: ok")),
+            (AgentEvent::tool_error("tc1", "bash", "{}", "not found"), Some("Tool error [bash]: not found")),
+            (tool_progress(50.0, Some(100.0), Some("halfway")), Some("Tool progress [bash]: 50/100 - halfway")),
+            (tool_progress(42.0, None, None), Some("Tool progress [bash]: 42")),
+            (AgentEvent::turn_ended(TurnOutcome::failed("boom")), Some("Error: boom")),
+            (AgentEvent::turn_ended(TurnOutcome::Cancelled), Some("Cancelled")),
+            (AgentEvent::turn_ended(TurnOutcome::Completed), Some("Done")),
+            (llm_call_started(0), None),
+            (retry_scheduled(1, 10), Some("Retrying (1/3) in 10ms")),
+            (llm_call_failed("overloaded", true), Some("LLM call failed (will retry): overloaded")),
+            (llm_call_failed("boom", false), None),
+            (auto_continue, Some("Continuing (2/5)...")),
+            (switched, Some("Model switched: old-model -> new-model")),
+            (compaction_started, Some("Context compaction started (42 messages)")),
+            (compacted, Some("Context compacted: 10 messages removed. summary here")),
+            (usage_update(), Some("Context: 100000 / 200000 tokens (50.0%)")),
+            (AgentEvent::Context(ContextEvent::Cleared), Some("Context cleared")),
+        ];
+        for (event, expected) in cases {
+            assert_eq!(format_text(&event).as_deref(), expected, "{event:?}");
+        }
     }
 }

@@ -45,14 +45,14 @@ impl Session {
         };
         let response = if let Some(id) = selected {
             let resumed = client.handle
-                .resume_session(
+                .request(
                     ResumeSessionRequest::new(id.clone(), working_dir.clone())
                         .replay_from(ReplayFrom::Start(ReplayFromStart::new())),
                 )
                 .await?;
             NewSessionResponse::new(id).config_options(resumed.config_options)
         } else {
-            client.handle.new_session(NewSessionRequest::new(working_dir.clone())).await?
+            client.handle.request(NewSessionRequest::new(working_dir.clone())).await?
         };
         let workspace_status = initial_workspace_status(&working_dir);
         Ok(Self { client, response, working_dir, workspace_status, workspace_access: WorkspaceAccess::Remote })
@@ -67,7 +67,7 @@ impl Session {
     pub async fn connect_to(agent: impl ConnectTo<Client> + 'static, working_dir: PathBuf) -> Result<Self, AppError> {
         let workspace_status = initial_workspace_status(&working_dir);
         let client = connect_acp_client(agent, initialize_request(client_info())).await?;
-        let session_response = client.handle.new_session(NewSessionRequest::new(working_dir.clone())).await?;
+        let session_response = client.handle.request(NewSessionRequest::new(working_dir.clone())).await?;
 
         Ok(Self {
             client,

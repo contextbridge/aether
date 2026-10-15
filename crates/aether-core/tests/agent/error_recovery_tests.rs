@@ -51,7 +51,7 @@ async fn test_api_error_mid_stream_does_not_add_empty_assistant_message() -> Tes
     );
 
     // Only one LLM call should have been made (the errored one)
-    let contexts = result.captured_contexts.lock().unwrap();
+    let contexts = result.contexts();
     assert_eq!(contexts.len(), 1, "Expected exactly one LLM call (the errored one)");
 
     // That context should only contain the user message — no empty assistant message
@@ -186,10 +186,6 @@ impl StreamingModelProvider for PanickingLlm {
 
     fn display_name(&self) -> String {
         "panicking".to_string()
-    }
-
-    fn context_window(&self) -> Option<u32> {
-        None
     }
 }
 

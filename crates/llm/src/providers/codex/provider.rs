@@ -1,5 +1,5 @@
 use super::oauth::CodexTokenManager;
-use crate::provider::{LlmResponseStream, StreamingModelProvider, get_context_window};
+use crate::provider::{LlmResponseStream, StreamingModelProvider};
 use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
 use crate::providers::http::{SseData, http_client};
 use crate::providers::openai_responses::mappers::{ResponsesRequestPolicy, build_wire_request};
@@ -74,10 +74,6 @@ impl CodexProvider {
     }
 
     /// Send the request and return a stream of SSE lines parsed into typed events.
-    ///
-    /// Uses manual SSE parsing because the Codex API does not return a
-    /// `Content-Type: text/event-stream` header, which `reqwest_eventsource`
-    /// (used by `async-openai`'s `create_stream`) requires.
     async fn send_request(&self, request: serde_json::Value, headers: HeaderMap) -> Result<OpenedStream<SseData>> {
         let url = format!("{}/responses", self.base_url);
 
@@ -101,10 +97,6 @@ impl StreamingModelProvider for CodexProvider {
         format!("{}:{}", super::PROVIDER_ID, self.model).parse().ok()
     }
 
-    fn context_window(&self) -> Option<u32> {
-        get_context_window(super::PROVIDER_ID, &self.model)
-    }
-
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
         let provider = self.clone();
         let context = context.clone();
@@ -118,10 +110,6 @@ impl StreamingModelProvider for CodexProvider {
             decode_responses(),
             self.idle_timeout,
         )
-    }
-
-    fn display_name(&self) -> String {
-        format!("Codex ({})", self.model)
     }
 }
 

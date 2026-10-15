@@ -17,9 +17,7 @@ pub struct BrowserOAuthHandler {
 impl BrowserOAuthHandler {
     /// Create a handler bound to a specific port with a custom redirect URI.
     pub fn with_redirect_uri(redirect_uri: impl Into<String>, port: u16) -> Result<Self, std::io::Error> {
-        let std_listener = std::net::TcpListener::bind(format!("127.0.0.1:{port}"))?;
-        std_listener.set_nonblocking(true)?;
-        let listener = TcpListener::from_std(std_listener)?;
+        let (listener, _) = bind_loopback(port)?;
         Ok(Self { listener, redirect_uri: redirect_uri.into() })
     }
 }
@@ -38,6 +36,13 @@ impl OAuthHandler for BrowserOAuthHandler {
             accept_oauth_callback(&self.listener).await
         })
     }
+}
+
+pub fn bind_loopback(port: u16) -> std::io::Result<(TcpListener, u16)> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", port))?;
+    listener.set_nonblocking(true)?;
+    let port = listener.local_addr()?.port();
+    Ok((TcpListener::from_std(listener)?, port))
 }
 
 /// Accept an OAuth callback and return its absolute URL.

@@ -1,23 +1,22 @@
 use async_openai::types::chat::{
     ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls, ChatCompletionStreamOptions, ChatCompletionTools,
-    FunctionCall, Role,
+    FunctionCall,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{ChatMessage, ContentBlock, TokenUsage};
+use crate::{ChatMessage, ContentBlock, TokenUsage, tool_result_parts};
 
 /// Unified custom types for OpenAI-compatible APIs that deviate slightly from the standard.
 /// This handles quirks from providers like `OpenRouter`, Z.ai, and potentially others.
 ///
 /// Common deviations handled:
-/// - Missing 'object' field (z.ai)
 /// - Negative token counts (openrouter)
 /// - Additional finish reasons like 'error' (openrouter)
-/// - Optional `system_fingerprint` and usage fields
+/// - Optional usage fields
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum FinishReason {
+pub(crate) enum FinishReason {
     Stop,
     Length,
     ToolCalls,
@@ -28,22 +27,10 @@ pub enum FinishReason {
     ModelContextWindowExceeded,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatCompletionStreamResponse {
-    pub id: String,
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ChatCompletionStreamResponse {
     pub choices: Vec<ChatCompletionStreamChoice>,
-    pub created: u64,
-    pub model: String,
-    #[serde(default)]
-    pub system_fingerprint: Option<String>,
-    #[serde(default = "default_object")]
-    pub object: String,
-    #[serde(default)]
     pub usage: Option<Usage>,
-}
-
-fn default_object() -> String {
-    "chat.completion.chunk".to_string()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -108,9 +95,14 @@ pub(crate) struct CompatibleChatRequest {
     /// OpenAI-style prompt-cache affinity. Only set for providers that document support.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-pub(crate) fn map_messages(messages: &[ChatMessage]) -> crate::Result<Vec<CompatibleChatMessage>> {
+pub(crate) fn map_messages(
+    messages: &[ChatMessage],
+    tool_call_reasoning_placeholder: bool,
+) -> crate::Result<Vec<CompatibleChatMessage>> {
     let mut result = Vec::new();
 
     for message in messages {
@@ -135,7 +127,7 @@ pub(crate) fn map_messages(messages: &[ChatMessage]) -> crate::Result<Vec<Compat
 
                 let reasoning_content = if reasoning.summary_text.is_some() {
                     reasoning.summary_text.clone()
-                } else if has_tool_calls {
+                } else if has_tool_calls && tool_call_reasoning_placeholder {
                     Some(".".to_string())
                 } else {
                     None
@@ -143,18 +135,16 @@ pub(crate) fn map_messages(messages: &[ChatMessage]) -> crate::Result<Vec<Compat
 
                 Some(CompatibleChatMessage::Assistant { content: content.clone(), reasoning_content, tool_calls })
             }
-            ChatMessage::ToolCallResult(r) => {
-                let (content, tool_call_id) = match r {
-                    Ok(tool_result) => (tool_result.result.clone(), tool_result.id.clone()),
-                    Err(tool_error) => (tool_error.error.clone(), tool_error.id.clone()),
-                };
-
-                Some(CompatibleChatMessage::Tool { content, tool_call_id })
+            ChatMessage::ToolCallResult(result) => {
+                let (tool_call_id, content, _) = tool_result_parts(result);
+                Some(CompatibleChatMessage::Tool {
+                    content: content.to_string(),
+                    tool_call_id: tool_call_id.to_string(),
+                })
             }
-            ChatMessage::Summary { content, .. } => Some(CompatibleChatMessage::User {
-                content: UserContent::Text(format!("[Previous conversation handoff]\n\n{content}")),
-            }),
-            ChatMessage::Error { .. } => None,
+            ChatMessage::Summary { .. } | ChatMessage::Error { .. } => {
+                message.as_user_note().map(|note| CompatibleChatMessage::User { content: UserContent::Text(note) })
+            }
         };
 
         if let Some(msg) = mapped {
@@ -188,75 +178,63 @@ fn map_user_content(parts: &[ContentBlock]) -> crate::Result<UserContent> {
     Ok(UserContent::Parts(items))
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatCompletionStreamChoice {
-    pub index: i32,
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ChatCompletionStreamChoice {
     pub delta: ChatCompletionStreamResponseDelta,
     pub finish_reason: Option<FinishReason>,
-    #[serde(default)]
-    pub logprobs: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ChatCompletionStreamResponseDelta {
-    pub role: Option<Role>,
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct ChatCompletionStreamResponseDelta {
     pub content: Option<String>,
-    #[serde(default)]
     pub reasoning_content: Option<String>,
     pub tool_calls: Option<Vec<ToolCallDelta>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallDelta {
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ToolCallDelta {
     pub index: i32,
     pub id: Option<String>,
-    #[serde(rename = "type")]
-    pub tool_type: Option<String>,
     pub function: Option<FunctionCallDelta>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct FunctionCallDelta {
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct FunctionCallDelta {
     pub name: Option<String>,
     pub arguments: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct PromptTokensDetails {
-    #[serde(default)]
+#[derive(Debug, Clone, Default, Deserialize)]
+#[allow(clippy::struct_field_names)]
+pub(crate) struct PromptTokensDetails {
     pub cached_tokens: Option<u32>,
     /// `OpenRouter`-specific: tokens written to cache (cache creation).
     /// Only returned for models with explicit caching and cache write pricing.
-    #[serde(default)]
     pub cache_write_tokens: Option<u32>,
     /// `OpenAI` + `OpenRouter`: input audio tokens.
-    #[serde(default)]
     pub audio_tokens: Option<u32>,
     /// `OpenRouter`-specific: input video tokens.
-    #[serde(default)]
     pub video_tokens: Option<u32>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct CompletionTokensDetails {
-    #[serde(default)]
+#[derive(Debug, Clone, Default, Deserialize)]
+#[allow(clippy::struct_field_names)]
+pub(crate) struct CompletionTokensDetails {
     pub reasoning_tokens: Option<u32>,
-    #[serde(default)]
     pub audio_tokens: Option<u32>,
-    #[serde(default)]
     pub accepted_prediction_tokens: Option<u32>,
-    #[serde(default)]
     pub rejected_prediction_tokens: Option<u32>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Usage {
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct Usage {
+    #[serde(alias = "input_tokens")]
     pub prompt_tokens: i64,
+    #[serde(alias = "output_tokens")]
     pub completion_tokens: i64,
-    pub total_tokens: i64,
-    #[serde(default)]
+    #[serde(alias = "input_tokens_details")]
     pub prompt_tokens_details: Option<PromptTokensDetails>,
-    #[serde(default)]
+    #[serde(alias = "output_tokens_details")]
     pub completion_tokens_details: Option<CompletionTokensDetails>,
 }
 
@@ -282,7 +260,7 @@ impl From<Usage> for TokenUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::openai_compatible::build_chat_request;
+    use crate::providers::openai_compatible::{ChatRequestPolicy, build_chat_request};
     use crate::types::IsoString;
     use crate::{AssistantReasoning, Context, MessageId, ModelSettings, ToolCallRequest, ToolDefinition};
 
@@ -313,11 +291,40 @@ mod tests {
     #[test]
     fn test_build_request_includes_reasoning_content_on_assistant_tool_message() {
         let context = context_with_assistant_message(assistant_with_tool_call(Some("trace chunk")));
-        let request = build_chat_request("test-model", &context, None).unwrap();
+        let request = build_chat_request("test-model", &context, &ChatRequestPolicy::DEFAULT).unwrap();
 
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["messages"][1]["role"], "assistant");
         assert_eq!(json["messages"][1]["reasoning_content"], "trace chunk");
+    }
+
+    #[test]
+    fn test_build_request_sends_errors_and_summaries_as_user_notes() {
+        let context = Context::new(
+            vec![
+                ChatMessage::Error {
+                    message_id: MessageId::new(),
+                    message: "boom".to_string(),
+                    timestamp: IsoString::now(),
+                },
+                ChatMessage::Summary {
+                    message_id: MessageId::new(),
+                    content: "earlier work".to_string(),
+                    timestamp: IsoString::now(),
+                    messages_compacted: 2,
+                },
+            ],
+            vec![],
+        );
+
+        let json =
+            serde_json::to_value(build_chat_request("test-model", &context, &ChatRequestPolicy::DEFAULT).unwrap())
+                .unwrap();
+        assert_eq!(json["messages"][0], serde_json::json!({ "role": "user", "content": "Error: boom" }));
+        assert_eq!(
+            json["messages"][1],
+            serde_json::json!({ "role": "user", "content": "[Previous conversation handoff]\n\nearlier work" })
+        );
     }
 
     #[test]
@@ -326,13 +333,16 @@ mod tests {
 
         let mut context = Context::new(vec![user()], vec![]);
         context.set_model_settings(ModelSettings { temperature: Some(0.0), top_p: Some(0.5), max_tokens: Some(64) });
-        let json = serde_json::to_value(build_chat_request("test-model", &context, None).unwrap()).unwrap();
+        let json =
+            serde_json::to_value(build_chat_request("test-model", &context, &ChatRequestPolicy::DEFAULT).unwrap())
+                .unwrap();
         assert_eq!(json["temperature"], 0.0);
         assert_eq!(json["top_p"], 0.5);
         assert_eq!(json["max_tokens"], 64);
 
         let unset = Context::new(vec![user()], vec![]);
-        let json = serde_json::to_value(build_chat_request("test-model", &unset, None).unwrap()).unwrap();
+        let json = serde_json::to_value(build_chat_request("test-model", &unset, &ChatRequestPolicy::DEFAULT).unwrap())
+            .unwrap();
         assert!(json.get("temperature").is_none());
         assert!(json.get("top_p").is_none());
         assert!(json.get("max_tokens").is_none());
@@ -341,7 +351,7 @@ mod tests {
     #[test]
     fn test_build_request_includes_stream_options_with_usage() {
         let context = crate::Context::new(vec![ChatMessage::user("hello")], vec![]);
-        let request = build_chat_request("test-model", &context, None).unwrap();
+        let request = build_chat_request("test-model", &context, &ChatRequestPolicy::DEFAULT).unwrap();
 
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["stream_options"]["include_usage"], true);
@@ -350,11 +360,15 @@ mod tests {
     #[test]
     fn test_build_request_sends_empty_reasoning_content_on_tool_call_when_none() {
         let context = context_with_assistant_message(assistant_with_tool_call(None));
-        let request = build_chat_request("test-model", &context, None).unwrap();
+        let request = build_chat_request("test-model", &context, &ChatRequestPolicy::DEFAULT).unwrap();
 
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["messages"][1]["role"], "assistant");
         assert_eq!(json["messages"][1]["reasoning_content"], ".");
+
+        let policy = ChatRequestPolicy { tool_call_reasoning_placeholder: false, ..ChatRequestPolicy::DEFAULT };
+        let json = serde_json::to_value(build_chat_request("test-model", &context, &policy).unwrap()).unwrap();
+        assert!(json["messages"][1].get("reasoning_content").is_none());
     }
 
     #[test]

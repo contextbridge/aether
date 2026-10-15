@@ -3,11 +3,12 @@ mod prompt_history;
 use acp_utils::notifications::{PromptSearchResponse, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn};
 use aether_core::events::{AgentEvent, MessageEvent, ToolEvent};
 use serde::Serialize;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use tracing::warn;
+use utils::fs::write_atomic;
 use utils::settings::aether_home;
 
 use crate::error::SessionStoreError;
@@ -83,10 +84,13 @@ pub struct SessionStore {
     prompt_history: PromptHistoryIndex,
 }
 
+pub fn sessions_dir() -> Option<PathBuf> {
+    aether_home().map(|home| home.join("sessions"))
+}
+
 impl SessionStore {
     pub fn new() -> Result<Self, SessionStoreError> {
-        let home = aether_home().ok_or(SessionStoreError::MissingAetherHome)?;
-        Ok(Self::from_path(home.join("sessions")))
+        sessions_dir().map(Self::from_path).ok_or(SessionStoreError::MissingAetherHome)
     }
 
     pub fn from_path(dir: PathBuf) -> Self {
@@ -133,17 +137,13 @@ impl SessionStore {
         let mut meta: SessionMeta = serde_json::from_str(first.trim())
             .map_err(|source| SessionStoreError::InvalidMetadata { line_number: 1, source })?;
         meta.cwd = new_cwd.to_path_buf();
-        let meta_line = serde_json::to_string(&meta)?;
-
-        let tmp_path = path.with_extension("jsonl.tmp");
-        {
-            let mut file = File::create(&tmp_path)?;
-            writeln!(file, "{meta_line}")?;
-            for line in lines {
-                writeln!(file, "{line}")?;
-            }
+        let mut rewritten = serde_json::to_string(&meta)?;
+        rewritten.push('\n');
+        for line in lines {
+            rewritten.push_str(line);
+            rewritten.push('\n');
         }
-        fs::rename(tmp_path, &path)?;
+        write_atomic(&path, rewritten.as_bytes())?;
 
         let _ = self.prompt_history.relocate_session(session_id, new_cwd);
         Ok(())
@@ -183,12 +183,7 @@ impl SessionStore {
     }
 
     fn append_line<T: Serialize>(&self, session_id: &str, value: &T) -> Result<(), SessionStoreError> {
-        fs::create_dir_all(&self.dir)?;
-        let path = self.session_path(session_id);
-        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
-        let line = serde_json::to_string(value)?;
-        writeln!(file, "{line}")?;
-        Ok(())
+        Ok(append_to_jsonl(&self.session_path(session_id), &serde_json::to_string(value)?)?)
     }
 
     fn session_path(&self, session_id: &str) -> PathBuf {
@@ -308,4 +303,11 @@ fn extract_title(content: &[ContentBlock]) -> String {
     let first_line =
         ContentBlock::first_text(content).and_then(|text| text.lines().next()).unwrap_or("Media prompt").trim();
     truncate_for_preview(first_line)
+}
+
+fn append_to_jsonl(path: &Path, line: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    OpenOptions::new().create(true).append(true).open(path)?.write_all(format!("{line}\n").as_bytes())
 }

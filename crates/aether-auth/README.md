@@ -22,7 +22,6 @@ OAuth credential storage and authorization flows for Aether. Provides a pluggabl
 - **`BrowserOAuthHandler`** -- Default `OAuthHandler` that opens the system browser and listens on a local port.
 - **`OsKeyringStore`** -- `OAuthCredentialStorage` backed by the OS keychain (macOS Keychain, Windows Credential Manager, Linux/FreeBSD Secret Service). Available under the `keyring` feature.
 - **`FakeOAuthCredentialStore`** -- In-memory `OAuthCredentialStorage` for tests.
-- **`McpCredentialStore`** -- Per-server adapter that binds an `OAuthCredentialStorage` to one MCP server ID and implements `rmcp::transport::auth::CredentialStore`. Available under the `mcp` feature.
 - **`OAuthError`** -- Error enum returned by every fallible API in this crate.
 
 ## Usage
@@ -35,31 +34,20 @@ use aether_auth::{OAuthCredential, OAuthCredentialStorage, OsKeyringStore};
 # async fn example() -> Result<(), aether_auth::OAuthError> {
 let store = OsKeyringStore::with_platform_store();
 
-store
-    .save_credential(
-        "anthropic",
-        OAuthCredential {
-            client_id: "client-id".into(),
-            access_token: "token".into(),
-            refresh_token: None,
-            expires_at: None,
-        },
-    )
-    .await?;
+store.save_credential("anthropic", OAuthCredential::new("client-id", "token")).await?;
 
 let loaded = store.load_credential("anthropic").await?;
 # Ok(())
 # }
 ```
 
-For MCP servers that require OAuth, the `mcp` feature integrates Aether's browser and callback UI with `rmcp`'s authorization state machine. 
+MCP server OAuth (discovery, registration, PKCE, refresh) lives in `aether-mcp-utils`, which builds on these primitives and `rmcp`'s authorization state machine.
 
 ## Feature Flags
 
 | Feature | Description | Default |
 |---------|-------------|---------|
 | `keyring` | `OsKeyringStore` backed by the platform's native keychain | no |
-| `mcp` | MCP credential store, authorization-code flow, and `AuthorizationManager` integration via `rmcp` | no |
 
 ## License
 

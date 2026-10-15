@@ -2,9 +2,7 @@ use super::mantle::{MantleAuth, MantleClient};
 use super::mappers::{default_cache_point, map_messages, map_tools};
 use super::streaming::{converse_events, decode_converse_event};
 use crate::catalog::transport::ModelTransport;
-use crate::provider::{
-    LlmResponseStream, ProviderFactory, StreamingModelProvider, get_context_window, validate_reasoning,
-};
+use crate::provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider, validate_reasoning};
 use crate::providers::openai_responses::streaming::decode_responses;
 use crate::providers::response_stream::{OpenedStream, response_stream};
 use crate::{Context, LlmError, ProviderAuthMode, ProviderConnectionConfig, ProviderError, Result};
@@ -160,10 +158,6 @@ impl BedrockProvider {
 }
 
 impl ProviderFactory for BedrockProvider {
-    async fn from_env() -> Result<Self> {
-        Ok(Self::new(ProviderConnectionConfig::default()).await)
-    }
-
     async fn from_env_with_connection(connection: ProviderConnectionConfig) -> Result<Self> {
         Ok(Self::new(connection).await)
     }
@@ -176,10 +170,6 @@ impl ProviderFactory for BedrockProvider {
 impl StreamingModelProvider for BedrockProvider {
     fn model(&self) -> Option<crate::LlmModel> {
         format!("bedrock:{}", self.model).parse().ok()
-    }
-
-    fn context_window(&self) -> Option<u32> {
-        get_context_window("bedrock", &self.model)
     }
 
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
@@ -207,10 +197,6 @@ impl StreamingModelProvider for BedrockProvider {
             decode_responses(),
             self.idle_timeout,
         )
-    }
-
-    fn display_name(&self) -> String {
-        format!("Bedrock ({})", self.model)
     }
 }
 
@@ -308,13 +294,13 @@ mod tests {
 
     #[test]
     fn test_display_name() {
-        assert_eq!(test_provider().display_name(), "Bedrock (anthropic.claude-sonnet-4-5-20250929-v1:0)");
+        assert_eq!(test_provider().display_name(), "AWS Bedrock (anthropic.claude-sonnet-4-5-20250929-v1:0)");
     }
 
     #[test]
     fn test_with_model() {
         let provider = test_provider().with_model("anthropic.claude-opus-4-20250514-v1:0");
-        assert_eq!(provider.display_name(), "Bedrock (anthropic.claude-opus-4-20250514-v1:0)");
+        assert_eq!(provider.display_name(), "AWS Bedrock (anthropic.claude-opus-4-20250514-v1:0)");
     }
 
     #[test]
@@ -615,7 +601,7 @@ mod tests {
         let provider = test_provider().with_model(id);
         assert_eq!(provider.context_window(), None);
         assert_eq!(provider.model().unwrap().to_string(), format!("bedrock:{id}"));
-        assert_eq!(provider.display_name(), format!("Bedrock ({id})"));
+        assert_eq!(provider.display_name(), format!("AWS Bedrock ({id})"));
     }
 
     #[tokio::test]

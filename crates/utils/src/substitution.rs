@@ -1,28 +1,22 @@
 use std::collections::HashMap;
 use std::hash::BuildHasher;
+use std::sync::LazyLock;
 
 use regex::{Captures, Regex};
 
 /// Substitute parameters in a prompt template
 /// Supports named parameters using the format `$parameter_name`
 pub fn substitute_parameters<S: BuildHasher>(template: &str, arguments: &Option<HashMap<String, String, S>>) -> String {
-    let Ok(regex) = Regex::new(r"\$(\w+)") else {
+    let Some(args) = arguments else {
         return template.to_string();
     };
 
-    arguments
-        .as_ref()
-        .map(|args| {
-            regex
-                .replace_all(template, |caps: &Captures| {
-                    let text = caps[0].to_string();
-                    let param_name = &caps[1];
-                    args.get(param_name).cloned().unwrap_or(text)
-                })
-                .to_string()
-        })
-        .unwrap_or(template.to_string())
+    PARAMETER
+        .replace_all(template, |caps: &Captures| args.get(&caps[1]).cloned().unwrap_or_else(|| caps[0].to_string()))
+        .into_owned()
 }
+
+static PARAMETER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$(\w+)").expect("valid regex"));
 
 #[cfg(test)]
 mod tests {

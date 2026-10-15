@@ -1,5 +1,5 @@
 use super::types::{Content, ContentBlock as AnthropicContentBlock, ImageSource, Message, Role, Tool};
-use crate::{ChatMessage, ContentBlock, LlmError, Result, ToolDefinition};
+use crate::{ChatMessage, ContentBlock, LlmError, Result, ToolDefinition, tool_result_parts};
 
 pub fn map_messages(messages: &[ChatMessage]) -> Result<(Option<String>, Vec<Message>)> {
     let mut system_prompt = None;
@@ -11,19 +11,11 @@ pub fn map_messages(messages: &[ChatMessage]) -> Result<(Option<String>, Vec<Mes
                 system_prompt = Some(content.clone());
             }
             ChatMessage::User { content, .. } => {
-                anthropic_messages.push(Message {
-                    role: Role::User,
-                    content: map_content_blocks(content)?,
-                    cache_control: None,
-                });
+                anthropic_messages.push(Message { role: Role::User, content: map_content_blocks(content)? });
             }
             ChatMessage::Assistant { content, tool_calls, .. } => {
                 if tool_calls.is_empty() {
-                    anthropic_messages.push(Message {
-                        role: Role::Assistant,
-                        content: Content::Text(content.clone()),
-                        cache_control: None,
-                    });
+                    anthropic_messages.push(Message { role: Role::Assistant, content: Content::Text(content.clone()) });
                 } else {
                     let mut blocks = if content.is_empty() {
                         Vec::new()
@@ -42,50 +34,23 @@ pub fn map_messages(messages: &[ChatMessage]) -> Result<(Option<String>, Vec<Mes
                         });
                     }
 
-                    anthropic_messages.push(Message {
-                        role: Role::Assistant,
-                        content: Content::Blocks(blocks),
-                        cache_control: None,
-                    });
+                    anthropic_messages.push(Message { role: Role::Assistant, content: Content::Blocks(blocks) });
                 }
             }
-            ChatMessage::ToolCallResult(result) => match result {
-                Ok(tool_result) => {
-                    anthropic_messages.push(Message {
-                        role: Role::User,
-                        content: Content::Blocks(vec![AnthropicContentBlock::ToolResult {
-                            tool_use_id: tool_result.id.clone(),
-                            content: tool_result.result.clone(),
-                            is_error: Some(false),
-                        }]),
-                        cache_control: None,
-                    });
-                }
-                Err(tool_error) => {
-                    anthropic_messages.push(Message {
-                        role: Role::User,
-                        content: Content::Blocks(vec![AnthropicContentBlock::ToolResult {
-                            tool_use_id: tool_error.id.clone(),
-                            content: tool_error.error.clone(),
-                            is_error: Some(true),
-                        }]),
-                        cache_control: None,
-                    });
-                }
-            },
-            ChatMessage::Error { message, .. } => {
+            ChatMessage::ToolCallResult(result) => {
+                let (tool_use_id, content, is_error) = tool_result_parts(result);
                 anthropic_messages.push(Message {
                     role: Role::User,
-                    content: Content::Text(format!("Error: {message}")),
-                    cache_control: None,
+                    content: Content::Blocks(vec![AnthropicContentBlock::ToolResult {
+                        tool_use_id: tool_use_id.to_string(),
+                        content: content.to_string(),
+                        is_error: Some(is_error),
+                    }]),
                 });
             }
-            ChatMessage::Summary { content, .. } => {
-                anthropic_messages.push(Message {
-                    role: Role::User,
-                    content: Content::Text(format!("[Previous conversation handoff]\n\n{content}")),
-                    cache_control: None,
-                });
+            ChatMessage::Error { .. } | ChatMessage::Summary { .. } => {
+                let note = message.as_user_note();
+                anthropic_messages.extend(note.map(|note| Message { role: Role::User, content: Content::Text(note) }));
             }
         }
     }
@@ -115,21 +80,15 @@ fn map_content_blocks(parts: &[ContentBlock]) -> Result<Content> {
     Ok(Content::Blocks(blocks))
 }
 
-pub fn map_tools(tools: &[ToolDefinition]) -> Result<Vec<Tool>> {
-    let mut anthropic_tools = Vec::new();
-
-    for tool in tools {
-        let input_schema = tool.parameters.clone();
-
-        anthropic_tools.push(Tool {
+pub fn map_tools(tools: &[ToolDefinition]) -> Vec<Tool> {
+    tools
+        .iter()
+        .map(|tool| Tool {
             name: tool.name.clone(),
             description: tool.description.clone(),
-            input_schema,
-            cache_control: None,
-        });
-    }
-
-    Ok(anthropic_tools)
+            input_schema: tool.parameters.clone(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -252,24 +211,10 @@ mod tests {
             serde_json::from_str(r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#).unwrap(),
         )];
 
-        let mapped = map_tools(&tools).unwrap();
+        let mapped = map_tools(&tools);
         assert_eq!(mapped.len(), 1);
         assert_eq!(mapped[0].name, "search");
         assert_eq!(mapped[0].description, "Search for information");
-    }
-
-    #[test]
-    fn test_map_tools_no_cache_control() {
-        let tools = vec![ToolDefinition::new(
-            "search",
-            "Search for information",
-            serde_json::from_str(r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#).unwrap(),
-        )];
-
-        let mapped = map_tools(&tools).unwrap();
-        assert_eq!(mapped.len(), 1);
-        // Mapper doesn't set cache_control — that's the provider's responsibility
-        assert!(mapped[0].cache_control.is_none());
     }
 
     #[test]

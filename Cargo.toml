@@ -18,9 +18,7 @@ aether-sessions = { path = "crates/aether-sessions", version = "0.3.14" }
 # AWS SDK
 aws-config = { version = "1.8.18", features = ["behavior-version-latest"] }
 aws-sdk-bedrockruntime = { version = "1.133.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
-# Capped below 1.5.0: it makes DeferredSignerSender::send generic, which breaks
-# type inference in aws-runtime 1.7.4 (latest). Lift once aws-runtime ships a fix.
-aws-smithy-types = ">=1.4.9, <1.9.0"
+aws-smithy-types = "1.8.1"
 aws-credential-types = "1.3.0"
 aws-sigv4 = "1.5.1"
 
@@ -51,9 +49,9 @@ tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"]
 # MCP and API clients
 rmcp = { version = "^3.5.1", default-features = false }
 sse-stream = "0.2.6"
-async-openai = { version = "^0.42.0", features = ["byot", "chat-completion", "responses"] }
+async-openai = { version = "^0.42.0", default-features = false, features = ["chat-completion-types", "response-types"] }
 reqwest = { version = "^0.13.4", default-features = false, features = ["json", "query", "rustls", "http2", "stream"] }
-oauth2 = "5.0"
+oauth2 = { version = "5.0", default-features = false }
 keyring-core = "1.0.0"
 apple-native-keyring-store = { version = "1.0.0", features = ["keychain"] }
 windows-native-keyring-store = "1.1.0"
@@ -69,18 +67,14 @@ lsp-types = "0.97"
 
 # Schema and validation
 schemars = { version = "^1.2.1", features = ["derive"] }
-secrecy = "0.10"
 
 # Utilities
 chrono = { version = "^0.4.45", features = ["serde"] }
-time = "=0.3.55"
 uuid = { version = "1.23", features = ["v4"] }
 regex = "^1.12.4"
 sha2 = "0.11"
 base16ct = { version = "1.0", features = ["alloc"] }
 base64 = "0.23"
-rand = "0.10"
-dirs = "7.0"
 noyalib = "0.0.54"
 htmd = "0.5"
 dom_smoothie = "0.18"

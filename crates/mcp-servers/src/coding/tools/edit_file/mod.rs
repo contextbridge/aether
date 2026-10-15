@@ -17,7 +17,6 @@ pub struct EditFileArgs {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EditFileResponse {
-    pub status: String,
     /// Path of the file that was edited
     pub file_path: String,
     /// Total number of lines in the file after editing
@@ -40,7 +39,6 @@ pub async fn edit_file_contents(args: EditFileArgs) -> Result<EditFileResponse, 
         FileDiff { path: file_path.clone(), old_text: Some(original_content), new_text: Some(updated_content) };
 
     Ok(EditFileResponse {
-        status: "success".to_string(),
         file_path,
         total_lines,
         replacements_made,

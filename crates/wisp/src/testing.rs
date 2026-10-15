@@ -8,24 +8,29 @@ use crate::app::message::Message;
 use crate::app::{App, AppConfig};
 use crate::attachment::{AttachmentOutcome, PromptAttachment, build_attachments_with};
 use crate::command::{AgentCommand, Command, CommandResult, FilesystemCommand, GitReviewCommand, PromptRejection};
-use crate::file_index::{FileEntry, MAX_INDEXED_FILES, file_entries};
+use crate::file_index::{MAX_INDEXED_FILES, file_entries};
 use crate::git_review::{
     ClientState, ConnectionState, DiffDocument, DiffReviewEvent, DiffScope, DiffSnapshot, FileDiff, FileStatus,
     LIVE_PROTOCOL_VERSION, RemoteError, RemoteErrorCode, RepositoryAction, ServerEvent, StageState,
 };
 pub use crate::renderer::RenderStats;
-use crate::renderer::Renderer;
+use crate::renderer::{DrawContext, Renderer};
 use crate::request::RequestId;
+use crate::screens::git_diff::GitDiffScreen;
 use crate::session::platform::BrowserOpener;
 use crate::session::terminal::inline_viewport_height;
 use crate::session::workspace_status::WorkspaceStatus;
 use crate::settings::UiSettings;
 use crate::surfaces::composer::ComposerLayout;
+use crate::theme::Theme;
+use crate::view::generation::Generation;
+use crate::view::syntax::SyntaxHighlighter;
 use acp_utils::client::AcpEvent;
 use acp_utils::content::display_content_blocks;
 use acp_utils::notifications::{
     AetherCapabilities, ContextClearedParams, SubAgentEvent, SubAgentProgressParams, WorkspaceStatusResponse,
 };
+use acp_utils::testing::{idle_notification, running_notification};
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::v2::{self as acp, SessionId, SessionUpdate, ToolCallUpdate};
 use clankerdiff_core::git_patch_from_texts;
@@ -35,6 +40,7 @@ use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Position, Rect, Size};
 use ratatui::{Terminal, TerminalOptions, Viewport};
 use serde_json::json;
+use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -276,7 +282,7 @@ impl FakeFilesystem {
 
     /// The runtime's file index over the in-memory tree, minus gitignore
     /// semantics, which need a real repository.
-    pub fn index_files(&self, root: &Path) -> Vec<FileEntry> {
+    pub fn index_files(&self, root: &Path) -> Vec<PromptAttachment> {
         let paths = self.files.keys().filter(|path| path.starts_with(root)).cloned();
         file_entries(root, paths, MAX_INDEXED_FILES)
     }
@@ -521,32 +527,40 @@ impl FakeGit {
     }
 }
 
-/// A backend that records terminal history operations without involving a real
-/// terminal. It is intentionally small: only operations with an observable
-/// presentation contract are recorded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendEvent {
     ShowCursor,
     Scroll,
 }
 
-#[derive(Debug)]
-pub struct RecordingBackend {
-    inner: TestBackend,
-    events: Vec<BackendEvent>,
+/// frame pushed at the terminal. Because ratatui diffs buffers before flushing,
+/// `cells_drawn` counts only cells that actually changed — a frame that
+/// repaints a settled screen costs nothing.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct BackendStats {
+    pub draws: u64,
+    pub cells_drawn: u64,
+    pub scrolls: u64,
 }
 
-impl RecordingBackend {
+#[derive(Debug)]
+pub struct InstrumentedBackend {
+    inner: TestBackend,
+    events: Vec<BackendEvent>,
+    stats: BackendStats,
+}
+
+impl InstrumentedBackend {
     pub fn new(width: u16, height: u16) -> Self {
-        Self { inner: TestBackend::new(width, height), events: Vec::new() }
+        Self { inner: TestBackend::new(width, height), events: Vec::new(), stats: BackendStats::default() }
     }
 
-    pub fn events(&self) -> &[BackendEvent] {
-        &self.events
+    pub fn take_events(&mut self) -> Vec<BackendEvent> {
+        std::mem::take(&mut self.events)
     }
 
-    pub fn clear_events(&mut self) {
-        self.events.clear();
+    pub fn take_stats(&mut self) -> BackendStats {
+        std::mem::take(&mut self.stats)
     }
 
     pub fn resize(&mut self, width: u16, height: u16) {
@@ -562,14 +576,24 @@ impl RecordingBackend {
     }
 }
 
-impl Backend for RecordingBackend {
+impl Borrow<TestBackend> for InstrumentedBackend {
+    fn borrow(&self) -> &TestBackend {
+        &self.inner
+    }
+}
+
+impl Backend for InstrumentedBackend {
     type Error = std::convert::Infallible;
 
     fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
-        self.inner.draw(content)
+        self.stats.draws += 1;
+        let mut cells = 0u64;
+        let drawn = self.inner.draw(content.inspect(|_| cells += 1));
+        self.stats.cells_drawn += cells;
+        drawn
     }
 
     fn append_lines(&mut self, lines: u16) -> Result<(), Self::Error> {
@@ -615,109 +639,12 @@ impl Backend for RecordingBackend {
 
     fn scroll_region_up(&mut self, region: std::ops::Range<u16>, lines: u16) -> Result<(), Self::Error> {
         self.events.push(BackendEvent::Scroll);
-        let region = if region == (0..1) { 0..self.inner.size().unwrap().height } else { region };
-        self.inner.scroll_region_up(region, lines)
-    }
-
-    fn scroll_region_down(&mut self, region: std::ops::Range<u16>, lines: u16) -> Result<(), Self::Error> {
-        self.events.push(BackendEvent::Scroll);
-        self.inner.scroll_region_down(region, lines)
-    }
-}
-
-/// Backend work since the last [`CountingBackend::take_stats`]: how much a
-/// frame pushed at the terminal. Because ratatui diffs buffers before flushing,
-/// `cells_drawn` counts only cells that actually changed — a frame that
-/// repaints a settled screen costs nothing.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct BackendStats {
-    pub draws: u64,
-    pub cells_drawn: u64,
-    pub scrolls: u64,
-}
-
-/// A [`TestBackend`] that counts what rendering pushes at it, for tests that
-/// bound rendering work instead of timing it.
-#[derive(Debug)]
-pub struct CountingBackend {
-    inner: TestBackend,
-    stats: BackendStats,
-}
-
-impl CountingBackend {
-    pub fn new(width: u16, height: u16) -> Self {
-        Self { inner: TestBackend::new(width, height), stats: BackendStats::default() }
-    }
-
-    pub fn take_stats(&mut self) -> BackendStats {
-        std::mem::take(&mut self.stats)
-    }
-
-    pub fn buffer(&self) -> &Buffer {
-        self.inner.buffer()
-    }
-
-    pub fn scrollback(&self) -> &Buffer {
-        self.inner.scrollback()
-    }
-}
-
-impl Backend for CountingBackend {
-    type Error = std::convert::Infallible;
-
-    fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
-    where
-        I: Iterator<Item = (u16, u16, &'a Cell)>,
-    {
-        self.stats.draws += 1;
-        let mut cells = 0u64;
-        let drawn = self.inner.draw(content.inspect(|_| cells += 1));
-        self.stats.cells_drawn += cells;
-        drawn
-    }
-
-    fn hide_cursor(&mut self) -> Result<(), Self::Error> {
-        self.inner.hide_cursor()
-    }
-
-    fn show_cursor(&mut self) -> Result<(), Self::Error> {
-        self.inner.show_cursor()
-    }
-
-    fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
-        self.inner.get_cursor_position()
-    }
-
-    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Self::Error> {
-        self.inner.set_cursor_position(position)
-    }
-
-    fn clear(&mut self) -> Result<(), Self::Error> {
-        self.inner.clear()
-    }
-
-    fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
-        self.inner.clear_region(clear_type)
-    }
-
-    fn size(&self) -> Result<Size, Self::Error> {
-        self.inner.size()
-    }
-
-    fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
-        self.inner.window_size()
-    }
-
-    fn flush(&mut self) -> Result<(), Self::Error> {
-        self.inner.flush()
-    }
-
-    fn scroll_region_up(&mut self, region: std::ops::Range<u16>, lines: u16) -> Result<(), Self::Error> {
         self.stats.scrolls += 1;
         self.inner.scroll_region_up(region, lines)
     }
 
     fn scroll_region_down(&mut self, region: std::ops::Range<u16>, lines: u16) -> Result<(), Self::Error> {
+        self.events.push(BackendEvent::Scroll);
         self.stats.scrolls += 1;
         self.inner.scroll_region_down(region, lines)
     }
@@ -749,14 +676,7 @@ where
     pub fn with_backend(backend: B) -> Self {
         let builder = TestUiBuilder::new();
         let app = App::new(builder.app_config());
-        Self {
-            app,
-            renderer: Renderer::new(),
-            terminal: test_terminal(backend),
-            executor: FakeExecutor::new(),
-            agent: FakeAgent::default(),
-            opened_urls: builder.opened_urls.clone(),
-        }
+        builder.finish(app, backend)
     }
 
     /// The app under test, for the read-only queries assertions are built from.
@@ -783,10 +703,7 @@ where
                 continue;
             }
             if !self.agent.running {
-                let session_id = self.app.session_id().clone();
-                let running =
-                    acp::SessionUpdate::StateUpdate(acp::StateUpdate::Running(acp::RunningStateUpdate::new()));
-                self.acp_event(acp::UpdateSessionNotification::new(session_id, running).into());
+                self.acp_event(running_notification(self.app.session_id().clone()).into());
             }
             self.agent.inserted += 1;
             let message = acp::UserMessage::new(format!("user-message-{}", self.agent.inserted))
@@ -837,6 +754,14 @@ where
             }
         }
         None
+    }
+
+    pub fn take_command_where<T>(&mut self, extract: impl FnMut(Command) -> Option<T>) -> Option<T> {
+        self.take_commands().into_iter().find_map(extract)
+    }
+
+    pub fn count_commands(&mut self, predicate: impl Fn(&Command) -> bool) -> usize {
+        self.take_commands().iter().filter(|command| predicate(command)).count()
     }
 
     pub fn backend(&self) -> &B {
@@ -973,6 +898,12 @@ where
         self.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     }
 
+    pub fn turn(&mut self, prompt: &str, reply: &str) {
+        self.submit(prompt);
+        self.acp_event(text_chunk(reply));
+        self.complete_prompt(acp::StopReason::EndTurn);
+    }
+
     pub fn paste(&mut self, text: &str) {
         self.deliver(Message::Terminal(Event::Paste(text.to_string())));
     }
@@ -981,20 +912,31 @@ where
         self.deliver(Message::Agent(Box::new(event)));
     }
 
+    pub fn run_command(&mut self, command: &str) {
+        self.type_text(command);
+        self.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    }
+
+    pub fn open_session_picker(&mut self, sessions: Vec<acp::SessionInfo>) {
+        self.run_command("/resume");
+        let listed = self.drain_agent_commands_until(|command| matches!(command, AgentCommand::ListSessions));
+        assert!(listed, "/resume should ask the agent to list sessions");
+        self.deliver_result(CommandResult::SessionsListed(Ok(acp::ListSessionsResponse::new(sessions))));
+    }
+
     pub fn begin_resume(&mut self, session_id: &str, cwd: &str) {
-        self.deliver_result(CommandResult::SessionsListed(Ok(acp::ListSessionsResponse::new(vec![
-            acp::SessionInfo::new(session_id.to_string(), cwd),
-        ]))));
+        self.open_session_picker(vec![acp::SessionInfo::new(session_id.to_string(), cwd)]);
         self.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let resumed = self.drain_agent_commands_until(|command| {
+            matches!(command, AgentCommand::ResumeSession { session_id: id, cwd: dir }
+                if id.0.as_ref() == session_id && dir == Path::new(cwd))
+        });
+        assert!(resumed, "picking {session_id} should ask the agent to resume it in {cwd}");
     }
 
     /// The agent reports that its turn is over.
     pub fn complete_prompt(&mut self, stop_reason: acp::StopReason) {
-        let session_id = self.app.session_id().clone();
-        let update = acp::SessionUpdate::StateUpdate(acp::StateUpdate::Idle(
-            acp::IdleStateUpdate::new().stop_reason(stop_reason),
-        ));
-        self.acp_event(acp::UpdateSessionNotification::new(session_id, update).into());
+        self.acp_event(idle_notification(self.app.session_id().clone(), Some(stop_reason)).into());
     }
 
     pub fn tick(&mut self, now: Instant) {
@@ -1060,6 +1002,10 @@ where
             self.acp_event(sub_agent_progress(&parent, &task, agent, SubAgentEvent::Done));
         }
     }
+
+    fn drain_agent_commands_until(&mut self, predicate: impl Fn(&AgentCommand) -> bool) -> bool {
+        std::iter::from_fn(|| self.next_agent_command()).any(|command| predicate(&command))
+    }
 }
 
 impl TestUi<TestBackend> {
@@ -1085,46 +1031,9 @@ impl Default for TestUi<TestBackend> {
     }
 }
 
-/// A backend whose screen and scrollback buffers can be read back, so a
-/// [`TestUi`] built on it can expose viewport/history/conversation text.
-pub trait BuffersReader {
-    fn screen(&self) -> &Buffer;
-    fn scrollback(&self) -> &Buffer;
-}
-
-impl BuffersReader for TestBackend {
-    fn screen(&self) -> &Buffer {
-        self.buffer()
-    }
-
-    fn scrollback(&self) -> &Buffer {
-        self.scrollback()
-    }
-}
-
-impl BuffersReader for CountingBackend {
-    fn screen(&self) -> &Buffer {
-        self.buffer()
-    }
-
-    fn scrollback(&self) -> &Buffer {
-        self.scrollback()
-    }
-}
-
-impl BuffersReader for RecordingBackend {
-    fn screen(&self) -> &Buffer {
-        self.buffer()
-    }
-
-    fn scrollback(&self) -> &Buffer {
-        self.scrollback()
-    }
-}
-
 impl<B> TestUi<B>
 where
-    B: Backend + BuffersReader,
+    B: Backend + Borrow<TestBackend>,
     B::Error: std::fmt::Debug,
 {
     /// What the inline viewport currently shows: the composer, status line,
@@ -1167,57 +1076,27 @@ where
     }
 
     pub fn assert_viewport_contains(&mut self, needle: &str) {
-        let viewport = self.viewport_text();
-        assert!(
-            viewport.contains(needle),
-            "viewport should contain {needle:?}:
-{viewport}"
-        );
+        assert_text_contains("viewport", &self.viewport_text(), needle, true);
     }
 
     pub fn assert_viewport_not_contains(&mut self, needle: &str) {
-        let viewport = self.viewport_text();
-        assert!(
-            !viewport.contains(needle),
-            "viewport should not contain {needle:?}:
-{viewport}"
-        );
+        assert_text_contains("viewport", &self.viewport_text(), needle, false);
     }
 
     pub fn assert_history_contains(&mut self, needle: &str) {
-        let history = self.history_text();
-        assert!(
-            history.contains(needle),
-            "history should contain {needle:?}:
-{history}"
-        );
+        assert_text_contains("history", &self.history_text(), needle, true);
     }
 
     pub fn assert_history_not_contains(&mut self, needle: &str) {
-        let history = self.history_text();
-        assert!(
-            !history.contains(needle),
-            "history should not contain {needle:?}:
-{history}"
-        );
+        assert_text_contains("history", &self.history_text(), needle, false);
     }
 
     pub fn assert_conversation_contains(&mut self, needle: &str) {
-        let conversation = self.conversation_text();
-        assert!(
-            conversation.contains(needle),
-            "conversation should contain {needle:?}:
-{conversation}"
-        );
+        assert_text_contains("conversation", &self.conversation_text(), needle, true);
     }
 
     pub fn assert_conversation_not_contains(&mut self, needle: &str) {
-        let conversation = self.conversation_text();
-        assert!(
-            !conversation.contains(needle),
-            "conversation should not contain {needle:?}:
-{conversation}"
-        );
+        assert_text_contains("conversation", &self.conversation_text(), needle, false);
     }
 
     /// Asserts the viewport's visible text matches `expected` row-by-row.
@@ -1349,26 +1228,27 @@ impl TestUiBuilder {
 
     /// Builds the whole UI scenario.
     pub fn build(self) -> TestUi {
-        self.finish()
+        let app = App::new(self.app_config());
+        let backend = TestBackend::new(self.width, self.height);
+        self.finish(app, backend)
     }
 
     pub fn build_from_session(self, session: crate::session::Session) -> (TestUi, UnboundedReceiver<AcpEvent>) {
         let (app, events, _) = App::from_session(session, self.settings.clone());
-        let mut ui = self.finish_with_app(app);
+        let backend = TestBackend::new(self.width, self.height);
+        let mut ui = self.finish(app, backend);
         ui.executor.record(ui.app.take_commands());
         (ui, events)
     }
 
-    fn finish(self) -> TestUi {
-        let app = App::new(self.app_config());
-        self.finish_with_app(app)
-    }
-
-    fn finish_with_app(self, app: App) -> TestUi {
+    fn finish<B: Backend>(self, app: App, backend: B) -> TestUi<B>
+    where
+        B::Error: std::fmt::Debug,
+    {
         TestUi {
             app,
             renderer: Renderer::new(),
-            terminal: test_terminal(TestBackend::new(self.width, self.height)),
+            terminal: test_terminal(backend),
             executor: FakeExecutor::with_git(self.git),
             agent: FakeAgent::default(),
             opened_urls: self.opened_urls,
@@ -1431,20 +1311,16 @@ pub fn line_text(line: &ratatui::text::Line<'_>) -> String {
 /// How many rows contain at least one cell with `background`.
 pub fn rows_with_background(buffer: &Buffer, background: ratatui::style::Color) -> usize {
     (buffer.area.top()..buffer.area.bottom())
-        .filter(|&y| {
-            (buffer.area.left()..buffer.area.right())
-                .any(|x| buffer.cell((x, y)).is_some_and(|cell| cell.bg == background))
-        })
+        .filter(|&y| row_cells(buffer, y).iter().any(|cell| cell.bg == background))
         .count()
 }
 
+pub fn row_cells(buffer: &Buffer, y: u16) -> Vec<&Cell> {
+    (buffer.area.left()..buffer.area.right()).filter_map(|x| buffer.cell((x, y))).collect()
+}
+
 pub fn row_containing(buffer: &Buffer, needle: &str) -> Option<u16> {
-    (buffer.area.top()..buffer.area.bottom()).find(|&y| {
-        let row = (buffer.area.left()..buffer.area.right())
-            .map(|x| buffer.cell((x, y)).map_or(" ", Cell::symbol))
-            .collect::<String>();
-        row.contains(needle)
-    })
+    (buffer.area.top()..buffer.area.bottom()).find(|&y| row_text(buffer, y).contains(needle))
 }
 
 pub fn buffer_text(buffer: &Buffer) -> String {
@@ -1550,9 +1426,38 @@ pub fn sub_agent_tool_update(parent: &str, task: &str, agent: &str, update: Tool
 }
 
 pub fn tool_completed(id: &str) -> AcpEvent {
-    session_update(acp::SessionUpdate::ToolCallUpdate(
-        acp::ToolCallUpdate::new(id.to_string()).status(acp::ToolCallStatus::Completed),
-    ))
+    tool_status(id, acp::ToolCallStatus::Completed)
+}
+
+pub fn tool_status(id: &str, status: acp::ToolCallStatus) -> AcpEvent {
+    session_update(acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(id.to_string()).status(status)))
+}
+
+pub fn numbered_lines(prefix: &str, count: usize) -> String {
+    let mut lines = String::new();
+    for index in 0..count {
+        let _ = write!(lines, "{prefix}-{index}\n\n");
+    }
+    lines
+}
+
+pub fn render_surface<R>(mut buffer: Buffer, render: impl FnOnce(&mut Buffer, &mut DrawContext<'_>) -> R) -> Buffer {
+    let theme = Theme::default();
+    let mut highlighter = SyntaxHighlighter::new();
+    let mut cx = DrawContext { theme: &theme, highlighter: &mut highlighter, theme_generation: Generation::default() };
+    render(&mut buffer, &mut cx);
+    buffer
+}
+
+pub fn git_diff_screen(files: Vec<FileDiff>) -> GitDiffScreen {
+    let document = DiffDocument { repo_root: "/workspace".into(), files };
+    let mut screen = GitDiffScreen::new();
+    screen.install(&ClientState {
+        connection: ConnectionState::Connected,
+        snapshot: Some(Arc::new(DiffSnapshot { scope: DiffScope::Both, document: Arc::new(document) })),
+        ..ClientState::default()
+    });
+    screen
 }
 
 pub fn chunk_message(message: &str, chunk_bytes: usize) -> Vec<String> {
@@ -1616,6 +1521,11 @@ fn is_binary(bytes: &[u8]) -> bool {
     bytes.iter().take(8192).any(|byte| *byte == 0) || std::str::from_utf8(bytes).is_err()
 }
 
+fn assert_text_contains(surface: &str, text: &str, needle: &str, expected: bool) {
+    let should = if expected { "should" } else { "should not" };
+    assert!(text.contains(needle) == expected, "{surface} {should} contain {needle:?}:\n{text}");
+}
+
 /// The terminal a scenario draws into: the inline viewport sized from the
 /// backend, exactly as the real event loop enters it.
 fn test_terminal<B: Backend>(backend: B) -> Terminal<B>
@@ -1629,63 +1539,36 @@ where
 
 /// What the inline viewport shows: `terminal.get_frame().area()` clipped out of
 /// the backend's full screen buffer.
-fn viewport_buffer<B>(terminal: &mut Terminal<B>) -> Buffer
-where
-    B: Backend + BuffersReader,
-{
+fn viewport_buffer<B: Backend + Borrow<TestBackend>>(terminal: &mut Terminal<B>) -> Buffer {
     let area = terminal.get_frame().area();
-    let screen = terminal.backend().screen();
-    let mut viewport = Buffer::empty(Rect::new(0, 0, area.width, area.height));
-    for y in 0..area.height {
-        for x in 0..area.width {
-            viewport[(x, y)] = screen[(area.x + x, area.y + y)].clone();
-        }
-    }
-    viewport
+    let backend: &TestBackend = terminal.backend().borrow();
+    crop(backend.buffer(), area, 0)
 }
 
 /// Content Ratatui's `insert_before` committed above the inline viewport.
-fn history_buffer<B>(terminal: &mut Terminal<B>) -> Buffer
-where
-    B: Backend + BuffersReader,
-{
-    let viewport_area = terminal.get_frame().area();
-    let screen = terminal.backend().screen();
-    let scrollback = terminal.backend().scrollback();
-    let history_height = scrollback.area.height.saturating_add(viewport_area.top());
-    let mut history = Buffer::empty(Rect::new(0, 0, screen.area.width, history_height));
-    for y in 0..scrollback.area.height {
-        for x in 0..scrollback.area.width {
-            history[(x, y)] = scrollback[(x, y)].clone();
-        }
-    }
-    for y in 0..viewport_area.top() {
-        for x in 0..screen.area.width {
-            history[(x, scrollback.area.height + y)] = screen[(x, y)].clone();
-        }
-    }
+fn history_buffer<B: Backend + Borrow<TestBackend>>(terminal: &mut Terminal<B>) -> Buffer {
+    let viewport_top = terminal.get_frame().area().top();
+    let backend: &TestBackend = terminal.backend().borrow();
+    let mut history = backend.scrollback().clone();
+    let above_viewport = Rect { height: viewport_top, ..backend.buffer().area };
+    history.merge(&crop(backend.buffer(), above_viewport, history.area.height));
     history
 }
 
-fn conversation_buffer<B>(terminal: &mut Terminal<B>) -> Buffer
-where
-    B: Backend + BuffersReader,
-{
-    let history = history_buffer(terminal);
-    let viewport = viewport_buffer(terminal);
-    let mut conversation =
-        Buffer::empty(Rect::new(0, 0, viewport.area.width, history.area.height.saturating_add(viewport.area.height)));
-    for y in 0..history.area.height {
-        for x in 0..history.area.width {
-            conversation[(x, y)] = history[(x, y)].clone();
-        }
-    }
-    for y in 0..viewport.area.height {
-        for x in 0..viewport.area.width {
-            conversation[(x, history.area.height + y)] = viewport[(x, y)].clone();
-        }
-    }
+fn conversation_buffer<B: Backend + Borrow<TestBackend>>(terminal: &mut Terminal<B>) -> Buffer {
+    let mut conversation = history_buffer(terminal);
+    let viewport = terminal.get_frame().area();
+    let backend: &TestBackend = terminal.backend().borrow();
+    conversation.merge(&crop(backend.buffer(), viewport, conversation.area.height));
     conversation
+}
+
+fn crop(buffer: &Buffer, area: Rect, y: u16) -> Buffer {
+    let mut cropped = Buffer::empty(Rect { x: 0, y, ..area });
+    for position in area.positions() {
+        cropped[(position.x - area.x, position.y - area.y + y)] = buffer[position].clone();
+    }
+    cropped
 }
 
 const SEED_PROSE: &str = "\

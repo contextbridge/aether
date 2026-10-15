@@ -290,15 +290,8 @@ impl TurnState {
         if let Some(chat) = &mut self.chat_call {
             chat.record_tool_call(request);
         }
-        let mut attributes = vec![
-            KeyValue::new(semconv::GEN_AI_OPERATION_NAME, "execute_tool"),
-            KeyValue::new(semconv::GEN_AI_TOOL_NAME, request.name.clone()),
-            KeyValue::new(semconv::GEN_AI_TOOL_CALL_ID, request.id.clone()),
-            KeyValue::new(semconv::MCP_METHOD_NAME, "tools/call"),
-            // The server sees the tool without our namespacing prefix, so this
-            // is what joins this span to the server's span for the same call.
-            KeyValue::new(semconv::MCP_TOOL_NAME, mcp_tool_name(&request.name).to_string()),
-        ];
+        let mut attributes = execute_tool_attributes(&request.name, mcp_tool_name(&request.name));
+        attributes.push(KeyValue::new(semconv::GEN_AI_TOOL_CALL_ID, request.id.clone()));
         if instrumentation.content.tool_calls && !request.arguments.is_empty() {
             attributes.push(KeyValue::new(semconv::GEN_AI_TOOL_CALL_ARGUMENTS, request.arguments.clone()));
         }
@@ -334,6 +327,15 @@ impl TurnState {
     }
 }
 
+pub(crate) fn execute_tool_attributes(tool_name: &str, mcp_tool_name: &str) -> Vec<KeyValue> {
+    vec![
+        KeyValue::new(semconv::GEN_AI_OPERATION_NAME, "execute_tool"),
+        KeyValue::new(semconv::GEN_AI_TOOL_NAME, tool_name.to_string()),
+        KeyValue::new(semconv::MCP_METHOD_NAME, "tools/call"),
+        KeyValue::new(semconv::MCP_TOOL_NAME, mcp_tool_name.to_string()),
+    ]
+}
+
 /// Maps the agent's canonical provider name to the `GenAI` semantic-convention
 /// provider name, passing providers the catalog doesn't know through as-is.
 fn genai_provider_name(provider: &str) -> String {
@@ -357,20 +359,15 @@ fn hashed_content(content_key: &'static str, hash_key: &'static str, content: St
 }
 
 fn pricing_attributes(pricing: ModelPricing) -> Vec<KeyValue> {
-    let mut attributes = vec![
-        KeyValue::new(semconv::AI_INPUT_TOKEN_PRICE, pricing.input_per_million / TOKENS_PER_MILLION),
-        KeyValue::new(semconv::AI_OUTPUT_TOKEN_PRICE, pricing.output_per_million / TOKENS_PER_MILLION),
-    ];
-
-    if let Some(price) = pricing.cache_read_per_million {
-        attributes.push(KeyValue::new(semconv::AI_CACHE_READ_TOKEN_PRICE, price / TOKENS_PER_MILLION));
-    }
-
-    if let Some(price) = pricing.cache_write_per_million {
-        attributes.push(KeyValue::new(semconv::AI_CACHE_WRITE_TOKEN_PRICE, price / TOKENS_PER_MILLION));
-    }
-
-    attributes
+    [
+        (semconv::AI_INPUT_TOKEN_PRICE, Some(pricing.input_per_million)),
+        (semconv::AI_OUTPUT_TOKEN_PRICE, Some(pricing.output_per_million)),
+        (semconv::AI_CACHE_READ_TOKEN_PRICE, pricing.cache_read_per_million),
+        (semconv::AI_CACHE_WRITE_TOKEN_PRICE, pricing.cache_write_per_million),
+    ]
+    .into_iter()
+    .filter_map(|(key, per_million)| per_million.map(|price| KeyValue::new(key, price / TOKENS_PER_MILLION)))
+    .collect()
 }
 
 const TOKENS_PER_MILLION: f64 = 1_000_000.0;

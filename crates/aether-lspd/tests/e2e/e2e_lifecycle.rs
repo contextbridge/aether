@@ -1,9 +1,8 @@
 use crate::common::{
-    DaemonHarness, cargo_project, file_uri, hover_text, poll_workspace_diagnostics, use_fake_servers,
-    workspace_error_count,
+    TestWorkspace, cargo_project, connect, fake_daemon, file_uri, hover_text, use_fake_servers,
+    wait_for_workspace_diagnostics, workspace_error_count,
 };
 use aether_lspd::{LanguageId, LspClient, lockfile_path, socket_path};
-use std::time::Duration;
 
 #[tokio::test]
 async fn daemon_persists_after_client_disconnect() {
@@ -21,103 +20,57 @@ async fn daemon_persists_after_client_disconnect() {
 
 #[tokio::test]
 async fn multiple_clients_share_fake_server_session() {
-    use_fake_servers();
-
     let project = cargo_project("shared_session");
-
-    let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
-    let client1 = harness.connect().await.expect("Failed to connect client 1");
-    let client2 = harness.connect().await.expect("Failed to connect client 2");
-
+    let (_daemon, client1) = fake_daemon(project.root(), LanguageId::Rust).await;
+    let client2 = connect(project.root(), LanguageId::Rust).await;
     let uri = file_uri(&project.path("src/main.rs"));
 
     let hover1 = hover_text(client1.hover(uri.clone(), 0, 0).await.expect("Hover failed"));
-    let hover2 = hover_text(client2.hover(uri.clone(), 0, 0).await.expect("Hover failed"));
+    let hover2 = hover_text(client2.hover(uri, 0, 0).await.expect("Hover failed"));
 
     assert_ne!(hover1, "");
     assert_eq!(hover1, hover2);
-
-    harness.kill().await.expect("Failed to kill daemon");
 }
 
 #[tokio::test]
 async fn diagnostics_are_available_across_clients_without_explicit_open() {
-    use_fake_servers();
-
-    let project = cargo_project("shared_diagnostics");
-    project.write("src/main.rs", "fn main() { let error = 1; }\n");
-
-    let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
-    let client1 = harness.connect().await.expect("Failed to connect client 1");
-    let client2 = harness.connect().await.expect("Failed to connect client 2");
+    let project = cargo_project("shared_diagnostics").file("src/main.rs", "fn main() { let error = 1; }\n");
+    let (_daemon, client1) = fake_daemon(project.root(), LanguageId::Rust).await;
+    let client2 = connect(project.root(), LanguageId::Rust).await;
     let uri = file_uri(&project.path("src/main.rs"));
 
-    let diagnostics1 = client1.get_diagnostics(Some(uri.clone())).await.expect("Failed to get diagnostics");
-    let diagnostics2 = client2.get_diagnostics(Some(uri.clone())).await.expect("Failed to get diagnostics");
-
-    assert_eq!(diagnostics1.len(), 1);
-    assert_eq!(diagnostics2.len(), 1);
-    assert_eq!(diagnostics1[0].diagnostics.len(), 1);
-    assert_eq!(diagnostics2[0].diagnostics.len(), 1);
-
-    harness.kill().await.expect("Failed to kill daemon");
+    for client in [&client1, &client2] {
+        let diagnostics = client.get_diagnostics(Some(uri.clone())).await.expect("Failed to get diagnostics");
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].diagnostics.len(), 1);
+    }
 }
 
 #[tokio::test]
 async fn workspace_bootstrap_diagnostics_are_available_without_explicit_open() {
-    use_fake_servers();
+    let project = TestWorkspace::new()
+        .file("build/Cargo.toml", "[package]\nname = \"build_root\"\nversion = \"0.1.0\"\nedition = \"2024\"\n")
+        .file("build/src/main.rs", "fn main() { let error = 1; }\n");
+    let (_daemon, client) = fake_daemon(&project.path("build"), LanguageId::Rust).await;
 
-    let temp = tempfile::tempdir().expect("Failed to create temp directory");
-    let root = temp.path().join("build");
-    std::fs::create_dir_all(root.join("src")).expect("Failed to create source directory");
-    std::fs::write(
-        root.join("Cargo.toml"),
-        "[package]\nname = \"build_root\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-    )
-    .expect("Failed to write Cargo.toml");
-    std::fs::write(root.join("src/main.rs"), "fn main() { let error = 1; }\n").expect("Failed to add source file");
-
-    let harness = DaemonHarness::spawn(&root, LanguageId::Rust).await.expect("Failed to spawn daemon");
-    let client = harness.connect().await.expect("Failed to connect client");
-
-    let diagnostics = poll_workspace_diagnostics(
-        &client,
-        |diagnostics| workspace_error_count(diagnostics) > 0,
-        Duration::from_secs(10),
-    )
-    .await;
+    let diagnostics =
+        wait_for_workspace_diagnostics(&client, |diagnostics| workspace_error_count(diagnostics) > 0).await;
 
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(workspace_error_count(&diagnostics), 1);
-
-    harness.kill().await.expect("Failed to kill daemon");
 }
 
 #[tokio::test]
 async fn workspace_diagnostics_refresh_after_external_edit_without_explicit_open() {
-    use_fake_servers();
+    let project = cargo_project("workspace_external_refresh").file("src/main.rs", "fn main() { let ok = 1; }\n");
+    let (_daemon, client) = fake_daemon(project.root(), LanguageId::Rust).await;
 
-    let project = cargo_project("workspace_external_refresh");
-    project.write("src/main.rs", "fn main() { let ok = 1; }\n");
-
-    let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
-    let client = harness.connect().await.expect("Failed to connect client");
-    let main_rs = project.root().join("src/main.rs");
-
-    let initial =
-        poll_workspace_diagnostics(&client, |diagnostics| diagnostics.len() == 1, Duration::from_secs(10)).await;
+    let initial = wait_for_workspace_diagnostics(&client, |diagnostics| diagnostics.len() == 1).await;
     assert_eq!(workspace_error_count(&initial), 0);
 
-    std::fs::write(&main_rs, "fn main() { let error = 1; }\n").expect("Failed to write file");
+    project.write("src/main.rs", "fn main() { let error = 1; }\n");
 
-    let refreshed = poll_workspace_diagnostics(
-        &client,
-        |diagnostics| workspace_error_count(diagnostics) > 0,
-        Duration::from_secs(10),
-    )
-    .await;
+    let refreshed = wait_for_workspace_diagnostics(&client, |diagnostics| workspace_error_count(diagnostics) > 0).await;
     assert_eq!(refreshed.len(), 1);
     assert_eq!(workspace_error_count(&refreshed), 1);
-
-    harness.kill().await.expect("Failed to kill daemon");
 }

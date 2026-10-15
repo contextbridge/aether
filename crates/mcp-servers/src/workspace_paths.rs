@@ -1,32 +1,5 @@
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkspacePaths {
-    root: PathBuf,
-}
-
-impl WorkspacePaths {
-    pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
-    }
-
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
-    pub fn resolve_path(&self, path: PathBuf) -> PathBuf {
-        resolve_path(&self.root, path)
-    }
-
-    pub fn resolve_file(&self, raw: &str) -> Result<PathBuf, EmptyFilePathError> {
-        resolve_file(&self.root, raw)
-    }
-
-    pub fn relative_path(&self, path: &str) -> String {
-        relative_path(&self.root, path)
-    }
-}
-
 pub fn current_dir() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
@@ -65,12 +38,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn workspace_paths_resolve_against_root() {
-        let workspace = WorkspacePaths::new("/workspace");
-        assert_eq!(workspace.root(), Path::new("/workspace"));
-        assert_eq!(workspace.resolve_path(PathBuf::from("src/main.rs")), PathBuf::from("/workspace/src/main.rs"));
-        assert_eq!(workspace.relative_path("/workspace/src/main.rs"), "src/main.rs");
-        assert_eq!(workspace.relative_path("/elsewhere/lib.rs"), "/elsewhere/lib.rs");
+    fn relative_path_strips_root_prefix() {
+        assert_eq!(relative_path(Path::new("/workspace"), "/workspace/src/main.rs"), "src/main.rs");
+        assert_eq!(relative_path(Path::new("/workspace"), "/elsewhere/lib.rs"), "/elsewhere/lib.rs");
     }
 
     #[test]

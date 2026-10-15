@@ -1,22 +1,22 @@
-use agent_client_protocol::schema::v2 as acp;
+use super::support::*;
 
 const PATCH: &str = "diff --git a/workspace/src/lib.rs b/workspace/src/lib.rs\n--- a/workspace/src/lib.rs\n+++ b/workspace/src/lib.rs\n@@ -1 +1 @@\n-before\n+after\n";
 
 #[test]
 fn text_diff_fixture_uses_v2_metadata_and_preserves_patch_content() {
-    let diff = wisp::testing::text_diff("/workspace/file with \"quotes\".rs", "before", "after");
+    let diff = text_diff("/workspace/file with \"quotes\".rs", "before", "after");
     assert_eq!(diff.changes, vec![acp::DiffChange::modify(path("/workspace/file with \"quotes\".rs"))]);
     let patch = diff.patch.expect("changed content has a patch");
     assert_eq!(patch.format, acp::DiffPatchFormat::GitPatch);
     assert!(patch.text.contains("\\ No newline at end of file"));
-    let wire = serde_json::to_value(wisp::testing::text_diff("/workspace/file.rs", "old\n", "new\n")).unwrap();
+    let wire = serde_json::to_value(text_diff("/workspace/file.rs", "old\n", "new\n")).unwrap();
     assert_eq!(wire["changes"][0]["operation"], "modify");
     assert_eq!(wire["patch"]["format"], "git_patch");
 }
 
 #[test]
 fn text_diff_fixture_omits_patch_for_unchanged_content() {
-    let diff = wisp::testing::text_diff("/workspace/file.rs", "same", "same");
+    let diff = text_diff("/workspace/file.rs", "same", "same");
     assert!(diff.patch.is_none());
 }
 
@@ -65,9 +65,9 @@ fn unknown_patch_format_is_not_rendered_as_a_git_patch() {
     ui.assert_conversation_not_contains("after");
 }
 
-fn ui_with_diff(diff: acp::Diff) -> wisp::testing::TestUi {
-    let mut ui = wisp::testing::TestUi::with_dimensions(100, 30);
-    ui.acp_event(wisp::testing::session_update(acp::SessionUpdate::ToolCallUpdate(
+fn ui_with_diff(diff: acp::Diff) -> TestUi {
+    let mut ui = TestUi::with_dimensions(100, 30);
+    ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(
         acp::ToolCallUpdate::new("edit")
             .title("Edit files")
             .status(acp::ToolCallStatus::Completed)

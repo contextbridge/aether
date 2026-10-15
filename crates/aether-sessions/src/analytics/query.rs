@@ -14,6 +14,12 @@ pub struct QueryOptions {
     pub timeout_ms: u64,
 }
 
+impl QueryOptions {
+    pub fn new(db_path: impl Into<PathBuf>, sql: impl Into<String>) -> Self {
+        Self { db_path: db_path.into(), sql: sql.into(), max_rows: 100, max_cell_chars: 1000, timeout_ms: 2000 }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct QueryOutput {
     pub columns: Vec<String>,
@@ -79,33 +85,20 @@ mod tests {
 
     #[tokio::test]
     async fn empty_query_errors() {
-        let result = run_query(&QueryOptions {
-            db_path: PathBuf::from("missing"),
-            sql: " ".to_string(),
-            max_rows: 100,
-            max_cell_chars: 100,
-            timeout_ms: 1000,
-        })
-        .await;
+        let result = run_query(&QueryOptions::new("missing", " ")).await;
         assert!(matches!(result, Err(SessionIndexError::EmptyQuery)));
     }
 
     #[tokio::test]
     async fn select_succeeds_and_truncates() {
         let db = test_db().await;
-        let output = run_query(&QueryOptions {
-            db_path: db.path,
-            sql: "select content, payload from events order by id".to_string(),
+        let options = QueryOptions {
             max_rows: 1,
             max_cell_chars: 3,
-            timeout_ms: 1000,
-        })
-        .await
-        .unwrap();
-        assert_eq!(
-            output.rows,
-            vec![vec![Value::String("abc".to_string()), Value::String("<blob 2 bytes>".to_string())]]
-        );
+            ..QueryOptions::new(db.path, "select content, payload from events order by id")
+        };
+        let output = run_query(&options).await.unwrap();
+        assert_eq!(output.rows, vec![vec![Value::from("abc"), Value::from("<blob 2 bytes>")]]);
         assert!(output.truncated_rows);
         assert!(output.truncated_cells);
     }
@@ -113,51 +106,19 @@ mod tests {
     #[tokio::test]
     async fn mutation_is_rejected_by_read_only_database() {
         let db = test_db().await;
-        let result = run_query(&QueryOptions {
-            db_path: db.path,
-            sql: "delete from events".to_string(),
-            max_rows: 100,
-            max_cell_chars: 100,
-            timeout_ms: 1000,
-        })
-        .await;
+        let result = run_query(&QueryOptions::new(db.path, "delete from events")).await;
         assert!(matches!(result, Err(SessionIndexError::Sqlx(_))));
     }
 
     #[tokio::test]
-    async fn line_commented_select_is_accepted() {
+    async fn commented_selects_are_accepted() {
         let db = test_db().await;
-        let output = run_query(&QueryOptions {
-            db_path: db.path,
-            sql: "-- note\nselect content from events order by id".to_string(),
-            max_rows: 100,
-            max_cell_chars: 100,
-            timeout_ms: 1000,
-        })
-        .await
-        .unwrap();
-        assert_eq!(
-            output.rows,
-            vec![vec![Value::String("abcdef".to_string())], vec![Value::String("ghijkl".to_string())]]
-        );
-    }
-
-    #[tokio::test]
-    async fn block_commented_select_is_accepted() {
-        let db = test_db().await;
-        let output = run_query(&QueryOptions {
-            db_path: db.path,
-            sql: "/* safety */ select content from events order by id".to_string(),
-            max_rows: 100,
-            max_cell_chars: 100,
-            timeout_ms: 1000,
-        })
-        .await
-        .unwrap();
-        assert_eq!(
-            output.rows,
-            vec![vec![Value::String("abcdef".to_string())], vec![Value::String("ghijkl".to_string())]]
-        );
+        for sql in
+            ["-- note\nselect content from events order by id", "/* safety */ select content from events order by id"]
+        {
+            let output = run_query(&QueryOptions::new(&db.path, sql)).await.unwrap();
+            assert_eq!(output.rows, vec![vec![Value::from("abcdef")], vec![Value::from("ghijkl")]], "{sql}");
+        }
     }
 
     #[test]
@@ -177,25 +138,9 @@ mod tests {
     #[tokio::test]
     async fn trailing_mutation_cannot_write_through_read_only_connection() {
         let db = test_db().await;
-        let path = db.path.clone();
-        let _ = run_query(&QueryOptions {
-            db_path: path.clone(),
-            sql: "select 1; delete from events".to_string(),
-            max_rows: 100,
-            max_cell_chars: 100,
-            timeout_ms: 1000,
-        })
-        .await;
+        let _ = run_query(&QueryOptions::new(&db.path, "select 1; delete from events")).await;
 
-        let output = run_query(&QueryOptions {
-            db_path: path,
-            sql: "select count(*) from events".to_string(),
-            max_rows: 100,
-            max_cell_chars: 100,
-            timeout_ms: 1000,
-        })
-        .await
-        .unwrap();
+        let output = run_query(&QueryOptions::new(&db.path, "select count(*) from events")).await.unwrap();
         assert_eq!(output.rows, vec![vec![Value::from(2)]]);
     }
 }

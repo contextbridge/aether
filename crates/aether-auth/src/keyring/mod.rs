@@ -27,8 +27,8 @@ impl OsKeyringStore {
         Self::from_factory(Arc::new(create_platform_keyring_store))
     }
 
-    /// Build a store backed by an in-memory mock keyring (for tests that exercise
-    /// the rmcp `CredentialStore` adapter without needing the real OS keychain).
+    /// Build a store backed by an in-memory mock keyring (for tests that need a
+    /// keyring-backed store without the real OS keychain).
     pub fn with_mock_store() -> Result<Self, OAuthError> {
         Ok(Self::new(keyring_core::mock::Store::new().map_err(map_keyring_err)?))
     }
@@ -201,50 +201,16 @@ async fn spawn_blocking<T: Send + 'static>(
 mod tests {
     use super::*;
     use crate::OAuthCredential;
+    use crate::credential::assert_storage_contract;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn credential() -> OAuthCredential {
-        OAuthCredential {
-            client_id: "client".to_string(),
-            access_token: "access".to_string(),
-            refresh_token: Some("refresh".to_string()),
-            expires_at: Some(1234),
-        }
+        OAuthCredential::new("client", "access").refresh_token("refresh").expires_at(1234)
     }
 
     #[tokio::test]
-    async fn load_returns_none_when_missing() {
-        let store = OsKeyringStore::with_mock_store().unwrap();
-        assert!(store.load_credential("server").await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn save_then_load_round_trips() {
-        let store = OsKeyringStore::with_mock_store().unwrap();
-        store.save_credential("server", credential()).await.unwrap();
-
-        let loaded = store.load_credential("server").await.unwrap().unwrap();
-        assert_eq!(loaded.client_id, "client");
-        assert_eq!(loaded.access_token, "access");
-        assert_eq!(loaded.refresh_token.as_deref(), Some("refresh"));
-        assert_eq!(loaded.expires_at, Some(1234));
-    }
-
-    #[tokio::test]
-    async fn credential_keys_are_isolated() {
-        let store = OsKeyringStore::with_mock_store().unwrap();
-        store.save_credential("key-a", credential()).await.unwrap();
-        assert!(store.load_credential("key-b").await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn delete_removes_credential() {
-        let store = OsKeyringStore::with_mock_store().unwrap();
-        store.save_credential("server", credential()).await.unwrap();
-        assert!(store.contains("server"));
-
-        store.delete("server").await.unwrap();
-        assert!(!store.contains("server"));
+    async fn satisfies_the_storage_contract() {
+        assert_storage_contract(&OsKeyringStore::with_mock_store().unwrap()).await;
     }
 
     #[tokio::test]

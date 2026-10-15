@@ -73,30 +73,23 @@ struct ExtractedContent {
 }
 
 fn extract_content(html: &str, url: &str) -> ExtractedContent {
-    if let Some(extracted) = try_readability(html, url) {
-        return extracted;
+    let article = Readability::new(html, Some(url), None)
+        .ok()
+        .and_then(|mut reader| reader.parse().ok())
+        .filter(|article| !article.content.is_empty());
+
+    match article {
+        Some(article) => ExtractedContent {
+            markdown: convert(&article.content).unwrap_or_else(|_| article.text_content.to_string()),
+            title: non_empty(article.title),
+            byline: article.byline,
+        },
+        None => ExtractedContent {
+            title: extract_title(html),
+            markdown: convert(html).unwrap_or_else(|_| html.to_string()),
+            byline: None,
+        },
     }
-    fallback_extract(html)
-}
-
-fn try_readability(html: &str, url: &str) -> Option<ExtractedContent> {
-    let mut reader = Readability::new(html, Some(url), None).ok()?;
-    let article = reader.parse().ok()?;
-
-    if article.content.is_empty() {
-        return None;
-    }
-
-    let markdown = convert(&article.content).unwrap_or_else(|_| article.text_content.to_string());
-    let title = non_empty(article.title);
-
-    Some(ExtractedContent { title, markdown, byline: article.byline })
-}
-
-fn fallback_extract(html: &str) -> ExtractedContent {
-    let title = extract_title(html);
-    let markdown = convert(html).unwrap_or_else(|_| html.to_string());
-    ExtractedContent { title, markdown, byline: None }
 }
 
 fn normalize_url(url: &str) -> Result<String, WebFetchError> {

@@ -1,6 +1,6 @@
-use crate::common::{McpClientExt, TestResult, cancels_prompts, connect, scripted, tool_request};
+use crate::common::{McpClientExt, TestResult, call_tool_error, cancels_prompts, connect, scripted, tool_request};
+use mcp_servers::PermissionMode;
 use mcp_servers::coding::CodingMcp;
-use mcp_servers::{DefaultCodingTools, PermissionMode};
 use mcp_utils::client::{ClientOptions, ElicitationSink};
 use mcp_utils::model::{ElicitationCapability, UrlElicitationCapability};
 use rmcp::model::{ElicitRequestParams, ElicitResult, ElicitationAction, ErrorCode, InputResponses};
@@ -9,7 +9,7 @@ use serde_json::json;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 
-fn coding_mcp(root: &TempDir, mode: PermissionMode) -> CodingMcp<DefaultCodingTools> {
+fn coding_mcp(root: &TempDir, mode: PermissionMode) -> CodingMcp {
     CodingMcp::new(root.path()).with_permission_mode(mode)
 }
 
@@ -78,6 +78,44 @@ async fn auto_mode_dangerous_command_is_gated() -> TestResult {
         captured,
         ElicitRequestParams::FormElicitationParams { message, .. } if message.contains("rm -rf ./scratch")
     ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn auto_mode_gates_only_destructive_looking_bash_commands() -> TestResult {
+    let root = TempDir::new()?;
+    let mcp = connect(coding_mcp(&root, PermissionMode::Auto), ClientOptions::default()).await;
+    let cases = [
+        ("rm -rf scratch", true),
+        ("rm\tfoo.txt", true),
+        ("rmdir empty_dir", true),
+        ("git push origin main", true),
+        ("git reset HEAD~1", true),
+        ("git checkout -- .", true),
+        ("git clean -fd", true),
+        ("chmod 777 missing.txt", true),
+        ("chown root:root missing.txt", true),
+        ("kill -9 999999", true),
+        ("pkill no-such-process", true),
+        ("mv old.txt new.txt", true),
+        ("dd if=/dev/zero of=out count=0", true),
+        ("npm install --force", true),
+        ("git log --hard", true),
+        ("echo x > file.txt", true),
+        ("echo x >> file.txt", true),
+        ("> file.txt", true),
+        ("grep '=> ' file.txt", false),
+        ("echo skillset", false),
+        ("ls -la", false),
+        ("git status", false),
+        ("cargo test", false),
+        ("grep -r pattern .", false),
+    ];
+
+    for (command, gated) in cases {
+        let error = call_tool_error(&mcp, "bash", json!({ "command": command, "timeout": 600_001 })).await;
+        assert_eq!(error.contains("Permission required for bash"), gated, "{command:?}: {error}");
+    }
     Ok(())
 }
 

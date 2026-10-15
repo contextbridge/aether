@@ -1,29 +1,7 @@
-use acp_utils::client::AcpEvent;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use ratatui::TerminalOptions;
-use ratatui::backend::TestBackend;
-use ratatui::buffer::Buffer;
-use wisp::app::ForegroundOperation;
-use wisp::command::{AgentCommand, Command, CommandResult, PromptRejection, TerminalCommand};
+use super::support::*;
+use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
-use super::support::{
-    BooleanPropertySchema, ElicitationSchema, StringPropertySchema, TestUi, TestUiBuilder, accepted_content, acp,
-    block_on_local, buffer_text, form_elicitation, with_elicitation,
-};
-
-/// Whether the app asked the terminal to ring the bell, draining whatever else
-/// it had queued along with it.
-fn rang_bell(app: &mut TestUi) -> bool {
-    app.take_commands().into_iter().any(|command| matches!(command, Command::Terminal(TerminalCommand::RingBell)))
-}
-
-fn sessions_completed(response: acp::ListSessionsResponse) -> CommandResult {
-    CommandResult::SessionsListed(Ok(response))
-}
-
-fn workspaces_completed(response: acp_utils::notifications::WorkspaceListResponse) -> CommandResult {
-    CommandResult::WorkspacesListed(Ok(response))
-}
+const MODELS: &[(&str, &str)] = &[("a", "Alpha"), ("b", "Beta")];
 
 #[test]
 fn remote_checkout_actions_are_blocked_without_losing_text() {
@@ -41,13 +19,10 @@ fn remote_checkout_actions_are_blocked_without_losing_text() {
 fn remote_git_review_opens() {
     use wisp::command::GitReviewCommand;
     let mut ui = TestUiBuilder::new().remote_workspace().dimensions(120, 24).build();
-    ui.key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
-    assert!(
-        ui.take_commands().iter().any(|command| matches!(command, Command::GitReview(GitReviewCommand::Open { .. })))
-    );
+    ui.key(ctrl('g'));
+    assert_eq!(ui.count_commands(|command| matches!(command, Command::GitReview(GitReviewCommand::Open { .. }))), 1);
     ui.settle_tasks();
-    ui.draw();
-    assert!(ui.viewport_text().contains("Git Diff"));
+    ui.assert_viewport_contains("Git Diff");
 }
 
 #[test]
@@ -60,303 +35,169 @@ fn remote_pasted_paths_remain_text_and_settings_remain_local() {
         matches!(ui.next_agent_command(), Some(AgentCommand::Prompt { text, .. }) if text == "/server/screenshot.png")
     );
     ui.complete_prompt(acp::StopReason::EndTurn);
-    ui.type_text("/settings");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/settings");
     assert!(ui.app().has_modal());
-    assert!(
-        ui.take_commands()
-            .iter()
-            .any(|command| matches!(command, Command::Filesystem(wisp::command::FilesystemCommand::ListThemes)))
-    );
-}
-
-fn make_app() -> TestUi {
-    TestUiBuilder::new().build()
-}
-
-fn make_ui() -> TestUi {
-    TestUiBuilder::new().dimensions(80, 24).build()
-}
-
-fn key(code: KeyCode) -> KeyEvent {
-    KeyEvent::new(code, KeyModifiers::NONE)
-}
-
-/// The area navigation is drawn into: the whole inline viewport.
-fn navigation_rect(ui: &mut TestUi) -> ratatui::layout::Rect {
-    ui.viewport_area()
-}
-
-fn mouse_event(kind: MouseEventKind, column: u16, row: u16) -> crossterm::event::Event {
-    crossterm::event::Event::Mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE })
-}
-
-fn scroll_down(column: u16, row: u16) -> crossterm::event::Event {
-    mouse_event(MouseEventKind::ScrollDown, column, row)
-}
-
-fn scroll_up(column: u16, row: u16) -> crossterm::event::Event {
-    mouse_event(MouseEventKind::ScrollUp, column, row)
-}
-
-fn click(column: u16, row: u16) -> crossterm::event::Event {
-    mouse_event(MouseEventKind::Down(MouseButton::Left), column, row)
+    assert_eq!(ui.count_commands(|command| matches!(command, Command::Filesystem(FilesystemCommand::ListThemes))), 1);
 }
 
 mod picker_click {
     use super::*;
-    use agent_client_protocol::schema::v2::{SessionId, SessionInfo};
 
     #[test]
-    fn session_picker_click_first_row_selects_index_zero() {
-        let mut ui = make_ui();
+    fn session_picker_click_selects_the_visible_row_under_the_pointer() {
+        for (filter, row, resumed) in [("", 2, "bbb"), ("Alpha", 2, "ccc"), ("", 0, "aaa"), ("", 10, "ccc")] {
+            let mut ui = TestUi::with_dimensions(80, 24);
+            ui.open_session_picker(vec![
+                session_info("aaa", "/tmp", "Alpha Project", ""),
+                session_info("bbb", "/tmp", "Beta Project", ""),
+                session_info("ccc", "/tmp", "Alpha Config", ""),
+            ]);
+            ui.type_text(filter);
+            ui.draw();
+            ui.terminal_event(click(2, row));
+            assert!(ui.app().has_session_picker(), "a click selects without resuming");
 
-        // Open session picker with sessions
-        let sessions = vec![
-            SessionInfo::new(SessionId::new("s1"), "/tmp"),
-            SessionInfo::new(SessionId::new("s2"), "/tmp"),
-            SessionInfo::new(SessionId::new("s3"), "/tmp"),
-        ];
-        ui.deliver_result(sessions_completed(acp::ListSessionsResponse::new(sessions)));
-        assert!(ui.app().has_session_picker());
-
-        ui.draw();
-        let rect = navigation_rect(&mut ui);
-        // Click on the second content row (local_y=2 → row=1 after border offset)
-        ui.terminal_event(click(rect.x + 2, rect.y + 2));
-        assert!(ui.app().has_session_picker(), "picker should remain open");
+            ui.key(key(KeyCode::Enter));
+            assert_eq!(
+                resumed_session(&mut ui).as_deref(),
+                Some(resumed),
+                "clicking row {row} under filter {filter:?}"
+            );
+        }
     }
 
     #[test]
-    fn session_picker_click_outside_row_range_is_clamped() {
-        let mut ui = make_ui();
-
-        let sessions =
-            vec![SessionInfo::new(SessionId::new("s1"), "/tmp"), SessionInfo::new(SessionId::new("s2"), "/tmp")];
-        ui.deliver_result(sessions_completed(acp::ListSessionsResponse::new(sessions)));
-        assert!(ui.app().has_session_picker());
-
-        ui.draw();
-
-        let rect = navigation_rect(&mut ui);
-        // Click far below content (local_y=20 → row=19 after offset, clamped to last item)
-        ui.terminal_event(click(rect.x + 2, rect.y + 20));
-        assert!(ui.app().has_session_picker());
-    }
-
-    #[test]
-    fn session_picker_click_with_filter_uses_visible_rows() {
-        let mut ui = make_ui();
-
-        let mut session_a = SessionInfo::new(SessionId::new("aaa"), "/tmp");
-        session_a.title = Some("Alpha Project".to_string());
-        let mut session_b = SessionInfo::new(SessionId::new("bbb"), "/tmp");
-        session_b.title = Some("Beta Project".to_string());
-        let mut session_c = SessionInfo::new(SessionId::new("ccc"), "/tmp");
-        session_c.title = Some("Alpha Config".to_string());
-
-        ui.deliver_result(sessions_completed(acp::ListSessionsResponse::new(vec![session_a, session_b, session_c])));
-        assert!(ui.app().has_session_picker());
-
-        // Type filter: "Alpha"
-        ui.key(key(KeyCode::Char('A')));
-        ui.key(key(KeyCode::Char('l')));
-        ui.key(key(KeyCode::Char('p')));
-        ui.key(key(KeyCode::Char('h')));
-        ui.key(key(KeyCode::Char('a')));
-
-        ui.draw();
-
-        let rect = navigation_rect(&mut ui);
-        // Click on first visible row
-        ui.terminal_event(click(rect.x + 2, rect.y + 2));
-        assert!(ui.app().has_session_picker());
-    }
-
-    #[test]
-    fn workspace_picker_click_first_row_selects_index_zero() {
-        use acp_utils::notifications::{WorkspaceEntry, WorkspaceListResponse};
-
-        let workspaces = vec![
-            WorkspaceEntry { path: std::path::PathBuf::from("/tmp/ws1"), is_current: false },
-            WorkspaceEntry { path: std::path::PathBuf::from("/tmp/ws2"), is_current: false },
-            WorkspaceEntry { path: std::path::PathBuf::from("/tmp/ws3"), is_current: false },
-        ];
-        let mut ui = make_ui();
-        ui.deliver_result(workspaces_completed(WorkspaceListResponse { workspaces }));
-
-        ui.draw();
-        let rect = navigation_rect(&mut ui);
-        // Click on the first content row (local_y=1 → row=0 after border offset)
-        ui.terminal_event(click(rect.x + 2, rect.y + 1));
-    }
-
-    #[test]
-    fn workspace_picker_click_outside_row_range_is_clamped() {
-        use acp_utils::notifications::{WorkspaceEntry, WorkspaceListResponse};
-
-        let workspaces = vec![WorkspaceEntry { path: std::path::PathBuf::from("/tmp/ws1"), is_current: false }];
-        let mut ui = make_ui();
-        ui.deliver_result(workspaces_completed(WorkspaceListResponse { workspaces }));
-
-        ui.draw();
-
-        let rect = navigation_rect(&mut ui);
-        // Click far below content
-        ui.terminal_event(click(rect.x + 2, rect.y + 15));
-    }
-
-    #[test]
-    fn workspace_picker_click_with_filter_uses_filtered_rows() {
-        use acp_utils::notifications::{WorkspaceEntry, WorkspaceListResponse};
-
-        let workspaces = vec![
-            WorkspaceEntry { path: std::path::PathBuf::from("/tmp/project-alpha"), is_current: false },
-            WorkspaceEntry { path: std::path::PathBuf::from("/tmp/project-beta"), is_current: false },
-            WorkspaceEntry { path: std::path::PathBuf::from("/tmp/other"), is_current: false },
-        ];
-        let mut ui = make_ui();
-        ui.deliver_result(workspaces_completed(WorkspaceListResponse { workspaces }));
-
-        // Type filter: "beta"
-        ui.key(key(KeyCode::Char('b')));
-        ui.key(key(KeyCode::Char('e')));
-        ui.key(key(KeyCode::Char('t')));
-        ui.key(key(KeyCode::Char('a')));
-
-        ui.draw();
-
-        let rect = navigation_rect(&mut ui);
-        // Click on first visible row
-        ui.terminal_event(click(rect.x + 2, rect.y + 2));
+    fn workspace_picker_click_moves_to_the_visible_row_under_the_pointer() {
+        for (filter, row, moved) in [("", 2, Some("/tmp/beta")), ("other", 1, Some("/tmp/other")), ("", 0, None)] {
+            let mut ui = TestUiBuilder::new().workspace_move().dimensions(80, 24).build();
+            let paths = ["/tmp/alpha", "/tmp/beta", "/tmp/other"];
+            open_workspace_picker(&mut ui, paths.map(|path| workspace_entry(path, false)).to_vec());
+            ui.type_text(filter);
+            ui.draw();
+            ui.terminal_event(click(2, row));
+            assert_eq!(
+                moved_workspace(&mut ui).as_deref(),
+                moved.map(Path::new),
+                "clicking row {row} under filter {filter:?}"
+            );
+        }
     }
 }
 
-mod mouse_capture {
-    use super::*;
-    use agent_client_protocol::schema::v2::{SessionId, SessionInfo};
+#[test]
+fn mouse_owning_surfaces_scroll_their_own_selection() {
+    let surfaces: [(&str, Step, Step); 5] = [
+        (
+            "settings",
+            |ui| ui.run_command("/settings"),
+            |ui| {
+                ui.key(key(KeyCode::Enter));
+                ui.assert_viewport_contains("Beta");
+            },
+        ),
+        (
+            "session picker",
+            |ui| ui.open_session_picker(["a", "b", "c"].map(|id| acp::SessionInfo::new(id, "/tmp")).to_vec()),
+            |ui| {
+                ui.key(key(KeyCode::Enter));
+                assert_eq!(resumed_session(ui).as_deref(), Some("b"));
+            },
+        ),
+        (
+            "workspace picker",
+            |ui| open_workspace_picker(ui, ["/tmp/a", "/tmp/b"].map(|path| workspace_entry(path, false)).to_vec()),
+            |ui| {
+                ui.key(key(KeyCode::Enter));
+                assert_eq!(moved_workspace(ui).as_deref(), Some(Path::new("/tmp/b")));
+            },
+        ),
+        (
+            "command picker",
+            |ui| ui.type_text("/"),
+            |ui| {
+                ui.key(key(KeyCode::Tab));
+                assert!(matches!(ui.next_agent_command(), Some(AgentCommand::ListSessions)));
+            },
+        ),
+        (
+            "prompt search",
+            |ui| search(ui, "h", vec![hit("hello", 0, 1), hit("hey", 0, 1)]),
+            |ui| assert_eq!(ui.app().composer().text(), "hey"),
+        ),
+    ];
+    let build = || {
+        TestUiBuilder::new()
+            .config_options(vec![select("model", "Model", "a", MODELS)])
+            .workspace_move()
+            .prompt_search()
+            .dimensions(80, 24)
+            .build()
+    };
+    for (surface, open, assert_second_selected) in surfaces {
+        let mut ui = build();
+        assert!(!ui.app().needs_mouse_capture(), "the conversation leaves the mouse to the terminal");
+        open(&mut ui);
+        assert!(ui.app().needs_mouse_capture(), "{surface} should capture the mouse");
+        ui.key(key(KeyCode::Esc));
+        assert!(!ui.app().needs_mouse_capture(), "closing {surface} should release the mouse");
 
-    #[test]
-    fn no_capture_when_no_fullscreen_or_modal() {
-        let app = make_app();
-        assert!(!app.app().needs_mouse_capture());
-    }
-
-    #[test]
-    fn capture_enabled_when_session_picker_is_open() {
-        let mut app = make_app();
-        let current_id = SessionId::new("test-session");
-        let other = SessionInfo::new(SessionId::new("other"), "/tmp");
-        app.deliver_result(sessions_completed(acp::ListSessionsResponse::new(vec![other])));
-        std::mem::drop(current_id);
-
-        assert!(app.app().has_session_picker());
-        assert!(app.app().needs_mouse_capture());
-
-        app.key(key(KeyCode::Esc));
-        assert!(!app.app().needs_mouse_capture());
-    }
-
-    #[test]
-    fn capture_when_composer_overlay_is_open() {
-        let mut app = make_app();
-
-        // Open command picker
-        app.key(key(KeyCode::Char('/')));
-        assert!(app.app().needs_mouse_capture());
-
-        app.key(key(KeyCode::Esc));
-        assert!(!app.app().needs_mouse_capture());
-    }
-
-    #[test]
-    fn capture_when_prompt_search_is_open() {
-        let mut app = TestUiBuilder::new().prompt_search().build();
-
-        app.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
-        assert!(app.app().needs_mouse_capture());
-
-        app.key(key(KeyCode::Esc));
-        assert!(!app.app().needs_mouse_capture());
-    }
-
-    #[test]
-    fn capture_disabled_after_connection_closed() {
-        let mut app = make_app();
-        let other = SessionInfo::new(SessionId::new("other"), "/tmp");
-        app.deliver_result(sessions_completed(acp::ListSessionsResponse::new(vec![other])));
-        assert!(app.app().needs_mouse_capture());
-
-        app.acp_event(AcpEvent::ConnectionClosed);
-        assert!(!app.app().needs_mouse_capture());
+        let mut ui = build();
+        open(&mut ui);
+        ui.draw();
+        for scroll in [scroll_down(2, 2), scroll_down(2, 2), scroll_up(2, 2)] {
+            ui.terminal_event(scroll);
+        }
+        assert_eq!(bells(&mut ui), 0, "{surface}");
+        assert!(ui.app().needs_mouse_capture(), "{surface} should stay open");
+        assert_second_selected(&mut ui);
     }
 }
 
-mod bell {
-    use super::*;
-    use agent_client_protocol::schema::v2 as acp;
+#[test]
+fn mouse_capture_is_released_when_the_connection_closes() {
+    let mut ui = TestUi::new();
+    ui.open_session_picker(vec![acp::SessionInfo::new("other", "/tmp")]);
+    assert!(ui.app().needs_mouse_capture());
 
-    #[test]
-    fn bell_after_normal_completion() {
-        let mut app = make_app();
+    ui.acp_event(AcpEvent::ConnectionClosed);
+    assert!(!ui.app().needs_mouse_capture());
+}
 
-        // Submit a prompt
-        app.submit("hello");
-        assert!(app.app().waiting_for_response());
-
-        app.complete_prompt(acp::StopReason::EndTurn);
-
-        assert!(rang_bell(&mut app));
-    }
-
-    #[test]
-    fn no_bell_after_cancellation() {
-        let mut app = make_app();
-
-        app.submit("hello");
-        app.complete_prompt(acp::StopReason::Cancelled);
-
-        assert!(!rang_bell(&mut app));
-    }
-
-    #[test]
-    fn no_bell_after_prompt_error() {
-        let mut app = make_app();
-        app.reject_prompts(PromptRejection::Failed("internal error".to_string()));
-
-        app.submit("hello");
-
-        assert!(!rang_bell(&mut app));
-    }
-
-    #[test]
-    fn no_bell_after_connection_close() {
-        let mut app = make_app();
-
-        app.submit("hello");
-        app.acp_event(AcpEvent::ConnectionClosed);
-
-        assert!(!rang_bell(&mut app));
-    }
-
-    #[test]
-    fn no_bell_on_unsolicited_prompt_completion() {
-        let mut app = make_app();
-
-        app.complete_prompt(acp::StopReason::EndTurn);
-
-        assert!(!rang_bell(&mut app));
-    }
-
-    #[test]
-    fn exactly_one_bell_per_completion() {
-        let mut app = make_app();
-
-        app.submit("first");
-        app.complete_prompt(acp::StopReason::EndTurn);
-
-        assert!(rang_bell(&mut app));
-        assert!(!rang_bell(&mut app));
+#[test]
+fn bell_rings_once_when_a_submitted_turn_ends_normally() {
+    let scenarios: [(&str, Step, usize); 5] = [
+        ("normal completion", |ui| ui.turn("hello", "done"), 1),
+        (
+            "cancellation",
+            |ui| {
+                ui.submit("hello");
+                ui.complete_prompt(acp::StopReason::Cancelled);
+            },
+            0,
+        ),
+        (
+            "prompt error",
+            |ui| {
+                ui.reject_prompts(PromptRejection::Failed("internal error".to_string()));
+                ui.submit("hello");
+            },
+            0,
+        ),
+        (
+            "connection close",
+            |ui| {
+                ui.submit("hello");
+                ui.acp_event(AcpEvent::ConnectionClosed);
+            },
+            0,
+        ),
+        ("unsolicited completion", |ui| ui.complete_prompt(acp::StopReason::EndTurn), 0),
+    ];
+    for (scenario, run, expected) in scenarios {
+        let mut ui = TestUi::new();
+        run(&mut ui);
+        assert_eq!(bells(&mut ui), expected, "{scenario}");
+        assert_eq!(bells(&mut ui), 0, "{scenario} must not ring again");
     }
 }
 
@@ -365,7 +206,7 @@ mod resize {
 
     #[test]
     fn resize_preserves_composer_content() {
-        let mut app = make_app();
+        let mut app = TestUi::new();
 
         app.terminal_event(crossterm::event::Event::Resize(120, 30));
 
@@ -390,117 +231,10 @@ mod resize {
 
 mod event_routing {
     use super::*;
-    use agent_client_protocol::schema::v2::{SessionId, SessionInfo};
-
-    #[test]
-    fn mouse_click_outside_surface_is_ignored() {
-        let mut app = make_app();
-
-        app.deliver_result(sessions_completed(acp::ListSessionsResponse::new(vec![SessionInfo::new(
-            SessionId::new("other"),
-            "/tmp",
-        )])));
-        assert!(app.app().has_session_picker());
-
-        // Click at (0, 0) — outside the picker rect (no surface rect is set without render)
-        app.terminal_event(click(0, 0));
-
-        // The session picker should still be open and unchanged
-        assert!(app.app().has_session_picker());
-    }
-
-    #[test]
-    fn keyboard_event_routing_precedence_unchanged() {
-        let mut app = make_app();
-
-        // Open settings overlay via /settings
-        app.key(key(KeyCode::Char('/')));
-        app.key(key(KeyCode::Char('s')));
-        app.key(key(KeyCode::Tab));
-        app.key(key(KeyCode::Enter));
-
-        // Esc closes settings overlay
-        app.key(key(KeyCode::Esc));
-        assert!(!app.app().has_modal());
-    }
-
-    #[test]
-    fn mouse_event_routes_to_topmost_surface() {
-        let mut ui = make_ui();
-
-        // Open settings overlay
-        ui.key(key(KeyCode::Char('/')));
-        ui.key(key(KeyCode::Char('s')));
-        ui.key(key(KeyCode::Tab));
-        ui.key(key(KeyCode::Enter));
-
-        ui.draw();
-
-        // Scroll events should be consumed internally
-        let bell_before = rang_bell(&mut ui);
-        ui.terminal_event(scroll_down(40, 5));
-        assert_eq!(bell_before, rang_bell(&mut ui));
-    }
-
-    #[test]
-    fn scroll_on_settings_overlay_changes_menu_selection() {
-        use agent_client_protocol::schema::v2::{SessionConfigOption, SessionConfigSelectOption};
-        let opts = vec![
-            SessionConfigOption::select(
-                "model",
-                "Model",
-                "a",
-                vec![SessionConfigSelectOption::new("a", "Alpha"), SessionConfigSelectOption::new("b", "Beta")],
-            ),
-            SessionConfigOption::select(
-                "mode",
-                "Mode",
-                "code",
-                vec![SessionConfigSelectOption::new("code", "Code"), SessionConfigSelectOption::new("chat", "Chat")],
-            ),
-        ];
-        let mut ui = TestUiBuilder::new().config_options(opts).dimensions(80, 24).build();
-
-        ui.type_text("/settings");
-        ui.key(key(KeyCode::Tab));
-
-        ui.draw();
-        assert!(ui.app().has_navigation());
-
-        ui.terminal_event(scroll_down(40, 5));
-        assert!(!rang_bell(&mut ui));
-    }
-
-    #[test]
-    fn settings_overlay_click_selects_entry() {
-        use agent_client_protocol::schema::v2::{SessionConfigOption, SessionConfigSelectOption};
-        let opts = vec![SessionConfigOption::select(
-            "model",
-            "Model",
-            "a",
-            vec![SessionConfigSelectOption::new("a", "Alpha"), SessionConfigSelectOption::new("b", "Beta")],
-        )];
-        let mut ui = TestUiBuilder::new().config_options(opts).dimensions(80, 24).build();
-
-        ui.type_text("/settings");
-        ui.key(key(KeyCode::Tab));
-
-        ui.draw();
-
-        let rect = navigation_rect(&mut ui);
-        let click_y = rect.y + 2;
-        ui.terminal_event(click(rect.x + 2, click_y));
-        assert!(!rang_bell(&mut ui));
-    }
 
     #[test]
     fn mouse_activation_uses_shared_settings_actions() -> Result<(), Box<dyn std::error::Error>> {
-        use acp_utils::notifications::{
-            McpNotification, McpServerAuthCapability, McpServerStatus, McpServerStatusEntry,
-        };
-        use agent_client_protocol::schema::v2::{
-            AuthMethod, AuthMethodAgent, SessionConfigOption, SessionConfigSelectOption,
-        };
+        use agent_client_protocol::schema::v2::{AuthMethod, AuthMethodAgent, SessionConfigOption};
 
         fn settings_app(
             options: Vec<SessionConfigOption>,
@@ -508,54 +242,33 @@ mod event_routing {
             methods: Vec<AuthMethod>,
         ) -> TestUi {
             let mut ui = TestUiBuilder::new().config_options(options).auth_methods(methods).dimensions(80, 24).build();
-            ui.acp_event(AcpEvent::McpNotification(McpNotification::ServerStatus { servers }));
+            ui.acp_event(mcp_notification(servers));
             ui
         }
 
-        fn open_settings(ui: &mut TestUi) {
-            ui.type_text("/settings");
-            ui.key(key(KeyCode::Tab));
-            ui.draw();
-        }
-
-        let options = vec![SessionConfigOption::select(
-            "model",
-            "Model",
-            "a",
-            vec![SessionConfigSelectOption::new("a", "Alpha"), SessionConfigSelectOption::new("b", "Beta")],
-        )];
-        let mut ui = settings_app(options, vec![], vec![]);
-        open_settings(&mut ui);
+        let mut ui = settings_app(vec![select("model", "Model", "a", MODELS)], vec![], vec![]);
+        ui.run_command("/settings");
         let model_row = ui.viewport_row("Model:").ok_or("Model row in the settings menu")?;
         ui.terminal_event(click(10, model_row));
-        ui.draw();
         let beta_row = ui.viewport_row("Beta").ok_or("Beta row in the model picker")?;
         ui.terminal_event(click(10, beta_row));
-        assert!(matches!(
-            ui.next_agent_command(),
-            Some(AgentCommand::SetConfigOption { config_id, value, .. }) if config_id == "model" && value == acp::SessionConfigOptionValue::id("b")
-        ));
+        assert_sets_config_option(&mut ui, "model", "b");
 
         let server = McpServerStatusEntry::new("linear", McpServerStatus::NeedsOAuth)
             .with_auth_capability(McpServerAuthCapability::OAuth);
         let mut ui = settings_app(vec![], vec![server], vec![]);
-        open_settings(&mut ui);
+        ui.run_command("/settings");
         let servers_row = ui.viewport_row("MCP Servers:").ok_or("MCP Servers row in the settings menu")?;
         ui.terminal_event(click(10, servers_row));
-        ui.draw();
         let linear_row = ui.viewport_row("linear").ok_or("linear row in the servers pane")?;
         ui.terminal_event(click(10, linear_row));
-        assert!(matches!(
-            ui.next_agent_command(),
-            Some(AgentCommand::AuthenticateMcpServer { server_name, .. }) if server_name == "linear"
-        ));
+        assert_authenticates_mcp_server(&mut ui, "linear");
 
         let methods = vec![AuthMethod::Agent(AuthMethodAgent::new("codex", "Codex"))];
         let mut ui = settings_app(vec![], vec![], methods);
-        open_settings(&mut ui);
+        ui.run_command("/settings");
         let providers_row = ui.viewport_row("Provider Logins:").ok_or("Provider Logins row in the settings menu")?;
         ui.terminal_event(click(10, providers_row));
-        ui.draw();
         let codex_row = ui.viewport_row("Codex").ok_or("Codex row in the provider pane")?;
         ui.terminal_event(click(10, codex_row));
         assert!(matches!(
@@ -564,101 +277,25 @@ mod event_routing {
         ));
         Ok(())
     }
-    #[test]
-    fn session_picker_scroll_changes_selection() {
-        let mut ui = make_ui();
-        let current = SessionId::new("test-session");
-        let sessions = vec![
-            SessionInfo::new(SessionId::new("a"), "/tmp/a"),
-            SessionInfo::new(SessionId::new("b"), "/tmp/b"),
-            SessionInfo::new(SessionId::new("c"), "/tmp/c"),
-        ];
-        ui.deliver_result(sessions_completed(acp::ListSessionsResponse::new(sessions)));
-        std::mem::drop(current);
-        assert!(ui.app().has_session_picker());
-
-        ui.draw();
-        assert!(ui.app().has_navigation());
-
-        let rect = navigation_rect(&mut ui);
-        ui.terminal_event(scroll_down(rect.x + 2, rect.y + 2));
-        assert!(!rang_bell(&mut ui));
-        assert!(ui.app().has_session_picker());
-    }
 
     #[test]
-    fn prompt_search_scroll_up_and_down() {
-        let mut ui = TestUiBuilder::new().prompt_search().dimensions(80, 24).build();
-
-        ui.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
-        assert!(ui.app().needs_mouse_capture());
-
-        ui.draw();
-
-        let rect = navigation_rect(&mut ui);
-        // Scroll should be consumed internally
-        ui.terminal_event(scroll_down(rect.x + 2, rect.y + 1));
-        ui.terminal_event(scroll_up(rect.x + 2, rect.y + 1));
-        assert!(!rang_bell(&mut ui));
-    }
-
-    #[test]
-    fn composer_overlay_scroll_and_click() {
-        let mut ui = make_ui();
-        // Open command picker
-        ui.key(key(KeyCode::Char('/')));
-        assert!(ui.app().needs_mouse_capture());
-
-        ui.draw();
-
-        let rect = navigation_rect(&mut ui);
-        ui.terminal_event(scroll_down(rect.x + 2, rect.y + rect.height.saturating_sub(1)));
-        ui.terminal_event(click(rect.x + 2, rect.y + rect.height.saturating_sub(1)));
-        assert!(!rang_bell(&mut ui));
-    }
-
-    #[test]
-    fn workspace_picker_scroll_up_and_down() {
-        use acp_utils::notifications::{WorkspaceEntry, WorkspaceListResponse};
-        use std::path::PathBuf;
-
-        let mut ui = make_ui();
-        let workspaces = vec![
-            WorkspaceEntry { path: PathBuf::from("/tmp/a"), is_current: false },
-            WorkspaceEntry { path: PathBuf::from("/tmp/b"), is_current: false },
-            WorkspaceEntry { path: PathBuf::from("/tmp/c"), is_current: false },
-        ];
-        ui.deliver_result(workspaces_completed(WorkspaceListResponse { workspaces }));
-        assert!(matches!(ui.app().foreground_operation(), ForegroundOperation::PickingWorkspace));
-
-        ui.draw();
-
-        let rect = navigation_rect(&mut ui);
-        ui.terminal_event(scroll_down(rect.x + 2, rect.y + 2));
-        ui.terminal_event(scroll_up(rect.x + 2, rect.y + 2));
-        ui.terminal_event(click(rect.x + 2, rect.y + 2));
-        assert!(!rang_bell(&mut ui));
-    }
-
-    #[test]
-    fn form_modal_scroll_changes_field() {
+    fn form_modal_scroll_answers_the_choice_in_focus() {
         block_on_local(async {
-            let mut ui = make_ui();
-            let schema = ElicitationSchema::new().property("field1", StringPropertySchema::new(), true).property(
-                "field2",
-                StringPropertySchema::new(),
-                true,
-            );
-
-            with_elicitation(&mut ui, form_elicitation("test", "Test", schema)).await;
-
+            let mut ui = TestUi::with_dimensions(80, 24);
+            let choices =
+                StringPropertySchema::new().enum_values(vec!["first".into(), "second".into(), "third".into()]);
+            let schema = ElicitationSchema::new().property("choice", choices, false);
+            let response_rx = with_elicitation(&mut ui, form_elicitation("test", "Pick one", schema)).await;
             assert!(ui.app().needs_mouse_capture());
 
             ui.draw();
+            for scroll in [scroll_down(2, 3), scroll_down(2, 3), scroll_up(2, 3)] {
+                ui.terminal_event(scroll);
+            }
+            ui.key(key(KeyCode::Enter));
 
-            let rect = navigation_rect(&mut ui);
-            ui.terminal_event(scroll_down(rect.x + 2, rect.y + 3));
-            assert!(!rang_bell(&mut ui));
+            let response = response_rx.await.unwrap();
+            assert_eq!(accepted_content(&response), serde_json::json!({ "choice": "second" }));
         });
     }
 
@@ -669,7 +306,7 @@ mod event_routing {
         block_on_local(async {
             const QUESTIONS: usize = 40;
 
-            let mut ui = make_ui();
+            let mut ui = TestUi::with_dimensions(80, 24);
             let mut schema = ElicitationSchema::new();
             for index in 0..QUESTIONS {
                 schema = schema.property(format!("question_{index:02}"), BooleanPropertySchema::new(), false);
@@ -678,7 +315,7 @@ mod event_routing {
             with_elicitation(&mut ui, form_elicitation("test", "Pick some", schema)).await;
 
             ui.draw();
-            let shows = |ui: &mut TestUi, needle: &str| screen_rows(ui).iter().any(|row| row.contains(needle));
+            let shows = |ui: &mut TestUi, needle: &str| buffer_text(ui.backend().buffer()).contains(needle);
             assert!(shows(&mut ui, "question_00"), "the first question starts on screen");
             assert!(!shows(&mut ui, "question_39"), "the last question starts on a later page");
 
@@ -703,11 +340,11 @@ mod event_routing {
             let schema =
                 ElicitationSchema::new().property("choice", StringPropertySchema::new().enum_values(values), false);
 
-            let mut ui = make_ui();
+            let mut ui = TestUi::with_dimensions(80, 24);
             with_elicitation(&mut ui, form_elicitation("test", "Pick one", schema)).await;
 
             ui.draw();
-            let shows = |ui: &mut TestUi, needle: &str| screen_rows(ui).iter().any(|row| row.contains(needle));
+            let shows = |ui: &mut TestUi, needle: &str| buffer_text(ui.backend().buffer()).contains(needle);
             assert!(shows(&mut ui, "option_00"), "the first option starts on screen");
             assert!(!shows(&mut ui, "option_39"), "the last option starts below the fold");
 
@@ -727,7 +364,7 @@ mod event_routing {
     #[test]
     fn form_modal_click_answers_the_option_under_the_pointer() {
         block_on_local(async {
-            let mut ui = make_ui();
+            let mut ui = TestUi::with_dimensions(80, 24);
             let schema = ElicitationSchema::new()
                 .property("alpha", BooleanPropertySchema::new().default_value(false), false)
                 .property("bravo", BooleanPropertySchema::new().default_value(false), false);
@@ -736,8 +373,9 @@ mod event_routing {
 
             ui.draw();
 
-            let rows = screen_rows(&mut ui);
-            let yes = rows.iter().position(|row| row.contains("1  Yes")).expect("the first option should be on screen");
+            let screen = buffer_text(ui.backend().buffer());
+            let yes =
+                screen.lines().position(|row| row.contains("1  Yes")).expect("the first option should be on screen");
             ui.terminal_event(click(20, u16::try_from(yes).unwrap()));
 
             // Two questions make this a wizard: Enter walks alpha → bravo →
@@ -756,7 +394,7 @@ mod event_routing {
     #[test]
     fn form_modal_click_hits_every_row_an_option_occupies() {
         block_on_local(async {
-            let mut ui = make_ui();
+            let mut ui = TestUi::with_dimensions(80, 24);
             let schema = ElicitationSchema::new().property(
                 "choice",
                 StringPropertySchema::new().enum_values(vec![
@@ -771,8 +409,8 @@ mod event_routing {
             ui.draw();
 
             let needle = "certainly-wraps";
-            for row in screen_rows(&mut ui)
-                .iter()
+            for row in buffer_text(ui.backend().buffer())
+                .lines()
                 .enumerate()
                 .filter(|(_, row)| row.contains(needle) || row.contains("onto-a-second-row"))
                 .map(|(row, _)| row)
@@ -793,72 +431,25 @@ mod event_routing {
     }
 }
 
-/// The screen's rows as text, indexed by terminal row.
-fn screen_rows(ui: &mut TestUi) -> Vec<String> {
-    let buffer = ui.backend().buffer();
-    (buffer.area.top()..buffer.area.bottom())
-        .map(|y| {
-            (buffer.area.left()..buffer.area.right())
-                .map(|x| buffer.cell((x, y)).map_or(" ", ratatui::buffer::Cell::symbol))
-                .collect()
-        })
-        .collect()
-}
-
 mod screen_mouse {
     use super::*;
-    use clankerdiff_client::ConnectionState;
-    use clankerdiff_ratatui::diff::DiffScope;
-    use std::sync::Arc;
-    use wisp::git_review::{ClientState, DiffDocument, DiffSnapshot, FileDiff};
-    use wisp::renderer::DrawContext;
+    use ratatui::layout::Rect;
+    use wisp::git_review::FileDiff;
     use wisp::screens::git_diff::GitDiffScreen;
-    use wisp::surfaces::input::{MouseAction, UiEvent};
-    use wisp::theme::Theme;
-    use wisp::view::generation::Generation;
-    use wisp::view::syntax::SyntaxHighlighter;
-
-    fn make_test_document() -> DiffSnapshot {
-        DiffSnapshot {
-            scope: DiffScope::Both,
-            document: Arc::new(DiffDocument {
-                repo_root: "/tmp/repo".into(),
-                files: vec![
-                    FileDiff::from_texts("src/main.rs", "fn old() {}\n", "fn main() {}\n").unwrap(),
-                    FileDiff::from_texts("src/lib.rs", "", "pub fn library() {}\n").unwrap(),
-                    FileDiff::from_texts("Cargo.toml", "old\n", "new\n").unwrap(),
-                ],
-            }),
-        }
-    }
+    use wisp::surfaces::input::MouseAction;
 
     fn render_git_diff(screen: &mut GitDiffScreen, width: u16, height: u16) -> Buffer {
-        let theme = Theme::default();
-        let mut highlighter = SyntaxHighlighter::new();
-        let backend = TestBackend::new(width, height);
-        let mut terminal = ratatui::Terminal::with_options(backend, TerminalOptions::default()).unwrap();
-        terminal
-            .draw(|frame| {
-                let mut cx = DrawContext {
-                    theme: &theme,
-                    highlighter: &mut highlighter,
-                    theme_generation: Generation::default(),
-                };
-                screen.render(frame.area(), frame.buffer_mut(), &mut cx);
-            })
-            .unwrap();
-        terminal.backend().buffer().clone()
+        render_surface(Buffer::empty(Rect::new(0, 0, width, height)), |buffer, cx| {
+            screen.render(buffer.area, buffer, cx)
+        })
     }
 
     fn open_screen() -> GitDiffScreen {
-        let mut screen = GitDiffScreen::new();
-        let state = ClientState {
-            connection: ConnectionState::Connected,
-            snapshot: Some(Arc::new(make_test_document())),
-            ..ClientState::default()
-        };
-        screen.install(&state);
-        screen
+        git_diff_screen(vec![
+            FileDiff::from_texts("src/main.rs", "fn old() {}\n", "fn main() {}\n").unwrap(),
+            FileDiff::from_texts("src/lib.rs", "", "pub fn library() {}\n").unwrap(),
+            FileDiff::from_texts("Cargo.toml", "old\n", "new\n").unwrap(),
+        ])
     }
 
     fn assert_drawer_focus(buffer: &Buffer, focused: bool) {
@@ -947,63 +538,6 @@ mod screen_mouse {
     }
 }
 
-mod mouse_owning_surfaces {
-    use agent_client_protocol::schema::v2::{SessionConfigOption, SessionConfigSelectOption, SessionId, SessionInfo};
-
-    use super::*;
-
-    #[test]
-    fn settings_overlay_sets_surface_rect() {
-        let opts = vec![SessionConfigOption::select(
-            "model",
-            "Model",
-            "a",
-            vec![SessionConfigSelectOption::new("a", "Alpha"), SessionConfigSelectOption::new("b", "Beta")],
-        )];
-        let mut ui = TestUiBuilder::new().config_options(opts).dimensions(80, 24).build();
-
-        // Type /settings to open the settings overlay
-        ui.type_text("/settings");
-        ui.key(key(KeyCode::Tab));
-
-        assert!(ui.app().has_modal(), "settings overlay should be open after /settings+Tab");
-
-        ui.draw();
-
-        assert!(ui.app().has_modal(), "the overlay should still be open after a render");
-    }
-
-    #[test]
-    fn session_picker_sets_surface_rect() {
-        let mut ui = make_ui();
-        let current = SessionId::new("test-session");
-        ui.deliver_result(sessions_completed(acp::ListSessionsResponse::new(vec![SessionInfo::new(
-            SessionId::new("other"),
-            std::path::PathBuf::from("/tmp"),
-        )])));
-        std::mem::drop(current);
-
-        ui.draw();
-
-        assert!(ui.app().has_navigation());
-    }
-
-    #[test]
-    fn prompt_search_sets_surface_rect() {
-        let mut ui = TestUiBuilder::new().prompt_search().dimensions(80, 24).build();
-
-        ui.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
-
-        ui.draw();
-
-        // History search is a composer overlay rather than app navigation, so it owns
-        // the mouse without anything being pushed above the conversation.
-        assert!(!ui.app().has_navigation());
-        assert!(ui.app().composer().has_prompt_search());
-        assert!(ui.app().needs_mouse_capture());
-    }
-}
-
 mod refocus_click {
     use agent_client_protocol::schema::v2::{AuthMethod, AuthMethodAgent};
     use crossterm::event::Event;
@@ -1013,13 +547,10 @@ mod refocus_click {
     fn codex_logged_in_via_browser() -> (TestUi, u16) {
         let methods = vec![AuthMethod::Agent(AuthMethodAgent::new("codex", "Codex"))];
         let mut ui = TestUiBuilder::new().auth_methods(methods).dimensions(80, 24).build();
-        ui.type_text("/settings");
-        ui.key(key(KeyCode::Tab));
-        ui.draw();
+        ui.run_command("/settings");
 
         let providers_row = ui.viewport_row("Provider Logins:").expect("Provider Logins row in the settings menu");
         ui.terminal_event(click(10, providers_row));
-        ui.draw();
 
         let codex_row = ui.viewport_row("Codex").expect("Codex row in the provider pane");
         ui.terminal_event(click(10, codex_row));
@@ -1039,7 +570,8 @@ mod refocus_click {
         ui.terminal_event(Event::FocusGained);
         ui.terminal_event(click(10, codex_row));
         ui.terminal_event(click(10, codex_row));
-        assert_eq!(authenticate_count(&mut ui), 1);
+        let logins = ui.count_commands(|command| matches!(command, Command::Agent(AgentCommand::Authenticate { .. })));
+        assert_eq!(logins, 1);
     }
 
     #[test]
@@ -1048,13 +580,39 @@ mod refocus_click {
         ui.terminal_event(Event::FocusGained);
         ui.key(key(KeyCode::Up));
         ui.terminal_event(click(10, codex_row));
-        assert_eq!(authenticate_count(&mut ui), 1);
+        let logins = ui.count_commands(|command| matches!(command, Command::Agent(AgentCommand::Authenticate { .. })));
+        assert_eq!(logins, 1);
     }
+}
 
-    fn authenticate_count(ui: &mut TestUi) -> usize {
-        ui.take_commands()
-            .into_iter()
-            .filter(|command| matches!(command, Command::Agent(AgentCommand::Authenticate { .. })))
-            .count()
-    }
+fn mouse_event(kind: MouseEventKind, column: u16, row: u16) -> crossterm::event::Event {
+    crossterm::event::Event::Mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE })
+}
+
+fn scroll_down(column: u16, row: u16) -> crossterm::event::Event {
+    mouse_event(MouseEventKind::ScrollDown, column, row)
+}
+
+fn scroll_up(column: u16, row: u16) -> crossterm::event::Event {
+    mouse_event(MouseEventKind::ScrollUp, column, row)
+}
+
+fn click(column: u16, row: u16) -> crossterm::event::Event {
+    mouse_event(MouseEventKind::Down(MouseButton::Left), column, row)
+}
+
+fn resumed_session(ui: &mut TestUi) -> Option<String> {
+    ui.take_command_where(|command| match command {
+        Command::Agent(AgentCommand::ResumeSession { session_id, .. }) => Some(session_id.0.to_string()),
+        _ => None,
+    })
+}
+
+fn moved_workspace(ui: &mut TestUi) -> Option<PathBuf> {
+    ui.take_command_where(|command| match command {
+        Command::Agent(AgentCommand::MoveWorkspace { target: WorkspaceMoveTarget::Existing { path }, .. }) => {
+            Some(path)
+        }
+        _ => None,
+    })
 }

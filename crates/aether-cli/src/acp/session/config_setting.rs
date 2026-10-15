@@ -1,4 +1,4 @@
-use acp_utils::config_option_id::ConfigOptionId;
+use acp_utils::config_option_id::{ConfigOptionId, UnknownConfigOptionId};
 use llm::ReasoningEffort;
 use thiserror::Error;
 
@@ -11,10 +11,7 @@ pub enum ConfigSetting {
 
 impl ConfigSetting {
     pub fn parse(config_id: &str, value: &str) -> Result<Self, ConfigSettingError> {
-        let id: ConfigOptionId =
-            config_id.parse().map_err(|_| ConfigSettingError::UnknownConfigId(config_id.to_string()))?;
-
-        match id {
+        match config_id.parse()? {
             ConfigOptionId::Mode => Ok(Self::Mode(value.to_string())),
             ConfigOptionId::Model => Ok(Self::Model(value.to_string())),
             ConfigOptionId::ReasoningEffort => {
@@ -30,8 +27,8 @@ impl ConfigSetting {
 
 #[derive(Debug, Error)]
 pub enum ConfigSettingError {
-    #[error("Unknown config option: {0}")]
-    UnknownConfigId(String),
+    #[error(transparent)]
+    UnknownConfigId(#[from] UnknownConfigOptionId),
     #[error("Invalid value '{value}' for config option '{config_id}'")]
     InvalidValue { config_id: String, value: String },
 }
@@ -41,47 +38,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_mode() {
-        let setting = ConfigSetting::parse("mode", "Planner").unwrap();
-        assert_eq!(setting, ConfigSetting::Mode("Planner".to_string()));
+    fn parses_each_config_option() {
+        let cases = [
+            ("mode", "Planner", ConfigSetting::Mode("Planner".into())),
+            ("model", "anthropic:claude-sonnet-4-5", ConfigSetting::Model("anthropic:claude-sonnet-4-5".into())),
+            ("reasoning_effort", "high", ConfigSetting::ReasoningEffort(Some(ReasoningEffort::High))),
+            ("reasoning_effort", "max", ConfigSetting::ReasoningEffort(Some(ReasoningEffort::Max))),
+            ("reasoning_effort", "", ConfigSetting::ReasoningEffort(None)),
+        ];
+        for (config_id, value, expected) in cases {
+            assert_eq!(ConfigSetting::parse(config_id, value).unwrap(), expected, "{config_id}={value}");
+        }
     }
 
     #[test]
-    fn parse_model() {
-        let setting = ConfigSetting::parse("model", "anthropic:claude-sonnet-4-5").unwrap();
-        assert_eq!(setting, ConfigSetting::Model("anthropic:claude-sonnet-4-5".to_string()));
-    }
-
-    #[test]
-    fn parse_reasoning_effort_high() {
-        let setting = ConfigSetting::parse("reasoning_effort", "high").unwrap();
-        assert_eq!(setting, ConfigSetting::ReasoningEffort(Some(ReasoningEffort::High)));
-    }
-
-    #[test]
-    fn parse_reasoning_effort_empty() {
-        let setting = ConfigSetting::parse("reasoning_effort", "").unwrap();
-        assert_eq!(setting, ConfigSetting::ReasoningEffort(None));
-    }
-
-    #[test]
-    fn unknown_config_id_returns_error() {
+    fn rejects_unknown_ids_and_invalid_values() {
         let err = ConfigSetting::parse("unknown", "value").unwrap_err();
-        assert!(matches!(err, ConfigSettingError::UnknownConfigId(ref id) if id == "unknown"));
+        assert!(matches!(err, ConfigSettingError::UnknownConfigId(UnknownConfigOptionId(ref id)) if id == "unknown"));
         assert!(err.to_string().contains("unknown"));
-    }
 
-    #[test]
-    fn parse_reasoning_effort_max() {
-        let setting = ConfigSetting::parse("reasoning_effort", "max").unwrap();
-        assert_eq!(setting, ConfigSetting::ReasoningEffort(Some(ReasoningEffort::Max)));
-    }
-
-    #[test]
-    fn invalid_reasoning_effort_returns_error() {
         let err = ConfigSetting::parse("reasoning_effort", "ultra").unwrap_err();
         assert!(matches!(err, ConfigSettingError::InvalidValue { .. }));
-        assert!(err.to_string().contains("ultra"));
-        assert!(err.to_string().contains("reasoning_effort"));
+        assert_eq!(err.to_string(), "Invalid value 'ultra' for config option 'reasoning_effort'");
     }
 }

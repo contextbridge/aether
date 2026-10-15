@@ -1,6 +1,6 @@
+use crate::theme::Theme;
 use crate::view::list_view::ListView;
 use crate::view::selection::{Direction, SelectionState};
-use crate::theme::Theme;
 use nucleo::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo::{Config, Matcher, Utf32Str};
 use ratatui::buffer::Buffer;
@@ -22,9 +22,6 @@ pub struct FilterableList<T> {
     selection: SelectionState,
     /// Entries navigation may land on; the rest are stepped over.
     selectable: fn(&T) -> bool,
-    /// Whether stepping wraps at the ends. Long lists that are scanned rather
-    /// than cycled stop instead.
-    wraps: bool,
     preserve_order: bool,
 }
 
@@ -40,7 +37,6 @@ impl<T> FilterableList<T> {
             filtered_indices,
             selection,
             selectable: |_| true,
-            wraps: true,
             preserve_order: false,
         }
     }
@@ -54,7 +50,7 @@ impl<T> FilterableList<T> {
 
     /// Stops navigation at the ends instead of wrapping.
     pub fn clamped(mut self) -> Self {
-        self.wraps = false;
+        self.selection = self.selection.clamped();
         self
     }
 
@@ -90,7 +86,11 @@ impl<T> FilterableList<T> {
     }
 
     pub fn selected_entry(&self) -> Option<&T> {
-        self.selection.selected().and_then(|selected| self.filtered_indices.get(selected)).copied().map(|index| &self.entries[index])
+        self.selection
+            .selected()
+            .and_then(|selected| self.filtered_indices.get(selected))
+            .copied()
+            .map(|index| &self.entries[index])
     }
 
     pub fn push_query_char(&mut self, character: char) {
@@ -115,26 +115,21 @@ impl<T> FilterableList<T> {
 
     /// Selects the entry drawn at terminal `row`, reporting whether one was hit.
     pub fn select_at(&mut self, row: u16) -> bool {
-        let previous = self.selection.selected();
-        let hit = self.selection.select_at(row, self.filtered_len())
-            && self.selected_entry().is_some_and(self.selectable);
-        if !hit {
-            self.selection.select(previous, self.filtered_len());
-        }
-        self.clear_offset_when_empty();
-        hit
+        let (selection, len, selectable) = self.navigation();
+        selection.select_at(row, len, selectable)
     }
 
     /// Moves to the nearest filtered entry in `direction` that this list's
     /// policy allows the selection to rest on.
     pub fn step(&mut self, direction: Direction) {
-        let Self { entries, filtered_indices, selection, selectable, wraps, .. } = self;
-        let allowed = |row: usize| selectable(&entries[filtered_indices[row]]);
-        if *wraps {
-            selection.step(filtered_indices.len(), direction, allowed);
-        } else {
-            selection.step_clamped(filtered_indices.len(), direction, allowed);
-        }
+        let (selection, len, selectable) = self.navigation();
+        selection.step(len, direction, selectable);
+    }
+
+    pub fn navigation(&mut self) -> (&mut SelectionState, usize, impl Fn(usize) -> bool + '_) {
+        let Self { entries, filtered_indices, selection, selectable, .. } = self;
+        let (entries, filtered_indices, selectable) = (&*entries, &*filtered_indices, *selectable);
+        (selection, filtered_indices.len(), move |row| selectable(&entries[filtered_indices[row]]))
     }
 
     pub fn select_index(&mut self, index: usize) {

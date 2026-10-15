@@ -11,13 +11,6 @@ type ModelsDevData = HashMap<String, ProviderData>;
 
 #[derive(Debug, Deserialize)]
 struct ProviderData {
-    #[allow(dead_code)]
-    id: String,
-    #[allow(dead_code)]
-    name: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    env: Vec<String>,
     #[serde(default)]
     models: HashMap<String, ModelData>,
 }
@@ -33,7 +26,6 @@ struct ModelData {
     #[serde(default)]
     reasoning_options: Vec<ReasoningOption>,
     #[serde(default)]
-    #[allow(dead_code)]
     cost: Option<CostData>,
     #[serde(default)]
     limit: Option<LimitData>,
@@ -82,9 +74,6 @@ struct CostData {
 struct LimitData {
     #[serde(default)]
     context: u32,
-    #[serde(default)]
-    #[allow(dead_code)]
-    output: u32,
 }
 
 impl CostData {
@@ -101,11 +90,10 @@ struct ProviderConfig {
     source_dev_id: Option<&'static str>,
     /// Additional models.dev keys whose models are merged into this provider
     extra_source_ids: &'static [&'static str],
-    /// When set, the provider exposes exactly these models with these context
-    /// windows (e.g. subscription-gated providers whose limits differ from the
-    /// source metadata). Every entry must exist and be tool-capable in the
-    /// source data.
-    explicit_models: Option<&'static [ExplicitModel]>,
+    /// When set, the provider exposes only these models (e.g. subscription-gated providers).
+    explicit_models: Option<&'static [&'static str]>,
+    /// Context window applied to every model.
+    explicit_context_window: Option<u32>,
     /// Our Rust enum name (e.g. "Gemini")
     enum_name: &'static str,
     /// Our internal provider name used for parsing (e.g. "gemini")
@@ -134,13 +122,6 @@ struct ProviderConfig {
     is_hybrid_dynamic: bool,
 }
 
-/// A model exposed by a provider with an explicit model list.
-struct ExplicitModel {
-    id: &'static str,
-    context_window: u32,
-    supports_reasoning_off: bool,
-}
-
 impl ProviderConfig {
     /// Shorthand for providers with default `source_dev_id`, `explicit_models`, and `oauth_provider_id`.
     const fn standard(
@@ -155,6 +136,7 @@ impl ProviderConfig {
             source_dev_id: None,
             extra_source_ids: &[],
             explicit_models: None,
+            explicit_context_window: None,
             enum_name,
             parser_name,
             genai_provider_name: parser_name,
@@ -178,10 +160,6 @@ impl ProviderConfig {
         let mut config = Self::standard(dev_id, enum_name, parser_name, display_name, Some(env_var));
         config.uses_openai_compatible_api = true;
         config
-    }
-
-    fn explicit_model(&self, model_id: &str) -> Option<&'static ExplicitModel> {
-        self.explicit_models.and_then(|models| models.iter().find(|model| model.id == model_id))
     }
 
     /// Inner catalog-enum name. For hybrid providers the outer `{enum_name}Model`
@@ -232,20 +210,13 @@ const PROVIDERS: &[ProviderConfig] = &[
         )
     },
     ProviderConfig {
-        dev_id: "codex",
         source_dev_id: Some("openai"),
-        extra_source_ids: &[],
         explicit_models: Some(CODEX_SUBSCRIPTION_MODELS),
-        enum_name: "Codex",
-        parser_name: "codex",
+        explicit_context_window: Some(272_000),
         genai_provider_name: "openai",
-        display_name: "Codex",
-        env_var: None,
         oauth_provider_id: Some("codex"),
         fallback_reasoning_levels: &["low", "medium", "high", "xhigh"],
-        use_model_transport: false,
-        uses_openai_compatible_api: false,
-        is_hybrid_dynamic: false,
+        ..ProviderConfig::standard("codex", "Codex", "codex", "Codex", None)
     },
     ProviderConfig::openai_compatible("deepseek", "DeepSeek", "deepseek", "DeepSeek", "DEEPSEEK_API_KEY"),
     ProviderConfig {
@@ -290,48 +261,18 @@ const DYNAMIC_PROVIDERS: &[DynamicProviderConfig] = &[
     },
 ];
 
-const CODEX_SUBSCRIPTION_CONTEXT_WINDOW: u32 = 272_000;
-
-const CODEX_SUBSCRIPTION_MODELS: &[ExplicitModel] = &[
-    ExplicitModel {
-        id: "gpt-6.1-sol",
-        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
-        supports_reasoning_off: false,
-    },
-    ExplicitModel { id: "gpt-6-sol", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW, supports_reasoning_off: false },
-    ExplicitModel {
-        id: "gpt-6-astra",
-        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
-        supports_reasoning_off: false,
-    },
-    ExplicitModel {
-        id: "gpt-6-luna",
-        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
-        supports_reasoning_off: false,
-    },
-    ExplicitModel {
-        id: "gpt-5.6-sol",
-        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
-        supports_reasoning_off: false,
-    },
-    ExplicitModel {
-        id: "gpt-5.6-terra",
-        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
-        supports_reasoning_off: false,
-    },
-    ExplicitModel {
-        id: "gpt-5.6-luna",
-        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
-        supports_reasoning_off: false,
-    },
-    ExplicitModel { id: "gpt-5.5", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW, supports_reasoning_off: false },
-    ExplicitModel { id: "gpt-5.4", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW, supports_reasoning_off: false },
-    ExplicitModel {
-        id: "gpt-5.4-mini",
-        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
-        supports_reasoning_off: false,
-    },
-    ExplicitModel { id: "gpt-5.2", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW, supports_reasoning_off: false },
+const CODEX_SUBSCRIPTION_MODELS: &[&str] = &[
+    "gpt-6.1-sol",
+    "gpt-6-sol",
+    "gpt-6-astra",
+    "gpt-6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.2",
 ];
 
 #[derive(Debug, Clone)]
@@ -348,7 +289,7 @@ struct ModelInfo {
     transport: Option<TransportInfo>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum TransportInfo {
     OpenAiResponses { base_url_template: String },
 }
@@ -453,23 +394,23 @@ fn validate_provider_config(cfg: &ProviderConfig, provider: &ProviderData) -> Re
         return Ok(());
     };
     let mut seen = HashSet::new();
-    for configured in explicit_models {
-        if !seen.insert(configured.id) {
+    for &model_id in explicit_models {
+        if !seen.insert(model_id) {
             return Err(CodegenError::DuplicateConfiguredModel {
                 provider_id: cfg.dev_id.to_string(),
-                model_id: configured.id.to_string(),
+                model_id: model_id.to_string(),
             });
         }
-        let Some(model) = provider.models.get(configured.id) else {
+        let Some(model) = provider.models.get(model_id) else {
             return Err(CodegenError::ConfiguredModelNotFound {
                 provider_id: cfg.dev_id.to_string(),
-                model_id: configured.id.to_string(),
+                model_id: model_id.to_string(),
             });
         };
         if model.tool_call != Some(true) {
             return Err(CodegenError::ConfiguredModelUnavailable {
                 provider_id: cfg.dev_id.to_string(),
-                model_id: configured.id.to_string(),
+                model_id: model_id.to_string(),
             });
         }
     }
@@ -484,15 +425,14 @@ fn collect_models_from(
         .values()
         .filter(|m| m.tool_call == Some(true))
         .filter(|m| !is_alias(&m.id))
-        .filter(|m| cfg.explicit_models.is_none() || cfg.explicit_model(&m.id).is_some())
+        .filter(|m| cfg.explicit_models.is_none_or(|ids| ids.contains(&m.id.as_str())))
         .map(|m| {
             let reasoning_levels =
                 if m.reasoning.unwrap_or(false) { reasoning_levels_for_model(cfg, m)? } else { Vec::new() };
             let input_modalities =
                 m.modalities.as_ref().map_or_else(|| vec!["text".to_string()], |md| md.input.clone());
-            let source_context_window = m.limit.as_ref().map_or(0, |l| l.context);
             let context_window =
-                cfg.explicit_model(&m.id).map_or(source_context_window, |explicit| explicit.context_window);
+                cfg.explicit_context_window.unwrap_or_else(|| m.limit.as_ref().map_or(0, |l| l.context));
             let pricing = if cfg.dev_id == "codex" { None } else { m.cost.clone() };
             Ok(ModelInfo {
                 variant_name: model_id_to_variant(&m.id),
@@ -531,11 +471,8 @@ fn transport_for_model(cfg: &ProviderConfig, model: &ModelData) -> Result<Option
 }
 
 fn disabled_support_for_model(cfg: &ProviderConfig, model: &ModelData) -> &'static str {
-    if !model.reasoning.unwrap_or(false) {
+    if !model.reasoning.unwrap_or(false) || cfg.explicit_models.is_some() {
         return "Unsupported";
-    }
-    if let Some(explicit) = cfg.explicit_model(&model.id) {
-        return if explicit.supports_reasoning_off { "Effort" } else { "Unsupported" };
     }
     if model.reasoning_options.iter().any(|option| {
         matches!(option,
@@ -618,33 +555,13 @@ fn model_id_to_variant(id: &str) -> String {
 
 fn emit_generated_source(ctx: &CodegenCtx) -> String {
     let provider_enum = emit_provider_enum();
-    let provider_enum_impl = emit_provider_enum_impl();
-    let provider_enum_display = emit_provider_enum_display();
-    let provider_enum_fromstr = emit_provider_enum_fromstr();
-    let provider_enums = emit_provider_enums(&ctx.provider_models);
-    let provider_impls = emit_provider_impls(&ctx.provider_models);
-    let llm_model_enum = emit_llm_model_enum();
-    let from_impls = emit_from_impls();
-    let llm_model_impl = emit_llm_model_impl();
-    let display_impl = emit_display_impl();
-    let fromstr_impl = emit_fromstr_impl();
+    let catalog_enums = emit_catalog_enums(&ctx.provider_models);
+    let llm_model = emit_llm_model();
 
     let file_tokens = quote! {
-        use std::borrow::Cow;
-        use std::sync::LazyLock;
-        use crate::ReasoningEffort;
-
         #provider_enum
-        #provider_enum_impl
-        #provider_enum_display
-        #provider_enum_fromstr
-        #provider_enums
-        #provider_impls
-        #llm_model_enum
-        #from_impls
-        #llm_model_impl
-        #display_impl
-        #fromstr_impl
+        #catalog_enums
+        #llm_model
     };
 
     let file: syn::File = syn::parse2(file_tokens).expect("generated tokens parse as Rust");
@@ -655,371 +572,226 @@ fn emit_generated_source(ctx: &CodegenCtx) -> String {
 }
 
 fn emit_provider_enum() -> TokenStream {
-    let catalog_variants = PROVIDERS.iter().map(|cfg| format_ident!("{}", cfg.enum_name));
-    let dynamic_variants = DYNAMIC_PROVIDERS.iter().map(|d| format_ident!("{}", d.enum_name));
+    let variants: Vec<_> = PROVIDERS
+        .iter()
+        .map(|cfg| cfg.enum_name)
+        .chain(DYNAMIC_PROVIDERS.iter().map(|d| d.enum_name))
+        .map(|name| format_ident!("{name}"))
+        .collect();
+    let catalog_info = PROVIDERS.iter().map(|cfg| {
+        let (parser_name, genai_provider_name, display_name) =
+            (cfg.parser_name, cfg.genai_provider_name, cfg.display_name);
+        let required_env_var = option_tokens(cfg.env_var);
+        let oauth_provider_id = option_tokens(cfg.oauth_provider_id);
+        let reasoning_off = if cfg.uses_openai_compatible_api {
+            format_ident!("Effort")
+        } else if cfg.use_model_transport {
+            format_ident!("ModelTransport")
+        } else {
+            format_ident!("Always")
+        };
+        quote! {
+            ProviderInfo {
+                parser_name: #parser_name,
+                genai_provider_name: #genai_provider_name,
+                display_name: #display_name,
+                required_env_var: #required_env_var,
+                oauth_provider_id: #oauth_provider_id,
+                is_local: false,
+                reasoning_off: ReasoningOff::#reasoning_off,
+            }
+        }
+    });
+    let dynamic_info = DYNAMIC_PROVIDERS.iter().map(|d| {
+        let (parser_name, genai_provider_name, display_name) = (d.parser_name, d.genai_provider_name, d.display_name);
+        quote! {
+            ProviderInfo {
+                parser_name: #parser_name,
+                genai_provider_name: #genai_provider_name,
+                display_name: #display_name,
+                required_env_var: None,
+                oauth_provider_id: None,
+                is_local: true,
+                reasoning_off: ReasoningOff::Never,
+            }
+        }
+    });
+
     quote! {
         /// Typed provider identifier — covers both catalog providers
         /// (`Anthropic`, `Codex`, …) and dynamic providers whose model name is
         /// user-supplied (`Ollama`, `LlamaCpp`).
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub enum Provider {
-            #(#catalog_variants,)*
-            #(#dynamic_variants,)*
+            #(#variants,)*
         }
-    }
-}
 
-fn emit_provider_enum_impl() -> TokenStream {
-    let parser_arms = provider_match_arms(|cfg| cfg.parser_name, |d| d.parser_name);
-    let genai_provider_name_arms = provider_match_arms(|cfg| cfg.genai_provider_name, |d| d.genai_provider_name);
-    let display_arms = provider_match_arms(|cfg| cfg.display_name, |d| d.display_name);
-
-    let env_var_some = PROVIDERS.iter().filter_map(|cfg| {
-        cfg.env_var.map(|var| {
-            let v = format_ident!("{}", cfg.enum_name);
-            quote! { Self::#v => Some(#var), }
-        })
-    });
-
-    let env_var_none = provider_or_pats(|cfg| cfg.env_var.is_none(), |_| true);
-    let oauth_some = PROVIDERS.iter().filter_map(|cfg| {
-        cfg.oauth_provider_id.map(|id| {
-            let v = format_ident!("{}", cfg.enum_name);
-            quote! { Self::#v => Some(#id), }
-        })
-    });
-    let oauth_none = provider_or_pats(|cfg| cfg.oauth_provider_id.is_none(), |_| true);
-
-    let is_local_true = provider_or_pats(|_| false, |_| true);
-    let is_local_false = provider_or_pats(|_| true, |_| false);
-    let all_variants = PROVIDERS
-        .iter()
-        .map(|cfg| format_ident!("{}", cfg.enum_name))
-        .chain(DYNAMIC_PROVIDERS.iter().map(|d| format_ident!("{}", d.enum_name)));
-
-    quote! {
         impl Provider {
             /// All providers — catalog and dynamic — in declaration order.
-            pub const ALL: &[Provider] = &[#(Self::#all_variants),*];
+            pub const ALL: &[Provider] = &[#(Self::#variants),*];
 
-            /// Parser name used in `provider:model` strings (e.g. `"anthropic"`).
-            pub fn parser_name(self) -> &'static str {
-                match self { #parser_arms }
-            }
-
-            /// OpenTelemetry `GenAI` semantic-convention provider name.
-            #[allow(clippy::match_same_arms)]
-            pub fn genai_provider_name(self) -> &'static str {
-                match self { #genai_provider_name_arms }
-            }
-
-            /// Human-readable provider name (e.g. `"AWS Bedrock"`).
-            pub fn display_name(self) -> &'static str {
-                match self { #display_arms }
-            }
-
-            /// API-key env var the provider requires, if any.
-            pub fn required_env_var(self) -> Option<&'static str> {
-                match self {
-                    #(#env_var_some)*
-                    #env_var_none => None,
-                }
-            }
-
-            /// OAuth provider ID if this provider authenticates via OAuth.
-            pub fn oauth_provider_id(self) -> Option<&'static str> {
-                match self {
-                    #(#oauth_some)*
-                    #oauth_none => None,
-                }
-            }
-
-            /// Local providers run models on the user's machine — there's no
-            /// remote API to call and no env var to satisfy.
-            pub fn is_local(self) -> bool {
-                match self {
-                    #is_local_true => true,
-                    #is_local_false => false,
-                }
-            }
+            const INFO: &[ProviderInfo] = &[#(#catalog_info,)* #(#dynamic_info,)*];
         }
     }
 }
 
-fn emit_provider_enum_display() -> TokenStream {
-    quote! {
-        impl std::fmt::Display for Provider {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str(self.parser_name())
-            }
-        }
-    }
-}
-
-fn emit_provider_enum_fromstr() -> TokenStream {
-    let catalog_arms = PROVIDERS.iter().map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        let name = cfg.parser_name;
-        quote! { #name => Ok(Self::#v), }
-    });
-
-    let dynamic_arms = DYNAMIC_PROVIDERS.iter().map(|d| {
-        let v = format_ident!("{}", d.enum_name);
-        let name = d.parser_name;
-        quote! { #name => Ok(Self::#v), }
-    });
-
-    quote! {
-        impl std::str::FromStr for Provider {
-            type Err = String;
-            fn from_str(s: &str) -> Result<Self, Self::Err> {
-                match s {
-                    #(#catalog_arms)*
-                    #(#dynamic_arms)*
-                    other => Err(format!("Unknown provider: '{other}'")),
-                }
-            }
-        }
-    }
-}
-
-fn emit_provider_enums(provider_models: &ProviderModels) -> TokenStream {
+fn emit_catalog_enums(provider_models: &ProviderModels) -> TokenStream {
     let enums = PROVIDERS.iter().map(|cfg| {
         let inner = format_ident!("{}", cfg.inner_enum_name());
-        let variants = provider_models[cfg.dev_id].iter().map(|m| format_ident!("{}", m.variant_name));
+        let models = &provider_models[cfg.dev_id];
+        let variants: Vec<_> = models.iter().map(|m| format_ident!("{}", m.variant_name)).collect();
+        let entries = models.iter().map(emit_catalog_entry);
         quote! {
             #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
             pub enum #inner {
                 #(#variants,)*
+            }
+
+            impl #inner {
+                const ALL: &[Self] = &[#(Self::#variants),*];
+
+                #[allow(clippy::large_stack_arrays, clippy::unreadable_literal)]
+                const ENTRIES: &[CatalogEntry] = &[#(#entries,)*];
+
+                fn entry(self) -> &'static CatalogEntry {
+                    &Self::ENTRIES[self as usize]
+                }
             }
         }
     });
     quote! { #(#enums)* }
 }
 
-fn emit_provider_impls(provider_models: &ProviderModels) -> TokenStream {
-    let impls = PROVIDERS.iter().map(|cfg| {
-        let models = &provider_models[cfg.dev_id];
-        let enum_ident = format_ident!("{}", cfg.inner_enum_name());
-
-        let model_id_arms = models.iter().map(|m| {
-            let v = format_ident!("{}", m.variant_name);
-            let id = &m.model_id;
-            quote! { Self::#v => #id, }
-        });
-
-        let display_name_arms = grouped_arms(
-            models,
-            |m| m.display_name.clone(),
-            |m| {
-                let s = &m.display_name;
-                quote! { #s }
-            },
-        );
-
-        let context_window_arms =
-            grouped_arms(models, |m| m.context_window, |m| num_lit_with_underscores(m.context_window));
-
-        let reasoning_levels_arms = emit_reasoning_levels_arms(models);
-        let disabled_support_arms = grouped_arms(
-            models,
-            |m| m.disabled_support,
-            |m| {
-                let variant = format_ident!("{}", m.disabled_support);
-                quote! { crate::reasoning::ReasoningDisabledSupport::#variant }
-            },
-        );
-
-        let prompt_caching_arms = grouped_arms(
-            models,
-            |m| m.supports_prompt_caching,
-            |m| {
-                let b = m.supports_prompt_caching;
-                quote! { #b }
-            },
-        );
-
-        let pricing_arms = emit_pricing_arms(models);
-
-        let modality_methods = ["image", "audio"].iter().map(|modality| {
-            let method = format_ident!("supports_{}", modality);
-            let mod_owned = (*modality).to_string();
-            let arms = grouped_arms(models, move |m| m.input_modalities.contains(&mod_owned), {
-                let mod_owned = (*modality).to_string();
-                move |m| {
-                    let b = m.input_modalities.contains(&mod_owned);
-                    quote! { #b }
-                }
-            });
-            quote! {
-                #[allow(clippy::too_many_lines)]
-                pub fn #method(self) -> bool {
-                    match self { #arms }
-                }
-            }
-        });
-
-        let transport_arms = emit_transport_arms(models);
-
-        let all_variants = models.iter().map(|m| format_ident!("{}", m.variant_name));
-
-        let from_str_impl = emit_from_str_impl(&enum_ident, cfg.parser_name, models);
-
+fn emit_catalog_entry(model: &ModelInfo) -> TokenStream {
+    let (id, display_name, supports_prompt_caching) =
+        (&model.model_id, &model.display_name, model.supports_prompt_caching);
+    let context_window = num_lit_with_underscores(model.context_window);
+    let reasoning_levels = model.reasoning_levels.iter().map(|level| format_ident!("{}", level_str_to_variant(level)));
+    let disabled_support = format_ident!("{}", model.disabled_support);
+    let pricing = option_tokens(model.pricing.as_ref().map(|pricing| {
+        let (input, output) = (pricing.input, pricing.output);
+        let (cache_read, cache_write) = (option_tokens(pricing.cache_read), option_tokens(pricing.cache_write));
         quote! {
-            impl #enum_ident {
-                #[allow(clippy::too_many_lines)]
-                fn model_id(self) -> &'static str {
-                    match self { #(#model_id_arms)* }
-                }
-
-                #[allow(clippy::too_many_lines)]
-                fn display_name(self) -> &'static str {
-                    match self { #display_name_arms }
-                }
-
-                #[allow(clippy::too_many_lines)]
-                fn context_window(self) -> u32 {
-                    match self { #context_window_arms }
-                }
-
-                #[allow(clippy::too_many_lines)]
-                pub fn reasoning_levels(self) -> &'static [ReasoningEffort] {
-                    match self { #reasoning_levels_arms }
-                }
-
-                #[allow(clippy::too_many_lines)]
-                pub fn reasoning_disabled_support(self) -> crate::reasoning::ReasoningDisabledSupport {
-                    match self { #disabled_support_arms }
-                }
-
-                pub fn supports_reasoning(self) -> bool {
-                    self.reasoning_levels().iter().any(|effort| effort.is_enabled())
-                }
-
-                #[allow(clippy::too_many_lines)]
-                pub fn supports_prompt_caching(self) -> bool {
-                    match self { #prompt_caching_arms }
-                }
-
-                #[allow(clippy::too_many_lines, clippy::match_same_arms, clippy::unreadable_literal)]
-                pub fn pricing(self) -> Option<ModelPricing> {
-                    match self { #pricing_arms }
-                }
-
-                #(#modality_methods)*
-
-                #[allow(clippy::too_many_lines)]
-                pub fn transport(self) -> Option<ModelTransport> {
-                    match self { #transport_arms }
-                }
-
-                const ALL: &[#enum_ident] = &[#(Self::#all_variants),*];
-            }
-
-            #from_str_impl
-        }
-    });
-    quote! { #(#impls)* }
-}
-
-fn emit_pricing_arms(models: &[ModelInfo]) -> TokenStream {
-    let arms = models.iter().map(|model| {
-        let variant = format_ident!("{}", model.variant_name);
-        let Some(pricing) = &model.pricing else {
-            return quote! { Self::#variant => None, };
-        };
-        let input = pricing.input;
-        let output = pricing.output;
-        let cache_read = pricing.cache_read.map_or_else(|| quote! { None }, |value| quote! { Some(#value) });
-        let cache_write = pricing.cache_write.map_or_else(|| quote! { None }, |value| quote! { Some(#value) });
-        quote! {
-            Self::#variant => Some(ModelPricing {
+            ModelPricing {
                 input_per_million: #input,
                 output_per_million: #output,
                 cache_read_per_million: #cache_read,
                 cache_write_per_million: #cache_write,
-            }),
+            }
         }
-    });
-    quote! { #(#arms)* }
+    }));
+    let supports_image = model.input_modalities.iter().any(|modality| modality == "image");
+    let supports_audio = model.input_modalities.iter().any(|modality| modality == "audio");
+    let transport = option_tokens(model.transport.as_ref().map(|transport| match transport {
+        TransportInfo::OpenAiResponses { base_url_template } => {
+            quote! { ModelTransport::OpenAiResponses { base_url_template: #base_url_template } }
+        }
+    }));
+    quote! {
+        CatalogEntry {
+            id: #id,
+            display_name: #display_name,
+            context_window: #context_window,
+            reasoning_levels: &[#(ReasoningEffort::#reasoning_levels),*],
+            disabled_support: ReasoningDisabledSupport::#disabled_support,
+            supports_prompt_caching: #supports_prompt_caching,
+            pricing: #pricing,
+            supports_image: #supports_image,
+            supports_audio: #supports_audio,
+            transport: #transport,
+        }
+    }
 }
 
-fn emit_from_str_impl(enum_ident: &proc_macro2::Ident, parser_name: &str, models: &[ModelInfo]) -> TokenStream {
-    let arms = models.iter().map(|m| {
-        let id = &m.model_id;
-        let v = format_ident!("{}", m.variant_name);
-        quote! { #id => Ok(Self::#v), }
+fn emit_llm_model() -> TokenStream {
+    let catalog_variants = PROVIDERS.iter().map(|cfg| {
+        let v = format_ident!("{}", cfg.enum_name);
+        let outer = format_ident!("{}", cfg.outer_enum_name());
+        quote! { #v(#outer) }
     });
-    let err_msg = format!("Unknown {parser_name} model: '{{s}}'");
-    quote! {
-        impl std::str::FromStr for #enum_ident {
-            type Err = String;
+    let dynamic_variants = DYNAMIC_PROVIDERS.iter().map(|d| format_ident!("{}", d.enum_name));
+    let from_impls = PROVIDERS.iter().map(|cfg| {
+        let v = format_ident!("{}", cfg.enum_name);
+        let outer = format_ident!("{}", cfg.outer_enum_name());
+        quote! {
+            impl From<#outer> for LlmModel {
+                fn from(m: #outer) -> Self {
+                    LlmModel::#v(m)
+                }
+            }
+        }
+    });
+    let env_vars = PROVIDERS.iter().filter_map(|cfg| cfg.env_var);
+    let pushes = PROVIDERS.iter().map(|cfg| {
+        let inner = format_ident!("{}", cfg.inner_enum_name());
+        let outer = format_ident!("{}", cfg.outer_enum_name());
+        let v = format_ident!("{}", cfg.enum_name);
+        if cfg.is_hybrid_dynamic {
+            quote! { v.extend(#inner::ALL.iter().copied().map(#outer::Foundation).map(LlmModel::#v)); }
+        } else {
+            quote! { v.extend(#inner::ALL.iter().copied().map(LlmModel::#v)); }
+        }
+    });
+    let provider_arms =
+        PROVIDERS.iter().map(|cfg| cfg.enum_name).chain(DYNAMIC_PROVIDERS.iter().map(|d| d.enum_name)).map(|name| {
+            let v = format_ident!("{name}");
+            quote! { Self::#v(_) => Provider::#v, }
+        });
+    let source_arms = PROVIDERS.iter().map(|cfg| {
+        let v = format_ident!("{}", cfg.enum_name);
+        if cfg.is_hybrid_dynamic {
+            quote! { Self::#v(m) => m.source(), }
+        } else {
+            quote! { Self::#v(m) => ModelSource::Catalog(m.entry()), }
+        }
+    });
+    let dynamic_pats = DYNAMIC_PROVIDERS.iter().map(|d| {
+        let v = format_ident!("{}", d.enum_name);
+        quote! { Self::#v(id) }
+    });
 
-            #[allow(clippy::too_many_lines)]
-            fn from_str(s: &str) -> Result<Self, Self::Err> {
-                match s {
-                    #(#arms)*
-                    _ => Err(format!(#err_msg)),
+    quote! {
+        /// A model from a specific provider
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+        pub enum LlmModel {
+            #(#catalog_variants,)*
+            #(#dynamic_variants(String),)*
+        }
+
+        #(#from_impls)*
+
+        impl LlmModel {
+            /// All provider API key env var names (deduplicated, static)
+            pub const ALL_REQUIRED_ENV_VARS: &[&str] = &[#(#env_vars),*];
+
+            /// All catalog models (excludes dynamic providers)
+            pub fn all() -> &'static [LlmModel] {
+                static ALL: LazyLock<Vec<LlmModel>> = LazyLock::new(|| {
+                    let mut v = Vec::new();
+                    #(#pushes)*
+                    v
+                });
+                &ALL
+            }
+
+            /// Typed provider identifier.
+            pub fn provider_enum(&self) -> Provider {
+                match self { #(#provider_arms)* }
+            }
+
+            fn source(&self) -> ModelSource<'_> {
+                match self {
+                    #(#source_arms)*
+                    #(#dynamic_pats)|* => ModelSource::Runtime(id),
                 }
             }
         }
     }
 }
 
-/// Emit match arms grouped by value to avoid clippy `match_same_arms`.
-fn grouped_arms<K, R>(
-    models: &[ModelInfo],
-    key_fn: impl Fn(&ModelInfo) -> K,
-    rhs_fn: impl Fn(&ModelInfo) -> R,
-) -> TokenStream
-where
-    K: Eq + Ord,
-    R: ToTokens,
-{
-    let mut groups: BTreeMap<K, Vec<&ModelInfo>> = BTreeMap::new();
-    for m in models {
-        groups.entry(key_fn(m)).or_default().push(m);
-    }
-    let arms = groups.values().map(|members| {
-        let pats = members.iter().map(|m| {
-            let v = format_ident!("{}", m.variant_name);
-            quote! { Self::#v }
-        });
-        let rhs = rhs_fn(members[0]);
-        quote! { #(#pats)|* => #rhs, }
-    });
-    quote! { #(#arms)* }
-}
-
-fn emit_reasoning_levels_arms(models: &[ModelInfo]) -> TokenStream {
-    grouped_arms(
-        models,
-        |m| m.reasoning_levels.clone(),
-        |m| {
-            if m.reasoning_levels.is_empty() {
-                quote! { &[] }
-            } else {
-                let items = m.reasoning_levels.iter().map(|l| {
-                    let variant = format_ident!("{}", level_str_to_variant(l));
-                    quote! { ReasoningEffort::#variant }
-                });
-                quote! { &[#(#items),*] }
-            }
-        },
-    )
-}
-
-fn emit_transport_arms(models: &[ModelInfo]) -> TokenStream {
-    grouped_arms(
-        models,
-        |m| m.transport.clone(),
-        |m| match m.transport.as_ref() {
-            Some(TransportInfo::OpenAiResponses { base_url_template }) => {
-                quote! { Some(ModelTransport::OpenAiResponses { base_url_template: #base_url_template }) }
-            }
-            None => quote! { None },
-        },
-    )
+/// Emit `Some(value)` or `None` (`quote` emits a bare value or nothing for an `Option`).
+fn option_tokens(value: Option<impl ToTokens>) -> TokenStream {
+    value.map_or_else(|| quote! { None }, |value| quote! { Some(#value) })
 }
 
 /// Map a reasoning level string to its `ReasoningEffort` variant name
@@ -1030,536 +802,6 @@ fn level_str_to_variant(level: &str) -> String {
     let mut variant = canonical.to_string();
     variant[..1].make_ascii_uppercase();
     variant
-}
-
-fn emit_llm_model_enum() -> TokenStream {
-    let catalog_variants = PROVIDERS.iter().map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        let inner = format_ident!("{}Model", cfg.enum_name);
-        quote! { #v(#inner) }
-    });
-    let dynamic_variants = DYNAMIC_PROVIDERS.iter().map(|d| {
-        let v = format_ident!("{}", d.enum_name);
-        quote! { #v(String) }
-    });
-    quote! {
-        /// A model from a specific provider
-        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        pub enum LlmModel {
-            #(#catalog_variants,)*
-            #(#dynamic_variants,)*
-        }
-    }
-}
-
-fn emit_from_impls() -> TokenStream {
-    let impls = PROVIDERS.iter().map(|cfg| {
-        let outer = format_ident!("{}Model", cfg.enum_name);
-        let v = format_ident!("{}", cfg.enum_name);
-        quote! {
-            impl From<#outer> for LlmModel {
-                fn from(m: #outer) -> Self {
-                    LlmModel::#v(m)
-                }
-            }
-        }
-    });
-    quote! { #(#impls)* }
-}
-
-fn emit_llm_model_impl() -> TokenStream {
-    let model_id = emit_llm_model_id();
-    let display_name = emit_llm_display_name();
-    let provider = emit_llm_provider();
-    let provider_enum = emit_llm_provider_enum();
-    let provider_display_name = emit_llm_provider_display_name();
-    let context_window = emit_llm_context_window();
-    let required_env_var = emit_llm_required_env_var();
-    let all_required_env_vars = emit_llm_all_required_env_vars();
-    let oauth_provider_id = emit_llm_oauth_provider_id();
-    let reasoning_levels = emit_llm_reasoning_levels();
-    let disabled_support = llm_delegate_with_dynamic_default(
-        "reasoning_disabled_support",
-        &quote! { crate::reasoning::ReasoningDisabledSupport::Unsupported },
-    );
-    let supports_reasoning = emit_llm_supports_reasoning();
-    let supports_reasoning_off_transport = emit_llm_supports_reasoning_off_transport();
-    let supports_prompt_caching = emit_llm_supports_prompt_caching();
-    let pricing = emit_llm_pricing();
-    let modality_methods = ["image", "audio"].iter().map(|m| emit_llm_supports_modality(m));
-    let transport = emit_llm_transport();
-    let all = emit_llm_all();
-
-    quote! {
-        impl LlmModel {
-            #model_id
-            #display_name
-            #provider
-            #provider_enum
-            #provider_display_name
-            #context_window
-            #required_env_var
-            #all_required_env_vars
-            #oauth_provider_id
-            #reasoning_levels
-            pub fn reasoning_disabled_support(&self) -> crate::reasoning::ReasoningDisabledSupport {
-                #disabled_support
-            }
-
-            /// Whether this model advertises an explicit off selection.
-            pub fn supports_reasoning_off(&self) -> bool {
-                self.reasoning_levels().contains(&ReasoningEffort::Disabled)
-            }
-
-            #supports_reasoning_off_transport
-
-            /// Explicit choices executable by the current adapter. Default is always valid.
-            pub fn effective_reasoning_levels(&self) -> Vec<ReasoningEffort> {
-                self.reasoning_levels()
-                    .iter()
-                    .copied()
-                    .filter(|effort| *effort != ReasoningEffort::Disabled || self.supports_reasoning_off_transport())
-                    .collect()
-            }
-
-            pub fn validate_reasoning_effort(&self, effort: ReasoningEffort) -> Result<(), crate::catalog::ReasoningEffortError> {
-                let supported = self.effective_reasoning_levels();
-                if effort == ReasoningEffort::Default || supported.contains(&effort) {
-                    Ok(())
-                } else {
-                    Err(crate::catalog::ReasoningEffortError::Unsupported { model: self.to_string(), effort, supported })
-                }
-            }
-
-            #supports_reasoning
-            #supports_prompt_caching
-            #pricing
-            #(#modality_methods)*
-            #transport
-            #all
-        }
-    }
-}
-
-fn emit_llm_model_id() -> TokenStream {
-    let catalog_arms = PROVIDERS.iter().map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        if cfg.is_hybrid_dynamic {
-            quote! { Self::#v(m) => m.model_id(), }
-        } else {
-            quote! { Self::#v(m) => Cow::Borrowed(m.model_id()), }
-        }
-    });
-    let dyn_pats = dynamic_pattern_with_binding("s");
-    quote! {
-        /// Raw model ID (e.g. `claude-opus-4-6`, `llama3.2`)
-        pub fn model_id(&self) -> Cow<'static, str> {
-            match self {
-                #(#catalog_arms)*
-                #dyn_pats => Cow::Owned(s.clone()),
-            }
-        }
-    }
-}
-
-fn emit_llm_display_name() -> TokenStream {
-    let catalog_arms = PROVIDERS.iter().map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        if cfg.is_hybrid_dynamic {
-            quote! { Self::#v(m) => m.display_name(), }
-        } else {
-            quote! { Self::#v(m) => Cow::Borrowed(m.display_name()), }
-        }
-    });
-    let dyn_arms = DYNAMIC_PROVIDERS.iter().map(|d| {
-        let v = format_ident!("{}", d.enum_name);
-        let fmt = format!("{} {{s}}", d.enum_name);
-        quote! { Self::#v(s) => Cow::Owned(format!(#fmt)), }
-    });
-    quote! {
-        /// Human-readable display name (e.g. `Claude Opus 4.6`)
-        pub fn display_name(&self) -> Cow<'static, str> {
-            match self {
-                #(#catalog_arms)*
-                #(#dyn_arms)*
-            }
-        }
-    }
-}
-
-fn emit_llm_provider() -> TokenStream {
-    let arms = llm_match_arms_ignored(|cfg| cfg.parser_name, |d| d.parser_name);
-    quote! {
-        /// Provider identifier (e.g. `anthropic`)
-        pub fn provider(&self) -> &'static str {
-            match self { #arms }
-        }
-    }
-}
-
-fn emit_llm_provider_enum() -> TokenStream {
-    let arms = llm_match_arms_ignored(
-        |cfg| {
-            let v = format_ident!("{}", cfg.enum_name);
-            quote! { Provider::#v }
-        },
-        |d| {
-            let v = format_ident!("{}", d.enum_name);
-            quote! { Provider::#v }
-        },
-    );
-    quote! {
-        /// Typed provider identifier.
-        pub fn provider_enum(&self) -> Provider {
-            match self { #arms }
-        }
-    }
-}
-
-fn emit_llm_provider_display_name() -> TokenStream {
-    let arms = llm_match_arms_ignored(|cfg| cfg.display_name, |d| d.display_name);
-    quote! {
-        /// Human-readable provider name (e.g. `AWS Bedrock`)
-        pub fn provider_display_name(&self) -> &'static str {
-            match self { #arms }
-        }
-    }
-}
-
-fn emit_llm_context_window() -> TokenStream {
-    let catalog_arms = PROVIDERS.iter().map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        if cfg.is_hybrid_dynamic {
-            quote! { Self::#v(m) => m.context_window(), }
-        } else {
-            quote! { Self::#v(m) => Some(m.context_window()), }
-        }
-    });
-    let dyn_pats = dynamic_pattern_with_binding("_");
-    quote! {
-        /// Context window size in tokens (None for dynamic providers)
-        pub fn context_window(&self) -> Option<u32> {
-            match self {
-                #(#catalog_arms)*
-                #dyn_pats => None,
-            }
-        }
-    }
-}
-
-fn emit_llm_required_env_var() -> TokenStream {
-    let some_arms = PROVIDERS.iter().filter_map(|cfg| {
-        cfg.env_var.map(|var| {
-            let v = format_ident!("{}", cfg.enum_name);
-            quote! { Self::#v(_) => Some(#var), }
-        })
-    });
-    let none_pats = llm_or_pats(|cfg| cfg.env_var.is_none(), |_| true);
-    quote! {
-        /// Required env var for this model's provider (None for local providers)
-        pub fn required_env_var(&self) -> Option<&'static str> {
-            match self {
-                #(#some_arms)*
-                #none_pats => None,
-            }
-        }
-    }
-}
-
-fn emit_llm_all_required_env_vars() -> TokenStream {
-    let vars = PROVIDERS.iter().filter_map(|cfg| cfg.env_var);
-    quote! {
-        /// All provider API key env var names (deduplicated, static)
-        pub const ALL_REQUIRED_ENV_VARS: &[&str] = &[#(#vars),*];
-    }
-}
-
-fn emit_llm_oauth_provider_id() -> TokenStream {
-    let some_arms = PROVIDERS.iter().filter_map(|cfg| {
-        cfg.oauth_provider_id.map(|id| {
-            let v = format_ident!("{}", cfg.enum_name);
-            quote! { Self::#v(_) => Some(#id), }
-        })
-    });
-    let none_pats = llm_or_pats(|cfg| cfg.oauth_provider_id.is_none(), |_| true);
-    quote! {
-        /// OAuth provider ID if this model requires OAuth login (e.g. `"codex"`)
-        pub fn oauth_provider_id(&self) -> Option<&'static str> {
-            match self {
-                #(#some_arms)*
-                #none_pats => None,
-            }
-        }
-    }
-}
-
-fn emit_llm_reasoning_levels() -> TokenStream {
-    let body = llm_delegate_with_dynamic_default("reasoning_levels", &quote! { &[] });
-    quote! {
-        /// Reasoning levels supported by this model (empty if not a reasoning model)
-        pub fn reasoning_levels(&self) -> &'static [ReasoningEffort] {
-            #body
-        }
-    }
-}
-
-fn emit_llm_supports_reasoning() -> TokenStream {
-    quote! {
-        /// Whether this model supports reasoning/extended thinking
-        pub fn supports_reasoning(&self) -> bool {
-            self.reasoning_levels().iter().any(|effort| effort.is_enabled())
-        }
-    }
-}
-
-fn emit_llm_supports_reasoning_off_transport() -> TokenStream {
-    let variants = |filter: fn(&ProviderConfig) -> bool| {
-        let pats = PROVIDERS.iter().filter(|cfg| filter(cfg)).map(|cfg| {
-            let v = format_ident!("{}", cfg.enum_name);
-            quote! { Provider::#v }
-        });
-        quote! { #(#pats)|* }
-    };
-    let effort_only = variants(|cfg| cfg.uses_openai_compatible_api);
-    let model_transport = variants(|cfg| cfg.use_model_transport);
-    let always = variants(|cfg| !cfg.uses_openai_compatible_api && !cfg.use_model_transport);
-    let dynamic = DYNAMIC_PROVIDERS.iter().map(|d| {
-        let v = format_ident!("{}", d.enum_name);
-        quote! { Provider::#v }
-    });
-    quote! {
-        pub fn supports_reasoning_off_transport(&self) -> bool {
-            if !self.supports_reasoning_off() {
-                return false;
-            }
-            match self.provider_enum() {
-                #always => true,
-                #model_transport => self.transport().is_some(),
-                #effort_only => {
-                    self.reasoning_disabled_support() == crate::reasoning::ReasoningDisabledSupport::Effort
-                }
-                #(#dynamic)|* => false,
-            }
-        }
-    }
-}
-
-fn emit_llm_supports_prompt_caching() -> TokenStream {
-    let body = llm_delegate_with_dynamic_default("supports_prompt_caching", &quote! { false });
-    quote! {
-        /// Whether this model supports provider-side prompt caching
-        pub fn supports_prompt_caching(&self) -> bool {
-            #body
-        }
-    }
-}
-
-fn emit_llm_pricing() -> TokenStream {
-    let body = llm_delegate_with_dynamic_default("pricing", &quote! { None });
-    quote! {
-        pub fn pricing(&self) -> Option<ModelPricing> {
-            #body
-        }
-    }
-}
-
-fn emit_llm_transport() -> TokenStream {
-    let body = llm_delegate_with_dynamic_default("transport", &quote! { None });
-    quote! {
-        /// Per-model transport override, when the model does not use its
-        /// provider's default endpoint and wire protocol.
-        pub fn transport(&self) -> Option<ModelTransport> {
-            #body
-        }
-    }
-}
-
-fn emit_llm_supports_modality(modality: &str) -> TokenStream {
-    let method = format!("supports_{modality}");
-    let method_ident = format_ident!("{}", method);
-    let doc = format!(" Whether this model supports {modality} input");
-    let body = llm_delegate_with_dynamic_default(&method, &quote! { false });
-    quote! {
-        #[doc = #doc]
-        pub fn #method_ident(&self) -> bool {
-            #body
-        }
-    }
-}
-
-fn emit_llm_all() -> TokenStream {
-    let pushes = PROVIDERS.iter().map(|cfg| {
-        let inner = format_ident!("{}", cfg.inner_enum_name());
-        let outer = format_ident!("{}", cfg.outer_enum_name());
-        let v = format_ident!("{}", cfg.enum_name);
-        if cfg.is_hybrid_dynamic {
-            quote! {
-                v.extend(#inner::ALL.iter().copied().map(#outer::Foundation).map(LlmModel::#v));
-            }
-        } else {
-            quote! {
-                v.extend(#inner::ALL.iter().copied().map(LlmModel::#v));
-            }
-        }
-    });
-    quote! {
-        /// All catalog models (excludes dynamic providers)
-        pub fn all() -> &'static [LlmModel] {
-            static ALL: LazyLock<Vec<LlmModel>> = LazyLock::new(|| {
-                let mut v = Vec::new();
-                #(#pushes)*
-                v
-            });
-            &ALL
-        }
-    }
-}
-
-fn emit_display_impl() -> TokenStream {
-    quote! {
-        impl std::fmt::Display for LlmModel {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{}:{}", self.provider(), self.model_id())
-            }
-        }
-    }
-}
-
-fn emit_fromstr_impl() -> TokenStream {
-    let catalog_arms = PROVIDERS.iter().map(|cfg| {
-        let name = cfg.parser_name;
-        let outer = format_ident!("{}Model", cfg.enum_name);
-        let v = format_ident!("{}", cfg.enum_name);
-        quote! { #name => model_str.parse::<#outer>().map(Self::#v), }
-    });
-    let dyn_arms = DYNAMIC_PROVIDERS.iter().map(|d| {
-        let name = d.parser_name;
-        let v = format_ident!("{}", d.enum_name);
-        quote! { #name => Ok(Self::#v(model_str.to_string())), }
-    });
-    quote! {
-        impl std::str::FromStr for LlmModel {
-            type Err = String;
-
-            /// Parse a `provider:model` string into an `LlmModel`
-            fn from_str(s: &str) -> Result<Self, Self::Err> {
-                let (provider_str, model_str) = s.split_once(':').unwrap_or((s, ""));
-                match provider_str {
-                    #(#catalog_arms)*
-                    #(#dyn_arms)*
-                    _ => Err(format!("Unknown provider: '{provider_str}'")),
-                }
-            }
-        }
-    }
-}
-
-/// Build a `Self::Ollama(b) | Self::LlamaCpp(b)` pattern for all dynamic providers.
-fn dynamic_pattern_with_binding(binding: &str) -> TokenStream {
-    let binding_ident = if binding == "_" {
-        quote! { _ }
-    } else {
-        let b = format_ident!("{}", binding);
-        quote! { #b }
-    };
-    let pats = DYNAMIC_PROVIDERS.iter().map(|d| {
-        let v = format_ident!("{}", d.enum_name);
-        quote! { Self::#v(#binding_ident) }
-    });
-    quote! { #(#pats)|* }
-}
-
-/// Build `Self::A => va, Self::B => vb, ...` arms for every `Provider` variant
-/// (catalog + dynamic). The `Provider` enum carries no inner data so there is
-/// no binding.
-fn provider_match_arms<V: ToTokens>(
-    catalog_value: impl Fn(&ProviderConfig) -> V,
-    dynamic_value: impl Fn(&DynamicProviderConfig) -> V,
-) -> TokenStream {
-    let catalog = PROVIDERS.iter().map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        let val = catalog_value(cfg);
-        quote! { Self::#v => #val, }
-    });
-    let dynamic = DYNAMIC_PROVIDERS.iter().map(|d| {
-        let v = format_ident!("{}", d.enum_name);
-        let val = dynamic_value(d);
-        quote! { Self::#v => #val, }
-    });
-    quote! { #(#catalog)* #(#dynamic)* }
-}
-
-/// Build `Self::A | Self::B | ...` patterns selecting `Provider` variants by
-/// predicate, across catalog + dynamic.
-fn provider_or_pats(
-    include_catalog: impl Fn(&ProviderConfig) -> bool,
-    include_dynamic: impl Fn(&DynamicProviderConfig) -> bool,
-) -> TokenStream {
-    let catalog = PROVIDERS.iter().filter(|cfg| include_catalog(cfg)).map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        quote! { Self::#v }
-    });
-    let dynamic = DYNAMIC_PROVIDERS.iter().filter(|d| include_dynamic(d)).map(|d| {
-        let v = format_ident!("{}", d.enum_name);
-        quote! { Self::#v }
-    });
-    let pats = catalog.chain(dynamic);
-    quote! { #(#pats)|* }
-}
-
-/// Build `Self::A(_) => va, ...` arms for every `LlmModel` variant — the
-/// wrapped inner value is ignored.
-fn llm_match_arms_ignored<V: ToTokens>(
-    catalog_value: impl Fn(&ProviderConfig) -> V,
-    dynamic_value: impl Fn(&DynamicProviderConfig) -> V,
-) -> TokenStream {
-    let catalog = PROVIDERS.iter().map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        let val = catalog_value(cfg);
-        quote! { Self::#v(_) => #val, }
-    });
-    let dynamic = DYNAMIC_PROVIDERS.iter().map(|d| {
-        let v = format_ident!("{}", d.enum_name);
-        let val = dynamic_value(d);
-        quote! { Self::#v(_) => #val, }
-    });
-    quote! { #(#catalog)* #(#dynamic)* }
-}
-
-/// Build `Self::A(_) | Self::B(_) | ...` patterns selecting `LlmModel`
-/// variants by predicate, across catalog + dynamic.
-fn llm_or_pats(
-    include_catalog: impl Fn(&ProviderConfig) -> bool,
-    include_dynamic: impl Fn(&DynamicProviderConfig) -> bool,
-) -> TokenStream {
-    let catalog = PROVIDERS.iter().filter(|cfg| include_catalog(cfg)).map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        quote! { Self::#v(_) }
-    });
-    let dynamic = DYNAMIC_PROVIDERS.iter().filter(|d| include_dynamic(d)).map(|d| {
-        let v = format_ident!("{}", d.enum_name);
-        quote! { Self::#v(_) }
-    });
-    let pats = catalog.chain(dynamic);
-    quote! { #(#pats)|* }
-}
-
-/// Build the body of an `LlmModel` method that delegates to a same-named
-/// method on the inner catalog enum, with a single combined arm for all
-/// dynamic providers.
-fn llm_delegate_with_dynamic_default(method: &str, dynamic_value: &TokenStream) -> TokenStream {
-    let method_ident = format_ident!("{}", method);
-    let catalog_arms = PROVIDERS.iter().map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        quote! { Self::#v(m) => m.#method_ident(), }
-    });
-    let dyn_pat = dynamic_pattern_with_binding("_");
-    quote! {
-        match self {
-            #(#catalog_arms)*
-            #dyn_pat => #dynamic_value,
-        }
-    }
 }
 
 /// Emit a `u32` literal with underscore separators (e.g. `200_000`).
@@ -2250,19 +1492,7 @@ mod tests {
     }
 
     fn assert_default_is_not_capability(source: &str) {
-        let file = syn::parse_file(source).unwrap();
-        for item in file.items {
-            if let syn::Item::Impl(implementation) = item {
-                for item in implementation.items {
-                    if let syn::ImplItem::Fn(method) = item
-                        && method.sig.ident == "reasoning_levels"
-                    {
-                        let body = method.block;
-                        assert!(!quote! { #body }.to_string().contains("ReasoningEffort :: Default"));
-                    }
-                }
-            }
-        }
+        assert!(!source.contains("ReasoningEffort::Default"));
     }
 
     fn build_from_value(data: &Value) -> ProviderModels {
@@ -2291,20 +1521,18 @@ mod tests {
         let mut root = serde_json::Map::new();
         for cfg in PROVIDERS {
             let json_key = cfg.json_key();
-            root.entry(json_key.to_string())
-                .or_insert_with(|| json!({"id": json_key, "name": json_key, "env": [], "models": {}}));
+            root.entry(json_key.to_string()).or_insert_with(|| json!({"models": {}}));
             for &extra in cfg.extra_source_ids {
-                root.entry(extra.to_string())
-                    .or_insert_with(|| json!({"id": extra, "name": extra, "env": [], "models": {}}));
+                root.entry(extra.to_string()).or_insert_with(|| json!({"models": {}}));
             }
         }
         let openai = root.get_mut("openai").unwrap()["models"].as_object_mut().unwrap();
-        for model in CODEX_SUBSCRIPTION_MODELS {
+        for &id in CODEX_SUBSCRIPTION_MODELS {
             openai.insert(
-                model.id.to_string(),
+                id.to_string(),
                 json!({
-                    "id": model.id,
-                    "name": model.id,
+                    "id": id,
+                    "name": id,
                     "tool_call": true,
                     "reasoning": true,
                     "reasoning_options": [{"type": "effort", "values": ["low", "medium", "high", "xhigh"]}],

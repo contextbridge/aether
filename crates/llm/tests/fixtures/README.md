@@ -14,9 +14,11 @@
 # Provider Fixtures
 
 Raw byte-for-byte SSE responses captured from each provider's streaming
-endpoint. Used by `tests/providers/*/fixture_tests.rs` to verify that the real
-`process_*_stream` parsers extract `TokenUsage` correctly from on-the-wire
-responses.
+endpoint. Used by `tests/providers/anthropic/fixture_tests.rs`,
+`tests/providers/chat_completions_fixture_tests.rs` (`openai`, `openrouter`,
+`z_ai`) and the `openai_responses` unit tests in
+`src/providers/openai_responses/streaming.rs` to verify that the real parsers
+extract `TokenUsage` correctly from on-the-wire responses.
 
 ## Why these exist
 
@@ -90,8 +92,8 @@ non-zero `cache_read_input_tokens`.
    `tests/providers/{provider}/capture_fixtures.rs` that posts the request body
    and writes the result via `write_fixture(...)`.
 2. Run the new test with `cargo nextest run -p aether-llm --run-ignored only -E 'test(<name>)'`.
-3. Add a `#[tokio::test]` to the matching `tests/providers/{provider}/fixture_tests.rs`
-   that asserts the structural property the scenario is meant to prove.
+3. Add a `#[tokio::test]` to the matching fixture test file (see above) that
+   asserts the structural property the scenario is meant to prove.
 
 ## Notes on Bedrock
 

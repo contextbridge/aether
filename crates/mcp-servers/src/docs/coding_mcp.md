@@ -12,15 +12,9 @@ let server = CodingMcp::new("/my/project");
 
 // With LSP code intelligence for that root and explicit read-rule directories
 let server = CodingMcp::new("/my/project")
-    .with_rules_dirs(vec!["/my/project/.aether/skills".into(), "/my/project/.claude/rules".into()])
+    .with_rules_dirs(&["/my/project/.aether/skills".into(), "/my/project/.claude/rules".into()])
     .with_lsp()
     .with_permission_mode(mcp_servers::PermissionMode::Auto);
-```
-
-For custom tool backends, use [`CodingMcp::with_tools`]:
-
-```rust,ignore
-let server = CodingMcp::with_tools("/my/project", my_custom_tools);
 ```
 
 # Tools provided
@@ -52,8 +46,6 @@ The server enforces several safety checks:
 
 # See also
 
-- [`CodingTools`] -- Trait abstracting the tool backend (implement for custom environments)
-- [`DefaultCodingTools`] -- The default local-filesystem implementation
 - [`PermissionMode`] -- User approval settings
 - [`LspRegistry`](crate::lsp::LspRegistry) -- LSP daemon connection manager
 - [`CodingError`](crate::coding::error::CodingError) -- Error types for tool operations

@@ -1,9 +1,7 @@
 use super::mappers::{map_messages, map_tools};
 use super::streaming::decode_line;
-use super::types::{Request, Thinking};
-use crate::provider::{
-    LlmResponseStream, ProviderFactory, StreamingModelProvider, get_context_window, validate_reasoning,
-};
+use super::types::{CacheControl, ContentBlock, Request, Thinking};
+use crate::provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider, validate_reasoning};
 use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
 use crate::providers::http::{SseData, anthropic_code, http_client, open_sse};
 use crate::providers::response_stream::{OpenedStream, response_stream};
@@ -63,35 +61,26 @@ impl AnthropicProvider {
     pub(crate) fn build_request(&self, context: &Context) -> Result<Request> {
         validate_reasoning(context, self.model().as_ref())?;
         let (system_prompt, messages) = map_messages(context.messages())?;
-        let tools = if context.tools().is_empty() { None } else { Some(map_tools(context.tools())?) };
-
         let settings = context.model_settings();
 
-        let mut request = Request::new(self.model.clone(), messages)
-            .with_max_tokens(settings.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS))
-            .with_stream(true)
-            .with_auto_caching();
-
-        if let Some(temp) = settings.temperature {
-            request = request.with_temperature(temp);
-        }
-
-        if let Some(top_p) = settings.top_p {
-            request = request.with_top_p(top_p);
-        }
-
-        if let Some(system) = system_prompt {
-            request = request.with_system_cached(system);
-        }
-
-        if let Some(tools) = tools {
-            request = request.with_tools(tools);
-        }
+        let mut request = Request {
+            model: self.model.clone(),
+            messages,
+            max_tokens: settings.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
+            temperature: settings.temperature,
+            top_p: settings.top_p,
+            system: system_prompt
+                .map(|text| vec![ContentBlock::Text { text, cache_control: Some(CacheControl::ephemeral()) }]),
+            tools: (!context.tools().is_empty()).then(|| map_tools(context.tools())),
+            stream: true,
+            thinking: None,
+            cache_control: Some(CacheControl::ephemeral()),
+        };
 
         if context.reasoning_effort() == ReasoningEffort::Disabled {
-            request = request.with_thinking(Thinking::Disabled);
+            request.thinking = Some(Thinking::Disabled);
         } else if let Some(budget_tokens) = effort_to_budget_tokens(context.reasoning_effort()) {
-            request = request.with_thinking(Thinking::new(budget_tokens));
+            request.thinking = Some(Thinking::Enabled { budget_tokens });
             // Anthropic requires temperature and top_p to be unset when thinking is enabled
             request.temperature = None;
             request.top_p = None;
@@ -147,10 +136,6 @@ impl AnthropicProvider {
 }
 
 impl ProviderFactory for AnthropicProvider {
-    fn from_env() -> impl Future<Output = Result<Self>> + Send {
-        ready(Ok(Self::new(None)))
-    }
-
     fn from_env_with_connection(connection: ProviderConnectionConfig) -> impl Future<Output = Result<Self>> + Send {
         ready(Ok(Self::new(None).with_connection(connection)))
     }
@@ -163,10 +148,6 @@ impl ProviderFactory for AnthropicProvider {
 impl StreamingModelProvider for AnthropicProvider {
     fn model(&self) -> Option<crate::LlmModel> {
         format!("anthropic:{}", self.model).parse().ok()
-    }
-
-    fn context_window(&self) -> Option<u32> {
-        get_context_window("anthropic", &self.model)
     }
 
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
@@ -182,10 +163,6 @@ impl StreamingModelProvider for AnthropicProvider {
             |line, turn| decode_line(&line, turn),
             self.idle_timeout,
         )
-    }
-
-    fn display_name(&self) -> String {
-        format!("Anthropic ({})", self.model)
     }
 }
 
@@ -206,7 +183,6 @@ mod tests {
     use crate::ChatMessage;
 
     use crate::ToolDefinition;
-    use crate::providers::anthropic::types::{SystemContent, SystemContentBlock};
     use crate::providers::test_capture_server::{CaptureServer, ResponseSpec, hello_context};
     use futures::StreamExt;
 
@@ -309,18 +285,10 @@ mod tests {
         );
 
         let request = provider.build_request(&context).unwrap();
-        if let Some(system) = &request.system {
-            match system {
-                SystemContent::Blocks(blocks) => {
-                    assert_eq!(blocks.len(), 1);
-                    let SystemContentBlock::Text { text, .. } = &blocks[0];
-                    assert_eq!(text, "You are helpful");
-                }
-                SystemContent::Text(_) => panic!("Expected blocks system content"),
-            }
-        } else {
-            panic!("Expected system prompt");
-        }
+        let Some([ContentBlock::Text { text, .. }]) = request.system.as_deref() else {
+            panic!("Expected a single text system block");
+        };
+        assert_eq!(text, "You are helpful");
         assert_eq!(request.messages.len(), 1);
         assert!(request.tools.is_some());
         assert_eq!(request.tools.unwrap().len(), 1);
@@ -342,19 +310,11 @@ mod tests {
         let request = provider.build_request(&context).unwrap();
 
         // With caching enabled, system prompt should be cached
-        if let Some(system) = &request.system {
-            match system {
-                SystemContent::Blocks(blocks) => {
-                    assert_eq!(blocks.len(), 1);
-                    let SystemContentBlock::Text { text, cache_control } = &blocks[0];
-                    assert_eq!(text, "Hello");
-                    assert!(cache_control.is_some());
-                }
-                SystemContent::Text(_) => panic!("Expected blocks system content for caching"),
-            }
-        } else {
-            panic!("Expected system prompt");
-        }
+        let Some([ContentBlock::Text { text, cache_control }]) = request.system.as_deref() else {
+            panic!("Expected a single text system block");
+        };
+        assert_eq!(text, "Hello");
+        assert!(cache_control.is_some());
 
         assert!(request.tools.is_some());
 
