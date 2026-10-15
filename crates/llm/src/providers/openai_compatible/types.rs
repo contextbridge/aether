@@ -299,35 +299,6 @@ mod tests {
     }
 
     #[test]
-    fn test_build_request_sends_errors_and_summaries_as_user_notes() {
-        let context = Context::new(
-            vec![
-                ChatMessage::Error {
-                    message_id: MessageId::new(),
-                    message: "boom".to_string(),
-                    timestamp: IsoString::now(),
-                },
-                ChatMessage::Summary {
-                    message_id: MessageId::new(),
-                    content: "earlier work".to_string(),
-                    timestamp: IsoString::now(),
-                    messages_compacted: 2,
-                },
-            ],
-            vec![],
-        );
-
-        let json =
-            serde_json::to_value(build_chat_request("test-model", &context, &ChatRequestPolicy::DEFAULT).unwrap())
-                .unwrap();
-        assert_eq!(json["messages"][0], serde_json::json!({ "role": "user", "content": "Error: boom" }));
-        assert_eq!(
-            json["messages"][1],
-            serde_json::json!({ "role": "user", "content": "[Previous conversation handoff]\n\nearlier work" })
-        );
-    }
-
-    #[test]
     fn test_build_request_maps_model_settings_and_omits_when_unset() {
         let user = || ChatMessage::user("hello");
 

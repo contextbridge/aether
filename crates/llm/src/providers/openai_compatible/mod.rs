@@ -109,32 +109,3 @@ fn map_tools(
         })
         .collect()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ChatMessage;
-    use crate::tool_schema::normalize_for_moonshot;
-
-    #[test]
-    fn tool_schema_transform_applies_to_every_tool() {
-        let parameters = serde_json::json!({
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "title": "MySchema",
-            "type": "object",
-            "properties": { "q": { "type": "string", "format": "uri" } }
-        });
-        let context =
-            Context::new(vec![ChatMessage::user("hi")], vec![ToolDefinition::new("search", "Search", parameters)]);
-        let policy =
-            ChatRequestPolicy { tool_schema_transform: Some(normalize_for_moonshot), ..ChatRequestPolicy::DEFAULT };
-
-        let request = serde_json::to_value(build_chat_request("model", &context, &policy).unwrap()).unwrap();
-
-        let params = &request["tools"][0]["function"]["parameters"];
-        assert!(params.get("$schema").is_none());
-        assert!(params.get("title").is_none());
-        assert!(params["properties"]["q"].get("format").is_none());
-        assert_eq!(params["type"], "object");
-    }
-}

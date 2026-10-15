@@ -296,6 +296,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn moonshot_normalizes_tool_schemas() {
+        let parameters = json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "MySchema",
+            "type": "object",
+            "properties": { "q": { "type": "string", "format": "uri" } }
+        });
+        let mut server = CaptureServer::start_chat_completions().await;
+        let provider = capture_backed_provider(&server, &MOONSHOT);
+        let context =
+            Context::new(vec![ChatMessage::user("hi")], vec![ToolDefinition::new("search", "Search", parameters)]);
+
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        let body = server.captured().await.body;
+
+        assert_successful_stream(&responses);
+        let params = &body["tools"][0]["function"]["parameters"];
+        assert!(params.get("$schema").is_none());
+        assert!(params.get("title").is_none());
+        assert!(params["properties"]["q"].get("format").is_none());
+        assert_eq!(params["type"], "object");
+    }
+
+    #[tokio::test]
+    async fn chat_completions_send_errors_and_summaries_as_user_notes() {
+        let mut server = CaptureServer::start_chat_completions().await;
+        let provider = capture_backed_provider(&server, &DEEPSEEK);
+        let context = Context::new(
+            vec![
+                ChatMessage::Error {
+                    message_id: MessageId::new(),
+                    message: "boom".to_string(),
+                    timestamp: IsoString::now(),
+                },
+                ChatMessage::Summary {
+                    message_id: MessageId::new(),
+                    content: "earlier work".to_string(),
+                    timestamp: IsoString::now(),
+                    messages_compacted: 2,
+                },
+            ],
+            vec![],
+        );
+
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        let body = server.captured().await.body;
+
+        assert_successful_stream(&responses);
+        assert_eq!(body["messages"][0], json!({ "role": "user", "content": "Error: boom" }));
+        assert_eq!(
+            body["messages"][1],
+            json!({ "role": "user", "content": "[Previous conversation handoff]\n\nearlier work" })
+        );
+    }
+
+    #[tokio::test]
     async fn openrouter_requests_usage_caching_and_session_routing() {
         let mut server = CaptureServer::start_chat_completions().await;
         let provider = capture_backed_provider(&server, &OPENROUTER).with_model("anthropic/claude-haiku-4.5");
