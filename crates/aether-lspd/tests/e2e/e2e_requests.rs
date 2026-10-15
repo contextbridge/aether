@@ -1,12 +1,10 @@
-use crate::common::{DaemonHarness, cargo_project, file_uri, hover_text, use_fake_servers};
+use crate::common::{cargo_project, fake_daemon, file_uri, hover_text};
 use aether_lspd::LanguageId;
 use lsp_types::{DocumentSymbolResponse, GotoDefinitionResponse};
 use std::path::PathBuf;
 
 #[tokio::test]
 async fn request_helpers_round_trip_through_fake_server() {
-    use_fake_servers();
-
     let project = cargo_project("request_contracts");
     let content = r#"fn example_fn() -> i32 {
     7
@@ -19,8 +17,7 @@ fn main() {
 "#;
     project.write("src/main.rs", content);
 
-    let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
-    let client = harness.connect().await.expect("Failed to connect");
+    let (_daemon, client) = fake_daemon(project.root(), LanguageId::Rust).await;
     let uri = file_uri(&project.path("src/main.rs"));
 
     let hover = hover_text(client.hover(uri.clone(), 0, 0).await.expect("Hover request failed"));
@@ -60,19 +57,12 @@ fn main() {
     let edits = changes.get(&uri).expect("Rename changes should include the file");
     assert_eq!(edits.len(), 1);
     assert_eq!(edits[0].new_text, "renamed_fn");
-
-    harness.kill().await.expect("Failed to kill daemon");
 }
 
 #[tokio::test]
 async fn documents_in_paths_with_spaces_round_trip_through_the_daemon() {
-    use_fake_servers();
-
-    let project = cargo_project("request_spaces");
-    project.write("src/my mod.rs", "fn main() { let error = 1; }\n");
-
-    let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
-    let client = harness.connect().await.expect("Failed to connect");
+    let project = cargo_project("request_spaces").file("src/my mod.rs", "fn main() { let error = 1; }\n");
+    let (_daemon, client) = fake_daemon(project.root(), LanguageId::Rust).await;
     let uri = file_uri(&project.path("src/my mod.rs"));
 
     assert!(uri.as_str().contains("my%20mod.rs"), "URI must be percent-encoded: {}", uri.as_str());
@@ -89,18 +79,12 @@ async fn documents_in_paths_with_spaces_round_trip_through_the_daemon() {
 
     let on_disk = std::fs::canonicalize(project.root().join("src/my mod.rs")).expect("File should exist");
     assert_eq!(PathBuf::from(aether_lspd::uri_to_path(&uri)), on_disk);
-
-    harness.kill().await.expect("Failed to kill daemon");
 }
+
 #[tokio::test]
 async fn diagnostic_helpers_round_trip_through_fake_server() {
-    use_fake_servers();
-
-    let project = cargo_project("request_diagnostics");
-    project.write("src/main.rs", "fn main() { let error = 1; }\n");
-
-    let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
-    let client = harness.connect().await.expect("Failed to connect");
+    let project = cargo_project("request_diagnostics").file("src/main.rs", "fn main() { let error = 1; }\n");
+    let (_daemon, client) = fake_daemon(project.root(), LanguageId::Rust).await;
     let uri = file_uri(&project.path("src/main.rs"));
 
     client.queue_diagnostic_refresh(uri.clone()).await.expect("Queue diagnostic refresh failed");
@@ -110,6 +94,4 @@ async fn diagnostic_helpers_round_trip_through_fake_server() {
     assert_eq!(diagnostics[0].uri, uri);
     assert_eq!(diagnostics[0].diagnostics.len(), 1);
     assert_eq!(diagnostics[0].diagnostics[0].message, "error token");
-
-    harness.kill().await.expect("Failed to kill daemon");
 }

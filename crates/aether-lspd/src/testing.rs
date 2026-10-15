@@ -149,7 +149,7 @@ pub fn file_uri(path: &Path) -> lsp_types::Uri {
     path_to_uri(path).expect("Invalid file path")
 }
 
-pub fn remove_stale_daemon_files(workspace_root: &Path, language: LanguageId) {
+fn remove_stale_daemon_files(workspace_root: &Path, language: LanguageId) {
     let socket = socket_path(workspace_root, language);
     let _ = fs::remove_file(lockfile_path(&socket));
     let _ = fs::remove_file(socket);

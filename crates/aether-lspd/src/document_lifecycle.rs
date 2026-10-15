@@ -114,167 +114,106 @@ fn hash_content(content: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    use lsp_types::FileChangeType;
     use tempfile::TempDir;
-
-    fn uri_for(path: &Path) -> Uri {
-        crate::path_to_uri(path).unwrap()
-    }
 
     #[tokio::test]
     async fn acquire_returns_open_action() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("main.rs");
         std::fs::write(&path, "fn main() {}\n").unwrap();
-        let uri = uri_for(&path);
-        let lifecycle = DocumentLifecycle::new();
 
-        let action = lifecycle.acquire(&uri).await;
+        let action = DocumentLifecycle::new().acquire(&crate::path_to_uri(&path).unwrap()).await;
+
         let AcquireAction::Open { file_path, content } = action else {
             panic!("expected Open");
         };
-        let expected_path = path.canonicalize().unwrap();
-        assert_eq!(file_path, expected_path.to_string_lossy());
+        assert_eq!(file_path, path.canonicalize().unwrap().to_string_lossy());
         assert_eq!(content, "fn main() {}\n");
     }
 
     #[tokio::test]
-    async fn acquire_unchanged_content_returns_unchanged() {
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("main.rs");
-        std::fs::write(&path, "fn main() {}\n").unwrap();
-        let uri = uri_for(&path);
-        let lifecycle = DocumentLifecycle::new();
-
-        assert!(matches!(lifecycle.acquire(&uri).await, AcquireAction::Open { .. }));
-        assert!(matches!(lifecycle.acquire(&uri).await, AcquireAction::Unchanged));
-    }
-
-    #[tokio::test]
     async fn acquire_changed_content_returns_reopen() {
-        let temp = TempDir::new().unwrap();
+        let (temp, uri, lifecycle) = open_fixture().await;
         let path = temp.path().join("main.rs");
-        std::fs::write(&path, "fn main() {}\n").unwrap();
-        let uri = uri_for(&path);
-        let lifecycle = DocumentLifecycle::new();
-
-        assert!(matches!(lifecycle.acquire(&uri).await, AcquireAction::Open { .. }));
-
         std::fs::write(&path, "fn main() { println!(\"hi\"); }\n").unwrap();
-        let action = lifecycle.acquire(&uri).await;
-        let AcquireAction::Reopen { file_path, content } = action else {
+
+        let AcquireAction::Reopen { file_path, content } = lifecycle.acquire(&uri).await else {
             panic!("expected Reopen after content change");
         };
-        let expected_path = path.canonicalize().unwrap();
-        assert_eq!(file_path, expected_path.to_string_lossy());
+        assert_eq!(file_path, path.canonicalize().unwrap().to_string_lossy());
         assert_eq!(content, "fn main() { println!(\"hi\"); }\n");
     }
 
     #[tokio::test]
     async fn acquire_missing_file() {
         let uri: Uri = "file:///nonexistent/path.rs".parse().unwrap();
-        let lifecycle = DocumentLifecycle::new();
-        assert!(matches!(lifecycle.acquire(&uri).await, AcquireAction::MissingOnDisk));
+        assert!(matches!(DocumentLifecycle::new().acquire(&uri).await, AcquireAction::MissingOnDisk));
     }
 
-    #[tokio::test]
-    async fn release_when_not_open_returns_unchanged() {
+    #[test]
+    fn release_when_not_open_returns_unchanged() {
         let uri: Uri = "file:///test.rs".parse().unwrap();
-        let lifecycle = DocumentLifecycle::new();
-        assert!(matches!(lifecycle.release(&uri), ReleaseAction::Unchanged));
+        assert!(matches!(DocumentLifecycle::new().release(&uri), ReleaseAction::Unchanged));
     }
 
     #[tokio::test]
     async fn release_after_acquire_closes() {
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("main.rs");
-        std::fs::write(&path, "fn main() {}\n").unwrap();
-        let uri = uri_for(&path);
-        let lifecycle = DocumentLifecycle::new();
+        let (_temp, uri, lifecycle) = open_fixture().await;
 
-        assert!(matches!(lifecycle.acquire(&uri).await, AcquireAction::Open { .. }));
         assert!(matches!(lifecycle.release(&uri), ReleaseAction::Close));
         assert!(matches!(lifecycle.release(&uri), ReleaseAction::Unchanged));
     }
 
     #[tokio::test]
+    async fn repeated_acquire_stays_open_until_last_release() {
+        let (_temp, uri, lifecycle) = open_fixture().await;
+
+        assert!(matches!(lifecycle.acquire(&uri).await, AcquireAction::Unchanged));
+        assert!(matches!(lifecycle.release(&uri), ReleaseAction::Unchanged));
+        assert!(matches!(lifecycle.release(&uri), ReleaseAction::Close));
+    }
+
+    #[tokio::test]
     async fn filter_watcher_changes_suppresses_open_docs() {
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("main.rs");
-        std::fs::write(&path, "fn main() {}\n").unwrap();
-        let uri = uri_for(&path);
+        let (_temp, uri, lifecycle) = open_fixture().await;
         let other_uri: Uri = "file:///other.rs".parse().unwrap();
-        let lifecycle = DocumentLifecycle::new();
 
-        assert!(matches!(lifecycle.acquire(&uri).await, AcquireAction::Open { .. }));
+        let filtered = lifecycle.filter_watcher_changes(vec![changed(&uri), changed(&other_uri)]);
 
-        let changes = vec![
-            FileEvent { uri: uri.clone(), typ: lsp_types::FileChangeType::CHANGED },
-            FileEvent { uri: other_uri.clone(), typ: lsp_types::FileChangeType::CHANGED },
-        ];
-        let filtered = lifecycle.filter_watcher_changes(changes);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].uri, other_uri);
     }
 
     #[tokio::test]
     async fn suppressed_watcher_change_requests_refresh_after_close() {
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("main.rs");
-        std::fs::write(&path, "fn main() {}\n").unwrap();
-        let uri = uri_for(&path);
-        let lifecycle = DocumentLifecycle::new();
+        let (_temp, uri, lifecycle) = open_fixture().await;
 
-        assert!(matches!(lifecycle.acquire(&uri).await, AcquireAction::Open { .. }));
-
-        let filtered = lifecycle
-            .filter_watcher_changes(vec![FileEvent { uri: uri.clone(), typ: lsp_types::FileChangeType::CHANGED }]);
-        assert_eq!(filtered.len(), 0);
+        assert_eq!(lifecycle.filter_watcher_changes(vec![changed(&uri)]), Vec::<FileEvent>::new());
         assert!(matches!(lifecycle.release(&uri), ReleaseAction::CloseAndRefresh));
     }
 
     #[tokio::test]
     async fn suppressed_watcher_change_waits_for_last_release() {
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("main.rs");
-        std::fs::write(&path, "fn main() {}\n").unwrap();
-        let uri = uri_for(&path);
-        let lifecycle = DocumentLifecycle::new();
-
-        assert!(matches!(lifecycle.acquire(&uri).await, AcquireAction::Open { .. }));
+        let (_temp, uri, lifecycle) = open_fixture().await;
         assert!(matches!(lifecycle.acquire(&uri).await, AcquireAction::Unchanged));
 
-        let filtered = lifecycle
-            .filter_watcher_changes(vec![FileEvent { uri: uri.clone(), typ: lsp_types::FileChangeType::CHANGED }]);
-        assert_eq!(filtered.len(), 0);
+        assert_eq!(lifecycle.filter_watcher_changes(vec![changed(&uri)]), Vec::<FileEvent>::new());
         assert!(matches!(lifecycle.release(&uri), ReleaseAction::Unchanged));
         assert!(matches!(lifecycle.release(&uri), ReleaseAction::CloseAndRefresh));
     }
 
-    #[tokio::test]
-    async fn concurrent_acquire_single_release_keeps_open() {
+    async fn open_fixture() -> (TempDir, Uri, DocumentLifecycle) {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("main.rs");
         std::fs::write(&path, "fn main() {}\n").unwrap();
-        let uri = uri_for(&path);
+        let uri = crate::path_to_uri(&path).unwrap();
         let lifecycle = DocumentLifecycle::new();
-
         assert!(matches!(lifecycle.acquire(&uri).await, AcquireAction::Open { .. }));
-        assert!(matches!(lifecycle.acquire(&uri).await, AcquireAction::Unchanged));
-        assert!(matches!(lifecycle.release(&uri), ReleaseAction::Unchanged));
+        (temp, uri, lifecycle)
     }
 
-    #[tokio::test]
-    async fn concurrent_acquire_both_release_closes() {
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("main.rs");
-        std::fs::write(&path, "fn main() {}\n").unwrap();
-        let uri = uri_for(&path);
-        let lifecycle = DocumentLifecycle::new();
-
-        assert!(matches!(lifecycle.acquire(&uri).await, AcquireAction::Open { .. }));
-        assert!(matches!(lifecycle.acquire(&uri).await, AcquireAction::Unchanged));
-        assert!(matches!(lifecycle.release(&uri), ReleaseAction::Unchanged));
-        assert!(matches!(lifecycle.release(&uri), ReleaseAction::Close));
+    fn changed(uri: &Uri) -> FileEvent {
+        FileEvent { uri: uri.clone(), typ: FileChangeType::CHANGED }
     }
 }

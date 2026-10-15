@@ -1,15 +1,13 @@
 #![allow(dead_code, unused_imports)]
 
-pub mod daemon_harness;
+pub use aether_lspd::testing::{TestWorkspace, cargo_project, file_uri};
 
-pub use aether_lspd::testing::{cargo_project, file_uri};
-pub use daemon_harness::DaemonHarness;
-
-use aether_lspd::testing::configure_fake_server;
+use aether_lspd::testing::{TestDaemon, configure_fake_server};
 use aether_lspd::{LanguageId, LspClient};
-use lsp_types::{Hover, PublishDiagnosticsParams};
+use lsp_types::{Hover, HoverContents, MarkedString, PublishDiagnosticsParams};
+use std::path::Path;
 use std::sync::Once;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 static FAKE_SERVERS: Once = Once::new();
 
@@ -23,24 +21,31 @@ pub fn use_fake_servers() {
     });
 }
 
-pub async fn poll_workspace_diagnostics(
+pub async fn fake_daemon(root: &Path, language: LanguageId) -> (TestDaemon, LspClient) {
+    use_fake_servers();
+    start_daemon(root, language).await
+}
+
+pub async fn start_daemon(root: &Path, language: LanguageId) -> (TestDaemon, LspClient) {
+    let daemon = TestDaemon::spawn(root, language, Duration::from_secs(120)).await.expect("Failed to spawn daemon");
+    (daemon, connect(root, language).await)
+}
+
+pub async fn connect(root: &Path, language: LanguageId) -> LspClient {
+    LspClient::connect(root, language).await.expect("Failed to connect client")
+}
+
+pub async fn wait_for_workspace_diagnostics(
     client: &LspClient,
     predicate: impl Fn(&[PublishDiagnosticsParams]) -> bool,
-    timeout: Duration,
 ) -> Vec<PublishDiagnosticsParams> {
-    let start = Instant::now();
-    let mut last = Vec::new();
-
-    while start.elapsed() < timeout {
+    loop {
         let diagnostics = client.get_diagnostics(None).await.expect("Failed to get workspace diagnostics");
         if predicate(&diagnostics) {
             return diagnostics;
         }
-        last = diagnostics;
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-
-    panic!("workspace diagnostics timed out after {timeout:?}. Last result: {last:?}");
 }
 
 pub fn workspace_error_count(diagnostics: &[PublishDiagnosticsParams]) -> usize {
@@ -48,20 +53,13 @@ pub fn workspace_error_count(diagnostics: &[PublishDiagnosticsParams]) -> usize 
 }
 
 pub fn hover_text(hover: Option<Hover>) -> String {
-    let hover = hover.expect("Expected hover result");
-    match hover.contents {
-        lsp_types::HoverContents::Scalar(scalar) => match scalar {
-            lsp_types::MarkedString::String(text) => text,
-            lsp_types::MarkedString::LanguageString(value) => value.value,
-        },
-        lsp_types::HoverContents::Array(values) => values
-            .into_iter()
-            .map(|value| match value {
-                lsp_types::MarkedString::String(text) => text,
-                lsp_types::MarkedString::LanguageString(value) => value.value,
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-        lsp_types::HoverContents::Markup(markup) => markup.value,
+    let marked = |value: MarkedString| match value {
+        MarkedString::String(text) => text,
+        MarkedString::LanguageString(value) => value.value,
+    };
+    match hover.expect("Expected hover result").contents {
+        HoverContents::Scalar(value) => marked(value),
+        HoverContents::Array(values) => values.into_iter().map(marked).collect::<Vec<_>>().join("\n"),
+        HoverContents::Markup(markup) => markup.value,
     }
 }

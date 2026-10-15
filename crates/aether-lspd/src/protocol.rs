@@ -157,79 +157,48 @@ pub(crate) fn frame_writer<W: tokio::io::AsyncWrite, T: Serialize>(writer: W) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_protocol_error_new() {
-        let err = ProtocolError::new("test error");
-        assert_eq!(err.message, "test error");
-    }
+    use serde_json::json;
 
     #[test]
     fn test_daemon_request_lsp_call_roundtrip() {
         let req = DaemonRequest::LspCall {
             client_id: 42,
             method: "textDocument/definition".to_string(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": { "uri": "file:///test.rs" },
                 "position": { "line": 0, "character": 0 }
             }),
         };
-        let json = serde_json::to_string(&req).unwrap();
-        let decoded: DaemonRequest = serde_json::from_str(&json).unwrap();
-        match decoded {
-            DaemonRequest::LspCall { client_id, method, .. } => {
-                assert_eq!(client_id, 42);
-                assert_eq!(method, "textDocument/definition");
-            }
-            _ => panic!("Wrong variant"),
-        }
+        let decoded: DaemonRequest = serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
+
+        let DaemonRequest::LspCall { client_id, method, .. } = decoded else { panic!("Wrong variant") };
+        assert_eq!(client_id, 42);
+        assert_eq!(method, "textDocument/definition");
     }
 
     #[test]
-    fn test_extract_document_uri_definition() {
-        let params = serde_json::json!({
+    fn extract_document_uri_reads_text_document_requests_only() {
+        let main_rs = json!({
             "textDocument": { "uri": "file:///src/main.rs" },
             "position": { "line": 10, "character": 5 }
         });
-        let uri = extract_document_uri("textDocument/definition", &params);
-        assert!(uri.is_some());
-        assert_eq!(uri.unwrap().as_str(), "file:///src/main.rs");
-    }
+        let cases = [
+            ("textDocument/definition", main_rs.clone(), Some("file:///src/main.rs")),
+            ("textDocument/references", main_rs.clone(), Some("file:///src/main.rs")),
+            (
+                "textDocument/documentSymbol",
+                json!({ "textDocument": { "uri": "file:///src/foo.rs" } }),
+                Some("file:///src/foo.rs"),
+            ),
+            ("workspace/symbol", json!({ "query": "Foo" }), None),
+            ("workspace/executeCommand", main_rs, None),
+            ("textDocument/unknown", json!({}), None),
+        ];
 
-    #[test]
-    fn test_extract_document_uri_references() {
-        let params = serde_json::json!({
-            "textDocument": { "uri": "file:///src/lib.rs" },
-            "position": { "line": 5, "character": 3 },
-            "context": { "includeDeclaration": true }
-        });
-        let uri = extract_document_uri("textDocument/references", &params);
-        assert!(uri.is_some());
-        assert_eq!(uri.unwrap().as_str(), "file:///src/lib.rs");
-    }
-
-    #[test]
-    fn test_extract_document_uri_document_symbol() {
-        let params = serde_json::json!({
-            "textDocument": { "uri": "file:///src/foo.rs" }
-        });
-        let uri = extract_document_uri("textDocument/documentSymbol", &params);
-        assert!(uri.is_some());
-        assert_eq!(uri.unwrap().as_str(), "file:///src/foo.rs");
-    }
-
-    #[test]
-    fn test_extract_document_uri_workspace_symbol_returns_none() {
-        let params = serde_json::json!({ "query": "Foo" });
-        let uri = extract_document_uri("workspace/symbol", &params);
-        assert!(uri.is_none());
-    }
-
-    #[test]
-    fn test_extract_document_uri_unknown_method_returns_none() {
-        let params = serde_json::json!({});
-        let uri = extract_document_uri("textDocument/unknown", &params);
-        assert!(uri.is_none());
+        for (method, params, expected) in cases {
+            let uri = extract_document_uri(method, &params);
+            assert_eq!(uri.as_ref().map(|uri| uri.as_str()), expected, "{method}");
+        }
     }
 
     #[tokio::test]
