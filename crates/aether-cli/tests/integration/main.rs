@@ -3,6 +3,7 @@ mod acp_cancellation;
 mod acp_control_plane;
 mod acp_git_diff;
 mod acp_mcp_sign_in;
+mod acp_process;
 mod acp_prompt_lifecycle;
 mod acp_prompt_search;
 mod acp_remote;
