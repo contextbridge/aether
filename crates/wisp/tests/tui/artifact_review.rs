@@ -1,13 +1,9 @@
 use super::support::{
-    CreateElicitationResponse, ElicitationSchema, accepted_content, assert_ctrl_c_exits, block_on_local,
-    form_elicitation, make_app, with_elicitation,
+    CreateElicitationResponse, ElicitationSchema, TestUi, accepted_content, assert_ctrl_c_exits, block_on_local,
+    form_elicitation, plan_meta, with_elicitation,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use std::{
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
-use utils::artifact_review::ArtifactReviewElicitationMeta;
+use std::sync::{Arc, Mutex};
 use wisp::{
     screens::artifact_review::ArtifactReviewScreen,
     surfaces::{elicitation::ElicitationResponder, input::UiEvent},
@@ -19,13 +15,7 @@ fn screen(markdown: &str) -> (ArtifactReviewScreen, Responses) {
     let responses = Arc::new(Mutex::new(Vec::new()));
     let output = Arc::clone(&responses);
     let responder = ElicitationResponder::from_fn(move |response| output.lock().unwrap().push(response));
-    (
-        ArtifactReviewScreen::new(
-            ArtifactReviewElicitationMeta::new(Some(PathBuf::from("/tmp/plan.md")), "Review /tmp/plan.md", markdown),
-            responder,
-        ),
-        responses,
-    )
+    (ArtifactReviewScreen::new(plan_meta(markdown), responder), responses)
 }
 
 fn key(code: KeyCode) -> UiEvent {
@@ -157,34 +147,29 @@ fn dropping_confirmation_cancels_once() {
 #[test]
 fn approval_closes_the_route_and_notifies_the_user() {
     block_on_local(async {
-        let mut app = make_app();
-        let meta =
-            ArtifactReviewElicitationMeta::new(Some(PathBuf::from("/tmp/plan.md")), "Review /tmp/plan.md", "# Plan")
-                .to_meta();
-        with_elicitation(&mut app, form_elicitation("review", "Review artifact", ElicitationSchema::new()).meta(meta))
-            .await;
+        let mut app = TestUi::new();
+        open_plan_review(&mut app, "# Plan").await;
         app.key(KeyCode::Char('r').into());
         assert!(app.app().full_screen_active());
-        assert!(app.viewport_text().contains("Approve and continue"));
+        app.assert_viewport_contains("Approve and continue");
         app.key(KeyCode::Enter.into());
         assert!(!app.app().full_screen_active());
-        assert!(app.viewport_text().contains("Artifact approved"));
+        app.assert_viewport_contains("Artifact approved");
     });
 }
 
 #[test]
 fn double_ctrl_c_exits_over_artifact_review() {
     block_on_local(async {
-        let mut app = make_app();
-        let meta = ArtifactReviewElicitationMeta::new(
-            Some(PathBuf::from("/tmp/plan.md")),
-            "Review /tmp/plan.md",
-            "# Plan\nbody",
-        )
-        .to_meta();
-        with_elicitation(&mut app, form_elicitation("review", "Review artifact", ElicitationSchema::new()).meta(meta))
-            .await;
+        let mut app = TestUi::new();
+        open_plan_review(&mut app, "# Plan\nbody").await;
         assert!(app.app().full_screen_active());
         assert_ctrl_c_exits(&mut app);
     });
+}
+
+async fn open_plan_review(app: &mut TestUi, markdown: &str) {
+    let request =
+        form_elicitation("review", "Review artifact", ElicitationSchema::new()).meta(plan_meta(markdown).to_meta());
+    with_elicitation(app, request).await;
 }

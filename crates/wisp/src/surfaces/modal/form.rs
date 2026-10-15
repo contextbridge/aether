@@ -954,7 +954,7 @@ pub(super) fn permission_like_schema() -> ElicitationSchema {
 #[allow(clippy::absolute_paths, clippy::similar_names)]
 mod tests {
     use super::*;
-    use crate::testing::{buffer_text, row_containing};
+    use crate::testing::{buffer_text, row_containing, row_text};
     use agent_client_protocol::schema::v2::{BooleanPropertySchema, IntegerPropertySchema, NumberPropertySchema};
     use crossterm::event::KeyModifiers;
     use serde_json::Value;
@@ -1005,9 +1005,7 @@ mod tests {
         let mut buffer = Buffer::empty(Rect::new(0, 0, WIDTH, HEIGHT));
         form.render(buffer.area, &mut buffer, &Theme::default());
         for y in buffer.area.top()..buffer.area.bottom() {
-            let row: String = (buffer.area.left()..buffer.area.right())
-                .map(|x| buffer.cell((x, y)).map_or_else(|| " ".to_string(), |cell| cell.symbol().to_string()))
-                .collect();
+            let row = row_text(&buffer, y);
             if let Some(byte) = row.find(needle) {
                 let column = row[..byte].width() + needle.width() / 2;
                 return (as_u16(column), y);
@@ -1026,161 +1024,11 @@ mod tests {
     }
 
     #[test]
-    fn parses_string_field_with_title_and_description() {
+    fn fields_show_their_title_and_description() {
         let schema =
             required("name", StringPropertySchema::new().title("Your Name").description("Enter your full name"));
-        let form = test_modal("test".into(), String::new(), &schema);
-        assert_eq!(form.fields.len(), 1);
-        assert_eq!(form.fields[0].label, "Your Name");
-        assert_eq!(form.fields[0].description.as_deref(), Some("Enter your full name"));
-        assert!(form.fields[0].required);
-        assert!(matches!(form.fields[0].kind, FormFieldKind::Text(_)));
-    }
-
-    #[test]
-    fn parses_boolean_field_with_default() {
-        let schema = optional("approved", BooleanPropertySchema::new().default_value(true));
-        let form = test_modal("test".into(), String::new(), &schema);
-        assert_eq!(form.fields.len(), 1);
-        assert!(matches!(form.fields[0].kind, FormFieldKind::Boolean(true)));
-    }
-
-    #[test]
-    fn parses_integer_and_number_fields() {
-        let schema = ElicitationSchema::new()
-            .property("age", IntegerPropertySchema::new().minimum(0).maximum(150), true)
-            .property("rating", NumberPropertySchema::new().minimum(0.0).maximum(5.0), true);
-        let form = test_modal("test".into(), String::new(), &schema);
-        assert_eq!(form.fields.len(), 2);
-        assert!(matches!(form.fields[0].kind, FormFieldKind::Integer(_)));
-        assert!(matches!(form.fields[1].kind, FormFieldKind::Number(_)));
-    }
-
-    #[test]
-    fn integer_field_respects_default() {
-        let schema = required("count", IntegerPropertySchema::new().minimum(0).maximum(100).default_value(42));
-        let form = test_modal("test".into(), String::new(), &schema);
-        match &form.fields[0].kind {
-            FormFieldKind::Integer(value) => assert_eq!(value, "42"),
-            _ => panic!("expected Integer"),
-        }
-    }
-
-    #[test]
-    fn number_field_respects_default() {
-        let schema = required("score", NumberPropertySchema::new().minimum(0.0).maximum(100.0).default_value(2.5));
-        let form = test_modal("test".into(), String::new(), &schema);
-        match &form.fields[0].kind {
-            FormFieldKind::Number(value) => {
-                let parsed: f64 = value.parse().unwrap();
-                assert!((parsed - 2.5).abs() < 0.001, "expected ~2.5, got {}", value.text());
-            }
-            _ => panic!("expected Number"),
-        }
-    }
-
-    #[test]
-    fn string_field_respects_default() {
-        let schema = required("greeting", StringPropertySchema::new().default_value("hello"));
-        let form = test_modal("test".into(), String::new(), &schema);
-        match &form.fields[0].kind {
-            FormFieldKind::Text(value) => assert_eq!(value, "hello"),
-            _ => panic!("expected Text"),
-        }
-    }
-
-    #[test]
-    fn parses_single_select_enum_from_schema() {
-        let schema = required(
-            "color",
-            StringPropertySchema::new().enum_values(vec!["red".into(), "green".into(), "blue".into()]),
-        );
-        let form = test_modal("test".into(), String::new(), &schema);
-        match &form.fields[0].kind {
-            FormFieldKind::Single { options, selected } => {
-                assert_eq!(options.len(), 3);
-                assert_eq!(options[0].value, "red");
-                assert_eq!(*selected, 0);
-            }
-            _ => panic!("expected Single"),
-        }
-    }
-
-    #[test]
-    fn parses_single_select_with_default() {
-        let schema = required(
-            "color",
-            StringPropertySchema::new().enum_values(vec!["red".into(), "green".into()]).default_value("green"),
-        );
-        let form = test_modal("test".into(), String::new(), &schema);
-        match &form.fields[0].kind {
-            FormFieldKind::Single { options, selected } => {
-                assert_eq!(*selected, 1);
-                assert_eq!(options[1].value, "green");
-            }
-            _ => panic!("expected Single"),
-        }
-    }
-
-    #[test]
-    fn parses_titled_single_select_with_const_titles() {
-        let schema = required(
-            "size",
-            StringPropertySchema::new().one_of(vec![
-                EnumOption::new("s", "Small"),
-                EnumOption::new("m", "Medium"),
-                EnumOption::new("l", "Large"),
-            ]),
-        );
-        let form = test_modal("test".into(), String::new(), &schema);
-        match &form.fields[0].kind {
-            FormFieldKind::Single { options, .. } => {
-                assert_eq!(options.len(), 3);
-                assert_eq!(options[0].title, "Small");
-                assert_eq!(options[0].value, "s");
-            }
-            _ => panic!("expected Single"),
-        }
-    }
-
-    #[test]
-    fn parses_multi_select_enum() {
-        let schema = multi_schema();
-        let form = test_modal("test".into(), String::new(), &schema);
-        match &form.fields[0].kind {
-            FormFieldKind::Multi { options, selected, cursor } => {
-                assert_eq!(options.len(), 3);
-                assert_eq!(selected.len(), 3);
-                assert_eq!(*cursor, 0);
-                assert!(selected.iter().all(|s| !*s));
-            }
-            _ => panic!("expected Multi"),
-        }
-    }
-
-    #[test]
-    fn parses_multi_select_with_defaults() {
-        let schema = required(
-            "tags",
-            MultiSelectPropertySchema::new(vec!["fast".into(), "reliable".into(), "cheap".into()])
-                .default_value(vec!["reliable".to_string()]),
-        );
-        let form = test_modal("test".into(), String::new(), &schema);
-        match &form.fields[0].kind {
-            FormFieldKind::Multi { selected, .. } => {
-                assert!(!selected[0]);
-                assert!(selected[1]);
-                assert!(!selected[2]);
-            }
-            _ => panic!("expected Multi"),
-        }
-    }
-
-    #[test]
-    fn empty_schema_produces_no_fields() {
-        let schema = ElicitationSchema::new();
-        let form = test_modal("test".into(), String::new(), &schema);
-        assert!(form.fields.is_empty());
+        let screen = draw(&mut test_modal("test".into(), String::new(), &schema));
+        assert!(screen.contains("Your Name") && screen.contains("Enter your full name"), "{screen}");
     }
 
     #[test]
@@ -1191,23 +1039,33 @@ mod tests {
     }
 
     #[test]
-    fn number_field_default_submits_as_a_parsed_number() {
-        let schema = optional("count", IntegerPropertySchema::new().minimum(0).maximum(100).default_value(42));
+    fn numeric_defaults_submit_as_parsed_numbers() {
+        let schema = ElicitationSchema::new()
+            .property("count", IntegerPropertySchema::new().minimum(0).maximum(100).default_value(42), false)
+            .property("score", NumberPropertySchema::new().minimum(0.0).maximum(100.0).default_value(2.5), false);
         let mut form = test_modal("test".into(), String::new(), &schema);
-        assert_eq!(submitted(&mut form), serde_json::json!({"count": 42}));
+        assert_eq!(submitted(&mut form), serde_json::json!({"count": 42, "score": 2.5}));
     }
 
     #[test]
-    fn boolean_and_single_select_defaults_submit_as_typed_values() {
+    fn defaults_submit_as_typed_values_and_empty_text_is_omitted() {
         let schema = ElicitationSchema::new()
+            .property("name", StringPropertySchema::new().title("Name"), false)
             .property("approved", BooleanPropertySchema::new().default_value(true), false)
             .property(
                 "color",
                 StringPropertySchema::new().enum_values(vec!["red".into(), "green".into()]).default_value("green"),
                 false,
-            );
-        let mut form = test_modal("test".into(), String::new(), &schema);
-        assert_eq!(submitted(&mut form), serde_json::json!({"approved": true, "color": "green"}));
+            )
+            .property("size", StringPropertySchema::new().enum_values(vec!["s".into(), "m".into()]), true);
+        let mut form = test_modal("test".into(), "Test".into(), &schema);
+        assert_eq!(submitted(&mut form), serde_json::json!({"approved": true, "color": "green", "size": "s"}));
+    }
+
+    #[test]
+    fn empty_form_submits_an_empty_object() {
+        let mut form = test_modal("test".into(), String::new(), &ElicitationSchema::new());
+        assert_eq!(submitted(&mut form), serde_json::json!({}));
     }
 
     #[test]
@@ -1219,24 +1077,6 @@ mod tests {
         );
         let mut form = test_modal("test".into(), String::new(), &schema);
         assert_eq!(submitted(&mut form), serde_json::json!({"tags": ["reliable"]}));
-    }
-
-    #[test]
-    fn accept_produces_correct_json() {
-        let schema = ElicitationSchema::new()
-            .property("name", StringPropertySchema::new().title("Name"), false)
-            .property("approved", BooleanPropertySchema::new().default_value(true), false)
-            .property(
-                "color",
-                StringPropertySchema::new().enum_values(vec!["red".into(), "green".into()]).default_value("green"),
-                false,
-            );
-        let mut form = test_modal("test".into(), "Test".into(), &schema);
-        let value = submitted(&mut form);
-        let object = value.as_object().unwrap();
-        assert!(!object.contains_key("name"), "empty optional text should be omitted");
-        assert_eq!(object["approved"], Value::Bool(true));
-        assert_eq!(object["color"], Value::String("green".into()));
     }
 
     #[test]

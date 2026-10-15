@@ -14,8 +14,8 @@ const HEIGHT: u16 = 40;
 /// Turns in a seeded long-history scenario (~1k conversation items).
 const LONG_HISTORY: usize = 200;
 
-fn perf_ui() -> TestUi<CountingBackend> {
-    TestUi::with_backend(CountingBackend::new(WIDTH, HEIGHT))
+fn perf_ui() -> TestUi<InstrumentedBackend> {
+    TestUi::with_backend(InstrumentedBackend::new(WIDTH, HEIGHT))
 }
 
 #[test]
@@ -230,8 +230,8 @@ fn streamed_thought_preserves_content_without_rendering_it() {
             ui.app().conversation_items().last().and_then(ConversationItem::text).as_deref(),
             Some(seen.as_str())
         );
-        assert!(!ui.history_text().contains("Considering step"));
-        assert!(ui.viewport_text().contains(seen.split_whitespace().last().unwrap()));
+        ui.assert_history_not_contains("Considering step");
+        ui.assert_viewport_contains(seen.split_whitespace().last().unwrap());
         assert!(ui.app().progress_indicator().is_active(), "streaming thought must keep the progress band active");
     }
 }
@@ -352,8 +352,8 @@ fn rendering_work_breakdown() {
 /// runs with the counters reset and the row is printed.
 fn bench(
     name: &str,
-    prepare: impl FnOnce(&mut TestUi<CountingBackend>),
-    measure: impl FnOnce(&mut TestUi<CountingBackend>),
+    prepare: impl FnOnce(&mut TestUi<InstrumentedBackend>),
+    measure: impl FnOnce(&mut TestUi<InstrumentedBackend>),
 ) {
     let mut ui = perf_ui();
     prepare(&mut ui);

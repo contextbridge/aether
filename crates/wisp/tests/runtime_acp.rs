@@ -417,7 +417,7 @@ async fn remote_startup_resumes_selected_session_and_preserves_queued_replay() {
                 let state = events.try_recv().expect("state queued before response");
                 ui.acp_event(history);
                 ui.acp_event(state);
-                assert!(ui.conversation_text().contains("history"));
+                ui.assert_conversation_contains("history");
                 assert_eq!(ui.app().waiting_for_response(), running);
                 connection.send_notification(idle_notification(selected, Some(StopReason::EndTurn))).unwrap();
                 ui.acp_event(events.recv().await.unwrap());

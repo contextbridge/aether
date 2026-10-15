@@ -3,7 +3,7 @@ use super::support::*;
 #[test]
 fn required_elicitation_field_must_be_completed() {
     block_on_local(async {
-        let mut app = make_app();
+        let mut app = TestUi::new();
         let schema: ElicitationSchema = serde_json::from_value(serde_json::json!({
             "type": "object",
             "properties": { "name": { "type": "string" } },
@@ -25,7 +25,7 @@ fn required_elicitation_field_must_be_completed() {
 #[test]
 fn form_with_unsupported_required_field_is_cancelled() {
     block_on_local(async {
-        let mut app = make_app();
+        let mut app = TestUi::new();
         let request: CreateElicitationRequest = serde_json::from_value(serde_json::json!({
             "mode": "form",
             "sessionId": "test-session",
@@ -52,7 +52,7 @@ fn form_with_unsupported_required_field_is_cancelled() {
 #[test]
 fn elicitation_request_is_accepted_interactively() {
     block_on_local(async {
-        let mut app = make_app();
+        let mut app = TestUi::new();
 
         let response_rx =
             with_elicitation(&mut app, form_elicitation("test-server", "Confirm the action", ElicitationSchema::new()))
@@ -76,12 +76,7 @@ fn tab_cycles_reasoning_effort_through_advertised_levels() {
         let mut app = TestUiBuilder::new().config_options(vec![reasoning_option(current, &levels)]).build();
         for expected in expected_values {
             app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-            let cmd = app.next_agent_command().unwrap();
-            assert!(
-                matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. }
-                    if config_id == "reasoning_effort" && value == &acp::SessionConfigOptionValue::id(expected)),
-                "starting at {current}, expected {expected}, got {cmd:?}"
-            );
+            assert_sets_config_option(&mut app, "reasoning_effort", expected);
         }
     }
 }
@@ -92,22 +87,13 @@ fn shift_backtab_cycles_mode_option_and_wraps() {
     let mut app = TestUiBuilder::new().config_options(options).build();
 
     app.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
-    let cmd = app.next_agent_command().unwrap();
-    assert!(
-        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == &acp::SessionConfigOptionValue::id("plan"))
-    );
+    assert_sets_config_option(&mut app, "mode", "plan");
 
     app.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
-    let cmd = app.next_agent_command().unwrap();
-    assert!(
-        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == &acp::SessionConfigOptionValue::id("ask"))
-    );
+    assert_sets_config_option(&mut app, "mode", "ask");
 
     app.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
-    let cmd = app.next_agent_command().unwrap();
-    assert!(
-        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == &acp::SessionConfigOptionValue::id("code"))
-    );
+    assert_sets_config_option(&mut app, "mode", "code");
 }
 
 #[test]
@@ -116,22 +102,15 @@ fn shift_backtab_cycles_grouped_mode_options() {
     let mut app = TestUiBuilder::new().config_options(options).build();
 
     app.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
-    let cmd = app.next_agent_command().unwrap();
-    assert!(
-        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == &acp::SessionConfigOptionValue::id("plan"))
-    );
+    assert_sets_config_option(&mut app, "mode", "plan");
 
     app.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
-    let cmd = app.next_agent_command().unwrap();
-    assert!(
-        matches!(cmd, AgentCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == &acp::SessionConfigOptionValue::id("review")),
-        "cycling must cross group boundaries, not stop at the first group"
-    );
+    assert_sets_config_option(&mut app, "mode", "review");
 }
 
 #[test]
 fn tab_and_backtab_noop_without_cycleable_options() {
-    let mut app = make_app();
+    let mut app = TestUi::new();
 
     app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     app.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
@@ -176,7 +155,7 @@ fn failed_config_update_shows_error_and_does_not_corrupt_state() {
 #[test]
 fn double_ctrl_c_exits_over_elicitation_modal() {
     block_on_local(async {
-        let mut app = make_app();
+        let mut app = TestUi::new();
 
         with_elicitation(&mut app, form_elicitation("test-server", "", ElicitationSchema::new())).await;
         assert!(app.app().has_modal());
@@ -187,7 +166,7 @@ fn double_ctrl_c_exits_over_elicitation_modal() {
 #[test]
 fn form_modal_composed_space_does_not_answer() {
     block_on_local(async {
-        let mut app = make_app();
+        let mut app = TestUi::new();
 
         let response_rx = with_elicitation(
             &mut app,

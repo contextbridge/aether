@@ -13,7 +13,7 @@ categories = ["command-line-interface"]
 dist = false
 
 [features]
-testing = []
+testing = ["acp_utils/testing"]
 
 [lib]
 name = "wisp"
@@ -22,11 +22,6 @@ path = "src/lib.rs"
 [[bin]]
 name = "wisp"
 path = "src/main.rs"
-
-[[test]]
-name = "diff_model"
-path = "tests/diff_model.rs"
-required-features = ["testing"]
 
 [[test]]
 name = "git_contract"

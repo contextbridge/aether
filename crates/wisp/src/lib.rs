@@ -9,7 +9,7 @@ pub mod settings;
 // The crate's public API is the entry points above plus [`Session`]. The
 // internal module graph opens up only under the `testing` feature, for the
 // integration suite's cohesive harness in [`testing`].
-#[cfg(not(feature = "testing"))]
+#[cfg(all(test, not(feature = "testing")))]
 mod testing;
 #[cfg(feature = "testing")]
 pub mod testing;

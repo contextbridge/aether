@@ -1,51 +1,35 @@
-#![cfg(feature = "testing")]
-
-use acp_utils::client::AcpEvent;
-use acp_utils::conversation::{ConversationContent, ToolStatus};
+use super::support::*;
 use acp_utils::testing::{idle_notification, plan_notification, running_notification};
 use agent_client_protocol::schema::MaybeUndefined;
-use agent_client_protocol::schema::v2 as acp;
-use wisp::testing::{TestUi, session_update, text_chunk_with_id, tool_completed};
 
 #[test]
 fn user_ack_and_idle_preserve_one_foreground_turn() {
     let mut ui = TestUi::new();
     ui.submit("hello");
-    ui.acp_event(session_update(running_notification("test-session").update));
+    ui.acp_event(running_notification("test-session").into());
     assert!(ui.app().waiting_for_response());
     ui.acp_event(text_chunk_with_id("reply-1", "world"));
     ui.acp_event(idle_notification("other", Some(acp::StopReason::EndTurn)).into());
     assert!(ui.app().waiting_for_response());
-    ui.acp_event(session_update(idle_notification("test-session", Some(acp::StopReason::EndTurn)).update));
+    ui.acp_event(idle_notification("test-session", Some(acp::StopReason::EndTurn)).into());
     assert!(!ui.app().waiting_for_response());
     let text = ui.conversation_text();
     assert_eq!(text.matches("hello").count(), 1, "{text}");
     assert!(text.contains("world"), "{text}");
-    let commands = ui.executor_mut().take_commands();
-    assert_eq!(
-        commands
-            .iter()
-            .filter(|command| matches!(
-                command,
-                wisp::command::Command::Terminal(wisp::command::TerminalCommand::RingBell)
-            ))
-            .count(),
-        1
-    );
+    assert_eq!(bells(&mut ui), 1);
     ui.complete_prompt(acp::StopReason::EndTurn);
-    assert!(ui.executor_mut().take_commands().is_empty());
+    assert!(ui.take_commands().is_empty());
 }
 
 #[test]
 fn cancellation_keeps_final_output_and_ignores_stale_prompt_results() {
-    use wisp::command::CommandResult;
     let mut ui = TestUi::new();
     ui.submit("hello");
     ui.next_agent_command().unwrap();
     ui.deliver_result(CommandResult::Cancel(Ok(())));
     assert!(ui.app().waiting_for_response(), "cancel is not completion");
     ui.acp_event(text_chunk_with_id("reply", "final output"));
-    ui.acp_event(session_update(idle_notification("test-session", Some(acp::StopReason::Cancelled)).update));
+    ui.acp_event(idle_notification("test-session", Some(acp::StopReason::Cancelled)).into());
     assert!(!ui.app().waiting_for_response());
     ui.deliver_result(CommandResult::Prompt { request_id: wisp::request::RequestId::next(), result: Ok(()) });
     assert!(!ui.app().waiting_for_response(), "a result for no queued prompt changes nothing");
@@ -54,22 +38,18 @@ fn cancellation_keeps_final_output_and_ignores_stale_prompt_results() {
 
 #[test]
 fn config_result_for_a_replaced_conversation_is_ignored() {
-    use wisp::command::CommandResult;
     for restored_id in ["restored", "other"] {
         let mut ui = TestUi::new();
-        ui.deliver_result(CommandResult::NewSession(Ok(acp::NewSessionResponse::new("test-session"))));
+        ui.deliver_result(new_session_created("test-session", Vec::new()));
         let stale = ui.app().conversation_id();
         ui.deliver_result(CommandResult::ConfigOptionsUpdated {
             conversation_id: stale,
-            result: Ok(acp::SetSessionConfigOptionResponse::new(vec![model_option("stale")])),
+            result: Ok(acp::SetSessionConfigOptionResponse::new(vec![select_option("model", "stale")])),
         });
         assert_eq!(ui.app().config_options().len(), 1);
 
         ui.begin_resume(restored_id, "/tmp");
-        ui.deliver_result(CommandResult::ResumeSession {
-            session_id: restored_id.into(),
-            result: Ok(acp::ResumeSessionResponse::new().config_options(vec![model_option("restored")])),
-        });
+        ui.deliver_result(session_loaded(restored_id, vec![select_option("model", "restored")]));
         ui.deliver_result(CommandResult::ConfigOptionsUpdated {
             conversation_id: stale,
             result: Ok(acp::SetSessionConfigOptionResponse::new(vec![])),
@@ -82,10 +62,7 @@ fn config_result_for_a_replaced_conversation_is_ignored() {
 fn replay_snapshot_cannot_replace_a_live_turn() {
     let mut ui = TestUi::new();
     ui.submit("current");
-    ui.deliver_result(wisp::command::CommandResult::ResumeSession {
-        session_id: "test-session".into(),
-        result: Ok(acp::ResumeSessionResponse::new()),
-    });
+    ui.deliver_result(session_loaded("test-session", Vec::new()));
     assert!(ui.app().waiting_for_response());
     ui.assert_conversation_contains("current");
 }
@@ -113,7 +90,7 @@ fn live_messages_can_be_replaced_cleared_and_appended_after_idle() {
 fn ready_and_replayed_updates_do_not_start_activity() {
     let mut ui = TestUi::new();
     for event in [
-        session_update(idle_notification("test-session", None).update),
+        idle_notification("test-session", None).into(),
         message("history", "saved response"),
         text_chunk_with_id("history", " tail"),
     ] {
@@ -171,14 +148,8 @@ fn tool_and_plan_updates_are_upserts_and_chunks_append() {
     assert_eq!(tools[0].title(), "Read file");
     assert_eq!(tools[0].status, ToolStatus::Success);
     for (id, text) in [("a", "old"), ("b", "preserved"), ("a", "replacement")] {
-        ui.acp_event(session_update(
-            plan_notification(
-                "test-session",
-                id,
-                vec![acp::PlanEntry::new(text, acp::PlanEntryPriority::Medium, acp::PlanEntryStatus::Pending)],
-            )
-            .update,
-        ));
+        let entry = acp::PlanEntry::new(text, acp::PlanEntryPriority::Medium, acp::PlanEntryStatus::Pending);
+        ui.acp_event(plan_notification("test-session", id, vec![entry]).into());
     }
     let entries = ui.app().plan_entries();
     assert_eq!(entries.iter().map(|entry| entry.content.as_str()).collect::<Vec<_>>(), ["replacement"]);
@@ -197,16 +168,13 @@ fn repeated_resume_replaces_history_without_adopting_a_live_echo() {
             idle_notification("restored", None).update,
         ]
         .into_iter()
-        .map(|update| AcpEvent::SessionUpdate(Box::new(acp::UpdateSessionNotification::new(id, update))))
+        .map(|update| session_update_for(id, update))
         .collect();
         for event in replay {
             ui.acp_event(event);
         }
         assert_eq!(ui.conversation_text().matches("saved answer").count(), 1);
-        ui.deliver_result(wisp::command::CommandResult::ResumeSession {
-            session_id: id.into(),
-            result: Ok(acp::ResumeSessionResponse::new()),
-        });
+        ui.deliver_result(session_loaded(id, Vec::new()));
         assert_eq!(ui.app().conversation_items().len(), 2);
         assert!(!ui.app().waiting_for_response());
         assert!(!ui.app().progress_indicator().is_active());
@@ -228,10 +196,6 @@ fn seeded_history_uses_distinct_message_ids_and_finishes_each_turn() {
     assert_eq!(users.len(), 3);
     assert_ne!(users[0].message_id(), users[1].message_id());
     assert!(!ui.app().waiting_for_response());
-}
-
-fn model_option(value: &str) -> acp::SessionConfigOption {
-    acp::SessionConfigOption::select("model", "Model", value, vec![acp::SessionConfigSelectOption::new(value, value)])
 }
 
 fn message(id: &str, text: &str) -> AcpEvent {

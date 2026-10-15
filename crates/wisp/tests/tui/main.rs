@@ -5,11 +5,13 @@
 
 mod support;
 
+mod acp_reduction;
 mod artifact_review;
 mod attachments;
 mod composer;
 mod configuration;
 mod conversation;
+mod diff_model;
 mod filterable_list;
 mod foundation;
 mod frame;
@@ -28,5 +30,6 @@ mod status_line;
 mod subagents;
 mod terminal_interaction;
 mod terminal_session;
+mod theme;
 mod widgets;
 mod workspace;

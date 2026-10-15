@@ -2,11 +2,11 @@ use super::support::*;
 
 #[test]
 fn first_frame_never_inserts_scrollback() {
-    let mut ui = TestUi::with_backend(RecordingBackend::new(40, 15));
+    let mut ui = TestUi::with_backend(InstrumentedBackend::new(40, 15));
 
     ui.draw();
 
-    let events: Vec<BackendEvent> = ui.backend().events().to_vec();
+    let events = ui.backend_mut().take_events();
     assert_eq!(
         events.iter().filter(|event| **event == BackendEvent::Scroll).count(),
         0,
@@ -21,20 +21,13 @@ fn first_frame_never_inserts_scrollback() {
 
 #[test]
 fn resize_growth_preserves_native_history_without_duplication() {
-    let mut ui = TestUi::with_backend(RecordingBackend::new(40, 15));
+    let mut ui = TestUi::with_backend(InstrumentedBackend::new(40, 15));
     ui.draw();
 
     // Conversation items remain owned by the model while the renderer commits
     // only the visible overflow into terminal-native history.
     ui.backend_mut().resize(40, 10);
-    ui.submit("hello");
-    let mut reply = String::new();
-    for index in 0..30 {
-        writeln!(reply, "overflow-line-{index}").unwrap();
-        reply.push('\n');
-    }
-    ui.acp_event(text_chunk(&reply));
-    ui.complete_prompt(acp::StopReason::EndTurn);
+    ui.turn("hello", &numbered_lines("overflow-line", 30));
     ui.draw();
     assert!(
         ui.app()
@@ -45,12 +38,12 @@ fn resize_growth_preserves_native_history_without_duplication() {
     );
     assert!(buffer_text(ui.backend().scrollback()).contains("overflow-line-0"));
 
-    ui.backend_mut().clear_events();
+    ui.backend_mut().take_events();
 
     ui.backend_mut().resize(40, 15);
     ui.draw();
 
-    let events: Vec<BackendEvent> = ui.backend().events().to_vec();
+    let events = ui.backend_mut().take_events();
     assert!(events.iter().any(|event| *event == BackendEvent::ShowCursor), "the viewport must be drawn: {events:?}");
     assert!(
         !events.iter().any(|event| *event == BackendEvent::Scroll),
@@ -96,11 +89,9 @@ fn redrawing_without_state_change_preserves_the_visible_rows() {
     let mut ui = TestUi::new();
     ui.submit("idempotent");
     ui.acp_event(text_chunk("streaming reply"));
-    ui.draw();
 
     let viewport: Vec<String> = ui.viewport_text().lines().map(str::to_string).collect();
     let conversation: Vec<String> = ui.conversation_text().lines().map(str::to_string).collect();
-    ui.draw();
     ui.assert_viewport(&viewport);
     ui.assert_conversation(&conversation);
 }
@@ -108,9 +99,7 @@ fn redrawing_without_state_change_preserves_the_visible_rows() {
 #[test]
 fn completed_turn_settles_into_a_stable_viewport() {
     let mut ui = TestUi::with_dimensions(40, 15);
-    ui.submit("hi");
-    ui.acp_event(text_chunk("final answer"));
-    ui.complete_prompt(acp::StopReason::EndTurn);
+    ui.turn("hi", "final answer");
     ui.draw();
     ui.draw();
 
@@ -137,12 +126,7 @@ fn completed_turn_settles_into_a_stable_viewport() {
 fn scoped_buffers_partition_the_committed_and_live_conversation() {
     let mut ui = TestUi::new();
     ui.submit("hello");
-    let mut reply = String::new();
-    for index in 0..30 {
-        writeln!(reply, "overflow-line-{index}").unwrap();
-        reply.push('\n');
-    }
-    ui.acp_event(text_chunk(&format!("{reply}still-streaming")));
+    ui.acp_event(text_chunk(&format!("{}still-streaming", numbered_lines("overflow-line", 30))));
     ui.draw();
 
     assert!(buffer_text(ui.backend().scrollback()).contains("overflow-line-0"));
@@ -161,15 +145,7 @@ fn resize_growth_keeps_canonical_history_visible() {
     ui.draw();
 
     ui.resize(40, 10);
-    ui.submit("hello");
-    let mut reply = String::new();
-    for index in 0..30 {
-        writeln!(reply, "queued-line-{index}").unwrap();
-        reply.push('\n');
-    }
-    ui.acp_event(text_chunk(&reply));
-    ui.complete_prompt(acp::StopReason::EndTurn);
-    ui.draw();
+    ui.turn("hello", &numbered_lines("queued-line", 30));
 
     ui.assert_history_contains("queued-line-0");
     assert!(
@@ -178,7 +154,6 @@ fn resize_growth_keeps_canonical_history_visible() {
     );
 
     ui.resize(40, 15);
-    ui.draw();
 
     ui.assert_history_contains("queued-line-0");
     assert!(
