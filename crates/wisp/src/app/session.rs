@@ -67,7 +67,6 @@ impl App {
             self.session.auth_methods(),
         );
         overlay.upsert_local_entries(build_theme_entries(self.ui.settings.ui(), &[]));
-        overlay.add_status_entries();
         self.open_overlay(Overlay::Settings(Box::new(overlay)));
         self.queue(Command::Filesystem(FilesystemCommand::ListThemes));
     }

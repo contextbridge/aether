@@ -63,6 +63,13 @@ impl PaneKind {
             Self::ProviderLogins => "Provider Logins",
         }
     }
+
+    fn summary(self, live: &LiveSettingsData) -> String {
+        match self {
+            Self::McpServers => server_status::summary(&live.servers),
+            Self::ProviderLogins => provider_login::summary(&live.providers),
+        }
+    }
 }
 
 /// The settings overlay: a menu of options, each of which opens a pane.
@@ -143,26 +150,20 @@ impl SettingsOverlay {
         server_statuses: Vec<McpServerStatusEntry>,
         auth_methods: &[AuthMethod],
     ) -> Self {
-        Self {
+        let mut overlay = Self {
             menu: SettingsMenu::from_config_options(config_options),
             pane: None,
             current_reasoning_effort: reasoning_effort_of(config_options),
             live: LiveSettingsData { servers: server_statuses, providers: build_provider_login_entries(auth_methods) },
             pending_elicitation: None,
-        }
+        };
+        overlay.sync_pane_rows();
+        overlay
     }
 
     /// Adds the given rows, replacing any already shown for the same option.
     pub fn upsert_local_entries(&mut self, entries: Vec<SettingsMenuEntry>) {
         self.menu.upsert_local_entries(entries);
-    }
-
-    /// Adds the rows that open panes rather than pick a config value.
-    pub fn add_status_entries(&mut self) {
-        self.menu.upsert_pane_row(PaneKind::McpServers, &server_status::summary(&self.live.servers));
-        if !self.live.providers.is_empty() {
-            self.menu.upsert_pane_row(PaneKind::ProviderLogins, &provider_login::summary(&self.live.providers));
-        }
     }
 
     pub fn update_config_options(&mut self, options: &[LocalConfigOption]) {
@@ -176,13 +177,12 @@ impl SettingsOverlay {
 
     pub fn update_server_statuses(&mut self, statuses: Vec<McpServerStatusEntry>) {
         self.live.servers = statuses;
-        self.menu.upsert_pane_row(PaneKind::McpServers, &server_status::summary(&self.live.servers));
         self.refresh_pane();
     }
 
     pub fn update_auth_methods(&mut self, methods: &[AuthMethod]) {
         self.live.providers = build_provider_login_entries(methods);
-        self.menu.upsert_pane_row(PaneKind::ProviderLogins, &provider_login::summary(&self.live.providers));
+        self.sync_pane_rows();
         self.refresh_pane();
     }
 
@@ -221,6 +221,11 @@ impl SettingsOverlay {
             .map_or_else(|| vec![("Enter", "select".into()), ("Esc", "close".into())], SettingsPane::footer)
     }
 
+    fn sync_pane_rows(&mut self) {
+        self.menu.show_pane_row(PaneKind::McpServers, true);
+        self.menu.show_pane_row(PaneKind::ProviderLogins, !self.live.providers.is_empty());
+    }
+
     fn refresh_pane(&mut self) {
         if let Some(pane) = self.pane.as_mut() {
             pane.refresh(&self.live);
@@ -230,7 +235,7 @@ impl SettingsOverlay {
     /// Draws whichever of the menu or the open pane has focus.
     fn render_content(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
         let Some(pane) = self.pane.as_mut() else {
-            self.menu.render(area, buf, cx.theme);
+            self.menu.render(area, buf, cx.theme, &self.live);
             return None;
         };
         pane.render(area, buf, cx)
@@ -269,10 +274,10 @@ impl SettingsOverlay {
 
     fn open_selected_pane(&self) -> Option<SettingsPane> {
         let pane = match self.menu.selected_row()? {
-            MenuRow::Pane { kind: PaneKind::McpServers, .. } => {
+            MenuRow::Pane(PaneKind::McpServers) => {
                 SettingsPane::ServerStatus(ServerStatusPane::new(self.live.servers.clone()))
             }
-            MenuRow::Pane { kind: PaneKind::ProviderLogins, .. } => {
+            MenuRow::Pane(PaneKind::ProviderLogins) => {
                 SettingsPane::ProviderLogin(ProviderLoginPane::new(self.live.providers.clone()))
             }
             MenuRow::Select(entry) if entry.multi_select => SettingsPane::ModelSelector(ModelSelector::new(

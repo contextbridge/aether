@@ -1,4 +1,4 @@
-use super::{PaneKind, SettingsChange, SettingsMenuEntry};
+use super::{LiveSettingsData, PaneKind, SettingsChange, SettingsMenuEntry};
 use crate::session::session_config_view::{LocalConfigKind, LocalConfigOption, LocalConfigValue};
 use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
@@ -20,14 +20,14 @@ pub(super) struct SettingsMenu {
 pub(super) enum MenuRow {
     /// A config option, opening a picker over its values.
     Select(SettingsMenuEntry),
-    /// A row that opens a pane rather than picking a value. Its "value" is just
-    /// the summary line shown beside the title.
-    Pane { kind: PaneKind, summary: String },
+    /// A row that opens a pane rather than picking a value, summarizing the
+    /// pane's live data beside its title.
+    Pane(PaneKind),
 }
 
 impl MenuRow {
     /// The `title: value` line drawn for this row.
-    fn label(&self) -> String {
+    fn label(&self, live: &LiveSettingsData) -> String {
         match self {
             Self::Select(entry) => {
                 let current = entry
@@ -37,7 +37,7 @@ impl MenuRow {
                     .unwrap_or("?");
                 format!("{}: {current}", entry.title)
             }
-            Self::Pane { kind, summary } => format!("{}: {summary}", kind.title()),
+            Self::Pane(kind) => format!("{}: {}", kind.title(), kind.summary(live)),
         }
     }
 }
@@ -98,22 +98,24 @@ impl SettingsMenu {
         }
     }
 
-    pub(super) fn render(&mut self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
-        let rows = self.rows.iter().map(|row| Line::styled(format!(" {}", row.label()), theme.text_primary)).collect();
+    pub(super) fn render(&mut self, area: Rect, buffer: &mut Buffer, theme: &Theme, live: &LiveSettingsData) {
+        let rows =
+            self.rows.iter().map(|row| Line::styled(format!(" {}", row.label(live)), theme.text_primary)).collect();
         let view = ListView::new(rows, theme)
             .pane(" (no settings options)")
             .highlight_horizontal_padding(MODAL_HORIZONTAL_PADDING);
         StatefulWidget::render(view, area, buffer, &mut self.selection);
     }
 
-    /// Adds or refreshes the row that opens `kind`'s pane.
-    pub(super) fn upsert_pane_row(&mut self, kind: PaneKind, summary: &str) {
-        let row = MenuRow::Pane { kind, summary: summary.to_string() };
-        let existing =
-            self.rows.iter().position(|row| matches!(row, MenuRow::Pane { kind: existing, .. } if *existing == kind));
-        match existing {
-            Some(index) => self.rows[index] = row,
-            None => self.rows.push(row),
+    /// Adds or removes the row that opens `kind`'s pane.
+    pub(super) fn show_pane_row(&mut self, kind: PaneKind, shown: bool) {
+        let existing = self.rows.iter().position(|row| matches!(row, MenuRow::Pane(existing) if *existing == kind));
+        match (existing, shown) {
+            (None, true) => self.rows.push(MenuRow::Pane(kind)),
+            (Some(index), false) => {
+                self.rows.remove(index);
+            }
+            _ => {}
         }
         self.selection.clamp(self.rows.len());
     }
