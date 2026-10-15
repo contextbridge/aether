@@ -6,51 +6,27 @@
 
 mod common;
 
-use aether_lspd::testing::configure_fake_server;
-use aether_lspd::{ClientError, LSP_REQUEST_TIMED_OUT, LanguageId};
-use common::{DaemonHarness, cargo_project, file_uri, hover_text};
+use aether_lspd::testing::{TestDaemon, configure_fake_server};
+use aether_lspd::{ClientError, LSP_REQUEST_TIMED_OUT, LanguageId, LspClient};
+use common::{cargo_project, connect, file_uri, hover_text};
+use std::path::Path;
 use std::sync::Once;
-
-static SETUP: Once = Once::new();
-
-fn use_misbehaving_fake_server() {
-    SETUP.call_once(|| unsafe {
-        std::env::set_var("AETHER_LSPD_REQUEST_TIMEOUT", "2");
-        configure_fake_server(
-            LanguageId::Rust,
-            &["--wedge-on", "textDocument/definition", "--crash-on", "textDocument/references"],
-        );
-    });
-}
+use std::time::Duration;
 
 #[tokio::test]
 async fn wedged_request_fails_with_timeout_instead_of_hanging() {
-    use_misbehaving_fake_server();
-
     let project = cargo_project("wedge_timeout");
-    project.write("src/main.rs", "fn main() {}\n");
-    let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
-    let client = harness.connect().await.expect("Failed to connect");
+    let (_daemon, client) = misbehaving_daemon(project.root()).await;
 
     let result = client.goto_definition(file_uri(&project.path("src/main.rs")), 0, 3).await;
-    match result {
-        Err(ClientError::LspError { code, message }) => {
-            assert_eq!(code, LSP_REQUEST_TIMED_OUT, "unexpected error: {message}");
-        }
-        other => panic!("Expected timeout error for wedged request, got {other:?}"),
-    }
 
-    harness.kill().await.expect("Failed to kill daemon");
+    assert!(matches!(result, Err(ClientError::LspError { code: LSP_REQUEST_TIMED_OUT, .. })), "{result:?}");
 }
 
 #[tokio::test]
 async fn wedged_server_is_replaced_on_next_request() {
-    use_misbehaving_fake_server();
-
     let project = cargo_project("wedge_recovery");
-    project.write("src/main.rs", "fn main() {}\n");
-    let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
-    let client = harness.connect().await.expect("Failed to connect");
+    let (_daemon, client) = misbehaving_daemon(project.root()).await;
     let uri = file_uri(&project.path("src/main.rs"));
 
     let wedged = client.goto_definition(uri.clone(), 0, 3).await;
@@ -58,18 +34,12 @@ async fn wedged_server_is_replaced_on_next_request() {
 
     let hover = hover_text(client.hover(uri, 0, 0).await.expect("Hover after wedge should succeed"));
     assert!(hover.contains("open_count=1"), "unexpected hover from replacement server: {hover}");
-
-    harness.kill().await.expect("Failed to kill daemon");
 }
 
 #[tokio::test]
 async fn crashed_server_is_replaced_on_next_request() {
-    use_misbehaving_fake_server();
-
     let project = cargo_project("crash_recovery");
-    project.write("src/main.rs", "fn main() {}\n");
-    let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
-    let client = harness.connect().await.expect("Failed to connect");
+    let (_daemon, client) = misbehaving_daemon(project.root()).await;
     let uri = file_uri(&project.path("src/main.rs"));
 
     let crashed = client.find_references(uri.clone(), 0, 0, true).await;
@@ -77,6 +47,18 @@ async fn crashed_server_is_replaced_on_next_request() {
 
     let hover = hover_text(client.hover(uri, 0, 0).await.expect("Hover after crash should succeed"));
     assert!(hover.contains("open_count=1"), "unexpected hover from replacement server: {hover}");
+}
 
-    harness.kill().await.expect("Failed to kill daemon");
+static SETUP: Once = Once::new();
+
+async fn misbehaving_daemon(root: &Path) -> (TestDaemon, LspClient) {
+    SETUP.call_once(|| unsafe {
+        configure_fake_server(
+            LanguageId::Rust,
+            &["--wedge-on", "textDocument/definition", "--crash-on", "textDocument/references"],
+        );
+    });
+    let daemon =
+        TestDaemon::spawn(root, LanguageId::Rust, Duration::from_secs(2)).await.expect("Failed to spawn daemon");
+    (daemon, connect(root, LanguageId::Rust).await)
 }

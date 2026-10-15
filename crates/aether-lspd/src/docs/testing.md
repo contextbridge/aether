@@ -16,7 +16,6 @@ Projects are [`TestWorkspace`]s, so they share its `file`, `write`, `path`, and 
 # Daemons
 
 - [`TestDaemon`] -- An in-process daemon with deterministic shutdown.
-- [`remove_stale_daemon_files`] -- Clears a previous daemon's socket and lockfile.
 - [`configure_fake_server`] -- Points a language at the shared fake language server.
 
 # Example

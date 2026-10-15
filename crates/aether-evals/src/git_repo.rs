@@ -122,67 +122,39 @@ mod tests {
     use utils::testing::TestWorkspace;
 
     #[test]
-    fn test_git_diff_between_commits() {
+    fn diff_range_covers_commit_ranges_and_the_working_tree() {
         let repo = TestWorkspace::new().file("test.txt", "initial content\n").git_init();
         let first_commit = repo.commit("Initial commit");
         repo.write("test.txt", "modified content\n");
         repo.write("new.txt", "new file\n");
         let second_commit = repo.commit("Second commit");
-
-        let git_repo = GitRepo::from_path(repo.root());
-        let diff = git_repo.diff(&first_commit, &second_commit).unwrap();
-
-        assert!(diff.contains("test.txt"), "Diff should mention test.txt");
-        assert!(diff.contains("new.txt"), "Diff should mention new.txt");
-        assert!(
-            diff.contains("modified content") || diff.contains("+modified content"),
-            "Diff should show modified content"
-        );
-    }
-
-    #[test]
-    fn test_unified_diff_function() {
-        let repo = TestWorkspace::new().file("test.txt", "initial content\n").git_init();
-        let first_commit = repo.commit("Initial commit");
-        repo.write("test.txt", "modified content\n");
-        let second_commit = repo.commit("Second commit");
         repo.write("test.txt", "unstaged content\n");
-
         let git_repo = GitRepo::from_path(repo.root());
 
-        let diff = git_repo.diff_range(&first_commit, Some(&second_commit)).unwrap();
-        assert!(diff.contains("modified content") || diff.contains("+modified content"));
-
-        let unstaged_diff = git_repo.diff_range("HEAD", None).unwrap();
-        assert!(unstaged_diff.contains("unstaged content") || unstaged_diff.contains("+unstaged content"));
-
-        let from_commit_diff = git_repo.diff_range(&first_commit, None).unwrap();
-        assert!(from_commit_diff.contains("unstaged content") || from_commit_diff.contains("+unstaged content"));
+        let committed = git_repo.diff(&first_commit, &second_commit).unwrap();
+        assert!(committed.contains("+modified content"), "{committed}");
+        assert!(committed.contains("+new file"), "{committed}");
+        assert!(!committed.contains("unstaged content"), "{committed}");
+        assert!(git_repo.diff_range("HEAD", None).unwrap().contains("+unstaged content"));
+        assert!(git_repo.diff_range(&first_commit, None).unwrap().contains("+unstaged content"));
     }
 
     #[test]
-    fn test_blobless_clone_and_checkout() {
+    fn blobless_clone_checks_out_and_diffs_lazily_fetched_commits() {
         let source = TestWorkspace::new().file("test.txt", "initial content\n").git_init();
         let first_commit = source.commit("Initial commit");
         source.write("test.txt", "modified content\n");
         let second_commit = source.commit("Second commit");
-
         let clone = TestWorkspace::new();
-        let repo = GitRepo::clone(source.root(), clone.root(), CloneMode::Blobless).unwrap();
 
-        let entries: Vec<_> = fs::read_dir(clone.root())
-            .unwrap()
-            .filter_map(std::result::Result::ok)
-            .filter(|e| e.file_name() != ".git")
-            .collect();
-        assert_eq!(entries.len(), 0, "Working directory should be empty after blobless clone");
+        let repo = GitRepo::clone(source.root(), clone.root(), CloneMode::Blobless).unwrap();
+        assert!(
+            fs::read_dir(clone.root()).unwrap().all(|entry| entry.unwrap().file_name() == ".git"),
+            "working directory should be empty after a --no-checkout clone"
+        );
 
         repo.checkout(&first_commit).unwrap();
-
-        let content = fs::read_to_string(clone.path("test.txt")).unwrap();
-        assert_eq!(content, "initial content\n");
-
-        let diff = repo.diff(&first_commit, &second_commit).unwrap();
-        assert!(diff.contains("modified content") || diff.contains("+modified content"));
+        assert_eq!(fs::read_to_string(clone.path("test.txt")).unwrap(), "initial content\n");
+        assert!(repo.diff(&first_commit, &second_commit).unwrap().contains("+modified content"));
     }
 }
