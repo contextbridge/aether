@@ -5,18 +5,14 @@ mod providers {
         mod capture_fixtures;
         mod fixture_tests;
     }
+    mod chat_completions_fixture_tests;
     mod openai {
         mod capture_fixtures;
-        mod fixture_tests;
     }
     mod openrouter {
         mod capture_fixtures;
-        mod fixture_tests;
-        mod usage_tests;
     }
     mod z_ai {
         mod capture_fixtures;
-        mod fixture_tests;
-        mod types_tests;
     }
 }

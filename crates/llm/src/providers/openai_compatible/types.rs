@@ -16,7 +16,7 @@ use crate::{ChatMessage, ContentBlock, TokenUsage, tool_result_parts};
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum FinishReason {
+pub(crate) enum FinishReason {
     Stop,
     Length,
     ToolCalls,
@@ -28,7 +28,7 @@ pub enum FinishReason {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct ChatCompletionStreamResponse {
+pub(crate) struct ChatCompletionStreamResponse {
     pub choices: Vec<ChatCompletionStreamChoice>,
     pub usage: Option<Usage>,
 }
@@ -179,33 +179,34 @@ fn map_user_content(parts: &[ContentBlock]) -> crate::Result<UserContent> {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct ChatCompletionStreamChoice {
+pub(crate) struct ChatCompletionStreamChoice {
     pub delta: ChatCompletionStreamResponseDelta,
     pub finish_reason: Option<FinishReason>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-pub struct ChatCompletionStreamResponseDelta {
+pub(crate) struct ChatCompletionStreamResponseDelta {
     pub content: Option<String>,
     pub reasoning_content: Option<String>,
     pub tool_calls: Option<Vec<ToolCallDelta>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct ToolCallDelta {
+pub(crate) struct ToolCallDelta {
     pub index: i32,
     pub id: Option<String>,
     pub function: Option<FunctionCallDelta>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-pub struct FunctionCallDelta {
+pub(crate) struct FunctionCallDelta {
     pub name: Option<String>,
     pub arguments: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-pub struct PromptTokensDetails {
+#[allow(clippy::struct_field_names)]
+pub(crate) struct PromptTokensDetails {
     pub cached_tokens: Option<u32>,
     /// `OpenRouter`-specific: tokens written to cache (cache creation).
     /// Only returned for models with explicit caching and cache write pricing.
@@ -217,7 +218,8 @@ pub struct PromptTokensDetails {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-pub struct CompletionTokensDetails {
+#[allow(clippy::struct_field_names)]
+pub(crate) struct CompletionTokensDetails {
     pub reasoning_tokens: Option<u32>,
     pub audio_tokens: Option<u32>,
     pub accepted_prediction_tokens: Option<u32>,
@@ -225,7 +227,7 @@ pub struct CompletionTokensDetails {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-pub struct Usage {
+pub(crate) struct Usage {
     #[serde(alias = "input_tokens")]
     pub prompt_tokens: i64,
     #[serde(alias = "output_tokens")]

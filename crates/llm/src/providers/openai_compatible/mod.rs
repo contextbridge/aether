@@ -1,7 +1,7 @@
 #![doc = include_str!(concat!(env!("OUT_DIR"), "/docs/openai_compatible.md"))]
 
-pub mod streaming;
-pub mod types;
+pub(crate) mod streaming;
+pub(crate) mod types;
 
 use async_openai::types::chat::{ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionTools, FunctionObject};
 use schemars::Schema;
@@ -11,7 +11,6 @@ use crate::{Context, LlmError, ToolDefinition};
 use types::CompatibleChatRequest;
 
 pub use streaming::process_compatible_stream;
-pub use types::ChatCompletionStreamResponse;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ChatRequestPolicy {

@@ -12,7 +12,9 @@
 
 use serde_json::{Value, json};
 
-use crate::providers::common::{lorem_filler, post_json_capture, require_env, write_fixture};
+use crate::providers::common::{
+    MINIMAL_PROMPT, TOOL_PROMPT, lorem_filler, post_json_capture, require_env, weather_tool, write_fixture,
+};
 
 const MODEL: &str = "claude-haiku-4-5";
 const REASONING_MODEL: &str = "claude-sonnet-4-5";
@@ -25,7 +27,7 @@ async fn capture_anthropic_01_minimal() {
         "model": MODEL,
         "max_tokens": 64,
         "stream": true,
-        "messages": [{"role": "user", "content": "Reply with exactly: hi"}],
+        "messages": [{"role": "user", "content": MINIMAL_PROMPT}],
     }))
     .await;
     write_fixture("anthropic", "01_minimal", &bytes);
@@ -38,16 +40,8 @@ async fn capture_anthropic_02_tool_call() {
         "model": MODEL,
         "max_tokens": 256,
         "stream": true,
-        "tools": [{
-            "name": "get_weather",
-            "description": "Get the current weather for a city.",
-            "input_schema": {
-                "type": "object",
-                "properties": {"city": {"type": "string"}},
-                "required": ["city"],
-            },
-        }],
-        "messages": [{"role": "user", "content": "What's the weather in Tokyo? Use the tool."}],
+        "tools": [weather_tool("input_schema")],
+        "messages": [{"role": "user", "content": TOOL_PROMPT}],
     }))
     .await;
     write_fixture("anthropic", "02_tool_call", &bytes);
@@ -97,6 +91,5 @@ async fn capture_anthropic_05_reasoning() {
 
 async fn send(body: &Value) -> Vec<u8> {
     let key = require_env("ANTHROPIC_API_KEY");
-    let client = reqwest::Client::new();
-    post_json_capture(&client, URL, &[("x-api-key", key.as_str()), ("anthropic-version", "2023-06-01")], body).await
+    post_json_capture(URL, &[("x-api-key", &key), ("anthropic-version", "2023-06-01")], body).await
 }
