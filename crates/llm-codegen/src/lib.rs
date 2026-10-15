@@ -304,13 +304,11 @@ struct CodegenCtx {
 pub struct GeneratedOutput {
     /// The generated Rust source (for `generated.rs`).
     pub rust_source: String,
-    /// Provider documentation keys for the shared OpenAI-compatible module.
-    pub openai_compatible_provider_ids: Vec<&'static str>,
     /// Per-provider markdown documentation keyed by provider identifier.
     ///
     /// Keys are provider `dev_ids` (e.g. `"anthropic"`, `"ollama"`) and values
     /// are markdown strings suitable for `#![doc = include_str!(...)]`.
-    pub provider_docs: HashMap<String, String>,
+    pub provider_docs: BTreeMap<String, String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -342,13 +340,7 @@ pub fn generate(models_json_path: &Path) -> Result<GeneratedOutput, CodegenError
 
     let provider_models = build_provider_models(&data)?;
     let ctx = CodegenCtx { provider_models };
-    let openai_compatible_provider_ids =
-        PROVIDERS.iter().filter(|config| config.uses_openai_compatible_api).map(|config| config.dev_id).collect();
-    Ok(GeneratedOutput {
-        rust_source: emit_generated_source(&ctx),
-        openai_compatible_provider_ids,
-        provider_docs: emit_provider_docs(&ctx),
-    })
+    Ok(GeneratedOutput { rust_source: emit_generated_source(&ctx), provider_docs: emit_provider_docs(&ctx) })
 }
 
 fn build_provider_models(data: &ModelsDevData) -> Result<ProviderModels, CodegenError> {
@@ -825,8 +817,8 @@ fn format_number(n: u32) -> String {
     result
 }
 
-fn emit_provider_docs(ctx: &CodegenCtx) -> HashMap<String, String> {
-    let mut docs = HashMap::new();
+fn emit_provider_docs(ctx: &CodegenCtx) -> BTreeMap<String, String> {
+    let mut docs = BTreeMap::new();
 
     for cfg in PROVIDERS {
         let models = &ctx.provider_models[cfg.dev_id];

@@ -1,5 +1,3 @@
-#![doc = include_str!(concat!(env!("OUT_DIR"), "/docs/openai_compatible.md"))]
-
 pub(crate) mod streaming;
 pub(crate) mod types;
 

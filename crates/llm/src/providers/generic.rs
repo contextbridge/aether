@@ -1,3 +1,5 @@
+#![doc = include_str!(concat!(env!("OUT_DIR"), "/docs/generic.md"))]
+
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use std::future::Future;
 use std::time::Duration;
