@@ -33,11 +33,11 @@ use tracing::{error, info};
 
 use super::protocol::content::map_acp_to_content_blocks;
 use super::session::actor::{ClientConnection, SessionCommand};
-#[cfg(any(test, feature = "testing"))]
 use super::session::actor::{SessionActor, SessionActorInit};
 use super::session::config_setting::ConfigSetting;
-use super::session::factory::{PreparedSession, SessionFactory};
+use super::session::factory::SessionFactory;
 use super::session::hooks::SessionHooks;
+use super::session::registry::ActiveSession;
 use super::session::{SessionRegistry, paginate_summaries};
 use crate::resolve::InitialSessionSelection;
 use crate::settings_args::SettingsSourceArgs;
@@ -74,12 +74,6 @@ pub(crate) struct AcpStateConfig {
     pub(crate) runtime_factory: Option<Arc<dyn super::session::runtime::RuntimeFactory>>,
     pub(crate) cwd: PathBuf,
     pub(crate) hooks: SessionHooks,
-}
-
-struct SpawnedSession {
-    session_id: SessionId,
-    config_options: Vec<acp::SessionConfigOption>,
-    commands: mpsc::Sender<SessionCommand>,
 }
 
 #[derive(Default)]
@@ -229,16 +223,19 @@ impl AcpState {
         req: NewSessionRequest,
         cx: &ConnectionTo<Client>,
     ) -> Result<NewSessionResponse, Error> {
-        let created = self.spawn_session(req, Some(cx)).await?;
-        Ok(NewSessionResponse::new(created.session_id).config_options(created.config_options))
+        let init = self.factory.prepare_new(req, Some(cx)).await?;
+        let session_id = init.session_id.clone();
+        let (config_options, _) = self.activate(&mut self.registry.lock().await, init).await?;
+        Ok(NewSessionResponse::new(session_id).config_options(config_options))
     }
 
     pub(super) async fn start_session(&self, prompt: String) -> Result<SessionId, Error> {
         let request = NewSessionRequest::new(acp::AbsolutePath::new(self.cwd.clone()));
-        let created = self.spawn_session(request, None).await?;
+        let init = self.factory.prepare_new(request, None).await?;
+        let session_id = init.session_id.clone();
+        let (_, commands) = self.activate(&mut self.registry.lock().await, init).await?;
         let content = vec![ContentBlock::text(prompt)];
-        created
-            .commands
+        commands
             .send(SessionCommand::Prompt {
                 content: content.clone(),
                 display_content: content,
@@ -246,23 +243,22 @@ impl AcpState {
             })
             .await
             .map_err(|_| Error::internal_error())?;
-        Ok(created.session_id)
+        Ok(session_id)
     }
 
-    async fn spawn_session(
+    async fn activate(
         &self,
-        request: NewSessionRequest,
-        connection: Option<&ConnectionTo<Client>>,
-    ) -> Result<SpawnedSession, Error> {
-        self.activate(self.factory.prepare_new(request, connection).await?).await
-    }
-
-    async fn activate(&self, prepared: PreparedSession) -> Result<SpawnedSession, Error> {
-        self.registry.stop().await;
-        let created = prepared.start().await?;
-        let commands = created.handle.command_sender();
-        self.registry.register(&created.session_id, created.handle).await;
-        Ok(SpawnedSession { session_id: created.session_id, config_options: created.config_options, commands })
+        active: &mut ActiveSession<'_>,
+        init: SessionActorInit,
+    ) -> Result<(Vec<acp::SessionConfigOption>, mpsc::Sender<SessionCommand>), Error> {
+        let available = self.factory.available_models().await;
+        let config_options = init.config.config_options(&init.modes, available, init.oauth_credential_store.as_ref());
+        let session_id = init.session_id.clone();
+        let commands = active.replace(session_id, SessionActor::spawn(init)).await.map_err(|e| {
+            error!("Failed to start session actor: {e}");
+            Error::internal_error()
+        })?;
+        Ok((config_options, commands))
     }
 
     pub(crate) async fn logout(
@@ -286,7 +282,9 @@ impl AcpState {
             Some(_) => return Err(Error::invalid_params()),
         };
 
-        if let Some(sender) = self.registry.lookup(Some(req.session_id.0.as_ref())).await {
+        let mut active = self.registry.lock().await;
+        if let Some(sender) = active.lookup(Some(req.session_id.0.as_ref())) {
+            drop(active);
             let available = self.factory.available_models().await.to_vec();
             let (config_tx, config_rx) = oneshot::channel();
 
@@ -306,8 +304,9 @@ impl AcpState {
             return Ok(ResumeSessionResponse::new().config_options(options));
         }
 
-        let resumed = self.activate(self.factory.prepare_resume(req, cx, replay).await?).await?;
-        Ok(ResumeSessionResponse::new().config_options(resumed.config_options))
+        let init = self.factory.prepare_resume(req, cx, replay).await?;
+        let (config_options, _) = self.activate(&mut active, init).await?;
+        Ok(ResumeSessionResponse::new().config_options(config_options))
     }
 
     pub(crate) async fn close_session(&self, req: CloseSessionRequest) -> Result<CloseSessionResponse, Error> {
@@ -527,10 +526,9 @@ impl AcpState {
 
     #[cfg(any(test, feature = "testing"))]
     pub(crate) async fn register_session(&self, init: SessionActorInit) {
-        self.registry.stop().await;
-        let id = init.session_id.clone();
-        let handle = SessionActor::spawn(init).await.expect("test session actor spawns");
-        self.registry.register(&id, handle).await;
+        let session_id = init.session_id.clone();
+        let start = SessionActor::spawn(init);
+        self.registry.lock().await.replace(session_id, start).await.expect("test session actor spawns");
     }
 
     async fn serve_attached(

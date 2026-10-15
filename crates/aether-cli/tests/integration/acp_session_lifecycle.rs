@@ -3,12 +3,15 @@ use agent_client_protocol::Error;
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::v2::{
     AbsolutePath, CloseSessionRequest, CloseSessionResponse, ContentBlock, ListSessionsRequest, ListSessionsResponse,
-    ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate, StopReason, ToolCallStatus,
+    NewSessionRequest, ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate, StopReason,
+    ToolCallStatus,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use llm::testing::{FakeLlmProvider, llm_response};
 use serde_json::json;
+use std::fmt::Debug;
+use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::Notify;
 
@@ -240,6 +243,50 @@ async fn disconnect_during_startup_leaves_no_detached_runtime() {
         assert_eq!(harness.live_runtime_count(), 0);
     })
     .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn concurrent_new_sessions_leave_one_live_session() {
+    AcpTestHarness::run(|harness| async move {
+        let new_session =
+            || harness.client_cx.send_request(NewSessionRequest::new(AbsolutePath::new("/tmp"))).block_task();
+
+        let results = start_twice_concurrently(&harness, new_session).await;
+
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
+        assert_eq!(harness.live_runtime_count(), 1);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn concurrent_resumes_of_one_session_share_one_actor() {
+    AcpTestHarness::run(|harness| async move {
+        harness.append_stored_session("stored", "2026-05-01T00:00:00Z");
+        let resume = || {
+            harness.client_cx.send_request(ResumeSessionRequest::new("stored", AbsolutePath::new("/tmp"))).block_task()
+        };
+
+        let results = start_twice_concurrently(&harness, resume).await;
+
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
+        assert_eq!(harness.live_runtime_count(), 1);
+    })
+    .await;
+}
+
+async fn start_twice_concurrently<T: Debug, F: Future<Output = Result<T, Error>>>(
+    harness: &AcpTestHarness,
+    start: impl Fn() -> F,
+) -> [Result<T, Error>; 2] {
+    let mut startup = harness.pause_next_runtime();
+    let first = start();
+    startup.wait_until_started().await;
+    let second = start();
+    let _ = list(harness, ListSessionsRequest::new()).await;
+    startup.finish(true);
+    let (first, second) = tokio::join!(first, second);
+    [first, second]
 }
 
 async fn next_history(harness: &mut AcpTestHarness) -> SessionUpdate {
