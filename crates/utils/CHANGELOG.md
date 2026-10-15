@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.20](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.19...aether-utils-v0.2.20) - 2026-10-15
+
+### Other
+
+- Assorted cleanups  ([#601](https://github.com/contextbridge/aether/pull/601))
+
 ## [0.2.19](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.18...aether-utils-v0.2.19) - 2026-10-08
 
 ### Fixed

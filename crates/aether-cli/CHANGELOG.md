@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.17](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.16...aether-agent-cli-v0.9.17) - 2026-10-15
+
+### Other
+
+- *(deps)* bump agent-client-protocol from 2.2.0 to 3.1.0 ([#604](https://github.com/contextbridge/aether/pull/604))
+- Assorted cleanups  ([#601](https://github.com/contextbridge/aether/pull/601))
+
 ## [0.9.16](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.15...aether-agent-cli-v0.9.16) - 2026-10-12
 
 ### Added
