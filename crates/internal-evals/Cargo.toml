@@ -21,7 +21,4 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-aether-core = { package = "aether-agent-core", path = "../aether-core" }
-tempfile = { workspace = true }
-testcontainers = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros"] }
