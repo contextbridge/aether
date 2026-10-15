@@ -84,7 +84,7 @@ impl Vars {
     }
 
     /// Returns `true` if `s` contains a `$VAR` or `${VAR}` style reference.
-    pub fn has_reference(&self, s: &str) -> bool {
+    pub fn has_reference(s: &str) -> bool {
         REFERENCE.captures_iter(s).any(|caps| var_name(&caps).is_some())
     }
 }
@@ -212,16 +212,15 @@ mod tests {
 
     #[test]
     fn has_reference_ignores_escaped_dollars() {
-        assert!(!no_env().has_reference("$$HOME"));
+        assert!(!Vars::has_reference("$$HOME"));
     }
 
     #[test]
     fn has_reference_detects_both_forms() {
-        let vars = no_env();
-        assert!(vars.has_reference("${WORKSPACE}/foo"));
-        assert!(vars.has_reference("$HOME/bar"));
-        assert!(!vars.has_reference("plain/path"));
-        assert!(!vars.has_reference("$"));
-        assert!(!vars.has_reference("$$"));
+        assert!(Vars::has_reference("${WORKSPACE}/foo"));
+        assert!(Vars::has_reference("$HOME/bar"));
+        assert!(!Vars::has_reference("plain/path"));
+        assert!(!Vars::has_reference("$"));
+        assert!(!Vars::has_reference("$$"));
     }
 }
