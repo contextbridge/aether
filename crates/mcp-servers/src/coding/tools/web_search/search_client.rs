@@ -119,26 +119,41 @@ struct BraveWebResults {
     results: Vec<SearchResult>,
 }
 
-/// Fake search client that serves queued responses in call order.
+/// In-memory search client: serves results by query, honors `count`, and
+/// fails a query with its queued errors before serving its results.
 #[cfg(test)]
 #[derive(Debug, Default)]
 pub struct FakeSearchClient {
-    responses: std::sync::Mutex<std::collections::VecDeque<Result<Vec<SearchResult>, WebSearchError>>>,
+    results: std::collections::HashMap<String, Vec<SearchResult>>,
+    failures: std::sync::Mutex<std::collections::HashMap<String, std::collections::VecDeque<WebSearchError>>>,
 }
 
 #[cfg(test)]
 impl FakeSearchClient {
-    pub fn new(responses: impl IntoIterator<Item = Result<Vec<SearchResult>, WebSearchError>>) -> Self {
-        Self { responses: std::sync::Mutex::new(responses.into_iter().collect()) }
+    pub fn with_results(mut self, query: &str, results: Vec<SearchResult>) -> Self {
+        self.results.insert(query.to_string(), results);
+        self
+    }
+
+    pub fn with_failures(self, query: &str, errors: impl IntoIterator<Item = WebSearchError>) -> Self {
+        self.failures.lock().unwrap().entry(query.to_string()).or_default().extend(errors);
+        self
     }
 }
 
 #[cfg(test)]
 impl SearchClient for FakeSearchClient {
-    fn search(&self, _params: SearchParams) -> BoxFuture<'_, Result<Vec<SearchResult>, WebSearchError>> {
-        let response = self.responses.lock().unwrap().pop_front();
-        Box::pin(std::future::ready(
-            response.unwrap_or_else(|| Err(WebSearchError::ApiError("No fake response queued".to_string()))),
-        ))
+    fn search(&self, params: SearchParams) -> BoxFuture<'_, Result<Vec<SearchResult>, WebSearchError>> {
+        let failure =
+            self.failures.lock().unwrap().get_mut(&params.query).and_then(std::collections::VecDeque::pop_front);
+        let response = match failure {
+            Some(error) => Err(error),
+            None => Ok(self
+                .results
+                .get(&params.query)
+                .map(|results| results.iter().take(params.count as usize).cloned().collect())
+                .unwrap_or_default()),
+        };
+        Box::pin(std::future::ready(response))
     }
 }
