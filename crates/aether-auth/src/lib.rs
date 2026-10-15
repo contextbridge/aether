@@ -8,7 +8,7 @@ mod fake;
 mod handler;
 
 pub use browser::{BrowserOAuthHandler, accept_oauth_callback, bind_loopback};
-pub use credential::{OAuthCredential, OAuthCredentialStorage, oauth_http_client};
+pub use credential::{OAuthCredential, OAuthCredentialStorage, OAuthHttpClient};
 pub use encrypted_file::EncryptedFileOAuthCredentialStorage;
 pub use error::OAuthError;
 pub use fake::FakeOAuthCredentialStore;
