@@ -76,7 +76,7 @@ pub(crate) enum Nav {
     Close,
     /// Enter chose the focused entry.
     Activate,
-    /// A click landed on an entry and selected it.
+    /// A click moved the selection to an entry, which may also activate it.
     Clicked,
     /// The selection or filter query changed.
     Moved,

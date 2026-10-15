@@ -174,6 +174,7 @@ impl ModelSelector {
         }
         match self.items.on_nav_event(&event) {
             Nav::Clicked => {
+                self.clamp_reasoning_to_focused();
                 self.toggle_focused();
                 Vec::new()
             }
