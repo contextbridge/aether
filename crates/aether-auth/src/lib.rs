@@ -7,7 +7,7 @@ pub mod error;
 mod fake;
 mod handler;
 
-pub use browser::{BrowserOAuthHandler, accept_oauth_callback};
+pub use browser::{BrowserOAuthHandler, accept_oauth_callback, bind_loopback};
 pub use credential::{OAuthCredential, OAuthCredentialStorage, oauth_http_client};
 pub use encrypted_file::EncryptedFileOAuthCredentialStorage;
 pub use error::OAuthError;
@@ -18,13 +18,6 @@ pub use handler::OAuthHandler;
 pub mod keyring;
 #[cfg(feature = "keyring")]
 pub use keyring::OsKeyringStore;
-
-#[cfg(feature = "mcp")]
-pub mod mcp;
-#[cfg(feature = "mcp")]
-pub use mcp::{
-    McpCredentialStore, OAuthClientRegistration, OAuthFlowOptions, create_auth_manager_from_store, perform_oauth_flow,
-};
 
 #[cfg(feature = "sigv4")]
 mod sigv4;

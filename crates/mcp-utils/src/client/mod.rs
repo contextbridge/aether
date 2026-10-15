@@ -16,7 +16,7 @@ pub(crate) use elicitation::cancelled;
 pub use elicitation::{Elicitation, ElicitationRequest, ElicitationSink};
 pub use error::ClientError;
 pub use mcp_client::McpClient;
-pub use oauth::OAuthSettings;
+pub use oauth::{OAuthClientRegistration, OAuthSettings};
 pub use options::ClientOptions;
 pub use reqwest::header::HeaderMap;
 pub use task::TaskErrorReason;

@@ -1,8 +1,7 @@
 use super::fake_http_server::origin;
 use super::{FakeHttpServer, FakeMcpServer, RecordedRequest};
-use crate::client::{Elicitation, ElicitationRequest, HttpAuth, OAuthSettings, Transport};
+use crate::client::{Elicitation, ElicitationRequest, HttpAuth, OAuthClientRegistration, OAuthSettings, Transport};
 use crate::gateway::ServerSpec;
-use aether_auth::OAuthClientRegistration;
 use axum::http::{StatusCode, Uri, header::WWW_AUTHENTICATE};
 use axum::response::IntoResponse;
 use axum::routing::post;
@@ -26,7 +25,7 @@ pub const CLIENT_METADATA_URL: &str = "https://client.example/oauth/client-metad
 
 impl FakeAuthServer {
     pub async fn start(server: FakeMcpServer) -> Self {
-        let routes = Router::new().route("/token", post(token)).fallback(metadata);
+        let routes = Router::new().route("/token", post(token)).route("/register", post(register)).fallback(metadata);
         Self { http: FakeHttpServer::serve(server, routes, require_token).await }
     }
 
@@ -90,7 +89,8 @@ fn callback_url(authorization_url: &str) -> String {
     callback
         .query_pairs_mut()
         .append_pair("code", "test-code")
-        .append_pair("state", &query("state").unwrap_or_default());
+        .append_pair("state", &query("state").unwrap_or_default())
+        .append_pair("iss", &url.origin().ascii_serialization());
     callback.to_string()
 }
 
@@ -102,6 +102,7 @@ pub fn client_metadata() -> OAuthSettings {
 }
 
 pub const ACCESS_TOKEN: &str = "access-token";
+pub const REGISTERED_CLIENT_ID: &str = "registered-client";
 
 fn require_token(request: &RecordedRequest) -> Result<(), impl IntoResponse + use<>> {
     let bearer = format!("Bearer {ACCESS_TOKEN}");
@@ -117,6 +118,10 @@ async fn token() -> Json<Value> {
     Json(json!({ "access_token": ACCESS_TOKEN, "token_type": "Bearer", "expires_in": 3600 }))
 }
 
+async fn register(Json(request): Json<Value>) -> Json<Value> {
+    Json(json!({ "client_id": REGISTERED_CLIENT_ID, "redirect_uris": request["redirect_uris"] }))
+}
+
 async fn metadata(headers: HeaderMap, uri: Uri) -> Json<Value> {
     let origin = origin(&headers);
     if uri.path().contains("oauth-protected-resource") {
@@ -126,8 +131,10 @@ async fn metadata(headers: HeaderMap, uri: Uri) -> Json<Value> {
         "issuer": origin,
         "authorization_endpoint": format!("{origin}/authorize"),
         "token_endpoint": format!("{origin}/token"),
+        "registration_endpoint": format!("{origin}/register"),
         "response_types_supported": ["code"],
         "code_challenge_methods_supported": ["S256"],
-        "client_id_metadata_document_supported": true
+        "client_id_metadata_document_supported": true,
+        "authorization_response_iss_parameter_supported": true
     }))
 }

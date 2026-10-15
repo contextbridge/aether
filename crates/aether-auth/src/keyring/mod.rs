@@ -27,8 +27,8 @@ impl OsKeyringStore {
         Self::from_factory(Arc::new(create_platform_keyring_store))
     }
 
-    /// Build a store backed by an in-memory mock keyring (for tests that exercise
-    /// the rmcp `CredentialStore` adapter without needing the real OS keychain).
+    /// Build a store backed by an in-memory mock keyring (for tests that need a
+    /// keyring-backed store without the real OS keychain).
     pub fn with_mock_store() -> Result<Self, OAuthError> {
         Ok(Self::new(keyring_core::mock::Store::new().map_err(map_keyring_err)?))
     }
