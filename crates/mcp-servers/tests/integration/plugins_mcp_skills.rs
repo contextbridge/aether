@@ -193,6 +193,39 @@ async fn from_args_resolves_dirs_and_runs_prompts_from_the_base_dir() -> TestRes
 }
 
 #[tokio::test]
+async fn prompt_arguments_are_substituted_after_shell_expansion() -> TestResult {
+    let workspace = TestWorkspace::new().file(
+        "skills/review/SKILL.md",
+        "---\ndescription: Review\nuser-invocable: true\n---\nbranch: !`echo main`\nrequest: $ARGUMENTS",
+    );
+    let client = serve(&workspace).await;
+
+    let text = prompt_text(&client, "review", json!({ "ARGUMENTS": "!`touch pwned`" })).await?;
+
+    assert_eq!(text, "branch: main\nrequest: !`touch pwned`");
+    assert!(!workspace.root().join("pwned").exists(), "argument text must not run as a shell command");
+    Ok(())
+}
+
+#[tokio::test]
+async fn prompt_substitutes_provided_arguments_and_keeps_the_rest() -> TestResult {
+    let workspace = TestWorkspace::new().file(
+        "skills/review/SKILL.md",
+        "---\ndescription: Review\nuser-invocable: true\n---\nReview $1 in $2 with $tool",
+    );
+    let client = serve(&workspace).await;
+
+    for (arguments, expected) in [
+        (json!({ "1": "Rust", "2": "Actix" }), "Review Rust in Actix with $tool"),
+        (json!({ "unused": "value" }), "Review $1 in $2 with $tool"),
+        (json!({}), "Review $1 in $2 with $tool"),
+    ] {
+        assert_eq!(prompt_text(&client, "review", arguments.clone()).await?, expected, "{arguments}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn list_skills_input_schema_has_properties_object() -> TestResult {
     let workspace = TestWorkspace::new();
     let client = serve(&workspace).await;
@@ -208,6 +241,12 @@ async fn list_skills_input_schema_has_properties_object() -> TestResult {
 
 async fn serve(workspace: &TestWorkspace) -> McpClient {
     connect(skills_server(workspace.root()), ClientOptions::default()).await
+}
+
+async fn prompt_text(client: &McpClient, name: &str, arguments: Value) -> TestResult<String> {
+    let Value::Object(arguments) = arguments else { panic!("prompt arguments must be an object") };
+    let prompt = client.get_prompt(name, arguments).await?;
+    Ok(prompt.messages[0].content.as_text().map(|content| content.text.clone()).unwrap_or_default())
 }
 
 async fn get_skill(client: &McpClient, name: &str, path: Option<&str>) -> TestResult<Value> {
