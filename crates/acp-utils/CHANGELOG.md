@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.15](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.5.14...aether-acp-utils-v0.5.15) - 2026-10-15
+
+### Other
+
+- *(deps)* bump agent-client-protocol from 2.2.0 to 3.1.0 ([#604](https://github.com/contextbridge/aether/pull/604))
+- Assorted cleanups  ([#601](https://github.com/contextbridge/aether/pull/601))
+
 ## [0.5.14](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.5.13...aether-acp-utils-v0.5.14) - 2026-10-12
 
 ### Other

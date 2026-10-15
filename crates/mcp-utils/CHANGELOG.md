@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.15](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.7.14...aether-mcp-utils-v0.7.15) - 2026-10-15
+
+### Other
+
+- *(deps)* bump sse-stream from 0.2.6 to 0.3.0 ([#603](https://github.com/contextbridge/aether/pull/603))
+- Assorted cleanups  ([#601](https://github.com/contextbridge/aether/pull/601))
+
 ## [0.7.14](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.7.13...aether-mcp-utils-v0.7.14) - 2026-10-12
 
 ### Added

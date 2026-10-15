@@ -1,6 +1,6 @@
 [package]
 name = "aether-utils"
-version = "0.2.19"
+version = "0.2.20"
 edition = "2024"
 description = "Shared utilities for the Aether AI agent framework"
 license = "MIT"
