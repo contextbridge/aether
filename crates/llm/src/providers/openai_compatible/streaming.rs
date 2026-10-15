@@ -23,8 +23,6 @@ pub(crate) fn decode_sse_chunk(data: &str, turn: &mut StreamAssembler<i32>) -> R
 }
 
 fn decode_chunk(mut chunk: ChatCompletionStreamResponse, turn: &mut StreamAssembler<i32>) -> Result<Vec<LlmResponse>> {
-    turn.allow_eof();
-
     let mut responses: Vec<_> =
         chunk.usage.map(|usage| LlmResponse::Usage { tokens: usage.into() }).into_iter().collect();
     let Some(choice) = chunk.choices.pop() else {
@@ -47,6 +45,7 @@ fn decode_chunk(mut chunk: ChatCompletionStreamResponse, turn: &mut StreamAssemb
         debug!("Received finish reason: {finish_reason:?}");
         responses.extend(turn.complete_all_tools());
         turn.stop(map_finish_reason(finish_reason)?);
+        turn.allow_eof();
     }
 
     Ok(responses)
@@ -138,9 +137,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_reasoning_chunks() {
-        let responses = collect_responses(chat_stream().reasoning(&["thinking"]).build()).await;
+        let responses =
+            collect_responses(chat_stream().reasoning(&["thinking"]).finish(FinishReason::Stop).build()).await;
 
-        assert_eq!(responses, llm_response().reasoning(&["thinking"]).build());
+        assert_eq!(responses, llm_response().reasoning(&["thinking"]).build_with_stop_reason(StopReason::EndTurn));
     }
 
     #[tokio::test]
@@ -243,9 +243,11 @@ mod tests {
 
     #[tokio::test]
     async fn negative_token_counts_are_clamped_to_zero() {
-        let tokens = collect_first_usage(
-            chat_stream().usage(Usage { prompt_tokens: -5, completion_tokens: 10, ..Default::default() }).build(),
-        )
+        let tokens = collect_first_usage(chat_stream().usage(Usage {
+            prompt_tokens: -5,
+            completion_tokens: 10,
+            ..Default::default()
+        }))
         .await;
 
         assert_eq!(
@@ -256,16 +258,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_zai_shape_only_populates_cache_read() {
-        let tokens = collect_first_usage(
-            chat_stream()
-                .usage(Usage {
-                    prompt_tokens: 100,
-                    completion_tokens: 50,
-                    prompt_tokens_details: Some(PromptTokensDetails { cached_tokens: Some(30), ..Default::default() }),
-                    completion_tokens_details: None,
-                })
-                .build(),
-        )
+        let tokens = collect_first_usage(chat_stream().usage(Usage {
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            prompt_tokens_details: Some(PromptTokensDetails { cached_tokens: Some(30), ..Default::default() }),
+            completion_tokens_details: None,
+        }))
         .await
         .expect("usage event");
 
@@ -282,26 +280,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_openrouter_shape_populates_all_fields() {
-        let tokens = collect_first_usage(
-            chat_stream()
-                .usage(Usage {
-                    prompt_tokens: 1000,
-                    completion_tokens: 500,
-                    prompt_tokens_details: Some(PromptTokensDetails {
-                        cached_tokens: Some(100),
-                        cache_write_tokens: Some(50),
-                        audio_tokens: Some(10),
-                        video_tokens: Some(5),
-                    }),
-                    completion_tokens_details: Some(CompletionTokensDetails {
-                        reasoning_tokens: Some(300),
-                        audio_tokens: Some(8),
-                        accepted_prediction_tokens: Some(2),
-                        rejected_prediction_tokens: Some(1),
-                    }),
-                })
-                .build(),
-        )
+        let tokens = collect_first_usage(chat_stream().usage(Usage {
+            prompt_tokens: 1000,
+            completion_tokens: 500,
+            prompt_tokens_details: Some(PromptTokensDetails {
+                cached_tokens: Some(100),
+                cache_write_tokens: Some(50),
+                audio_tokens: Some(10),
+                video_tokens: Some(5),
+            }),
+            completion_tokens_details: Some(CompletionTokensDetails {
+                reasoning_tokens: Some(300),
+                audio_tokens: Some(8),
+                accepted_prediction_tokens: Some(2),
+                rejected_prediction_tokens: Some(1),
+            }),
+        }))
         .await
         .expect("usage event");
 
@@ -324,24 +318,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_openai_shape_populates_input_audio_and_completion_details() {
-        let tokens = collect_first_usage(
-            chat_stream()
-                .usage(Usage {
-                    prompt_tokens: 200,
-                    completion_tokens: 100,
-                    prompt_tokens_details: Some(PromptTokensDetails {
-                        cached_tokens: Some(80),
-                        audio_tokens: Some(12),
-                        ..Default::default()
-                    }),
-                    completion_tokens_details: Some(CompletionTokensDetails {
-                        reasoning_tokens: Some(40),
-                        accepted_prediction_tokens: Some(5),
-                        ..Default::default()
-                    }),
-                })
-                .build(),
-        )
+        let tokens = collect_first_usage(chat_stream().usage(Usage {
+            prompt_tokens: 200,
+            completion_tokens: 100,
+            prompt_tokens_details: Some(PromptTokensDetails {
+                cached_tokens: Some(80),
+                audio_tokens: Some(12),
+                ..Default::default()
+            }),
+            completion_tokens_details: Some(CompletionTokensDetails {
+                reasoning_tokens: Some(40),
+                accepted_prediction_tokens: Some(5),
+                ..Default::default()
+            }),
+        }))
         .await
         .expect("usage event");
 
@@ -387,10 +377,12 @@ mod tests {
         response_stream(opened, decode_chunk, DEFAULT_STREAM_IDLE_TIMEOUT).collect().await
     }
 
-    async fn collect_first_usage(chunks: Vec<ChatCompletionStreamResponse>) -> Option<TokenUsage> {
-        collect_responses(chunks).await.into_iter().find_map(|response| match response {
-            LlmResponse::Usage { tokens } => Some(tokens),
-            _ => None,
+    async fn collect_first_usage(stream: ChatStreamBuilder) -> Option<TokenUsage> {
+        collect_responses(stream.finish(FinishReason::Stop).build()).await.into_iter().find_map(|response| {
+            match response {
+                LlmResponse::Usage { tokens } => Some(tokens),
+                _ => None,
+            }
         })
     }
 

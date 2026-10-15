@@ -441,16 +441,43 @@ mod tests {
 
     #[tokio::test]
     async fn chat_chunk_that_is_not_json_interrupts_the_stream() {
-        let mut server = CaptureServer::start_with_response("data: invalid json\n\n").await;
-        let provider = capture_backed_provider(&server, &OPENROUTER);
-
-        let responses = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
-        let _ = server.captured().await;
+        let responses = streamed_chat("data: invalid json\n\n").await;
 
         assert!(matches!(responses[..], [Ok(LlmResponse::Start), Err(_)]), "{responses:?}");
-        let error = responses[1].as_ref().unwrap_err();
-        assert_eq!(error.provider().map(|provider| provider.kind), Some(ProviderErrorKind::StreamInterrupted));
-        assert!(error.is_retryable());
+        assert_interrupted(&responses);
+    }
+
+    #[tokio::test]
+    async fn chat_stream_ends_at_done() {
+        let responses = streamed_chat(&format!("{CHAT_FIXTURE}data: invalid json\n\n")).await;
+
+        assert_successful_stream(&responses);
+    }
+
+    #[tokio::test]
+    async fn chat_stream_skips_keepalive_events() {
+        let responses = streamed_chat(&format!("event: keepalive\ndata: ping\n\n{CHAT_FIXTURE}")).await;
+
+        assert_successful_stream(&responses);
+    }
+
+    #[tokio::test]
+    async fn chat_stream_cut_off_mid_tool_call_is_interrupted() {
+        let tool_call_start = json!({ "choices": [{ "index": 0, "delta": { "tool_calls": [{
+            "index": 0, "id": "call_1", "type": "function",
+            "function": { "name": "bash", "arguments": r#"{"command":"# }
+        }] } }] });
+
+        let responses = streamed_chat(&format!("data: {tool_call_start}\n\n")).await;
+
+        assert!(
+            !responses.iter().any(|response| matches!(
+                response,
+                Ok(LlmResponse::ToolRequestComplete { .. } | LlmResponse::Done { .. })
+            )),
+            "{responses:?}"
+        );
+        assert_interrupted(&responses);
     }
 
     #[tokio::test]
@@ -807,9 +834,26 @@ mod tests {
         assert_eq!(provider.model().unwrap().to_string(), "xiaomi:mimo-v2.6-pro");
     }
 
+    const CHAT_FIXTURE: &str = include_str!("../../tests/fixtures/openai/01_minimal.sse");
+
+    async fn streamed_chat(body: &str) -> Vec<Result<LlmResponse>> {
+        let mut server = CaptureServer::start_with_spec(ResponseSpec::sse(body)).await;
+        let provider = capture_backed_provider(&server, &OPENROUTER);
+
+        let responses = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
+        let _ = server.captured().await;
+        responses
+    }
+
     fn assert_successful_stream(responses: &[Result<LlmResponse>]) {
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
         assert!(responses.iter().any(|response| matches!(response, Ok(LlmResponse::Done { .. }))));
+    }
+
+    fn assert_interrupted(responses: &[Result<LlmResponse>]) {
+        let error = responses.last().and_then(|response| response.as_ref().err()).expect("the stream must fail");
+        assert_eq!(error.provider().map(|provider| provider.kind), Some(ProviderErrorKind::StreamInterrupted));
+        assert!(error.is_retryable());
     }
 
     fn reasoning_off_model(provider: Provider) -> &'static LlmModel {
