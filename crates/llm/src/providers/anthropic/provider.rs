@@ -1,7 +1,8 @@
 use super::mappers::{map_messages, map_tools};
 use super::streaming::decode_line;
 use super::types::{CacheControl, ContentBlock, Request, Thinking};
-use crate::provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider, validate_reasoning};
+use crate::catalog::Provider;
+use crate::provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider, display_name, validate_reasoning};
 use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
 use crate::providers::http::{SseData, anthropic_code, http_client, open_sse};
 use crate::providers::response_stream::{OpenedStream, response_stream};
@@ -146,6 +147,10 @@ impl ProviderFactory for AnthropicProvider {
 }
 
 impl StreamingModelProvider for AnthropicProvider {
+    fn display_name(&self) -> String {
+        display_name(Provider::Anthropic, &self.model)
+    }
+
     fn model(&self) -> Option<crate::LlmModel> {
         format!("anthropic:{}", self.model).parse().ok()
     }
@@ -375,5 +380,11 @@ mod tests {
     fn test_anthropic_provider_display_name_default() {
         let provider = AnthropicProvider::new(Some("test-api-key".to_string()));
         assert_eq!(provider.display_name(), "Anthropic (claude-sonnet-4-5-20250929)");
+    }
+
+    #[test]
+    fn display_name_names_models_outside_the_catalog() {
+        let provider = AnthropicProvider::new(Some("test-api-key".to_string())).with_model("claude-custom");
+        assert_eq!(provider.display_name(), "Anthropic (claude-custom)");
     }
 }
