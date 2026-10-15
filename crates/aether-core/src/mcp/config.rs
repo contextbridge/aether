@@ -1,7 +1,7 @@
 use super::ToolExposure;
-use aether_auth::{OAuthClientRegistration, SigV4Config, SigV4Credentials, SigV4Signer};
+use aether_auth::{SigV4Config, SigV4Credentials, SigV4Signer};
 use http::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, InvalidHeaderName, InvalidHeaderValue};
-use mcp_utils::client::{HttpAuth, OAuthSettings, Transport};
+use mcp_utils::client::{HttpAuth, OAuthClientRegistration, OAuthSettings, Transport};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
