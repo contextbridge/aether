@@ -3,7 +3,7 @@ use agent_client_protocol::schema::v2::{
     self as acp, CompleteElicitationNotification, CreateElicitationRequest, CreateElicitationResponse, Meta, SessionId,
 };
 use rmcp::model::{self as mcp, ElicitRequestParams, ElicitResult};
-use serde_json::{Map, Number, Value, json};
+use serde_json::{Value, json};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ElicitationConversionError {
@@ -11,8 +11,8 @@ pub enum ElicitationConversionError {
     Unsupported(&'static str),
     #[error("legacy MCP enum has a different number of values and titles")]
     MismatchedEnumTitles,
-    #[error("ACP elicitation response contains a non-finite number")]
-    NonFiniteNumber,
+    #[error("elicitation could not be converted: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 pub fn map_mcp_elicitation_request_to_acp(
@@ -51,7 +51,7 @@ pub fn map_acp_elicitation_response_to_mcp(
     let mut result = match response.action {
         acp::ElicitationAction::Accept(accept) => {
             let mut result = ElicitResult::new(mcp::ElicitationAction::Accept);
-            result.content = accept.content.map(map_acp_elicitation_content_to_mcp).transpose()?;
+            result.content = accept.content.map(serde_json::to_value).transpose()?;
             result
         }
         acp::ElicitationAction::Decline => ElicitResult::new(mcp::ElicitationAction::Decline),
@@ -81,149 +81,23 @@ pub fn source_mcp_server_name(meta: Option<&Meta>) -> Option<&str> {
 fn map_mcp_elicitation_schema_to_acp(
     schema: &mcp::ElicitationSchema,
 ) -> Result<acp::ElicitationSchema, ElicitationConversionError> {
-    let required = schema.required.as_deref().unwrap_or_default();
-    schema.properties.iter().try_fold(
-        acp::ElicitationSchema::new()
-            .title(owned_string(schema.title.as_deref()))
-            .description(owned_string(schema.description.as_deref())),
-        |converted, (name, property)| {
-            Ok(converted.property(name, map_mcp_primitive_schema_to_acp(property)?, required.contains(name)))
-        },
-    )
-}
-
-fn map_mcp_primitive_schema_to_acp(
-    property: &mcp::PrimitiveSchemaDefinition,
-) -> Result<acp::ElicitationPropertySchema, ElicitationConversionError> {
-    match property {
-        mcp::PrimitiveSchemaDefinition::String(schema) => Ok(map_mcp_string_schema_to_acp(schema)?.into()),
-        mcp::PrimitiveSchemaDefinition::Number(schema) => Ok(acp::NumberPropertySchema::new()
-            .title(owned_string(schema.title.as_deref()))
-            .description(owned_string(schema.description.as_deref()))
-            .minimum(schema.minimum)
-            .maximum(schema.maximum)
-            .default_value(schema.default)
-            .into()),
-        mcp::PrimitiveSchemaDefinition::Integer(schema) => Ok(acp::IntegerPropertySchema::new()
-            .title(owned_string(schema.title.as_deref()))
-            .description(owned_string(schema.description.as_deref()))
-            .minimum(schema.minimum)
-            .maximum(schema.maximum)
-            .default_value(schema.default)
-            .into()),
-        mcp::PrimitiveSchemaDefinition::Boolean(schema) => Ok(acp::BooleanPropertySchema::new()
-            .title(owned_string(schema.title.as_deref()))
-            .description(owned_string(schema.description.as_deref()))
-            .default_value(schema.default)
-            .into()),
-        mcp::PrimitiveSchemaDefinition::Enum(schema) => map_mcp_enum_schema_to_acp(schema),
-        _ => Err(ElicitationConversionError::Unsupported("MCP elicitation schema variant")),
+    let mut schema = serde_json::to_value(schema)?;
+    if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+        properties.values_mut().try_for_each(title_legacy_enum)?;
     }
+    Ok(serde_json::from_value(schema)?)
 }
 
-fn map_mcp_string_schema_to_acp(
-    schema: &mcp::StringSchema,
-) -> Result<acp::StringPropertySchema, ElicitationConversionError> {
-    let mut converted = acp::StringPropertySchema::new()
-        .title(owned_string(schema.title.as_deref()))
-        .description(owned_string(schema.description.as_deref()))
-        .min_length(schema.min_length)
-        .max_length(schema.max_length)
-        .default_value(schema.default.clone());
-    if let Some(format) = schema.format {
-        converted = converted.format(map_mcp_string_format_to_acp(format)?);
-    }
-    Ok(converted)
-}
-
-fn map_mcp_string_format_to_acp(format: mcp::StringFormat) -> Result<acp::StringFormat, ElicitationConversionError> {
-    match format {
-        mcp::StringFormat::Email => Ok(acp::StringFormat::Email),
-        mcp::StringFormat::Uri => Ok(acp::StringFormat::Uri),
-        mcp::StringFormat::Date => Ok(acp::StringFormat::Date),
-        mcp::StringFormat::DateTime => Ok(acp::StringFormat::DateTime),
-        _ => Err(ElicitationConversionError::Unsupported("MCP elicitation string format")),
-    }
-}
-
-fn map_mcp_enum_schema_to_acp(
-    schema: &mcp::EnumSchema,
-) -> Result<acp::ElicitationPropertySchema, ElicitationConversionError> {
-    match schema {
-        mcp::EnumSchema::Single(mcp::SingleSelectEnumSchema::Untitled(schema)) => Ok(build_acp_single_select_schema(
-            schema.title.as_deref(),
-            schema.description.as_deref(),
-            schema.default.clone(),
-        )
-        .enum_values(schema.enum_.clone())
-        .into()),
-        mcp::EnumSchema::Single(mcp::SingleSelectEnumSchema::Titled(schema)) => Ok(build_acp_single_select_schema(
-            schema.title.as_deref(),
-            schema.description.as_deref(),
-            schema.default.clone(),
-        )
-        .one_of(map_mcp_enum_options_to_acp(&schema.one_of))
-        .into()),
-        mcp::EnumSchema::Multi(mcp::MultiSelectEnumSchema::Untitled(schema)) => {
-            Ok(acp::MultiSelectPropertySchema::new(schema.items.enum_.clone())
-                .title(owned_string(schema.title.as_deref()))
-                .description(owned_string(schema.description.as_deref()))
-                .min_items(schema.min_items)
-                .max_items(schema.max_items)
-                .default_value(schema.default.clone())
-                .into())
-        }
-        mcp::EnumSchema::Multi(mcp::MultiSelectEnumSchema::Titled(schema)) => {
-            Ok(acp::MultiSelectPropertySchema::titled(map_mcp_enum_options_to_acp(&schema.items.any_of))
-                .title(owned_string(schema.title.as_deref()))
-                .description(owned_string(schema.description.as_deref()))
-                .min_items(schema.min_items)
-                .max_items(schema.max_items)
-                .default_value(schema.default.clone())
-                .into())
-        }
-        mcp::EnumSchema::Legacy(schema) => {
-            let (enum_values, one_of) = match &schema.enum_names {
-                Some(titles) if titles.len() == schema.enum_.len() => (
-                    None,
-                    Some(
-                        schema
-                            .enum_
-                            .iter()
-                            .zip(titles)
-                            .map(|(value, title)| acp::EnumOption::new(value, title))
-                            .collect::<Vec<_>>(),
-                    ),
-                ),
-                Some(_) => return Err(ElicitationConversionError::MismatchedEnumTitles),
-                None => (Some(schema.enum_.clone()), None),
-            };
-            Ok(build_acp_single_select_schema(
-                schema.title.as_deref(),
-                schema.description.as_deref(),
-                schema.default.clone(),
-            )
-            .enum_values(enum_values)
-            .one_of(one_of)
-            .into())
-        }
-        _ => Err(ElicitationConversionError::Unsupported("MCP elicitation schema variant")),
-    }
-}
-
-fn build_acp_single_select_schema(
-    title: Option<&str>,
-    description: Option<&str>,
-    default: Option<String>,
-) -> acp::StringPropertySchema {
-    acp::StringPropertySchema::new()
-        .title(title.map(str::to_owned))
-        .description(description.map(str::to_owned))
-        .default_value(default)
-}
-
-fn map_mcp_enum_options_to_acp(options: &[mcp::ConstTitle]) -> Vec<acp::EnumOption> {
-    options.iter().map(|option| acp::EnumOption::new(&option.const_, &option.title)).collect()
+fn title_legacy_enum(property: &mut Value) -> Result<(), ElicitationConversionError> {
+    let Some(property) = property.as_object_mut() else { return Ok(()) };
+    let Some(Value::Array(titles)) = property.remove("enumNames") else { return Ok(()) };
+    let values = match property.remove("enum") {
+        Some(Value::Array(values)) if values.len() == titles.len() => values,
+        _ => return Err(ElicitationConversionError::MismatchedEnumTitles),
+    };
+    let options = values.into_iter().zip(titles).map(|(value, title)| json!({ "const": value, "title": title }));
+    property.insert("oneOf".to_string(), options.collect());
+    Ok(())
 }
 
 fn map_mcp_meta_to_acp(meta: Option<&mcp::RequestMetaObject>, server_name: &str) -> Meta {
@@ -237,38 +111,6 @@ fn map_mcp_meta_to_acp(meta: Option<&mcp::RequestMetaObject>, server_name: &str)
     meta
 }
 
-fn map_acp_elicitation_content_to_mcp(
-    content: std::collections::BTreeMap<String, acp::ElicitationContentValue>,
-) -> Result<Value, ElicitationConversionError> {
-    Ok(Value::Object(
-        content
-            .into_iter()
-            .map(|(name, value)| map_acp_elicitation_content_value_to_mcp(value).map(|value| (name, value)))
-            .collect::<Result<Map<_, _>, _>>()?,
-    ))
-}
-
-fn map_acp_elicitation_content_value_to_mcp(
-    value: acp::ElicitationContentValue,
-) -> Result<Value, ElicitationConversionError> {
-    match value {
-        acp::ElicitationContentValue::String(value) => Ok(Value::String(value)),
-        acp::ElicitationContentValue::Integer(value) => Ok(Value::Number(value.into())),
-        acp::ElicitationContentValue::Number(value) => {
-            Number::from_f64(value).map(Value::Number).ok_or(ElicitationConversionError::NonFiniteNumber)
-        }
-        acp::ElicitationContentValue::Boolean(value) => Ok(Value::Bool(value)),
-        acp::ElicitationContentValue::StringArray(values) => {
-            Ok(Value::Array(values.into_iter().map(Value::String).collect()))
-        }
-        _ => Err(ElicitationConversionError::Unsupported("ACP elicitation response content")),
-    }
-}
-
-fn owned_string(value: Option<&str>) -> Option<String> {
-    value.map(str::to_owned)
-}
-
 fn build_scoped_elicitation_id(session_id: &SessionId, server_name: &str, elicitation_id: &str) -> String {
     json!([session_id.0.as_ref(), server_name, elicitation_id]).to_string()
 }
@@ -279,6 +121,7 @@ mod tests {
     use agent_client_protocol::schema::v2::{
         ElicitationAction, ElicitationMode, ElicitationPropertySchema, ElicitationScope,
     };
+    use serde_json::Map;
 
     #[test]
     fn form_request_converts_with_session_scope_and_source_server() {
@@ -297,6 +140,54 @@ mod tests {
         assert_eq!(converted.message, "Review the plan");
         assert_eq!(converted.meta.as_ref().and_then(|meta| meta.get("ui")), Some(&json!("artifactReview")));
         assert_eq!(source_mcp_server_name(converted.meta.as_ref()), Some("review"));
+    }
+
+    #[test]
+    fn every_mcp_property_kind_converts_to_the_matching_acp_schema() {
+        let requested_schema = serde_json::from_value(json!({
+            "type": "object",
+            "title": "Settings",
+            "description": "Pick settings",
+            "properties": {
+                "email": { "type": "string", "title": "Email", "format": "email", "minLength": 3, "maxLength": 50, "default": "a@b.c" },
+                "ratio": { "type": "number", "description": "Ratio", "minimum": 0.5, "maximum": 2.5, "default": 1.5 },
+                "count": { "type": "integer", "minimum": 1, "maximum": 9, "default": 3 },
+                "enabled": { "type": "boolean", "default": true },
+                "color": { "type": "string", "enum": ["red", "blue"], "default": "red" },
+                "size": { "type": "string", "oneOf": [{ "const": "s", "title": "Small" }, { "const": "l", "title": "Large" }] },
+                "tags": { "type": "array", "items": { "type": "string", "enum": ["a", "b"] }, "minItems": 1, "maxItems": 2, "default": ["a"] },
+                "labels": { "type": "array", "items": { "anyOf": [{ "const": "x", "title": "X" }] } },
+                "legacy": { "type": "string", "enum": ["p", "q"], "enumNames": ["P", "Q"] }
+            },
+            "required": ["count", "email"]
+        }))
+        .unwrap();
+        let request =
+            ElicitRequestParams::FormElicitationParams { meta: None, message: "Configure".into(), requested_schema };
+
+        let converted = map_mcp_elicitation_request_to_acp("settings", &SessionId::new("session-1"), &request).unwrap();
+        let ElicitationMode::Form(form) = converted.mode else { panic!("expected form mode") };
+
+        assert_eq!(
+            serde_json::to_value(&form.requested_schema).unwrap(),
+            json!({
+                "type": "object",
+                "title": "Settings",
+                "description": "Pick settings",
+                "properties": {
+                    "email": { "type": "string", "title": "Email", "format": "email", "minLength": 3, "maxLength": 50, "default": "a@b.c" },
+                    "ratio": { "type": "number", "description": "Ratio", "minimum": 0.5, "maximum": 2.5, "default": 1.5 },
+                    "count": { "type": "integer", "minimum": 1, "maximum": 9, "default": 3 },
+                    "enabled": { "type": "boolean", "default": true },
+                    "color": { "type": "string", "enum": ["red", "blue"], "default": "red" },
+                    "size": { "type": "string", "oneOf": [{ "const": "s", "title": "Small" }, { "const": "l", "title": "Large" }] },
+                    "tags": { "type": "array", "items": { "type": "string", "enum": ["a", "b"] }, "minItems": 1, "maxItems": 2, "default": ["a"] },
+                    "labels": { "type": "array", "items": { "anyOf": [{ "const": "x", "title": "X" }] } },
+                    "legacy": { "type": "string", "oneOf": [{ "const": "p", "title": "P" }, { "const": "q", "title": "Q" }] }
+                },
+                "required": ["count", "email"]
+            })
+        );
     }
 
     #[test]
@@ -332,6 +223,27 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![("small", "Small"), ("large", "Large")]
         );
+    }
+
+    #[test]
+    fn legacy_enum_with_mismatched_titles_is_rejected() {
+        let mut legacy = rmcp::model::LegacyEnumSchema::new(vec!["small".into(), "large".into()]);
+        legacy.enum_names = Some(vec!["Small".into()]);
+        let request = ElicitRequestParams::FormElicitationParams {
+            meta: None,
+            message: "Pick a size".to_string(),
+            requested_schema: rmcp::model::ElicitationSchema::builder()
+                .required_property(
+                    "size",
+                    rmcp::model::PrimitiveSchemaDefinition::Enum(rmcp::model::EnumSchema::Legacy(legacy)),
+                )
+                .build()
+                .unwrap(),
+        };
+
+        let error = map_mcp_elicitation_request_to_acp("catalog", &SessionId::new("session-1"), &request).unwrap_err();
+
+        assert!(matches!(error, ElicitationConversionError::MismatchedEnumTitles), "{error}");
     }
 
     #[test]
