@@ -51,7 +51,6 @@ dependencies = [
  "schemars 1.2.2",
  "serde",
  "serde_json",
- "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tokio-tungstenite 0.30.0",
@@ -120,7 +119,7 @@ dependencies = [
  "glob",
  "http",
  "noyalib",
- "reqwest 0.13.5",
+ "reqwest",
  "rmcp",
  "schemars 1.2.2",
  "serde",
@@ -151,7 +150,7 @@ dependencies = [
  "futures",
  "keyring-core",
  "oauth2",
- "reqwest 0.13.5",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",
@@ -232,14 +231,11 @@ dependencies = [
  "futures",
  "http",
  "oauth2",
- "reqwest 0.13.5",
+ "reqwest",
  "schemars 1.2.2",
- "secrecy",
  "serde",
  "serde_json",
- "tempfile",
  "thiserror 2.0.21",
- "time",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -310,7 +306,7 @@ dependencies = [
  "htmd",
  "libc",
  "lsp-types",
- "reqwest 0.13.5",
+ "reqwest",
  "rmcp",
  "schemars 1.2.2",
  "serde",
@@ -338,7 +334,7 @@ dependencies = [
  "axum",
  "chrono",
  "futures",
- "reqwest 0.13.5",
+ "reqwest",
  "rmcp",
  "serde",
  "serde_json",
@@ -367,7 +363,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "tokio",
  "tracing",
 ]
 
@@ -429,7 +424,7 @@ dependencies = [
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
  "prost",
- "reqwest 0.13.5",
+ "reqwest",
  "schemars 1.2.2",
  "serde",
  "serde_json",
@@ -1489,37 +1484,11 @@ version = "0.42.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63077bf55857e6963effefb5f28134c40cc2ee68bc176cc601bbdeb070017fba"
 dependencies = [
- "async-openai-macros",
- "base64 0.22.1",
  "bytes",
  "derive_builder",
- "eventsource-stream",
- "futures",
  "getrandom 0.3.4",
- "rand 0.9.5",
- "reqwest 0.13.5",
- "secrecy",
  "serde",
  "serde_json",
- "serde_urlencoded",
- "thiserror 2.0.21",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tower",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "async-openai-macros"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "492a944774207eed3acf425214eadbd6ce84a2b89331164ff1c11bae92b26302"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -4324,7 +4293,6 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots 1.0.9",
 ]
 
 [[package]]
@@ -4696,15 +4664,12 @@ name = "internal-evals"
 version = "0.1.0"
 dependencies = [
  "aether-agent-cli",
- "aether-agent-core",
  "aether-evals",
  "aether-llm",
  "aether-project",
  "async-stream",
  "futures",
  "serde_json",
- "tempfile",
- "testcontainers",
  "thiserror 2.0.21",
  "tokio",
 ]
@@ -5457,7 +5422,6 @@ dependencies = [
  "getrandom 0.2.17",
  "http",
  "rand 0.8.8",
- "reqwest 0.12.28",
  "serde",
  "serde_json",
  "serde_path_to_error",
@@ -5519,7 +5483,7 @@ dependencies = [
  "bytes",
  "http",
  "opentelemetry",
- "reqwest 0.13.5",
+ "reqwest",
 ]
 
 [[package]]
@@ -5535,7 +5499,7 @@ dependencies = [
  "opentelemetry-proto",
  "opentelemetry_sdk",
  "prost",
- "reqwest 0.13.5",
+ "reqwest",
  "thiserror 2.0.21",
  "tokio",
 ]
@@ -6462,44 +6426,6 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "reqwest"
-version = "0.12.28"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
-dependencies = [
- "base64 0.22.1",
- "bytes",
- "futures-core",
- "http",
- "http-body",
- "http-body-util",
- "hyper",
- "hyper-rustls",
- "hyper-util",
- "js-sys",
- "log",
- "percent-encoding",
- "pin-project-lite",
- "quinn",
- "rustls",
- "rustls-pki-types",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "sync_wrapper",
- "tokio",
- "tokio-rustls",
- "tower",
- "tower-http 0.6.11",
- "tower-service",
- "url",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "webpki-roots 1.0.9",
-]
-
-[[package]]
-name = "reqwest"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "16a1cfa75cc186dd73d5818e510e042e40927bccc9c236b061cea97e1eb08029"
@@ -6517,7 +6443,6 @@ dependencies = [
  "hyper-util",
  "js-sys",
  "log",
- "mime_guess",
  "percent-encoding",
  "pin-project-lite",
  "quinn",
@@ -6575,7 +6500,7 @@ dependencies = [
  "pin-project-lite",
  "process-wrap",
  "rand 0.10.3",
- "reqwest 0.13.5",
+ "reqwest",
  "rmcp-macros",
  "schemars 1.2.2",
  "serde",
@@ -6865,7 +6790,6 @@ version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e891af845473308773346dc847b2c23ee78fe442e0472ac50e22a18a93d3ae5a"
 dependencies = [
- "serde",
  "zeroize",
 ]
 
