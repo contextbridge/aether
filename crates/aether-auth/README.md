@@ -34,17 +34,7 @@ use aether_auth::{OAuthCredential, OAuthCredentialStorage, OsKeyringStore};
 # async fn example() -> Result<(), aether_auth::OAuthError> {
 let store = OsKeyringStore::with_platform_store();
 
-store
-    .save_credential(
-        "anthropic",
-        OAuthCredential {
-            client_id: "client-id".into(),
-            access_token: "token".into(),
-            refresh_token: None,
-            expires_at: None,
-        },
-    )
-    .await?;
+store.save_credential("anthropic", OAuthCredential::new("client-id", "token")).await?;
 
 let loaded = store.load_credential("anthropic").await?;
 # Ok(())

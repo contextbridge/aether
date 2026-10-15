@@ -7,10 +7,9 @@ use serde_json::json;
 
 #[derive(Clone)]
 pub struct FakeTask {
-    seed: Task,
+    task_id: String,
+    response: FakeToolResponse,
     states: Vec<DetailedTask>,
-    progress: Vec<(f64, Option<f64>)>,
-    gate: Option<Gate>,
     get_failures: usize,
     update_failures: usize,
 }
@@ -18,17 +17,17 @@ pub struct FakeTask {
 impl FakeTask {
     pub fn new(task_id: &str) -> Self {
         Self {
-            seed: task(task_id, TaskStatus::Working),
+            task_id: task_id.to_string(),
+            response: FakeToolResponse::task(CreateTaskResult::new(task(task_id, TaskStatus::Working))),
             states: vec![working_task(task_id)],
-            progress: Vec::new(),
-            gate: None,
             get_failures: 0,
             update_failures: 0,
         }
     }
 
     pub fn seed(mut self, seed: Task) -> Self {
-        self.seed = seed;
+        self.task_id.clone_from(&seed.task_id);
+        self.response.response = CallToolResponse::Task(CreateTaskResult::new(seed));
         self
     }
 
@@ -38,12 +37,12 @@ impl FakeTask {
     }
 
     pub fn progress(mut self, progress: f64, total: Option<f64>) -> Self {
-        self.progress.push((progress, total));
+        self.response = self.response.progress(progress, total);
         self
     }
 
     pub fn gated(mut self, gate: Gate) -> Self {
-        self.gate = Some(gate);
+        self.response = self.response.gated(gate);
         self
     }
 
@@ -58,17 +57,9 @@ impl FakeTask {
     }
 
     pub fn server(self, tool: &str) -> FakeMcpServer {
-        let task_id = self.seed.task_id.clone();
-        let mut response = FakeToolResponse::task(CreateTaskResult::new(self.seed));
-        for (progress, total) in self.progress {
-            response = response.progress(progress, total);
-        }
-        if let Some(gate) = self.gate {
-            response = response.gated(gate);
-        }
         FakeMcpServer::new()
-            .with_tool(FakeTool::new(tool).responds(response))
-            .with_task(task_id, self.states)
+            .with_tool(FakeTool::new(tool).responds(self.response))
+            .with_task(self.task_id, self.states)
             .with_task_get_failures(self.get_failures)
             .with_task_update_failures(self.update_failures)
     }

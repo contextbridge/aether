@@ -11,7 +11,7 @@ use crate::OAuthError;
 const TOKEN_EXPIRY_GRACE_PERIOD: Duration = Duration::from_mins(1);
 
 /// Credential for a non-MCP OAuth provider.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OAuthCredential {
     pub client_id: String,
     pub access_token: String,
@@ -21,6 +21,20 @@ pub struct OAuthCredential {
 }
 
 impl OAuthCredential {
+    pub fn new(client_id: impl Into<String>, access_token: impl Into<String>) -> Self {
+        Self { client_id: client_id.into(), access_token: access_token.into(), refresh_token: None, expires_at: None }
+    }
+
+    pub fn refresh_token(mut self, refresh_token: impl Into<String>) -> Self {
+        self.refresh_token = Some(refresh_token.into());
+        self
+    }
+
+    pub fn expires_at(mut self, expires_at: u64) -> Self {
+        self.expires_at = Some(expires_at);
+        self
+    }
+
     /// Build an `OAuthCredential` from an `OAuth2` token response.
     pub fn from_token_response<T: TokenResponse>(client_id: String, token_response: &T) -> Self {
         Self {
@@ -123,6 +137,34 @@ fn duration_millis(duration: Duration) -> u64 {
 }
 
 #[cfg(test)]
+pub(crate) async fn assert_storage_contract(store: &dyn OAuthCredentialStorage) {
+    let credential = OAuthCredential::new("client", "v1").refresh_token("refresh").expires_at(1234);
+    let rotated = OAuthCredential::new("client", "v2");
+    let other = OAuthCredential::new("other-client", "other");
+    let secret = serde_json::json!({"client_id": "c", "granted_scopes": ["read"]});
+
+    assert_eq!(store.load_credential("server").await.unwrap(), None);
+    assert!(!store.contains("server"));
+
+    store.save_credential("server", credential.clone()).await.unwrap();
+    store.save_credential("other", other.clone()).await.unwrap();
+    store.save("mcp:secret", secret.clone()).await.unwrap();
+    assert_eq!(store.load_credential("server").await.unwrap(), Some(credential));
+    assert!(store.contains("server"));
+
+    store.save_credential("server", rotated.clone()).await.unwrap();
+    assert_eq!(store.load_credential("server").await.unwrap(), Some(rotated));
+    assert_eq!(store.load_credential("other").await.unwrap(), Some(other.clone()));
+    assert_eq!(store.load("mcp:secret").await.unwrap(), Some(secret));
+
+    store.delete("server").await.unwrap();
+    store.delete("never-saved").await.unwrap();
+    assert_eq!(store.load_credential("server").await.unwrap(), None);
+    assert!(!store.contains("server"));
+    assert_eq!(store.load_credential("other").await.unwrap(), Some(other));
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -166,11 +208,6 @@ mod tests {
     }
 
     fn build_credential(expires_at: Option<u64>) -> OAuthCredential {
-        OAuthCredential {
-            client_id: "client".to_string(),
-            access_token: "access".to_string(),
-            refresh_token: None,
-            expires_at,
-        }
+        OAuthCredential { expires_at, ..OAuthCredential::new("client", "access") }
     }
 }
