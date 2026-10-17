@@ -91,14 +91,14 @@ impl App {
     fn handle_output(&mut self, output: UiOutput) {
         match output {
             UiOutput::Close => self.close_active(),
-            UiOutput::ConfigChange(change) if change.config_id == THEME_CONFIG_ID => {
-                self.apply_theme_change(&change.new_value);
-            }
             UiOutput::ConfigChange(change) => {
-                self.set_config_option(&change.config_id, &change.new_value);
                 self.apply_settings_change(&change);
+                if change.config_id == THEME_CONFIG_ID {
+                    self.apply_theme_change(&change.new_value);
+                } else {
+                    self.set_config_option(&change.config_id, &change.new_value);
+                }
             }
-            UiOutput::SetTheme(value) => self.apply_theme_change(&value),
             UiOutput::AuthenticateServer(server_name) => {
                 self.queue(Command::Agent(AgentCommand::AuthenticateMcpServer {
                     session_id: self.session.session_id().clone(),
@@ -123,11 +123,7 @@ impl App {
                     target,
                 }));
             }
-            UiOutput::ArtifactApproved => {
-                self.notify("Artifact approved");
-                self.close_active();
-            }
-            UiOutput::ArtifactFeedback(summary) => {
+            UiOutput::ArtifactReviewed(summary) => {
                 self.notify(&summary);
                 self.close_active();
             }

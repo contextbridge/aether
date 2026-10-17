@@ -48,9 +48,9 @@ pub(crate) use wisp::session::session_config_view::LocalConfigOption;
 pub(crate) use wisp::settings::overlay::SettingsOverlay;
 pub(crate) use wisp::settings::{StatusLineSegmentConfig, UiSettings};
 pub(crate) use wisp::surfaces::composer::Composer;
-pub(crate) use wisp::surfaces::input::UiEvent;
 pub(crate) use wisp::surfaces::picker::CommandEntry;
 pub(crate) use wisp::theme::Theme;
+pub(crate) use wisp::view::input::UiEvent;
 pub(crate) use wisp::view::syntax::SyntaxHighlighter;
 
 pub(crate) type Step = fn(&mut TestUi);
@@ -208,16 +208,10 @@ pub(crate) fn plan_meta(markdown: &str) -> ArtifactReviewElicitationMeta {
     ArtifactReviewElicitationMeta::new(Some(PathBuf::from("/tmp/plan.md")), "Review /tmp/plan.md", markdown)
 }
 
-pub(crate) fn open_first_config_option(ui: &mut TestUi) {
-    open_settings_entry(ui, 1);
-}
-
-pub(crate) fn open_mcp_servers(ui: &mut TestUi) {
-    open_settings_entry(ui, 1);
-}
-
-pub(crate) fn open_provider_logins(ui: &mut TestUi) {
-    open_settings_entry(ui, 2);
+/// Opens `/settings` and then the menu row labelled `label`, wherever it sits.
+pub(crate) fn open_settings_row(ui: &mut TestUi, label: &str) {
+    ui.run_command("/settings");
+    ui.click_text(label);
 }
 
 pub(crate) fn open_workspace_picker(ui: &mut TestUi, workspaces: Vec<WorkspaceEntry>) {
@@ -425,14 +419,6 @@ pub(crate) fn hit(prompt: &str, match_start: usize, match_end: usize) -> PromptS
         match_start,
         match_end,
     }
-}
-
-fn open_settings_entry(ui: &mut TestUi, rows_below_theme: usize) {
-    ui.run_command("/settings");
-    for _ in 0..rows_below_theme {
-        ui.key(key(KeyCode::Down));
-    }
-    ui.key(key(KeyCode::Enter));
 }
 
 fn plain(values: &[&str]) -> Vec<acp::SessionConfigSelectOption> {

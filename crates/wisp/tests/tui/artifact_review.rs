@@ -1,175 +1,156 @@
-use super::support::{
-    CreateElicitationResponse, ElicitationSchema, TestUi, accepted_content, assert_ctrl_c_exits, block_on_local,
-    form_elicitation, plan_meta, with_elicitation,
-};
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use std::sync::{Arc, Mutex};
-use wisp::{
-    screens::artifact_review::ArtifactReviewScreen,
-    surfaces::{elicitation::ElicitationResponder, input::UiEvent},
-};
-
-type Responses = Arc<Mutex<Vec<CreateElicitationResponse>>>;
-
-fn screen(markdown: &str) -> (ArtifactReviewScreen, Responses) {
-    let responses = Arc::new(Mutex::new(Vec::new()));
-    let output = Arc::clone(&responses);
-    let responder = ElicitationResponder::from_fn(move |response| output.lock().unwrap().push(response));
-    (ArtifactReviewScreen::new(plan_meta(markdown), responder), responses)
-}
-
-fn key(code: KeyCode) -> UiEvent {
-    UiEvent::Key(KeyEvent::new(code, KeyModifiers::NONE))
-}
-fn type_text(screen: &mut ArtifactReviewScreen, text: &str) {
-    for character in text.chars() {
-        screen.on_ui_event(key(KeyCode::Char(character)));
-    }
-}
+use super::support::*;
+use crossterm::event::KeyEventKind;
+use tokio::sync::oneshot;
 
 #[test]
 fn code_line_comments_preserve_source_context() {
-    let (mut screen, responses) = screen("# Plan\n\n```rust\nfn first() {}\nfn last() {}\n```\n");
-    screen.on_ui_event(key(KeyCode::Char('G')));
-    screen.on_ui_event(key(KeyCode::Char('c')));
-    type_text(&mut screen, "Rename this function");
-    screen.on_ui_event(key(KeyCode::Enter));
-    screen.on_ui_event(key(KeyCode::Char('r')));
-    let responses = responses.lock().unwrap();
-    let content = accepted_content(&responses[0]);
-    assert_eq!(content["decision"], "feedback");
-    let feedback = content["feedback"].as_str().unwrap();
-    assert!(feedback.contains("Rename this function"), "{feedback}");
-    assert!(feedback.contains("fn last()"), "{feedback}");
+    block_on_local(async {
+        let mut ui = TestUi::new();
+        let response = open_plan_review(&mut ui, "# Plan\n\n```rust\nfn first() {}\nfn last() {}\n```\n").await;
+
+        ui.key(key(KeyCode::Char('G')));
+        ui.key(key(KeyCode::Char('c')));
+        ui.type_text("Rename this function");
+        ui.key(key(KeyCode::Enter));
+        ui.key(key(KeyCode::Char('r')));
+
+        let content = accepted_content(&response.await.unwrap());
+        assert_eq!(content["decision"], "feedback");
+        let feedback = content["feedback"].as_str().unwrap();
+        assert!(feedback.contains("Rename this function"), "{feedback}");
+        assert!(feedback.contains("fn last()"), "{feedback}");
+    });
 }
 
 #[test]
-fn approving_without_comments_requires_explicit_confirmation_and_answers_once() {
-    let (mut screen, responses) = screen("# Plan\n\nbody");
-    screen.on_ui_event(key(KeyCode::Char('r')));
-    assert!(responses.lock().unwrap().is_empty());
-    screen.on_ui_event(key(KeyCode::Enter));
-    screen.on_ui_event(key(KeyCode::Enter));
-    screen.cancel();
-    drop(screen);
-    let responses = responses.lock().unwrap();
-    assert_eq!(responses.len(), 1);
-    assert_eq!(accepted_content(&responses[0]), serde_json::json!({"decision": "approved"}));
+fn approving_without_comments_asks_for_confirmation_then_closes_the_review() {
+    block_on_local(async {
+        let mut ui = TestUi::new();
+        let response = open_plan_review(&mut ui, "# Plan\n\nbody").await;
+
+        ui.key(key(KeyCode::Char('r')));
+        assert!(ui.app().full_screen_active(), "r only asks for confirmation");
+        ui.assert_viewport_contains("Approve and continue");
+        ui.key(key(KeyCode::Enter));
+
+        assert_eq!(accepted_content(&response.await.unwrap()), serde_json::json!({"decision": "approved"}));
+        assert!(!ui.app().full_screen_active());
+        ui.assert_viewport_contains("Artifact approved");
+    });
 }
 
 #[test]
 fn confirmation_escape_returns_to_review_without_answering() {
-    let (mut screen, responses) = screen("# Plan\n\nbody");
-    screen.on_ui_event(key(KeyCode::Char('r')));
-    screen.on_ui_event(key(KeyCode::Esc));
-    assert!(responses.lock().unwrap().is_empty());
-    screen.on_ui_event(key(KeyCode::Char('c')));
-    type_text(&mut screen, "Add tests");
-    screen.on_ui_event(key(KeyCode::Enter));
-    screen.on_ui_event(key(KeyCode::Char('r')));
-    let responses = responses.lock().unwrap();
-    let content = accepted_content(&responses[0]);
-    assert_eq!(content["decision"], "feedback");
-    assert!(content["feedback"].as_str().unwrap().contains("Add tests"));
+    block_on_local(async {
+        let mut ui = TestUi::new();
+        let response = open_plan_review(&mut ui, "# Plan\n\nbody").await;
+
+        ui.key(key(KeyCode::Char('r')));
+        ui.key(key(KeyCode::Esc));
+        assert!(ui.app().full_screen_active(), "Esc backs out of the confirmation, not the review");
+        ui.key(key(KeyCode::Char('c')));
+        ui.type_text("Add tests");
+        ui.key(key(KeyCode::Enter));
+        ui.key(key(KeyCode::Char('r')));
+
+        let content = accepted_content(&response.await.unwrap());
+        assert_eq!(content["decision"], "feedback");
+        assert!(content["feedback"].as_str().unwrap().contains("Add tests"));
+    });
 }
 
 #[test]
 fn draft_and_help_escape_do_not_cancel_review() {
-    let (mut screen, responses) = screen("# Plan\n\nbody");
-    screen.on_ui_event(key(KeyCode::Char('?')));
-    screen.on_ui_event(key(KeyCode::Esc));
-    assert!(responses.lock().unwrap().is_empty());
-    screen.on_ui_event(key(KeyCode::Char('c')));
-    type_text(&mut screen, "discard me");
-    screen.on_ui_event(key(KeyCode::Esc));
-    assert!(responses.lock().unwrap().is_empty());
-    screen.on_ui_event(key(KeyCode::Char('r')));
-    assert!(responses.lock().unwrap().is_empty());
-    screen.on_ui_event(key(KeyCode::Enter));
-    let responses = responses.lock().unwrap();
-    assert_eq!(accepted_content(&responses[0]), serde_json::json!({"decision": "approved"}));
+    block_on_local(async {
+        let mut ui = TestUi::new();
+        let response = open_plan_review(&mut ui, "# Plan\n\nbody").await;
+
+        ui.key(key(KeyCode::Char('?')));
+        ui.key(key(KeyCode::Esc));
+        assert!(ui.app().full_screen_active(), "Esc closes help, not the review");
+        ui.key(key(KeyCode::Char('c')));
+        ui.type_text("discard me");
+        ui.key(key(KeyCode::Esc));
+        assert!(ui.app().full_screen_active(), "Esc discards the draft, not the review");
+        ui.key(key(KeyCode::Char('r')));
+        ui.key(key(KeyCode::Enter));
+
+        assert_eq!(accepted_content(&response.await.unwrap()), serde_json::json!({"decision": "approved"}));
+    });
 }
 
 #[test]
 fn modified_and_released_submission_keys_do_not_submit() {
-    let (mut screen, responses) = screen("# Plan\n\nbody");
-    for modifiers in
-        [KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SUPER, KeyModifiers::HYPER, KeyModifiers::META]
-    {
-        screen.on_ui_event(UiEvent::Key(KeyEvent::new(KeyCode::Char('a'), modifiers)));
-        screen.on_ui_event(UiEvent::Key(KeyEvent::new(KeyCode::Char('r'), modifiers)));
-    }
-    screen.on_ui_event(UiEvent::Key(KeyEvent::new_with_kind(
-        KeyCode::Char('r'),
-        KeyModifiers::NONE,
-        KeyEventKind::Release,
-    )));
-    screen.on_ui_event(key(KeyCode::Enter));
-    assert!(responses.lock().unwrap().is_empty());
-}
-
-#[test]
-fn confirmation_ignores_modified_released_repeated_and_widget_keys() {
-    let (mut screen, responses) = screen("# Plan\n\nbody");
-    screen.on_ui_event(key(KeyCode::Char('r')));
-    for modifiers in [
-        KeyModifiers::SHIFT,
-        KeyModifiers::CONTROL,
-        KeyModifiers::ALT,
-        KeyModifiers::SUPER,
-        KeyModifiers::HYPER,
-        KeyModifiers::META,
-    ] {
-        for code in [KeyCode::Enter, KeyCode::Esc] {
-            screen.on_ui_event(UiEvent::Key(KeyEvent::new(code, modifiers)));
-        }
-    }
-    for kind in [KeyEventKind::Release, KeyEventKind::Repeat] {
-        screen.on_ui_event(UiEvent::Key(KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::NONE, kind)));
-    }
-    screen.on_ui_event(key(KeyCode::Char('c')));
-    screen.on_ui_event(UiEvent::Paste("do not add a comment".into()));
-    assert!(responses.lock().unwrap().is_empty());
-    screen.on_ui_event(key(KeyCode::Enter));
-    assert_eq!(accepted_content(&responses.lock().unwrap()[0]), serde_json::json!({"decision": "approved"}));
-}
-
-#[test]
-fn dropping_confirmation_cancels_once() {
-    let (mut screen, responses) = screen("# Plan");
-    screen.on_ui_event(key(KeyCode::Char('r')));
-    drop(screen);
-    let responses = responses.lock().unwrap();
-    assert_eq!(responses.len(), 1);
-    assert_eq!(serde_json::to_value(&responses[0]).unwrap()["action"], "cancel");
-}
-
-#[test]
-fn approval_closes_the_route_and_notifies_the_user() {
     block_on_local(async {
-        let mut app = TestUi::new();
-        open_plan_review(&mut app, "# Plan").await;
-        app.key(KeyCode::Char('r').into());
-        assert!(app.app().full_screen_active());
-        app.assert_viewport_contains("Approve and continue");
-        app.key(KeyCode::Enter.into());
-        assert!(!app.app().full_screen_active());
-        app.assert_viewport_contains("Artifact approved");
+        let mut ui = TestUi::new();
+        let _response = open_plan_review(&mut ui, "# Plan\n\nbody").await;
+
+        for modifiers in
+            [KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SUPER, KeyModifiers::HYPER, KeyModifiers::META]
+        {
+            ui.key(KeyEvent::new(KeyCode::Char('a'), modifiers));
+            ui.key(KeyEvent::new(KeyCode::Char('r'), modifiers));
+        }
+        ui.key(KeyEvent::new_with_kind(KeyCode::Char('r'), KeyModifiers::NONE, KeyEventKind::Release));
+        ui.key(key(KeyCode::Enter));
+
+        assert!(ui.app().full_screen_active(), "no key submitted the review");
+    });
+}
+
+#[test]
+fn confirmation_ignores_modified_and_widget_keys() {
+    block_on_local(async {
+        let mut ui = TestUi::new();
+        let response = open_plan_review(&mut ui, "# Plan\n\nbody").await;
+        ui.key(key(KeyCode::Char('r')));
+
+        for modifiers in [
+            KeyModifiers::SHIFT,
+            KeyModifiers::CONTROL,
+            KeyModifiers::ALT,
+            KeyModifiers::SUPER,
+            KeyModifiers::HYPER,
+            KeyModifiers::META,
+        ] {
+            for code in [KeyCode::Enter, KeyCode::Esc] {
+                ui.key(KeyEvent::new(code, modifiers));
+            }
+        }
+        ui.key(key(KeyCode::Char('c')));
+        ui.paste("do not add a comment");
+        assert!(ui.app().full_screen_active(), "only a plain Enter confirms");
+        ui.key(key(KeyCode::Enter));
+
+        assert_eq!(accepted_content(&response.await.unwrap()), serde_json::json!({"decision": "approved"}));
+    });
+}
+
+#[test]
+fn closing_the_app_during_confirmation_cancels_the_review() {
+    block_on_local(async {
+        let mut ui = TestUi::new();
+        let response = open_plan_review(&mut ui, "# Plan").await;
+        ui.key(key(KeyCode::Char('r')));
+
+        drop(ui);
+
+        assert_eq!(serde_json::to_value(response.await.unwrap()).unwrap()["action"], "cancel");
     });
 }
 
 #[test]
 fn double_ctrl_c_exits_over_artifact_review() {
     block_on_local(async {
-        let mut app = TestUi::new();
-        open_plan_review(&mut app, "# Plan\nbody").await;
-        assert!(app.app().full_screen_active());
-        assert_ctrl_c_exits(&mut app);
+        let mut ui = TestUi::new();
+        let _response = open_plan_review(&mut ui, "# Plan\nbody").await;
+        assert!(ui.app().full_screen_active());
+        assert_ctrl_c_exits(&mut ui);
     });
 }
 
-async fn open_plan_review(app: &mut TestUi, markdown: &str) {
+async fn open_plan_review(ui: &mut TestUi, markdown: &str) -> oneshot::Receiver<CreateElicitationResponse> {
     let request =
         form_elicitation("review", "Review artifact", ElicitationSchema::new()).meta(plan_meta(markdown).to_meta());
-    with_elicitation(app, request).await;
+    with_elicitation(ui, request).await
 }

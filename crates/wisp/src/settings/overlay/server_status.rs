@@ -1,12 +1,13 @@
 use super::{LiveSettingsData, summarize};
-use crate::surfaces::input::{Nav, UiEvent, UiOutput, one};
+use crate::surfaces::input::{UiOutput, one};
 use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
+use crate::view::input::{Nav, UiEvent};
 use crate::view::list_view::ListView;
 use crate::view::selection::SelectionState;
 use acp_utils::notifications::{McpServerStatus, McpServerStatusEntry};
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::StatefulWidget;
@@ -53,10 +54,9 @@ impl ServerStatusPane {
 }
 
 impl ServerStatusPane {
-    #[allow(clippy::needless_pass_by_value)]
-    pub(crate) fn on_ui_event(&mut self, event: UiEvent) -> Vec<UiOutput> {
+    pub(crate) fn on_ui_event(&mut self, event: &UiEvent) -> Vec<UiOutput> {
         let rows = &self.rows;
-        match self.selection.on_nav_event(&event, rows.len(), |index| is_server(&rows[index])) {
+        match self.selection.on_nav_event(event, rows.len(), |index| is_server(&rows[index])) {
             Nav::Activate | Nav::Clicked => one(self
                 .selected_entry()
                 .filter(|entry| entry.can_authenticate())
@@ -67,7 +67,7 @@ impl ServerStatusPane {
 }
 
 impl ServerStatusPane {
-    pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) -> Option<Position> {
+    pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         let rows = self.rows.iter().map(|row| match row {
             ServerStatusRow::Header(label) => Line::styled(label.clone(), theme.heading),
             ServerStatusRow::Spacer => Line::default(),
@@ -88,7 +88,6 @@ impl ServerStatusPane {
             .pane(" (no MCP servers configured)")
             .highlight_horizontal_padding(MODAL_HORIZONTAL_PADDING);
         StatefulWidget::render(view, area, buf, &mut self.selection);
-        None
     }
 }
 impl ServerStatusPane {

@@ -222,129 +222,146 @@ fn stray_thought_chunk_is_not_interruptible() {
     ui.assert_viewport_not_contains("esc to interrupt");
 }
 
-type Scenario = (&'static str, Step, &'static [&'static str], &'static [&'static str], bool);
+/// What the progress band shows once `setup` has run.
+struct Scenario {
+    name: &'static str,
+    setup: Step,
+    shown: &'static [&'static str],
+    hidden: &'static [&'static str],
+}
 
 #[test]
 fn progress_band_shows_while_work_is_in_flight() {
-    assert_progress(&[
-        ("prompt in flight", |ui| ui.submit("hello"), &["esc to interrupt"], &[], true),
-        ("compaction", |ui| ui.acp_event(compacting()), &["Compacting context"], &[], true),
-        (
-            "compaction takes precedence over agent work",
-            |ui| {
-                ui.submit("hello");
-                ui.acp_event(compacting());
+    assert_progress(
+        true,
+        &[
+            Scenario {
+                name: "prompt in flight",
+                setup: |ui| ui.submit("hello"),
+                shown: &["esc to interrupt"],
+                hidden: &[],
             },
-            &["Compacting context", "esc to interrupt"],
-            &["Thinking…"],
-            true,
-        ),
-        ("workspace move", move_to_other_workspace, &["Moving workspace"], &["esc to interrupt"], true),
-        (
-            "workspace move takes precedence over compaction",
-            |ui| {
-                move_to_other_workspace(ui);
-                ui.acp_event(compacting());
+            Scenario {
+                name: "compaction",
+                setup: |ui| ui.acp_event(compacting()),
+                shown: &["Compacting context"],
+                hidden: &[],
             },
-            &["Moving workspace"],
-            &["Compacting"],
-            true,
-        ),
-        (
-            "loading the moved session",
-            |ui| {
-                move_to_other_workspace(ui);
-                ui.deliver_result(workspace_moved("/home/user/code/other"));
+            Scenario {
+                name: "compaction takes precedence over agent work",
+                setup: |ui| {
+                    ui.submit("hello");
+                    ui.acp_event(compacting());
+                },
+                shown: &["Compacting context", "esc to interrupt"],
+                hidden: &["Thinking…"],
             },
-            &["Loading session in new workspace"],
-            &[],
-            true,
-        ),
-    ]);
+            Scenario {
+                name: "workspace move",
+                setup: move_to_other_workspace,
+                shown: &["Moving workspace"],
+                hidden: &["esc to interrupt"],
+            },
+            Scenario {
+                name: "workspace move takes precedence over compaction",
+                setup: |ui| {
+                    move_to_other_workspace(ui);
+                    ui.acp_event(compacting());
+                },
+                shown: &["Moving workspace"],
+                hidden: &["Compacting"],
+            },
+            Scenario {
+                name: "loading the moved session",
+                setup: |ui| {
+                    move_to_other_workspace(ui);
+                    ui.deliver_result(workspace_moved("/home/user/code/other"));
+                },
+                shown: &["Loading session in new workspace"],
+                hidden: &[],
+            },
+        ],
+    );
 }
 
 #[test]
 fn progress_band_clears_once_work_ends() {
-    assert_progress(&[
-        ("idle", |_| {}, &[], &["Working…", "esc to interrupt"], false),
-        (
-            "completed prompt",
-            |ui| {
-                ui.submit("hello");
-                ui.tick(Instant::now());
-                ui.acp_event(text_chunk("response"));
-                ui.complete_prompt(acp::StopReason::EndTurn);
-                ui.tick(Instant::now());
+    assert_progress(
+        false,
+        &[
+            Scenario { name: "idle", setup: |_| {}, shown: &[], hidden: &["Working…", "esc to interrupt"] },
+            Scenario {
+                name: "completed prompt",
+                setup: |ui| {
+                    ui.submit("hello");
+                    ui.tick(Instant::now());
+                    ui.acp_event(text_chunk("response"));
+                    ui.complete_prompt(acp::StopReason::EndTurn);
+                    ui.tick(Instant::now());
+                },
+                shown: &[],
+                hidden: &["esc to interrupt", "Working…"],
             },
-            &[],
-            &["esc to interrupt", "Working…"],
-            false,
-        ),
-        (
-            "finished compaction",
-            |ui| {
-                ui.acp_event(compacting());
-                ui.acp_event(compaction_update("compaction", acp::CompactionStatus::Completed));
+            Scenario {
+                name: "finished compaction",
+                setup: |ui| {
+                    ui.acp_event(compacting());
+                    ui.acp_event(compaction_update("compaction", acp::CompactionStatus::Completed));
+                },
+                shown: &[],
+                hidden: &["Compacting context"],
             },
-            &[],
-            &["Compacting context"],
-            false,
-        ),
-        (
-            "failed workspace move",
-            |ui| {
-                move_to_other_workspace(ui);
-                ui.deliver_result(workspace_move_failed("permission denied"));
+            Scenario {
+                name: "failed workspace move",
+                setup: |ui| {
+                    move_to_other_workspace(ui);
+                    ui.deliver_result(workspace_move_failed("permission denied"));
+                },
+                shown: &[],
+                hidden: &["Moving workspace", "Loading session"],
             },
-            &[],
-            &["Moving workspace", "Loading session"],
-            false,
-        ),
-        (
-            "failed workspace listing",
-            |ui| {
-                ui.run_command("/move");
-                ui.deliver_result(workspace_list_failed("network error"));
+            Scenario {
+                name: "failed workspace listing",
+                setup: |ui| {
+                    ui.run_command("/move");
+                    ui.deliver_result(workspace_list_failed("network error"));
+                },
+                shown: &[],
+                hidden: &["Moving workspace"],
             },
-            &[],
-            &["Moving workspace"],
-            false,
-        ),
-        (
-            "context cleared",
-            |ui| {
-                compacting_prompt(ui);
-                ui.acp_event(context_cleared());
+            Scenario {
+                name: "context cleared",
+                setup: |ui| {
+                    compacting_prompt(ui);
+                    ui.acp_event(context_cleared());
+                },
+                shown: &[],
+                hidden: &["Compacting", "esc to interrupt"],
             },
-            &[],
-            &["Compacting", "esc to interrupt"],
-            false,
-        ),
-        (
-            "new session",
-            |ui| {
-                compacting_prompt(ui);
-                ui.complete_prompt(acp::StopReason::EndTurn);
-                ui.run_command("/clear");
-                ui.deliver_result(new_session_created("new-session", Vec::new()));
+            Scenario {
+                name: "new session",
+                setup: |ui| {
+                    compacting_prompt(ui);
+                    ui.complete_prompt(acp::StopReason::EndTurn);
+                    ui.run_command("/clear");
+                    ui.deliver_result(new_session_created("new-session", Vec::new()));
+                },
+                shown: &[],
+                hidden: &["Compacting"],
             },
-            &[],
-            &["Compacting"],
-            false,
-        ),
-        (
-            "resumed session",
-            |ui| {
-                compacting_prompt(ui);
-                ui.complete_prompt(acp::StopReason::EndTurn);
-                ui.begin_resume("loaded-session", "/tmp");
-                ui.deliver_result(session_loaded("loaded-session", Vec::new()));
+            Scenario {
+                name: "resumed session",
+                setup: |ui| {
+                    compacting_prompt(ui);
+                    ui.complete_prompt(acp::StopReason::EndTurn);
+                    ui.begin_resume("loaded-session", "/tmp");
+                    ui.deliver_result(session_loaded("loaded-session", Vec::new()));
+                },
+                shown: &[],
+                hidden: &["Compacting"],
             },
-            &[],
-            &["Compacting"],
-            false,
-        ),
-    ]);
+        ],
+    );
 }
 
 #[test]
@@ -371,20 +388,20 @@ fn progress_is_not_inserted_into_scrollback() {
     assert!(!scrollback.contains("Working…"), "progress label in scrollback:\n{scrollback}");
 }
 
-fn assert_progress(scenarios: &[Scenario]) {
-    for &(scenario, setup, shown, hidden, ticking) in scenarios {
+fn assert_progress(ticking: bool, scenarios: &[Scenario]) {
+    for Scenario { name, setup, shown, hidden } in scenarios {
         let mut ui = TestUiBuilder::new().workspace_move().dimensions(120, 30).build();
         setup(&mut ui);
 
         let viewport = ui.viewport_text();
         let spinning = SPINNER_FRAMES.iter().any(|frame| viewport.contains(frame));
-        assert_eq!(spinning, ticking, "{scenario}: spinner visibility\n{viewport}");
-        assert_eq!(ui.app().wants_tick(), ticking, "{scenario}: wants_tick");
-        for text in shown {
-            assert!(viewport.contains(text), "{scenario}: {text:?} should show\n{viewport}");
+        assert_eq!(spinning, ticking, "{name}: spinner visibility\n{viewport}");
+        assert_eq!(ui.app().wants_tick(), ticking, "{name}: wants_tick");
+        for text in *shown {
+            assert!(viewport.contains(text), "{name}: {text:?} should show\n{viewport}");
         }
-        for text in hidden {
-            assert!(!viewport.contains(text), "{scenario}: {text:?} should not show\n{viewport}");
+        for text in *hidden {
+            assert!(!viewport.contains(text), "{name}: {text:?} should not show\n{viewport}");
         }
     }
 }

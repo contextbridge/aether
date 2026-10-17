@@ -13,9 +13,10 @@ use ratatui::{
 use crate::command::GitReviewCommand;
 use crate::git_review::{ClientState, DiffReviewEvent, DiffSnapshot, ReviewCapabilities};
 use crate::renderer::DrawContext;
-use crate::screens::reviewer::{crossterm_event, theme_selection};
+use crate::screens::reviewer::{crossterm_event, theme_change};
 use crate::settings::builtin_review_theme_choices;
-use crate::surfaces::input::{UiEvent, UiOutput};
+use crate::surfaces::input::UiOutput;
+use crate::view::input::UiEvent;
 use crate::view::generation::Generation;
 
 pub struct GitDiffScreen {
@@ -44,7 +45,7 @@ impl GitDiffScreen {
         self.state.interaction_phase() == InteractionPhase::Browse
     }
 
-    pub fn on_ui_event(&mut self, event: UiEvent) -> Vec<UiOutput> {
+    pub fn on_ui_event(&mut self, event: &UiEvent) -> Vec<UiOutput> {
         self.handle_event(crossterm_event(event))
     }
 
@@ -76,7 +77,7 @@ impl GitDiffScreen {
             InputOutcome::Ignored
             | InputOutcome::Consumed
             | InputOutcome::Emitted(DiffReviewEvent::CopyFormattedReview(_)) => Vec::new(),
-            InputOutcome::ThemeSelected(id) => vec![UiOutput::SetTheme(theme_selection(id))],
+            InputOutcome::ThemeSelected(id) => vec![theme_change(id)],
             InputOutcome::Emitted(DiffReviewEvent::Cancel) => vec![UiOutput::Close],
             InputOutcome::Emitted(DiffReviewEvent::SubmitReview(submission)) => {
                 vec![UiOutput::SubmitReview(submission.formatted)]

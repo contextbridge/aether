@@ -11,7 +11,7 @@ use ratatui::widgets::Widget;
 use std::collections::BTreeMap;
 use unicode_width::UnicodeWidthStr;
 
-use crate::surfaces::input::is_composed_char;
+use crate::view::edit_buffer::is_composed_char;
 use crate::theme::Theme;
 use crate::view::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::view::selection::{Direction, scroll_into_view, step_clamped};

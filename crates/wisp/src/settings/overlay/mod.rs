@@ -13,9 +13,10 @@ use self::server_status::ServerStatusPane;
 use crate::renderer::DrawContext;
 use crate::session::platform::{BrowserOpener, ClipboardWriter};
 use crate::session::session_config_view::{LocalConfigOption, LocalConfigValue, LocalConfigView};
-use crate::surfaces::input::{Nav, UiEvent, UiOutput};
+use crate::surfaces::input::UiOutput;
 use crate::surfaces::modal::{ElicitationModal, frame::ModalFrame};
 use crate::theme::Theme;
+use crate::view::input::{Nav, UiEvent};
 use crate::view::widgets::key_hints;
 use acp_utils::notifications::McpServerStatusEntry;
 use agent_client_protocol::Responder;
@@ -102,7 +103,7 @@ enum SettingsPane {
 }
 
 impl SettingsPane {
-    pub(crate) fn on_ui_event(&mut self, event: UiEvent) -> Vec<UiOutput> {
+    pub(crate) fn on_ui_event(&mut self, event: &UiEvent) -> Vec<UiOutput> {
         match self {
             Self::ServerStatus(pane) => pane.on_ui_event(event),
             Self::ProviderLogin(pane) => pane.on_ui_event(event),
@@ -135,12 +136,12 @@ impl SettingsPane {
         }
     }
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
+    fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         match self {
-            Self::ServerStatus(pane) => pane.render(area, buf, cx.theme),
-            Self::ProviderLogin(pane) => pane.render(area, buf, cx.theme),
-            Self::ModelSelector(pane) => pane.render(area, buf, cx.theme),
-            Self::Picker(pane) => pane.render(area, buf, cx.theme),
+            Self::ServerStatus(pane) => pane.render(area, buf, theme),
+            Self::ProviderLogin(pane) => pane.render(area, buf, theme),
+            Self::ModelSelector(pane) => pane.render(area, buf, theme),
+            Self::Picker(pane) => pane.render(area, buf, theme),
         }
     }
 }
@@ -232,13 +233,11 @@ impl SettingsOverlay {
         }
     }
 
-    /// Draws whichever of the menu or the open pane has focus.
-    fn render_content(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
-        let Some(pane) = self.pane.as_mut() else {
-            self.menu.render(area, buf, cx.theme, &self.live);
-            return None;
-        };
-        pane.render(area, buf, cx)
+    fn render_content(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
+        match self.pane.as_mut() {
+            Some(pane) => pane.render(area, buf, theme),
+            None => self.menu.render(area, buf, theme, &self.live),
+        }
     }
 
     /// Splits `inner` into the rows the menu or pane keeps and the rows a
@@ -291,9 +290,6 @@ impl SettingsOverlay {
         Some(pane)
     }
 
-    /// Handles pane outputs locally: `Close` returns focus to the
-    /// menu, and config edits are mirrored into the menu on the way past so the
-    /// UI never lags the agent round-trip.
     fn apply(&mut self, outputs: Vec<UiOutput>) -> Vec<UiOutput> {
         outputs
             .into_iter()
@@ -301,10 +297,6 @@ impl SettingsOverlay {
                 UiOutput::Close if self.pane.is_some() => {
                     self.pane = None;
                     false
-                }
-                UiOutput::ConfigChange(change) => {
-                    self.menu.apply_change(change);
-                    true
                 }
                 _ => true,
             })
@@ -320,7 +312,7 @@ impl SettingsOverlay {
     /// triage is the same for all of them — and because only routing them
     /// together makes "a request closing returns focus to the pane behind it"
     /// hold for a click as reliably as it does for a keystroke.
-    pub fn on_ui_event(&mut self, event: UiEvent) -> Vec<UiOutput> {
+    pub fn on_ui_event(&mut self, event: &UiEvent) -> Vec<UiOutput> {
         if let Some(pending) = self.pending_elicitation.as_mut() {
             // Answering a request returns focus to the pane behind it rather
             // than closing the overlay the request arrived in.
@@ -330,7 +322,7 @@ impl SettingsOverlay {
             return Vec::new();
         }
         let Some(pane) = self.pane.as_mut() else {
-            return self.on_menu_event(&event);
+            return self.on_menu_event(event);
         };
         // Esc leaves the pane rather than the overlay, committing whatever the
         // pane batched up while it was open.
@@ -374,13 +366,12 @@ impl SettingsOverlay {
         (&frame).render(area, buf);
 
         let (content, prompt) = self.split_for_prompt(inner, theme);
-        let cursor = self.render_content(content, buf, cx);
+        self.render_content(content, buf, theme);
 
         let (Some(prompt), Some(pending)) = (prompt, self.pending_elicitation.as_mut()) else {
-            return cursor;
+            return None;
         };
-        pending.render_inline(prompt, buf, cx.theme);
-        None
+        pending.render_inline(prompt, buf, theme)
     }
 }
 

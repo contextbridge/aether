@@ -8,7 +8,7 @@ use crate::session::session_config_view::LocalConfigView;
 use crate::settings::KeyAction;
 use crate::surfaces::composer::ComposerOutcome;
 use crate::surfaces::dropped_files::parse_dropped_file_paths;
-use crate::surfaces::input::{MouseAction, UiEvent};
+use crate::view::input::{MouseAction, UiEvent};
 use crate::surfaces::picker::CommandEntry;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::buffer::Buffer;
@@ -67,10 +67,10 @@ impl App {
 
         if let Some(overlay) = self.overlay.as_mut() {
             let outputs = match overlay {
-                Overlay::Settings(overlay) => overlay.on_ui_event(event),
-                Overlay::Sessions(picker) => picker.on_ui_event(event),
-                Overlay::Workspaces(picker) => picker.on_ui_event(event),
-                Overlay::Elicitation(modal) => modal.on_ui_event(event),
+                Overlay::Settings(overlay) => overlay.on_ui_event(&event),
+                Overlay::Sessions(picker) => picker.on_ui_event(&event),
+                Overlay::Workspaces(picker) => picker.on_ui_event(&event),
+                Overlay::Elicitation(modal) => modal.on_ui_event(&event),
             };
             self.dispatch_outputs(outputs);
             return;
@@ -83,13 +83,13 @@ impl App {
             return;
         }
         let outputs = match &mut self.route {
-            Route::GitReview(screen) => screen.on_ui_event(event),
-            Route::ArtifactReview(screen) => screen.on_ui_event(event),
+            Route::GitReview(screen) => screen.on_ui_event(&event),
+            Route::ArtifactReview(screen) => screen.on_ui_event(&event),
             Route::Conversation => {
-                return match event {
-                    UiEvent::Key(key) => self.dispatch_key(key),
-                    UiEvent::Paste(text) => self.on_composer_paste(&text),
-                    UiEvent::Mouse(action, (_, row)) => self.composer.on_overlay_mouse(action, row),
+                return match &event {
+                    UiEvent::Key(key) => self.dispatch_key(*key),
+                    UiEvent::Paste(text) => self.on_composer_paste(text),
+                    UiEvent::Mouse(..) => self.composer.on_overlay_mouse(&event),
                 };
             }
         };

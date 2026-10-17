@@ -1,11 +1,12 @@
 use super::{LiveSettingsData, summarize};
-use crate::surfaces::input::{Nav, UiEvent, UiOutput, one};
+use crate::surfaces::input::{UiOutput, one};
 use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
 use crate::view::filterable_list::FilterableList;
+use crate::view::input::{Nav, UiEvent};
 use agent_client_protocol::schema::v2::AuthMethod;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::Rect;
 use ratatui::text::Line;
 use ratatui::widgets::StatefulWidget;
 
@@ -35,9 +36,8 @@ impl ProviderLoginPane {
 }
 
 impl ProviderLoginPane {
-    #[allow(clippy::needless_pass_by_value)]
-    pub(crate) fn on_ui_event(&mut self, event: UiEvent) -> Vec<UiOutput> {
-        match self.entries.on_nav_event(&event) {
+    pub(crate) fn on_ui_event(&mut self, event: &UiEvent) -> Vec<UiOutput> {
+        match self.entries.on_nav_event(event) {
             Nav::Activate | Nav::Clicked => one(self
                 .entries
                 .selected_entry()
@@ -49,7 +49,7 @@ impl ProviderLoginPane {
 }
 
 impl ProviderLoginPane {
-    pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) -> Option<Position> {
+    pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         let (view, selection) = self.entries.view(theme, |entry| {
             let (indicator, detail, style) = match entry.status {
                 ProviderLoginStatus::NeedsLogin => ("⚡", "needs login", theme.warning),
@@ -63,7 +63,6 @@ impl ProviderLoginPane {
             .highlight_style((theme.background, theme.warning))
             .highlight_horizontal_padding(MODAL_HORIZONTAL_PADDING);
         StatefulWidget::render(view, area, buf, selection);
-        None
     }
 }
 impl ProviderLoginPane {
