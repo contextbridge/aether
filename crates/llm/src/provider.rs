@@ -1,9 +1,7 @@
 use crate::LlmError;
 use crate::LlmModel;
-use crate::ProviderConnectionConfig;
 use crate::Result as LlmResult;
 use crate::catalog::{Provider, ReasoningEffortError};
-use std::future::Future;
 use std::pin::Pin;
 use tokio_stream::Stream;
 use utils::ReasoningEffort;
@@ -17,20 +15,6 @@ use super::{Context, LlmResponse};
 /// trait objects (`Vec<Box<dyn StreamingModelProvider>>`) in types like
 /// [`AlloyedModelProvider`](crate::alloyed::AlloyedModelProvider).
 pub type LlmResponseStream = Pin<Box<dyn Stream<Item = LlmResult<LlmResponse>> + Send>>;
-
-#[doc = include_str!("docs/provider_factory.md")]
-pub trait ProviderFactory: Sized {
-    /// Create provider from environment variables with provider connection overrides.
-    fn from_env_with_connection(connection: ProviderConnectionConfig) -> impl Future<Output = LlmResult<Self>> + Send;
-
-    /// Create provider from environment variables and default configuration
-    fn from_env() -> impl Future<Output = LlmResult<Self>> + Send {
-        Self::from_env_with_connection(ProviderConnectionConfig::default())
-    }
-
-    /// Set or update the model for this provider (builder pattern)
-    fn with_model(self, model: &str) -> Self;
-}
 
 #[doc = include_str!("docs/streaming_model_provider.md")]
 pub trait StreamingModelProvider: Send + Sync {

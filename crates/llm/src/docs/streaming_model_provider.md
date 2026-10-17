@@ -42,7 +42,6 @@ async fn ask(provider: &dyn StreamingModelProvider) {
 
 # See also
 
-- [`ProviderFactory`] -- Construction trait, separated for dyn-compatibility.
 - [`Context`] -- The conversation state passed to `stream_response`.
 - [`LlmResponse`] -- The events yielded by the response stream.
 - [`AlloyedModelProvider`](crate::alloyed::AlloyedModelProvider) -- Round-robin wrapper over multiple providers.

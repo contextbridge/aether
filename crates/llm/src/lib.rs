@@ -28,7 +28,7 @@ pub use error::{LlmError, ProviderError, ProviderErrorKind, Result};
 pub use llm_response::{LlmResponse, StopReason};
 pub use message_id::MessageId;
 pub use model_settings::ModelSettings;
-pub use provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider};
+pub use provider::{LlmResponseStream, StreamingModelProvider};
 pub use provider_connection::{
     ProviderAuthMode, ProviderConnectionConfig, ProviderConnectionOverride, ProviderConnectionOverrides,
 };

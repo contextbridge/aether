@@ -13,7 +13,7 @@ This is the primary entry point for creating providers from user-supplied model 
 
 # Custom providers
 
-Register additional providers with [`with_provider`](ModelProviderParser::with_provider) (for types implementing [`ProviderFactory`]) or [`with_generic_provider`](ModelProviderParser::with_generic_provider) (for endpoints described by a [`ProviderConfig`](crate::providers::generic::ProviderConfig)).
+Register additional providers with [`with_generic_provider`](ModelProviderParser::with_generic_provider) (for endpoints described by a [`ProviderConfig`](crate::providers::generic::ProviderConfig)).
 
 # Example
 
