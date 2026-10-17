@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use super::common::TaskSummary;
 use crate::tasks::task_store::TaskStore;
-use crate::tasks::types::{TaskId, TaskStatus};
+use crate::tasks::types::{Task, TaskStatus};
 use utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 
 /// Input for the `task_list` tool
@@ -41,27 +41,22 @@ pub struct TaskListOutput {
 }
 
 pub fn execute_task_list(input: &TaskListInput, store: &TaskStore) -> TaskListOutput {
-    let tasks: Vec<TaskSummary> = if input.ready_only.unwrap_or(false) {
-        store.get_ready().into_iter().map(TaskSummary::from).collect()
-    } else if let Some(tree_id) = &input.tree_id {
-        let tree_id = TaskId::from(tree_id.as_str());
-        store.get_tree(&tree_id).map(|tasks| tasks.into_iter().map(TaskSummary::from).collect()).unwrap_or_default()
-    } else if let Some(assignee) = &input.assignee {
-        store.list_by_assignee(assignee).into_iter().map(TaskSummary::from).collect()
-    } else if let Some(status) = input.status {
-        store.list_by_status(status).into_iter().map(TaskSummary::from).collect()
-    } else {
-        store
-            .list_trees()
-            .iter()
-            .flat_map(|root_id| store.get_tree(root_id).unwrap_or_default().into_iter().map(TaskSummary::from))
-            .collect()
-    };
+    let tasks: Vec<TaskSummary> =
+        store.tasks().filter(|task| input.matches(task, store)).map(TaskSummary::from).collect();
 
     let done = tasks.iter().filter(|t| t.status == TaskStatus::Completed).count();
     let display_meta = ToolDisplayMeta::new("Todo", format!("{done}/{} tasks", tasks.len()));
 
     TaskListOutput { tasks, meta: Some(display_meta.into()) }
+}
+
+impl TaskListInput {
+    fn matches(&self, task: &Task, store: &TaskStore) -> bool {
+        self.assignee.as_ref().is_none_or(|assignee| task.assignee.as_ref() == Some(assignee))
+            && self.status.is_none_or(|status| task.status == status)
+            && self.tree_id.as_deref().is_none_or(|tree_id| task.id.root().as_str() == tree_id)
+            && (!self.ready_only.unwrap_or(false) || store.is_ready(task))
+    }
 }
 
 #[cfg(test)]
@@ -147,6 +142,40 @@ mod tests {
 
         assert_eq!(output.tasks.len(), 1);
         assert_eq!(output.tasks[0].status, TaskStatus::InProgress);
+    }
+
+    #[test]
+    fn assignee_and_status_filters_combine() {
+        let mut tasks = TestTaskStore::new();
+        let root = tasks.root_task("Root");
+        for (title, status) in [("Started", TaskStatus::InProgress), ("Queued", TaskStatus::Pending)] {
+            let task = tasks.subtask(&root.id, title);
+            let update =
+                TaskUpdate { assignee: Some("worker-1".to_string()), status: Some(status), ..Default::default() };
+            tasks.store_mut().update(&task.id, update).unwrap();
+        }
+
+        let input = TaskListInput {
+            assignee: Some("worker-1".to_string()),
+            status: Some(TaskStatus::InProgress),
+            ..Default::default()
+        };
+        let titles: Vec<_> = execute_task_list(&input, tasks.store()).tasks.into_iter().map(|t| t.title).collect();
+
+        assert_eq!(titles, ["Started"]);
+    }
+
+    #[test]
+    fn lists_tasks_in_id_order_with_numeric_subtask_indices() {
+        let mut tasks = TestTaskStore::new();
+        let root = tasks.root_task("Root");
+        let subtasks: Vec<_> = (1..=11).map(|n| tasks.subtask(&root.id, &format!("Step {n}"))).collect();
+
+        let output = execute_task_list(&TaskListInput::default(), tasks.store());
+
+        let ids: Vec<_> = output.tasks.into_iter().map(|t| t.id).collect();
+        let expected: Vec<_> = std::iter::once(&root).chain(&subtasks).map(|t| t.id.to_string()).collect();
+        assert_eq!(ids, expected);
     }
 
     #[test]

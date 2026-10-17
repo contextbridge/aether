@@ -1,4 +1,4 @@
-Lists tasks with optional filters.
+Lists tasks in ID order. Filters are optional and combine.
 
 ## Usage
 
@@ -8,6 +8,7 @@ Lists tasks with optional filters.
 {"status": "in_progress"}
 {"tree_id": "at-a1b2c3d4"}
 {"ready_only": true}
+{"assignee": "worker-1", "status": "pending"}
 ```
 
 No filters → returns all active tasks.
