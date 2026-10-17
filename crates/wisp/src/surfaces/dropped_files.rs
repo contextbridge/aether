@@ -5,7 +5,7 @@ use url::Url;
 ///
 /// Returns `Some(paths)` when the payload is high-confidence file-drop content,
 /// `None` when it looks like ordinary user text and should remain a normal paste.
-pub fn parse_dropped_file_paths(pasted: &str) -> Option<Vec<PathBuf>> {
+pub(crate) fn parse_dropped_file_paths(pasted: &str) -> Option<Vec<PathBuf>> {
     pasted
         .lines()
         .map(str::trim)

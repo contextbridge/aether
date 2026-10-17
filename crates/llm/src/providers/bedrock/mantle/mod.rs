@@ -1,5 +1,5 @@
-pub mod auth;
-pub mod client;
+pub(crate) mod auth;
+pub(crate) mod client;
 
-pub use auth::MantleAuth;
-pub use client::MantleClient;
+pub(crate) use auth::MantleAuth;
+pub(crate) use client::MantleClient;

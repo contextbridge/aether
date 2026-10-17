@@ -12,12 +12,12 @@ use std::time::Duration;
 
 static FAKE_SERVERS: Once = Once::new();
 
-pub async fn fake_lsp(workspace: TestWorkspace, language: LanguageId) -> CodingWorkspace {
+async fn fake_lsp(workspace: TestWorkspace, language: LanguageId) -> CodingWorkspace {
     let daemon = fake_daemon(&workspace, language);
     CodingWorkspace::with_daemon(workspace, daemon).await
 }
 
-pub fn fake_daemon(workspace: &TestWorkspace, language: LanguageId) -> TestDaemonBuilder {
+fn fake_daemon(workspace: &TestWorkspace, language: LanguageId) -> TestDaemonBuilder {
     FAKE_SERVERS.call_once(|| unsafe {
         configure_fake_server(LanguageId::Rust, &[]);
         configure_fake_server(LanguageId::Go, &["--fail-on", "textDocument/definition"]);

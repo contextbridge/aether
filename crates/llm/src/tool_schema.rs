@@ -18,7 +18,7 @@ impl ToolDefinition {
     }
 }
 
-pub fn normalize_for_moonshot(schema: &mut Schema) {
+pub(crate) fn normalize_for_moonshot(schema: &mut Schema) {
     RemoveRefSiblings::default().transform(schema);
     MoonshotMfjsTransformer.transform(schema);
 }
@@ -28,7 +28,7 @@ pub fn normalize_for_moonshot(schema: &mut Schema) {
 /// Optional properties can already be omitted, so the null alternative is redundant.
 /// Xiaomi `MiMo`'s server-side tool-call parser corrupts streamed tool calls and leaks
 /// them into text when a parameter's type is a union.
-pub fn normalize_for_xiaomi(schema: &mut Schema) {
+pub(crate) fn normalize_for_xiaomi(schema: &mut Schema) {
     OptionalNullStripper.transform(schema);
 }
 

@@ -69,7 +69,7 @@ pub(crate) struct ProductionRuntimeFactory {
 }
 
 impl ProductionRuntimeFactory {
-    pub fn new(
+    pub(crate) fn new(
         cwd: PathBuf,
         mcp_servers: Vec<ServerSpec>,
         agent_deps: AgentDeps,

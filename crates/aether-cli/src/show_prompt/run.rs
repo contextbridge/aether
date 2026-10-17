@@ -40,7 +40,7 @@ pub async fn run_prompt(args: PromptArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-pub fn build_tools(tools: &[ToolDefinition]) -> String {
+pub(super) fn build_tools(tools: &[ToolDefinition]) -> String {
     if tools.is_empty() {
         return String::new();
     }
@@ -65,7 +65,7 @@ pub fn build_tools(tools: &[ToolDefinition]) -> String {
     sections.join("\n\n")
 }
 
-pub fn format_stats(prompt_chars: usize, tool_schema_chars: usize, tool_count: usize) -> String {
+pub(super) fn format_stats(prompt_chars: usize, tool_schema_chars: usize, tool_count: usize) -> String {
     let est_tokens = (prompt_chars + tool_schema_chars) / 4;
     format!(
         "---\n\

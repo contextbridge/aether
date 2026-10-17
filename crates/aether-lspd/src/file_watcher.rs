@@ -24,14 +24,14 @@ pub(crate) struct FileWatcherBatch {
 }
 
 /// Handle that sends messages to the [`FileWatcherActor`] via an mpsc channel.
-pub struct FileWatcherHandle {
+pub(crate) struct FileWatcherHandle {
     msg_tx: mpsc::Sender<FileWatcherMsg>,
     _task: JoinHandle<()>,
 }
 
 impl FileWatcherHandle {
     /// Spawn the actor task and return a handle to it.
-    pub fn spawn(workspace_root: PathBuf, event_tx: mpsc::Sender<FileWatcherBatch>) -> Self {
+    pub(crate) fn spawn(workspace_root: PathBuf, event_tx: mpsc::Sender<FileWatcherBatch>) -> Self {
         let (msg_tx, msg_rx) = mpsc::channel(64);
         let (bridge_tx, bridge_rx) = mpsc::unbounded_channel::<Event>();
         let watcher = match create_watcher(&workspace_root, bridge_tx) {
@@ -74,12 +74,12 @@ impl FileWatcherHandle {
     }
 
     /// Register file watchers for a `workspace/didChangeWatchedFiles` registration.
-    pub fn register_watchers(&self, id: String, watchers: Vec<FileSystemWatcher>) {
+    pub(crate) fn register_watchers(&self, id: String, watchers: Vec<FileSystemWatcher>) {
         let _ = self.msg_tx.try_send(FileWatcherMsg::Register { id, watchers });
     }
 
     /// Unregister file watchers for a given registration ID.
-    pub fn unregister(&self, id: String) {
+    pub(crate) fn unregister(&self, id: String) {
         let _ = self.msg_tx.try_send(FileWatcherMsg::Unregister { id });
     }
 }

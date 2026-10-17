@@ -4,7 +4,7 @@ use utils::git::{GitError, git};
 
 /// Controls how much of a repository's object set is downloaded during [`GitRepo::clone`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CloneMode {
+pub(crate) enum CloneMode {
     /// Download the full object set so the clone is self-contained
     /// (e.g. so it can be bundled, or because `source` is a bundle
     /// and not a promisor remote).
@@ -15,19 +15,19 @@ pub enum CloneMode {
 }
 
 /// Represents a git repository used for evaluation purposes
-pub struct GitRepo {
+pub(crate) struct GitRepo {
     path: PathBuf,
 }
 
 impl GitRepo {
     /// Create a `GitRepo` instance from an existing repository path
-    pub fn from_path(path: &Path) -> Self {
+    pub(crate) fn from_path(path: &Path) -> Self {
         GitRepo { path: path.to_path_buf() }
     }
 
     /// Initialize an empty repository at `dest`.
     #[tracing::instrument(skip(dest))]
-    pub fn init(dest: &Path) -> Result<Self, GitError> {
+    pub(crate) fn init(dest: &Path) -> Result<Self, GitError> {
         git(None, &[OsStr::new("init"), dest.as_os_str()])?;
         Ok(GitRepo { path: dest.to_path_buf() })
     }
@@ -39,7 +39,7 @@ impl GitRepo {
     /// the clone is self-contained (e.g. so it can be bundled, or because `source` is a
     /// bundle and not a promisor remote).
     #[tracing::instrument(skip(source, dest))]
-    pub fn clone(source: impl AsRef<OsStr>, dest: &Path, mode: CloneMode) -> Result<Self, GitError> {
+    pub(crate) fn clone(source: impl AsRef<OsStr>, dest: &Path, mode: CloneMode) -> Result<Self, GitError> {
         let mut args = vec![OsStr::new("clone"), OsStr::new("--no-checkout")];
         if mode == CloneMode::Blobless {
             args.push(OsStr::new("--filter=blob:none"));
@@ -52,14 +52,14 @@ impl GitRepo {
 
     /// Checkout a specific commit, branch, or tag
     #[tracing::instrument(skip(self))]
-    pub fn checkout(&self, reference: &str) -> Result<(), GitError> {
+    pub(crate) fn checkout(&self, reference: &str) -> Result<(), GitError> {
         self.git(&["checkout", reference])?;
         Ok(())
     }
 
     /// Fetch `revs` from `remote` (a named remote or a URL) into this repository.
     #[tracing::instrument(skip(self))]
-    pub fn fetch(&self, remote: &str, revs: &[&str]) -> Result<(), GitError> {
+    pub(crate) fn fetch(&self, remote: &str, revs: &[&str]) -> Result<(), GitError> {
         let mut args = vec!["fetch", remote];
         args.extend_from_slice(revs);
         self.git(&args)?;
@@ -68,7 +68,7 @@ impl GitRepo {
 
     /// Point a ref at a commit (e.g. to create a branch tip to bundle).
     #[tracing::instrument(skip(self))]
-    pub fn update_ref(&self, name: &str, commit: &str) -> Result<(), GitError> {
+    pub(crate) fn update_ref(&self, name: &str, commit: &str) -> Result<(), GitError> {
         self.git(&["update-ref", name, commit])?;
         Ok(())
     }
@@ -76,7 +76,7 @@ impl GitRepo {
     /// Create a self-contained git bundle at `out` containing the given refs and their
     /// reachable objects.
     #[tracing::instrument(skip(self, out))]
-    pub fn bundle(&self, revs: &[&str], out: &Path) -> Result<(), GitError> {
+    pub(crate) fn bundle(&self, revs: &[&str], out: &Path) -> Result<(), GitError> {
         let mut args = vec![OsStr::new("bundle"), OsStr::new("create"), out.as_os_str()];
         args.extend(revs.iter().map(OsStr::new));
         self.git(&args)?;
@@ -94,7 +94,7 @@ impl GitRepo {
     /// * `diff_range("abc123", None)` - changes from commit to working directory
     /// * `diff_range("HEAD", None)` - unstaged changes (equivalent to `git diff`)
     #[tracing::instrument(skip(self))]
-    pub fn diff_range(&self, from_commit: &str, to_commit: Option<&str>) -> Result<String, GitError> {
+    pub(crate) fn diff_range(&self, from_commit: &str, to_commit: Option<&str>) -> Result<String, GitError> {
         let range = match to_commit {
             Some(to) => format!("{from_commit}..{to}"),
             None => from_commit.to_string(),
@@ -106,7 +106,7 @@ impl GitRepo {
     /// Get the diff between two commits
     ///
     /// Returns the output of `git diff from_commit..to_commit`
-    pub fn diff(&self, from_commit: &str, to_commit: &str) -> Result<String, GitError> {
+    pub(crate) fn diff(&self, from_commit: &str, to_commit: &str) -> Result<String, GitError> {
         self.diff_range(from_commit, Some(to_commit))
     }
 

@@ -145,16 +145,16 @@ impl ContainerBuilder {
 }
 
 impl ExecHandle {
-    pub fn stdout(&mut self) -> impl AsyncBufRead + Send + '_ {
+    pub(crate) fn stdout(&mut self) -> impl AsyncBufRead + Send + '_ {
         self.exec.stdout()
     }
 
-    pub async fn stderr_to_string(&mut self) -> Result<String, ContainerError> {
+    pub(crate) async fn stderr_to_string(&mut self) -> Result<String, ContainerError> {
         let stderr = self.exec.stderr_to_vec().await?;
         Ok(String::from_utf8_lossy(&stderr).into_owned())
     }
 
-    pub async fn exit_code(self) -> Result<i64, ContainerError> {
+    pub(crate) async fn exit_code(self) -> Result<i64, ContainerError> {
         let runtime = Handle::current();
         spawn_blocking(move || runtime.block_on(self.exec.exit_code()))
             .await
@@ -162,7 +162,7 @@ impl ExecHandle {
             .ok_or(ContainerError::MissingExecExitCode)
     }
 
-    pub async fn collect(mut self) -> Result<ExecOutput, ContainerError> {
+    pub(crate) async fn collect(mut self) -> Result<ExecOutput, ContainerError> {
         let stdout = String::from_utf8_lossy(&self.exec.stdout_to_vec().await?).into_owned();
         let stderr = String::from_utf8_lossy(&self.exec.stderr_to_vec().await?).into_owned();
         let exit_code = self.exit_code().await?;

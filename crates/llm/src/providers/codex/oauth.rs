@@ -68,7 +68,7 @@ struct CachedToken {
 ///
 /// Holds an `Arc<dyn OAuthCredentialStorage>` so callers can swap in keyring-backed,
 /// file-backed, or in-memory stores without changing this type.
-pub struct CodexTokenManager {
+pub(crate) struct CodexTokenManager {
     store: Arc<dyn OAuthCredentialStorage>,
     credential_key: String,
     token_url: TokenUrl,
@@ -76,7 +76,7 @@ pub struct CodexTokenManager {
 }
 
 impl CodexTokenManager {
-    pub fn new(store: Arc<dyn OAuthCredentialStorage>, credential_key: &str) -> Self {
+    pub(crate) fn new(store: Arc<dyn OAuthCredentialStorage>, credential_key: &str) -> Self {
         Self::new_with_token_url(
             store,
             credential_key,
@@ -92,7 +92,7 @@ impl CodexTokenManager {
     ///
     /// Returns `(access_token, account_id)`. The account ID is extracted from
     /// the JWT's `https://api.openai.com/auth` claim field `chatgpt_account_id`.
-    pub async fn get_valid_token(&self) -> Result<(String, String), LlmError> {
+    pub(crate) async fn get_valid_token(&self) -> Result<(String, String), LlmError> {
         let mut cache = self.cached.lock().await;
         if let Some(cached) = cache.as_ref()
             && !cached.credential.needs_refresh()
@@ -125,7 +125,7 @@ impl CodexTokenManager {
     }
 
     /// Clear the cached token (e.g. after a 401 response)
-    pub async fn clear_cache(&self) {
+    pub(crate) async fn clear_cache(&self) {
         *self.cached.lock().await = None;
     }
 }
@@ -134,7 +134,7 @@ impl CodexTokenManager {
 ///
 /// The JWT payload contains a claim at `https://api.openai.com/auth`
 /// with a `chatgpt_account_id` field.
-pub fn extract_account_id(access_token: &str) -> Result<String, LlmError> {
+pub(crate) fn extract_account_id(access_token: &str) -> Result<String, LlmError> {
     let parts: Vec<&str> = access_token.split('.').collect();
     if parts.len() != 3 {
         return Err(LlmError::InvalidJwt("expected 3 dot-separated parts".to_string()));

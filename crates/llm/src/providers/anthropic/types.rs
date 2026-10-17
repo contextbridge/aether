@@ -3,20 +3,20 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Role {
+pub(crate) enum Role {
     User,
     Assistant,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum CacheType {
+pub(crate) enum CacheType {
     Ephemeral,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct Request {
+pub(crate) struct Request {
     pub model: String,
     pub messages: Vec<Message>,
     pub max_tokens: u32,
@@ -37,28 +37,28 @@ pub struct Request {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub enum Thinking {
+pub(crate) enum Thinking {
     Enabled { budget_tokens: u32 },
     Disabled,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct Message {
+pub(crate) struct Message {
     pub role: Role,
     pub content: Content,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum Content {
+pub(crate) enum Content {
     Text(String),
     Blocks(Vec<ContentBlock>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
-pub enum ContentBlock {
+pub(crate) enum ContentBlock {
     #[serde(rename = "text")]
     Text {
         text: String,
@@ -79,7 +79,7 @@ pub enum ContentBlock {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImageSource {
+pub(crate) struct ImageSource {
     #[serde(rename = "type")]
     pub source_type: String,
     pub media_type: String,
@@ -87,20 +87,20 @@ pub struct ImageSource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CacheControl {
+pub(crate) struct CacheControl {
     #[serde(rename = "type")]
     pub cache_type: CacheType,
 }
 
 impl CacheControl {
-    pub fn ephemeral() -> Self {
+    pub(crate) fn ephemeral() -> Self {
         Self { cache_type: CacheType::Ephemeral }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct Tool {
+pub(crate) struct Tool {
     pub name: String,
     pub description: String,
     pub input_schema: serde_json::Value,
@@ -108,7 +108,7 @@ pub struct Tool {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum StreamEvent {
+pub(crate) enum StreamEvent {
     MessageStart,
     ContentBlockStart(ContentBlockStart),
     ContentBlockDelta(ContentBlockDelta),
@@ -142,14 +142,14 @@ impl From<&Usage> for TokenUsage {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct ContentBlockStart {
+pub(crate) struct ContentBlockStart {
     pub index: u32,
     pub content_block: ContentBlockStartData,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type")]
-pub enum ContentBlockStartData {
+pub(crate) enum ContentBlockStartData {
     #[serde(rename = "tool_use")]
     ToolUse { id: String, name: String },
     #[serde(other)]
@@ -158,7 +158,7 @@ pub enum ContentBlockStartData {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct ContentBlockDelta {
+pub(crate) struct ContentBlockDelta {
     pub index: u32,
     pub delta: ContentBlockDeltaData,
 }
@@ -166,20 +166,20 @@ pub struct ContentBlockDelta {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::enum_variant_names)]
-pub enum ContentBlockDeltaData {
+pub(crate) enum ContentBlockDeltaData {
     TextDelta { text: String },
     InputJsonDelta { partial_json: String },
     ThinkingDelta { thinking: String },
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct ContentBlockStop {
+pub(crate) struct ContentBlockStop {
     pub index: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct MessageDelta {
+pub(crate) struct MessageDelta {
     pub delta: MessageDeltaData,
     #[serde(default)]
     pub usage: Option<Usage>,
@@ -187,19 +187,19 @@ pub struct MessageDelta {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct MessageDeltaData {
+pub(crate) struct MessageDeltaData {
     pub stop_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct ErrorEvent {
+pub(crate) struct ErrorEvent {
     pub error: Error,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct Error {
+pub(crate) struct Error {
     #[serde(rename = "type")]
     pub error_type: String,
     pub message: String,

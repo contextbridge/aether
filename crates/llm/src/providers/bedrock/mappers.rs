@@ -17,7 +17,7 @@ fn bedrock_err(e: impl Display) -> LlmError {
     LlmError::ProviderRequest(e.to_string())
 }
 
-pub fn map_messages(
+pub(crate) fn map_messages(
     messages: &[ChatMessage],
     cache_point: Option<&CachePointBlock>,
 ) -> Result<(Vec<SystemContentBlock>, Vec<Message>)> {
@@ -73,7 +73,7 @@ pub fn map_messages(
     Ok((system_blocks, bedrock_messages))
 }
 
-pub fn map_tools(tools: &[ToolDefinition], cache_point: Option<&CachePointBlock>) -> Result<ToolConfiguration> {
+pub(crate) fn map_tools(tools: &[ToolDefinition], cache_point: Option<&CachePointBlock>) -> Result<ToolConfiguration> {
     let mut bedrock_tools: Vec<Tool> = tools
         .iter()
         .map(|tool| {
@@ -96,7 +96,7 @@ pub fn map_tools(tools: &[ToolDefinition], cache_point: Option<&CachePointBlock>
     ToolConfiguration::builder().set_tools(Some(bedrock_tools)).build().map_err(bedrock_err)
 }
 
-pub fn default_cache_point() -> Result<CachePointBlock> {
+pub(crate) fn default_cache_point() -> Result<CachePointBlock> {
     CachePointBlock::builder().r#type(CachePointType::Default).build().map_err(bedrock_err)
 }
 

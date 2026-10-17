@@ -7,7 +7,7 @@ use crate::{LlmResponse, ProviderError, ProviderErrorKind, Result, StopReason, T
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
-pub enum ResponsesStreamEvent {
+pub(crate) enum ResponsesStreamEvent {
     #[serde(rename = "response.created")]
     Created,
     #[serde(rename = "response.output_text.delta")]
@@ -39,30 +39,30 @@ impl ResponsesStreamEvent {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ResponsesFailedEvent {
+pub(crate) struct ResponsesFailedEvent {
     pub response: ResponsesFailed,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ResponsesFailed {
+pub(crate) struct ResponsesFailed {
     #[serde(default)]
     pub error: Option<ResponsesErrorEvent>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ResponsesTextDeltaEvent {
+pub(crate) struct ResponsesTextDeltaEvent {
     pub delta: String,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ResponsesOutputItemEvent {
+pub(crate) struct ResponsesOutputItemEvent {
     pub output_index: u32,
     pub item: OutputItem,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum OutputItem {
+pub(crate) enum OutputItem {
     FunctionCall {
         call_id: String,
         name: String,
@@ -78,18 +78,18 @@ pub enum OutputItem {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ResponsesFunctionCallArgumentsDeltaEvent {
+pub(crate) struct ResponsesFunctionCallArgumentsDeltaEvent {
     pub output_index: u32,
     pub delta: String,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ResponsesCompletedEvent {
+pub(crate) struct ResponsesCompletedEvent {
     pub response: ResponsesCompleted,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ResponsesCompleted {
+pub(crate) struct ResponsesCompleted {
     #[serde(default)]
     pub usage: Option<Usage>,
     #[serde(default)]
@@ -98,7 +98,7 @@ pub struct ResponsesCompleted {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Status {
+pub(crate) enum Status {
     Completed,
     Incomplete,
     #[serde(other)]
@@ -106,7 +106,7 @@ pub enum Status {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ResponsesErrorEvent {
+pub(crate) struct ResponsesErrorEvent {
     #[serde(default)]
     pub code: Option<String>,
     #[serde(default)]

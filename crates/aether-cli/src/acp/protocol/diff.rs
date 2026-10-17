@@ -3,7 +3,7 @@ use clankerdiff_core::git_patch_from_texts;
 use utils::display_meta::FileDiff;
 
 /// Convert full text snapshots into Git patch
-pub fn map_file_diff(diff: &FileDiff) -> Option<Diff> {
+pub(crate) fn map_file_diff(diff: &FileDiff) -> Option<Diff> {
     if !std::path::Path::new(&diff.path).is_absolute() {
         return None;
     }

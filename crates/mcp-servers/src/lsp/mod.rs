@@ -11,11 +11,11 @@ pub use registry::LspRegistry;
 pub(crate) mod test_fixtures {
     use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, TextEdit, Uri};
 
-    pub fn uri(path: &str) -> Uri {
+    pub(crate) fn uri(path: &str) -> Uri {
         format!("file://{path}").parse().unwrap()
     }
 
-    pub fn diagnostic(severity: DiagnosticSeverity, message: &str, line: u32) -> Diagnostic {
+    pub(crate) fn diagnostic(severity: DiagnosticSeverity, message: &str, line: u32) -> Diagnostic {
         Diagnostic {
             range: Range::new(Position::new(line, 0), Position::new(line, 10)),
             severity: Some(severity),
@@ -26,7 +26,7 @@ pub(crate) mod test_fixtures {
         }
     }
 
-    pub fn text_edit(line: u32, from: u32, to: u32, new_text: &str) -> TextEdit {
+    pub(crate) fn text_edit(line: u32, from: u32, to: u32, new_text: &str) -> TextEdit {
         TextEdit::new(Range::new(Position::new(line, from), Position::new(line, to)), new_text.to_string())
     }
 }

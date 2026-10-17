@@ -15,12 +15,12 @@ use std::str::FromStr;
 
 /// The user's overrides; every other action uses its default binding.
 #[derive(Clone, Debug)]
-pub struct Keybindings(BTreeMap<KeyAction, KeyBinding>);
+pub(super) struct Keybindings(BTreeMap<KeyAction, KeyBinding>);
 
 impl Keybindings {
     /// Parses the configured overrides. An entry that does not parse keeps its
     /// default and logs a warning rather than dropping the command.
-    pub fn from_settings(settings: &UiSettings) -> Self {
+    pub(super) fn from_settings(settings: &UiSettings) -> Self {
         let mut overrides = BTreeMap::new();
         for (&action, text) in &settings.keybindings {
             match text.parse() {
@@ -36,32 +36,32 @@ impl Keybindings {
     }
 
     /// Whether `key` triggers `action`, per the module's modifier policy.
-    pub fn matches(&self, action: KeyAction, key: KeyEvent) -> bool {
+    pub(super) fn matches(&self, action: KeyAction, key: KeyEvent) -> bool {
         self.0.get(&action).copied().unwrap_or_else(|| action.default_binding()).matches(key)
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct KeyBinding {
+pub(super) struct KeyBinding {
     pub code: KeyCode,
     pub modifiers: KeyModifiers,
 }
 
 impl KeyBinding {
-    pub fn new(code: KeyCode, modifiers: KeyModifiers) -> Self {
+    pub(super) fn new(code: KeyCode, modifiers: KeyModifiers) -> Self {
         Self { code, modifiers }
     }
 
     /// Exact-match semantics: the key and the full modifier set must both
     /// match, per the module's modifier policy.
-    pub fn matches(&self, event: KeyEvent) -> bool {
+    pub(super) fn matches(&self, event: KeyEvent) -> bool {
         self.code == event.code && self.modifiers == event.modifiers
     }
 }
 
 /// The rejected input, for the warning that keeps the default binding.
 #[derive(Debug, PartialEq, Eq)]
-pub struct KeyBindingParseError(pub String);
+pub(super) struct KeyBindingParseError(pub String);
 
 impl FromStr for KeyBinding {
     type Err = KeyBindingParseError;

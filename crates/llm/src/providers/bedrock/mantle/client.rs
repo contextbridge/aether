@@ -10,7 +10,7 @@ use utils::variables::Vars;
 
 /// Transport for Bedrock models served through the `OpenAI` Responses API.
 #[derive(Clone)]
-pub struct MantleClient {
+pub(crate) struct MantleClient {
     http: reqwest::Client,
     template_vars: Vars,
     auth: MantleAuth,
@@ -18,7 +18,7 @@ pub struct MantleClient {
 }
 
 impl MantleClient {
-    pub fn new(region: String, auth: MantleAuth, base_url_override: Option<String>) -> Self {
+    pub(crate) fn new(region: String, auth: MantleAuth, base_url_override: Option<String>) -> Self {
         Self {
             http: http_client(),
             template_vars: Vars::new().with("AWS_REGION", region.clone()).with("AWS_DEFAULT_REGION", region),
@@ -27,7 +27,7 @@ impl MantleClient {
         }
     }
 
-    pub fn with_auth(mut self, auth: MantleAuth) -> Self {
+    pub(crate) fn with_auth(mut self, auth: MantleAuth) -> Self {
         self.auth = auth;
         self
     }
@@ -36,7 +36,7 @@ impl MantleClient {
     ///
     /// An explicit base URL — a test server or a private endpoint — wins over the
     /// catalog template, which is why the override is checked first.
-    pub fn endpoint(&self, transport: &ModelTransport) -> Result<String> {
+    pub(crate) fn endpoint(&self, transport: &ModelTransport) -> Result<String> {
         let ModelTransport::OpenAiResponses { base_url_template } = transport;
         let base = match &self.base_url_override {
             Some(base) => base.clone(),

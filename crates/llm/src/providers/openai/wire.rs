@@ -3,7 +3,7 @@ use serde::Deserialize;
 use utils::ReasoningEffort;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PromptCacheKeySource {
+pub(crate) enum PromptCacheKeySource {
     Omit,
     Prefix,
     SessionAffinity,

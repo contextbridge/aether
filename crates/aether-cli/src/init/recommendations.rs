@@ -11,7 +11,7 @@ pub(crate) struct ModelWithReasoning {
 }
 
 impl ModelWithReasoning {
-    pub fn new(model: impl Into<LlmModel>, effort: Option<ReasoningEffort>) -> Self {
+    pub(super) fn new(model: impl Into<LlmModel>, effort: Option<ReasoningEffort>) -> Self {
         let model = model.into();
         let effort = effort.filter(|e| model.reasoning_levels().contains(e));
         Self { model, reasoning_effort: effort }

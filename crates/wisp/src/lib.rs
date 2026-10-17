@@ -1,6 +1,6 @@
-// Items reachable only through the `testing` harness look dead in default
-// builds; the all-features lint gate still checks dead code for real.
-#![cfg_attr(not(feature = "testing"), allow(dead_code, unused_imports))]
+// Items reachable only through the `testing` harness look dead and
+// unreachable in default builds; the all-features lint gate still checks both.
+#![cfg_attr(not(feature = "testing"), allow(dead_code, unused_imports, unreachable_pub))]
 
 pub mod cli;
 pub mod error;

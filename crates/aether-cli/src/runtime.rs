@@ -11,7 +11,7 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::mpsc::{Receiver, Sender};
 
-pub struct RuntimeBuilder {
+pub(crate) struct RuntimeBuilder {
     cwd: PathBuf,
     spec: AgentSpec,
     provider: Option<Arc<dyn StreamingModelProvider>>,
@@ -22,14 +22,14 @@ pub struct RuntimeBuilder {
     usage_seed: Option<SessionUsageEvent>,
 }
 
-pub struct Runtime {
+pub(crate) struct Runtime {
     pub agent_tx: Sender<Command>,
     pub agent_rx: Receiver<AgentEvent>,
     pub agent_handle: AgentHandle,
     pub mcp: McpCatalog,
 }
 
-pub struct PromptPreview {
+pub(crate) struct PromptPreview {
     pub system_prompt: String,
     pub tools: Vec<ToolDefinition>,
 }
@@ -45,7 +45,7 @@ pub enum RuntimeError {
 }
 
 impl RuntimeBuilder {
-    pub fn from_spec(cwd: PathBuf, spec: AgentSpec) -> Self {
+    pub(crate) fn from_spec(cwd: PathBuf, spec: AgentSpec) -> Self {
         Self {
             cwd,
             spec,
@@ -58,46 +58,46 @@ impl RuntimeBuilder {
         }
     }
 
-    pub fn agent_deps(mut self, deps: AgentDeps) -> Self {
+    pub(crate) fn agent_deps(mut self, deps: AgentDeps) -> Self {
         self.agent_deps = deps;
         self
     }
 
     #[cfg(any(test, feature = "testing"))]
-    pub fn provider(mut self, provider: Arc<dyn StreamingModelProvider>) -> Self {
+    pub(crate) fn provider(mut self, provider: Arc<dyn StreamingModelProvider>) -> Self {
         self.provider = Some(provider);
         self
     }
 
-    pub fn resume_usage(mut self, last: Option<SessionUsageEvent>) -> Self {
+    pub(crate) fn resume_usage(mut self, last: Option<SessionUsageEvent>) -> Self {
         self.usage_seed = last;
         self
     }
 
     /// Replaces the agent's own MCP servers when `config` names any.
-    pub fn mcp_config(mut self, config: McpConfig) -> Self {
+    pub(crate) fn mcp_config(mut self, config: McpConfig) -> Self {
         if !config.is_empty() {
             self.spec.mcp = config;
         }
         self
     }
 
-    pub fn extra_servers(mut self, servers: Vec<ServerSpec>) -> Self {
+    pub(crate) fn extra_servers(mut self, servers: Vec<ServerSpec>) -> Self {
         self.extra_mcp_servers = servers;
         self
     }
 
-    pub fn elicitation(mut self, sink: ElicitationSink) -> Self {
+    pub(crate) fn elicitation(mut self, sink: ElicitationSink) -> Self {
         self.elicitation = Some(sink);
         self
     }
 
-    pub fn wait_for_mcp(mut self) -> Self {
+    pub(crate) fn wait_for_mcp(mut self) -> Self {
         self.wait_for_mcp = true;
         self
     }
 
-    pub async fn build(self, messages: Vec<ChatMessage>) -> Result<Runtime, RuntimeError> {
+    pub(crate) async fn build(self, messages: Vec<ChatMessage>) -> Result<Runtime, RuntimeError> {
         let mcp = self.spawn_mcp()?;
         if self.wait_for_mcp {
             mcp.ready().await;
@@ -116,7 +116,7 @@ impl RuntimeBuilder {
         Ok(Runtime { agent_tx, agent_rx, agent_handle, mcp })
     }
 
-    pub async fn preview(self) -> Result<PromptPreview, RuntimeError> {
+    pub(crate) async fn preview(self) -> Result<PromptPreview, RuntimeError> {
         let mcp = self.spawn_mcp()?;
         mcp.ready().await;
         let mut prompts = self.spec.prompts.clone();
@@ -139,7 +139,7 @@ impl RuntimeBuilder {
 }
 
 impl Runtime {
-    pub async fn shutdown(self) {
+    pub(crate) async fn shutdown(self) {
         let Self { agent_tx, agent_rx, agent_handle, mcp } = self;
         drop((agent_tx, agent_rx));
         agent_handle.abort();

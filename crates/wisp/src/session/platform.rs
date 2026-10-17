@@ -4,14 +4,14 @@
 
 use std::sync::Arc;
 
-pub type BrowserOpener = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
-pub type ClipboardWriter = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+pub(crate) type BrowserOpener = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+pub(crate) type ClipboardWriter = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
-pub fn default_browser_opener() -> BrowserOpener {
+pub(crate) fn default_browser_opener() -> BrowserOpener {
     Arc::new(|url: &str| open_url(url))
 }
 
-pub fn default_clipboard_writer() -> ClipboardWriter {
+pub(crate) fn default_clipboard_writer() -> ClipboardWriter {
     Arc::new(|text: &str| write_clipboard(text))
 }
 

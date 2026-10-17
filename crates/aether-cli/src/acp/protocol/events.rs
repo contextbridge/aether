@@ -46,7 +46,7 @@ pub(crate) fn project_agent_event(msg: &AgentEvent, mode: NotificationMode, io: 
 }
 
 /// Replace the session's itemized plan with the tool result's plan snapshot.
-pub fn try_extract_plan_notification(result_meta: Option<&ToolResultMeta>) -> Option<SessionUpdate> {
+pub(crate) fn try_extract_plan_notification(result_meta: Option<&ToolResultMeta>) -> Option<SessionUpdate> {
     let plan_meta = result_meta?.plan.as_ref()?;
     let entries = plan_meta
         .entries
@@ -57,12 +57,12 @@ pub fn try_extract_plan_notification(result_meta: Option<&ToolResultMeta>) -> Op
 }
 
 #[derive(Clone, Copy)]
-pub enum NotificationMode {
+pub(crate) enum NotificationMode {
     Live,
     Replay,
 }
 
-pub fn map_agent_event_to_notification(msg: &AgentEvent, mode: NotificationMode) -> Option<SessionUpdate> {
+pub(crate) fn map_agent_event_to_notification(msg: &AgentEvent, mode: NotificationMode) -> Option<SessionUpdate> {
     match msg {
         AgentEvent::Context(ContextEvent::UsageUpdated { usage }) => map_context_usage_to_notification(usage),
 

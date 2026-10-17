@@ -20,7 +20,7 @@ use super::CommandDispatcher;
 
 const MAX_ACP_EVENTS_PER_FRAME: usize = 1_000;
 
-pub async fn run(
+pub(crate) async fn run(
     mut app: App,
     mut renderer: Renderer,
     mut event_rx: mpsc::UnboundedReceiver<AcpEvent>,
