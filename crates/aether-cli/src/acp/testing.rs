@@ -4,6 +4,7 @@ use super::session::agent_key::AgentKey;
 use super::session::agents::SessionAgents;
 use super::session::config::SessionConfigState;
 use super::session::error::SessionError;
+use super::session::factory::SessionFactoryConfig;
 use super::session::hooks::SessionHooks;
 use super::session::model::{Modes, ValidatedMode};
 use super::session::runtime::{AgentRuntime, RuntimeFactory};
@@ -289,17 +290,18 @@ impl AcpTestHarness {
                 session_store: session_store.clone(),
                 workspace_manager,
                 oauth_credential_store: oauth_store.clone(),
-                initial_selection: InitialSessionSelection::default(),
-                // Inline settings keep the developer's own `~/.aether/settings.json` out of the tests.
-                settings_source: SettingsSourceArgs {
-                    settings_json: Some(r#"{"agents":[]}"#.to_string()),
-                    settings_file: None,
-                },
-                provider_connections: ProviderConnectionOverrides::default(),
                 telemetry: None,
-                runtime_factory: Some(runtime_factory),
                 cwd: PathBuf::from("/tmp"),
-                hooks,
+                sessions: SessionFactoryConfig {
+                    initial_selection: InitialSessionSelection::default(),
+                    settings_source: SettingsSourceArgs {
+                        settings_json: Some(r#"{"agents":[]}"#.to_string()),
+                        settings_file: None,
+                    },
+                    provider_connections: ProviderConnectionOverrides::default(),
+                    runtime_factory: Some(runtime_factory),
+                    hooks,
+                },
             },
             Arc::new(FakeProviderLogin),
         ));
@@ -585,6 +587,7 @@ impl AcpTestHarness {
             transcript: Vec::new(),
             replay: false,
             modes: Modes::default(),
+            available: LlmModel::all().into(),
             config,
             hooks: SessionHooks::default(),
         }

@@ -8,6 +8,7 @@ pub mod testing;
 
 pub use session::hooks::{IdleHook, SessionHooks};
 
+use crate::acp::session::factory::SessionFactoryConfig;
 use crate::acp::state::{AcpState, AcpStateConfig};
 use crate::credentials::oauth_credential_store_from_config;
 use crate::provider_connection_args::ProviderConnectionArgs;
@@ -199,13 +200,15 @@ fn create_acp_state(args: AcpArgs, cwd: &Path, hooks: SessionHooks) -> Result<Ac
         session_store: Arc::new(SessionStore::new().map_err(AcpRunError::SessionStore)?),
         workspace_manager: Arc::new(WorkspaceManager::new().map_err(AcpRunError::WorkspaceManager)?),
         oauth_credential_store: oauth_credential_store_from_config(settings.credentials_store)?,
-        initial_selection: config.initial_selection,
-        settings_source: config.settings_source,
-        provider_connections: config.provider_connections,
         telemetry,
-        runtime_factory: None,
         cwd: cwd.to_path_buf(),
-        hooks,
+        sessions: SessionFactoryConfig {
+            initial_selection: config.initial_selection,
+            settings_source: config.settings_source,
+            provider_connections: config.provider_connections,
+            runtime_factory: None,
+            hooks,
+        },
     }))
 }
 
