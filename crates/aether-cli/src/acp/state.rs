@@ -19,8 +19,8 @@ use agent_client_protocol::schema::v2::{
 };
 use agent_client_protocol::util::internal_error;
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Error, Responder};
+use llm::ContentBlock;
 use llm::catalog::{LlmModel, ModelSpec};
-use llm::{ContentBlock, ProviderConnectionOverrides};
 use mcp_utils::model::{ElicitationCapability, FormElicitationCapability, UrlElicitationCapability};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -35,12 +35,9 @@ use super::protocol::content::map_acp_to_content_blocks;
 use super::session::actor::{ClientConnection, SessionCommand};
 use super::session::actor::{SessionActor, SessionActorInit};
 use super::session::config_setting::ConfigSetting;
-use super::session::factory::SessionFactory;
-use super::session::hooks::SessionHooks;
+use super::session::factory::{SessionFactory, SessionFactoryConfig};
 use super::session::registry::ActiveSession;
 use super::session::{SessionRegistry, paginate_summaries};
-use crate::resolve::InitialSessionSelection;
-use crate::settings_args::SettingsSourceArgs;
 use crate::workspace::{WorkspaceError, WorkspaceManager, current_ref};
 use aether_sessions::{SessionStore, SessionStoreError};
 
@@ -67,13 +64,9 @@ pub(crate) struct AcpStateConfig {
     pub(crate) session_store: Arc<SessionStore>,
     pub(crate) workspace_manager: Arc<WorkspaceManager>,
     pub(crate) oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
-    pub(crate) initial_selection: InitialSessionSelection,
-    pub(crate) settings_source: SettingsSourceArgs,
-    pub(crate) provider_connections: ProviderConnectionOverrides,
     pub(crate) telemetry: Option<Arc<TelemetryRuntime>>,
-    pub(crate) runtime_factory: Option<Arc<dyn super::session::runtime::RuntimeFactory>>,
     pub(crate) cwd: PathBuf,
-    pub(crate) hooks: SessionHooks,
+    pub(crate) sessions: SessionFactoryConfig,
 }
 
 #[derive(Default)]
@@ -158,7 +151,12 @@ impl AcpState {
     }
 
     pub(crate) fn with_login(config: AcpStateConfig, login: Arc<dyn ProviderLogin>) -> Self {
-        let factory = SessionFactory::new(&config);
+        let factory = SessionFactory::new(
+            config.sessions,
+            Arc::clone(&config.session_store),
+            Arc::clone(&config.oauth_credential_store),
+            config.telemetry.as_ref().map(|runtime| runtime.observer_factory()),
+        );
         Self {
             client_slot: ClientSlot::default(),
             login,
@@ -177,8 +175,7 @@ impl AcpState {
         info!("Received initialize request: {:?}", args);
         self.factory.set_elicitation(mcp_elicitation(&args.capabilities));
         let auth_methods = build_auth_methods(self.oauth_credential_store.as_ref());
-        let available = self.factory.available_models().await.to_vec();
-        let prompt_capabilities = prompt_capabilities_for_models(&available);
+        let prompt_capabilities = prompt_capabilities_for_models(&self.factory.available_models().await);
         let aether_capabilities =
             AetherCapabilities { prompt_search: true, session_preview: true, workspace_move: true };
         let session_capabilities = acp::SessionCapabilities::new()
@@ -251,8 +248,8 @@ impl AcpState {
         active: &mut ActiveSession<'_>,
         init: SessionActorInit,
     ) -> Result<(Vec<acp::SessionConfigOption>, mpsc::Sender<SessionCommand>), Error> {
-        let available = self.factory.available_models().await;
-        let config_options = init.config.config_options(&init.modes, available, init.oauth_credential_store.as_ref());
+        let config_options =
+            init.config.config_options(&init.modes, &init.available, init.oauth_credential_store.as_ref());
         let session_id = init.session_id.clone();
         let commands = active.replace(session_id, SessionActor::spawn(init)).await.map_err(|e| {
             error!("Failed to start session actor: {e}");
@@ -285,7 +282,6 @@ impl AcpState {
         let mut active = self.registry.lock().await;
         if let Some(sender) = active.lookup(Some(req.session_id.0.as_ref())) {
             drop(active);
-            let available = self.factory.available_models().await.to_vec();
             let (config_tx, config_rx) = oneshot::channel();
 
             sender
@@ -294,7 +290,6 @@ impl AcpState {
                     cwd: req.cwd.into_inner(),
                     mcp_servers: req.mcp_servers,
                     replay,
-                    available,
                     reply: config_tx,
                 })
                 .await
@@ -395,10 +390,15 @@ impl AcpState {
     }
 
     async fn send_command(&self, session_id: &str, command: SessionCommand) -> Result<(), Error> {
-        let Some(sender) = self.registry.lookup(Some(session_id)).await else {
-            return Err(Error::invalid_params());
+        let (command, error) = match self.registry.lookup(Some(session_id)).await {
+            None => (command, Error::invalid_params()),
+            Some(sender) => match sender.send(command).await {
+                Ok(()) => return Ok(()),
+                Err(closed) => (closed.0, Error::internal_error()),
+            },
         };
-        sender.send(command).await.map_err(|_| Error::internal_error())
+        command.reject(error.clone());
+        Err(error)
     }
 
     /// Moves the session's uncommitted changes to the target workspace, stops
@@ -463,8 +463,6 @@ impl AcpState {
         self.send_command(&session_id, SessionCommand::Cancel).await
     }
 
-    /// Route a config change to its session actor. Discovers available models
-    /// once, then the actor applies the change and answers with rebuilt options.
     pub(crate) async fn set_session_config_option(
         &self,
         args: SetSessionConfigOptionRequest,
@@ -491,30 +489,22 @@ impl AcpState {
             }
         };
 
-        let available = self.factory.available_models().await.to_vec();
-        self.route(&session_id, SessionCommand::SetConfig { setting, available, responder }).await;
+        self.route(&session_id, SessionCommand::SetConfig { setting, responder }).await;
     }
 
     async fn route(&self, session_id: &str, command: SessionCommand) {
-        let (command, error) = match self.registry.lookup(Some(session_id)).await {
-            None => (command, Error::invalid_params()),
-            Some(sender) => match sender.send(command).await {
-                Ok(()) => return,
-                Err(closed) => (closed.0, Error::internal_error()),
-            },
-        };
-        error!("Could not route command to session {session_id}: {error:?}");
-        command.reject(error);
+        if let Err(error) = self.send_command(session_id, command).await {
+            error!("Could not route command to session {session_id}: {error:?}");
+        }
     }
 
     pub(crate) async fn on_mcp_request(&self, request: McpRequest) -> Result<(), Error> {
         info!("Received MCP ext request: {:?}", request);
         match request {
             McpRequest::Authenticate { session_id, server_name } => {
-                self.send_command(&session_id, SessionCommand::AuthenticateMcp { server_name }).await?;
+                self.send_command(&session_id, SessionCommand::AuthenticateMcp { server_name }).await
             }
         }
-        Ok(())
     }
 
     pub(super) fn stop_token(&self) -> CancellationToken {
@@ -584,8 +574,7 @@ impl AcpState {
 
     async fn broadcast_config_options(&self) {
         if let Some(sender) = self.registry.lookup(None).await {
-            let available = self.factory.available_models().await.to_vec();
-            let _ = sender.send(SessionCommand::RefreshConfigOptions { available }).await;
+            let _ = sender.send(SessionCommand::RefreshConfigOptions).await;
         }
     }
 }

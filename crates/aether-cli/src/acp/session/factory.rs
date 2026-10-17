@@ -23,7 +23,6 @@ use super::hooks::SessionHooks;
 use super::model::{Modes, pick_default_model};
 use super::runtime::{ProductionRuntimeFactory, RuntimeFactory};
 use crate::acp::protocol::mcp::map_acp_mcp_servers;
-use crate::acp::state::AcpStateConfig;
 use crate::resolve::{InitialSessionSelection, resolve_agent_from_catalog};
 use crate::settings_args::SettingsSourceArgs;
 use aether_sessions::{SessionStore, SessionStoreError};
@@ -31,29 +30,35 @@ use aether_sessions::{SessionStore, SessionStoreError};
 /// Builds the per-session actor for both new and resumed sessions, resolving
 /// settings, agent catalog, model discovery, and the runtime factory.
 pub(crate) struct SessionFactory {
-    settings_source: SettingsSourceArgs,
-    provider_connections: ProviderConnectionOverrides,
+    config: SessionFactoryConfig,
     oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
     session_store: Arc<SessionStore>,
-    initial_selection: InitialSessionSelection,
     observer_factory: Option<DynObserverFactory>,
-    runtime_factory: Option<Arc<dyn RuntimeFactory>>,
-    hooks: SessionHooks,
-    available: OnceCell<Vec<LlmModel>>,
+    available: OnceCell<Arc<[LlmModel]>>,
     elicitation: OnceLock<ElicitationCapability>,
 }
 
+/// How [`SessionFactory`] picks the agent and runtime for a session.
+pub(crate) struct SessionFactoryConfig {
+    pub(crate) initial_selection: InitialSessionSelection,
+    pub(crate) settings_source: SettingsSourceArgs,
+    pub(crate) provider_connections: ProviderConnectionOverrides,
+    pub(crate) runtime_factory: Option<Arc<dyn RuntimeFactory>>,
+    pub(crate) hooks: SessionHooks,
+}
+
 impl SessionFactory {
-    pub(crate) fn new(config: &AcpStateConfig) -> Self {
+    pub(crate) fn new(
+        config: SessionFactoryConfig,
+        session_store: Arc<SessionStore>,
+        oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
+        observer_factory: Option<DynObserverFactory>,
+    ) -> Self {
         Self {
-            settings_source: config.settings_source.clone(),
-            provider_connections: config.provider_connections.clone(),
-            oauth_credential_store: Arc::clone(&config.oauth_credential_store),
-            session_store: Arc::clone(&config.session_store),
-            initial_selection: config.initial_selection.clone(),
-            observer_factory: config.telemetry.as_ref().map(|runtime| runtime.observer_factory()),
-            runtime_factory: config.runtime_factory.clone(),
-            hooks: config.hooks.clone(),
+            config,
+            oauth_credential_store,
+            session_store,
+            observer_factory,
             available: OnceCell::new(),
             elicitation: OnceLock::new(),
         }
@@ -63,8 +68,8 @@ impl SessionFactory {
         let _ = self.elicitation.set(capability);
     }
 
-    pub(crate) async fn available_models(&self) -> &[LlmModel] {
-        self.available.get_or_init(get_local_models).await
+    pub(crate) async fn available_models(&self) -> Arc<[LlmModel]> {
+        Arc::clone(self.available.get_or_init(async || get_local_models().await.into()).await)
     }
 
     pub(crate) async fn prepare_new(
@@ -164,7 +169,7 @@ impl SessionFactory {
         replay: bool,
         cx: Option<&ConnectionTo<Client>>,
     ) -> SessionActorInit {
-        let runtime_factory = self.runtime_factory.clone().unwrap_or_else(|| {
+        let runtime_factory = self.config.runtime_factory.clone().unwrap_or_else(|| {
             self.production_runtime_factory(
                 cwd.clone(),
                 mcp_servers.clone(),
@@ -185,8 +190,9 @@ impl SessionFactory {
             transcript,
             replay,
             modes: mode_catalog.modes,
+            available: mode_catalog.available,
             config: resolved.config,
-            hooks: self.hooks.clone(),
+            hooks: self.config.hooks.clone(),
         }
     }
 
@@ -195,13 +201,13 @@ impl SessionFactory {
         mode_catalog: &mut SessionModeCatalog,
         default_model: &LlmModel,
     ) -> Result<ResolvedSession, Error> {
-        let selection = match &self.initial_selection {
+        let selection = match &self.config.initial_selection {
             InitialSessionSelection::Agent(agent) => {
                 if !mode_catalog.modes.iter().any(|mode| mode.name == *agent) {
                     warn!("Unknown or unavailable agent `{agent}` requested via --agent");
                     return Err(Error::invalid_params());
                 }
-                self.initial_selection.clone()
+                self.config.initial_selection.clone()
             }
             InitialSessionSelection::Model { model, reasoning_effort } => {
                 let model = parse_available_model(model, &mode_catalog.available)?;
@@ -210,7 +216,7 @@ impl SessionFactory {
             InitialSessionSelection::Default if mode_catalog.specs.catalog().default_agent().is_none() => {
                 InitialSessionSelection::Model { model: default_model.to_string(), reasoning_effort: None }
             }
-            InitialSessionSelection::Default => self.initial_selection.clone(),
+            InitialSessionSelection::Default => self.config.initial_selection.clone(),
         };
 
         let selected =
@@ -232,15 +238,16 @@ impl SessionFactory {
 
     async fn load_mode_catalog(&self, cwd: &Path) -> Result<SessionModeCatalog, Error> {
         let catalog = self
+            .config
             .settings_source
             .load_agent_catalog(cwd)
             .map_err(|e| {
                 error!("Failed to load agent catalog: {e}");
                 Error::invalid_params()
             })?
-            .with_provider_connections(self.provider_connections.clone());
+            .with_provider_connections(self.config.provider_connections.clone());
 
-        let available = self.available_models().await.to_vec();
+        let available = self.available_models().await;
         let modes = Modes::from_specs(catalog.all(), &available);
 
         Ok(SessionModeCatalog { specs: SessionAgents::new(catalog), modes, available })
@@ -250,7 +257,7 @@ impl SessionFactory {
 struct SessionModeCatalog {
     specs: SessionAgents,
     modes: Modes,
-    available: Vec<LlmModel>,
+    available: Arc<[LlmModel]>,
 }
 
 struct ResolvedSession {
