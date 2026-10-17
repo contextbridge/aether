@@ -4,7 +4,7 @@ use super::streaming::{converse_events, decode_converse_event};
 use crate::catalog::transport::ModelTransport;
 use crate::provider::{LlmResponseStream, StreamingModelProvider, validate_reasoning};
 use crate::providers::openai_responses::streaming::decode_responses;
-use crate::providers::response_stream::{OpenedStream, response_stream};
+use crate::providers::response_stream::{OpenedStream, error_stream, response_stream};
 use crate::{Context, LlmError, ProviderAuthMode, ProviderConnectionConfig, ProviderError, Result};
 use aws_config::Region;
 use aws_credential_types::provider::SharedCredentialsProvider;
@@ -119,7 +119,6 @@ impl BedrockProvider {
         &self,
         context: &Context,
     ) -> Result<EventReceiver<ConverseStreamOutput, ConverseStreamOutputError>> {
-        validate_reasoning(context, self.model().as_ref())?;
         let cache_point =
             self.model().is_some_and(|m| m.supports_prompt_caching()).then(default_cache_point).transpose()?;
         let (system_blocks, messages) = map_messages(context.messages(), cache_point.as_ref())?;
@@ -163,6 +162,10 @@ impl StreamingModelProvider for BedrockProvider {
     }
 
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
+        let identity = self.model();
+        if let Err(error) = validate_reasoning(context, identity.as_ref()) {
+            return error_stream(error);
+        }
         let provider = self.clone();
         let context = context.clone();
 
@@ -183,7 +186,7 @@ impl StreamingModelProvider for BedrockProvider {
         }
 
         response_stream(
-            async move { provider.mantle.stream(&provider.model, &transport, &context).await },
+            async move { provider.mantle.stream(identity.as_ref(), &provider.model, &transport, &context).await },
             decode_responses(),
             self.idle_timeout,
         )

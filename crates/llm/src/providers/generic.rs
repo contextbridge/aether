@@ -220,11 +220,13 @@ impl GenericProvider {
 
 impl StreamingModelProvider for GenericProvider {
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
-        let stream = match &self.config.api {
-            Api::ChatCompletions(policy) => self.stream_chat_completions(context, policy),
-            Api::Responses(policy) => self.stream_responses(context, policy),
-            Api::Messages => self.stream_messages(context),
-        };
+        let identity = self.model();
+        let wire_model = self.request_model.as_deref().unwrap_or(&self.model);
+        let stream = validate_reasoning(context, identity.as_ref()).and_then(|()| match &self.config.api {
+            Api::ChatCompletions(policy) => self.stream_chat_completions(wire_model, context, policy),
+            Api::Responses(policy) => self.stream_responses(identity.as_ref(), wire_model, context, policy),
+            Api::Messages => self.stream_messages(wire_model, context),
+        });
         stream.unwrap_or_else(error_stream)
     }
 
@@ -238,27 +240,30 @@ impl StreamingModelProvider for GenericProvider {
 }
 
 impl GenericProvider {
-    fn stream_chat_completions(&self, context: &Context, policy: &ChatRequestPolicy) -> Result<LlmResponseStream> {
-        validate_reasoning(context, self.model().as_ref())?;
-        let model = self.request_model.as_deref().unwrap_or(&self.model);
-        let request = serde_json::to_value(build_chat_request(model, context, policy)?)?;
+    fn stream_chat_completions(
+        &self,
+        wire_model: &str,
+        context: &Context,
+        policy: &ChatRequestPolicy,
+    ) -> Result<LlmResponseStream> {
+        let request = serde_json::to_value(build_chat_request(wire_model, context, policy)?)?;
         let opened = self.open("chat/completions", request);
         Ok(response_stream(opened, |data, turn| decode_sse_chunk(&data, turn), self.idle_timeout))
     }
 
-    fn stream_responses(&self, context: &Context, policy: &ResponsesRequestPolicy) -> Result<LlmResponseStream> {
-        let mut request = build_responses_request(&self.model, context, policy)?;
-        if let Some(model) = &self.request_model {
-            request.model.clone_from(model);
-        }
-        let opened = self.open("responses", serde_json::to_value(request)?);
-        Ok(response_stream(opened, decode_responses(), self.idle_timeout))
+    fn stream_responses(
+        &self,
+        identity: Option<&LlmModel>,
+        wire_model: &str,
+        context: &Context,
+        policy: &ResponsesRequestPolicy,
+    ) -> Result<LlmResponseStream> {
+        let request = serde_json::to_value(build_responses_request(identity, wire_model, context, policy)?)?;
+        Ok(response_stream(self.open("responses", request), decode_responses(), self.idle_timeout))
     }
 
-    fn stream_messages(&self, context: &Context) -> Result<LlmResponseStream> {
-        validate_reasoning(context, self.model().as_ref())?;
-        let model = self.request_model.as_deref().unwrap_or(&self.model);
-        let request = build_messages_request(model, context)?;
+    fn stream_messages(&self, wire_model: &str, context: &Context) -> Result<LlmResponseStream> {
+        let request = build_messages_request(wire_model, context)?;
         let builder =
             self.http.post(format!("{}/v1/messages", self.api_base)).headers(self.headers.clone()).json(&request);
         Ok(response_stream(open_sse(builder, anthropic_code), |data, turn| decode_line(&data, turn), self.idle_timeout))
@@ -528,6 +533,20 @@ mod tests {
                 assert!(matches!(error, LlmError::UnsupportedDisableTransport { .. }));
             }
             assert!(!error.is_retryable());
+        }
+    }
+
+    #[tokio::test]
+    async fn every_api_validates_reasoning_before_sending() {
+        for config in [&DEEPSEEK, &OPENAI, &ANTHROPIC] {
+            let server = CaptureServer::start_chat_completions().await;
+            let provider = capture_backed_provider(&server, config).with_model("unknown");
+            let mut context = hello_context();
+            context.set_reasoning_effort(ReasoningEffort::Disabled);
+
+            let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+
+            assert!(matches!(responses[..], [Err(LlmError::ReasoningValidation(_))]), "{responses:?}");
         }
     }
 

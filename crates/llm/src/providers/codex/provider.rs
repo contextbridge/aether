@@ -1,6 +1,6 @@
 use super::oauth::CodexTokenManager;
 use crate::catalog::Provider;
-use crate::provider::{LlmResponseStream, StreamingModelProvider, display_name};
+use crate::provider::{LlmResponseStream, StreamingModelProvider, display_name, validate_reasoning};
 use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
 use crate::providers::http::{SseData, http_client};
 use crate::providers::openai_responses::mappers::{ResponsesRequestPolicy, build_request};
@@ -55,11 +55,15 @@ impl CodexProvider {
     }
 
     fn build_wire_request(&self, context: &Context) -> Result<serde_json::Value> {
-        let mut request = build_request(&self.model, context, &ResponsesRequestPolicy::CODEX)?;
-        if let Some(model) = &self.request_model {
-            request.model.clone_from(model);
-        }
-        Ok(serde_json::to_value(request)?)
+        let identity = self.model();
+        validate_reasoning(context, identity.as_ref())?;
+        let wire_model = self.request_model.as_deref().unwrap_or(&self.model);
+        Ok(serde_json::to_value(build_request(
+            identity.as_ref(),
+            wire_model,
+            context,
+            &ResponsesRequestPolicy::CODEX,
+        )?)?)
     }
 
     async fn build_headers(&self) -> Result<HeaderMap> {
