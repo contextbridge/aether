@@ -60,8 +60,8 @@ pub fn execute_task_update(input: TaskUpdateInput, store: &mut TaskStore) -> Res
     .map(String::from)
     .collect();
 
-    let ready_before: Vec<String> = if update.status == Some(TaskStatus::Completed) {
-        store.get_ready().iter().map(|t| t.id.to_string()).collect()
+    let ready_before: Vec<TaskId> = if update.status == Some(TaskStatus::Completed) {
+        store.tasks().filter(|t| store.is_ready(t)).map(|t| t.id.clone()).collect()
     } else {
         vec![]
     };
@@ -69,12 +69,7 @@ pub fn execute_task_update(input: TaskUpdateInput, store: &mut TaskStore) -> Res
     let task = store.update(&id, update)?;
 
     let newly_ready: Vec<TaskSummary> = if task.status == TaskStatus::Completed {
-        store
-            .get_ready()
-            .iter()
-            .filter(|t| !ready_before.contains(&t.id.to_string()))
-            .map(|t| TaskSummary::from(*t))
-            .collect()
+        store.tasks().filter(|t| store.is_ready(t) && !ready_before.contains(&t.id)).map(TaskSummary::from).collect()
     } else {
         vec![]
     };

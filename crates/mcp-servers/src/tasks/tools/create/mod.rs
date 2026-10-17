@@ -267,7 +267,7 @@ mod tests {
             assert!(matches!(result, Err(TaskStoreError::DependencyNotFound { .. })), "{result:?}");
         }
         tasks.reopen();
-        assert_eq!(tasks.store().len(), 1);
+        assert_eq!(tasks.store().tasks().count(), 1);
     }
 
     #[test]
@@ -287,7 +287,30 @@ mod tests {
 
         assert!(matches!(result, Err(TaskStoreError::ParentNotFound { .. })), "{result:?}");
         tasks.reopen();
-        assert_eq!(tasks.store().len(), 1);
+        assert_eq!(tasks.store().tasks().count(), 1);
+    }
+
+    #[test]
+    fn plan_keeps_every_task_in_id_order_as_tasks_are_added() {
+        let mut tasks = TestTaskStore::new();
+        let root = tasks.root_task("Root");
+        let mut expected = vec!["Root".to_string()];
+
+        for n in 1..=11 {
+            let title = format!("Step {n}");
+            let input = TaskCreateInput {
+                title: title.clone(),
+                description: None,
+                parent_id: Some(root.id.to_string()),
+                assignee: None,
+                deps: None,
+            };
+            let output = execute_task_create(&input, tasks.store_mut()).unwrap();
+            expected.push(title);
+
+            let plan: Vec<_> = output.meta.unwrap().plan.unwrap().entries.into_iter().map(|e| e.content).collect();
+            assert_eq!(plan, expected);
+        }
     }
 
     #[test]

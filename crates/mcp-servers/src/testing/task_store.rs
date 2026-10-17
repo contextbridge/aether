@@ -19,7 +19,7 @@ impl TestTaskStore {
         Self { directory, store }
     }
 
-    /// The store root; task tree files live in `active/` and `completed/` beneath it.
+    /// The store root; task tree files live in `active/` beneath it.
     pub fn root(&self) -> PathBuf {
         store_root(&self.directory)
     }
@@ -34,7 +34,7 @@ impl TestTaskStore {
         &mut self.store
     }
 
-    /// Drops the in-memory index and reloads the store from disk.
+    /// Drops the in-memory tasks and reloads the store from disk.
     pub fn reopen(&mut self) {
         let mut store = TaskStore::new(self.root());
         store.init().expect("failed to re-initialize task store");
