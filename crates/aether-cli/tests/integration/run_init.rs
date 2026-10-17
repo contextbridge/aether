@@ -8,38 +8,6 @@ use mcp_servers::McpBuilderExt;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-fn apply(
-    target: InitTarget,
-    provider: Provider,
-    preset: Preset,
-    harnesses: &[HarnessIntegration],
-) -> Result<InitOutcome, InitError> {
-    apply_init(target, provider, preset, harnesses, OverwriteMode::PreserveExisting)
-}
-
-fn load(settings_path: &Path) -> AetherSettings {
-    let content = std::fs::read_to_string(settings_path).expect("settings.json");
-    AetherSettings::try_from(content.as_str()).expect("settings parses")
-}
-
-fn agent_provider(agent: &aether_project::AgentConfig) -> Provider {
-    agent.model.parse::<LlmModel>().expect("model parses").provider_enum()
-}
-
-fn inline_args(servers: &BTreeMap<String, McpServerConfig>, name: &str) -> Vec<String> {
-    let McpServerConfig::InMemory(in_memory) = servers.get(name).unwrap_or_else(|| panic!("{name} server")) else {
-        panic!("expected in-memory {name}");
-    };
-    in_memory.args.clone()
-}
-
-fn inline_servers(spec: &McpSourceSpec) -> &BTreeMap<String, McpServerConfig> {
-    let McpSourceSpec::Inline(config) = spec else {
-        panic!("expected inline MCPs, got a file spec");
-    };
-    &config.servers
-}
-
 #[test]
 fn writes_user_minimal_preset_for_codex() {
     let dir = tempfile::tempdir().unwrap();
@@ -279,6 +247,38 @@ fn unsupported_provider_returns_error_without_writing_files() {
     assert!(matches!(err, InitError::UnsupportedProvider { provider: Provider::Gemini, .. }), "{err:?}");
     assert!(!dir.path().join("settings.json").exists(), "no settings.json should be written");
     assert!(!dir.path().join("SYSTEM.md").exists(), "no SYSTEM.md should be written");
+}
+
+fn apply(
+    target: InitTarget,
+    provider: Provider,
+    preset: Preset,
+    harnesses: &[HarnessIntegration],
+) -> Result<InitOutcome, InitError> {
+    apply_init(target, provider, preset, harnesses, OverwriteMode::PreserveExisting)
+}
+
+fn load(settings_path: &Path) -> AetherSettings {
+    let content = std::fs::read_to_string(settings_path).expect("settings.json");
+    AetherSettings::try_from(content.as_str()).expect("settings parses")
+}
+
+fn agent_provider(agent: &aether_project::AgentConfig) -> Provider {
+    agent.model.parse::<LlmModel>().expect("model parses").provider_enum()
+}
+
+fn inline_args(servers: &BTreeMap<String, McpServerConfig>, name: &str) -> Vec<String> {
+    let McpServerConfig::InMemory(in_memory) = servers.get(name).unwrap_or_else(|| panic!("{name} server")) else {
+        panic!("expected in-memory {name}");
+    };
+    in_memory.args.clone()
+}
+
+fn inline_servers(spec: &McpSourceSpec) -> &BTreeMap<String, McpServerConfig> {
+    let McpSourceSpec::Inline(config) = spec else {
+        panic!("expected inline MCPs, got a file spec");
+    };
+    &config.servers
 }
 
 fn assert_plan_tools(agent: &aether_project::AgentConfig) {

@@ -19,9 +19,9 @@ pub(crate) enum InitialSessionSelection {
 
 #[derive(Debug, Error)]
 pub enum SelectionConflict {
-    #[error("agent and model cannot both be supplied")]
+    #[error("an agent and a model cannot both be selected")]
     AgentAndModel,
-    #[error("reasoningEffort requires model")]
+    #[error("a reasoning effort requires a model")]
     ReasoningEffortWithoutModel,
 }
 

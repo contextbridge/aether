@@ -93,8 +93,8 @@ pub enum AcpRunError {
     #[error("ACP protocol error: {0}")]
     Protocol(#[from] acp::Error),
 
-    #[error("Invalid --options-json: {0}")]
-    OptionsJson(#[from] AcpOptionsJsonError),
+    #[error("Invalid ACP configuration: {0}")]
+    Config(#[from] AcpConfigError),
 
     #[error("Failed to load settings: {0}")]
     Settings(#[from] SettingsError),
@@ -113,15 +113,15 @@ pub enum AcpRunError {
 }
 
 #[derive(Debug, Error)]
-pub enum AcpOptionsJsonError {
-    #[error("{0}")]
-    Parse(#[from] serde_json::Error),
+pub enum AcpConfigError {
+    #[error("could not parse --options-json: {0}")]
+    OptionsJson(#[from] serde_json::Error),
     #[error(transparent)]
     ConflictingSettingsSources(#[from] ConflictingSettingsSources),
     #[error(transparent)]
     Selection(#[from] SelectionConflict),
-    #[error("invalid reasoningEffort: {0}")]
-    UnsupportedReasoningEffort(#[from] ReasoningEffortError),
+    #[error(transparent)]
+    ReasoningEffort(#[from] ReasoningEffortError),
 }
 
 pub async fn run_acp(args: AcpArgs) -> Result<(), AcpRunError> {
@@ -144,7 +144,7 @@ struct AcpRunConfig {
 }
 
 impl AcpRunConfig {
-    fn from_args(args: AcpArgs) -> Result<Self, AcpOptionsJsonError> {
+    fn from_args(args: AcpArgs) -> Result<Self, AcpConfigError> {
         if let Some(json) = args.options_json {
             return Self::from_options(serde_json::from_str(&json)?);
         }
@@ -159,7 +159,7 @@ impl AcpRunConfig {
         .validated()
     }
 
-    fn from_options(options: AcpOptions) -> Result<Self, AcpOptionsJsonError> {
+    fn from_options(options: AcpOptions) -> Result<Self, AcpConfigError> {
         Self {
             log_dir: options.log_dir.unwrap_or_else(default_log_dir),
             initial_selection: InitialSessionSelection::from_flags(
@@ -174,7 +174,7 @@ impl AcpRunConfig {
         .validated()
     }
 
-    fn validated(self) -> Result<Self, AcpOptionsJsonError> {
+    fn validated(self) -> Result<Self, AcpConfigError> {
         if let InitialSessionSelection::Model { model, reasoning_effort } = &self.initial_selection {
             validate_reasoning_effort(model, *reasoning_effort)?;
         }
@@ -275,6 +275,17 @@ mod tests {
     }
 
     #[test]
+    fn flag_errors_name_neither_options_json_nor_json_keys() {
+        let cli =
+            TestCli::try_parse_from(["test", "--model", "anthropic:claude-opus-4-6", "--reasoning-effort", "xhigh"])
+                .unwrap();
+
+        let message = AcpRunError::from(AcpRunConfig::from_args(cli.args).unwrap_err()).to_string();
+
+        assert!(!message.contains("options-json") && !message.contains("reasoningEffort"), "{message}");
+    }
+
+    #[test]
     fn options_json_rejects_unsupported_reasoning_effort() {
         let error = AcpRunConfig::from_options(AcpOptions {
             model: Some("anthropic:claude-opus-4-6".to_string()),
@@ -283,7 +294,7 @@ mod tests {
         })
         .unwrap_err();
 
-        assert!(matches!(error, AcpOptionsJsonError::UnsupportedReasoningEffort(_)));
+        assert!(matches!(error, AcpConfigError::ReasoningEffort(_)));
     }
 
     #[test]
@@ -294,6 +305,6 @@ mod tests {
         })
         .unwrap_err();
 
-        assert!(matches!(err, AcpOptionsJsonError::Selection(SelectionConflict::ReasoningEffortWithoutModel)));
+        assert!(matches!(err, AcpConfigError::Selection(SelectionConflict::ReasoningEffortWithoutModel)));
     }
 }
