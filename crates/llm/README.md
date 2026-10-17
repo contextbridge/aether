@@ -150,11 +150,11 @@ let (provider, _) = parser.parse("llamacpp").await.unwrap();
 When you need fine-grained control, construct the provider directly and configure request settings on the context:
 
 ```rust,no_run
-# async fn example() {
-use llm::providers::anthropic::AnthropicProvider;
-use llm::{Context, ModelSettings, ProviderFactory};
+# fn example() {
+use llm::providers::generic::{ANTHROPIC, GenericProvider};
+use llm::{Context, ModelSettings};
 
-let provider = AnthropicProvider::from_env().await
+let provider = GenericProvider::from_env(&ANTHROPIC)
     .unwrap()
     .with_model("claude-sonnet-4-5-20250929");
 

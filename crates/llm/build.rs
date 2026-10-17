@@ -1,6 +1,6 @@
 use std::path::Path;
 
-const OWN_MODULE_PROVIDERS: [&str; 3] = ["anthropic", "codex", "amazon-bedrock"];
+const OWN_MODULE_PROVIDERS: [&str; 2] = ["codex", "amazon-bedrock"];
 
 fn main() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));

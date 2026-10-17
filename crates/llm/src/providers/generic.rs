@@ -1,12 +1,14 @@
 #![doc = include_str!(concat!(env!("OUT_DIR"), "/docs/generic.md"))]
 
-use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use std::future::Future;
 use std::time::Duration;
 
 use crate::catalog::Provider;
 use crate::provider::{display_name, validate_reasoning};
-use crate::providers::http::{SseData, http_client};
+use crate::providers::anthropic::mappers::build_request as build_messages_request;
+use crate::providers::anthropic::streaming::decode_line;
+use crate::providers::http::{SseData, anthropic_code, http_client, open_sse};
 pub use crate::providers::openai_compatible::ChatRequestPolicy;
 use crate::providers::openai_compatible::streaming::decode_sse_chunk;
 use crate::providers::openai_compatible::types::CompatibleChatRequest;
@@ -33,7 +35,15 @@ pub struct ProviderConfig {
 pub enum Api {
     ChatCompletions(ChatRequestPolicy),
     Responses(ResponsesRequestPolicy),
+    Messages,
 }
+
+pub const ANTHROPIC: ProviderConfig = ProviderConfig {
+    provider: Provider::Anthropic,
+    api_base: Some("https://api.anthropic.com"),
+    default_model: "claude-sonnet-4-5-20250929",
+    api: Api::Messages,
+};
 
 pub const OPENAI: ProviderConfig = ProviderConfig {
     provider: Provider::Openai,
@@ -129,6 +139,7 @@ const LOCAL_CHAT: ChatRequestPolicy =
     ChatRequestPolicy { tool_call_reasoning_placeholder: false, ..ChatRequestPolicy::DEFAULT };
 
 pub(crate) const BUILT_INS: &[&ProviderConfig] = &[
+    &ANTHROPIC,
     &OPENAI,
     &XIAOMI,
     &DEEPSEEK,
@@ -192,7 +203,7 @@ impl GenericProvider {
             config,
             http: http_client(),
             api_base,
-            headers: auth_headers(api_key, connection.auth_mode)?,
+            headers: api_headers(&config.api, api_key, connection.auth_mode)?,
             model: config.default_model.to_string(),
             request_model: connection.request_model,
             idle_timeout: connection.idle_timeout,
@@ -212,6 +223,7 @@ impl StreamingModelProvider for GenericProvider {
         let stream = match &self.config.api {
             Api::ChatCompletions(policy) => self.stream_chat_completions(context, policy),
             Api::Responses(policy) => self.stream_responses(context, policy),
+            Api::Messages => self.stream_messages(context),
         };
         stream.unwrap_or_else(error_stream)
     }
@@ -242,6 +254,15 @@ impl GenericProvider {
         Ok(response_stream(self.open("responses", request), decode_responses(), self.idle_timeout))
     }
 
+    fn stream_messages(&self, context: &Context) -> Result<LlmResponseStream> {
+        validate_reasoning(context, self.model().as_ref())?;
+        let model = self.request_model.as_deref().unwrap_or(&self.model);
+        let request = build_messages_request(model, context)?;
+        let builder =
+            self.http.post(format!("{}/v1/messages", self.api_base)).headers(self.headers.clone()).json(&request);
+        Ok(response_stream(open_sse(builder, anthropic_code), |data, turn| decode_line(&data, turn), self.idle_timeout))
+    }
+
     fn open(
         &self,
         path: &str,
@@ -252,12 +273,19 @@ impl GenericProvider {
     }
 }
 
-fn auth_headers(api_key: &str, auth_mode: ProviderAuthMode) -> Result<HeaderMap> {
+fn api_headers(api: &Api, api_key: &str, auth_mode: ProviderAuthMode) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
+    if let Api::Messages = api {
+        headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+    }
     if auth_mode == ProviderAuthMode::Default && !api_key.is_empty() {
-        let mut bearer = HeaderValue::from_str(&format!("Bearer {api_key}"))?;
-        bearer.set_sensitive(true);
-        headers.insert(AUTHORIZATION, bearer);
+        let (name, value) = match api {
+            Api::ChatCompletions(_) | Api::Responses(_) => (AUTHORIZATION, format!("Bearer {api_key}")),
+            Api::Messages => (HeaderName::from_static("x-api-key"), api_key.to_string()),
+        };
+        let mut value = HeaderValue::from_str(&value)?;
+        value.set_sensitive(true);
+        headers.insert(name, value);
     }
     Ok(headers)
 }
@@ -283,8 +311,8 @@ mod tests {
     use crate::providers::test_capture_server::{CaptureServer, ResponseSpec, hello_context};
     use crate::types::IsoString;
     use crate::{
-        AssistantReasoning, ChatMessage, ContentBlock, LlmResponse, MessageId, ProviderErrorKind, ReasoningEffort,
-        ToolCallRequest, ToolDefinition,
+        AssistantReasoning, ChatMessage, ContentBlock, LlmResponse, MessageId, ModelSettings, ProviderErrorKind,
+        ReasoningEffort, ToolCallRequest, ToolDefinition,
     };
 
     #[tokio::test]
@@ -634,21 +662,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_provider_honors_configured_idle_timeout() {
-        let spec =
-            ResponseSpec::sse(include_str!("../../tests/fixtures/openai/01_minimal.sse")).paced(Duration::from_mins(2));
-        let mut server = CaptureServer::start_with_spec(spec).await;
-        let connection = ProviderConnectionConfig {
-            base_url: Some(server.base_url.clone()),
-            idle_timeout: Duration::from_mins(1),
-            ..Default::default()
-        };
-        let provider = GenericProvider::from_env_with_connection(&OLLAMA, connection).unwrap().with_model("test-model");
+    async fn providers_honor_configured_idle_timeout() {
+        for (config, fixture) in [
+            (&OLLAMA, include_str!("../../tests/fixtures/openai/01_minimal.sse")),
+            (&ANTHROPIC, include_str!("../../tests/fixtures/anthropic/01_minimal.sse")),
+        ] {
+            let spec = ResponseSpec::sse(fixture).paced(Duration::from_mins(2));
+            let mut server = CaptureServer::start_with_spec(spec).await;
+            let connection = ProviderConnectionConfig {
+                base_url: Some(server.base_url.clone()),
+                auth_mode: ProviderAuthMode::None,
+                idle_timeout: Duration::from_mins(1),
+                ..Default::default()
+            };
+            let provider = GenericProvider::new_with_connection("key", config, connection).unwrap();
 
-        let responses = server.collect_on_paused_clock(provider.stream_response(&hello_context())).await;
+            let responses = server.collect_on_paused_clock(provider.stream_response(&hello_context())).await;
 
-        let error = responses.last().and_then(|response| response.as_ref().err()).and_then(LlmError::provider);
-        assert_eq!(error.map(|error| error.kind), Some(ProviderErrorKind::Timeout), "{responses:?}");
+            let error = responses.last().and_then(|response| response.as_ref().err()).and_then(LlmError::provider);
+            assert_eq!(error.map(|error| error.kind), Some(ProviderErrorKind::Timeout), "{responses:?}");
+        }
     }
 
     #[tokio::test]
@@ -836,6 +869,104 @@ mod tests {
         assert_eq!(provider.model().unwrap().to_string(), "xiaomi:mimo-v2.6-pro");
     }
 
+    #[tokio::test]
+    async fn anthropic_sends_its_version_and_api_key_unless_auth_is_none() {
+        for (auth_mode, api_key) in [(ProviderAuthMode::Default, Some("secret")), (ProviderAuthMode::None, None)] {
+            let mut server = CaptureServer::start_messages().await;
+            let connection =
+                ProviderConnectionConfig { base_url: Some(server.base_url.clone()), auth_mode, ..Default::default() };
+            let provider = GenericProvider::new_with_connection("secret", &ANTHROPIC, connection).unwrap();
+
+            let responses = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
+            let captured = server.captured().await;
+
+            assert_successful_stream(&responses);
+            assert_eq!(captured.path, "/v1/messages");
+            assert_eq!(captured.headers["anthropic-version"], "2023-06-01");
+            assert_eq!(captured.headers.get("x-api-key").map(|key| key.to_str().unwrap()), api_key);
+            assert!(captured.headers.get("authorization").is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn anthropic_caches_the_system_prompt_and_sends_tools() {
+        let mut server = CaptureServer::start_messages().await;
+        let provider = capture_backed_provider(&server, &ANTHROPIC);
+        let context = Context::new(
+            vec![ChatMessage::system("You are helpful"), ChatMessage::user("Hello")],
+            vec![ToolDefinition::new("search", "Search", json!({ "type": "object" }))],
+        );
+
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        let body = server.captured().await.body;
+
+        assert_successful_stream(&responses);
+        assert_eq!(body["model"], "claude-sonnet-4-5-20250929");
+        assert_eq!(body["max_tokens"], 16_384);
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["cache_control"], json!({ "type": "ephemeral" }));
+        assert_eq!(
+            body["system"],
+            json!([{ "type": "text", "text": "You are helpful", "cache_control": { "type": "ephemeral" } }])
+        );
+        assert_eq!(body["messages"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            body["tools"],
+            json!([{ "name": "search", "description": "Search", "input_schema": { "type": "object" } }])
+        );
+        assert_eq!(provider.display_name(), "Anthropic (claude-sonnet-4-5-20250929)");
+    }
+
+    #[tokio::test]
+    async fn anthropic_default_and_disabled_thinking_keep_sampling_and_token_limit() {
+        for (effort, thinking) in
+            [(ReasoningEffort::Default, None), (ReasoningEffort::Disabled, Some(json!({ "type": "disabled" })))]
+        {
+            let body = anthropic_request_body(effort).await;
+
+            assert_eq!(body.get("thinking"), thinking.as_ref());
+            assert_eq!(body["max_tokens"], 500);
+            assert_eq!(body["temperature"], 0.5);
+            assert_eq!(body["top_p"], 0.5);
+        }
+    }
+
+    #[tokio::test]
+    async fn anthropic_enabled_thinking_clears_sampling_and_raises_token_limit() {
+        for (effort, budget_tokens) in
+            [(ReasoningEffort::Low, 1024), (ReasoningEffort::High, 10240), (ReasoningEffort::Max, 32768)]
+        {
+            let body = anthropic_request_body(effort).await;
+
+            assert_eq!(body["thinking"], json!({ "type": "enabled", "budget_tokens": budget_tokens }));
+            assert_eq!(body["max_tokens"], budget_tokens + 1024);
+            assert!(body.get("temperature").is_none());
+            assert!(body.get("top_p").is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn anthropic_request_model_routes_the_request_without_changing_catalog_identity() {
+        let mut server = CaptureServer::start_messages().await;
+        let provider = GenericProvider::new_with_connection(
+            "key",
+            &ANTHROPIC,
+            ProviderConnectionConfig {
+                base_url: Some(server.base_url.clone()),
+                request_model: Some("claude-deployment".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let responses = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
+        let captured = server.captured().await;
+
+        assert_successful_stream(&responses);
+        assert_eq!(captured.body["model"], "claude-deployment");
+        assert_eq!(provider.model().unwrap().to_string(), "anthropic:claude-sonnet-4-5-20250929");
+    }
+
     const CHAT_FIXTURE: &str = include_str!("../../tests/fixtures/openai/01_minimal.sse");
 
     async fn streamed_chat(body: &str) -> Vec<Result<LlmResponse>> {
@@ -856,6 +987,20 @@ mod tests {
         let error = responses.last().and_then(|response| response.as_ref().err()).expect("the stream must fail");
         assert_eq!(error.provider().map(|provider| provider.kind), Some(ProviderErrorKind::StreamInterrupted));
         assert!(error.is_retryable());
+    }
+
+    async fn anthropic_request_body(effort: ReasoningEffort) -> serde_json::Value {
+        let mut server = CaptureServer::start_messages().await;
+        let provider = capture_backed_provider(&server, &ANTHROPIC)
+            .with_model(&reasoning_off_model(Provider::Anthropic).model_id());
+        let mut context = hello_context();
+        context.set_reasoning_effort(effort);
+        context.set_model_settings(ModelSettings { temperature: Some(0.5), top_p: Some(0.5), max_tokens: Some(500) });
+
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+
+        assert_successful_stream(&responses);
+        server.captured().await.body
     }
 
     fn reasoning_off_model(provider: Provider) -> &'static LlmModel {

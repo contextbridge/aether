@@ -13,14 +13,11 @@ This trait is separate from [`StreamingModelProvider`] because construction meth
 # Example
 
 ```rust,no_run
-# async fn example() {
 use llm::{ProviderFactory, StreamingModelProvider};
-use llm::providers::anthropic::AnthropicProvider;
 
-let provider = AnthropicProvider::from_env().await
-    .expect("ANTHROPIC_API_KEY must be set")
-    .with_model("claude-sonnet-4-5-20250929");
-
-println!("Using: {}", provider.display_name());
-# }
+async fn create<T: ProviderFactory + StreamingModelProvider>(model: &str) -> llm::Result<T> {
+    let provider = T::from_env().await?.with_model(model);
+    println!("Using: {}", provider.display_name());
+    Ok(provider)
+}
 ```

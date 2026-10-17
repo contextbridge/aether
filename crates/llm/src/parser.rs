@@ -4,10 +4,7 @@ use crate::catalog::LlmModel;
 use crate::providers::bedrock::BedrockProvider;
 #[cfg(feature = "codex")]
 use crate::providers::codex::CodexProvider;
-use crate::providers::{
-    anthropic::AnthropicProvider,
-    generic::{self, GenericProvider},
-};
+use crate::providers::generic::{self, GenericProvider};
 use crate::{
     LlmError, ProviderConnectionConfig, ProviderConnectionOverrides, ProviderFactory, StreamingModelProvider,
     alloyed::AlloyedModelProvider,
@@ -35,7 +32,7 @@ impl ModelProviderParser {
 impl Default for ModelProviderParser {
     /// Create a parser with all built-in providers registered
     fn default() -> Self {
-        let mut parser = Self::new(HashMap::new()).with_provider::<AnthropicProvider>("anthropic");
+        let mut parser = Self::new(HashMap::new());
 
         for config in generic::BUILT_INS {
             parser = parser.with_generic_provider(config);

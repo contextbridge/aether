@@ -40,7 +40,7 @@ use std::io::{self, Write};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Choose your LLM. Alternatively use AnthropicProvider, GenericProvider..etc
+    // 1. Choose your LLM. Alternatively use another ProviderConfig (e.g. ANTHROPIC), CodexProvider..etc
     // For this example, OPENROUTER_API_KEY needs to be set in your environment
     let llm = GenericProvider::from_env(&OPENROUTER)?.with_model("z-ai/glm-4.6");
 

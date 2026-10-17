@@ -98,6 +98,10 @@ impl CaptureServer {
         Self::start_with_response(CHAT_COMPLETIONS_FIXTURE).await
     }
 
+    pub(crate) async fn start_messages() -> Self {
+        Self::start_with_response(MESSAGES_FIXTURE).await
+    }
+
     pub(crate) async fn start_with_response(response: &'static str) -> Self {
         Self::start_with_spec(ResponseSpec::sse(response)).await
     }
@@ -126,12 +130,14 @@ impl CaptureServer {
             self.captured().await;
             tokio::time::pause();
         });
+        tokio::time::resume();
         responses
     }
 }
 
 const RESPONSES_FIXTURE: &str = include_str!("../../tests/fixtures/openai_responses/01_minimal.sse");
 const CHAT_COMPLETIONS_FIXTURE: &str = include_str!("../../tests/fixtures/openai/01_minimal.sse");
+const MESSAGES_FIXTURE: &str = include_str!("../../tests/fixtures/anthropic/01_minimal.sse");
 
 async fn capture(
     State(state): State<Arc<CaptureState>>,

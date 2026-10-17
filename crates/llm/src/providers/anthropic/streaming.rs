@@ -14,7 +14,7 @@ pub fn process_anthropic_stream(lines: impl Stream<Item = Result<String>> + Send
     )
 }
 
-pub(super) fn decode_line(line: &str, turn: &mut StreamAssembler<u32>) -> Result<Vec<LlmResponse>> {
+pub(crate) fn decode_line(line: &str, turn: &mut StreamAssembler<u32>) -> Result<Vec<LlmResponse>> {
     match serde_json::from_str(line) {
         Ok(event) => decode_event(event, turn),
         Err(e) => {
