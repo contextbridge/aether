@@ -4,7 +4,6 @@ use super::types::{
     InputContent, InputItem, MessageContent, Reasoning, ReasoningContent, ResponsesRequest, Role, TextFormat,
     TextParam, Tool,
 };
-use crate::catalog::Provider;
 use crate::providers::openai_compatible::{PromptCacheKeySource, reasoning_effort_param};
 use crate::tool_schema::normalize_for_xiaomi;
 use crate::{
@@ -13,13 +12,12 @@ use crate::{
 
 /// The per-provider decisions that shape an otherwise identical Responses request.
 pub struct ResponsesRequestPolicy {
-    /// Provider that owns the model — decides whose encrypted reasoning may be
-    /// replayed from earlier turns.
-    pub(crate) provider: Provider,
     /// Send `reasoning` even when no effort was requested.
     always_include_reasoning: bool,
     /// Effort applied when the caller did not request one.
     default_effort: Option<ReasoningEffort>,
+    /// Wire value for `ReasoningEffort::Disabled`.
+    disabled_effort: &'static str,
     text_verbosity: Option<&'static str>,
     /// `strict` sent on every function tool. The Responses API defaults this to
     /// `true`, which rejects tool schemas that omit `additionalProperties`, so
@@ -33,9 +31,9 @@ pub struct ResponsesRequestPolicy {
 
 impl ResponsesRequestPolicy {
     pub const OPENAI: Self = Self {
-        provider: Provider::Openai,
         always_include_reasoning: false,
         default_effort: None,
+        disabled_effort: "none",
         text_verbosity: None,
         tool_strict: Some(false),
         parallel_tool_calls: None,
@@ -45,7 +43,6 @@ impl ResponsesRequestPolicy {
     };
 
     pub const XIAOMI: Self = Self {
-        provider: Provider::Xiaomi,
         tool_schema_transform: Some(normalize_for_xiaomi),
         reasoning_format: ReasoningFormat::PlainText,
         prompt_cache_key: PromptCacheKeySource::Omit,
@@ -54,9 +51,9 @@ impl ResponsesRequestPolicy {
 
     #[cfg(feature = "codex")]
     pub const CODEX: Self = Self {
-        provider: Provider::Codex,
         always_include_reasoning: true,
         default_effort: Some(ReasoningEffort::Medium),
+        disabled_effort: "disabled",
         text_verbosity: Some("medium"),
         tool_strict: None,
         parallel_tool_calls: Some(true),
@@ -64,8 +61,7 @@ impl ResponsesRequestPolicy {
     };
 
     #[cfg(feature = "bedrock")]
-    pub const MANTLE: Self =
-        Self { provider: Provider::Bedrock, always_include_reasoning: true, tool_strict: None, ..Self::OPENAI };
+    pub const MANTLE: Self = Self { always_include_reasoning: true, tool_strict: None, ..Self::OPENAI };
 
     /// Effort to send, if any — an explicit request beats the provider default.
     fn effort(&self, context: &Context) -> Option<ReasoningEffort> {
@@ -87,13 +83,12 @@ enum ReasoningFormat {
 }
 
 pub(crate) fn build_request(
-    model: &str,
+    identity: Option<&LlmModel>,
+    wire_model: &str,
     context: &Context,
     policy: &ResponsesRequestPolicy,
 ) -> Result<ResponsesRequest> {
-    let identity: Option<LlmModel> = format!("{}:{model}", policy.provider.parser_name()).parse().ok();
-    crate::provider::validate_reasoning(context, identity.as_ref())?;
-    let context = context.filter_encrypted_reasoning(identity.as_ref());
+    let context = context.filter_encrypted_reasoning(identity);
     let encrypted = policy.reasoning_format == ReasoningFormat::Encrypted;
     let (instructions, input) = map_messages(context.messages(), policy.reasoning_format)?;
     let tools = if context.tools().is_empty() { None } else { Some(map_tools(context.tools(), policy)?) };
@@ -102,7 +97,7 @@ pub(crate) fn build_request(
     let reasoning = (policy.always_include_reasoning || effort.is_some()).then(|| Reasoning {
         summary: (encrypted && context.reasoning_effort() != ReasoningEffort::Disabled).then_some("auto"),
         effort: effort.and_then(|effort| match effort {
-            ReasoningEffort::Disabled if policy.provider == Provider::Codex => Some(effort.as_str()),
+            ReasoningEffort::Disabled => Some(policy.disabled_effort),
             effort => reasoning_effort_param(effort),
         }),
     });
@@ -112,7 +107,7 @@ pub(crate) fn build_request(
         input,
         instructions,
         max_output_tokens: settings.max_tokens,
-        model: model.to_string(),
+        model: wire_model.to_string(),
         parallel_tool_calls: policy.parallel_tool_calls,
         prompt_cache_key: policy.prompt_cache_key.resolve(&context).map(String::from),
         reasoning,
@@ -233,7 +228,7 @@ mod tests {
     use serde_json::{Value, json};
 
     fn openai_request(model: &str, context: &Context) -> Result<ResponsesRequest> {
-        build_request(model, context, &ResponsesRequestPolicy::OPENAI)
+        build_request(None, model, context, &ResponsesRequestPolicy::OPENAI)
     }
 
     fn openai_body(model: &str, context: &Context) -> Value {
@@ -361,7 +356,7 @@ mod tests {
     fn a_provider_default_effort_always_ships_with_a_reasoning_object() {
         let context = Context::new(vec![ChatMessage::user("Hi")], vec![]);
 
-        let request = build_request("gpt-5.5", &context, &ResponsesRequestPolicy::CODEX).unwrap();
+        let request = build_request(None, "gpt-5.5", &context, &ResponsesRequestPolicy::CODEX).unwrap();
         let body = serde_json::to_value(request).unwrap();
 
         assert_eq!(body["reasoning"]["effort"], "medium");

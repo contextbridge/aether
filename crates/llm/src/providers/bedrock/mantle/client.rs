@@ -6,7 +6,7 @@ use crate::providers::http::{SseData, http_client};
 use crate::providers::openai_responses::mappers::{ResponsesRequestPolicy, build_request};
 use crate::providers::openai_responses::transport::send;
 use crate::providers::response_stream::OpenedStream;
-use crate::{Context, LlmError, Result};
+use crate::{Context, LlmError, LlmModel, Result};
 use utils::variables::Vars;
 
 /// Transport for Bedrock models served through the `OpenAI` Responses API.
@@ -51,12 +51,13 @@ impl MantleClient {
 
     pub(crate) async fn stream(
         &self,
+        identity: Option<&LlmModel>,
         model: &str,
         transport: &ModelTransport,
         context: &Context,
     ) -> Result<OpenedStream<SseData>> {
         let url = self.endpoint(transport)?;
-        let body = serde_json::to_value(build_request(model, context, &ResponsesRequestPolicy::MANTLE)?)?;
+        let body = serde_json::to_value(build_request(identity, model, context, &ResponsesRequestPolicy::MANTLE)?)?;
 
         debug!(model, url, auth = %self.auth, "Sending Bedrock responses request");
 
