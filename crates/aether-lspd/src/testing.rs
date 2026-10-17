@@ -1,53 +1,38 @@
 #![doc = include_str!("docs/testing.md")]
 
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread::JoinHandle;
 use std::time::Duration;
-use tokio::net::UnixStream;
 use tokio::sync::oneshot;
 
 use crate::LanguageId;
-use crate::daemon::LspDaemon;
+use crate::daemon::{LspDaemon, Timeouts};
 use crate::error::DaemonError;
-use crate::socket_path::{lockfile_path, socket_path};
+use crate::socket_path::socket_path;
 use crate::uri::path_to_uri;
 pub use utils::testing::TestWorkspace;
 
 /// An in-process daemon with explicit configuration and deterministic shutdown.
 pub struct TestDaemon {
     shutdown_tx: Option<oneshot::Sender<()>>,
-    task: Option<JoinHandle<Result<(), TestDaemonError>>>,
+    task: Option<JoinHandle<Result<(), DaemonError>>>,
+}
+
+/// Configures a [`TestDaemon`] before it starts. Unset timeouts match the production daemon.
+pub struct TestDaemonBuilder {
+    workspace_root: PathBuf,
+    language: LanguageId,
+    timeouts: Timeouts,
 }
 
 impl TestDaemon {
-    pub async fn spawn(
-        workspace_root: &Path,
-        language: LanguageId,
-        request_timeout: Duration,
-    ) -> Result<Self, TestDaemonError> {
-        remove_stale_daemon_files(workspace_root, language);
-        let socket_path = socket_path(workspace_root, language);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let daemon_socket_path = socket_path.clone();
-        let task = std::thread::spawn(move || {
-            tokio::runtime::Runtime::new()
-                .map_err(TestDaemonError::Runtime)?
-                .block_on(LspDaemon::new(daemon_socket_path, None, request_timeout).run_until_shutdown(shutdown_rx))
-                .map_err(TestDaemonError::Daemon)
-        });
-        let mut daemon = Self { shutdown_tx: Some(shutdown_tx), task: Some(task) };
+    pub fn spawn(workspace_root: &Path, language: LanguageId) -> Result<Self, TestDaemonError> {
+        Self::builder(workspace_root, language).spawn()
+    }
 
-        while UnixStream::connect(&socket_path).await.is_err() {
-            if daemon.task.as_ref().is_some_and(JoinHandle::is_finished) {
-                daemon.finish()?;
-                return Err(TestDaemonError::ExitedBeforeReady);
-            }
-            tokio::task::yield_now().await;
-        }
-
-        Ok(daemon)
+    pub fn builder(workspace_root: &Path, language: LanguageId) -> TestDaemonBuilder {
+        TestDaemonBuilder { workspace_root: workspace_root.to_path_buf(), language, timeouts: Timeouts::default() }
     }
 
     pub fn shutdown(mut self) -> Result<(), TestDaemonError> {
@@ -61,6 +46,32 @@ impl TestDaemon {
         let task = self.task.take().expect("test daemon task should be present");
         task.join().map_err(|_| TestDaemonError::ThreadPanicked)??;
         Ok(())
+    }
+}
+
+impl TestDaemonBuilder {
+    pub fn request_timeout(mut self, timeout: Duration) -> Self {
+        self.timeouts.request = timeout;
+        self
+    }
+
+    pub fn diagnostics_timeout(mut self, timeout: Duration) -> Self {
+        self.timeouts.diagnostics = timeout;
+        self
+    }
+
+    pub fn diagnostics_settle(mut self, settle: Duration) -> Self {
+        self.timeouts.diagnostics_settle = settle;
+        self
+    }
+
+    pub fn spawn(self) -> Result<TestDaemon, TestDaemonError> {
+        let socket_path = socket_path(&self.workspace_root, self.language);
+        let daemon = LspDaemon::bind(socket_path, None, self.timeouts)?;
+        let runtime = tokio::runtime::Runtime::new().map_err(TestDaemonError::Runtime)?;
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let task = std::thread::spawn(move || runtime.block_on(daemon.run_until_shutdown(shutdown_rx)));
+        Ok(TestDaemon { shutdown_tx: Some(shutdown_tx), task: Some(task) })
     }
 }
 
@@ -79,8 +90,6 @@ impl Drop for TestDaemon {
 pub enum TestDaemonError {
     #[error("Daemon failed: {0}")]
     Daemon(#[from] DaemonError),
-    #[error("Daemon exited before its socket was ready")]
-    ExitedBeforeReady,
     #[error("Failed to create daemon runtime: {0}")]
     Runtime(std::io::Error),
     #[error("Daemon thread panicked")]
@@ -147,12 +156,6 @@ pub fn node_project(name: &str) -> TestWorkspace {
 
 pub fn file_uri(path: &Path) -> lsp_types::Uri {
     path_to_uri(path).expect("Invalid file path")
-}
-
-fn remove_stale_daemon_files(workspace_root: &Path, language: LanguageId) {
-    let socket = socket_path(workspace_root, language);
-    let _ = fs::remove_file(lockfile_path(&socket));
-    let _ = fs::remove_file(socket);
 }
 
 const TYPESCRIPT_PACKAGE: &str = "typescript@7.0.2";

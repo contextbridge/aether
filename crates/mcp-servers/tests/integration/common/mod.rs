@@ -2,6 +2,7 @@
 
 #![allow(dead_code)]
 
+use aether_lspd::testing::{TestDaemon, TestDaemonBuilder};
 use mcp_servers::coding::CodingMcp;
 use mcp_servers::coding::tools::web_fetch::WebFetcher;
 use mcp_servers::skills::{
@@ -20,12 +21,9 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-/// Default timeout for polling operations (60 seconds).
-const POLL_TIMEOUT: Duration = Duration::from_mins(1);
-const POLL_INTERVAL: Duration = Duration::from_millis(500);
-const TASK_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -80,8 +78,10 @@ pub fn test_error(message: impl Into<String>) -> std::io::Error {
 
 /// An isolated workspace connected to a `CodingMcp` through the public MCP protocol.
 pub struct CodingWorkspace {
-    workspace: TestWorkspace,
     pub client: McpClient,
+    // Fields drop in order: stop the daemon before deleting the files it watches.
+    daemon: Option<TestDaemon>,
+    workspace: TestWorkspace,
 }
 
 impl CodingWorkspace {
@@ -93,6 +93,11 @@ impl CodingWorkspace {
         Self::with(workspace, |root| CodingMcp::new(root).with_lsp()).await
     }
 
+    pub async fn with_daemon(workspace: TestWorkspace, daemon: TestDaemonBuilder) -> Self {
+        let daemon = daemon.spawn().expect("Failed to start LSP daemon");
+        Self { daemon: Some(daemon), ..Self::with_lsp(workspace).await }
+    }
+
     pub async fn with_http(http: FakeHttpClient) -> Self {
         Self::with(TestWorkspace::new(), |root| CodingMcp::new(root).with_web_fetcher(WebFetcher::with_client(http)))
             .await
@@ -100,7 +105,7 @@ impl CodingWorkspace {
 
     pub async fn with(workspace: TestWorkspace, configure: impl FnOnce(&Path) -> CodingMcp) -> Self {
         let client = connect(configure(workspace.root()), ClientOptions::default()).await;
-        Self { workspace, client }
+        Self { workspace, client, daemon: None }
     }
 
     pub fn root(&self) -> &Path {
@@ -128,19 +133,19 @@ impl CodingWorkspace {
         Ok(())
     }
 
-    pub async fn poll_errors(&self, relative_path: Option<&str>, predicate: impl Fn(&Value) -> bool) -> Value {
-        let args = relative_path.map_or_else(|| json!({}), |path| json!({ "filePath": self.path(path) }));
-        poll_lsp_tool(&self.client, "lsp_check_errors", args, predicate).await
+    pub async fn check_errors(&self, relative_path: &str) -> TestResult<Value> {
+        self.client.call("lsp_check_errors", json!({ "filePath": self.path(relative_path) })).await
     }
 
-    pub async fn poll_symbol(
-        &self,
-        relative_path: &str,
-        mut lookup: Value,
-        predicate: impl Fn(&Value) -> bool,
-    ) -> Value {
-        lookup["file_path"] = json!(self.path(relative_path));
-        poll_lsp_tool(&self.client, "lsp_symbol", lookup, predicate).await
+    pub async fn poll_workspace_errors(&self, predicate: impl Fn(&Value) -> bool) -> Value {
+        loop {
+            if let Ok(result) = self.client.call("lsp_check_errors", json!({})).await
+                && predicate(&result)
+            {
+                return result;
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
     }
 }
 
@@ -176,22 +181,8 @@ pub async fn await_terminal_task(client: &McpClient, task_id: &str) -> TestResul
         if task.status().is_terminal() {
             return Ok(task);
         }
-        tokio::time::sleep(TASK_POLL_INTERVAL).await;
-    }
-}
-
-pub async fn poll_lsp_tool(client: &McpClient, tool: &str, args: Value, predicate: impl Fn(&Value) -> bool) -> Value {
-    let start = Instant::now();
-    let mut last = String::from("(no response)");
-    while start.elapsed() < POLL_TIMEOUT {
-        match client.call(tool, &args).await {
-            Ok(result) if predicate(&result) => return result,
-            Ok(result) => last = result.to_string(),
-            Err(error) => last = error.to_string(),
-        }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
-    panic!("poll_lsp_tool({tool}) timed out after {POLL_TIMEOUT:?}. Last result: {last}");
 }
 
 fn error_count(result: &Value) -> Option<u64> {

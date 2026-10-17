@@ -1,29 +1,35 @@
 use lsp_types::{PublishDiagnosticsParams, Uri};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
-use tokio::sync::Notify;
+use tokio::sync::watch;
+use tokio::time::{Instant, timeout_at};
 
-const DIAGNOSTICS_SETTLE_DURATION: Duration = Duration::from_millis(600);
-
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct DiagnosticsStore {
     state: Arc<RwLock<HashMap<Uri, (PublishDiagnosticsParams, u64)>>>,
-    notify: Arc<Notify>,
-    version: Arc<AtomicU64>,
+    version: Arc<watch::Sender<u64>>,
+    settle: Duration,
+}
+
+/// Whether a diagnostics wait saw the server publish for the file.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Freshness {
+    Fresh,
+    Unconfirmed,
 }
 
 impl DiagnosticsStore {
-    pub(crate) fn new() -> Self {
-        Self::default()
+    pub(crate) fn new(settle: Duration) -> Self {
+        Self { state: Arc::default(), version: Arc::new(watch::Sender::new(0)), settle }
     }
 
     pub(crate) fn publish(&self, diagnostics: PublishDiagnosticsParams) {
-        let uri = diagnostics.uri.clone();
-        let version = self.version.fetch_add(1, Ordering::Relaxed) + 1;
-        self.state.write().unwrap_or_else(PoisonError::into_inner).insert(uri, (diagnostics, version));
-        self.notify.notify_waiters();
+        let mut state = self.state.write().unwrap_or_else(PoisonError::into_inner);
+        self.version.send_modify(|version| {
+            *version += 1;
+            state.insert(diagnostics.uri.clone(), (diagnostics, *version));
+        });
     }
 
     pub(crate) fn current_uri_version(&self, uri: &Uri) -> u64 {
@@ -52,30 +58,20 @@ impl DiagnosticsStore {
         self.state.write().unwrap_or_else(PoisonError::into_inner).remove(uri);
     }
 
-    pub(crate) async fn wait_for_uri_fresh(&self, uri: &Uri, version_before: u64, timeout: Duration) {
-        let _ = tokio::time::timeout(timeout, self.wait_for_uri_settled(uri, version_before)).await;
-    }
-
-    async fn wait_for_uri_settled(&self, uri: &Uri, version_before: u64) {
-        loop {
-            let published = self.notify.notified();
-            if self.current_uri_version(uri) != version_before {
-                break;
-            }
-            published.await;
+    pub(crate) async fn wait_for_uri_fresh(&self, uri: &Uri, version_before: u64, timeout: Duration) -> Freshness {
+        let deadline = Instant::now() + timeout;
+        let mut published = self.version.subscribe();
+        let first = published.wait_for(|_| self.current_uri_version(uri) != version_before);
+        if !matches!(timeout_at(deadline, first).await, Ok(Ok(_))) {
+            return Freshness::Unconfirmed;
         }
 
-        let mut last_version = self.current_uri_version(uri);
         loop {
-            tokio::select! {
-                () = self.notify.notified() => last_version = self.current_uri_version(uri),
-                () = tokio::time::sleep(DIAGNOSTICS_SETTLE_DURATION) => {
-                    let version = self.current_uri_version(uri);
-                    if version == last_version {
-                        return;
-                    }
-                    last_version = version;
-                }
+            let settled = self.current_uri_version(uri);
+            let quiet_until = (Instant::now() + self.settle).min(deadline);
+            let republished = published.wait_for(|_| self.current_uri_version(uri) != settled);
+            if !matches!(timeout_at(quiet_until, republished).await, Ok(Ok(_))) {
+                return Freshness::Fresh;
             }
         }
     }
@@ -85,6 +81,8 @@ impl DiagnosticsStore {
 mod tests {
     use super::*;
     use lsp_types::{Diagnostic, Position, Range};
+
+    const SETTLE: Duration = Duration::from_millis(600);
 
     fn diagnostics(uri: &str, message: &str) -> PublishDiagnosticsParams {
         PublishDiagnosticsParams {
@@ -100,7 +98,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn wait_for_uri_fresh_waits_for_settle_window() {
-        let store = DiagnosticsStore::new();
+        let store = DiagnosticsStore::new(SETTLE);
         let uri: Uri = "file:///test.rs".parse().unwrap();
         let version_before = store.current_uri_version(&uri);
         let publish_store = store.clone();
@@ -114,8 +112,9 @@ mod tests {
         });
 
         let start = tokio::time::Instant::now();
-        store.wait_for_uri_fresh(&uri, version_before, Duration::from_secs(2)).await;
+        let freshness = store.wait_for_uri_fresh(&uri, version_before, Duration::from_secs(2)).await;
 
+        assert_eq!(freshness, Freshness::Fresh);
         assert!(start.elapsed() >= Duration::from_millis(600), "store should wait through the settle window");
         let diags = store.get(None);
         assert_eq!(diags[0].diagnostics[0].message, "second");
@@ -123,7 +122,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn wait_for_uri_fresh_ignores_unrelated_publishes() {
-        let store = DiagnosticsStore::new();
+        let store = DiagnosticsStore::new(SETTLE);
         let target: Uri = "file:///target.rs".parse().unwrap();
         let other: Uri = "file:///other.rs".parse().unwrap();
         let version_before = store.current_uri_version(&target);
@@ -131,9 +130,7 @@ mod tests {
         let waiter = {
             let store = store.clone();
             let target = target.clone();
-            tokio::spawn(async move {
-                store.wait_for_uri_fresh(&target, version_before, Duration::from_secs(2)).await;
-            })
+            tokio::spawn(async move { store.wait_for_uri_fresh(&target, version_before, Duration::from_secs(2)).await })
         };
 
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -143,12 +140,46 @@ mod tests {
         assert!(!waiter.is_finished(), "unrelated publishes should not satisfy target URI freshness");
 
         store.publish(diagnostics(target.as_str(), "target"));
-        waiter.await.unwrap();
+        assert_eq!(waiter.await.unwrap(), Freshness::Fresh);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wait_for_uri_fresh_is_unconfirmed_when_the_uri_is_never_published() {
+        let store = DiagnosticsStore::new(SETTLE);
+        let uri: Uri = "file:///test.rs".parse().unwrap();
+
+        let freshness = store.wait_for_uri_fresh(&uri, 0, Duration::from_secs(2)).await;
+
+        assert_eq!(freshness, Freshness::Unconfirmed);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wait_for_uri_fresh_settles_while_other_uris_keep_publishing() {
+        let store = DiagnosticsStore::new(SETTLE);
+        let target: Uri = "file:///target.rs".parse().unwrap();
+        let publisher = {
+            let store = store.clone();
+            let target = target.clone();
+            tokio::spawn(async move {
+                store.publish(diagnostics(target.as_str(), "target"));
+                loop {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    store.publish(diagnostics("file:///other.rs", "other"));
+                }
+            })
+        };
+
+        let start = tokio::time::Instant::now();
+        let freshness = store.wait_for_uri_fresh(&target, 0, Duration::from_secs(20)).await;
+        publisher.abort();
+
+        assert_eq!(freshness, Freshness::Fresh);
+        assert!(start.elapsed() < Duration::from_secs(1), "settled after {:?}", start.elapsed());
     }
 
     #[tokio::test]
     async fn forget_removes_cached_diagnostics() {
-        let store = DiagnosticsStore::new();
+        let store = DiagnosticsStore::new(SETTLE);
         let uri: Uri = "file:///test.rs".parse().unwrap();
         store.publish(diagnostics(uri.as_str(), "error"));
         store.forget_uri(&uri);

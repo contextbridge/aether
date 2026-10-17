@@ -1,4 +1,4 @@
-use crate::common::{cargo_project, fake_daemon, file_uri, hover_text};
+use crate::common::{cargo_project, fake_daemon, fake_request, file_uri, hover_text, workspace_error_count};
 use aether_lspd::LanguageId;
 use lsp_types::{DocumentSymbolResponse, GotoDefinitionResponse};
 use std::path::PathBuf;
@@ -20,11 +20,11 @@ fn main() {
     let (_daemon, client) = fake_daemon(project.root(), LanguageId::Rust).await;
     let uri = file_uri(&project.path("src/main.rs"));
 
-    let hover = hover_text(client.hover(uri.clone(), 0, 0).await.expect("Hover request failed"));
-    assert!(hover.contains("open_count=1"));
+    let hover = hover_text(client.hover(uri.clone(), 5, 16).await.expect("Hover request failed"));
+    assert!(hover.contains("open_count=1; line=5; character=16"), "{hover}");
     assert!(hover.contains("example_fn"));
 
-    let definition = client.goto_definition(uri.clone(), 4, 16).await.expect("Goto definition failed");
+    let definition = client.goto_definition(uri.clone(), 5, 16).await.expect("Goto definition failed");
     match definition {
         GotoDefinitionResponse::Array(locations) => {
             assert_eq!(locations.len(), 1);
@@ -35,7 +35,8 @@ fn main() {
     }
 
     let references = client.find_references(uri.clone(), 0, 3, true).await.expect("Find references failed");
-    assert_eq!(references.len(), 2);
+    let lines: Vec<u32> = references.iter().map(|location| location.range.start.line).collect();
+    assert_eq!(lines, [0, 5]);
     assert!(references.iter().all(|location| location.uri == uri));
 
     let document_symbols = client.document_symbol(uri.clone()).await.expect("Document symbol failed");
@@ -55,8 +56,8 @@ fn main() {
     #[allow(clippy::mutable_key_type)]
     let changes = rename.changes.expect("Rename should contain changes");
     let edits = changes.get(&uri).expect("Rename changes should include the file");
-    assert_eq!(edits.len(), 1);
-    assert_eq!(edits[0].new_text, "renamed_fn");
+    assert_eq!(edits.len(), 2);
+    assert!(edits.iter().all(|edit| edit.new_text == "renamed_fn"));
 }
 
 #[tokio::test]
@@ -94,4 +95,36 @@ async fn diagnostic_helpers_round_trip_through_fake_server() {
     assert_eq!(diagnostics[0].uri, uri);
     assert_eq!(diagnostics[0].diagnostics.len(), 1);
     assert_eq!(diagnostics[0].diagnostics[0].message, "error token");
+}
+
+#[tokio::test]
+async fn a_pending_diagnostics_call_does_not_block_other_requests_on_the_connection() {
+    let project =
+        cargo_project("held_diagnostics").file("src/main.rs", "// hold-diagnostics\nfn main() { let error = 1; }\n");
+    let (_daemon, client) = fake_daemon(project.root(), LanguageId::Rust).await;
+    let uri = file_uri(&project.path("src/main.rs"));
+
+    let (diagnostics, hover) = tokio::join!(client.get_diagnostics(Some(uri.clone())), async {
+        let hover = client.hover(uri.clone(), 0, 0).await;
+        fake_request(&client, "fake/releaseDiagnostics").await;
+        hover
+    });
+
+    assert!(hover.expect("Hover failed").is_some());
+    assert_eq!(workspace_error_count(&diagnostics.expect("Failed to get diagnostics")), 1);
+}
+
+#[tokio::test]
+async fn position_requests_wait_for_the_server_to_finish_loading() {
+    let project = cargo_project("loading_server").file(".fake-loading", "");
+    let (_daemon, client) = fake_daemon(project.root(), LanguageId::Rust).await;
+    let uri = file_uri(&project.path("src/main.rs"));
+
+    let (hover, ()) = tokio::join!(client.hover(uri, 0, 0), async {
+        // The round trip gives the hover time to reach the daemon before loading finishes.
+        fake_request(&client, "fake/noop").await;
+        fake_request(&client, "fake/finishLoading").await;
+    });
+
+    assert!(hover_text(hover.expect("Hover failed")).contains("open_count=1"));
 }

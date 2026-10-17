@@ -33,7 +33,7 @@ impl FileWatcherHandle {
     /// Spawn the actor task and return a handle to it.
     pub fn spawn(workspace_root: PathBuf, event_tx: mpsc::Sender<FileWatcherBatch>) -> Self {
         let (msg_tx, msg_rx) = mpsc::channel(64);
-        let (bridge_tx, bridge_rx) = mpsc::channel::<Event>(256);
+        let (bridge_tx, bridge_rx) = mpsc::unbounded_channel::<Event>();
         let watcher = match create_watcher(&workspace_root, bridge_tx) {
             Ok(w) => {
                 tracing::debug!("Started file watcher on {}", workspace_root.display());
@@ -91,7 +91,7 @@ struct FileWatcherActor {
     canonical_workspace_root: Option<PathBuf>,
     event_tx: mpsc::Sender<FileWatcherBatch>,
     msg_rx: mpsc::Receiver<FileWatcherMsg>,
-    bridge_rx: mpsc::Receiver<notify::Event>,
+    bridge_rx: mpsc::UnboundedReceiver<notify::Event>,
     forwarded_pending: BTreeMap<Uri, FileChangeType>,
     discovered_pending: BTreeSet<Uri>,
     registrations: HashMap<String, Vec<FileSystemWatcher>>,
@@ -229,11 +229,17 @@ impl FileWatcherActor {
 }
 
 /// Create the OS file watcher that bridges notify events into an mpsc channel.
-fn create_watcher(workspace_root: &Path, tx: mpsc::Sender<Event>) -> Result<RecommendedWatcher, notify::Error> {
+///
+/// The channel is unbounded so the OS callback never blocks: a callback parked on a full channel
+/// would deadlock dropping the watcher, which waits for the callback thread to finish.
+fn create_watcher(
+    workspace_root: &Path,
+    tx: mpsc::UnboundedSender<Event>,
+) -> Result<RecommendedWatcher, notify::Error> {
     let mut watcher = RecommendedWatcher::new(
         move |event: Result<Event, notify::Error>| match event {
             Ok(e) => {
-                let _ = tx.blocking_send(e);
+                let _ = tx.send(e);
             }
             Err(e) => {
                 tracing::debug!("File watcher error: {e}");
@@ -352,7 +358,7 @@ mod tests {
     fn test_actor(workspace_root: &str) -> (FileWatcherActor, mpsc::Receiver<FileWatcherBatch>) {
         let (event_tx, event_rx) = mpsc::channel(8);
         let (_, msg_rx) = mpsc::channel(8);
-        let (_, bridge_rx) = mpsc::channel(8);
+        let (_, bridge_rx) = mpsc::unbounded_channel();
         (
             FileWatcherActor {
                 _watcher: None,

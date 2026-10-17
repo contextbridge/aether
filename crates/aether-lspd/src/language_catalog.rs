@@ -92,6 +92,7 @@ pub struct ServerSpec {
     pub(crate) env_key: &'static str,
     args: &'static [&'static str],
     diagnostics_mode: DiagnosticsMode,
+    reports_server_status: bool,
 }
 
 pub fn detect_project_languages(root: &Path) -> Vec<LanguageId> {
@@ -114,6 +115,7 @@ pub(crate) struct LspConfig {
     pub args: Vec<String>,
     pub languages: Vec<LanguageId>,
     pub diagnostics_mode: DiagnosticsMode,
+    pub reports_server_status: bool,
 }
 
 pub(crate) fn socket_identity_for_language(id: LanguageId) -> &'static str {
@@ -134,7 +136,13 @@ pub(crate) fn resolved_config_for_language(language: LanguageId) -> Option<LspCo
         .map(|candidate| candidate.id)
         .collect();
 
-    Some(LspConfig { command, args, languages, diagnostics_mode: server.diagnostics_mode })
+    Some(LspConfig {
+        command,
+        args,
+        languages,
+        diagnostics_mode: server.diagnostics_mode,
+        reports_server_status: server.reports_server_status,
+    })
 }
 
 const RUST_ANALYZER: ServerSpec = ServerSpec {
@@ -144,6 +152,7 @@ const RUST_ANALYZER: ServerSpec = ServerSpec {
     env_key: "RUST_ANALYZER",
     args: &[],
     diagnostics_mode: DiagnosticsMode::Push,
+    reports_server_status: true,
 };
 
 const TSC: ServerSpec = ServerSpec {
@@ -157,6 +166,7 @@ const TSC: ServerSpec = ServerSpec {
     env_key: "TSC",
     args: &["--lsp", "--stdio"],
     diagnostics_mode: DiagnosticsMode::Pull,
+    reports_server_status: false,
 };
 
 const PYRIGHT: ServerSpec = ServerSpec {
@@ -166,6 +176,7 @@ const PYRIGHT: ServerSpec = ServerSpec {
     env_key: "PYRIGHT",
     args: &["--stdio"],
     diagnostics_mode: DiagnosticsMode::Push,
+    reports_server_status: false,
 };
 
 const GOPLS: ServerSpec = ServerSpec {
@@ -175,6 +186,7 @@ const GOPLS: ServerSpec = ServerSpec {
     env_key: "GOPLS",
     args: &[],
     diagnostics_mode: DiagnosticsMode::Push,
+    reports_server_status: false,
 };
 
 const CLANGD: ServerSpec = ServerSpec {
@@ -184,6 +196,7 @@ const CLANGD: ServerSpec = ServerSpec {
     env_key: "CLANGD",
     args: &[],
     diagnostics_mode: DiagnosticsMode::Push,
+    reports_server_status: false,
 };
 
 const PROJECT_LANGUAGE_SPECS: &[(LanguageId, &[&str])] = &[

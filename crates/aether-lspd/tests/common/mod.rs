@@ -5,6 +5,7 @@ pub use aether_lspd::testing::{TestWorkspace, cargo_project, file_uri};
 use aether_lspd::testing::{TestDaemon, configure_fake_server};
 use aether_lspd::{LanguageId, LspClient};
 use lsp_types::{Hover, HoverContents, MarkedString, PublishDiagnosticsParams};
+use serde_json::{Value, json};
 use std::path::Path;
 use std::sync::Once;
 use std::time::Duration;
@@ -21,18 +22,26 @@ pub fn use_fake_servers() {
     });
 }
 
+/// A daemon serving the fake server, which publishes once per open, so diagnostics need no settle window.
 pub async fn fake_daemon(root: &Path, language: LanguageId) -> (TestDaemon, LspClient) {
     use_fake_servers();
-    start_daemon(root, language).await
+    let daemon =
+        TestDaemon::builder(root, language).diagnostics_settle(Duration::ZERO).spawn().expect("Failed to spawn daemon");
+    (daemon, connect(root, language).await)
 }
 
 pub async fn start_daemon(root: &Path, language: LanguageId) -> (TestDaemon, LspClient) {
-    let daemon = TestDaemon::spawn(root, language, Duration::from_secs(120)).await.expect("Failed to spawn daemon");
+    let daemon = TestDaemon::spawn(root, language).expect("Failed to spawn daemon");
     (daemon, connect(root, language).await)
 }
 
 pub async fn connect(root: &Path, language: LanguageId) -> LspClient {
     LspClient::connect(root, language).await.expect("Failed to connect client")
+}
+
+/// Sends a request only the fake server understands, such as `fake/finishLoading`.
+pub async fn fake_request(client: &LspClient, method: &str) {
+    client.call(method, &json!({}), || Value::Null).await.unwrap_or_else(|error| panic!("{method} failed: {error}"));
 }
 
 pub async fn wait_for_workspace_diagnostics(

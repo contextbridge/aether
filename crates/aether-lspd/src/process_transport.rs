@@ -2,7 +2,7 @@ use crate::error::{DaemonError, DaemonResult};
 use crate::file_watcher::{FileWatcherBatch, FileWatcherHandle};
 use crate::language_catalog::{DiagnosticsMode, LspConfig};
 use crate::path_to_uri;
-use crate::protocol::{LspErrorResponse, LspNotification};
+use crate::protocol::LspErrorResponse;
 use futures::{SinkExt, StreamExt};
 use lsp_types::notification::{DidChangeWatchedFiles, Initialized, Notification, PublishDiagnostics};
 use lsp_types::request::{
@@ -25,18 +25,29 @@ use std::collections::HashMap;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::bytes::{Buf, BytesMut};
 use tokio_util::codec::{Decoder, Encoder, FramedRead, FramedWrite};
 
 const INITIALIZE_REQUEST_ID: i64 = 1;
+const SERVER_STATUS_METHOD: &str = "experimental/serverStatus";
 
 #[derive(Clone)]
 pub(crate) struct ProcessTransport {
     command_tx: mpsc::Sender<TransportCommand>,
     process_id: Option<i32>,
     initialized_rx: watch::Receiver<bool>,
+    ready: Arc<watch::Sender<bool>>,
+}
+
+/// A notification the daemon sends to its language server.
+#[derive(Debug, Clone)]
+pub(crate) struct LspNotification {
+    pub(crate) method: String,
+    pub(crate) params: Value,
 }
 
 pub(crate) enum TransportEvent {
@@ -74,6 +85,7 @@ struct ProcessTransportActor {
     writer: FramedWrite<ChildStdin, LspCodec>,
     diagnostics_mode: DiagnosticsMode,
     initialized_tx: watch::Sender<bool>,
+    ready: Arc<watch::Sender<bool>>,
     command_rx: mpsc::Receiver<TransportCommand>,
     event_tx: mpsc::Sender<TransportEvent>,
     watcher: FileWatcherHandle,
@@ -104,6 +116,7 @@ impl ProcessTransport {
         let (event_tx, event_rx) = mpsc::channel(100);
         let (watcher_tx, watcher_rx) = mpsc::channel(64);
         let (initialized_tx, initialized_rx) = watch::channel(false);
+        let ready = Arc::new(watch::Sender::new(!config.reports_server_status));
         let watcher = FileWatcherHandle::spawn(root_path.to_path_buf(), watcher_tx);
 
         let actor = ProcessTransportActor {
@@ -112,6 +125,7 @@ impl ProcessTransport {
             writer: FramedWrite::new(stdin, LspCodec),
             diagnostics_mode: config.diagnostics_mode,
             initialized_tx,
+            ready: Arc::clone(&ready),
             command_rx,
             event_tx,
             watcher,
@@ -121,7 +135,7 @@ impl ProcessTransport {
         };
         tokio::spawn(actor.run(root_path.to_path_buf()));
 
-        Ok((Self { command_tx, process_id, initialized_rx }, event_rx))
+        Ok((Self { command_tx, process_id, initialized_rx, ready }, event_rx))
     }
 
     pub(crate) async fn wait_until_initialized(&self) -> DaemonResult<()> {
@@ -131,6 +145,14 @@ impl ProcessTransport {
             .await
             .map(|_| ())
             .map_err(|_| DaemonError::LspInitializeFailed)
+    }
+
+    pub(crate) async fn wait_until_ready(&self, bound: Duration) {
+        let mut ready = self.ready.subscribe();
+        if tokio::time::timeout(bound, ready.wait_for(|ready| *ready)).await.is_err() {
+            tracing::warn!("Language server still loading after {}s; sending requests anyway", bound.as_secs());
+            self.ready.send_replace(true);
+        }
     }
 
     pub(crate) async fn request_raw(&self, method: &str, params: Value) -> Result<Value, TransportError> {
@@ -260,6 +282,7 @@ impl ProcessTransportActor {
                 }),
                 ..Default::default()
             }),
+            experimental: Some(json!({ "serverStatusNotification": true })),
             ..Default::default()
         };
 
@@ -331,6 +354,11 @@ impl ProcessTransportActor {
             (None, Some(method)) if method == PublishDiagnostics::METHOD => {
                 if let Ok(diagnostics) = serde_json::from_value(message.params) {
                     let _ = self.event_tx.send(TransportEvent::PublishedDiagnostics(diagnostics)).await;
+                }
+            }
+            (None, Some(method)) if method == SERVER_STATUS_METHOD => {
+                if let Some(quiescent) = message.params.get("quiescent").and_then(Value::as_bool) {
+                    self.ready.send_replace(quiescent);
                 }
             }
             _ => {}

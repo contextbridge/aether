@@ -1,21 +1,18 @@
 use crate::common::{
-    TestWorkspace, cargo_project, connect, fake_daemon, file_uri, hover_text, use_fake_servers,
-    wait_for_workspace_diagnostics, workspace_error_count,
+    TestWorkspace, cargo_project, connect, fake_daemon, file_uri, hover_text, wait_for_workspace_diagnostics,
+    workspace_error_count,
 };
-use aether_lspd::{LanguageId, LspClient, lockfile_path, socket_path};
+use aether_lspd::LanguageId;
 
 #[tokio::test]
-async fn daemon_persists_after_client_disconnect() {
-    use_fake_servers();
-
+async fn daemon_keeps_serving_after_a_client_disconnects() {
     let project = cargo_project("disconnect_persists");
-    let socket_path = socket_path(project.root(), LanguageId::Rust);
-    let lockfile_path = lockfile_path(&socket_path);
-
-    let client = LspClient::connect(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
+    let (_daemon, client) = fake_daemon(project.root(), LanguageId::Rust).await;
     client.disconnect().await.expect("Failed to disconnect client");
 
-    assert!(lockfile_path.exists(), "Daemon should continue running after a client disconnects");
+    let client = connect(project.root(), LanguageId::Rust).await;
+    let hover = client.hover(file_uri(&project.path("src/main.rs")), 0, 0).await.expect("Hover failed");
+    assert!(hover.is_some());
 }
 
 #[tokio::test]

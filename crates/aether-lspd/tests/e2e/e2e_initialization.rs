@@ -22,8 +22,10 @@ async fn connect_failure(language: LanguageId) -> String {
     use_fake_servers();
 
     let root = TempDir::new().expect("Failed to create project");
-    let daemon =
-        TestDaemon::spawn(root.path(), language, Duration::from_secs(2)).await.expect("Failed to spawn daemon");
+    let daemon = TestDaemon::builder(root.path(), language)
+        .request_timeout(Duration::from_secs(2))
+        .spawn()
+        .expect("Failed to spawn daemon");
 
     let error = LspClient::connect(root.path(), language).await.err().expect("connect should fail");
     daemon.shutdown().expect("Failed to shut down daemon");
