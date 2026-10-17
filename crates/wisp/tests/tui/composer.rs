@@ -300,3 +300,15 @@ fn file_picker_completes_from_the_fake_filesystem() {
     ui.assert_viewport_contains("readme.md");
     ui.assert_viewport_contains("src/main.rs");
 }
+
+#[test]
+fn characters_held_with_a_platform_modifier_are_not_typed() {
+    let mut ui = TestUi::new();
+
+    for modifiers in [KeyModifiers::SUPER, KeyModifiers::HYPER, KeyModifiers::META] {
+        ui.key(KeyEvent::new(KeyCode::Char('k'), modifiers));
+    }
+    ui.key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT));
+
+    assert_eq!(ui.app().composer().text(), "K");
+}

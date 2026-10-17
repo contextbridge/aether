@@ -1,6 +1,9 @@
 use crate::theme::Theme;
+use crate::view::edit_buffer::is_composed_char;
+use crate::view::input::{Nav, UiEvent};
 use crate::view::list_view::ListView;
 use crate::view::selection::{Direction, SelectionState};
+use crossterm::event::KeyCode;
 use nucleo::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo::{Config, Matcher, Utf32Str};
 use ratatui::buffer::Buffer;
@@ -126,10 +129,26 @@ impl<T> FilterableList<T> {
         selection.step(len, direction, selectable);
     }
 
-    pub fn navigation(&mut self) -> (&mut SelectionState, usize, impl Fn(usize) -> bool + '_) {
-        let Self { entries, filtered_indices, selection, selectable, .. } = self;
-        let (entries, filtered_indices, selectable) = (&*entries, &*filtered_indices, *selectable);
-        (selection, filtered_indices.len(), move |row| selectable(&entries[filtered_indices[row]]))
+    pub(crate) fn on_nav_event(&mut self, event: &UiEvent) -> Nav {
+        if let UiEvent::Key(key) = event {
+            match key.code {
+                KeyCode::Backspace => {
+                    self.pop_query_char();
+                    return Nav::Moved;
+                }
+                KeyCode::Char(c) if !c.is_control() && !is_composed_char(*key) => {
+                    self.push_query_char(c);
+                    return Nav::Moved;
+                }
+                _ => {}
+            }
+        }
+        self.navigate(event)
+    }
+
+    pub(crate) fn navigate(&mut self, event: &UiEvent) -> Nav {
+        let (selection, len, selectable) = self.navigation();
+        selection.on_nav_event(event, len, selectable)
     }
 
     pub fn select_index(&mut self, index: usize) {
@@ -169,6 +188,12 @@ impl<T> FilterableList<T> {
         let (view, selection) = self.view(theme, row);
         let view = view.empty_message(empty).bordered(title).scrollbar();
         StatefulWidget::render(view, area, buf, selection);
+    }
+
+    fn navigation(&mut self) -> (&mut SelectionState, usize, impl Fn(usize) -> bool + '_) {
+        let Self { entries, filtered_indices, selection, selectable, .. } = self;
+        let (entries, filtered_indices, selectable) = (&*entries, &*filtered_indices, *selectable);
+        (selection, filtered_indices.len(), move |row| selectable(&entries[filtered_indices[row]]))
     }
 
     fn refilter(&mut self) {

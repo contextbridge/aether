@@ -103,10 +103,9 @@ mod picker_click {
             ])
             .dimensions(80, 24)
             .build();
-        open_first_config_option(&mut ui);
+        open_settings_row(&mut ui, "Model");
 
-        let row = ui.viewport_row("Chat").expect("DeepSeek chat row");
-        ui.terminal_event(click(10, row));
+        ui.click_text("Chat");
         ui.key(key(KeyCode::Esc));
 
         assert_sets_config_option(&mut ui, "model", "anthropic:opus,deepseek:chat");
@@ -280,7 +279,7 @@ mod event_routing {
     use super::*;
 
     #[test]
-    fn mouse_activation_uses_shared_settings_actions() -> Result<(), Box<dyn std::error::Error>> {
+    fn mouse_activation_uses_shared_settings_actions() {
         use agent_client_protocol::schema::v2::{AuthMethod, AuthMethodAgent, SessionConfigOption};
 
         fn settings_app(
@@ -294,35 +293,25 @@ mod event_routing {
         }
 
         let mut ui = settings_app(vec![select("model", "Model", "a", MODELS)], vec![], vec![]);
-        ui.run_command("/settings");
-        let model_row = ui.viewport_row("Model:").ok_or("Model row in the settings menu")?;
-        ui.terminal_event(click(10, model_row));
-        let beta_row = ui.viewport_row("Beta").ok_or("Beta row in the model picker")?;
-        ui.terminal_event(click(10, beta_row));
+        open_settings_row(&mut ui, "Model");
+        ui.click_text("Beta");
         assert_sets_config_option(&mut ui, "model", "b");
 
         let server = McpServerStatusEntry::new("linear", McpServerStatus::NeedsOAuth)
             .with_auth_capability(McpServerAuthCapability::OAuth);
         let mut ui = settings_app(vec![], vec![server], vec![]);
-        ui.run_command("/settings");
-        let servers_row = ui.viewport_row("MCP Servers:").ok_or("MCP Servers row in the settings menu")?;
-        ui.terminal_event(click(10, servers_row));
-        let linear_row = ui.viewport_row("linear").ok_or("linear row in the servers pane")?;
-        ui.terminal_event(click(10, linear_row));
+        open_settings_row(&mut ui, "MCP Servers");
+        ui.click_text("linear");
         assert_authenticates_mcp_server(&mut ui, "linear");
 
         let methods = vec![AuthMethod::Agent(AuthMethodAgent::new("codex", "Codex"))];
         let mut ui = settings_app(vec![], vec![], methods);
-        ui.run_command("/settings");
-        let providers_row = ui.viewport_row("Provider Logins:").ok_or("Provider Logins row in the settings menu")?;
-        ui.terminal_event(click(10, providers_row));
-        let codex_row = ui.viewport_row("Codex").ok_or("Codex row in the provider pane")?;
-        ui.terminal_event(click(10, codex_row));
+        open_settings_row(&mut ui, "Provider Logins");
+        ui.click_text("Codex");
         assert!(matches!(
             ui.next_agent_command(),
             Some(AgentCommand::Authenticate { method_id }) if method_id == "codex"
         ));
-        Ok(())
     }
 
     #[test]
@@ -483,7 +472,7 @@ mod screen_mouse {
     use ratatui::layout::Rect;
     use wisp::git_review::FileDiff;
     use wisp::screens::git_diff::GitDiffScreen;
-    use wisp::surfaces::input::MouseAction;
+    use wisp::view::input::MouseAction;
 
     fn render_git_diff(screen: &mut GitDiffScreen, width: u16, height: u16) -> Buffer {
         render_surface(Buffer::empty(Rect::new(0, 0, width, height)), |buffer, cx| {
@@ -517,11 +506,11 @@ mod screen_mouse {
     fn git_diff_click_left_side_selects_drawer() {
         let mut screen = open_screen();
 
-        screen.on_ui_event(UiEvent::Key(key(KeyCode::Tab)));
+        screen.on_ui_event(&UiEvent::Key(key(KeyCode::Tab)));
         let before = render_git_diff(&mut screen, 120, 40);
         assert_drawer_focus(&before, false);
 
-        assert!(screen.on_ui_event(UiEvent::Mouse(MouseAction::Click, (20, 3))).is_empty());
+        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (20, 3))).is_empty());
 
         let buffer = render_git_diff(&mut screen, 120, 40);
         assert_drawer_focus(&buffer, true);
@@ -534,7 +523,7 @@ mod screen_mouse {
         let before = render_git_diff(&mut screen, 120, 40);
         assert_drawer_focus(&before, true);
 
-        assert!(screen.on_ui_event(UiEvent::Mouse(MouseAction::Click, (60, 3))).is_empty());
+        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (60, 3))).is_empty());
 
         let buffer = render_git_diff(&mut screen, 120, 40);
         assert_drawer_focus(&buffer, false);
@@ -546,9 +535,9 @@ mod screen_mouse {
 
         render_git_diff(&mut screen, 60, 40);
 
-        assert!(screen.on_ui_event(UiEvent::Mouse(MouseAction::Click, (2, 3))).is_empty());
+        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (2, 3))).is_empty());
 
-        screen.on_ui_event(UiEvent::Key(key(KeyCode::Char('c'))));
+        screen.on_ui_event(&UiEvent::Key(key(KeyCode::Char('c'))));
         let buffer = render_git_diff(&mut screen, 60, 40);
         assert!(buffer_text(&buffer).contains("save"), "patch focus must allow drafting a comment");
     }
@@ -560,7 +549,7 @@ mod screen_mouse {
         let before = render_git_diff(&mut screen, 120, 40);
 
         // Click at y=0 (top border) — should be ignored
-        assert!(screen.on_ui_event(UiEvent::Mouse(MouseAction::Click, (40, 0))).is_empty());
+        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (40, 0))).is_empty());
 
         let buffer = render_git_diff(&mut screen, 120, 40);
         assert_eq!(buffer, before, "border clicks must not alter selection or focus");
@@ -571,15 +560,15 @@ mod screen_mouse {
         let mut screen = open_screen();
 
         render_git_diff(&mut screen, 60, 40);
-        assert!(screen.on_ui_event(UiEvent::Mouse(MouseAction::Click, (20, 3))).is_empty());
-        screen.on_ui_event(UiEvent::Key(key(KeyCode::Char('c'))));
+        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (20, 3))).is_empty());
+        screen.on_ui_event(&UiEvent::Key(key(KeyCode::Char('c'))));
         let draft = render_git_diff(&mut screen, 60, 40);
         assert!(buffer_text(&draft).contains("save"));
-        screen.on_ui_event(UiEvent::Key(key(KeyCode::Esc)));
+        screen.on_ui_event(&UiEvent::Key(key(KeyCode::Esc)));
 
         let before = render_git_diff(&mut screen, 120, 40);
         assert_drawer_focus(&before, false);
-        assert!(screen.on_ui_event(UiEvent::Mouse(MouseAction::Click, (20, 3))).is_empty());
+        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (20, 3))).is_empty());
         let after = render_git_diff(&mut screen, 120, 40);
         assert_drawer_focus(&after, true);
     }
@@ -591,16 +580,12 @@ mod refocus_click {
 
     use super::*;
 
-    fn codex_logged_in_via_browser() -> (TestUi, u16) {
+    fn codex_logged_in_via_browser() -> TestUi {
         let methods = vec![AuthMethod::Agent(AuthMethodAgent::new("codex", "Codex"))];
         let mut ui = TestUiBuilder::new().auth_methods(methods).dimensions(80, 24).build();
-        ui.run_command("/settings");
+        open_settings_row(&mut ui, "Provider Logins");
 
-        let providers_row = ui.viewport_row("Provider Logins:").expect("Provider Logins row in the settings menu");
-        ui.terminal_event(click(10, providers_row));
-
-        let codex_row = ui.viewport_row("Codex").expect("Codex row in the provider pane");
-        ui.terminal_event(click(10, codex_row));
+        ui.click_text("Codex");
         ui.terminal_event(Event::FocusLost);
         ui.deliver_result(CommandResult::AuthenticationCompleted {
             method_id: "codex".into(),
@@ -608,25 +593,25 @@ mod refocus_click {
         });
         ui.draw();
         ui.take_commands();
-        (ui, codex_row)
+        ui
     }
 
     #[test]
     fn click_after_refocusing_can_log_in_again() {
-        let (mut ui, codex_row) = codex_logged_in_via_browser();
+        let mut ui = codex_logged_in_via_browser();
         ui.terminal_event(Event::FocusGained);
-        ui.terminal_event(click(10, codex_row));
-        ui.terminal_event(click(10, codex_row));
+        ui.click_text("Codex");
+        ui.click_text("Codex");
         let logins = ui.count_commands(|command| matches!(command, Command::Agent(AgentCommand::Authenticate { .. })));
         assert_eq!(logins, 1);
     }
 
     #[test]
     fn click_after_refocusing_from_the_keyboard_is_not_swallowed() {
-        let (mut ui, codex_row) = codex_logged_in_via_browser();
+        let mut ui = codex_logged_in_via_browser();
         ui.terminal_event(Event::FocusGained);
         ui.key(key(KeyCode::Up));
-        ui.terminal_event(click(10, codex_row));
+        ui.click_text("Codex");
         let logins = ui.count_commands(|command| matches!(command, Command::Agent(AgentCommand::Authenticate { .. })));
         assert_eq!(logins, 1);
     }

@@ -38,7 +38,7 @@ fn auth_methods_updated(methods: Vec<acp::AuthMethod>) -> AcpEvent {
 /// Walks settings down to the MCP servers pane and authenticates the selected
 /// server: the flow that makes the agent hand back an OAuth URL.
 fn authenticate_selected_oauth_server(ui: &mut TestUi) {
-    open_mcp_servers(ui);
+    open_settings_row(ui, "MCP Servers");
     ui.key(key(KeyCode::Enter));
 }
 
@@ -148,7 +148,7 @@ fn mcp_server_status_pane_renders_entries() {
         server_status_entry("slack", McpServerStatus::Failed { error: "timeout".to_string() }),
     ]));
 
-    open_mcp_servers(&mut ui);
+    open_settings_row(&mut ui, "MCP Servers");
 
     ui.assert_viewport_contains("github");
     ui.assert_viewport_contains("5 tools");
@@ -162,7 +162,7 @@ fn mcp_server_status_pane_renders_entries() {
 fn mcp_server_status_empty_shows_placeholder() {
     let mut ui = TestUi::new();
 
-    open_mcp_servers(&mut ui);
+    open_settings_row(&mut ui, "MCP Servers");
 
     ui.assert_viewport_contains("no MCP servers configured");
 }
@@ -173,7 +173,7 @@ fn selecting_oauth_server_emits_authenticate_mcp_server() {
 
     ui.acp_event(mcp_notification(vec![oauth_server("linear", McpServerStatus::NeedsOAuth)]));
 
-    open_mcp_servers(&mut ui);
+    open_settings_row(&mut ui, "MCP Servers");
     ui.key(key(KeyCode::Enter));
 
     assert_authenticates_mcp_server(&mut ui, "linear");
@@ -185,7 +185,7 @@ fn selecting_non_oauth_server_is_noop() {
 
     ui.acp_event(mcp_notification(vec![server_status_entry("github", McpServerStatus::Connected { tool_count: 5 })]));
 
-    open_mcp_servers(&mut ui);
+    open_settings_row(&mut ui, "MCP Servers");
     ui.key(key(KeyCode::Enter));
 
     assert_no_commands(&mut ui, "should not emit command for non-OAuth server");
@@ -195,7 +195,7 @@ fn selecting_non_oauth_server_is_noop() {
 fn provider_login_emits_authenticate() {
     let mut ui = TestUiBuilder::new().auth_methods(vec![auth_method("codex", "Codex", None)]).build();
 
-    open_provider_logins(&mut ui);
+    open_settings_row(&mut ui, "Provider Logins");
     ui.key(key(KeyCode::Enter));
 
     let cmd = ui.next_agent_command();
@@ -207,7 +207,7 @@ fn authenticate_complete_updates_correct_entry() {
     let mut ui =
         TestUiBuilder::new().auth_methods(vec![auth_method("a", "A", None), auth_method("b", "B", None)]).build();
 
-    open_provider_logins(&mut ui);
+    open_settings_row(&mut ui, "Provider Logins");
     ui.key(key(KeyCode::Enter));
 
     ui.deliver_result(auth_complete("a"));
@@ -219,7 +219,7 @@ fn authenticate_complete_updates_correct_entry() {
 fn authenticate_failed_resets_to_needs_login() {
     let mut ui = TestUiBuilder::new().auth_methods(vec![auth_method("x", "X", None)]).build();
 
-    open_provider_logins(&mut ui);
+    open_settings_row(&mut ui, "Provider Logins");
     ui.key(key(KeyCode::Enter));
 
     ui.deliver_result(auth_failed("x"));
@@ -231,7 +231,7 @@ fn authenticate_failed_resets_to_needs_login() {
 fn auth_methods_updated_replaces_provider_entries() {
     let mut ui = TestUiBuilder::new().auth_methods(vec![auth_method("old", "Old", None)]).build();
 
-    open_provider_logins(&mut ui);
+    open_settings_row(&mut ui, "Provider Logins");
 
     ui.acp_event(auth_methods_updated(vec![auth_method("new", "New", None)]));
 
@@ -297,7 +297,7 @@ fn enter_on_settings_oauth_prompt_opens_the_browser() {
             Arc::new(|_| Ok(())),
         );
 
-        overlay.on_ui_event(UiEvent::Key(key(KeyCode::Enter)));
+        overlay.on_ui_event(&UiEvent::Key(key(KeyCode::Enter)));
 
         assert_eq!(opened.lock().unwrap().as_deref(), Some("https://linear.app/oauth"));
     });
@@ -355,12 +355,32 @@ fn form_elicitation_is_answered_inside_the_settings_overlay() {
 }
 
 #[test]
+fn form_elicitation_inside_settings_owns_the_terminal_cursor() {
+    block_on_local(async {
+        let mut ui = TestUiBuilder::new().dimensions(80, 30).build();
+        ui.run_command("/settings");
+        let schema = ElicitationSchema::new().property("token", StringPropertySchema::new(), true);
+        let _response_rx = with_elicitation(&mut ui, form_elicitation("linear", "Paste an API token", schema)).await;
+
+        ui.type_text("secret");
+        ui.draw();
+
+        let buffer = ui.backend().buffer();
+        let row = row_containing(buffer, "secret").expect("token field");
+        let text = row_text(buffer, row);
+        let column = text[..text.find("secret").unwrap()].width() + "secret".width();
+        assert!(ui.backend().cursor_visible(), "the token field owns the cursor");
+        assert_eq!(ui.backend().cursor_position(), Position::new(u16::try_from(column).unwrap(), row));
+    });
+}
+
+#[test]
 fn server_status_updated_while_pane_open_refreshes() {
     let mut ui = TestUi::new();
 
     ui.acp_event(mcp_notification(vec![server_status_entry("a", McpServerStatus::Connected { tool_count: 1 })]));
 
-    open_mcp_servers(&mut ui);
+    open_settings_row(&mut ui, "MCP Servers");
 
     ui.acp_event(mcp_notification(vec![server_status_entry(
         "a",
@@ -379,7 +399,7 @@ fn provider_login_pane_shows_all_statuses() {
         ])
         .build();
 
-    open_provider_logins(&mut ui);
+    open_settings_row(&mut ui, "Provider Logins");
 
     ui.assert_viewport_contains("NeedsLogin");
     ui.assert_viewport_contains("needs login");
@@ -393,7 +413,7 @@ fn esc_from_server_status_returns_to_menu() {
 
     ui.acp_event(mcp_notification(vec![server_status_entry("a", McpServerStatus::Connected { tool_count: 1 })]));
 
-    open_mcp_servers(&mut ui);
+    open_settings_row(&mut ui, "MCP Servers");
     ui.key(key(KeyCode::Esc));
 
     ui.assert_viewport_contains("MCP Servers");
@@ -403,7 +423,7 @@ fn esc_from_server_status_returns_to_menu() {
 fn esc_from_provider_login_returns_to_menu() {
     let mut ui = TestUiBuilder::new().auth_methods(vec![auth_method("x", "X", None)]).build();
 
-    open_provider_logins(&mut ui);
+    open_settings_row(&mut ui, "Provider Logins");
     ui.key(key(KeyCode::Esc));
 
     ui.assert_viewport_contains("Provider Logins");
@@ -428,7 +448,7 @@ fn server_status_summary_updates_in_menu() {
 fn provider_login_summary_updates_in_menu_after_login() {
     let mut ui =
         TestUiBuilder::new().auth_methods(vec![auth_method("codex", "Codex", None)]).dimensions(80, 24).build();
-    open_provider_logins(&mut ui);
+    open_settings_row(&mut ui, "Provider Logins");
     ui.key(key(KeyCode::Enter));
 
     ui.deliver_result(CommandResult::AuthenticationCompleted {
@@ -472,7 +492,7 @@ fn server_status_pane_groups_model_visible_and_deferred_with_headers() {
         deferred_oauth_server("linear", McpServerStatus::NeedsOAuth),
     ]));
 
-    open_mcp_servers(&mut ui);
+    open_settings_row(&mut ui, "MCP Servers");
 
     ui.assert_viewport_contains("Model-visible");
     ui.assert_viewport_contains("Deferred");
@@ -490,7 +510,7 @@ fn server_status_pane_only_model_visible_renders_no_headers() {
         server_status_entry("slack", McpServerStatus::Failed { error: "err".to_string() }),
     ]));
 
-    open_mcp_servers(&mut ui);
+    open_settings_row(&mut ui, "MCP Servers");
 
     ui.assert_viewport_not_contains("Model-visible");
     ui.assert_viewport_not_contains("Deferred");
@@ -505,7 +525,7 @@ fn server_status_pane_only_deferred_shows_deferred_header() {
         deferred_oauth_server("linear", McpServerStatus::NeedsOAuth),
     ]));
 
-    open_mcp_servers(&mut ui);
+    open_settings_row(&mut ui, "MCP Servers");
 
     ui.assert_viewport_not_contains("Model-visible");
     ui.assert_viewport_contains("Deferred");
@@ -521,7 +541,7 @@ fn server_status_navigation_skips_headers_and_spacers() {
         deferred_oauth_server("linear", McpServerStatus::NeedsOAuth),
     ]));
 
-    open_mcp_servers(&mut ui);
+    open_settings_row(&mut ui, "MCP Servers");
 
     // First server: github (Model-visible section, row index 1)
     ui.key(key(KeyCode::Enter));
@@ -554,7 +574,7 @@ fn deferred_oauth_server_sends_original_server_name() {
 
     ui.acp_event(mcp_notification(vec![deferred_oauth_server("linear", McpServerStatus::NeedsOAuth)]));
 
-    open_mcp_servers(&mut ui);
+    open_settings_row(&mut ui, "MCP Servers");
     ui.key(key(KeyCode::Enter));
 
     assert_authenticates_mcp_server(&mut ui, "linear");
@@ -605,7 +625,7 @@ fn server_status_update_entries_preserves_selection_across_group_boundaries() {
         deferred_oauth_server("linear", McpServerStatus::NeedsOAuth),
     ]));
 
-    open_mcp_servers(&mut ui);
+    open_settings_row(&mut ui, "MCP Servers");
 
     // Navigate to linear (Deferred section, after header + spacer)
     ui.key(key(KeyCode::Down));
@@ -805,7 +825,7 @@ fn settings_selecting_option_emits_config_option() {
         .config_options(vec![select("model", "Model", "gpt-4o", &[("gpt-4o", "GPT-4o"), ("claude", "Claude")])])
         .build();
 
-    open_first_config_option(&mut ui);
+    open_settings_row(&mut ui, "Model");
     ui.key(key(KeyCode::Down));
     ui.key(key(KeyCode::Enter));
 
@@ -817,7 +837,7 @@ fn settings_multi_select_opens_the_model_selector_and_commits_toggles() {
     let models = choices(&[("anthropic:opus", "Anthropic / Opus"), ("anthropic:sonnet", "Anthropic / Sonnet")]);
     let mut ui = TestUiBuilder::new().config_options(vec![model_picker("", models)]).build();
 
-    open_first_config_option(&mut ui);
+    open_settings_row(&mut ui, "Model");
     ui.assert_viewport_contains("Model search");
 
     ui.key(key(KeyCode::Enter));
@@ -830,7 +850,7 @@ fn model_selector_space_types_into_search_instead_of_toggling() {
     let mut ui = TestUiBuilder::new()
         .config_options(vec![model_picker("", choices(&[("anthropic:opus", "Opus"), ("anthropic:sonnet", "Sonnet")]))])
         .build();
-    open_first_config_option(&mut ui);
+    open_settings_row(&mut ui, "Model");
 
     ui.key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
     ui.key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::ALT));
@@ -1101,7 +1121,7 @@ fn model_selector_provider_heading_does_not_skip_rows() {
         )])
         .build();
 
-    open_first_config_option(&mut ui);
+    open_settings_row(&mut ui, "Model");
 
     ui.assert_viewport_contains("OpenAI");
     ui.assert_viewport_contains("GPT-4o");
@@ -1128,7 +1148,7 @@ fn model_selector_skips_disabled_models_and_scrolls_to_the_end() {
         .collect();
     let mut ui = TestUiBuilder::new().config_options(vec![model_picker("", options)]).build();
 
-    open_first_config_option(&mut ui);
+    open_settings_row(&mut ui, "Model");
     for _ in 0..13 {
         ui.key(key(KeyCode::Down));
     }
@@ -1154,7 +1174,7 @@ fn model_selector_focused_item_visible_with_provider_headings() {
         )])
         .build();
 
-    open_first_config_option(&mut ui);
+    open_settings_row(&mut ui, "Model");
 
     // Move down through all items — last item should be visible
     for _ in 0..4 {
@@ -1214,7 +1234,7 @@ fn overlay_text(ui: &mut TestUi) -> String {
 
 fn model_selector_ui(option: acp::SessionConfigOption) -> TestUi {
     let mut ui = TestUiBuilder::new().dimensions(100, 40).config_options(vec![option]).build();
-    open_first_config_option(&mut ui);
+    open_settings_row(&mut ui, "Model");
     ui
 }
 
@@ -1320,7 +1340,7 @@ fn settings_picker_filters_by_typed_query() {
             &[("gpt-4o", "GPT-4o"), ("claude", "Claude"), ("gemini", "Gemini")],
         )])
         .build();
-    open_first_config_option(&mut ui);
+    open_settings_row(&mut ui, "Model");
 
     ui.type_text("clau");
 
@@ -1339,7 +1359,7 @@ fn settings_picker_shows_unavailable_options_with_their_reason() {
         vec![acp::SessionConfigSelectOption::new("gpt-4o", "GPT-4o"), unavailable],
     );
     let mut ui = TestUiBuilder::new().config_options(vec![option]).build();
-    open_first_config_option(&mut ui);
+    open_settings_row(&mut ui, "Model");
 
     let text = overlay_text(&mut ui);
     assert!(text.contains("Claude"), "an unavailable option is still listed:\n{text}");
@@ -1354,7 +1374,7 @@ fn settings_picker_shows_unavailable_options_with_their_reason() {
 fn settings_picker_esc_returns_to_the_menu_without_changing_anything() {
     let mut ui =
         TestUiBuilder::new().config_options(vec![select("model", "Model", "a", &[("a", "A"), ("b", "B")])]).build();
-    open_first_config_option(&mut ui);
+    open_settings_row(&mut ui, "Model");
     ui.key(key(KeyCode::Down));
 
     ui.key(key(KeyCode::Esc));
@@ -1369,7 +1389,7 @@ fn settings_picker_esc_returns_to_the_menu_without_changing_anything() {
 fn settings_picker_confirming_the_current_value_sends_nothing() {
     let mut ui =
         TestUiBuilder::new().config_options(vec![select("model", "Model", "a", &[("a", "A"), ("b", "B")])]).build();
-    open_first_config_option(&mut ui);
+    open_settings_row(&mut ui, "Model");
 
     ui.key(key(KeyCode::Enter));
 
@@ -1380,7 +1400,7 @@ fn settings_picker_confirming_the_current_value_sends_nothing() {
 fn settings_picker_confirm_updates_the_menu_immediately() {
     let mut ui =
         TestUiBuilder::new().config_options(vec![select("model", "Model", "a", &[("a", "A"), ("b", "B")])]).build();
-    open_first_config_option(&mut ui);
+    open_settings_row(&mut ui, "Model");
     ui.key(key(KeyCode::Down));
     ui.key(key(KeyCode::Enter));
 
@@ -1572,7 +1592,7 @@ fn model_selector_requires_explicit_choice_when_disabled_is_incompatible() {
             reasoning_option("disabled", &["default", "disabled", "high"]),
         ])
         .build();
-    open_first_config_option(&mut ui);
+    open_settings_row(&mut ui, "Model");
     ui.assert_viewport_contains("disabled [·]");
     ui.key(key(KeyCode::Enter));
     ui.key(key(KeyCode::Down));
@@ -1602,7 +1622,7 @@ fn model_selector_does_not_commit_reasoning_when_only_focus_moves() {
             reasoning_option("high", &["low", "medium", "high"]),
         ])
         .build();
-    open_first_config_option(&mut ui);
+    open_settings_row(&mut ui, "Model");
 
     ui.key(key(KeyCode::Down));
     ui.key(key(KeyCode::Esc));
@@ -1614,7 +1634,7 @@ fn model_selector_does_not_commit_reasoning_when_only_focus_moves() {
 fn model_selector_toggling_twice_leaves_nothing_to_commit() {
     let mut ui =
         TestUiBuilder::new().config_options(vec![model_picker("", choices(&[("anthropic:opus", "Opus")]))]).build();
-    open_first_config_option(&mut ui);
+    open_settings_row(&mut ui, "Model");
 
     ui.key(key(KeyCode::Enter));
     ui.key(key(KeyCode::Enter));
@@ -1631,7 +1651,7 @@ fn model_selector_preselects_the_current_value() {
             choices(&[("anthropic:opus", "Opus"), ("anthropic:sonnet", "Sonnet")]),
         )])
         .build();
-    open_first_config_option(&mut ui);
+    open_settings_row(&mut ui, "Model");
 
     ui.key(key(KeyCode::Esc));
 
@@ -1646,7 +1666,7 @@ fn model_selector_toggles_only_what_the_query_left_visible() {
             choices(&[("anthropic:opus", "Opus"), ("openai:gpt-4o", "GPT-4o"), ("google:gemini", "Gemini")]),
         )])
         .build();
-    open_first_config_option(&mut ui);
+    open_settings_row(&mut ui, "Model");
 
     ui.type_text("gpt");
     ui.key(key(KeyCode::Enter));

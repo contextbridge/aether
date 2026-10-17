@@ -34,7 +34,7 @@ use acp_utils::testing::{idle_notification, running_notification};
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::v2::{self as acp, SessionId, SessionUpdate, ToolCallUpdate};
 use clankerdiff_core::git_patch_from_texts;
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Position, Rect, Size};
@@ -47,6 +47,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedReceiver;
+use unicode_width::UnicodeWidthStr;
 
 /// A deterministic command runner for integration tests.
 ///
@@ -1073,6 +1074,20 @@ where
     /// Row (within the viewport buffer) of the first line containing `needle`.
     pub fn viewport_row(&mut self, needle: &str) -> Option<u16> {
         row_containing(&self.viewport(), needle)
+    }
+
+    pub fn click_text(&mut self, needle: &str) {
+        let viewport = self.viewport();
+        let rows: Vec<u16> = (viewport.area.top()..viewport.area.bottom())
+            .filter(|&row| row_text(&viewport, row).contains(needle))
+            .collect();
+        let [row] = rows[..] else {
+            panic!("expected one row showing {needle:?}, found rows {rows:?}:\n{}", buffer_text(&viewport));
+        };
+        let text = row_text(&viewport, row);
+        let column = u16::try_from(text[..text.find(needle).expect("the row shows needle")].width()).unwrap();
+        let kind = MouseEventKind::Down(MouseButton::Left);
+        self.terminal_event(Event::Mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE }));
     }
 
     pub fn assert_viewport_contains(&mut self, needle: &str) {

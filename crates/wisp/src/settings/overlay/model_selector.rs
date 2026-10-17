@@ -1,16 +1,17 @@
 use super::{KeyHint, SettingsChange, value_match_key};
 use crate::session::session_config_view::LocalConfigValue;
-use crate::surfaces::input::{Nav, UiEvent, UiOutput};
+use crate::surfaces::input::UiOutput;
 use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
 use crate::view::filterable_list::FilterableList;
+use crate::view::input::{Nav, UiEvent};
 use crate::view::reasoning_bar::{reasoning_bar, reasoning_column_width, reasoning_label_width};
 use crate::view::selection::Direction;
 use crate::view::wrap::truncate_to_width;
 use acp_utils::config_option_id::ConfigOptionId;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Layout, Position, Rect};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, StatefulWidget, Widget};
@@ -153,9 +154,8 @@ impl ModelSelector {
 impl ModelSelector {
     /// Enter toggles the focused model, and Tab cycles reasoning effort, so
     /// those never reach the shared picker navigation.
-    #[allow(clippy::needless_pass_by_value)]
-    pub(crate) fn on_ui_event(&mut self, event: UiEvent) -> Vec<UiOutput> {
-        if let UiEvent::Key(key) = &event {
+    pub(crate) fn on_ui_event(&mut self, event: &UiEvent) -> Vec<UiOutput> {
+        if let UiEvent::Key(key) = event {
             match key.code {
                 KeyCode::Tab => {
                     self.cycle_reasoning(Direction::Forward);
@@ -172,7 +172,7 @@ impl ModelSelector {
                 _ => {}
             }
         }
-        match self.items.on_nav_event(&event) {
+        match self.items.on_nav_event(event) {
             Nav::Clicked => {
                 self.clamp_reasoning_to_focused();
                 self.toggle_focused();
@@ -222,7 +222,7 @@ impl ModelSelector {
 }
 
 impl ModelSelector {
-    pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) -> Option<Position> {
+    pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         let [header_area, list_area] =
             Layout::vertical([Constraint::Length(HEADER_ROWS), Constraint::Min(0)]).areas(area);
         let reasoning_width = self
@@ -311,7 +311,6 @@ impl ModelSelector {
                 .style(theme.warning)
                 .render(Rect::new(area.x, area.y + 2, area.width, 1), buf);
         }
-        None
     }
 }
 

@@ -128,6 +128,16 @@ impl EditBuffer {
     }
 }
 
+const COMPOSED_MODIFIERS: KeyModifiers = KeyModifiers::CONTROL
+    .union(KeyModifiers::ALT)
+    .union(KeyModifiers::SUPER)
+    .union(KeyModifiers::HYPER)
+    .union(KeyModifiers::META);
+
+pub(crate) fn is_composed_char(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char(_)) && key.modifiers.intersects(COMPOSED_MODIFIERS)
+}
+
 /// Applies one editing keystroke to `buffer`, returning whether it was consumed.
 ///
 /// This is the single key table shared by every text input: the composer, the
@@ -138,7 +148,7 @@ pub fn apply_edit_key(buffer: &mut EditBuffer, key: KeyEvent) -> bool {
     match key.code {
         KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => buffer.move_line_start(),
         KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => buffer.move_line_end(),
-        KeyCode::Char(character) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+        KeyCode::Char(character) if !is_composed_char(key) => {
             buffer.insert_char(character);
         }
         KeyCode::Backspace => {

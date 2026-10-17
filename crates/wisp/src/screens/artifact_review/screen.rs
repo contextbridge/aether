@@ -1,6 +1,7 @@
-use crate::screens::reviewer::{crossterm_event, theme_selection};
+use crate::screens::reviewer::{crossterm_event, theme_change};
 use crate::surfaces::elicitation::ElicitationResponder;
-use crate::surfaces::input::{UiEvent, UiOutput};
+use crate::surfaces::input::UiOutput;
+use crate::view::input::UiEvent;
 use crate::surfaces::modal::frame::ModalFrame;
 use crate::view::generation::Generation;
 use crate::{renderer::DrawContext, settings::builtin_review_theme_choices};
@@ -48,7 +49,7 @@ impl ArtifactReviewScreen {
         self.state.set_theme_choices(choices);
     }
 
-    pub fn on_ui_event(&mut self, event: UiEvent) -> Vec<UiOutput> {
+    pub fn on_ui_event(&mut self, event: &UiEvent) -> Vec<UiOutput> {
         self.handle_event(crossterm_event(event))
     }
 
@@ -88,10 +89,10 @@ impl ArtifactReviewScreen {
 
     fn submit(&mut self, submission: ArtifactReviewSubmission) -> Vec<UiOutput> {
         self.responder.accept_strings(submission.fields());
-        vec![match submission {
-            ArtifactReviewSubmission::Approved => UiOutput::ArtifactApproved,
-            ArtifactReviewSubmission::Feedback { feedback } => UiOutput::ArtifactFeedback(feedback),
-        }]
+        vec![UiOutput::ArtifactReviewed(match submission {
+            ArtifactReviewSubmission::Approved => "Artifact approved".to_string(),
+            ArtifactReviewSubmission::Feedback { feedback } => feedback,
+        })]
     }
 
     fn handle_event(&mut self, event: Event) -> Vec<UiOutput> {
@@ -120,7 +121,7 @@ impl ArtifactReviewScreen {
         };
         match outcome {
             InputOutcome::Ignored | InputOutcome::Consumed => Vec::new(),
-            InputOutcome::ThemeSelected(id) => vec![UiOutput::SetTheme(theme_selection(id))],
+            InputOutcome::ThemeSelected(id) => vec![theme_change(id)],
             InputOutcome::Emitted(MarkdownReviewEvent::CopyFormatted(_)) => {
                 self.error = Some("Clipboard is disabled".into());
                 Vec::new()

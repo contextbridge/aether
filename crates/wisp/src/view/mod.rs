@@ -1,6 +1,7 @@
 pub(crate) mod edit_buffer;
 pub mod filterable_list;
 pub mod generation;
+pub mod input;
 pub mod list_view;
 pub(crate) mod markdown;
 pub(crate) mod reasoning_bar;

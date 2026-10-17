@@ -1,5 +1,5 @@
-use crate::view::edit_buffer::EditBuffer;
 use crate::theme::Theme;
+use crate::view::edit_buffer::EditBuffer;
 use crate::view::wrap::{as_u16, fit_prefix};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -93,9 +93,6 @@ pub fn key_hints(hints: &[(impl AsRef<str>, impl AsRef<str>)], theme: &Theme) ->
     Line::from(spans)
 }
 
-/// The widest slice of `buffer` that keeps the cursor visible in `width`
-/// columns, with the cursor's column inside that slice. Shared by every
-/// single-line text input so rendering and cursor placement cannot disagree.
 pub(crate) fn visible_window(buffer: &EditBuffer, width: usize) -> (String, usize) {
     if width == 0 {
         return (String::new(), 0);

@@ -1,3 +1,5 @@
+use crate::view::input::{Nav, UiEvent};
+use crossterm::event::KeyCode;
 use ratatui::layout::Rect;
 
 /// Cursor and scroll offset for a list of `len` items.
@@ -110,6 +112,26 @@ impl SelectionState {
                 return;
             }
         }
+    }
+
+    pub(crate) fn on_nav_event(&mut self, event: &UiEvent, len: usize, selectable: impl Fn(usize) -> bool) -> Nav {
+        let direction = match event {
+            UiEvent::Key(key) => match key.code {
+                KeyCode::Esc => return Nav::Close,
+                KeyCode::Enter => return Nav::Activate,
+                KeyCode::Up => Direction::Backward,
+                KeyCode::Down => Direction::Forward,
+                _ => return Nav::Unhandled,
+            },
+            UiEvent::Paste(_) => return Nav::Unhandled,
+            UiEvent::Mouse(action, (_, row)) => match action.direction() {
+                Some(direction) => direction,
+                None if self.select_at(*row, len, selectable) => return Nav::Clicked,
+                None => return Nav::Unhandled,
+            },
+        };
+        self.step(len, direction, selectable);
+        Nav::Moved
     }
 
     pub fn clamp(&mut self, len: usize) {

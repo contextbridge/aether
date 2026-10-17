@@ -189,6 +189,23 @@ fn workspace_picker_enter_selects_create_new_and_shows_naming_mode() {
 }
 
 #[test]
+fn workspace_name_prompt_owns_the_terminal_cursor() {
+    let mut ui = TestUiBuilder::new().workspace_move().build();
+    open_workspace_picker(&mut ui, vec![workspace_entry("/home/user/code/current", true)]);
+    ui.key(key(KeyCode::Enter));
+
+    ui.type_text("proj");
+    ui.draw();
+
+    let buffer = ui.backend().buffer();
+    let row = row_containing(buffer, "Name: proj").expect("name prompt");
+    let text = row_text(buffer, row);
+    let column = text[..text.find("Name: proj").unwrap()].width() + "Name: proj".width();
+    assert!(ui.backend().cursor_visible(), "the name prompt owns the cursor");
+    assert_eq!(ui.backend().cursor_position(), Position::new(u16::try_from(column).unwrap(), row));
+}
+
+#[test]
 fn workspace_naming_new_esc_returns_to_list_mode() {
     let mut ui = TestUiBuilder::new().workspace_move().build();
 

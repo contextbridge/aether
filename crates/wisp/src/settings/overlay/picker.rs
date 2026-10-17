@@ -1,12 +1,13 @@
 use super::{SettingsChange, SettingsMenuEntry, value_match_key};
 use crate::session::session_config_view::LocalConfigValue;
-use crate::surfaces::input::{Nav, UiEvent, UiOutput};
+use crate::surfaces::input::UiOutput;
 use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
 use crate::view::filterable_list::FilterableList;
+use crate::view::input::{Nav, UiEvent};
 use crate::view::wrap::truncate_to_width;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Layout, Position, Rect};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, StatefulWidget, Widget};
@@ -31,9 +32,8 @@ impl SettingsPicker {
 }
 
 impl SettingsPicker {
-    #[allow(clippy::needless_pass_by_value)]
-    pub(crate) fn on_ui_event(&mut self, event: UiEvent) -> Vec<UiOutput> {
-        match self.values.on_nav_event(&event) {
+    pub(crate) fn on_ui_event(&mut self, event: &UiEvent) -> Vec<UiOutput> {
+        match self.values.on_nav_event(event) {
             Nav::Activate | Nav::Clicked => {
                 let change = self
                     .values
@@ -48,7 +48,7 @@ impl SettingsPicker {
 }
 
 impl SettingsPicker {
-    pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) -> Option<Position> {
+    pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         let [header_area, list_area] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
         Paragraph::new(truncate_to_width(
             &format!(" {} search: {}", self.title, self.values.query()),
@@ -73,6 +73,5 @@ impl SettingsPicker {
             buf,
             selection,
         );
-        None
     }
 }

@@ -27,7 +27,7 @@ fn artifact_review_clears_underlying_content_only_inside_its_viewport() {
             assert_opaque_viewport(Rect::new(3, y, 120, 24), |area, buffer, cx| {
                 screen.render(area, buffer, cx);
             });
-            screen.on_ui_event(wisp::surfaces::input::UiEvent::Key(crossterm::event::KeyCode::Char('r').into()));
+            screen.on_ui_event(&wisp::view::input::UiEvent::Key(crossterm::event::KeyCode::Char('r').into()));
             assert_opaque_viewport(Rect::new(3, y, 120, 24), |area, buffer, cx| {
                 assert_eq!(screen.render(area, buffer, cx), None);
             });

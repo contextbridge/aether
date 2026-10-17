@@ -1,5 +1,6 @@
 use crate::renderer::DrawContext;
-use crate::surfaces::input::{Nav, UiEvent, UiOutput, one};
+use crate::surfaces::input::{UiOutput, one};
+use crate::view::input::{Nav, UiEvent};
 use crate::theme::Theme;
 use crate::view::filterable_list::FilterableList;
 use crate::view::wrap::truncate_to_width;
@@ -148,9 +149,8 @@ impl SessionPicker {
 }
 
 impl SessionPicker {
-    #[allow(clippy::needless_pass_by_value)]
-    pub(crate) fn on_ui_event(&mut self, event: UiEvent) -> Vec<UiOutput> {
-        match self.sessions.on_nav_event(&event) {
+    pub(crate) fn on_ui_event(&mut self, event: &UiEvent) -> Vec<UiOutput> {
+        match self.sessions.on_nav_event(event) {
             Nav::Close => vec![UiOutput::Close],
             Nav::Activate => self.activate(),
             Nav::Moved | Nav::Clicked => self.preview_request(),
