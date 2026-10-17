@@ -3,7 +3,7 @@ use crate::catalog::Provider;
 use crate::provider::{LlmResponseStream, StreamingModelProvider, display_name};
 use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
 use crate::providers::http::{SseData, http_client};
-use crate::providers::openai_responses::mappers::{ResponsesRequestPolicy, build_wire_request};
+use crate::providers::openai_responses::mappers::{ResponsesRequestPolicy, build_request};
 use crate::providers::openai_responses::streaming::decode_responses;
 use crate::providers::openai_responses::transport::send;
 use crate::providers::response_stream::{OpenedStream, response_stream};
@@ -55,11 +55,11 @@ impl CodexProvider {
     }
 
     fn build_wire_request(&self, context: &Context) -> Result<serde_json::Value> {
-        let mut request = build_wire_request(&self.model, context, &ResponsesRequestPolicy::CODEX)?;
+        let mut request = build_request(&self.model, context, &ResponsesRequestPolicy::CODEX)?;
         if let Some(model) = &self.request_model {
-            request["model"] = model.clone().into();
+            request.model.clone_from(model);
         }
-        Ok(request)
+        Ok(serde_json::to_value(request)?)
     }
 
     async fn build_headers(&self) -> Result<HeaderMap> {

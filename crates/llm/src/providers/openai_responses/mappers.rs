@@ -1,18 +1,14 @@
-use async_openai::types::responses::{
-    CreateResponse, EasyInputContent, EasyInputMessage, FunctionCallOutput, FunctionCallOutputItemParam, FunctionTool,
-    FunctionToolCall, ImageDetail, IncludeEnum, InputContent, InputImageContent, InputItem, InputParam,
-    InputTextContent, Item, MessageType, Reasoning, ReasoningItem, ReasoningItemContent, ReasoningSummary,
-    ReasoningTextContent, ResponseTextParam, Role, TextResponseFormatConfiguration, Tool, Verbosity,
-};
-
 use schemars::Schema;
 
+use super::types::{
+    InputContent, InputItem, MessageContent, Reasoning, ReasoningContent, ResponsesRequest, Role, TextFormat,
+    TextParam, Tool,
+};
 use crate::catalog::Provider;
 use crate::providers::openai_compatible::{PromptCacheKeySource, reasoning_effort_param};
 use crate::tool_schema::normalize_for_xiaomi;
 use crate::{
-    ChatMessage, ContentBlock, Context, LlmError, LlmModel, ReasoningEffort, Result, ToolCallRequest, ToolDefinition,
-    tool_result_parts,
+    ChatMessage, ContentBlock, Context, LlmError, LlmModel, ReasoningEffort, Result, ToolDefinition, tool_result_parts,
 };
 
 /// The per-provider decisions that shape an otherwise identical Responses request.
@@ -24,7 +20,7 @@ pub struct ResponsesRequestPolicy {
     always_include_reasoning: bool,
     /// Effort applied when the caller did not request one.
     default_effort: Option<ReasoningEffort>,
-    text_verbosity: Option<Verbosity>,
+    text_verbosity: Option<&'static str>,
     /// `strict` sent on every function tool. The Responses API defaults this to
     /// `true`, which rejects tool schemas that omit `additionalProperties`, so
     /// `None` and `Some(false)` are not interchangeable.
@@ -61,7 +57,7 @@ impl ResponsesRequestPolicy {
         provider: Provider::Codex,
         always_include_reasoning: true,
         default_effort: Some(ReasoningEffort::Medium),
-        text_verbosity: Some(Verbosity::Medium),
+        text_verbosity: Some("medium"),
         tool_strict: None,
         parallel_tool_calls: Some(true),
         ..Self::OPENAI
@@ -90,11 +86,11 @@ enum ReasoningFormat {
     PlainText,
 }
 
-pub(crate) fn build_typed_request(
+pub(crate) fn build_request(
     model: &str,
     context: &Context,
     policy: &ResponsesRequestPolicy,
-) -> Result<CreateResponse> {
+) -> Result<ResponsesRequest> {
     let identity: Option<LlmModel> = format!("{}:{model}", policy.provider.parser_name()).parse().ok();
     crate::provider::validate_reasoning(context, identity.as_ref())?;
     let context = context.filter_encrypted_reasoning(identity.as_ref());
@@ -102,103 +98,31 @@ pub(crate) fn build_typed_request(
     let (instructions, input) = map_messages(context.messages(), policy.reasoning_format)?;
     let tools = if context.tools().is_empty() { None } else { Some(map_tools(context.tools(), policy)?) };
     let settings = context.model_settings();
-    let reasoning = (policy.always_include_reasoning || policy.effort(&context).is_some()).then_some(Reasoning {
-        effort: None,
-        summary: (encrypted && context.reasoning_effort() != ReasoningEffort::Disabled)
-            .then_some(ReasoningSummary::Auto),
-        mode: None,
-        context: None,
+    let effort = policy.effort(&context);
+    let reasoning = (policy.always_include_reasoning || effort.is_some()).then(|| Reasoning {
+        summary: (encrypted && context.reasoning_effort() != ReasoningEffort::Disabled).then_some("auto"),
+        effort: effort.and_then(|effort| match effort {
+            ReasoningEffort::Disabled if policy.provider == Provider::Codex => Some(effort.as_str()),
+            effort => reasoning_effort_param(effort),
+        }),
     });
 
-    let text = policy.text_verbosity.clone().map(|verbosity| ResponseTextParam {
-        format: TextResponseFormatConfiguration::Text,
-        verbosity: Some(verbosity),
-    });
-
-    Ok(CreateResponse {
-        model: Some(model.to_string()),
-        input: InputParam::Items(input),
+    Ok(ResponsesRequest {
+        include: encrypted.then_some(&["reasoning.encrypted_content"][..]),
+        input,
         instructions,
-        tools,
-        parallel_tool_calls: policy.parallel_tool_calls,
-        stream: Some(true),
-        store: Some(false),
         max_output_tokens: settings.max_tokens,
-        temperature: settings.temperature,
-        top_p: settings.top_p,
-        reasoning,
-        include: encrypted.then_some(vec![IncludeEnum::ReasoningEncryptedContent]),
-        text,
+        model: model.to_string(),
+        parallel_tool_calls: policy.parallel_tool_calls,
         prompt_cache_key: policy.prompt_cache_key.resolve(&context).map(String::from),
-        ..Default::default()
+        reasoning,
+        store: false,
+        stream: true,
+        temperature: settings.temperature,
+        text: policy.text_verbosity.map(|verbosity| TextParam { format: TextFormat::Text, verbosity }),
+        tools,
+        top_p: settings.top_p,
     })
-}
-
-pub(crate) fn build_wire_request(
-    model: &str,
-    context: &Context,
-    policy: &ResponsesRequestPolicy,
-) -> Result<serde_json::Value> {
-    let wire_effort = policy.effort(context).and_then(|effort| match effort {
-        ReasoningEffort::Disabled if policy.provider == Provider::Codex => Some(effort.as_str()),
-        effort => reasoning_effort_param(effort),
-    });
-    let mut body = serde_json::to_value(build_typed_request(model, context, policy)?)?;
-
-    // async-openai's `ReasoningEffort` cannot express `max`, so the effort is
-    // written onto the serialized body instead of the typed request. Safe because
-    // `build_typed_request` emits `reasoning` whenever `policy.effort` is set.
-    if let Some(wire_effort) = wire_effort {
-        body["reasoning"]["effort"] = wire_effort.into();
-    }
-    Ok(body)
-}
-
-pub(crate) fn map_user_content_for_responses(parts: &[ContentBlock]) -> Result<EasyInputContent> {
-    let mut items = Vec::with_capacity(parts.len());
-    for part in parts {
-        match part {
-            ContentBlock::Text { text } => {
-                items.push(InputContent::InputText(InputTextContent {
-                    text: text.clone(),
-                    prompt_cache_breakpoint: None,
-                }));
-            }
-            ContentBlock::Image { .. } => {
-                items.push(InputContent::InputImage(InputImageContent {
-                    detail: ImageDetail::Auto,
-                    file_id: None,
-                    image_url: Some(part.as_data_uri().expect("image content always has a data URI")),
-                    prompt_cache_breakpoint: None,
-                }));
-            }
-            ContentBlock::Audio { .. } => {
-                return Err(LlmError::UnsupportedContent("OpenAI Responses does not support audio input".into()));
-            }
-        }
-    }
-    Ok(EasyInputContent::ContentList(items))
-}
-
-impl From<FunctionToolCall> for ToolCallRequest {
-    fn from(call: FunctionToolCall) -> Self {
-        ToolCallRequest { id: call.call_id, name: call.name, arguments: call.arguments }
-    }
-}
-
-impl From<&ToolCallRequest> for FunctionToolCall {
-    fn from(call: &ToolCallRequest) -> Self {
-        FunctionToolCall {
-            call_id: call.id.clone(),
-            name: call.name.clone(),
-            arguments: call.arguments.clone(),
-            namespace: None,
-            id: None,
-            status: None,
-            caller: None,
-            r#async: None,
-        }
-    }
 }
 
 /// Map internal `ChatMessage`s to Responses API input items.
@@ -218,60 +142,45 @@ fn map_messages(
                 system_prompt = Some(content.clone());
             }
             ChatMessage::User { content, .. } => {
-                items.push(InputItem::EasyMessage(EasyInputMessage {
-                    r#type: MessageType::Message,
-                    role: Role::User,
-                    content: map_user_content_for_responses(content)?,
-                    phase: None,
-                }));
+                items.push(InputItem::Message { role: Role::User, content: map_user_content(content)? });
             }
             ChatMessage::Assistant { content, tool_calls, reasoning, .. } => {
                 if !content.is_empty() {
-                    items.push(easy_message(Role::Assistant, content.clone()));
+                    items.push(text_message(Role::Assistant, content.clone()));
                 }
                 if reasoning_format == ReasoningFormat::PlainText
                     && let Some(text) = &reasoning.summary_text
                 {
-                    items.push(InputItem::Item(Item::Reasoning(ReasoningItem {
+                    items.push(InputItem::Reasoning {
                         id: None,
                         summary: vec![],
                         encrypted_content: None,
-                        content: Some(vec![ReasoningItemContent::ReasoningText(ReasoningTextContent {
-                            text: text.clone(),
-                        })]),
-                        status: None,
-                    })));
+                        content: Some(vec![ReasoningContent::ReasoningText { text: text.clone() }]),
+                    });
                 }
                 if reasoning_format == ReasoningFormat::Encrypted
                     && let Some(encrypted) = &reasoning.encrypted_content
                 {
-                    items.push(InputItem::Item(Item::Reasoning(ReasoningItem {
+                    items.push(InputItem::Reasoning {
                         id: Some(encrypted.id.clone()),
                         summary: vec![],
                         encrypted_content: Some(encrypted.content.clone()),
                         content: None,
-                        status: None,
-                    })));
+                    });
                 }
-                for tc in tool_calls {
-                    items.push(InputItem::Item(Item::FunctionCall(tc.into())));
-                }
+                items.extend(tool_calls.iter().map(|call| InputItem::FunctionCall {
+                    arguments: call.arguments.clone(),
+                    call_id: call.id.clone(),
+                    name: call.name.clone(),
+                }));
             }
             ChatMessage::ToolCallResult(result) => {
                 let (call_id, content, is_error) = tool_result_parts(result);
                 let output = if is_error { format!("Error: {content}") } else { content.to_string() };
-                items.push(InputItem::Item(Item::FunctionCallOutput(FunctionCallOutputItemParam {
-                    call_id: Some(call_id.to_string()),
-                    output: FunctionCallOutput::Text(output),
-                    id: None,
-                    status: None,
-                    name: None,
-                    namespace: None,
-                    caller: None,
-                })));
+                items.push(InputItem::FunctionCallOutput { call_id: call_id.to_string(), output });
             }
             ChatMessage::Error { .. } | ChatMessage::Summary { .. } => {
-                items.extend(msg.as_user_note().map(|note| easy_message(Role::User, note)));
+                items.extend(msg.as_user_note().map(|note| text_message(Role::User, note)));
             }
         }
     }
@@ -279,27 +188,39 @@ fn map_messages(
     Ok((system_prompt, items))
 }
 
-/// Map internal `ToolDefinition`s to async-openai `Tool` types.
+fn map_user_content(parts: &[ContentBlock]) -> Result<MessageContent> {
+    let mut items = Vec::with_capacity(parts.len());
+    for part in parts {
+        match part {
+            ContentBlock::Text { text } => items.push(InputContent::InputText { text: text.clone() }),
+            ContentBlock::Image { .. } => items.push(InputContent::InputImage {
+                detail: "auto",
+                image_url: part.as_data_uri().expect("image content always has a data URI"),
+            }),
+            ContentBlock::Audio { .. } => {
+                return Err(LlmError::UnsupportedContent("OpenAI Responses does not support audio input".into()));
+            }
+        }
+    }
+    Ok(MessageContent::Parts(items))
+}
+
 fn map_tools(tools: &[ToolDefinition], policy: &ResponsesRequestPolicy) -> Result<Vec<Tool>> {
     tools
         .iter()
         .map(|tool| {
-            Ok(Tool::Function(FunctionTool {
+            Ok(Tool::Function {
                 name: tool.name.clone(),
-                description: Some(tool.description.clone()),
-                parameters: Some(tool.parameters_with(policy.tool_schema_transform)?),
+                parameters: tool.parameters_with(policy.tool_schema_transform)?,
                 strict: policy.tool_strict,
-                defer_loading: None,
-                r#async: None,
-                output_schema: None,
-                allowed_callers: None,
-            }))
+                description: tool.description.clone(),
+            })
         })
         .collect()
 }
 
-fn easy_message(role: Role, content: String) -> InputItem {
-    InputItem::EasyMessage(EasyInputMessage { role, content: EasyInputContent::Text(content), ..Default::default() })
+fn text_message(role: Role, content: String) -> InputItem {
+    InputItem::Message { role, content: MessageContent::Text(content) }
 }
 
 #[cfg(test)]
@@ -307,42 +228,43 @@ mod tests {
     use super::*;
     use crate::types::IsoString;
     use crate::{
-        AssistantReasoning, ContentBlock, EncryptedReasoningContent, LlmError, MessageId, ToolCallError,
-        ToolCallRequest, ToolCallResult,
+        AssistantReasoning, EncryptedReasoningContent, MessageId, ToolCallError, ToolCallRequest, ToolCallResult,
     };
+    use serde_json::{Value, json};
 
-    fn openai_request(model: &str, context: &Context) -> Result<CreateResponse> {
-        build_typed_request(model, context, &ResponsesRequestPolicy::OPENAI)
+    fn openai_request(model: &str, context: &Context) -> Result<ResponsesRequest> {
+        build_request(model, context, &ResponsesRequestPolicy::OPENAI)
     }
 
-    fn openai_body(model: &str, context: &Context) -> serde_json::Value {
-        build_wire_request(model, context, &ResponsesRequestPolicy::OPENAI).unwrap()
+    fn openai_body(model: &str, context: &Context) -> Value {
+        serde_json::to_value(openai_request(model, context).unwrap()).unwrap()
+    }
+
+    fn input_json(messages: &[ChatMessage]) -> (Option<String>, Vec<Value>) {
+        let (system, items) = map_messages(messages, ReasoningFormat::Encrypted).unwrap();
+        (system, items.iter().map(|item| serde_json::to_value(item).unwrap()).collect())
     }
 
     #[test]
     fn build_request_maps_a_simple_user_message() {
         let context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
 
-        let request = openai_request("gpt-4.1", &context).unwrap();
-        assert_eq!(request.model, Some("gpt-4.1".to_string()));
-        assert!(request.instructions.is_none());
-        assert!(request.tools.is_none());
-        assert!(request.reasoning.is_none());
-
-        let json = serde_json::to_value(&request).unwrap();
-        assert_eq!(json["input"][0]["role"], "user");
-        assert_eq!(json["input"][0]["content"][0]["text"], "Hello");
+        let body = openai_body("gpt-4.1", &context);
+        assert_eq!(body["model"], "gpt-4.1");
+        assert!(body.get("instructions").is_none());
+        assert!(body.get("tools").is_none());
+        assert!(body.get("reasoning").is_none());
+        assert_eq!(body["input"][0]["role"], "user");
+        assert_eq!(body["input"][0]["content"][0]["text"], "Hello");
     }
 
     #[test]
     fn build_request_lifts_the_system_prompt_into_instructions() {
         let context = Context::new(vec![ChatMessage::system("You are helpful."), ChatMessage::user("Hi")], vec![]);
 
-        let request = openai_request("gpt-4.1", &context).unwrap();
-        assert_eq!(request.instructions, Some("You are helpful.".to_string()));
-
-        let json = serde_json::to_value(&request).unwrap();
-        let items = json["input"].as_array().unwrap();
+        let body = openai_body("gpt-4.1", &context);
+        assert_eq!(body["instructions"], "You are helpful.");
+        let items = body["input"].as_array().unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["role"], "user");
     }
@@ -373,20 +295,17 @@ mod tests {
             vec![ToolDefinition::new("search", "Search", serde_json::json!({ "type": "object" }))],
         );
 
-        let request = openai_request("gpt-4.1", &context).unwrap();
-        let json = serde_json::to_value(&request).unwrap();
+        let body = openai_body("gpt-4.1", &context);
 
-        let items = json["input"].as_array().unwrap();
+        let items = body["input"].as_array().unwrap();
         assert_eq!(items[0]["role"], "user");
         assert_eq!(items[1]["type"], "function_call");
         assert_eq!(items[1]["call_id"], "call_1");
         assert_eq!(items[2]["type"], "function_call_output");
         assert_eq!(items[2]["call_id"], "call_1");
         assert_eq!(items[2]["output"], "Found results");
-
-        let tools = serde_json::to_value(&request.tools).unwrap();
-        assert_eq!(tools[0]["type"], "function");
-        assert_eq!(tools[0]["name"], "search");
+        assert_eq!(body["tools"][0]["type"], "function");
+        assert_eq!(body["tools"][0]["name"], "search");
     }
 
     #[test]
@@ -398,10 +317,10 @@ mod tests {
             max_tokens: Some(128),
         });
 
-        let request = openai_request("gpt-4.1", &context).unwrap();
-        assert_eq!(request.temperature, Some(0.0));
-        assert_eq!(request.top_p, Some(0.5));
-        assert_eq!(request.max_output_tokens, Some(128));
+        let body = openai_body("gpt-4.1", &context);
+        assert_eq!(body["temperature"], 0.0);
+        assert_eq!(body["top_p"], 0.5);
+        assert_eq!(body["max_output_tokens"], 128);
     }
 
     #[test]
@@ -442,7 +361,8 @@ mod tests {
     fn a_provider_default_effort_always_ships_with_a_reasoning_object() {
         let context = Context::new(vec![ChatMessage::user("Hi")], vec![]);
 
-        let body = build_wire_request("gpt-5.5", &context, &ResponsesRequestPolicy::CODEX).unwrap();
+        let request = build_request("gpt-5.5", &context, &ResponsesRequestPolicy::CODEX).unwrap();
+        let body = serde_json::to_value(request).unwrap();
 
         assert_eq!(body["reasoning"]["effort"], "medium");
         assert_eq!(body["reasoning"]["summary"], "auto");
@@ -464,7 +384,7 @@ mod tests {
     fn map_messages_extracts_system_prompt() {
         let messages = vec![ChatMessage::system("You are helpful"), ChatMessage::user("Hello")];
 
-        let (system, items) = map_messages(&messages, ReasoningFormat::Encrypted).unwrap();
+        let (system, items) = input_json(&messages);
         assert_eq!(system, Some("You are helpful".to_string()));
         assert_eq!(items.len(), 1);
     }
@@ -499,28 +419,14 @@ mod tests {
             },
         ];
 
-        let (system, items) = map_messages(&messages, ReasoningFormat::Encrypted).unwrap();
+        let (system, items) = input_json(&messages);
         assert!(system.is_none());
         assert_eq!(items.len(), 5); // user + assistant msg + function_call + function_call_output + assistant msg
-
-        // Verify the function_call item
-        let fc = &items[2];
-        if let InputItem::Item(Item::FunctionCall(call)) = fc {
-            assert_eq!(call.call_id, "call_1");
-            assert_eq!(call.name, "read_file");
-            assert_eq!(call.arguments, r#"{"path":"foo.rs"}"#);
-        } else {
-            panic!("Expected FunctionCall, got {fc:?}");
-        }
-
-        // Verify the function_call_output item
-        let fco = &items[3];
-        if let InputItem::Item(Item::FunctionCallOutput(out)) = fco {
-            assert_eq!(out.call_id.as_deref(), Some("call_1"));
-            assert!(matches!(&out.output, FunctionCallOutput::Text(t) if t == "fn main() {}"));
-        } else {
-            panic!("Expected FunctionCallOutput, got {fco:?}");
-        }
+        assert_eq!(
+            items[2],
+            json!({ "type": "function_call", "arguments": r#"{"path":"foo.rs"}"#, "call_id": "call_1", "name": "read_file" })
+        );
+        assert_eq!(items[3], json!({ "type": "function_call_output", "call_id": "call_1", "output": "fn main() {}" }));
     }
 
     #[test]
@@ -532,13 +438,11 @@ mod tests {
             error: "command failed".to_string(),
         }))];
 
-        let (_, items) = map_messages(&messages, ReasoningFormat::Encrypted).unwrap();
-        assert_eq!(items.len(), 1);
-        if let InputItem::Item(Item::FunctionCallOutput(out)) = &items[0] {
-            assert!(matches!(&out.output, FunctionCallOutput::Text(t) if t.contains("Error: command failed")));
-        } else {
-            panic!("Expected FunctionCallOutput");
-        }
+        let (_, items) = input_json(&messages);
+        assert_eq!(
+            items,
+            vec![json!({ "type": "function_call_output", "call_id": "call_2", "output": "Error: command failed" })]
+        );
     }
 
     #[test]
@@ -550,56 +454,13 @@ mod tests {
             messages_compacted: 5,
         }];
 
-        let (_, items) = map_messages(&messages, ReasoningFormat::Encrypted).unwrap();
+        let (_, items) = input_json(&messages);
         assert_eq!(items.len(), 1);
-        if let InputItem::EasyMessage(msg) = &items[0] {
-            assert_eq!(msg.role, Role::User);
-            if let EasyInputContent::Text(text) = &msg.content {
-                assert!(text.starts_with("[Previous conversation handoff]"));
-                assert!(text.contains("Rust"));
-            } else {
-                panic!("Expected Text content");
-            }
-        } else {
-            panic!("Expected EasyMessage");
-        }
-    }
-
-    #[test]
-    fn map_messages_serialization_shape() {
-        let messages = vec![
-            ChatMessage::user("Hello"),
-            ChatMessage::Assistant {
-                message_id: MessageId::new(),
-                content: "Hi".to_string(),
-                reasoning: AssistantReasoning::default(),
-                timestamp: IsoString::now(),
-                tool_calls: vec![ToolCallRequest {
-                    id: "tc_1".to_string(),
-                    name: "bash".to_string(),
-                    arguments: "{}".to_string(),
-                }],
-            },
-            ChatMessage::ToolCallResult(Ok(ToolCallResult {
-                id: "tc_1".to_string(),
-                name: "bash".to_string(),
-                arguments: "{}".to_string(),
-                result: "ok".to_string(),
-            })),
-        ];
-
-        let (_, items) = map_messages(&messages, ReasoningFormat::Encrypted).unwrap();
-        // EasyMessage items serialize with "type": "message"
-        let json = serde_json::to_value(&items[0]).unwrap();
-        assert_eq!(json["role"], "user");
-        // FunctionCall items serialize with "type": "function_call"
-        let json = serde_json::to_value(&items[2]).unwrap();
-        assert_eq!(json["type"], "function_call");
-        assert_eq!(json["call_id"], "tc_1");
-        // FunctionCallOutput items serialize with "type": "function_call_output"
-        let json = serde_json::to_value(&items[3]).unwrap();
-        assert_eq!(json["type"], "function_call_output");
-        assert_eq!(json["call_id"], "tc_1");
+        assert_eq!(items[0]["type"], "message");
+        assert_eq!(items[0]["role"], "user");
+        let text = items[0]["content"].as_str().expect("summary is sent as plain text");
+        assert!(text.starts_with("[Previous conversation handoff]"));
+        assert!(text.contains("Rust"));
     }
 
     #[test]
@@ -610,15 +471,12 @@ mod tests {
             serde_json::from_str(r#"{"type": "object", "properties": {"path": {"type": "string"}}}"#).unwrap(),
         )];
 
-        let mapped = map_tools(&tools, &ResponsesRequestPolicy::OPENAI).unwrap();
-        assert_eq!(mapped.len(), 1);
-        if let Tool::Function(f) = &mapped[0] {
-            assert_eq!(f.name, "read_file");
-            assert_eq!(f.description.as_deref(), Some("Read a file from disk"));
-            assert_eq!(f.parameters.as_ref().unwrap()["properties"]["path"]["type"], "string");
-        } else {
-            panic!("Expected Tool::Function");
-        }
+        let mapped = serde_json::to_value(map_tools(&tools, &ResponsesRequestPolicy::OPENAI).unwrap()).unwrap();
+        assert_eq!(mapped.as_array().map(Vec::len), Some(1));
+        assert_eq!(mapped[0]["type"], "function");
+        assert_eq!(mapped[0]["name"], "read_file");
+        assert_eq!(mapped[0]["description"], "Read a file from disk");
+        assert_eq!(mapped[0]["parameters"]["properties"]["path"]["type"], "string");
     }
 
     #[test]
@@ -638,16 +496,13 @@ mod tests {
             tool_calls: vec![],
         }];
 
-        let (_, items) = map_messages(&messages, ReasoningFormat::Encrypted).unwrap();
-        // Should have: easy_message (text) + reasoning item = 2
+        let (_, items) = input_json(&messages);
+        // Should have: text message + reasoning item = 2
         assert_eq!(items.len(), 2);
-
-        let reasoning_item = &items[1];
-        if let InputItem::Item(Item::Reasoning(r)) = reasoning_item {
-            assert_eq!(r.encrypted_content.as_deref(), Some("encrypted-blob"));
-        } else {
-            panic!("Expected Item::Reasoning, got {reasoning_item:?}");
-        }
+        assert_eq!(
+            items[1],
+            json!({ "type": "reasoning", "id": "r_1", "summary": [], "encrypted_content": "encrypted-blob" })
+        );
     }
 
     #[test]
@@ -660,10 +515,10 @@ mod tests {
             tool_calls: vec![],
         }];
 
-        let (_, items) = map_messages(&messages, ReasoningFormat::Encrypted).unwrap();
+        let (_, items) = input_json(&messages);
         // Only the text message, no reasoning item
         assert_eq!(items.len(), 1);
-        assert!(matches!(&items[0], InputItem::EasyMessage(_)));
+        assert_eq!(items[0]["type"], "message");
     }
 
     #[test]

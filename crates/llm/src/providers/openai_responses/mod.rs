@@ -9,3 +9,4 @@
 pub(crate) mod mappers;
 pub(crate) mod streaming;
 pub(crate) mod transport;
+pub(crate) mod types;
