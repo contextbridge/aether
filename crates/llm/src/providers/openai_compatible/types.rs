@@ -1,7 +1,3 @@
-use async_openai::types::chat::{
-    ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls, ChatCompletionStreamOptions, ChatCompletionTools,
-    FunctionCall,
-};
 use serde::{Deserialize, Serialize};
 
 use crate::{ChatMessage, ContentBlock, TokenUsage, tool_result_parts};
@@ -66,7 +62,7 @@ pub(crate) enum CompatibleChatMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         reasoning_content: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        tool_calls: Option<Vec<ChatCompletionMessageToolCalls>>,
+        tool_calls: Option<Vec<ToolCall>>,
     },
     Tool {
         content: String,
@@ -75,15 +71,44 @@ pub(crate) enum CompatibleChatMessage {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum ToolCall {
+    Function { id: String, function: FunctionCall },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct FunctionCall {
+    pub name: String,
+    pub arguments: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum Tool {
+    Function { function: FunctionDefinition },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct FunctionDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+    pub strict: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct StreamOptions {
+    pub include_usage: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct CompatibleChatRequest {
     pub model: String,
     pub messages: Vec<CompatibleChatMessage>,
+    pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub stream: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<ChatCompletionTools>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stream_options: Option<ChatCompletionStreamOptions>,
+    pub tools: Option<Vec<Tool>>,
+    pub stream_options: StreamOptions,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -114,11 +139,9 @@ pub(crate) fn map_messages(
             ChatMessage::Assistant { content, reasoning, tool_calls, .. } => {
                 let openai_tool_calls: Vec<_> = tool_calls
                     .iter()
-                    .map(|call| {
-                        ChatCompletionMessageToolCalls::Function(ChatCompletionMessageToolCall {
-                            id: call.id.clone(),
-                            function: FunctionCall { name: call.name.clone(), arguments: call.arguments.clone() },
-                        })
+                    .map(|call| ToolCall::Function {
+                        id: call.id.clone(),
+                        function: FunctionCall { name: call.name.clone(), arguments: call.arguments.clone() },
                     })
                     .collect();
 

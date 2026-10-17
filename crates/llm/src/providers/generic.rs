@@ -13,7 +13,7 @@ pub use crate::providers::openai_compatible::ChatRequestPolicy;
 use crate::providers::openai_compatible::streaming::decode_sse_chunk;
 use crate::providers::openai_compatible::types::CompatibleChatRequest;
 use crate::providers::openai_compatible::{PromptCacheKeySource, build_chat_request};
-use crate::providers::openai_responses::mappers::build_wire_request;
+use crate::providers::openai_responses::mappers::build_request as build_responses_request;
 use crate::providers::openai_responses::streaming::decode_responses;
 use crate::providers::openai_responses::transport::send;
 use crate::providers::response_stream::{OpenedStream, error_stream, response_stream};
@@ -247,11 +247,12 @@ impl GenericProvider {
     }
 
     fn stream_responses(&self, context: &Context, policy: &ResponsesRequestPolicy) -> Result<LlmResponseStream> {
-        let mut request = build_wire_request(&self.model, context, policy)?;
+        let mut request = build_responses_request(&self.model, context, policy)?;
         if let Some(model) = &self.request_model {
-            request["model"] = model.clone().into();
+            request.model.clone_from(model);
         }
-        Ok(response_stream(self.open("responses", request), decode_responses(), self.idle_timeout))
+        let opened = self.open("responses", serde_json::to_value(request)?);
+        Ok(response_stream(opened, decode_responses(), self.idle_timeout))
     }
 
     fn stream_messages(&self, context: &Context) -> Result<LlmResponseStream> {

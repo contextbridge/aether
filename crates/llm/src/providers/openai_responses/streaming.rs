@@ -1,10 +1,9 @@
-use async_openai::types::responses::{OutputItem, ReasoningItem, Status};
 use serde::Deserialize;
 use tracing::debug;
 
 use crate::providers::openai_compatible::types::Usage;
 use crate::providers::response_stream::StreamAssembler;
-use crate::{LlmResponse, ProviderError, ProviderErrorKind, Result, StopReason};
+use crate::{LlmResponse, ProviderError, ProviderErrorKind, Result, StopReason, ToolCallRequest};
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
@@ -66,6 +65,23 @@ pub struct ResponsesOutputItemEvent {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum OutputItem {
+    FunctionCall {
+        call_id: String,
+        name: String,
+        #[serde(default)]
+        arguments: String,
+    },
+    Reasoning {
+        id: Option<String>,
+        encrypted_content: Option<String>,
+    },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ResponsesFunctionCallArgumentsDeltaEvent {
     pub output_index: u32,
     pub delta: String,
@@ -82,6 +98,15 @@ pub struct ResponsesCompleted {
     pub usage: Option<Usage>,
     #[serde(default)]
     pub status: Option<Status>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Status {
+    Completed,
+    Incomplete,
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,8 +150,8 @@ fn decode_event(event: ResponsesStreamEvent, turn: &mut StreamAssembler<u32>) ->
     let responses = match event {
         ResponsesStreamEvent::OutputTextDelta(e) if !e.delta.is_empty() => vec![LlmResponse::Text { chunk: e.delta }],
         ResponsesStreamEvent::OutputItemAdded(e) => match e.item {
-            OutputItem::FunctionCall(call) => vec![turn.start_tool(e.output_index, call.call_id, call.name)],
-            _ => vec![],
+            OutputItem::FunctionCall { call_id, name, .. } => vec![turn.start_tool(e.output_index, call_id, name)],
+            OutputItem::Reasoning { .. } | OutputItem::Other => vec![],
         },
         ResponsesStreamEvent::FunctionCallArgumentsDelta(e) => {
             turn.append_tool_args(&e.output_index, e.delta).into_iter().collect()
@@ -135,18 +160,20 @@ fn decode_event(event: ResponsesStreamEvent, turn: &mut StreamAssembler<u32>) ->
             vec![LlmResponse::Reasoning { chunk: e.delta }]
         }
         ResponsesStreamEvent::OutputItemDone(e) => match e.item {
-            OutputItem::FunctionCall(call) => turn.complete_tool_with(&e.output_index, call.into()),
-            OutputItem::Reasoning(ReasoningItem { id: Some(id), encrypted_content: Some(content), .. }) => {
+            OutputItem::FunctionCall { call_id, name, arguments } => {
+                turn.complete_tool_with(&e.output_index, ToolCallRequest { id: call_id, name, arguments })
+            }
+            OutputItem::Reasoning { id: Some(id), encrypted_content: Some(content) } => {
                 vec![LlmResponse::EncryptedReasoning { id, content }]
             }
-            _ => vec![],
+            OutputItem::Reasoning { .. } | OutputItem::Other => vec![],
         },
         ResponsesStreamEvent::Completed(e) | ResponsesStreamEvent::Incomplete(e) => {
             match e.response.status {
                 Some(Status::Completed) => turn.stop(StopReason::EndTurn),
                 Some(Status::Incomplete) => turn.stop(StopReason::Length),
-                _ if incomplete => turn.stop(StopReason::Length),
-                _ => {}
+                Some(Status::Other) | None if incomplete => turn.stop(StopReason::Length),
+                Some(Status::Other) | None => {}
             }
             turn.finish_now();
             e.response.usage.map(|usage| LlmResponse::Usage { tokens: usage.into() }).into_iter().collect()
@@ -446,6 +473,41 @@ mod tests {
             assert_eq!(err.is_retryable(), retryable, "{code:?}: {err:?}");
             assert!(err.to_string().contains("model overloaded"), "server message was dropped: {err}");
         }
+    }
+
+    #[tokio::test]
+    async fn output_items_the_decoder_does_not_use_are_ignored() {
+        for item in [
+            json!({ "type": "future_item", "id": "x_1" }),
+            json!({ "type": "message", "role": "assistant", "content": [] }),
+        ] {
+            let responses = collect_responses(
+                responses_stream()
+                    .created()
+                    .push(json!({ "type": "response.output_item.added", "output_index": 0, "item": item }))
+                    .text(&["done"])
+                    .push(json!({ "type": "response.output_item.done", "output_index": 0, "item": item }))
+                    .completed()
+                    .build(),
+            )
+            .await;
+
+            assert_eq!(responses, llm_response().text(&["done"]).build_with_stop_reason(StopReason::EndTurn), "{item}");
+        }
+    }
+
+    #[tokio::test]
+    async fn unknown_completion_status_still_finishes_the_response() {
+        let responses = collect_responses(
+            responses_stream()
+                .created()
+                .text(&["done"])
+                .push(json!({ "type": "response.completed", "response": { "status": "paused" } }))
+                .build(),
+        )
+        .await;
+
+        assert_eq!(responses, llm_response().text(&["done"]).build());
     }
 
     #[tokio::test]

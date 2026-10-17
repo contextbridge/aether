@@ -1,12 +1,11 @@
 pub(crate) mod streaming;
 pub(crate) mod types;
 
-use async_openai::types::chat::{ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionTools, FunctionObject};
 use schemars::Schema;
 use utils::ReasoningEffort;
 
 use crate::{Context, LlmError, ToolDefinition};
-use types::CompatibleChatRequest;
+use types::{CompatibleChatRequest, FunctionDefinition, StreamOptions, Tool};
 
 pub use streaming::process_compatible_stream;
 
@@ -73,9 +72,9 @@ pub(crate) fn build_chat_request(
     let mut request = CompatibleChatRequest {
         model: model.to_string(),
         messages,
-        stream: Some(true),
+        stream: true,
         tools,
-        stream_options: Some(ChatCompletionStreamOptions { include_usage: Some(true), include_obfuscation: None }),
+        stream_options: StreamOptions { include_usage: true },
         reasoning_effort: reasoning_effort_param(context.reasoning_effort()),
         temperature: settings.temperature,
         top_p: settings.top_p,
@@ -89,21 +88,18 @@ pub(crate) fn build_chat_request(
     Ok(request)
 }
 
-fn map_tools(
-    tools: &[ToolDefinition],
-    tool_schema_transform: Option<fn(&mut Schema)>,
-) -> Result<Vec<ChatCompletionTools>, LlmError> {
+fn map_tools(tools: &[ToolDefinition], tool_schema_transform: Option<fn(&mut Schema)>) -> Result<Vec<Tool>, LlmError> {
     tools
         .iter()
         .map(|tool| {
-            Ok(ChatCompletionTools::Function(ChatCompletionTool {
-                function: FunctionObject {
+            Ok(Tool::Function {
+                function: FunctionDefinition {
                     name: tool.name.clone(),
-                    description: Some(tool.description.clone()),
-                    parameters: Some(tool.parameters_with(tool_schema_transform)?),
-                    strict: Some(false),
+                    description: tool.description.clone(),
+                    parameters: tool.parameters_with(tool_schema_transform)?,
+                    strict: false,
                 },
-            }))
+            })
         })
         .collect()
 }

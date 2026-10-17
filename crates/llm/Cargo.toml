@@ -37,7 +37,6 @@ bedrock = [
 codex = ["dep:aether-auth", "dep:oauth2", "dep:base64", "dep:url"]
 
 [dependencies]
-async-openai = { workspace = true }
 async-stream = { workspace = true }
 aws-config = { workspace = true, optional = true }
 aws-credential-types = { workspace = true, optional = true }
