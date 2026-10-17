@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 
 const LSP_CONTENT_MODIFIED: i32 = -32801;
 const LSP_SERVER_CANCELLED: i32 = -32802;
@@ -34,6 +34,7 @@ const TRANSIENT_RETRY_DELAY: Duration = Duration::from_millis(500);
 pub(crate) struct WorkspaceSession {
     transport: ProcessTransport,
     documents: DocumentLifecycle,
+    document_sync: Arc<Mutex<()>>,
     diagnostics: DiagnosticsStore,
     refresh: RefreshQueue,
     diagnostics_mode: DiagnosticsMode,
@@ -48,6 +49,7 @@ impl WorkspaceSession {
         let session = Self {
             transport,
             documents: DocumentLifecycle::new(),
+            document_sync: Arc::default(),
             diagnostics: DiagnosticsStore::new(timeouts.diagnostics_settle),
             refresh: RefreshQueue::new(),
             diagnostics_mode: config.diagnostics_mode,
@@ -129,6 +131,7 @@ impl WorkspaceSession {
     }
 
     async fn open_document(&self, uri: &Uri) -> DocumentSync {
+        let _sync = self.document_sync.lock().await;
         let notifications = match self.documents.acquire(uri).await {
             AcquireAction::Open { file_path, content } => open_and_save_notifications(uri, &file_path, content),
             AcquireAction::Reopen { file_path, content } => reopen_notifications(uri, &file_path, content),
@@ -148,6 +151,7 @@ impl WorkspaceSession {
     }
 
     async fn close_document(&self, uri: &Uri) {
+        let _sync = self.document_sync.lock().await;
         match self.documents.release(uri) {
             ReleaseAction::Close => self.transport.send_notification(close_notification(uri)).await,
             ReleaseAction::CloseAndRefresh => {

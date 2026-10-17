@@ -85,19 +85,20 @@ async fn authorization_presents_the_client_metadata_and_a_loopback_redirect() {
 }
 
 #[tokio::test]
-async fn authorization_redirects_to_the_configured_callback_port() {
+async fn authorization_listens_on_the_configured_callback_port() {
     let server = math_auth_server().await;
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let mut flow = AuthFlow::start(
-        server.transport_with(HttpAuth::OAuth(OAuthSettings { callback_port: port, ..client_metadata() })),
-    );
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = taken.local_addr().unwrap().port();
+    let (options, host) = elicitation_host();
+    drop(host);
 
-    let prompt = flow.prompt().await;
-    let redirect_uri = prompt.query("redirect_uri");
-    drop(prompt);
+    let transport = server.transport_with(HttpAuth::OAuth(OAuthSettings { callback_port: port, ..client_metadata() }));
+    let error = McpClient::authorize("linear", transport, &options, None).await.expect_err("the port is taken");
 
-    assert_eq!(redirect_uri, format!("http://localhost:{port}/"));
-    assert!(matches!(flow.finish().await, Err(ClientError::Auth { source: OAuthError::UserCancelled, .. })));
+    assert!(matches!(
+        error,
+        ClientError::Auth { source: OAuthError::Io(error), .. } if error.kind() == std::io::ErrorKind::AddrInUse
+    ));
 }
 
 #[tokio::test]

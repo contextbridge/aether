@@ -1,5 +1,6 @@
 use crate::common::{cargo_project, fake_daemon, fake_request, file_uri, hover_text, workspace_error_count};
 use aether_lspd::LanguageId;
+use futures::future::join_all;
 use lsp_types::{DocumentSymbolResponse, GotoDefinitionResponse};
 use std::path::PathBuf;
 
@@ -127,4 +128,18 @@ async fn position_requests_wait_for_the_server_to_finish_loading() {
     });
 
     assert!(hover_text(hover.expect("Hover failed")).contains("open_count=1"));
+}
+
+#[tokio::test]
+async fn concurrent_requests_for_one_document_reach_the_server_after_it_opens() {
+    let project = cargo_project("concurrent_open");
+    let (_daemon, client) = fake_daemon(project.root(), LanguageId::Rust).await;
+    let uri = file_uri(&project.path("src/main.rs"));
+
+    let hovers = join_all((0..32).map(|_| client.hover(uri.clone(), 0, 0))).await;
+
+    for hover in hovers {
+        let hover = hover_text(hover.expect("Hover failed"));
+        assert!(!hover.contains("open_count=0"), "a hover reached the server before the document was open: {hover}");
+    }
 }
