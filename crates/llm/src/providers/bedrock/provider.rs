@@ -2,7 +2,7 @@ use super::mantle::{MantleAuth, MantleClient};
 use super::mappers::{default_cache_point, map_messages, map_tools};
 use super::streaming::{converse_events, decode_converse_event};
 use crate::catalog::transport::ModelTransport;
-use crate::provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider, validate_reasoning};
+use crate::provider::{LlmResponseStream, StreamingModelProvider, validate_reasoning};
 use crate::providers::openai_responses::streaming::decode_responses;
 use crate::providers::response_stream::{OpenedStream, response_stream};
 use crate::{Context, LlmError, ProviderAuthMode, ProviderConnectionConfig, ProviderError, Result};
@@ -154,16 +154,6 @@ impl BedrockProvider {
         })?;
 
         Ok(response.stream)
-    }
-}
-
-impl ProviderFactory for BedrockProvider {
-    async fn from_env_with_connection(connection: ProviderConnectionConfig) -> Result<Self> {
-        Ok(Self::new(connection).await)
-    }
-
-    fn with_model(self, model: &str) -> Self {
-        self.with_model(model)
     }
 }
 

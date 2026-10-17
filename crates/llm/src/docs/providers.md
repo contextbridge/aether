@@ -1,6 +1,6 @@
 Built-in LLM provider implementations.
 
-Each submodule implements [`StreamingModelProvider`](crate::StreamingModelProvider) and [`ProviderFactory`](crate::ProviderFactory) for a specific LLM service.
+Each provider implements [`StreamingModelProvider`](crate::StreamingModelProvider) for a specific LLM service.
 
 # Available providers
 
@@ -16,7 +16,6 @@ The [`generic`] module provides a shared [`GenericProvider`](generic::GenericPro
 
 # Adding a new provider
 
-1. Create a submodule under `providers/`.
-2. Implement [`StreamingModelProvider`](crate::StreamingModelProvider) and [`ProviderFactory`](crate::ProviderFactory).
-3. Register it in [`ModelProviderParser::default()`](crate::parser::ModelProviderParser::default).
-4. Add model entries to `models.json` for the catalog.
+1. If it speaks one of the wire formats above, add a [`ProviderConfig`](generic::ProviderConfig) constant to `BUILT_INS` in [`generic`].
+2. Otherwise, create a submodule under `providers/`, implement [`StreamingModelProvider`](crate::StreamingModelProvider), and register it in [`ModelProviderParser::default()`](crate::parser::ModelProviderParser::default).
+3. Add model entries to `models.json` for the catalog.
