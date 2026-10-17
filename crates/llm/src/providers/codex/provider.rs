@@ -7,7 +7,7 @@ use crate::providers::openai::responses::mappers::{ResponsesRequestPolicy, build
 use crate::providers::openai::responses::streaming::decode_responses;
 use crate::providers::openai::responses::types::ResponsesRequest;
 use crate::providers::response_stream::{OpenedStream, response_stream};
-use crate::{Context, LlmError, Result};
+use crate::{Context, LlmModel, Result};
 use aether_auth::OAuthCredentialStorage;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use std::sync::Arc;
@@ -64,16 +64,12 @@ impl CodexProvider {
     async fn build_headers(&self) -> Result<HeaderMap> {
         let (access_token, account_id) = self.token_manager.get_valid_token().await?;
 
+        let mut authorization = HeaderValue::from_str(&format!("Bearer {access_token}"))?;
+        authorization.set_sensitive(true);
+
         let mut headers = HeaderMap::new();
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {access_token}"))
-                .map_err(|e| LlmError::ProviderRequest(e.to_string()))?,
-        );
-        headers.insert(
-            "chatgpt-account-id",
-            HeaderValue::from_str(&account_id).map_err(|e| LlmError::ProviderRequest(e.to_string()))?,
-        );
+        headers.insert(AUTHORIZATION, authorization);
+        headers.insert("chatgpt-account-id", HeaderValue::from_str(&account_id)?);
         headers.insert("originator", HeaderValue::from_static("codex_cli_rs"));
         headers.insert("version", HeaderValue::from_static(CODEX_CLIENT_VERSION));
 
@@ -104,8 +100,8 @@ impl StreamingModelProvider for CodexProvider {
         display_name(Provider::Codex, &self.model)
     }
 
-    fn model(&self) -> Option<crate::LlmModel> {
-        format!("{}:{}", super::PROVIDER_ID, self.model).parse().ok()
+    fn model(&self) -> Option<LlmModel> {
+        LlmModel::parse_for(Provider::Codex, &self.model).ok()
     }
 
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
@@ -128,6 +124,7 @@ impl StreamingModelProvider for CodexProvider {
 mod tests {
     use super::*;
     use crate::ChatMessage;
+    use crate::LlmError;
     use crate::ToolDefinition;
     use crate::providers::test_capture_server::{CaptureServer, hello_context};
     use aether_auth::{FakeOAuthCredentialStore, OAuthCredential};

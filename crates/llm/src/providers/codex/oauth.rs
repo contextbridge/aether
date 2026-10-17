@@ -35,7 +35,7 @@ pub async fn perform_codex_oauth_flow(store: &dyn OAuthCredentialStorage) -> Res
 
     // Port 1455 is hardcoded because the Codex API has a fixed redirect URI
     // (http://localhost:1455/auth/callback) registered with OpenAI's OAuth server.
-    let handler = BrowserOAuthHandler::with_redirect_uri(REDIRECT_URI, 1455)?;
+    let handler = BrowserOAuthHandler::with_redirect_uri(REDIRECT_URI, 1455).map_err(OAuthError::from)?;
     let callback_url = handler.authorize(auth_url.as_str()).await?;
     let callback = Url::parse(&callback_url)
         .map_err(|error| OAuthError::InvalidCallback(format!("Invalid callback URL: {error}")))?;

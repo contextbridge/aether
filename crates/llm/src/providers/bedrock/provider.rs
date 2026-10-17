@@ -1,6 +1,7 @@
 use super::mantle::{MantleAuth, MantleClient};
 use super::mappers::{default_cache_point, map_messages, map_tools};
 use super::streaming::{converse_events, decode_converse_event};
+use crate::catalog::Provider;
 use crate::catalog::transport::ModelTransport;
 use crate::provider::{LlmResponseStream, StreamingModelProvider, validate_reasoning};
 use crate::providers::openai::responses::streaming::decode_responses;
@@ -158,7 +159,7 @@ impl BedrockProvider {
 
 impl StreamingModelProvider for BedrockProvider {
     fn model(&self) -> Option<crate::LlmModel> {
-        format!("bedrock:{}", self.model).parse().ok()
+        crate::LlmModel::parse_for(Provider::Bedrock, &self.model).ok()
     }
 
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
@@ -278,7 +279,6 @@ fn region_from_env() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::Provider;
     use crate::providers::test_capture_server::{CaptureServer, ResponseSpec, hello_context};
     use crate::types::IsoString;
     use crate::{AssistantReasoning, ChatMessage, EncryptedReasoningContent, LlmModel, MessageId};

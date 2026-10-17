@@ -2,8 +2,10 @@
 
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use serde::Serialize;
+use std::borrow::Cow;
 use std::future::Future;
 use std::time::Duration;
+use utils::variables::Vars;
 
 use crate::catalog::Provider;
 use crate::provider::{display_name, validate_reasoning};
@@ -29,6 +31,7 @@ pub use crate::providers::openai::responses::mappers::ResponsesRequestPolicy;
 pub struct ProviderConfig {
     pub provider: Provider,
     pub api_base: Option<&'static str>,
+    pub api_base_env: Option<&'static str>,
     pub default_model: &'static str,
     pub api: Api,
 }
@@ -42,6 +45,7 @@ pub enum Api {
 pub const ANTHROPIC: ProviderConfig = ProviderConfig {
     provider: Provider::Anthropic,
     api_base: Some("https://api.anthropic.com"),
+    api_base_env: None,
     default_model: "claude-sonnet-4-5-20250929",
     api: Api::Messages,
 };
@@ -49,6 +53,7 @@ pub const ANTHROPIC: ProviderConfig = ProviderConfig {
 pub const OPENAI: ProviderConfig = ProviderConfig {
     provider: Provider::Openai,
     api_base: Some("https://api.openai.com/v1"),
+    api_base_env: None,
     default_model: "gpt-4.1",
     api: Api::Responses(ResponsesRequestPolicy::OPENAI),
 };
@@ -56,6 +61,7 @@ pub const OPENAI: ProviderConfig = ProviderConfig {
 pub const XIAOMI: ProviderConfig = ProviderConfig {
     provider: Provider::Xiaomi,
     api_base: Some("https://api.xiaomimimo.com/v1"),
+    api_base_env: None,
     default_model: "mimo-v2.6-pro",
     api: Api::Responses(ResponsesRequestPolicy::XIAOMI),
 };
@@ -63,6 +69,7 @@ pub const XIAOMI: ProviderConfig = ProviderConfig {
 pub const DEEPSEEK: ProviderConfig = ProviderConfig {
     provider: Provider::DeepSeek,
     api_base: Some("https://api.deepseek.com"),
+    api_base_env: None,
     default_model: "deepseek-v4-flash",
     api: Api::ChatCompletions(ChatRequestPolicy::DEFAULT),
 };
@@ -70,6 +77,7 @@ pub const DEEPSEEK: ProviderConfig = ProviderConfig {
 pub const MOONSHOT: ProviderConfig = ProviderConfig {
     provider: Provider::Moonshot,
     api_base: Some("https://api.moonshot.ai/v1"),
+    api_base_env: None,
     default_model: "moonshot-v1-8k",
     api: Api::ChatCompletions(ChatRequestPolicy {
         tool_schema_transform: Some(normalize_for_moonshot),
@@ -80,6 +88,7 @@ pub const MOONSHOT: ProviderConfig = ProviderConfig {
 pub const ZAI: ProviderConfig = ProviderConfig {
     provider: Provider::ZAi,
     api_base: Some("https://api.z.ai/api/coding/paas/v4"),
+    api_base_env: None,
     default_model: "GLM-4.6",
     api: Api::ChatCompletions(ChatRequestPolicy::DEFAULT),
 };
@@ -87,6 +96,7 @@ pub const ZAI: ProviderConfig = ProviderConfig {
 pub const AZURE_FOUNDRY: ProviderConfig = ProviderConfig {
     provider: Provider::AzureFoundry,
     api_base: None,
+    api_base_env: None,
     default_model: "gpt-5.5",
     api: Api::ChatCompletions(ChatRequestPolicy {
         prompt_cache_key: PromptCacheKeySource::Prefix,
@@ -97,6 +107,7 @@ pub const AZURE_FOUNDRY: ProviderConfig = ProviderConfig {
 pub const FIREWORKS: ProviderConfig = ProviderConfig {
     provider: Provider::Fireworks,
     api_base: Some("https://api.fireworks.ai/inference/v1"),
+    api_base_env: None,
     default_model: "accounts/fireworks/models/glm-5p1",
     api: Api::ChatCompletions(ChatRequestPolicy {
         prompt_cache_key: PromptCacheKeySource::SessionAffinity,
@@ -107,6 +118,7 @@ pub const FIREWORKS: ProviderConfig = ProviderConfig {
 pub const GEMINI: ProviderConfig = ProviderConfig {
     provider: Provider::Gemini,
     api_base: Some("https://generativelanguage.googleapis.com/v1beta/openai"),
+    api_base_env: None,
     default_model: "",
     api: Api::ChatCompletions(ChatRequestPolicy::DEFAULT),
 };
@@ -114,6 +126,7 @@ pub const GEMINI: ProviderConfig = ProviderConfig {
 pub const OPENROUTER: ProviderConfig = ProviderConfig {
     provider: Provider::OpenRouter,
     api_base: Some("https://openrouter.ai/api/v1"),
+    api_base_env: None,
     default_model: "",
     api: Api::ChatCompletions(ChatRequestPolicy {
         prompt_cache_key: PromptCacheKeySource::Prefix,
@@ -125,6 +138,7 @@ pub const OPENROUTER: ProviderConfig = ProviderConfig {
 pub const OLLAMA: ProviderConfig = ProviderConfig {
     provider: Provider::Ollama,
     api_base: Some("http://localhost:11434/v1"),
+    api_base_env: Some("OLLAMA_HOST"),
     default_model: "",
     api: Api::ChatCompletions(LOCAL_CHAT),
 };
@@ -132,6 +146,7 @@ pub const OLLAMA: ProviderConfig = ProviderConfig {
 pub const LLAMACPP: ProviderConfig = ProviderConfig {
     provider: Provider::LlamaCpp,
     api_base: Some("http://localhost:8080/v1"),
+    api_base_env: Some("LLAMA_CPP_HOST"),
     default_model: "",
     api: Api::ChatCompletions(LOCAL_CHAT),
 };
@@ -174,12 +189,23 @@ impl GenericProvider {
         config: &'static ProviderConfig,
         connection: ProviderConnectionConfig,
     ) -> Result<Self> {
+        Self::from_vars(config, connection, &Vars::new())
+    }
+
+    pub fn from_vars(
+        config: &'static ProviderConfig,
+        mut connection: ProviderConnectionConfig,
+        vars: &Vars,
+    ) -> Result<Self> {
         let api_key = match (connection.auth_mode, config.provider.required_env_var()) {
             (ProviderAuthMode::Default, Some(env_var)) => {
-                std::env::var(env_var).map_err(|_| LlmError::MissingApiKey(env_var.to_string()))?
+                vars.get(env_var).ok_or_else(|| LlmError::MissingApiKey(env_var.to_string()))?.into_owned()
             }
             _ => String::new(),
         };
+        connection.base_url = connection
+            .base_url
+            .or_else(|| config.api_base_env.and_then(|env_var| vars.get(env_var)).map(Cow::into_owned));
         Self::new_with_connection(&api_key, config, connection)
     }
 
@@ -212,9 +238,7 @@ impl GenericProvider {
     }
 
     pub fn with_model(mut self, model: &str) -> Self {
-        if !model.is_empty() {
-            self.model = model.to_string();
-        }
+        self.model = model.to_string();
         self
     }
 }
@@ -236,7 +260,7 @@ impl StreamingModelProvider for GenericProvider {
     }
 
     fn model(&self) -> Option<LlmModel> {
-        format!("{}:{}", self.config.provider.parser_name(), self.model).parse().ok()
+        LlmModel::parse_for(self.config.provider, &self.model).ok()
     }
 }
 
@@ -575,8 +599,8 @@ mod tests {
         let provider = GenericProvider::new("key", &DEEPSEEK).unwrap().with_model("my-custom-model");
         assert_eq!(provider.display_name(), "DeepSeek (my-custom-model)");
 
-        let provider = GenericProvider::new("key", &GEMINI).unwrap();
-        assert_eq!(provider.display_name(), "Gemini");
+        let provider = GenericProvider::new("key", &DEEPSEEK).unwrap().with_model("");
+        assert_eq!(provider.display_name(), "DeepSeek");
     }
 
     #[test]
@@ -688,6 +712,35 @@ mod tests {
             assert!(captured.body["messages"][1].get("reasoning_content").is_none());
             assert_eq!(provider.display_name(), display_name);
         }
+    }
+
+    #[tokio::test]
+    async fn local_providers_send_requests_to_their_host_variable() {
+        for (config, host_var) in [(&OLLAMA, "OLLAMA_HOST"), (&LLAMACPP, "LLAMA_CPP_HOST")] {
+            let mut server = CaptureServer::start_chat_completions().await;
+            let vars = Vars::new().with_env_lookup(|_| None).with(host_var, server.base_url.clone());
+            let provider = GenericProvider::from_vars(config, ProviderConnectionConfig::default(), &vars)
+                .unwrap()
+                .with_model("test-model");
+
+            let responses = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
+
+            assert_successful_stream(&responses);
+            assert_eq!(server.captured().await.path, "/v1/chat/completions", "{host_var}");
+        }
+    }
+
+    #[tokio::test]
+    async fn connection_url_takes_precedence_over_the_host_variable() {
+        let mut server = CaptureServer::start_chat_completions().await;
+        let vars = Vars::new().with_env_lookup(|_| None).with("OLLAMA_HOST", "http://127.0.0.1:1");
+        let connection = ProviderConnectionConfig { base_url: Some(server.base_url.clone()), ..Default::default() };
+        let provider = GenericProvider::from_vars(&OLLAMA, connection, &vars).unwrap().with_model("test-model");
+
+        let responses = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
+
+        assert_successful_stream(&responses);
+        assert_eq!(server.captured().await.path, "/v1/chat/completions");
     }
 
     #[tokio::test]

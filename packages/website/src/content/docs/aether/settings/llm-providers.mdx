@@ -190,9 +190,9 @@ Inference profiles are a Converse-API feature and do not apply to Responses-tran
 | ----------------- | ------------------- |
 | **Credentials**   | None                |
 | **Model syntax**  | `ollama:<model-id>` |
-| **Discovery host** | `OLLAMA_HOST`      |
+| **Host**          | `OLLAMA_HOST`       |
 
-Aether discovers models you have pulled into Ollama by querying `$OLLAMA_HOST/api/tags` (`http://localhost:11434` by default). To route inference requests to a different host, override the provider URL:
+Aether discovers models you have pulled into Ollama by querying `$OLLAMA_HOST/api/tags` and sends inference requests to `$OLLAMA_HOST/v1` (`http://localhost:11434` by default). A provider URL takes precedence over `OLLAMA_HOST` for inference requests:
 
 ```json title=".aether/settings.json"
 {
@@ -208,9 +208,9 @@ Aether discovers models you have pulled into Ollama by querying `$OLLAMA_HOST/ap
 | ----------------- | --------------------- |
 | **Credentials**   | None                  |
 | **Model syntax**  | `llamacpp:<model-id>` |
-| **Discovery host** | `LLAMA_CPP_HOST`     |
+| **Host**          | `LLAMA_CPP_HOST`      |
 
-Aether queries `$LLAMA_CPP_HOST/v1/models` (`http://localhost:8080` by default) for the currently loaded model. To route inference requests to a different host, override the provider URL:
+Aether queries `$LLAMA_CPP_HOST/v1/models` for the currently loaded model and sends inference requests to `$LLAMA_CPP_HOST/v1` (`http://localhost:8080` by default). A provider URL takes precedence over `LLAMA_CPP_HOST` for inference requests:
 
 ```json title=".aether/settings.json"
 {

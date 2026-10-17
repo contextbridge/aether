@@ -16,9 +16,6 @@ pub enum LlmError {
     /// support diagnostics (HTTP status, request ID, provider error code).
     #[error("{0}")]
     Provider(#[from] ProviderError),
-    /// IO error while reading stream
-    #[error("IO error reading stream: {0}")]
-    IoError(String),
     /// JSON parsing/serialization error
     #[error("JSON parsing error: {0}")]
     JsonParsing(String),
@@ -223,12 +220,6 @@ impl From<serde_json::Error> for LlmError {
     }
 }
 
-impl From<std::io::Error> for LlmError {
-    fn from(error: std::io::Error) -> Self {
-        LlmError::IoError(error.to_string())
-    }
-}
-
 impl From<reqwest::header::InvalidHeaderValue> for LlmError {
     fn from(error: reqwest::header::InvalidHeaderValue) -> Self {
         LlmError::ProviderRequest(error.to_string())
@@ -303,7 +294,6 @@ mod tests {
         assert!(!LlmError::from(ProviderError::api("x")).is_retryable());
         assert!(!LlmError::from(ProviderError::authentication("x")).is_retryable());
         assert!(!LlmError::MissingApiKey("x".into()).is_retryable());
-        assert!(!LlmError::IoError("x".into()).is_retryable());
         assert!(!LlmError::JsonParsing("x".into()).is_retryable());
         assert!(!LlmError::ToolParameterParsing { tool_name: "t".into(), error: "e".into() }.is_retryable());
         assert!(!LlmError::OAuthError("x".into()).is_retryable());
