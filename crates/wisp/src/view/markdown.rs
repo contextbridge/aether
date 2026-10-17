@@ -4,7 +4,7 @@ use clankerdiff_ratatui::MarkdownDocument;
 use clankerdiff_ratatui::{MarkdownLayoutOptions, MarkdownRenderer, MarkdownPresentation};
 use ratatui::text::Line;
 
-pub fn render_markdown(source: &str, width: u16, theme: &Theme, highlighter: &mut SyntaxHighlighter) -> Vec<Line<'static>> {
+pub(crate) fn render_markdown(source: &str, width: u16, theme: &Theme, highlighter: &mut SyntaxHighlighter) -> Vec<Line<'static>> {
     let document = MarkdownDocument::parse(source);
     MarkdownRenderer::new().render_layout(&document, layout_options(width), theme.review(), &mut highlighter.inner)
         .rows().iter().map(|row| row.line.clone()).collect()

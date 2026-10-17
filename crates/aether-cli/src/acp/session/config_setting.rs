@@ -3,14 +3,14 @@ use llm::ReasoningEffort;
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConfigSetting {
+pub(crate) enum ConfigSetting {
     Mode(String),
     Model(String),
     ReasoningEffort(Option<ReasoningEffort>),
 }
 
 impl ConfigSetting {
-    pub fn parse(config_id: &str, value: &str) -> Result<Self, ConfigSettingError> {
+    pub(crate) fn parse(config_id: &str, value: &str) -> Result<Self, ConfigSettingError> {
         match config_id.parse()? {
             ConfigOptionId::Mode => Ok(Self::Mode(value.to_string())),
             ConfigOptionId::Model => Ok(Self::Model(value.to_string())),
@@ -26,7 +26,7 @@ impl ConfigSetting {
 }
 
 #[derive(Debug, Error)]
-pub enum ConfigSettingError {
+pub(crate) enum ConfigSettingError {
     #[error(transparent)]
     UnknownConfigId(#[from] UnknownConfigOptionId),
     #[error("Invalid value '{value}' for config option '{config_id}'")]

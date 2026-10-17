@@ -8,17 +8,17 @@ use ratatui::widgets::{Paragraph, Widget};
 
 const MAX_PROMPT_ROWS: usize = 3;
 
-pub struct QueuedPromptsView<'a> {
+pub(crate) struct QueuedPromptsView<'a> {
     prompts: &'a [QueuedPrompt],
     theme: &'a Theme,
 }
 
 impl<'a> QueuedPromptsView<'a> {
-    pub fn new(prompts: &'a [QueuedPrompt], theme: &'a Theme) -> Self {
+    pub(crate) fn new(prompts: &'a [QueuedPrompt], theme: &'a Theme) -> Self {
         Self { prompts, theme }
     }
 
-    pub fn line_count(&self) -> usize {
+    pub(crate) fn line_count(&self) -> usize {
         self.prompts.len().min(MAX_PROMPT_ROWS + 1)
     }
 }

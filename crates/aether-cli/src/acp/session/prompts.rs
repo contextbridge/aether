@@ -29,31 +29,31 @@ struct PreparingPrompt {
 }
 
 impl PromptQueue {
-    pub fn is_idle(&self) -> bool {
+    pub(crate) fn is_idle(&self) -> bool {
         !self.running && self.preparing.is_empty() && self.submitted.is_empty()
     }
 
-    pub fn is_running(&self) -> bool {
+    pub(crate) fn is_running(&self) -> bool {
         self.running
     }
 
-    pub fn is_preparing(&self) -> bool {
+    pub(crate) fn is_preparing(&self) -> bool {
         !self.expansions.is_empty()
     }
 
-    pub fn has_agent_work(&self) -> bool {
+    pub(crate) fn has_agent_work(&self) -> bool {
         self.running || !self.submitted.is_empty()
     }
 
-    pub fn turn_started(&mut self) {
+    pub(crate) fn turn_started(&mut self) {
         self.running = true;
     }
 
-    pub fn turn_ended(&mut self) {
+    pub(crate) fn turn_ended(&mut self) {
         self.running = false;
     }
 
-    pub fn prepare(
+    pub(crate) fn prepare(
         &mut self,
         display_content: Vec<ContentBlock>,
         responder: ClientConnection,
@@ -64,11 +64,11 @@ impl PromptQueue {
         self.expansions.push_back(expansion.map(move |content| (message_id, content)).boxed());
     }
 
-    pub async fn next_prepared(&mut self) -> Option<(MessageId, Vec<ContentBlock>)> {
+    pub(crate) async fn next_prepared(&mut self) -> Option<(MessageId, Vec<ContentBlock>)> {
         self.expansions.next().await
     }
 
-    pub fn submit(&mut self, message_id: MessageId, content: Vec<ContentBlock>) {
+    pub(crate) fn submit(&mut self, message_id: MessageId, content: Vec<ContentBlock>) {
         let Some(PreparingPrompt { responder, display_content }) = self.preparing.remove(&message_id) else {
             return;
         };
@@ -81,24 +81,24 @@ impl PromptQueue {
         self.submitted.insert(message_id, SubmittedPrompt { responder, event, echo });
     }
 
-    pub fn reject(&mut self, message_id: &MessageId, error: Error) {
+    pub(crate) fn reject(&mut self, message_id: &MessageId, error: Error) {
         if let Some(prompt) = self.preparing.remove(message_id) {
             prompt.responder.respond_with_error(error);
         }
     }
 
-    pub fn take_submitted(&mut self, message_id: &MessageId) -> Option<SubmittedPrompt> {
+    pub(crate) fn take_submitted(&mut self, message_id: &MessageId) -> Option<SubmittedPrompt> {
         self.submitted.remove(message_id)
     }
 
-    pub fn cancel_preparing(&mut self) {
+    pub(crate) fn cancel_preparing(&mut self) {
         self.expansions = FuturesOrdered::new();
         for (_, prompt) in self.preparing.drain() {
             prompt.responder.respond_with_error(Error::request_cancelled());
         }
     }
 
-    pub fn cancel_submitted(&mut self) {
+    pub(crate) fn cancel_submitted(&mut self) {
         for (_, prompt) in self.submitted.drain() {
             prompt.responder.respond_with_error(Error::request_cancelled());
         }

@@ -7,7 +7,7 @@ use crate::{ChatMessage, ContentBlock, Context, LlmError, ReasoningEffort, Resul
 /// `max_tokens` on every request, so a value is always sent.
 const DEFAULT_MAX_TOKENS: u32 = 16_384;
 
-pub fn build_request(model: &str, context: &Context) -> Result<Request> {
+pub(crate) fn build_request(model: &str, context: &Context) -> Result<Request> {
     let (system_prompt, messages) = map_messages(context.messages())?;
     let settings = context.model_settings();
 
@@ -41,7 +41,7 @@ pub fn build_request(model: &str, context: &Context) -> Result<Request> {
     Ok(request)
 }
 
-pub fn map_messages(messages: &[ChatMessage]) -> Result<(Option<String>, Vec<Message>)> {
+pub(crate) fn map_messages(messages: &[ChatMessage]) -> Result<(Option<String>, Vec<Message>)> {
     let mut system_prompt = None;
     let mut anthropic_messages = Vec::new();
 
@@ -120,7 +120,7 @@ fn map_content_blocks(parts: &[ContentBlock]) -> Result<Content> {
     Ok(Content::Blocks(blocks))
 }
 
-pub fn map_tools(tools: &[ToolDefinition]) -> Vec<Tool> {
+pub(crate) fn map_tools(tools: &[ToolDefinition]) -> Vec<Tool> {
     tools
         .iter()
         .map(|tool| Tool {

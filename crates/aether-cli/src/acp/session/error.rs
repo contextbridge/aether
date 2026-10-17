@@ -3,7 +3,7 @@ use thiserror::Error;
 use crate::runtime::RuntimeError;
 
 #[derive(Debug, Error)]
-pub enum SessionError {
+pub(crate) enum SessionError {
     #[error("failed to build session: {0}")]
     Build(#[from] RuntimeError),
     #[error("failed to persist session: {0}")]

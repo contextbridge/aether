@@ -165,7 +165,7 @@ fn format_session_usage(usage: &llm::SessionUsageEvent) -> String {
 pub(crate) mod test_events {
     use aether_core::events::{AgentEvent, ContextEvent, ToolEvent, TurnEvent};
 
-    pub fn tool_progress(progress: f64, total: Option<f64>, message: Option<&str>) -> AgentEvent {
+    pub(crate) fn tool_progress(progress: f64, total: Option<f64>, message: Option<&str>) -> AgentEvent {
         AgentEvent::Tool(ToolEvent::Progress {
             request: llm::ToolCallRequest {
                 id: "tc1".to_string(),
@@ -178,7 +178,7 @@ pub(crate) mod test_events {
         })
     }
 
-    pub fn llm_call_started(attempt: u32) -> AgentEvent {
+    pub(crate) fn llm_call_started(attempt: u32) -> AgentEvent {
         AgentEvent::Turn(TurnEvent::LlmCallStarted {
             purpose: llm::LlmCallPurpose::Chat,
             model: llm::ModelIdentity::default(),
@@ -188,7 +188,7 @@ pub(crate) mod test_events {
         })
     }
 
-    pub fn retry_scheduled(attempt: u32, delay_ms: u64) -> AgentEvent {
+    pub(crate) fn retry_scheduled(attempt: u32, delay_ms: u64) -> AgentEvent {
         AgentEvent::Turn(TurnEvent::RetryScheduled {
             purpose: llm::LlmCallPurpose::Chat,
             attempt,
@@ -197,7 +197,7 @@ pub(crate) mod test_events {
         })
     }
 
-    pub fn usage_update() -> AgentEvent {
+    pub(crate) fn usage_update() -> AgentEvent {
         AgentEvent::Context(ContextEvent::UsageUpdated {
             usage: llm::ContextUsage {
                 input_tokens: 100_000.into(),

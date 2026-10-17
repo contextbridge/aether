@@ -4,14 +4,14 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 /// A lockfile that tracks the daemon's PID
-pub struct PidLockfile {
+pub(crate) struct PidLockfile {
     path: PathBuf,
     _file: File,
 }
 
 impl PidLockfile {
     /// Acquire a lockfile, writing the current PID
-    pub fn acquire(path: &Path) -> io::Result<Self> {
+    pub(crate) fn acquire(path: &Path) -> io::Result<Self> {
         if let Some(parent) = path.parent() {
             create_dir_all(parent)?;
         }

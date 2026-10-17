@@ -1,3 +1,3 @@
 mod server;
 
-pub use server::{Artifact, PendingReviews, ReviewServer};
+pub(crate) use server::{Artifact, PendingReviews, ReviewServer};

@@ -36,7 +36,7 @@ pub(crate) struct TemplateFile {
     pub body: &'static str,
 }
 
-pub fn supported_providers() -> impl Iterator<Item = Provider> {
+pub(super) fn supported_providers() -> impl Iterator<Item = Provider> {
     Provider::ALL.iter().copied().filter(|p| recommended_for_provider(*p).is_some())
 }
 

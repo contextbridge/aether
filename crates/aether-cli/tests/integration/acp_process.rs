@@ -8,30 +8,30 @@ use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 /// An `aether acp` child process speaking newline-delimited JSON-RPC over piped stdio.
-pub struct AcpProcess {
+pub(crate) struct AcpProcess {
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     next_id: u64,
 }
 
-pub struct AcpProcessBuilder {
+pub(crate) struct AcpProcessBuilder {
     command: Command,
 }
 
 impl AcpProcess {
-    pub fn builder() -> AcpProcessBuilder {
+    pub(crate) fn builder() -> AcpProcessBuilder {
         let mut command = Command::new(env!("CARGO_BIN_EXE_aether"));
         command.arg("acp").stderr(Stdio::null());
         AcpProcessBuilder { command }
     }
 
-    pub fn initialize(&mut self) -> TestResult<Value> {
+    pub(crate) fn initialize(&mut self) -> TestResult<Value> {
         self.request("initialize", &initialize_params()?)
     }
 
     /// Send a request and return its `result`, skipping unrelated messages.
-    pub fn request(&mut self, method: &str, params: &Value) -> TestResult<Value> {
+    pub(crate) fn request(&mut self, method: &str, params: &Value) -> TestResult<Value> {
         let id = self.next_id;
         self.next_id += 1;
         self.send(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))?;
@@ -48,13 +48,13 @@ impl AcpProcess {
         }
     }
 
-    pub fn send(&mut self, message: &Value) -> TestResult {
+    pub(crate) fn send(&mut self, message: &Value) -> TestResult {
         writeln!(self.stdin, "{message}")?;
         self.stdin.flush()?;
         Ok(())
     }
 
-    pub fn read_message(&mut self) -> TestResult<Value> {
+    pub(crate) fn read_message(&mut self) -> TestResult<Value> {
         let mut line = String::new();
         if self.stdout.read_line(&mut line)? == 0 {
             return Err(IoError::other("agent exited before sending a message").into());
@@ -63,31 +63,31 @@ impl AcpProcess {
     }
 }
 
-pub fn initialize_params() -> TestResult<Value> {
+pub(crate) fn initialize_params() -> TestResult<Value> {
     Ok(serde_json::to_value(InitializeRequest::new(ProtocolVersion::V2, Implementation::new("test", "1")))?)
 }
 
 impl AcpProcessBuilder {
-    pub fn log_dir(mut self, dir: &Path) -> Self {
+    pub(crate) fn log_dir(mut self, dir: &Path) -> Self {
         self.command.arg("--log-dir").arg(dir);
         self
     }
 
-    pub fn settings_json(self, settings: &str) -> Self {
+    pub(crate) fn settings_json(self, settings: &str) -> Self {
         self.arg("--settings-json").arg(settings)
     }
 
-    pub fn arg(mut self, arg: impl AsRef<OsStr>) -> Self {
+    pub(crate) fn arg(mut self, arg: impl AsRef<OsStr>) -> Self {
         self.command.arg(arg);
         self
     }
 
-    pub fn env(mut self, key: &str, value: impl AsRef<OsStr>) -> Self {
+    pub(crate) fn env(mut self, key: &str, value: impl AsRef<OsStr>) -> Self {
         self.command.env(key, value);
         self
     }
 
-    pub fn spawn(mut self) -> TestResult<AcpProcess> {
+    pub(crate) fn spawn(mut self) -> TestResult<AcpProcess> {
         let mut child = self.command.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
         let stdin = child.stdin.take().ok_or_else(|| IoError::other("child stdin"))?;
         let stdout = child.stdout.take().ok_or_else(|| IoError::other("child stdout"))?;
@@ -95,7 +95,7 @@ impl AcpProcessBuilder {
     }
 
     /// The configured command, for tests that supply their own stdio.
-    pub fn into_command(self) -> Command {
+    pub(crate) fn into_command(self) -> Command {
         self.command
     }
 }

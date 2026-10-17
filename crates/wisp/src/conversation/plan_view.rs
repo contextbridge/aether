@@ -12,18 +12,18 @@ const SQUARE_FILLED: &str = "\u{25A0}";
 
 /// Renders the plan checklist as a ratatui widget. Callers inset the area they
 /// pass to [`Widget::render`] rather than asking for an indent.
-pub struct PlanView<'a> {
+pub(crate) struct PlanView<'a> {
     entries: &'a [PlanEntry],
     theme: &'a Theme,
 }
 
 impl<'a> PlanView<'a> {
-    pub fn new(entries: &'a [PlanEntry], theme: &'a Theme) -> Self {
+    pub(crate) fn new(entries: &'a [PlanEntry], theme: &'a Theme) -> Self {
         Self { entries, theme }
     }
 
     /// Number of lines the plan view will occupy (header + blank + entries).
-    pub fn line_count(&self) -> usize {
+    pub(crate) fn line_count(&self) -> usize {
         if self.entries.is_empty() { 0 } else { self.entries.len() + 2 }
     }
 }

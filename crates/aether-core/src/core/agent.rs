@@ -3,7 +3,7 @@ use crate::context::{
 };
 use crate::core::prompt_cache_key::derive_prompt_cache_key;
 use crate::core::queued_input::QueuedInput;
-pub use crate::core::retry_config::RetryConfig;
+pub(super) use crate::core::retry_config::RetryConfig;
 use crate::core::tool_execution::{ToolAbortPolicy, ToolExecutionUpdate, ToolExecutions};
 use crate::core::{AgentBuilder, AgentError, PromptCache};
 use crate::events::{
