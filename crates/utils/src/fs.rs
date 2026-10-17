@@ -1,12 +1,10 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
 use tempfile::NamedTempFile;
 
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    fs::create_dir_all(parent)?;
-
+    let parent = create_parent_dir(path)?;
     let mut temp = NamedTempFile::new_in(parent)?;
     temp.write_all(bytes)?;
     if let Ok(existing) = fs::metadata(path) {
@@ -17,10 +15,32 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
+pub fn append_line(path: &Path, line: &str) -> io::Result<()> {
+    create_parent_dir(path)?;
+    OpenOptions::new().create(true).append(true).open(path)?.write_all(format!("{line}\n").as_bytes())
+}
+
+fn create_parent_dir(path: &Path) -> io::Result<&Path> {
+    let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    fs::create_dir_all(parent)?;
+    Ok(parent)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn append_line_creates_parents_and_appends_newline_terminated_lines() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("nested/log.jsonl");
+
+        append_line(&path, "first").unwrap();
+        append_line(&path, "second").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "first\nsecond\n");
+    }
 
     #[test]
     fn write_atomic_creates_parents_and_replaces_contents() {

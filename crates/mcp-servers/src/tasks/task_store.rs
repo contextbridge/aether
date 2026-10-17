@@ -1,9 +1,10 @@
 use super::task_index::TaskIndex;
 use super::types::{Task, TaskId, TaskStatus, TaskUpdate};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use thiserror::Error;
+use utils::fs::append_line;
 
 /// Errors that can occur during task store operations
 #[derive(Debug, Error)]
@@ -105,7 +106,7 @@ impl TaskStore {
         };
         fields.apply_to(&mut task);
 
-        write_task_to_file(&task, &file_path)?;
+        append_line(&file_path, &serde_json::to_string(&task)?)?;
         self.index.insert(task.clone(), file_path);
 
         Ok(task)
@@ -229,21 +230,6 @@ impl TaskStore {
 
         Ok(())
     }
-}
-
-fn write_task_to_file(task: &Task, path: &PathBuf) -> Result<(), TaskStoreError> {
-    if let Some(parent) = path.parent()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent)?;
-    }
-
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-
-    let json = serde_json::to_string(task)?;
-    writeln!(file, "{json}")?;
-
-    Ok(())
 }
 
 #[cfg(test)]
