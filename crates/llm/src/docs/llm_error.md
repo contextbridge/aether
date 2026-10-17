@@ -9,7 +9,6 @@ Errors that can occur when interacting with LLM providers.
 ## Parsing
 - **`JsonParsing`** -- Failed to parse or serialize JSON (response body, tool arguments).
 - **`ToolParameterParsing`** -- Failed to parse tool parameters for a specific tool.
-- **`IoError`** -- IO error while reading the response stream.
 
 ## Content
 - **`UnsupportedContent`** -- The message contained only content types this provider doesn't support (e.g. sending audio to a text-only model).

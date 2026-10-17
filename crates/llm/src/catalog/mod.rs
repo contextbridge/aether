@@ -40,6 +40,19 @@ pub async fn get_local_models() -> Vec<LlmModel> {
 }
 
 impl LlmModel {
+    pub(crate) fn parse_for(provider: Provider, model_id: &str) -> Result<Self, String> {
+        match provider {
+            Provider::Ollama => Ok(Self::Ollama(model_id.to_string())),
+            Provider::LlamaCpp => Ok(Self::LlamaCpp(model_id.to_string())),
+            Provider::Bedrock => model_id.parse().map(Self::Bedrock),
+            provider => Self::all()
+                .iter()
+                .find(|model| model.provider_enum() == provider && model.model_id() == model_id)
+                .cloned()
+                .ok_or_else(|| format!("Unknown {provider} model: '{model_id}'")),
+        }
+    }
+
     /// Raw model ID (e.g. `claude-opus-4-6`, `llama3.2`)
     pub fn model_id(&self) -> Cow<'static, str> {
         match self.source() {
@@ -176,16 +189,7 @@ impl FromStr for LlmModel {
     /// Parse a `provider:model` string into an `LlmModel`
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (provider, model_id) = s.split_once(':').unwrap_or((s, ""));
-        match provider.parse::<Provider>()? {
-            Provider::Ollama => Ok(Self::Ollama(model_id.to_string())),
-            Provider::LlamaCpp => Ok(Self::LlamaCpp(model_id.to_string())),
-            Provider::Bedrock => model_id.parse().map(Self::Bedrock),
-            provider => Self::all()
-                .iter()
-                .find(|model| model.provider_enum() == provider && model.model_id() == model_id)
-                .cloned()
-                .ok_or_else(|| format!("Unknown {provider} model: '{model_id}'")),
-        }
+        Self::parse_for(provider.parse()?, model_id)
     }
 }
 
