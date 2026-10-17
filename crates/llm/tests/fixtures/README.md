@@ -14,11 +14,10 @@
 # Provider Fixtures
 
 Raw byte-for-byte SSE responses captured from each provider's streaming
-endpoint. Used by `tests/providers/anthropic/fixture_tests.rs`,
-`tests/providers/chat_completions_fixture_tests.rs` (`openai`, `openrouter`,
-`z_ai`) and the Responses unit tests in
-`src/providers/openai/responses/streaming.rs` to verify that the real parsers
-extract `TokenUsage` correctly from on-the-wire responses.
+endpoint. `src/providers/fixture_tests.rs` serves each one from a local server
+and streams it through the real provider (HTTP, SSE parsing and decoding) to
+verify that `TokenUsage` and stop reasons are extracted correctly from
+on-the-wire responses.
 
 ## Why these exist
 
@@ -34,18 +33,20 @@ test assertions.
 
 ## Refreshing fixtures
 
-The capture step lives in `#[ignore]`'d tests under
-`tests/providers/{provider}/capture_fixtures.rs`. They're skipped on a normal
-`cargo nextest run` so CI never spends money; refresh by opting in:
+The capture step lives in `#[ignore]`'d tests: one per scenario in
+`tests/providers/anthropic_capture_fixtures.rs`, and one per provider in
+`tests/providers/openai_capture_fixtures.rs` (`openai` also captures
+`openai_responses`). They're skipped on a normal `cargo nextest run` so CI never
+spends money; refresh by opting in:
 
 ```sh
 # Single provider, all scenarios:
 ANTHROPIC_API_KEY=sk-ant-... \
   cargo nextest run -p aether-llm --run-ignored only -E 'test(capture_anthropic)'
 
-# Single scenario:
-OPENAI_API_KEY=sk-... \
-  cargo nextest run -p aether-llm --run-ignored only -E 'test(capture_openai_02_tool_call)'
+# Single Anthropic scenario:
+ANTHROPIC_API_KEY=sk-ant-... \
+  cargo nextest run -p aether-llm --run-ignored only -E 'test(capture_anthropic_02_tool_call)'
 
 # Everything (requires every key):
 ANTHROPIC_API_KEY=... OPENAI_API_KEY=... OPENROUTER_API_KEY=... ZAI_API_KEY=... \
@@ -88,12 +89,13 @@ non-zero `cache_read_input_tokens`.
 
 ## Adding a new scenario
 
-1. Add a new `#[tokio::test] #[ignore = "..."]` function to
-   `tests/providers/{provider}/capture_fixtures.rs` that posts the request body
-   and writes the result via `write_fixture(...)`.
-2. Run the new test with `cargo nextest run -p aether-llm --run-ignored only -E 'test(<name>)'`.
-3. Add a `#[tokio::test]` to the matching fixture test file (see above) that
-   asserts the structural property the scenario is meant to prove.
+1. Capture it from the matching file in `tests/providers/`: a new
+   `#[tokio::test] #[ignore = "..."]` function in `anthropic_capture_fixtures.rs`,
+   or another request in the provider's test in `openai_capture_fixtures.rs`.
+   Either posts the request body and writes the result via `write_fixture(...)`.
+2. Run it with `cargo nextest run -p aether-llm --run-ignored only -E 'test(<name>)'`.
+3. Add a row or test to `src/providers/fixture_tests.rs` that asserts the
+   structural property the scenario is meant to prove.
 
 ## Notes on Bedrock
 

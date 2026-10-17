@@ -49,8 +49,9 @@ impl<T> OpenedStream<T> {
         Self { events, http: None }
     }
 
-    pub fn with_http(events: T, http: HttpResponseMetadata) -> Self {
-        Self { events, http: Some(http) }
+    pub fn with_http(mut self, http: HttpResponseMetadata) -> Self {
+        self.http = Some(http);
+        self
     }
 }
 
@@ -216,7 +217,7 @@ mod tests {
         let events = stream::iter([Err(ProviderError::stream_interrupted("connection reset").into())]);
         let http = HttpResponseMetadata { status: 200, request_id: Some("req-1".to_string()) };
 
-        let responses = collect(text_stream(ready(Ok(OpenedStream::with_http(events, http))))).await;
+        let responses = collect(text_stream(ready(Ok(OpenedStream::new(events).with_http(http))))).await;
 
         let error = responses.last().and_then(|response| response.as_ref().err()).and_then(LlmError::provider);
         assert_eq!(error.and_then(|error| error.request_id.as_deref()), Some("req-1"), "{responses:?}");

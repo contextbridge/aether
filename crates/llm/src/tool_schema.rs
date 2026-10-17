@@ -5,7 +5,7 @@ use serde_json::{Map, Value, json};
 use crate::{LlmError, ToolDefinition};
 
 impl ToolDefinition {
-    pub fn parameters_with(&self, transform: Option<fn(&mut Schema)>) -> Result<Value, LlmError> {
+    pub(crate) fn parameters_with(&self, transform: Option<fn(&mut Schema)>) -> Result<Value, LlmError> {
         let Some(transform) = transform else {
             return Ok(self.parameters.clone());
         };
