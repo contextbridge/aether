@@ -135,14 +135,14 @@ Use `aether-agent-core` as a Rust library to build your own agent in ~25 lines. 
        events::{AgentEvent, Command, MessageEvent, TurnEvent, TurnOutcome},
        mcp::mcp,
    };
-   use llm::providers::anthropic::AnthropicProvider;
+   use llm::providers::generic::{ANTHROPIC, GenericProvider};
    use aether_core::mcp::McpConfig;
    use std::io::{self, Write};
 
    #[tokio::main]
    async fn main() -> Result<(), Box<dyn std::error::Error>> {
        // 1. Create a provider (reads ANTHROPIC_API_KEY from env)
-       let llm = AnthropicProvider::new(None);
+       let llm = GenericProvider::from_env(&ANTHROPIC)?;
 
        // 2. Spawn MCP tool servers from an mcp.json file
        let config = McpConfig::from_json_file("mcp.json")?;

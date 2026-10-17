@@ -1,5 +1,45 @@
-use super::types::{Content, ContentBlock as AnthropicContentBlock, ImageSource, Message, Role, Tool};
-use crate::{ChatMessage, ContentBlock, LlmError, Result, ToolDefinition, tool_result_parts};
+use super::types::{
+    CacheControl, Content, ContentBlock as AnthropicContentBlock, ImageSource, Message, Request, Role, Thinking, Tool,
+};
+use crate::{ChatMessage, ContentBlock, Context, LlmError, ReasoningEffort, Result, ToolDefinition, tool_result_parts};
+
+/// Tokens requested when no `max_tokens` is set via `ModelSettings`. Anthropic requires
+/// `max_tokens` on every request, so a value is always sent.
+const DEFAULT_MAX_TOKENS: u32 = 16_384;
+
+pub fn build_request(model: &str, context: &Context) -> Result<Request> {
+    let (system_prompt, messages) = map_messages(context.messages())?;
+    let settings = context.model_settings();
+
+    let mut request = Request {
+        model: model.to_string(),
+        messages,
+        max_tokens: settings.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
+        temperature: settings.temperature,
+        top_p: settings.top_p,
+        system: system_prompt
+            .map(|text| vec![AnthropicContentBlock::Text { text, cache_control: Some(CacheControl::ephemeral()) }]),
+        tools: (!context.tools().is_empty()).then(|| map_tools(context.tools())),
+        stream: true,
+        thinking: None,
+        cache_control: Some(CacheControl::ephemeral()),
+    };
+
+    if context.reasoning_effort() == ReasoningEffort::Disabled {
+        request.thinking = Some(Thinking::Disabled);
+    } else if let Some(budget_tokens) = effort_to_budget_tokens(context.reasoning_effort()) {
+        request.thinking = Some(Thinking::Enabled { budget_tokens });
+        // Anthropic requires temperature and top_p to be unset when thinking is enabled
+        request.temperature = None;
+        request.top_p = None;
+        // max_tokens must be > budget_tokens
+        if request.max_tokens <= budget_tokens {
+            request.max_tokens = budget_tokens + 1024;
+        }
+    }
+
+    Ok(request)
+}
 
 pub fn map_messages(messages: &[ChatMessage]) -> Result<(Option<String>, Vec<Message>)> {
     let mut system_prompt = None;
@@ -89,6 +129,17 @@ pub fn map_tools(tools: &[ToolDefinition]) -> Vec<Tool> {
             input_schema: tool.parameters.clone(),
         })
         .collect()
+}
+
+fn effort_to_budget_tokens(effort: ReasoningEffort) -> Option<u32> {
+    Some(match effort {
+        ReasoningEffort::Default | ReasoningEffort::Disabled => return None,
+        // 1024 is the Anthropic API's minimum thinking budget.
+        ReasoningEffort::Minimal | ReasoningEffort::Low => 1024,
+        ReasoningEffort::Medium => 4096,
+        ReasoningEffort::High | ReasoningEffort::Xhigh => 10240,
+        ReasoningEffort::Max => 32768,
+    })
 }
 
 #[cfg(test)]

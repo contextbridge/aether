@@ -22,6 +22,7 @@ pub struct CodexProvider {
     base_url: String,
     client: reqwest::Client,
     model: String,
+    request_model: Option<String>,
     token_manager: Arc<CodexTokenManager>,
     idle_timeout: Duration,
 }
@@ -33,6 +34,7 @@ impl CodexProvider {
             base_url: CODEX_API_BASE.to_string(),
             client: http_client(),
             model: "gpt-5.5".to_string(),
+            request_model: None,
             token_manager: Arc::new(token_manager),
             idle_timeout: DEFAULT_STREAM_IDLE_TIMEOUT,
         }
@@ -42,6 +44,7 @@ impl CodexProvider {
         if let Some(base_url) = connection.base_url {
             self.base_url = base_url.trim_end_matches('/').to_string();
         }
+        self.request_model = connection.request_model;
         self.idle_timeout = connection.idle_timeout;
         self
     }
@@ -52,7 +55,11 @@ impl CodexProvider {
     }
 
     fn build_wire_request(&self, context: &Context) -> Result<serde_json::Value> {
-        build_wire_request(&self.model, context, &ResponsesRequestPolicy::CODEX)
+        let mut request = build_wire_request(&self.model, context, &ResponsesRequestPolicy::CODEX)?;
+        if let Some(model) = &self.request_model {
+            request["model"] = model.clone().into();
+        }
+        Ok(request)
     }
 
     async fn build_headers(&self) -> Result<HeaderMap> {
@@ -123,7 +130,7 @@ mod tests {
     use super::*;
     use crate::ChatMessage;
     use crate::ToolDefinition;
-    use crate::providers::test_capture_server::CaptureServer;
+    use crate::providers::test_capture_server::{CaptureServer, hello_context};
     use aether_auth::{FakeOAuthCredentialStore, OAuthCredential};
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -207,7 +214,31 @@ mod tests {
         assert_eq!(captured.body["reasoning"]["effort"], "medium");
     }
 
+    #[tokio::test]
+    async fn request_model_routes_the_request_without_changing_catalog_identity() {
+        let mut server = CaptureServer::start_responses().await;
+        let provider = authenticated_provider().with_connection(crate::ProviderConnectionConfig {
+            base_url: Some(server.base_url.clone()),
+            request_model: Some("codex-deployment".to_string()),
+            ..Default::default()
+        });
+
+        let responses = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
+        let captured = server.captured().await;
+
+        assert!(responses.iter().all(Result::is_ok), "{responses:?}");
+        assert_eq!(captured.body["model"], "codex-deployment");
+        assert_eq!(provider.model().unwrap().to_string(), "codex:gpt-5.5");
+    }
+
     fn server_backed_provider(server: &CaptureServer) -> CodexProvider {
+        authenticated_provider().with_connection(crate::ProviderConnectionConfig {
+            base_url: Some(server.base_url.clone()),
+            ..Default::default()
+        })
+    }
+
+    fn authenticated_provider() -> CodexProvider {
         let credential = OAuthCredential {
             client_id: "test".to_string(),
             access_token: test_jwt("account-1"),
@@ -216,10 +247,7 @@ mod tests {
         };
         let store: Arc<dyn OAuthCredentialStorage> =
             Arc::new(FakeOAuthCredentialStore::new().with_credential("codex", credential));
-        CodexProvider::new(store).with_connection(crate::ProviderConnectionConfig {
-            base_url: Some(server.base_url.clone()),
-            ..Default::default()
-        })
+        CodexProvider::new(store)
     }
 
     fn test_jwt(account_id: &str) -> String {
