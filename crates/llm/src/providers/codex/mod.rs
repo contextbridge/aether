@@ -1,7 +1,7 @@
 #![doc = include_str!(concat!(env!("OUT_DIR"), "/docs/codex.md"))]
 
-pub mod oauth;
-pub mod provider;
+pub(crate) mod oauth;
+pub(crate) mod provider;
 
 pub const PROVIDER_ID: &str = "codex";
 

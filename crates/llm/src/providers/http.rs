@@ -33,18 +33,20 @@ async fn open_sse(request: RequestBuilder, code: fn(&str) -> Option<String>) -> 
     }
 
     let http = HttpResponseMetadata::from(&response);
-    let data = response
-        .bytes_stream()
-        .eventsource()
-        .take_while(|event| ready(!matches!(event, Ok(event) if event.data == "[DONE]")))
-        .filter_map(|event| {
-            ready(match event {
-                Ok(event) if event.event == "keepalive" => None,
-                Ok(event) => Some(Ok(event.data)),
-                Err(error) => Some(Err(ProviderError::stream_interrupted(error.to_string()).into())),
-            })
-        });
-    Ok(OpenedStream::with_http(Box::pin(data), http))
+    let data: SseData = Box::pin(
+        response
+            .bytes_stream()
+            .eventsource()
+            .take_while(|event| ready(!matches!(event, Ok(event) if event.data == "[DONE]")))
+            .filter_map(|event| {
+                ready(match event {
+                    Ok(event) if event.event == "keepalive" => None,
+                    Ok(event) => Some(Ok(event.data)),
+                    Err(error) => Some(Err(ProviderError::stream_interrupted(error.to_string()).into())),
+                })
+            }),
+    );
+    Ok(OpenedStream::new(data).with_http(http))
 }
 
 #[derive(Debug, Clone)]

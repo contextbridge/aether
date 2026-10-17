@@ -1,18 +1,7 @@
 use super::types::{ChatCompletionStreamResponse, FinishReason, FunctionCallDelta, ToolCallDelta};
-use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
-use crate::providers::response_stream::{OpenedStream, StreamAssembler, response_stream};
-use crate::{LlmResponse, LlmResponseStream, ProviderError, Result, StopReason};
-use futures::Stream;
-use std::future::ready;
+use crate::providers::response_stream::StreamAssembler;
+use crate::{LlmResponse, ProviderError, Result, StopReason};
 use tracing::debug;
-
-pub fn process_compatible_stream(data: impl Stream<Item = Result<String>> + Send + 'static) -> LlmResponseStream {
-    response_stream(
-        ready(Ok(OpenedStream::new(data))),
-        |data, turn| decode_sse_chunk(&data, turn),
-        DEFAULT_STREAM_IDLE_TIMEOUT,
-    )
-}
 
 pub(crate) fn decode_sse_chunk(data: &str, turn: &mut StreamAssembler<i32>) -> Result<Vec<LlmResponse>> {
     let chunk = serde_json::from_str::<ChatCompletionStreamResponse>(data).map_err(|error| {
@@ -76,18 +65,21 @@ fn map_finish_reason(reason: FinishReason) -> Result<StopReason> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
     use crate::providers::openai::chat::types::{ChatCompletionStreamChoice, ChatCompletionStreamResponseDelta};
     use crate::providers::openai::wire::{CompletionTokensDetails, PromptTokensDetails, Usage};
+    use crate::providers::response_stream::{OpenedStream, response_stream};
     use crate::testing::llm_response;
     use crate::{ProviderErrorKind, TokenUsage};
     use futures::{StreamExt, stream};
     use serde_json::json;
+    use std::future::ready;
 
     #[tokio::test]
     async fn error_finish_reasons_yield_retryable_server_errors() {
         for reason in ["error", "network_error"] {
             let chunk = json!({ "choices": [{ "delta": { "content": "" }, "finish_reason": reason }] }).to_string();
-            let responses: Vec<_> = process_compatible_stream(stream::iter([Ok(chunk)])).collect().await;
+            let responses = process_data(vec![chunk]).await;
 
             let err = responses.last().unwrap().as_ref().expect_err("an error finish reason must surface as Err");
             assert_eq!(err.provider().map(|provider| provider.kind), Some(ProviderErrorKind::Server), "{err:?}");
@@ -366,6 +358,13 @@ mod tests {
 
     async fn collect_responses(chunks: Vec<ChatCompletionStreamResponse>) -> Vec<LlmResponse> {
         process_chunks(chunks.into_iter().map(Ok)).await.into_iter().map(Result::unwrap).collect()
+    }
+
+    async fn process_data(data: Vec<String>) -> Vec<Result<LlmResponse>> {
+        let opened = ready(Ok(OpenedStream::new(stream::iter(data.into_iter().map(Ok)))));
+        response_stream(opened, |data: String, turn| decode_sse_chunk(&data, turn), DEFAULT_STREAM_IDLE_TIMEOUT)
+            .collect()
+            .await
     }
 
     async fn process_chunks(

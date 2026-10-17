@@ -3,7 +3,6 @@ pub(crate) mod types;
 use super::wire::{PromptCacheKeySource, reasoning_effort_param};
 use crate::{Context, LlmError, ToolDefinition};
 use schemars::Schema;
-pub use streaming::process_compatible_stream;
 use types::{CompatibleChatRequest, FunctionDefinition, StreamOptions, Tool};
 
 #[derive(Debug, Clone, Copy)]

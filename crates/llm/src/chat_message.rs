@@ -214,7 +214,7 @@ impl ChatMessage {
         }
     }
 
-    pub fn as_user_note(&self) -> Option<String> {
+    pub(crate) fn as_user_note(&self) -> Option<String> {
         match self {
             ChatMessage::Summary { content, .. } => Some(format!("[Previous conversation handoff]\n\n{content}")),
             ChatMessage::Error { message, .. } => Some(format!("Error: {message}")),

@@ -564,41 +564,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn captured_responses_fixture_uses_the_shared_processor() {
-        let responses =
-            process_fixture(include_str!("../../../../tests/fixtures/openai_responses/01_minimal.sse")).await;
-
-        assert!(responses.iter().all(Result::is_ok), "{responses:?}");
-        let usage = find_usage(&responses).expect("fixture should report usage");
-        assert!(!usage.input_tokens.is_zero(), "input_tokens should be > 0: {usage:?}");
-        assert!(!usage.output_tokens.is_zero(), "output_tokens should be > 0: {usage:?}");
-        assert!(matches!(responses.last(), Some(Ok(LlmResponse::Done { stop_reason: Some(StopReason::EndTurn) }))));
-    }
-
-    #[tokio::test]
-    async fn captured_reasoning_fixture_preserves_reasoning_usage() {
-        let responses =
-            process_fixture(include_str!("../../../../tests/fixtures/openai_responses/02_reasoning.sse")).await;
-
-        assert!(responses.iter().all(Result::is_ok), "{responses:?}");
-        let usage = find_usage(&responses).expect("fixture should report usage");
-        assert!(!usage.input_tokens.is_zero(), "input_tokens should be > 0: {usage:?}");
-        assert!(!usage.output_tokens.is_zero(), "output_tokens should be > 0: {usage:?}");
-        assert!(usage.reasoning_tokens.is_some_and(|tokens| !tokens.is_zero()), "{usage:?}");
-    }
-
-    #[tokio::test]
-    async fn captured_mantle_fixture_preserves_cache_write_usage() {
-        let responses =
-            process_fixture(include_str!("../../../../tests/fixtures/openai_responses/03_mantle_cache_write.sse"))
-                .await;
-
-        assert!(responses.iter().all(Result::is_ok), "{responses:?}");
-        let usage = find_usage(&responses).expect("fixture should report usage");
-        assert_eq!(usage.cache_creation_tokens.map(crate::Tokens::get), Some(1024));
-    }
-
-    #[tokio::test]
     async fn test_encrypted_reasoning_from_output_item_done() {
         let responses = collect_responses(
             responses_stream().created().reasoning_item(0, Some("enc-blob-data")).completed().build(),
@@ -677,11 +642,6 @@ mod tests {
 
     async fn process_events(events: Vec<Value>) -> Vec<Result<LlmResponse>> {
         process_data(events.into_iter().map(|event| event.to_string()).collect()).await
-    }
-
-    async fn process_fixture(sse: &str) -> Vec<Result<LlmResponse>> {
-        let data = sse.lines().filter_map(|line| line.strip_prefix("data: ")).filter(|data| *data != "[DONE]");
-        process_data(data.map(str::to_string).collect()).await
     }
 
     async fn process_data(data: Vec<String>) -> Vec<Result<LlmResponse>> {

@@ -1,20 +1,7 @@
-//! Re-capture committed Anthropic fixtures by hitting `api.anthropic.com`
-//! directly.
-//!
-//! Each scenario is an `#[ignore]`'d test so the regular `cargo nextest run`
-//! never spends money. To refresh, set `ANTHROPIC_API_KEY` and run:
-//!
-//! ```sh
-//! cargo nextest run --run-ignored only -E 'test(capture_anthropic)'
-//! ```
-//!
-//! Add a single scenario by name with e.g. `test(capture_anthropic_02_tool_call)`.
-
-use serde_json::{Value, json};
-
 use crate::providers::common::{
     MINIMAL_PROMPT, TOOL_PROMPT, lorem_filler, post_json_capture, require_env, weather_tool, write_fixture,
 };
+use serde_json::{Value, json};
 
 const MODEL: &str = "claude-haiku-4-5";
 const REASONING_MODEL: &str = "claude-sonnet-4-5";
@@ -47,15 +34,9 @@ async fn capture_anthropic_02_tool_call() {
     write_fixture("anthropic", "02_tool_call", &bytes);
 }
 
-/// `03_cache_write` populates the prompt cache; `04_cache_read` re-sends the
-/// same prefix and should report non-zero `cache_read_input_tokens`. They must
-/// be captured back-to-back, so they live in a single test function.
 #[tokio::test]
 #[ignore = "captures live fixtures, requires ANTHROPIC_API_KEY"]
 async fn capture_anthropic_03_04_cache_pair() {
-    // Comfortably above any per-model cache minimum (Anthropic's smallest
-    // documented threshold is 1024 tokens; 2500 sat right on the edge for
-    // claude-haiku-4-5 and produced cache_creation_input_tokens=0).
     let long_system = lorem_filler(5_000);
     let body = json!({
         "model": MODEL,

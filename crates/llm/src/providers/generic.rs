@@ -638,35 +638,24 @@ mod tests {
             (&MOONSHOT, None),
             (&ZAI, None),
         ] {
-            let mut server = CaptureServer::start_chat_completions().await;
-            let provider = capture_backed_provider(&server, config);
-            let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
-            context.set_prompt_cache_key(Some("prefix-abc".to_string()));
-            context.set_session_affinity_key(Some("conversation-abc".to_string()));
+            for keys_set in [true, false] {
+                let mut server = CaptureServer::start_chat_completions().await;
+                let provider = capture_backed_provider(&server, config);
+                let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
+                if keys_set {
+                    context.set_prompt_cache_key(Some("prefix-abc".to_string()));
+                    context.set_session_affinity_key(Some("conversation-abc".to_string()));
+                }
 
-            let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-            let captured = server.captured().await;
+                let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+                let captured = server.captured().await;
 
-            assert_successful_stream(&responses);
-            assert_eq!(captured.body.get("prompt_cache_key").and_then(serde_json::Value::as_str), expected_key);
-            assert!(captured.body.get("user").is_none());
-            assert!(captured.body.get("session_id").is_none());
-        }
-    }
-
-    #[tokio::test]
-    async fn chat_providers_omit_unset_context_keys() {
-        for config in [&AZURE_FOUNDRY, &FIREWORKS] {
-            let mut server = CaptureServer::start_chat_completions().await;
-            let provider = capture_backed_provider(&server, config);
-            let context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
-
-            let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-            let captured = server.captured().await;
-
-            assert_successful_stream(&responses);
-            assert!(captured.body.get("prompt_cache_key").is_none());
-            assert!(captured.body.get("session_id").is_none());
+                assert_successful_stream(&responses);
+                let sent_key = captured.body.get("prompt_cache_key").and_then(serde_json::Value::as_str);
+                assert_eq!(sent_key, expected_key.filter(|_| keys_set), "{} keys_set={keys_set}", config.provider);
+                assert!(captured.body.get("user").is_none());
+                assert!(captured.body.get("session_id").is_none());
+            }
         }
     }
 

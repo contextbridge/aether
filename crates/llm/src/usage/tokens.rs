@@ -126,7 +126,12 @@ impl TokenUsage {
         self.input_tokens + self.output_tokens
     }
 
-    pub fn from_uncached_input(input: u32, output: u32, cache_read: Option<u32>, cache_write: Option<u32>) -> Self {
+    pub(crate) fn from_uncached_input(
+        input: u32,
+        output: u32,
+        cache_read: Option<u32>,
+        cache_write: Option<u32>,
+    ) -> Self {
         let cache_read = cache_read.map(Tokens::from);
         let cache_creation = cache_write.map(Tokens::from);
         Self {

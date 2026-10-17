@@ -70,7 +70,7 @@ pub struct ToolCallError {
     pub error: String,
 }
 
-pub fn tool_result_parts(result: &Result<ToolCallResult, ToolCallError>) -> (&str, &str, bool) {
+pub(crate) fn tool_result_parts(result: &Result<ToolCallResult, ToolCallError>) -> (&str, &str, bool) {
     match result {
         Ok(result) => (&result.id, &result.result, false),
         Err(error) => (&error.id, &error.error, true),

@@ -7,23 +7,10 @@ use aws_sdk_bedrockruntime::types::{
 };
 use aws_smithy_types::event_stream::RawMessage;
 use futures::{Stream, stream};
-use std::future::ready;
 use tracing::{error, warn};
 
-use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
-
-use crate::providers::response_stream::{OpenedStream, StreamAssembler, response_stream};
-use crate::{LlmError, LlmResponse, LlmResponseStream, ProviderError, StopReason, TokenUsage};
-
-pub fn process_bedrock_stream(
-    events: impl Stream<Item = crate::Result<ConverseStreamOutput>> + Send + 'static,
-) -> LlmResponseStream {
-    response_stream(
-        ready(Ok(OpenedStream::new(events))),
-        |event, turn| Ok(decode_converse_event(event, turn)),
-        DEFAULT_STREAM_IDLE_TIMEOUT,
-    )
-}
+use crate::providers::response_stream::StreamAssembler;
+use crate::{LlmError, LlmResponse, ProviderError, StopReason, TokenUsage};
 
 pub(crate) fn converse_events(
     receiver: EventReceiver<ConverseStreamOutput, ConverseStreamOutputError>,
@@ -120,12 +107,15 @@ fn map_bedrock_stop_reason(reason: &BedrockStopReason) -> StopReason {
 mod tests {
     use super::*;
     use crate::ProviderErrorKind;
+    use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
+    use crate::providers::response_stream::{OpenedStream, response_stream};
     use crate::testing::llm_response;
     use aws_sdk_bedrockruntime::types::{
         ContentBlockDeltaEvent, ContentBlockStartEvent, ContentBlockStopEvent, ConversationRole,
         ConverseStreamMetadataEvent, MessageStartEvent, MessageStopEvent, ToolUseBlockDelta, ToolUseBlockStart,
     };
     use futures::StreamExt;
+    use std::future::ready;
 
     #[tokio::test]
     async fn test_text_stream() {
@@ -256,7 +246,10 @@ mod tests {
     }
 
     async fn process_events(events: Vec<ConverseStreamOutput>) -> Vec<crate::Result<LlmResponse>> {
-        process_bedrock_stream(stream::iter(events.into_iter().map(Ok))).collect().await
+        let opened = ready(Ok(OpenedStream::new(stream::iter(events.into_iter().map(Ok)))));
+        response_stream(opened, |event, turn| Ok(decode_converse_event(event, turn)), DEFAULT_STREAM_IDLE_TIMEOUT)
+            .collect()
+            .await
     }
 
     fn bedrock_stream() -> BedrockStreamBuilder {

@@ -121,6 +121,7 @@ pub enum StreamEvent {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(clippy::struct_field_names)]
 pub struct Usage {
     pub input_tokens: u32,
     pub output_tokens: u32,
@@ -149,12 +150,10 @@ pub struct ContentBlockStart {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type")]
 pub enum ContentBlockStartData {
-    #[serde(rename = "text")]
-    Text { text: String },
     #[serde(rename = "tool_use")]
     ToolUse { id: String, name: String },
-    #[serde(rename = "thinking")]
-    Thinking { thinking: String },
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -166,6 +165,7 @@ pub struct ContentBlockDelta {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::enum_variant_names)]
 pub enum ContentBlockDeltaData {
     TextDelta { text: String },
     InputJsonDelta { partial_json: String },

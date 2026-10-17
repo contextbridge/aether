@@ -1,18 +1,7 @@
 use super::types::{ContentBlockDeltaData, ContentBlockStartData, StreamEvent};
-use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
-use crate::providers::response_stream::{OpenedStream, StreamAssembler, response_stream};
-use crate::{LlmError, LlmResponse, LlmResponseStream, ProviderError, Result, StopReason};
-use futures::Stream;
-use std::future::ready;
+use crate::providers::response_stream::StreamAssembler;
+use crate::{LlmError, LlmResponse, ProviderError, Result, StopReason};
 use tracing::debug;
-
-pub fn process_anthropic_stream(lines: impl Stream<Item = Result<String>> + Send + 'static) -> LlmResponseStream {
-    response_stream(
-        ready(Ok(OpenedStream::new(lines))),
-        |line, turn| decode_line(&line, turn),
-        DEFAULT_STREAM_IDLE_TIMEOUT,
-    )
-}
 
 pub(crate) fn decode_line(line: &str, turn: &mut StreamAssembler<u32>) -> Result<Vec<LlmResponse>> {
     match serde_json::from_str(line) {
@@ -28,7 +17,7 @@ fn decode_event(event: StreamEvent, turn: &mut StreamAssembler<u32>) -> Result<V
     let response = match event {
         StreamEvent::ContentBlockStart(data) => match data.content_block {
             ContentBlockStartData::ToolUse { id, name } => Some(turn.start_tool(data.index, id, name)),
-            ContentBlockStartData::Text { .. } | ContentBlockStartData::Thinking { .. } => None,
+            ContentBlockStartData::Other => None,
         },
         StreamEvent::ContentBlockDelta(data) => match data.delta {
             ContentBlockDeltaData::TextDelta { text } => {
@@ -82,10 +71,13 @@ fn map_anthropic_stop_reason(reason: &str) -> StopReason {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
+    use crate::providers::response_stream::{OpenedStream, response_stream};
     use crate::testing::llm_response;
     use crate::{ProviderErrorKind, TokenUsage};
     use futures::{StreamExt, stream};
     use serde_json::{Value, json};
+    use std::future::ready;
 
     #[tokio::test]
     async fn test_process_text_stream() {
@@ -285,7 +277,10 @@ mod tests {
     }
 
     async fn process_lines(lines: Vec<String>) -> Vec<Result<LlmResponse>> {
-        process_anthropic_stream(stream::iter(lines.into_iter().map(Ok))).collect().await
+        let opened = ready(Ok(OpenedStream::new(stream::iter(lines.into_iter().map(Ok)))));
+        response_stream(opened, |line: String, turn| decode_line(&line, turn), DEFAULT_STREAM_IDLE_TIMEOUT)
+            .collect()
+            .await
     }
 
     fn anthropic_stream() -> AnthropicStreamBuilder {
