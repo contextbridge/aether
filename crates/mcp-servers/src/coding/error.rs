@@ -35,8 +35,8 @@ pub enum CodingError {
     Lsp(#[from] LspError),
 
     /// Tool not configured/available
-    #[error("{0}")]
-    NotConfigured(String),
+    #[error("{0} is not configured")]
+    NotConfigured(&'static str),
 
     /// A required file-path argument was empty
     #[error(transparent)]

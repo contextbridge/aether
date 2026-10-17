@@ -9,17 +9,8 @@ use std::collections::HashMap;
 async fn builtin_servers_list_their_tools_over_stdio() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let dir = dir.path().to_str().unwrap();
-    let coding = &[
-        "bash",
-        "edit_file",
-        "lsp_check_errors",
-        "lsp_rename",
-        "lsp_symbol",
-        "read_file",
-        "web_fetch",
-        "web_search",
-        "write_file",
-    ];
+    let coding =
+        &["bash", "edit_file", "lsp_check_errors", "lsp_rename", "lsp_symbol", "read_file", "web_fetch", "write_file"];
     let cases: [(&str, &[&str], &[&str]); 6] = [
         ("tasks", &["--dir", dir], &["task_create", "task_get", "task_list", "task_update"]),
         ("coding", &[], coding),
@@ -30,7 +21,19 @@ async fn builtin_servers_list_their_tools_over_stdio() {
     ];
 
     for (server, args, expected) in cases {
-        assert_eq!(list_tools(server, args).await, expected, "{server} {args:?}");
+        assert_eq!(list_tools(server, args, "").await, expected, "{server} {args:?}");
+    }
+}
+
+#[tokio::test]
+async fn coding_server_lists_web_search_only_with_an_api_key_and_lsp_tools_unless_disabled() {
+    let cases: [(&str, &[&str]); 2] = [
+        ("", &["bash", "edit_file", "read_file", "web_fetch", "write_file"]),
+        ("test-key", &["bash", "edit_file", "read_file", "web_fetch", "web_search", "write_file"]),
+    ];
+
+    for (search_key, expected) in cases {
+        assert_eq!(list_tools("coding", &["--disable-lsp"], search_key).await, expected, "key={search_key:?}");
     }
 }
 
@@ -61,9 +64,12 @@ async fn connect(args: &[&str], env: HashMap<String, String>) -> Result<McpClien
     McpClient::connect("stdio", Transport::Stdio { command, args, env, cwd: None }, &ClientOptions::default()).await
 }
 
-async fn list_tools(server: &str, server_args: &[&str]) -> Vec<String> {
+async fn list_tools(server: &str, server_args: &[&str], search_key: &str) -> Vec<String> {
     let aether_home = tempfile::tempdir().expect("create temp aether home");
-    let env = HashMap::from([("AETHER_HOME".to_string(), aether_home.path().join(".aether").display().to_string())]);
+    let env = HashMap::from([
+        ("AETHER_HOME".to_string(), aether_home.path().join(".aether").display().to_string()),
+        ("BRAVE_SEARCH_API_KEY".to_string(), search_key.to_string()),
+    ]);
     let args = [&["--server", server, "--"], server_args].concat();
     let client = connect(&args, env).await.expect("connect to server");
     let mut names: Vec<_> =
