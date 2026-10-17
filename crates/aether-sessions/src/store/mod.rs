@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use tracing::warn;
 use utils::fs::{append_line, write_atomic};
-use utils::settings::aether_home;
+use utils::path::aether_home;
 
 use crate::error::SessionStoreError;
 use crate::{SessionEvent, SessionLog, SessionLogEntry, SessionMeta, UserEvent};
@@ -85,6 +85,10 @@ pub struct SessionStore {
 
 pub fn sessions_dir() -> Option<PathBuf> {
     aether_home().map(|home| home.join("sessions"))
+}
+
+pub fn session_index_path() -> Option<PathBuf> {
+    aether_home().map(|home| home.join("session-index.sqlite"))
 }
 
 impl SessionStore {

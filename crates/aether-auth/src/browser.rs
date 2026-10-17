@@ -1,41 +1,16 @@
 use crate::error::OAuthError;
-use crate::handler::OAuthHandler;
-use futures::future::BoxFuture;
 use std::process::Command;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::time::timeout;
 
-/// Default `OAuthHandler` that opens the system browser and listens
-/// for the OAuth callback on a local port.
-pub struct BrowserOAuthHandler {
-    listener: TcpListener,
-    redirect_uri: String,
-}
-
-impl BrowserOAuthHandler {
-    /// Create a handler bound to a specific port with a custom redirect URI.
-    pub fn with_redirect_uri(redirect_uri: impl Into<String>, port: u16) -> Result<Self, std::io::Error> {
-        let (listener, _) = bind_loopback(port)?;
-        Ok(Self { listener, redirect_uri: redirect_uri.into() })
+pub async fn authorize_in_browser(auth_url: &str, port: u16) -> Result<String, OAuthError> {
+    let (listener, _) = bind_loopback(port)?;
+    if let Err(error) = open_browser(auth_url) {
+        tracing::warn!("Failed to open browser: {error}");
     }
-}
-
-impl OAuthHandler for BrowserOAuthHandler {
-    fn redirect_uri(&self) -> &str {
-        &self.redirect_uri
-    }
-
-    fn authorize(&self, auth_url: &str) -> BoxFuture<'_, Result<String, OAuthError>> {
-        let auth_url = auth_url.to_string();
-        Box::pin(async move {
-            if let Err(error) = open_browser(&auth_url) {
-                tracing::warn!("Failed to open browser: {error}");
-            }
-            accept_oauth_callback(&self.listener).await
-        })
-    }
+    accept_oauth_callback(&listener).await
 }
 
 pub fn bind_loopback(port: u16) -> std::io::Result<(TcpListener, u16)> {
@@ -153,11 +128,5 @@ mod tests {
         callback.write_all(b"GET /?code=abc&state=xyz HTTP/1.1\r\n").await.unwrap();
 
         assert!(handle.await.unwrap().unwrap().contains("code=abc&state=xyz"));
-    }
-
-    #[tokio::test]
-    async fn custom_redirect_uri_is_retained() {
-        let handler = BrowserOAuthHandler::with_redirect_uri("http://localhost:9999/callback", 0).unwrap();
-        assert_eq!(handler.redirect_uri(), "http://localhost:9999/callback");
     }
 }

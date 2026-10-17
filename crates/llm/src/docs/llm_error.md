@@ -5,6 +5,7 @@ Errors that can occur when interacting with LLM providers.
 ## Authentication
 - **`MissingApiKey`** -- A required environment variable (e.g. `ANTHROPIC_API_KEY`) is not set.
 - **`OAuthError`** -- OAuth authentication failed (when the `oauth` feature is enabled).
+- **`InvalidJwt`** -- A Codex access token is not a JWT carrying a `ChatGPT` account ID.
 
 ## Parsing
 - **`JsonParsing`** -- Failed to parse or serialize JSON (response body, tool arguments).

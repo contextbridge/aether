@@ -14,7 +14,7 @@ Contains Dockerized evals for Aether agents.
 
 There are two ways to write evals:
 
-- **Declarative JSON, no Rust** — author one `*.eval.json` file per scenario and run them with `aether eval`. Best for users evaluating the agent against their own repo. See the [evals documentation](https://aether-agent.io/aether/running/evals/) for the eval file format and CLI usage; a complete example is in [`examples/edit-notes.eval.json`](examples/edit-notes.eval.json) with a sandbox image in [`examples/Dockerfile`](examples/Dockerfile).
+- **Declarative JSON, no Rust** — author one `*.eval.json` file per scenario and run them with `aether eval`. Best for users evaluating the agent against their own repo. See the [evals documentation](https://aether-agent.io/aether/running/evals/) for the eval file format and CLI usage, and [`examples/Dockerfile`](examples/Dockerfile) for a sandbox image.
 - **Rust tests** — `#[tokio::test]`s in `crates/internal-evals/tests` using the `aether-evals` harness directly. Best for evals maintained in this repo. See [Running evals](#running-evals).
 
 ## Running evals

@@ -3,7 +3,7 @@ use crate::content_capture::ContentCaptureSettings;
 use crate::error::{TelemetryInitError, TelemetryShutdownError};
 use crate::gen_ai_metrics::GenAiMetrics;
 use crate::genai_constants;
-use crate::otel_observer::{OtelInstrumentation, execute_tool_attributes};
+use crate::otel_observer::{OtelInstrumentation, TOOLS_CALL_METHOD, execute_tool_attributes};
 use crate::span_guard::{ErrorKind, SpanGuard};
 use crate::trace_context::{extract_trace_context, inject_trace_context};
 use aether_core::events::{
@@ -159,8 +159,6 @@ impl TelemetryConfig {
         self.endpoint.as_deref().filter(|endpoint| !endpoint.is_empty()).ok_or(TelemetryInitError::MissingOtlpEndpoint)
     }
 }
-
-const TOOLS_CALL_METHOD: &str = "tools/call";
 
 #[derive(Default)]
 struct TraceRoot {

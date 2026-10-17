@@ -127,7 +127,7 @@ mod tests {
     use crate::LlmError;
     use crate::ToolDefinition;
     use crate::providers::test_capture_server::{CaptureServer, hello_context};
-    use aether_auth::{FakeOAuthCredentialStore, OAuthCredential};
+    use aether_auth::{MemoryCredentialStore, OAuthCredential};
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use futures::StreamExt;
@@ -138,7 +138,7 @@ mod tests {
             crate::LlmModel::all().iter().filter(|model| model.provider_enum() == crate::catalog::Provider::Codex)
         {
             assert!(!model.effective_reasoning_levels().contains(&crate::ReasoningEffort::Disabled));
-            let provider = CodexProvider::new(Arc::new(FakeOAuthCredentialStore::new())).with_model(&model.model_id());
+            let provider = CodexProvider::new(Arc::new(MemoryCredentialStore::new())).with_model(&model.model_id());
             let mut context = Context::new(vec![], vec![]);
             context.set_reasoning_effort(crate::ReasoningEffort::Disabled);
             let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
@@ -242,7 +242,7 @@ mod tests {
             expires_at: Some(u64::MAX),
         };
         let store: Arc<dyn OAuthCredentialStorage> =
-            Arc::new(FakeOAuthCredentialStore::new().with_credential("codex", credential));
+            Arc::new(MemoryCredentialStore::new().with_credential("codex", credential));
         CodexProvider::new(store)
     }
 
@@ -254,7 +254,7 @@ mod tests {
     }
 
     fn create_test_provider() -> CodexProvider {
-        let store: Arc<dyn OAuthCredentialStorage> = Arc::new(FakeOAuthCredentialStore::new());
+        let store: Arc<dyn OAuthCredentialStorage> = Arc::new(MemoryCredentialStore::new());
         CodexProvider::new(store).with_model("gpt-5.5")
     }
 }

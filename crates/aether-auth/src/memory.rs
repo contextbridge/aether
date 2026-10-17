@@ -7,11 +7,11 @@ use crate::credential::{OAuthCredential, OAuthCredentialStorage};
 use crate::error::OAuthError;
 
 #[derive(Default)]
-pub struct FakeOAuthCredentialStore {
+pub struct MemoryCredentialStore {
     values: Mutex<HashMap<String, serde_json::Value>>,
 }
 
-impl FakeOAuthCredentialStore {
+impl MemoryCredentialStore {
     pub fn new() -> Self {
         Self::default()
     }
@@ -28,7 +28,7 @@ impl FakeOAuthCredentialStore {
 }
 
 #[async_trait]
-impl OAuthCredentialStorage for FakeOAuthCredentialStore {
+impl OAuthCredentialStorage for MemoryCredentialStore {
     async fn load(&self, key: &str) -> Result<Option<serde_json::Value>, OAuthError> {
         Ok(self.values.lock().unwrap().get(key).cloned())
     }
@@ -56,15 +56,14 @@ mod tests {
 
     #[tokio::test]
     async fn satisfies_the_storage_contract() {
-        assert_storage_contract(&FakeOAuthCredentialStore::new()).await;
+        assert_storage_contract(&MemoryCredentialStore::new()).await;
     }
 
     #[tokio::test]
     async fn builders_seed_the_store() {
         let credential = OAuthCredential::new("client", "token");
-        let store = FakeOAuthCredentialStore::new()
-            .with_credential("codex", credential.clone())
-            .with_value("mcp:slack", json!(1));
+        let store =
+            MemoryCredentialStore::new().with_credential("codex", credential.clone()).with_value("mcp:slack", json!(1));
 
         assert_eq!(store.load_credential("codex").await.unwrap(), Some(credential));
         assert_eq!(store.load("mcp:slack").await.unwrap(), Some(json!(1)));

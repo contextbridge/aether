@@ -723,7 +723,6 @@ fn emit_llm_model() -> TokenStream {
             }
         }
     });
-    let env_vars = PROVIDERS.iter().filter_map(|cfg| cfg.env_var);
     let pushes = PROVIDERS.iter().filter_map(|cfg| {
         let inner = format_ident!("{}", cfg.inner_enum_name());
         let outer = format_ident!("{}", cfg.outer_enum_name());
@@ -763,9 +762,6 @@ fn emit_llm_model() -> TokenStream {
         #(#from_impls)*
 
         impl LlmModel {
-            /// All provider API key env var names (deduplicated, static)
-            pub const ALL_REQUIRED_ENV_VARS: &[&str] = &[#(#env_vars),*];
-
             /// All catalog models (excludes dynamic providers)
             pub fn all() -> &'static [LlmModel] {
                 static ALL: LazyLock<Vec<LlmModel>> = LazyLock::new(|| {

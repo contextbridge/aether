@@ -25,6 +25,10 @@ pub enum LlmError {
     /// OAuth authentication error
     #[error("OAuth error: {0}")]
     OAuthError(String),
+
+    /// The Codex access token is not a JWT carrying a `ChatGPT` account ID.
+    #[error("Invalid JWT: {0}")]
+    InvalidJwt(String),
     /// The message contained only content types this provider doesn't support
     #[error("Unsupported content: {0}")]
     UnsupportedContent(String),

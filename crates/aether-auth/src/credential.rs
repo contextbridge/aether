@@ -89,9 +89,6 @@ impl OAuthCredential {
 }
 
 /// Storage for namespaced, opaque OAuth JSON values.
-///
-/// Implementations include [`OsKeyringStore`](crate::OsKeyringStore) (OS keychain, feature `keyring`)
-/// and the in-memory [`FakeOAuthCredentialStore`](crate::FakeOAuthCredentialStore) for tests.
 #[async_trait]
 pub trait OAuthCredentialStorage: Send + Sync {
     async fn load(&self, key: &str) -> Result<Option<Value>, OAuthError>;

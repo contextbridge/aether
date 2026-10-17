@@ -104,8 +104,4 @@ pub enum SettingsError {
     /// The configured agent selector matched an agent that users cannot invoke.
     #[error("Configured agent selector '{name}' is not user-invocable")]
     NonUserInvocableAgentSelector { name: String },
-
-    /// Duplicate prompt names in the catalog.
-    #[error("Duplicate prompt name: '{name}'")]
-    DuplicatePromptName { name: String },
 }

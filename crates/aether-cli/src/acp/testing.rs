@@ -57,7 +57,7 @@ pub struct AcpTestHarness {
     connection: Option<HarnessConnectionTasks>,
     resume_agent: FakeAcpAgent,
     runtime_control: Arc<Mutex<FakeRuntimeControl>>,
-    pub oauth_store: Arc<aether_auth::FakeOAuthCredentialStore>,
+    pub oauth_store: Arc<aether_auth::MemoryCredentialStore>,
     agent_cx: ConnectionTo<Client>,
     state: Arc<AcpState>,
     session_store: Arc<SessionStore>,
@@ -343,7 +343,7 @@ impl AcpTestHarness {
             agents: resume_agents,
             control: runtime_control.clone(),
         });
-        let oauth_store = Arc::new(aether_auth::FakeOAuthCredentialStore::new());
+        let oauth_store = Arc::new(aether_auth::MemoryCredentialStore::new());
         let state = Arc::new(AcpState::with_login(
             AcpStateConfig {
                 session_store: session_store.clone(),

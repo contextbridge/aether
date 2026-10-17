@@ -1,4 +1,4 @@
-use aether_auth::{FakeOAuthCredentialStore, OAuthCredentialStorage, OAuthError};
+use aether_auth::{MemoryCredentialStore, OAuthCredentialStorage, OAuthError};
 use mcp_utils::client::{
     ClientError, ClientOptions, Elicitation, ElicitationSink, HttpAuth, McpClient, OAuthClientRegistration,
     OAuthSettings, Transport,
@@ -144,7 +144,7 @@ async fn accepted_authorization_waits_for_the_callback_then_connects_with_the_to
 #[tokio::test]
 async fn authorized_credentials_are_stored_and_reused_without_prompting() {
     let server = math_auth_server().await;
-    let store = Arc::new(FakeOAuthCredentialStore::new());
+    let store = Arc::new(MemoryCredentialStore::new());
     authorize_into(&server, client_metadata(), &store).await;
     let (options, _host) = elicitation_host();
 
@@ -159,7 +159,7 @@ async fn authorized_credentials_are_stored_and_reused_without_prompting() {
 #[tokio::test]
 async fn stored_credentials_for_another_client_are_ignored() {
     let server = math_auth_server().await;
-    let store = Arc::new(FakeOAuthCredentialStore::new());
+    let store = Arc::new(MemoryCredentialStore::new());
     authorize_into(&server, client_metadata(), &store).await;
     let configured = OAuthSettings {
         registration: OAuthClientRegistration::PreRegistered("configured".to_string()),
@@ -182,7 +182,7 @@ async fn stored_credentials_for_another_client_are_ignored() {
 #[tokio::test]
 async fn undecodable_stored_credentials_fall_back_to_authorization() {
     let server = math_auth_server().await;
-    let store = Arc::new(FakeOAuthCredentialStore::new().with_value("mcp:linear", json!("invalid")));
+    let store = Arc::new(MemoryCredentialStore::new().with_value("mcp:linear", json!("invalid")));
     let (options, _host) = elicitation_host();
 
     let error = McpClient::connect("linear", server.transport(), &options.oauth_store(store))
@@ -332,7 +332,7 @@ impl AuthFlow {
     }
 }
 
-async fn authorize_into(server: &FakeAuthServer, oauth: OAuthSettings, store: &Arc<FakeOAuthCredentialStore>) {
+async fn authorize_into(server: &FakeAuthServer, oauth: OAuthSettings, store: &Arc<MemoryCredentialStore>) {
     let (options, mut host) = elicitation_host();
     let options = options.oauth_store(store.clone());
     let transport = server.transport_with(HttpAuth::OAuth(oauth));

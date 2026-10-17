@@ -6,9 +6,8 @@
 //! - A **rule** (`triggers.read` globs)
 //! - Any combination of the above
 
-use crate::error::SettingsError;
 use crate::prompt_file::{PromptFile, SKILL_FILENAME};
-use std::collections::{HashMap, HashSet};
+use std::collections::BTreeMap;
 use std::fs::{DirEntry, ReadDir, read_dir};
 use std::path::{Path, PathBuf};
 
@@ -19,24 +18,15 @@ pub struct PromptCatalog {
 }
 
 impl PromptCatalog {
-    /// Discover and validate all prompt artifacts under `skills_dir/*/SKILL.md`.
-    ///
-    /// `skills_dir` is typically `<project_root>/.aether/skills` or `<base_dir>/skills`.
-    pub fn from_dir(skills_dir: &Path) -> Result<Self, SettingsError> {
-        let entries = read_dir(skills_dir).map_err(|e| SettingsError::IoError(e.to_string()))?;
-        let prompts: Vec<PromptFile> = parse_skills(entries).collect();
-        validate_catalog(&prompts)?;
-
-        Ok(Self { specs: prompts })
-    }
-
-    /// Discover and merge prompt artifacts from multiple skill directories.
+    /// Discover and merge prompt artifacts from skill directories such as
+    /// `<project_root>/.aether/skills`, ordered by prompt name.
     ///
     /// On name collision, the last directory wins. Directories that don't exist are skipped.
-    pub fn from_dirs(skills_dirs: &[PathBuf]) -> Self {
-        let mut seen: HashMap<String, PromptFile> = HashMap::new();
+    pub fn from_dirs(skills_dirs: impl IntoIterator<Item = impl AsRef<Path>>) -> Self {
+        let mut seen: BTreeMap<String, PromptFile> = BTreeMap::new();
 
         for dir in skills_dirs {
+            let dir = dir.as_ref();
             let Ok(entries) = read_dir(dir) else {
                 tracing::warn!("Skills directory does not exist, skipping: {}", dir.display());
                 continue;
@@ -52,7 +42,7 @@ impl PromptCatalog {
         Self { specs: Vec::new() }
     }
 
-    /// All prompt specs in catalog order.
+    /// All prompt specs, ordered by name.
     pub fn all(&self) -> &[PromptFile] {
         &self.specs
     }
@@ -100,16 +90,6 @@ fn get_path(entry: &DirEntry) -> Option<PathBuf> {
     }
 }
 
-fn validate_catalog(specs: &[PromptFile]) -> Result<(), SettingsError> {
-    let mut seen_names = HashSet::new();
-    for spec in specs {
-        if !seen_names.insert(&spec.name) {
-            return Err(SettingsError::DuplicatePromptName { name: spec.name.clone() });
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,7 +98,7 @@ mod tests {
     #[test]
     fn discover_empty_project() {
         let dir = project();
-        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
+        let catalog = PromptCatalog::from_dirs([dir.root()]);
         assert!(catalog.all().is_empty());
     }
 
@@ -129,7 +109,7 @@ mod tests {
             "---\ndescription: Generate commit messages\nuser-invocable: true\nagent-invocable: false\n---\nGenerate a commit message.",
         );
 
-        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
+        let catalog = PromptCatalog::from_dirs([dir.root()]);
         assert_eq!(catalog.all().len(), 1);
 
         let spec = &catalog.all()[0];
@@ -146,7 +126,7 @@ mod tests {
             "---\ndescription: Explain code\nagent-invocable: true\n---\nExplain the code.",
         );
 
-        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
+        let catalog = PromptCatalog::from_dirs([dir.root()]);
         assert_eq!(catalog.all().len(), 1);
 
         let spec = &catalog.all()[0];
@@ -161,7 +141,7 @@ mod tests {
             "---\ndescription: Rust conventions\nagent-invocable: false\ntriggers:\n  read:\n    - \"crates/**/*.rs\"\n---\nFollow Rust conventions.",
         );
 
-        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
+        let catalog = PromptCatalog::from_dirs([dir.root()]);
         assert_eq!(catalog.all().len(), 1);
 
         let spec = &catalog.all()[0];
@@ -179,7 +159,7 @@ mod tests {
             "---\ndescription: Explain code\nuser-invocable: true\nagent-invocable: true\nargument-hint: \"[path]\"\n---\nExplain with diagrams.",
         );
 
-        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
+        let catalog = PromptCatalog::from_dirs([dir.root()]);
         let spec = &catalog.all()[0];
         assert!(spec.user_invocable);
         assert!(spec.agent_invocable);
@@ -192,21 +172,10 @@ mod tests {
     }
 
     #[test]
-    fn reject_duplicate_names() {
-        let dir = project()
-            // Second skill has an explicit name override so it collides with "foo"
-            .file("foo/SKILL.md", "---\ndescription: First\nuser-invocable: true\n---\nContent.")
-            .file("bar/SKILL.md", "---\nname: foo\ndescription: Second\nuser-invocable: true\n---\nContent.");
-
-        let result = PromptCatalog::from_dir(dir.root());
-        assert!(matches!(result, Err(SettingsError::DuplicatePromptName { .. })));
-    }
-
-    #[test]
     fn empty_description_defaults_to_name() {
         let dir = project().file("bad/SKILL.md", "---\ndescription: \"\"\nuser-invocable: true\n---\nContent.");
 
-        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
+        let catalog = PromptCatalog::from_dirs([dir.root()]);
         assert_eq!(catalog.all().len(), 1);
         assert_eq!(catalog.all()[0].description, "bad");
     }
@@ -215,7 +184,7 @@ mod tests {
     fn flat_md_without_activation_surface_is_skipped() {
         let dir = project().file("noop.md", "---\ndescription: Does nothing\nagent-invocable: false\n---\nContent.");
 
-        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
+        let catalog = PromptCatalog::from_dirs([dir.root()]);
         assert!(catalog.all().is_empty());
     }
 
@@ -226,7 +195,7 @@ mod tests {
             "---\nname: custom-name\ndescription: Custom\nuser-invocable: true\n---\nContent.",
         );
 
-        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
+        let catalog = PromptCatalog::from_dirs([dir.root()]);
         assert_eq!(catalog.all()[0].name, "custom-name");
     }
 
@@ -243,7 +212,7 @@ mod tests {
             )
             .file("commit/SKILL.md", "---\ndescription: Commit\nuser-invocable: true\n---\nCommit.");
 
-        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
+        let catalog = PromptCatalog::from_dirs([dir.root()]);
         let matches = catalog.matching_rules("src/main.rs");
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].name, "rust-rules");
@@ -263,7 +232,7 @@ mod tests {
             "---\ndescription: A rule\nagent-invocable: false\ntriggers:\n  read:\n    - \"*.rs\"\n---\nRule content.",
         );
 
-        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
+        let catalog = PromptCatalog::from_dirs([dir.root()]);
         assert_eq!(catalog.all().len(), 1);
         assert_eq!(catalog.slash_commands().count(), 0);
         assert_eq!(catalog.skills().count(), 0);
@@ -275,7 +244,7 @@ mod tests {
             .file(".archived/SKILL.md", "---\ndescription: Archived\nuser-invocable: true\n---\nOld.")
             .file("visible/SKILL.md", "---\ndescription: Visible\nuser-invocable: true\n---\nNew.");
 
-        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
+        let catalog = PromptCatalog::from_dirs([dir.root()]);
         assert_eq!(catalog.all().len(), 1);
         assert_eq!(catalog.all()[0].name, "visible");
     }
@@ -287,7 +256,7 @@ mod tests {
         let dir_b =
             project().file("rust/SKILL.md", "---\ndescription: Rust B\nagent-invocable: true\n---\nFrom dir B.");
 
-        let catalog = PromptCatalog::from_dirs(&[dir_a.root().to_path_buf(), dir_b.root().to_path_buf()]);
+        let catalog = PromptCatalog::from_dirs([dir_a.root(), dir_b.root()]);
         assert_eq!(catalog.all().len(), 1);
 
         let spec = &catalog.all()[0];
@@ -303,7 +272,7 @@ mod tests {
         let dir_b =
             project().file("python/SKILL.md", "---\ndescription: Python\nagent-invocable: true\n---\nPython content.");
 
-        let catalog = PromptCatalog::from_dirs(&[dir_a.root().to_path_buf(), dir_b.root().to_path_buf()]);
+        let catalog = PromptCatalog::from_dirs([dir_a.root(), dir_b.root()]);
         assert_eq!(catalog.all().len(), 2);
 
         let names: Vec<&str> = catalog.all().iter().map(|s| s.name.as_str()).collect();
@@ -312,12 +281,25 @@ mod tests {
     }
 
     #[test]
+    fn from_dirs_lists_prompts_by_name() {
+        let names = ["delta", "alpha", "echo", "charlie", "bravo", "foxtrot"];
+        let dir = names.iter().fold(project(), |dir, name| {
+            dir.file(format!("{name}/SKILL.md"), "---\ndescription: A skill\nagent-invocable: true\n---\nBody.")
+        });
+
+        let catalog = PromptCatalog::from_dirs([dir.root()]);
+
+        let listed: Vec<&str> = catalog.all().iter().map(|spec| spec.name.as_str()).collect();
+        assert_eq!(listed, ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"]);
+    }
+
+    #[test]
     fn from_dirs_skips_missing() {
         let dir_a =
             project().file("rust/SKILL.md", "---\ndescription: Rust\nagent-invocable: true\n---\nRust content.");
         let missing = PathBuf::from("/tmp/nonexistent-skills-dir-12345");
 
-        let catalog = PromptCatalog::from_dirs(&[missing, dir_a.root().to_path_buf()]);
+        let catalog = PromptCatalog::from_dirs([missing.as_path(), dir_a.root()]);
         assert_eq!(catalog.all().len(), 1);
         assert_eq!(catalog.all()[0].name, "rust");
     }
@@ -328,7 +310,7 @@ mod tests {
             .file("commit/SKILL.md", "---\ndescription: Commit\nuser-invocable: true\n---\nCommit message.")
             .file("rust-rules.md", "---\ndescription: Rust rules\nglobs:\n  - \"**/*.rs\"\n---\nRust conventions.");
 
-        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
+        let catalog = PromptCatalog::from_dirs([dir.root()]);
         assert_eq!(catalog.all().len(), 2);
 
         let names: Vec<&str> = catalog.all().iter().map(|s| s.name.as_str()).collect();
@@ -342,7 +324,7 @@ mod tests {
         let dir_b = project()
             .file("rust-rules.md", "---\ndescription: Rust rules\nglobs:\n  - \"**/*.rs\"\n---\nRust conventions.");
 
-        let catalog = PromptCatalog::from_dirs(&[dir_a.root().to_path_buf(), dir_b.root().to_path_buf()]);
+        let catalog = PromptCatalog::from_dirs([dir_a.root(), dir_b.root()]);
         assert_eq!(catalog.all().len(), 2);
 
         let names: Vec<&str> = catalog.all().iter().map(|s| s.name.as_str()).collect();
@@ -356,7 +338,7 @@ mod tests {
             .file(".hidden-rule.md", "---\ndescription: Hidden\nglobs:\n  - \"**/*.rs\"\n---\nHidden.")
             .file("visible-rule.md", "---\ndescription: Visible\nglobs:\n  - \"**/*.ts\"\n---\nVisible.");
 
-        let catalog = PromptCatalog::from_dir(dir.root()).unwrap();
+        let catalog = PromptCatalog::from_dirs([dir.root()]);
         assert_eq!(catalog.all().len(), 1);
         assert_eq!(catalog.all()[0].name, "visible-rule");
     }
