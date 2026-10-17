@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use rmcp::model::{ElicitRequestParams, ElicitationAction};
 use rmcp::transport::auth::{
     AuthClient, AuthError, AuthorizationManager, AuthorizationRequest, AuthorizationSession, CredentialStore,
-    OAuthClientConfig, StoredCredentials,
+    StoredCredentials,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,7 +34,7 @@ pub(super) async fn restore(
     options: &ClientOptions,
 ) -> Option<AuthClient<reqwest::Client>> {
     let store = McpCredentialStore::new(server, oauth, options)?;
-    match restore_manager(url, &loopback_redirect_uri(oauth.callback_port), store).await {
+    match restore_manager(url, store).await {
         Ok(manager) => manager.map(|manager| {
             tracing::debug!(server, "Using stored OAuth credentials");
             AuthClient::new(reqwest::Client::default(), manager)
@@ -87,8 +87,11 @@ impl McpCredentialStore {
         let store = Arc::clone(options.oauth_store.as_ref()?);
         Some(Self { key: format!("mcp:{server}"), store, expected_client_id })
     }
+}
 
-    async fn load_stored(&self) -> std::result::Result<Option<StoredCredentials>, AuthError> {
+#[async_trait]
+impl CredentialStore for McpCredentialStore {
+    async fn load(&self) -> std::result::Result<Option<StoredCredentials>, AuthError> {
         let Some(value) = self.store.load(&self.key).await.map_err(|error| store_error(&error))? else {
             return Ok(None);
         };
@@ -97,13 +100,6 @@ impl McpCredentialStore {
         Ok(Some(credentials).filter(|credentials| {
             self.expected_client_id.as_deref().is_none_or(|expected| credentials.client_id == expected)
         }))
-    }
-}
-
-#[async_trait]
-impl CredentialStore for McpCredentialStore {
-    async fn load(&self) -> std::result::Result<Option<StoredCredentials>, AuthError> {
-        self.load_stored().await
     }
 
     async fn save(&self, credentials: StoredCredentials) -> std::result::Result<(), AuthError> {
@@ -119,17 +115,11 @@ impl CredentialStore for McpCredentialStore {
 
 async fn restore_manager(
     url: &str,
-    redirect_uri: &str,
     store: McpCredentialStore,
 ) -> std::result::Result<Option<AuthorizationManager>, AuthError> {
-    let Some(stored) = store.load_stored().await? else { return Ok(None) };
     let mut manager = AuthorizationManager::new(url).await?;
     manager.set_credential_store(store);
-    if !manager.initialize_from_store().await? {
-        return Ok(None);
-    }
-    manager.configure_client(OAuthClientConfig::new(stored.client_id, redirect_uri))?;
-    Ok(Some(manager))
+    Ok(manager.initialize_from_store().await?.then_some(manager))
 }
 
 async fn authorization_flow(

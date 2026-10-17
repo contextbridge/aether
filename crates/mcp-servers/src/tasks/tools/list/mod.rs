@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use super::common::TaskSummary;
 use crate::tasks::task_store::TaskStore;
 use crate::tasks::types::{Task, TaskStatus};
-use utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 
 /// Input for the `task_list` tool
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -33,21 +32,11 @@ pub struct TaskListInput {
 pub struct TaskListOutput {
     /// Matching tasks
     pub tasks: Vec<TaskSummary>,
-
-    /// Display metadata for human-friendly rendering
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub meta: Option<ToolResultMeta>,
 }
 
 pub fn execute_task_list(input: &TaskListInput, store: &TaskStore) -> TaskListOutput {
-    let tasks: Vec<TaskSummary> =
-        store.tasks().filter(|task| input.matches(task, store)).map(TaskSummary::from).collect();
-
-    let done = tasks.iter().filter(|t| t.status == TaskStatus::Completed).count();
-    let display_meta = ToolDisplayMeta::new("Todo", format!("{done}/{} tasks", tasks.len()));
-
-    TaskListOutput { tasks, meta: Some(display_meta.into()) }
+    let tasks = store.tasks().filter(|task| input.matches(task, store)).map(TaskSummary::from).collect();
+    TaskListOutput { tasks }
 }
 
 impl TaskListInput {

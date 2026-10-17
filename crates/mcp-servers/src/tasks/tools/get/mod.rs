@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::tasks::task_store::{TaskStore, TaskStoreError};
 use crate::tasks::types::{Task, TaskId};
-use utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 
 /// Input for the `task_get` tool
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -18,9 +17,6 @@ pub struct TaskGetInput {
 #[serde(rename_all = "camelCase")]
 pub struct TaskGetOutput {
     pub task: Task,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub meta: Option<ToolResultMeta>,
 }
 
 /// Get a task by ID
@@ -29,9 +25,7 @@ pub fn execute_task_get(input: TaskGetInput, store: &TaskStore) -> Result<TaskGe
 
     let task = store.get(&task_id).ok_or(TaskStoreError::NotFound { id: input.id })?;
 
-    let display_meta = ToolDisplayMeta::new("Todo", task.title.clone());
-
-    Ok(TaskGetOutput { task: task.clone(), meta: Some(display_meta.into()) })
+    Ok(TaskGetOutput { task: task.clone() })
 }
 
 #[cfg(test)]

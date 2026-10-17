@@ -2,6 +2,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+use crate::Displayed;
 use crate::file_ops::{ApplyEditsResult, FileEdit, FileError, apply_edits};
 use utils::display_meta::{FileDiff, ToolDisplayMeta, ToolResultMeta, basename};
 
@@ -23,13 +24,9 @@ pub struct EditFileResponse {
     pub total_lines: usize,
     /// Number of replacements made
     pub replacements_made: usize,
-    /// Display metadata for human-friendly rendering
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub meta: Option<ToolResultMeta>,
 }
 
-pub async fn edit_file_contents(args: EditFileArgs) -> Result<EditFileResponse, FileError> {
+pub async fn edit_file_contents(args: EditFileArgs) -> Result<Displayed<EditFileResponse>, FileError> {
     let ApplyEditsResult { path, original_content, updated_content, replacements_made } =
         apply_edits(Path::new(&args.file_path), &args.edits).await?;
     let file_path = path.to_string_lossy().into_owned();
@@ -38,12 +35,8 @@ pub async fn edit_file_contents(args: EditFileArgs) -> Result<EditFileResponse, 
     let file_diff =
         FileDiff { path: file_path.clone(), old_text: Some(original_content), new_text: Some(updated_content) };
 
-    Ok(EditFileResponse {
-        file_path,
-        total_lines,
-        replacements_made,
-        meta: Some(ToolResultMeta::with_file_diff(display_meta, file_diff)),
-    })
+    let response = EditFileResponse { file_path, total_lines, replacements_made };
+    Ok(Displayed::new(response, ToolResultMeta::with_file_diff(display_meta, file_diff)))
 }
 
 #[cfg(test)]
@@ -118,7 +111,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(result.replacements_made, 2);
+        assert_eq!(result.output.replacements_made, 2);
         assert_eq!(fs::read_to_string(&file_path).unwrap(), "ALPHA\nbeta\nGAMMA\n");
     }
 

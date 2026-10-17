@@ -1,10 +1,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::common::{TaskSummary, task_result_meta};
+use super::common::TaskSummary;
 use crate::tasks::task_store::{TaskStore, TaskStoreError};
 use crate::tasks::types::{TaskId, TaskStatus, TaskUpdate};
-use utils::display_meta::ToolResultMeta;
 
 /// Input for the `task_update` tool
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -29,11 +28,6 @@ pub struct TaskUpdateOutput {
     /// Tasks that are now ready to start (when completing a task that others depended on)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub newly_ready: Vec<TaskSummary>,
-
-    /// Display metadata for human-friendly rendering
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub meta: Option<ToolResultMeta>,
 }
 
 /// Update an existing task's fields
@@ -74,12 +68,7 @@ pub fn execute_task_update(input: TaskUpdateInput, store: &mut TaskStore) -> Res
         vec![]
     };
 
-    Ok(TaskUpdateOutput {
-        task: TaskSummary::from(&task),
-        changes,
-        newly_ready,
-        meta: Some(task_result_meta(store, &task.title)),
-    })
+    Ok(TaskUpdateOutput { task: TaskSummary::from(&task), changes, newly_ready })
 }
 
 #[cfg(test)]

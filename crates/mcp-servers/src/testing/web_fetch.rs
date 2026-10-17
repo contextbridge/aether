@@ -10,22 +10,12 @@ use crate::coding::tools::web_fetch::{HttpClient, HttpResponse};
 ///
 /// Requests to URLs without a scripted result fail with
 /// [`WebFetchError::RequestFailed`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct FakeHttpClient {
     responses: Arc<Mutex<HashMap<String, Result<HttpResponse, WebFetchError>>>>,
 }
 
-impl Default for FakeHttpClient {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl FakeHttpClient {
-    pub fn new() -> Self {
-        Self { responses: Arc::new(Mutex::new(HashMap::new())) }
-    }
-
     /// Scripts a full response for `url`, including redirects via `final_url`.
     pub fn with_response(self, url: &str, response: HttpResponse) -> Self {
         self.with_result(url, Ok(response))

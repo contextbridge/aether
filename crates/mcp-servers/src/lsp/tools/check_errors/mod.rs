@@ -3,6 +3,7 @@
 // `Uri` only uses interior mutability to cache parsed components; its identity is stable.
 #![allow(clippy::mutable_key_type)]
 
+use crate::Displayed;
 use crate::lsp::common::truncate_results;
 use crate::lsp::diagnostics::{DiagnosticCounts, FormattedDiagnostic, Severity, count_by_severity};
 use crate::lsp::error::LspError;
@@ -13,7 +14,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
+use utils::display_meta::{ToolDisplayMeta, basename};
 
 /// Input payload for the `lsp_check_errors` tool.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -40,10 +41,6 @@ pub struct LspDiagnosticsOutput {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub truncated: Option<bool>,
-
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub meta: Option<ToolResultMeta>,
 }
 
 pub const MAX_LISTED_DIAGNOSTICS: usize = 200;
@@ -90,7 +87,6 @@ impl LspDiagnosticsOutput {
             diagnostics: by_file,
             summary,
             truncated: truncation.truncated,
-            meta: None,
         }
     }
 }
@@ -99,14 +95,14 @@ impl LspDiagnosticsOutput {
 pub async fn execute_lsp_diagnostics(
     mut request: LspDiagnosticsRequest,
     registry: &LspRegistry,
-) -> Result<LspDiagnosticsOutput, LspError> {
+) -> Result<Displayed<LspDiagnosticsOutput>, LspError> {
     request.file_path = request.file_path.map(|path| registry.resolve_file(&path)).transpose()?;
     if let Some(file_path) = request.file_path.as_deref().filter(|path| !Path::new(path).is_file()) {
         return Err(LspError::InvalidPath(format!("filePath must point to an existing file, got: {file_path}")));
     }
 
     let diagnostics_cache = registry.collect_diagnostics(request.file_path.as_deref()).await?;
-    let mut output = LspDiagnosticsOutput::new(&request, registry.root_path(), &diagnostics_cache);
+    let output = LspDiagnosticsOutput::new(&request, registry.root_path(), &diagnostics_cache);
 
     let detail = if output.summary.errors == 0 && output.summary.warnings == 0 {
         "no issues".to_string()
@@ -117,12 +113,7 @@ pub async fn execute_lsp_diagnostics(
         Some(fp) => format!("{}, {detail}", basename(fp)),
         None => detail,
     };
-    #[allow(clippy::used_underscore_binding)]
-    {
-        output.meta = Some(ToolDisplayMeta::new("LSP errors", value).into());
-    }
-
-    Ok(output)
+    Ok(Displayed::new(output, ToolDisplayMeta::new("LSP errors", value)))
 }
 
 #[cfg(test)]
