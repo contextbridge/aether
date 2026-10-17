@@ -2,10 +2,10 @@ use super::oauth::CodexTokenManager;
 use crate::catalog::Provider;
 use crate::provider::{LlmResponseStream, StreamingModelProvider, display_name, validate_reasoning};
 use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
-use crate::providers::http::{SseData, http_client};
-use crate::providers::openai_responses::mappers::{ResponsesRequestPolicy, build_request};
-use crate::providers::openai_responses::streaming::decode_responses;
-use crate::providers::openai_responses::transport::send;
+use crate::providers::http::{SseData, http_client, post_sse, responses_code};
+use crate::providers::openai::responses::mappers::{ResponsesRequestPolicy, build_request};
+use crate::providers::openai::responses::streaming::decode_responses;
+use crate::providers::openai::responses::types::ResponsesRequest;
 use crate::providers::response_stream::{OpenedStream, response_stream};
 use crate::{Context, LlmError, Result};
 use aether_auth::OAuthCredentialStorage;
@@ -54,16 +54,11 @@ impl CodexProvider {
         self
     }
 
-    fn build_wire_request(&self, context: &Context) -> Result<serde_json::Value> {
+    fn build_wire_request(&self, context: &Context) -> Result<ResponsesRequest> {
         let identity = self.model();
         validate_reasoning(context, identity.as_ref())?;
         let wire_model = self.request_model.as_deref().unwrap_or(&self.model);
-        Ok(serde_json::to_value(build_request(
-            identity.as_ref(),
-            wire_model,
-            context,
-            &ResponsesRequestPolicy::CODEX,
-        )?)?)
+        build_request(identity.as_ref(), wire_model, context, &ResponsesRequestPolicy::CODEX)
     }
 
     async fn build_headers(&self) -> Result<HeaderMap> {
@@ -86,13 +81,13 @@ impl CodexProvider {
     }
 
     /// Send the request and return a stream of SSE lines parsed into typed events.
-    async fn send_request(&self, request: serde_json::Value, headers: HeaderMap) -> Result<OpenedStream<SseData>> {
+    async fn send_request(&self, request: ResponsesRequest, headers: HeaderMap) -> Result<OpenedStream<SseData>> {
         let url = format!("{}/responses", self.base_url);
 
         debug!("Sending request to Codex API: {url}");
-        debug!("Codex request body: {request}");
+        debug!(?request, "Codex request body");
 
-        match send(&self.client, &url, headers, request).await {
+        match post_sse(&self.client, &url, headers, &request, responses_code).await {
             Ok(opened) => Ok(opened),
             Err(error) => {
                 if error.provider().map(|provider| provider.kind) == Some(crate::ProviderErrorKind::Authentication) {

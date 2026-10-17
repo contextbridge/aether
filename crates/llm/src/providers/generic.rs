@@ -1,6 +1,7 @@
 #![doc = include_str!(concat!(env!("OUT_DIR"), "/docs/generic.md"))]
 
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
+use serde::Serialize;
 use std::future::Future;
 use std::time::Duration;
 
@@ -8,14 +9,14 @@ use crate::catalog::Provider;
 use crate::provider::{display_name, validate_reasoning};
 use crate::providers::anthropic::mappers::build_request as build_messages_request;
 use crate::providers::anthropic::streaming::decode_line;
-use crate::providers::http::{SseData, anthropic_code, http_client, open_sse};
-pub use crate::providers::openai_compatible::ChatRequestPolicy;
-use crate::providers::openai_compatible::streaming::decode_sse_chunk;
-use crate::providers::openai_compatible::types::CompatibleChatRequest;
-use crate::providers::openai_compatible::{PromptCacheKeySource, build_chat_request};
-use crate::providers::openai_responses::mappers::build_request as build_responses_request;
-use crate::providers::openai_responses::streaming::decode_responses;
-use crate::providers::openai_responses::transport::send;
+use crate::providers::http::{SseData, anthropic_code, http_client, post_sse, responses_code};
+pub use crate::providers::openai::chat::ChatRequestPolicy;
+use crate::providers::openai::chat::build_chat_request;
+use crate::providers::openai::chat::streaming::decode_sse_chunk;
+use crate::providers::openai::chat::types::CompatibleChatRequest;
+use crate::providers::openai::responses::mappers::build_request as build_responses_request;
+use crate::providers::openai::responses::streaming::decode_responses;
+use crate::providers::openai::wire::PromptCacheKeySource;
 use crate::providers::response_stream::{OpenedStream, error_stream, response_stream};
 use crate::tool_schema::normalize_for_moonshot;
 use crate::{
@@ -23,7 +24,7 @@ use crate::{
     StreamingModelProvider,
 };
 
-pub use crate::providers::openai_responses::mappers::ResponsesRequestPolicy;
+pub use crate::providers::openai::responses::mappers::ResponsesRequestPolicy;
 
 pub struct ProviderConfig {
     pub provider: Provider,
@@ -246,8 +247,8 @@ impl GenericProvider {
         context: &Context,
         policy: &ChatRequestPolicy,
     ) -> Result<LlmResponseStream> {
-        let request = serde_json::to_value(build_chat_request(wire_model, context, policy)?)?;
-        let opened = self.open("chat/completions", request);
+        let request = build_chat_request(wire_model, context, policy)?;
+        let opened = self.post("chat/completions", &request, responses_code);
         Ok(response_stream(opened, |data, turn| decode_sse_chunk(&data, turn), self.idle_timeout))
     }
 
@@ -258,24 +259,23 @@ impl GenericProvider {
         context: &Context,
         policy: &ResponsesRequestPolicy,
     ) -> Result<LlmResponseStream> {
-        let request = serde_json::to_value(build_responses_request(identity, wire_model, context, policy)?)?;
-        Ok(response_stream(self.open("responses", request), decode_responses(), self.idle_timeout))
+        let request = build_responses_request(identity, wire_model, context, policy)?;
+        Ok(response_stream(self.post("responses", &request, responses_code), decode_responses(), self.idle_timeout))
     }
 
     fn stream_messages(&self, wire_model: &str, context: &Context) -> Result<LlmResponseStream> {
         let request = build_messages_request(wire_model, context)?;
-        let builder =
-            self.http.post(format!("{}/v1/messages", self.api_base)).headers(self.headers.clone()).json(&request);
-        Ok(response_stream(open_sse(builder, anthropic_code), |data, turn| decode_line(&data, turn), self.idle_timeout))
+        let opened = self.post("v1/messages", &request, anthropic_code);
+        Ok(response_stream(opened, |data, turn| decode_line(&data, turn), self.idle_timeout))
     }
 
-    fn open(
+    fn post<T: Serialize>(
         &self,
         path: &str,
-        request: serde_json::Value,
-    ) -> impl Future<Output = Result<OpenedStream<SseData>>> + Send + 'static {
-        let (http, url, headers) = (self.http.clone(), format!("{}/{path}", self.api_base), self.headers.clone());
-        async move { send(&http, &url, headers, request).await }
+        body: &T,
+        code: fn(&str) -> Option<String>,
+    ) -> impl Future<Output = Result<OpenedStream<SseData>>> + Send + use<T> {
+        post_sse(&self.http, &format!("{}/{path}", self.api_base), self.headers.clone(), body, code)
     }
 }
 
@@ -533,6 +533,26 @@ mod tests {
                 assert!(matches!(error, LlmError::UnsupportedDisableTransport { .. }));
             }
             assert!(!error.is_retryable());
+        }
+    }
+
+    #[tokio::test]
+    async fn sampling_settings_are_sent_as_configured() {
+        for (config, mut server) in [
+            (&DEEPSEEK, CaptureServer::start_chat_completions().await),
+            (&OPENAI, CaptureServer::start_responses().await),
+            (&ANTHROPIC, CaptureServer::start_messages().await),
+        ] {
+            let provider = capture_backed_provider(&server, config);
+            let mut context = hello_context();
+            context.set_model_settings(ModelSettings { temperature: Some(0.2), top_p: Some(0.9), max_tokens: None });
+
+            let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+            let body = server.captured().await.body;
+
+            assert!(responses.iter().all(Result::is_ok), "{responses:?}");
+            assert_eq!(body["temperature"], 0.2, "{}", config.provider);
+            assert_eq!(body["top_p"], 0.9, "{}", config.provider);
         }
     }
 

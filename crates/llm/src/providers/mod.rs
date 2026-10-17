@@ -8,8 +8,7 @@ pub mod codex;
 pub mod generic;
 pub(crate) mod http;
 pub mod local;
-pub mod openai_compatible;
-pub(crate) mod openai_responses;
+pub mod openai;
 pub(crate) mod response_stream;
 #[cfg(test)]
 pub(crate) mod test_capture_server;

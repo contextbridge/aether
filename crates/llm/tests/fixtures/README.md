@@ -16,8 +16,8 @@
 Raw byte-for-byte SSE responses captured from each provider's streaming
 endpoint. Used by `tests/providers/anthropic/fixture_tests.rs`,
 `tests/providers/chat_completions_fixture_tests.rs` (`openai`, `openrouter`,
-`z_ai`) and the `openai_responses` unit tests in
-`src/providers/openai_responses/streaming.rs` to verify that the real parsers
+`z_ai`) and the Responses unit tests in
+`src/providers/openai/responses/streaming.rs` to verify that the real parsers
 extract `TokenUsage` correctly from on-the-wire responses.
 
 ## Why these exist

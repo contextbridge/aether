@@ -1,13 +1,10 @@
 pub(crate) mod streaming;
 pub(crate) mod types;
-
-use schemars::Schema;
-use utils::ReasoningEffort;
-
+use super::wire::{PromptCacheKeySource, reasoning_effort_param};
 use crate::{Context, LlmError, ToolDefinition};
-use types::{CompatibleChatRequest, FunctionDefinition, StreamOptions, Tool};
-
+use schemars::Schema;
 pub use streaming::process_compatible_stream;
+use types::{CompatibleChatRequest, FunctionDefinition, StreamOptions, Tool};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ChatRequestPolicy {
@@ -26,39 +23,6 @@ impl ChatRequestPolicy {
     };
 }
 
-/// Selects what `prompt_cache_key` is sent to a LLM provider.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PromptCacheKeySource {
-    /// Do not send a prompt cache key.
-    Omit,
-    /// Use a hash of the prompt prefix.
-    Prefix,
-    /// Use a stable session identifier.
-    SessionAffinity,
-}
-
-impl PromptCacheKeySource {
-    pub(crate) fn resolve(self, context: &Context) -> Option<&str> {
-        match self {
-            Self::Omit => None,
-            Self::Prefix => context.prompt_cache_key(),
-            Self::SessionAffinity => context.session_affinity_key(),
-        }
-    }
-}
-
-pub(crate) fn reasoning_effort_param(effort: ReasoningEffort) -> Option<&'static str> {
-    match effort {
-        ReasoningEffort::Default => None,
-        ReasoningEffort::Disabled => Some("none"),
-        effort => Some(effort.as_str()),
-    }
-}
-
-/// Build a chat completion request from a context
-///
-/// This is shared logic for OpenAI-compatible providers like `OpenRouter` and Z.ai.
-/// Uses `CompatibleChatRequest` which preserves `reasoning_content` on assistant messages.
 pub(crate) fn build_chat_request(
     model: &str,
     context: &Context,
