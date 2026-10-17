@@ -1,5 +1,4 @@
 use crate::SessionMeta;
-use crate::store::append_to_jsonl;
 use acp_utils::notifications::{PromptSearchResponse, PromptSearchResult};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -8,7 +7,7 @@ use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use tracing::warn;
-use utils::fs::write_atomic;
+use utils::fs::{append_line, write_atomic};
 
 const PROMPT_HISTORY_MAX_ENTRIES: usize = 100;
 const PROMPT_HISTORY_COMPACT_AFTER_LINES: usize = 2 * PROMPT_HISTORY_MAX_ENTRIES;
@@ -30,7 +29,7 @@ impl PromptHistoryIndex {
         let mut state = self.lock_state();
         let history = self.ensure_loaded(&mut state)?;
 
-        append_to_jsonl(&self.path, &entry_line(&entry)?)?;
+        append_line(&self.path, &entry_line(&entry)?)?;
         history.file_lines += 1;
         history.entries.push_back(entry);
         if history.entries.len() > PROMPT_HISTORY_MAX_ENTRIES {

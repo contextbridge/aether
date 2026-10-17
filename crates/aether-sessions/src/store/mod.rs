@@ -3,12 +3,11 @@ mod prompt_history;
 use acp_utils::notifications::{PromptSearchResponse, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn};
 use aether_core::events::{AgentEvent, MessageEvent, ToolEvent};
 use serde::Serialize;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use tracing::warn;
-use utils::fs::write_atomic;
+use utils::fs::{append_line, write_atomic};
 use utils::settings::aether_home;
 
 use crate::error::SessionStoreError;
@@ -99,14 +98,14 @@ impl SessionStore {
     }
 
     pub fn append_meta(&self, session_id: &str, meta: &SessionMeta) -> Result<(), SessionStoreError> {
-        self.append_line(session_id, meta)
+        self.append_json(session_id, meta)
     }
 
     pub fn append_event(&self, session_id: &str, event: &SessionEvent) -> Result<(), SessionStoreError> {
         if !event.is_persisted() {
             return Ok(());
         }
-        self.append_line(session_id, event)?;
+        self.append_json(session_id, event)?;
         if let Some(prompt) = event.user_content()
             && let Some(meta) = self.session_meta(session_id)
         {
@@ -182,8 +181,8 @@ impl SessionStore {
         SessionLog::open(self.session_path(session_id)).ok().map(|log| log.meta)
     }
 
-    fn append_line<T: Serialize>(&self, session_id: &str, value: &T) -> Result<(), SessionStoreError> {
-        Ok(append_to_jsonl(&self.session_path(session_id), &serde_json::to_string(value)?)?)
+    fn append_json<T: Serialize>(&self, session_id: &str, value: &T) -> Result<(), SessionStoreError> {
+        Ok(append_line(&self.session_path(session_id), &serde_json::to_string(value)?)?)
     }
 
     fn session_path(&self, session_id: &str) -> PathBuf {
@@ -303,11 +302,4 @@ fn extract_title(content: &[ContentBlock]) -> String {
     let first_line =
         ContentBlock::first_text(content).and_then(|text| text.lines().next()).unwrap_or("Media prompt").trim();
     truncate_for_preview(first_line)
-}
-
-fn append_to_jsonl(path: &Path, line: &str) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    OpenOptions::new().create(true).append(true).open(path)?.write_all(format!("{line}\n").as_bytes())
 }
