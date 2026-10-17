@@ -1,4 +1,4 @@
-Client for connecting to a running [`LspDaemon`](crate::LspDaemon) over a Unix domain socket.
+Client for connecting to a running `aether-lspd` daemon over a Unix domain socket. Requests from one client run concurrently, so a slow diagnostics query never holds up a hover.
 
 `LspClient` is the primary entry point for consumers of this crate. Call [`connect`](LspClient::connect) with a workspace root and language -- the client will auto-spawn a daemon process if one isn't already running, then send an `Initialize` handshake.
 

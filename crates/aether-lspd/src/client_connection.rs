@@ -1,14 +1,13 @@
-use crate::protocol::{DaemonRequest, DaemonResponse, ProtocolError, frame_reader, frame_writer};
+use crate::protocol::{DaemonCall, DaemonRequest, DaemonResponse, LspErrorResponse, frame_reader, frame_writer};
 use crate::workspace_registry::{WorkspaceBinding, WorkspaceRegistry};
 use futures::{SinkExt, StreamExt};
-use serde_json::Value;
 use tokio::io::{ReadHalf, WriteHalf, split};
 use tokio::net::UnixStream;
 use tokio::spawn;
 use tokio::sync::mpsc;
 
 #[tracing::instrument(skip(stream, registry), fields(%client_id))]
-pub async fn handle_client(stream: UnixStream, registry: WorkspaceRegistry, client_id: uuid::Uuid) {
+pub(crate) async fn handle_client(stream: UnixStream, registry: WorkspaceRegistry, client_id: uuid::Uuid) {
     let (reader, writer) = split(stream);
     let (response_tx, response_rx) = mpsc::channel::<DaemonResponse>(100);
     let writer_task = spawn(run_writer(writer, response_rx));
@@ -45,41 +44,41 @@ async fn run_reader(
             }
         };
 
-        let response = match request {
-            DaemonRequest::Ping => DaemonResponse::Pong,
+        match request {
             DaemonRequest::Disconnect => break,
-            DaemonRequest::Initialize(init) => match registry.bind(&init.workspace_root, init.language).await {
-                Ok(bound) => {
-                    binding = Some(bound);
-                    DaemonResponse::Initialized
+            DaemonRequest::Initialize(init) => {
+                let response = match registry.bind(&init.workspace_root, init.language).await {
+                    Ok(bound) => {
+                        binding = Some(bound);
+                        DaemonResponse::Initialized
+                    }
+                    Err(err) => DaemonResponse::InitializeFailed(err.to_string()),
+                };
+                let _ = response_tx.send(response).await;
+            }
+            DaemonRequest::Call { id, call } => {
+                let ordered = matches!(call, DaemonCall::QueueRefresh { .. });
+                let reply = reply(registry.clone(), binding.clone(), id, call, response_tx.clone());
+                if ordered {
+                    reply.await;
+                } else {
+                    spawn(reply);
                 }
-                Err(err) => DaemonResponse::Error(ProtocolError::new(err.to_string())),
-            },
-            DaemonRequest::LspCall { client_id, method, params } => match &binding {
-                Some(binding) => {
-                    DaemonResponse::LspResult { client_id, result: registry.lsp_call(binding, &method, params).await }
-                }
-                None => not_initialized(client_id),
-            },
-            DaemonRequest::GetDiagnostics { client_id, uri } => match &binding {
-                Some(binding) => DaemonResponse::LspResult {
-                    client_id,
-                    result: registry.get_diagnostics(binding, uri.as_ref()).await,
-                },
-                None => not_initialized(client_id),
-            },
-            DaemonRequest::QueueDiagnosticRefresh { client_id, uri } => match &binding {
-                Some(binding) => DaemonResponse::LspResult {
-                    client_id,
-                    result: registry.queue_diagnostic_refresh(binding, uri).map(|()| Value::Null),
-                },
-                None => not_initialized(client_id),
-            },
-        };
-        let _ = response_tx.send(response).await;
+            }
+        }
     }
 }
 
-fn not_initialized(client_id: i64) -> DaemonResponse {
-    DaemonResponse::Error(ProtocolError::with_client_id("Not initialized", client_id))
+async fn reply(
+    registry: WorkspaceRegistry,
+    binding: Option<WorkspaceBinding>,
+    id: i64,
+    call: DaemonCall,
+    response_tx: mpsc::Sender<DaemonResponse>,
+) {
+    let result = match binding {
+        Some(binding) => registry.call(&binding, call).await,
+        None => Err(LspErrorResponse::daemon("Not initialized")),
+    };
+    let _ = response_tx.send(DaemonResponse::Reply { id, result }).await;
 }

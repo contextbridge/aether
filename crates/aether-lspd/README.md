@@ -46,15 +46,13 @@ Full API documentation is available on [docs.rs](https://docs.rs/aether-lspd).
 
 Key entry points:
 - [`LspClient`] -- connect to a daemon and make LSP requests
-- [`LspDaemon`] -- the daemon runtime that manages language servers
+- [`run_lspd`] -- run the daemon that manages language servers
 - [`LanguageId`] -- supported languages and their LSP server configurations
-- [`DaemonRequest`] / [`DaemonResponse`] -- the wire protocol between client and daemon
 
 ## Key Types
 
-- **`LspClient`** -- Client for connecting to a running daemon. Supports go-to-definition, references, hover, diagnostics, rename, and more.
-- **`LspDaemon`** -- Main daemon runtime. Listens on a Unix socket and manages language server lifecycles.
-- **`DaemonRequest` / `DaemonResponse`** -- Protocol messages between client and daemon.
+- **`LspClient`** -- Client for connecting to a running daemon. Supports go-to-definition, references, hover, diagnostics, rename, and more. Requests on one client run concurrently.
+- **`LspdArgs`** -- Daemon settings: socket path, idle timeout and per-request timeout. The client-daemon protocol is private and versioned through the socket name.
 - **`LanguageId`** -- Supported language identifiers with associated LSP server configurations.
 
 ## Feature Flags

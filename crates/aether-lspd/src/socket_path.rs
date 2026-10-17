@@ -1,5 +1,6 @@
 use crate::language_catalog::LanguageId;
 use crate::language_catalog::socket_identity_for_language;
+use crate::protocol::PROTOCOL_VERSION;
 use std::path::{Path, PathBuf};
 
 #[doc = include_str!("docs/socket_path.md")]
@@ -10,7 +11,7 @@ pub fn socket_path(workspace_root: &Path, language: LanguageId) -> PathBuf {
 }
 
 /// Ensure the socket directory exists and return the socket path
-pub fn ensure_socket_dir(workspace_root: &Path, language: LanguageId) -> std::io::Result<PathBuf> {
+pub(crate) fn ensure_socket_dir(workspace_root: &Path, language: LanguageId) -> std::io::Result<PathBuf> {
     let path = socket_path(workspace_root, language);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -19,14 +20,14 @@ pub fn ensure_socket_dir(workspace_root: &Path, language: LanguageId) -> std::io
 }
 
 /// Get the lockfile path corresponding to a socket path
-pub fn lockfile_path(socket_path: &Path) -> PathBuf {
+pub(crate) fn lockfile_path(socket_path: &Path) -> PathBuf {
     socket_path.with_extension("lock")
 }
 
 /// Get the log file path corresponding to a socket path.
 ///
 /// The log file lives alongside the socket with a `.log` extension.
-pub fn log_file_path(socket_path: &Path) -> PathBuf {
+pub(crate) fn log_file_path(socket_path: &Path) -> PathBuf {
     socket_path.with_extension("log")
 }
 
@@ -53,7 +54,7 @@ fn generate_socket_name(workspace_root: &Path, language: LanguageId) -> String {
     // Use first 8 bytes of SHA256 for a 16-char hex string
     let short_hash = u64::from_be_bytes(hash[..8].try_into().unwrap());
 
-    format!("lsp-{}-{:016x}.sock", socket_identity_for_language(language), short_hash)
+    format!("lsp-{}-v{PROTOCOL_VERSION}-{short_hash:016x}.sock", socket_identity_for_language(language))
 }
 
 /// Get the current user's UID

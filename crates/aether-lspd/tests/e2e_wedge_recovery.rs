@@ -58,7 +58,9 @@ async fn misbehaving_daemon(root: &Path) -> (TestDaemon, LspClient) {
             &["--wedge-on", "textDocument/definition", "--crash-on", "textDocument/references"],
         );
     });
-    let daemon =
-        TestDaemon::spawn(root, LanguageId::Rust, Duration::from_secs(2)).await.expect("Failed to spawn daemon");
+    let daemon = TestDaemon::builder(root, LanguageId::Rust)
+        .request_timeout(Duration::from_secs(2))
+        .spawn()
+        .expect("Failed to spawn daemon");
     (daemon, connect(root, LanguageId::Rust).await)
 }

@@ -11,7 +11,6 @@ Errors that can occur when using [`LspClient`].
 # Runtime errors
 
 - **`Io`** -- An IO error on the Unix socket connection.
-- **`DaemonError`** -- The daemon returned a protocol-level error.
 - **`ProtocolError`** -- A framing or serialization error in the daemon protocol.
 
 # LSP errors

@@ -15,8 +15,8 @@ Projects are [`TestWorkspace`]s, so they share its `file`, `write`, `path`, and 
 
 # Daemons
 
-- [`TestDaemon`] -- An in-process daemon with deterministic shutdown.
-- [`configure_fake_server`] -- Points a language at the shared fake language server.
+- [`TestDaemon`] -- An in-process daemon with deterministic shutdown. Its socket accepts connections as soon as `spawn` returns. [`TestDaemon::builder`] overrides the request, diagnostics and settle timeouts.
+- [`configure_fake_server`] -- Points a language at the shared fake language server. The fake server holds diagnostics for files containing `// hold-diagnostics` until it receives a `fake/releaseDiagnostics` request, and reports itself as loading while the workspace root holds a `.fake-loading` file, until a `fake/finishLoading` request.
 
 # Example
 

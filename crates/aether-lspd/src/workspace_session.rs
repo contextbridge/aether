@@ -1,10 +1,11 @@
-use crate::diagnostics_store::DiagnosticsStore;
+use crate::daemon::Timeouts;
+use crate::diagnostics_store::{DiagnosticsStore, Freshness};
 use crate::document_lifecycle::{AcquireAction, DocumentLifecycle, ReleaseAction};
 use crate::error::DaemonResult;
 use crate::file_watcher::{FileWatcherBatch, is_ignored_directory_name};
 use crate::language_catalog::{DiagnosticsMode, LanguageId, LspConfig};
-use crate::process_transport::{ProcessTransport, TransportError, TransportEvent};
-use crate::protocol::{LspNotification, extract_document_uri};
+use crate::process_transport::{LspNotification, ProcessTransport, TransportError, TransportEvent};
+use crate::protocol::extract_document_uri;
 use crate::refresh_queue::RefreshQueue;
 use ignore::WalkBuilder;
 use lsp_types::notification::{
@@ -24,8 +25,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-const DIAGNOSTICS_TIMEOUT: Duration = Duration::from_secs(20);
-const BACKGROUND_REFRESH_TIMEOUT: Duration = Duration::from_secs(20);
 const LSP_CONTENT_MODIFIED: i32 = -32801;
 const LSP_SERVER_CANCELLED: i32 = -32802;
 const TRANSIENT_RETRY_LIMIT: u32 = 3;
@@ -38,19 +37,21 @@ pub(crate) struct WorkspaceSession {
     diagnostics: DiagnosticsStore,
     refresh: RefreshQueue,
     diagnostics_mode: DiagnosticsMode,
+    diagnostics_timeout: Duration,
     supported_extensions: Arc<HashSet<String>>,
     alive: Arc<AtomicBool>,
 }
 
 impl WorkspaceSession {
-    pub(crate) fn spawn(workspace_root: &Path, config: &LspConfig) -> DaemonResult<Self> {
+    pub(crate) fn spawn(workspace_root: &Path, config: &LspConfig, timeouts: Timeouts) -> DaemonResult<Self> {
         let (transport, event_rx) = ProcessTransport::spawn(workspace_root, config)?;
         let session = Self {
             transport,
             documents: DocumentLifecycle::new(),
-            diagnostics: DiagnosticsStore::new(),
+            diagnostics: DiagnosticsStore::new(timeouts.diagnostics_settle),
             refresh: RefreshQueue::new(),
             diagnostics_mode: config.diagnostics_mode,
+            diagnostics_timeout: timeouts.diagnostics,
             supported_extensions: Arc::new(supported_extensions(config)),
             alive: Arc::new(AtomicBool::new(true)),
         };
@@ -64,6 +65,10 @@ impl WorkspaceSession {
 
     pub(crate) async fn wait_until_initialized(&self) -> DaemonResult<()> {
         self.transport.wait_until_initialized().await
+    }
+
+    pub(crate) async fn wait_until_ready(&self, bound: Duration) {
+        self.transport.wait_until_ready(bound).await;
     }
 
     pub(crate) async fn request(&self, method: &str, params: &Value) -> Result<Value, TransportError> {
@@ -85,10 +90,10 @@ impl WorkspaceSession {
         match uri {
             Some(uri) => {
                 if self.refresh_uri(uri).await == Freshness::Unconfirmed {
-                    self.refresh.wait_for_current_generation(DIAGNOSTICS_TIMEOUT).await;
+                    self.refresh.wait_for_current_generation(self.diagnostics_timeout).await;
                 }
             }
-            None => self.refresh.wait_for_current_generation(BACKGROUND_REFRESH_TIMEOUT).await,
+            None => self.refresh.wait_for_current_generation(self.diagnostics_timeout).await,
         }
         self.diagnostics.get(uri)
     }
@@ -157,8 +162,7 @@ impl WorkspaceSession {
         match (self.diagnostics_mode, sync) {
             (_, DocumentSync::Missing) | (DiagnosticsMode::Push, DocumentSync::AlreadyOpen) => Freshness::Unconfirmed,
             (DiagnosticsMode::Push, DocumentSync::Sent { version_before }) => {
-                self.diagnostics.wait_for_uri_fresh(uri, version_before, DIAGNOSTICS_TIMEOUT).await;
-                Freshness::Fresh
+                self.diagnostics.wait_for_uri_fresh(uri, version_before, self.diagnostics_timeout).await
             }
             (DiagnosticsMode::Pull, DocumentSync::Sent { .. } | DocumentSync::AlreadyOpen) => {
                 self.pull_diagnostics(uri).await
@@ -171,7 +175,7 @@ impl WorkspaceSession {
         // which TypeScript 7 rejects.
         let params = serde_json::json!({ "textDocument": TextDocumentIdentifier { uri: uri.clone() } });
         let request = self.request_with_retry(DocumentDiagnosticRequest::METHOD, &params);
-        let report = tokio::time::timeout(DIAGNOSTICS_TIMEOUT, request)
+        let report = tokio::time::timeout(self.diagnostics_timeout, request)
             .await
             .ok()
             .and_then(Result::ok)
@@ -261,12 +265,6 @@ enum DocumentSync {
     Sent { version_before: u64 },
     AlreadyOpen,
     Missing,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Freshness {
-    Fresh,
-    Unconfirmed,
 }
 
 fn supported_extensions(config: &LspConfig) -> HashSet<String> {

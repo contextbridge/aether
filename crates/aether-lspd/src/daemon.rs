@@ -1,9 +1,11 @@
 use crate::client_connection::handle_client;
 use crate::error::{DaemonError, DaemonResult};
 use crate::pid_lockfile::PidLockfile;
+use crate::socket_path::lockfile_path;
 use crate::workspace_registry::WorkspaceRegistry;
 use std::fs::{create_dir_all, remove_file};
 use std::future::pending;
+use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -15,35 +17,54 @@ use tokio::time::{Instant, sleep};
 use uuid::Uuid;
 
 #[doc = include_str!("docs/daemon.md")]
-pub struct LspDaemon {
+pub(crate) struct LspDaemon {
     socket_path: PathBuf,
+    listener: StdUnixListener,
+    _lockfile: PidLockfile,
     idle_timeout: Option<Duration>,
     workspace_registry: WorkspaceRegistry,
 }
 
+/// How long the daemon waits on its language servers.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Timeouts {
+    /// Bounds each request; a server that exceeds it is killed and replaced.
+    pub(crate) request: Duration,
+    /// How long a diagnostics query waits for the server to publish fresh results.
+    pub(crate) diagnostics: Duration,
+    /// How long a file's diagnostics must stay unchanged before they count as final.
+    pub(crate) diagnostics_settle: Duration,
+}
+
 impl LspDaemon {
-    /// Create a daemon with socket, idle-timeout, and per-request timeout settings.
-    pub fn new(socket_path: PathBuf, idle_timeout: Option<Duration>, request_timeout: Duration) -> Self {
-        Self { socket_path, idle_timeout, workspace_registry: WorkspaceRegistry::new(request_timeout) }
+    pub(crate) fn bind(socket_path: PathBuf, idle_timeout: Option<Duration>, timeouts: Timeouts) -> DaemonResult<Self> {
+        if let Some(parent) = socket_path.parent() {
+            create_dir_all(parent).map_err(DaemonError::Io)?;
+        }
+        let lockfile = PidLockfile::acquire(&lockfile_path(&socket_path)).map_err(DaemonError::LockfileError)?;
+
+        let _ = remove_file(&socket_path);
+        let listener = StdUnixListener::bind(&socket_path).map_err(DaemonError::BindFailed)?;
+        listener.set_nonblocking(true).map_err(DaemonError::BindFailed)?;
+        tracing::info!("Daemon listening on {:?}", socket_path);
+
+        Ok(Self {
+            socket_path,
+            listener,
+            _lockfile: lockfile,
+            idle_timeout,
+            workspace_registry: WorkspaceRegistry::new(timeouts),
+        })
     }
 
-    /// Run the daemon until shutdown.
-    pub async fn run(self) -> DaemonResult<()> {
+    /// Serve clients until SIGTERM or SIGINT.
+    pub(crate) async fn run(self) -> DaemonResult<()> {
         self.run_until_shutdown(spawn_shutdown_signal_handler()).await
     }
 
     pub(crate) async fn run_until_shutdown(self, shutdown_rx: oneshot::Receiver<()>) -> DaemonResult<()> {
-        if let Some(parent) = self.socket_path.parent() {
-            create_dir_all(parent).map_err(DaemonError::Io)?;
-        }
-
-        let _lockfile =
-            PidLockfile::acquire(&self.socket_path.with_extension("lock")).map_err(DaemonError::LockfileError)?;
-
-        let _ = remove_file(&self.socket_path);
-
-        tracing::info!("Daemon listening on {:?}", self.socket_path);
-        self.run_listener_loop(shutdown_rx).await?;
+        let listener = UnixListener::from_std(self.listener).map_err(DaemonError::BindFailed)?;
+        run_listener_loop(&listener, &self.workspace_registry, self.idle_timeout, shutdown_rx).await;
 
         tracing::info!("Shutting down LSP servers");
         self.workspace_registry.shutdown().await;
@@ -53,60 +74,14 @@ impl LspDaemon {
 
         Ok(())
     }
+}
 
-    /// Main listener loop that handles connections and shutdown signals.
-    async fn run_listener_loop(&self, mut shutdown_rx: oneshot::Receiver<()>) -> DaemonResult<()> {
-        let listener = UnixListener::bind(&self.socket_path).map_err(DaemonError::BindFailed)?;
-        let idle = Arc::new(Mutex::new(IdleState { client_count: 0, last_activity: Instant::now() }));
-
-        loop {
-            select! {
-                biased;
-
-                _ = &mut shutdown_rx => {
-                    tracing::info!("Shutting down");
-                    return Ok(());
-                }
-
-                result = listener.accept() => {
-                    match result {
-                        Ok((stream, _)) => {
-                            let client_id = Uuid::new_v4();
-                            let registry = self.workspace_registry.clone();
-                            let idle = Arc::clone(&idle);
-
-                            {
-                                let mut state = idle.lock().unwrap_or_else(PoisonError::into_inner);
-                                state.client_count += 1;
-                                state.last_activity = Instant::now();
-                            }
-
-                            spawn(async move {
-                                handle_client(stream, registry, client_id).await;
-                                {
-                                    let mut state = idle.lock().unwrap_or_else(PoisonError::into_inner);
-                                    state.client_count -= 1;
-                                    state.last_activity = Instant::now();
-                                }
-                                tracing::debug!("Client {} handler complete", client_id);
-                            });
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to accept connection: {}", e);
-                        }
-                    }
-                }
-
-                () = check_idle_timeout(&idle, self.idle_timeout) => {
-                    tracing::info!("Idle timeout reached, shutting down");
-                    return Ok(());
-                }
-
-                () = check_workspace_liveness(&self.workspace_registry, Duration::from_secs(10)) => {
-                    tracing::info!("All workspace roots deleted, shutting down");
-                    return Ok(());
-                }
-            }
+impl Default for Timeouts {
+    fn default() -> Self {
+        Self {
+            request: Duration::from_secs(120),
+            diagnostics: Duration::from_secs(20),
+            diagnostics_settle: Duration::from_millis(600),
         }
     }
 }
@@ -114,6 +89,65 @@ impl LspDaemon {
 struct IdleState {
     client_count: usize,
     last_activity: Instant,
+}
+
+async fn run_listener_loop(
+    listener: &UnixListener,
+    workspace_registry: &WorkspaceRegistry,
+    idle_timeout: Option<Duration>,
+    mut shutdown_rx: oneshot::Receiver<()>,
+) {
+    let idle = Arc::new(Mutex::new(IdleState { client_count: 0, last_activity: Instant::now() }));
+
+    loop {
+        select! {
+            biased;
+
+            _ = &mut shutdown_rx => {
+                tracing::info!("Shutting down");
+                return;
+            }
+
+            result = listener.accept() => {
+                match result {
+                    Ok((stream, _)) => {
+                        let client_id = Uuid::new_v4();
+                        let registry = workspace_registry.clone();
+                        let idle = Arc::clone(&idle);
+
+                        {
+                            let mut state = idle.lock().unwrap_or_else(PoisonError::into_inner);
+                            state.client_count += 1;
+                            state.last_activity = Instant::now();
+                        }
+
+                        spawn(async move {
+                            handle_client(stream, registry, client_id).await;
+                            {
+                                let mut state = idle.lock().unwrap_or_else(PoisonError::into_inner);
+                                state.client_count -= 1;
+                                state.last_activity = Instant::now();
+                            }
+                            tracing::debug!("Client {} handler complete", client_id);
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to accept connection: {}", e);
+                    }
+                }
+            }
+
+            () = check_idle_timeout(&idle, idle_timeout) => {
+                tracing::info!("Idle timeout reached, shutting down");
+                return;
+            }
+
+            () = check_workspace_liveness(workspace_registry, Duration::from_secs(10)) => {
+                tracing::info!("All workspace roots deleted, shutting down");
+                return;
+            }
+        }
+    }
 }
 
 async fn check_idle_timeout(idle: &Mutex<IdleState>, timeout: Option<Duration>) {
