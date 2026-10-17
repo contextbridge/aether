@@ -5,7 +5,7 @@
 //! minimal one (only `prompt_tokens`, `completion_tokens` and `cached_tokens`),
 //! so a parser change that stops accepting either shape fails here.
 
-use llm::providers::openai_compatible::process_compatible_stream;
+use llm::providers::openai::chat::process_compatible_stream;
 use llm::{LlmResponse, StopReason};
 
 use crate::providers::common::{expect_usage, parse_fixture};

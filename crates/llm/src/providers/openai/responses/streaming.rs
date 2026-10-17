@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use tracing::debug;
 
-use crate::providers::openai_compatible::types::Usage;
+use crate::providers::openai::wire::Usage;
 use crate::providers::response_stream::StreamAssembler;
 use crate::{LlmResponse, ProviderError, ProviderErrorKind, Result, StopReason, ToolCallRequest};
 
@@ -33,10 +33,6 @@ pub enum ResponsesStreamEvent {
 }
 
 impl ResponsesStreamEvent {
-    /// Whether this event may legitimately arrive before `response.created`:
-    /// event types we ignore, and failures the endpoint reports *instead of*
-    /// opening a response. Rejecting those would replace the server's own
-    /// message with a generic interrupt.
     fn may_precede_creation(&self) -> bool {
         matches!(self, Self::Ignored | Self::Error(_) | Self::Failed(_))
     }
@@ -569,7 +565,8 @@ mod tests {
 
     #[tokio::test]
     async fn captured_responses_fixture_uses_the_shared_processor() {
-        let responses = process_fixture(include_str!("../../../tests/fixtures/openai_responses/01_minimal.sse")).await;
+        let responses =
+            process_fixture(include_str!("../../../../tests/fixtures/openai_responses/01_minimal.sse")).await;
 
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
         let usage = find_usage(&responses).expect("fixture should report usage");
@@ -581,7 +578,7 @@ mod tests {
     #[tokio::test]
     async fn captured_reasoning_fixture_preserves_reasoning_usage() {
         let responses =
-            process_fixture(include_str!("../../../tests/fixtures/openai_responses/02_reasoning.sse")).await;
+            process_fixture(include_str!("../../../../tests/fixtures/openai_responses/02_reasoning.sse")).await;
 
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
         let usage = find_usage(&responses).expect("fixture should report usage");
@@ -593,7 +590,8 @@ mod tests {
     #[tokio::test]
     async fn captured_mantle_fixture_preserves_cache_write_usage() {
         let responses =
-            process_fixture(include_str!("../../../tests/fixtures/openai_responses/03_mantle_cache_write.sse")).await;
+            process_fixture(include_str!("../../../../tests/fixtures/openai_responses/03_mantle_cache_write.sse"))
+                .await;
 
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
         let usage = find_usage(&responses).expect("fixture should report usage");

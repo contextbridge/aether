@@ -76,10 +76,8 @@ fn map_finish_reason(reason: FinishReason) -> Result<StopReason> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::openai_compatible::types::{
-        ChatCompletionStreamChoice, ChatCompletionStreamResponseDelta, CompletionTokensDetails, PromptTokensDetails,
-        Usage,
-    };
+    use crate::providers::openai::chat::types::{ChatCompletionStreamChoice, ChatCompletionStreamResponseDelta};
+    use crate::providers::openai::wire::{CompletionTokensDetails, PromptTokensDetails, Usage};
     use crate::testing::llm_response;
     use crate::{ProviderErrorKind, TokenUsage};
     use futures::{StreamExt, stream};

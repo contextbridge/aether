@@ -4,24 +4,17 @@ use super::types::{
     InputContent, InputItem, MessageContent, Reasoning, ReasoningContent, ResponsesRequest, Role, TextFormat,
     TextParam, Tool,
 };
-use crate::providers::openai_compatible::{PromptCacheKeySource, reasoning_effort_param};
+use crate::providers::openai::wire::{PromptCacheKeySource, reasoning_effort_param};
 use crate::tool_schema::normalize_for_xiaomi;
 use crate::{
     ChatMessage, ContentBlock, Context, LlmError, LlmModel, ReasoningEffort, Result, ToolDefinition, tool_result_parts,
 };
 
-/// The per-provider decisions that shape an otherwise identical Responses request.
 pub struct ResponsesRequestPolicy {
-    /// Send `reasoning` even when no effort was requested.
     always_include_reasoning: bool,
-    /// Effort applied when the caller did not request one.
     default_effort: Option<ReasoningEffort>,
-    /// Wire value for `ReasoningEffort::Disabled`.
     disabled_effort: &'static str,
     text_verbosity: Option<&'static str>,
-    /// `strict` sent on every function tool. The Responses API defaults this to
-    /// `true`, which rejects tool schemas that omit `additionalProperties`, so
-    /// `None` and `Some(false)` are not interchangeable.
     tool_strict: Option<bool>,
     parallel_tool_calls: Option<bool>,
     tool_schema_transform: Option<fn(&mut Schema)>,
@@ -72,13 +65,9 @@ impl ResponsesRequestPolicy {
     }
 }
 
-/// How a provider exposes reasoning and expects it back on later turns.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ReasoningFormat {
-    /// Opaque encrypted items replayed only to the model that produced them,
-    /// alongside human-readable summaries.
     Encrypted,
-    /// Raw reasoning text, streamed and replayed as-is with no summaries.
     PlainText,
 }
 
@@ -120,10 +109,6 @@ pub(crate) fn build_request(
     })
 }
 
-/// Map internal `ChatMessage`s to Responses API input items.
-///
-/// Returns `(system_prompt, input_items)` — the system prompt is extracted
-/// separately since the Responses API carries it as `instructions`.
 fn map_messages(
     messages: &[ChatMessage],
     reasoning_format: ReasoningFormat,

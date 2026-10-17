@@ -3,7 +3,7 @@ use super::mappers::{default_cache_point, map_messages, map_tools};
 use super::streaming::{converse_events, decode_converse_event};
 use crate::catalog::transport::ModelTransport;
 use crate::provider::{LlmResponseStream, StreamingModelProvider, validate_reasoning};
-use crate::providers::openai_responses::streaming::decode_responses;
+use crate::providers::openai::responses::streaming::decode_responses;
 use crate::providers::response_stream::{OpenedStream, error_stream, response_stream};
 use crate::{Context, LlmError, ProviderAuthMode, ProviderConnectionConfig, ProviderError, Result};
 use aws_config::Region;

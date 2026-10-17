@@ -2,9 +2,11 @@ use crate::providers::response_stream::OpenedStream;
 use crate::{LlmError, ProviderError, Result};
 use eventsource_stream::Eventsource;
 use futures::{Stream, StreamExt};
-use reqwest::{RequestBuilder, Response, header::HeaderMap};
+use reqwest::header::{ACCEPT, HeaderMap};
+use reqwest::{Client, RequestBuilder, Response};
+use serde::Serialize;
 use serde_json::{Value, from_str};
-use std::future::ready;
+use std::future::{Future, ready};
 use std::pin::Pin;
 use std::time::Duration;
 
@@ -14,10 +16,17 @@ pub(crate) fn http_client() -> reqwest::Client {
     reqwest::Client::builder().connect_timeout(Duration::from_secs(30)).build().expect("HTTP client should build")
 }
 
-pub(crate) async fn open_sse(
-    request: RequestBuilder,
+pub(crate) fn post_sse<T: Serialize>(
+    client: &Client,
+    url: &str,
+    headers: HeaderMap,
+    body: &T,
     code: fn(&str) -> Option<String>,
-) -> Result<OpenedStream<SseData>> {
+) -> impl Future<Output = Result<OpenedStream<SseData>>> + Send + use<T> {
+    open_sse(client.post(url).headers(headers).header(ACCEPT, "text/event-stream").json(body), code)
+}
+
+async fn open_sse(request: RequestBuilder, code: fn(&str) -> Option<String>) -> Result<OpenedStream<SseData>> {
     let response = request.send().await?;
     if !response.status().is_success() {
         return Err(rejected(response, code).await.into());
