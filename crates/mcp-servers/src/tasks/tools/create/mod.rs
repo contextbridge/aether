@@ -1,10 +1,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::common::{TaskSummary, task_result_meta};
+use super::common::TaskSummary;
 use crate::tasks::task_store::{TaskStore, TaskStoreError};
 use crate::tasks::types::{TaskId, TaskUpdate};
-use utils::display_meta::ToolResultMeta;
 
 fn empty_string_as_none<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
@@ -47,11 +46,6 @@ pub struct TaskCreateInput {
 pub struct TaskCreateOutput {
     /// The created task
     pub task: TaskSummary,
-
-    /// Display metadata for human-friendly rendering
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub meta: Option<ToolResultMeta>,
 }
 
 /// Create a new task or subtask
@@ -65,7 +59,7 @@ pub fn execute_task_create(input: &TaskCreateInput, store: &mut TaskStore) -> Re
     let parent = input.parent_id.as_deref().map(TaskId::from);
     let task = store.create(parent.as_ref(), &input.title, fields)?;
 
-    Ok(TaskCreateOutput { task: TaskSummary::from(&task), meta: Some(task_result_meta(store, &task.title)) })
+    Ok(TaskCreateOutput { task: TaskSummary::from(&task) })
 }
 
 #[cfg(test)]
@@ -288,29 +282,6 @@ mod tests {
         assert!(matches!(result, Err(TaskStoreError::ParentNotFound { .. })), "{result:?}");
         tasks.reopen();
         assert_eq!(tasks.store().tasks().count(), 1);
-    }
-
-    #[test]
-    fn plan_keeps_every_task_in_id_order_as_tasks_are_added() {
-        let mut tasks = TestTaskStore::new();
-        let root = tasks.root_task("Root");
-        let mut expected = vec!["Root".to_string()];
-
-        for n in 1..=11 {
-            let title = format!("Step {n}");
-            let input = TaskCreateInput {
-                title: title.clone(),
-                description: None,
-                parent_id: Some(root.id.to_string()),
-                assignee: None,
-                deps: None,
-            };
-            let output = execute_task_create(&input, tasks.store_mut()).unwrap();
-            expected.push(title);
-
-            let plan: Vec<_> = output.meta.unwrap().plan.unwrap().entries.into_iter().map(|e| e.content).collect();
-            assert_eq!(plan, expected);
-        }
     }
 
     #[test]

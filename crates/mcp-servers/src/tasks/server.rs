@@ -2,22 +2,21 @@ use crate::server_config;
 use clap::Parser;
 use rmcp::{
     ServerHandler,
-    handler::server::{
-        router::tool::ToolRouter,
-        wrapper::{Json, Parameters},
-    },
+    handler::server::{router::tool::ToolRouter, tool::schema_for_output, wrapper::Parameters},
     model::{ServerCapabilities, ServerConfig},
     tool, tool_handler, tool_router,
 };
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
+use utils::display_meta::ToolDisplayMeta;
 
 use crate::{
+    Displayed,
     tasks::{
-        TaskCreateInput, TaskCreateOutput, TaskGetInput, TaskGetOutput, TaskListInput, TaskListOutput, TaskStore,
-        TaskStoreError, TaskUpdateInput, TaskUpdateOutput, execute_task_create, execute_task_get, execute_task_list,
-        execute_task_update,
+        TaskCreateInput, TaskCreateOutput, TaskGetInput, TaskGetOutput, TaskListInput, TaskListOutput, TaskStatus,
+        TaskStore, TaskStoreError, TaskUpdateInput, TaskUpdateOutput, execute_task_create, execute_task_get,
+        execute_task_list, execute_task_update, tools::common::task_result_meta,
     },
     workspace_paths::resolve_path,
 };
@@ -99,47 +98,72 @@ impl ServerHandler for TasksMcp {
 #[tool_router]
 impl TasksMcp {
     #[doc = include_str!("./tools/create/description.md")]
-    #[tool(annotations(
-        read_only_hint = false,
-        destructive_hint = false,
-        idempotent_hint = false,
-        open_world_hint = false
-    ))]
+    #[tool(
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<TaskCreateOutput>()
+    )]
     pub async fn task_create(
         &self,
-        request: Parameters<TaskCreateInput>,
-    ) -> Result<Json<TaskCreateOutput>, TaskStoreError> {
-        let Parameters(input) = request;
-        self.with_store(move |store| execute_task_create(&input, store)).await.map(Json)
+        Parameters(input): Parameters<TaskCreateInput>,
+    ) -> Result<Displayed<TaskCreateOutput>, TaskStoreError> {
+        self.with_store(move |store| {
+            let output = execute_task_create(&input, store)?;
+            let meta = task_result_meta(store, &output.task.title);
+            Ok(Displayed::new(output, meta))
+        })
+        .await
     }
 
     #[doc = include_str!("./tools/update/description.md")]
-    #[tool(annotations(
-        read_only_hint = false,
-        destructive_hint = true,
-        idempotent_hint = false,
-        open_world_hint = false
-    ))]
+    #[tool(
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<TaskUpdateOutput>()
+    )]
     pub async fn task_update(
         &self,
-        request: Parameters<TaskUpdateInput>,
-    ) -> Result<Json<TaskUpdateOutput>, TaskStoreError> {
-        let Parameters(input) = request;
-        self.with_store(move |store| execute_task_update(input, store)).await.map(Json)
+        Parameters(input): Parameters<TaskUpdateInput>,
+    ) -> Result<Displayed<TaskUpdateOutput>, TaskStoreError> {
+        self.with_store(move |store| {
+            let output = execute_task_update(input, store)?;
+            let meta = task_result_meta(store, &output.task.title);
+            Ok(Displayed::new(output, meta))
+        })
+        .await
     }
 
     #[doc = include_str!("./tools/list/description.md")]
-    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
-    pub async fn task_list(&self, request: Parameters<TaskListInput>) -> Result<Json<TaskListOutput>, TaskStoreError> {
-        let Parameters(input) = request;
-        self.with_store(move |store| Ok(execute_task_list(&input, store))).await.map(Json)
+    #[tool(
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<TaskListOutput>()
+    )]
+    pub async fn task_list(
+        &self,
+        Parameters(input): Parameters<TaskListInput>,
+    ) -> Result<Displayed<TaskListOutput>, TaskStoreError> {
+        self.with_store(move |store| {
+            let output = execute_task_list(&input, store);
+            let done = output.tasks.iter().filter(|task| task.status == TaskStatus::Completed).count();
+            let meta = ToolDisplayMeta::new("Todo", format!("{done}/{} tasks", output.tasks.len()));
+            Ok(Displayed::new(output, meta))
+        })
+        .await
     }
 
     #[doc = include_str!("./tools/get/description.md")]
-    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
-    pub async fn task_get(&self, request: Parameters<TaskGetInput>) -> Result<Json<TaskGetOutput>, TaskStoreError> {
-        let Parameters(input) = request;
-        self.with_store(move |store| execute_task_get(input, store)).await.map(Json)
+    #[tool(
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<TaskGetOutput>()
+    )]
+    pub async fn task_get(
+        &self,
+        Parameters(input): Parameters<TaskGetInput>,
+    ) -> Result<Displayed<TaskGetOutput>, TaskStoreError> {
+        self.with_store(move |store| {
+            let output = execute_task_get(input, store)?;
+            let meta = ToolDisplayMeta::new("Todo", output.task.title.clone());
+            Ok(Displayed::new(output, meta))
+        })
+        .await
     }
 }
 
@@ -198,15 +222,35 @@ mod tests {
 
         assert!(base.path().join("tasks/.aether-tasks/active").join(id.filename()).exists());
         let reopened = TasksMcp::from_args(args(), base.path());
-        let Json(listed) = reopened.task_list(Parameters(TaskListInput::default())).await.unwrap();
-        assert_eq!(listed.tasks.len(), 1);
+        let listed = reopened.task_list(Parameters(TaskListInput::default())).await.unwrap();
+        assert_eq!(listed.output.tasks.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn plan_keeps_every_task_in_id_order_as_tasks_are_added() {
+        let server = TasksMcp::new();
+        let root = create_task(&server).await;
+        let mut expected = vec!["Task".to_string()];
+
+        for n in 1..=11 {
+            let title = format!("Step {n}");
+            let input = TaskCreateInput { parent_id: Some(root.to_string()), ..task_input(&title) };
+            let created = server.task_create(Parameters(input)).await.unwrap();
+            expected.push(title);
+
+            let plan = created.meta.and_then(|meta| meta.plan).expect("task_create reports the plan");
+            let titles: Vec<_> = plan.entries.into_iter().map(|entry| entry.content).collect();
+            assert_eq!(titles, expected);
+        }
     }
 
     async fn create_task(server: &TasksMcp) -> TaskId {
-        let input =
-            TaskCreateInput { title: "Task".into(), description: None, parent_id: None, assignee: None, deps: None };
-        let Json(output) = server.task_create(Parameters(input)).await.unwrap();
-        TaskId::from(output.task.id)
+        let created = server.task_create(Parameters(task_input("Task"))).await.unwrap();
+        TaskId::from(created.output.task.id)
+    }
+
+    fn task_input(title: &str) -> TaskCreateInput {
+        TaskCreateInput { title: title.into(), description: None, parent_id: None, assignee: None, deps: None }
     }
 
     fn session_task_file(id: &TaskId) -> Option<PathBuf> {

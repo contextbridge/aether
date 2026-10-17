@@ -1,6 +1,5 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use utils::display_meta::ToolResultMeta;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -20,7 +19,4 @@ pub struct SkillListItem {
 #[serde(rename_all = "camelCase")]
 pub struct ListSkillsOutput {
     pub skills: Vec<SkillListItem>,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub meta: Option<ToolResultMeta>,
 }

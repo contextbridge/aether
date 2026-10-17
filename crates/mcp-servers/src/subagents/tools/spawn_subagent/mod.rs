@@ -1,3 +1,4 @@
+use crate::Displayed;
 use crate::setup::agent_mcp;
 use crate::subagents::SubAgentProgressSink;
 use aether_core::{
@@ -17,7 +18,7 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio::time::timeout;
-use utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
+use utils::display_meta::ToolDisplayMeta;
 use utils::panic::panic_message;
 
 /// Input for a single agent task within a batch
@@ -86,10 +87,6 @@ pub struct SpawnSubAgentsOutput {
     pub success_count: usize,
     /// Number of failures
     pub error_count: usize,
-    /// Display metadata for human-friendly rendering
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub meta: Option<ToolResultMeta>,
 }
 
 /// Prompt instructions appended to sub-agent prompts to ensure structured output
@@ -117,9 +114,10 @@ impl AgentExecutor {
     }
 
     /// Execute multiple agent tasks in parallel and return results
-    pub async fn execute_tasks(&self, tasks: Vec<SubAgentTask>) -> SpawnSubAgentsOutput {
+    pub async fn execute_tasks(&self, tasks: Vec<SubAgentTask>) -> Displayed<SpawnSubAgentsOutput> {
         if tasks.is_empty() {
-            return SpawnSubAgentsOutput { results: vec![], success_count: 0, error_count: 0, meta: None };
+            let output = SpawnSubAgentsOutput { results: vec![], success_count: 0, error_count: 0 };
+            return Displayed { output, meta: None };
         }
 
         let task_count = tasks.len();
@@ -152,10 +150,8 @@ impl AgentExecutor {
         let success_count = results.iter().filter(|r| matches!(r.status, SubAgentStatus::Success)).count();
         let error_count = results.len() - success_count;
 
-        // Create display metadata using the first task
         let display_meta = ToolDisplayMeta::new("Spawn agent", format!("{first_agent_name} (1/{task_count})"));
-
-        SpawnSubAgentsOutput { results, success_count, error_count, meta: Some(display_meta.into()) }
+        Displayed::new(SpawnSubAgentsOutput { results, success_count, error_count }, display_meta)
     }
 
     /// Execute a single sub-agent and return its result

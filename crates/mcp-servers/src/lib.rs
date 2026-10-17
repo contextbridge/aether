@@ -6,6 +6,11 @@ mod background_tasks;
 #[cfg(any(feature = "coding", feature = "review"))]
 mod request_context;
 
+#[cfg(any(feature = "coding", feature = "skills", feature = "tasks", feature = "subagents"))]
+mod displayed;
+#[cfg(any(feature = "coding", feature = "skills", feature = "tasks", feature = "subagents"))]
+pub use displayed::Displayed;
+
 pub mod workspace_paths;
 
 #[cfg(any(test, feature = "test-helpers"))]

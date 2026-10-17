@@ -53,6 +53,8 @@ pub trait McpClientExt {
     async fn call_raw(&self, tool: &str, args: impl Serialize) -> TestResult<CallToolResult>;
 
     async fn call(&self, tool: &str, args: impl Serialize) -> TestResult<Value>;
+
+    async fn call_displayed(&self, tool: &str, args: impl Serialize) -> TestResult<(Value, Value)>;
 }
 
 impl McpClientExt for McpClient {
@@ -69,6 +71,13 @@ impl McpClientExt for McpClient {
             .ok_or_else(|| test_error(format!("{tool} returned no text content: {result:?}")))?;
         serde_json::from_str(&text.text)
             .map_err(|error| test_error(format!("{tool} returned non-JSON text ({error}): {}", text.text)).into())
+    }
+
+    async fn call_displayed(&self, tool: &str, args: impl Serialize) -> TestResult<(Value, Value)> {
+        let result = self.call_raw(tool, args).await?;
+        let meta = result.meta.map(|meta| Value::Object(meta.0)).unwrap_or_default();
+        let output = result.structured_content.ok_or_else(|| test_error(format!("{tool} returned no output")))?;
+        Ok((output, meta))
     }
 }
 

@@ -10,7 +10,6 @@ use reqwest::Url;
 use std::time::Duration;
 
 use crate::coding::error::WebFetchError;
-use utils::display_meta::{ToolDisplayMeta, truncate};
 
 /// HTTP client for fetching web content and converting to markdown.
 pub struct WebFetcher {
@@ -52,16 +51,12 @@ impl WebFetcher {
             ExtractedContent { title: None, markdown: response.body, byline: None }
         };
 
-        let display_meta =
-            ToolDisplayMeta::new("Fetch URL", extracted.title.clone().unwrap_or_else(|| truncate(&url, 60)));
-
         Ok(WebFetchOutput {
             content: extracted.markdown,
             final_url: response.final_url,
             status_code: response.status_code,
             title: extracted.title,
             byline: extracted.byline,
-            meta: Some(display_meta.into()),
         })
     }
 }

@@ -23,7 +23,7 @@ async fn list_skills_returns_agent_invocable_skills_sorted_by_name() -> TestResu
         .file("skills/rule-only.md", RULE_ONLY);
     let client = serve(&workspace).await;
 
-    let listed = client.call("list_skills", ListSkillsInput::default()).await?;
+    let (listed, meta) = client.call_displayed("list_skills", ListSkillsInput::default()).await?;
 
     assert_eq!(
         listed["skills"],
@@ -32,7 +32,7 @@ async fn list_skills_returns_agent_invocable_skills_sorted_by_name() -> TestResu
             { "name": "zeta", "description": "Zeta", "tags": ["systems"] },
         ])
     );
-    assert_eq!(listed["_meta"]["display"], json!({ "title": "Skills", "value": "2 skills" }));
+    assert_eq!(meta["display"], json!({ "title": "Skills", "value": "2 skills" }));
     Ok(())
 }
 

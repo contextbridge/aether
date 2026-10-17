@@ -89,7 +89,7 @@ async fn long_web_pages_keep_head_and_tail_and_save_the_full_page() -> TestResul
         body: page.clone(),
         content_type: Some("text/plain".into()),
     };
-    let workspace = CodingWorkspace::with_http(FakeHttpClient::new().with_response(url, response)).await;
+    let workspace = CodingWorkspace::with_http(FakeHttpClient::default().with_response(url, response)).await;
 
     let result =
         workspace.client.call("web_fetch", WebFetchInput { url: url.into(), prompt: None, timeout: None }).await?;
@@ -128,18 +128,22 @@ async fn read_file_reports_invalid_and_missing_paths() -> TestResult {
 async fn write_file_handles_empty_content_and_overwrites() -> TestResult {
     let workspace = CodingWorkspace::new().await;
     let path = workspace.path("nested/output.txt");
-    let result = workspace.client.call("write_file", serde_json::json!({ "file_path": path, "content": "" })).await?;
+    let (result, meta) =
+        workspace.client.call_displayed("write_file", serde_json::json!({ "file_path": path, "content": "" })).await?;
     assert_eq!(result["bytesWritten"], 0);
-    assert_eq!(result["_meta"]["file_diff"]["old_text"], serde_json::Value::Null);
-    assert_eq!(result["_meta"]["file_diff"]["new_text"], "");
+    assert_eq!(result.get("_meta"), None, "display metadata stays out of the model-facing output");
+    assert_eq!(meta["file_diff"]["old_text"], serde_json::Value::Null);
+    assert_eq!(meta["file_diff"]["new_text"], "");
     workspace
         .client
         .call("read_file", ReadFileArgs { file_path: path.to_string_lossy().into(), ..Default::default() })
         .await?;
-    let result =
-        workspace.client.call("write_file", serde_json::json!({ "filePath": path, "content": "new content" })).await?;
+    let (result, meta) = workspace
+        .client
+        .call_displayed("write_file", serde_json::json!({ "filePath": path, "content": "new content" }))
+        .await?;
     assert_eq!(result["bytesWritten"], 11);
-    assert_eq!(result["_meta"]["file_diff"]["new_text"], "new content");
+    assert_eq!(meta["file_diff"]["new_text"], "new content");
     assert_eq!(workspace.read("nested/output.txt")?, "new content");
     Ok(())
 }
@@ -152,9 +156,9 @@ async fn edit_file_supports_batch_edits_and_response_metadata() -> TestResult {
         .client
         .call("read_file", ReadFileArgs { file_path: path.to_string_lossy().into(), ..Default::default() })
         .await?;
-    let result = workspace
+    let (result, meta) = workspace
         .client
-        .call(
+        .call_displayed(
             "edit_file",
             serde_json::json!({
                 "file_path": path,
@@ -166,8 +170,8 @@ async fn edit_file_supports_batch_edits_and_response_metadata() -> TestResult {
         )
         .await?;
     assert_eq!(result["replacementsMade"], 2);
-    assert_eq!(result["_meta"]["file_diff"]["old_text"], "alpha\nbeta\ngamma\n");
-    assert_eq!(result["_meta"]["file_diff"]["new_text"], "ALPHA\nbeta\nGAMMA\n");
+    assert_eq!(meta["file_diff"]["old_text"], "alpha\nbeta\ngamma\n");
+    assert_eq!(meta["file_diff"]["new_text"], "ALPHA\nbeta\nGAMMA\n");
     assert_eq!(workspace.read("source.txt")?, "ALPHA\nbeta\nGAMMA\n");
     Ok(())
 }

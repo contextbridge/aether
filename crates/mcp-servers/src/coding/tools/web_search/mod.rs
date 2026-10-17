@@ -12,7 +12,6 @@ use std::time::Duration;
 use url::Url;
 
 use crate::coding::error::WebSearchError;
-use utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 
 const DEFAULT_COUNT: u32 = 10;
 const MAX_COUNT: u32 = 20;
@@ -48,11 +47,6 @@ pub struct WebSearchOutput {
 
     /// The original query
     pub query: String,
-
-    /// Display metadata for human-friendly rendering
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub meta: Option<ToolResultMeta>,
 }
 
 /// Individual search result
@@ -124,9 +118,7 @@ impl WebSearcher {
             args.allowed_domains.as_deref().is_none_or(in_any) && !args.blocked_domains.as_deref().is_some_and(in_any)
         });
 
-        let display_meta = ToolDisplayMeta::new("Web search", format!("'{}' ({} results)", query, results.len()));
-
-        Ok(WebSearchOutput { results, query: query.to_string(), meta: Some(display_meta.into()) })
+        Ok(WebSearchOutput { results, query: query.to_string() })
     }
 }
 

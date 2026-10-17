@@ -5,8 +5,8 @@ use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     handler::server::{
         router::tool::ToolRouter,
-        tool::{ToolCallContext, parse_json_object},
-        wrapper::{Json, Parameters},
+        tool::{ToolCallContext, parse_json_object, schema_for_output},
+        wrapper::Parameters,
     },
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, CreateTaskResult, ElicitRequest,
@@ -27,6 +27,7 @@ pub mod error;
 pub mod prompt_rule_matcher;
 pub mod tools;
 
+use crate::Displayed;
 use crate::background_tasks::{BackgroundTasks, delegate_background_tasks};
 use crate::coding::error::CodingError;
 use crate::coding::prompt_rule_matcher::PromptRuleMatcher;
@@ -158,54 +159,6 @@ impl ServerHandler for CodingMcp {
     delegate_background_tasks!(tasks);
 }
 
-async fn notify_preview(context: &RequestContext<RoleServer>, meta: ToolDisplayMeta) {
-    notify(context, serde_json::to_string(&ToolResultMeta::from(meta)).unwrap_or_default()).await;
-}
-
-async fn notify(context: &RequestContext<RoleServer>, message: String) {
-    if let Some(token) = context.meta.get_progress_token() {
-        let _ = context.peer.notify_progress(ProgressNotificationParam::new(token, 0.0).with_message(message)).await;
-    }
-}
-
-/// Returns `true` if the command looks destructive (deletes files, force-pushes, etc.).
-///
-/// Uses simple substring matching — conservative by design.
-fn is_dangerous_cmd(command: &str) -> bool {
-    const PATTERNS: &[&str] = &[
-        "rm ",
-        "rm\t",
-        "rmdir ",
-        "git push",
-        "git reset",
-        "git checkout --",
-        "git clean",
-        "chmod ",
-        "chown ",
-        "kill ",
-        "pkill ",
-        "mv ",
-        "dd ",
-        "--force",
-        "--hard",
-    ];
-
-    // Check simple substring patterns
-    if PATTERNS.iter().any(|p| command.contains(p)) {
-        return true;
-    }
-
-    // Check redirect operators: only match >/>> that aren't inside quotes or part of =>
-    // Simple heuristic: look for "> " or ">> " not preceded by '='
-    for (i, _) in command.match_indices("> ") {
-        if i == 0 || command.as_bytes()[i - 1] != b'=' {
-            return true;
-        }
-    }
-
-    false
-}
-
 #[tool_router]
 impl CodingMcp {
     pub fn new(root_dir: impl Into<PathBuf>) -> Self {
@@ -276,6 +229,172 @@ impl CodingMcp {
         self
     }
 
+    #[doc = include_str!("tools/read_file/description.md")]
+    #[tool(
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<ReadFileResult>()
+    )]
+    pub async fn read_file(
+        &self,
+        Parameters(mut args): Parameters<ReadFileArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Displayed<ReadFileResult>, CodingError> {
+        args.file_path = self.resolve_file_arg(&args.file_path)?;
+        notify_preview(&context, ToolDisplayMeta::new("Read file", basename(&args.file_path))).await;
+        self.read_and_track(args).await
+    }
+
+    #[doc = include_str!("tools/write_file/description.md")]
+    #[tool(
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<WriteFileResponse>()
+    )]
+    pub async fn write_file(
+        &self,
+        Parameters(mut args): Parameters<WriteFileArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Displayed<WriteFileResponse>, CodingError> {
+        args.file_path = self.resolve_file_arg(&args.file_path)?;
+        notify_preview(&context, ToolDisplayMeta::new("Write file", basename(&args.file_path))).await;
+
+        self.ensure_read_before_overwrite(&args.file_path).await?;
+
+        let response = write_file_contents(args).await?;
+
+        self.spawn_diagnostic_refresh(&response.output.file_path);
+
+        Ok(response)
+    }
+
+    #[doc = include_str!("tools/edit_file/description.md")]
+    #[tool(
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<EditFileResponse>()
+    )]
+    pub async fn edit_file(
+        &self,
+        Parameters(mut args): Parameters<EditFileArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Displayed<EditFileResponse>, CodingError> {
+        args.file_path = self.resolve_file_arg(&args.file_path)?;
+        notify_preview(&context, ToolDisplayMeta::new("Edit file", basename(&args.file_path))).await;
+
+        self.ensure_read_before_edit(&args.file_path)?;
+
+        let response = edit_file_contents(args).await?;
+
+        self.spawn_diagnostic_refresh(&response.output.file_path);
+
+        Ok(response)
+    }
+
+    #[doc = include_str!("tools/bash/description.md")]
+    #[tool(
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = true),
+        output_schema = schema_for_output::<BashOutput>()
+    )]
+    pub async fn bash(
+        &self,
+        Parameters(args): Parameters<BashInput>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Displayed<BashOutput>, CodingError> {
+        notify_preview(&context, ToolDisplayMeta::new("Run command", truncate(&args.command, 40))).await;
+
+        run_bash(args, &self.root_dir, &self.bash_environment, self.bash_truncator, &self.spill_dir).await
+    }
+
+    #[doc = include_str!("tools/web_fetch/description.md")]
+    #[tool(
+        annotations(read_only_hint = true, open_world_hint = true),
+        output_schema = schema_for_output::<WebFetchOutput>()
+    )]
+    pub async fn web_fetch(
+        &self,
+        Parameters(args): Parameters<WebFetchInput>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Displayed<WebFetchOutput>, CodingError> {
+        notify_preview(&context, ToolDisplayMeta::new("Fetch URL", truncate(&args.url, 60))).await;
+        let output = self.web_fetcher.fetch(args).await?;
+        let page = output.title.clone().unwrap_or_else(|| truncate(&output.final_url, 60));
+        let content = self.web_truncator.truncate(output.content, &self.spill_dir, "web-fetch");
+        Ok(Displayed::new(WebFetchOutput { content, ..output }, ToolDisplayMeta::new("Fetch URL", page)))
+    }
+
+    #[doc = include_str!("tools/web_search/description.md")]
+    #[tool(
+        annotations(read_only_hint = true, open_world_hint = true),
+        output_schema = schema_for_output::<WebSearchOutput>()
+    )]
+    pub async fn web_search(
+        &self,
+        Parameters(args): Parameters<WebSearchInput>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Displayed<WebSearchOutput>, CodingError> {
+        notify_preview(&context, ToolDisplayMeta::new("Web search", format!("'{}'", args.query))).await;
+
+        let searcher = self.web_searcher.as_ref().ok_or(CodingError::NotConfigured("Web search"))?;
+        let output = searcher
+            .search(args, |delay| {
+                notify(&context, format!("Search rate limited; retrying in {} seconds.", delay.as_secs()))
+            })
+            .await?;
+        let summary = format!("'{}' ({} results)", output.query, output.results.len());
+        Ok(Displayed::new(output, ToolDisplayMeta::new("Web search", summary)))
+    }
+
+    #[doc = include_str!("../lsp/tools/symbol_lookup/description.md")]
+    #[tool(
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<LspSymbolOutput>()
+    )]
+    pub async fn lsp_symbol(
+        &self,
+        Parameters(input): Parameters<LspSymbolInput>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Displayed<LspSymbolOutput>, CodingError> {
+        notify_preview(&context, ToolDisplayMeta::new("LSP symbol", &input.symbol)).await;
+        execute_lsp_symbol(input, self.lsp()?).await.map_err(CodingError::from)
+    }
+
+    #[doc = include_str!("../lsp/tools/check_errors/description.md")]
+    #[tool(
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<LspDiagnosticsOutput>()
+    )]
+    pub async fn lsp_check_errors(
+        &self,
+        Parameters(request): Parameters<LspDiagnosticsRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Displayed<LspDiagnosticsOutput>, CodingError> {
+        let preview_value = request.file_path.as_ref().map_or_else(|| "workspace".to_string(), |path| basename(path));
+        notify_preview(&context, ToolDisplayMeta::new("LSP errors", preview_value)).await;
+        execute_lsp_diagnostics(request, self.lsp()?).await.map_err(CodingError::from)
+    }
+
+    #[doc = include_str!("../lsp/tools/rename/description.md")]
+    #[tool(
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<LspRenameOutput>()
+    )]
+    pub async fn lsp_rename(
+        &self,
+        Parameters(input): Parameters<LspRenameInput>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Displayed<LspRenameOutput>, CodingError> {
+        notify_preview(&context, ToolDisplayMeta::new("LSP rename", &input.symbol)).await;
+        execute_lsp_rename(input, self.lsp()?).await.map_err(CodingError::from)
+    }
+}
+
+#[cfg(feature = "test-helpers")]
+impl CodingMcp {
+    pub fn with_web_fetcher(mut self, web_fetcher: WebFetcher) -> Self {
+        self.web_fetcher = web_fetcher;
+        self
+    }
+}
+
+impl CodingMcp {
     fn create_background_bash_task(&self, args: BashInput) -> rmcp::model::Task {
         let cwd = self.root_dir.clone();
         let environment = self.bash_environment.clone();
@@ -284,13 +403,9 @@ impl CodingMcp {
         let description = args.description.clone().unwrap_or_else(|| truncate(&args.command, 80));
 
         self.tasks.spawn(description, async move {
-            Ok(match run_bash(args, &cwd, &environment, truncator, &spill_dir).await {
-                Ok(output) => serde_json::to_value(output).map_or_else(
-                    |error| CallToolResult::error(vec![ContentBlock::text(error.to_string())]),
-                    CallToolResult::structured,
-                ),
-                Err(error) => CallToolResult::error(vec![ContentBlock::text(error.to_string())]),
-            })
+            let result = run_bash(args, &cwd, &environment, truncator, &spill_dir).await.map_err(|e| e.to_string());
+            let result = result.and_then(|output| output.into_result().map_err(|e| e.to_string()));
+            Ok(result.unwrap_or_else(|error| CallToolResult::error(vec![ContentBlock::text(error)])))
         })
     }
 
@@ -383,7 +498,7 @@ When using tools that take file paths, always use absolute paths from:
 
     /// Reads `args.file_path` (already resolved against the root directory),
     /// records it in the read set, and appends any matching read-rule reminders.
-    async fn read_and_track(&self, args: ReadFileArgs) -> Result<Json<ReadFileResult>, CodingError> {
+    async fn read_and_track(&self, args: ReadFileArgs) -> Result<Displayed<ReadFileResult>, CodingError> {
         let file_path = args.file_path.clone();
         let mut result = read_file_contents(args).await?;
         let matched = {
@@ -392,19 +507,17 @@ When using tools that take file paths, always use absolute paths from:
             state.rule_matcher.get_matched_rules(&self.root_dir, &file_path)
         };
 
-        let total_lines = result.total_lines;
         for rule in &matched {
             write!(result.content, "\n\n<system-reminder>\n{}\n</system-reminder>", rule.body).unwrap();
         }
 
+        let mut summary = format!("{}, {} lines", basename(&file_path), result.total_lines);
         if !matched.is_empty() {
             let rule_names: Vec<&str> = matched.iter().map(|r| r.name.as_str()).collect();
-            let base = format!("{}, {total_lines} lines", basename(&file_path));
-            let value = format!("{base} +rules: {}", rule_names.join(", "));
-            result.meta = Some(ToolDisplayMeta::new("Read file", value).into());
+            write!(summary, " +rules: {}", rule_names.join(", ")).unwrap();
         }
 
-        Ok(Json(result))
+        Ok(Displayed::new(result, ToolDisplayMeta::new("Read file", summary)))
     }
 
     /// Read-before-overwrite safety check: an existing file must have been read
@@ -426,162 +539,15 @@ When using tools that take file paths, always use absolute paths from:
         }
         Ok(())
     }
+}
 
-    #[doc = include_str!("tools/read_file/description.md")]
-    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
-    pub async fn read_file(
-        &self,
-        request: Parameters<ReadFileArgs>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<Json<ReadFileResult>, CodingError> {
-        let Parameters(mut args) = request;
-        args.file_path = self.resolve_file_arg(&args.file_path)?;
-        notify_preview(&context, ToolDisplayMeta::new("Read file", basename(&args.file_path))).await;
-        self.read_and_track(args).await
-    }
-
-    #[doc = include_str!("tools/write_file/description.md")]
-    #[tool(annotations(
-        read_only_hint = false,
-        destructive_hint = true,
-        idempotent_hint = false,
-        open_world_hint = false
-    ))]
-    pub async fn write_file(
-        &self,
-        request: Parameters<WriteFileArgs>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<Json<WriteFileResponse>, CodingError> {
-        let Parameters(mut args) = request;
-        args.file_path = self.resolve_file_arg(&args.file_path)?;
-        notify_preview(&context, ToolDisplayMeta::new("Write file", basename(&args.file_path))).await;
-
-        self.ensure_read_before_overwrite(&args.file_path).await?;
-
-        let response = write_file_contents(args).await?;
-
-        self.spawn_diagnostic_refresh(&response.file_path);
-
-        Ok(Json(response))
-    }
-
-    #[doc = include_str!("tools/edit_file/description.md")]
-    #[tool(annotations(
-        read_only_hint = false,
-        destructive_hint = true,
-        idempotent_hint = false,
-        open_world_hint = false
-    ))]
-    pub async fn edit_file(
-        &self,
-        request: Parameters<EditFileArgs>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<Json<EditFileResponse>, CodingError> {
-        let Parameters(mut args) = request;
-        args.file_path = self.resolve_file_arg(&args.file_path)?;
-        notify_preview(&context, ToolDisplayMeta::new("Edit file", basename(&args.file_path))).await;
-
-        self.ensure_read_before_edit(&args.file_path)?;
-
-        let response = edit_file_contents(args).await?;
-
-        self.spawn_diagnostic_refresh(&response.file_path);
-
-        Ok(Json(response))
-    }
-
-    #[doc = include_str!("tools/bash/description.md")]
-    #[tool(annotations(
-        read_only_hint = false,
-        destructive_hint = true,
-        idempotent_hint = false,
-        open_world_hint = true
-    ))]
-    pub async fn bash(
-        &self,
-        request: Parameters<BashInput>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<Json<BashOutput>, CodingError> {
-        let Parameters(args) = request;
-        notify_preview(&context, ToolDisplayMeta::new("Run command", truncate(&args.command, 40))).await;
-
-        run_bash(args, &self.root_dir, &self.bash_environment, self.bash_truncator, &self.spill_dir).await.map(Json)
-    }
-
-    #[doc = include_str!("tools/web_fetch/description.md")]
-    #[tool(annotations(read_only_hint = true, open_world_hint = true))]
-    pub async fn web_fetch(
-        &self,
-        request: Parameters<WebFetchInput>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<Json<WebFetchOutput>, CodingError> {
-        let Parameters(args) = request;
-        notify_preview(&context, ToolDisplayMeta::new("Fetch URL", truncate(&args.url, 60))).await;
-        let output = self.web_fetcher.fetch(args).await?;
-        let content = self.web_truncator.truncate(output.content, &self.spill_dir, "web-fetch");
-        Ok(Json(WebFetchOutput { content, ..output }))
-    }
-
-    #[doc = include_str!("tools/web_search/description.md")]
-    #[tool(annotations(read_only_hint = true, open_world_hint = true))]
-    pub async fn web_search(
-        &self,
-        request: Parameters<WebSearchInput>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<Json<WebSearchOutput>, CodingError> {
-        let Parameters(args) = request;
-        notify_preview(&context, ToolDisplayMeta::new("Web search", format!("'{}'", args.query))).await;
-
-        let searcher = self.web_searcher.as_ref().ok_or(CodingError::NotConfigured("Web search"))?;
-        searcher
-            .search(args, |delay| {
-                notify(&context, format!("Search rate limited; retrying in {} seconds.", delay.as_secs()))
-            })
-            .await
-            .map(Json)
-            .map_err(CodingError::from)
-    }
-
-    #[doc = include_str!("../lsp/tools/symbol_lookup/description.md")]
-    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
-    pub async fn lsp_symbol(
-        &self,
-        request: Parameters<LspSymbolInput>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<Json<LspSymbolOutput>, CodingError> {
-        let Parameters(input) = request;
-        notify_preview(&context, ToolDisplayMeta::new("LSP symbol", &input.symbol)).await;
-        execute_lsp_symbol(input, self.lsp()?).await.map(Json).map_err(CodingError::from)
-    }
-
-    #[doc = include_str!("../lsp/tools/check_errors/description.md")]
-    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
-    pub async fn lsp_check_errors(
-        &self,
-        request: Parameters<LspDiagnosticsRequest>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<Json<LspDiagnosticsOutput>, CodingError> {
-        let Parameters(request) = request;
-        let preview_value = request.file_path.as_ref().map_or_else(|| "workspace".to_string(), |path| basename(path));
-        notify_preview(&context, ToolDisplayMeta::new("LSP errors", preview_value)).await;
-        execute_lsp_diagnostics(request, self.lsp()?).await.map(Json).map_err(CodingError::from)
-    }
-
-    #[doc = include_str!("../lsp/tools/rename/description.md")]
-    #[tool(annotations(
-        read_only_hint = false,
-        destructive_hint = true,
-        idempotent_hint = false,
-        open_world_hint = false
-    ))]
-    pub async fn lsp_rename(
-        &self,
-        request: Parameters<LspRenameInput>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<Json<LspRenameOutput>, CodingError> {
-        let Parameters(input) = request;
-        notify_preview(&context, ToolDisplayMeta::new("LSP rename", &input.symbol)).await;
-        execute_lsp_rename(input, self.lsp()?).await.map(Json).map_err(CodingError::from)
+impl Debug for CodingMcp {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CodingMcp")
+            .field("root_dir", &self.root_dir)
+            .field("permission_mode", &self.permission_mode)
+            .finish_non_exhaustive()
     }
 }
 
@@ -601,6 +567,54 @@ struct PermissionPrompt {
 struct FilePathArg {
     #[serde(rename = "filePath", alias = "file_path")]
     file_path: String,
+}
+
+#[derive(Default)]
+struct ReadState {
+    files_read: HashSet<String>,
+    rule_matcher: PromptRuleMatcher,
+}
+
+async fn notify_preview(context: &RequestContext<RoleServer>, meta: ToolDisplayMeta) {
+    notify(context, serde_json::to_string(&ToolResultMeta::from(meta)).unwrap_or_default()).await;
+}
+
+async fn notify(context: &RequestContext<RoleServer>, message: String) {
+    if let Some(token) = context.meta.get_progress_token() {
+        let _ = context.peer.notify_progress(ProgressNotificationParam::new(token, 0.0).with_message(message)).await;
+    }
+}
+
+fn is_dangerous_cmd(command: &str) -> bool {
+    const PATTERNS: &[&str] = &[
+        "rm ",
+        "rm\t",
+        "rmdir ",
+        "git push",
+        "git reset",
+        "git checkout --",
+        "git clean",
+        "chmod ",
+        "chown ",
+        "kill ",
+        "pkill ",
+        "mv ",
+        "dd ",
+        "--force",
+        "--hard",
+    ];
+
+    if PATTERNS.iter().any(|p| command.contains(p)) {
+        return true;
+    }
+
+    for (i, _) in command.match_indices("> ") {
+        if i == 0 || command.as_bytes()[i - 1] != b'=' {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn permission_granted(result: &ElicitResult) -> bool {
@@ -639,9 +653,12 @@ async fn run_bash(
     environment: &BashEnvironment,
     truncator: ToolResultTruncator,
     spill_dir: &TempDir,
-) -> Result<BashOutput, CodingError> {
+) -> Result<Displayed<BashOutput>, CodingError> {
+    let command = truncate(&args.command, 40);
     let output = execute_command(args, Some(cwd), environment).await?;
-    Ok(BashOutput { output: truncator.truncate(output.output, spill_dir, "bash"), ..output })
+    let timed_out = if output.killed { ", timed out" } else { "" };
+    let meta = ToolDisplayMeta::new("Ran", format!("{command} (exit {}{timed_out})", output.exit_code));
+    Ok(Displayed::new(BashOutput { output: truncator.truncate(output.output, spill_dir, "bash"), ..output }, meta))
 }
 
 fn background_bash_args(request: &CallToolRequestParams) -> Option<BashInput> {
@@ -653,30 +670,6 @@ fn background_bash_args(request: &CallToolRequestParams) -> Option<BashInput> {
 
 fn parse_arguments<T: DeserializeOwned>(request: &CallToolRequestParams) -> Option<T> {
     request.arguments.clone().and_then(|arguments| parse_json_object(arguments).ok())
-}
-
-impl Debug for CodingMcp {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("CodingMcp")
-            .field("root_dir", &self.root_dir)
-            .field("permission_mode", &self.permission_mode)
-            .finish_non_exhaustive()
-    }
-}
-
-#[cfg(feature = "test-helpers")]
-impl CodingMcp {
-    pub fn with_web_fetcher(mut self, web_fetcher: WebFetcher) -> Self {
-        self.web_fetcher = web_fetcher;
-        self
-    }
-}
-
-#[derive(Default)]
-struct ReadState {
-    files_read: HashSet<String>,
-    rule_matcher: PromptRuleMatcher,
 }
 
 #[cfg(test)]

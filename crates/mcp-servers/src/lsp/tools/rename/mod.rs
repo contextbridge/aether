@@ -6,8 +6,9 @@ use std::path::Path;
 use lsp_types::{DocumentChangeOperation, DocumentChanges, OneOf, ResourceOp, WorkspaceEdit};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
+use utils::display_meta::{ToolDisplayMeta, basename};
 
+use crate::Displayed;
 use crate::lsp::common::uri_to_path;
 use crate::lsp::error::LspError;
 use crate::lsp::registry::LspRegistry;
@@ -56,14 +57,10 @@ pub struct LspRenameOutput {
     /// Error message if rename failed
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// Display metadata for TUI rendering
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub meta: Option<ToolResultMeta>,
 }
 
 impl LspRenameOutput {
-    async fn applied(input: &LspRenameInput, changes: &[LspFileEdit], project_root: &Path) -> Self {
+    async fn applied(input: &LspRenameInput, changes: &[LspFileEdit], project_root: &Path) -> Displayed<Self> {
         let edited: Vec<SourceLine> = changes
             .iter()
             .flat_map(|file_edit| {
@@ -73,27 +70,27 @@ impl LspRenameOutput {
         let total_edits = edited.len();
         let files_affected = changes.len();
 
-        Self {
+        let output = Self {
             old_name: input.symbol.clone(),
             new_name: input.new_name.clone(),
             total_edits,
             files_affected,
             changes: render_locations(&edited, project_root, None).await,
             success: true,
-            meta: Some(rename_success_meta(input, total_edits, files_affected).into()),
             ..Default::default()
-        }
+        };
+        Displayed::new(output, rename_success_meta(input, total_edits, files_affected))
     }
 
-    fn failed(input: &LspRenameInput, error: String) -> Self {
-        Self {
+    fn failed(input: &LspRenameInput, error: String) -> Displayed<Self> {
+        let output = Self {
             old_name: input.symbol.clone(),
             new_name: input.new_name.clone(),
             success: false,
             error: Some(error),
-            meta: Some(rename_failure_meta(input).into()),
             ..Default::default()
-        }
+        };
+        Displayed::new(output, rename_failure_meta(input))
     }
 }
 
@@ -101,7 +98,7 @@ impl LspRenameOutput {
 pub async fn execute_lsp_rename(
     mut input: LspRenameInput,
     registry: &LspRegistry,
-) -> Result<LspRenameOutput, LspError> {
+) -> Result<Displayed<LspRenameOutput>, LspError> {
     input.file_path = registry.resolve_file(&input.file_path)?;
     let resolved = registry.resolve_symbol(&input.file_path, &input.symbol, input.line).await?;
 

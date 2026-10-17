@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use super::progress::SubAgentProgressSink;
 use super::tools::{AgentExecutor, SpawnSubAgentsInput, SpawnSubAgentsOutput};
+use crate::Displayed;
 use crate::background_tasks::{BackgroundTasks, delegate_background_tasks};
 use crate::request_context::require_tasks;
 use crate::workspace_paths::resolve_root;
@@ -204,8 +205,6 @@ impl Drop for InstrumentationGuard {
     }
 }
 
-fn output_result(output: SpawnSubAgentsOutput) -> Result<CallToolResult, ErrorData> {
-    serde_json::to_value(output)
-        .map(CallToolResult::structured)
-        .map_err(|error| ErrorData::internal_error(error.to_string(), None))
+fn output_result(output: Displayed<SpawnSubAgentsOutput>) -> Result<CallToolResult, ErrorData> {
+    output.into_result().map_err(|error| ErrorData::internal_error(error.to_string(), None))
 }
