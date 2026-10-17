@@ -1,6 +1,6 @@
 use crate::TestResult;
 use crate::acp_process::AcpProcess;
-use aether_auth::{EncryptedFileOAuthCredentialStorage, OAuthCredential, OAuthCredentialStorage};
+use aether_auth::{EncryptedFileCredentialStore, OAuthCredential, OAuthCredentialStorage};
 use aether_cli::workspace::testing::init_repo;
 use aether_sessions::{SessionMeta, SessionStore};
 use agent_client_protocol::schema::v2 as acp;
@@ -13,7 +13,7 @@ const PASSWORD: &str = "test-password";
 #[tokio::test]
 async fn encrypted_credentials_default_to_aether_home() -> TestResult {
     let homes = Homes::new()?;
-    EncryptedFileOAuthCredentialStorage::new(homes.aether_home().join("credentials.enc"), PASSWORD.to_string())
+    EncryptedFileCredentialStore::new(homes.aether_home().join("credentials.enc"), PASSWORD.to_string())
         .with_scrypt_work_factor(10)
         .save_credential(
             "codex",

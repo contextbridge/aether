@@ -26,7 +26,6 @@ sigv4 = ["dep:aws-config", "dep:aws-credential-types", "dep:aws-sigv4"]
 [dependencies]
 age = { workspace = true }
 async-trait = { workspace = true }
-futures = { workspace = true }
 oauth2 = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

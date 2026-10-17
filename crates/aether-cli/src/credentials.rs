@@ -1,5 +1,5 @@
 use aether_auth::{
-    EncryptedFileOAuthCredentialStorage, FakeOAuthCredentialStore, OAuthCredentialStorage, OAuthError, OsKeyringStore,
+    EncryptedFileCredentialStore, KeyringCredentialStore, MemoryCredentialStore, OAuthCredentialStorage, OAuthError,
 };
 use aether_project::CredentialsStoreConfig;
 use std::sync::Arc;
@@ -8,11 +8,11 @@ pub fn oauth_credential_store_from_config(
     config: Option<CredentialsStoreConfig>,
 ) -> Result<Arc<dyn OAuthCredentialStorage>, OAuthError> {
     match config {
-        Some(CredentialsStoreConfig::Memory) => Ok(Arc::new(FakeOAuthCredentialStore::new())),
+        Some(CredentialsStoreConfig::Memory) => Ok(Arc::new(MemoryCredentialStore::new())),
         Some(CredentialsStoreConfig::EncryptedFile { path, password_env }) => {
-            Ok(Arc::new(EncryptedFileOAuthCredentialStorage::from_settings(path, password_env.as_deref())?))
+            Ok(Arc::new(EncryptedFileCredentialStore::from_settings(path, password_env.as_deref())?))
         }
-        Some(CredentialsStoreConfig::Keyring) | None => Ok(Arc::new(OsKeyringStore::with_platform_store())),
+        Some(CredentialsStoreConfig::Keyring) | None => Ok(Arc::new(KeyringCredentialStore::with_platform_store())),
     }
 }
 

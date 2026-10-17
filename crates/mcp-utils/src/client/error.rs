@@ -1,5 +1,6 @@
 use aether_auth::OAuthError;
 use rmcp::service::{ClientInitializeError, ServiceError};
+use rmcp::transport::auth::AuthError;
 use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -34,6 +35,13 @@ pub enum ClientError {
         server: String,
         #[source]
         source: OAuthError,
+    },
+    #[error("OAuth {step} failed for MCP server '{server}': {source}")]
+    AuthFlow {
+        server: String,
+        step: &'static str,
+        #[source]
+        source: AuthError,
     },
     #[error("Authentication for MCP server '{server}' timed out after {timeout:?}")]
     AuthTimedOut { server: String, timeout: Duration },

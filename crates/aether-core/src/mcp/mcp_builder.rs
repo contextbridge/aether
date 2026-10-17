@@ -2,7 +2,7 @@ use mcp_utils::client::{ClientOptions, ElicitationSink, Transport};
 use mcp_utils::gateway::{McpGateway, ServerSpec};
 use mcp_utils::model::Implementation;
 use mcp_utils::server::{McpServer, ServeError, UnixSocket};
-use utils::settings::aether_home;
+use utils::path::aether_home;
 use utils::variables::Vars;
 
 use super::config::ServerSource;
@@ -183,7 +183,7 @@ impl ConfiguredServer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aether_auth::{FakeOAuthCredentialStore, OAuthCredentialStorage};
+    use aether_auth::{MemoryCredentialStore, OAuthCredentialStorage};
     use mcp_utils::testing::FakeMcpServer;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -199,7 +199,7 @@ mod tests {
         let received = Arc::new(Mutex::new(None::<RuntimeServices>));
         let factory_calls = Arc::clone(&calls);
         let factory_received = Arc::clone(&received);
-        let oauth_store: Arc<dyn OAuthCredentialStorage> = Arc::new(FakeOAuthCredentialStore::new());
+        let oauth_store: Arc<dyn OAuthCredentialStorage> = Arc::new(MemoryCredentialStore::new());
         let deps = AgentDeps::new(Arc::clone(&oauth_store), None);
 
         let builder = McpBuilder::new("/workspace")

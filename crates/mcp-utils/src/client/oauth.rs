@@ -64,7 +64,6 @@ pub(super) async fn authorize(
     timeout(AUTH_TIMEOUT, flow)
         .await
         .map_err(|_| ClientError::AuthTimedOut { server: server.to_string(), timeout: AUTH_TIMEOUT })?
-        .map_err(|source| ClientError::Auth { server: server.to_string(), source })
 }
 
 const AUTH_TIMEOUT: Duration = Duration::from_mins(3);
@@ -129,16 +128,15 @@ async fn authorization_flow(
     store: Option<McpCredentialStore>,
     challenge: Option<String>,
     prompts: &mpsc::Sender<Elicitation>,
-) -> std::result::Result<AuthClient<reqwest::Client>, OAuthError> {
-    let (listener, port) = bind_loopback(oauth.callback_port)?;
-    let mut manager = AuthorizationManager::new(url).await.map_err(rmcp_err("OAuth init failed"))?;
+) -> Result<AuthClient<reqwest::Client>> {
+    let failed = |step| move |source| ClientError::AuthFlow { server: server.to_string(), step, source };
+    let (listener, port) = bind_loopback(oauth.callback_port).map_err(|error| oauth_failed(server, error.into()))?;
+    let mut manager = AuthorizationManager::new(url).await.map_err(failed("setup"))?;
     if let Some(store) = store {
         manager.set_credential_store(store);
     }
-    let resolution = manager
-        .resolve_metadata_from_challenge(challenge.as_deref())
-        .await
-        .map_err(rmcp_err("OAuth metadata discovery failed"))?;
+    let resolution =
+        manager.resolve_metadata_from_challenge(challenge.as_deref()).await.map_err(failed("metadata discovery"))?;
 
     manager.set_metadata(resolution.metadata);
 
@@ -148,12 +146,11 @@ async fn authorization_flow(
         OAuthClientRegistration::ClientMetadata(url) => request.with_client_metadata_url(url),
         OAuthClientRegistration::Dynamic => request,
     };
-    let session = AuthorizationSession::new(manager, request)
-        .await
-        .map_err(|(_, error)| rmcp_err("OAuth authorization failed")(error))?;
+    let session =
+        AuthorizationSession::new(manager, request).await.map_err(|(_, error)| failed("authorization")(error))?;
 
     let callback_url = prompt_for_callback(server, session.get_authorization_url(), &listener, prompts).await?;
-    session.handle_callback_url(&callback_url).await.map_err(rmcp_err("token exchange failed"))?;
+    session.handle_callback_url(&callback_url).await.map_err(failed("token exchange"))?;
     Ok(AuthClient::new(reqwest::Client::default(), session.auth_manager))
 }
 
@@ -162,7 +159,7 @@ async fn prompt_for_callback(
     auth_url: &str,
     listener: &TcpListener,
     prompts: &mpsc::Sender<Elicitation>,
-) -> std::result::Result<String, OAuthError> {
+) -> Result<String> {
     let request = ElicitRequestParams::UrlElicitationParams {
         meta: None,
         message: "Open this URL to authorize MCP server access.".to_string(),
@@ -173,7 +170,7 @@ async fn prompt_for_callback(
     prompts
         .send(Elicitation::Request(Box::new(elicitation)))
         .await
-        .map_err(|_| OAuthError::Rmcp("OAuth prompt channel closed".to_string()))?;
+        .map_err(|_| ClientError::OAuthUnavailable { server: server.to_string() })?;
 
     let result = tokio::select! {
         callback = accept_oauth_callback(listener) => callback,
@@ -186,15 +183,15 @@ async fn prompt_for_callback(
         let completion = Elicitation::Complete { server: server.to_string(), id: OAUTH_ELICITATION_ID.to_string() };
         let _ = prompts.send(completion).await;
     }
-    result
+    result.map_err(|error| oauth_failed(server, error))
 }
 
 fn loopback_redirect_uri(port: u16) -> String {
     format!("http://localhost:{port}/")
 }
 
-fn rmcp_err(context: &'static str) -> impl Fn(AuthError) -> OAuthError {
-    move |error| OAuthError::Rmcp(format!("{context}: {error}"))
+fn oauth_failed(server: &str, source: OAuthError) -> ClientError {
+    ClientError::Auth { server: server.to_string(), source }
 }
 
 fn store_error(error: &OAuthError) -> AuthError {

@@ -1,4 +1,4 @@
-use utils::settings::aether_home;
+use utils::path::aether_home;
 
 use crate::agent_config::AgentConfig;
 use crate::error::SettingsError;
@@ -210,16 +210,6 @@ impl OtlpTelemetrySettings {
     }
 }
 
-fn is_default<T: Default + PartialEq>(value: &T) -> bool {
-    value == &T::default()
-}
-
-fn merge_field<T>(current: &mut Option<T>, next: Option<T>) {
-    if next.is_some() {
-        *current = next;
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettingsFileSource {
     pub path: PathBuf,
@@ -307,6 +297,14 @@ impl AetherSettings {
             AetherSettingsSource::Json(json) => Self::try_from(json.as_str()),
             AetherSettingsSource::Value(settings) => Ok(*settings),
         }
+    }
+}
+
+impl TryFrom<&str> for AetherSettings {
+    type Error = SettingsError;
+
+    fn try_from(content: &str) -> Result<Self, Self::Error> {
+        serde_json::from_str(content).map_err(|e| SettingsError::ParseError(e.to_string()))
     }
 }
 
@@ -398,11 +396,13 @@ fn promote_mcp_sources(sources: &mut [McpSourceSpec], source_root: &Path) {
     }
 }
 
-impl TryFrom<&str> for AetherSettings {
-    type Error = SettingsError;
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    value == &T::default()
+}
 
-    fn try_from(content: &str) -> Result<Self, Self::Error> {
-        serde_json::from_str(content).map_err(|e| SettingsError::ParseError(e.to_string()))
+fn merge_field<T>(current: &mut Option<T>, next: Option<T>) {
+    if next.is_some() {
+        *current = next;
     }
 }
 

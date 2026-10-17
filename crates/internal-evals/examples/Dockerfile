@@ -34,7 +34,3 @@ COPY crates/internal-evals/examples/aether-eval-agent /usr/local/bin/aether-eval
 RUN chmod +x /usr/local/bin/aether-eval-agent
 
 WORKDIR /workspace
-
-# `aether --sandbox-image` runs this image with its arguments appended to the entrypoint.
-# Eval runs override the entrypoint, so this only serves the sandbox-CLI workflow.
-ENTRYPOINT ["aether"]

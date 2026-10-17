@@ -27,10 +27,6 @@ pub fn available_models() -> Vec<LlmModel> {
         .collect()
 }
 
-pub fn is_provider_env_var(key: &str) -> bool {
-    LlmModel::ALL_REQUIRED_ENV_VARS.contains(&key) || OPTIONAL_PROVIDER_ENV_VARS.contains(&key)
-}
-
 /// Returns available catalog models plus any locally discovered models.
 pub async fn get_local_models() -> Vec<LlmModel> {
     let mut models = available_models();
@@ -214,6 +210,16 @@ impl Provider {
         self.info().required_env_var
     }
 
+    pub fn env_vars(self) -> Vec<&'static str> {
+        let overrides: &[&'static str] = match self {
+            Self::Ollama => &["OLLAMA_HOST"],
+            Self::LlamaCpp => &["LLAMA_CPP_HOST"],
+            Self::Bedrock => AWS_ENV_VARS,
+            _ => &[],
+        };
+        self.required_env_var().into_iter().chain(overrides.iter().copied()).collect()
+    }
+
     /// OAuth provider ID if this provider authenticates via OAuth.
     pub fn oauth_provider_id(self) -> Option<&'static str> {
         self.info().oauth_provider_id
@@ -248,8 +254,7 @@ impl FromStr for Provider {
     }
 }
 
-const OPTIONAL_PROVIDER_ENV_VARS: &[&str] = &[
-    "OLLAMA_HOST",
+const AWS_ENV_VARS: &[&str] = &[
     "AWS_ACCESS_KEY_ID",
     "AWS_BEARER_TOKEN_BEDROCK",
     "AWS_DEFAULT_REGION",

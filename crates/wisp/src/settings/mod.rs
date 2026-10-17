@@ -12,8 +12,10 @@ pub use themes::{list_theme_files, load_theme_file};
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use tracing::warn;
-use utils::settings::SettingsStore;
+use utils::fs::write_atomic;
+use utils::path::app_home;
 
 use crate::theme::ThemeLoadError;
 
@@ -229,29 +231,91 @@ pub fn resolve_content_padding(settings: &UiSettings) -> usize {
 }
 
 pub fn load_or_create_settings() -> UiSettings {
-    store().map_or_else(
+    settings_path().map_or_else(
         || {
             warn!("Unable to resolve Wisp settings path; using defaults");
             UiSettings::default()
         },
-        |store| store.load_or_create(),
+        |path| load_or_create_at(&path),
     )
 }
 
 pub fn save_settings(settings: &UiSettings) -> std::io::Result<()> {
-    let store = store()
+    let path = settings_path()
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "Unable to resolve Wisp settings path"))?;
-    store.save(settings)
+    save_to_path(&path, settings)
 }
 
-/// The on-disk home for wisp settings, shared by every load and save.
-fn store() -> Option<SettingsStore> {
-    SettingsStore::new("WISP_HOME", ".wisp")
+fn wisp_home() -> Option<PathBuf> {
+    app_home("WISP_HOME", ".wisp")
+}
+
+fn settings_path() -> Option<PathBuf> {
+    wisp_home().map(|home| home.join("settings.json"))
+}
+
+fn load_or_create_at(path: &Path) -> UiSettings {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let defaults = UiSettings::default();
+            if let Err(error) = save_to_path(path, &defaults) {
+                warn!("Failed to write default settings to {}: {error}", path.display());
+            }
+            return defaults;
+        }
+        Err(error) => {
+            warn!("Failed reading settings {}: {error}", path.display());
+            return UiSettings::default();
+        }
+    };
+
+    serde_json::from_str(&raw).unwrap_or_else(|error| {
+        warn!("Malformed settings JSON at {}: {error}", path.display());
+        UiSettings::default()
+    })
+}
+
+fn save_to_path(path: &Path, settings: &UiSettings) -> std::io::Result<()> {
+    let mut serialized = serde_json::to_vec_pretty(settings)
+        .map_err(|error| std::io::Error::other(format!("Failed to serialize settings: {error}")))?;
+    serialized.push(b'\n');
+    write_atomic(path, &serialized)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn missing_settings_are_created_with_defaults() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("settings.json");
+
+        assert_eq!(load_or_create_at(&path), UiSettings::default());
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn saved_settings_load_back() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("settings.json");
+        let settings = UiSettings { content_padding: Some(4), ..UiSettings::default() };
+
+        save_to_path(&path, &settings).unwrap();
+
+        assert_eq!(load_or_create_at(&path), settings);
+    }
+
+    #[test]
+    fn malformed_settings_fall_back_to_defaults() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, "{not-json").unwrap();
+
+        assert_eq!(load_or_create_at(&path), UiSettings::default());
+    }
 
     #[test]
     fn launcher_defaults_fill_only_missing_status_line_fields() {

@@ -223,7 +223,7 @@ pub(crate) fn get_all_models(discovered: &[LlmModel]) -> Vec<LlmModel> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aether_auth::FakeOAuthCredentialStore;
+    use aether_auth::MemoryCredentialStore;
     use aether_core::agent_spec::AgentSpecExposure;
     use agent_client_protocol::schema::v2::{SessionConfigKind, SessionConfigSelectOption, SessionConfigSelectOptions};
     use llm::catalog::{AnthropicModel, BedrockFoundationModel, BedrockModel, DeepSeekModel, GeminiModel};
@@ -285,8 +285,8 @@ mod tests {
         opts.iter().find(|o| o.config_id.0.as_ref() == id).unwrap_or_else(|| panic!("option '{id}' not found"))
     }
 
-    fn fake_store() -> FakeOAuthCredentialStore {
-        FakeOAuthCredentialStore::new()
+    fn fake_store() -> MemoryCredentialStore {
+        MemoryCredentialStore::new()
     }
 
     fn model_option() -> SessionConfigOption {

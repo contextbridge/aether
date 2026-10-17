@@ -1,8 +1,8 @@
-use crate::paths::{default_db_path, default_sessions_dir};
 use aether_sessions::analytics::{
     IngestOptions, QueryOptions, SessionIndexError, default_parse_concurrency, ingest_sessions, render_schema_text,
     render_tsv, run_query, schema_doc,
 };
+use aether_sessions::{session_index_path, sessions_dir};
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -78,8 +78,8 @@ pub async fn run_cli(cli: Cli) -> Result<(), SessionIndexError> {
 
 async fn ingest(args: IngestArgs) -> Result<(), SessionIndexError> {
     let summary = ingest_sessions(IngestOptions {
-        sessions_dir: args.sessions_dir.map_or_else(default_sessions_dir, Ok)?,
-        db_path: args.db.map_or_else(default_db_path, Ok)?,
+        sessions_dir: args.sessions_dir.or_else(sessions_dir).ok_or(SessionIndexError::MissingAetherHome)?,
+        db_path: args.db.or_else(session_index_path).ok_or(SessionIndexError::MissingAetherHome)?,
         prune: !args.no_prune,
         parse_concurrency: args.parse_concurrency.unwrap_or_else(default_parse_concurrency),
     })
@@ -90,7 +90,7 @@ async fn ingest(args: IngestArgs) -> Result<(), SessionIndexError> {
 
 async fn query(args: QueryArgs) -> Result<(), SessionIndexError> {
     let output = run_query(&QueryOptions {
-        db_path: args.db.map_or_else(default_db_path, Ok)?,
+        db_path: args.db.or_else(session_index_path).ok_or(SessionIndexError::MissingAetherHome)?,
         sql: args.sql.join(" "),
         max_rows: args.max_rows,
         max_cell_chars: args.max_cell_chars,

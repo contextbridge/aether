@@ -1,7 +1,7 @@
 use crate::common::{
     TestResult, await_terminal_task, call_task, cancels_prompts, connect, taskless, test_error, tool_request,
 };
-use aether_auth::FakeOAuthCredentialStore;
+use aether_auth::MemoryCredentialStore;
 use aether_core::core::AgentDeps;
 use aether_core::events::{AgentEvent, AgentObserver, McpRequestInstrumentation, ObserverFactory, TraceContext};
 use aether_core::mcp::{McpBuilder, McpConfig, ToolFilter};
@@ -141,7 +141,7 @@ async fn test_spawn_agent_with_coding_mcp_from_settings_catalog() {
 #[tokio::test]
 async fn test_spawn_subagent_codex_uses_oauth_store() -> TestResult {
     let workspace = create_project_with_codex_agent();
-    let deps = AgentDeps::new(Arc::new(FakeOAuthCredentialStore::new()), None)
+    let deps = AgentDeps::new(Arc::new(MemoryCredentialStore::new()), None)
         .with_agent_registry(test_registry(workspace.root()));
     let mcp = connect(SubAgentsMcp::new(workspace.root().to_path_buf(), deps), cancels_prompts()).await;
 

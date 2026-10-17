@@ -96,11 +96,11 @@ impl LlmCallState {
                         (GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS, usage.cache_creation_tokens),
                         (GEN_AI_USAGE_REASONING_OUTPUT_TOKENS, usage.reasoning_tokens),
                         (AI_REASONING_TOKENS, usage.reasoning_tokens),
-                    ];
-                    for (key, tokens) in token_attributes {
-                        if let Some(tokens) = tokens {
-                            self.span.set_attribute(KeyValue::new(key, attr_tokens(tokens)));
-                        }
+                    ]
+                    .into_iter()
+                    .filter_map(|(key, tokens)| tokens.map(|tokens| KeyValue::new(key, attr_tokens(tokens))));
+                    for attribute in token_attributes {
+                        self.span.set_attribute(attribute);
                     }
                     self.record_token_usage(*usage);
                 }

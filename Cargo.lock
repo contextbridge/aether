@@ -147,7 +147,6 @@ dependencies = [
  "aws-credential-types",
  "aws-sigv4",
  "dbus-secret-service-keyring-store",
- "futures",
  "keyring-core",
  "oauth2",
  "reqwest",

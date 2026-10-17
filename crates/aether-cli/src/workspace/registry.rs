@@ -4,7 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use utils::fs::write_atomic;
-use utils::settings::aether_home;
+use utils::path::aether_home;
 
 /// Persistent registry of managed workspaces, grouped by repository identity.
 ///

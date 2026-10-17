@@ -72,5 +72,5 @@ fn resolve_theme_file_path_from_name(file: &str) -> Result<PathBuf, ThemeLoadErr
 }
 
 fn themes_dir_path() -> Option<PathBuf> {
-    Some(super::store()?.home().join("themes"))
+    super::wisp_home().map(|home| home.join("themes"))
 }

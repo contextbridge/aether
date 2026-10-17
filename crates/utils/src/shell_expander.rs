@@ -40,7 +40,7 @@ pub async fn expand_shell(content: &str, cwd: &Path) -> String {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ShellExpansionError {
+enum ShellExpansionError {
     #[error("Failed to spawn {shell} for `{cmd}`: {error}")]
     Spawn { shell: String, cmd: String, error: String },
     #[error("Shell interpolation `{cmd}` failed with {status}: {stderr}")]
