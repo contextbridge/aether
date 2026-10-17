@@ -186,7 +186,7 @@ async fn coding_tool_catalog_uses_bash_for_search_and_directory_listings() -> Te
     let workspace = CodingWorkspace::new().await;
     let catalog = workspace.client.list_tools().await?;
     let names: Vec<_> = catalog.iter().map(|tool| tool.name.as_ref()).collect();
-    for retained in ["bash", "read_file", "write_file", "edit_file", "lsp_symbol"] {
+    for retained in ["bash", "read_file", "write_file", "edit_file"] {
         assert!(names.contains(&retained), "missing tool {retained}: {names:?}");
     }
     for removed in ["find", "grep", "ast_grep", "list_files", "lsp_document", "lsp_workspace_search"] {
@@ -196,12 +196,19 @@ async fn coding_tool_catalog_uses_bash_for_search_and_directory_listings() -> Te
 }
 
 #[tokio::test]
-async fn instructions_list_lsp_tools_only_when_lsp_is_enabled() {
-    let without_lsp = CodingWorkspace::new().await.client.instructions().unwrap_or_default();
-    let with_lsp = CodingWorkspace::with_lsp(TestWorkspace::new()).await.client.instructions().unwrap_or_default();
+async fn lsp_tools_are_listed_and_described_only_when_lsp_is_enabled() -> TestResult {
+    for (workspace, lsp) in
+        [(CodingWorkspace::new().await, false), (CodingWorkspace::with_lsp(TestWorkspace::new()).await, true)]
+    {
+        let names: Vec<_> =
+            workspace.client.list_tools().await?.into_iter().map(|tool| tool.name.to_string()).collect();
+        let instructions = workspace.client.instructions().unwrap_or_default();
 
-    for tool in ["lsp_check_errors", "lsp_symbol", "lsp_rename"] {
-        assert!(!without_lsp.contains(tool), "{without_lsp}");
-        assert!(with_lsp.contains(tool), "{with_lsp}");
+        for tool in ["lsp_check_errors", "lsp_symbol", "lsp_rename"] {
+            assert_eq!(names.iter().any(|name| name == tool), lsp, "lsp={lsp} {tool}: {names:?}");
+            assert_eq!(instructions.contains(tool), lsp, "lsp={lsp} {tool}: {instructions}");
+        }
+        assert!(!names.iter().any(|name| name == "web_search"), "no searcher was configured: {names:?}");
     }
+    Ok(())
 }

@@ -210,13 +210,16 @@ fn is_dangerous_cmd(command: &str) -> bool {
 impl CodingMcp {
     pub fn new(root_dir: impl Into<PathBuf>) -> Self {
         Self {
-            tool_router: Self::tool_router(),
+            tool_router: LSP_TOOLS
+                .into_iter()
+                .chain([WEB_SEARCH_TOOL])
+                .fold(Self::tool_router(), ToolRouter::with_disabled),
             tasks: BackgroundTasks::new(),
             read_state: Mutex::new(ReadState::default()),
             bash_environment: BashEnvironment::new().with_current_exe_dir_on_path(),
             lsp: None,
             web_fetcher: WebFetcher::new(),
-            web_searcher: WebSearcher::try_new().ok(),
+            web_searcher: None,
             root_dir: root_dir.into(),
             permission_mode: PermissionMode::AlwaysAllow,
             spill_dir: Arc::new(TempDir::new()),
@@ -229,7 +232,10 @@ impl CodingMcp {
         let CodingMcpArgs { root_dir, rules_dirs, permission_mode, disable_lsp } = args;
         let root_dir = resolve_root(base_dir, root_dir);
         let rules_dirs: Vec<_> = rules_dirs.into_iter().map(|path| resolve_path(&root_dir, path)).collect();
-        let server = Self::new(root_dir).with_rules_dirs(&rules_dirs).with_permission_mode(permission_mode);
+        let mut server = Self::new(root_dir).with_rules_dirs(&rules_dirs).with_permission_mode(permission_mode);
+        if let Ok(searcher) = WebSearcher::try_new() {
+            server = server.with_web_searcher(searcher);
+        }
         if disable_lsp { server } else { server.with_lsp() }
     }
 
@@ -244,6 +250,16 @@ impl CodingMcp {
     /// in the background, allowing indexing to start right away.
     pub fn with_lsp(mut self) -> Self {
         self.lsp = Some(LspRegistry::new_and_spawn(self.root_dir.clone()));
+        for tool in LSP_TOOLS {
+            self.tool_router.enable_route(tool);
+        }
+        self
+    }
+
+    /// Enable the `web_search` tool, backed by `searcher`.
+    pub fn with_web_searcher(mut self, searcher: WebSearcher) -> Self {
+        self.web_searcher = Some(searcher);
+        self.tool_router.enable_route(WEB_SEARCH_TOOL);
         self
     }
 
@@ -362,7 +378,7 @@ When using tools that take file paths, always use absolute paths from:
     }
 
     fn lsp(&self) -> Result<&LspRegistry, CodingError> {
-        self.lsp.as_deref().ok_or_else(|| CodingError::NotConfigured("LSP not configured".to_string()))
+        self.lsp.as_deref().ok_or(CodingError::NotConfigured("LSP"))
     }
 
     /// Reads `args.file_path` (already resolved against the root directory),
@@ -516,14 +532,7 @@ When using tools that take file paths, always use absolute paths from:
         let Parameters(args) = request;
         notify_preview(&context, ToolDisplayMeta::new("Web search", format!("'{}'", args.query))).await;
 
-        let searcher = self.web_searcher.as_ref().ok_or_else(|| {
-            CodingError::NotConfigured(
-                "Web search not available: BRAVE_SEARCH_API_KEY environment variable not set. \
-                 Get a free API key from https://api.search.brave.com/app/keys"
-                    .to_string(),
-            )
-        })?;
-
+        let searcher = self.web_searcher.as_ref().ok_or(CodingError::NotConfigured("Web search"))?;
         searcher
             .search(args, |delay| {
                 notify(&context, format!("Search rate limited; retrying in {} seconds.", delay.as_secs()))
@@ -575,6 +584,9 @@ When using tools that take file paths, always use absolute paths from:
         execute_lsp_rename(input, self.lsp()?).await.map(Json).map_err(CodingError::from)
     }
 }
+
+const LSP_TOOLS: [&str; 3] = ["lsp_check_errors", "lsp_rename", "lsp_symbol"];
+const WEB_SEARCH_TOOL: &str = "web_search";
 
 /// A pending user-approval prompt for a gated tool call.
 struct PermissionPrompt {

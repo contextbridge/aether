@@ -34,7 +34,7 @@ impl BraveSearchClient {
     ///
     /// The API key is read from `BRAVE_SEARCH_API_KEY` environment variable
     pub fn new() -> Result<Self, WebSearchError> {
-        let api_key = std::env::var("BRAVE_SEARCH_API_KEY").map_err(|_| {
+        let api_key = std::env::var("BRAVE_SEARCH_API_KEY").ok().filter(|key| !key.is_empty()).ok_or_else(|| {
             WebSearchError::ConfigError(
                 "BRAVE_SEARCH_API_KEY environment variable not set. \
                  Get a free API key from https://api.search.brave.com/app/keys"

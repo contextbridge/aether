@@ -162,7 +162,7 @@ async fn cancelled_prompt_carrying_allow_content_is_not_approval() -> TestResult
 async fn always_ask_gates_lsp_rename_via_destructive_annotation() -> TestResult {
     let root = TempDir::new()?;
     let (options, elicitation) = scripted(deny());
-    let mcp = connect(coding_mcp(&root, PermissionMode::AlwaysAsk), options).await;
+    let mcp = connect(coding_mcp(&root, PermissionMode::AlwaysAsk).with_lsp(), options).await;
 
     let result = mcp.call_raw("lsp_rename", json!({ "symbol": "foo", "newName": "bar" })).await?;
     assert!(result.is_error.unwrap_or(false), "denied rename should error: {result:?}");
