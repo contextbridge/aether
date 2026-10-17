@@ -4,7 +4,7 @@ use mcp_utils::model::ElicitResult;
 use mcp_utils::server::McpServer;
 use mcp_utils::testing::{CapturedElicitation, ElicitationScriptBuilder, FakeMcpServer};
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Notify, mpsc};
 
@@ -136,14 +136,8 @@ impl TestScenario {
 /// Result of running a test agent, including messages, captured contexts, and the MCP elicitations it answered.
 pub struct TestAgentResult {
     pub messages: Vec<AgentEvent>,
-    pub captured_contexts: Arc<Mutex<Vec<Context>>>,
+    pub contexts: Vec<Context>,
     pub elicitations: Vec<CapturedElicitation>,
-}
-
-impl TestAgentResult {
-    pub fn contexts(&self) -> Vec<Context> {
-        self.captured_contexts.lock().expect("captured contexts lock poisoned").clone()
-    }
 }
 
 /// Error returned by [`TestAgentBuilder::run`], [`TestAgentBuilder::run_trace`], and
@@ -341,8 +335,9 @@ impl TestAgentBuilder {
 
         handle.await_completion().await;
 
+        let contexts = captured_contexts.lock().expect("captured contexts lock poisoned").clone();
         let elicitations = script.map(|script| script.captured()).unwrap_or_default();
-        Ok(TestAgentResult { messages, captured_contexts, elicitations })
+        Ok(TestAgentResult { messages, contexts, elicitations })
     }
 
     fn configure(mut self, configure: impl FnOnce(AgentBuilder) -> AgentBuilder + Send + 'static) -> Self {

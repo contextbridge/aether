@@ -73,7 +73,7 @@ async fn the_agent_follows_the_gateway_catalog_as_it_changes() -> Result<(), Box
         .run_with_context()
         .await?;
 
-    let contexts = result.contexts();
+    let contexts = result.contexts;
     assert!(tool_names(&contexts[0]).contains(&"dynamic__add_numbers".to_string()));
     assert!(system_prompt(&contexts[0]).contains("Use the math tools"));
     assert!(tool_names(&contexts[1]).contains(&"dynamic__added_later".to_string()));

@@ -18,8 +18,8 @@ use acp_utils::notifications::McpNotification;
 use acp_utils::testing::{TestPeer, initialize_request};
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
-use aether_core::core::{AgentBuilder, AgentHandle, Prompt};
-use aether_core::events::{AgentEvent, Command, MessageEvent, TurnOutcome, UserCommand};
+use aether_core::core::{AgentBuilder, Prompt};
+use aether_core::events::{AgentEvent, AgentObserver, Command, MessageEvent, TurnOutcome, UserCommand};
 use aether_core::mcp::{McpBuilder, McpCatalog, mcp};
 use aether_core::testing::ready_catalog;
 use aether_project::AgentCatalog;
@@ -109,6 +109,65 @@ pub struct FakeAcpAgent {
 
 pub struct FakeBackgroundTask {
     server: FakeMcpServer,
+}
+
+/// Builds a session served by one fake agent; see [`AcpTestHarness::session`].
+pub struct TestSessionBuilder<'a> {
+    harness: &'a AcpTestHarness,
+    id: SessionId,
+    provider: FakeLlmProvider,
+    model: String,
+    servers: Vec<ServerSpec>,
+    max_auto_continues: Option<u32>,
+    observer: Option<Box<dyn AgentObserver>>,
+}
+
+impl TestSessionBuilder<'_> {
+    pub fn model(mut self, model: &str) -> Self {
+        self.model = model.to_string();
+        self
+    }
+
+    pub fn observer(mut self, observer: impl AgentObserver + 'static) -> Self {
+        self.observer = Some(Box::new(observer));
+        self
+    }
+
+    /// Serve `task` and a `/plan` prompt, and let the agent end its turn
+    /// without auto-continuing so the task outcome arrives as its own turn.
+    pub fn background_task(mut self, task: &FakeBackgroundTask) -> Self {
+        let prompts = self.harness.runtime_control.lock().unwrap().prompt_server("plan");
+        self.servers.push(ServerSpec::in_process("tasks", task.server.clone()));
+        self.servers.push(ServerSpec::in_process("prompts", prompts));
+        self.max_auto_continues = Some(0);
+        self
+    }
+
+    pub async fn insert(self) -> SessionId {
+        let Self { harness, id, provider, model, servers, max_auto_continues, observer } = self;
+        let (mcp, elicitations) = spawn_ready(mcp("/tmp").with_servers(servers)).await;
+        let mut agent = AgentBuilder::new(Arc::new(provider)).mcp(mcp.clone());
+        if let Some(max) = max_auto_continues {
+            agent = agent.max_auto_continues(max);
+        }
+        if let Some(observer) = observer {
+            agent = agent.observer(observer);
+        }
+        let (agent_tx, agent_rx, agent_handle) = agent.spawn().await.expect("fake agent spawns");
+
+        let control = &harness.runtime_control;
+        control.lock().unwrap().agents.push(agent_tx.clone());
+        let agent_tx = count_prompts(agent_tx, control.lock().unwrap().agent_prompts.clone());
+        let runtime = Runtime { agent_tx, agent_rx, agent_handle, mcp };
+        let factory = Arc::new(StubRuntimeFactory { runtime: Mutex::new(Some((runtime, elicitations))) });
+
+        let default_model: llm::catalog::LlmModel = "anthropic:claude-sonnet-4-5".parse().expect("test model parses");
+        let mut specs = SessionAgents::new(AgentCatalog::empty(PathBuf::from("/tmp")));
+        specs.set_default(AgentSpec::bare(&default_model, None, Vec::new()));
+        let config = SessionConfigState::with_selection(model, None, None);
+        harness.state.register_session(harness.session_init(id.clone(), specs, factory, config)).await;
+        id
+    }
 }
 
 pub struct PendingRuntime {
@@ -412,46 +471,17 @@ impl AcpTestHarness {
         );
     }
 
-    pub async fn insert_fake_session(&self, provider: FakeLlmProvider, id: impl Into<SessionId>) -> SessionId {
-        let id = id.into();
-        let (agent_tx, agent_rx, agent_handle) =
-            AgentBuilder::new(Arc::new(provider)).spawn().await.expect("fake agent spawns");
-        self.insert_stub_session(agent_tx, agent_rx, agent_handle, id.clone(), "fake:fake").await;
-        id
-    }
-
-    pub async fn insert_stub_session(
-        &self,
-        agent_tx: mpsc::Sender<Command>,
-        agent_rx: mpsc::Receiver<AgentEvent>,
-        agent_handle: AgentHandle,
-        id: SessionId,
-        model: &str,
-    ) {
-        let (mcp, elicitations) = spawn_ready(mcp("/tmp")).await;
-        let runtime = Runtime { agent_tx, agent_rx, agent_handle, mcp };
-        self.register_stub_session(runtime, elicitations, id, model).await;
-    }
-
-    pub async fn insert_background_task_session(
-        &self,
-        provider: FakeLlmProvider,
-        task: &FakeBackgroundTask,
-        id: SessionId,
-    ) -> McpCatalog {
-        let server = task.server.clone();
-        let prompts = self.runtime_control.lock().unwrap().prompt_server("plan");
-        let servers = vec![ServerSpec::in_process("tasks", server), ServerSpec::in_process("prompts", prompts)];
-        let (mcp, elicitations) = spawn_ready(mcp("/tmp").with_servers(servers)).await;
-        let (agent_tx, agent_rx, agent_handle) = AgentBuilder::new(Arc::new(provider))
-            .max_auto_continues(0)
-            .mcp(mcp.clone())
-            .spawn()
-            .await
-            .expect("background task agent spawns");
-        let runtime = Runtime { agent_tx, agent_rx, agent_handle, mcp: mcp.clone() };
-        self.register_stub_session(runtime, elicitations, id, "fake:fake").await;
-        mcp
+    /// Start building a session whose agent streams from `provider`.
+    pub fn session(&self, id: impl Into<SessionId>, provider: FakeLlmProvider) -> TestSessionBuilder<'_> {
+        TestSessionBuilder {
+            harness: self,
+            id: id.into(),
+            provider,
+            model: "fake:fake".to_string(),
+            servers: Vec::new(),
+            max_auto_continues: None,
+            observer: None,
+        }
     }
 
     pub fn append_stored_session(&self, session_id: &str, created_at: &str) {
@@ -547,24 +577,6 @@ impl AcpTestHarness {
 
     pub fn append_stored_event(&self, session_id: &str, event: &SessionEvent) {
         self.session_store.append_event(session_id, event).expect("stored session event appends");
-    }
-
-    async fn register_stub_session(
-        &self,
-        mut runtime: Runtime,
-        elicitations: mpsc::Receiver<Elicitation>,
-        id: SessionId,
-        model: &str,
-    ) {
-        let model_spec: llm::catalog::LlmModel = "anthropic:claude-sonnet-4-5".parse().expect("test model parses");
-        let mut specs = SessionAgents::new(AgentCatalog::empty(PathBuf::from("/tmp")));
-        specs.set_default(AgentSpec::bare(&model_spec, None, Vec::new()));
-        let agent_prompts = self.runtime_control.lock().unwrap().agent_prompts.clone();
-        self.runtime_control.lock().unwrap().agents.push(runtime.agent_tx.clone());
-        runtime.agent_tx = count_prompts(runtime.agent_tx, agent_prompts);
-        let factory = Arc::new(StubRuntimeFactory { runtime: Mutex::new(Some((runtime, elicitations))) });
-        let config = SessionConfigState::with_selection(model.to_string(), None, None);
-        self.state.register_session(self.session_init(id, specs, factory, config)).await;
     }
 
     fn session_init(

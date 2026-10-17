@@ -2,8 +2,7 @@ mod client;
 mod websocket;
 
 use aether_cli::acp::testing::AcpTestHarness;
-use aether_core::core::agent;
-use aether_core::events::{AgentEvent, MessageEvent, TurnEvent, TurnOutcome};
+use aether_core::events::{AgentEvent, AgentObserver, MessageEvent, TurnEvent, TurnOutcome};
 use aether_sessions::{SessionEvent, UserEvent};
 use agent_client_protocol::schema::v2::{
     AbsolutePath, CloseSessionRequest, ContentBlock, ElicitationMode, ElicitationScope, NewSessionRequest, ReplayFrom,
@@ -12,7 +11,7 @@ use agent_client_protocol::schema::v2::{
 };
 use llm::{LlmResponse, testing::FakeLlmProvider};
 use std::sync::Arc;
-use tokio::sync::{Notify, mpsc, oneshot};
+use tokio::sync::{Notify, oneshot};
 
 #[tokio::test(flavor = "current_thread")]
 async fn initialize_remote_metadata_always_tracks_live_session() {
@@ -365,24 +364,15 @@ async fn start_observed_paused_turn(harness: &mut AcpTestHarness) -> (SessionId,
         LlmResponse::done(),
     ]])
     .pause_turn_after(0, 1, release.clone());
-    let (tx, mut events, handle) = agent(provider).spawn().await.expect("fake agent spawns");
-    let (forward, rx) = mpsc::channel(1);
     let (completed, completion) = oneshot::channel();
-    tokio::spawn(async move {
-        let mut completed = Some(completed);
-        while let Some(event) = events.recv().await {
-            let done = matches!(event, AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Completed }));
-            if forward.send(event).await.is_err() {
-                break;
-            }
-            if done && let Some(completed) = completed.take() {
-                let _ = completed.send(());
-            }
-        }
-    });
     let id = SessionId::new("remote-lifecycle");
     harness.append_stored_session(id.0.as_ref(), "2026-05-01T00:00:00Z");
-    harness.insert_stub_session(tx, rx, handle, id.clone(), "anthropic:claude-sonnet-4-5").await;
+    harness
+        .session(id.clone(), provider)
+        .model("anthropic:claude-sonnet-4-5")
+        .observer(TurnCompletion(Some(completed)))
+        .insert()
+        .await;
     harness.prompt(&id, "original prompt").await.expect("prompt accepted");
 
     let mut running = false;
@@ -475,4 +465,17 @@ fn assert_stopped_turn(harness: &AcpTestHarness, id: &SessionId) {
         )),
         "shutdown must not complete the gated turn"
     );
+}
+
+/// Signals once the agent completes a turn.
+struct TurnCompletion(Option<oneshot::Sender<()>>);
+
+impl AgentObserver for TurnCompletion {
+    fn on_event(&mut self, event: &AgentEvent) {
+        if matches!(event, AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Completed }))
+            && let Some(completed) = self.0.take()
+        {
+            let _ = completed.send(());
+        }
+    }
 }

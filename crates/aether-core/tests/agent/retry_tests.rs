@@ -66,7 +66,7 @@ async fn retries_then_succeeds_on_third_attempt() -> Result<(), Box<dyn Error>> 
         result.messages
     );
     assert!(completed(&result), "expected the turn to complete, got {:?}", result.messages.last());
-    assert_eq!(result.contexts().len(), 3, "should have called LLM 3 times (2 failures + 1 success)");
+    assert_eq!(result.contexts.len(), 3, "should have called LLM 3 times (2 failures + 1 success)");
 
     let first_failed = failed_calls(&result)[0];
     assert!(
@@ -95,7 +95,7 @@ async fn exhausts_retries_then_emits_error() -> Result<(), Box<dyn Error>> {
 
     assert_eq!(retry_attempts(&result).len(), 3, "should retry exactly max_attempts times before giving up");
     assert!(has_failed_turn(&result), "expected a failed turn after exhausting retries: {:?}", result.messages);
-    assert_eq!(result.contexts().len(), 4, "should call LLM max_attempts + 1 times (1 initial + 3 retries)");
+    assert_eq!(result.contexts.len(), 4, "should call LLM max_attempts + 1 times (1 initial + 3 retries)");
 
     let last_failed = failed_calls(&result).pop().expect("expected failed llm_call_ended events");
     assert!(
@@ -114,7 +114,7 @@ async fn non_retryable_error_surfaces_immediately() -> Result<(), Box<dyn Error>
 
     assert_eq!(retry_attempts(&result).len(), 0, "non-retryable errors must not trigger retry");
     assert!(has_failed_turn(&result), "expected a failed turn for non-retryable failure");
-    assert_eq!(result.contexts().len(), 1, "should call LLM exactly once");
+    assert_eq!(result.contexts.len(), 1, "should call LLM exactly once");
 
     Ok(())
 }
@@ -151,7 +151,7 @@ async fn mid_stream_interrupts_consume_retry_budget() -> Result<(), Box<dyn Erro
 
     assert_eq!(retry_attempts(&result).len(), 3, "mid-stream interrupts must respect max_attempts");
     assert!(has_failed_turn(&result), "expected a failed turn after exhausting retries on mid-stream interrupts");
-    assert_eq!(result.contexts().len(), 4, "should call LLM exactly max_attempts + 1 times (1 initial + 3 retries)");
+    assert_eq!(result.contexts.len(), 4, "should call LLM exactly max_attempts + 1 times (1 initial + 3 retries)");
 
     Ok(())
 }
@@ -197,7 +197,7 @@ async fn cancel_during_retry_wait_aborts_pending_retry() -> Result<(), Box<dyn E
     assert!(has_cancelled, "expected the turn to end as cancelled, got {messages:?}");
 
     // The retry should never have fired — only the original failed call counts.
-    assert_eq!(result.contexts().len(), 1, "retry must not fire after cancel; expected 1 LLM call");
+    assert_eq!(result.contexts.len(), 1, "retry must not fire after cancel; expected 1 LLM call");
 
     Ok(())
 }
