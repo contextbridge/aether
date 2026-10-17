@@ -30,7 +30,7 @@ async fn live_context_and_reloaded_log_share_identities_and_message_boundaries()
     assert_eq!(restored.message_count(), 4);
     assert_eq!(restored.messages()[0].message_id(), Some(user_id));
 
-    let contexts = result.captured_contexts.lock().unwrap();
+    let contexts = &result.contexts;
     assert_eq!(conversation_ids(contexts[1].messages()), conversation_ids(&restored.messages()[..3]));
     let assistant_ids: Vec<_> = restored
         .messages()
@@ -75,7 +75,7 @@ async fn continuation_preserves_live_message_boundaries_and_ids() {
         .run_with_context()
         .await
         .unwrap();
-    let contexts = result.captured_contexts.lock().unwrap();
+    let contexts = result.contexts;
     let mut events =
         vec![SessionEvent::User(UserEvent::Message { message_id: user_id, content, display_content: None })];
     events.extend(result.messages.into_iter().map(SessionEvent::Agent));

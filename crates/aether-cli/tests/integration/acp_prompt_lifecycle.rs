@@ -55,7 +55,7 @@ async fn cancel_sent_before_acceptance_is_not_lost() {
         let release = Arc::new(Notify::new());
         let provider =
             FakeLlmProvider::new(vec![llm_response().text(&["reply"]).build()]).pause_turn_after(0, 1, release);
-        let id = harness.insert_fake_session(provider, "early-cancel").await;
+        let id = harness.session("early-cancel", provider).insert().await;
         let prompt = harness.prompt(&id, "hi");
         harness.client_cx.send_notification(CancelSessionNotification::new(id.clone())).unwrap();
         match prompt.await {
@@ -69,10 +69,10 @@ async fn cancel_sent_before_acceptance_is_not_lost() {
 #[tokio::test(flavor = "current_thread")]
 async fn provider_failure_after_acceptance_reports_error_and_idle() {
     AcpTestHarness::run(|mut harness| async move {
-        let id = harness.insert_fake_session(failing_provider(), "failure").await;
+        let id = harness.session("failure", failing_provider()).insert().await;
         harness.prompt(&id, "hi").await.unwrap();
         let updates = harness.updates_until(&id, is_idle).await;
-        assert!(updates.iter().any(|update| is_agent_message(update, "provider failed")), "{updates:?}");
+        assert!(updates.iter().any(|update| agent_message_contains(update, "provider failed")), "{updates:?}");
         assert_idle(&updates, StopReason::EndTurn);
     })
     .await;
@@ -82,7 +82,7 @@ async fn provider_failure_after_acceptance_reports_error_and_idle() {
 async fn failed_turn_is_reported_once_under_a_stable_id_and_kept_out_of_resumed_history() {
     AcpTestHarness::run(|mut harness| async move {
         harness.append_stored_session("failed-turn", "2026-05-01T00:00:00Z");
-        let id = harness.insert_fake_session(failing_provider(), "failed-turn").await;
+        let id = harness.session("failed-turn", failing_provider()).insert().await;
 
         harness.prompt(&id, "hi").await.unwrap();
         let live = error_message_ids(&mut harness, &id).await;
@@ -113,7 +113,7 @@ async fn acceptance_precedes_streaming_and_idle_completes_the_turn() {
         let release = Arc::new(Notify::new());
         let provider =
             FakeLlmProvider::new(vec![llm_response().text(&["hello"]).build()]).pause_turn_after(0, 1, release.clone());
-        let id = harness.insert_fake_session(provider, "lifecycle").await;
+        let id = harness.session("lifecycle", provider).insert().await;
         harness.client_cx.send_notification(CancelSessionNotification::new(id.clone())).unwrap();
         let response = harness.prompt(&id, "hi").await.unwrap();
         assert_eq!(serde_json::to_value(&response).unwrap(), serde_json::json!({"messageId": response.message_id}));
@@ -156,7 +156,7 @@ async fn mcp_status_is_reported_only_when_a_tool_refresh_changes_it() -> TestRes
     AcpTestHarness::run(|mut harness| async move {
         let task = FakeBackgroundTask::new();
         let id = SessionId::new("mcp-status-refresh");
-        harness.insert_background_task_session(background_task_provider(), &task, id).await;
+        harness.session(id, background_task_provider()).background_task(&task).insert().await;
         let initial = tasks_tool_count(&harness.next_mcp_server_statuses().await).expect("tasks server is connected");
 
         task.announce_unchanged_tools().await;
@@ -173,7 +173,7 @@ async fn background_task_outcome_turn_is_framed_by_running_and_idle() -> TestRes
     AcpTestHarness::run(|mut harness| async move {
         let task = FakeBackgroundTask::new();
         let id = SessionId::new("task-outcome");
-        harness.insert_background_task_session(background_task_provider(), &task, id.clone()).await;
+        harness.session(id.clone(), background_task_provider()).background_task(&task).insert().await;
         start_background_task(&mut harness, &id).await?;
 
         task.complete("task output");
@@ -192,7 +192,7 @@ async fn prompt_during_background_task_outcome_turn_is_inserted_after_its_reply(
         let release = Arc::new(Notify::new());
         let provider = background_task_provider().pause_turn_after(2, 1, release.clone());
         let id = SessionId::new("task-outcome-prompt");
-        harness.insert_background_task_session(provider, &task, id.clone()).await;
+        harness.session(id.clone(), provider).background_task(&task).insert().await;
         start_background_task(&mut harness, &id).await?;
 
         task.complete("task output");
@@ -220,7 +220,7 @@ async fn prompt_prepared_during_background_task_outcome_turn_is_inserted_after_i
         let release = Arc::new(Notify::new());
         let provider = background_task_provider().pause_turn_after(2, 1, release.clone());
         let id = SessionId::new("task-outcome-preparing");
-        harness.insert_background_task_session(provider, &task, id.clone()).await;
+        harness.session(id.clone(), provider).background_task(&task).insert().await;
         start_background_task(&mut harness, &id).await?;
         let prompt = harness.prompt(&id, "/plan");
         expansion.reached().await;
@@ -374,7 +374,7 @@ async fn queue_prompt_behind_paused_reply(
     let mut turns = vec![llm_response().text(&["first", " reply"]).build()];
     turns.extend(later_replies.iter().map(|reply| llm_response().text(&[reply]).build()));
     let provider = FakeLlmProvider::new(turns).pause_turn_after(0, 1, release.clone());
-    harness.insert_fake_session(provider, id.clone()).await;
+    harness.session(id.clone(), provider).insert().await;
     harness.prompt(id, "first").await?;
     harness.updates_until(id, |update| matches!(update, SessionUpdate::AgentMessageChunk(_))).await;
 
@@ -400,8 +400,16 @@ fn position(updates: &[SessionUpdate], predicate: impl Fn(&SessionUpdate) -> boo
 }
 
 fn is_agent_message(update: &SessionUpdate, text: &str) -> bool {
+    agent_message_matches(update, |message| message == text)
+}
+
+fn agent_message_contains(update: &SessionUpdate, text: &str) -> bool {
+    agent_message_matches(update, |message| message.contains(text))
+}
+
+fn agent_message_matches(update: &SessionUpdate, matches_text: impl Fn(&str) -> bool) -> bool {
     matches!(update, SessionUpdate::AgentMessage(message) if message.content.value().into_iter().flatten().any(
-        |block| matches!(block, ContentBlock::Text(block) if block.text.contains(text)),
+        |block| matches!(block, ContentBlock::Text(block) if matches_text(&block.text)),
     ))
 }
 
@@ -445,7 +453,7 @@ async fn error_message_ids(harness: &mut AcpTestHarness, id: &SessionId) -> Vec<
     let updates = harness.updates_until(id, is_idle).await;
     updates
         .into_iter()
-        .filter(|update| is_agent_message(update, "provider failed"))
+        .filter(|update| agent_message_contains(update, "provider failed"))
         .filter_map(|update| match update {
             SessionUpdate::AgentMessage(message) => Some(message.message_id),
             _ => None,

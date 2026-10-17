@@ -99,7 +99,7 @@ async fn oversized_context_is_compacted_before_the_llm_call() {
         .await
         .unwrap();
 
-    let contexts = result.contexts();
+    let contexts = result.contexts;
     let messages = contexts.last().expect("chat request should reach the provider").messages();
     assert!(
         matches!(&messages[0], ChatMessage::Summary { content, .. } if content == "summary"),
@@ -191,7 +191,7 @@ async fn cancel_during_compaction_preserves_the_initiating_message() {
         .await
         .unwrap();
 
-    let contexts = result.contexts();
+    let contexts = result.contexts;
     let preserved = contexts.iter().any(|context| {
         context
             .messages()

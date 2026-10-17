@@ -10,7 +10,7 @@ async fn cancel_mid_stream_interrupts_prompt() {
         let release = Arc::new(Notify::new());
         let provider = FakeLlmProvider::new(vec![llm_response().text(&["hello", " world"]).build()])
             .pause_turn_after(0, 1, release);
-        let id = harness.insert_fake_session(provider, "test-session").await;
+        let id = harness.session("test-session", provider).insert().await;
         let response = harness.prompt(&id, "hi").await.unwrap();
         assert_eq!(serde_json::to_value(&response).unwrap(), serde_json::json!({"messageId": response.message_id}));
         loop {

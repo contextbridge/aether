@@ -101,7 +101,7 @@ async fn close_cancels_prompt_before_returning() {
         let release = Arc::new(Notify::new());
         let llm =
             FakeLlmProvider::new(vec![llm_response().text(&["hello"]).build()]).pause_turn_after(0, 1, release.clone());
-        let session_id = harness.insert_fake_session(llm, "prompting-session").await;
+        let session_id = harness.session("prompting-session", llm).insert().await;
 
         harness.prompt(&session_id, "hi").await.expect("prompt accepted");
         loop {

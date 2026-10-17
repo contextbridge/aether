@@ -56,7 +56,7 @@ async fn cache_key_refreshes_after_tool_updates() -> Result<(), Box<dyn Error>> 
         .run_with_context()
         .await?;
 
-    let contexts = result.contexts();
+    let contexts = result.contexts;
     assert_eq!(contexts.len(), 2, "expected two LLM requests");
     assert_ne!(contexts[0].prompt_cache_key(), contexts[1].prompt_cache_key());
     Ok(())
@@ -78,7 +78,7 @@ async fn cache_key_is_stable_across_turns() -> Result<(), Box<dyn Error>> {
         .run_with_context()
         .await?;
 
-    let contexts = result.contexts();
+    let contexts = result.contexts;
     assert_eq!(contexts.len(), 2, "expected two LLM requests");
     assert_eq!(contexts[0].prompt_cache_key(), contexts[1].prompt_cache_key());
     Ok(())
@@ -119,7 +119,7 @@ async fn session_affinity_is_stable_across_turns_and_distinct_from_the_prefix_ke
         .run_with_context()
         .await?;
 
-    let contexts = result.contexts();
+    let contexts = result.contexts;
     assert_eq!(contexts.len(), 2, "expected two LLM requests");
     assert!(contexts.iter().all(|context| context.session_affinity_key() == Some("conversation-123")));
     assert!(contexts.iter().all(|context| context.prompt_cache_key() != context.session_affinity_key()));
@@ -142,7 +142,7 @@ async fn prompt_cache_key(
         .run_with_context()
         .await?;
 
-    let contexts = result.contexts();
+    let contexts = result.contexts;
     Ok(contexts[0].prompt_cache_key().expect("agent should derive a prompt cache key").to_string())
 }
 
@@ -156,7 +156,7 @@ async fn prompt_cache_key_for_model(model: &str) -> Result<String, Box<dyn Error
         .run_with_context()
         .await?;
 
-    let contexts = result.contexts();
+    let contexts = result.contexts;
     Ok(contexts[0].prompt_cache_key().expect("agent should derive a prompt cache key").to_string())
 }
 
@@ -164,7 +164,7 @@ async fn session_affinity_key() -> Result<String, Box<dyn Error>> {
     let result =
         test_agent().without_mcp().llm_responses(&[response()]).user_text("question").run_with_context().await?;
 
-    let contexts = result.contexts();
+    let contexts = result.contexts;
     Ok(contexts[0].session_affinity_key().expect("agent should set a session affinity key").to_string())
 }
 
