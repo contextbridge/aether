@@ -1,5 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 use super::common::TaskSummary;
 use crate::tasks::task_store::{TaskStore, TaskStoreError};
@@ -54,15 +55,16 @@ pub fn execute_task_update(input: TaskUpdateInput, store: &mut TaskStore) -> Res
     .map(String::from)
     .collect();
 
-    let ready_before: Vec<TaskId> = if update.status == Some(TaskStatus::Completed) {
+    let completing = update.status == Some(TaskStatus::Completed);
+    let ready_before: BTreeSet<TaskId> = if completing {
         store.tasks().filter(|t| store.is_ready(t)).map(|t| t.id.clone()).collect()
     } else {
-        vec![]
+        BTreeSet::new()
     };
 
     let task = store.update(&id, update)?;
 
-    let newly_ready: Vec<TaskSummary> = if task.status == TaskStatus::Completed {
+    let newly_ready: Vec<TaskSummary> = if completing {
         store.tasks().filter(|t| store.is_ready(t) && !ready_before.contains(&t.id)).map(TaskSummary::from).collect()
     } else {
         vec![]
@@ -205,6 +207,26 @@ mod tests {
 
         assert_eq!(output.newly_ready.len(), 1);
         assert_eq!(output.newly_ready[0].id, sub2.id.to_string());
+    }
+
+    #[test]
+    fn editing_a_completed_task_does_not_report_existing_ready_tasks() {
+        let mut tasks = TestTaskStore::new();
+        let task = tasks.root_task("Completed");
+        tasks.root_task("Already ready");
+        tasks
+            .store_mut()
+            .update(&task.id, TaskUpdate { status: Some(TaskStatus::Completed), ..Default::default() })
+            .unwrap();
+
+        for update in [
+            TaskUpdate { title: Some("Renamed".into()), ..Default::default() },
+            TaskUpdate { summary: Some("More details".into()), ..Default::default() },
+            TaskUpdate { status: Some(TaskStatus::Completed), ..Default::default() },
+        ] {
+            let output = execute_task_update(update_input(task.id.as_str(), update), tasks.store_mut()).unwrap();
+            assert!(output.newly_ready.is_empty(), "{:?}", output.newly_ready);
+        }
     }
 
     #[test]
