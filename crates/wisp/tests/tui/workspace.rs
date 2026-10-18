@@ -206,6 +206,33 @@ fn workspace_name_prompt_owns_the_terminal_cursor() {
 }
 
 #[test]
+fn workspace_name_scrolls_unicode_text_and_keeps_cursor_visible() {
+    let mut ui = TestUiBuilder::new().workspace_move().dimensions(24, 20).build();
+    open_workspace_picker(&mut ui, vec![workspace_entry("/workspace/current", true)]);
+    ui.key(key(KeyCode::Enter));
+    ui.type_text("a界bcdefghijklmnopqrstuvwxyz");
+    ui.draw();
+
+    let buffer = ui.backend().buffer();
+    let row = row_containing(buffer, "Name:").expect("name prompt");
+    let text = row_text(buffer, row);
+    assert!(text.contains("xyz"), "{text}");
+    assert!(!text.contains("a界"), "the input should scroll: {text}");
+    let column = text[..text.find("xyz").unwrap()].width() + 3;
+    assert!(ui.backend().cursor_visible());
+    assert_eq!(ui.backend().cursor_position(), Position::new(u16::try_from(column).unwrap(), row));
+
+    ui.key(key(KeyCode::Home));
+    ui.key(key(KeyCode::Right));
+    ui.key(key(KeyCode::Right));
+    ui.draw();
+    let text = row_text(ui.backend().buffer(), row);
+    assert!(text.contains("Name: a界"), "{text}");
+    let column = text[..text.find("a界").unwrap()].width() + 3;
+    assert_eq!(ui.backend().cursor_position(), Position::new(u16::try_from(column).unwrap(), row));
+}
+
+#[test]
 fn workspace_naming_new_esc_returns_to_list_mode() {
     let mut ui = TestUiBuilder::new().workspace_move().build();
 

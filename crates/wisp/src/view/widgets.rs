@@ -105,14 +105,3 @@ pub(crate) fn visible_window(buffer: &EditBuffer, width: usize) -> (String, usiz
     let (visible_len, _) = fit_prefix(&text[start..], width);
     (text[start..start + visible_len].to_string(), cursor_width.min(width.saturating_sub(1)))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::visible_window;
-    use crate::view::edit_buffer::EditBuffer;
-
-    #[test]
-    fn scrolls_unicode_text_to_keep_cursor_visible() {
-        assert_eq!(visible_window(&EditBuffer::new("a界bcdef"), 4), ("def".to_string(), 3));
-    }
-}
