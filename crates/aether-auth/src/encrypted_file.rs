@@ -7,14 +7,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::env::var;
-use std::fs::{File, OpenOptions, create_dir_all};
 use std::io::ErrorKind;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
-use utils::fs::write_atomic;
+use utils::fs::{with_file_lock, write_atomic};
 use utils::path::aether_home;
 
 const DEFAULT_PASSWORD_ENV: &str = "AETHER_CREDENTIALS_PASSWORD";
@@ -129,17 +128,18 @@ impl EncryptedFile {
     }
 
     fn update(&self, mutate: impl FnOnce(&mut CredentialStore)) -> Result<(), OAuthError> {
-        let _lock = self.lock()?;
-        let mut store = self.read()?;
-        mutate(&mut store);
+        with_file_lock(&self.path, || {
+            let mut store = self.read()?;
+            mutate(&mut store);
 
-        let plaintext = serde_json::to_vec(&store)
-            .map_err(|e| OAuthError::CredentialStore(format!("Failed to serialize credentials: {e}")))?;
-        write_atomic(&self.path, &encrypt(&plaintext, &self.passphrase, self.scrypt_work_factor)?)?;
+            let plaintext = serde_json::to_vec(&store)
+                .map_err(|e| OAuthError::CredentialStore(format!("Failed to serialize credentials: {e}")))?;
+            write_atomic(&self.path, &encrypt(&plaintext, &self.passphrase, self.scrypt_work_factor)?)?;
 
-        let version = file_version(&self.path)?;
-        *self.cache.lock().unwrap_or_else(PoisonError::into_inner) = Some(Decrypted { version, store });
-        Ok(())
+            let version = file_version(&self.path)?;
+            *self.cache.lock().unwrap_or_else(PoisonError::into_inner) = Some(Decrypted { version, store });
+            Ok(())
+        })
     }
 
     fn decrypt_file(&self, version: Option<FileVersion>) -> Result<CredentialStore, OAuthError> {
@@ -149,17 +149,6 @@ impl EncryptedFile {
         let plaintext = decrypt(&std::fs::read(&self.path)?, &self.passphrase)?;
         serde_json::from_slice(&plaintext)
             .map_err(|e| OAuthError::CredentialStore(format!("Invalid credential data: {e}")))
-    }
-
-    fn lock(&self) -> Result<File, OAuthError> {
-        if let Some(parent) = self.path.parent() {
-            create_dir_all(parent)?;
-        }
-        let mut lock_path = self.path.clone().into_os_string();
-        lock_path.push(".lock");
-        let lock = OpenOptions::new().create(true).truncate(false).write(true).open(lock_path)?;
-        lock.lock()?;
-        Ok(lock)
     }
 }
 

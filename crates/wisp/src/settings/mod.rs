@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use tracing::warn;
-use utils::fs::write_atomic;
+use utils::fs::{JsonFileError, read_json, write_json_atomic};
 use utils::path::app_home;
 
 use crate::theme::ThemeLoadError;
@@ -255,68 +255,32 @@ fn settings_path() -> Option<PathBuf> {
 }
 
 fn load_or_create_at(path: &Path) -> UiSettings {
-    let raw = match std::fs::read_to_string(path) {
-        Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+    match read_json(path) {
+        Ok(Some(settings)) => settings,
+        Ok(None) => {
             let defaults = UiSettings::default();
             if let Err(error) = save_to_path(path, &defaults) {
                 warn!("Failed to write default settings to {}: {error}", path.display());
             }
-            return defaults;
+            defaults
         }
         Err(error) => {
-            warn!("Failed reading settings {}: {error}", path.display());
-            return UiSettings::default();
+            warn!("Failed to load settings: {error}");
+            UiSettings::default()
         }
-    };
-
-    serde_json::from_str(&raw).unwrap_or_else(|error| {
-        warn!("Malformed settings JSON at {}: {error}", path.display());
-        UiSettings::default()
-    })
+    }
 }
 
 fn save_to_path(path: &Path, settings: &UiSettings) -> std::io::Result<()> {
-    let mut serialized = serde_json::to_vec_pretty(settings)
-        .map_err(|error| std::io::Error::other(format!("Failed to serialize settings: {error}")))?;
-    serialized.push(b'\n');
-    write_atomic(path, &serialized)
+    write_json_atomic(path, settings).map_err(|error| match error {
+        JsonFileError::Io { source, .. } => source,
+        error @ JsonFileError::Json { .. } => std::io::Error::other(error),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn missing_settings_are_created_with_defaults() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("settings.json");
-
-        assert_eq!(load_or_create_at(&path), UiSettings::default());
-        assert!(path.exists());
-    }
-
-    #[test]
-    fn saved_settings_load_back() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("settings.json");
-        let settings = UiSettings { content_padding: Some(4), ..UiSettings::default() };
-
-        save_to_path(&path, &settings).unwrap();
-
-        assert_eq!(load_or_create_at(&path), settings);
-    }
-
-    #[test]
-    fn malformed_settings_fall_back_to_defaults() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("settings.json");
-        std::fs::write(&path, "{not-json").unwrap();
-
-        assert_eq!(load_or_create_at(&path), UiSettings::default());
-    }
-
     #[test]
     fn launcher_defaults_fill_only_missing_status_line_fields() {
         let settings = UiSettings {

@@ -1,9 +1,8 @@
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use thiserror::Error;
-use utils::fs::write_atomic;
+pub(super) use utils::fs::JsonFileError as RegistryError;
+use utils::fs::{read_json, write_json_atomic};
 use utils::path::aether_home;
 
 /// Persistent registry of managed workspaces, grouped by repository identity.
@@ -18,14 +17,6 @@ pub(super) struct WorkspaceRegistry {
 pub(super) struct WorkspaceRecord {
     pub path: PathBuf,
     pub repo_key: String,
-}
-
-#[derive(Debug, Error)]
-pub enum RegistryError {
-    #[error("failed to access workspace registry {}: {source}", .path.display())]
-    Io { path: PathBuf, source: io::Error },
-    #[error("invalid workspace registry {}: {source}", .path.display())]
-    Parse { path: PathBuf, source: serde_json::Error },
 }
 
 impl WorkspaceRegistry {
@@ -69,18 +60,11 @@ impl WorkspaceRegistry {
     }
 
     fn read(&self) -> Result<Vec<WorkspaceRecord>, RegistryError> {
-        match fs::read_to_string(&self.path) {
-            Ok(content) => serde_json::from_str(&content)
-                .map_err(|source| RegistryError::Parse { path: self.path.clone(), source }),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(e) => Err(self.io_error(e)),
-        }
+        read_json(&self.path).map(Option::unwrap_or_default)
     }
 
     fn write(&self, records: &[WorkspaceRecord]) -> Result<(), RegistryError> {
-        let content = serde_json::to_string_pretty(records)
-            .map_err(|source| RegistryError::Parse { path: self.path.clone(), source })?;
-        write_atomic(&self.path, content.as_bytes()).map_err(|e| self.io_error(e))
+        write_json_atomic(&self.path, records)
     }
 
     fn io_error(&self, source: io::Error) -> RegistryError {
@@ -91,6 +75,7 @@ impl WorkspaceRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::TempDir;
 
     fn temp_registry() -> (TempDir, WorkspaceRegistry) {
