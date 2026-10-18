@@ -1,8 +1,10 @@
 use crate::common::{cargo_project, fake_daemon, fake_request, file_uri, hover_text, workspace_error_count};
+use crate::common::{connect, use_fake_servers};
 use aether_lspd::LanguageId;
-use futures::future::join_all;
+use aether_lspd::testing::{TestDaemon, TestGate, TestPoint};
 use lsp_types::{DocumentSymbolResponse, GotoDefinitionResponse};
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[tokio::test]
 async fn request_helpers_round_trip_through_fake_server() {
@@ -118,28 +120,87 @@ async fn a_pending_diagnostics_call_does_not_block_other_requests_on_the_connect
 #[tokio::test]
 async fn position_requests_wait_for_the_server_to_finish_loading() {
     let project = cargo_project("loading_server").file(".fake-loading", "");
-    let (_daemon, client) = fake_daemon(project.root(), LanguageId::Rust).await;
+    let waiting = TestGate::default();
+    use_fake_servers();
+    let _daemon = TestDaemon::builder(project.root(), LanguageId::Rust)
+        .diagnostics_settle(Duration::ZERO)
+        .gate(TestPoint::ReadyWait, &waiting)
+        .spawn()
+        .unwrap();
+    let client = connect(project.root(), LanguageId::Rust).await;
     let uri = file_uri(&project.path("src/main.rs"));
+    let mut hover = std::pin::pin!(client.hover(uri, 0, 0));
 
-    let (hover, ()) = tokio::join!(client.hover(uri, 0, 0), async {
-        // The round trip gives the hover time to reach the daemon before loading finishes.
-        fake_request(&client, "fake/noop").await;
-        fake_request(&client, "fake/finishLoading").await;
-    });
+    tokio::select! {
+        () = waiting.reached() => {}
+        result = &mut hover => panic!("hover completed while the server was loading: {result:?}"),
+    }
+    fake_request(&client, "fake/finishLoading").await;
 
-    assert!(hover_text(hover.expect("Hover failed")).contains("open_count=1"));
+    assert!(hover_text(hover.await.expect("Hover failed")).contains("open_count=1"));
 }
 
 #[tokio::test]
 async fn concurrent_requests_for_one_document_reach_the_server_after_it_opens() {
-    let project = cargo_project("concurrent_open");
-    let (_daemon, client) = fake_daemon(project.root(), LanguageId::Rust).await;
-    let uri = file_uri(&project.path("src/main.rs"));
+    let project = cargo_project("concurrent_open").file("target/pending.rs", "fn pending() {}\n");
+    let uri = file_uri(&project.path("target/pending.rs"));
+    let opening = TestGate::default();
+    let waiting = TestGate::default();
+    use_fake_servers();
+    let _daemon = TestDaemon::builder(project.root(), LanguageId::Rust)
+        .diagnostics_settle(Duration::ZERO)
+        .gate(TestPoint::DocumentOpen(uri.clone()), &opening)
+        .gate(TestPoint::DocumentSyncWait(uri.clone()), &waiting)
+        .spawn()
+        .unwrap();
+    let client = connect(project.root(), LanguageId::Rust).await;
+    let mut first = std::pin::pin!(client.hover(uri.clone(), 0, 0));
+    tokio::select! {
+        () = opening.reached() => {}
+        result = &mut first => panic!("hover completed before didOpen was released: {result:?}"),
+    }
 
-    let hovers = join_all((0..32).map(|_| client.hover(uri.clone(), 0, 0))).await;
+    let mut second = std::pin::pin!(client.hover(uri, 0, 0));
+    tokio::select! {
+        () = waiting.reached() => {}
+        result = &mut second => panic!("second hover overtook didOpen: {result:?}"),
+    }
+    opening.release();
+    let (first, second) = tokio::join!(first, second);
+    for hover in [first, second] {
+        assert!(hover_text(hover.expect("Hover failed")).contains("open_count=1"));
+    }
+}
 
-    for hover in hovers {
-        let hover = hover_text(hover.expect("Hover failed"));
-        assert!(!hover.contains("open_count=0"), "a hover reached the server before the document was open: {hover}");
+#[tokio::test]
+async fn diagnostics_waiters_observe_concurrent_publications() {
+    let project = cargo_project("concurrent_diagnostics");
+    let targets: Vec<_> = (0..64)
+        .map(|index| {
+            let path = format!("target/file_{index}.rs");
+            project.write(&path, "// hold-diagnostics\nfn example() { let error = 1; }\n");
+            (file_uri(&project.path(&path)), TestGate::default())
+        })
+        .collect();
+    use_fake_servers();
+    let mut builder = TestDaemon::builder(project.root(), LanguageId::Rust).diagnostics_settle(Duration::ZERO);
+    for (uri, waiting) in &targets {
+        builder = builder.gate(TestPoint::DiagnosticsWait(uri.clone()), waiting);
+    }
+    let _daemon = builder.spawn().unwrap();
+    let client = connect(project.root(), LanguageId::Rust).await;
+    let mut queries = std::pin::pin!(futures::future::join_all(
+        targets.iter().map(|(uri, _)| client.get_diagnostics(Some(uri.clone())))
+    ));
+    tokio::select! {
+        _ = futures::future::join_all(targets.iter().map(|(_, gate)| gate.reached())) => {}
+        result = &mut queries => panic!("diagnostics returned before publication: {result:?}"),
+    }
+    fake_request(&client, "fake/releaseDiagnostics").await;
+    for (result, (uri, _)) in queries.await.into_iter().zip(&targets) {
+        let diagnostics = result.unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(&diagnostics[0].uri, uri);
+        assert_eq!(workspace_error_count(&diagnostics), 1);
     }
 }

@@ -31,11 +31,18 @@ pub(crate) struct WorkspaceBinding {
 pub(crate) struct WorkspaceRegistry {
     sessions: Arc<RwLock<HashMap<WorkspaceKey, Arc<WorkspaceSession>>>>,
     timeouts: Timeouts,
+    #[cfg(feature = "testing")]
+    pub(crate) hooks: crate::testing::TestHooks,
 }
 
 impl WorkspaceRegistry {
     pub(crate) fn new(timeouts: Timeouts) -> Self {
-        Self { sessions: Arc::new(RwLock::new(HashMap::new())), timeouts }
+        Self {
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            timeouts,
+            #[cfg(feature = "testing")]
+            hooks: crate::testing::TestHooks::default(),
+        }
     }
 
     pub(crate) async fn bind(&self, workspace_root: &Path, language: LanguageId) -> DaemonResult<WorkspaceBinding> {
@@ -125,7 +132,13 @@ impl WorkspaceRegistry {
             sessions.remove(&binding.key);
         }
 
-        let session = Arc::new(WorkspaceSession::spawn(&binding.key.workspace_root, &config, self.timeouts)?);
+        let session = Arc::new(WorkspaceSession::spawn(
+            &binding.key.workspace_root,
+            &config,
+            self.timeouts,
+            #[cfg(feature = "testing")]
+            self.hooks.clone(),
+        )?);
         sessions.insert(binding.key.clone(), Arc::clone(&session));
         Ok(session)
     }
@@ -138,7 +151,10 @@ impl WorkspaceRegistry {
         params: &Value,
     ) -> Result<Value, SessionCallError> {
         if targets_a_position(params) {
-            session.wait_until_ready(self.timeouts.request).await;
+            let ready = session.wait_until_ready(self.timeouts.request);
+            #[cfg(feature = "testing")]
+            let ready = self.hooks.observe_pending(crate::testing::TestPoint::ReadyWait, ready);
+            ready.await;
         }
         self.within_deadline(session, session.request(method, params)).await?.map_err(SessionCallError::from)
     }

@@ -41,10 +41,17 @@ pub(crate) struct WorkspaceSession {
     diagnostics_timeout: Duration,
     supported_extensions: Arc<HashSet<String>>,
     alive: Arc<AtomicBool>,
+    #[cfg(feature = "testing")]
+    hooks: crate::testing::TestHooks,
 }
 
 impl WorkspaceSession {
-    pub(crate) fn spawn(workspace_root: &Path, config: &LspConfig, timeouts: Timeouts) -> DaemonResult<Self> {
+    pub(crate) fn spawn(
+        workspace_root: &Path,
+        config: &LspConfig,
+        timeouts: Timeouts,
+        #[cfg(feature = "testing")] hooks: crate::testing::TestHooks,
+    ) -> DaemonResult<Self> {
         let (transport, event_rx) = ProcessTransport::spawn(workspace_root, config)?;
         let session = Self {
             transport,
@@ -56,6 +63,8 @@ impl WorkspaceSession {
             diagnostics_timeout: timeouts.diagnostics,
             supported_extensions: Arc::new(supported_extensions(config)),
             alive: Arc::new(AtomicBool::new(true)),
+            #[cfg(feature = "testing")]
+            hooks,
         };
 
         tokio::spawn(session.clone().run_events(event_rx));
@@ -131,7 +140,10 @@ impl WorkspaceSession {
     }
 
     async fn open_document(&self, uri: &Uri) -> DocumentSync {
-        let _sync = self.document_sync.lock().await;
+        let sync = self.document_sync.lock();
+        #[cfg(feature = "testing")]
+        let sync = self.hooks.observe_pending(crate::testing::TestPoint::DocumentSyncWait(uri.clone()), sync);
+        let _sync = sync.await;
         let notifications = match self.documents.acquire(uri).await {
             AcquireAction::Open { file_path, content } => open_and_save_notifications(uri, &file_path, content),
             AcquireAction::Reopen { file_path, content } => reopen_notifications(uri, &file_path, content),
@@ -143,6 +155,8 @@ impl WorkspaceSession {
             }
         };
 
+        #[cfg(feature = "testing")]
+        self.hooks.pause(crate::testing::TestPoint::DocumentOpen(uri.clone())).await;
         let version_before = self.diagnostics.current_uri_version(uri);
         for notification in notifications {
             self.transport.send_notification(notification).await;
@@ -166,7 +180,10 @@ impl WorkspaceSession {
         match (self.diagnostics_mode, sync) {
             (_, DocumentSync::Missing) | (DiagnosticsMode::Push, DocumentSync::AlreadyOpen) => Freshness::Unconfirmed,
             (DiagnosticsMode::Push, DocumentSync::Sent { version_before }) => {
-                self.diagnostics.wait_for_uri_fresh(uri, version_before, self.diagnostics_timeout).await
+                let fresh = self.diagnostics.wait_for_uri_fresh(uri, version_before, self.diagnostics_timeout);
+                #[cfg(feature = "testing")]
+                let fresh = self.hooks.observe_pending(crate::testing::TestPoint::DiagnosticsWait(uri.clone()), fresh);
+                fresh.await
             }
             (DiagnosticsMode::Pull, DocumentSync::Sent { .. } | DocumentSync::AlreadyOpen) => {
                 self.pull_diagnostics(uri).await

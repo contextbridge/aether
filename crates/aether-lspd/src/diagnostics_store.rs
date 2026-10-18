@@ -1,14 +1,12 @@
 use lsp_types::{PublishDiagnosticsParams, Uri};
 use std::collections::HashMap;
-use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::time::{Instant, timeout_at};
 
 #[derive(Clone)]
 pub(crate) struct DiagnosticsStore {
-    state: Arc<RwLock<HashMap<Uri, (PublishDiagnosticsParams, u64)>>>,
-    version: Arc<watch::Sender<u64>>,
+    state: watch::Sender<DiagnosticsState>,
     settle: Duration,
 }
 
@@ -21,47 +19,45 @@ pub(crate) enum Freshness {
 
 impl DiagnosticsStore {
     pub(crate) fn new(settle: Duration) -> Self {
-        Self { state: Arc::default(), version: Arc::new(watch::Sender::new(0)), settle }
+        Self { state: watch::Sender::new(DiagnosticsState::default()), settle }
     }
 
     pub(crate) fn publish(&self, diagnostics: PublishDiagnosticsParams) {
-        let mut state = self.state.write().unwrap_or_else(PoisonError::into_inner);
-        self.version.send_modify(|version| {
-            *version += 1;
-            state.insert(diagnostics.uri.clone(), (diagnostics, *version));
+        self.state.send_modify(|state| {
+            state.generation += 1;
+            state.diagnostics.insert(diagnostics.uri.clone(), (diagnostics, state.generation));
         });
     }
 
     pub(crate) fn current_uri_version(&self, uri: &Uri) -> u64 {
-        self.state
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(uri)
-            .map(|(_, version)| *version)
-            .unwrap_or_default()
+        self.state.borrow().uri_version(uri)
     }
 
     pub(crate) fn get(&self, uri: Option<&Uri>) -> Vec<PublishDiagnosticsParams> {
-        let state = self.state.read().unwrap_or_else(PoisonError::into_inner);
+        let state = self.state.borrow();
         if let Some(uri) = uri {
-            state.get(uri).map(|(diagnostics, _)| diagnostics.clone()).into_iter().collect()
+            state.diagnostics.get(uri).map(|(diagnostics, _)| diagnostics.clone()).into_iter().collect()
         } else {
-            state.values().map(|(diagnostics, _)| diagnostics.clone()).collect()
+            state.diagnostics.values().map(|(diagnostics, _)| diagnostics.clone()).collect()
         }
     }
 
     pub(crate) fn uris(&self) -> Vec<Uri> {
-        self.state.read().unwrap_or_else(PoisonError::into_inner).keys().cloned().collect()
+        self.state.borrow().diagnostics.keys().cloned().collect()
     }
 
     pub(crate) fn forget_uri(&self, uri: &Uri) {
-        self.state.write().unwrap_or_else(PoisonError::into_inner).remove(uri);
+        self.state.send_if_modified(|state| {
+            state.diagnostics.remove(uri);
+            // Eviction is not a server publication and should not wake freshness waiters.
+            false
+        });
     }
 
     pub(crate) async fn wait_for_uri_fresh(&self, uri: &Uri, version_before: u64, timeout: Duration) -> Freshness {
         let deadline = Instant::now() + timeout;
-        let mut published = self.version.subscribe();
-        let first = published.wait_for(|_| self.current_uri_version(uri) != version_before);
+        let mut published = self.state.subscribe();
+        let first = published.wait_for(|state| state.uri_version(uri) != version_before);
         if !matches!(timeout_at(deadline, first).await, Ok(Ok(_))) {
             return Freshness::Unconfirmed;
         }
@@ -69,11 +65,23 @@ impl DiagnosticsStore {
         loop {
             let settled = self.current_uri_version(uri);
             let quiet_until = (Instant::now() + self.settle).min(deadline);
-            let republished = published.wait_for(|_| self.current_uri_version(uri) != settled);
+            let republished = published.wait_for(|state| state.uri_version(uri) != settled);
             if !matches!(timeout_at(quiet_until, republished).await, Ok(Ok(_))) {
                 return Freshness::Fresh;
             }
         }
+    }
+}
+
+#[derive(Default)]
+struct DiagnosticsState {
+    diagnostics: HashMap<Uri, (PublishDiagnosticsParams, u64)>,
+    generation: u64,
+}
+
+impl DiagnosticsState {
+    fn uri_version(&self, uri: &Uri) -> u64 {
+        self.diagnostics.get(uri).map(|(_, version)| *version).unwrap_or_default()
     }
 }
 

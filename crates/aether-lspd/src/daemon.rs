@@ -57,6 +57,12 @@ impl LspDaemon {
         })
     }
 
+    #[cfg(feature = "testing")]
+    pub(crate) fn with_test_hooks(mut self, hooks: crate::testing::TestHooks) -> Self {
+        self.workspace_registry.hooks = hooks;
+        self
+    }
+
     /// Serve clients until SIGTERM or SIGINT.
     pub(crate) async fn run(self) -> DaemonResult<()> {
         self.run_until_shutdown(spawn_shutdown_signal_handler()).await

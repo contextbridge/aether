@@ -1,10 +1,13 @@
 #![doc = include_str!("docs/testing.md")]
 
+use std::future::{Future, poll_fn};
 use std::path::{Path, PathBuf};
+use std::pin::pin;
 use std::process::Command;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 
 use crate::LanguageId;
 use crate::daemon::{LspDaemon, Timeouts};
@@ -24,6 +27,7 @@ pub struct TestDaemonBuilder {
     workspace_root: PathBuf,
     language: LanguageId,
     timeouts: Timeouts,
+    hooks: TestHooks,
 }
 
 impl TestDaemon {
@@ -32,7 +36,12 @@ impl TestDaemon {
     }
 
     pub fn builder(workspace_root: &Path, language: LanguageId) -> TestDaemonBuilder {
-        TestDaemonBuilder { workspace_root: workspace_root.to_path_buf(), language, timeouts: Timeouts::default() }
+        TestDaemonBuilder {
+            workspace_root: workspace_root.to_path_buf(),
+            language,
+            timeouts: Timeouts::default(),
+            hooks: TestHooks::default(),
+        }
     }
 
     pub fn shutdown(mut self) -> Result<(), TestDaemonError> {
@@ -49,7 +58,44 @@ impl TestDaemon {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TestPoint {
+    ReadyWait,
+    DocumentOpen(lsp_types::Uri),
+    DocumentSyncWait(lsp_types::Uri),
+    DiagnosticsWait(lsp_types::Uri),
+}
+
+#[derive(Clone, Default)]
+pub struct TestGate {
+    state: Arc<watch::Sender<(bool, bool)>>,
+}
+
+impl TestGate {
+    pub async fn reached(&self) {
+        let _ = self.state.subscribe().wait_for(|(reached, _)| *reached).await;
+    }
+
+    pub fn release(&self) {
+        self.state.send_modify(|(_, released)| *released = true);
+    }
+
+    fn reach(&self) {
+        self.state.send_modify(|(reached, _)| *reached = true);
+    }
+
+    async fn pause(&self) {
+        self.reach();
+        let _ = self.state.subscribe().wait_for(|(_, released)| *released).await;
+    }
+}
+
 impl TestDaemonBuilder {
+    pub fn gate(mut self, point: TestPoint, gate: &TestGate) -> Self {
+        self.hooks.0.push((point, gate.clone()));
+        self
+    }
+
     pub fn request_timeout(mut self, timeout: Duration) -> Self {
         self.timeouts.request = timeout;
         self
@@ -67,7 +113,7 @@ impl TestDaemonBuilder {
 
     pub fn spawn(self) -> Result<TestDaemon, TestDaemonError> {
         let socket_path = socket_path(&self.workspace_root, self.language);
-        let daemon = LspDaemon::bind(socket_path, None, self.timeouts)?;
+        let daemon = LspDaemon::bind(socket_path, None, self.timeouts)?.with_test_hooks(self.hooks);
         let runtime = tokio::runtime::Runtime::new().map_err(TestDaemonError::Runtime)?;
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let task = std::thread::spawn(move || runtime.block_on(daemon.run_until_shutdown(shutdown_rx)));
@@ -156,6 +202,35 @@ pub fn node_project(name: &str) -> TestWorkspace {
 
 pub fn file_uri(path: &Path) -> lsp_types::Uri {
     path_to_uri(path).expect("Invalid file path")
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct TestHooks(Vec<(TestPoint, TestGate)>);
+
+impl TestHooks {
+    pub(crate) async fn pause(&self, point: TestPoint) {
+        if let Some(gate) = self.gate(&point) {
+            gate.pause().await;
+        }
+    }
+
+    pub(crate) async fn observe_pending<T>(&self, point: TestPoint, future: impl Future<Output = T>) -> T {
+        let mut future = pin!(future);
+        poll_fn(|cx| {
+            let result = future.as_mut().poll(cx);
+            if result.is_pending()
+                && let Some(gate) = self.gate(&point)
+            {
+                gate.reach();
+            }
+            result
+        })
+        .await
+    }
+
+    fn gate(&self, point: &TestPoint) -> Option<&TestGate> {
+        self.0.iter().find_map(|(at, gate)| (at == point).then_some(gate))
+    }
 }
 
 const TYPESCRIPT_PACKAGE: &str = "typescript@7.0.2";
