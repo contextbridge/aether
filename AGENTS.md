@@ -17,6 +17,7 @@
 1. Backwards compatibility and fallbacks are not a concern when planning or implementing code.
 2. Favor simplicity over complexity. Good architecture results in simple systems.
 3. Non-doc (double slash) comments should be used extremely sparringly and only to explain the "why?" a certain piece of code exits. Comments should never be used for file separators.
+4. Generic names must start with `T` and proceed to `U`, `V` etc.
 
 ### File organization
 
