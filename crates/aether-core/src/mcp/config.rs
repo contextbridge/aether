@@ -1,5 +1,5 @@
 use super::ToolExposure;
-use aether_auth::{SigV4Config, SigV4Credentials, SigV4Signer};
+use aether_auth::{SigV4Signer, SigV4Signers};
 use http::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, InvalidHeaderName, InvalidHeaderValue};
 use mcp_utils::client::{HttpAuth, OAuthClientRegistration, OAuthSettings, Transport};
 use schemars::JsonSchema;
@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroU16;
 use std::path::Path;
-use std::time::Duration;
 use utils::variables::{VarError, Vars};
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
@@ -98,8 +97,8 @@ pub struct InMemoryServerConfig {
 }
 
 #[derive(Debug)]
-pub(super) enum ServerSource {
-    Ready(Transport),
+pub(super) enum ResolvedServer {
+    Transport(Transport),
     InMemory(Vec<String>),
 }
 
@@ -199,11 +198,11 @@ impl McpServerConfig {
         }
     }
 
-    pub(super) fn resolve(self, vars: &Vars, cwd: &Path) -> Result<ServerSource, ParseError> {
+    pub(super) fn resolve(self, vars: &Vars, cwd: &Path, signers: &SigV4Signers) -> Result<ResolvedServer, ParseError> {
         Ok(match self {
-            McpServerConfig::Stdio(config) => ServerSource::Ready(config.into_transport(vars, cwd)?),
-            McpServerConfig::Remote(config) => ServerSource::Ready(config.into_transport(vars)?),
-            McpServerConfig::InMemory(config) => ServerSource::InMemory(expand_all(vars, &config.args)?),
+            McpServerConfig::Stdio(config) => ResolvedServer::Transport(config.into_transport(vars, cwd)?),
+            McpServerConfig::Remote(config) => ResolvedServer::Transport(config.into_transport(vars, signers)?),
+            McpServerConfig::InMemory(config) => ResolvedServer::InMemory(expand_all(vars, &config.args)?),
         })
     }
 
@@ -241,19 +240,14 @@ impl McpOAuthConfig {
 }
 
 impl McpSigV4Config {
-    fn into_signer(self, vars: &Vars) -> Result<SigV4Signer, VarError> {
+    fn into_signer(self, vars: &Vars, signers: &SigV4Signers) -> Result<SigV4Signer, VarError> {
         let profile = self.profile.map(|profile| vars.expand(&profile)).transpose()?;
-        Ok(SigV4Signer::new(SigV4Config {
-            service: vars.expand(&self.service)?,
-            region: vars.expand(&self.region)?,
-            credentials: SigV4Credentials::DefaultChain { profile },
-            refresh_before_expiry: Duration::from_mins(5),
-        }))
+        Ok(signers.default_chain(vars.expand(&self.service)?, vars.expand(&self.region)?, profile))
     }
 }
 
 impl RemoteServerConfig {
-    pub fn into_transport(self, vars: &Vars) -> Result<Transport, ParseError> {
+    pub fn into_transport(self, vars: &Vars, signers: &SigV4Signers) -> Result<Transport, ParseError> {
         let mut headers = HeaderMap::with_capacity(self.headers.len());
         for (name, value) in self.headers {
             let header_name = name
@@ -269,7 +263,7 @@ impl RemoteServerConfig {
         let has_authorization = headers.contains_key(AUTHORIZATION);
         let auth = match (self.oauth, self.sigv4) {
             (Some(oauth), None) if !has_authorization => HttpAuth::OAuth(expand_oauth(vars, oauth)?.into_settings()),
-            (None, Some(sigv4)) if !has_authorization => HttpAuth::SigV4(sigv4.into_signer(vars)?),
+            (None, Some(sigv4)) if !has_authorization => HttpAuth::SigV4(sigv4.into_signer(vars, signers)?),
             (None, None) => default_auth(&headers),
             _ => return Err(ParseError::ConflictingAuth),
         };

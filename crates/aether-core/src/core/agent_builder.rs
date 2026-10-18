@@ -4,7 +4,6 @@ use crate::context::{CompactionConfig, SessionUsageTracker};
 use crate::core::{Agent, AgentDeps, Prompt, Result};
 use crate::events::{AgentEvent, AgentObserver, Command, TurnOutcome};
 use crate::mcp::McpCatalog;
-use llm::parser::ModelProviderParser;
 use llm::{ChatMessage, ModelSettings, SessionUsageEvent, StreamingModelProvider};
 use std::sync::Arc;
 use std::time::Duration;
@@ -80,12 +79,7 @@ impl AgentBuilder {
     ///
     /// The LLM provider is derived from `spec.model` via `ModelProviderParser`.
     pub async fn from_spec(spec: &AgentSpec, deps: &AgentDeps) -> Result<Self> {
-        let parser = ModelProviderParser::default().with_provider_connections(spec.provider_connections.clone());
-        let parser = match deps.oauth_credential_store.clone() {
-            Some(store) => parser.with_codex_provider(store),
-            None => parser,
-        };
-        let (provider, _) = parser.parse(&spec.model).await?;
+        let (provider, _) = deps.model_providers().parse(&spec.model, &spec.provider_connections).await?;
         Ok(Self::from_spec_with_llm(spec, deps, Arc::from(provider)))
     }
 

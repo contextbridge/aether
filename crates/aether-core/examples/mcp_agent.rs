@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let llm = GenericProvider::from_env(&OPENROUTER)?.with_model("z-ai/glm-4.5-air");
     let config = McpConfig::from_json_file("examples/mcp.json")?;
-    let mcp = mcp(std::env::current_dir()?).with_config(config)?.spawn()?;
+    let mcp = mcp(std::env::current_dir()?).with_config(config).spawn()?;
     mcp.ready().await;
 
     let (tx, mut rx, _handle) = agent(llm)
