@@ -1,28 +1,28 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use utils::git::{GitError, git, git_with_stdin};
+use utils::git::{GitError, git, git_text, git_with_stdin};
 
 pub(crate) fn current_ref(repo: &Path) -> Option<String> {
-    git_text(repo, &["branch", "--show-current"])
+    git_text(Some(repo), &["branch", "--show-current"])
         .ok()
         .filter(|name| !name.is_empty())
-        .or_else(|| git_text(repo, &["rev-parse", "--short", "HEAD"]).ok())
+        .or_else(|| git_text(Some(repo), &["rev-parse", "--short", "HEAD"]).ok())
 }
 
 /// Resolves the root of the git working tree containing `path`.
 pub(super) fn repo_root(path: &Path) -> Result<PathBuf, GitError> {
-    git_text(path, &["rev-parse", "--show-toplevel"]).map(PathBuf::from)
+    git_text(Some(path), &["rev-parse", "--show-toplevel"]).map(PathBuf::from)
 }
 
 /// Returns the hash of the repository's first root commit, a stable identity
 /// shared by every clone and copy of the same repository.
 pub(super) fn root_commit_hash(repo: &Path) -> Result<String, GitError> {
-    Ok(git_text(repo, &["rev-list", "--max-parents=0", "HEAD"])?.lines().next().unwrap_or_default().to_string())
+    Ok(git_text(Some(repo), &["rev-list", "--max-parents=0", "HEAD"])?.lines().next().unwrap_or_default().to_string())
 }
 
 pub(super) fn head_commit_hash(repo: &Path) -> Result<String, GitError> {
-    git_text(repo, &["rev-parse", "HEAD"])
+    git_text(Some(repo), &["rev-parse", "HEAD"])
 }
 
 pub(super) fn is_clean(repo: &Path) -> Result<bool, GitError> {
@@ -71,10 +71,6 @@ pub(super) fn reset_clean(repo: &Path) -> Result<(), GitError> {
     git(Some(repo), &["reset", "--hard", "HEAD"])?;
     git(Some(repo), &["clean", "-fd"])?;
     Ok(())
-}
-
-fn git_text(repo: &Path, args: &[&str]) -> Result<String, GitError> {
-    git(Some(repo), args).map(|stdout| String::from_utf8_lossy(&stdout).trim().to_string())
 }
 
 #[cfg(test)]
