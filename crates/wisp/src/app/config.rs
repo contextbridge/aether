@@ -74,16 +74,13 @@ pub(super) fn build_theme_entries(settings: &UiSettings, files: &[String]) -> Ve
     let values: Vec<LocalConfigValue> = builtin.chain(custom).collect();
 
     let current_file = settings.theme.selection_id();
-    let current_value_index = values.iter().position(|value| value.value == current_file).unwrap_or(0);
 
     vec![SettingsMenuEntry {
         config_id: THEME_CONFIG_ID.to_string(),
         title: "Theme".to_string(),
         values,
-        current_value_index,
         current_raw_value: current_file,
         local: true,
         multi_select: false,
-        display_name: None,
     }]
 }

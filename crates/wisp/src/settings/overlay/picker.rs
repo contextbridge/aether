@@ -22,10 +22,12 @@ pub(super) struct SettingsPicker {
 
 impl SettingsPicker {
     pub(super) fn from_entry(entry: &SettingsMenuEntry) -> Option<Self> {
-        let current_value = entry.values.get(entry.current_value_index)?.value.clone();
+        let current_value_index =
+            entry.values.iter().position(|value| value.value == entry.current_raw_value).unwrap_or(0);
+        let current_value = entry.values.get(current_value_index)?.value.clone();
         let mut values =
             FilterableList::new(entry.values.clone(), value_match_key).selectable(|value| !value.is_disabled);
-        values.select_index(entry.current_value_index);
+        values.select_index(current_value_index);
 
         Some(Self { config_id: entry.config_id.clone(), title: entry.title.clone(), current_value, values })
     }

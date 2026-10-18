@@ -30,10 +30,20 @@ impl MenuRow {
     fn label(&self, live: &LiveSettingsData) -> String {
         match self {
             Self::Select(entry) => {
-                let current = entry
-                    .display_name
+                let combined = entry
+                    .multi_select
+                    .then(|| combined_display_name(&entry.current_raw_value, &entry.values))
+                    .flatten();
+                let current = combined
                     .as_deref()
-                    .or_else(|| entry.values.get(entry.current_value_index).map(|value| value.name.as_str()))
+                    .or_else(|| {
+                        entry
+                            .values
+                            .iter()
+                            .find(|value| value.value == entry.current_raw_value)
+                            .or_else(|| entry.values.first())
+                            .map(|value| value.name.as_str())
+                    })
                     .unwrap_or("?");
                 format!("{}: {current}", entry.title)
             }
@@ -92,9 +102,6 @@ impl SettingsMenu {
         });
         if let Some(entry) = entry {
             entry.current_raw_value.clone_from(&change.new_value);
-            if let Some(index) = entry.values.iter().position(|value| value.value == change.new_value) {
-                entry.current_value_index = index;
-            }
         }
     }
 
@@ -132,9 +139,7 @@ fn menu_entry(option: &LocalConfigOption) -> Option<SettingsMenuEntry> {
     Some(SettingsMenuEntry {
         config_id: option.id.clone(),
         title: option.name.clone(),
-        current_value_index: values.iter().position(|value| value.value == *current_value).unwrap_or(0),
         current_raw_value: current_value.clone(),
-        display_name: (*multi_select).then(|| combined_display_name(current_value, values)).flatten(),
         values: values.clone(),
         multi_select: *multi_select,
         local: false,

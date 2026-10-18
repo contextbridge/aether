@@ -41,10 +41,8 @@ pub struct SettingsMenuEntry {
     pub config_id: String,
     pub title: String,
     pub values: Vec<LocalConfigValue>,
-    pub current_value_index: usize,
     pub current_raw_value: String,
     pub multi_select: bool,
-    pub display_name: Option<String>,
     /// Client-side rather than part of the agent's schema, so it survives a
     /// config-options push that replaces every agent-provided row.
     pub local: bool,

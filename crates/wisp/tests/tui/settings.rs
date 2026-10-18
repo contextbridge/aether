@@ -1307,6 +1307,27 @@ fn settings_menu_shows_every_selected_model_for_a_multi_select() {
 }
 
 #[test]
+fn settings_menu_derives_the_model_label_after_local_changes() {
+    let option = LocalConfigOption::from_acp(model_picker(
+        "opus,sonnet",
+        choices(&[("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")]),
+    ));
+    let mut overlay = SettingsOverlay::new(&[option], vec![], &[]);
+    let area = ratatui::layout::Rect::new(0, 0, 80, 20);
+
+    for (value, label) in [("sonnet,haiku", "Sonnet, Haiku"), ("haiku", "Haiku")] {
+        overlay.apply_change(&wisp::settings::overlay::SettingsChange {
+            config_id: "model".into(),
+            new_value: value.into(),
+        });
+        let buffer = render_surface(Buffer::empty(area), |buffer, cx| overlay.render(area, buffer, cx));
+        let text = buffer_text(&buffer);
+        assert!(text.contains(&format!("Model: {label}")), "{text}");
+        assert!(!text.contains("Opus"), "{text}");
+    }
+}
+
+#[test]
 fn settings_menu_selection_wraps() {
     let mut ui = TestUiBuilder::new().config_options(vec![select("model", "Model", "a", &[("a", "A")])]).build();
     ui.run_command("/settings");
