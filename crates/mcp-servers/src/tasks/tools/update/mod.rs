@@ -36,24 +36,12 @@ pub fn execute_task_update(input: TaskUpdateInput, store: &mut TaskStore) -> Res
     let TaskUpdateInput { id, update } = input;
     let id = TaskId::from(id);
 
-    let changes: Vec<String> = [
-        update.title.as_ref().map(|_| "title"),
-        update.description.as_ref().map(|_| "description"),
-        update.status.as_ref().map(|_| "status"),
-        update.assignee.as_ref().map(|_| "assignee"),
-        update.deps.as_ref().map(|_| "deps"),
-        update.summary.as_ref().map(|_| "summary"),
-        update.decisions.as_ref().map(|_| "decisions"),
-        update.facts.as_ref().map(|_| "facts"),
-        update.next_steps.as_ref().map(|_| "next_steps"),
-        update.blockers.as_ref().map(|_| "blockers"),
-        update.files_read.as_ref().map(|_| "files_read"),
-        update.resources.as_ref().map(|_| "resources"),
-    ]
-    .into_iter()
-    .flatten()
-    .map(String::from)
-    .collect();
+    let changes = serde_json::to_value(&update)?
+        .as_object()
+        .expect("TaskUpdate serializes as an object")
+        .keys()
+        .cloned()
+        .collect();
 
     let completing = update.status == Some(TaskStatus::Completed);
     let ready_before: BTreeSet<TaskId> = if completing {
@@ -96,6 +84,34 @@ mod tests {
 
         assert_eq!(output.task.title, "Updated title");
         assert_eq!(output.changes, vec!["title"]);
+    }
+
+    #[test]
+    fn changes_use_wire_names_and_include_explicitly_empty_fields() {
+        let mut tasks = TestTaskStore::new();
+        let task = tasks.root_task("Task");
+        let input: TaskUpdateInput = serde_json::from_value(serde_json::json!({
+            "id": task.id,
+            "nextSteps": ["Review"],
+            "filesRead": [],
+            "summary": "",
+        }))
+        .unwrap();
+
+        let output = execute_task_update(input, tasks.store_mut()).unwrap();
+
+        let changes: BTreeSet<_> = output.changes.iter().map(String::as_str).collect();
+        assert_eq!(changes, BTreeSet::from(["nextSteps", "filesRead", "summary"]));
+    }
+
+    #[test]
+    fn absent_fields_are_not_reported_as_changes() {
+        let mut tasks = TestTaskStore::new();
+        let task = tasks.root_task("Task");
+        let output =
+            execute_task_update(update_input(task.id.as_str(), TaskUpdate::default()), tasks.store_mut()).unwrap();
+
+        assert_eq!(output.changes, Vec::<String>::new());
     }
 
     #[test]
