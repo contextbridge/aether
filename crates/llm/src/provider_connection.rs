@@ -4,7 +4,9 @@ use std::time::Duration;
 
 pub(crate) const DEFAULT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_mins(5);
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderAuthMode {
     #[default]
@@ -12,7 +14,7 @@ pub enum ProviderAuthMode {
     None,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ProviderConnectionConfig {
     pub base_url: Option<String>,
     pub auth_mode: ProviderAuthMode,

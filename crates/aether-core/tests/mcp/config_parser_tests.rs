@@ -1,4 +1,4 @@
-use aether_auth::SigV4Credentials;
+use aether_auth::{SigV4Credentials, SigV4Signers};
 use aether_core::mcp::{
     McpConfig, McpServerConfig, ParseError, StdioServerConfig, ToolExposure, ToolFilter, ToolMatcher, http_transport,
 };
@@ -386,7 +386,7 @@ fn only_server(json: &str) -> McpServerConfig {
 fn try_transport(json: &str, vars: &Vars) -> Result<Transport, ParseError> {
     match only_server(json) {
         McpServerConfig::Stdio(config) => config.into_transport(vars, Path::new("/cwd")),
-        McpServerConfig::Remote(config) => config.into_transport(vars),
+        McpServerConfig::Remote(config) => config.into_transport(vars, &SigV4Signers::default()),
         McpServerConfig::InMemory(_) => panic!("in-memory servers have no transport"),
     }
 }
@@ -424,7 +424,7 @@ fn remote(server: &str) -> Result<Transport, ParseError> {
     else {
         panic!("expected a remote server")
     };
-    config.into_transport(&vars(&[]))
+    config.into_transport(&vars(&[]), &SigV4Signers::default())
 }
 
 fn deferred(allow: &[&str], deny: &[&str]) -> ToolExposure {

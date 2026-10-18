@@ -20,4 +20,4 @@ pub use keyring::KeyringCredentialStore;
 #[cfg(feature = "sigv4")]
 mod sigv4;
 #[cfg(feature = "sigv4")]
-pub use sigv4::{SigV4Config, SigV4Credentials, SigV4Error, SigV4Signer};
+pub use sigv4::{SigV4Config, SigV4Credentials, SigV4Error, SigV4Signer, SigV4Signers};

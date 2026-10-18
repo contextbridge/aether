@@ -208,6 +208,7 @@ impl AcpState {
                     error!("OAuth flow failed for {method_id}: {e}");
                     Error::internal_error()
                 })?;
+                self.factory.forget_cached_credentials().await;
             }
             _ => return Err(Error::invalid_params()),
         }
@@ -264,6 +265,7 @@ impl AcpState {
         cx: &ConnectionTo<Client>,
     ) -> Result<LogoutAuthResponse, Error> {
         self.oauth_credential_store.delete("codex").await.map_err(|e| internal_error(e.to_string()))?;
+        self.factory.forget_cached_credentials().await;
         self.broadcast_auth_state(cx).await;
         Ok(LogoutAuthResponse::new())
     }

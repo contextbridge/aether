@@ -2,7 +2,10 @@ use crate::output::OutputFormat;
 use futures::StreamExt;
 use llm::catalog::{ReasoningEffortError, validate_reasoning_effort};
 use llm::parser::ModelProviderParser;
-use llm::{ChatMessage, Context, LlmError, LlmResponse, ModelSettings, ReasoningEffort, StreamingModelProvider};
+use llm::{
+    ChatMessage, Context, LlmError, LlmResponse, ModelSettings, ProviderConnectionOverrides, ReasoningEffort,
+    StreamingModelProvider,
+};
 use std::io::{Read, stdin};
 use std::process::ExitCode;
 use thiserror::Error;
@@ -82,7 +85,7 @@ pub async fn run(args: GenerateArgs) -> Result<ExitCode, GenerateCommandError> {
     let prompt = resolve_prompt(args.prompt.as_deref(), args.prompt_file.as_deref())?;
     validate_reasoning_effort(&args.model, args.reasoning_effort)?;
     let (provider, _) = ModelProviderParser::default()
-        .parse(&args.model)
+        .parse(&args.model, &ProviderConnectionOverrides::default())
         .await
         .map_err(|source| GenerateCommandError::Model { model: args.model.clone(), source })?;
 

@@ -28,13 +28,16 @@ Parse a `"provider:model"` string into a provider, build a context, and stream t
 ```rust,no_run
 use llm::parser::ModelProviderParser;
 use llm::types::IsoString;
-use llm::{ChatMessage, ContentBlock, Context, LlmResponse, MessageId, StreamingModelProvider};
+use llm::{
+    ChatMessage, ContentBlock, Context, LlmResponse, MessageId, ProviderConnectionOverrides, StreamingModelProvider,
+};
 use tokio_stream::StreamExt;
 
 #[tokio::main]
 async fn main() -> llm::Result<()> {
     let parser = ModelProviderParser::default();
-    let (provider, _model) = parser.parse("anthropic:claude-sonnet-4-5-20250929").await?;
+    let connections = ProviderConnectionOverrides::default();
+    let (provider, _model) = parser.parse("anthropic:claude-sonnet-4-5-20250929", &connections).await?;
 
     let context = Context::new(
         vec![ChatMessage::User {
@@ -131,17 +134,19 @@ context.push_assistant_turn(
 ```rust,no_run
 # async fn example() {
 use llm::parser::ModelProviderParser;
+use llm::ProviderConnectionOverrides;
 
 let parser = ModelProviderParser::default();
+let connections = ProviderConnectionOverrides::default();
 
 // Cloud providers (need API keys in env)
-let (provider, _) = parser.parse("anthropic:claude-sonnet-4-5-20250929").await.unwrap();
-let (provider, _) = parser.parse("openai:gpt-4o").await.unwrap();
-let (provider, _) = parser.parse("openrouter:moonshotai/kimi-k2").await.unwrap();
+let (provider, _) = parser.parse("anthropic:claude-sonnet-4-5-20250929", &connections).await.unwrap();
+let (provider, _) = parser.parse("openai:gpt-4o", &connections).await.unwrap();
+let (provider, _) = parser.parse("openrouter:moonshotai/kimi-k2", &connections).await.unwrap();
 
 // Local models (no API key needed)
-let (provider, _) = parser.parse("ollama:llama3.2").await.unwrap();
-let (provider, _) = parser.parse("llamacpp").await.unwrap();
+let (provider, _) = parser.parse("ollama:llama3.2", &connections).await.unwrap();
+let (provider, _) = parser.parse("llamacpp", &connections).await.unwrap();
 # }
 ```
 

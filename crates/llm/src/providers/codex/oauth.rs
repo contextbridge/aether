@@ -158,6 +158,10 @@ pub(crate) fn extract_account_id(access_token: &str) -> Result<String, LlmError>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::ModelProviderParser;
+    use crate::providers::codex::CodexProvider;
+    use crate::providers::test_capture_server::{CaptureServer, hello_context};
+    use crate::{LlmModel, ProviderConnectionOverride, ProviderConnectionOverrides, StreamingModelProvider};
     use aether_auth::{MemoryCredentialStore, OAuthCredential};
     use axum::Router;
     use axum::body::{Body, to_bytes};
@@ -165,9 +169,12 @@ mod tests {
     use axum::http::{HeaderMap, Method, Request, StatusCode};
     use axum::response::IntoResponse;
     use axum::routing::post;
-    use std::collections::HashMap;
+    use futures::StreamExt;
+    use futures::future::join_all;
+    use std::collections::{BTreeMap, HashMap, HashSet};
+    use std::sync::{Mutex as StdMutex, PoisonError};
     use tokio::net::TcpListener;
-    use tokio::sync::{Mutex as TokioMutex, oneshot};
+    use tokio::sync::mpsc;
 
     /// Create a test JWT with a given payload
     fn make_test_jwt(payload: &serde_json::Value) -> String {
@@ -221,7 +228,7 @@ mod tests {
     #[tokio::test]
     async fn codex_token_manager_refreshes_expired_credential() {
         let new_access_token = test_jwt_for_account("acct_new");
-        let endpoint = FakeTokenEndpoint::start(TokenEndpointResponse::success(&new_access_token, None)).await;
+        let mut endpoint = FakeTokenEndpoint::start(TokenEndpointResponse::success(&new_access_token, None)).await;
         let store = Arc::new(
             MemoryCredentialStore::new()
                 .with_credential("codex", expired_credential("old-access", Some("refresh-old"))),
@@ -229,7 +236,7 @@ mod tests {
 
         let manager = CodexTokenManager::new_with_token_url(store.clone(), "codex", endpoint.url.clone());
         let (access_token, account_id) = manager.get_valid_token().await.unwrap();
-        let request = endpoint.request.await.expect("token endpoint request");
+        let request = endpoint.captured().await;
         let saved = store.load_credential("codex").await.unwrap().unwrap();
 
         assert_eq!(access_token, new_access_token);
@@ -332,9 +339,39 @@ mod tests {
         assert_eq!(saved.refresh_token, original.refresh_token);
     }
 
+    #[tokio::test]
+    async fn codex_models_from_one_parser_refresh_an_expired_token_once() {
+        let new_access_token = test_jwt_for_account("acct_new");
+        let endpoint =
+            FakeTokenEndpoint::start(TokenEndpointResponse::success(&new_access_token, Some("refresh-new"))).await;
+        let store = Arc::new(
+            MemoryCredentialStore::new()
+                .with_credential("codex", expired_credential("old-access", Some("refresh-old"))),
+        );
+        let server = CaptureServer::start_responses().await;
+        let manager = CodexTokenManager::new_with_token_url(store.clone(), "codex", endpoint.url.clone());
+        let parser = ModelProviderParser::default().with_codex_provider(CodexProvider::from_token_manager(manager));
+        let connections = ProviderConnectionOverrides::new(BTreeMap::from([(
+            "codex".to_string(),
+            ProviderConnectionOverride::url(&server.base_url),
+        )]));
+
+        let (parser, connections) = (&parser, &connections);
+        let responses = join_all(codex_specs().map(|spec| async move {
+            let (provider, _) = parser.parse(&spec, connections).await.unwrap();
+            provider.stream_response(&hello_context()).collect::<Vec<_>>().await
+        }))
+        .await;
+        let saved = store.load_credential("codex").await.unwrap().unwrap();
+
+        assert!(responses.iter().flatten().all(Result::is_ok), "{responses:?}");
+        assert_eq!(saved.access_token, new_access_token);
+        assert_eq!(saved.refresh_token.as_deref(), Some("refresh-new"));
+    }
+
     struct FakeTokenEndpoint {
         url: TokenUrl,
-        request: oneshot::Receiver<CapturedTokenRequest>,
+        requests: mpsc::UnboundedReceiver<CapturedTokenRequest>,
     }
 
     struct CapturedTokenRequest {
@@ -347,8 +384,8 @@ mod tests {
     #[derive(Clone)]
     struct FakeTokenState {
         response: TokenEndpointResponse,
-        request_tx: Arc<TokioMutex<Option<oneshot::Sender<CapturedTokenRequest>>>>,
-        shutdown_tx: Arc<TokioMutex<Option<oneshot::Sender<()>>>>,
+        requests: mpsc::UnboundedSender<CapturedTokenRequest>,
+        redeemed: Arc<StdMutex<HashSet<String>>>,
     }
 
     #[derive(Clone)]
@@ -383,42 +420,53 @@ mod tests {
                 listener.local_addr().expect("fake token endpoint address")
             ))
             .expect("fake token endpoint URL is valid");
-            let (request_tx, request) = oneshot::channel();
-            let (shutdown_tx, shutdown) = oneshot::channel();
-            let state = FakeTokenState {
-                response,
-                request_tx: Arc::new(TokioMutex::new(Some(request_tx))),
-                shutdown_tx: Arc::new(TokioMutex::new(Some(shutdown_tx))),
-            };
+            let (sender, requests) = mpsc::unbounded_channel();
+            let state = FakeTokenState { response, requests: sender, redeemed: Arc::default() };
             let app = Router::new().route("/oauth/token", post(capture_token_request)).with_state(state);
-            tokio::spawn(async move {
-                axum::serve(listener, app)
-                    .with_graceful_shutdown(async {
-                        let _ = shutdown.await;
-                    })
-                    .await
-                    .expect("serve fake token endpoint");
-            });
-            Self { url, request }
+            tokio::spawn(async move { axum::serve(listener, app).await.expect("serve fake token endpoint") });
+            Self { url, requests }
+        }
+
+        async fn captured(&mut self) -> CapturedTokenRequest {
+            self.requests.recv().await.expect("token endpoint request")
         }
     }
 
-    async fn capture_token_request(State(state): State<FakeTokenState>, request: Request<Body>) -> impl IntoResponse {
+    async fn capture_token_request(
+        State(state): State<FakeTokenState>,
+        request: Request<Body>,
+    ) -> axum::response::Response {
         let (parts, body) = request.into_parts();
         let body = to_bytes(body, usize::MAX).await.expect("read token request body");
-        let form = url::form_urlencoded::parse(&body).into_owned().collect();
-        if let Some(tx) = state.request_tx.lock().await.take() {
-            let _ = tx.send(CapturedTokenRequest {
-                method: parts.method,
-                path: parts.uri.path().to_string(),
-                headers: parts.headers,
-                form,
-            });
+        let form: HashMap<String, String> = url::form_urlencoded::parse(&body).into_owned().collect();
+        let reused = form
+            .get("refresh_token")
+            .is_some_and(|token| !state.redeemed.lock().unwrap_or_else(PoisonError::into_inner).insert(token.clone()));
+        let _ = state.requests.send(CapturedTokenRequest {
+            method: parts.method,
+            path: parts.uri.path().to_string(),
+            headers: parts.headers,
+            form,
+        });
+        if reused {
+            return TokenEndpointResponse::failure().into_response();
         }
-        if let Some(tx) = state.shutdown_tx.lock().await.take() {
-            let _ = tx.send(());
+        state.response.into_response()
+    }
+
+    impl IntoResponse for TokenEndpointResponse {
+        fn into_response(self) -> axum::response::Response {
+            (self.status, axum::Json(self.body)).into_response()
         }
-        (state.response.status, axum::Json(state.response.body))
+    }
+
+    fn codex_specs() -> impl Iterator<Item = String> {
+        let models: Vec<String> = LlmModel::all()
+            .iter()
+            .filter(|model| model.provider_enum() == crate::catalog::Provider::Codex)
+            .map(ToString::to_string)
+            .collect();
+        models.into_iter().cycle().take(20)
     }
 
     fn expired_credential(access_token: &str, refresh_token: Option<&str>) -> OAuthCredential {

@@ -5,7 +5,7 @@ use mcp_utils::server::{McpServer, ServeError, UnixSocket};
 use utils::path::aether_home;
 use utils::variables::Vars;
 
-use super::config::ServerSource;
+use super::config::ResolvedServer;
 use super::{McpCatalog, McpConfig, McpServerConfig, ParseError, ToolExposure, ToolFilter};
 use crate::core::AgentDeps;
 
@@ -44,6 +44,8 @@ pub enum McpSpawnError {
     InMemoryFactoryNotFound(String),
     #[error("Failed to create in-memory MCP server '{name}': {source}")]
     ServerFactory { name: String, source: ServerFactoryError },
+    #[error("Invalid config for MCP server '{name}': {source}")]
+    Config { name: String, source: ParseError },
 }
 
 impl McpBuilder {
@@ -65,12 +67,12 @@ impl McpBuilder {
         }
     }
 
-    pub fn with_config(mut self, config: McpConfig) -> Result<Self, ParseError> {
+    pub fn with_config(mut self, config: McpConfig) -> Self {
         for (name, server) in config.servers {
-            let server = ConfiguredServer::from_config(name, server, &self.vars, &self.root_dir)?;
-            self.insert(server);
+            let exposure = server.defer_tools().clone();
+            self.insert(ConfiguredServer { name, exposure, source: ServerSource::Config(server) });
         }
-        Ok(self)
+        self
     }
 
     pub fn with_servers(self, servers: Vec<ServerSpec>) -> Self {
@@ -78,7 +80,7 @@ impl McpBuilder {
     }
 
     pub fn with_server(mut self, spec: ServerSpec, exposure: ToolExposure) -> Self {
-        self.insert(ConfiguredServer { name: spec.name, exposure, source: ServerSource::Ready(spec.transport) });
+        self.insert(ConfiguredServer { name: spec.name, exposure, source: ServerSource::Transport(spec.transport) });
         self
     }
 
@@ -120,7 +122,7 @@ impl McpBuilder {
         let servers = self
             .servers
             .into_iter()
-            .map(|server| server.build(&self.factories, &services))
+            .map(|server| server.build(&self.factories, &services, &self.vars))
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(McpCatalog::new(McpGateway::new(servers, &options), self.tool_filter, exposures, socket))
@@ -136,7 +138,7 @@ impl McpBuilder {
     fn client_options(&self) -> ClientOptions {
         let mut options =
             ClientOptions::default().implementation(Implementation::new("aether", env!("CARGO_PKG_VERSION")));
-        if let Some(store) = self.agent_deps.oauth_credential_store.clone() {
+        if let Some(store) = self.agent_deps.oauth_credential_store().cloned() {
             options = options.oauth_store(store);
         }
         if let Some(sink) = self.elicitation.clone() {
@@ -154,20 +156,27 @@ struct ConfiguredServer {
     source: ServerSource,
 }
 
-impl ConfiguredServer {
-    fn from_config(name: String, config: McpServerConfig, vars: &Vars, root_dir: &Path) -> Result<Self, ParseError> {
-        let exposure = config.defer_tools().clone();
-        Ok(Self { name, exposure, source: config.resolve(vars, root_dir)? })
-    }
+enum ServerSource {
+    Transport(Transport),
+    Config(McpServerConfig),
+}
 
+impl ConfiguredServer {
     fn build(
         self,
         factories: &HashMap<String, ServerFactory>,
         services: &RuntimeServices,
+        vars: &Vars,
     ) -> Result<ServerSpec, McpSpawnError> {
-        let transport = match self.source {
-            ServerSource::Ready(transport) => transport,
-            ServerSource::InMemory(args) => {
+        let resolved = match self.source {
+            ServerSource::Transport(transport) => ResolvedServer::Transport(transport),
+            ServerSource::Config(config) => config
+                .resolve(vars, &services.root_dir, &services.agent_deps.sigv4_signers)
+                .map_err(|source| McpSpawnError::Config { name: self.name.clone(), source })?,
+        };
+        let transport = match resolved {
+            ResolvedServer::Transport(transport) => transport,
+            ResolvedServer::InMemory(args) => {
                 let factory = factories
                     .get(&self.name)
                     .ok_or_else(|| McpSpawnError::InMemoryFactoryNotFound(self.name.clone()))?;
@@ -210,8 +219,7 @@ mod tests {
                 *factory_received.lock().unwrap() = Some(services.clone());
                 Ok(FakeMcpServer::new().into())
             })
-            .with_config(config(r#"{"servers":{"test":{"type":"in-memory","args":["--root","${WORKSPACE}/tools"]}}}"#))
-            .unwrap();
+            .with_config(config(r#"{"servers":{"test":{"type":"in-memory","args":["--root","${WORKSPACE}/tools"]}}}"#));
         assert_eq!(calls.load(Ordering::SeqCst), 0);
 
         let _spawned = builder.spawn().unwrap();
@@ -219,7 +227,7 @@ mod tests {
         let services = received.lock().unwrap().clone().expect("factory received runtime services");
         assert_eq!(services.root_dir, PathBuf::from("/workspace"));
         assert!(Arc::ptr_eq(
-            services.agent_deps.oauth_credential_store.as_ref().expect("factory received agent dependencies"),
+            services.agent_deps.oauth_credential_store().expect("factory received agent dependencies"),
             &oauth_store,
         ));
         assert!(services.deferred_tools_socket.is_none());
@@ -235,7 +243,6 @@ mod tests {
                 Ok(FakeMcpServer::new().into())
             })
             .with_config(config(r#"{"servers":{"test":{"type":"in-memory","deferTools":true}}}"#))
-            .unwrap()
             .spawn()
             .unwrap();
 
@@ -264,7 +271,6 @@ mod tests {
         let mcp = McpBuilder::new("/workspace")
             .register_in_memory_server("test", |_, _| Ok(FakeMcpServer::math().into()))
             .with_config(config(r#"{"servers":{"test":{"type":"in-memory"}}}"#))
-            .unwrap()
             .spawn()
             .unwrap();
 
@@ -279,7 +285,6 @@ mod tests {
             .register_in_memory_server("configured", |_, _| Ok(FakeMcpServer::new().into()))
             .with_servers(vec![ServerSpec::in_process("ready", FakeMcpServer::new())])
             .with_config(config(r#"{"servers":{"configured":{"type":"in-memory"}}}"#))
-            .unwrap()
             .spawn()
             .unwrap();
 
@@ -312,9 +317,8 @@ mod tests {
 
     #[tokio::test]
     async fn missing_in_memory_factory_fails_at_spawn_with_server_name() {
-        let builder = McpBuilder::new("/workspace")
-            .with_config(config(r#"{"servers":{"custom":{"type":"in-memory"}}}"#))
-            .unwrap();
+        let builder =
+            McpBuilder::new("/workspace").with_config(config(r#"{"servers":{"custom":{"type":"in-memory"}}}"#));
 
         let Err(error) = builder.spawn() else {
             panic!("spawn should reject an unregistered factory");
@@ -326,14 +330,26 @@ mod tests {
     async fn rejected_in_memory_args_fail_spawn_with_server_name() {
         let builder = McpBuilder::new("/workspace")
             .register_in_memory_server("custom", |args, _| Err(format!("unexpected argument '{}'", args[0]).into()))
-            .with_config(config(r#"{"servers":{"custom":{"type":"in-memory","args":["--bad"]}}}"#))
-            .unwrap();
+            .with_config(config(r#"{"servers":{"custom":{"type":"in-memory","args":["--bad"]}}}"#));
 
         let Err(error) = builder.spawn() else {
             panic!("spawn should surface the factory's error");
         };
         assert!(matches!(error, McpSpawnError::ServerFactory { ref name, .. } if name == "custom"));
         assert!(error.to_string().contains("unexpected argument '--bad'"), "unexpected error: {error}");
+    }
+
+    #[tokio::test]
+    async fn invalid_server_config_fails_spawn_with_server_name() {
+        let builder = McpBuilder::new("/workspace")
+            .with_config(config(r#"{"servers":{"remote":{"type":"http","url":"${MISSING}"}}}"#));
+
+        let Err(error) = builder.spawn() else {
+            panic!("spawn should reject an unresolvable server config");
+        };
+        assert!(
+            matches!(error, McpSpawnError::Config { ref name, source: ParseError::VarError(_) } if name == "remote")
+        );
     }
 
     #[tokio::test]
@@ -361,7 +377,6 @@ mod tests {
                 Ok(FakeMcpServer::new().into())
             })
             .with_config(config(json))
-            .unwrap()
             .spawn()
             .unwrap();
         received.lock().unwrap().clone()

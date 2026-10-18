@@ -3,6 +3,7 @@ use crate::acp::session::git_diff::GitDiffService;
 use acp_utils::elicitation;
 use acp_utils::notifications::{GitDiffEventPayload, McpNotification};
 use aether_auth::OAuthCredentialStorage;
+use aether_core::core::AgentDeps;
 use aether_core::events::{AgentCommand, AgentEvent, Command, TurnEvent, TurnOutcome};
 use aether_core::mcp::McpCatalog;
 use aether_sessions::model::{SessionControlEvent, SessionEvent, last_session_usage};
@@ -16,7 +17,6 @@ use clankerdiff_protocol::client::ClientCommand;
 use clankerdiff_protocol::shared::{DocumentUpdate, Event};
 use futures::{FutureExt, StreamExt, future::BoxFuture};
 use llm::catalog::LlmModel;
-use llm::parser::ModelProviderParser;
 use llm::{ChatMessage, ContentBlock, MessageId, ProviderConnectionOverrides};
 use mcp_utils::client::{Elicitation, ElicitationRequest};
 use std::collections::HashMap;
@@ -194,6 +194,7 @@ pub(crate) struct SessionActorInit {
     pub connection: Option<ConnectionTo<Client>>,
     pub repository: Arc<SessionStore>,
     pub oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
+    pub agent_deps: AgentDeps,
     pub active_agent: AgentKey,
     pub specs: SessionAgents,
     pub runtime_factory: Arc<dyn RuntimeFactory>,
@@ -214,6 +215,7 @@ pub(crate) struct SessionActor {
     mcp_servers: Vec<acp::McpServer>,
     repository: Arc<SessionStore>,
     oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
+    agent_deps: AgentDeps,
     cancel: CancellationToken,
     active_agent: AgentKey,
     specs: SessionAgents,
@@ -246,6 +248,7 @@ impl SessionActor {
             mcp_servers: init.mcp_servers,
             repository: init.repository,
             oauth_credential_store: init.oauth_credential_store,
+            agent_deps: init.agent_deps,
             cancel: cancel.clone(),
             active_agent: init.active_agent,
             specs: init.specs,
@@ -603,10 +606,8 @@ impl SessionActor {
                 Ok(())
             }
             Switch::Model(model) => {
-                let parser = ModelProviderParser::default()
-                    .with_provider_connections(self.active_provider_connections())
-                    .with_codex_provider(Arc::clone(&self.oauth_credential_store));
-                let (provider, _) = parser.parse(&model).await?;
+                let (provider, _) =
+                    self.agent_deps.model_providers().parse(&model, &self.active_provider_connections()).await?;
                 self.send_active_command(Command::agent(AgentCommand::SwitchModel(provider))).await
             }
             Switch::None => Ok(()),
