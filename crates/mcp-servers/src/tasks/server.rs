@@ -52,7 +52,10 @@ impl TasksMcp {
     /// is dropped and outstanding operations finish. Use [`Self::new_persistent`]
     /// for cross-session storage.
     pub fn new() -> Self {
-        let temp_dir = TempDir::with_prefix("aether-tasks-").expect("failed to create temp dir for task storage");
+        Self::new_session(TempDir::with_prefix("aether-tasks-").expect("failed to create temp dir for task storage"))
+    }
+
+    pub fn new_session(temp_dir: TempDir) -> Self {
         let task_path = temp_dir.path().to_path_buf();
         Self {
             storage: Arc::new(TaskStorage { store: Mutex::new(TaskStore::new(task_path)), _temp_dir: Some(temp_dir) }),
@@ -197,12 +200,14 @@ mod tests {
 
     #[tokio::test]
     async fn session_storage_is_removed_on_drop() {
-        let server = TasksMcp::new();
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().to_path_buf();
+        let server = TaskServerBuilder::default().session_directory(directory).build();
         let id = create_task(&server).await;
-        let file = session_task_file(&id).expect("session task file should exist in a temp dir");
+        assert!(path.join("active").join(id.filename()).exists());
 
         drop(server);
-        assert!(!file.exists(), "temp dir should be cleaned up on drop");
+        assert!(!path.exists(), "owned session directory should be cleaned up on drop");
     }
 
     #[tokio::test]
@@ -228,7 +233,7 @@ mod tests {
 
     #[tokio::test]
     async fn plan_keeps_every_task_in_id_order_as_tasks_are_added() {
-        let server = TasksMcp::new();
+        let server = TaskServerBuilder::default().build();
         let root = create_task(&server).await;
         let mut expected = vec!["Task".to_string()];
 
@@ -244,6 +249,22 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct TaskServerBuilder {
+        session_directory: Option<TempDir>,
+    }
+
+    impl TaskServerBuilder {
+        fn session_directory(mut self, directory: TempDir) -> Self {
+            self.session_directory = Some(directory);
+            self
+        }
+
+        fn build(self) -> TasksMcp {
+            self.session_directory.map_or_else(TasksMcp::new, TasksMcp::new_session)
+        }
+    }
+
     async fn create_task(server: &TasksMcp) -> TaskId {
         let created = server.task_create(Parameters(task_input("Task"))).await.unwrap();
         TaskId::from(created.output.task.id)
@@ -251,14 +272,5 @@ mod tests {
 
     fn task_input(title: &str) -> TaskCreateInput {
         TaskCreateInput { title: title.into(), description: None, parent_id: None, assignee: None, deps: None }
-    }
-
-    fn session_task_file(id: &TaskId) -> Option<PathBuf> {
-        fs::read_dir(std::env::temp_dir())
-            .ok()?
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_name().to_string_lossy().starts_with("aether-tasks-"))
-            .map(|entry| entry.path().join("active").join(id.filename()))
-            .find(|path| path.exists())
     }
 }
