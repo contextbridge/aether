@@ -18,7 +18,7 @@ use acp_utils::notifications::McpNotification;
 use acp_utils::testing::{TestPeer, initialize_request};
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
-use aether_core::core::{AgentBuilder, Prompt};
+use aether_core::core::{AgentBuilder, AgentDeps, Prompt};
 use aether_core::events::{AgentEvent, AgentObserver, Command, MessageEvent, TurnOutcome, UserCommand};
 use aether_core::mcp::{McpBuilder, McpCatalog, mcp};
 use aether_core::testing::ready_catalog;
@@ -593,6 +593,7 @@ impl AcpTestHarness {
             connection: Some(self.agent_cx.clone()),
             repository: self.session_store.clone(),
             oauth_credential_store: self.oauth_store.clone(),
+            agent_deps: AgentDeps::new(self.oauth_store.clone(), None),
             active_agent: AgentKey::Default,
             specs,
             runtime_factory,

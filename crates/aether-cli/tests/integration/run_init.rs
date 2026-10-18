@@ -228,7 +228,7 @@ async fn every_inline_mcp_in_init_presets_spawns_with_its_args() {
                     McpSourceSpec::File(_) => None,
                 });
                 let config = inline.collect::<McpConfig>();
-                let spawned = mcp(dir.path()).with_builtin_servers().with_config(config).unwrap().spawn();
+                let spawned = mcp(dir.path()).with_builtin_servers().with_config(config).spawn();
                 let catalog = spawned.unwrap_or_else(|error| {
                     panic!("{preset:?} agent `{}` harnesses={harnesses:?} failed to spawn: {error}", agent.name)
                 });

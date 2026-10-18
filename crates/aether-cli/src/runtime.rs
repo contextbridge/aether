@@ -1,7 +1,7 @@
 use aether_core::agent_spec::AgentSpec;
 use aether_core::core::{AgentBuilder, AgentDeps, AgentError, AgentHandle, Prompt, PromptCache};
 use aether_core::events::{AgentEvent, Command};
-use aether_core::mcp::{McpCatalog, McpConfig, McpSpawnError, ParseError};
+use aether_core::mcp::{McpCatalog, McpConfig, McpSpawnError};
 use llm::{ChatMessage, SessionUsageEvent, StreamingModelProvider, ToolDefinition};
 use mcp_servers::agent_mcp;
 use mcp_utils::client::ElicitationSink;
@@ -36,8 +36,6 @@ pub(crate) struct PromptPreview {
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
-    #[error("Invalid MCP config: {0}")]
-    McpConfig(#[from] ParseError),
     #[error("MCP error: {0}")]
     McpSpawn(#[from] McpSpawnError),
     #[error("Agent error: {0}")]
@@ -129,7 +127,7 @@ impl RuntimeBuilder {
     fn spawn_mcp(&self) -> Result<McpCatalog, RuntimeError> {
         let mut builder = agent_mcp(&self.cwd, self.agent_deps.clone(), self.spec.tools.clone())
             .with_servers(self.extra_mcp_servers.clone())
-            .with_config(self.spec.mcp.clone())?;
+            .with_config(self.spec.mcp.clone());
         if let Some(sink) = self.elicitation.clone() {
             builder = builder.with_elicitation(sink);
         }

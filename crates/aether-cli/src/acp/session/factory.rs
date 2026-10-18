@@ -32,8 +32,8 @@ use aether_sessions::{SessionStore, SessionStoreError};
 pub(crate) struct SessionFactory {
     config: SessionFactoryConfig,
     oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
+    agent_deps: AgentDeps,
     session_store: Arc<SessionStore>,
-    observer_factory: Option<DynObserverFactory>,
     available: OnceCell<Arc<[LlmModel]>>,
     elicitation: OnceLock<ElicitationCapability>,
 }
@@ -56,9 +56,9 @@ impl SessionFactory {
     ) -> Self {
         Self {
             config,
+            agent_deps: AgentDeps::new(Arc::clone(&oauth_credential_store), observer_factory),
             oauth_credential_store,
             session_store,
-            observer_factory,
             available: OnceCell::new(),
             elicitation: OnceLock::new(),
         }
@@ -70,6 +70,10 @@ impl SessionFactory {
 
     pub(crate) async fn available_models(&self) -> Arc<[LlmModel]> {
         Arc::clone(self.available.get_or_init(async || get_local_models().await.into()).await)
+    }
+
+    pub(crate) async fn forget_cached_credentials(&self) {
+        self.agent_deps.forget_cached_credentials().await;
     }
 
     pub(crate) async fn prepare_new(
@@ -138,16 +142,19 @@ impl SessionFactory {
         Ok(self.prepare_session(session_id, cwd, mcp_servers, mode_catalog, resolved, events, replay, Some(cx)))
     }
 
+    fn session_deps(&self, catalog: &AgentCatalog, session_affinity_key: &str) -> AgentDeps {
+        self.agent_deps
+            .clone()
+            .with_agent_registry(catalog.registry().clone())
+            .with_session_affinity_key(session_affinity_key)
+    }
+
     fn production_runtime_factory(
         &self,
         cwd: PathBuf,
         mcp_servers: Vec<acp::McpServer>,
-        catalog: &AgentCatalog,
-        session_affinity_key: &str,
+        deps: AgentDeps,
     ) -> Arc<dyn RuntimeFactory> {
-        let deps = AgentDeps::new(Arc::clone(&self.oauth_credential_store), self.observer_factory.clone())
-            .with_agent_registry(catalog.registry().clone())
-            .with_session_affinity_key(session_affinity_key);
         let mcp_servers = map_acp_mcp_servers(mcp_servers, &cwd);
         Arc::new(ProductionRuntimeFactory::new(
             cwd,
@@ -169,14 +176,11 @@ impl SessionFactory {
         replay: bool,
         cx: Option<&ConnectionTo<Client>>,
     ) -> SessionActorInit {
-        let runtime_factory = self.config.runtime_factory.clone().unwrap_or_else(|| {
-            self.production_runtime_factory(
-                cwd.clone(),
-                mcp_servers.clone(),
-                mode_catalog.specs.catalog(),
-                session_id.0.as_ref(),
-            )
-        });
+        let agent_deps = self.session_deps(mode_catalog.specs.catalog(), session_id.0.as_ref());
+        let runtime_factory =
+            self.config.runtime_factory.clone().unwrap_or_else(|| {
+                self.production_runtime_factory(cwd.clone(), mcp_servers.clone(), agent_deps.clone())
+            });
         SessionActorInit {
             session_id,
             cwd,
@@ -184,6 +188,7 @@ impl SessionFactory {
             connection: cx.cloned(),
             repository: self.session_store.clone(),
             oauth_credential_store: Arc::clone(&self.oauth_credential_store),
+            agent_deps,
             active_agent: resolved.active_agent,
             specs: mode_catalog.specs,
             runtime_factory,
