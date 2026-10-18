@@ -35,8 +35,8 @@ pub enum CodingError {
     Lsp(#[from] LspError),
 
     /// Tool not configured/available
-    #[error("{0}")]
-    NotConfigured(String),
+    #[error("{0} is not configured")]
+    NotConfigured(&'static str),
 
     /// A required file-path argument was empty
     #[error(transparent)]
@@ -83,7 +83,7 @@ pub enum BashError {
 }
 
 /// Errors related to web fetch operations
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum WebFetchError {
     /// Invalid URL format
     #[error("Invalid URL: {0}")]

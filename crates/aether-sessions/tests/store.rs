@@ -5,6 +5,7 @@ use aether_sessions::testing::{
 };
 use aether_sessions::{ScanLimits, SessionStore, SessionStoreError};
 use llm::ContentBlock;
+use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -106,6 +107,22 @@ fn prompt_search_is_smart_case_unicode_safe_and_retains_recent_entries() {
 }
 
 #[test]
+fn prompt_history_appends_until_compaction_and_keeps_the_newest_entries() {
+    let store = TestStore::new().session("session-1", &[]);
+    for index in 0..250 {
+        store.append("session-1", &user_message(&format!("prompt {index};")));
+    }
+
+    let lines = fs::read_to_string(store.path().join("prompt-history.jsonl")).unwrap().lines().count();
+    assert!((101..=200).contains(&lines), "history file holds {lines} lines");
+    let reloaded = SessionStore::from_path(store.path().to_path_buf());
+    for sessions in [store.store(), &reloaded] {
+        assert_eq!(sessions.search_prompts("prompt 149;", None).unwrap().results.len(), 0);
+        assert_eq!(sessions.search_prompts("prompt 150;", None).unwrap().results.len(), 1);
+    }
+}
+
+#[test]
 fn relocating_updates_metadata_and_derived_prompt_entries() {
     let store = TestStore::new().session("session-1", &[user_message("move me")]);
 
@@ -114,6 +131,24 @@ fn relocating_updates_metadata_and_derived_prompt_entries() {
     assert_eq!(store.store().session_cwd("session-1"), Some(PathBuf::from("/tmp/new-project")));
     let response = store.store().search_prompts("move me", None).expect("search succeeds");
     assert_eq!(response.results[0].cwd, PathBuf::from("/tmp/new-project"));
+}
+
+#[test]
+fn relocating_succeeds_while_a_temp_path_is_occupied() {
+    let store = TestStore::new().session("session-1", &[user_message("move me")]);
+    fs::create_dir(store.path().join("session-1.jsonl.tmp")).unwrap();
+    store.store().relocate("session-1", Path::new("/tmp/new-project")).expect("relocation succeeds");
+
+    assert_eq!(store.store().session_cwd("session-1"), Some(PathBuf::from("/tmp/new-project")));
+}
+
+#[test]
+fn rebuilding_prompt_history_succeeds_while_a_temp_path_is_occupied() {
+    let store = TestStore::new().session("session-1", &[user_message("find me")]);
+    fs::create_dir(store.path().join("prompt-history.jsonl.tmp")).unwrap();
+    store.store().rebuild_prompt_history().expect("rebuild succeeds");
+
+    assert_eq!(store.store().search_prompts("find me", None).unwrap().results.len(), 1);
 }
 
 #[test]

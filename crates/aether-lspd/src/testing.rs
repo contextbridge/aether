@@ -1,54 +1,59 @@
 #![doc = include_str!("docs/testing.md")]
 
-use std::fs;
+use std::future::{Future, poll_fn};
 use std::path::{Path, PathBuf};
+use std::pin::pin;
 use std::process::Command;
+use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
 use std::time::Duration;
-use tokio::net::UnixStream;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 
 use crate::LanguageId;
-use crate::daemon::LspDaemon;
+use crate::daemon::{LspDaemon, Timeouts};
 use crate::error::DaemonError;
-use crate::language_catalog::server_kind_for_language;
-use crate::socket_path::{lockfile_path, socket_path};
+use crate::socket_path::socket_path;
 use crate::uri::path_to_uri;
 pub use utils::testing::TestWorkspace;
 
 /// An in-process daemon with explicit configuration and deterministic shutdown.
 pub struct TestDaemon {
     shutdown_tx: Option<oneshot::Sender<()>>,
-    task: Option<JoinHandle<Result<(), TestDaemonError>>>,
+    task: Option<JoinHandle<Result<(), DaemonError>>>,
+    clock: Option<tokio::runtime::Handle>,
+}
+
+/// Configures a [`TestDaemon`] before it starts. Unset timeouts match the production daemon.
+pub struct TestDaemonBuilder {
+    workspace_root: PathBuf,
+    language: LanguageId,
+    timeouts: Timeouts,
+    hooks: TestHooks,
+    paused_time: bool,
 }
 
 impl TestDaemon {
-    pub async fn spawn(
-        workspace_root: &Path,
-        language: LanguageId,
-        request_timeout: Duration,
-    ) -> Result<Self, TestDaemonError> {
-        remove_stale_daemon_files(workspace_root, language);
-        let socket_path = socket_path(workspace_root, language);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let daemon_socket_path = socket_path.clone();
-        let task = std::thread::spawn(move || {
-            tokio::runtime::Runtime::new()
-                .map_err(TestDaemonError::Runtime)?
-                .block_on(LspDaemon::new(daemon_socket_path, None, request_timeout).run_until_shutdown(shutdown_rx))
-                .map_err(TestDaemonError::Daemon)
-        });
-        let mut daemon = Self { shutdown_tx: Some(shutdown_tx), task: Some(task) };
+    pub fn spawn(workspace_root: &Path, language: LanguageId) -> Result<Self, TestDaemonError> {
+        Self::builder(workspace_root, language).spawn()
+    }
 
-        while UnixStream::connect(&socket_path).await.is_err() {
-            if daemon.task.as_ref().is_some_and(JoinHandle::is_finished) {
-                daemon.finish()?;
-                return Err(TestDaemonError::ExitedBeforeReady);
-            }
-            tokio::task::yield_now().await;
+    pub fn builder(workspace_root: &Path, language: LanguageId) -> TestDaemonBuilder {
+        TestDaemonBuilder {
+            workspace_root: workspace_root.to_path_buf(),
+            language,
+            timeouts: Timeouts::default(),
+            hooks: TestHooks::default(),
+            paused_time: false,
         }
+    }
 
-        Ok(daemon)
+    pub async fn advance_time(&self, duration: Duration) {
+        self.clock
+            .as_ref()
+            .expect("enable paused_time on the daemon builder")
+            .spawn(async move { tokio::time::advance(duration).await })
+            .await
+            .expect("daemon clock task should complete");
     }
 
     pub fn shutdown(mut self) -> Result<(), TestDaemonError> {
@@ -62,6 +67,91 @@ impl TestDaemon {
         let task = self.task.take().expect("test daemon task should be present");
         task.join().map_err(|_| TestDaemonError::ThreadPanicked)??;
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TestPoint {
+    ReadyWait,
+    RequestReceived(String),
+    DocumentOpen(lsp_types::Uri),
+    DocumentSyncWait(lsp_types::Uri),
+    DiagnosticsWait(lsp_types::Uri),
+}
+
+#[derive(Clone, Default)]
+pub struct TestGate {
+    state: Arc<watch::Sender<(bool, bool)>>,
+}
+
+impl TestGate {
+    pub async fn reached(&self) {
+        let _ = self.state.subscribe().wait_for(|(reached, _)| *reached).await;
+    }
+
+    pub fn release(&self) {
+        self.state.send_modify(|(_, released)| *released = true);
+    }
+
+    fn reach(&self) {
+        self.state.send_modify(|(reached, _)| *reached = true);
+    }
+
+    async fn pause(&self) {
+        self.reach();
+        let _ = self.state.subscribe().wait_for(|(_, released)| *released).await;
+    }
+}
+
+impl TestDaemonBuilder {
+    pub fn gate(mut self, point: TestPoint, gate: &TestGate) -> Self {
+        self.hooks.0.push((point, gate.clone()));
+        self
+    }
+
+    pub fn paused_time(mut self) -> Self {
+        self.paused_time = true;
+        self
+    }
+
+    pub fn request_timeout(mut self, timeout: Duration) -> Self {
+        self.timeouts.request = timeout;
+        self
+    }
+
+    pub fn diagnostics_timeout(mut self, timeout: Duration) -> Self {
+        self.timeouts.diagnostics = timeout;
+        self
+    }
+
+    pub fn diagnostics_settle(mut self, settle: Duration) -> Self {
+        self.timeouts.diagnostics_settle = settle;
+        self
+    }
+
+    pub fn spawn(self) -> Result<TestDaemon, TestDaemonError> {
+        let socket_path = socket_path(&self.workspace_root, self.language);
+        let daemon = LspDaemon::bind(socket_path, None, self.timeouts)?.with_test_hooks(self.hooks);
+        let runtime = if self.paused_time {
+            tokio::runtime::Builder::new_current_thread().enable_all().start_paused(true).build()
+        } else {
+            tokio::runtime::Builder::new_multi_thread().enable_all().build()
+        }
+        .map_err(TestDaemonError::Runtime)?;
+        let clock = self.paused_time.then(|| runtime.handle().clone());
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let task = std::thread::spawn(move || {
+            // A pending blocking task disables Tokio's automatic clock advancement during external I/O.
+            let (release_tx, release_rx) = mpsc::channel::<()>();
+            let hold_clock = self.paused_time.then(|| runtime.spawn_blocking(move || release_rx.recv()));
+            let result = runtime.block_on(daemon.run_until_shutdown(shutdown_rx));
+            drop(release_tx);
+            if let Some(hold_clock) = hold_clock {
+                runtime.block_on(hold_clock).expect("clock guard should finish").ok();
+            }
+            result
+        });
+        Ok(TestDaemon { shutdown_tx: Some(shutdown_tx), task: Some(task), clock })
     }
 }
 
@@ -80,8 +170,6 @@ impl Drop for TestDaemon {
 pub enum TestDaemonError {
     #[error("Daemon failed: {0}")]
     Daemon(#[from] DaemonError),
-    #[error("Daemon exited before its socket was ready")]
-    ExitedBeforeReady,
     #[error("Failed to create daemon runtime: {0}")]
     Runtime(std::io::Error),
     #[error("Daemon thread panicked")]
@@ -95,11 +183,10 @@ pub enum TestDaemonError {
 /// This mutates process-global environment variables. Call it only from an isolated test binary
 /// before starting any daemon or other thread that can read language-server configuration.
 pub unsafe fn configure_fake_server(language: LanguageId, extra_args: &[&str]) {
-    let server_kind = server_kind_for_language(language).expect("language should have a configured server");
+    let env_key = language.server().expect("language should have a configured server").env_key;
     let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/common/fake_lsp_server.py");
     let mut args = vec![script.to_string_lossy().into_owned()];
     args.extend(extra_args.iter().map(ToString::to_string));
-    let env_key = server_kind.env_key();
 
     unsafe {
         std::env::set_var(format!("AETHER_LSPD_SERVER_COMMAND_{env_key}"), "python3");
@@ -151,10 +238,33 @@ pub fn file_uri(path: &Path) -> lsp_types::Uri {
     path_to_uri(path).expect("Invalid file path")
 }
 
-pub fn remove_stale_daemon_files(workspace_root: &Path, language: LanguageId) {
-    let socket = socket_path(workspace_root, language);
-    let _ = fs::remove_file(lockfile_path(&socket));
-    let _ = fs::remove_file(socket);
+#[derive(Clone, Default)]
+pub(crate) struct TestHooks(Vec<(TestPoint, TestGate)>);
+
+impl TestHooks {
+    pub(crate) async fn pause(&self, point: TestPoint) {
+        if let Some(gate) = self.gate(&point) {
+            gate.pause().await;
+        }
+    }
+
+    pub(crate) async fn observe_pending<T>(&self, point: TestPoint, future: impl Future<Output = T>) -> T {
+        let mut future = pin!(future);
+        poll_fn(|cx| {
+            let result = future.as_mut().poll(cx);
+            if result.is_pending()
+                && let Some(gate) = self.gate(&point)
+            {
+                gate.reach();
+            }
+            result
+        })
+        .await
+    }
+
+    fn gate(&self, point: &TestPoint) -> Option<&TestGate> {
+        self.0.iter().find_map(|(at, gate)| (at == point).then_some(gate))
+    }
 }
 
 const TYPESCRIPT_PACKAGE: &str = "typescript@7.0.2";

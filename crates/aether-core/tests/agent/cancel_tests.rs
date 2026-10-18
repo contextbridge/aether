@@ -225,9 +225,13 @@ async fn test_prompt_after_cancel_produces_response() {
             llm_response().text(&["Hello", " world", " this", " is", " a", " long", " response"]).build(),
             llm_response().text(&["Second response"]).build(),
         ])
+        .pause_turn_after(0, 1, Arc::new(Notify::new()))
         .scenario(
             TestScenario::new()
                 .user_text("first question")
+                .wait_for(
+                    |event| matches!(event, AgentEvent::Message(MessageEvent::Text { chunk, .. }) if chunk == "Hello"),
+                )
                 .cancel()
                 .wait_for_turn_end()
                 .user_text("second question")

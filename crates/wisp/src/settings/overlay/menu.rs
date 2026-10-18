@@ -1,9 +1,9 @@
-use super::{PaneKind, SettingsChange, SettingsMenuEntry, SettingsMenuValue};
-use crate::session::session_config_view::{LocalConfigKind, LocalConfigOption};
+use super::{LiveSettingsData, PaneKind, SettingsChange, SettingsMenuEntry};
+use crate::session::session_config_view::{LocalConfigKind, LocalConfigOption, LocalConfigValue};
 use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
 use crate::view::list_view::ListView;
-use crate::view::selection::{Direction, SelectionState};
+use crate::view::selection::SelectionState;
 use acp_utils::config_option_id::ConfigOptionId;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -15,40 +15,39 @@ pub(super) struct SettingsMenu {
     pub(super) selection: SelectionState,
 }
 
-pub(super) struct SettingsMenuView<'a> {
-    rows: &'a [MenuRow],
-    theme: &'a Theme,
-}
-
-impl<'a> SettingsMenuView<'a> {
-    pub(super) fn new(rows: &'a [MenuRow], theme: &'a Theme) -> Self {
-        Self { rows, theme }
-    }
-}
-
 /// One row of the settings menu.
 #[derive(Clone)]
 pub(super) enum MenuRow {
     /// A config option, opening a picker over its values.
     Select(SettingsMenuEntry),
-    /// A row that opens a pane rather than picking a value. Its "value" is just
-    /// the summary line shown beside the title.
-    Pane { kind: PaneKind, summary: String },
+    /// A row that opens a pane rather than picking a value, summarizing the
+    /// pane's live data beside its title.
+    Pane(PaneKind),
 }
 
 impl MenuRow {
     /// The `title: value` line drawn for this row.
-    fn label(&self) -> String {
+    fn label(&self, live: &LiveSettingsData) -> String {
         match self {
             Self::Select(entry) => {
-                let current = entry
-                    .display_name
+                let combined = entry
+                    .multi_select
+                    .then(|| combined_display_name(&entry.current_raw_value, &entry.values))
+                    .flatten();
+                let current = combined
                     .as_deref()
-                    .or_else(|| entry.values.get(entry.current_value_index).map(|value| value.name.as_str()))
+                    .or_else(|| {
+                        entry
+                            .values
+                            .iter()
+                            .find(|value| value.value == entry.current_raw_value)
+                            .or_else(|| entry.values.first())
+                            .map(|value| value.name.as_str())
+                    })
                     .unwrap_or("?");
                 format!("{}: {current}", entry.title)
             }
-            Self::Pane { kind, summary } => format!("{}: {summary}", kind.title()),
+            Self::Pane(kind) => format!("{}: {}", kind.title(), kind.summary(live)),
         }
     }
 }
@@ -62,10 +61,6 @@ impl SettingsMenu {
             .collect();
         let selection = SelectionState::new(rows.len());
         Self { rows, selection }
-    }
-
-    pub(super) fn step(&mut self, direction: Direction) {
-        self.selection.step(self.rows.len(), direction, |_| true);
     }
 
     pub(super) fn selected_row(&self) -> Option<&MenuRow> {
@@ -107,76 +102,45 @@ impl SettingsMenu {
         });
         if let Some(entry) = entry {
             entry.current_raw_value.clone_from(&change.new_value);
-            if let Some(index) = entry.values.iter().position(|value| value.value == change.new_value) {
-                entry.current_value_index = index;
-            }
         }
     }
 
-    /// Selects the row drawn at terminal `row`, reporting whether one was hit.
-    pub(super) fn click_at(&mut self, row: u16) -> bool {
-        self.selection.select_at(row, self.rows.len())
+    pub(super) fn render(&mut self, area: Rect, buffer: &mut Buffer, theme: &Theme, live: &LiveSettingsData) {
+        let rows =
+            self.rows.iter().map(|row| Line::styled(format!(" {}", row.label(live)), theme.text_primary)).collect();
+        let view = ListView::new(rows, theme)
+            .pane(" (no settings options)")
+            .highlight_horizontal_padding(MODAL_HORIZONTAL_PADDING);
+        StatefulWidget::render(view, area, buffer, &mut self.selection);
     }
 
-    pub(super) fn render(&mut self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
-        let Self { rows, selection, .. } = self;
-        StatefulWidget::render(SettingsMenuView::new(rows, theme), area, buffer, selection);
-    }
-
-    /// Adds or refreshes the row that opens `kind`'s pane.
-    pub(super) fn upsert_pane_row(&mut self, kind: PaneKind, summary: &str) {
-        let row = MenuRow::Pane { kind, summary: summary.to_string() };
-        let existing =
-            self.rows.iter().position(|row| matches!(row, MenuRow::Pane { kind: existing, .. } if *existing == kind));
-        match existing {
-            Some(index) => self.rows[index] = row,
-            None => self.rows.push(row),
+    /// Adds or removes the row that opens `kind`'s pane.
+    pub(super) fn show_pane_row(&mut self, kind: PaneKind, shown: bool) {
+        let existing = self.rows.iter().position(|row| matches!(row, MenuRow::Pane(existing) if *existing == kind));
+        match (existing, shown) {
+            (None, true) => self.rows.push(MenuRow::Pane(kind)),
+            (Some(index), false) => {
+                self.rows.remove(index);
+            }
+            _ => {}
         }
         self.selection.clamp(self.rows.len());
     }
 }
 
-impl StatefulWidget for SettingsMenuView<'_> {
-    type State = SelectionState;
-
-    fn render(self, area: Rect, buffer: &mut Buffer, state: &mut Self::State) {
-        let rows =
-            self.rows.iter().map(|row| Line::styled(format!(" {}", row.label()), self.theme.text_primary)).collect();
-        let view = ListView::new(rows, self.theme)
-            .pane(" (no settings options)")
-            .highlight_horizontal_padding(MODAL_HORIZONTAL_PADDING);
-        StatefulWidget::render(view, area, buffer, state);
-    }
-}
-
 fn menu_entry(option: &LocalConfigOption) -> Option<SettingsMenuEntry> {
-    let LocalConfigKind::Select { current_value, values: option_values, multi_select } = &option.kind else {
+    let LocalConfigKind::Select { current_value, values, multi_select } = &option.kind else {
         return None;
     };
-    if option_values.is_empty() {
+    if values.is_empty() {
         return None;
     }
-
-    let current_value_index = option_values.iter().position(|value| value.value == *current_value).unwrap_or(0);
-    let values: Vec<SettingsMenuValue> = option_values
-        .iter()
-        .map(|value| SettingsMenuValue {
-            value: value.value.clone(),
-            name: value.name.clone(),
-            group: value.group.clone(),
-            is_disabled: value.is_disabled,
-            description: value.description.clone(),
-            meta: value.meta.clone(),
-        })
-        .collect();
 
     Some(SettingsMenuEntry {
         config_id: option.id.clone(),
         title: option.name.clone(),
-        current_value_index,
         current_raw_value: current_value.clone(),
-        display_name: (*multi_select).then(|| combined_display_name(current_value, &values)).flatten(),
-        values,
+        values: values.clone(),
         multi_select: *multi_select,
         local: false,
     })
@@ -184,7 +148,7 @@ fn menu_entry(option: &LocalConfigOption) -> Option<SettingsMenuEntry> {
 
 /// The label for a multi-select whose value names several options at once,
 /// falling back to a count when none of them are known.
-fn combined_display_name(current: &str, values: &[SettingsMenuValue]) -> Option<String> {
+fn combined_display_name(current: &str, values: &[LocalConfigValue]) -> Option<String> {
     if !current.contains(',') {
         return None;
     }

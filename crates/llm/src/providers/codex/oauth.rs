@@ -1,7 +1,5 @@
 use crate::LlmError;
-use aether_auth::{
-    BrowserOAuthHandler, OAuthCredential, OAuthCredentialStorage, OAuthError, OAuthHandler, oauth_http_client,
-};
+use aether_auth::{OAuthCredential, OAuthCredentialStorage, OAuthError, authorize_in_browser, oauth_http_client};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use oauth2::basic::BasicClient;
@@ -35,8 +33,7 @@ pub async fn perform_codex_oauth_flow(store: &dyn OAuthCredentialStorage) -> Res
 
     // Port 1455 is hardcoded because the Codex API has a fixed redirect URI
     // (http://localhost:1455/auth/callback) registered with OpenAI's OAuth server.
-    let handler = BrowserOAuthHandler::with_redirect_uri(REDIRECT_URI, 1455)?;
-    let callback_url = handler.authorize(auth_url.as_str()).await?;
+    let callback_url = authorize_in_browser(auth_url.as_str(), 1455).await?;
     let callback = Url::parse(&callback_url)
         .map_err(|error| OAuthError::InvalidCallback(format!("Invalid callback URL: {error}")))?;
     let param = |name: &str| callback.query_pairs().find(|(key, _)| key == name).map(|(_, value)| value.into_owned());
@@ -71,7 +68,7 @@ struct CachedToken {
 ///
 /// Holds an `Arc<dyn OAuthCredentialStorage>` so callers can swap in keyring-backed,
 /// file-backed, or in-memory stores without changing this type.
-pub struct CodexTokenManager {
+pub(crate) struct CodexTokenManager {
     store: Arc<dyn OAuthCredentialStorage>,
     credential_key: String,
     token_url: TokenUrl,
@@ -79,7 +76,7 @@ pub struct CodexTokenManager {
 }
 
 impl CodexTokenManager {
-    pub fn new(store: Arc<dyn OAuthCredentialStorage>, credential_key: &str) -> Self {
+    pub(crate) fn new(store: Arc<dyn OAuthCredentialStorage>, credential_key: &str) -> Self {
         Self::new_with_token_url(
             store,
             credential_key,
@@ -95,7 +92,7 @@ impl CodexTokenManager {
     ///
     /// Returns `(access_token, account_id)`. The account ID is extracted from
     /// the JWT's `https://api.openai.com/auth` claim field `chatgpt_account_id`.
-    pub async fn get_valid_token(&self) -> Result<(String, String), LlmError> {
+    pub(crate) async fn get_valid_token(&self) -> Result<(String, String), LlmError> {
         let mut cache = self.cached.lock().await;
         if let Some(cached) = cache.as_ref()
             && !cached.credential.needs_refresh()
@@ -128,7 +125,7 @@ impl CodexTokenManager {
     }
 
     /// Clear the cached token (e.g. after a 401 response)
-    pub async fn clear_cache(&self) {
+    pub(crate) async fn clear_cache(&self) {
         *self.cached.lock().await = None;
     }
 }
@@ -137,24 +134,23 @@ impl CodexTokenManager {
 ///
 /// The JWT payload contains a claim at `https://api.openai.com/auth`
 /// with a `chatgpt_account_id` field.
-pub fn extract_account_id(access_token: &str) -> Result<String, LlmError> {
+pub(crate) fn extract_account_id(access_token: &str) -> Result<String, LlmError> {
     let parts: Vec<&str> = access_token.split('.').collect();
     if parts.len() != 3 {
-        return Err(OAuthError::InvalidJwt("expected 3 dot-separated parts".to_string()).into());
+        return Err(LlmError::InvalidJwt("expected 3 dot-separated parts".to_string()));
     }
 
-    let decoded = URL_SAFE_NO_PAD
-        .decode(parts[1])
-        .map_err(|e| OAuthError::InvalidJwt(format!("failed to decode payload: {e}")))?;
+    let decoded =
+        URL_SAFE_NO_PAD.decode(parts[1]).map_err(|e| LlmError::InvalidJwt(format!("failed to decode payload: {e}")))?;
 
-    let payload: serde_json::Value = serde_json::from_slice(&decoded)
-        .map_err(|e| OAuthError::InvalidJwt(format!("failed to parse payload: {e}")))?;
+    let payload: serde_json::Value =
+        serde_json::from_slice(&decoded).map_err(|e| LlmError::InvalidJwt(format!("failed to parse payload: {e}")))?;
 
     let account_id = payload
         .get("https://api.openai.com/auth")
         .and_then(|auth| auth.get("chatgpt_account_id"))
         .and_then(|v| v.as_str())
-        .ok_or_else(|| OAuthError::InvalidJwt("missing chatgpt_account_id in token".to_string()))?;
+        .ok_or_else(|| LlmError::InvalidJwt("missing chatgpt_account_id in token".to_string()))?;
 
     Ok(account_id.to_string())
 }
@@ -162,7 +158,7 @@ pub fn extract_account_id(access_token: &str) -> Result<String, LlmError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aether_auth::{FakeOAuthCredentialStore, OAuthCredential};
+    use aether_auth::{MemoryCredentialStore, OAuthCredential};
     use axum::Router;
     use axum::body::{Body, to_bytes};
     use axum::extract::State;
@@ -227,7 +223,7 @@ mod tests {
         let new_access_token = test_jwt_for_account("acct_new");
         let endpoint = FakeTokenEndpoint::start(TokenEndpointResponse::success(&new_access_token, None)).await;
         let store = Arc::new(
-            FakeOAuthCredentialStore::new()
+            MemoryCredentialStore::new()
                 .with_credential("codex", expired_credential("old-access", Some("refresh-old"))),
         );
 
@@ -254,7 +250,7 @@ mod tests {
         let endpoint =
             FakeTokenEndpoint::start(TokenEndpointResponse::success(&new_access_token, Some("refresh-new"))).await;
         let store = Arc::new(
-            FakeOAuthCredentialStore::new()
+            MemoryCredentialStore::new()
                 .with_credential("codex", expired_credential("old-access", Some("refresh-old"))),
         );
         let manager = CodexTokenManager::new_with_token_url(store.clone(), "codex", endpoint.url.clone());
@@ -268,7 +264,7 @@ mod tests {
     #[tokio::test]
     async fn codex_token_manager_uses_unexpired_credential_without_refresh() {
         let access_token = test_jwt_for_account("acct_existing");
-        let store = Arc::new(FakeOAuthCredentialStore::new().with_credential(
+        let store = Arc::new(MemoryCredentialStore::new().with_credential(
             "codex",
             OAuthCredential {
                 client_id: CLIENT_ID.to_string(),
@@ -291,7 +287,7 @@ mod tests {
 
     #[tokio::test]
     async fn codex_token_manager_errors_when_credential_is_missing() {
-        let store = Arc::new(FakeOAuthCredentialStore::new());
+        let store = Arc::new(MemoryCredentialStore::new());
         let manager = CodexTokenManager::new_with_token_url(
             store,
             "codex",
@@ -306,7 +302,7 @@ mod tests {
     #[tokio::test]
     async fn codex_token_manager_errors_when_expired_without_refresh_token() {
         let original = expired_credential("old-access", None);
-        let store = Arc::new(FakeOAuthCredentialStore::new().with_credential("codex", original.clone()));
+        let store = Arc::new(MemoryCredentialStore::new().with_credential("codex", original.clone()));
         let manager = CodexTokenManager::new_with_token_url(
             store.clone(),
             "codex",
@@ -325,7 +321,7 @@ mod tests {
     async fn codex_token_manager_does_not_overwrite_credential_when_refresh_fails() {
         let endpoint = FakeTokenEndpoint::start(TokenEndpointResponse::failure()).await;
         let original = expired_credential("old-access", Some("refresh-old"));
-        let store = Arc::new(FakeOAuthCredentialStore::new().with_credential("codex", original.clone()));
+        let store = Arc::new(MemoryCredentialStore::new().with_credential("codex", original.clone()));
         let manager = CodexTokenManager::new_with_token_url(store.clone(), "codex", endpoint.url.clone());
 
         let result = manager.get_valid_token().await;

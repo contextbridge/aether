@@ -11,7 +11,7 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use std::io;
 
-pub async fn run_wizard(
+pub(super) async fn run_wizard(
     provider: Option<Provider>,
     preset: Option<Preset>,
     harnesses: Vec<HarnessIntegration>,

@@ -1,8 +1,3 @@
-#![doc = include_str!(concat!(env!("OUT_DIR"), "/docs/anthropic.md"))]
-
-pub mod mappers;
-pub mod provider;
-pub mod streaming;
-pub mod types;
-
-pub use provider::AnthropicProvider;
+pub(crate) mod mappers;
+pub(crate) mod streaming;
+pub(crate) mod types;

@@ -84,6 +84,6 @@ async fn spawn_applies_model_settings_to_context() {
         .await
         .unwrap();
 
-    let contexts = result.captured_contexts.lock().unwrap();
+    let contexts = result.contexts;
     assert_eq!(contexts[0].model_settings(), &settings);
 }

@@ -20,15 +20,9 @@ mod tests {
         drop(Db::open_writable(&db_path).await.unwrap());
 
         for example in examples() {
-            run_query(&QueryOptions {
-                db_path: db_path.clone(),
-                sql: example.sql.to_string(),
-                max_rows: 100,
-                max_cell_chars: 1000,
-                timeout_ms: 2000,
-            })
-            .await
-            .unwrap_or_else(|error| panic!("example '{}' failed: {error}", example.name));
+            run_query(&QueryOptions::new(&db_path, example.sql))
+                .await
+                .unwrap_or_else(|error| panic!("example '{}' failed: {error}", example.name));
         }
     }
 }

@@ -2,16 +2,15 @@ use tracing::debug;
 
 use super::auth::MantleAuth;
 use crate::catalog::transport::ModelTransport;
-use crate::providers::http::{SseData, http_client};
-use crate::providers::openai_responses::mappers::{ResponsesRequestPolicy, build_wire_request};
-use crate::providers::openai_responses::transport::send;
+use crate::providers::http::{SseData, http_client, post_sse, responses_code};
+use crate::providers::openai::responses::mappers::{ResponsesRequestPolicy, build_request};
 use crate::providers::response_stream::OpenedStream;
-use crate::{Context, LlmError, Result};
+use crate::{Context, LlmError, LlmModel, Result};
 use utils::variables::Vars;
 
 /// Transport for Bedrock models served through the `OpenAI` Responses API.
 #[derive(Clone)]
-pub struct MantleClient {
+pub(crate) struct MantleClient {
     http: reqwest::Client,
     template_vars: Vars,
     auth: MantleAuth,
@@ -19,7 +18,7 @@ pub struct MantleClient {
 }
 
 impl MantleClient {
-    pub fn new(region: String, auth: MantleAuth, base_url_override: Option<String>) -> Self {
+    pub(crate) fn new(region: String, auth: MantleAuth, base_url_override: Option<String>) -> Self {
         Self {
             http: http_client(),
             template_vars: Vars::new().with("AWS_REGION", region.clone()).with("AWS_DEFAULT_REGION", region),
@@ -28,7 +27,7 @@ impl MantleClient {
         }
     }
 
-    pub fn with_auth(mut self, auth: MantleAuth) -> Self {
+    pub(crate) fn with_auth(mut self, auth: MantleAuth) -> Self {
         self.auth = auth;
         self
     }
@@ -37,7 +36,7 @@ impl MantleClient {
     ///
     /// An explicit base URL — a test server or a private endpoint — wins over the
     /// catalog template, which is why the override is checked first.
-    pub fn endpoint(&self, transport: &ModelTransport) -> Result<String> {
+    pub(crate) fn endpoint(&self, transport: &ModelTransport) -> Result<String> {
         let ModelTransport::OpenAiResponses { base_url_template } = transport;
         let base = match &self.base_url_override {
             Some(base) => base.clone(),
@@ -51,18 +50,19 @@ impl MantleClient {
 
     pub(crate) async fn stream(
         &self,
+        identity: Option<&LlmModel>,
         model: &str,
         transport: &ModelTransport,
         context: &Context,
     ) -> Result<OpenedStream<SseData>> {
         let url = self.endpoint(transport)?;
-        let body = build_wire_request(model, context, &ResponsesRequestPolicy::MANTLE)?;
+        let body = build_request(identity, model, context, &ResponsesRequestPolicy::MANTLE)?;
 
         debug!(model, url, auth = %self.auth, "Sending Bedrock responses request");
 
         let encoded = serde_json::to_vec(&body)?;
         let headers = self.auth.headers("POST", &url, &encoded).await?;
-        send(&self.http, &url, headers, body).await
+        post_sse(&self.http, &url, headers, &body, responses_code).await
     }
 }
 

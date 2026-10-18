@@ -1,11 +1,11 @@
-use super::agent::{AgentConfig, AutoContinue, RetryConfig};
+use super::agent::RetryConfig;
 use crate::agent_spec::AgentSpec;
 use crate::context::{CompactionConfig, SessionUsageTracker};
-use crate::core::{Agent, AgentDeps, Prompt, PromptCache, Result};
+use crate::core::{Agent, AgentDeps, Prompt, Result};
 use crate::events::{AgentEvent, AgentObserver, Command, TurnOutcome};
 use crate::mcp::McpCatalog;
 use llm::parser::ModelProviderParser;
-use llm::{ChatMessage, Context, ModelSettings, SessionUsageEvent, StreamingModelProvider};
+use llm::{ChatMessage, ModelSettings, SessionUsageEvent, StreamingModelProvider};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -40,20 +40,20 @@ pub async fn recv_agent_event(rx: &mut Receiver<AgentEvent>) -> AgentEvent {
 }
 
 pub struct AgentBuilder {
-    llm: Arc<dyn StreamingModelProvider>,
-    prompts: Vec<Prompt>,
-    initial_messages: Vec<ChatMessage>,
-    mcp: McpCatalog,
-    channel_capacity: usize,
-    tool_timeout: Duration,
-    compaction_config: Option<CompactionConfig>,
-    max_auto_continues: u32,
-    retry_config: RetryConfig,
-    context_window: Option<u32>,
-    model_settings: ModelSettings,
-    observers: Vec<Box<dyn AgentObserver>>,
-    session_usage: SessionUsageTracker,
-    session_affinity_key: String,
+    pub(super) llm: Arc<dyn StreamingModelProvider>,
+    pub(super) prompts: Vec<Prompt>,
+    pub(super) initial_messages: Vec<ChatMessage>,
+    pub(super) mcp: McpCatalog,
+    pub(super) channel_capacity: usize,
+    pub(super) tool_timeout: Duration,
+    pub(super) compaction_config: Option<CompactionConfig>,
+    pub(super) max_auto_continues: u32,
+    pub(super) retry_config: RetryConfig,
+    pub(super) context_window: Option<u32>,
+    pub(super) model_settings: ModelSettings,
+    pub(super) observers: Vec<Box<dyn AgentObserver>>,
+    pub(super) session_usage: SessionUsageTracker,
+    pub(super) session_affinity_key: String,
 }
 
 impl AgentBuilder {
@@ -242,36 +242,9 @@ impl AgentBuilder {
     }
 
     pub async fn spawn(self) -> Result<(Sender<Command>, Receiver<AgentEvent>, AgentHandle)> {
-        let mut prompt_cache = PromptCache::new(self.prompts);
-        let system_content = prompt_cache.render().await?;
-        let mut messages = Vec::new();
-
-        if !system_content.is_empty() {
-            messages.push(ChatMessage::system(system_content));
-        }
-
-        messages.extend(self.initial_messages);
         let (command_tx, command_rx) = mpsc::channel::<Command>(self.channel_capacity);
         let (message_tx, agent_event_rx) = mpsc::channel::<AgentEvent>(self.channel_capacity);
-        let mut context = Context::new(messages, Vec::new());
-        context.set_model_settings(self.model_settings);
-        context.set_session_affinity_key(Some(self.session_affinity_key));
-
-        let config = AgentConfig {
-            llm: self.llm,
-            context,
-            mcp: self.mcp,
-            tool_timeout: self.tool_timeout,
-            compaction_config: self.compaction_config,
-            auto_continue: AutoContinue::new(self.max_auto_continues),
-            retry_config: self.retry_config,
-            context_window: self.context_window,
-            prompt_cache,
-            observers: self.observers,
-            session_usage: self.session_usage,
-        };
-
-        let agent = Agent::new(config, command_rx, message_tx);
+        let agent = Agent::new(self, command_rx, message_tx).await?;
         let handle = AbortOnDropHandle::new(tokio::spawn(agent.run()));
 
         Ok((command_tx, agent_event_rx, AgentHandle { handle }))

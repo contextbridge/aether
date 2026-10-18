@@ -1,27 +1,18 @@
 use super::{LiveSettingsData, summarize};
-use crate::surfaces::input::{Nav, SettingsOutput, UiEvent, one};
+use crate::surfaces::input::{UiOutput, one};
 use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
 use crate::view::filterable_list::FilterableList;
+use crate::view::input::{Nav, UiEvent};
 use agent_client_protocol::schema::v2::AuthMethod;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::Rect;
 use ratatui::text::Line;
 use ratatui::widgets::StatefulWidget;
 
 /// Provider authentication status, with a login action per provider.
 pub(super) struct ProviderLoginPane {
     entries: FilterableList<ProviderLoginEntry>,
-}
-
-pub(super) struct ProviderLoginView<'a> {
-    theme: &'a Theme,
-}
-
-impl<'a> ProviderLoginView<'a> {
-    pub(super) fn new(theme: &'a Theme) -> Self {
-        Self { theme }
-    }
 }
 
 #[derive(Clone)]
@@ -45,41 +36,31 @@ impl ProviderLoginPane {
 }
 
 impl ProviderLoginPane {
-    #[allow(clippy::needless_pass_by_value)]
-    pub(crate) fn on_ui_event(&mut self, event: UiEvent) -> Vec<SettingsOutput> {
-        match self.entries.on_nav_event(&event) {
+    pub(crate) fn on_ui_event(&mut self, event: &UiEvent) -> Vec<UiOutput> {
+        match self.entries.on_nav_event(event) {
             Nav::Activate | Nav::Clicked => one(self
                 .entries
                 .selected_entry()
                 .filter(|entry| entry.status != ProviderLoginStatus::Authenticating)
-                .map(|entry| SettingsOutput::AuthenticateProvider(entry.method_id.clone()))),
+                .map(|entry| UiOutput::AuthenticateProvider(entry.method_id.clone()))),
             Nav::Close | Nav::Moved | Nav::Unhandled => Vec::new(),
         }
     }
 }
 
 impl ProviderLoginPane {
-    pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) -> Option<Position> {
-        StatefulWidget::render(ProviderLoginView::new(theme), area, buf, &mut self.entries);
-        None
-    }
-}
-
-impl StatefulWidget for ProviderLoginView<'_> {
-    type State = FilterableList<ProviderLoginEntry>;
-
-    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        let (view, selection) = state.view(self.theme, |entry| {
+    pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
+        let (view, selection) = self.entries.view(theme, |entry| {
             let (indicator, detail, style) = match entry.status {
-                ProviderLoginStatus::NeedsLogin => ("⚡", "needs login", self.theme.warning),
-                ProviderLoginStatus::Authenticating => ("⏳", "authenticating...", self.theme.warning),
-                ProviderLoginStatus::LoggedIn => ("✓", "logged in", self.theme.success),
+                ProviderLoginStatus::NeedsLogin => ("⚡", "needs login", theme.warning),
+                ProviderLoginStatus::Authenticating => ("⏳", "authenticating...", theme.warning),
+                ProviderLoginStatus::LoggedIn => ("✓", "logged in", theme.success),
             };
             Line::styled(format!(" {}  {indicator} {detail}", entry.name), style)
         });
         let view = view
             .empty_message(" (no providers need login)")
-            .highlight_style((self.theme.background, self.theme.warning))
+            .highlight_style((theme.background, theme.warning))
             .highlight_horizontal_padding(MODAL_HORIZONTAL_PADDING);
         StatefulWidget::render(view, area, buf, selection);
     }

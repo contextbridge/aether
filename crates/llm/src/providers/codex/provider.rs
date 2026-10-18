@@ -1,12 +1,13 @@
 use super::oauth::CodexTokenManager;
-use crate::provider::{LlmResponseStream, StreamingModelProvider, get_context_window};
+use crate::catalog::Provider;
+use crate::provider::{LlmResponseStream, StreamingModelProvider, display_name, validate_reasoning};
 use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
-use crate::providers::http::{SseData, http_client};
-use crate::providers::openai_responses::mappers::{ResponsesRequestPolicy, build_wire_request};
-use crate::providers::openai_responses::streaming::decode_responses;
-use crate::providers::openai_responses::transport::send;
+use crate::providers::http::{SseData, http_client, post_sse, responses_code};
+use crate::providers::openai::responses::mappers::{ResponsesRequestPolicy, build_request};
+use crate::providers::openai::responses::streaming::decode_responses;
+use crate::providers::openai::responses::types::ResponsesRequest;
 use crate::providers::response_stream::{OpenedStream, response_stream};
-use crate::{Context, LlmError, Result};
+use crate::{Context, LlmModel, Result};
 use aether_auth::OAuthCredentialStorage;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use std::sync::Arc;
@@ -21,6 +22,7 @@ pub struct CodexProvider {
     base_url: String,
     client: reqwest::Client,
     model: String,
+    request_model: Option<String>,
     token_manager: Arc<CodexTokenManager>,
     idle_timeout: Duration,
 }
@@ -32,6 +34,7 @@ impl CodexProvider {
             base_url: CODEX_API_BASE.to_string(),
             client: http_client(),
             model: "gpt-5.5".to_string(),
+            request_model: None,
             token_manager: Arc::new(token_manager),
             idle_timeout: DEFAULT_STREAM_IDLE_TIMEOUT,
         }
@@ -41,6 +44,7 @@ impl CodexProvider {
         if let Some(base_url) = connection.base_url {
             self.base_url = base_url.trim_end_matches('/').to_string();
         }
+        self.request_model = connection.request_model;
         self.idle_timeout = connection.idle_timeout;
         self
     }
@@ -50,23 +54,22 @@ impl CodexProvider {
         self
     }
 
-    fn build_wire_request(&self, context: &Context) -> Result<serde_json::Value> {
-        build_wire_request(&self.model, context, &ResponsesRequestPolicy::CODEX)
+    fn build_wire_request(&self, context: &Context) -> Result<ResponsesRequest> {
+        let identity = self.model();
+        validate_reasoning(context, identity.as_ref())?;
+        let wire_model = self.request_model.as_deref().unwrap_or(&self.model);
+        build_request(identity.as_ref(), wire_model, context, &ResponsesRequestPolicy::CODEX)
     }
 
     async fn build_headers(&self) -> Result<HeaderMap> {
         let (access_token, account_id) = self.token_manager.get_valid_token().await?;
 
+        let mut authorization = HeaderValue::from_str(&format!("Bearer {access_token}"))?;
+        authorization.set_sensitive(true);
+
         let mut headers = HeaderMap::new();
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {access_token}"))
-                .map_err(|e| LlmError::ProviderRequest(e.to_string()))?,
-        );
-        headers.insert(
-            "chatgpt-account-id",
-            HeaderValue::from_str(&account_id).map_err(|e| LlmError::ProviderRequest(e.to_string()))?,
-        );
+        headers.insert(AUTHORIZATION, authorization);
+        headers.insert("chatgpt-account-id", HeaderValue::from_str(&account_id)?);
         headers.insert("originator", HeaderValue::from_static("codex_cli_rs"));
         headers.insert("version", HeaderValue::from_static(CODEX_CLIENT_VERSION));
 
@@ -74,17 +77,13 @@ impl CodexProvider {
     }
 
     /// Send the request and return a stream of SSE lines parsed into typed events.
-    ///
-    /// Uses manual SSE parsing because the Codex API does not return a
-    /// `Content-Type: text/event-stream` header, which `reqwest_eventsource`
-    /// (used by `async-openai`'s `create_stream`) requires.
-    async fn send_request(&self, request: serde_json::Value, headers: HeaderMap) -> Result<OpenedStream<SseData>> {
+    async fn send_request(&self, request: ResponsesRequest, headers: HeaderMap) -> Result<OpenedStream<SseData>> {
         let url = format!("{}/responses", self.base_url);
 
         debug!("Sending request to Codex API: {url}");
-        debug!("Codex request body: {request}");
+        debug!(?request, "Codex request body");
 
-        match send(&self.client, &url, headers, request).await {
+        match post_sse(&self.client, &url, headers, &request, responses_code).await {
             Ok(opened) => Ok(opened),
             Err(error) => {
                 if error.provider().map(|provider| provider.kind) == Some(crate::ProviderErrorKind::Authentication) {
@@ -97,12 +96,12 @@ impl CodexProvider {
 }
 
 impl StreamingModelProvider for CodexProvider {
-    fn model(&self) -> Option<crate::LlmModel> {
-        format!("{}:{}", super::PROVIDER_ID, self.model).parse().ok()
+    fn display_name(&self) -> String {
+        display_name(Provider::Codex, &self.model)
     }
 
-    fn context_window(&self) -> Option<u32> {
-        get_context_window(super::PROVIDER_ID, &self.model)
+    fn model(&self) -> Option<LlmModel> {
+        LlmModel::parse_for(Provider::Codex, &self.model).ok()
     }
 
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
@@ -119,19 +118,16 @@ impl StreamingModelProvider for CodexProvider {
             self.idle_timeout,
         )
     }
-
-    fn display_name(&self) -> String {
-        format!("Codex ({})", self.model)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ChatMessage;
+    use crate::LlmError;
     use crate::ToolDefinition;
-    use crate::providers::test_capture_server::CaptureServer;
-    use aether_auth::{FakeOAuthCredentialStore, OAuthCredential};
+    use crate::providers::test_capture_server::{CaptureServer, hello_context};
+    use aether_auth::{MemoryCredentialStore, OAuthCredential};
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use futures::StreamExt;
@@ -142,7 +138,7 @@ mod tests {
             crate::LlmModel::all().iter().filter(|model| model.provider_enum() == crate::catalog::Provider::Codex)
         {
             assert!(!model.effective_reasoning_levels().contains(&crate::ReasoningEffort::Disabled));
-            let provider = CodexProvider::new(Arc::new(FakeOAuthCredentialStore::new())).with_model(&model.model_id());
+            let provider = CodexProvider::new(Arc::new(MemoryCredentialStore::new())).with_model(&model.model_id());
             let mut context = Context::new(vec![], vec![]);
             context.set_reasoning_effort(crate::ReasoningEffort::Disabled);
             let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
@@ -162,6 +158,7 @@ mod tests {
     fn display_name_includes_model() {
         let provider = create_test_provider();
         assert_eq!(provider.display_name(), "Codex (gpt-5.5)");
+        assert_eq!(create_test_provider().with_model("gpt-custom").display_name(), "Codex (gpt-custom)");
     }
 
     #[tokio::test]
@@ -188,6 +185,7 @@ mod tests {
         assert_eq!(captured.body["model"], "gpt-6-luna");
         assert_eq!(captured.body["instructions"], "You are helpful");
         assert_eq!(captured.body["tools"].as_array().unwrap().len(), 1);
+        assert!(captured.body["tools"][0].get("strict").is_none());
         assert_eq!(captured.body["parallel_tool_calls"], true);
         assert_eq!(captured.body["input"][0]["role"], "user");
         assert_eq!(captured.body["prompt_cache_key"], "session-abc");
@@ -211,9 +209,34 @@ mod tests {
 
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
         assert_eq!(captured.body["reasoning"]["effort"], "medium");
+        assert_eq!(captured.body["reasoning"]["summary"], "auto");
+    }
+
+    #[tokio::test]
+    async fn request_model_routes_the_request_without_changing_catalog_identity() {
+        let mut server = CaptureServer::start_responses().await;
+        let provider = authenticated_provider().with_connection(crate::ProviderConnectionConfig {
+            base_url: Some(server.base_url.clone()),
+            request_model: Some("codex-deployment".to_string()),
+            ..Default::default()
+        });
+
+        let responses = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
+        let captured = server.captured().await;
+
+        assert!(responses.iter().all(Result::is_ok), "{responses:?}");
+        assert_eq!(captured.body["model"], "codex-deployment");
+        assert_eq!(provider.model().unwrap().to_string(), "codex:gpt-5.5");
     }
 
     fn server_backed_provider(server: &CaptureServer) -> CodexProvider {
+        authenticated_provider().with_connection(crate::ProviderConnectionConfig {
+            base_url: Some(server.base_url.clone()),
+            ..Default::default()
+        })
+    }
+
+    fn authenticated_provider() -> CodexProvider {
         let credential = OAuthCredential {
             client_id: "test".to_string(),
             access_token: test_jwt("account-1"),
@@ -221,11 +244,8 @@ mod tests {
             expires_at: Some(u64::MAX),
         };
         let store: Arc<dyn OAuthCredentialStorage> =
-            Arc::new(FakeOAuthCredentialStore::new().with_credential("codex", credential));
-        CodexProvider::new(store).with_connection(crate::ProviderConnectionConfig {
-            base_url: Some(server.base_url.clone()),
-            ..Default::default()
-        })
+            Arc::new(MemoryCredentialStore::new().with_credential("codex", credential));
+        CodexProvider::new(store)
     }
 
     fn test_jwt(account_id: &str) -> String {
@@ -236,7 +256,7 @@ mod tests {
     }
 
     fn create_test_provider() -> CodexProvider {
-        let store: Arc<dyn OAuthCredentialStorage> = Arc::new(FakeOAuthCredentialStore::new());
+        let store: Arc<dyn OAuthCredentialStorage> = Arc::new(MemoryCredentialStore::new());
         CodexProvider::new(store).with_model("gpt-5.5")
     }
 }

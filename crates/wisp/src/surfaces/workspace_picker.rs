@@ -1,9 +1,11 @@
 use crate::renderer::DrawContext;
-use crate::surfaces::input::{Nav, UiEvent, WorkspacePickerOutput};
+use crate::surfaces::input::UiOutput;
+use crate::view::input::{Nav, UiEvent};
 use crate::theme::Theme;
 use crate::view::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::view::filterable_list::FilterableList;
-use crate::view::widgets::TextInput;
+use crate::view::widgets::visible_window;
+use crate::view::wrap::as_u16;
 use acp_utils::notifications::{WorkspaceEntry, WorkspaceMoveTarget};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
@@ -48,7 +50,7 @@ impl WorkspacePicker {
         }
     }
 
-    fn on_naming_key(&mut self, key: KeyEvent) -> Vec<WorkspacePickerOutput> {
+    fn on_naming_key(&mut self, key: KeyEvent) -> Vec<UiOutput> {
         let Mode::NamingNew { name } = &mut self.mode else {
             return Vec::new();
         };
@@ -62,7 +64,7 @@ impl WorkspacePicker {
                 if trimmed.is_empty() {
                     return Vec::new();
                 }
-                vec![WorkspacePickerOutput::Move { target: WorkspaceMoveTarget::New { name: trimmed } }]
+                vec![UiOutput::MoveWorkspace(WorkspaceMoveTarget::New { name: trimmed })]
             }
             _ => {
                 apply_edit_key(name, key);
@@ -80,7 +82,13 @@ impl WorkspacePicker {
         });
     }
 
-    fn render_name_input(parent_dir: Option<&Path>, name: &EditBuffer, area: Rect, buf: &mut Buffer, theme: &Theme) {
+    fn render_name_input(
+        parent_dir: Option<&Path>,
+        name: &EditBuffer,
+        area: Rect,
+        buf: &mut Buffer,
+        theme: &Theme,
+    ) -> Position {
         let block = Block::bordered().title(" New workspace ").style(theme.text_primary);
         let inner = block.inner(area);
         block.render(area, buf);
@@ -93,37 +101,36 @@ impl WorkspacePicker {
             Paragraph::new(vec![Line::raw(""), hint]).render(inner, buf);
         }
 
-        let field = theme.surface_style();
-        TextInput::new(name)
-            .prefix("  Name: ")
-            .prefix_style(field)
-            .style(field)
+        let prefix = "  Name: ";
+        let (visible, cursor) = visible_window(name, usize::from(inner.width).saturating_sub(prefix.len()));
+        Paragraph::new(Line::styled(format!("{prefix}{visible}"), theme.surface_style()))
             .render(Rect { height: 1, ..inner }, buf);
+        Position::new(inner.x + as_u16(prefix.len() + cursor), inner.y)
     }
 }
 
 impl WorkspacePicker {
-    pub(crate) fn on_ui_event(&mut self, event: UiEvent) -> Vec<WorkspacePickerOutput> {
+    pub(crate) fn on_ui_event(&mut self, event: &UiEvent) -> Vec<UiOutput> {
         if matches!(self.mode, Mode::NamingNew { .. }) {
             return match event {
-                UiEvent::Key(key) => self.on_naming_key(key),
-                UiEvent::Paste(text) => self.on_paste(&text),
+                UiEvent::Key(key) => self.on_naming_key(*key),
+                UiEvent::Paste(text) => self.on_paste(text),
                 UiEvent::Mouse(..) => Vec::new(),
             };
         }
-        if let UiEvent::Key(key) = &event
+        if let UiEvent::Key(key) = event
             && key.code == KeyCode::Tab
         {
             return self.activate();
         }
-        match self.rows.on_nav_event(&event) {
-            Nav::Close => vec![WorkspacePickerOutput::Close],
+        match self.rows.on_nav_event(event) {
+            Nav::Close => vec![UiOutput::Close],
             Nav::Activate | Nav::Clicked => self.activate(),
             Nav::Moved | Nav::Unhandled => Vec::new(),
         }
     }
 
-    fn on_paste(&mut self, text: &str) -> Vec<WorkspacePickerOutput> {
+    fn on_paste(&mut self, text: &str) -> Vec<UiOutput> {
         if let Mode::NamingNew { name } = &mut self.mode {
             name.insert_paste(text);
         }
@@ -132,10 +139,10 @@ impl WorkspacePicker {
 
     /// Acts on the focused row: existing workspaces move immediately, while
     /// "create new" switches to the name prompt.
-    fn activate(&mut self) -> Vec<WorkspacePickerOutput> {
+    fn activate(&mut self) -> Vec<UiOutput> {
         match self.rows.selected_entry().cloned() {
             Some(WorkspaceRow::Existing(entry)) => {
-                vec![WorkspacePickerOutput::Move { target: WorkspaceMoveTarget::Existing { path: entry.path } }]
+                vec![UiOutput::MoveWorkspace(WorkspaceMoveTarget::Existing { path: entry.path })]
             }
             Some(WorkspaceRow::CreateNew) => {
                 self.mode = Mode::NamingNew { name: EditBuffer::default() };
@@ -149,9 +156,13 @@ impl WorkspacePicker {
 impl WorkspacePicker {
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
         match &mut self.mode {
-            Mode::NamingNew { name } => Self::render_name_input(self.parent_dir.as_deref(), name, area, buf, cx.theme),
-            Mode::List => self.render_list(area, buf, cx.theme),
+            Mode::NamingNew { name } => {
+                Some(Self::render_name_input(self.parent_dir.as_deref(), name, area, buf, cx.theme))
+            }
+            Mode::List => {
+                self.render_list(area, buf, cx.theme);
+                None
+            }
         }
-        None
     }
 }

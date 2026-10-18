@@ -3,12 +3,12 @@ mod prompt_history;
 use acp_utils::notifications::{PromptSearchResponse, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn};
 use aether_core::events::{AgentEvent, MessageEvent, ToolEvent};
 use serde::Serialize;
-use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use tracing::warn;
-use utils::settings::aether_home;
+use utils::fs::{append_line, write_atomic};
+use utils::path::aether_home;
 
 use crate::error::SessionStoreError;
 use crate::{SessionEvent, SessionLog, SessionLogEntry, SessionMeta, UserEvent};
@@ -83,10 +83,17 @@ pub struct SessionStore {
     prompt_history: PromptHistoryIndex,
 }
 
+pub fn sessions_dir() -> Option<PathBuf> {
+    aether_home().map(|home| home.join("sessions"))
+}
+
+pub fn session_index_path() -> Option<PathBuf> {
+    aether_home().map(|home| home.join("session-index.sqlite"))
+}
+
 impl SessionStore {
     pub fn new() -> Result<Self, SessionStoreError> {
-        let home = aether_home().ok_or(SessionStoreError::MissingAetherHome)?;
-        Ok(Self::from_path(home.join("sessions")))
+        sessions_dir().map(Self::from_path).ok_or(SessionStoreError::MissingAetherHome)
     }
 
     pub fn from_path(dir: PathBuf) -> Self {
@@ -95,14 +102,14 @@ impl SessionStore {
     }
 
     pub fn append_meta(&self, session_id: &str, meta: &SessionMeta) -> Result<(), SessionStoreError> {
-        self.append_line(session_id, meta)
+        self.append_json(session_id, meta)
     }
 
     pub fn append_event(&self, session_id: &str, event: &SessionEvent) -> Result<(), SessionStoreError> {
         if !event.is_persisted() {
             return Ok(());
         }
-        self.append_line(session_id, event)?;
+        self.append_json(session_id, event)?;
         if let Some(prompt) = event.user_content()
             && let Some(meta) = self.session_meta(session_id)
         {
@@ -133,17 +140,13 @@ impl SessionStore {
         let mut meta: SessionMeta = serde_json::from_str(first.trim())
             .map_err(|source| SessionStoreError::InvalidMetadata { line_number: 1, source })?;
         meta.cwd = new_cwd.to_path_buf();
-        let meta_line = serde_json::to_string(&meta)?;
-
-        let tmp_path = path.with_extension("jsonl.tmp");
-        {
-            let mut file = File::create(&tmp_path)?;
-            writeln!(file, "{meta_line}")?;
-            for line in lines {
-                writeln!(file, "{line}")?;
-            }
+        let mut rewritten = serde_json::to_string(&meta)?;
+        rewritten.push('\n');
+        for line in lines {
+            rewritten.push_str(line);
+            rewritten.push('\n');
         }
-        fs::rename(tmp_path, &path)?;
+        write_atomic(&path, rewritten.as_bytes())?;
 
         let _ = self.prompt_history.relocate_session(session_id, new_cwd);
         Ok(())
@@ -182,13 +185,8 @@ impl SessionStore {
         SessionLog::open(self.session_path(session_id)).ok().map(|log| log.meta)
     }
 
-    fn append_line<T: Serialize>(&self, session_id: &str, value: &T) -> Result<(), SessionStoreError> {
-        fs::create_dir_all(&self.dir)?;
-        let path = self.session_path(session_id);
-        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
-        let line = serde_json::to_string(value)?;
-        writeln!(file, "{line}")?;
-        Ok(())
+    fn append_json<T: Serialize>(&self, session_id: &str, value: &T) -> Result<(), SessionStoreError> {
+        Ok(append_line(&self.session_path(session_id), &serde_json::to_string(value)?)?)
     }
 
     fn session_path(&self, session_id: &str) -> PathBuf {

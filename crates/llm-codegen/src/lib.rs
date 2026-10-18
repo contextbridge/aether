@@ -1,23 +1,59 @@
 #![doc = include_str!("../README.md")]
 
-use proc_macro2::TokenStream;
+use proc_macro2::{Ident, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
 use std::path::Path;
+use utils::ReasoningEffort;
+
+/// Output of the code generator.
+pub struct GeneratedOutput {
+    /// The generated Rust source (for `generated.rs`).
+    pub rust_source: String,
+    /// Per-provider markdown documentation keyed by provider identifier.
+    ///
+    /// Keys are provider `dev_ids` (e.g. `"anthropic"`, `"ollama"`) and values
+    /// are markdown strings suitable for `#![doc = include_str!(...)]`.
+    pub provider_docs: BTreeMap<String, String>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CodegenError {
+    #[error("read: {0}")]
+    Read(#[from] std::io::Error),
+    #[error("parse: {0}")]
+    Parse(#[from] serde_json::Error),
+    #[error("Provider '{0}' not found in models.dev data")]
+    ProviderNotFound(String),
+    #[error("Configured model '{model_id}' was not found in provider '{provider_id}'")]
+    ConfiguredModelNotFound { provider_id: String, model_id: String },
+    #[error("Configured model '{model_id}' is duplicated for provider '{provider_id}'")]
+    DuplicateConfiguredModel { provider_id: String, model_id: String },
+    #[error("Configured model '{model_id}' is not tool-capable in provider '{provider_id}'")]
+    ConfiguredModelUnavailable { provider_id: String, model_id: String },
+    #[error("Model '{model_id}' declares unsupported reasoning effort '{effort}'")]
+    UnsupportedReasoningEffort { model_id: String, effort: String },
+    #[error("Model '{model_id}' declares unsupported wire shape '{shape}'")]
+    UnsupportedWireShape { model_id: String, shape: String },
+    #[error("Model '{model_id}' must declare both an endpoint and wire shape")]
+    IncompleteTransport { model_id: String },
+}
+
+pub fn generate(models_json_path: &Path) -> Result<GeneratedOutput, CodegenError> {
+    let json_bytes = std::fs::read_to_string(models_json_path)?;
+    let data: ModelsDevData = serde_json::from_str(&json_bytes)?;
+
+    let provider_models = build_provider_models(&data)?;
+    let ctx = CodegenCtx { provider_models };
+    Ok(GeneratedOutput { rust_source: emit_generated_source(&ctx), provider_docs: emit_provider_docs(&ctx) })
+}
 
 type ModelsDevData = HashMap<String, ProviderData>;
 
 #[derive(Debug, Deserialize)]
 struct ProviderData {
-    #[allow(dead_code)]
-    id: String,
-    #[allow(dead_code)]
-    name: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    env: Vec<String>,
     #[serde(default)]
     models: HashMap<String, ModelData>,
 }
@@ -33,7 +69,6 @@ struct ModelData {
     #[serde(default)]
     reasoning_options: Vec<ReasoningOption>,
     #[serde(default)]
-    #[allow(dead_code)]
     cost: Option<CostData>,
     #[serde(default)]
     limit: Option<LimitData>,
@@ -82,9 +117,6 @@ struct CostData {
 struct LimitData {
     #[serde(default)]
     context: u32,
-    #[serde(default)]
-    #[allow(dead_code)]
-    output: u32,
 }
 
 impl CostData {
@@ -93,7 +125,7 @@ impl CostData {
     }
 }
 
-/// Provider configuration for codegen (catalog providers with known model lists)
+/// Provider configuration for codegen, for catalog and local providers alike.
 struct ProviderConfig {
     /// Unique provider key used in `provider_models` map (e.g. "codex")
     dev_id: &'static str,
@@ -101,11 +133,10 @@ struct ProviderConfig {
     source_dev_id: Option<&'static str>,
     /// Additional models.dev keys whose models are merged into this provider
     extra_source_ids: &'static [&'static str],
-    /// When set, the provider exposes exactly these models with these context
-    /// windows (e.g. subscription-gated providers whose limits differ from the
-    /// source metadata). Every entry must exist and be tool-capable in the
-    /// source data.
-    explicit_models: Option<&'static [ExplicitModel]>,
+    /// When set, the provider exposes only these models (e.g. subscription-gated providers).
+    explicit_models: Option<&'static [&'static str]>,
+    /// Context window applied to every model.
+    explicit_context_window: Option<u32>,
     /// Our Rust enum name (e.g. "Gemini")
     enum_name: &'static str,
     /// Our internal provider name used for parsing (e.g. "gemini")
@@ -119,26 +150,67 @@ struct ProviderConfig {
     /// OAuth provider ID for providers that require OAuth login (e.g. "codex")
     oauth_provider_id: Option<&'static str>,
     /// Fallback levels when source metadata does not declare granular efforts.
-    fallback_reasoning_levels: &'static [&'static str],
+    fallback_reasoning_levels: &'static [ReasoningEffort],
+    /// Which models can turn reasoning off.
+    reasoning_off: ReasoningOff,
+    /// When false (subscription-billed providers), models carry no pricing.
+    per_token_pricing: bool,
     /// When true, a model's `provider.api`/`provider.shape` metadata is read as a
     /// per-model transport override. Off elsewhere because most providers publish
     /// unrelated data (npm package names) under the same key.
     use_model_transport: bool,
-    /// When true, the provider uses the shared OpenAI-compatible chat transport.
-    uses_openai_compatible_api: bool,
-    /// When true, the inner catalog enum is named `{Enum}FoundationModel` and
-    /// `LlmModel::{Enum}` carries a hand-written `{Enum}Model` wrapper (defined
-    /// outside of codegen) that adds a `Profile(String)` fall-through plus any
-    /// provider-specific parsing policy. Used for Bedrock to accept arbitrary
-    /// inference profile IDs at runtime while keeping ARNs out of model identity.
-    is_hybrid_dynamic: bool,
+    /// Transport for models whose metadata declares none.
+    transport_override: Option<TransportOverride>,
+    model_ids: ModelIds,
 }
 
-/// A model exposed by a provider with an explicit model list.
-struct ExplicitModel {
-    id: &'static str,
-    context_window: u32,
-    supports_reasoning_off: bool,
+/// How `LlmModel::{Enum}` identifies a provider's models.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ModelIds {
+    /// A generated `{Enum}Model` catalog enum.
+    Catalog,
+    /// A generated `{Enum}FoundationModel` catalog enum inside a hand-written
+    /// `{Enum}Model` wrapper (defined outside of codegen) that adds a
+    /// `Profile(String)` fall-through plus any provider-specific parsing policy.
+    /// Used for Bedrock to accept arbitrary inference profile IDs at runtime
+    /// while keeping ARNs out of model identity.
+    Hybrid,
+    /// A model name supplied at runtime (`LlmModel::{Enum}(String)`), with no
+    /// catalog enum.
+    Runtime,
+}
+
+/// Mirrors `ReasoningOff` in `llm::catalog`.
+#[derive(Debug, Clone, Copy)]
+enum ReasoningOff {
+    Always,
+    Effort,
+    ModelTransport,
+    Never,
+}
+
+/// Mirrors `llm::ReasoningDisabledSupport`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReasoningDisabledSupport {
+    Unsupported,
+    Effort,
+    Toggle,
+}
+
+/// Serves models whose ID starts with one of `model_id_prefixes` over the
+/// Responses API from `base_url_template`.
+struct TransportOverride {
+    model_id_prefixes: &'static [&'static str],
+    base_url_template: &'static str,
+}
+
+impl TransportOverride {
+    fn for_model(&self, model_id: &str) -> Option<TransportInfo> {
+        self.model_id_prefixes
+            .iter()
+            .any(|prefix| model_id.starts_with(prefix))
+            .then(|| TransportInfo::OpenAiResponses { base_url_template: self.base_url_template.to_string() })
+    }
 }
 
 impl ProviderConfig {
@@ -155,39 +227,44 @@ impl ProviderConfig {
             source_dev_id: None,
             extra_source_ids: &[],
             explicit_models: None,
+            explicit_context_window: None,
             enum_name,
             parser_name,
             genai_provider_name: parser_name,
             display_name,
             env_var,
             oauth_provider_id: None,
-            fallback_reasoning_levels: &["low", "medium", "high"],
+            fallback_reasoning_levels: &[ReasoningEffort::Low, ReasoningEffort::Medium, ReasoningEffort::High],
+            reasoning_off: ReasoningOff::Always,
+            per_token_pricing: true,
             use_model_transport: false,
-            uses_openai_compatible_api: false,
-            is_hybrid_dynamic: false,
+            transport_override: None,
+            model_ids: ModelIds::Catalog,
         }
     }
 
-    const fn openai_compatible(
-        dev_id: &'static str,
+    const fn local(
         enum_name: &'static str,
         parser_name: &'static str,
+        genai_provider_name: &'static str,
         display_name: &'static str,
-        env_var: &'static str,
     ) -> Self {
-        let mut config = Self::standard(dev_id, enum_name, parser_name, display_name, Some(env_var));
-        config.uses_openai_compatible_api = true;
-        config
+        Self {
+            genai_provider_name,
+            reasoning_off: ReasoningOff::Never,
+            model_ids: ModelIds::Runtime,
+            ..Self::standard(parser_name, enum_name, parser_name, display_name, None)
+        }
     }
 
-    fn explicit_model(&self, model_id: &str) -> Option<&'static ExplicitModel> {
-        self.explicit_models.and_then(|models| models.iter().find(|model| model.id == model_id))
+    fn is_local(&self) -> bool {
+        self.model_ids == ModelIds::Runtime
     }
 
     /// Inner catalog-enum name. For hybrid providers the outer `{enum_name}Model`
     /// is a wrapper; the catalog enum is `{enum_name}FoundationModel`.
     fn inner_enum_name(&self) -> String {
-        if self.is_hybrid_dynamic {
+        if self.model_ids == ModelIds::Hybrid {
             format!("{}FoundationModel", self.enum_name)
         } else {
             format!("{}Model", self.enum_name)
@@ -205,52 +282,43 @@ impl ProviderConfig {
     }
 }
 
-/// Dynamic provider — model name is user-supplied at runtime, no fixed enum
-#[allow(clippy::struct_field_names)]
-struct DynamicProviderConfig {
-    /// Rust variant name in `LlmModel` (e.g. "Ollama")
-    enum_name: &'static str,
-    /// Parser name used in "provider:model" strings (e.g. "ollama")
-    parser_name: &'static str,
-    /// OpenTelemetry `GenAI` semantic-convention provider name.
-    genai_provider_name: &'static str,
-    /// Human-readable provider name (e.g. "Ollama")
-    display_name: &'static str,
-}
-
 const PROVIDERS: &[ProviderConfig] = &[
     ProviderConfig::standard("anthropic", "Anthropic", "anthropic", "Anthropic", Some("ANTHROPIC_API_KEY")),
     ProviderConfig {
         source_dev_id: Some("azure"),
         genai_provider_name: "azure.ai.openai",
-        ..ProviderConfig::openai_compatible(
+        reasoning_off: ReasoningOff::Effort,
+        ..ProviderConfig::standard(
             "azure-foundry",
             "AzureFoundry",
             "azure-foundry",
             "Microsoft Foundry",
-            "AZURE_OPENAI_API_KEY",
+            Some("AZURE_OPENAI_API_KEY"),
         )
     },
     ProviderConfig {
-        dev_id: "codex",
         source_dev_id: Some("openai"),
-        extra_source_ids: &[],
         explicit_models: Some(CODEX_SUBSCRIPTION_MODELS),
-        enum_name: "Codex",
-        parser_name: "codex",
+        explicit_context_window: Some(272_000),
         genai_provider_name: "openai",
-        display_name: "Codex",
-        env_var: None,
         oauth_provider_id: Some("codex"),
-        fallback_reasoning_levels: &["low", "medium", "high", "xhigh"],
-        use_model_transport: false,
-        uses_openai_compatible_api: false,
-        is_hybrid_dynamic: false,
+        fallback_reasoning_levels: &[
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::Xhigh,
+        ],
+        per_token_pricing: false,
+        ..ProviderConfig::standard("codex", "Codex", "codex", "Codex", None)
     },
-    ProviderConfig::openai_compatible("deepseek", "DeepSeek", "deepseek", "DeepSeek", "DEEPSEEK_API_KEY"),
+    ProviderConfig {
+        reasoning_off: ReasoningOff::Effort,
+        ..ProviderConfig::standard("deepseek", "DeepSeek", "deepseek", "DeepSeek", Some("DEEPSEEK_API_KEY"))
+    },
     ProviderConfig {
         source_dev_id: Some("fireworks-ai"),
-        ..ProviderConfig::openai_compatible("fireworks", "Fireworks", "fireworks", "Fireworks AI", "FIREWORKS_API_KEY")
+        reasoning_off: ReasoningOff::Effort,
+        ..ProviderConfig::standard("fireworks", "Fireworks", "fireworks", "Fireworks AI", Some("FIREWORKS_API_KEY"))
     },
     ProviderConfig {
         genai_provider_name: "gcp.gemini",
@@ -258,80 +326,44 @@ const PROVIDERS: &[ProviderConfig] = &[
     },
     ProviderConfig {
         genai_provider_name: "moonshot_ai",
-        ..ProviderConfig::openai_compatible("moonshotai", "Moonshot", "moonshot", "Moonshot", "MOONSHOT_API_KEY")
+        reasoning_off: ReasoningOff::Effort,
+        ..ProviderConfig::standard("moonshotai", "Moonshot", "moonshot", "Moonshot", Some("MOONSHOT_API_KEY"))
     },
     ProviderConfig::standard("openai", "Openai", "openai", "OpenAI", Some("OPENAI_API_KEY")),
     ProviderConfig::standard("openrouter", "OpenRouter", "openrouter", "OpenRouter", Some("OPENROUTER_API_KEY")),
     ProviderConfig::standard("xiaomi", "Xiaomi", "xiaomi", "Xiaomi", Some("XIAOMI_API_KEY")),
     ProviderConfig {
         extra_source_ids: &["zai-coding-plan"],
-        ..ProviderConfig::openai_compatible("zai", "ZAi", "zai", "ZAI", "ZAI_API_KEY")
+        reasoning_off: ReasoningOff::Effort,
+        ..ProviderConfig::standard("zai", "ZAi", "zai", "ZAI", Some("ZAI_API_KEY"))
     },
     ProviderConfig {
         genai_provider_name: "aws.bedrock",
+        reasoning_off: ReasoningOff::ModelTransport,
         use_model_transport: true,
-        is_hybrid_dynamic: true,
+        transport_override: Some(TransportOverride {
+            model_id_prefixes: &["us.openai.gpt-6-", "us.openai.gpt-6.1-sol"],
+            base_url_template: "https://bedrock-runtime.${AWS_REGION}.amazonaws.com/openai/v1",
+        }),
+        model_ids: ModelIds::Hybrid,
         ..ProviderConfig::standard("amazon-bedrock", "Bedrock", "bedrock", "AWS Bedrock", None)
     },
+    ProviderConfig::local("Ollama", "ollama", "ollama", "Ollama"),
+    ProviderConfig::local("LlamaCpp", "llamacpp", "llama.cpp", "LlamaCpp"),
 ];
 
-const DYNAMIC_PROVIDERS: &[DynamicProviderConfig] = &[
-    DynamicProviderConfig {
-        enum_name: "Ollama",
-        parser_name: "ollama",
-        genai_provider_name: "ollama",
-        display_name: "Ollama",
-    },
-    DynamicProviderConfig {
-        enum_name: "LlamaCpp",
-        parser_name: "llamacpp",
-        genai_provider_name: "llama.cpp",
-        display_name: "LlamaCpp",
-    },
-];
-
-const CODEX_SUBSCRIPTION_CONTEXT_WINDOW: u32 = 272_000;
-
-const CODEX_SUBSCRIPTION_MODELS: &[ExplicitModel] = &[
-    ExplicitModel {
-        id: "gpt-6.1-sol",
-        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
-        supports_reasoning_off: false,
-    },
-    ExplicitModel { id: "gpt-6-sol", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW, supports_reasoning_off: false },
-    ExplicitModel {
-        id: "gpt-6-astra",
-        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
-        supports_reasoning_off: false,
-    },
-    ExplicitModel {
-        id: "gpt-6-luna",
-        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
-        supports_reasoning_off: false,
-    },
-    ExplicitModel {
-        id: "gpt-5.6-sol",
-        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
-        supports_reasoning_off: false,
-    },
-    ExplicitModel {
-        id: "gpt-5.6-terra",
-        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
-        supports_reasoning_off: false,
-    },
-    ExplicitModel {
-        id: "gpt-5.6-luna",
-        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
-        supports_reasoning_off: false,
-    },
-    ExplicitModel { id: "gpt-5.5", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW, supports_reasoning_off: false },
-    ExplicitModel { id: "gpt-5.4", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW, supports_reasoning_off: false },
-    ExplicitModel {
-        id: "gpt-5.4-mini",
-        context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
-        supports_reasoning_off: false,
-    },
-    ExplicitModel { id: "gpt-5.2", context_window: CODEX_SUBSCRIPTION_CONTEXT_WINDOW, supports_reasoning_off: false },
+const CODEX_SUBSCRIPTION_MODELS: &[&str] = &[
+    "gpt-6.1-sol",
+    "gpt-6-sol",
+    "gpt-6-astra",
+    "gpt-6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.2",
 ];
 
 #[derive(Debug, Clone)]
@@ -340,15 +372,15 @@ struct ModelInfo {
     model_id: String,
     display_name: String,
     context_window: u32,
-    reasoning_levels: Vec<String>,
-    disabled_support: &'static str,
+    reasoning_levels: Vec<ReasoningEffort>,
+    disabled_support: ReasoningDisabledSupport,
     input_modalities: Vec<String>,
     pricing: Option<CostData>,
     supports_prompt_caching: bool,
     transport: Option<TransportInfo>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum TransportInfo {
     OpenAiResponses { base_url_template: String },
 }
@@ -359,61 +391,15 @@ struct CodegenCtx {
     provider_models: ProviderModels,
 }
 
-/// Output of the code generator.
-pub struct GeneratedOutput {
-    /// The generated Rust source (for `generated.rs`).
-    pub rust_source: String,
-    /// Provider documentation keys for the shared OpenAI-compatible module.
-    pub openai_compatible_provider_ids: Vec<&'static str>,
-    /// Per-provider markdown documentation keyed by provider identifier.
-    ///
-    /// Keys are provider `dev_ids` (e.g. `"anthropic"`, `"ollama"`) and values
-    /// are markdown strings suitable for `#![doc = include_str!(...)]`.
-    pub provider_docs: HashMap<String, String>,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum CodegenError {
-    #[error("read: {0}")]
-    Read(#[from] std::io::Error),
-    #[error("parse: {0}")]
-    Parse(#[from] serde_json::Error),
-    #[error("Provider '{0}' not found in models.dev data")]
-    ProviderNotFound(String),
-    #[error("Configured model '{model_id}' was not found in provider '{provider_id}'")]
-    ConfiguredModelNotFound { provider_id: String, model_id: String },
-    #[error("Configured model '{model_id}' is duplicated for provider '{provider_id}'")]
-    DuplicateConfiguredModel { provider_id: String, model_id: String },
-    #[error("Configured model '{model_id}' is not tool-capable in provider '{provider_id}'")]
-    ConfiguredModelUnavailable { provider_id: String, model_id: String },
-    #[error("Model '{model_id}' declares unsupported reasoning effort '{effort}'")]
-    UnsupportedReasoningEffort { model_id: String, effort: String },
-    #[error("Model '{model_id}' declares unsupported wire shape '{shape}'")]
-    UnsupportedWireShape { model_id: String, shape: String },
-    #[error("Model '{model_id}' must declare both an endpoint and wire shape")]
-    IncompleteTransport { model_id: String },
-}
-
-/// Run the codegen, returning the generated Rust source and per-provider docs.
-pub fn generate(models_json_path: &Path) -> Result<GeneratedOutput, CodegenError> {
-    let json_bytes = std::fs::read_to_string(models_json_path)?;
-    let data: ModelsDevData = serde_json::from_str(&json_bytes)?;
-
-    let provider_models = build_provider_models(&data)?;
-    let ctx = CodegenCtx { provider_models };
-    let openai_compatible_provider_ids =
-        PROVIDERS.iter().filter(|config| config.uses_openai_compatible_api).map(|config| config.dev_id).collect();
-    Ok(GeneratedOutput {
-        rust_source: emit_generated_source(&ctx),
-        openai_compatible_provider_ids,
-        provider_docs: emit_provider_docs(&ctx),
-    })
+/// Providers with a fixed model list read from models.dev.
+fn catalog_providers() -> impl Iterator<Item = &'static ProviderConfig> {
+    PROVIDERS.iter().filter(|cfg| !cfg.is_local())
 }
 
 fn build_provider_models(data: &ModelsDevData) -> Result<ProviderModels, CodegenError> {
     let mut provider_models = ProviderModels::new();
 
-    for cfg in PROVIDERS {
+    for cfg in catalog_providers() {
         let json_key = cfg.json_key();
         let provider_data = data.get(json_key).ok_or_else(|| CodegenError::ProviderNotFound(json_key.to_string()))?;
 
@@ -429,18 +415,6 @@ fn build_provider_models(data: &ModelsDevData) -> Result<ProviderModels, Codegen
             }
         }
 
-        if cfg.dev_id == "amazon-bedrock" {
-            for model in &mut models {
-                if (model.model_id.starts_with("us.openai.gpt-6-") || model.model_id == "us.openai.gpt-6.1-sol")
-                    && model.transport.is_none()
-                {
-                    model.transport = Some(TransportInfo::OpenAiResponses {
-                        base_url_template: "https://bedrock-runtime.${AWS_REGION}.amazonaws.com/openai/v1".to_string(),
-                    });
-                }
-            }
-        }
-
         models.sort_by(|a, b| a.model_id.cmp(&b.model_id));
         provider_models.insert(cfg.dev_id, models);
     }
@@ -453,23 +427,23 @@ fn validate_provider_config(cfg: &ProviderConfig, provider: &ProviderData) -> Re
         return Ok(());
     };
     let mut seen = HashSet::new();
-    for configured in explicit_models {
-        if !seen.insert(configured.id) {
+    for &model_id in explicit_models {
+        if !seen.insert(model_id) {
             return Err(CodegenError::DuplicateConfiguredModel {
                 provider_id: cfg.dev_id.to_string(),
-                model_id: configured.id.to_string(),
+                model_id: model_id.to_string(),
             });
         }
-        let Some(model) = provider.models.get(configured.id) else {
+        let Some(model) = provider.models.get(model_id) else {
             return Err(CodegenError::ConfiguredModelNotFound {
                 provider_id: cfg.dev_id.to_string(),
-                model_id: configured.id.to_string(),
+                model_id: model_id.to_string(),
             });
         };
         if model.tool_call != Some(true) {
             return Err(CodegenError::ConfiguredModelUnavailable {
                 provider_id: cfg.dev_id.to_string(),
-                model_id: configured.id.to_string(),
+                model_id: model_id.to_string(),
             });
         }
     }
@@ -484,16 +458,15 @@ fn collect_models_from(
         .values()
         .filter(|m| m.tool_call == Some(true))
         .filter(|m| !is_alias(&m.id))
-        .filter(|m| cfg.explicit_models.is_none() || cfg.explicit_model(&m.id).is_some())
+        .filter(|m| cfg.explicit_models.is_none_or(|ids| ids.contains(&m.id.as_str())))
         .map(|m| {
             let reasoning_levels =
                 if m.reasoning.unwrap_or(false) { reasoning_levels_for_model(cfg, m)? } else { Vec::new() };
             let input_modalities =
                 m.modalities.as_ref().map_or_else(|| vec!["text".to_string()], |md| md.input.clone());
-            let source_context_window = m.limit.as_ref().map_or(0, |l| l.context);
             let context_window =
-                cfg.explicit_model(&m.id).map_or(source_context_window, |explicit| explicit.context_window);
-            let pricing = if cfg.dev_id == "codex" { None } else { m.cost.clone() };
+                cfg.explicit_context_window.unwrap_or_else(|| m.limit.as_ref().map_or(0, |l| l.context));
+            let pricing = m.cost.clone().filter(|_| cfg.per_token_pricing);
             Ok(ModelInfo {
                 variant_name: model_id_to_variant(&m.id),
                 model_id: m.id.clone(),
@@ -514,12 +487,11 @@ fn transport_for_model(cfg: &ProviderConfig, model: &ModelData) -> Result<Option
     if !cfg.use_model_transport {
         return Ok(None);
     }
-    let Some(provider) = &model.provider else {
-        return Ok(None);
-    };
+    let (api, shape) =
+        model.provider.as_ref().map_or((None, None), |provider| (provider.api.as_ref(), provider.shape.as_deref()));
 
-    match (&provider.api, provider.shape.as_deref()) {
-        (None, None) => Ok(None),
+    match (api, shape) {
+        (None, None) => Ok(cfg.transport_override.as_ref().and_then(|transport| transport.for_model(&model.id))),
         (Some(base_url_template), Some("responses")) => {
             Ok(Some(TransportInfo::OpenAiResponses { base_url_template: base_url_template.clone() }))
         }
@@ -530,27 +502,24 @@ fn transport_for_model(cfg: &ProviderConfig, model: &ModelData) -> Result<Option
     }
 }
 
-fn disabled_support_for_model(cfg: &ProviderConfig, model: &ModelData) -> &'static str {
-    if !model.reasoning.unwrap_or(false) {
-        return "Unsupported";
-    }
-    if let Some(explicit) = cfg.explicit_model(&model.id) {
-        return if explicit.supports_reasoning_off { "Effort" } else { "Unsupported" };
+fn disabled_support_for_model(cfg: &ProviderConfig, model: &ModelData) -> ReasoningDisabledSupport {
+    if !model.reasoning.unwrap_or(false) || cfg.explicit_models.is_some() {
+        return ReasoningDisabledSupport::Unsupported;
     }
     if model.reasoning_options.iter().any(|option| {
         matches!(option,
             ReasoningOption::Effort { values } if values.iter().any(|value| value.as_deref() == Some("none"))
         )
     }) {
-        "Effort"
+        ReasoningDisabledSupport::Effort
     } else if model.reasoning_options.iter().any(|option| matches!(option, ReasoningOption::Toggle)) {
-        "Toggle"
+        ReasoningDisabledSupport::Toggle
     } else {
-        "Unsupported"
+        ReasoningDisabledSupport::Unsupported
     }
 }
 
-fn reasoning_levels_for_model(cfg: &ProviderConfig, model: &ModelData) -> Result<Vec<String>, CodegenError> {
+fn reasoning_levels_for_model(cfg: &ProviderConfig, model: &ModelData) -> Result<Vec<ReasoningEffort>, CodegenError> {
     let values = model
         .reasoning_options
         .iter()
@@ -561,30 +530,23 @@ fn reasoning_levels_for_model(cfg: &ProviderConfig, model: &ModelData) -> Result
         .collect::<Vec<_>>();
     let mut levels = Vec::new();
     if values.is_empty() {
-        levels.extend(cfg.fallback_reasoning_levels.iter().map(|level| (*level).to_string()));
+        levels.extend_from_slice(cfg.fallback_reasoning_levels);
     } else {
         for effort in values.into_iter().flatten().filter_map(|value| value.as_deref()) {
             if matches!(effort, "none" | "default") {
                 continue;
             }
             let parsed =
-                effort.parse::<utils::ReasoningEffort>().ok().filter(|effort| effort.is_enabled()).ok_or_else(
-                    || CodegenError::UnsupportedReasoningEffort {
-                        model_id: model.id.clone(),
-                        effort: effort.to_string(),
-                    },
-                )?;
-            levels.push(parsed.as_str().to_string());
+                effort.parse::<ReasoningEffort>().ok().filter(|effort| effort.is_enabled()).ok_or_else(|| {
+                    CodegenError::UnsupportedReasoningEffort { model_id: model.id.clone(), effort: effort.to_string() }
+                })?;
+            levels.push(parsed);
         }
     }
-    if disabled_support_for_model(cfg, model) != "Unsupported" {
-        levels.push("disabled".to_string());
+    if disabled_support_for_model(cfg, model) != ReasoningDisabledSupport::Unsupported {
+        levels.push(ReasoningEffort::Disabled);
     }
-    Ok(utils::ReasoningEffort::selectable_levels()
-        .iter()
-        .filter(|level| levels.iter().any(|value| value == level.as_str()))
-        .map(|level| level.as_str().to_string())
-        .collect())
+    Ok(ReasoningEffort::selectable_levels().iter().copied().filter(|level| levels.contains(level)).collect())
 }
 
 /// Returns true for "latest" alias IDs that just point to another model
@@ -618,33 +580,13 @@ fn model_id_to_variant(id: &str) -> String {
 
 fn emit_generated_source(ctx: &CodegenCtx) -> String {
     let provider_enum = emit_provider_enum();
-    let provider_enum_impl = emit_provider_enum_impl();
-    let provider_enum_display = emit_provider_enum_display();
-    let provider_enum_fromstr = emit_provider_enum_fromstr();
-    let provider_enums = emit_provider_enums(&ctx.provider_models);
-    let provider_impls = emit_provider_impls(&ctx.provider_models);
-    let llm_model_enum = emit_llm_model_enum();
-    let from_impls = emit_from_impls();
-    let llm_model_impl = emit_llm_model_impl();
-    let display_impl = emit_display_impl();
-    let fromstr_impl = emit_fromstr_impl();
+    let catalog_enums = emit_catalog_enums(&ctx.provider_models);
+    let llm_model = emit_llm_model();
 
     let file_tokens = quote! {
-        use std::borrow::Cow;
-        use std::sync::LazyLock;
-        use crate::ReasoningEffort;
-
         #provider_enum
-        #provider_enum_impl
-        #provider_enum_display
-        #provider_enum_fromstr
-        #provider_enums
-        #provider_impls
-        #llm_model_enum
-        #from_impls
-        #llm_model_impl
-        #display_impl
-        #fromstr_impl
+        #catalog_enums
+        #llm_model
     };
 
     let file: syn::File = syn::parse2(file_tokens).expect("generated tokens parse as Rust");
@@ -655,407 +597,124 @@ fn emit_generated_source(ctx: &CodegenCtx) -> String {
 }
 
 fn emit_provider_enum() -> TokenStream {
-    let catalog_variants = PROVIDERS.iter().map(|cfg| format_ident!("{}", cfg.enum_name));
-    let dynamic_variants = DYNAMIC_PROVIDERS.iter().map(|d| format_ident!("{}", d.enum_name));
+    let variants: Vec<_> = PROVIDERS.iter().map(|cfg| format_ident!("{}", cfg.enum_name)).collect();
+    let info = PROVIDERS.iter().map(|cfg| {
+        let (parser_name, genai_provider_name, display_name, is_local) =
+            (cfg.parser_name, cfg.genai_provider_name, cfg.display_name, cfg.is_local());
+        let required_env_var = option_tokens(cfg.env_var);
+        let oauth_provider_id = option_tokens(cfg.oauth_provider_id);
+        let reasoning_off = variant_ident(cfg.reasoning_off);
+        quote! {
+            ProviderInfo {
+                parser_name: #parser_name,
+                genai_provider_name: #genai_provider_name,
+                display_name: #display_name,
+                required_env_var: #required_env_var,
+                oauth_provider_id: #oauth_provider_id,
+                is_local: #is_local,
+                reasoning_off: ReasoningOff::#reasoning_off,
+            }
+        }
+    });
+
     quote! {
         /// Typed provider identifier — covers both catalog providers
         /// (`Anthropic`, `Codex`, …) and dynamic providers whose model name is
         /// user-supplied (`Ollama`, `LlamaCpp`).
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub enum Provider {
-            #(#catalog_variants,)*
-            #(#dynamic_variants,)*
+            #(#variants,)*
         }
-    }
-}
 
-fn emit_provider_enum_impl() -> TokenStream {
-    let parser_arms = provider_match_arms(|cfg| cfg.parser_name, |d| d.parser_name);
-    let genai_provider_name_arms = provider_match_arms(|cfg| cfg.genai_provider_name, |d| d.genai_provider_name);
-    let display_arms = provider_match_arms(|cfg| cfg.display_name, |d| d.display_name);
-
-    let env_var_some = PROVIDERS.iter().filter_map(|cfg| {
-        cfg.env_var.map(|var| {
-            let v = format_ident!("{}", cfg.enum_name);
-            quote! { Self::#v => Some(#var), }
-        })
-    });
-
-    let env_var_none = provider_or_pats(|cfg| cfg.env_var.is_none(), |_| true);
-    let oauth_some = PROVIDERS.iter().filter_map(|cfg| {
-        cfg.oauth_provider_id.map(|id| {
-            let v = format_ident!("{}", cfg.enum_name);
-            quote! { Self::#v => Some(#id), }
-        })
-    });
-    let oauth_none = provider_or_pats(|cfg| cfg.oauth_provider_id.is_none(), |_| true);
-
-    let is_local_true = provider_or_pats(|_| false, |_| true);
-    let is_local_false = provider_or_pats(|_| true, |_| false);
-    let all_variants = PROVIDERS
-        .iter()
-        .map(|cfg| format_ident!("{}", cfg.enum_name))
-        .chain(DYNAMIC_PROVIDERS.iter().map(|d| format_ident!("{}", d.enum_name)));
-
-    quote! {
         impl Provider {
             /// All providers — catalog and dynamic — in declaration order.
-            pub const ALL: &[Provider] = &[#(Self::#all_variants),*];
+            pub const ALL: &[Provider] = &[#(Self::#variants),*];
 
-            /// Parser name used in `provider:model` strings (e.g. `"anthropic"`).
-            pub fn parser_name(self) -> &'static str {
-                match self { #parser_arms }
-            }
-
-            /// OpenTelemetry `GenAI` semantic-convention provider name.
-            #[allow(clippy::match_same_arms)]
-            pub fn genai_provider_name(self) -> &'static str {
-                match self { #genai_provider_name_arms }
-            }
-
-            /// Human-readable provider name (e.g. `"AWS Bedrock"`).
-            pub fn display_name(self) -> &'static str {
-                match self { #display_arms }
-            }
-
-            /// API-key env var the provider requires, if any.
-            pub fn required_env_var(self) -> Option<&'static str> {
-                match self {
-                    #(#env_var_some)*
-                    #env_var_none => None,
-                }
-            }
-
-            /// OAuth provider ID if this provider authenticates via OAuth.
-            pub fn oauth_provider_id(self) -> Option<&'static str> {
-                match self {
-                    #(#oauth_some)*
-                    #oauth_none => None,
-                }
-            }
-
-            /// Local providers run models on the user's machine — there's no
-            /// remote API to call and no env var to satisfy.
-            pub fn is_local(self) -> bool {
-                match self {
-                    #is_local_true => true,
-                    #is_local_false => false,
-                }
-            }
+            const INFO: &[ProviderInfo] = &[#(#info,)*];
         }
     }
 }
 
-fn emit_provider_enum_display() -> TokenStream {
-    quote! {
-        impl std::fmt::Display for Provider {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str(self.parser_name())
-            }
-        }
-    }
-}
-
-fn emit_provider_enum_fromstr() -> TokenStream {
-    let catalog_arms = PROVIDERS.iter().map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        let name = cfg.parser_name;
-        quote! { #name => Ok(Self::#v), }
-    });
-
-    let dynamic_arms = DYNAMIC_PROVIDERS.iter().map(|d| {
-        let v = format_ident!("{}", d.enum_name);
-        let name = d.parser_name;
-        quote! { #name => Ok(Self::#v), }
-    });
-
-    quote! {
-        impl std::str::FromStr for Provider {
-            type Err = String;
-            fn from_str(s: &str) -> Result<Self, Self::Err> {
-                match s {
-                    #(#catalog_arms)*
-                    #(#dynamic_arms)*
-                    other => Err(format!("Unknown provider: '{other}'")),
-                }
-            }
-        }
-    }
-}
-
-fn emit_provider_enums(provider_models: &ProviderModels) -> TokenStream {
-    let enums = PROVIDERS.iter().map(|cfg| {
+fn emit_catalog_enums(provider_models: &ProviderModels) -> TokenStream {
+    let enums = catalog_providers().map(|cfg| {
         let inner = format_ident!("{}", cfg.inner_enum_name());
-        let variants = provider_models[cfg.dev_id].iter().map(|m| format_ident!("{}", m.variant_name));
+        let models = &provider_models[cfg.dev_id];
+        let variants: Vec<_> = models.iter().map(|m| format_ident!("{}", m.variant_name)).collect();
+        let entries = models.iter().map(emit_catalog_entry);
         quote! {
             #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
             pub enum #inner {
                 #(#variants,)*
+            }
+
+            impl #inner {
+                const ALL: &[Self] = &[#(Self::#variants),*];
+
+                #[allow(clippy::large_stack_arrays, clippy::unreadable_literal)]
+                const ENTRIES: &[CatalogEntry] = &[#(#entries,)*];
+
+                fn entry(self) -> &'static CatalogEntry {
+                    &Self::ENTRIES[self as usize]
+                }
             }
         }
     });
     quote! { #(#enums)* }
 }
 
-fn emit_provider_impls(provider_models: &ProviderModels) -> TokenStream {
-    let impls = PROVIDERS.iter().map(|cfg| {
-        let models = &provider_models[cfg.dev_id];
-        let enum_ident = format_ident!("{}", cfg.inner_enum_name());
-
-        let model_id_arms = models.iter().map(|m| {
-            let v = format_ident!("{}", m.variant_name);
-            let id = &m.model_id;
-            quote! { Self::#v => #id, }
-        });
-
-        let display_name_arms = grouped_arms(
-            models,
-            |m| m.display_name.clone(),
-            |m| {
-                let s = &m.display_name;
-                quote! { #s }
-            },
-        );
-
-        let context_window_arms =
-            grouped_arms(models, |m| m.context_window, |m| num_lit_with_underscores(m.context_window));
-
-        let reasoning_levels_arms = emit_reasoning_levels_arms(models);
-        let disabled_support_arms = grouped_arms(
-            models,
-            |m| m.disabled_support,
-            |m| {
-                let variant = format_ident!("{}", m.disabled_support);
-                quote! { crate::reasoning::ReasoningDisabledSupport::#variant }
-            },
-        );
-
-        let prompt_caching_arms = grouped_arms(
-            models,
-            |m| m.supports_prompt_caching,
-            |m| {
-                let b = m.supports_prompt_caching;
-                quote! { #b }
-            },
-        );
-
-        let pricing_arms = emit_pricing_arms(models);
-
-        let modality_methods = ["image", "audio"].iter().map(|modality| {
-            let method = format_ident!("supports_{}", modality);
-            let mod_owned = (*modality).to_string();
-            let arms = grouped_arms(models, move |m| m.input_modalities.contains(&mod_owned), {
-                let mod_owned = (*modality).to_string();
-                move |m| {
-                    let b = m.input_modalities.contains(&mod_owned);
-                    quote! { #b }
-                }
-            });
-            quote! {
-                #[allow(clippy::too_many_lines)]
-                pub fn #method(self) -> bool {
-                    match self { #arms }
-                }
-            }
-        });
-
-        let transport_arms = emit_transport_arms(models);
-
-        let all_variants = models.iter().map(|m| format_ident!("{}", m.variant_name));
-
-        let from_str_impl = emit_from_str_impl(&enum_ident, cfg.parser_name, models);
-
+fn emit_catalog_entry(model: &ModelInfo) -> TokenStream {
+    let (id, display_name, supports_prompt_caching) =
+        (&model.model_id, &model.display_name, model.supports_prompt_caching);
+    let context_window = num_lit_with_underscores(model.context_window);
+    let reasoning_levels = model.reasoning_levels.iter().copied().map(variant_ident);
+    let disabled_support = variant_ident(model.disabled_support);
+    let pricing = option_tokens(model.pricing.as_ref().map(|pricing| {
+        let (input, output) = (pricing.input, pricing.output);
+        let (cache_read, cache_write) = (option_tokens(pricing.cache_read), option_tokens(pricing.cache_write));
         quote! {
-            impl #enum_ident {
-                #[allow(clippy::too_many_lines)]
-                fn model_id(self) -> &'static str {
-                    match self { #(#model_id_arms)* }
-                }
-
-                #[allow(clippy::too_many_lines)]
-                fn display_name(self) -> &'static str {
-                    match self { #display_name_arms }
-                }
-
-                #[allow(clippy::too_many_lines)]
-                fn context_window(self) -> u32 {
-                    match self { #context_window_arms }
-                }
-
-                #[allow(clippy::too_many_lines)]
-                pub fn reasoning_levels(self) -> &'static [ReasoningEffort] {
-                    match self { #reasoning_levels_arms }
-                }
-
-                #[allow(clippy::too_many_lines)]
-                pub fn reasoning_disabled_support(self) -> crate::reasoning::ReasoningDisabledSupport {
-                    match self { #disabled_support_arms }
-                }
-
-                pub fn supports_reasoning(self) -> bool {
-                    self.reasoning_levels().iter().any(|effort| effort.is_enabled())
-                }
-
-                #[allow(clippy::too_many_lines)]
-                pub fn supports_prompt_caching(self) -> bool {
-                    match self { #prompt_caching_arms }
-                }
-
-                #[allow(clippy::too_many_lines, clippy::match_same_arms, clippy::unreadable_literal)]
-                pub fn pricing(self) -> Option<ModelPricing> {
-                    match self { #pricing_arms }
-                }
-
-                #(#modality_methods)*
-
-                #[allow(clippy::too_many_lines)]
-                pub fn transport(self) -> Option<ModelTransport> {
-                    match self { #transport_arms }
-                }
-
-                const ALL: &[#enum_ident] = &[#(Self::#all_variants),*];
-            }
-
-            #from_str_impl
-        }
-    });
-    quote! { #(#impls)* }
-}
-
-fn emit_pricing_arms(models: &[ModelInfo]) -> TokenStream {
-    let arms = models.iter().map(|model| {
-        let variant = format_ident!("{}", model.variant_name);
-        let Some(pricing) = &model.pricing else {
-            return quote! { Self::#variant => None, };
-        };
-        let input = pricing.input;
-        let output = pricing.output;
-        let cache_read = pricing.cache_read.map_or_else(|| quote! { None }, |value| quote! { Some(#value) });
-        let cache_write = pricing.cache_write.map_or_else(|| quote! { None }, |value| quote! { Some(#value) });
-        quote! {
-            Self::#variant => Some(ModelPricing {
+            ModelPricing {
                 input_per_million: #input,
                 output_per_million: #output,
                 cache_read_per_million: #cache_read,
                 cache_write_per_million: #cache_write,
-            }),
+            }
         }
-    });
-    quote! { #(#arms)* }
-}
-
-fn emit_from_str_impl(enum_ident: &proc_macro2::Ident, parser_name: &str, models: &[ModelInfo]) -> TokenStream {
-    let arms = models.iter().map(|m| {
-        let id = &m.model_id;
-        let v = format_ident!("{}", m.variant_name);
-        quote! { #id => Ok(Self::#v), }
-    });
-    let err_msg = format!("Unknown {parser_name} model: '{{s}}'");
+    }));
+    let supports_image = model.input_modalities.iter().any(|modality| modality == "image");
+    let supports_audio = model.input_modalities.iter().any(|modality| modality == "audio");
+    let transport = option_tokens(model.transport.as_ref().map(|transport| match transport {
+        TransportInfo::OpenAiResponses { base_url_template } => {
+            quote! { ModelTransport::OpenAiResponses { base_url_template: #base_url_template } }
+        }
+    }));
     quote! {
-        impl std::str::FromStr for #enum_ident {
-            type Err = String;
-
-            #[allow(clippy::too_many_lines)]
-            fn from_str(s: &str) -> Result<Self, Self::Err> {
-                match s {
-                    #(#arms)*
-                    _ => Err(format!(#err_msg)),
-                }
-            }
+        CatalogEntry {
+            id: #id,
+            display_name: #display_name,
+            context_window: #context_window,
+            reasoning_levels: &[#(ReasoningEffort::#reasoning_levels),*],
+            disabled_support: ReasoningDisabledSupport::#disabled_support,
+            supports_prompt_caching: #supports_prompt_caching,
+            pricing: #pricing,
+            supports_image: #supports_image,
+            supports_audio: #supports_audio,
+            transport: #transport,
         }
     }
 }
 
-/// Emit match arms grouped by value to avoid clippy `match_same_arms`.
-fn grouped_arms<K, R>(
-    models: &[ModelInfo],
-    key_fn: impl Fn(&ModelInfo) -> K,
-    rhs_fn: impl Fn(&ModelInfo) -> R,
-) -> TokenStream
-where
-    K: Eq + Ord,
-    R: ToTokens,
-{
-    let mut groups: BTreeMap<K, Vec<&ModelInfo>> = BTreeMap::new();
-    for m in models {
-        groups.entry(key_fn(m)).or_default().push(m);
-    }
-    let arms = groups.values().map(|members| {
-        let pats = members.iter().map(|m| {
-            let v = format_ident!("{}", m.variant_name);
-            quote! { Self::#v }
-        });
-        let rhs = rhs_fn(members[0]);
-        quote! { #(#pats)|* => #rhs, }
-    });
-    quote! { #(#arms)* }
-}
-
-fn emit_reasoning_levels_arms(models: &[ModelInfo]) -> TokenStream {
-    grouped_arms(
-        models,
-        |m| m.reasoning_levels.clone(),
-        |m| {
-            if m.reasoning_levels.is_empty() {
-                quote! { &[] }
-            } else {
-                let items = m.reasoning_levels.iter().map(|l| {
-                    let variant = format_ident!("{}", level_str_to_variant(l));
-                    quote! { ReasoningEffort::#variant }
-                });
-                quote! { &[#(#items),*] }
-            }
-        },
-    )
-}
-
-fn emit_transport_arms(models: &[ModelInfo]) -> TokenStream {
-    grouped_arms(
-        models,
-        |m| m.transport.clone(),
-        |m| match m.transport.as_ref() {
-            Some(TransportInfo::OpenAiResponses { base_url_template }) => {
-                quote! { Some(ModelTransport::OpenAiResponses { base_url_template: #base_url_template }) }
-            }
-            None => quote! { None },
-        },
-    )
-}
-
-/// Map a reasoning level string to its `ReasoningEffort` variant name
-/// (the serialized name with the first letter capitalized).
-fn level_str_to_variant(level: &str) -> String {
-    let canonical =
-        level.parse::<utils::ReasoningEffort>().unwrap_or_else(|_| panic!("Unknown reasoning level: {level}")).as_str();
-    let mut variant = canonical.to_string();
-    variant[..1].make_ascii_uppercase();
-    variant
-}
-
-fn emit_llm_model_enum() -> TokenStream {
-    let catalog_variants = PROVIDERS.iter().map(|cfg| {
+fn emit_llm_model() -> TokenStream {
+    let variants = PROVIDERS.iter().map(|cfg| {
         let v = format_ident!("{}", cfg.enum_name);
-        let inner = format_ident!("{}Model", cfg.enum_name);
-        quote! { #v(#inner) }
-    });
-    let dynamic_variants = DYNAMIC_PROVIDERS.iter().map(|d| {
-        let v = format_ident!("{}", d.enum_name);
-        quote! { #v(String) }
-    });
-    quote! {
-        /// A model from a specific provider
-        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        pub enum LlmModel {
-            #(#catalog_variants,)*
-            #(#dynamic_variants,)*
+        let outer = format_ident!("{}", cfg.outer_enum_name());
+        match cfg.model_ids {
+            ModelIds::Catalog | ModelIds::Hybrid => quote! { #v(#outer) },
+            ModelIds::Runtime => quote! { #v(String) },
         }
-    }
-}
-
-fn emit_from_impls() -> TokenStream {
-    let impls = PROVIDERS.iter().map(|cfg| {
-        let outer = format_ident!("{}Model", cfg.enum_name);
+    });
+    let from_impls = catalog_providers().map(|cfg| {
         let v = format_ident!("{}", cfg.enum_name);
+        let outer = format_ident!("{}", cfg.outer_enum_name());
         quote! {
             impl From<#outer> for LlmModel {
                 fn from(m: #outer) -> Self {
@@ -1064,502 +723,78 @@ fn emit_from_impls() -> TokenStream {
             }
         }
     });
-    quote! { #(#impls)* }
-}
-
-fn emit_llm_model_impl() -> TokenStream {
-    let model_id = emit_llm_model_id();
-    let display_name = emit_llm_display_name();
-    let provider = emit_llm_provider();
-    let provider_enum = emit_llm_provider_enum();
-    let provider_display_name = emit_llm_provider_display_name();
-    let context_window = emit_llm_context_window();
-    let required_env_var = emit_llm_required_env_var();
-    let all_required_env_vars = emit_llm_all_required_env_vars();
-    let oauth_provider_id = emit_llm_oauth_provider_id();
-    let reasoning_levels = emit_llm_reasoning_levels();
-    let disabled_support = llm_delegate_with_dynamic_default(
-        "reasoning_disabled_support",
-        &quote! { crate::reasoning::ReasoningDisabledSupport::Unsupported },
-    );
-    let supports_reasoning = emit_llm_supports_reasoning();
-    let supports_reasoning_off_transport = emit_llm_supports_reasoning_off_transport();
-    let supports_prompt_caching = emit_llm_supports_prompt_caching();
-    let pricing = emit_llm_pricing();
-    let modality_methods = ["image", "audio"].iter().map(|m| emit_llm_supports_modality(m));
-    let transport = emit_llm_transport();
-    let all = emit_llm_all();
-
-    quote! {
-        impl LlmModel {
-            #model_id
-            #display_name
-            #provider
-            #provider_enum
-            #provider_display_name
-            #context_window
-            #required_env_var
-            #all_required_env_vars
-            #oauth_provider_id
-            #reasoning_levels
-            pub fn reasoning_disabled_support(&self) -> crate::reasoning::ReasoningDisabledSupport {
-                #disabled_support
-            }
-
-            /// Whether this model advertises an explicit off selection.
-            pub fn supports_reasoning_off(&self) -> bool {
-                self.reasoning_levels().contains(&ReasoningEffort::Disabled)
-            }
-
-            #supports_reasoning_off_transport
-
-            /// Explicit choices executable by the current adapter. Default is always valid.
-            pub fn effective_reasoning_levels(&self) -> Vec<ReasoningEffort> {
-                self.reasoning_levels()
-                    .iter()
-                    .copied()
-                    .filter(|effort| *effort != ReasoningEffort::Disabled || self.supports_reasoning_off_transport())
-                    .collect()
-            }
-
-            pub fn validate_reasoning_effort(&self, effort: ReasoningEffort) -> Result<(), crate::catalog::ReasoningEffortError> {
-                let supported = self.effective_reasoning_levels();
-                if effort == ReasoningEffort::Default || supported.contains(&effort) {
-                    Ok(())
-                } else {
-                    Err(crate::catalog::ReasoningEffortError::Unsupported { model: self.to_string(), effort, supported })
-                }
-            }
-
-            #supports_reasoning
-            #supports_prompt_caching
-            #pricing
-            #(#modality_methods)*
-            #transport
-            #all
-        }
-    }
-}
-
-fn emit_llm_model_id() -> TokenStream {
-    let catalog_arms = PROVIDERS.iter().map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        if cfg.is_hybrid_dynamic {
-            quote! { Self::#v(m) => m.model_id(), }
-        } else {
-            quote! { Self::#v(m) => Cow::Borrowed(m.model_id()), }
-        }
-    });
-    let dyn_pats = dynamic_pattern_with_binding("s");
-    quote! {
-        /// Raw model ID (e.g. `claude-opus-4-6`, `llama3.2`)
-        pub fn model_id(&self) -> Cow<'static, str> {
-            match self {
-                #(#catalog_arms)*
-                #dyn_pats => Cow::Owned(s.clone()),
-            }
-        }
-    }
-}
-
-fn emit_llm_display_name() -> TokenStream {
-    let catalog_arms = PROVIDERS.iter().map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        if cfg.is_hybrid_dynamic {
-            quote! { Self::#v(m) => m.display_name(), }
-        } else {
-            quote! { Self::#v(m) => Cow::Borrowed(m.display_name()), }
-        }
-    });
-    let dyn_arms = DYNAMIC_PROVIDERS.iter().map(|d| {
-        let v = format_ident!("{}", d.enum_name);
-        let fmt = format!("{} {{s}}", d.enum_name);
-        quote! { Self::#v(s) => Cow::Owned(format!(#fmt)), }
-    });
-    quote! {
-        /// Human-readable display name (e.g. `Claude Opus 4.6`)
-        pub fn display_name(&self) -> Cow<'static, str> {
-            match self {
-                #(#catalog_arms)*
-                #(#dyn_arms)*
-            }
-        }
-    }
-}
-
-fn emit_llm_provider() -> TokenStream {
-    let arms = llm_match_arms_ignored(|cfg| cfg.parser_name, |d| d.parser_name);
-    quote! {
-        /// Provider identifier (e.g. `anthropic`)
-        pub fn provider(&self) -> &'static str {
-            match self { #arms }
-        }
-    }
-}
-
-fn emit_llm_provider_enum() -> TokenStream {
-    let arms = llm_match_arms_ignored(
-        |cfg| {
-            let v = format_ident!("{}", cfg.enum_name);
-            quote! { Provider::#v }
-        },
-        |d| {
-            let v = format_ident!("{}", d.enum_name);
-            quote! { Provider::#v }
-        },
-    );
-    quote! {
-        /// Typed provider identifier.
-        pub fn provider_enum(&self) -> Provider {
-            match self { #arms }
-        }
-    }
-}
-
-fn emit_llm_provider_display_name() -> TokenStream {
-    let arms = llm_match_arms_ignored(|cfg| cfg.display_name, |d| d.display_name);
-    quote! {
-        /// Human-readable provider name (e.g. `AWS Bedrock`)
-        pub fn provider_display_name(&self) -> &'static str {
-            match self { #arms }
-        }
-    }
-}
-
-fn emit_llm_context_window() -> TokenStream {
-    let catalog_arms = PROVIDERS.iter().map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        if cfg.is_hybrid_dynamic {
-            quote! { Self::#v(m) => m.context_window(), }
-        } else {
-            quote! { Self::#v(m) => Some(m.context_window()), }
-        }
-    });
-    let dyn_pats = dynamic_pattern_with_binding("_");
-    quote! {
-        /// Context window size in tokens (None for dynamic providers)
-        pub fn context_window(&self) -> Option<u32> {
-            match self {
-                #(#catalog_arms)*
-                #dyn_pats => None,
-            }
-        }
-    }
-}
-
-fn emit_llm_required_env_var() -> TokenStream {
-    let some_arms = PROVIDERS.iter().filter_map(|cfg| {
-        cfg.env_var.map(|var| {
-            let v = format_ident!("{}", cfg.enum_name);
-            quote! { Self::#v(_) => Some(#var), }
-        })
-    });
-    let none_pats = llm_or_pats(|cfg| cfg.env_var.is_none(), |_| true);
-    quote! {
-        /// Required env var for this model's provider (None for local providers)
-        pub fn required_env_var(&self) -> Option<&'static str> {
-            match self {
-                #(#some_arms)*
-                #none_pats => None,
-            }
-        }
-    }
-}
-
-fn emit_llm_all_required_env_vars() -> TokenStream {
-    let vars = PROVIDERS.iter().filter_map(|cfg| cfg.env_var);
-    quote! {
-        /// All provider API key env var names (deduplicated, static)
-        pub const ALL_REQUIRED_ENV_VARS: &[&str] = &[#(#vars),*];
-    }
-}
-
-fn emit_llm_oauth_provider_id() -> TokenStream {
-    let some_arms = PROVIDERS.iter().filter_map(|cfg| {
-        cfg.oauth_provider_id.map(|id| {
-            let v = format_ident!("{}", cfg.enum_name);
-            quote! { Self::#v(_) => Some(#id), }
-        })
-    });
-    let none_pats = llm_or_pats(|cfg| cfg.oauth_provider_id.is_none(), |_| true);
-    quote! {
-        /// OAuth provider ID if this model requires OAuth login (e.g. `"codex"`)
-        pub fn oauth_provider_id(&self) -> Option<&'static str> {
-            match self {
-                #(#some_arms)*
-                #none_pats => None,
-            }
-        }
-    }
-}
-
-fn emit_llm_reasoning_levels() -> TokenStream {
-    let body = llm_delegate_with_dynamic_default("reasoning_levels", &quote! { &[] });
-    quote! {
-        /// Reasoning levels supported by this model (empty if not a reasoning model)
-        pub fn reasoning_levels(&self) -> &'static [ReasoningEffort] {
-            #body
-        }
-    }
-}
-
-fn emit_llm_supports_reasoning() -> TokenStream {
-    quote! {
-        /// Whether this model supports reasoning/extended thinking
-        pub fn supports_reasoning(&self) -> bool {
-            self.reasoning_levels().iter().any(|effort| effort.is_enabled())
-        }
-    }
-}
-
-fn emit_llm_supports_reasoning_off_transport() -> TokenStream {
-    let variants = |filter: fn(&ProviderConfig) -> bool| {
-        let pats = PROVIDERS.iter().filter(|cfg| filter(cfg)).map(|cfg| {
-            let v = format_ident!("{}", cfg.enum_name);
-            quote! { Provider::#v }
-        });
-        quote! { #(#pats)|* }
-    };
-    let effort_only = variants(|cfg| cfg.uses_openai_compatible_api);
-    let model_transport = variants(|cfg| cfg.use_model_transport);
-    let always = variants(|cfg| !cfg.uses_openai_compatible_api && !cfg.use_model_transport);
-    let dynamic = DYNAMIC_PROVIDERS.iter().map(|d| {
-        let v = format_ident!("{}", d.enum_name);
-        quote! { Provider::#v }
-    });
-    quote! {
-        pub fn supports_reasoning_off_transport(&self) -> bool {
-            if !self.supports_reasoning_off() {
-                return false;
-            }
-            match self.provider_enum() {
-                #always => true,
-                #model_transport => self.transport().is_some(),
-                #effort_only => {
-                    self.reasoning_disabled_support() == crate::reasoning::ReasoningDisabledSupport::Effort
-                }
-                #(#dynamic)|* => false,
-            }
-        }
-    }
-}
-
-fn emit_llm_supports_prompt_caching() -> TokenStream {
-    let body = llm_delegate_with_dynamic_default("supports_prompt_caching", &quote! { false });
-    quote! {
-        /// Whether this model supports provider-side prompt caching
-        pub fn supports_prompt_caching(&self) -> bool {
-            #body
-        }
-    }
-}
-
-fn emit_llm_pricing() -> TokenStream {
-    let body = llm_delegate_with_dynamic_default("pricing", &quote! { None });
-    quote! {
-        pub fn pricing(&self) -> Option<ModelPricing> {
-            #body
-        }
-    }
-}
-
-fn emit_llm_transport() -> TokenStream {
-    let body = llm_delegate_with_dynamic_default("transport", &quote! { None });
-    quote! {
-        /// Per-model transport override, when the model does not use its
-        /// provider's default endpoint and wire protocol.
-        pub fn transport(&self) -> Option<ModelTransport> {
-            #body
-        }
-    }
-}
-
-fn emit_llm_supports_modality(modality: &str) -> TokenStream {
-    let method = format!("supports_{modality}");
-    let method_ident = format_ident!("{}", method);
-    let doc = format!(" Whether this model supports {modality} input");
-    let body = llm_delegate_with_dynamic_default(&method, &quote! { false });
-    quote! {
-        #[doc = #doc]
-        pub fn #method_ident(&self) -> bool {
-            #body
-        }
-    }
-}
-
-fn emit_llm_all() -> TokenStream {
-    let pushes = PROVIDERS.iter().map(|cfg| {
+    let pushes = PROVIDERS.iter().filter_map(|cfg| {
         let inner = format_ident!("{}", cfg.inner_enum_name());
         let outer = format_ident!("{}", cfg.outer_enum_name());
         let v = format_ident!("{}", cfg.enum_name);
-        if cfg.is_hybrid_dynamic {
-            quote! {
-                v.extend(#inner::ALL.iter().copied().map(#outer::Foundation).map(LlmModel::#v));
+        match cfg.model_ids {
+            ModelIds::Catalog => Some(quote! { v.extend(#inner::ALL.iter().copied().map(LlmModel::#v)); }),
+            ModelIds::Hybrid => {
+                Some(quote! { v.extend(#inner::ALL.iter().copied().map(#outer::Foundation).map(LlmModel::#v)); })
             }
-        } else {
-            quote! {
-                v.extend(#inner::ALL.iter().copied().map(LlmModel::#v));
-            }
+            ModelIds::Runtime => None,
         }
     });
-    quote! {
-        /// All catalog models (excludes dynamic providers)
-        pub fn all() -> &'static [LlmModel] {
-            static ALL: LazyLock<Vec<LlmModel>> = LazyLock::new(|| {
-                let mut v = Vec::new();
-                #(#pushes)*
-                v
-            });
-            &ALL
-        }
-    }
-}
-
-fn emit_display_impl() -> TokenStream {
-    quote! {
-        impl std::fmt::Display for LlmModel {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{}:{}", self.provider(), self.model_id())
-            }
-        }
-    }
-}
-
-fn emit_fromstr_impl() -> TokenStream {
-    let catalog_arms = PROVIDERS.iter().map(|cfg| {
-        let name = cfg.parser_name;
-        let outer = format_ident!("{}Model", cfg.enum_name);
+    let provider_arms = PROVIDERS.iter().map(|cfg| {
         let v = format_ident!("{}", cfg.enum_name);
-        quote! { #name => model_str.parse::<#outer>().map(Self::#v), }
+        quote! { Self::#v(_) => Provider::#v, }
     });
-    let dyn_arms = DYNAMIC_PROVIDERS.iter().map(|d| {
-        let name = d.parser_name;
-        let v = format_ident!("{}", d.enum_name);
-        quote! { #name => Ok(Self::#v(model_str.to_string())), }
+    let source_arms = PROVIDERS.iter().filter_map(|cfg| {
+        let v = format_ident!("{}", cfg.enum_name);
+        match cfg.model_ids {
+            ModelIds::Catalog => Some(quote! { Self::#v(m) => ModelSource::Catalog(m.entry()), }),
+            ModelIds::Hybrid => Some(quote! { Self::#v(m) => m.source(), }),
+            ModelIds::Runtime => None,
+        }
     });
-    quote! {
-        impl std::str::FromStr for LlmModel {
-            type Err = String;
+    let runtime_pats = PROVIDERS.iter().filter(|cfg| cfg.is_local()).map(|cfg| {
+        let v = format_ident!("{}", cfg.enum_name);
+        quote! { Self::#v(id) }
+    });
 
-            /// Parse a `provider:model` string into an `LlmModel`
-            fn from_str(s: &str) -> Result<Self, Self::Err> {
-                let (provider_str, model_str) = s.split_once(':').unwrap_or((s, ""));
-                match provider_str {
-                    #(#catalog_arms)*
-                    #(#dyn_arms)*
-                    _ => Err(format!("Unknown provider: '{provider_str}'")),
+    quote! {
+        /// A model from a specific provider
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+        pub enum LlmModel {
+            #(#variants,)*
+        }
+
+        #(#from_impls)*
+
+        impl LlmModel {
+            /// All catalog models (excludes dynamic providers)
+            pub fn all() -> &'static [LlmModel] {
+                static ALL: LazyLock<Vec<LlmModel>> = LazyLock::new(|| {
+                    let mut v = Vec::new();
+                    #(#pushes)*
+                    v
+                });
+                &ALL
+            }
+
+            /// Typed provider identifier.
+            pub fn provider_enum(&self) -> Provider {
+                match self { #(#provider_arms)* }
+            }
+
+            fn source(&self) -> ModelSource<'_> {
+                match self {
+                    #(#source_arms)*
+                    #(#runtime_pats)|* => ModelSource::Runtime(id),
                 }
             }
         }
     }
 }
 
-/// Build a `Self::Ollama(b) | Self::LlamaCpp(b)` pattern for all dynamic providers.
-fn dynamic_pattern_with_binding(binding: &str) -> TokenStream {
-    let binding_ident = if binding == "_" {
-        quote! { _ }
-    } else {
-        let b = format_ident!("{}", binding);
-        quote! { #b }
-    };
-    let pats = DYNAMIC_PROVIDERS.iter().map(|d| {
-        let v = format_ident!("{}", d.enum_name);
-        quote! { Self::#v(#binding_ident) }
-    });
-    quote! { #(#pats)|* }
+/// Emit `Some(value)` or `None` (`quote` emits a bare value or nothing for an `Option`).
+fn option_tokens(value: Option<impl ToTokens>) -> TokenStream {
+    value.map_or_else(|| quote! { None }, |value| quote! { Some(#value) })
 }
 
-/// Build `Self::A => va, Self::B => vb, ...` arms for every `Provider` variant
-/// (catalog + dynamic). The `Provider` enum carries no inner data so there is
-/// no binding.
-fn provider_match_arms<V: ToTokens>(
-    catalog_value: impl Fn(&ProviderConfig) -> V,
-    dynamic_value: impl Fn(&DynamicProviderConfig) -> V,
-) -> TokenStream {
-    let catalog = PROVIDERS.iter().map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        let val = catalog_value(cfg);
-        quote! { Self::#v => #val, }
-    });
-    let dynamic = DYNAMIC_PROVIDERS.iter().map(|d| {
-        let v = format_ident!("{}", d.enum_name);
-        let val = dynamic_value(d);
-        quote! { Self::#v => #val, }
-    });
-    quote! { #(#catalog)* #(#dynamic)* }
-}
-
-/// Build `Self::A | Self::B | ...` patterns selecting `Provider` variants by
-/// predicate, across catalog + dynamic.
-fn provider_or_pats(
-    include_catalog: impl Fn(&ProviderConfig) -> bool,
-    include_dynamic: impl Fn(&DynamicProviderConfig) -> bool,
-) -> TokenStream {
-    let catalog = PROVIDERS.iter().filter(|cfg| include_catalog(cfg)).map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        quote! { Self::#v }
-    });
-    let dynamic = DYNAMIC_PROVIDERS.iter().filter(|d| include_dynamic(d)).map(|d| {
-        let v = format_ident!("{}", d.enum_name);
-        quote! { Self::#v }
-    });
-    let pats = catalog.chain(dynamic);
-    quote! { #(#pats)|* }
-}
-
-/// Build `Self::A(_) => va, ...` arms for every `LlmModel` variant — the
-/// wrapped inner value is ignored.
-fn llm_match_arms_ignored<V: ToTokens>(
-    catalog_value: impl Fn(&ProviderConfig) -> V,
-    dynamic_value: impl Fn(&DynamicProviderConfig) -> V,
-) -> TokenStream {
-    let catalog = PROVIDERS.iter().map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        let val = catalog_value(cfg);
-        quote! { Self::#v(_) => #val, }
-    });
-    let dynamic = DYNAMIC_PROVIDERS.iter().map(|d| {
-        let v = format_ident!("{}", d.enum_name);
-        let val = dynamic_value(d);
-        quote! { Self::#v(_) => #val, }
-    });
-    quote! { #(#catalog)* #(#dynamic)* }
-}
-
-/// Build `Self::A(_) | Self::B(_) | ...` patterns selecting `LlmModel`
-/// variants by predicate, across catalog + dynamic.
-fn llm_or_pats(
-    include_catalog: impl Fn(&ProviderConfig) -> bool,
-    include_dynamic: impl Fn(&DynamicProviderConfig) -> bool,
-) -> TokenStream {
-    let catalog = PROVIDERS.iter().filter(|cfg| include_catalog(cfg)).map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        quote! { Self::#v(_) }
-    });
-    let dynamic = DYNAMIC_PROVIDERS.iter().filter(|d| include_dynamic(d)).map(|d| {
-        let v = format_ident!("{}", d.enum_name);
-        quote! { Self::#v(_) }
-    });
-    let pats = catalog.chain(dynamic);
-    quote! { #(#pats)|* }
-}
-
-/// Build the body of an `LlmModel` method that delegates to a same-named
-/// method on the inner catalog enum, with a single combined arm for all
-/// dynamic providers.
-fn llm_delegate_with_dynamic_default(method: &str, dynamic_value: &TokenStream) -> TokenStream {
-    let method_ident = format_ident!("{}", method);
-    let catalog_arms = PROVIDERS.iter().map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        quote! { Self::#v(m) => m.#method_ident(), }
-    });
-    let dyn_pat = dynamic_pattern_with_binding("_");
-    quote! {
-        match self {
-            #(#catalog_arms)*
-            #dyn_pat => #dynamic_value,
-        }
-    }
+/// Emit the variant name of a fieldless enum whose `Debug` derive prints it.
+fn variant_ident(variant: impl std::fmt::Debug) -> Ident {
+    format_ident!("{}", format!("{variant:?}"))
 }
 
 /// Emit a `u32` literal with underscore separators (e.g. `200_000`).
@@ -1583,78 +818,78 @@ fn format_number(n: u32) -> String {
     result
 }
 
-fn emit_provider_docs(ctx: &CodegenCtx) -> HashMap<String, String> {
-    let mut docs = HashMap::new();
+fn emit_provider_docs(ctx: &CodegenCtx) -> BTreeMap<String, String> {
+    PROVIDERS
+        .iter()
+        .map(|cfg| {
+            let doc = if cfg.is_local() {
+                local_provider_doc(cfg)
+            } else {
+                catalog_provider_doc(cfg, &ctx.provider_models[cfg.dev_id])
+            };
+            (cfg.dev_id.to_string(), doc)
+        })
+        .collect()
+}
 
-    for cfg in PROVIDERS {
-        let models = &ctx.provider_models[cfg.dev_id];
-        let mut doc = String::new();
+fn catalog_provider_doc(cfg: &ProviderConfig, models: &[ModelInfo]) -> String {
+    let mut doc = String::new();
 
-        pushln(&mut doc, format!("`{}` LLM provider.", cfg.display_name));
-        blank(&mut doc);
+    pushln(&mut doc, format!("`{}` LLM provider.", cfg.display_name));
+    blank(&mut doc);
 
-        pushln(&mut doc, "# Authentication");
-        blank(&mut doc);
-        match cfg.env_var {
-            Some(var) => pushln(&mut doc, format!("Set the `{var}` environment variable.")),
-            None if cfg.oauth_provider_id.is_some() => {
-                pushln(&mut doc, "This provider uses OAuth authentication.");
-            }
-            None => {
-                pushln(
-                    &mut doc,
-                    "Uses the default AWS credential chain (environment variables, config files, IAM roles).",
-                );
-                pushln(
-                    &mut doc,
-                    "Models served from a dedicated endpoint also accept a Bedrock API key in `AWS_BEARER_TOKEN_BEDROCK`.",
-                );
-            }
+    pushln(&mut doc, "# Authentication");
+    blank(&mut doc);
+    match cfg.env_var {
+        Some(var) => pushln(&mut doc, format!("Set the `{var}` environment variable.")),
+        None if cfg.oauth_provider_id.is_some() => {
+            pushln(&mut doc, "This provider uses OAuth authentication.");
         }
-        blank(&mut doc);
-
-        pushln(&mut doc, "# Supported models");
-        blank(&mut doc);
-        pushln(&mut doc, "| Model ID | Name | Context | Reasoning | Image | Audio |");
-        pushln(&mut doc, "|----------|------|---------|-----------|-------|-------|");
-        for model in models {
-            let ctx_str = format_context_window(model.context_window);
-            let reasoning = if model.reasoning_levels.iter().any(|level| level != "disabled") { "yes" } else { "" };
-            let image = if model.input_modalities.contains(&"image".to_string()) { "yes" } else { "" };
-            let audio = if model.input_modalities.contains(&"audio".to_string()) { "yes" } else { "" };
+        None => {
+            pushln(&mut doc, "Uses the default AWS credential chain (environment variables, config files, IAM roles).");
             pushln(
                 &mut doc,
-                format!(
-                    "| `{}` | `{}` | `{}` | {} | {} | {} |",
-                    model.model_id, model.display_name, ctx_str, reasoning, image, audio
-                ),
+                "Models served from a dedicated endpoint also accept a Bedrock API key in `AWS_BEARER_TOKEN_BEDROCK`.",
             );
         }
-
-        for model in models.iter().filter(|model| model.disabled_support != "Unsupported") {
-            pushln(
-                &mut doc,
-                format!("Model `{}` advertises `disabled` reasoning (subject to adapter support).", model.model_id),
-            );
-        }
-        push_transport_section(&mut doc, models);
-
-        docs.insert(cfg.dev_id.to_string(), doc);
     }
+    blank(&mut doc);
 
-    for dyn_cfg in DYNAMIC_PROVIDERS {
-        let mut doc = String::new();
-        pushln(&mut doc, format!("`{}` LLM provider.", dyn_cfg.display_name));
-        blank(&mut doc);
+    pushln(&mut doc, "# Supported models");
+    blank(&mut doc);
+    pushln(&mut doc, "| Model ID | Name | Context | Reasoning | Image | Audio |");
+    pushln(&mut doc, "|----------|------|---------|-----------|-------|-------|");
+    for model in models {
+        let ctx_str = format_context_window(model.context_window);
+        let reasoning = if model.reasoning_levels.iter().any(|level| level.is_enabled()) { "yes" } else { "" };
+        let image = if model.input_modalities.contains(&"image".to_string()) { "yes" } else { "" };
+        let audio = if model.input_modalities.contains(&"audio".to_string()) { "yes" } else { "" };
         pushln(
             &mut doc,
-            format!("This provider accepts any model name at runtime (e.g. `{}:my-model`).", dyn_cfg.parser_name),
+            format!(
+                "| `{}` | `{}` | `{}` | {} | {} | {} |",
+                model.model_id, model.display_name, ctx_str, reasoning, image, audio
+            ),
         );
-        pushln(&mut doc, "No API key is required.");
-        docs.insert(dyn_cfg.parser_name.to_string(), doc);
     }
 
-    docs
+    for model in models.iter().filter(|model| model.disabled_support != ReasoningDisabledSupport::Unsupported) {
+        pushln(
+            &mut doc,
+            format!("Model `{}` advertises `disabled` reasoning (subject to adapter support).", model.model_id),
+        );
+    }
+    push_transport_section(&mut doc, models);
+    doc
+}
+
+fn local_provider_doc(cfg: &ProviderConfig) -> String {
+    let mut doc = String::new();
+    pushln(&mut doc, format!("`{}` LLM provider.", cfg.display_name));
+    blank(&mut doc);
+    pushln(&mut doc, format!("This provider accepts any model name at runtime (e.g. `{}:my-model`).", cfg.parser_name));
+    pushln(&mut doc, "No API key is required.");
+    doc
 }
 
 /// Document the models that do not use the provider's default endpoint.
@@ -1702,616 +937,4 @@ fn pushln(out: &mut String, line: impl AsRef<str>) {
 
 fn blank(out: &mut String) {
     pushln(out, "");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::Value;
-    use serde_json::json;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn model_id_to_variant_pascal_cases_segments() {
-        assert_eq!(model_id_to_variant("claude-sonnet-4-5-20250929"), "ClaudeSonnet4520250929");
-        assert_eq!(model_id_to_variant("gemini-2.5-flash"), "Gemini25Flash");
-        assert_eq!(model_id_to_variant("deepseek-chat"), "DeepseekChat");
-        assert_eq!(model_id_to_variant("glm-4.5"), "Glm45");
-    }
-
-    #[test]
-    fn model_id_to_variant_handles_slash_and_colon() {
-        assert_eq!(model_id_to_variant("anthropic/claude-opus-4.6"), "AnthropicClaudeOpus46");
-        assert_eq!(model_id_to_variant("openai/gpt-5.1-codex-max"), "OpenaiGpt51CodexMax");
-        assert_eq!(model_id_to_variant("deepseek/deepseek-r1:free"), "DeepseekDeepseekR1Free");
-    }
-
-    #[test]
-    fn is_alias_detects_latest_suffix() {
-        assert!(is_alias("claude-sonnet-4-5-latest"));
-        assert!(is_alias("claude-3-7-sonnet-latest"));
-        assert!(!is_alias("claude-sonnet-4-5-20250929"));
-    }
-
-    #[test]
-    fn build_uses_explicit_context_windows_for_codex_models() {
-        let data = minimal_models_dev_json();
-
-        let models = build_from_value(&data);
-        let window = |id: &str| models["codex"].iter().find(|model| model.model_id == id).unwrap().context_window;
-        for model_id in [
-            "gpt-6.1-sol",
-            "gpt-6-sol",
-            "gpt-6-astra",
-            "gpt-6-luna",
-            "gpt-5.6-sol",
-            "gpt-5.6-terra",
-            "gpt-5.6-luna",
-            "gpt-5.5",
-            "gpt-5.4",
-            "gpt-5.4-mini",
-            "gpt-5.2",
-        ] {
-            assert_eq!(window(model_id), 272_000);
-        }
-    }
-
-    #[test]
-    fn transport_override_is_preserved_from_model_metadata() {
-        let mut data = minimal_models_dev_json();
-        insert_models(
-            &mut data,
-            "amazon-bedrock",
-            json!({
-                "with-transport": {
-                    "id": "with-transport", "name": "With Transport", "tool_call": true,
-                    "limit": {"context": 1000, "output": 0},
-                    "provider": {
-                        "npm": "@ai-sdk/amazon-bedrock/mantle",
-                        "api": "https://example.${AWS_REGION}.api.aws/openai/v1",
-                        "shape": "responses"
-                    }
-                },
-                "without-transport": {
-                    "id": "without-transport", "name": "Without Transport", "tool_call": true,
-                    "limit": {"context": 1000, "output": 0}
-                }
-            }),
-        );
-
-        let models = build_from_value(&data);
-        let transport =
-            |id: &str| models["amazon-bedrock"].iter().find(|m| m.model_id == id).unwrap().transport.clone();
-
-        assert_eq!(
-            transport("with-transport"),
-            Some(TransportInfo::OpenAiResponses {
-                base_url_template: "https://example.${AWS_REGION}.api.aws/openai/v1".to_string(),
-            })
-        );
-        assert_eq!(transport("without-transport"), None);
-    }
-
-    #[test]
-    fn transport_override_with_only_an_npm_package_is_ignored() {
-        let mut data = minimal_models_dev_json();
-        anthropic_models(
-            &mut data,
-            json!({
-                "npm-only": {
-                    "id": "npm-only", "name": "Npm Only", "tool_call": true,
-                    "limit": {"context": 1000, "output": 0},
-                    "provider": {"npm": "@ai-sdk/anthropic"}
-                }
-            }),
-        );
-
-        let models = build_from_value(&data);
-
-        assert_eq!(models["anthropic"].iter().find(|m| m.model_id == "npm-only").unwrap().transport, None);
-    }
-
-    #[test]
-    fn unknown_wire_shape_is_rejected() {
-        let mut data = minimal_models_dev_json();
-        insert_models(
-            &mut data,
-            "amazon-bedrock",
-            json!({
-                "weird": {
-                    "id": "weird", "name": "Weird", "tool_call": true,
-                    "limit": {"context": 1000, "output": 0},
-                    "provider": {"api": "https://example.com/v1", "shape": "telepathy"}
-                }
-            }),
-        );
-        let parsed: ModelsDevData = serde_json::from_value(data).expect("parse fixture");
-
-        let error = build_provider_models(&parsed).unwrap_err();
-
-        assert!(
-            matches!(error, CodegenError::UnsupportedWireShape { ref model_id, ref shape }
-                if model_id == "weird" && shape == "telepathy"),
-            "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn incomplete_bedrock_transport_is_rejected() {
-        let mut data = minimal_models_dev_json();
-        insert_models(
-            &mut data,
-            "amazon-bedrock",
-            json!({
-                "incomplete": {
-                    "id": "incomplete", "name": "Incomplete", "tool_call": true,
-                    "limit": {"context": 1000, "output": 0},
-                    "provider": {"api": "https://example.com/v1"}
-                }
-            }),
-        );
-        let parsed: ModelsDevData = serde_json::from_value(data).expect("parse fixture");
-
-        let error = build_provider_models(&parsed).unwrap_err();
-
-        assert!(matches!(error, CodegenError::IncompleteTransport { ref model_id } if model_id == "incomplete"));
-    }
-
-    #[test]
-    fn format_context_window_formats_correctly() {
-        assert_eq!(format_context_window(1_000_000), "1M");
-        assert_eq!(format_context_window(200_000), "200k");
-        assert_eq!(format_context_window(8_000), "8k");
-        assert_eq!(format_context_window(0), "unknown");
-    }
-
-    #[test]
-    fn level_str_to_variant_covers_all_reasoning_efforts() {
-        for effort in utils::ReasoningEffort::all() {
-            let _ = level_str_to_variant(effort.as_str());
-        }
-    }
-
-    #[test]
-    fn build_sorts_models_and_filters_aliases_and_non_tool_call() {
-        let mut data = minimal_models_dev_json();
-        anthropic_models(
-            &mut data,
-            json!({
-                "b-model": {"id": "b-model", "name": "B Model", "tool_call": true, "limit": {"context": 2000, "output": 0}},
-                "a-model": {"id": "a-model", "name": "A Model", "tool_call": true, "limit": {"context": 1000, "output": 0}},
-                "alpha-latest": {"id": "alpha-latest", "name": "Alias", "tool_call": true, "limit": {"context": 500, "output": 0}},
-                "no-tools": {"id": "no-tools", "name": "No Tools", "tool_call": false, "limit": {"context": 500, "output": 0}}
-            }),
-        );
-
-        let models = build_from_value(&data);
-        let ids: Vec<&str> = models["anthropic"].iter().map(|m| m.model_id.as_str()).collect();
-        assert_eq!(ids, vec!["a-model", "b-model"]);
-    }
-
-    #[test]
-    fn build_extra_source_ids_merges_unique_models_into_provider() {
-        let mut data = minimal_models_dev_json();
-        zai_extra_models(
-            &mut data,
-            json!({
-                "extra-model": {"id": "extra-model", "name": "Extra Model", "tool_call": true, "limit": {"context": 4000, "output": 0}}
-            }),
-        );
-
-        let models = build_from_value(&data);
-        assert!(models["zai"].iter().any(|m| m.model_id == "extra-model"));
-    }
-
-    #[test]
-    fn build_extra_source_ids_does_not_duplicate_existing_models() {
-        let mut data = minimal_models_dev_json();
-        let shared = json!({
-            "shared-model": {"id": "shared-model", "name": "Shared Model", "tool_call": true, "limit": {"context": 1000, "output": 0}}
-        });
-        insert_models(&mut data, "zai", shared.clone());
-        insert_models(&mut data, "zai-coding-plan", shared);
-
-        let models = build_from_value(&data);
-        let count = models["zai"].iter().filter(|m| m.model_id == "shared-model").count();
-        assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn build_derives_reasoning_levels_from_source_metadata() {
-        let mut data = minimal_models_dev_json();
-        anthropic_models(
-            &mut data,
-            json!({
-                "claude-test": {
-                    "id": "claude-test", "name": "Claude Test", "tool_call": true, "reasoning": true,
-                    "reasoning_options": [{"type": "effort", "values": ["low", "high", "max"]}],
-                    "limit": {"context": 200_000, "output": 0}
-                }
-            }),
-        );
-
-        let models = build_from_value(&data);
-        let model = models["anthropic"].iter().find(|model| model.model_id == "claude-test").unwrap();
-        assert_eq!(model.reasoning_levels, ["low", "high", "max"]);
-    }
-
-    #[test]
-    fn generate_rejects_unknown_reasoning_effort_metadata() {
-        let mut data = minimal_models_dev_json();
-        anthropic_models(
-            &mut data,
-            json!({
-                "claude-test": {
-                    "id": "claude-test", "name": "Claude Test", "tool_call": true, "reasoning": true,
-                    "reasoning_options": [{"type": "effort", "values": ["ultra"]}],
-                    "limit": {"context": 200_000, "output": 0}
-                }
-            }),
-        );
-        let tmp = NamedTempFile::new().unwrap();
-        std::fs::write(tmp.path(), serde_json::to_string(&data).unwrap()).unwrap();
-        assert!(matches!(generate(tmp.path()), Err(CodegenError::UnsupportedReasoningEffort { .. })));
-    }
-
-    #[test]
-    fn build_preserves_model_pricing_and_omits_codex_subscription_pricing() {
-        let mut data = minimal_models_dev_json();
-        anthropic_models(
-            &mut data,
-            json!({
-                "priced": {
-                    "id": "priced", "name": "Priced", "tool_call": true,
-                    "limit": {"context": 200_000, "output": 0},
-                    "cost": {"input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75}
-                }
-            }),
-        );
-        insert_models(
-            &mut data,
-            "openai",
-            json!({
-                "gpt-5.5": {
-                    "id": "gpt-5.5", "name": "GPT-5.5", "tool_call": true,
-                    "limit": {"context": 1_050_000, "output": 128_000},
-                    "cost": {"input": 1.25, "output": 10.0, "cache_read": 0.125}
-                }
-            }),
-        );
-
-        let models = build_from_value(&data);
-        let priced = models["anthropic"].iter().find(|model| model.model_id == "priced").unwrap();
-        assert_eq!(priced.pricing.as_ref().map(|pricing| pricing.input), Some(3.0));
-        assert_eq!(priced.pricing.as_ref().map(|pricing| pricing.output), Some(15.0));
-        assert_eq!(priced.pricing.as_ref().and_then(|pricing| pricing.cache_read), Some(0.3));
-        assert_eq!(priced.pricing.as_ref().and_then(|pricing| pricing.cache_write), Some(3.75));
-
-        let codex = models["codex"].iter().find(|model| model.model_id == "gpt-5.5").unwrap();
-        assert_eq!(codex.pricing, None);
-        assert!(codex.supports_prompt_caching);
-    }
-
-    #[test]
-    fn build_derives_prompt_caching_from_cost_fields() {
-        let mut data = minimal_models_dev_json();
-        insert_models(
-            &mut data,
-            "amazon-bedrock",
-            json!({
-                "cached": {
-                    "id": "cached", "name": "Cached", "tool_call": true,
-                    "limit": {"context": 200_000, "output": 0},
-                    "cost": {"input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75}
-                },
-                "uncached": {
-                    "id": "uncached", "name": "Uncached", "tool_call": true,
-                    "limit": {"context": 200_000, "output": 0},
-                    "cost": {"input": 3.0, "output": 15.0}
-                }
-            }),
-        );
-
-        let models = build_from_value(&data);
-        let bedrock = &models["amazon-bedrock"];
-        let cached = bedrock.iter().find(|m| m.model_id == "cached").unwrap();
-        let uncached = bedrock.iter().find(|m| m.model_id == "uncached").unwrap();
-        assert!(cached.supports_prompt_caching);
-        assert!(!uncached.supports_prompt_caching);
-    }
-
-    #[test]
-    fn build_assigns_codex_model_specific_reasoning_levels() {
-        let mut data = minimal_models_dev_json();
-        insert_models(
-            &mut data,
-            "openai",
-            json!({
-                "gpt-5.6-sol": {
-                    "id": "gpt-5.6-sol", "name": "GPT-5.6 Sol", "tool_call": true, "reasoning": true,
-                    "reasoning_options": [{"type": "effort", "values": ["none", "low", "medium", "high", "xhigh", "max"]}],
-                    "limit": {"context": 200_000, "output": 0}
-                },
-                "gpt-5.6-luna": {
-                    "id": "gpt-5.6-luna", "name": "GPT-5.6 Luna", "tool_call": true, "reasoning": true,
-                    "reasoning_options": [{"type": "effort", "values": ["none", "low", "medium", "high", "xhigh", "max"]}],
-                    "limit": {"context": 200_000, "output": 0}
-                },
-                "gpt-5.4": {
-                    "id": "gpt-5.4", "name": "GPT-5.4", "tool_call": true, "reasoning": true,
-                    "limit": {"context": 200_000, "output": 0}
-                }
-            }),
-        );
-
-        let models = build_from_value(&data);
-        let levels = |id: &str| models["codex"].iter().find(|m| m.model_id == id).unwrap().reasoning_levels.clone();
-        assert_eq!(levels("gpt-5.6-sol"), vec!["low", "medium", "high", "xhigh", "max"]);
-        assert_eq!(levels("gpt-5.6-luna"), vec!["low", "medium", "high", "xhigh", "max"]);
-        assert_eq!(levels("gpt-5.4"), vec!["low", "medium", "high", "xhigh"]);
-    }
-
-    #[test]
-    fn build_applies_codex_subscription_context_window_override() {
-        let mut data = minimal_models_dev_json();
-        insert_models(
-            &mut data,
-            "openai",
-            json!({
-                "gpt-5.5": {
-                    "id": "gpt-5.5", "name": "GPT-5.5", "tool_call": true, "reasoning": true,
-                    "limit": {"context": 1_050_000, "output": 128_000}
-                }
-            }),
-        );
-
-        let models = build_from_value(&data);
-        let codex = models["codex"].iter().find(|m| m.model_id == "gpt-5.5").unwrap();
-        let openai = models["openai"].iter().find(|m| m.model_id == "gpt-5.5").unwrap();
-        assert_eq!(codex.context_window, 272_000);
-        assert_eq!(openai.context_window, 1_050_000);
-    }
-
-    #[test]
-    fn generate_uses_codex_subscription_model_ids() {
-        let mut data = minimal_models_dev_json();
-        insert_models(
-            &mut data,
-            "openai",
-            json!({
-                "gpt-6.1-sol": {
-                    "id": "gpt-6.1-sol", "name": "GPT-6.1 Sol", "tool_call": true, "reasoning": true,
-                    "reasoning_options": [{"type": "effort", "values": ["low", "medium", "high", "xhigh", "max"]}],
-                    "limit": {"context": 1_050_000, "output": 128_000}
-                },
-                "gpt-5.1-codex": {
-                    "id": "gpt-5.1-codex", "name": "GPT-5.1 Codex", "tool_call": true, "reasoning": true,
-                    "limit": {"context": 400_000, "output": 128_000}
-                },
-                "gpt-5.6": {
-                    "id": "gpt-5.6", "name": "GPT-5.6 Sol", "tool_call": true, "reasoning": true,
-                    "limit": {"context": 1_050_000, "output": 128_000}
-                },
-                "gpt-5.6-sol": {
-                    "id": "gpt-5.6-sol", "name": "GPT-5.6 Sol", "tool_call": true, "reasoning": true,
-                    "limit": {"context": 1_050_000, "output": 128_000}
-                },
-                "gpt-5.6-terra": {
-                    "id": "gpt-5.6-terra", "name": "GPT-5.6 Terra", "tool_call": true, "reasoning": true,
-                    "limit": {"context": 1_050_000, "output": 128_000}
-                },
-                "gpt-5.6-luna": {
-                    "id": "gpt-5.6-luna", "name": "GPT-5.6 Luna", "tool_call": true, "reasoning": true,
-                    "limit": {"context": 1_050_000, "output": 128_000}
-                }
-            }),
-        );
-
-        let tmp = NamedTempFile::new().unwrap();
-        std::fs::write(tmp.path(), serde_json::to_string(&data).unwrap()).unwrap();
-        let output = generate(tmp.path()).unwrap();
-
-        let codex_doc = &output.provider_docs["codex"];
-        assert!(!codex_doc.contains("`gpt-5.6`"));
-        assert!(!codex_doc.contains("`gpt-5.1-codex`"));
-        assert!(codex_doc.contains("| `gpt-6.1-sol` | `GPT-6.1 Sol` | `272k` |"));
-        assert!(codex_doc.contains("| `gpt-5.6-sol` | `GPT-5.6 Sol` | `272k` |"));
-        assert!(codex_doc.contains("| `gpt-5.6-terra` | `GPT-5.6 Terra` | `272k` |"));
-        assert!(codex_doc.contains("| `gpt-5.6-luna` | `GPT-5.6 Luna` | `272k` |"));
-
-        let openai_doc = &output.provider_docs["openai"];
-        assert!(openai_doc.contains("`gpt-5.6`"));
-        assert!(openai_doc.contains("`gpt-5.1-codex`"));
-        assert!(openai_doc.contains("`gpt-5.6-sol`"));
-    }
-
-    #[test]
-    fn generate_emits_provider_docs() {
-        let mut data = minimal_models_dev_json();
-        anthropic_models(
-            &mut data,
-            json!({
-                "claude-test": {
-                    "id": "claude-test", "name": "Claude Test", "tool_call": true, "reasoning": true,
-                    "limit": {"context": 200_000, "output": 0},
-                    "modalities": {"input": ["text", "image"]}
-                }
-            }),
-        );
-
-        let tmp = NamedTempFile::new().unwrap();
-        std::fs::write(tmp.path(), serde_json::to_string(&data).unwrap()).unwrap();
-        let output = generate(tmp.path()).unwrap();
-
-        let anthropic_doc = &output.provider_docs["anthropic"];
-        assert!(anthropic_doc.contains("`Anthropic` LLM provider."));
-        assert!(anthropic_doc.contains("`ANTHROPIC_API_KEY`"));
-        assert!(anthropic_doc.contains("| `claude-test` | `Claude Test` | `200k` | yes | yes |  |"));
-
-        let ollama_doc = &output.provider_docs["ollama"];
-        assert!(ollama_doc.contains("`Ollama` LLM provider."));
-        assert!(ollama_doc.contains("any model name at runtime"));
-    }
-
-    #[test]
-    fn generate_routes_only_existing_us_gpt_6_profiles_to_runtime() {
-        let mut data = minimal_models_dev_json();
-        let mut models = serde_json::Map::new();
-        for version in ["6-luna", "6-sol", "6-astra", "6.1-sol"] {
-            for prefix in ["us", "global"] {
-                let id = format!("{prefix}.openai.gpt-{version}");
-                models.insert(
-                    id.clone(),
-                    json!({
-                        "id": id, "name": format!("GPT-{version} ({prefix})"), "tool_call": true,
-                        "limit": {"context": 1_050_000, "output": 128_000}
-                    }),
-                );
-            }
-        }
-        models.insert(
-            "openai.gpt-6-astra".to_string(),
-            json!({
-                "id": "openai.gpt-6-astra", "name": "GPT-6 Astra", "tool_call": true,
-                "provider": {"api": "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1", "shape": "responses"}
-            }),
-        );
-        insert_models(&mut data, "amazon-bedrock", serde_json::Value::Object(models));
-        let tmp = NamedTempFile::new().unwrap();
-        std::fs::write(tmp.path(), serde_json::to_string(&data).unwrap()).unwrap();
-        let docs = generate(tmp.path()).unwrap().provider_docs.remove("amazon-bedrock").unwrap();
-
-        for version in ["6-luna", "6-sol", "6-astra", "6.1-sol"] {
-            let id = format!("openai.gpt-{version}");
-            assert!(docs.contains(&format!(
-                "| `us.{id}` | `https://bedrock-runtime.${{AWS_REGION}}.amazonaws.com/openai/v1` | `responses` |"
-            )));
-            assert!(!docs.contains(&format!("| `global.{id}` | `https://bedrock-runtime.")));
-        }
-        assert!(docs.contains(
-            "| `openai.gpt-6-astra` | `https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1` | `responses` |"
-        ));
-        assert!(!docs.contains("| `openai.gpt-6-luna` |"));
-        assert!(!docs.contains("| `openai.gpt-6-sol` |"));
-    }
-
-    #[test]
-    fn generate_preserves_disabled_separately_from_default() {
-        let mut data = minimal_models_dev_json();
-        data["openai"]["models"]["gpt-5.4"]["reasoning_options"] = json!([
-            {"type": "effort", "values": [null, "default", "none", "low", "high"]}
-        ]);
-        anthropic_models(
-            &mut data,
-            json!({
-                "claude-toggle": {
-                    "id": "claude-toggle", "name": "Toggle", "tool_call": true, "reasoning": true,
-                    "reasoning_options": [{"type": "toggle"}, {"type": "effort", "values": ["low", "high"]}]
-                }
-            }),
-        );
-        let tmp = NamedTempFile::new().unwrap();
-        std::fs::write(tmp.path(), serde_json::to_string(&data).unwrap()).unwrap();
-        let output = generate(tmp.path()).unwrap();
-        assert!(output.rust_source.contains("ReasoningEffort::Disabled"));
-        assert_default_is_not_capability(&output.rust_source);
-        assert!(output.provider_docs["openai"].contains("disabled"));
-        assert!(output.provider_docs["anthropic"].contains("disabled"));
-        assert!(!output.provider_docs["codex"].contains("disabled"));
-    }
-
-    #[test]
-    fn generate_reasoning_capability_edge_cases() {
-        let mut data = minimal_models_dev_json();
-        for (id, reasoning, options, disabled) in [
-            ("toggle", true, json!([{"type": "toggle"}]), true),
-            (
-                "both",
-                true,
-                json!([{"type": "toggle"}, {"type": "effort", "values": ["none", "high", "none", "low", "low"]}]),
-                true,
-            ),
-            ("defaults", true, json!([{"type": "effort", "values": [null, "default"]}]), false),
-            ("budget", true, json!([{"type": "budget_tokens"}]), false),
-            ("missing", true, json!([]), false),
-            ("plain", false, json!([{"type": "toggle"}]), false),
-        ] {
-            data["anthropic"]["models"] = json!({id: {"id": id, "name": id, "reasoning": reasoning, "tool_call": true, "reasoning_options": options}});
-            let tmp = NamedTempFile::new().unwrap();
-            std::fs::write(tmp.path(), serde_json::to_string(&data).unwrap()).unwrap();
-            let output = generate(tmp.path()).unwrap();
-            assert_eq!(output.provider_docs["anthropic"].contains("advertises `disabled`"), disabled, "{id}");
-            assert_default_is_not_capability(&output.rust_source);
-            if id == "both" {
-                assert!(output.rust_source.contains("ReasoningDisabledSupport::Effort"));
-                assert!(!output.rust_source.contains("ReasoningEffort::Disabled, ReasoningEffort::Disabled"));
-            }
-        }
-    }
-
-    fn assert_default_is_not_capability(source: &str) {
-        let file = syn::parse_file(source).unwrap();
-        for item in file.items {
-            if let syn::Item::Impl(implementation) = item {
-                for item in implementation.items {
-                    if let syn::ImplItem::Fn(method) = item
-                        && method.sig.ident == "reasoning_levels"
-                    {
-                        let body = method.block;
-                        assert!(!quote! { #body }.to_string().contains("ReasoningEffort :: Default"));
-                    }
-                }
-            }
-        }
-    }
-
-    fn build_from_value(data: &Value) -> ProviderModels {
-        let parsed: ModelsDevData = serde_json::from_value(data.clone()).expect("parse fixture");
-        build_provider_models(&parsed).expect("build provider models")
-    }
-
-    fn anthropic_models(data: &mut Value, models: Value) {
-        insert_models(data, "anthropic", models);
-    }
-
-    fn zai_extra_models(data: &mut Value, models: Value) {
-        insert_models(data, "zai-coding-plan", models);
-    }
-
-    fn insert_models(data: &mut Value, provider_key: &str, models: Value) {
-        let provider = data.as_object_mut().unwrap().get_mut(provider_key).unwrap().as_object_mut().unwrap();
-        let target = provider.get_mut("models").unwrap().as_object_mut().unwrap();
-        let Value::Object(models) = models else {
-            panic!("models fixture must be an object");
-        };
-        target.extend(models);
-    }
-
-    fn minimal_models_dev_json() -> Value {
-        let mut root = serde_json::Map::new();
-        for cfg in PROVIDERS {
-            let json_key = cfg.json_key();
-            root.entry(json_key.to_string())
-                .or_insert_with(|| json!({"id": json_key, "name": json_key, "env": [], "models": {}}));
-            for &extra in cfg.extra_source_ids {
-                root.entry(extra.to_string())
-                    .or_insert_with(|| json!({"id": extra, "name": extra, "env": [], "models": {}}));
-            }
-        }
-        let openai = root.get_mut("openai").unwrap()["models"].as_object_mut().unwrap();
-        for model in CODEX_SUBSCRIPTION_MODELS {
-            openai.insert(
-                model.id.to_string(),
-                json!({
-                    "id": model.id,
-                    "name": model.id,
-                    "tool_call": true,
-                    "reasoning": true,
-                    "reasoning_options": [{"type": "effort", "values": ["low", "medium", "high", "xhigh"]}],
-                    "limit": {"context": 1_050_000, "output": 0}
-                }),
-            );
-        }
-        Value::Object(root)
-    }
 }

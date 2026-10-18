@@ -6,21 +6,21 @@ use llm::{ToolCallError, ToolCallResult};
 use mcp_utils::testing::CapturedElicitation;
 use serde_json::Value;
 
-pub const CALL_ID: &str = "call-1";
+pub(super) const CALL_ID: &str = "call-1";
 
-pub struct ToolRun {
+pub(super) struct ToolRun {
     pub events: Vec<AgentEvent>,
     pub elicitations: Vec<CapturedElicitation>,
 }
 
 #[derive(Debug, PartialEq)]
-pub enum TaskOutcome {
+pub(super) enum TaskOutcome {
     Completed(String),
     Failed(String),
     Cancelled,
 }
 
-pub async fn deferred_tools(mcp: &McpCatalog) -> Vec<String> {
+pub(super) async fn deferred_tools(mcp: &McpCatalog) -> Vec<String> {
     let Some(socket) = mcp.deferred_tools_socket() else { return Vec::new() };
     let client = DeferredToolsClient::connect(socket.to_path_buf()).await.expect("connect to the deferred tools");
     let servers = client.servers().await.expect("list the deferred servers");
@@ -30,7 +30,7 @@ pub async fn deferred_tools(mcp: &McpCatalog) -> Vec<String> {
         .collect()
 }
 
-pub async fn call_tool(agent: TestAgentBuilder, tool: &str, arguments: Value) -> ToolRun {
+pub(super) async fn call_tool(agent: TestAgentBuilder, tool: &str, arguments: Value) -> ToolRun {
     let arguments = arguments.to_string();
     let result = agent
         .llm_responses(&[
@@ -46,7 +46,7 @@ pub async fn call_tool(agent: TestAgentBuilder, tool: &str, arguments: Value) ->
 }
 
 impl ToolRun {
-    pub fn result(&self) -> Result<&ToolCallResult, &ToolCallError> {
+    pub(super) fn result(&self) -> Result<&ToolCallResult, &ToolCallError> {
         self.tool_events()
             .find_map(|event| match event {
                 ToolEvent::Result { result, .. } => Some(Ok(result)),
@@ -56,14 +56,14 @@ impl ToolRun {
             .expect("the tool call finished in the foreground")
     }
 
-    pub fn created_task(&self) -> Option<&str> {
+    pub(super) fn created_task(&self) -> Option<&str> {
         self.tool_events().find_map(|event| match event {
             ToolEvent::TaskCreated { task_id, .. } => Some(task_id.as_str()),
             _ => None,
         })
     }
 
-    pub fn task_outcome(&self) -> TaskOutcome {
+    pub(super) fn task_outcome(&self) -> TaskOutcome {
         self.tool_events()
             .find_map(|event| match event {
                 ToolEvent::TaskCompleted { result, .. } => Some(TaskOutcome::Completed(result.result.clone())),
@@ -74,7 +74,7 @@ impl ToolRun {
             .expect("the tool call started a background task that finished")
     }
 
-    pub fn tool_events(&self) -> impl Iterator<Item = &ToolEvent> {
+    pub(super) fn tool_events(&self) -> impl Iterator<Item = &ToolEvent> {
         self.events.iter().filter_map(|event| match event {
             AgentEvent::Tool(event) => Some(event),
             _ => None,

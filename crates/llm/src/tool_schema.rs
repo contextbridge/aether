@@ -2,7 +2,23 @@ use schemars::Schema;
 use schemars::transform::{RemoveRefSiblings, Transform, transform_subschemas};
 use serde_json::{Map, Value, json};
 
-pub fn normalize_for_moonshot(schema: &mut Schema) {
+use crate::{LlmError, ToolDefinition};
+
+impl ToolDefinition {
+    pub(crate) fn parameters_with(&self, transform: Option<fn(&mut Schema)>) -> Result<Value, LlmError> {
+        let Some(transform) = transform else {
+            return Ok(self.parameters.clone());
+        };
+        let mut schema = Schema::try_from(self.parameters.clone()).map_err(|error| LlmError::ToolParameterParsing {
+            tool_name: self.name.clone(),
+            error: error.to_string(),
+        })?;
+        transform(&mut schema);
+        Ok(schema.into())
+    }
+}
+
+pub(crate) fn normalize_for_moonshot(schema: &mut Schema) {
     RemoveRefSiblings::default().transform(schema);
     MoonshotMfjsTransformer.transform(schema);
 }
@@ -12,7 +28,7 @@ pub fn normalize_for_moonshot(schema: &mut Schema) {
 /// Optional properties can already be omitted, so the null alternative is redundant.
 /// Xiaomi `MiMo`'s server-side tool-call parser corrupts streamed tool calls and leaks
 /// them into text when a parameter's type is a union.
-pub fn normalize_for_xiaomi(schema: &mut Schema) {
+pub(crate) fn normalize_for_xiaomi(schema: &mut Schema) {
     OptionalNullStripper.transform(schema);
 }
 

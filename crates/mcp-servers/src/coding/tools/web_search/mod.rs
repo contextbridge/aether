@@ -1,18 +1,17 @@
 pub mod search_client;
 
-pub use search_client::{BraveSearchClient, RawSearchResult, SearchClient, SearchParams};
+pub use search_client::{BraveSearchClient, SearchClient, SearchParams};
 
 #[cfg(test)]
 pub use search_client::FakeSearchClient;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::future::Future;
 use std::time::Duration;
+use url::Url;
 
 use crate::coding::error::WebSearchError;
-use utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 
 const DEFAULT_COUNT: u32 = 10;
 const MAX_COUNT: u32 = 20;
@@ -48,11 +47,6 @@ pub struct WebSearchOutput {
 
     /// The original query
     pub query: String,
-
-    /// Display metadata for human-friendly rendering
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub meta: Option<ToolResultMeta>,
 }
 
 /// Individual search result
@@ -66,6 +60,7 @@ pub struct SearchResult {
     pub url: String,
 
     /// Result snippet/description
+    #[serde(alias = "description")]
     pub snippet: String,
 }
 
@@ -114,72 +109,17 @@ impl WebSearcher {
             }
         };
 
-        // Ensure we don't return more than requested
-        if results.len() > count as usize {
-            results.truncate(count as usize);
-        }
+        results.truncate(count as usize);
+        results.retain(|result| {
+            let url = Url::parse(&result.url).ok();
+            let host = url.as_ref().and_then(Url::host_str);
+            let in_any =
+                |domains: &[String]| host.is_some_and(|host| domains.iter().any(|d| host.ends_with(d.as_str())));
+            args.allowed_domains.as_deref().is_none_or(in_any) && !args.blocked_domains.as_deref().is_some_and(in_any)
+        });
 
-        // Apply domain filters if provided
-        if let Some(ref allowed) = args.allowed_domains {
-            results = filter_allowed_domains(results, allowed);
-        }
-
-        if let Some(ref blocked) = args.blocked_domains {
-            results = filter_blocked_domains(results, blocked);
-        }
-
-        // Convert to output format
-        let results: Vec<SearchResult> = results
-            .into_iter()
-            .map(|r| SearchResult { title: r.title, url: r.url.clone(), snippet: r.description })
-            .collect();
-
-        let display_meta = ToolDisplayMeta::new("Web search", format!("'{}' ({} results)", query, results.len()));
-
-        Ok(WebSearchOutput { results, query: query.to_string(), meta: Some(display_meta.into()) })
+        Ok(WebSearchOutput { results, query: query.to_string() })
     }
-}
-
-fn filter_allowed_domains(results: Vec<RawSearchResult>, allowed_domains: &[String]) -> Vec<RawSearchResult> {
-    let allowed_set: HashSet<String> = allowed_domains.iter().cloned().collect();
-
-    results
-        .into_iter()
-        .filter(|r| {
-            if let Some(host) = extract_domain(&r.url) {
-                return allowed_set.iter().any(|domain| host.ends_with(domain));
-            }
-            false
-        })
-        .collect()
-}
-
-fn filter_blocked_domains(results: Vec<RawSearchResult>, blocked_domains: &[String]) -> Vec<RawSearchResult> {
-    let blocked_set: HashSet<String> = blocked_domains.iter().cloned().collect();
-
-    results
-        .into_iter()
-        .filter(|r| {
-            if let Some(host) = extract_domain(&r.url) {
-                return !blocked_set.iter().any(|domain| host.ends_with(domain));
-            }
-            true
-        })
-        .collect()
-}
-
-/// Extract domain/hostname from a URL
-fn extract_domain(url: &str) -> Option<String> {
-    // Remove protocol
-    let url = url.strip_prefix("http://").or_else(|| url.strip_prefix("https://")).unwrap_or(url);
-
-    // Remove path and query string
-    let domain = url.split('/').next()?;
-
-    // Remove port if present
-    let domain = domain.split(':').next()?;
-
-    Some(domain.to_string())
 }
 
 #[cfg(test)]
@@ -189,8 +129,8 @@ mod tests {
 
     use super::*;
 
-    fn make_result(url: &str) -> RawSearchResult {
-        RawSearchResult { title: "Test".to_string(), url: url.to_string(), description: "Test description".to_string() }
+    fn make_result(url: &str) -> SearchResult {
+        SearchResult { title: "Test".to_string(), url: url.to_string(), snippet: "Test description".to_string() }
     }
 
     fn input(query: &str) -> WebSearchInput {
@@ -201,54 +141,44 @@ mod tests {
         vals.iter().map(std::string::ToString::to_string).collect()
     }
 
-    fn searcher_with(query: &str, results: Vec<RawSearchResult>) -> WebSearcher {
-        WebSearcher::with_client(FakeSearchClient::new().with_results(query, results))
+    fn searcher_with(query: &str, results: Vec<SearchResult>) -> WebSearcher {
+        WebSearcher::with_client(FakeSearchClient::default().with_results(query, results))
     }
 
-    #[test]
-    fn test_domain_filtering() {
-        let urls = ["https://example.com/page", "https://test.org/page", "https://sub.example.com/page"];
-        let results: Vec<_> = urls.iter().map(|u| make_result(u)).collect();
+    fn rate_limited(retry_after: Option<Duration>) -> WebSearchError {
+        WebSearchError::RateLimited { message: "too many requests".to_string(), retry_after }
+    }
 
-        // Allowed domains: keeps example.com and sub.example.com
-        let filtered = filter_allowed_domains(results.clone(), &strs(&["example.com"]));
-        assert_eq!(filtered.len(), 2);
-        assert!(filtered.iter().all(|r| r.url.contains("example.com")));
-
-        // Blocked domains: removes example.com
-        let results2 = vec![
-            make_result("https://example.com/page"),
-            make_result("https://test.org/page"),
-            make_result("https://allowed.com/page"),
+    #[tokio::test]
+    async fn test_domain_filtering() {
+        let urls = ["https://example.com/page", "https://test.org/page", "https://sub.example.com:8080/page"];
+        let cases = [
+            (Some(strs(&["example.com"])), None, vec![urls[0], urls[2]]),
+            (None, Some(strs(&["example.com"])), vec![urls[1]]),
+            (Some(strs(&["example.com", "test.org"])), Some(strs(&["test.org"])), vec![urls[0], urls[2]]),
         ];
-        let filtered = filter_blocked_domains(results2, &strs(&["example.com"]));
-        assert_eq!(filtered.len(), 2);
-        assert!(!filtered.iter().any(|r| r.url.contains("example.com")));
 
-        // Combined: allow example.com + test.org, then block test.org => only example.com
-        let results3: Vec<_> = urls.iter().map(|u| make_result(u)).collect();
-        let filtered = filter_allowed_domains(results3, &strs(&["example.com", "test.org"]));
-        let filtered = filter_blocked_domains(filtered, &strs(&["test.org"]));
-        assert_eq!(filtered.len(), 2);
-        assert!(filtered.iter().all(|r| r.url.contains("example.com")));
+        for (allowed_domains, blocked_domains, expected) in cases {
+            let searcher = searcher_with("rust", urls.iter().map(|url| make_result(url)).collect());
+            let query = WebSearchInput { allowed_domains, blocked_domains, ..input("rust") };
+            let output = searcher.search(query, |_| async {}).await.unwrap();
+            let urls: Vec<_> = output.results.iter().map(|r| r.url.as_str()).collect();
+            assert_eq!(urls, expected);
+        }
     }
 
     #[tokio::test]
     async fn test_empty_query_returns_error() {
-        let searcher = WebSearcher::with_client(FakeSearchClient::new());
+        let searcher = WebSearcher::with_client(FakeSearchClient::default());
         let result = searcher.search(input("   "), |_| async {}).await;
         assert!(matches!(result, Err(WebSearchError::InvalidQuery(_))));
     }
 
     #[tokio::test(start_paused = true)]
     async fn retries_rate_limited_search_after_retry_after_period() {
-        let client = FakeSearchClient::new().with_sequential_results(vec![
-            Err(WebSearchError::RateLimited {
-                message: "too many requests".to_string(),
-                retry_after: Some(Duration::ZERO),
-            }),
-            Ok(vec![make_result("https://example.com")]),
-        ]);
+        let client = FakeSearchClient::default()
+            .with_results("rust", vec![make_result("https://example.com")])
+            .with_failures("rust", [rate_limited(Some(Duration::ZERO))]);
         let searcher = WebSearcher::with_client(client);
 
         let retry_delays = Arc::new(Mutex::new(Vec::new()));
@@ -269,10 +199,9 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn retries_rate_limited_search_when_retry_after_header_is_missing() {
-        let client = FakeSearchClient::new().with_sequential_results(vec![
-            Err(WebSearchError::RateLimited { message: "too many requests".to_string(), retry_after: None }),
-            Ok(vec![make_result("https://example.com")]),
-        ]);
+        let client = FakeSearchClient::default()
+            .with_results("rust", vec![make_result("https://example.com")])
+            .with_failures("rust", [rate_limited(None)]);
         let searcher = WebSearcher::with_client(client);
 
         let retry_delays = Arc::new(Mutex::new(Vec::new()));
@@ -293,20 +222,9 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn returns_rate_limited_error_after_retry_budget_is_exhausted() {
-        let rate_limited = || -> Result<Vec<RawSearchResult>, WebSearchError> {
-            Err(WebSearchError::RateLimited {
-                message: "too many requests".to_string(),
-                retry_after: Some(Duration::ZERO),
-            })
-        };
-        let client = FakeSearchClient::new().with_sequential_results(vec![
-            rate_limited(),
-            rate_limited(),
-            rate_limited(),
-            rate_limited(),
-            Err(WebSearchError::ApiError("retry budget was exceeded".to_string())),
-        ]);
-        let searcher = WebSearcher::with_client(client);
+        let mut failures = vec![rate_limited(Some(Duration::ZERO)); 4];
+        failures.push(WebSearchError::ApiError("retry budget was exceeded".to_string()));
+        let searcher = WebSearcher::with_client(FakeSearchClient::default().with_failures("rust", failures));
         let result = searcher.search(input("rust"), |_| async {}).await;
 
         assert!(matches!(result, Err(WebSearchError::RateLimited { .. })));
@@ -314,53 +232,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_count_limiting() {
-        let many_results: Vec<_> = (0..30)
-            .map(|i| RawSearchResult {
-                title: format!("Result {i}"),
-                url: format!("https://example.com/{i}"),
-                description: format!("Description {i}"),
-            })
-            .collect();
-        let searcher = searcher_with("test query", many_results);
+        let searcher =
+            searcher_with("test query", (0..30).map(|i| make_result(&format!("https://example.com/{i}"))).collect());
 
-        let mut q = input("test query");
-        q.count = Some(15);
-        let output = searcher.search(q, |_| async {}).await.unwrap();
-        assert_eq!(output.results.len(), 15);
+        let output = searcher.search(WebSearchInput { count: Some(15), ..input("test query") }, |_| async {}).await;
+        assert_eq!(output.unwrap().results.len(), 15);
     }
 
-    #[tokio::test]
-    async fn test_domain_filtering_in_web_searcher() {
-        let searcher = searcher_with(
-            "test query",
-            vec![
-                make_result("https://example.com/page1"),
-                make_result("https://blocked.com/page2"),
-                make_result("https://example.com/page3"),
-            ],
-        );
+    #[test]
+    fn search_result_deserializes_brave_description_as_snippet() {
+        let result: SearchResult = serde_json::from_value(serde_json::json!({
+            "title": "Rust Language",
+            "url": "https://rust-lang.org",
+            "description": "A systems language"
+        }))
+        .unwrap();
 
-        let mut q = input("test query");
-        q.blocked_domains = Some(strs(&["blocked.com"]));
-        let output = searcher.search(q, |_| async {}).await.unwrap();
-        assert_eq!(output.results.len(), 2);
-        assert!(!output.results.iter().any(|r| r.url.contains("blocked.com")));
-    }
-
-    #[tokio::test]
-    async fn test_searcher_tracks_results() {
-        let searcher = searcher_with(
-            "rust programming",
-            vec![RawSearchResult {
-                title: "Rust Language".to_string(),
-                url: "https://rust-lang.org".to_string(),
-                description: "A systems language".to_string(),
-            }],
-        );
-        let output = searcher.search(input("rust programming"), |_| async {}).await.unwrap();
-        assert_eq!(output.results.len(), 1);
-        assert_eq!(output.results[0].title, "Rust Language");
-        assert_eq!(output.results[0].snippet, "A systems language");
+        assert_eq!(result.snippet, "A systems language");
     }
 
     #[test]

@@ -1,115 +1,48 @@
-//! Shared helpers for fixture-driven provider tests.
-//!
-//! Each provider's `fixture_tests.rs` loads a captured SSE body from
-//! `tests/fixtures/{provider}/{scenario}.sse`, splits the SSE frames, feeds
-//! them through the real `process_*_stream` parser, and asserts structural
-//! properties of the resulting `TokenUsage`. Fixtures are committed to git so
-//! CI can run them without API keys; a missing fixture is a hard failure
-//! (rather than a silent skip) so accidental deletions can't make the
-//! parser-coverage net invisibly disappear.
-//!
-//! The companion `capture_fixtures.rs` files in each provider directory hold
-//! `#[ignore]`'d tests that re-capture those fixtures by hitting the real
-//! provider endpoints. They're skipped on `cargo nextest run`; refresh them
-//! with `cargo nextest run --run-ignored only -E 'test(capture_)'` (and the
-//! relevant API key in the environment).
-
-#![allow(dead_code)]
-
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use llm::LlmResponse;
-use llm::TokenUsage;
-use llm::providers::openai_compatible::streaming::process_compatible_stream;
-use llm::providers::openai_compatible::types::ChatCompletionStreamResponse;
-use serde_json::Value;
-use tokio_stream::StreamExt;
+use serde_json::{Value, json};
 
-/// Resolve `tests/fixtures/{provider}/{scenario}.sse` relative to the crate
-/// manifest directory.
-pub fn fixture_path(provider: &str, scenario: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(provider).join(format!("{scenario}.sse"))
+pub(crate) const MINIMAL_PROMPT: &str = "Reply with exactly: hi";
+pub(crate) const TOOL_PROMPT: &str = "What's the weather in Tokyo? Use the tool.";
+
+pub(crate) fn weather_tool(schema_key: &str) -> Value {
+    let mut tool = json!({ "name": "get_weather", "description": "Get the current weather for a city." });
+    tool[schema_key] = json!({
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+    });
+    tool
 }
 
-/// Read a committed fixture from disk. Panics if the fixture is missing — the
-/// suite refuses to silently pass when its parser-regression net is gone. To
-/// regenerate fixtures, run
-/// `cargo nextest run --run-ignored only -E 'test(capture_{provider})'`.
-pub fn read_fixture(provider: &str, scenario: &str) -> Vec<u8> {
-    let path = fixture_path(provider, scenario);
-    fs::read(&path).unwrap_or_else(|_| {
-        panic!(
-            "missing fixture {provider}/{scenario} at {} — \
-             run `cargo nextest run --run-ignored only -E 'test(capture_{provider})'` to regenerate",
-            path.display()
-        )
+pub(crate) fn chat_body(model: &str, prompt: &str) -> Value {
+    json!({
+        "model": model,
+        "stream": true,
+        "stream_options": {"include_usage": true},
+        "messages": [{"role": "user", "content": prompt}],
     })
 }
 
-/// Parse an SSE body into the JSON payloads of `data:` lines, dropping
-/// `[DONE]` sentinels, comments, and `event:` lines. Returns one entry per
-/// `data:` frame in stream order.
-pub fn parse_sse_data_lines(bytes: &[u8]) -> Vec<String> {
-    let text = std::str::from_utf8(bytes).expect("fixture is utf-8");
-    text.lines()
-        .filter_map(|line| line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")))
-        .map(str::trim)
-        .filter(|s| !s.is_empty() && *s != "[DONE]")
-        .map(str::to_string)
-        .collect()
+pub(crate) fn chat_tool_body(model: &str) -> Value {
+    let mut body = chat_body(model, TOOL_PROMPT);
+    body["tools"] = json!([{ "type": "function", "function": weather_tool("parameters") }]);
+    body["tool_choice"] = json!("auto");
+    body
 }
 
-pub async fn parse_compatible_fixture(provider: &str, scenario: &str) -> Vec<LlmResponse> {
-    let bytes = read_fixture(provider, scenario);
-    let lines = parse_sse_data_lines(&bytes);
-    let chunks: Vec<ChatCompletionStreamResponse> = lines
-        .into_iter()
-        .filter_map(|line| match serde_json::from_str(&line) {
-            Ok(chunk) => Some(chunk),
-            Err(e) => {
-                eprintln!("{provider}/{scenario}: skipping unparseable line: {e}\n  line: {line}");
-                None
-            }
-        })
-        .collect();
-
-    let stream = tokio_stream::iter(chunks.into_iter().map(Ok::<_, std::io::Error>));
-    let mut processed = Box::pin(process_compatible_stream(stream));
-    let mut events = Vec::new();
-    while let Some(event) = processed.next().await {
-        events.push(event.expect("stream item should not error"));
-    }
-    events
-}
-
-/// Find the first `LlmResponse::Usage` in a list of parsed events.
-pub fn find_usage(events: &[LlmResponse]) -> Option<TokenUsage> {
-    events.iter().find_map(|e| match e {
-        LlmResponse::Usage { tokens } => Some(*tokens),
-        _ => None,
-    })
-}
-
-/// Assert the basic invariants every captured response should satisfy:
-/// non-zero input tokens and non-zero output tokens.
-pub fn assert_minimal_usage(usage: &TokenUsage, scenario: &str) {
-    assert!(!usage.input_tokens.is_zero(), "{scenario}: input_tokens should be > 0");
-    assert!(!usage.output_tokens.is_zero(), "{scenario}: output_tokens should be > 0");
-}
-
-/// Read an environment variable, panicking with a clear instruction if missing.
-/// Used by `capture_fixtures.rs` tests to fail loudly when an API key is needed.
-pub fn require_env(name: &'static str) -> String {
-    env::var(name).unwrap_or_else(|_| panic!("{name} must be set to capture fixtures"))
+pub(crate) async fn post_bearer_capture(url: &str, key_env: &'static str, body: &Value) -> Vec<u8> {
+    let auth = format!("Bearer {}", require_env(key_env));
+    post_json_capture(url, &[("authorization", &auth)], body).await
 }
 
 /// `POST` a JSON body and return the raw response bytes. Panics on transport
 /// errors and on any non-2xx status, with the response body included in the
 /// panic message so capture failures are diagnosable from the test output.
-pub async fn post_json_capture(client: &reqwest::Client, url: &str, headers: &[(&str, &str)], body: &Value) -> Vec<u8> {
-    let mut req = client.post(url).header("content-type", "application/json").json(body);
+pub(crate) async fn post_json_capture(url: &str, headers: &[(&str, &str)], body: &Value) -> Vec<u8> {
+    let mut req = reqwest::Client::new().post(url).header("content-type", "application/json").json(body);
     for (k, v) in headers {
         req = req.header(*k, *v);
     }
@@ -120,9 +53,13 @@ pub async fn post_json_capture(client: &reqwest::Client, url: &str, headers: &[(
     bytes
 }
 
+pub(crate) fn require_env(name: &'static str) -> String {
+    env::var(name).unwrap_or_else(|_| panic!("{name} must be set to capture fixtures"))
+}
+
 /// Write captured bytes to `tests/fixtures/{provider}/{scenario}.sse`,
 /// creating the parent directory if needed.
-pub fn write_fixture(provider: &str, scenario: &str, bytes: &[u8]) {
+pub(crate) fn write_fixture(provider: &str, scenario: &str, bytes: &[u8]) {
     let path = fixture_path(provider, scenario);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).expect("create fixtures dir");
@@ -136,7 +73,7 @@ pub fn write_fixture(provider: &str, scenario: &str, bytes: &[u8]) {
 /// Generate roughly `approx_tokens` tokens of lorem-ipsum filler. Used by the
 /// Anthropic cache scenarios to comfortably exceed the smallest documented
 /// per-model cache minimum (1024 tokens).
-pub fn lorem_filler(approx_tokens: usize) -> String {
+pub(crate) fn lorem_filler(approx_tokens: usize) -> String {
     let line = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. ";
     let target_chars = approx_tokens * 4;
     let mut s = String::with_capacity(target_chars);
@@ -144,6 +81,10 @@ pub fn lorem_filler(approx_tokens: usize) -> String {
         s.push_str(line);
     }
     s
+}
+
+fn fixture_path(provider: &str, scenario: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(provider).join(format!("{scenario}.sse"))
 }
 
 fn relative_to_manifest(path: &Path) -> PathBuf {

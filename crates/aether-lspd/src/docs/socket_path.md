@@ -5,13 +5,9 @@ The path is derived from a SHA-256 hash of the canonical workspace root, combine
 # Path format
 
 ```text
-{socket_dir}/lsp-{server}-{hash}.sock
+{socket_dir}/lsp-{server}-v{protocol_version}-{hash}.sock
 ```
 
-Where `socket_dir` is `$XDG_RUNTIME_DIR/aether-lspd` if available, or `/tmp/aether-lspd-{uid}` otherwise. The UID suffix prevents permission conflicts between users on shared machines.
+Where `socket_dir` is `$XDG_RUNTIME_DIR/aether-lspd` if available, or `/tmp/aether-lspd-{uid}` otherwise. The UID suffix prevents permission conflicts between users on shared machines. The protocol version keeps a newer client from connecting to an older daemon that is still running.
 
-# Related functions
-
-- [`ensure_socket_dir`] -- Creates the socket directory if needed and returns the socket path.
-- [`lockfile_path`] -- Returns the `.lock` path for a given socket (used by the daemon for single-instance enforcement).
-- [`log_file_path`] -- Returns the `.log` path for a given socket (used for daemon log output).
+The daemon keeps its lockfile and log next to the socket, with `.lock` and `.log` extensions.

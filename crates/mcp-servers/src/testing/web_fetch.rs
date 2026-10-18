@@ -10,26 +10,15 @@ use crate::coding::tools::web_fetch::{HttpClient, HttpResponse};
 ///
 /// Requests to URLs without a scripted result fail with
 /// [`WebFetchError::RequestFailed`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct FakeHttpClient {
-    responses: Arc<Mutex<HashMap<String, FakeResponse>>>,
-}
-
-impl Default for FakeHttpClient {
-    fn default() -> Self {
-        Self::new()
-    }
+    responses: Arc<Mutex<HashMap<String, Result<HttpResponse, WebFetchError>>>>,
 }
 
 impl FakeHttpClient {
-    pub fn new() -> Self {
-        Self { responses: Arc::new(Mutex::new(HashMap::new())) }
-    }
-
     /// Scripts a full response for `url`, including redirects via `final_url`.
     pub fn with_response(self, url: &str, response: HttpResponse) -> Self {
-        self.responses.lock().unwrap().insert(url.to_string(), FakeResponse::Ok(response));
-        self
+        self.with_result(url, Ok(response))
     }
 
     /// Scripts a 200 response whose body is `html` and whose `final_url` is `url`.
@@ -47,40 +36,25 @@ impl FakeHttpClient {
 
     /// Scripts a [`WebFetchError::Timeout`] carrying `timeout_ms` for `url`.
     pub fn with_timeout(self, url: &str, timeout_ms: u64) -> Self {
-        self.responses.lock().unwrap().insert(url.to_string(), FakeResponse::Timeout(timeout_ms));
-        self
+        self.with_result(url, Err(WebFetchError::Timeout(timeout_ms)))
     }
 
     /// Scripts a [`WebFetchError::RequestFailed`] carrying `message` for `url`.
     pub fn with_request_failed(self, url: &str, message: &str) -> Self {
-        self.responses.lock().unwrap().insert(url.to_string(), FakeResponse::RequestFailed(message.to_string()));
+        self.with_result(url, Err(WebFetchError::RequestFailed(message.to_string())))
+    }
+
+    fn with_result(self, url: &str, result: Result<HttpResponse, WebFetchError>) -> Self {
+        self.responses.lock().unwrap().insert(url.to_string(), result);
         self
     }
 }
 
 impl HttpClient for FakeHttpClient {
     fn fetch<'a>(&'a self, url: &'a str, _timeout: Duration) -> BoxFuture<'a, Result<HttpResponse, WebFetchError>> {
-        let responses = self.responses.lock().unwrap();
-        Box::pin(std::future::ready(match responses.get(url) {
-            Some(response) => response.clone().into_result(),
-            None => Err(WebFetchError::RequestFailed(format!("No fake response configured for URL: {url}"))),
-        }))
-    }
-}
-
-#[derive(Debug, Clone)]
-enum FakeResponse {
-    Ok(HttpResponse),
-    Timeout(u64),
-    RequestFailed(String),
-}
-
-impl FakeResponse {
-    fn into_result(self) -> Result<HttpResponse, WebFetchError> {
-        match self {
-            FakeResponse::Ok(response) => Ok(response),
-            FakeResponse::Timeout(timeout_ms) => Err(WebFetchError::Timeout(timeout_ms)),
-            FakeResponse::RequestFailed(message) => Err(WebFetchError::RequestFailed(message)),
-        }
+        let response = self.responses.lock().unwrap().get(url).cloned();
+        Box::pin(std::future::ready(response.unwrap_or_else(|| {
+            Err(WebFetchError::RequestFailed(format!("No fake response configured for URL: {url}")))
+        })))
     }
 }

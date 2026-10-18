@@ -4,12 +4,12 @@ use mcp_utils::model::ElicitResult;
 use mcp_utils::server::McpServer;
 use mcp_utils::testing::{CapturedElicitation, ElicitationScriptBuilder, FakeMcpServer};
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Notify, mpsc};
 
 use crate::context::CompactionConfig;
-use crate::core::{AgentError, McpInstructions, Prompt, RetryConfig, agent};
+use crate::core::{AgentBuilder, AgentError, McpInstructions, Prompt, RetryConfig, agent};
 use crate::events::{
     AgentCommand, AgentEvent, AgentObserver, Command, ContextEvent, ToolEvent, TurnEvent, UserCommand,
 };
@@ -69,65 +69,13 @@ pub fn fast_retry(max_attempts: u32) -> RetryConfig {
 }
 
 pub fn test_agent() -> TestAgentBuilder {
-    TestAgentBuilder::new()
-}
-
-/// An ordered interaction with a test agent.
-pub enum TestAgentStep {
-    Send(Command),
-    WaitFor(Box<dyn Fn(&AgentEvent) -> bool + Send>),
-    /// Run an arbitrary side effect (e.g. releasing a paused LLM stream) between steps.
-    Perform(Box<dyn FnOnce() + Send>),
-}
-
-impl TestAgentStep {
-    pub fn send(command: Command) -> Self {
-        Self::Send(command)
-    }
-
-    pub fn user_text(text: impl Into<String>) -> Self {
-        Self::send(Command::text(text))
-    }
-
-    pub fn cancel() -> Self {
-        Self::send(Command::UserCommand(UserCommand::Cancel))
-    }
-
-    pub fn switch_model(provider: impl StreamingModelProvider + 'static) -> Self {
-        Self::send(Command::AgentCommand(AgentCommand::SwitchModel(Box::new(provider))))
-    }
-
-    pub fn replace_conversation(messages: Vec<ChatMessage>) -> Self {
-        Self::send(Command::AgentCommand(AgentCommand::ReplaceConversation(messages)))
-    }
-
-    pub fn perform(action: impl FnOnce() + Send + 'static) -> Self {
-        Self::Perform(Box::new(action))
-    }
-
-    pub fn wait_for(predicate: impl Fn(&AgentEvent) -> bool + Send + 'static) -> Self {
-        Self::WaitFor(Box::new(predicate))
-    }
-
-    pub fn wait_for_turn_end() -> Self {
-        Self::wait_for(|event| matches!(event, AgentEvent::Turn(TurnEvent::Ended { .. })))
-    }
-
-    pub fn wait_for_compaction_start() -> Self {
-        Self::wait_for(|event| matches!(event, AgentEvent::Context(ContextEvent::CompactionStarted { .. })))
-    }
-
-    pub fn wait_for_retry(attempt: u32) -> Self {
-        Self::wait_for(
-            move |event| matches!(event, AgentEvent::Turn(TurnEvent::RetryScheduled { attempt: actual, .. }) if *actual == attempt),
-        )
-    }
+    TestAgentBuilder::default()
 }
 
 /// A fluent sequence of commands and synchronization points for a test agent.
 #[derive(Default)]
 pub struct TestScenario {
-    steps: Vec<TestAgentStep>,
+    steps: Vec<Step>,
 }
 
 impl TestScenario {
@@ -135,69 +83,60 @@ impl TestScenario {
         Self::default()
     }
 
-    pub fn send(mut self, command: Command) -> Self {
-        self.steps.push(TestAgentStep::send(command));
-        self
+    pub fn send(self, command: Command) -> Self {
+        self.step(Step::Send(command))
     }
 
-    pub fn user_text(mut self, text: impl Into<String>) -> Self {
-        self.steps.push(TestAgentStep::user_text(text));
-        self
+    pub fn user_text(self, text: impl Into<String>) -> Self {
+        self.send(Command::text(text))
     }
 
-    pub fn cancel(mut self) -> Self {
-        self.steps.push(TestAgentStep::cancel());
-        self
+    pub fn cancel(self) -> Self {
+        self.send(Command::UserCommand(UserCommand::Cancel))
     }
 
-    pub fn switch_model(mut self, provider: impl StreamingModelProvider + 'static) -> Self {
-        self.steps.push(TestAgentStep::switch_model(provider));
-        self
+    pub fn switch_model(self, provider: impl StreamingModelProvider + 'static) -> Self {
+        self.send(Command::AgentCommand(AgentCommand::SwitchModel(Box::new(provider))))
     }
 
-    pub fn replace_conversation(mut self, messages: Vec<ChatMessage>) -> Self {
-        self.steps.push(TestAgentStep::replace_conversation(messages));
-        self
+    pub fn replace_conversation(self, messages: Vec<ChatMessage>) -> Self {
+        self.send(Command::AgentCommand(AgentCommand::ReplaceConversation(messages)))
     }
 
-    pub fn wait_for(mut self, predicate: impl Fn(&AgentEvent) -> bool + Send + 'static) -> Self {
-        self.steps.push(TestAgentStep::wait_for(predicate));
-        self
+    pub fn wait_for(self, predicate: impl Fn(&AgentEvent) -> bool + Send + 'static) -> Self {
+        self.step(Step::WaitFor(Box::new(predicate)))
     }
 
-    pub fn wait_for_turn_end(mut self) -> Self {
-        self.steps.push(TestAgentStep::wait_for_turn_end());
-        self
+    pub fn wait_for_turn_end(self) -> Self {
+        self.wait_for(|event| matches!(event, AgentEvent::Turn(TurnEvent::Ended { .. })))
     }
 
-    pub fn wait_for_compaction_start(mut self) -> Self {
-        self.steps.push(TestAgentStep::wait_for_compaction_start());
-        self
+    pub fn wait_for_compaction_start(self) -> Self {
+        self.wait_for(|event| matches!(event, AgentEvent::Context(ContextEvent::CompactionStarted { .. })))
     }
 
-    pub fn wait_for_retry(mut self, attempt: u32) -> Self {
-        self.steps.push(TestAgentStep::wait_for_retry(attempt));
-        self
+    pub fn wait_for_retry(self, attempt: u32) -> Self {
+        self.wait_for(
+            move |event| matches!(event, AgentEvent::Turn(TurnEvent::RetryScheduled { attempt: actual, .. }) if *actual == attempt),
+        )
     }
 
     /// Run an arbitrary side effect between scenario steps, e.g. releasing a
     /// paused LLM stream so a queued message can be injected mid-turn.
-    pub fn perform(mut self, action: impl FnOnce() + Send + 'static) -> Self {
-        self.steps.push(TestAgentStep::perform(action));
-        self
+    pub fn perform(self, action: impl FnOnce() + Send + 'static) -> Self {
+        self.step(Step::Perform(Box::new(action)))
     }
-}
 
-impl From<Vec<TestAgentStep>> for TestScenario {
-    fn from(steps: Vec<TestAgentStep>) -> Self {
-        Self { steps }
+    fn step(mut self, step: Step) -> Self {
+        self.steps.push(step);
+        self
     }
 }
 
 /// Result of running a test agent, including messages, captured contexts, and the MCP elicitations it answered.
 pub struct TestAgentResult {
     pub messages: Vec<AgentEvent>,
-    pub captured_contexts: Arc<Mutex<Vec<Context>>>,
+    pub contexts: Vec<Context>,
     pub elicitations: Vec<CapturedElicitation>,
 }
 
@@ -213,74 +152,29 @@ pub enum TestAgentError {
 
 pub type TestResult<T> = std::result::Result<T, TestAgentError>;
 
-struct ProviderTestConfig {
+#[derive(Default)]
+pub struct TestAgentBuilder {
     responses: Vec<Vec<Result<LlmResponse, LlmError>>>,
-    model: Option<LlmModel>,
-    context_window: Option<u32>,
-    pause: Option<(usize, usize, Arc<Notify>)>,
-}
-
-struct AgentTestConfig {
-    context_window_override: Option<u32>,
-    timeout: Option<Duration>,
-    max_auto_continues: Option<u32>,
-    retry_config: Option<RetryConfig>,
-    observers: Vec<Box<dyn AgentObserver>>,
+    llm_config: Vec<Configure<FakeLlmProvider>>,
+    agent_config: Vec<Configure<AgentBuilder>>,
     /// `None` connects a single fake server named `test`.
     mcp_servers: Option<Vec<ServerSpec>>,
     elicitations: Option<ElicitationScriptBuilder>,
-    initial_messages: Vec<ChatMessage>,
-    system_prompts: Vec<Prompt>,
-    session_affinity_key: Option<String>,
-    compaction: Option<CompactionConfig>,
-    model_settings: Option<ModelSettings>,
-}
-
-enum TestExecution {
-    CommandsUntilTurnEnd(Vec<Command>),
-    Scenario(TestScenario),
-}
-
-pub struct TestAgentBuilder {
-    provider: ProviderTestConfig,
-    agent: AgentTestConfig,
-    execution: Option<TestExecution>,
-}
-
-impl Default for TestAgentBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
+    scenario: Option<TestScenario>,
 }
 
 impl TestAgentBuilder {
-    pub fn new() -> Self {
-        Self {
-            provider: ProviderTestConfig { responses: Vec::new(), model: None, context_window: None, pause: None },
-            agent: AgentTestConfig {
-                context_window_override: None,
-                timeout: None,
-                max_auto_continues: None,
-                retry_config: None,
-                observers: Vec::new(),
-                mcp_servers: None,
-                elicitations: None,
-                initial_messages: Vec::new(),
-                system_prompts: Vec::new(),
-                session_affinity_key: None,
-                compaction: None,
-                model_settings: None,
-            },
-            execution: None,
-        }
-    }
-
     pub fn commands(self, commands: Vec<Command>) -> Self {
-        self.with_execution(TestExecution::CommandsUntilTurnEnd(commands))
+        assert!(!commands.is_empty(), "commands() requires at least one command");
+        let scenario = commands.into_iter().fold(TestScenario::new(), TestScenario::send);
+        self.scenario(scenario.wait_for_turn_end())
     }
 
-    pub fn scenario(self, scenario: impl Into<TestScenario>) -> Self {
-        self.with_execution(TestExecution::Scenario(scenario.into()))
+    pub fn scenario(mut self, scenario: TestScenario) -> Self {
+        assert!(!scenario.steps.is_empty(), "scenario() requires at least one step");
+        assert!(self.scenario.is_none(), "commands(), user_text(), and scenario() are mutually exclusive");
+        self.scenario = Some(scenario);
+        self
     }
 
     pub fn user_text(self, text: &str) -> Self {
@@ -288,58 +182,52 @@ impl TestAgentBuilder {
     }
 
     pub fn llm_responses(mut self, llm_responses: &[Vec<LlmResponse>]) -> Self {
-        self.provider.responses = llm_responses.iter().map(|turn| turn.iter().cloned().map(Ok).collect()).collect();
+        self.responses = llm_responses.iter().map(|turn| turn.iter().cloned().map(Ok).collect()).collect();
         self
     }
 
     pub fn llm_result_responses(mut self, llm_responses: &[Vec<Result<LlmResponse, LlmError>>]) -> Self {
-        self.provider.responses = Vec::from(llm_responses);
+        self.responses = Vec::from(llm_responses);
         self
     }
 
-    pub fn model(mut self, model: LlmModel) -> Self {
-        self.provider.model = Some(model);
-        self
+    pub fn model(self, model: LlmModel) -> Self {
+        self.configure_llm(|llm| llm.with_model(model))
     }
 
-    pub fn provider_context_window(mut self, window: Option<u32>) -> Self {
-        self.provider.context_window = window;
-        self
+    pub fn provider_context_window(self, window: Option<u32>) -> Self {
+        self.configure_llm(move |llm| llm.with_context_window(window))
     }
 
-    pub fn context_window_override(mut self, window: u32) -> Self {
-        self.agent.context_window_override = Some(window);
-        self
+    pub fn context_window_override(self, window: u32) -> Self {
+        self.configure(move |agent| agent.context_window(Some(window)))
     }
 
-    pub fn tool_timeout(mut self, timeout: Duration) -> Self {
-        self.agent.timeout = Some(timeout);
-        self
+    pub fn tool_timeout(self, timeout: Duration) -> Self {
+        self.configure(move |agent| agent.tool_timeout(timeout))
     }
 
-    pub fn max_auto_continues(mut self, max: u32) -> Self {
-        self.agent.max_auto_continues = Some(max);
-        self
+    pub fn max_auto_continues(self, max: u32) -> Self {
+        self.configure(move |agent| agent.max_auto_continues(max))
     }
 
-    pub fn retry_config(mut self, config: RetryConfig) -> Self {
-        self.agent.retry_config = Some(config);
-        self
+    pub fn retry_config(self, config: RetryConfig) -> Self {
+        self.configure(move |agent| agent.retry(config))
     }
 
     /// Run without the default fake MCP server when the scenario does not exercise tools.
     pub fn without_mcp(mut self) -> Self {
-        self.agent.mcp_servers = Some(Vec::new());
+        self.mcp_servers = Some(Vec::new());
         self
     }
 
     pub fn mcp_server(mut self, name: &str, server: impl Into<McpServer>) -> Self {
-        self.agent.mcp_servers.get_or_insert_with(Vec::new).push(ServerSpec::in_process(name, server));
+        self.mcp_servers.get_or_insert_with(Vec::new).push(ServerSpec::in_process(name, server));
         self
     }
 
     pub fn elicitation_response(mut self, response: ElicitResult) -> Self {
-        self.agent.elicitations = Some(self.agent.elicitations.take().unwrap_or_default().response(response));
+        self.elicitations = Some(self.elicitations.take().unwrap_or_default().response(response));
         self
     }
 
@@ -348,53 +236,46 @@ impl TestAgentBuilder {
         F: Fn(String, String) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        self.agent.elicitations = Some(self.agent.elicitations.take().unwrap_or_default().on_url(handler));
+        self.elicitations = Some(self.elicitations.take().unwrap_or_default().on_url(handler));
         self
     }
 
     /// Pre-populate the context with conversation history.
-    pub fn messages(mut self, messages: Vec<ChatMessage>) -> Self {
-        self.agent.initial_messages = messages;
-        self
+    pub fn messages(self, messages: Vec<ChatMessage>) -> Self {
+        self.configure(|agent| agent.messages(messages))
     }
 
-    /// Set the system prompt. Multiple prompts are concatenated with double
-    /// newlines, mirroring [`crate::core::AgentBuilder::system_prompt`].
-    pub fn system_prompt(mut self, prompt: Prompt) -> Self {
-        self.agent.system_prompts.push(prompt);
-        self
+    /// Set the system prompt. Multiple prompts are concatenated with double newlines.
+    pub fn system_prompt(self, prompt: Prompt) -> Self {
+        self.configure(|agent| agent.system_prompt(prompt))
     }
 
     /// Set the session affinity key attached to every LLM call; defaults to a
     /// fresh random key per agent.
-    pub fn session_affinity_key(mut self, key: impl Into<String>) -> Self {
-        self.agent.session_affinity_key = Some(key.into());
-        self
+    pub fn session_affinity_key(self, key: impl Into<String>) -> Self {
+        let key = key.into();
+        self.configure(|agent| agent.session_affinity_key(key))
     }
 
     /// Configure context compaction settings.
-    pub fn compaction_config(mut self, config: CompactionConfig) -> Self {
-        self.agent.compaction = Some(config);
-        self
+    pub fn compaction_config(self, config: CompactionConfig) -> Self {
+        self.configure(|agent| agent.compaction(config))
     }
 
     /// Set the model settings applied to every LLM call.
-    pub fn model_settings(mut self, settings: ModelSettings) -> Self {
-        self.agent.model_settings = Some(settings);
-        self
+    pub fn model_settings(self, settings: ModelSettings) -> Self {
+        self.configure(|agent| agent.model_settings(settings))
     }
 
     /// Pause the fake LLM stream at `turn_index` / `chunk_index` until
     /// `release.notify_one()` is called. Used for deterministic timing tests.
-    pub fn pause_turn_after(mut self, turn_index: usize, chunk_index: usize, release: Arc<Notify>) -> Self {
-        self.provider.pause = Some((turn_index, chunk_index, release));
-        self
+    pub fn pause_turn_after(self, turn_index: usize, chunk_index: usize, release: Arc<Notify>) -> Self {
+        self.configure_llm(move |llm| llm.pause_turn_after(turn_index, chunk_index, release))
     }
 
     /// Attach an observer of the test agent's event stream.
-    pub fn observer(mut self, observer: Box<dyn AgentObserver>) -> Self {
-        self.agent.observers.push(observer);
-        self
+    pub fn observer(self, observer: Box<dyn AgentObserver>) -> Self {
+        self.configure(|agent| agent.observer(observer))
     }
 
     pub async fn run(self) -> TestResult<Vec<AgentEvent>> {
@@ -416,77 +297,30 @@ impl TestAgentBuilder {
     /// Use this when you need to verify what context was passed to the LLM,
     /// for example when testing that file attachments are properly formatted.
     pub async fn run_with_context(self) -> TestResult<TestAgentResult> {
-        let Self { provider, agent: config, execution } = self;
-        let mut llm = FakeLlmProvider::from_results(provider.responses).with_context_window(provider.context_window);
-        if let Some(model) = provider.model {
-            llm = llm.with_model(model);
-        }
-        if let Some((turn_index, chunk_index, release)) = provider.pause {
-            llm = llm.pause_turn_after(turn_index, chunk_index, release);
-        }
+        let Self { responses, llm_config, agent_config, mcp_servers, elicitations, scenario } = self;
+        let scenario = scenario.expect("test agent requires commands(), user_text(), or scenario()");
+        let llm =
+            llm_config.into_iter().fold(FakeLlmProvider::from_results(responses), |llm, configure| configure(llm));
         let captured_contexts = llm.captured_contexts();
 
-        let servers = config.mcp_servers.unwrap_or_else(|| vec![ServerSpec::in_process("test", FakeMcpServer::math())]);
+        let servers = mcp_servers.unwrap_or_else(|| vec![ServerSpec::in_process("test", FakeMcpServer::math())]);
         let mut mcp = mcp("/workspace").with_servers(servers);
-        let mut elicitations = None;
-        if let Some(script) = config.elicitations {
+        let mut script = None;
+        if let Some(elicitations) = elicitations {
             let (sink, events) = mpsc::channel(32);
             mcp = mcp.with_elicitation(ElicitationSink::form_and_url(sink));
-            elicitations = Some(script.spawn(events));
-        }
-        let mcp = ready_catalog(mcp).await;
-
-        let mut builder = agent(llm).mcp(mcp);
-        if let Some(timeout) = config.timeout {
-            builder = builder.tool_timeout(timeout);
-        }
-        if let Some(max) = config.max_auto_continues {
-            builder = builder.max_auto_continues(max);
-        }
-        if let Some(retry) = config.retry_config {
-            builder = builder.retry(retry);
-        } else {
-            builder = builder.retry(RetryConfig::disabled());
-        }
-        for prompt in config.system_prompts {
-            builder = builder.system_prompt(prompt);
-        }
-        if let Some(key) = config.session_affinity_key {
-            builder = builder.session_affinity_key(key);
-        }
-        if let Some(compaction) = config.compaction {
-            builder = builder.compaction(compaction);
-        }
-        if let Some(settings) = config.model_settings {
-            builder = builder.model_settings(settings);
-        }
-        builder = builder.context_window(config.context_window_override);
-        if !config.initial_messages.is_empty() {
-            builder = builder.messages(config.initial_messages);
-        }
-        for observer in config.observers {
-            builder = builder.observer(observer);
+            script = Some(elicitations.spawn(events));
         }
 
-        let steps = match execution.expect("test agent requires commands(), user_text(), or scenario()") {
-            TestExecution::CommandsUntilTurnEnd(commands) => {
-                assert!(!commands.is_empty(), "commands() requires at least one command");
-                let mut steps = commands.into_iter().map(TestAgentStep::send).collect::<Vec<_>>();
-                steps.push(TestAgentStep::wait_for_turn_end());
-                steps
-            }
-            TestExecution::Scenario(scenario) => {
-                assert!(!scenario.steps.is_empty(), "scenario() requires at least one step");
-                scenario.steps
-            }
-        };
+        let builder = agent(llm).mcp(ready_catalog(mcp).await).retry(RetryConfig::disabled());
+        let builder = agent_config.into_iter().fold(builder, |builder, configure| configure(builder));
         let (tx, mut rx, handle) = builder.spawn().await?;
         let mut messages = Vec::new();
 
-        for step in steps {
+        for step in scenario.steps {
             match step {
-                TestAgentStep::Send(command) => tx.send(command).await?,
-                TestAgentStep::WaitFor(predicate) => loop {
+                Step::Send(command) => tx.send(command).await?,
+                Step::WaitFor(predicate) => loop {
                     let message = rx.recv().await.expect("agent event channel closed before scenario step matched");
                     let matched = predicate(&message);
                     messages.push(message);
@@ -494,20 +328,33 @@ impl TestAgentBuilder {
                         break;
                     }
                 },
-                TestAgentStep::Perform(action) => action(),
+                Step::Perform(action) => action(),
             }
         }
         drop(tx);
 
         handle.await_completion().await;
 
-        let elicitations = elicitations.map(|script| script.captured()).unwrap_or_default();
-        Ok(TestAgentResult { messages, captured_contexts, elicitations })
+        let contexts = captured_contexts.lock().expect("captured contexts lock poisoned").clone();
+        let elicitations = script.map(|script| script.captured()).unwrap_or_default();
+        Ok(TestAgentResult { messages, contexts, elicitations })
     }
 
-    fn with_execution(mut self, execution: TestExecution) -> Self {
-        assert!(self.execution.is_none(), "commands(), user_text(), and scenario() are mutually exclusive");
-        self.execution = Some(execution);
+    fn configure(mut self, configure: impl FnOnce(AgentBuilder) -> AgentBuilder + Send + 'static) -> Self {
+        self.agent_config.push(Box::new(configure));
         self
     }
+
+    fn configure_llm(mut self, configure: impl FnOnce(FakeLlmProvider) -> FakeLlmProvider + Send + 'static) -> Self {
+        self.llm_config.push(Box::new(configure));
+        self
+    }
+}
+
+type Configure<T> = Box<dyn FnOnce(T) -> T + Send>;
+
+enum Step {
+    Send(Command),
+    WaitFor(Box<dyn Fn(&AgentEvent) -> bool + Send>),
+    Perform(Box<dyn FnOnce() + Send>),
 }

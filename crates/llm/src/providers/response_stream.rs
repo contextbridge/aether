@@ -45,12 +45,13 @@ pub(crate) struct OpenedStream<T> {
 }
 
 impl<T> OpenedStream<T> {
-    pub fn new(events: T) -> Self {
+    pub(crate) fn new(events: T) -> Self {
         Self { events, http: None }
     }
 
-    pub fn with_http(events: T, http: HttpResponseMetadata) -> Self {
-        Self { events, http: Some(http) }
+    pub(crate) fn with_http(mut self, http: HttpResponseMetadata) -> Self {
+        self.http = Some(http);
+        self
     }
 }
 
@@ -61,17 +62,17 @@ pub(crate) struct StreamAssembler<T> {
 }
 
 impl<T: Ord + Debug> StreamAssembler<T> {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self { tool_calls: BTreeMap::new(), stop_reason: None, termination: Termination::Pending }
     }
 
-    pub fn start_tool(&mut self, index: T, id: String, name: String) -> LlmResponse {
+    pub(crate) fn start_tool(&mut self, index: T, id: String, name: String) -> LlmResponse {
         let start = LlmResponse::ToolRequestStart { id: id.clone(), name: name.clone() };
         self.tool_calls.insert(index, ToolCallRequest { id, name, arguments: String::new() });
         start
     }
 
-    pub fn append_tool_args(&mut self, index: &T, chunk: String) -> Option<LlmResponse> {
+    pub(crate) fn append_tool_args(&mut self, index: &T, chunk: String) -> Option<LlmResponse> {
         if chunk.is_empty() {
             return None;
         }
@@ -84,11 +85,11 @@ impl<T: Ord + Debug> StreamAssembler<T> {
         Some(LlmResponse::ToolRequestArg { id: tool_call.id.clone(), chunk })
     }
 
-    pub fn complete_tool(&mut self, index: &T) -> Option<LlmResponse> {
+    pub(crate) fn complete_tool(&mut self, index: &T) -> Option<LlmResponse> {
         self.tool_calls.remove(index).map(|tool_call| LlmResponse::ToolRequestComplete { tool_call })
     }
 
-    pub fn complete_tool_with(&mut self, index: &T, mut tool_call: ToolCallRequest) -> Vec<LlmResponse> {
+    pub(crate) fn complete_tool_with(&mut self, index: &T, mut tool_call: ToolCallRequest) -> Vec<LlmResponse> {
         let mut responses = Vec::new();
         match self.tool_calls.remove(index) {
             Some(streamed) if tool_call.arguments.is_empty() => tool_call.arguments = streamed.arguments,
@@ -102,22 +103,22 @@ impl<T: Ord + Debug> StreamAssembler<T> {
         responses
     }
 
-    pub fn complete_all_tools(&mut self) -> Vec<LlmResponse> {
+    pub(crate) fn complete_all_tools(&mut self) -> Vec<LlmResponse> {
         std::mem::take(&mut self.tool_calls)
             .into_values()
             .map(|tool_call| LlmResponse::ToolRequestComplete { tool_call })
             .collect()
     }
 
-    pub fn stop(&mut self, stop_reason: StopReason) {
+    pub(crate) fn stop(&mut self, stop_reason: StopReason) {
         self.stop_reason = Some(stop_reason);
     }
 
-    pub fn allow_eof(&mut self) {
+    pub(crate) fn allow_eof(&mut self) {
         self.termination = Termination::AtEof;
     }
 
-    pub fn finish_now(&mut self) {
+    pub(crate) fn finish_now(&mut self) {
         self.termination = Termination::Immediate;
     }
 
@@ -216,7 +217,7 @@ mod tests {
         let events = stream::iter([Err(ProviderError::stream_interrupted("connection reset").into())]);
         let http = HttpResponseMetadata { status: 200, request_id: Some("req-1".to_string()) };
 
-        let responses = collect(text_stream(ready(Ok(OpenedStream::with_http(events, http))))).await;
+        let responses = collect(text_stream(ready(Ok(OpenedStream::new(events).with_http(http))))).await;
 
         let error = responses.last().and_then(|response| response.as_ref().err()).and_then(LlmError::provider);
         assert_eq!(error.and_then(|error| error.request_id.as_deref()), Some("req-1"), "{responses:?}");

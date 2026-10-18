@@ -67,31 +67,18 @@ pub struct RunConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[schemars(rename = "AetherHeadlessCliOptions")]
 pub struct HeadlessOptions {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub providers: Option<BTreeMap<String, ProviderConnectionOverride>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<AetherSettings>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings_file: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_config: Option<McpConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<OutputFormat>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verbose: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub events: Option<Vec<CliEventKind>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_context: Option<AgentTraceContext>,
 }
 
@@ -146,75 +133,89 @@ pub struct HeadlessArgs {
     pub events: Vec<CliEventKind>,
 }
 
+struct HeadlessInputs {
+    prompt: String,
+    cwd: PathBuf,
+    settings_source: SettingsSourceArgs,
+    provider_connections: ProviderConnectionOverrides,
+    agent: Option<String>,
+    model: Option<String>,
+    mcp_config: McpConfig,
+    system_prompt: Option<String>,
+    output: OutputFormat,
+    verbose: bool,
+    events: Vec<CliEventKind>,
+    trace_context: Option<AgentTraceContext>,
+}
+
 impl RunConfig {
     fn from_args(args: HeadlessArgs) -> Result<Self, CliError> {
-        if let Some(json) = args.options_json {
-            return Self::from_options(serde_json::from_str(&json).map_err(CliError::InvalidOptionsJson)?);
+        if let Some(json) = &args.options_json {
+            return Self::from_options(serde_json::from_str(json).map_err(CliError::InvalidOptionsJson)?);
         }
 
         let prompt = resolve_prompt(&args)?;
         let cwd = args.cwd.canonicalize().map_err(CliError::IoError)?;
-        let settings = args.settings_source.load_settings(&cwd)?;
-        let provider_connections = args.provider_connection.clone().into_overrides();
-        let oauth_credential_store = oauth_credential_store_from_config(settings.credentials_store.clone())?;
-        let telemetry = settings.telemetry.clone();
-        let selection = match (args.agent, args.model) {
-            (Some(agent), None) => InitialSessionSelection::Agent(agent),
-            (None, Some(model)) => InitialSessionSelection::Model { model, reasoning_effort: None },
-            (None, None) => InitialSessionSelection::Default,
-            (Some(_), Some(_)) => {
-                return Err(CliError::ConflictingArgs("Cannot specify both --agent and --model".to_string()));
-            }
-        };
-        let resolved = resolve_agent_from_settings(&cwd, settings, provider_connections, &selection)?;
         let mcp_config = args.mcp_config.load(&cwd)?;
-
-        Ok(Self {
+        HeadlessInputs {
             prompt,
             cwd,
+            settings_source: args.settings_source,
+            provider_connections: args.provider_connection.into_overrides(),
+            agent: args.agent,
+            model: args.model,
             mcp_config,
-            spec: resolved.spec,
-            agent_catalog: resolved.catalog,
             system_prompt: args.system_prompt,
             output: args.output,
             verbose: args.verbose,
             events: args.events,
-            oauth_credential_store,
-            telemetry,
             trace_context: None,
-        })
+        }
+        .resolve()
     }
 
     fn from_options(options: HeadlessOptions) -> Result<Self, CliError> {
         let prompt = options.prompt.ok_or(CliError::NoPrompt)?;
         let cwd = options.cwd.unwrap_or_else(|| PathBuf::from(".")).canonicalize().map_err(CliError::IoError)?;
-        let settings_source = SettingsSourceArgs::from_json_options(options.settings, options.settings_file)?;
-        let settings = settings_source.load_settings(&cwd)?;
-        let provider_connections = ProviderConnectionOverrides::new(options.providers.unwrap_or_default());
-        let oauth_credential_store = oauth_credential_store_from_config(settings.credentials_store.clone())?;
-        let telemetry = settings.telemetry.clone();
-        let selection = match (options.agent, options.model) {
-            (Some(agent), None) => InitialSessionSelection::Agent(agent),
-            (None, Some(model)) => InitialSessionSelection::Model { model, reasoning_effort: None },
-            (None, None) => InitialSessionSelection::Default,
-            (Some(_), Some(_)) => {
-                return Err(CliError::ConflictingArgs("Cannot specify both --agent and --model".to_string()));
-            }
-        };
-        let resolved = resolve_agent_from_settings(&cwd, settings, provider_connections, &selection)?;
-        Ok(Self {
+        HeadlessInputs {
             prompt,
             cwd,
+            settings_source: SettingsSourceArgs::from_json_options(options.settings, options.settings_file)?,
+            provider_connections: ProviderConnectionOverrides::new(options.providers.unwrap_or_default()),
+            agent: options.agent,
+            model: options.model,
             mcp_config: options.mcp_config.unwrap_or_default(),
-            spec: resolved.spec,
-            agent_catalog: resolved.catalog,
             system_prompt: options.system_prompt,
             output: options.output.unwrap_or(OutputFormat::Text),
             verbose: options.verbose.unwrap_or(false),
             events: options.events.unwrap_or_default(),
+            trace_context: options.trace_context,
+        }
+        .resolve()
+    }
+}
+
+impl HeadlessInputs {
+    fn resolve(self) -> Result<RunConfig, CliError> {
+        let settings = self.settings_source.load_settings(&self.cwd)?;
+        let oauth_credential_store = oauth_credential_store_from_config(settings.credentials_store.clone())?;
+        let telemetry = settings.telemetry.clone();
+        let selection = InitialSessionSelection::from_flags(self.agent, self.model, None)?;
+        let resolved = resolve_agent_from_settings(&self.cwd, settings, self.provider_connections, &selection)?;
+
+        Ok(RunConfig {
+            prompt: self.prompt,
+            cwd: self.cwd,
+            mcp_config: self.mcp_config,
+            spec: resolved.spec,
+            agent_catalog: resolved.catalog,
+            system_prompt: self.system_prompt,
+            output: self.output,
+            verbose: self.verbose,
+            events: self.events,
             oauth_credential_store,
             telemetry,
-            trace_context: options.trace_context,
+            trace_context: self.trace_context,
         })
     }
 }

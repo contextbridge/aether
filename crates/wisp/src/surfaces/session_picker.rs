@@ -1,5 +1,6 @@
 use crate::renderer::DrawContext;
-use crate::surfaces::input::{Nav, SessionPickerOutput, UiEvent, one};
+use crate::surfaces::input::{UiOutput, one};
+use crate::view::input::{Nav, UiEvent};
 use crate::theme::Theme;
 use crate::view::filterable_list::FilterableList;
 use crate::view::wrap::truncate_to_width;
@@ -59,7 +60,7 @@ impl SessionPicker {
 
     /// Marks the selected session's preview as in-flight and returns the request
     /// for it, or nothing when it is already loading or cached.
-    fn preview_request(&mut self) -> Vec<SessionPickerOutput> {
+    fn preview_request(&mut self) -> Vec<UiOutput> {
         if !self.preview_enabled {
             return Vec::new();
         }
@@ -70,7 +71,7 @@ impl SessionPicker {
             return Vec::new();
         }
         self.previews.insert(session_id.clone(), PreviewState::Loading);
-        vec![SessionPickerOutput::Preview(session_id)]
+        vec![UiOutput::PreviewSession(session_id)]
     }
 
     fn render_list(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
@@ -148,18 +149,17 @@ impl SessionPicker {
 }
 
 impl SessionPicker {
-    #[allow(clippy::needless_pass_by_value)]
-    pub(crate) fn on_ui_event(&mut self, event: UiEvent) -> Vec<SessionPickerOutput> {
-        match self.sessions.on_nav_event(&event) {
-            Nav::Close => vec![SessionPickerOutput::Close],
+    pub(crate) fn on_ui_event(&mut self, event: &UiEvent) -> Vec<UiOutput> {
+        match self.sessions.on_nav_event(event) {
+            Nav::Close => vec![UiOutput::Close],
             Nav::Activate => self.activate(),
-            Nav::Moved => self.preview_request(),
-            Nav::Clicked | Nav::Unhandled => Vec::new(),
+            Nav::Moved | Nav::Clicked => self.preview_request(),
+            Nav::Unhandled => Vec::new(),
         }
     }
 
-    fn activate(&mut self) -> Vec<SessionPickerOutput> {
-        one(self.sessions.selected_entry().map(|session| SessionPickerOutput::Resume {
+    fn activate(&mut self) -> Vec<UiOutput> {
+        one(self.sessions.selected_entry().map(|session| UiOutput::ResumeSession {
             session_id: SessionId::new(session.session_id.0.to_string()),
             cwd: session.cwd.0.clone(),
         }))

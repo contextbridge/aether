@@ -16,5 +16,6 @@ pub use log::{SessionLine, SessionLog, SessionLogEntry};
 pub use model::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent, last_agent_from_events};
 pub use store::{
     DiscoveredSessionFile, FileFingerprint, ScanLimits, SessionStore, SessionSummary, discover_session_files,
+    session_index_path, sessions_dir,
 };
 pub use transcript::{context_from_events, conversation_messages_from_events};

@@ -33,12 +33,10 @@ bedrock = [
     "dep:aws-sdk-bedrockruntime",
     "dep:aws-smithy-types",
     "dep:base64",
-    "dep:time",
 ]
 codex = ["dep:aether-auth", "dep:oauth2", "dep:base64", "dep:url"]
 
 [dependencies]
-async-openai = { workspace = true, features = ["middleware"] }
 async-stream = { workspace = true }
 aws-config = { workspace = true, optional = true }
 aws-credential-types = { workspace = true, optional = true }
@@ -50,15 +48,12 @@ eventsource-stream = { workspace = true }
 reqwest = { workspace = true }
 futures = { workspace = true }
 thiserror = { workspace = true }
-time = { workspace = true, optional = true }
 uuid = { workspace = true }
 
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "net", "time"] }
 tokio-stream = { workspace = true }
-tower = { workspace = true, features = ["util"] }
 
 schemars = { workspace = true }
-secrecy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
@@ -78,7 +73,6 @@ llm-codegen = { package = "aether-llm-codegen", path = "../llm-codegen", version
 aether-doctest = { path = "../doctest" }
 axum = { workspace = true }
 http = { workspace = true }
-tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber = { workspace = true }
 

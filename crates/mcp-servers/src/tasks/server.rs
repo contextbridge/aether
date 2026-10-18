@@ -2,22 +2,21 @@ use crate::server_config;
 use clap::Parser;
 use rmcp::{
     ServerHandler,
-    handler::server::{
-        router::tool::ToolRouter,
-        wrapper::{Json, Parameters},
-    },
+    handler::server::{router::tool::ToolRouter, tool::schema_for_output, wrapper::Parameters},
     model::{ServerCapabilities, ServerConfig},
     tool, tool_handler, tool_router,
 };
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
+use utils::display_meta::ToolDisplayMeta;
 
 use crate::{
+    Displayed,
     tasks::{
-        TaskCreateInput, TaskCreateOutput, TaskGetInput, TaskGetOutput, TaskListInput, TaskListOutput, TaskStore,
-        TaskStoreError, TaskUpdateInput, TaskUpdateOutput, execute_task_create, execute_task_get, execute_task_list,
-        execute_task_update,
+        TaskCreateInput, TaskCreateOutput, TaskGetInput, TaskGetOutput, TaskListInput, TaskListOutput, TaskStatus,
+        TaskStore, TaskStoreError, TaskUpdateInput, TaskUpdateOutput, execute_task_create, execute_task_get,
+        execute_task_list, execute_task_update, tools::common::task_result_meta,
     },
     workspace_paths::resolve_path,
 };
@@ -53,7 +52,10 @@ impl TasksMcp {
     /// is dropped and outstanding operations finish. Use [`Self::new_persistent`]
     /// for cross-session storage.
     pub fn new() -> Self {
-        let temp_dir = TempDir::with_prefix("aether-tasks-").expect("failed to create temp dir for task storage");
+        Self::new_session(TempDir::with_prefix("aether-tasks-").expect("failed to create temp dir for task storage"))
+    }
+
+    pub fn new_session(temp_dir: TempDir) -> Self {
         let task_path = temp_dir.path().to_path_buf();
         Self {
             storage: Arc::new(TaskStorage { store: Mutex::new(TaskStore::new(task_path)), _temp_dir: Some(temp_dir) }),
@@ -82,18 +84,6 @@ impl TasksMcp {
             None => Self::new(),
         }
     }
-
-    #[cfg(test)]
-    #[allow(clippy::used_underscore_binding)]
-    fn is_session_scoped(&self) -> bool {
-        self.storage._temp_dir.is_some()
-    }
-
-    #[cfg(test)]
-    #[allow(clippy::used_underscore_binding)]
-    fn temp_path(&self) -> Option<PathBuf> {
-        self.storage._temp_dir.as_ref().map(|d| d.path().to_path_buf())
-    }
 }
 
 #[allow(clippy::unused_async_trait_impl)]
@@ -111,47 +101,72 @@ impl ServerHandler for TasksMcp {
 #[tool_router]
 impl TasksMcp {
     #[doc = include_str!("./tools/create/description.md")]
-    #[tool(annotations(
-        read_only_hint = false,
-        destructive_hint = false,
-        idempotent_hint = false,
-        open_world_hint = false
-    ))]
+    #[tool(
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<TaskCreateOutput>()
+    )]
     pub async fn task_create(
         &self,
-        request: Parameters<TaskCreateInput>,
-    ) -> Result<Json<TaskCreateOutput>, TaskStoreError> {
-        let Parameters(input) = request;
-        self.with_store(move |store| execute_task_create(&input, store)).await.map(Json)
+        Parameters(input): Parameters<TaskCreateInput>,
+    ) -> Result<Displayed<TaskCreateOutput>, TaskStoreError> {
+        self.with_store(move |store| {
+            let output = execute_task_create(&input, store)?;
+            let meta = task_result_meta(store, &output.task.title);
+            Ok(Displayed::new(output, meta))
+        })
+        .await
     }
 
     #[doc = include_str!("./tools/update/description.md")]
-    #[tool(annotations(
-        read_only_hint = false,
-        destructive_hint = true,
-        idempotent_hint = false,
-        open_world_hint = false
-    ))]
+    #[tool(
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<TaskUpdateOutput>()
+    )]
     pub async fn task_update(
         &self,
-        request: Parameters<TaskUpdateInput>,
-    ) -> Result<Json<TaskUpdateOutput>, TaskStoreError> {
-        let Parameters(input) = request;
-        self.with_store(move |store| execute_task_update(input, store)).await.map(Json)
+        Parameters(input): Parameters<TaskUpdateInput>,
+    ) -> Result<Displayed<TaskUpdateOutput>, TaskStoreError> {
+        self.with_store(move |store| {
+            let output = execute_task_update(input, store)?;
+            let meta = task_result_meta(store, &output.task.title);
+            Ok(Displayed::new(output, meta))
+        })
+        .await
     }
 
     #[doc = include_str!("./tools/list/description.md")]
-    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
-    pub async fn task_list(&self, request: Parameters<TaskListInput>) -> Result<Json<TaskListOutput>, TaskStoreError> {
-        let Parameters(input) = request;
-        self.with_store(move |store| Ok(execute_task_list(&input, store))).await.map(Json)
+    #[tool(
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<TaskListOutput>()
+    )]
+    pub async fn task_list(
+        &self,
+        Parameters(input): Parameters<TaskListInput>,
+    ) -> Result<Displayed<TaskListOutput>, TaskStoreError> {
+        self.with_store(move |store| {
+            let output = execute_task_list(&input, store);
+            let done = output.tasks.iter().filter(|task| task.status == TaskStatus::Completed).count();
+            let meta = ToolDisplayMeta::new("Todo", format!("{done}/{} tasks", output.tasks.len()));
+            Ok(Displayed::new(output, meta))
+        })
+        .await
     }
 
     #[doc = include_str!("./tools/get/description.md")]
-    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
-    pub async fn task_get(&self, request: Parameters<TaskGetInput>) -> Result<Json<TaskGetOutput>, TaskStoreError> {
-        let Parameters(input) = request;
-        self.with_store(move |store| execute_task_get(input, store)).await.map(Json)
+    #[tool(
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<TaskGetOutput>()
+    )]
+    pub async fn task_get(
+        &self,
+        Parameters(input): Parameters<TaskGetInput>,
+    ) -> Result<Displayed<TaskGetOutput>, TaskStoreError> {
+        self.with_store(move |store| {
+            let output = execute_task_get(input, store)?;
+            let meta = ToolDisplayMeta::new("Todo", output.task.title.clone());
+            Ok(Displayed::new(output, meta))
+        })
+        .await
     }
 }
 
@@ -180,37 +195,82 @@ struct TaskStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tasks::TaskId;
+    use std::fs;
 
-    #[test]
-    fn test_new_is_session_scoped() {
-        let server = TasksMcp::new();
-        assert!(server.is_session_scoped());
-        let temp_path = server.temp_path().unwrap();
-        assert!(temp_path.exists());
+    #[tokio::test]
+    async fn session_storage_is_removed_on_drop() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().to_path_buf();
+        let server = TaskServerBuilder::default().session_directory(directory).build();
+        let id = create_task(&server).await;
+        assert!(path.join("active").join(id.filename()).exists());
 
         drop(server);
-        assert!(!temp_path.exists(), "temp dir should be cleaned up on drop");
+        assert!(!path.exists(), "owned session directory should be cleaned up on drop");
     }
 
-    #[test]
-    fn test_new_persistent_uses_provided_dir() {
-        let temp = TempDir::new().unwrap();
-        let server = TasksMcp::new_persistent(temp.path().to_path_buf());
-        assert!(!server.is_session_scoped());
+    #[tokio::test]
+    async fn from_args_without_dir_leaves_base_dir_untouched() {
+        let base = TempDir::new().unwrap();
+        let server = TasksMcp::from_args(TasksMcpArgs::try_parse_from(Vec::<String>::new()).unwrap(), base.path());
+
+        create_task(&server).await;
+        assert_eq!(fs::read_dir(base.path()).unwrap().count(), 0);
     }
 
-    #[test]
-    fn test_from_args_with_dir_is_persistent() {
-        let args = TasksMcpArgs::try_parse_from(["--dir", "tasks"]).unwrap();
-        let server = TasksMcp::from_args(args, Path::new("/workspace"));
+    #[tokio::test]
+    async fn from_args_with_dir_persists_across_servers() {
+        let base = TempDir::new().unwrap();
+        let args = || TasksMcpArgs::try_parse_from(["--dir", "tasks"]).unwrap();
+        let id = create_task(&TasksMcp::from_args(args(), base.path())).await;
 
-        assert!(!server.is_session_scoped());
+        assert!(base.path().join("tasks/.aether-tasks/active").join(id.filename()).exists());
+        let reopened = TasksMcp::from_args(args(), base.path());
+        let listed = reopened.task_list(Parameters(TaskListInput::default())).await.unwrap();
+        assert_eq!(listed.output.tasks.len(), 1);
     }
 
-    #[test]
-    fn test_from_args_no_dir_is_session_scoped() {
-        let server =
-            TasksMcp::from_args(TasksMcpArgs::try_parse_from(Vec::<String>::new()).unwrap(), Path::new("/workspace"));
-        assert!(server.is_session_scoped());
+    #[tokio::test]
+    async fn plan_keeps_every_task_in_id_order_as_tasks_are_added() {
+        let server = TaskServerBuilder::default().build();
+        let root = create_task(&server).await;
+        let mut expected = vec!["Task".to_string()];
+
+        for n in 1..=11 {
+            let title = format!("Step {n}");
+            let input = TaskCreateInput { parent_id: Some(root.to_string()), ..task_input(&title) };
+            let created = server.task_create(Parameters(input)).await.unwrap();
+            expected.push(title);
+
+            let plan = created.meta.and_then(|meta| meta.plan).expect("task_create reports the plan");
+            let titles: Vec<_> = plan.entries.into_iter().map(|entry| entry.content).collect();
+            assert_eq!(titles, expected);
+        }
+    }
+
+    #[derive(Default)]
+    struct TaskServerBuilder {
+        session_directory: Option<TempDir>,
+    }
+
+    impl TaskServerBuilder {
+        fn session_directory(mut self, directory: TempDir) -> Self {
+            self.session_directory = Some(directory);
+            self
+        }
+
+        fn build(self) -> TasksMcp {
+            self.session_directory.map_or_else(TasksMcp::new, TasksMcp::new_session)
+        }
+    }
+
+    async fn create_task(server: &TasksMcp) -> TaskId {
+        let created = server.task_create(Parameters(task_input("Task"))).await.unwrap();
+        TaskId::from(created.output.task.id)
+    }
+
+    fn task_input(title: &str) -> TaskCreateInput {
+        TaskCreateInput { title: title.into(), description: None, parent_id: None, assignee: None, deps: None }
     }
 }

@@ -1,6 +1,6 @@
-Messages sent from an [`LspClient`](crate::LspClient) to the [`LspDaemon`](crate::LspDaemon).
+Messages sent from an [`LspClient`](crate::LspClient) to the daemon.
 
-The daemon protocol uses length-prefixed JSON frames over a Unix domain socket. Each frame is a 4-byte big-endian length prefix followed by a JSON-serialized `DaemonRequest` or [`DaemonResponse`]. The maximum frame size is [`MAX_MESSAGE_SIZE`] (16 MB).
+The daemon protocol uses length-prefixed JSON frames over a Unix domain socket. Each frame is a 4-byte big-endian length prefix followed by a JSON-serialized `DaemonRequest` or [`DaemonResponse`]. The protocol is private to this crate: [`PROTOCOL_VERSION`] is part of every socket name, so a client never talks to a daemon built from a different version.
 
 # Request lifecycle
 
@@ -8,30 +8,15 @@ The daemon protocol uses length-prefixed JSON frames over a Unix domain socket. 
 Client                          Daemon
   ── Initialize ──────────────►
   ◄─────────────── Initialized ─
-  ── LspCall ─────────────────►
-  ◄──────────────── LspResult ──
-  ── GetDiagnostics ──────────►
-  ◄──────────────── LspResult ──
+  ── Call { id: 1, Lsp } ─────►
+  ── Call { id: 2, Diagnostics }►
+  ◄────────── Reply { id: 1 } ──
+  ◄────────── Reply { id: 2 } ──
   ── Disconnect ──────────────►
 ```
 
 # Variants
 
-- **`Initialize`** -- Handshake that specifies the workspace root and language. Must be the first message. Contains an [`InitializeRequest`].
-- **`LspCall`** -- Forward an LSP method call to the language server. Each call carries a `client_id` for response correlation.
-- **`GetDiagnostics`** -- Retrieve cached diagnostics. Pass `uri: None` to get diagnostics for all files in the workspace.
-- **`QueueDiagnosticRefresh`** -- Ask the daemon to re-check a file and update its diagnostics cache.
+- **`Initialize`** -- Handshake that binds the connection to a workspace root and language. Must be the first message. The daemon answers with `Initialized` or `InitializeFailed`.
+- **`Call`** -- A [`DaemonCall`] tagged with a client-chosen `id`. Calls on one connection run concurrently and their replies can arrive in any order, so a diagnostics wait never blocks a hover.
 - **`Disconnect`** -- Graceful client disconnect.
-- **`Ping`** -- Keepalive check; the daemon responds with [`DaemonResponse::Pong`].
-
-# Response types
-
-[`DaemonResponse`] variants:
-- **`Initialized`** -- The handshake succeeded.
-- **`Pong`** -- Reply to `Ping`.
-- **`LspResult`** -- The result of an `LspCall` or `GetDiagnostics`, containing either a JSON `Value` or an [`LspErrorResponse`].
-- **`Error`** -- A [`ProtocolError`] for protocol-level failures.
-
-# Helper function
-
-[`extract_document_uri`] extracts the target file URI from an LSP request's params, used by the daemon to auto-open documents before forwarding requests.

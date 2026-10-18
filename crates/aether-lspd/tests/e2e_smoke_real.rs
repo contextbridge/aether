@@ -1,21 +1,17 @@
 mod common;
 
 use aether_lspd::LanguageId;
-use common::{DaemonHarness, cargo_project, file_uri, hover_text};
+use common::{cargo_project, file_uri, hover_text, start_daemon};
 
 #[tokio::test]
 #[ignore = "requires rust-analyzer on PATH"]
 async fn rust_analyzer_smoke_hover() {
-    let project = cargo_project("smoke_ra");
-    let content = "fn main() { let value = 1; }\n";
-    project.write("src/main.rs", content);
-
-    let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
-    let client = harness.connect().await.expect("Failed to connect client");
+    let project = cargo_project("smoke_ra").file("src/main.rs", "fn main() { let value = 1; }\n");
+    let (_daemon, client) = start_daemon(project.root(), LanguageId::Rust).await;
     let uri = file_uri(&project.path("src/main.rs"));
 
-    let hover = hover_text(client.hover(uri, 0, 0).await.expect("Hover failed"));
-    assert_ne!(hover, "");
+    let hover = client.hover(uri, 0, 16).await.expect("Hover failed");
 
-    harness.kill().await.expect("Failed to kill daemon");
+    let text = hover_text(hover);
+    assert!(text.contains("i32"), "expected the inferred type in hover: {text}");
 }

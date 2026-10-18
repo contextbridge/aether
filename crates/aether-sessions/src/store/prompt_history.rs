@@ -2,13 +2,15 @@ use crate::SessionMeta;
 use acp_utils::notifications::{PromptSearchResponse, PromptSearchResult};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader, Write};
+use std::fs::File;
+use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use tracing::warn;
+use utils::fs::{append_line, write_atomic};
 
 const PROMPT_HISTORY_MAX_ENTRIES: usize = 100;
+const PROMPT_HISTORY_COMPACT_AFTER_LINES: usize = 2 * PROMPT_HISTORY_MAX_ENTRIES;
 const PROMPT_SEARCH_DEFAULT_LIMIT: usize = 20;
 const PROMPT_SEARCH_MAX_LIMIT: usize = 50;
 
@@ -25,52 +27,45 @@ impl PromptHistoryIndex {
     pub(super) fn append_prompt(&self, meta: &SessionMeta, prompt: String) -> io::Result<()> {
         let entry = PromptHistoryEntry::new(meta, prompt);
         let mut state = self.lock_state();
-        let entries = self.ensure_loaded(&mut state)?;
+        let history = self.ensure_loaded(&mut state)?;
 
-        entries.push_back(entry);
-        if entries.len() > PROMPT_HISTORY_MAX_ENTRIES {
-            entries.pop_front();
-            self.rewrite_file(entries.iter())
-        } else {
-            self.append_to_file(entries.back().expect("just pushed"))
+        append_line(&self.path, &entry_line(&entry)?)?;
+        history.file_lines += 1;
+        history.entries.push_back(entry);
+        if history.entries.len() > PROMPT_HISTORY_MAX_ENTRIES {
+            history.entries.pop_front();
         }
+        self.compact_if_full(history)
     }
 
     pub(super) fn rebuild<I: IntoIterator<Item = (SessionMeta, String)>>(&self, entries: I) -> io::Result<()> {
         let mut state = self.lock_state();
-        let entries: VecDeque<_> =
-            entries.into_iter().map(|(meta, prompt)| PromptHistoryEntry::new(&meta, prompt)).collect();
-        let entries = entries
-            .into_iter()
-            .rev()
-            .take(PROMPT_HISTORY_MAX_ENTRIES)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<VecDeque<_>>();
-        self.rewrite_file(entries.iter())?;
-        *state = State::Loaded(entries);
+        let entries =
+            keep_newest(entries.into_iter().map(|(meta, prompt)| PromptHistoryEntry::new(&meta, prompt)).collect());
+        let mut history = LoadedHistory { entries, file_lines: 0 };
+        self.rewrite_file(&mut history)?;
+        *state = State::Loaded(history);
         Ok(())
     }
 
     pub(super) fn relocate_session(&self, session_id: &str, new_cwd: &Path) -> io::Result<()> {
         let mut state = self.lock_state();
-        let entries = self.ensure_loaded(&mut state)?;
+        let history = self.ensure_loaded(&mut state)?;
 
         let mut changed = false;
-        for entry in entries.iter_mut().filter(|entry| entry.session_id == session_id) {
+        for entry in history.entries.iter_mut().filter(|entry| entry.session_id == session_id) {
             entry.cwd = new_cwd.to_path_buf();
             changed = true;
         }
 
-        if changed { self.rewrite_file(entries.iter()) } else { Ok(()) }
+        if changed { self.rewrite_file(history) } else { Ok(()) }
     }
 
     pub(super) fn search(&self, query: &str, limit: Option<usize>) -> io::Result<PromptSearchResponse> {
         let query = query.trim();
         let limit = prompt_search_limit(limit);
         let mut state = self.lock_state();
-        let entries = self.ensure_loaded(&mut state)?;
+        let entries = &self.ensure_loaded(&mut state)?.entries;
 
         let response = PromptSearchResponse { query: query.to_string(), results: Vec::new(), truncated: false };
         if query.is_empty() {
@@ -90,23 +85,22 @@ impl PromptHistoryIndex {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn ensure_loaded<'a>(&self, state: &'a mut State) -> io::Result<&'a mut VecDeque<PromptHistoryEntry>> {
+    fn ensure_loaded<'a>(&self, state: &'a mut State) -> io::Result<&'a mut LoadedHistory> {
         if let State::Unloaded = state {
-            let (entries, needs_rewrite) = self.load_history()?;
-            *state = State::Loaded(entries);
-            if needs_rewrite {
-                let State::Loaded(entries) = state else { unreachable!() };
-                self.rewrite_file(entries.iter())?;
-            }
+            let mut history = self.load_history()?;
+            self.compact_if_full(&mut history)?;
+            *state = State::Loaded(history);
         }
-        let State::Loaded(entries) = state else { unreachable!() };
-        Ok(entries)
+        let State::Loaded(history) = state else { unreachable!() };
+        Ok(history)
     }
 
-    fn load_history(&self) -> io::Result<(VecDeque<PromptHistoryEntry>, bool)> {
+    fn load_history(&self) -> io::Result<LoadedHistory> {
         let file = match File::open(&self.path) {
             Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok((VecDeque::new(), false)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(LoadedHistory { entries: VecDeque::new(), file_lines: 0 });
+            }
             Err(error) => return Err(error),
         };
 
@@ -116,41 +110,33 @@ impl PromptHistoryIndex {
             .filter_map(|line| parse_prompt_history_line(&line))
             .collect();
 
-        let needs_rewrite = parsed.len() > PROMPT_HISTORY_MAX_ENTRIES;
-        let skip = parsed.len().saturating_sub(PROMPT_HISTORY_MAX_ENTRIES);
-        Ok((parsed.into_iter().skip(skip).collect(), needs_rewrite))
+        Ok(LoadedHistory { file_lines: parsed.len(), entries: keep_newest(parsed) })
     }
 
-    fn append_to_file(&self, entry: &PromptHistoryEntry) -> io::Result<()> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let mut file = OpenOptions::new().create(true).append(true).open(&self.path)?;
-        let line = serde_json::to_string(entry)
-            .map_err(|error| io::Error::other(format!("failed to serialize prompt history entry: {error}")))?;
-        writeln!(file, "{line}")
+    fn compact_if_full(&self, history: &mut LoadedHistory) -> io::Result<()> {
+        if history.file_lines > PROMPT_HISTORY_COMPACT_AFTER_LINES { self.rewrite_file(history) } else { Ok(()) }
     }
 
-    fn rewrite_file<'a>(&self, entries: impl IntoIterator<Item = &'a PromptHistoryEntry>) -> io::Result<()> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)?;
+    fn rewrite_file(&self, history: &mut LoadedHistory) -> io::Result<()> {
+        let mut content = String::new();
+        for entry in &history.entries {
+            content.push_str(&entry_line(entry)?);
+            content.push('\n');
         }
-        let tmp_path = self.path.with_extension("jsonl.tmp");
-        {
-            let mut file = File::create(&tmp_path)?;
-            for entry in entries {
-                let line = serde_json::to_string(entry)
-                    .map_err(|error| io::Error::other(format!("failed to serialize prompt history entry: {error}")))?;
-                writeln!(file, "{line}")?;
-            }
-        }
-        fs::rename(tmp_path, &self.path)
+        write_atomic(&self.path, content.as_bytes())?;
+        history.file_lines = history.entries.len();
+        Ok(())
     }
 }
 
 enum State {
     Unloaded,
-    Loaded(VecDeque<PromptHistoryEntry>),
+    Loaded(LoadedHistory),
+}
+
+struct LoadedHistory {
+    entries: VecDeque<PromptHistoryEntry>,
+    file_lines: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -228,4 +214,14 @@ fn find_case_insensitive(prompt: &str, query: &str) -> Option<(usize, usize)> {
         lower_offset += ch.to_lowercase().map(char::len_utf8).sum::<usize>();
     }
     orig_start.map(|start| (start, prompt.len()))
+}
+
+fn keep_newest<T>(entries: Vec<T>) -> VecDeque<T> {
+    let skip = entries.len().saturating_sub(PROMPT_HISTORY_MAX_ENTRIES);
+    entries.into_iter().skip(skip).collect()
+}
+
+fn entry_line(entry: &PromptHistoryEntry) -> io::Result<String> {
+    serde_json::to_string(entry)
+        .map_err(|error| io::Error::other(format!("failed to serialize prompt history entry: {error}")))
 }

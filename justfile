@@ -130,10 +130,6 @@ sweep-installed:
 build-sandbox TAG="aether-sandbox:latest":
     docker build -t {{TAG}} -f crates/internal-evals/examples/Dockerfile .
 
-# Run wisp + aether agent inside the sandbox
-run-sandbox:
-    cargo run -p aether-wisp -- -a 'cargo run -p aether-agent-cli -- --sandbox-image aether-sandbox:latest acp'
-
 # Install aether-cli and wisp binaries locally
 install:
     cargo install --path crates/aether-cli --force

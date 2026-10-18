@@ -41,7 +41,7 @@ coding = [
     "dep:dom_smoothie",
     "dep:url",
 ]
-skills = ["dep:aether-project"]
+skills = ["dep:aether-project", "dep:regex"]
 tasks = [
     "dep:chrono",
     "dep:tempfile",
@@ -84,6 +84,9 @@ axum = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
 tower-http = { workspace = true, optional = true, features = ["fs"] }
+
+# skills feature
+regex = { workspace = true, optional = true }
 
 # tasks feature
 tempfile = { workspace = true, optional = true }

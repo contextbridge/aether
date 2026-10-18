@@ -1,5 +1,4 @@
 use crate::attachment::{AttachmentOutcome, PromptAttachment};
-use crate::file_index::FileEntry;
 use crate::git_review::{ClientState, DiffReviewEvent, ServerMessage};
 use crate::request::RequestId;
 use crate::session::workspace_status::WorkspaceStatus;
@@ -119,7 +118,7 @@ pub enum CommandResult {
     SessionPreviewLoaded { session_id: String, result: Result<SessionPreviewResponse, String> },
     WorkspacesListed(Result<WorkspaceListResponse, String>),
     WorkspaceMoved(Result<WorkspaceMoveResponse, String>),
-    FilesIndexed { request_id: RequestId, files: Vec<FileEntry> },
+    FilesIndexed { request_id: RequestId, files: Vec<PromptAttachment> },
     GitReview(Arc<ClientState>),
     GitReviewAction(Result<(), String>),
     SubmissionPrepared(AttachmentOutcome),

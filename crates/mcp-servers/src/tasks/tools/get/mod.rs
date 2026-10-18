@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::tasks::task_store::{TaskStore, TaskStoreError};
 use crate::tasks::types::{Task, TaskId};
-use utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 
 /// Input for the `task_get` tool
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -17,12 +16,7 @@ pub struct TaskGetInput {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskGetOutput {
-    pub status: String,
     pub task: Task,
-    pub message: String,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub meta: Option<ToolResultMeta>,
 }
 
 /// Get a task by ID
@@ -31,14 +25,7 @@ pub fn execute_task_get(input: TaskGetInput, store: &TaskStore) -> Result<TaskGe
 
     let task = store.get(&task_id).ok_or(TaskStoreError::NotFound { id: input.id })?;
 
-    let display_meta = ToolDisplayMeta::new("Todo", task.title.clone());
-
-    Ok(TaskGetOutput {
-        status: "success".to_string(),
-        message: format!("Retrieved task '{}'", task.title),
-        task: task.clone(),
-        meta: Some(display_meta.into()),
-    })
+    Ok(TaskGetOutput { task: task.clone() })
 }
 
 #[cfg(test)]
@@ -51,16 +38,15 @@ mod tests {
     fn test_get_root_task() {
         let mut tasks = TestTaskStore::new();
 
-        let created = tasks.store_mut().create_tree("Research topic", Some("Detailed description")).unwrap();
+        let description = TaskUpdate { description: Some("Detailed description".to_string()), ..Default::default() };
+        let created = tasks.store_mut().create(None, "Research topic", description).unwrap();
 
         let output = execute_task_get(TaskGetInput { id: created.id.to_string() }, tasks.store()).unwrap();
 
-        assert_eq!(output.status, "success");
         assert_eq!(output.task.id.to_string(), created.id.to_string());
         assert_eq!(output.task.title, "Research topic");
         assert_eq!(output.task.description, Some("Detailed description".to_string()));
         assert_eq!(output.task.status, TaskStatus::Pending);
-        assert!(output.message.contains("Retrieved task"));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 Error types for all coding tool operations.
 
-`CodingError` is the top-level enum returned by [`CodingTools`](crate::CodingTools) methods and the tools exposed by [`CodingMcp`](crate::CodingMcp). Each variant wraps a more specific error type.
+`CodingError` is the top-level enum returned by the tools exposed by [`CodingMcp`](crate::CodingMcp). Each variant wraps a more specific error type.
 
 # Variants
 

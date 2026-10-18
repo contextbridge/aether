@@ -51,7 +51,7 @@ async fn test_agent_builder_includes_mcp_instructions_in_system_prompt() -> Resu
         .run_with_context()
         .await?;
 
-    let contexts = result.captured_contexts.lock().unwrap();
+    let contexts = result.contexts;
     let first_message = contexts[0].messages().first().expect("expected at least one message");
     let ChatMessage::System { content, .. } = first_message else {
         panic!("Expected system message, got: {first_message:?}");
@@ -71,7 +71,7 @@ async fn test_agent_builder_works_without_mcp_instructions() -> Result<(), Box<d
         .run_with_context()
         .await?;
 
-    let contexts = result.captured_contexts.lock().unwrap();
+    let contexts = result.contexts;
     let first_message = contexts[0].messages().first().expect("expected at least one message");
     let ChatMessage::System { content, .. } = first_message else {
         panic!("Expected system message, got: {first_message:?}");

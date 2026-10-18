@@ -1,5 +1,7 @@
 use std::path::Path;
 
+const OWN_MODULE_PROVIDERS: [&str; 2] = ["codex", "amazon-bedrock"];
+
 fn main() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let models_json = manifest_dir.join("models.json");
@@ -16,31 +18,15 @@ fn main() {
 
     let docs_dir = Path::new(&out_dir).join("docs");
     std::fs::create_dir_all(&docs_dir).unwrap();
+    let mut generic =
+        String::from("Providers served by [`GenericProvider`], each described by a [`ProviderConfig`] constant.\n\n");
     for (provider_id, markdown) in &output.provider_docs {
-        std::fs::write(docs_dir.join(format!("{provider_id}.md")), markdown).unwrap();
-    }
-
-    // Combine OpenAI-compatible providers into a single module doc.
-    let mut combined = String::from(
-        "`OpenAI`-compatible LLM providers.\n\nShared infrastructure for providers whose APIs are compatible with the `OpenAI` chat completions format.\n\n",
-    );
-    for key in &output.openai_compatible_provider_ids {
-        if let Some(doc) = output.provider_docs.get(*key) {
-            combined.push_str(doc);
-            combined.push('\n');
+        if OWN_MODULE_PROVIDERS.contains(&provider_id.as_str()) {
+            std::fs::write(docs_dir.join(format!("{provider_id}.md")), markdown).unwrap();
+        } else {
+            generic.push_str(markdown);
+            generic.push('\n');
         }
     }
-    std::fs::write(docs_dir.join("openai_compatible.md"), combined).unwrap();
-
-    // Combine ollama + llamacpp into a single doc for the local module
-    let mut local = String::from(
-        "Local LLM providers.\n\nProviders that run models on the local machine without requiring API keys.\n\n",
-    );
-    for key in ["ollama", "llamacpp"] {
-        if let Some(doc) = output.provider_docs.get(key) {
-            local.push_str(doc);
-            local.push('\n');
-        }
-    }
-    std::fs::write(docs_dir.join("local.md"), local).unwrap();
+    std::fs::write(docs_dir.join("generic.md"), generic).unwrap();
 }

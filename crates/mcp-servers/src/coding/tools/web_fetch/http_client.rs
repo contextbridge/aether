@@ -44,11 +44,6 @@ pub struct WebFetchOutput {
     /// Author or byline if available
     #[serde(skip_serializing_if = "Option::is_none")]
     pub byline: Option<String>,
-
-    /// Display metadata for human-friendly rendering
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub meta: Option<utils::display_meta::ToolResultMeta>,
 }
 
 /// Response from an HTTP client fetch operation

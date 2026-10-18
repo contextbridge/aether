@@ -1,5 +1,5 @@
 use aether_cli::acp::testing::{AcpTestHarness, FakeAgentSwitchingSession};
-use agent_client_protocol::schema::v2::{AvailableCommand, AvailableCommandInput, PromptRequest, StopReason};
+use agent_client_protocol::schema::v2::{AvailableCommand, AvailableCommandInput, StopReason};
 use mcp_utils::gateway::ServerSpec;
 use mcp_utils::model::{Prompt, PromptArgument};
 use mcp_utils::testing::FakeMcpServer;
@@ -91,9 +91,8 @@ async fn commands_carry_the_prompt_description_and_argument_hint() {
 }
 
 async fn send(harness: &mut AcpTestHarness, session: &FakeAgentSwitchingSession, text: &str) {
-    let id = session.session_id().clone();
-    harness.client_cx.send_request(PromptRequest::new(id.clone(), vec![text.into()])).block_task().await.unwrap();
-    harness.expect_idle(&id, StopReason::EndTurn).await;
+    harness.prompt(session.session_id(), text).await.unwrap();
+    harness.expect_idle(session.session_id(), StopReason::EndTurn).await;
 }
 
 fn command<'a>(commands: &'a [AvailableCommand], name: &str) -> &'a AvailableCommand {

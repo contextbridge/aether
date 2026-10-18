@@ -4,7 +4,7 @@ use mcp_utils::client::{HeaderMap, Transport};
 use mcp_utils::gateway::ServerSpec;
 use std::path::Path;
 
-pub fn map_acp_mcp_servers(servers: Vec<McpServer>, cwd: &Path) -> Vec<ServerSpec> {
+pub(crate) fn map_acp_mcp_servers(servers: Vec<McpServer>, cwd: &Path) -> Vec<ServerSpec> {
     servers
         .into_iter()
         .filter_map(|s| {

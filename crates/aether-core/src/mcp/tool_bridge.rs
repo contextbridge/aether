@@ -32,12 +32,10 @@ pub(crate) fn convert_tool_result(
         return Err(ToolCallError::from_request(request, format!("Tool execution error: {message}")));
     }
 
-    let (result, result_meta) = match mcp_result.structured_content {
-        Some(mut value) => {
-            let result_meta = extract_result_meta(&mut value);
-            (encode_structured(&value), result_meta)
-        }
-        None => (content_text(&mcp_result.content, "No result"), None),
+    let result_meta = mcp_result.meta.and_then(|meta| serde_json::from_value(Value::Object(meta.0)).ok());
+    let result = match mcp_result.structured_content {
+        Some(value) => encode_structured(&value),
+        None => content_text(&mcp_result.content, "No result"),
     };
     let result = TOOL_RESULT_TRUNCATOR.truncate(result, spill_dir, &request.name);
 
@@ -125,33 +123,10 @@ fn binary_placeholder(mime_type: &str, base64: &str) -> String {
     format!("[{mime_type} content omitted, {} bytes of base64]", base64.len())
 }
 
-fn extract_result_meta(value: &mut serde_json::Value) -> Option<ToolResultMeta> {
-    let obj = value.as_object_mut()?;
-    let parsed: ToolResultMeta = {
-        let meta = obj.get("_meta")?.as_object()?;
-        serde_json::from_value(serde_json::Value::Object(meta.clone())).ok()?
-    };
-
-    let meta_empty = {
-        let meta = obj.get_mut("_meta")?.as_object_mut()?;
-        for key in ["display", "file_diff", "plan"] {
-            meta.remove(key);
-        }
-        meta.is_empty()
-    };
-
-    if meta_empty {
-        obj.remove("_meta");
-    }
-
-    Some(parsed)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use rmcp::model::CallToolResult as McpCallToolResult;
-    use serde::Serialize;
     use serde_json::json;
     use utils::display_meta::PlanMetaStatus;
 
@@ -169,71 +144,49 @@ mod tests {
         convert(mcp).unwrap()
     }
 
-    #[test]
-    fn test_extracts_and_strips_meta() {
-        let structured = json!({
-            "status": "success", "file_path": "/test/file.rs",
-            "_meta": { "display": { "title": "Read file", "value": "file.rs, 50 lines" } }
-        });
+    fn with_meta(structured: serde_json::Value, meta: serde_json::Value) -> McpCallToolResult {
         let mut mcp = McpCallToolResult::structured(structured);
-        mcp.content = vec![ContentBlock::text("plain text fallback")];
-        let (result, meta) = convert(mcp).unwrap();
-
-        assert!(!result.result.contains("_meta"));
-        assert!(result.result.contains("success"));
-        let rm = meta.expect("meta should be present");
-        assert_eq!(rm.display.title, "Read file");
-        assert_eq!(rm.display.value, "file.rs, 50 lines");
-        assert!(rm.file_diff.is_none());
+        mcp.meta = Some(serde_json::from_value(meta).unwrap());
+        mcp
     }
 
     #[test]
-    fn test_extracts_meta_with_file_diff() {
-        let (result, meta) = call_structured(json!({
-            "status": "success",
-            "_meta": {
+    fn display_metadata_comes_from_the_result_meta() {
+        let (result, meta) = convert(with_meta(
+            json!({ "status": "success", "file_path": "/test/file.rs" }),
+            json!({
                 "display": { "title": "Edit file", "value": "main.rs" },
-                "file_diff": { "path": "/tmp/main.rs", "old_text": "old content", "new_text": "new content" }
-            }
-        }));
-        assert!(!result.result.contains("_meta"));
-        let rm = meta.expect("meta should be present");
-        assert_eq!(rm.display.title, "Edit file");
-        let fd = rm.file_diff.expect("file_diff should be present");
-        assert_eq!(fd.path, "/tmp/main.rs");
-        assert_eq!(fd.old_text.as_deref(), Some("old content"));
-        assert_eq!(fd.new_text.as_deref(), Some("new content"));
+                "file_diff": { "path": "/tmp/main.rs", "old_text": "old content", "new_text": "new content" },
+                "plan": { "entries": [
+                    { "content": "Research AI agents", "status": "in_progress" },
+                    { "content": "Write tests", "status": "pending" }
+                ]},
+                "traceparent": "00-trace-span-01"
+            }),
+        ))
+        .unwrap();
+
+        assert_eq!(result.result, encode_structured(&json!({ "status": "success", "file_path": "/test/file.rs" })));
+        let meta = meta.expect("meta should be present");
+        assert_eq!(meta.display.title, "Edit file");
+        assert_eq!(meta.display.value, "main.rs");
+        let diff = meta.file_diff.expect("file_diff should be present");
+        assert_eq!(diff.path, "/tmp/main.rs");
+        assert_eq!(diff.old_text.as_deref(), Some("old content"));
+        assert_eq!(diff.new_text.as_deref(), Some("new content"));
+        let plan = meta.plan.expect("plan should be present");
+        assert_eq!(plan.entries[0].status, PlanMetaStatus::InProgress);
+        assert_eq!(plan.entries[1].status, PlanMetaStatus::Pending);
     }
 
     #[test]
-    fn test_extracts_known_meta_and_preserves_unknown_meta_keys() {
-        let (result, meta) = call_structured(json!({
-            "status": "success",
-            "_meta": {
-                "display": { "title": "Edit file", "value": "main.rs" },
-                "file_diff": { "path": "/tmp/main.rs", "old_text": "old", "new_text": "new" },
-                "trace_id": "trace-123", "duration_ms": 18
-            }
-        }));
-        let rm = meta.expect("meta should be present");
-        assert_eq!(rm.display.title, "Edit file");
-        assert!(rm.file_diff.is_some());
-        for absent in ["display:", "file_diff:"] {
-            assert!(!result.result.contains(absent));
+    fn result_meta_without_display_metadata_is_ignored() {
+        for meta in [json!({ "display": "not a valid ToolDisplayMeta" }), json!({ "traceparent": "00-trace-span-01" })]
+        {
+            let (result, display) = convert(with_meta(json!({ "status": "success" }), meta)).unwrap();
+            assert!(display.is_none());
+            assert!(result.result.contains("success"));
         }
-        for present in ["trace_id:", "trace-123", "duration_ms:", "18"] {
-            assert!(result.result.contains(present));
-        }
-    }
-
-    #[test]
-    fn test_malformed_meta_returns_none() {
-        let (result, meta) = call_structured(json!({
-            "status": "success",
-            "_meta": { "display": "not a valid ToolDisplayMeta" }
-        }));
-        assert!(meta.is_none());
-        assert!(result.result.contains("not a valid ToolDisplayMeta"));
     }
 
     #[test]
@@ -257,75 +210,6 @@ mod tests {
         let mcp = McpCallToolResult::success(vec![ContentBlock::text("first"), ContentBlock::text("second")]);
         let (result, _) = convert(mcp).unwrap();
         assert_eq!(result.result, "first\nsecond");
-    }
-
-    #[test]
-    fn test_extracts_meta_with_plan() {
-        let (result, meta) = call_structured(json!({
-            "status": "success",
-            "_meta": {
-                "display": { "title": "Todo", "value": "Research AI agents" },
-                "plan": { "entries": [
-                    { "content": "Research AI agents", "status": "in_progress" },
-                    { "content": "Write tests", "status": "pending" }
-                ]}
-            }
-        }));
-        assert!(!result.result.contains("_meta"));
-        let rm = meta.expect("meta should be present");
-        assert_eq!(rm.display.title, "Todo");
-        let plan = rm.plan.expect("plan should be present");
-        assert_eq!(plan.entries.len(), 2);
-        assert_eq!(plan.entries[0].content, "Research AI agents");
-        assert_eq!(plan.entries[0].status, PlanMetaStatus::InProgress);
-        assert_eq!(plan.entries[1].status, PlanMetaStatus::Pending);
-    }
-
-    /// Regression: verifies `#[serde(rename = "_meta")]` preserves the key under camelCase,
-    /// and that omitting the rename breaks extraction.
-    #[test]
-    fn test_meta_camel_case_serde_round_trip() {
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct GoodResult {
-            file_path: String,
-            total_lines: usize,
-            #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-            _meta: Option<serde_json::Value>,
-        }
-
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct BrokenResult {
-            file_path: String,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            _meta: Option<serde_json::Value>,
-        }
-
-        let display_meta = json!({
-            "display": { "title": "Read file", "value": "file.rs, 50 lines" }
-        });
-
-        let good = serde_json::to_value(&GoodResult {
-            file_path: "/test/file.rs".into(),
-            total_lines: 50,
-            _meta: Some(display_meta.clone()),
-        })
-        .unwrap();
-        assert!(good.get("_meta").is_some(), "expected `_meta` key, got: {good}");
-        let (stripped, meta) = call_structured(good);
-        let rm = meta.expect("meta should be extracted");
-        assert_eq!(rm.display.title, "Read file");
-        assert_eq!(rm.display.value, "file.rs, 50 lines");
-        assert!(!stripped.result.contains("_meta"));
-
-        let broken =
-            serde_json::to_value(&BrokenResult { file_path: "/test/file.rs".into(), _meta: Some(display_meta) })
-                .unwrap();
-        assert!(broken.get("_meta").is_none(), "should be mangled by camelCase");
-        assert!(broken.get("meta").is_some());
-        let (_, meta) = call_structured(broken);
-        assert!(meta.is_none(), "extraction should fail when _meta is mangled");
     }
 
     #[test]

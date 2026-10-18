@@ -1,6 +1,6 @@
 use super::InitScope;
 use super::harness::HarnessIntegration;
-use super::recommendations::{ProviderRecommendations, recommended_for_provider};
+use super::recommendations::{ModelWithReasoning, ProviderRecommendations, recommended_for_provider};
 use aether_core::mcp::{InMemoryServerConfig, InMemoryType, McpConfig, McpServerConfig};
 use aether_core::mcp::{ToolExposure, ToolFilter, ToolMatcher};
 use aether_project::{AetherSettings, AgentConfig, McpSourceSpec, PromptSource};
@@ -36,7 +36,7 @@ pub(crate) struct TemplateFile {
     pub body: &'static str,
 }
 
-pub fn supported_providers() -> impl Iterator<Item = Provider> {
+pub(super) fn supported_providers() -> impl Iterator<Item = Provider> {
     Provider::ALL.iter().copied().filter(|p| recommended_for_provider(*p).is_some())
 }
 
@@ -47,71 +47,57 @@ pub fn build_batteries_included_settings(
     scope: InitScope,
     harnesses: &[HarnessIntegration],
 ) -> AetherSettings {
-    let plan = build_batteries_included_plan_agent(display, model.clone(), reasoning_effort, harnesses);
-    let build = build_batteries_included_build_agent(display, model.clone(), reasoning_effort, harnesses);
-    let explore = build_batteries_included_explore_agent(model, reasoning_effort, scope, harnesses);
+    let choice = (model, reasoning_effort);
+    batteries_settings(display, [choice.clone(), choice.clone(), choice], scope, harnesses)
+}
 
+fn batteries_settings(
+    display: &str,
+    [plan, build, explore]: [ModelChoice; 3],
+    scope: InitScope,
+    harnesses: &[HarnessIntegration],
+) -> AetherSettings {
+    let plan_description = format!("{display} planner (may write plan artifacts and request review)");
     AetherSettings {
         prompts: batteries_prompts(scope, harnesses),
-        agents: vec![plan, build, explore],
+        agents: vec![
+            primary_agent("Plan", plan_description, plan, harnesses, plan_tools()),
+            primary_agent("Build", format!("{display} implementor"), build, harnesses, ToolFilter::default()),
+            explore_agent(explore, scope, harnesses),
+        ],
         ..AetherSettings::default()
     }
 }
 
-fn build_batteries_included_plan_agent(
-    display: &str,
-    model: String,
-    reasoning_effort: Option<ReasoningEffort>,
+type ModelChoice = (String, Option<ReasoningEffort>);
+
+fn primary_agent(
+    name: &str,
+    description: String,
+    (model, reasoning_effort): ModelChoice,
     harnesses: &[HarnessIntegration],
+    tools: ToolFilter,
 ) -> AgentConfig {
-    let coding = coding_args(harnesses);
-    let skills = skills_args(harnesses);
     AgentConfig {
-        name: "Plan".to_string(),
-        description: format!("{display} planner (may write plan artifacts and request review)"),
+        name: name.to_string(),
+        description,
         model,
         reasoning_effort,
         user_invocable: true,
         mcps: vec![mcps(vec![
-            ("review", vec![]),
-            ("coding", coding),
-            ("skills", skills),
-            ("subagents", vec![]),
-            ("tasks", vec![]),
-        ])],
-        tools: plan_tools(),
-        ..AgentConfig::default()
-    }
-}
-
-fn build_batteries_included_build_agent(
-    display: &str,
-    model: String,
-    reasoning_effort: Option<ReasoningEffort>,
-    harnesses: &[HarnessIntegration],
-) -> AgentConfig {
-    let coding = coding_args(harnesses);
-    let skills = skills_args(harnesses);
-    AgentConfig {
-        name: "Build".to_string(),
-        description: format!("{display} implementor"),
-        model,
-        reasoning_effort,
-        user_invocable: true,
-        mcps: vec![mcps(vec![
-            ("coding", coding),
-            ("skills", skills),
+            ("coding", coding_args(harnesses)),
+            ("skills", skills_args(harnesses)),
             ("subagents", vec![]),
             ("tasks", vec![]),
             ("review", vec![]),
         ])],
+        tools,
         ..AgentConfig::default()
     }
 }
 
-fn build_batteries_included_explore_agent(
-    model: String,
-    reasoning_effort: Option<ReasoningEffort>,
+fn explore_agent(
+    (model, reasoning_effort): ModelChoice,
     scope: InitScope,
     harnesses: &[HarnessIntegration],
 ) -> AgentConfig {
@@ -170,28 +156,8 @@ fn batteries_included_preset(
     scope: InitScope,
     harnesses: &[HarnessIntegration],
 ) -> ResolvedPreset {
-    let display = provider.display_name();
-    let plan = build_batteries_included_plan_agent(
-        display,
-        recs.plan.model.to_string(),
-        recs.plan.reasoning_effort,
-        harnesses,
-    );
-
-    let build = build_batteries_included_build_agent(
-        display,
-        recs.build.model.to_string(),
-        recs.build.reasoning_effort,
-        harnesses,
-    );
-
-    let explore = build_batteries_included_explore_agent(
-        recs.explore.model.to_string(),
-        recs.explore.reasoning_effort,
-        scope,
-        harnesses,
-    );
-
+    let choice = |rec: &ModelWithReasoning| (rec.model.to_string(), rec.reasoning_effort);
+    let choices = [choice(&recs.plan), choice(&recs.build), choice(&recs.explore)];
     ResolvedPreset {
         files: &[
             TemplateFile { path: SYSTEM_PATH, body: SYSTEM_MD },
@@ -199,11 +165,7 @@ fn batteries_included_preset(
             TemplateFile { path: AETHER_SKILL_PATH, body: AETHER_SKILL_MD },
             TemplateFile { path: PLAN_SKILL_PATH, body: PLAN_SKILL_MD },
         ],
-        settings: AetherSettings {
-            prompts: batteries_prompts(scope, harnesses),
-            agents: vec![plan, build, explore],
-            ..AetherSettings::default()
-        },
+        settings: batteries_settings(provider.display_name(), choices, scope, harnesses),
     }
 }
 

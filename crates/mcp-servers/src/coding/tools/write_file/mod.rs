@@ -1,3 +1,4 @@
+use crate::Displayed;
 use crate::file_ops::{FileError, write_text_file};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -23,13 +24,9 @@ pub struct WriteFileResponse {
     pub bytes_written: usize,
     /// File path that was written
     pub file_path: String,
-    /// Display metadata for human-friendly rendering
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub meta: Option<ToolResultMeta>,
 }
 
-pub async fn write_file_contents(args: WriteFileArgs) -> Result<WriteFileResponse, FileError> {
+pub async fn write_file_contents(args: WriteFileArgs) -> Result<Displayed<WriteFileResponse>, FileError> {
     let file_path = Path::new(&args.file_path);
     let result = write_text_file(file_path, &args.content).await?;
     let file_path = result.path.to_string_lossy().into_owned();
@@ -37,12 +34,12 @@ pub async fn write_file_contents(args: WriteFileArgs) -> Result<WriteFileRespons
     let file_diff =
         FileDiff { path: file_path.clone(), old_text: result.original_content, new_text: Some(args.content) };
 
-    Ok(WriteFileResponse {
+    let response = WriteFileResponse {
         message: format!("Successfully wrote {} bytes to {}", result.bytes_written, file_path),
         bytes_written: result.bytes_written,
         file_path,
-        meta: Some(ToolResultMeta::with_file_diff(display_meta, file_diff)),
-    })
+    };
+    Ok(Displayed::new(response, ToolResultMeta::with_file_diff(display_meta, file_diff)))
 }
 
 #[cfg(test)]

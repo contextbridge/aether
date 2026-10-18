@@ -1,29 +1,18 @@
 use super::{LiveSettingsData, summarize};
-use crate::surfaces::input::{SettingsOutput, UiEvent, one};
+use crate::surfaces::input::{UiOutput, one};
 use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
+use crate::view::input::{Nav, UiEvent};
 use crate::view::list_view::ListView;
-use crate::view::selection::{Direction, SelectionState};
+use crate::view::selection::SelectionState;
 use acp_utils::notifications::{McpServerStatus, McpServerStatusEntry};
-use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::StatefulWidget;
 
 /// Read-only view of MCP server health, with authentication for OAuth servers.
-pub(super) struct ServerStatusView<'a> {
-    rows: &'a [ServerStatusRow],
-    theme: &'a Theme,
-}
-
-impl<'a> ServerStatusView<'a> {
-    pub(super) fn new(rows: &'a [ServerStatusRow], theme: &'a Theme) -> Self {
-        Self { rows, theme }
-    }
-}
-
 pub(super) struct ServerStatusPane {
     rows: Vec<ServerStatusRow>,
     selection: SelectionState,
@@ -65,89 +54,40 @@ impl ServerStatusPane {
 }
 
 impl ServerStatusPane {
-    #[allow(clippy::needless_pass_by_value)]
-    pub(crate) fn on_ui_event(&mut self, event: UiEvent) -> Vec<SettingsOutput> {
-        match event {
-            UiEvent::Key(key) => self.on_key(key),
-            UiEvent::Paste(_) => Vec::new(),
-            UiEvent::Mouse(action, (_, row)) => match action.direction() {
-                Some(direction) => self.scroll(direction),
-                None => self.click(row),
-            },
-        }
-    }
-
-    fn on_key(&mut self, key: KeyEvent) -> Vec<SettingsOutput> {
-        match key.code {
-            KeyCode::Up => self.scroll(Direction::Backward),
-            KeyCode::Down => self.scroll(Direction::Forward),
-            KeyCode::Enter => self.activate(),
-            _ => Vec::new(),
-        }
-    }
-
-    fn activate(&mut self) -> Vec<SettingsOutput> {
-        one(self
-            .selected_entry()
-            .filter(|entry| entry.can_authenticate())
-            .map(|entry| SettingsOutput::AuthenticateServer(entry.name.clone())))
-    }
-
-    /// Headers and spacers are not selectable, so a click on one is ignored
-    /// rather than moving focus to a row that cannot be authenticated.
-    fn click(&mut self, row: u16) -> Vec<SettingsOutput> {
-        let restore = self.selection.selected();
-        if !self.selection.select_at(row, self.rows.len()) {
-            return Vec::new();
-        }
-        if !self.selection.selected().and_then(|index| self.rows.get(index)).is_some_and(is_server) {
-            self.selection.select(restore, self.rows.len());
-            return Vec::new();
-        }
-        self.activate()
-    }
-
-    fn scroll(&mut self, direction: Direction) -> Vec<SettingsOutput> {
+    pub(crate) fn on_ui_event(&mut self, event: &UiEvent) -> Vec<UiOutput> {
         let rows = &self.rows;
-        self.selection.step(rows.len(), direction, |index| is_server(&rows[index]));
-        Vec::new()
+        match self.selection.on_nav_event(event, rows.len(), |index| is_server(&rows[index])) {
+            Nav::Activate | Nav::Clicked => one(self
+                .selected_entry()
+                .filter(|entry| entry.can_authenticate())
+                .map(|entry| UiOutput::AuthenticateServer(entry.name.clone()))),
+            Nav::Close | Nav::Moved | Nav::Unhandled => Vec::new(),
+        }
     }
 }
 
 impl ServerStatusPane {
-    pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) -> Option<Position> {
-        let Self { rows, selection, .. } = self;
-        StatefulWidget::render(ServerStatusView::new(rows, theme), area, buf, selection);
-        None
-    }
-}
-
-impl StatefulWidget for ServerStatusView<'_> {
-    type State = SelectionState;
-
-    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+    pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         let rows = self.rows.iter().map(|row| match row {
-            ServerStatusRow::Header(label) => Line::styled(label.clone(), self.theme.heading),
+            ServerStatusRow::Header(label) => Line::styled(label.clone(), theme.heading),
             ServerStatusRow::Spacer => Line::default(),
             ServerStatusRow::Server { entry, indented } => {
                 let (indicator, detail) = server_status_detail(entry);
                 let prefix = if *indented { "  " } else { "" };
                 let style = match &entry.status {
-                    McpServerStatus::Connected { .. } | McpServerStatus::Connecting => {
-                        Style::from(self.theme.text_primary)
-                    }
-                    McpServerStatus::Failed { .. } => Style::from(self.theme.error),
-                    McpServerStatus::Authenticating | McpServerStatus::NeedsOAuth => Style::from(self.theme.warning),
+                    McpServerStatus::Connected { .. } | McpServerStatus::Connecting => Style::from(theme.text_primary),
+                    McpServerStatus::Failed { .. } => Style::from(theme.error),
+                    McpServerStatus::Authenticating | McpServerStatus::NeedsOAuth => Style::from(theme.warning),
                 };
                 let row_prefix = if area.width > 30 { " " } else { "" };
                 let name_separator = if area.width <= 30 { " " } else { "  " };
                 Line::styled(format!("{row_prefix}{prefix}{}{name_separator}{indicator} {detail}", entry.name), style)
             }
         });
-        let view = ListView::new(rows.collect(), self.theme)
+        let view = ListView::new(rows.collect(), theme)
             .pane(" (no MCP servers configured)")
             .highlight_horizontal_padding(MODAL_HORIZONTAL_PADDING);
-        StatefulWidget::render(view, area, buf, state);
+        StatefulWidget::render(view, area, buf, &mut self.selection);
     }
 }
 impl ServerStatusPane {

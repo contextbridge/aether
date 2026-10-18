@@ -20,12 +20,9 @@ fn plan_renders_in_viewport() {
 
     assert!(ui.app().has_plan());
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-
-    assert!(viewport.contains("Plan"), "viewport should show Plan header:\n{viewport}");
-    assert!(viewport.contains("Research"), "viewport should show Research:\n{viewport}");
-    assert!(viewport.contains("Implement"), "viewport should show Implement:\n{viewport}");
+    ui.assert_viewport_contains("Plan");
+    ui.assert_viewport_contains("Research");
+    ui.assert_viewport_contains("Implement");
 }
 
 #[test]
@@ -37,7 +34,6 @@ fn plan_ordering_in_viewport() {
         plan_entry("InProgress task", acp::PlanEntryStatus::InProgress),
     ]));
 
-    ui.draw();
     let viewport = ui.viewport_text();
 
     let in_progress_pos = viewport.find("InProgress task").unwrap();
@@ -55,14 +51,10 @@ fn plan_grace_period_hides_completed() {
 
     ui.acp_event(plan_update(vec![plan_entry("Done", acp::PlanEntryStatus::Completed)]));
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("Done"), "completed entry visible at t=0:\n{viewport}");
+    ui.assert_viewport_contains("Done");
 
     ui.tick(now + Duration::from_secs(5));
-    ui.draw();
-    let viewport_after = ui.viewport_text();
-    assert!(!viewport_after.contains("Done"), "completed entry hidden after 5s grace:\n{viewport_after}");
+    ui.assert_viewport_not_contains("Done");
 }
 
 #[test]
@@ -90,7 +82,6 @@ fn plan_coexists_with_streaming_transcript() {
     ui.submit("explain");
     ui.acp_event(text_chunk("Here is the explanation."));
 
-    ui.draw();
     let viewport = ui.viewport();
     let transcript_row = row_containing(&viewport, "Here is the explanation.").expect("transcript visible");
     let plan_row = row_containing(&viewport, "Plan").expect("plan header visible");
@@ -113,11 +104,8 @@ fn plan_coexists_with_tool_calls() {
     ui.submit("fix it");
     ui.acp_event(tool_call("tool-1", "Editing main.rs"));
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-
-    assert!(viewport.contains("Edit files"), "plan entry visible:\n{viewport}");
-    assert!(viewport.contains("Editing main.rs"), "tool call visible:\n{viewport}");
+    ui.assert_viewport_contains("Edit files");
+    ui.assert_viewport_contains("Editing main.rs");
 }
 
 #[test]
@@ -132,7 +120,6 @@ fn plan_short_terminal_clips_plan() {
         plan_entry("Plan item four", acp::PlanEntryStatus::Pending),
     ]));
 
-    ui.draw();
     let viewport = ui.viewport_text();
 
     assert!(viewport.contains("Plan"), "plan header visible on short terminal:\n{viewport}");
@@ -148,14 +135,9 @@ fn plan_not_in_scrollback() {
     let mut ui = TestUi::new();
     ui.acp_event(plan_update(vec![plan_entry("A plan task", acp::PlanEntryStatus::InProgress)]));
 
-    ui.submit("hello");
-    ui.acp_event(text_chunk("response text"));
-    ui.complete_prompt(acp::StopReason::EndTurn);
+    ui.turn("hello", "response text");
 
-    ui.draw();
-    let scrollback = ui.history_text();
-
-    assert!(!scrollback.contains("A plan task"), "plan should not be in scrollback:\n{scrollback}");
+    ui.assert_history_not_contains("A plan task");
 }
 
 #[test]
@@ -167,9 +149,7 @@ fn plan_cleared_on_context_cleared() {
     ui.acp_event(context_cleared());
     assert!(!ui.app().has_plan());
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(!viewport.contains("Task"), "plan should be gone after context clear:\n{viewport}");
+    ui.assert_viewport_not_contains("Task");
 }
 
 #[test]
@@ -178,14 +158,11 @@ fn plan_cleared_on_new_session() {
     ui.acp_event(plan_update(vec![plan_entry("Task", acp::PlanEntryStatus::Pending)]));
     assert!(ui.app().has_plan());
 
-    ui.type_text("/clear");
-    ui.key(key(KeyCode::Tab));
+    ui.run_command("/clear");
     ui.deliver_result(new_session_created("new-id", Vec::new()));
     assert!(!ui.app().has_plan());
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(!viewport.contains("Task"), "plan should be gone after new session:\n{viewport}");
+    ui.assert_viewport_not_contains("Task");
 }
 
 #[test]
@@ -198,7 +175,5 @@ fn plan_cleared_on_session_loaded() {
     ui.deliver_result(session_loaded("other-session", Vec::new()));
     assert!(!ui.app().has_plan());
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-    assert!(!viewport.contains("Task"), "plan should be gone after session load:\n{viewport}");
+    ui.assert_viewport_not_contains("Task");
 }

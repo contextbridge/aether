@@ -59,15 +59,10 @@ pub enum McpCommandError {
 
 #[derive(Debug)]
 enum Request {
-    Help(HelpLevel),
+    ServersHelp,
+    ServerHelp(String),
+    ToolHelp { server: String, tool: String },
     Call { server: String, tool: String, json: Map<String, Value>, timeout_seconds: u64 },
-}
-
-#[derive(Debug)]
-enum HelpLevel {
-    Servers,
-    Server(String),
-    Tool { server: String, tool: String },
 }
 
 impl McpCommandError {
@@ -88,7 +83,28 @@ impl McpCommandError {
 pub async fn run(args: McpArgs) -> Result<(), McpCommandError> {
     let request = Request::try_from(args)?;
     let client = DeferredToolsClient::connect(inherited_socket()?).await?;
-    execute_request(&client, request).await
+    match request {
+        Request::ServersHelp => print_servers_help(&client.servers().await?),
+        Request::ServerHelp(server) => {
+            let servers = client.servers().await?;
+            let deferred = servers
+                .iter()
+                .find(|deferred| deferred.name == server)
+                .ok_or_else(|| McpCommandError::Usage(format!("unknown deferred server `{server}`")))?;
+            print_server_help(deferred);
+        }
+        Request::ToolHelp { server, tool } => {
+            let definition = client
+                .tool(&server, &tool)
+                .await?
+                .ok_or_else(|| McpCommandError::Usage(format!("unknown deferred tool `{server} {tool}`")))?;
+            print_tool_help(&server, &tool, &definition)?;
+        }
+        Request::Call { server, tool, json, timeout_seconds } => {
+            call_tool(&client, &server, &tool, json, timeout_seconds).await?;
+        }
+    }
+    Ok(())
 }
 
 impl TryFrom<McpArgs> for Request {
@@ -96,9 +112,9 @@ impl TryFrom<McpArgs> for Request {
 
     fn try_from(args: McpArgs) -> Result<Self, Self::Error> {
         match (args.server, args.tool, args.help) {
-            (None, None, _) => Ok(Request::Help(HelpLevel::Servers)),
-            (Some(server), None, true) => Ok(Request::Help(HelpLevel::Server(server))),
-            (Some(server), Some(tool), true) => Ok(Request::Help(HelpLevel::Tool { server, tool })),
+            (None, None, _) => Ok(Request::ServersHelp),
+            (Some(server), None, true) => Ok(Request::ServerHelp(server)),
+            (Some(server), Some(tool), true) => Ok(Request::ToolHelp { server, tool }),
             (Some(server), Some(tool), false) => {
                 let json = if let Some(input) = args.json.as_deref() {
                     parse_json_object(Some(input))?
@@ -136,40 +152,6 @@ fn parse_json_object(input: Option<&str>) -> Result<Map<String, Value>, McpComma
         serde_json::error::Category::Data => McpCommandError::Usage("tool input must be a JSON object".into()),
         _ => McpCommandError::Usage(format!("invalid JSON input: {error}")),
     })
-}
-
-async fn execute_request(client: &DeferredToolsClient, request: Request) -> Result<(), McpCommandError> {
-    match request {
-        Request::Help(HelpLevel::Servers) => show_servers_help(client).await,
-        Request::Help(HelpLevel::Server(server)) => show_server_help(client, &server).await,
-        Request::Help(HelpLevel::Tool { server, tool }) => show_tool_help(client, &server, &tool).await,
-        Request::Call { server, tool, json, timeout_seconds } => {
-            call_tool(client, &server, &tool, json, timeout_seconds).await
-        }
-    }
-}
-
-async fn show_servers_help(client: &DeferredToolsClient) -> Result<(), McpCommandError> {
-    print_servers_help(&client.servers().await?);
-    Ok(())
-}
-
-async fn show_server_help(client: &DeferredToolsClient, server: &str) -> Result<(), McpCommandError> {
-    let servers = client.servers().await?;
-    let deferred = servers
-        .iter()
-        .find(|deferred| deferred.name == server)
-        .ok_or_else(|| McpCommandError::Usage(format!("unknown deferred server `{server}`")))?;
-    print_server_help(deferred);
-    Ok(())
-}
-
-async fn show_tool_help(client: &DeferredToolsClient, server: &str, tool: &str) -> Result<(), McpCommandError> {
-    let definition = client
-        .tool(server, tool)
-        .await?
-        .ok_or_else(|| McpCommandError::Usage(format!("unknown deferred tool `{server} {tool}`")))?;
-    print_tool_help(server, tool, &definition)
 }
 
 async fn call_tool(

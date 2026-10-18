@@ -1,7 +1,7 @@
 use super::App;
 use crate::command::{Command, FilesystemCommand};
-use crate::session::session_config_view::{LocalConfigOption, LocalConfigView};
-use crate::settings::overlay::{SettingsChange, SettingsMenuEntry, SettingsMenuValue};
+use crate::session::session_config_view::{LocalConfigOption, LocalConfigValue, LocalConfigView};
+use crate::settings::overlay::{SettingsChange, SettingsMenuEntry};
 use crate::settings::{ThemeSettings, UiSettings};
 use crate::theme::{Theme, ThemeApplicationError};
 use acp_utils::config_option_id::ConfigOptionId;
@@ -58,45 +58,29 @@ impl App {
 }
 
 pub(super) fn build_theme_entries(settings: &UiSettings, files: &[String]) -> Vec<SettingsMenuEntry> {
-    use acp_utils::config_meta::SelectOptionMeta;
     use acp_utils::config_option_id::THEME_CONFIG_ID;
 
-    let mut values: Vec<SettingsMenuValue> = Vec::new();
-
-    for descriptor in ReviewTheme::catalog() {
-        values.push(SettingsMenuValue {
-            value: format!("builtin:{}", descriptor.id),
-            name: descriptor.name,
-            group: None,
-            description: Some("Built-in theme".into()),
-            is_disabled: false,
-            meta: SelectOptionMeta::default(),
-        });
-    }
-
-    for file in files {
-        let display = file.trim_end_matches(".json").to_string();
-        values.push(SettingsMenuValue {
-            value: format!("file:{file}"),
-            name: display,
-            group: None,
-            description: None,
-            is_disabled: false,
-            meta: SelectOptionMeta::default(),
-        });
-    }
+    let builtin = ReviewTheme::catalog().into_iter().map(|descriptor| LocalConfigValue {
+        value: format!("builtin:{}", descriptor.id),
+        name: descriptor.name,
+        description: Some("Built-in theme".into()),
+        ..LocalConfigValue::default()
+    });
+    let custom = files.iter().map(|file| LocalConfigValue {
+        value: format!("file:{file}"),
+        name: file.trim_end_matches(".json").to_string(),
+        ..LocalConfigValue::default()
+    });
+    let values: Vec<LocalConfigValue> = builtin.chain(custom).collect();
 
     let current_file = settings.theme.selection_id();
-    let current_value_index = values.iter().position(|value| value.value == current_file).unwrap_or(0);
 
     vec![SettingsMenuEntry {
         config_id: THEME_CONFIG_ID.to_string(),
         title: "Theme".to_string(),
         values,
-        current_value_index,
         current_raw_value: current_file,
         local: true,
         multi_select: false,
-        display_name: None,
     }]
 }

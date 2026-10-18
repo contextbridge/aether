@@ -4,9 +4,7 @@ use acp_utils::notifications::{
 use aether_cli::acp::testing::AcpTestHarness;
 use aether_cli::workspace::DirectoryCloner;
 use aether_cli::workspace::testing::{StdCopyCloner, init_repo};
-use agent_client_protocol::schema::v2::{
-    AbsolutePath, ListSessionsRequest, PromptRequest, ResumeSessionRequest, StopReason,
-};
+use agent_client_protocol::schema::v2::{AbsolutePath, ListSessionsRequest, ResumeSessionRequest, StopReason};
 use std::fs;
 use utils::testing::{git, git_commit};
 
@@ -215,29 +213,44 @@ async fn live_workspace_move_stops_old_actor_and_allows_restore_in_new_cwd() {
         let moved = move_workspace(&harness, "live", WorkspaceMoveTarget::New { name: "moved".into() })
             .await
             .expect("move live workspace");
-        assert!(
-            harness
-                .client_cx
-                .send_request(PromptRequest::new("live", vec!["old actor".into()]))
-                .block_task()
-                .await
-                .is_err(),
-            "move must remove the old actor"
-        );
+        assert!(harness.prompt(&"live".into(), "old actor").await.is_err(), "move must remove the old actor");
         harness
             .client_cx
             .send_request(ResumeSessionRequest::new("live", AbsolutePath::new(moved.new_cwd)))
             .block_task()
             .await
             .expect("restore moved session");
-        harness
-            .client_cx
-            .send_request(PromptRequest::new("live", vec!["new workspace".into()]))
-            .block_task()
-            .await
-            .expect("prompt restored actor");
+        harness.prompt(&"live".into(), "new workspace").await.expect("prompt restored actor");
         harness.expect_idle(&"live".into(), StopReason::EndTurn).await;
         harness.resume_agent().assert_saw(&["new workspace"]);
+        harness.shutdown().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn live_workspace_move_keeps_every_event_persisted_before_the_move() {
+    AcpTestHarness::run(|mut harness| async move {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = init_repo(tmp.path(), "repo");
+        let live = "live".into();
+        harness.append_stored_session_in("live", "2026-05-01T00:00:00Z", &repo);
+        harness
+            .client_cx
+            .send_request(ResumeSessionRequest::new("live", AbsolutePath::new(repo)))
+            .block_task()
+            .await
+            .expect("restore source");
+        harness.prompt(&live, "before the move").await.expect("prompt accepted");
+        harness.expect_idle(&live, StopReason::EndTurn).await;
+        let persisted = harness.stored_events(&live);
+
+        move_workspace(&harness, "live", WorkspaceMoveTarget::New { name: "moved".into() })
+            .await
+            .expect("move live workspace");
+
+        assert!(harness.prompt(&live, "after the move").await.is_err(), "move must remove the old actor");
+        assert_eq!(harness.stored_events(&live), persisted);
         harness.shutdown().await;
     })
     .await;
@@ -259,12 +272,7 @@ async fn failed_and_unrelated_moves_preserve_live_actor() {
         move_workspace(&harness, "other", WorkspaceMoveTarget::New { name: "moved".into() })
             .await
             .expect("move unrelated saved session");
-        harness
-            .client_cx
-            .send_request(PromptRequest::new(active.session_id().clone(), vec!["still here".into()]))
-            .block_task()
-            .await
-            .expect("original actor still accepts prompts");
+        harness.prompt(active.session_id(), "still here").await.expect("original actor still accepts prompts");
         harness.expect_idle(active.session_id(), StopReason::EndTurn).await;
         active.planner().assert_saw(&["still here"]);
         harness.shutdown().await;

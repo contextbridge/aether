@@ -4,11 +4,11 @@ use std::time::{Duration, Instant};
 
 /// How long a completed plan entry stays on screen before it is dropped, so the
 /// user sees the tick before the row disappears.
-pub const GRACE_PERIOD: Duration = Duration::from_secs(3);
+pub(crate) const GRACE_PERIOD: Duration = Duration::from_secs(3);
 
 /// The agent's current plan, with completed entries expiring after a grace period.
 #[derive(Debug)]
-pub struct PlanTracker {
+pub(crate) struct PlanTracker {
     plan: Option<(acp::PlanId, Vec<acp::PlanEntry>)>,
     /// When each entry was first reported complete. ACP plan entries have no
     /// stable id, so content is the only available identity key.
@@ -23,7 +23,7 @@ impl Default for PlanTracker {
 }
 
 impl PlanTracker {
-    pub fn sync(&mut self, plan: Option<&acp::PlanItems>, now: Instant) {
+    pub(crate) fn sync(&mut self, plan: Option<&acp::PlanItems>, now: Instant) {
         match plan {
             None => self.clear(),
             Some(items) if !self.is_current(items) => self.replace(items.plan_id.clone(), items.entries.clone(), now),
@@ -49,7 +49,7 @@ impl PlanTracker {
 
     /// Entries to draw at `now`, ordered in-progress, then pending, then the
     /// completed ones still inside their grace period.
-    pub fn visible_entries(&self, now: Instant) -> Vec<acp::PlanEntry> {
+    pub(crate) fn visible_entries(&self, now: Instant) -> Vec<acp::PlanEntry> {
         let mut visible: Vec<_> = self.entries().iter().filter(|entry| self.is_visible(entry, now)).cloned().collect();
         visible.sort_by_key(|entry| match entry.status {
             acp::PlanEntryStatus::InProgress => 0,
@@ -61,21 +61,21 @@ impl PlanTracker {
     }
 
     /// Entries to draw as of the last tick.
-    pub fn current_entries(&self) -> Vec<acp::PlanEntry> {
+    pub(crate) fn current_entries(&self) -> Vec<acp::PlanEntry> {
         self.visible_entries(self.last_tick)
     }
 
     /// Whether a completed entry is still counting down, which is what keeps the
     /// tick loop running long enough to expire it.
-    pub fn has_completed_in_grace_period(&self) -> bool {
+    pub(crate) fn has_completed_in_grace_period(&self) -> bool {
         self.entries().iter().any(|entry| terminal_status(&entry.status) && self.is_visible(entry, self.last_tick))
     }
 
-    pub fn has_entries(&self) -> bool {
+    pub(crate) fn has_entries(&self) -> bool {
         !self.entries().is_empty()
     }
 
-    pub fn on_tick(&mut self, now: Instant) {
+    pub(crate) fn on_tick(&mut self, now: Instant) {
         self.last_tick = now;
     }
 

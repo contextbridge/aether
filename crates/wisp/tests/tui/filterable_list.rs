@@ -88,3 +88,38 @@ fn caches_normalized_search_keys_and_edits_its_own_query() {
     assert_eq!(list.query(), "äl");
     assert_eq!(list.filtered_len(), 1);
 }
+
+#[test]
+fn selectable_policy_normalizes_initial_and_explicit_selection() {
+    let mut list =
+        FilterableList::new(vec!["disabled", "allowed"], ToString::to_string).selectable(|entry| *entry == "allowed");
+    assert_eq!(list.selected_entry(), Some(&"allowed"));
+
+    list.select_index(0);
+    assert_eq!(list.selected_entry(), Some(&"allowed"));
+
+    let list = FilterableList::new(vec!["disabled"], ToString::to_string).selectable(|_| false);
+    assert_eq!(list.selected_entry(), None);
+}
+
+#[test]
+fn filtering_only_disabled_entries_clears_selection_and_recovers() {
+    let mut list =
+        FilterableList::new(vec!["allowed", "disabled"], ToString::to_string).selectable(|entry| *entry == "allowed");
+
+    list.set_query("disabled");
+    assert_eq!(list.filtered_len(), 1);
+    assert_eq!(list.selected_entry(), None);
+    list.select_index(1);
+    assert_eq!(list.selected_entry(), None);
+    let area = Rect::new(0, 0, 20, 4);
+    let mut buffer = Buffer::empty(area);
+    list.render_pane("Items", "Empty", area, &mut buffer, &Theme::default(), |entry| Line::raw(*entry));
+    assert_eq!(list.selected_entry(), None, "rendering must not restore a disabled selection");
+    assert!(!list.select_at(1));
+    list.step(Direction::Forward);
+    assert_eq!(list.selected_entry(), None);
+
+    list.set_query("");
+    assert_eq!(list.selected_entry(), Some(&"allowed"));
+}

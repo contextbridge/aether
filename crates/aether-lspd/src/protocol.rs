@@ -11,88 +11,45 @@ use tokio_util::codec::{Decoder, Encoder, FramedRead, FramedWrite, LengthDelimit
 
 #[doc = include_str!("docs/protocol.md")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum DaemonRequest {
+pub(crate) enum DaemonRequest {
     Initialize(InitializeRequest),
-    LspCall {
-        client_id: i64,
-        method: String,
-        params: Value,
-    },
-    GetDiagnostics {
-        client_id: i64,
-        /// If None, return all cached diagnostics for the workspace
-        uri: Option<Uri>,
-    },
-    QueueDiagnosticRefresh {
-        client_id: i64,
-        uri: Uri,
-    },
+    Call { id: i64, call: DaemonCall },
     Disconnect,
-    Ping,
 }
 
-/// Initialize request to set up LSP for a workspace
+/// Work a client asks of its bound workspace.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InitializeRequest {
-    pub workspace_root: PathBuf,
-    pub language: LanguageId,
+pub(crate) enum DaemonCall {
+    /// Forward an LSP request to the language server.
+    Lsp { method: String, params: Value },
+    /// Read diagnostics for one file, or for the whole workspace when `uri` is `None`.
+    Diagnostics { uri: Option<Uri> },
+    /// Re-check a file in the background and update its cached diagnostics.
+    QueueRefresh { uri: Uri },
 }
 
-/// LSP notification from client to server
+/// Binds a connection to one workspace and language server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LspNotification {
-    pub method: String,
-    pub params: Value,
+pub(crate) struct InitializeRequest {
+    pub(crate) workspace_root: PathBuf,
+    pub(crate) language: LanguageId,
 }
 
-/// Top-level daemon response
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum DaemonResponse {
+pub(crate) enum DaemonResponse {
     Initialized,
-    Pong,
-    LspResult { client_id: i64, result: Result<Value, LspErrorResponse> },
-    Error(ProtocolError),
+    InitializeFailed(String),
+    Reply { id: i64, result: Result<Value, LspErrorResponse> },
 }
 
-/// LSP error response
+/// An error answer to a call, either forwarded from the language server or synthesized by the daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LspErrorResponse {
-    pub code: i32,
-    pub message: String,
+pub(crate) struct LspErrorResponse {
+    pub(crate) code: i32,
+    pub(crate) message: String,
 }
 
-/// Protocol-level error (not LSP error)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProtocolError {
-    pub message: String,
-    /// Optional `client_id` for correlating errors back to LSP requests
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub client_id: Option<i64>,
-}
-
-impl ProtocolError {
-    pub fn new(message: impl Into<String>) -> Self {
-        Self { message: message.into(), client_id: None }
-    }
-
-    pub fn with_client_id(message: impl Into<String>, client_id: i64) -> Self {
-        Self { message: message.into(), client_id: Some(client_id) }
-    }
-}
-
-/// Extract the document URI from an LSP request's params by method name.
-///
-/// Used by the daemon for auto-open: if the request targets a specific file,
-/// the daemon ensures the file is opened before forwarding the request.
-pub fn extract_document_uri(method: &str, params: &Value) -> Option<Uri> {
-    if !method.starts_with("textDocument/") {
-        return None;
-    }
-    params.pointer("/textDocument/uri").and_then(|v| v.as_str()).and_then(|s| s.parse().ok())
-}
-
-/// Maximum message size (16 MB)
-pub const MAX_MESSAGE_SIZE: u32 = 16 * 1024 * 1024;
+pub(crate) const PROTOCOL_VERSION: u32 = 2;
 
 /// Error code for a request that exceeded the daemon's per-request timeout.
 /// The daemon kills and replaces the language server when this fires.
@@ -104,16 +61,39 @@ pub const LSP_REQUEST_TIMED_OUT: i32 = -33001;
 
 /// Error code for a request that failed because the language server process
 /// exited or its transport shut down before responding.
-pub const LSP_TRANSPORT_CLOSED: i32 = -33002;
+pub(crate) const LSP_TRANSPORT_CLOSED: i32 = -33002;
 
-fn invalid_data(err: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, err)
+pub(crate) const DAEMON_ERROR: i32 = -1;
+const MAX_MESSAGE_SIZE: u32 = 16 * 1024 * 1024;
+
+impl LspErrorResponse {
+    pub(crate) fn daemon(message: impl Into<String>) -> Self {
+        Self { code: DAEMON_ERROR, message: message.into() }
+    }
+}
+
+pub(crate) fn extract_document_uri(method: &str, params: &Value) -> Option<Uri> {
+    if !method.starts_with("textDocument/") {
+        return None;
+    }
+    params.pointer("/textDocument/uri").and_then(|v| v.as_str()).and_then(|s| s.parse().ok())
+}
+
+pub(crate) type FrameReader<R, T> = FramedRead<R, JsonFrames<T>>;
+pub(crate) type FrameWriter<W, T> = FramedWrite<W, JsonFrames<T>>;
+
+pub(crate) fn frame_reader<R: tokio::io::AsyncRead, T: DeserializeOwned>(reader: R) -> FrameReader<R, T> {
+    FramedRead::new(reader, JsonFrames::new())
+}
+
+pub(crate) fn frame_writer<W: tokio::io::AsyncWrite, T: Serialize>(writer: W) -> FrameWriter<W, T> {
+    FramedWrite::new(writer, JsonFrames::new())
 }
 
 pub(crate) struct JsonFrames<T>(LengthDelimitedCodec, PhantomData<fn() -> T>);
 
 impl<T> JsonFrames<T> {
-    pub(crate) fn new() -> Self {
+    fn new() -> Self {
         Self(
             LengthDelimitedCodec::builder()
                 .big_endian()
@@ -143,108 +123,73 @@ impl<T: Serialize> Encoder<T> for JsonFrames<T> {
     }
 }
 
-pub(crate) type FrameReader<R, T> = FramedRead<R, JsonFrames<T>>;
-pub(crate) type FrameWriter<W, T> = FramedWrite<W, JsonFrames<T>>;
-
-pub(crate) fn frame_reader<R: tokio::io::AsyncRead, T: DeserializeOwned>(reader: R) -> FrameReader<R, T> {
-    FramedRead::new(reader, JsonFrames::new())
-}
-
-pub(crate) fn frame_writer<W: tokio::io::AsyncWrite, T: Serialize>(writer: W) -> FrameWriter<W, T> {
-    FramedWrite::new(writer, JsonFrames::new())
+fn invalid_data(err: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, err)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
-    fn test_protocol_error_new() {
-        let err = ProtocolError::new("test error");
-        assert_eq!(err.message, "test error");
-    }
-
-    #[test]
-    fn test_daemon_request_lsp_call_roundtrip() {
-        let req = DaemonRequest::LspCall {
-            client_id: 42,
-            method: "textDocument/definition".to_string(),
-            params: serde_json::json!({
-                "textDocument": { "uri": "file:///test.rs" },
-                "position": { "line": 0, "character": 0 }
-            }),
+    fn lsp_call_round_trips_with_its_id() {
+        let request = DaemonRequest::Call {
+            id: 42,
+            call: DaemonCall::Lsp {
+                method: "textDocument/definition".to_string(),
+                params: json!({
+                    "textDocument": { "uri": "file:///test.rs" },
+                    "position": { "line": 0, "character": 0 }
+                }),
+            },
         };
-        let json = serde_json::to_string(&req).unwrap();
-        let decoded: DaemonRequest = serde_json::from_str(&json).unwrap();
-        match decoded {
-            DaemonRequest::LspCall { client_id, method, .. } => {
-                assert_eq!(client_id, 42);
-                assert_eq!(method, "textDocument/definition");
-            }
-            _ => panic!("Wrong variant"),
-        }
+        let decoded: DaemonRequest = serde_json::from_str(&serde_json::to_string(&request).unwrap()).unwrap();
+
+        let DaemonRequest::Call { id, call: DaemonCall::Lsp { method, .. } } = decoded else { panic!("Wrong variant") };
+        assert_eq!(id, 42);
+        assert_eq!(method, "textDocument/definition");
     }
 
     #[test]
-    fn test_extract_document_uri_definition() {
-        let params = serde_json::json!({
+    fn extract_document_uri_reads_text_document_requests_only() {
+        let main_rs = json!({
             "textDocument": { "uri": "file:///src/main.rs" },
             "position": { "line": 10, "character": 5 }
         });
-        let uri = extract_document_uri("textDocument/definition", &params);
-        assert!(uri.is_some());
-        assert_eq!(uri.unwrap().as_str(), "file:///src/main.rs");
-    }
+        let cases = [
+            ("textDocument/definition", main_rs.clone(), Some("file:///src/main.rs")),
+            ("textDocument/references", main_rs.clone(), Some("file:///src/main.rs")),
+            (
+                "textDocument/documentSymbol",
+                json!({ "textDocument": { "uri": "file:///src/foo.rs" } }),
+                Some("file:///src/foo.rs"),
+            ),
+            ("workspace/symbol", json!({ "query": "Foo" }), None),
+            ("workspace/executeCommand", main_rs, None),
+            ("textDocument/unknown", json!({}), None),
+        ];
 
-    #[test]
-    fn test_extract_document_uri_references() {
-        let params = serde_json::json!({
-            "textDocument": { "uri": "file:///src/lib.rs" },
-            "position": { "line": 5, "character": 3 },
-            "context": { "includeDeclaration": true }
-        });
-        let uri = extract_document_uri("textDocument/references", &params);
-        assert!(uri.is_some());
-        assert_eq!(uri.unwrap().as_str(), "file:///src/lib.rs");
-    }
-
-    #[test]
-    fn test_extract_document_uri_document_symbol() {
-        let params = serde_json::json!({
-            "textDocument": { "uri": "file:///src/foo.rs" }
-        });
-        let uri = extract_document_uri("textDocument/documentSymbol", &params);
-        assert!(uri.is_some());
-        assert_eq!(uri.unwrap().as_str(), "file:///src/foo.rs");
-    }
-
-    #[test]
-    fn test_extract_document_uri_workspace_symbol_returns_none() {
-        let params = serde_json::json!({ "query": "Foo" });
-        let uri = extract_document_uri("workspace/symbol", &params);
-        assert!(uri.is_none());
-    }
-
-    #[test]
-    fn test_extract_document_uri_unknown_method_returns_none() {
-        let params = serde_json::json!({});
-        let uri = extract_document_uri("textDocument/unknown", &params);
-        assert!(uri.is_none());
+        for (method, params, expected) in cases {
+            let uri = extract_document_uri(method, &params);
+            assert_eq!(uri.as_ref().map(|uri| uri.as_str()), expected, "{method}");
+        }
     }
 
     #[tokio::test]
-    async fn test_duplex_reads_multiple_back_to_back_frames() {
+    async fn reads_back_to_back_frames() {
         use futures::{SinkExt, StreamExt};
 
         let (client_io, server_io) = tokio::io::duplex(1024);
         let mut writer = frame_writer::<_, DaemonRequest>(client_io);
         let mut reader = frame_reader::<_, DaemonRequest>(server_io);
 
-        writer.send(DaemonRequest::Ping).await.expect("send ping");
+        let call = DaemonCall::Diagnostics { uri: None };
+        writer.send(DaemonRequest::Call { id: 1, call }).await.expect("send call");
         writer.send(DaemonRequest::Disconnect).await.expect("send disconnect");
 
         let first = reader.next().await.expect("first frame").expect("decode first frame");
-        assert!(matches!(first, DaemonRequest::Ping));
+        assert!(matches!(first, DaemonRequest::Call { id: 1, call: DaemonCall::Diagnostics { uri: None } }));
 
         let second = reader.next().await.expect("second frame").expect("decode second frame");
         assert!(matches!(second, DaemonRequest::Disconnect));

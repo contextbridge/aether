@@ -35,14 +35,14 @@ aether-agent-core = "0.1"
 ```rust,no_run
 use aether_core::core::{Command, Prompt, agent};
 use aether_core::events::{AgentEvent, MessageEvent, ToolEvent, TurnEvent};
-use llm::providers::openrouter::OpenRouterProvider;
+use llm::providers::generic::{GenericProvider, OPENROUTER};
 use std::io::{self, Write};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Choose your LLM. Alternatively use AnthropicProvider, LlamaCppProvider..etc
+    // 1. Choose your LLM. Alternatively use another ProviderConfig (e.g. ANTHROPIC), CodexProvider..etc
     // For this example, OPENROUTER_API_KEY needs to be set in your environment
-    let llm = OpenRouterProvider::default("z-ai/glm-4.6")?;
+    let llm = GenericProvider::from_env(&OPENROUTER)?.with_model("z-ai/glm-4.6");
 
    // 2. Create an Agent
     let (tx, mut rx, _handle) = agent(llm) // <-- Give it an LLM
@@ -105,13 +105,13 @@ And bring Mr. `BotBot` to life!
 use aether_core::core::{Command, Prompt, agent};
 use aether_core::events::{AgentEvent, MessageEvent, ToolEvent, TurnEvent};
 use aether_core::mcp::mcp;
-use llm::providers::openrouter::OpenRouterProvider;
+use llm::providers::generic::{GenericProvider, OPENROUTER};
 use aether_core::mcp::McpConfig;
 use std::io::{self, Write};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let llm = OpenRouterProvider::default("z-ai/glm-4.6")?;
+    let llm = GenericProvider::from_env(&OPENROUTER)?.with_model("z-ai/glm-4.6");
 
     // 1. Connect to MCP servers
     let mcp = mcp(".")

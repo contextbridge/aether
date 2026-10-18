@@ -12,18 +12,18 @@ const SQUARE_FILLED: &str = "\u{25A0}";
 
 /// Renders the plan checklist as a ratatui widget. Callers inset the area they
 /// pass to [`Widget::render`] rather than asking for an indent.
-pub struct PlanView<'a> {
+pub(crate) struct PlanView<'a> {
     entries: &'a [PlanEntry],
     theme: &'a Theme,
 }
 
 impl<'a> PlanView<'a> {
-    pub fn new(entries: &'a [PlanEntry], theme: &'a Theme) -> Self {
+    pub(crate) fn new(entries: &'a [PlanEntry], theme: &'a Theme) -> Self {
         Self { entries, theme }
     }
 
     /// Number of lines the plan view will occupy (header + blank + entries).
-    pub fn line_count(&self) -> usize {
+    pub(crate) fn line_count(&self) -> usize {
         if self.entries.is_empty() { 0 } else { self.entries.len() + 2 }
     }
 }
@@ -45,33 +45,18 @@ fn build_plan_lines(entries: &[PlanEntry], theme: &Theme) -> Vec<Line<'static>> 
     lines.push(Line::default());
     lines.push(Line::from(Span::styled("Plan", header_style)));
 
+    let crossed_out = Style::from((theme.muted, Modifier::CROSSED_OUT));
     for entry in entries {
-        let mut spans = Vec::new();
-        match &entry.status {
-            PlanEntryStatus::Completed => {
-                spans.push(Span::styled(format!("  {CHECKBOX_FILLED} "), theme.muted));
-                spans.push(Span::styled(
-                    entry.content.clone(),
-                    (theme.muted, Modifier::CROSSED_OUT),
-                ));
-            }
-            PlanEntryStatus::Cancelled => {
-                spans.push(Span::styled("  × ", theme.muted));
-                spans.push(Span::styled(
-                    entry.content.clone(),
-                    (theme.muted, Modifier::CROSSED_OUT),
-                ));
-            }
-            PlanEntryStatus::InProgress => {
-                spans.push(Span::styled(format!("  {SQUARE_FILLED} "), theme.info));
-                spans.push(Span::styled(entry.content.clone(), theme.text_primary));
-            }
-            _ => {
-                spans.push(Span::styled(format!("  {CHECKBOX_EMPTY} "), theme.muted));
-                spans.push(Span::styled(entry.content.clone(), theme.muted));
-            }
-        }
-        lines.push(Line::from(spans));
+        let (glyph, color, style) = match &entry.status {
+            PlanEntryStatus::Completed => (CHECKBOX_FILLED, theme.muted, crossed_out),
+            PlanEntryStatus::Cancelled => ("×", theme.muted, crossed_out),
+            PlanEntryStatus::InProgress => (SQUARE_FILLED, theme.info, Style::from(theme.text_primary)),
+            _ => (CHECKBOX_EMPTY, theme.muted, Style::from(theme.muted)),
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {glyph} "), color),
+            Span::styled(entry.content.clone(), style),
+        ]));
     }
 
     lines

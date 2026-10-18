@@ -8,77 +8,60 @@
 //! they care about, which keeps them tolerant of terminals that add stray
 //! modifier flags.
 
-use crate::settings::UiSettings;
+use crate::settings::{KeyAction, UiSettings};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
+/// The user's overrides; every other action uses its default binding.
 #[derive(Clone, Debug)]
-pub struct Keybindings {
-    pub exit: KeyBinding,
-    pub cancel: KeyBinding,
-    pub submit: KeyBinding,
-    pub open_command_picker: KeyBinding,
-    pub open_file_picker: KeyBinding,
-    pub toggle_git_diff: KeyBinding,
-    pub cycle_reasoning: KeyBinding,
-    pub cycle_mode: KeyBinding,
-    pub open_prompt_search: KeyBinding,
-}
+pub(super) struct Keybindings(BTreeMap<KeyAction, KeyBinding>);
 
 impl Keybindings {
-    /// Resolves the configured bindings over the defaults. An entry that does
-    /// not parse keeps its default and logs a warning rather than dropping the
-    /// command.
-    pub fn from_settings(settings: &UiSettings) -> Self {
-        let mut bindings = Self::default();
-        let Some(config) = settings.keybindings.as_ref() else {
-            return bindings;
-        };
-        let overrides = [
-            (&mut bindings.exit, &config.exit, "exit"),
-            (&mut bindings.cancel, &config.cancel, "cancel"),
-            (&mut bindings.submit, &config.submit, "submit"),
-            (&mut bindings.open_command_picker, &config.open_command_picker, "openCommandPicker"),
-            (&mut bindings.open_file_picker, &config.open_file_picker, "openFilePicker"),
-            (&mut bindings.toggle_git_diff, &config.toggle_git_diff, "toggleGitDiff"),
-            (&mut bindings.cycle_reasoning, &config.cycle_reasoning, "cycleReasoning"),
-            (&mut bindings.cycle_mode, &config.cycle_mode, "cycleMode"),
-            (&mut bindings.open_prompt_search, &config.open_prompt_search, "openPromptSearch"),
-        ];
-        for (binding, configured, name) in overrides {
-            let Some(text) = configured.as_deref() else { continue };
+    /// Parses the configured overrides. An entry that does not parse keeps its
+    /// default and logs a warning rather than dropping the command.
+    pub(super) fn from_settings(settings: &UiSettings) -> Self {
+        let mut overrides = BTreeMap::new();
+        for (&action, text) in &settings.keybindings {
             match text.parse() {
-                Ok(parsed) => *binding = parsed,
+                Ok(parsed) => {
+                    overrides.insert(action, parsed);
+                }
                 Err(KeyBindingParseError(input)) => {
-                    tracing::warn!("ignoring unparseable keybinding {name} = {input:?}");
+                    tracing::warn!("ignoring unparseable keybinding {action:?} = {input:?}");
                 }
             }
         }
-        bindings
+        Self(overrides)
+    }
+
+    /// Whether `key` triggers `action`, per the module's modifier policy.
+    pub(super) fn matches(&self, action: KeyAction, key: KeyEvent) -> bool {
+        self.0.get(&action).copied().unwrap_or_else(|| action.default_binding()).matches(key)
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct KeyBinding {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct KeyBinding {
     pub code: KeyCode,
     pub modifiers: KeyModifiers,
 }
 
 impl KeyBinding {
-    pub fn new(code: KeyCode, modifiers: KeyModifiers) -> Self {
+    pub(super) fn new(code: KeyCode, modifiers: KeyModifiers) -> Self {
         Self { code, modifiers }
     }
 
     /// Exact-match semantics: the key and the full modifier set must both
     /// match, per the module's modifier policy.
-    pub fn matches(&self, event: KeyEvent) -> bool {
+    pub(super) fn matches(&self, event: KeyEvent) -> bool {
         self.code == event.code && self.modifiers == event.modifiers
     }
 }
 
 /// The rejected input, for the warning that keeps the default binding.
 #[derive(Debug, PartialEq, Eq)]
-pub struct KeyBindingParseError(pub String);
+pub(super) struct KeyBindingParseError(pub String);
 
 impl FromStr for KeyBinding {
     type Err = KeyBindingParseError;
@@ -106,19 +89,20 @@ impl FromStr for KeyBinding {
     }
 }
 
-impl Default for Keybindings {
-    fn default() -> Self {
-        Self {
-            exit: KeyBinding::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
-            cancel: KeyBinding::new(KeyCode::Esc, KeyModifiers::NONE),
-            submit: KeyBinding::new(KeyCode::Enter, KeyModifiers::NONE),
-            open_command_picker: KeyBinding::new(KeyCode::Char('/'), KeyModifiers::NONE),
-            open_file_picker: KeyBinding::new(KeyCode::Char('@'), KeyModifiers::NONE),
-            toggle_git_diff: KeyBinding::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
-            cycle_reasoning: KeyBinding::new(KeyCode::Tab, KeyModifiers::NONE),
-            cycle_mode: KeyBinding::new(KeyCode::BackTab, KeyModifiers::SHIFT),
-            open_prompt_search: KeyBinding::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
-        }
+impl KeyAction {
+    fn default_binding(self) -> KeyBinding {
+        let (code, modifiers) = match self {
+            Self::Exit => (KeyCode::Char('c'), KeyModifiers::CONTROL),
+            Self::Cancel => (KeyCode::Esc, KeyModifiers::NONE),
+            Self::Submit => (KeyCode::Enter, KeyModifiers::NONE),
+            Self::OpenCommandPicker => (KeyCode::Char('/'), KeyModifiers::NONE),
+            Self::OpenFilePicker => (KeyCode::Char('@'), KeyModifiers::NONE),
+            Self::ToggleGitDiff => (KeyCode::Char('g'), KeyModifiers::CONTROL),
+            Self::CycleReasoning => (KeyCode::Tab, KeyModifiers::NONE),
+            Self::CycleMode => (KeyCode::BackTab, KeyModifiers::SHIFT),
+            Self::OpenPromptSearch => (KeyCode::Char('r'), KeyModifiers::CONTROL),
+        };
+        KeyBinding::new(code, modifiers)
     }
 }
 
@@ -152,7 +136,6 @@ fn parse_key_code(token: &str) -> Option<KeyCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::KeybindingsSettings;
 
     #[test]
     fn requires_exact_modifier_match() {
@@ -180,15 +163,15 @@ mod tests {
     #[test]
     fn settings_override_defaults_and_ignore_invalid_entries() {
         let settings = UiSettings {
-            keybindings: Some(KeybindingsSettings {
-                toggle_git_diff: Some("ctrl+d".to_string()),
-                submit: Some("not a key at all".to_string()),
-                ..KeybindingsSettings::default()
-            }),
+            keybindings: BTreeMap::from([
+                (KeyAction::ToggleGitDiff, "ctrl+d".to_string()),
+                (KeyAction::Submit, "not a key at all".to_string()),
+            ]),
             ..UiSettings::default()
         };
         let bindings = Keybindings::from_settings(&settings);
-        assert_eq!(bindings.toggle_git_diff, KeyBinding::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
-        assert_eq!(bindings.submit, Keybindings::default().submit);
+        assert!(bindings.matches(KeyAction::ToggleGitDiff, KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL)));
+        assert!(!bindings.matches(KeyAction::ToggleGitDiff, KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL)));
+        assert!(bindings.matches(KeyAction::Submit, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
     }
 }

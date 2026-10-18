@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use tempfile::TempDir;
 
-use crate::tasks::{Task, TaskId, TaskStore};
+use crate::tasks::{Task, TaskId, TaskStore, TaskUpdate};
 
 /// An on-disk [`TaskStore`] rooted in a temporary directory, set up fluently.
 pub struct TestTaskStore {
@@ -19,7 +19,7 @@ impl TestTaskStore {
         Self { directory, store }
     }
 
-    /// The store root; task tree files live in `active/` and `completed/` beneath it.
+    /// The store root; task tree files live in `active/` beneath it.
     pub fn root(&self) -> PathBuf {
         store_root(&self.directory)
     }
@@ -34,7 +34,7 @@ impl TestTaskStore {
         &mut self.store
     }
 
-    /// Drops the in-memory index and reloads the store from disk.
+    /// Drops the in-memory tasks and reloads the store from disk.
     pub fn reopen(&mut self) {
         let mut store = TaskStore::new(self.root());
         store.init().expect("failed to re-initialize task store");
@@ -43,12 +43,12 @@ impl TestTaskStore {
 
     /// Creates a root task tree with `title`.
     pub fn root_task(&mut self, title: &str) -> Task {
-        self.store.create_tree(title, None).expect("failed to create root task")
+        self.store.create(None, title, TaskUpdate::default()).expect("failed to create root task")
     }
 
     /// Adds a subtask with `title` under `parent`.
     pub fn subtask(&mut self, parent: &TaskId, title: &str) -> Task {
-        self.store.add_subtask(parent, title).expect("failed to add subtask")
+        self.store.create(Some(parent), title, TaskUpdate::default()).expect("failed to add subtask")
     }
 }
 

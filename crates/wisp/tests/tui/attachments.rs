@@ -1,235 +1,74 @@
 use super::support::*;
-use std::path::{Path, PathBuf};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 
-fn make_app_with_prompt_capabilities(prompt_capabilities: acp::PromptCapabilities) -> TestUi {
-    TestUiBuilder::new().prompt_capabilities(prompt_capabilities).build()
-}
-
-fn make_app_with_caps_and_config(
-    prompt_capabilities: acp::PromptCapabilities,
-    config_options: Vec<acp::SessionConfigOption>,
-) -> TestUi {
-    TestUiBuilder::new().prompt_capabilities(prompt_capabilities).config_options(config_options).build()
-}
-
-fn make_failable_app_with_caps(prompt_capabilities: acp::PromptCapabilities) -> TestUi {
-    let mut app = TestUiBuilder::new().prompt_capabilities(prompt_capabilities).build();
-    app.reject_prompts(PromptRejection::Failed("connection closed".to_string()));
-    app
-}
-
-fn pending_media_paths(app: &TestUi) -> Vec<&PathBuf> {
-    app.app().composer().pending_media().iter().map(|attachment| &attachment.path).collect()
-}
-
-fn media_caps() -> acp::PromptCapabilities {
-    acp::PromptCapabilities::new().image(acp::PromptImageCapabilities::new()).audio(acp::PromptAudioCapabilities::new())
-}
-
-fn model_select_option(
-    value: &str,
-    name: &str,
-    supports_image: bool,
-    supports_audio: bool,
-) -> acp::SessionConfigSelectOption {
-    acp::SessionConfigSelectOption::new(value.to_string(), name.to_string())
-        .meta(SelectOptionMeta { reasoning_levels: vec![], supports_image, supports_audio }.into_meta())
-}
-
-fn image_model_config(current: &str, options: Vec<acp::SessionConfigSelectOption>) -> acp::SessionConfigOption {
-    acp::SessionConfigOption::select(
-        ConfigOptionId::Model.as_str().to_string(),
-        "Model".to_string(),
-        current.to_string(),
-        options,
-    )
-    .category(acp::SessionConfigOptionCategory::Model)
-}
-
-fn grouped_model_config(current: &str, groups: Vec<acp::SessionConfigSelectGroup>) -> acp::SessionConfigOption {
-    let mut option = acp::SessionConfigOption::select(
-        ConfigOptionId::Model.as_str().to_string(),
-        "Model".to_string(),
-        current.to_string(),
-        Vec::<acp::SessionConfigSelectOption>::new(),
-    )
-    .category(acp::SessionConfigOptionCategory::Model);
-    if let acp::SessionConfigKind::Select(select) = &mut option.kind {
-        select.options = acp::SessionConfigSelectOptions::Grouped(groups);
-    }
-    option
-}
-
-fn make_select_group(
-    id: &str,
-    name: &str,
-    options: Vec<acp::SessionConfigSelectOption>,
-) -> acp::SessionConfigSelectGroup {
-    acp::SessionConfigSelectGroup::new(acp::SessionConfigGroupId::new(id.to_string()), name.to_string(), options)
-}
+const ONE_MIB: usize = 1024 * 1024;
+const TEN_MIB: usize = 10 * 1024 * 1024;
 
 #[test]
 fn remote_paste_never_attaches_even_when_the_path_exists_locally() {
-    let tmp = TestWorkspace::new();
-    let image = tmp.write("photo.png", b"client-only contents");
     let mut ui = TestUiBuilder::new().remote_workspace().build();
-    ui.paste(image.to_str().unwrap());
+    let image = paste_media(&mut ui, "photo.png");
+    let image = image.to_str().unwrap();
     assert_eq!(ui.app().composer().pending_media().len(), 0);
-    assert_eq!(ui.app().composer().text(), image.to_str().unwrap());
+    assert_eq!(ui.app().composer().text(), image);
     ui.key(key(KeyCode::Enter));
-    assert!(
-        matches!(ui.next_agent_command(), Some(AgentCommand::Prompt { text, content: None, .. }) if text == image.to_str().unwrap())
-    );
+    assert!(matches!(ui.next_agent_command(), Some(AgentCommand::Prompt { text, content: None, .. }) if text == image));
     assert!(ui.take_commands().is_empty());
 }
 
 #[test]
-fn paste_image_path_adds_pending_media() {
-    let mut app = make_app();
+fn pasting_an_existing_media_path_or_file_uri_attaches_it() {
     let tmp = TestWorkspace::new();
-    let img = tmp.write("photo.png", b"fake png");
+    let file = |name: &str| tmp.write(name, b"media").display().to_string();
+    for (name, payload) in [
+        ("photo.png", file("photo.png")),
+        ("note.wav", file("note.wav")),
+        ("image.png", format!("file://{}", file("image.png"))),
+        ("my image.png", format!("file://{}", file("my image.png")).replace(' ', "%20")),
+    ] {
+        let mut ui = TestUi::new();
 
-    app.paste(img.to_str().unwrap());
+        ui.paste(&payload);
 
-    assert_eq!(app.app().composer().pending_media().len(), 1);
-    assert_eq!(app.app().composer().pending_media()[0].display_name, "photo.png");
-    assert_eq!(app.app().composer().text(), "");
+        let attached: Vec<_> = ui.app().composer().pending_media().iter().map(|media| &media.display_name).collect();
+        assert_eq!(attached, [name], "pasting {name} should attach it");
+        assert_eq!(ui.app().composer().text(), "", "an attached path is consumed");
+    }
 }
 
 #[test]
-fn paste_audio_path_adds_pending_media() {
-    let mut app = make_app();
+fn pastes_that_are_not_all_existing_media_files_stay_text() {
     let tmp = TestWorkspace::new();
-    let audio = tmp.write("note.wav", b"fake wav");
-
-    app.paste(audio.to_str().unwrap());
-
-    assert_eq!(app.app().composer().pending_media().len(), 1);
-    assert_eq!(app.app().composer().pending_media()[0].display_name, "note.wav");
-}
-
-#[test]
-fn paste_ordinary_text_inserts_as_text() {
-    let mut app = make_app();
-
-    app.paste("hello world");
-
-    assert_eq!(app.app().composer().pending_media().len(), 0);
-    assert_eq!(app.app().composer().text(), "hello world");
-}
-
-#[test]
-fn paste_non_media_file_falls_back_to_text() {
-    let mut app = make_app();
-    let tmp = TestWorkspace::new();
-    let txt = tmp.write("readme.txt", b"hello");
-
-    app.paste(txt.to_str().unwrap());
-
-    assert_eq!(app.app().composer().pending_media().len(), 0);
-    assert_ne!(app.app().composer().text(), "");
-}
-
-#[test]
-fn paste_nonexistent_path_remains_as_text() {
-    let mut app = make_app();
-    let tmp = TestWorkspace::new();
-    let missing = tmp.path("photo.png");
-    let input = missing.to_str().unwrap();
-
-    app.paste(input);
-
-    assert_eq!(app.app().composer().pending_media().len(), 0);
-    assert_eq!(app.app().composer().text(), input);
-}
-
-#[test]
-fn paste_nonexistent_file_uri_remains_as_text() {
-    let mut app = make_app();
-    let tmp = TestWorkspace::new();
-    let missing = tmp.path("note.wav");
-    let uri = format!("file://{}", missing.display());
-
-    app.paste(&uri);
-
-    assert_eq!(app.app().composer().pending_media().len(), 0);
-    assert_eq!(app.app().composer().text(), uri);
-}
-
-#[test]
-fn paste_directory_path_remains_as_text() {
-    let mut app = make_app();
-    let tmp = TestWorkspace::new();
+    let photo = tmp.write("photo.png", b"img").display().to_string();
+    let readme = tmp.write("readme.txt", b"hello").display().to_string();
+    let missing = tmp.path("gone.wav").display().to_string();
     // A directory with a media-like extension is the dangerous case.
-    let dir = tmp.path("assets.png");
-    std::fs::create_dir(&dir).unwrap();
-    let input = dir.to_str().unwrap();
+    let directory = tmp.path("clips.png");
+    std::fs::create_dir(&directory).unwrap();
+    let directory = directory.display().to_string();
+    for input in [
+        "hello world".to_string(),
+        readme,
+        missing.clone(),
+        format!("file://{missing}"),
+        directory.clone(),
+        format!("{}\n{missing}", tmp.path("a.png").display()),
+        format!("{photo}\n{missing}"),
+        format!("{photo}\n{directory}"),
+    ] {
+        let mut ui = TestUi::new();
 
-    app.paste(input);
+        ui.paste(&input);
 
-    assert_eq!(app.app().composer().pending_media().len(), 0);
-    assert_eq!(app.app().composer().text(), input);
-}
-
-#[test]
-fn paste_multiple_nonexistent_paths_remain_as_text() {
-    let mut app = make_app();
-    let tmp = TestWorkspace::new();
-    let a = tmp.path("a.png");
-    let b = tmp.path("b.wav");
-    let input = format!("{}\n{}", a.display(), b.display());
-
-    app.paste(&input);
-
-    assert_eq!(app.app().composer().pending_media().len(), 0);
-    assert_eq!(app.app().composer().text(), input);
-}
-
-#[test]
-fn paste_existing_regular_file_becomes_media_and_clears_text() {
-    let mut app = make_app();
-    let tmp = TestWorkspace::new();
-    let img = tmp.write("photo.png", b"fake png");
-
-    app.paste(img.to_str().unwrap());
-
-    assert_eq!(app.app().composer().pending_media().len(), 1);
-    assert_eq!(app.app().composer().pending_media()[0].display_name, "photo.png");
-    assert!(app.app().composer().text().is_empty(), "a real regular media file consumes the pasted path");
-}
-
-#[test]
-fn paste_mixed_valid_and_missing_media_keeps_text_and_adds_nothing() {
-    let mut app = make_app();
-    let tmp = TestWorkspace::new();
-    let valid = tmp.write("photo.png", b"img");
-    let missing = tmp.path("gone.wav");
-    let input = format!("{}\n{}", valid.display(), missing.display());
-
-    app.paste(&input);
-
-    assert_eq!(app.app().composer().pending_media().len(), 0);
-    assert_eq!(app.app().composer().text(), input);
-}
-
-#[test]
-fn paste_mixed_valid_media_and_directory_keeps_text_and_adds_nothing() {
-    let mut app = make_app();
-    let tmp = TestWorkspace::new();
-    let valid = tmp.write("photo.png", b"img");
-    let dir = tmp.path("clips.png");
-    std::fs::create_dir(&dir).unwrap();
-    let input = format!("{}\n{}", valid.display(), dir.display());
-
-    app.paste(&input);
-
-    assert_eq!(app.app().composer().pending_media().len(), 0);
-    assert_eq!(app.app().composer().text(), input);
+        assert_eq!(ui.app().composer().pending_media().len(), 0, "{input:?} should attach nothing");
+        assert_eq!(ui.app().composer().text(), input);
+    }
 }
 
 #[test]
 fn paste_multiple_dropped_files_adds_all() {
-    let mut app = make_app();
+    let mut app = TestUi::new();
     let tmp = TestWorkspace::new();
     let img = tmp.write("a.png", b"img");
     let audio = tmp.write("b.wav", b"audio");
@@ -242,7 +81,7 @@ fn paste_multiple_dropped_files_adds_all() {
 
 #[test]
 fn duplicate_dropped_media_not_added_twice() {
-    let mut app = make_app();
+    let mut app = TestUi::new();
     let tmp = TestWorkspace::new();
     let img = tmp.write("photo.png", b"img");
     let path_str = img.to_str().unwrap().to_string();
@@ -255,57 +94,36 @@ fn duplicate_dropped_media_not_added_twice() {
 
 #[test]
 fn media_only_submit_sends_with_content_blocks() {
-    let mut app = make_app_with_prompt_capabilities(media_caps());
-    let tmp = TestWorkspace::new();
-    let img = tmp.write("photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
+    let mut app = TestUiBuilder::new().prompt_capabilities(media_caps()).build();
+    submit_media(&mut app, "photo.png");
 
-    app.paste(img.to_str().unwrap());
-    app.key(key(KeyCode::Enter));
-    app.settle_tasks();
-
-    let cmd = app.next_agent_command().unwrap();
-    match cmd {
-        AgentCommand::Prompt { text, content, .. } => {
-            assert!(text.is_empty(), "media-only send should have empty text");
-            assert!(content.is_some(), "media-only send should have content blocks");
-            assert_ne!(content.unwrap().len(), 0);
-        }
-        other => panic!("expected Prompt command, got {other:?}"),
-    }
+    let cmd = app.next_agent_command();
+    assert!(
+        matches!(&cmd, Some(AgentCommand::Prompt { text, content: Some(blocks), .. })
+            if text.is_empty() && !blocks.is_empty()),
+        "media-only send should carry content blocks and no text, got {cmd:?}"
+    );
 }
 
 #[test]
 fn submit_with_text_and_media_merges_both() {
-    let mut app = make_app_with_prompt_capabilities(media_caps());
-    let tmp = TestWorkspace::new();
-    let img = tmp.write("photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
-
-    app.paste(img.to_str().unwrap());
+    let mut app = TestUiBuilder::new().prompt_capabilities(media_caps()).build();
+    paste_media(&mut app, "photo.png");
     app.type_text("describe this");
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
 
-    let cmd = app.next_agent_command().unwrap();
-    match cmd {
-        AgentCommand::Prompt { text, content, .. } => {
-            assert_eq!(text, "describe this");
-            assert!(content.is_some());
-        }
-        other => panic!("expected Prompt command, got {other:?}"),
-    }
+    let cmd = app.next_agent_command();
+    assert!(
+        matches!(&cmd, Some(AgentCommand::Prompt { text, content: Some(_), .. }) if text == "describe this"),
+        "{cmd:?}"
+    );
 }
 
 #[test]
 fn submit_clears_pending_media() {
-    let mut app = make_app_with_prompt_capabilities(media_caps());
-    let tmp = TestWorkspace::new();
-    let img = tmp.write("photo.png", b"fake png");
-
-    app.paste(img.to_str().unwrap());
-    app.key(key(KeyCode::Enter));
-    app.settle_tasks();
+    let mut app = TestUiBuilder::new().prompt_capabilities(media_caps()).build();
+    submit_media(&mut app, "photo.png");
     app.next_agent_command().unwrap();
 
     assert_eq!(app.app().composer().pending_media().len(), 0);
@@ -314,13 +132,9 @@ fn submit_clears_pending_media() {
 
 #[test]
 fn backspace_on_empty_composer_removes_last_dropped_media() {
-    let mut app = make_app();
-    let tmp = TestWorkspace::new();
-    let img1 = tmp.write("a.png", b"a");
-    let img2 = tmp.write("b.png", b"b");
-
-    app.paste(img1.to_str().unwrap());
-    app.paste(img2.to_str().unwrap());
+    let mut app = TestUi::new();
+    paste_media(&mut app, "a.png");
+    paste_media(&mut app, "b.png");
     assert_eq!(app.app().composer().pending_media().len(), 2);
 
     app.key(key(KeyCode::Backspace));
@@ -333,11 +147,8 @@ fn backspace_on_empty_composer_removes_last_dropped_media() {
 
 #[test]
 fn backspace_does_not_remove_media_when_text_present() {
-    let mut app = make_app();
-    let tmp = TestWorkspace::new();
-    let img = tmp.write("photo.png", b"img");
-
-    app.paste(img.to_str().unwrap());
+    let mut app = TestUi::new();
+    paste_media(&mut app, "photo.png");
     app.type_text("x");
     app.key(key(KeyCode::Backspace));
 
@@ -347,11 +158,8 @@ fn backspace_does_not_remove_media_when_text_present() {
 
 #[test]
 fn attachment_chips_render_in_layout() {
-    let mut app = make_app();
-    let tmp = TestWorkspace::new();
-    let img = tmp.write("photo.png", b"img");
-
-    app.paste(img.to_str().unwrap());
+    let mut app = TestUi::new();
+    paste_media(&mut app, "photo.png");
 
     let layout = app.composer_layout(80);
     let text: String = layout
@@ -364,150 +172,55 @@ fn attachment_chips_render_in_layout() {
 }
 
 #[test]
-fn agent_rejects_image_when_capability_missing() {
-    let caps = acp::PromptCapabilities::new().image(None).audio(acp::PromptAudioCapabilities::new());
-    let mut app = make_app_with_prompt_capabilities(caps);
-    let tmp = TestWorkspace::new();
-    let img = tmp.write("photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
+fn media_is_sent_only_when_the_agent_and_every_selected_model_support_it() {
+    let no_image = acp::PromptCapabilities::new().audio(acp::PromptAudioCapabilities::new());
+    let no_audio = acp::PromptCapabilities::new().image(acp::PromptImageCapabilities::new());
+    let cases = [
+        (no_image, vec![], "photo.png", Some("ACP agent does not support image input")),
+        (no_audio, vec![], "note.wav", Some("ACP agent does not support audio input")),
+        (media_caps(), models("gpt", &[("gpt", false, false)]), "photo.png", Some("selection does not support image")),
+        (media_caps(), models("gpt", &[("gpt", true, false)]), "note.wav", Some("selection does not support audio")),
+        (media_caps(), models("unknown", &[("known", true, true)]), "photo.png", Some("missing prompt capability")),
+        (media_caps(), grouped("a", &[("a", false, true)]), "photo.png", Some("selection does not support image")),
+        (media_caps(), grouped("a", &[("a", true, false)]), "note.wav", Some("selection does not support audio")),
+        (media_caps(), grouped("a,b", &[("a", true, true), ("b", false, false)]), "photo.png", Some("support image")),
+        (media_caps(), models("a", &[("a", true, true)]), "photo.png", None),
+        (media_caps(), grouped("a,b", &[("a", true, true), ("b", true, true)]), "photo.png", None),
+    ];
+    for (capabilities, config, file, rejection) in cases {
+        let mut ui = TestUiBuilder::new().prompt_capabilities(capabilities).config_options(config).build();
+        submit_media(&mut ui, file);
 
-    app.paste(img.to_str().unwrap());
-    app.key(key(KeyCode::Enter));
-    app.settle_tasks();
-
-    assert!(app.next_command().is_none(), "prompt should be blocked locally");
-    assert!(!app.app().waiting_for_response());
-
-    let messages: Vec<_> = message_texts(&app).collect();
-    assert!(messages.iter().any(|msg| msg.contains("does not support image")));
-}
-
-#[test]
-fn agent_rejects_audio_when_capability_missing() {
-    let caps = acp::PromptCapabilities::new().image(acp::PromptImageCapabilities::new()).audio(None);
-    let mut app = make_app_with_prompt_capabilities(caps);
-    let tmp = TestWorkspace::new();
-    let audio = tmp.write("note.wav", b"fake wav data");
-    app.executor_mut().filesystem_mut().write_file(&audio, b"fake wav data");
-
-    app.paste(audio.to_str().unwrap());
-    app.key(key(KeyCode::Enter));
-    app.settle_tasks();
-
-    assert!(app.next_command().is_none(), "prompt should be blocked locally");
-    assert!(!app.app().waiting_for_response());
-}
-
-#[test]
-fn selected_model_rejects_image() {
-    let caps = acp::PromptCapabilities::new()
-        .image(acp::PromptImageCapabilities::new())
-        .audio(acp::PromptAudioCapabilities::new());
-    let config = vec![image_model_config(
-        "gpt:no-vision",
-        vec![model_select_option("gpt:no-vision", "GPT No Vision", false, false)],
-    )];
-    let mut app = make_app_with_caps_and_config(caps, config);
-    let tmp = TestWorkspace::new();
-    let img = tmp.write("photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
-
-    app.paste(img.to_str().unwrap());
-    app.key(key(KeyCode::Enter));
-    app.settle_tasks();
-
-    assert!(app.next_command().is_none(), "prompt should be blocked locally");
-    let messages: Vec<_> = message_texts(&app).collect();
-    assert!(messages.iter().any(|msg| msg.contains("model selection does not support image")));
-}
-
-#[test]
-fn missing_model_metadata_rejects_media() {
-    let caps = acp::PromptCapabilities::new()
-        .image(acp::PromptImageCapabilities::new())
-        .audio(acp::PromptAudioCapabilities::new());
-    let config =
-        vec![image_model_config("unknown-model", vec![model_select_option("known-model", "Known", true, true)])];
-    let mut app = make_app_with_caps_and_config(caps, config);
-    let tmp = TestWorkspace::new();
-    let img = tmp.write("photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
-
-    app.paste(img.to_str().unwrap());
-    app.key(key(KeyCode::Enter));
-    app.settle_tasks();
-
-    assert!(app.next_command().is_none(), "prompt should be blocked locally");
-    let messages: Vec<_> = message_texts(&app).collect();
-    assert!(messages.iter().any(|msg| msg.contains("missing prompt capability metadata")));
-}
-
-#[test]
-fn supported_media_sends_blocks() {
-    let caps = acp::PromptCapabilities::new()
-        .image(acp::PromptImageCapabilities::new())
-        .audio(acp::PromptAudioCapabilities::new());
-    let config = vec![image_model_config(
-        "claude:vision",
-        vec![model_select_option("claude:vision", "Claude Vision", true, true)],
-    )];
-    let mut app = make_app_with_caps_and_config(caps, config);
-    let tmp = TestWorkspace::new();
-    let img = tmp.write("photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
-
-    app.paste(img.to_str().unwrap());
-    app.key(key(KeyCode::Enter));
-    app.settle_tasks();
-
-    let cmd = app.next_agent_command().unwrap();
-    match cmd {
-        AgentCommand::Prompt { content, .. } => {
-            let blocks = content.expect("should have content blocks");
-            assert!(blocks.iter().any(|b| matches!(b, acp::ContentBlock::Image(_))));
+        if let Some(notice) = rejection {
+            assert!(ui.next_command().is_none(), "{file} should be blocked locally");
+            assert!(!ui.app().waiting_for_response());
+            let messages: Vec<_> = message_texts(&ui).collect();
+            assert!(messages.iter().any(|message| message.contains(notice)), "{notice:?} not in {messages:?}");
+        } else {
+            let command = ui.next_agent_command();
+            assert!(
+                matches!(&command, Some(AgentCommand::Prompt { content: Some(blocks), .. })
+                    if blocks.iter().any(|block| matches!(block, acp::ContentBlock::Image(_)))),
+                "{file} should be sent, got {command:?}"
+            );
         }
-        other => panic!("expected Prompt command, got {other:?}"),
     }
-}
-
-#[test]
-fn sync_prompt_failure_resets_busy_state() {
-    let mut app = make_failable_app_with_caps(media_caps());
-    let tmp = TestWorkspace::new();
-    let img = tmp.write("photo.png", b"fake png data");
-
-    app.paste(img.to_str().unwrap());
-    app.key(key(KeyCode::Enter));
-    app.settle_tasks();
-    let _ = app.next_agent_command().expect("prompt should be recorded before its completion fails");
-
-    assert!(!app.app().waiting_for_response(), "failed prompt should reset busy state");
-    assert!(app.next_command().is_none(), "no follow-up prompt should be sent");
-
-    let messages: Vec<_> = message_texts(&app).collect();
-    assert!(messages.iter().any(|msg| msg.contains("Failed to send prompt")));
 }
 
 #[test]
 fn text_only_submit_unaffected_by_media_capability_check() {
     let caps = acp::PromptCapabilities::new().image(None).audio(None);
-    let mut app = make_app_with_prompt_capabilities(caps);
+    let mut app = TestUiBuilder::new().prompt_capabilities(caps).build();
 
     app.submit("hello");
 
-    let cmd = app.next_agent_command().unwrap();
-    match cmd {
-        AgentCommand::Prompt { text, content, .. } => {
-            assert_eq!(text, "hello");
-            assert!(content.is_none());
-        }
-        other => panic!("expected Prompt command, got {other:?}"),
-    }
+    let cmd = app.next_agent_command();
+    assert!(matches!(&cmd, Some(AgentCommand::Prompt { text, content: None, .. }) if text == "hello"), "{cmd:?}");
 }
 
 #[test]
 fn submit_is_blocked_when_composer_empty_without_media() {
-    let mut app = make_app();
+    let mut app = TestUi::new();
 
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
@@ -517,13 +230,9 @@ fn submit_is_blocked_when_composer_empty_without_media() {
 
 #[test]
 fn clear_command_also_clears_pending_media() {
-    let mut app = make_app();
-    let tmp = TestWorkspace::new();
-    let img = tmp.write("photo.png", b"img");
-
-    app.paste(img.to_str().unwrap());
-    app.type_text("/clear");
-    app.key(key(KeyCode::Tab));
+    let mut app = TestUi::new();
+    paste_media(&mut app, "photo.png");
+    app.run_command("/clear");
     let _ = app.next_agent_command().unwrap();
 
     assert_eq!(app.app().composer().pending_media().len(), 0);
@@ -531,178 +240,10 @@ fn clear_command_also_clears_pending_media() {
 }
 
 #[test]
-fn paste_with_file_uri_parses_correctly() {
-    let mut app = make_app();
-    let tmp = TestWorkspace::new();
-    let img = tmp.write("image.png", b"img");
-    let uri = format!("file://{}", img.display());
-
-    app.paste(&uri);
-
-    assert_eq!(app.app().composer().pending_media().len(), 1);
-    assert_eq!(app.app().composer().pending_media()[0].display_name, "image.png");
-}
-
-#[test]
-fn paste_with_percent_decoded_file_uri() {
-    let mut app = make_app();
-    let tmp = TestWorkspace::new();
-    let img = tmp.write("my image.png", b"png");
-    let unencoded_path = img.to_str().unwrap();
-    let encoded_path = unencoded_path.replace(' ', "%20");
-    let uri = format!("file://{encoded_path}");
-
-    app.paste(&uri);
-
-    assert_eq!(app.app().composer().pending_media().len(), 1);
-    assert_eq!(app.app().composer().pending_media()[0].display_name, "my image.png");
-}
-
-#[test]
-fn selected_model_rejects_audio() {
-    let caps = acp::PromptCapabilities::new()
-        .image(acp::PromptImageCapabilities::new())
-        .audio(acp::PromptAudioCapabilities::new());
-    let config = vec![image_model_config(
-        "gpt:no-audio",
-        vec![model_select_option("gpt:no-audio", "GPT No Audio", true, false)],
-    )];
-    let mut app = make_app_with_caps_and_config(caps, config);
-    let tmp = TestWorkspace::new();
-    let audio = tmp.write("note.wav", b"fake wav data");
-    app.executor_mut().filesystem_mut().write_file(&audio, b"fake wav data");
-
-    app.paste(audio.to_str().unwrap());
-    app.key(key(KeyCode::Enter));
-    app.settle_tasks();
-
-    assert!(app.next_command().is_none(), "prompt should be blocked locally");
-    let messages: Vec<_> = message_texts(&app).collect();
-    assert!(messages.iter().any(|msg| msg.contains("model selection does not support audio")));
-}
-
-#[test]
-fn selected_model_rejects_image_grouped() {
-    let caps = acp::PromptCapabilities::new()
-        .image(acp::PromptImageCapabilities::new())
-        .audio(acp::PromptAudioCapabilities::new());
-    let groups = vec![make_select_group(
-        "g1",
-        "Group 1",
-        vec![model_select_option("grouped:no-vision", "No Vision", false, true)],
-    )];
-    let config = vec![grouped_model_config("grouped:no-vision", groups)];
-    let mut app = make_app_with_caps_and_config(caps, config);
-    let tmp = TestWorkspace::new();
-    let img = tmp.write("photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
-
-    app.paste(img.to_str().unwrap());
-    app.key(key(KeyCode::Enter));
-    app.settle_tasks();
-
-    assert!(app.next_command().is_none(), "prompt should be blocked locally");
-    let messages: Vec<_> = message_texts(&app).collect();
-    assert!(messages.iter().any(|msg| msg.contains("model selection does not support image")));
-}
-
-#[test]
-fn selected_model_rejects_audio_grouped() {
-    let caps = acp::PromptCapabilities::new()
-        .image(acp::PromptImageCapabilities::new())
-        .audio(acp::PromptAudioCapabilities::new());
-    let groups = vec![make_select_group(
-        "g1",
-        "Group 1",
-        vec![model_select_option("grouped:no-audio", "No Audio", true, false)],
-    )];
-    let config = vec![grouped_model_config("grouped:no-audio", groups)];
-    let mut app = make_app_with_caps_and_config(caps, config);
-    let tmp = TestWorkspace::new();
-    let audio = tmp.write("note.wav", b"fake wav data");
-    app.executor_mut().filesystem_mut().write_file(&audio, b"fake wav data");
-
-    app.paste(audio.to_str().unwrap());
-    app.key(key(KeyCode::Enter));
-    app.settle_tasks();
-
-    assert!(app.next_command().is_none(), "prompt should be blocked locally");
-    let messages: Vec<_> = message_texts(&app).collect();
-    assert!(messages.iter().any(|msg| msg.contains("model selection does not support audio")));
-}
-
-#[test]
-fn comma_separated_multi_model_rejects_image() {
-    let caps = acp::PromptCapabilities::new()
-        .image(acp::PromptImageCapabilities::new())
-        .audio(acp::PromptAudioCapabilities::new());
-    let groups = vec![
-        make_select_group(
-            "g1",
-            "Vision Models",
-            vec![model_select_option("claude:sonnet", "Claude Sonnet", true, true)],
-        ),
-        make_select_group(
-            "g2",
-            "Text Models",
-            vec![model_select_option("gpt:text-only", "GPT Text Only", false, false)],
-        ),
-    ];
-    let config = vec![grouped_model_config("claude:sonnet,gpt:text-only", groups)];
-    let mut app = make_app_with_caps_and_config(caps, config);
-    let tmp = TestWorkspace::new();
-    let img = tmp.write("photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
-
-    app.paste(img.to_str().unwrap());
-    app.key(key(KeyCode::Enter));
-    app.settle_tasks();
-
-    assert!(app.next_command().is_none(), "prompt should be blocked — multi-select includes unsupported model");
-}
-
-#[test]
-fn comma_separated_multi_model_sends_when_all_support_media() {
-    let caps = acp::PromptCapabilities::new()
-        .image(acp::PromptImageCapabilities::new())
-        .audio(acp::PromptAudioCapabilities::new());
-    let groups = vec![
-        make_select_group(
-            "g1",
-            "Vision Models",
-            vec![model_select_option("claude:sonnet", "Claude Sonnet", true, true)],
-        ),
-        make_select_group("g2", "Reasoning", vec![model_select_option("deepseek:r1", "DeepSeek R1", true, true)]),
-    ];
-    let config = vec![grouped_model_config("claude:sonnet,deepseek:r1", groups)];
-    let mut app = make_app_with_caps_and_config(caps, config);
-    let tmp = TestWorkspace::new();
-    let img = tmp.write("photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
-
-    app.paste(img.to_str().unwrap());
-    app.key(key(KeyCode::Enter));
-    app.settle_tasks();
-
-    let cmd = app.next_agent_command().unwrap();
-    match cmd {
-        AgentCommand::Prompt { content, .. } => {
-            let blocks = content.expect("should have content blocks");
-            assert!(blocks.iter().any(|b| matches!(b, acp::ContentBlock::Image(_))));
-        }
-        other => panic!("expected Prompt command, got {other:?}"),
-    }
-}
-
-#[test]
 fn unsupported_media_returns_the_text_to_the_composer() {
     let caps = acp::PromptCapabilities::new().image(None).audio(None);
-    let mut app = make_app_with_prompt_capabilities(caps);
-    let tmp = TestWorkspace::new();
-    let img = tmp.write("photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
-
-    app.paste(img.to_str().unwrap());
+    let mut app = TestUiBuilder::new().prompt_capabilities(caps).build();
+    let img = paste_media(&mut app, "photo.png");
     app.type_text("describe this image");
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
@@ -721,13 +262,9 @@ fn unsupported_media_returns_the_text_to_the_composer() {
 
 #[test]
 fn sync_failure_returns_the_text_to_the_composer() {
-    let caps = media_caps();
-    let mut app = make_failable_app_with_caps(caps);
-    let tmp = TestWorkspace::new();
-    let img = tmp.write("photo.png", b"fake png data");
-    app.executor_mut().filesystem_mut().write_file(&img, b"fake png data");
-
-    app.paste(img.to_str().unwrap());
+    let mut app = TestUiBuilder::new().prompt_capabilities(media_caps()).build();
+    app.reject_prompts(PromptRejection::Failed("connection closed".to_string()));
+    let img = paste_media(&mut app, "photo.png");
     app.type_text("describe this");
     app.key(key(KeyCode::Enter));
     app.settle_tasks();
@@ -743,306 +280,158 @@ fn sync_failure_returns_the_text_to_the_composer() {
     assert!(messages.iter().any(|msg| msg.contains("Failed to send prompt")), "error message shown");
 }
 
-const ONE_MIB: usize = 1024 * 1024;
-const TEN_MIB: usize = 10 * 1024 * 1024;
-
-fn write_temp(name: &str, bytes: &[u8]) -> (TestWorkspace, PathBuf) {
-    let dir = TestWorkspace::new();
-    let path = dir.write(name, bytes);
-    (dir, path)
-}
-
-fn attach(path: PathBuf, display_name: &str) -> Vec<PromptAttachment> {
-    vec![PromptAttachment { path, display_name: display_name.to_string() }]
-}
-
-fn text_of(block: &acp::ContentBlock) -> &str {
-    match block {
-        acp::ContentBlock::Resource(resource) => match &resource.resource {
-            acp::EmbeddedResourceResource::TextResourceContents(contents) => &contents.text,
-            _ => panic!("resource block is not text"),
-        },
-        _ => panic!("expected a text resource block, got {block:?}"),
-    }
-}
-
-fn mime_of(block: &acp::ContentBlock) -> &str {
-    match block {
-        acp::ContentBlock::Image(image) => image.mime_type.0.as_ref(),
-        acp::ContentBlock::Audio(audio) => audio.mime_type.0.as_ref(),
-        acp::ContentBlock::Resource(resource) => match &resource.resource {
-            acp::EmbeddedResourceResource::TextResourceContents(contents) => {
-                contents.mime_type.as_ref().map_or("", |mime| mime.0.as_ref())
-            }
-            _ => "",
-        },
-        _ => "",
+#[test]
+fn classify_attachment_whitelists_media_and_text_types() {
+    use AttachmentKind::{Audio, Image, Text, Unsupported};
+    for (file, kind) in [
+        ("photo.png", Image),
+        ("photo.jpg", Image),
+        ("photo.jpeg", Image),
+        ("photo.gif", Image),
+        ("photo.webp", Image),
+        ("icon.svg", Unsupported),
+        ("photo.bmp", Unsupported),
+        ("note.wav", Audio),
+        ("note.mp3", Audio),
+        ("note.ogg", Audio),
+        ("readme.txt", Text),
+        ("data.xyz", Unsupported),
+    ] {
+        assert_eq!(classify_attachment(Path::new(file)), kind, "{file}");
     }
 }
 
 #[test]
-fn classify_attachment_detects_whitelisted_images() {
-    assert_eq!(classify_attachment(Path::new("photo.png")), AttachmentKind::Image);
-    assert_eq!(classify_attachment(Path::new("photo.jpg")), AttachmentKind::Image);
-    assert_eq!(classify_attachment(Path::new("photo.jpeg")), AttachmentKind::Image);
-    assert_eq!(classify_attachment(Path::new("photo.gif")), AttachmentKind::Image);
-    assert_eq!(classify_attachment(Path::new("photo.webp")), AttachmentKind::Image);
-}
+fn attachments_enforce_media_and_text_size_limits() {
+    let text = |bytes: usize| vec![b'x'; bytes];
+    let multibyte = "€".repeat(ONE_MIB / 3 + 2).into_bytes();
+    let mut early_invalid = text(ONE_MIB + 10);
+    early_invalid[100] = 0xff;
+    let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>".to_vec();
+    let flac = b"fake but valid UTF-8 audio metadata".to_vec();
+    let too_large = |name: &str| format!("Skipped {name}: file too large (max 10485760)");
+    let binary = |name: &str| format!("Skipped binary or non-UTF8 file: {name}");
+    let truncated = |name: &str| format!("Truncated {name} to 1048576 bytes");
+    let cases = [
+        ("photo.png", vec![0; TEN_MIB], Some(("image", "image/png", TEN_MIB)), None),
+        ("photo.png", vec![0; TEN_MIB + 1], None, Some(too_large("photo.png"))),
+        ("note.wav", vec![0; TEN_MIB], Some(("audio", "audio/wav", TEN_MIB)), None),
+        ("note.wav", vec![0; TEN_MIB + 1], None, Some(too_large("note.wav"))),
+        ("notes.txt", text(ONE_MIB - 1), Some(("text", "text/plain", ONE_MIB - 1)), None),
+        ("notes.txt", text(ONE_MIB), Some(("text", "text/plain", ONE_MIB)), None),
+        ("notes.txt", text(ONE_MIB + 1), Some(("text", "text/plain", ONE_MIB)), Some(truncated("notes.txt"))),
+        ("big.txt", text(4 * ONE_MIB), Some(("text", "text/plain", ONE_MIB)), Some(truncated("big.txt"))),
+        ("multi.txt", multibyte, Some(("text", "text/plain", ONE_MIB - ONE_MIB % 3)), Some(truncated("multi.txt"))),
+        ("bad.txt", early_invalid, None, Some(binary("bad.txt"))),
+        ("icon.svg", svg.clone(), Some(("text", "image/svg+xml", svg.len())), None),
+        ("track.flac", flac.clone(), Some(("text", "audio/flac", flac.len())), None),
+        ("notes.xyz", b"hello world".to_vec(), Some(("text", "chemical/x-xyz", 11)), None),
+        ("raster.bmp", vec![0x42, 0x4d, 0xff, 0x00], None, Some(binary("raster.bmp"))),
+        ("data.bin", vec![0xff, 0xfe, 0xfd], None, Some(binary("data.bin"))),
+    ];
+    for (name, body, embedded, warning) in cases {
+        let outcome = encode(&[(name, &body)]);
 
-#[test]
-fn classify_attachment_excludes_image_mime_outside_whitelist() {
-    assert_eq!(classify_attachment(Path::new("icon.svg")), AttachmentKind::Unsupported);
-    assert_eq!(classify_attachment(Path::new("photo.bmp")), AttachmentKind::Unsupported);
-}
-
-#[test]
-fn classify_attachment_detects_whitelisted_audio() {
-    assert_eq!(classify_attachment(Path::new("note.wav")), AttachmentKind::Audio);
-    assert_eq!(classify_attachment(Path::new("note.mp3")), AttachmentKind::Audio);
-    assert_eq!(classify_attachment(Path::new("note.ogg")), AttachmentKind::Audio);
-}
-
-#[test]
-fn classify_attachment_detects_text() {
-    assert_eq!(classify_attachment(Path::new("readme.txt")), AttachmentKind::Text);
-}
-
-#[test]
-fn classify_attachment_unknown_extension_is_unsupported() {
-    assert_eq!(classify_attachment(Path::new("data.xyz")), AttachmentKind::Unsupported);
-}
-
-#[test]
-fn image_at_ten_mib_limit_is_accepted() {
-    let (_dir, path) = write_temp("photo.png", &vec![0u8; TEN_MIB]);
-    let outcome = build_attachments(&attach(path, "photo.png"));
-
-    assert_eq!(outcome.blocks.len(), 1);
-    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
-    assert!(matches!(outcome.blocks[0], acp::ContentBlock::Image(_)));
-    assert_eq!(mime_of(&outcome.blocks[0]), "image/png");
-}
-
-#[test]
-fn image_above_ten_mib_is_rejected() {
-    let (_dir, path) = write_temp("photo.png", &vec![0u8; TEN_MIB + 1]);
-    let outcome = build_attachments(&attach(path, "photo.png"));
-
-    assert_eq!(outcome.blocks.len(), 0);
-    assert_eq!(outcome.warnings.len(), 1);
-    assert_eq!(outcome.warnings[0], "Skipped photo.png: file too large (max 10485760)");
-}
-
-#[test]
-fn audio_at_ten_mib_limit_is_accepted() {
-    let (_dir, path) = write_temp("note.wav", &vec![0u8; TEN_MIB]);
-    let outcome = build_attachments(&attach(path, "note.wav"));
-
-    assert_eq!(outcome.blocks.len(), 1);
-    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
-    assert!(matches!(outcome.blocks[0], acp::ContentBlock::Audio(_)));
-    assert_eq!(mime_of(&outcome.blocks[0]), "audio/wav");
-}
-
-#[test]
-fn audio_above_ten_mib_is_rejected() {
-    let (_dir, path) = write_temp("note.wav", &vec![0u8; TEN_MIB + 1]);
-    let outcome = build_attachments(&attach(path, "note.wav"));
-
-    assert_eq!(outcome.blocks.len(), 0);
-    assert_eq!(outcome.warnings.len(), 1);
-    assert_eq!(outcome.warnings[0], "Skipped note.wav: file too large (max 10485760)");
-}
-
-#[test]
-fn text_just_under_one_mib_is_not_truncated() {
-    let body = "x".repeat(ONE_MIB - 1);
-    let (_dir, path) = write_temp("notes.txt", body.as_bytes());
-    let outcome = build_attachments(&attach(path, "notes.txt"));
-
-    assert_eq!(outcome.blocks.len(), 1);
-    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
-    assert_eq!(text_of(&outcome.blocks[0]).len(), ONE_MIB - 1);
-    assert_eq!(text_of(&outcome.blocks[0]), &body);
-}
-
-#[test]
-fn text_exactly_one_mib_is_not_truncated() {
-    let body = "x".repeat(ONE_MIB);
-    let (_dir, path) = write_temp("notes.txt", body.as_bytes());
-    let outcome = build_attachments(&attach(path, "notes.txt"));
-
-    assert_eq!(outcome.blocks.len(), 1);
-    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
-    assert_eq!(text_of(&outcome.blocks[0]).len(), ONE_MIB);
-}
-
-#[test]
-fn text_just_over_one_mib_is_truncated_with_warning() {
-    let body = "x".repeat(ONE_MIB + 1);
-    let (_dir, path) = write_temp("notes.txt", body.as_bytes());
-    let outcome = build_attachments(&attach(path, "notes.txt"));
-
-    assert_eq!(outcome.blocks.len(), 1);
-    assert_eq!(outcome.warnings.len(), 1);
-    assert_eq!(outcome.warnings[0], "Truncated notes.txt to 1048576 bytes");
-    let text = text_of(&outcome.blocks[0]);
-    assert_eq!(text.len(), ONE_MIB);
-    assert_eq!(text, &body[..ONE_MIB]);
-}
-
-#[test]
-fn text_far_over_one_mib_embeds_only_one_mib() {
-    let body = "x".repeat(ONE_MIB * 4);
-    let (_dir, path) = write_temp("big.txt", body.as_bytes());
-    let outcome = build_attachments(&attach(path, "big.txt"));
-
-    assert_eq!(outcome.blocks.len(), 1);
-    assert_eq!(outcome.warnings.len(), 1);
-    assert_eq!(text_of(&outcome.blocks[0]).len(), ONE_MIB);
-}
-
-#[test]
-fn text_truncated_across_multibyte_boundary_stays_valid_utf8() {
-    let body = "€".repeat((ONE_MIB / 3) + 2);
-    let (_dir, path) = write_temp("multibyte.txt", body.as_bytes());
-    let outcome = build_attachments(&attach(path, "multibyte.txt"));
-
-    assert_eq!(outcome.blocks.len(), 1);
-    assert_eq!(outcome.warnings.len(), 1);
-    // ONE_MIB is not a multiple of three, so truncation lands mid-codepoint; the
-    // result must back up to the last complete UTF-8 boundary rather than panic.
-    let valid_len = ONE_MIB - (ONE_MIB % 3);
-    assert_eq!(text_of(&outcome.blocks[0]), &body[..valid_len]);
-}
-
-#[test]
-fn oversized_file_with_early_invalid_utf8_is_rejected() {
-    // An invalid byte well before the truncation point is a real error, not a
-    // truncation-induced incomplete sequence, so it must not be accepted as a prefix.
-    let mut body = vec![b'a'; ONE_MIB + 10];
-    body[100] = 0xff;
-    let (_dir, path) = write_temp("bad.txt", &body);
-    let outcome = build_attachments(&attach(path, "bad.txt"));
-
-    assert!(outcome.blocks.is_empty(), "invalid UTF-8 must not be accepted as a truncated prefix");
-    assert_eq!(outcome.warnings.len(), 1);
-    assert_eq!(outcome.warnings[0], "Skipped binary or non-UTF8 file: bad.txt");
-}
-
-#[test]
-fn svg_is_embedded_as_text_not_an_image() {
-    let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"/>";
-    let (_dir, path) = write_temp("icon.svg", svg.as_bytes());
-    let outcome = build_attachments(&attach(path, "icon.svg"));
-
-    assert_eq!(outcome.blocks.len(), 1);
-    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
-    assert!(matches!(outcome.blocks[0], acp::ContentBlock::Resource(_)));
-    assert_eq!(text_of(&outcome.blocks[0]), svg);
-    assert_eq!(mime_of(&outcome.blocks[0]), "image/svg+xml");
-}
-
-#[test]
-fn unsupported_audio_mime_is_embedded_as_text_not_audio() {
-    let flac = b"fake but valid UTF-8 audio metadata";
-    let (_dir, path) = write_temp("track.flac", flac);
-    let outcome = build_attachments(&attach(path, "track.flac"));
-
-    assert_eq!(outcome.blocks.len(), 1);
-    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
-    assert!(matches!(outcome.blocks[0], acp::ContentBlock::Resource(_)), "audio/flac is not a whitelisted media type");
-    assert!(mime_of(&outcome.blocks[0]).starts_with("audio/"), "kept its audio/* MIME but stayed a text resource");
-    assert_eq!(text_of(&outcome.blocks[0]), std::str::from_utf8(flac).unwrap());
-}
-
-#[test]
-fn unsupported_image_mime_binary_is_skipped_with_warning() {
-    let (_dir, path) = write_temp("raster.bmp", &[0x42, 0x4d, 0xff, 0x00]);
-    let outcome = build_attachments(&attach(path, "raster.bmp"));
-
-    assert!(outcome.blocks.is_empty(), "image/bmp is not whitelisted, and the binary body is non-UTF-8");
-    assert_eq!(outcome.warnings.len(), 1);
-    assert_eq!(outcome.warnings[0], "Skipped binary or non-UTF8 file: raster.bmp");
-}
-
-#[test]
-fn non_utf8_file_is_skipped_with_warning() {
-    let (_dir, path) = write_temp("data.bin", &[0xff, 0xfe, 0xfd]);
-    let outcome = build_attachments(&attach(path, "data.bin"));
-
-    assert_eq!(outcome.blocks.len(), 0);
-    assert_eq!(outcome.warnings.len(), 1);
-    assert_eq!(outcome.warnings[0], "Skipped binary or non-UTF8 file: data.bin");
-}
-
-#[test]
-fn unsupported_extension_text_is_embedded_as_resource() {
-    let (_dir, path) = write_temp("notes.xyz", b"hello world");
-    let outcome = build_attachments(&attach(path, "notes.xyz"));
-
-    assert_eq!(outcome.blocks.len(), 1);
-    assert_eq!(outcome.warnings.len(), 0);
-    assert!(matches!(outcome.blocks[0], acp::ContentBlock::Resource(_)));
-    assert_eq!(text_of(&outcome.blocks[0]), "hello world");
+        let blocks: Vec<_> = outcome.blocks.iter().map(embedded_bytes).collect();
+        let summary: Vec<_> = blocks.iter().map(|(kind, mime, bytes)| (*kind, *mime, bytes.len())).collect();
+        assert_eq!(summary, Vec::from_iter(embedded), "{name}");
+        assert!(blocks.iter().all(|(_, _, bytes)| body.starts_with(bytes)), "{name} should embed a prefix of the file");
+        assert_eq!(outcome.warnings, Vec::from_iter(warning), "{name}");
+    }
 }
 
 #[test]
 fn multi_attachment_preserves_order_with_truncated_text_between_media() {
-    let dir = TestWorkspace::new();
-    let img = dir.write("photo.png", b"png bytes");
-    let big = dir.write("big.txt", vec![b'a'; ONE_MIB + 5]);
-    let wav = dir.write("note.wav", b"wav bytes");
-    let attachments = vec![
-        PromptAttachment { path: img, display_name: "photo.png".to_string() },
-        PromptAttachment { path: big, display_name: "big.txt".to_string() },
-        PromptAttachment { path: wav, display_name: "note.wav".to_string() },
+    let files = [
+        ("photo.png", b"png bytes".to_vec()),
+        ("big.txt", vec![b'a'; ONE_MIB + 5]),
+        ("note.wav", b"wav bytes".to_vec()),
     ];
+    let outcome = encode(&files);
 
-    let outcome = build_attachments(&attachments);
-
-    assert_eq!(outcome.blocks.len(), 3);
-    assert!(matches!(outcome.blocks[0], acp::ContentBlock::Image(_)));
-    assert!(matches!(outcome.blocks[1], acp::ContentBlock::Resource(_)));
-    assert!(matches!(outcome.blocks[2], acp::ContentBlock::Audio(_)));
-    // The truncation warning is emitted without dropping the truncated block.
+    let blocks: Vec<_> =
+        outcome.blocks.iter().map(embedded_bytes).map(|(kind, _, bytes)| (kind, bytes.len())).collect();
+    assert_eq!(blocks, [("image", 9), ("text", ONE_MIB), ("audio", 9)]);
     assert_eq!(outcome.warnings, vec!["Truncated big.txt to 1048576 bytes"]);
-    assert_eq!(text_of(&outcome.blocks[1]).len(), ONE_MIB);
 }
 
 #[test]
 fn image_and_audio_blocks_carry_base64_of_the_file_bytes() {
-    use base64::Engine;
-    use base64::engine::general_purpose::STANDARD as BASE64;
-
     let image_bytes = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xde, 0xad, 0xbe, 0xef];
-    let (_image_dir, image_path) = write_temp("photo.png", &image_bytes);
     let audio_bytes = *b"RIFF fake wav payload with non-text bytes \xff\x01\x02";
-    let (_audio_dir, audio_path) = write_temp("note.wav", &audio_bytes);
+    let tmp = TestWorkspace::new();
+    let attachments = [("photo.png", &image_bytes[..]), ("note.wav", &audio_bytes[..])]
+        .map(|(name, bytes)| PromptAttachment { path: tmp.write(name, bytes), display_name: name.to_string() });
 
-    let outcome = build_attachments(&[
-        PromptAttachment { path: image_path, display_name: "photo.png".to_string() },
-        PromptAttachment { path: audio_path, display_name: "note.wav".to_string() },
-    ]);
+    let outcome = build_attachments(&attachments);
 
-    assert_eq!(outcome.blocks.len(), 2);
+    let blocks: Vec<_> = outcome.blocks.iter().map(embedded_bytes).collect();
+    assert_eq!(blocks, [("image", "image/png", image_bytes.to_vec()), ("audio", "audio/wav", audio_bytes.to_vec())]);
     assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+}
 
-    let decoded_image = match &outcome.blocks[0] {
-        acp::ContentBlock::Image(image) => {
-            assert_eq!(image.mime_type.0.as_ref(), "image/png");
-            BASE64.decode(&image.data).unwrap()
-        }
-        other => panic!("expected image block, got {other:?}"),
-    };
-    assert_eq!(decoded_image, image_bytes);
+fn media_caps() -> acp::PromptCapabilities {
+    acp::PromptCapabilities::new().image(acp::PromptImageCapabilities::new()).audio(acp::PromptAudioCapabilities::new())
+}
 
-    let decoded_audio = match &outcome.blocks[1] {
-        acp::ContentBlock::Audio(audio) => {
-            assert_eq!(audio.mime_type.0.as_ref(), "audio/wav");
-            BASE64.decode(&audio.data).unwrap()
-        }
-        other => panic!("expected audio block, got {other:?}"),
-    };
-    assert_eq!(decoded_audio, audio_bytes);
+fn pending_media_paths(app: &TestUi) -> Vec<&PathBuf> {
+    app.app().composer().pending_media().iter().map(|attachment| &attachment.path).collect()
+}
+
+fn paste_media(ui: &mut TestUi, name: &str) -> PathBuf {
+    let tmp = TestWorkspace::new();
+    let path = tmp.write(name, b"media bytes");
+    ui.executor_mut().filesystem_mut().write_file(&path, b"media bytes");
+    ui.paste(path.to_str().unwrap());
+    path
+}
+
+fn submit_media(ui: &mut TestUi, name: &str) {
+    paste_media(ui, name);
+    ui.key(key(KeyCode::Enter));
+    ui.settle_tasks();
+}
+
+fn models(current: &str, offered: &[(&str, bool, bool)]) -> Vec<acp::SessionConfigOption> {
+    vec![model_picker(
+        current,
+        offered.iter().map(|&(value, image, audio)| model(value, image, audio)).collect::<Vec<_>>(),
+    )]
+}
+
+fn grouped(current: &str, offered: &[(&str, bool, bool)]) -> Vec<acp::SessionConfigOption> {
+    let groups: Vec<_> =
+        offered.iter().map(|&(value, image, audio)| option_group(value, vec![model(value, image, audio)])).collect();
+    vec![model_picker(current, groups)]
+}
+
+fn model(value: &str, supports_image: bool, supports_audio: bool) -> acp::SessionConfigSelectOption {
+    model_choice(value, value, SelectOptionMeta { supports_image, supports_audio, ..Default::default() })
+}
+
+fn encode(files: &[(&str, impl AsRef<[u8]>)]) -> AttachmentOutcome {
+    let mut filesystem = FakeFilesystem::new();
+    let mut attachments = Vec::new();
+    for (name, bytes) in files {
+        let path = Path::new("/workspace").join(name);
+        filesystem.write_file(&path, bytes);
+        attachments.push(PromptAttachment { path, display_name: (*name).to_string() });
+    }
+    filesystem.build_attachments(&attachments)
+}
+
+fn embedded_bytes(block: &acp::ContentBlock) -> (&'static str, &str, Vec<u8>) {
+    match block {
+        acp::ContentBlock::Image(image) => ("image", image.mime_type.0.as_ref(), BASE64.decode(&image.data).unwrap()),
+        acp::ContentBlock::Audio(audio) => ("audio", audio.mime_type.0.as_ref(), BASE64.decode(&audio.data).unwrap()),
+        acp::ContentBlock::Resource(resource) => match &resource.resource {
+            acp::EmbeddedResourceResource::TextResourceContents(contents) => (
+                "text",
+                contents.mime_type.as_ref().map_or("", |mime| mime.0.as_ref()),
+                contents.text.clone().into_bytes(),
+            ),
+            other => panic!("expected a text resource, got {other:?}"),
+        },
+        other => panic!("unexpected block {other:?}"),
+    }
 }

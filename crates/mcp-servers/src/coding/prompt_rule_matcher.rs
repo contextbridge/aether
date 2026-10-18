@@ -54,7 +54,7 @@ mod tests {
     #[test]
     fn returns_matched_rules_and_deduplicates() {
         let workspace = workspace_with_rust_rules("Rust best practices.");
-        let catalog = PromptCatalog::from_dir(workspace.root()).unwrap();
+        let catalog = PromptCatalog::from_dirs([workspace.root()]);
         let mut state = PromptRuleMatcher::new(catalog);
         let root_dir = Path::new("/project");
 
@@ -69,7 +69,7 @@ mod tests {
     #[test]
     fn returns_empty_for_non_matching_files() {
         let workspace = workspace_with_rust_rules("Rust rules.");
-        let catalog = PromptCatalog::from_dir(workspace.root()).unwrap();
+        let catalog = PromptCatalog::from_dirs([workspace.root()]);
         let mut state = PromptRuleMatcher::new(catalog);
         let root_dir = Path::new("/project");
 
@@ -82,7 +82,7 @@ mod tests {
         let workspace = workspace_with_rust_rules("Follow Rust best practices.")
             .file("commit/SKILL.md", "---\ndescription: Commit\nuser-invocable: true\n---\nCommit message.\n");
 
-        let catalog = PromptCatalog::from_dir(workspace.root()).unwrap();
+        let catalog = PromptCatalog::from_dirs([workspace.root()]);
         let mut state = PromptRuleMatcher::new(catalog);
         let root_dir = Path::new("/project");
         let matched = state.get_matched_rules(root_dir, "/project/src/main.rs");

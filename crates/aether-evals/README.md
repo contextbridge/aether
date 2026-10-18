@@ -58,7 +58,7 @@ Aether Evals' fake-agent coverage should use normal test names. Reserve `_eval` 
 - `Container::builder(image).start(&workspace)` starts a caller-owned Docker container with the workspace mounted at `/workspace`.
 - `DockerAgent::new(container, command)` runs an in-container command whose stdout is newline-delimited `AgentEvent` JSON.
 - `Container::exec_shell(script)` runs follow-up assertions or test commands in the same caller-owned container.
-- `default_eval_env_vars()` forwards provider credentials and Aether-related environment into Docker while setting `AETHER_HOME=/root/.aether`.
+- `eval_env_vars(&model)` forwards only the credentials for the providers `model` runs on into Docker, and sets `AETHER_HOME=/root/.aether`.
 - `Workspace::empty()` creates an isolated temp directory.
 - `Workspace::from_dir(path)` copies fixture directory contents into a temp directory.
 - `Workspace::from_git_repo(GitRepoSpec { url, start_commit, gold_commit, subdir })` clones and checks out a git repository.
@@ -77,7 +77,7 @@ Stdout is reserved for `AgentEvent` JSON lines and must end with a terminal even
 ```rust
 use aether_evals::{
     Agent, CONTAINER_AETHER_HOME, Container, DockerAgent, GitRepoSpec, Image, Task, Transcript, Workspace,
-    default_eval_env_vars,
+    eval_env_vars,
 };
 
 let workspace = Workspace::from_git_repo(GitRepoSpec {
@@ -87,7 +87,7 @@ let workspace = Workspace::from_git_repo(GitRepoSpec {
     subdir: None,
 })?;
 let container = Container::builder(Image::new("aether-sandbox", "latest"))
-    .with_env_vars(default_eval_env_vars())
+    .with_env_vars(eval_env_vars(&"anthropic:claude-opus-4-6".parse()?))
     .with_ephemeral_mount(CONTAINER_AETHER_HOME)
     .start(&workspace)
     .await?;

@@ -1,9 +1,11 @@
+use crate::daemon::Timeouts;
 use crate::error::{DaemonError, DaemonResult};
 use crate::language_catalog::LanguageId;
-use crate::language_catalog::{ServerKind, resolved_config_for_language, server_kind_for_language};
+use crate::language_catalog::resolved_config_for_language;
 use crate::process_transport::TransportError;
-use crate::protocol::{LSP_REQUEST_TIMED_OUT, LSP_TRANSPORT_CLOSED, LspErrorResponse};
+use crate::protocol::{DaemonCall, LSP_REQUEST_TIMED_OUT, LSP_TRANSPORT_CLOSED, LspErrorResponse};
 use crate::workspace_session::WorkspaceSession;
+use lsp_types::Uri;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -13,7 +15,7 @@ use std::time::Duration;
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub(crate) struct WorkspaceKey {
     pub(crate) workspace_root: PathBuf,
-    pub(crate) server_kind: ServerKind,
+    pub(crate) server: &'static str,
 }
 
 /// A client's resolved attachment to one workspace/language-server pair.
@@ -28,12 +30,19 @@ pub(crate) struct WorkspaceBinding {
 #[derive(Clone)]
 pub(crate) struct WorkspaceRegistry {
     sessions: Arc<RwLock<HashMap<WorkspaceKey, Arc<WorkspaceSession>>>>,
-    request_timeout: Duration,
+    timeouts: Timeouts,
+    #[cfg(feature = "testing")]
+    pub(crate) hooks: crate::testing::TestHooks,
 }
 
 impl WorkspaceRegistry {
-    pub(crate) fn new(request_timeout: Duration) -> Self {
-        Self { sessions: Arc::new(RwLock::new(HashMap::new())), request_timeout }
+    pub(crate) fn new(timeouts: Timeouts) -> Self {
+        Self {
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            timeouts,
+            #[cfg(feature = "testing")]
+            hooks: crate::testing::TestHooks::default(),
+        }
     }
 
     pub(crate) async fn bind(&self, workspace_root: &Path, language: LanguageId) -> DaemonResult<WorkspaceBinding> {
@@ -43,54 +52,19 @@ impl WorkspaceRegistry {
 
         match self.within_deadline(&session, session.wait_until_initialized()).await {
             Ok(initialized) => initialized.map(|()| binding),
-            Err(_) => Err(DaemonError::LspInitializeTimedOut(self.request_timeout)),
+            Err(_) => Err(DaemonError::LspInitializeTimedOut(self.timeouts.request)),
         }
     }
 
-    /// Run an LSP call against the binding's current session. If the session's
-    /// transport turns out to be closed (the language server exited), replace
-    /// the session and retry once against the fresh server. On timeout the
-    /// session is declared wedged: its server process is killed so the next
-    /// request gets a fresh one.
-    pub(crate) async fn lsp_call(
-        &self,
-        binding: &WorkspaceBinding,
-        method: &str,
-        params: Value,
-    ) -> Result<Value, LspErrorResponse> {
-        let session = self.session(binding)?;
-        let result = match self.call_session(&session, method, &params).await {
-            Err(SessionCallError::TransportClosed) => {
-                session.mark_dead();
-                let session = self.session(binding)?;
-                self.call_session(&session, method, &params).await
+    pub(crate) async fn call(&self, binding: &WorkspaceBinding, call: DaemonCall) -> Result<Value, LspErrorResponse> {
+        match call {
+            DaemonCall::Lsp { method, params } => self.lsp_call(binding, &method, &params).await,
+            DaemonCall::Diagnostics { uri } => self.diagnostics(binding, uri.as_ref()).await,
+            DaemonCall::QueueRefresh { uri } => {
+                self.session(binding)?.queue_diagnostic_refresh(uri);
+                Ok(Value::Null)
             }
-            result => result,
-        };
-        result.map_err(|err| err.into_response(method, self.request_timeout))
-    }
-
-    pub(crate) async fn get_diagnostics(
-        &self,
-        binding: &WorkspaceBinding,
-        uri: Option<&lsp_types::Uri>,
-    ) -> Result<Value, LspErrorResponse> {
-        let session = self.session(binding)?;
-        let diagnostics = self
-            .within_deadline(&session, session.get_diagnostics(uri))
-            .await
-            .map_err(|err| err.into_response("diagnostics", self.request_timeout))?;
-        serde_json::to_value(&diagnostics).map_err(|e| LspErrorResponse { code: -1, message: e.to_string() })
-    }
-
-    pub(crate) fn queue_diagnostic_refresh(
-        &self,
-        binding: &WorkspaceBinding,
-        uri: lsp_types::Uri,
-    ) -> Result<(), LspErrorResponse> {
-        let session = self.session(binding)?;
-        session.queue_diagnostic_refresh(uri);
-        Ok(())
+        }
     }
 
     pub(crate) fn workspace_roots(&self) -> Vec<PathBuf> {
@@ -108,8 +82,35 @@ impl WorkspaceRegistry {
         self.sessions.write().unwrap_or_else(PoisonError::into_inner).clear();
     }
 
+    async fn lsp_call(
+        &self,
+        binding: &WorkspaceBinding,
+        method: &str,
+        params: &Value,
+    ) -> Result<Value, LspErrorResponse> {
+        let session = self.session(binding)?;
+        let result = match self.call_session(&session, method, params).await {
+            Err(SessionCallError::TransportClosed) => {
+                session.mark_dead();
+                let session = self.session(binding)?;
+                self.call_session(&session, method, params).await
+            }
+            result => result,
+        };
+        result.map_err(|err| err.into_response(method, self.timeouts.request))
+    }
+
+    async fn diagnostics(&self, binding: &WorkspaceBinding, uri: Option<&Uri>) -> Result<Value, LspErrorResponse> {
+        let session = self.session(binding)?;
+        let diagnostics = self
+            .within_deadline(&session, session.get_diagnostics(uri))
+            .await
+            .map_err(|err| err.into_response("diagnostics", self.timeouts.request))?;
+        serde_json::to_value(&diagnostics).map_err(|e| LspErrorResponse::daemon(e.to_string()))
+    }
+
     fn session(&self, binding: &WorkspaceBinding) -> Result<Arc<WorkspaceSession>, LspErrorResponse> {
-        self.get_or_spawn(binding).map_err(|e| LspErrorResponse { code: -1, message: e.to_string() })
+        self.get_or_spawn(binding).map_err(|e| LspErrorResponse::daemon(e.to_string()))
     }
 
     fn get_or_spawn(&self, binding: &WorkspaceBinding) -> DaemonResult<Arc<WorkspaceSession>> {
@@ -131,7 +132,13 @@ impl WorkspaceRegistry {
             sessions.remove(&binding.key);
         }
 
-        let session = Arc::new(WorkspaceSession::spawn(&binding.key.workspace_root, &config)?);
+        let session = Arc::new(WorkspaceSession::spawn(
+            &binding.key.workspace_root,
+            &config,
+            self.timeouts,
+            #[cfg(feature = "testing")]
+            self.hooks.clone(),
+        )?);
         sessions.insert(binding.key.clone(), Arc::clone(&session));
         Ok(session)
     }
@@ -143,6 +150,12 @@ impl WorkspaceRegistry {
         method: &str,
         params: &Value,
     ) -> Result<Value, SessionCallError> {
+        if targets_a_position(params) {
+            let ready = session.wait_until_ready(self.timeouts.request);
+            #[cfg(feature = "testing")]
+            let ready = self.hooks.observe_pending(crate::testing::TestPoint::ReadyWait, ready);
+            ready.await;
+        }
         self.within_deadline(session, session.request(method, params)).await?.map_err(SessionCallError::from)
     }
 
@@ -151,7 +164,7 @@ impl WorkspaceRegistry {
         session: &WorkspaceSession,
         work: impl Future<Output = T>,
     ) -> Result<T, SessionCallError> {
-        tokio::time::timeout(self.request_timeout, work).await.map_err(|_| {
+        tokio::time::timeout(self.timeouts.request, work).await.map_err(|_| {
             session.declare_wedged();
             SessionCallError::TimedOut
         })
@@ -161,9 +174,10 @@ impl WorkspaceRegistry {
 impl WorkspaceKey {
     pub(crate) fn new(workspace_root: &Path, language: LanguageId) -> DaemonResult<Self> {
         let workspace_root = workspace_root.canonicalize().unwrap_or_else(|_| workspace_root.to_path_buf());
-        let server_kind = server_kind_for_language(language)
+        let server = language
+            .server()
             .ok_or_else(|| DaemonError::LspSpawnFailed(format!("No LSP configured for language: {language:?}")))?;
-        Ok(Self { workspace_root, server_kind })
+        Ok(Self { workspace_root, server: server.name })
     }
 }
 
@@ -198,6 +212,10 @@ impl From<TransportError> for SessionCallError {
             TransportError::Closed => Self::TransportClosed,
         }
     }
+}
+
+fn targets_a_position(params: &Value) -> bool {
+    params.get("position").is_some()
 }
 
 #[cfg(test)]

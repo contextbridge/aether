@@ -1,10 +1,11 @@
 pub(crate) use acp_utils::client::AcpEvent;
-pub(crate) use acp_utils::config_meta::SelectOptionMeta;
+pub(crate) use acp_utils::config_meta::{ConfigOptionMeta, SelectOptionMeta};
 pub(crate) use acp_utils::config_option_id::ConfigOptionId;
 pub(crate) use acp_utils::notifications::{
     AuthMethodsUpdatedParams, ContextClearedParams, McpNotification, McpServerAuthCapability, McpServerStatus,
-    McpServerStatusEntry, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn, SubAgentEvent,
-    SubAgentProgressParams, WorkspaceEntry, WorkspaceListResponse, WorkspaceMoveResponse,
+    McpServerStatusEntry, PromptSearchResponse, PromptSearchResult, SessionPreviewResponse, SessionPreviewRole,
+    SessionPreviewTurn, SubAgentEvent, SubAgentProgressParams, WorkspaceEntry, WorkspaceListResponse,
+    WorkspaceMoveResponse, WorkspaceMoveTarget,
 };
 pub(crate) use acp_utils::testing::test_connection;
 pub(crate) use agent_client_protocol::schema::v2::{
@@ -19,34 +20,40 @@ pub(crate) use ratatui::style::{Color, Modifier};
 use std::borrow::Cow;
 pub(crate) use std::fmt::Write as FmtWrite;
 pub(crate) use std::io::Write as IoWrite;
+pub(crate) use std::path::{Path, PathBuf};
 pub(crate) use std::sync::Arc;
 pub(crate) use std::time::{Duration, Instant};
-pub(crate) use tempfile::TempDir;
 pub(crate) use tokio::task::LocalSet;
+pub(crate) use unicode_width::UnicodeWidthStr;
+pub(crate) use utils::artifact_review::ArtifactReviewElicitationMeta;
 pub(crate) use utils::testing::TestWorkspace;
 pub(crate) use wisp::app::ForegroundOperation;
-pub(crate) use wisp::command::{AgentCommand, Command, CommandResult, FilesystemCommand, PromptRejection};
+pub(crate) use wisp::command::{
+    AgentCommand, Command, CommandResult, FilesystemCommand, PromptRejection, TerminalCommand,
+};
 pub(crate) use wisp::testing::{
-    BackendEvent, CountingBackend, FakeGit, RecordingBackend, StreamContent, TestUi, TestUiBuilder, assert_buffer_eq,
-    buffer_text, chunk_message, compaction_update, context_cleared, has_cell, line_text, row_containing, row_text,
-    rows_with_background, session_update, sub_agent_progress, sub_agent_tool_update, text_chunk, thought_chunk,
-    thought_chunk_with_id, tool_completed,
+    BackendEvent, FakeFilesystem, FakeGit, InstrumentedBackend, StreamContent, TestUi, TestUiBuilder, assert_buffer_eq,
+    buffer_text, chunk_message, compaction_update, context_cleared, git_diff_screen, has_cell, line_text,
+    numbered_lines, render_surface, row_cells, row_containing, row_text, rows_with_background, session_update,
+    sub_agent_progress, sub_agent_tool_update, text_chunk, text_chunk_with_id, text_diff, thought_chunk,
+    thought_chunk_with_id, tool_completed, tool_status,
 };
 
 pub(crate) use acp_utils::conversation::{ConversationContent, ConversationItem, ItemState, ToolStatus};
-pub(crate) use wisp::attachment::{AttachmentKind, PromptAttachment, build_attachments, classify_attachment};
-pub(crate) use wisp::file_index::index_files;
+pub(crate) use wisp::attachment::{
+    AttachmentKind, AttachmentOutcome, PromptAttachment, build_attachments, classify_attachment,
+};
 pub(crate) use wisp::git_review::{FileStatus, StageState};
-pub(crate) use wisp::renderer::DrawContext;
 pub(crate) use wisp::session::session_config_view::LocalConfigOption;
 pub(crate) use wisp::settings::overlay::SettingsOverlay;
 pub(crate) use wisp::settings::{StatusLineSegmentConfig, UiSettings};
 pub(crate) use wisp::surfaces::composer::Composer;
-pub(crate) use wisp::surfaces::input::UiEvent;
 pub(crate) use wisp::surfaces::picker::CommandEntry;
 pub(crate) use wisp::theme::Theme;
-pub(crate) use wisp::view::generation::Generation;
+pub(crate) use wisp::view::input::UiEvent;
 pub(crate) use wisp::view::syntax::SyntaxHighlighter;
+
+pub(crate) type Step = fn(&mut TestUi);
 
 pub(crate) fn block_on_local<F: std::future::Future>(body: F) -> F::Output {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
@@ -107,57 +114,160 @@ pub(crate) fn message_texts(app: &TestUi) -> impl Iterator<Item = String> + '_ {
     })
 }
 
-pub(crate) fn make_app() -> TestUi {
-    TestUiBuilder::new().build()
+pub(crate) fn select(id: &str, name: &str, current: &str, values: &[(&str, &str)]) -> acp::SessionConfigOption {
+    acp::SessionConfigOption::select(id.to_string(), name.to_string(), current.to_string(), choices(values))
 }
 
-pub(crate) fn make_app_in(working_dir: std::path::PathBuf) -> TestUi {
-    TestUiBuilder::new().working_dir(working_dir).build()
+pub(crate) fn choices(values: &[(&str, &str)]) -> Vec<acp::SessionConfigSelectOption> {
+    values
+        .iter()
+        .map(|&(value, label)| acp::SessionConfigSelectOption::new(value.to_string(), label.to_string()))
+        .collect()
+}
+
+pub(crate) fn model_picker(
+    current: &str,
+    choices: impl Into<acp::SessionConfigSelectOptions>,
+) -> acp::SessionConfigOption {
+    acp::SessionConfigOption::select("model", "Model", current.to_string(), choices)
+        .meta(ConfigOptionMeta { multi_select: true }.into_meta())
+}
+
+pub(crate) fn model_choice(value: &str, name: &str, meta: SelectOptionMeta) -> acp::SessionConfigSelectOption {
+    acp::SessionConfigSelectOption::new(value.to_string(), name.to_string()).meta(meta.into_meta())
+}
+
+pub(crate) fn option_group(name: &str, options: Vec<acp::SessionConfigSelectOption>) -> acp::SessionConfigSelectGroup {
+    acp::SessionConfigSelectGroup::new(name.to_string(), name.to_string(), options)
+}
+
+pub(crate) fn sonnet_model() -> acp::SessionConfigOption {
+    select("model", "Model", "claude-sonnet", &[("claude-sonnet", "Claude Sonnet")])
+}
+
+pub(crate) fn status_ui() -> TestUi {
+    TestUiBuilder::new().dimensions(120, 15).config_options(vec![sonnet_model()]).build()
+}
+
+pub(crate) fn config_update(options: Vec<acp::SessionConfigOption>) -> AcpEvent {
+    session_update(acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(options)))
+}
+
+pub(crate) fn mcp_notification(servers: Vec<McpServerStatusEntry>) -> AcpEvent {
+    AcpEvent::McpNotification(McpNotification::ServerStatus { servers })
 }
 
 pub(crate) fn select_option(id: &str, current_value: &str) -> acp::SessionConfigOption {
-    acp::SessionConfigOption::select(
-        id.to_string(),
-        id.to_string(),
-        current_value.to_string(),
-        vec![acp::SessionConfigSelectOption::new(current_value.to_string(), current_value.to_string())],
-    )
+    acp::SessionConfigOption::select(id.to_string(), id.to_string(), current_value.to_string(), plain(&[current_value]))
 }
 
 pub(crate) fn reasoning_option(current: &str, levels: &[&str]) -> acp::SessionConfigOption {
-    let options: Vec<acp::SessionConfigSelectOption> =
-        levels.iter().map(|&level| acp::SessionConfigSelectOption::new(level.to_string(), level.to_string())).collect();
-    acp::SessionConfigOption::select("reasoning_effort", "Reasoning", current.to_string(), options)
+    acp::SessionConfigOption::select("reasoning_effort", "Reasoning", current.to_string(), plain(levels))
 }
 
 pub(crate) fn mode_option(current: &str, modes: &[&str]) -> acp::SessionConfigOption {
-    acp::SessionConfigOption::select("mode", "Mode", current.to_string(), select_options(modes))
+    acp::SessionConfigOption::select("mode", "Mode", current.to_string(), plain(modes))
         .category(acp::SessionConfigOptionCategory::Mode)
 }
 
 /// A mode option whose values arrive under group headers rather than as a flat list.
 pub(crate) fn grouped_mode_option(current: &str, groups: &[(&str, &[&str])]) -> acp::SessionConfigOption {
-    let groups: Vec<acp::SessionConfigSelectGroup> = groups
-        .iter()
-        .map(|(name, modes)| {
-            acp::SessionConfigSelectGroup::new((*name).to_string(), (*name).to_string(), select_options(modes))
-        })
-        .collect();
+    let groups: Vec<_> = groups.iter().map(|(name, modes)| option_group(name, plain(modes))).collect();
     acp::SessionConfigOption::select("mode", "Mode", current.to_string(), groups)
         .category(acp::SessionConfigOptionCategory::Mode)
 }
 
-fn select_options(values: &[&str]) -> Vec<acp::SessionConfigSelectOption> {
-    values.iter().map(|&value| acp::SessionConfigSelectOption::new(value.to_string(), value.to_string())).collect()
-}
-
-/// Opens the `@` picker on `composer` and delivers the file index, the way the
-/// event loop does once the walk completes.
-pub(crate) fn open_file_picker(composer: &mut Composer, root: &std::path::Path) {
-    let FilesystemCommand::IndexFiles { request_id, root } = composer.open_file_picker(root) else {
+pub(crate) fn open_file_picker(composer: &mut Composer, files: &[&str]) {
+    let FilesystemCommand::IndexFiles { request_id, root } = composer.open_file_picker(Path::new("/workspace")) else {
         panic!("opening the file picker should ask for a file index");
     };
-    composer.on_files_indexed(request_id, index_files(&root));
+    let mut filesystem = FakeFilesystem::new();
+    for file in files {
+        filesystem.write_file(root.join(file), "");
+    }
+    composer.on_files_indexed(request_id, filesystem.index_files(&root));
+}
+
+pub(crate) fn assert_shell_command_highlighted(ui: &mut TestUi, tool: &str, command: &str) {
+    let conversation = ui.conversation();
+    let row = row_containing(&conversation, command).expect("rendered shell command");
+    let text = row_text(&conversation, row);
+    assert!(text.contains(&format!("{tool} {command}")), "command should share the tool row: {text:?}");
+    let start = text[..text.find(command).expect("command position")].width();
+    let cells = row_cells(&conversation, row);
+    assert_eq!(cells[start - 1].bg, Color::Reset, "the gap before the command should not set a background");
+    let command_cells: Vec<_> =
+        cells[start..start + command.width()].iter().filter(|cell| cell.symbol() != " ").collect();
+    assert!(command_cells.iter().all(|cell| cell.bg == Color::Reset), "command should sit on the terminal background");
+    let keyword = command_cells.iter().find(|cell| cell.symbol() == "i").expect("if keyword");
+    let variable = command_cells.iter().find(|cell| cell.symbol() == "$").expect("shell variable");
+    assert_ne!(keyword.fg, variable.fg, "shell keywords and variables should use distinct token colors");
+}
+
+pub(crate) fn plan_meta(markdown: &str) -> ArtifactReviewElicitationMeta {
+    ArtifactReviewElicitationMeta::new(Some(PathBuf::from("/tmp/plan.md")), "Review /tmp/plan.md", markdown)
+}
+
+/// Opens `/settings` and then the menu row labelled `label`, wherever it sits.
+pub(crate) fn open_settings_row(ui: &mut TestUi, label: &str) {
+    ui.run_command("/settings");
+    ui.click_text(label);
+}
+
+pub(crate) fn open_workspace_picker(ui: &mut TestUi, workspaces: Vec<WorkspaceEntry>) {
+    ui.run_command("/move");
+    let command = ui.next_agent_command();
+    assert!(
+        matches!(command, Some(AgentCommand::ListWorkspaces { .. })),
+        "/move should list workspaces, got {command:?}"
+    );
+    ui.deliver_result(workspaces_listed(workspaces));
+}
+
+pub(crate) fn move_to_other_workspace(ui: &mut TestUi) {
+    open_workspace_picker(
+        ui,
+        vec![workspace_entry("/home/user/code/current", true), workspace_entry("/home/user/code/other", false)],
+    );
+    ui.key(key(KeyCode::Enter));
+    let command = ui.next_agent_command();
+    assert!(
+        matches!(
+            &command,
+            Some(AgentCommand::MoveWorkspace { session_id, target: WorkspaceMoveTarget::Existing { path } })
+                if session_id == "test-session" && path == std::path::Path::new("/home/user/code/other")
+        ),
+        "picking a workspace should move the session there, got {command:?}"
+    );
+}
+
+pub(crate) fn assert_sets_config_option(ui: &mut TestUi, id: &str, value: &str) {
+    let command = ui.next_agent_command();
+    assert!(
+        matches!(&command, Some(AgentCommand::SetConfigOption { config_id, value: set, .. })
+            if config_id == id && *set == acp::SessionConfigOptionValue::id(value)),
+        "expected {id} to be set to {value}, got {command:?}"
+    );
+}
+
+pub(crate) fn assert_authenticates_mcp_server(ui: &mut TestUi, name: &str) {
+    let command = ui.next_agent_command();
+    assert!(
+        matches!(&command, Some(AgentCommand::AuthenticateMcpServer { server_name, .. }) if server_name == name),
+        "expected to authenticate {name}, got {command:?}"
+    );
+}
+
+pub(crate) fn take_applied_theme(ui: &mut TestUi) -> Box<UiSettings> {
+    ui.take_command_where(|command| match command {
+        Command::Filesystem(FilesystemCommand::ApplyTheme { settings }) => Some(settings),
+        _ => None,
+    })
+    .expect("the app should ask to apply a theme")
+}
+
+pub(crate) fn bells(ui: &mut TestUi) -> usize {
+    ui.count_commands(|command| matches!(command, Command::Terminal(TerminalCommand::RingBell)))
 }
 
 pub(crate) fn assert_ctrl_c_exits(ui: &mut TestUi) {
@@ -190,7 +300,7 @@ pub(crate) fn tool_completed_with_diff(id: &str) -> AcpEvent {
 }
 
 pub(crate) fn tool_completed_with_diff_contents(id: &str, old: &str, new: &str) -> AcpEvent {
-    let diff = wisp::testing::text_diff("/src/main.rs", old, new);
+    let diff = text_diff("/src/main.rs", old, new);
     session_update(acp::SessionUpdate::ToolCallUpdate(
         acp::ToolCallUpdate::new(id.to_string())
             .content(vec![acp::ToolCallContent::Diff(diff)])
@@ -215,10 +325,6 @@ pub(crate) fn session_info(id: &str, cwd: &str, title: &str, updated_at: &str) -
     acp::SessionInfo::new(SessionId::new(id), cwd)
         .title(Some(title.to_string()))
         .updated_at(Some(updated_at.to_string()))
-}
-
-pub(crate) fn sessions_listed(sessions: Vec<acp::SessionInfo>) -> CommandResult {
-    CommandResult::SessionsListed(Ok(acp::ListSessionsResponse::new(sessions)))
 }
 
 pub(crate) fn session_loaded(session_id: &str, config_options: Vec<acp::SessionConfigOption>) -> CommandResult {
@@ -260,14 +366,6 @@ pub(crate) fn user_message_chunk(text: &str) -> acp::SessionUpdate {
     )
 }
 
-pub(crate) fn make_app_with_session_preview() -> TestUi {
-    TestUiBuilder::new().session_preview().build()
-}
-
-pub(crate) fn make_app_with_workspace_move() -> TestUi {
-    TestUiBuilder::new().workspace_move().build()
-}
-
 pub(crate) fn workspace_entry(path: &str, is_current: bool) -> WorkspaceEntry {
     WorkspaceEntry { path: std::path::PathBuf::from(path), is_current }
 }
@@ -290,4 +388,39 @@ pub(crate) fn workspace_move_failed(error: &str) -> CommandResult {
 
 pub(crate) fn session_load_failed(error: &str) -> CommandResult {
     CommandResult::ResumeSession { session_id: "test-session".into(), result: Err(error.to_string()) }
+}
+
+pub(crate) fn search(ui: &mut TestUi, query: &str, results: Vec<PromptSearchResult>) {
+    start_search(ui, query);
+    ui.deliver_result(search_results(query, results));
+}
+
+pub(crate) fn start_search(ui: &mut TestUi, query: &str) {
+    ui.key(ctrl('r'));
+    ui.type_text(query);
+    let searched = std::iter::from_fn(|| ui.next_agent_command())
+        .any(|command| matches!(command, AgentCommand::SearchPrompts(params) if params.query == query));
+    assert!(searched, "typing {query:?} should search prompt history");
+}
+
+pub(crate) fn search_results(query: &str, results: Vec<PromptSearchResult>) -> CommandResult {
+    CommandResult::PromptSearchResults {
+        query: query.to_string(),
+        result: Ok(PromptSearchResponse { query: query.to_string(), results, truncated: false }),
+    }
+}
+
+pub(crate) fn hit(prompt: &str, match_start: usize, match_end: usize) -> PromptSearchResult {
+    PromptSearchResult {
+        session_id: "s1".to_string(),
+        cwd: "/tmp/repo".into(),
+        session_created_at: "2026-05-17T00:00:00Z".to_string(),
+        prompt: prompt.to_string(),
+        match_start,
+        match_end,
+    }
+}
+
+fn plain(values: &[&str]) -> Vec<acp::SessionConfigSelectOption> {
+    values.iter().map(|&value| acp::SessionConfigSelectOption::new(value.to_string(), value.to_string())).collect()
 }

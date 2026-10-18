@@ -1,13 +1,11 @@
 use super::config::build_theme_entries;
 use super::{App, ForegroundOperation, Overlay, Route};
 use crate::command::{AgentCommand, Command, FilesystemCommand, GitReviewCommand};
-use crate::settings::overlay::{SettingsChange, SettingsOverlay};
-use crate::surfaces::input::{
-    ElicitationOutput, GitReviewOutput, ArtifactReviewOutput, ReviewOutcome, RootOutput, SessionPickerOutput,
-    SettingsOutput, WorkspacePickerOutput,
-};
+use crate::settings::overlay::{ProviderLoginStatus, SettingsChange, SettingsOverlay};
 use crate::surfaces::composer::Submission;
+use crate::surfaces::input::UiOutput;
 use crate::surfaces::picker::CommandEntry;
+use acp_utils::config_option_id::THEME_CONFIG_ID;
 use acp_utils::notifications::AetherCapabilities;
 use agent_client_protocol::schema::v2::SessionId;
 
@@ -69,7 +67,6 @@ impl App {
             self.session.auth_methods(),
         );
         overlay.upsert_local_entries(build_theme_entries(self.ui.settings.ui(), &[]));
-        overlay.add_status_entries();
         self.open_overlay(Overlay::Settings(Box::new(overlay)));
         self.queue(Command::Filesystem(FilesystemCommand::ListThemes));
     }
@@ -85,72 +82,53 @@ impl App {
         }));
     }
 
-    pub(super) fn dispatch_outputs(&mut self, outputs: Vec<RootOutput>) {
+    pub(super) fn dispatch_outputs(&mut self, outputs: Vec<UiOutput>) {
         for output in outputs {
             self.handle_output(output);
         }
     }
 
-    fn handle_output(&mut self, output: RootOutput) {
+    fn handle_output(&mut self, output: UiOutput) {
         match output {
-            RootOutput::Session(output) => match output {
-                SessionPickerOutput::Close => self.close_active(),
-                SessionPickerOutput::Resume { session_id, cwd } => self.resume_session(&session_id, &cwd),
-                SessionPickerOutput::Preview(session_id) => {
-                    self.queue(Command::Agent(AgentCommand::SessionPreview { session_id }));
+            UiOutput::Close => self.close_active(),
+            UiOutput::ConfigChange(change) => {
+                self.apply_settings_change(&change);
+                if change.config_id == THEME_CONFIG_ID {
+                    self.apply_theme_change(&change.new_value);
+                } else {
+                    self.set_config_option(&change.config_id, &change.new_value);
                 }
-            },
-            RootOutput::Workspace(output) => match output {
-                WorkspacePickerOutput::Close => self.close_active(),
-                WorkspacePickerOutput::Move { target } => {
-                    self.close_overlay();
-                    self.foreground = ForegroundOperation::MovingWorkspace;
-                    self.queue(Command::Agent(AgentCommand::MoveWorkspace {
-                        session_id: self.session.session_id().0.to_string(),
-                        target,
-                    }));
+            }
+            UiOutput::AuthenticateServer(server_name) => {
+                self.queue(Command::Agent(AgentCommand::AuthenticateMcpServer {
+                    session_id: self.session.session_id().clone(),
+                    server_name,
+                }));
+            }
+            UiOutput::AuthenticateProvider(method_id) => {
+                if let Some(Overlay::Settings(overlay)) = self.overlay.as_mut() {
+                    overlay.set_provider_status(&method_id, ProviderLoginStatus::Authenticating);
                 }
-            },
-            RootOutput::Settings(output) => match output {
-                SettingsOutput::Close => self.close_active(),
-                SettingsOutput::SetConfigOption { config_id, value } => {
-                    self.set_config_option(&config_id, &value);
-                    self.apply_settings_change(&SettingsChange { config_id, new_value: value });
-                }
-                SettingsOutput::SetTheme(value) => self.apply_theme_change(&value),
-                SettingsOutput::AuthenticateServer(name) => {
-                    self.queue(Command::Agent(AgentCommand::AuthenticateMcpServer {
-                        session_id: self.session.session_id().clone(),
-                        server_name: name,
-                    }));
-                }
-                SettingsOutput::AuthenticateProvider(method_id) => {
-                    if let Some(Overlay::Settings(overlay)) = self.overlay.as_mut() {
-                        overlay.on_authenticate_started(&method_id);
-                    }
-                    self.queue(Command::Agent(AgentCommand::Authenticate { method_id }));
-                }
-            },
-            RootOutput::Elicitation(ElicitationOutput::Close) => self.close_active(),
-            RootOutput::ArtifactReview(ArtifactReviewOutput::Approved) => {
-                self.notify("Artifact approved");
+                self.queue(Command::Agent(AgentCommand::Authenticate { method_id }));
+            }
+            UiOutput::ResumeSession { session_id, cwd } => self.resume_session(&session_id, &cwd),
+            UiOutput::PreviewSession(session_id) => {
+                self.queue(Command::Agent(AgentCommand::SessionPreview { session_id }));
+            }
+            UiOutput::MoveWorkspace(target) => {
+                self.close_overlay();
+                self.foreground = ForegroundOperation::MovingWorkspace;
+                self.queue(Command::Agent(AgentCommand::MoveWorkspace {
+                    session_id: self.session.session_id().0.to_string(),
+                    target,
+                }));
+            }
+            UiOutput::ArtifactReviewed(summary) => {
+                self.notify(&summary);
                 self.close_active();
             }
-            RootOutput::ArtifactReview(ArtifactReviewOutput::SetTheme(value)) => self.apply_theme_change(&value),
-            RootOutput::ArtifactReview(ArtifactReviewOutput::Outcome(outcome)) => {
-                if let ReviewOutcome::Submitted(summary) = outcome {
-                    self.notify(&summary);
-                }
-                self.close_active();
-            }
-            RootOutput::GitReview(output) => match output {
-                GitReviewOutput::SetTheme(value) => self.apply_theme_change(&value),
-                GitReviewOutput::Outcome(ReviewOutcome::Cancelled) => self.close_active(),
-                GitReviewOutput::Outcome(ReviewOutcome::Submitted(prompt)) => self.submit_review(&prompt),
-                GitReviewOutput::Command(command) => {
-                    self.queue(Command::GitReview(command));
-                }
-            },
+            UiOutput::SubmitReview(prompt) => self.submit_review(&prompt),
+            UiOutput::GitReview(command) => self.queue(Command::GitReview(command)),
         }
     }
 

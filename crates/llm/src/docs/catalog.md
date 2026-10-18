@@ -1,7 +1,8 @@
 Auto-generated model catalog with metadata for all known LLM models.
 
-The catalog is generated at build time by the `aether-llm-codegen` crate from
-`models.json`. **Do not edit `generated.rs` by hand** -- modify `models.json` and rebuild instead.
+The model and provider enums and their metadata tables are generated at build time by the
+`aether-llm-codegen` crate from `models.json`. **Do not edit `generated.rs` by hand** -- modify
+`models.json` and rebuild instead.
 
 # `LlmModel` enum
 

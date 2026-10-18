@@ -16,9 +16,6 @@ pub enum LlmError {
     /// support diagnostics (HTTP status, request ID, provider error code).
     #[error("{0}")]
     Provider(#[from] ProviderError),
-    /// IO error while reading stream
-    #[error("IO error reading stream: {0}")]
-    IoError(String),
     /// JSON parsing/serialization error
     #[error("JSON parsing error: {0}")]
     JsonParsing(String),
@@ -28,6 +25,10 @@ pub enum LlmError {
     /// OAuth authentication error
     #[error("OAuth error: {0}")]
     OAuthError(String),
+
+    /// The Codex access token is not a JWT carrying a `ChatGPT` account ID.
+    #[error("Invalid JWT: {0}")]
+    InvalidJwt(String),
     /// The message contained only content types this provider doesn't support
     #[error("Unsupported content: {0}")]
     UnsupportedContent(String),
@@ -223,37 +224,9 @@ impl From<serde_json::Error> for LlmError {
     }
 }
 
-impl From<std::io::Error> for LlmError {
-    fn from(error: std::io::Error) -> Self {
-        LlmError::IoError(error.to_string())
-    }
-}
-
 impl From<reqwest::header::InvalidHeaderValue> for LlmError {
     fn from(error: reqwest::header::InvalidHeaderValue) -> Self {
         LlmError::ProviderRequest(error.to_string())
-    }
-}
-
-impl From<async_openai::error::OpenAIError> for LlmError {
-    fn from(error: async_openai::error::OpenAIError) -> Self {
-        use async_openai::error::OpenAIError;
-        match error {
-            OpenAIError::Reqwest(e) => LlmError::from(e),
-            OpenAIError::StreamError(e) => ProviderError::stream_interrupted(e.to_string()).into(),
-            OpenAIError::ApiError(api_err) => {
-                let status = api_err.status_code.as_u16();
-                let code = api_err.api_error.code.clone();
-                let message = format!("{status} {}", api_err.api_error);
-                ProviderError::from_http_status(status, message).with_code(code).into()
-            }
-            OpenAIError::JSONDeserialize(e, _) => LlmError::JsonParsing(e.to_string()),
-            OpenAIError::Boxed(e) => e
-                .downcast::<ProviderError>()
-                .map_or_else(|error| ProviderError::api(error.to_string()).into(), |error| (*error).into()),
-            OpenAIError::FileSaveError(s) | OpenAIError::FileReadError(s) => LlmError::IoError(s),
-            OpenAIError::InvalidArgument(s) => LlmError::InvalidArgument(s),
-        }
     }
 }
 
@@ -325,7 +298,6 @@ mod tests {
         assert!(!LlmError::from(ProviderError::api("x")).is_retryable());
         assert!(!LlmError::from(ProviderError::authentication("x")).is_retryable());
         assert!(!LlmError::MissingApiKey("x".into()).is_retryable());
-        assert!(!LlmError::IoError("x".into()).is_retryable());
         assert!(!LlmError::JsonParsing("x".into()).is_retryable());
         assert!(!LlmError::ToolParameterParsing { tool_name: "t".into(), error: "e".into() }.is_retryable());
         assert!(!LlmError::OAuthError("x".into()).is_retryable());
@@ -340,60 +312,5 @@ mod tests {
         assert!(!LlmError::InvalidModelSpec("x".into()).is_retryable());
         assert!(!LlmError::ProviderRequest("x".into()).is_retryable());
         assert!(!LlmError::InvalidArgument("x".into()).is_retryable());
-    }
-
-    #[test]
-    fn async_openai_api_error_preserves_status_and_code() {
-        use async_openai::error::{ApiError, ApiErrorResponse};
-        let response = ApiErrorResponse {
-            status_code: reqwest::StatusCode::SERVICE_UNAVAILABLE,
-            api_error: ApiError {
-                message: "overloaded".to_string(),
-                r#type: None,
-                param: None,
-                code: Some("server_error".to_string()),
-                misalignment: None,
-            },
-        };
-        let error = LlmError::from(async_openai::error::OpenAIError::ApiError(response));
-        let provider = error.provider().expect("expected provider error");
-        assert_eq!(provider.kind, ProviderErrorKind::Server);
-        assert_eq!(provider.http_status, Some(503));
-        assert_eq!(provider.code.as_deref(), Some("server_error"));
-        assert!(error.is_retryable());
-    }
-
-    #[test]
-    fn async_openai_boxed_provider_error_preserves_classification_and_diagnostics() {
-        let provider = ProviderError::rate_limit("slow down")
-            .with_http_status(429)
-            .with_code(Some("429".into()))
-            .with_request_id(Some("request-123".into()));
-        let error = LlmError::from(async_openai::error::OpenAIError::Boxed(Box::new(provider.clone())));
-
-        assert_eq!(error.provider(), Some(&provider));
-        assert!(error.is_retryable());
-    }
-
-    #[test]
-    fn async_openai_stream_error_is_interruption() {
-        let io = std::io::Error::other("eof");
-        let error = LlmError::from(async_openai::error::OpenAIError::StreamError(Box::new(
-            async_openai::error::StreamError::EventStream(io.to_string()),
-        )));
-        let provider = error.provider().expect("expected provider error");
-        assert_eq!(provider.kind, ProviderErrorKind::StreamInterrupted);
-        assert!(error.is_retryable());
-    }
-
-    #[test]
-    fn async_openai_non_error_body_stays_a_json_parsing_error() {
-        let body = r#"{"id":"chatcmpl-1","object":"chat.completion","choices":[]}"#;
-        let parse_error = serde_json::from_str::<String>(body).unwrap_err();
-
-        let error = LlmError::from(async_openai::error::OpenAIError::JSONDeserialize(parse_error, body.to_string()));
-
-        assert!(matches!(error, LlmError::JsonParsing(_)), "got {error:?}");
-        assert!(!error.is_retryable());
     }
 }

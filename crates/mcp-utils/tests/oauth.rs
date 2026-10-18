@@ -1,13 +1,16 @@
-use aether_auth::{OAuthClientRegistration, OAuthError};
+use aether_auth::{MemoryCredentialStore, OAuthCredentialStorage, OAuthError};
 use mcp_utils::client::{
-    ClientError, ClientOptions, Elicitation, ElicitationSink, HttpAuth, McpClient, OAuthSettings, Transport,
+    ClientError, ClientOptions, Elicitation, ElicitationSink, HttpAuth, McpClient, OAuthClientRegistration,
+    OAuthSettings, Transport,
 };
 use mcp_utils::gateway::{GatewayError, McpGateway};
 use mcp_utils::model::{ElicitResult, ElicitationAction, ElicitationCapability, FormElicitationCapability};
 use mcp_utils::testing::{
-    ACCESS_TOKEN, CLIENT_METADATA_URL, FakeAuthServer, FakeMcpServer, OAuthPrompt, client_metadata, elicitation_host,
-    wait_until,
+    ACCESS_TOKEN, CLIENT_METADATA_URL, FakeAuthServer, FakeMcpServer, OAuthPrompt, REGISTERED_CLIENT_ID,
+    client_metadata, elicitation_host, wait_until,
 };
+use serde_json::json;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::{JoinHandle, yield_now};
 use utils::mcp_status::McpServerStatus;
@@ -82,36 +85,40 @@ async fn authorization_presents_the_client_metadata_and_a_loopback_redirect() {
 }
 
 #[tokio::test]
-async fn authorization_redirects_to_the_configured_callback_port() {
+async fn authorization_listens_on_the_configured_callback_port() {
     let server = math_auth_server().await;
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let mut flow = AuthFlow::start(
-        server.transport_with(HttpAuth::OAuth(OAuthSettings { callback_port: port, ..client_metadata() })),
-    );
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = taken.local_addr().unwrap().port();
+    let (options, host) = elicitation_host();
+    drop(host);
 
-    let prompt = flow.prompt().await;
-    let redirect_uri = prompt.query("redirect_uri");
-    drop(prompt);
+    let transport = server.transport_with(HttpAuth::OAuth(OAuthSettings { callback_port: port, ..client_metadata() }));
+    let error = McpClient::authorize("linear", transport, &options, None).await.expect_err("the port is taken");
 
-    assert_eq!(redirect_uri, format!("http://localhost:{port}/"));
-    assert!(matches!(flow.finish().await, Err(ClientError::Auth { source: OAuthError::UserCancelled, .. })));
+    assert!(matches!(
+        error,
+        ClientError::Auth { source: OAuthError::Io(error), .. } if error.kind() == std::io::ErrorKind::AddrInUse
+    ));
 }
 
 #[tokio::test]
-async fn authorization_presents_a_preregistered_client_id() {
-    let server = math_auth_server().await;
-    let oauth = OAuthSettings {
-        registration: OAuthClientRegistration::PreRegistered("registered".to_string()),
-        callback_port: 0,
-    };
-    let mut flow = AuthFlow::start(server.transport_with(HttpAuth::OAuth(oauth)));
+async fn authorization_presents_the_client_for_each_registration_mode() {
+    for (registration, expected_client_id) in [
+        (OAuthClientRegistration::PreRegistered("configured".to_string()), "configured"),
+        (OAuthClientRegistration::ClientMetadata(CLIENT_METADATA_URL.to_string()), CLIENT_METADATA_URL),
+        (OAuthClientRegistration::Dynamic, REGISTERED_CLIENT_ID),
+    ] {
+        let server = math_auth_server().await;
+        let mut flow =
+            AuthFlow::start(server.transport_with(HttpAuth::OAuth(OAuthSettings { registration, callback_port: 0 })));
 
-    let prompt = flow.prompt().await;
-    let client_id = prompt.query("client_id");
-    drop(prompt);
+        let prompt = flow.prompt().await;
+        let client_id = prompt.query("client_id");
+        drop(prompt);
 
-    assert_eq!(client_id, "registered");
-    assert!(matches!(flow.finish().await, Err(ClientError::Auth { source: OAuthError::UserCancelled, .. })));
+        assert_eq!(client_id, expected_client_id);
+        assert!(matches!(flow.finish().await, Err(ClientError::Auth { source: OAuthError::UserCancelled, .. })));
+    }
 }
 
 #[tokio::test]
@@ -133,6 +140,57 @@ async fn accepted_authorization_waits_for_the_callback_then_connects_with_the_to
     let client = flow.finish().await.expect("the token authorizes the MCP handshake");
     assert!(client.list_tools().await.unwrap().iter().any(|tool| tool.name == "add_numbers"));
     assert!(server.received_bearer(ACCESS_TOKEN));
+}
+
+#[tokio::test]
+async fn authorized_credentials_are_stored_and_reused_without_prompting() {
+    let server = math_auth_server().await;
+    let store = Arc::new(MemoryCredentialStore::new());
+    authorize_into(&server, client_metadata(), &store).await;
+    let (options, _host) = elicitation_host();
+
+    let client = McpClient::connect("linear", server.transport(), &options.oauth_store(store.clone()))
+        .await
+        .expect("the stored token authorizes the MCP handshake");
+
+    assert!(client.list_tools().await.unwrap().iter().any(|tool| tool.name == "add_numbers"));
+    assert_eq!(store.load("mcp:linear").await.unwrap().unwrap()["client_id"], CLIENT_METADATA_URL);
+}
+
+#[tokio::test]
+async fn stored_credentials_for_another_client_are_ignored() {
+    let server = math_auth_server().await;
+    let store = Arc::new(MemoryCredentialStore::new());
+    authorize_into(&server, client_metadata(), &store).await;
+    let configured = OAuthSettings {
+        registration: OAuthClientRegistration::PreRegistered("configured".to_string()),
+        callback_port: 0,
+    };
+    let (options, _host) = elicitation_host();
+
+    let error = McpClient::connect(
+        "linear",
+        server.transport_with(HttpAuth::OAuth(configured)),
+        &options.oauth_store(store.clone()),
+    )
+    .await
+    .expect_err("another client's token is not used");
+
+    assert!(matches!(error, ClientError::AuthRequired { .. }), "{error}");
+    assert_eq!(store.load("mcp:linear").await.unwrap().unwrap()["client_id"], CLIENT_METADATA_URL);
+}
+
+#[tokio::test]
+async fn undecodable_stored_credentials_fall_back_to_authorization() {
+    let server = math_auth_server().await;
+    let store = Arc::new(MemoryCredentialStore::new().with_value("mcp:linear", json!("invalid")));
+    let (options, _host) = elicitation_host();
+
+    let error = McpClient::connect("linear", server.transport(), &options.oauth_store(store))
+        .await
+        .expect_err("undecodable credentials are not used");
+
+    assert!(matches!(error, ClientError::AuthRequired { .. }), "{error}");
 }
 
 #[tokio::test]
@@ -273,6 +331,15 @@ impl AuthFlow {
     async fn finish(self) -> Result<McpClient, ClientError> {
         self.task.await.unwrap()
     }
+}
+
+async fn authorize_into(server: &FakeAuthServer, oauth: OAuthSettings, store: &Arc<MemoryCredentialStore>) {
+    let (options, mut host) = elicitation_host();
+    let options = options.oauth_store(store.clone());
+    let transport = server.transport_with(HttpAuth::OAuth(oauth));
+    let authorization = tokio::spawn(async move { McpClient::authorize("linear", transport, &options, None).await });
+    next_prompt(&mut host).await.approve().await;
+    authorization.await.unwrap().expect("authorization succeeds");
 }
 
 fn oauth_gateway(server: &FakeAuthServer) -> (McpGateway, mpsc::Receiver<Elicitation>) {

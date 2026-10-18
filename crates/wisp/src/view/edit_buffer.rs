@@ -6,53 +6,53 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 /// The cursor is always held on a `char` boundary, so slicing `text()` at
 /// `cursor()` is infallible.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct EditBuffer {
+pub(crate) struct EditBuffer {
     text: String,
     cursor: usize,
 }
 
 impl EditBuffer {
     /// Creates a buffer holding `text` with the cursor at the end.
-    pub fn new(text: impl Into<String>) -> Self {
+    pub(crate) fn new(text: impl Into<String>) -> Self {
         let text = text.into();
         let cursor = text.len();
         Self { text, cursor }
     }
 
-    pub fn text(&self) -> &str {
+    pub(crate) fn text(&self) -> &str {
         &self.text
     }
 
-    pub fn cursor(&self) -> usize {
+    pub(crate) fn cursor(&self) -> usize {
         self.cursor
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.text.is_empty()
     }
 
     /// Replaces the contents, keeping the cursor at the same byte offset where
     /// the new text is long enough.
-    pub fn set_text(&mut self, text: impl Into<String>) {
+    pub(crate) fn set_text(&mut self, text: impl Into<String>) {
         self.text = text.into();
         self.set_cursor(self.cursor);
     }
 
-    pub fn set_cursor(&mut self, cursor: usize) {
+    pub(crate) fn set_cursor(&mut self, cursor: usize) {
         self.cursor = self.text.floor_char_boundary(cursor);
     }
 
-    pub fn insert_char(&mut self, character: char) {
+    pub(crate) fn insert_char(&mut self, character: char) {
         self.text.insert(self.cursor, character);
         self.cursor += character.len_utf8();
     }
 
-    pub fn insert_str(&mut self, text: &str) {
+    pub(crate) fn insert_str(&mut self, text: &str) {
         self.text.insert_str(self.cursor, text);
         self.cursor += text.len();
     }
 
-    pub fn insert_paste(&mut self, text: &str) {
+    pub(crate) fn insert_paste(&mut self, text: &str) {
         for character in
             text.chars().filter(|character| !character.is_control() || *character == '\n' || *character == '\t')
         {
@@ -60,7 +60,7 @@ impl EditBuffer {
         }
     }
 
-    pub fn backspace(&mut self) -> bool {
+    pub(crate) fn backspace(&mut self) -> bool {
         let Some(previous) = self.previous_boundary() else {
             return false;
         };
@@ -69,7 +69,7 @@ impl EditBuffer {
         true
     }
 
-    pub fn delete(&mut self) -> bool {
+    pub(crate) fn delete(&mut self) -> bool {
         let Some(next) = self.next_boundary() else {
             return false;
         };
@@ -77,41 +77,41 @@ impl EditBuffer {
         true
     }
 
-    pub fn move_left(&mut self) -> bool {
+    pub(crate) fn move_left(&mut self) -> bool {
         self.previous_boundary().is_some_and(|previous| {
             self.cursor = previous;
             true
         })
     }
 
-    pub fn move_right(&mut self) -> bool {
+    pub(crate) fn move_right(&mut self) -> bool {
         self.next_boundary().is_some_and(|next| {
             self.cursor = next;
             true
         })
     }
 
-    pub fn move_line_start(&mut self) {
+    pub(crate) fn move_line_start(&mut self) {
         self.cursor = self.line_start();
     }
 
-    pub fn move_line_end(&mut self) {
+    pub(crate) fn move_line_end(&mut self) {
         self.cursor = self.line_end();
     }
 
-    pub fn replace_range(&mut self, range: std::ops::Range<usize>, replacement: &str) {
+    pub(crate) fn replace_range(&mut self, range: std::ops::Range<usize>, replacement: &str) {
         let cursor = range.start + replacement.len();
         self.text.replace_range(range, replacement);
         self.set_cursor(cursor);
     }
 
     /// Empties the buffer, returning what it held.
-    pub fn take(&mut self) -> String {
+    pub(crate) fn take(&mut self) -> String {
         self.cursor = 0;
         std::mem::take(&mut self.text)
     }
 
-    pub fn line_start(&self) -> usize {
+    pub(crate) fn line_start(&self) -> usize {
         self.text[..self.cursor].rfind('\n').map_or(0, |index| index + 1)
     }
 
@@ -128,17 +128,27 @@ impl EditBuffer {
     }
 }
 
+const COMPOSED_MODIFIERS: KeyModifiers = KeyModifiers::CONTROL
+    .union(KeyModifiers::ALT)
+    .union(KeyModifiers::SUPER)
+    .union(KeyModifiers::HYPER)
+    .union(KeyModifiers::META);
+
+pub(crate) fn is_composed_char(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char(_)) && key.modifiers.intersects(COMPOSED_MODIFIERS)
+}
+
 /// Applies one editing keystroke to `buffer`, returning whether it was consumed.
 ///
 /// This is the single key table shared by every text input: the composer, the
 /// git-diff commit editor and review drafts, plan-review comments, the new
 /// workspace name prompt, and elicitation form fields. Callers handle their own
 /// Enter/Esc (and any vertical motion) before delegating here.
-pub fn apply_edit_key(buffer: &mut EditBuffer, key: KeyEvent) -> bool {
+pub(crate) fn apply_edit_key(buffer: &mut EditBuffer, key: KeyEvent) -> bool {
     match key.code {
         KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => buffer.move_line_start(),
         KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => buffer.move_line_end(),
-        KeyCode::Char(character) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+        KeyCode::Char(character) if !is_composed_char(key) => {
             buffer.insert_char(character);
         }
         KeyCode::Backspace => {

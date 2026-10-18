@@ -1,12 +1,10 @@
-use regex::Regex;
+use regex::{Captures, Regex};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::env;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use thiserror::Error;
-
-const ESCAPE_PLACEHOLDER: &str = "\x00ESCAPED_DOLLAR\x00";
 
 type GetEnvVarFn = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
@@ -19,9 +17,6 @@ type GetEnvVarFn = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 pub struct Vars {
     map: BTreeMap<String, String>,
     get_env_var: GetEnvVarFn,
-    escape_re: Regex,
-    bracketed_re: Regex,
-    simple_re: Regex,
 }
 
 impl fmt::Debug for Vars {
@@ -38,13 +33,7 @@ impl Default for Vars {
 
 impl Vars {
     pub fn new() -> Self {
-        Self {
-            map: BTreeMap::new(),
-            get_env_var: Arc::new(|k| env::var(k).ok()),
-            escape_re: Regex::new(r"\$\$").unwrap(),
-            bracketed_re: Regex::new(r"\$\{([^}]+)\}").unwrap(),
-            simple_re: Regex::new(r"\$([a-zA-Z_][a-zA-Z0-9_]*)").unwrap(),
-        }
+        Self { map: BTreeMap::new(), get_env_var: Arc::new(|k| env::var(k).ok()) }
     }
 
     /// Override the env-var fallback. Useful in tests to avoid mutating the
@@ -75,32 +64,28 @@ impl Vars {
     /// Expand `$VAR` / `${VAR}` references in `template`, consulting `self` before
     /// the env lookup. `$$` escapes to a literal `$`.
     pub fn expand(&self, template: &str) -> Result<String, VarError> {
-        let escaped = self.escape_re.replace_all(template, ESCAPE_PLACEHOLDER);
-        let bracketed = self.substitute(&self.bracketed_re, &escaped)?;
-        let simple = self.substitute(&self.simple_re, &bracketed)?;
-        Ok(simple.replace(ESCAPE_PLACEHOLDER, "$"))
-    }
-
-    fn substitute(&self, re: &Regex, text: &str) -> Result<String, VarError> {
         let mut missing = None;
-        let result = re.replace_all(text, |caps: &regex::Captures| {
-            let var_name = &caps[1];
-            if let Some(value) = self.get(var_name) {
-                value.into_owned()
-            } else {
-                missing = Some(var_name.to_string());
-                caps[0].to_string()
-            }
+        let expanded = REFERENCE.replace_all(template, |caps: &Captures| {
+            let Some(name) = var_name(caps) else {
+                return "$".to_string();
+            };
+            self.get(name).map_or_else(
+                || {
+                    missing.get_or_insert_with(|| name.to_string());
+                    caps[0].to_string()
+                },
+                Cow::into_owned,
+            )
         });
         match missing {
             Some(var) => Err(VarError::NotFound(var)),
-            None => Ok(result.into_owned()),
+            None => Ok(expanded.into_owned()),
         }
     }
 
     /// Returns `true` if `s` contains a `$VAR` or `${VAR}` style reference.
-    pub fn has_reference(&self, s: &str) -> bool {
-        self.bracketed_re.is_match(s) || self.simple_re.is_match(s)
+    pub fn has_reference(s: &str) -> bool {
+        REFERENCE.captures_iter(s).any(|caps| var_name(&caps).is_some())
     }
 }
 
@@ -108,6 +93,13 @@ impl Vars {
 pub enum VarError {
     #[error("Environment variable '{0}' not found")]
     NotFound(String),
+}
+
+static REFERENCE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\$(?:\$|\{([^}]+)\}|([A-Za-z_][A-Za-z0-9_]*))").expect("valid regex"));
+
+fn var_name<'a>(caps: &Captures<'a>) -> Option<&'a str> {
+    caps.get(1).or_else(|| caps.get(2)).map(|name| name.as_str())
 }
 
 #[cfg(test)]
@@ -213,12 +205,22 @@ mod tests {
     }
 
     #[test]
+    fn substituted_values_are_not_expanded_again() {
+        let vars = no_env().with("A", "$B").with("B", "expanded twice");
+        assert_eq!(vars.expand("${A} $A").unwrap(), "$B $B");
+    }
+
+    #[test]
+    fn has_reference_ignores_escaped_dollars() {
+        assert!(!Vars::has_reference("$$HOME"));
+    }
+
+    #[test]
     fn has_reference_detects_both_forms() {
-        let vars = no_env();
-        assert!(vars.has_reference("${WORKSPACE}/foo"));
-        assert!(vars.has_reference("$HOME/bar"));
-        assert!(!vars.has_reference("plain/path"));
-        assert!(!vars.has_reference("$"));
-        assert!(!vars.has_reference("$$"));
+        assert!(Vars::has_reference("${WORKSPACE}/foo"));
+        assert!(Vars::has_reference("$HOME/bar"));
+        assert!(!Vars::has_reference("plain/path"));
+        assert!(!Vars::has_reference("$"));
+        assert!(!Vars::has_reference("$$"));
     }
 }

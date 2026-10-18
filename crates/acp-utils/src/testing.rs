@@ -3,7 +3,7 @@
 mod fake_agent;
 pub use fake_agent::{FakeAgent, FakeAgentRequests};
 
-use crate::notifications::{GitDiffEventPayload, McpNotification};
+use crate::notifications::{AuthMethodsUpdatedParams, GitDiffEventPayload, McpNotification};
 pub use agent_client_protocol::Channel;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v2::{
@@ -25,6 +25,7 @@ pub struct TestPeer {
     session_notifications: mpsc::UnboundedReceiver<UpdateSessionNotification>,
     mcp_notifications: mpsc::UnboundedReceiver<McpNotification>,
     git_diff_notifications: mpsc::UnboundedReceiver<GitDiffEventPayload>,
+    auth_methods_updates: mpsc::UnboundedReceiver<AuthMethodsUpdatedParams>,
     elicitation_requests: mpsc::UnboundedReceiver<CreateElicitationRequest>,
     elicitation_completions: mpsc::UnboundedReceiver<CompleteElicitationNotification>,
     elicitation_responses: Arc<Mutex<VecDeque<CreateElicitationResponse>>>,
@@ -33,13 +34,13 @@ pub struct TestPeer {
 
 impl TestPeer {
     pub fn new() -> (Self, V2Builder<Client, impl HandleDispatchFrom<Agent>, NullRun>) {
-        let (sn_tx, sn_rx) = mpsc::unbounded_channel::<UpdateSessionNotification>();
-        let (mcp_tx, mcp_rx) = mpsc::unbounded_channel::<McpNotification>();
-        let (git_diff_tx, git_diff_rx) = mpsc::unbounded_channel::<GitDiffEventPayload>();
-        let (el_tx, el_rx) = mpsc::unbounded_channel::<CreateElicitationRequest>();
-        let (complete_tx, complete_rx) = mpsc::unbounded_channel::<CompleteElicitationNotification>();
-        let elicitation_responses: Arc<Mutex<VecDeque<CreateElicitationResponse>>> =
-            Arc::new(Mutex::new(VecDeque::new()));
+        let (session_tx, session_notifications) = mpsc::unbounded_channel();
+        let (mcp_tx, mcp_notifications) = mpsc::unbounded_channel();
+        let (git_diff_tx, git_diff_notifications) = mpsc::unbounded_channel();
+        let (auth_tx, auth_methods_updates) = mpsc::unbounded_channel();
+        let (elicitation_tx, elicitation_requests) = mpsc::unbounded_channel();
+        let (completion_tx, elicitation_completions) = mpsc::unbounded_channel();
+        let elicitation_responses = Arc::new(Mutex::new(VecDeque::new()));
         let responder_capture: Arc<Mutex<Option<oneshot::Sender<Responder<CreateElicitationResponse>>>>> =
             Arc::new(Mutex::new(None));
 
@@ -47,48 +48,27 @@ impl TestPeer {
             .v2()
             .name("test-client")
             .on_receive_notification(
-                {
-                    let tx = sn_tx;
-                    async move |n: UpdateSessionNotification, _cx| {
-                        let _ = tx.send(n);
-                        Ok(())
-                    }
-                },
+                async move |n: UpdateSessionNotification, _cx| forward(&session_tx, n),
                 acp::on_receive_notification!(),
             )
             .on_receive_notification(
-                {
-                    let tx = mcp_tx;
-                    async move |n: McpNotification, _cx| {
-                        let _ = tx.send(n);
-                        Ok(())
-                    }
-                },
+                async move |n: McpNotification, _cx| forward(&mcp_tx, n),
                 acp::on_receive_notification!(),
             )
             .on_receive_notification(
-                {
-                    let tx = git_diff_tx;
-                    async move |n: GitDiffEventPayload, _cx| {
-                        let _ = tx.send(n);
-                        Ok(())
-                    }
-                },
+                async move |n: GitDiffEventPayload, _cx| forward(&git_diff_tx, n),
                 acp::on_receive_notification!(),
             )
             .on_receive_notification(
-                {
-                    let tx = complete_tx;
-                    async move |notification: CompleteElicitationNotification, _cx| {
-                        let _ = tx.send(notification);
-                        Ok(())
-                    }
-                },
+                async move |n: AuthMethodsUpdatedParams, _cx| forward(&auth_tx, n),
+                acp::on_receive_notification!(),
+            )
+            .on_receive_notification(
+                async move |n: CompleteElicitationNotification, _cx| forward(&completion_tx, n),
                 acp::on_receive_notification!(),
             )
             .on_receive_request(
                 {
-                    let tx = el_tx;
                     let responses = elicitation_responses.clone();
                     let capture = responder_capture.clone();
                     async move |req: CreateElicitationRequest, responder: Responder<CreateElicitationResponse>, _cx| {
@@ -98,7 +78,7 @@ impl TestPeer {
                                 Err(responder) => responder.respond_with_error(acp::Error::internal_error()),
                             };
                         }
-                        let _ = tx.send(req);
+                        let _ = elicitation_tx.send(req);
                         let queued = responses.lock().unwrap().pop_front();
                         match queued {
                             Some(response) => responder.respond(response),
@@ -110,11 +90,12 @@ impl TestPeer {
             );
 
         let peer = Self {
-            session_notifications: sn_rx,
-            mcp_notifications: mcp_rx,
-            git_diff_notifications: git_diff_rx,
-            elicitation_requests: el_rx,
-            elicitation_completions: complete_rx,
+            session_notifications,
+            mcp_notifications,
+            git_diff_notifications,
+            auth_methods_updates,
+            elicitation_requests,
+            elicitation_completions,
             elicitation_responses,
             responder_capture,
         };
@@ -131,6 +112,10 @@ impl TestPeer {
 
     pub async fn next_git_diff_notification(&mut self) -> GitDiffEventPayload {
         self.git_diff_notifications.recv().await.expect("peer channel closed")
+    }
+
+    pub async fn next_auth_methods_update(&mut self) -> AuthMethodsUpdatedParams {
+        self.auth_methods_updates.recv().await.expect("peer channel closed")
     }
 
     pub async fn next_elicitation_request(&mut self) -> CreateElicitationRequest {
@@ -268,6 +253,12 @@ pub fn plan_notification(
         session_id,
         SessionUpdate::PlanUpdate(PlanUpdate::new(PlanUpdateContent::items(plan_id, entries))),
     )
+}
+
+#[expect(clippy::unnecessary_wraps, reason = "notification handlers must return a Result")]
+fn forward<T>(tx: &mpsc::UnboundedSender<T>, value: T) -> Result<(), acp::Error> {
+    let _ = tx.send(value);
+    Ok(())
 }
 
 fn placeholder_params() -> CreateElicitationRequest {

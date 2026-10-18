@@ -1,17 +1,17 @@
 use aether_cli::acp::testing::AcpTestHarness;
-use aether_core::core::agent;
 use agent_client_protocol::Error;
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::v2::{
     AbsolutePath, CloseSessionRequest, CloseSessionResponse, ContentBlock, ListSessionsRequest, ListSessionsResponse,
-    PromptRequest, ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate, StopReason,
-    TextContent, ToolCallStatus,
+    NewSessionRequest, ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate, StopReason,
+    ToolCallStatus,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use llm::LlmResponse;
-use llm::testing::FakeLlmProvider;
+use llm::testing::{FakeLlmProvider, llm_response};
 use serde_json::json;
+use std::fmt::Debug;
+use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::Notify;
 
@@ -89,14 +89,7 @@ async fn close_removes_idle_session_but_preserves_persisted_log() {
         assert_eq!(stored.sessions.len(), 1);
         assert_eq!(stored.sessions[0].session_id.0.as_ref(), "agent-switching-session");
 
-        let prompt = harness
-            .client_cx
-            .send_request(PromptRequest::new(
-                fake.session_id().clone(),
-                vec![ContentBlock::Text(TextContent::new("after close"))],
-            ))
-            .block_task()
-            .await;
+        let prompt = harness.prompt(fake.session_id(), "after close").await;
         assert!(prompt.is_err(), "a closed session must no longer accept prompts");
     })
     .await;
@@ -106,17 +99,11 @@ async fn close_removes_idle_session_but_preserves_persisted_log() {
 async fn close_cancels_prompt_before_returning() {
     AcpTestHarness::run(|mut harness| async move {
         let release = Arc::new(Notify::new());
-        let llm = FakeLlmProvider::new(vec![vec![LlmResponse::Start, LlmResponse::text("hello"), LlmResponse::done()]])
-            .pause_turn_after(0, 1, Arc::clone(&release));
-        let (agent_tx, agent_rx, agent_handle) = agent(llm).spawn().await.expect("agent spawns");
-        let session_id = SessionId::new("prompting-session");
-        harness.insert_stub_session(agent_tx, agent_rx, agent_handle, session_id.clone(), "fake:fake").await;
+        let llm =
+            FakeLlmProvider::new(vec![llm_response().text(&["hello"]).build()]).pause_turn_after(0, 1, release.clone());
+        let session_id = harness.session("prompting-session", llm).insert().await;
 
-        let prompt = harness
-            .client_cx
-            .send_request(PromptRequest::new(session_id.clone(), vec![ContentBlock::Text(TextContent::new("hi"))]))
-            .block_task();
-        prompt.await.expect("prompt accepted");
+        harness.prompt(&session_id, "hi").await.expect("prompt accepted");
         loop {
             let notification = harness.peer.next_session_notification().await;
             if let SessionUpdate::AgentMessageChunk(chunk) = notification.update
@@ -187,12 +174,7 @@ async fn resume_restores_transcript_without_replay_and_replaces_active_session()
         let resume = harness.client_cx.send_request(ResumeSessionRequest::new(session_id.clone(), AbsolutePath::new("/tmp"))).block_task();
         resume.await.expect("resume succeeds");
 
-        let prompt = harness
-            .client_cx
-            .send_request(PromptRequest::new(session_id.clone(), vec![ContentBlock::Text(TextContent::new("next prompt"))]))
-            .block_task()
-            .await
-            .expect("prompt on resumed session succeeds");
+        let prompt = harness.prompt(&session_id, "next prompt").await.expect("prompt on resumed session succeeds");
         loop {
             let notification = harness.peer.next_session_notification().await;
             match notification.update {
@@ -261,6 +243,50 @@ async fn disconnect_during_startup_leaves_no_detached_runtime() {
         assert_eq!(harness.live_runtime_count(), 0);
     })
     .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn concurrent_new_sessions_leave_one_live_session() {
+    AcpTestHarness::run(|harness| async move {
+        let new_session =
+            || harness.client_cx.send_request(NewSessionRequest::new(AbsolutePath::new("/tmp"))).block_task();
+
+        let results = start_twice_concurrently(&harness, new_session).await;
+
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
+        assert_eq!(harness.live_runtime_count(), 1);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn concurrent_resumes_of_one_session_share_one_actor() {
+    AcpTestHarness::run(|harness| async move {
+        harness.append_stored_session("stored", "2026-05-01T00:00:00Z");
+        let resume = || {
+            harness.client_cx.send_request(ResumeSessionRequest::new("stored", AbsolutePath::new("/tmp"))).block_task()
+        };
+
+        let results = start_twice_concurrently(&harness, resume).await;
+
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
+        assert_eq!(harness.live_runtime_count(), 1);
+    })
+    .await;
+}
+
+async fn start_twice_concurrently<T: Debug, F: Future<Output = Result<T, Error>>>(
+    harness: &AcpTestHarness,
+    start: impl Fn() -> F,
+) -> [Result<T, Error>; 2] {
+    let mut startup = harness.pause_next_runtime();
+    let first = start();
+    startup.wait_until_started().await;
+    let second = start();
+    let _ = list(harness, ListSessionsRequest::new()).await;
+    startup.finish(true);
+    let (first, second) = tokio::join!(first, second);
+    [first, second]
 }
 
 async fn next_history(harness: &mut AcpTestHarness) -> SessionUpdate {

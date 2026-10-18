@@ -1,9 +1,6 @@
-use std::borrow::Cow;
 use std::str::FromStr;
 
-use crate::catalog::transport::ModelTransport;
-use crate::catalog::{BedrockFoundationModel, ModelPricing};
-use crate::{ReasoningDisabledSupport, ReasoningEffort};
+use super::{BedrockFoundationModel, ModelSource};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BedrockModel {
@@ -12,77 +9,10 @@ pub enum BedrockModel {
 }
 
 impl BedrockModel {
-    pub fn model_id(&self) -> Cow<'static, str> {
+    pub(super) fn source(&self) -> ModelSource<'_> {
         match self {
-            Self::Foundation(m) => Cow::Borrowed(m.model_id()),
-            Self::Profile(s) => Cow::Owned(s.clone()),
-        }
-    }
-
-    pub fn display_name(&self) -> Cow<'static, str> {
-        match self {
-            Self::Foundation(m) => Cow::Borrowed(m.display_name()),
-            Self::Profile(s) => Cow::Owned(format!("Bedrock {s}")),
-        }
-    }
-
-    pub fn context_window(&self) -> Option<u32> {
-        match self {
-            Self::Foundation(m) => Some(m.context_window()),
-            Self::Profile(_) => None,
-        }
-    }
-
-    pub fn reasoning_levels(&self) -> &'static [ReasoningEffort] {
-        match self {
-            Self::Foundation(m) => m.reasoning_levels(),
-            Self::Profile(_) => &[],
-        }
-    }
-
-    pub fn reasoning_disabled_support(&self) -> crate::reasoning::ReasoningDisabledSupport {
-        match self {
-            Self::Foundation(model) => model.reasoning_disabled_support(),
-            Self::Profile(_) => ReasoningDisabledSupport::Unsupported,
-        }
-    }
-
-    pub fn supports_reasoning(&self) -> bool {
-        self.reasoning_levels().iter().any(|effort| effort.is_enabled())
-    }
-
-    pub fn supports_prompt_caching(&self) -> bool {
-        match self {
-            Self::Foundation(m) => m.supports_prompt_caching(),
-            Self::Profile(_) => false,
-        }
-    }
-
-    pub fn supports_image(&self) -> bool {
-        match self {
-            Self::Foundation(m) => m.supports_image(),
-            Self::Profile(_) => false,
-        }
-    }
-
-    pub fn supports_audio(&self) -> bool {
-        match self {
-            Self::Foundation(m) => m.supports_audio(),
-            Self::Profile(_) => false,
-        }
-    }
-
-    pub fn pricing(&self) -> Option<ModelPricing> {
-        match self {
-            Self::Foundation(m) => m.pricing(),
-            Self::Profile(_) => None,
-        }
-    }
-
-    pub fn transport(&self) -> Option<ModelTransport> {
-        match self {
-            Self::Foundation(m) => m.transport(),
-            Self::Profile(_) => None,
+            Self::Foundation(model) => ModelSource::Catalog(model.entry()),
+            Self::Profile(id) => ModelSource::Runtime(id),
         }
     }
 }
@@ -91,12 +21,12 @@ impl FromStr for BedrockModel {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.parse::<BedrockFoundationModel>() {
-            Ok(m) => Ok(Self::Foundation(m)),
-            Err(_) if is_bedrock_inference_profile_arn(s) => Err(
-                "Bedrock inference profile ARNs must be configured as providers.bedrock.inferenceProfileArn; keep model as bedrock:<model-id>".to_string(),
-            ),
-            Err(_) => Ok(Self::Profile(s.to_string())),
+        if let Some(model) = BedrockFoundationModel::ALL.iter().copied().find(|model| model.entry().id == s) {
+            Ok(Self::Foundation(model))
+        } else if is_bedrock_inference_profile_arn(s) {
+            Err("Bedrock inference profile ARNs must be configured as providers.bedrock.inferenceProfileArn; keep model as bedrock:<model-id>".to_string())
+        } else {
+            Ok(Self::Profile(s.to_string()))
         }
     }
 }
@@ -129,7 +59,7 @@ mod tests {
     fn unknown_profile_id_falls_through_to_profile_variant() {
         let model: BedrockModel = "us.anthropic.claude-future-model-v99:0".parse().unwrap();
         assert!(matches!(model, BedrockModel::Profile(_)));
-        assert_eq!(model.context_window(), None);
+        assert_eq!(crate::LlmModel::Bedrock(model).context_window(), None);
     }
 
     #[test]

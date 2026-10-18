@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use oauth2::basic::BasicClient;
-use oauth2::reqwest::redirect::Policy;
-use oauth2::{ClientId, RefreshToken, TokenResponse, TokenUrl};
+use oauth2::http;
+use oauth2::{AsyncHttpClient, ClientId, HttpClientError, HttpRequest, RefreshToken, TokenResponse, TokenUrl};
+use reqwest::redirect::Policy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
@@ -11,7 +12,7 @@ use crate::OAuthError;
 const TOKEN_EXPIRY_GRACE_PERIOD: Duration = Duration::from_mins(1);
 
 /// Credential for a non-MCP OAuth provider.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OAuthCredential {
     pub client_id: String,
     pub access_token: String,
@@ -21,6 +22,20 @@ pub struct OAuthCredential {
 }
 
 impl OAuthCredential {
+    pub fn new(client_id: impl Into<String>, access_token: impl Into<String>) -> Self {
+        Self { client_id: client_id.into(), access_token: access_token.into(), refresh_token: None, expires_at: None }
+    }
+
+    pub fn refresh_token(mut self, refresh_token: impl Into<String>) -> Self {
+        self.refresh_token = Some(refresh_token.into());
+        self
+    }
+
+    pub fn expires_at(mut self, expires_at: u64) -> Self {
+        self.expires_at = Some(expires_at);
+        self
+    }
+
     /// Build an `OAuthCredential` from an `OAuth2` token response.
     pub fn from_token_response<T: TokenResponse>(client_id: String, token_response: &T) -> Self {
         Self {
@@ -74,9 +89,6 @@ impl OAuthCredential {
 }
 
 /// Storage for namespaced, opaque OAuth JSON values.
-///
-/// Implementations include [`OsKeyringStore`](crate::OsKeyringStore) (OS keychain, feature `keyring`)
-/// and the in-memory [`FakeOAuthCredentialStore`](crate::FakeOAuthCredentialStore) for tests.
 #[async_trait]
 pub trait OAuthCredentialStorage: Send + Sync {
     async fn load(&self, key: &str) -> Result<Option<Value>, OAuthError>;
@@ -102,15 +114,29 @@ pub trait OAuthCredentialStorage: Send + Sync {
     }
 }
 
-fn expires_at_from_duration(duration: Option<Duration>) -> Option<u64> {
-    duration.map(|duration| current_unix_time_millis().saturating_add(duration_millis(duration)))
-}
-
-pub fn oauth_http_client() -> Result<oauth2::reqwest::Client, OAuthError> {
-    oauth2::reqwest::Client::builder()
+/// Build an `OAuth2` HTTP client that never follows redirects.
+pub fn oauth_http_client()
+-> Result<impl for<'c> AsyncHttpClient<'c, Error = HttpClientError<reqwest::Error>, Future: Send>, OAuthError> {
+    let client = reqwest::Client::builder()
         .redirect(Policy::none())
         .build()
-        .map_err(|e| OAuthError::TokenExchange(format!("failed to build HTTP client: {e}")))
+        .map_err(|e| OAuthError::TokenExchange(format!("failed to build HTTP client: {e}")))?;
+
+    Ok(move |request: HttpRequest| {
+        let client = client.clone();
+        async move {
+            let response = client.execute(request.try_into().map_err(Box::new)?).await.map_err(Box::new)?;
+            let mut builder = http::Response::builder().status(response.status()).version(response.version());
+            for (name, value) in response.headers() {
+                builder = builder.header(name, value);
+            }
+            builder.body(response.bytes().await.map_err(Box::new)?.to_vec()).map_err(HttpClientError::Http)
+        }
+    })
+}
+
+fn expires_at_from_duration(duration: Option<Duration>) -> Option<u64> {
+    duration.map(|duration| current_unix_time_millis().saturating_add(duration_millis(duration)))
 }
 
 fn current_unix_time_millis() -> u64 {
@@ -120,6 +146,34 @@ fn current_unix_time_millis() -> u64 {
 
 fn duration_millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+pub(crate) async fn assert_storage_contract(store: &dyn OAuthCredentialStorage) {
+    let credential = OAuthCredential::new("client", "v1").refresh_token("refresh").expires_at(1234);
+    let rotated = OAuthCredential::new("client", "v2");
+    let other = OAuthCredential::new("other-client", "other");
+    let secret = serde_json::json!({"client_id": "c", "granted_scopes": ["read"]});
+
+    assert_eq!(store.load_credential("server").await.unwrap(), None);
+    assert!(!store.contains("server"));
+
+    store.save_credential("server", credential.clone()).await.unwrap();
+    store.save_credential("other", other.clone()).await.unwrap();
+    store.save("mcp:secret", secret.clone()).await.unwrap();
+    assert_eq!(store.load_credential("server").await.unwrap(), Some(credential));
+    assert!(store.contains("server"));
+
+    store.save_credential("server", rotated.clone()).await.unwrap();
+    assert_eq!(store.load_credential("server").await.unwrap(), Some(rotated));
+    assert_eq!(store.load_credential("other").await.unwrap(), Some(other.clone()));
+    assert_eq!(store.load("mcp:secret").await.unwrap(), Some(secret));
+
+    store.delete("server").await.unwrap();
+    store.delete("never-saved").await.unwrap();
+    assert_eq!(store.load_credential("server").await.unwrap(), None);
+    assert!(!store.contains("server"));
+    assert_eq!(store.load_credential("other").await.unwrap(), Some(other));
 }
 
 #[cfg(test)]
@@ -166,11 +220,6 @@ mod tests {
     }
 
     fn build_credential(expires_at: Option<u64>) -> OAuthCredential {
-        OAuthCredential {
-            client_id: "client".to_string(),
-            access_token: "access".to_string(),
-            refresh_token: None,
-            expires_at,
-        }
+        OAuthCredential { expires_at, ..OAuthCredential::new("client", "access") }
     }
 }

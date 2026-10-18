@@ -3,32 +3,35 @@
 #[cfg(feature = "testing")]
 pub mod testing;
 
+mod client;
 mod client_connection;
+mod daemon;
 mod diagnostics_store;
 mod document_lifecycle;
+pub mod error;
 mod file_watcher;
 pub mod language_catalog;
 mod pid_lockfile;
 mod process_transport;
+mod protocol;
 mod refresh_queue;
+mod socket_path;
+pub mod uri;
 mod workspace_registry;
 mod workspace_session;
 
-mod client;
-pub mod daemon;
-pub mod error;
-pub mod protocol;
-pub mod socket_path;
-pub mod uri;
-
+use daemon::{LspDaemon, Timeouts};
 use std::path::PathBuf;
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 pub use client::{ClientError, ClientResult, LspClient};
-pub use daemon::LspDaemon;
 pub use error::{DaemonError, DaemonResult};
+pub use language_catalog::{LANGUAGES, LanguageId, LanguageMetadata, ServerSpec, detect_project_languages};
+pub use protocol::LSP_REQUEST_TIMED_OUT;
+pub use socket_path::socket_path;
+pub use uri::{UriError, path_to_uri, uri_to_path};
 
 #[derive(Debug, thiserror::Error)]
 pub enum LspdRunError {
@@ -39,18 +42,6 @@ pub enum LspdRunError {
     #[error("{0}")]
     Daemon(#[from] DaemonError),
 }
-pub use language_catalog::LanguageId;
-pub use language_catalog::{
-    LANGUAGE_METADATA, LanguageMetadata, LanguageServerMetadata, LspConfig, detect_project_languages,
-    get_config_for_language, metadata_for, server_metadata_for_language,
-};
-pub use socket_path::{ensure_socket_dir, lockfile_path, log_file_path, socket_path};
-
-pub use protocol::{
-    DaemonRequest, DaemonResponse, InitializeRequest, LSP_REQUEST_TIMED_OUT, LSP_TRANSPORT_CLOSED, LspErrorResponse,
-    MAX_MESSAGE_SIZE, ProtocolError,
-};
-pub use uri::{UriError, path_to_uri, uri_to_path};
 
 #[derive(clap::Args)]
 pub struct LspdArgs {
@@ -81,7 +72,7 @@ pub struct LspdArgs {
 
 pub fn run_lspd(args: LspdArgs) -> Result<(), LspdRunError> {
     let idle_timeout = if args.idle_timeout == 0 { None } else { Some(Duration::from_secs(args.idle_timeout)) };
-    let request_timeout = Duration::from_secs(args.request_timeout);
+    let timeouts = Timeouts { request: Duration::from_secs(args.request_timeout), ..Timeouts::default() };
 
     let runtime = tokio::runtime::Runtime::new().map_err(LspdRunError::RuntimeCreate)?;
 
@@ -109,6 +100,6 @@ pub fn run_lspd(args: LspdArgs) -> Result<(), LspdRunError> {
         }
 
         tracing::info!("Starting LSP daemon on socket: {:?}", args.socket);
-        LspDaemon::new(args.socket, idle_timeout, request_timeout).run().await.map_err(LspdRunError::Daemon)
+        Ok(LspDaemon::bind(args.socket, idle_timeout, timeouts)?.run().await?)
     })
 }

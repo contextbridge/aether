@@ -9,17 +9,11 @@ pub enum OAuthError {
     #[error("OAuth credential storage error: {0}")]
     CredentialStore(String),
 
-    #[error("rmcp auth error: {0}")]
-    Rmcp(String),
-
     #[error("IO error: {0}")]
     Io(Arc<std::io::Error>),
 
     #[error("Invalid OAuth callback: {0}")]
     InvalidCallback(String),
-
-    #[error("Invalid JWT: {0}")]
-    InvalidJwt(String),
 
     #[error("Token exchange failed: {0}")]
     TokenExchange(String),

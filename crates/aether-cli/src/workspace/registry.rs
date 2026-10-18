@@ -1,45 +1,38 @@
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use thiserror::Error;
+pub(super) use utils::fs::JsonFileError as RegistryError;
+use utils::fs::{read_json, write_json_atomic};
+use utils::path::aether_home;
 
 /// Persistent registry of managed workspaces, grouped by repository identity.
 ///
-/// Stored as a JSON array at `~/.aether/workspaces.json`.
-pub struct WorkspaceRegistry {
+/// Stored as a JSON array at `$AETHER_HOME/workspaces.json`.
+pub(super) struct WorkspaceRegistry {
     path: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct WorkspaceRecord {
+pub(super) struct WorkspaceRecord {
     pub path: PathBuf,
     pub repo_key: String,
 }
 
-#[derive(Debug, Error)]
-pub enum RegistryError {
-    #[error("failed to access workspace registry {}: {source}", .path.display())]
-    Io { path: PathBuf, source: io::Error },
-    #[error("invalid workspace registry {}: {source}", .path.display())]
-    Parse { path: PathBuf, source: serde_json::Error },
-}
-
 impl WorkspaceRegistry {
-    pub fn new() -> io::Result<Self> {
+    pub(super) fn new() -> io::Result<Self> {
         let home =
-            dirs::home_dir().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Home directory not found"))?;
-        Ok(Self::from_path(home.join(".aether/workspaces.json")))
+            aether_home().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Aether home directory not found"))?;
+        Ok(Self::from_path(home.join("workspaces.json")))
     }
 
-    pub fn from_path(path: PathBuf) -> Self {
+    pub(super) fn from_path(path: PathBuf) -> Self {
         Self { path }
     }
 
     /// Adds `path` under `repo_key`, deduplicating by canonicalized path. An
     /// existing entry for the same path has its `repo_key` refreshed instead.
-    pub fn register(&self, repo_key: &str, path: &Path) -> Result<(), RegistryError> {
+    pub(super) fn register(&self, repo_key: &str, path: &Path) -> Result<(), RegistryError> {
         let canonical = path.canonicalize().map_err(|e| self.io_error(e))?;
         let mut records = self.read()?;
 
@@ -57,7 +50,7 @@ impl WorkspaceRegistry {
 
     /// Returns every registered workspace for `repo_key`, pruning entries
     /// whose directory no longer exists.
-    pub fn workspaces_for(&self, repo_key: &str) -> Result<Vec<WorkspaceRecord>, RegistryError> {
+    pub(super) fn workspaces_for(&self, repo_key: &str) -> Result<Vec<WorkspaceRecord>, RegistryError> {
         let records = self.read()?;
         let live: Vec<WorkspaceRecord> = records.iter().filter(|record| record.path.exists()).cloned().collect();
         if live.len() != records.len() {
@@ -67,23 +60,11 @@ impl WorkspaceRegistry {
     }
 
     fn read(&self) -> Result<Vec<WorkspaceRecord>, RegistryError> {
-        match fs::read_to_string(&self.path) {
-            Ok(content) => serde_json::from_str(&content)
-                .map_err(|source| RegistryError::Parse { path: self.path.clone(), source }),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(e) => Err(self.io_error(e)),
-        }
+        read_json(&self.path).map(Option::unwrap_or_default)
     }
 
     fn write(&self, records: &[WorkspaceRecord]) -> Result<(), RegistryError> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|e| self.io_error(e))?;
-        }
-        let content = serde_json::to_string_pretty(records)
-            .map_err(|source| RegistryError::Parse { path: self.path.clone(), source })?;
-        let tmp_path = self.path.with_extension("json.tmp");
-        fs::write(&tmp_path, content).map_err(|e| self.io_error(e))?;
-        fs::rename(&tmp_path, &self.path).map_err(|e| self.io_error(e))
+        write_json_atomic(&self.path, records)
     }
 
     fn io_error(&self, source: io::Error) -> RegistryError {
@@ -94,6 +75,7 @@ impl WorkspaceRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::TempDir;
 
     fn temp_registry() -> (TempDir, WorkspaceRegistry) {
@@ -164,6 +146,15 @@ mod tests {
 
         let reread = registry.workspaces_for("repo1").unwrap();
         assert_eq!(reread.len(), 1);
+    }
+
+    #[test]
+    fn register_succeeds_while_a_temp_path_is_occupied() {
+        let (dir, registry) = temp_registry();
+        let a = make_dir(&dir, "a");
+        fs::create_dir(dir.path().join("workspaces.json.tmp")).unwrap();
+        registry.register("repo1", &a).unwrap();
+        assert_eq!(registry.workspaces_for("repo1").unwrap().len(), 1);
     }
 
     #[test]

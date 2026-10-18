@@ -3,20 +3,19 @@ use crate::mcp::PROGRESSIVE_DISCOVERY_INSTRUCTIONS;
 use glob::glob;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use tokio::fs;
 use tracing::warn;
-use utils::shell_expander::ShellExpander;
-use utils::substitution::substitute_parameters;
+use utils::shell_expander::expand_shell;
 use utils::variables::VarError;
 use utils::{PathOrObject, ResourcePath};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Prompt {
     Text(String),
-    File { path: PathBuf, args: Option<HashMap<String, String>>, cwd: PathBuf },
+    File { path: PathBuf, cwd: PathBuf },
     McpInstructions(McpInstructions),
 }
 
@@ -165,7 +164,7 @@ impl Prompt {
     }
 
     pub fn file(path: impl Into<PathBuf>, cwd: impl Into<PathBuf>) -> Self {
-        Self::File { path: path.into(), args: None, cwd: cwd.into() }
+        Self::File { path: path.into(), cwd: cwd.into() }
     }
 
     /// Resolve a slice of [`PromptSource`] declarations into runtime [`Prompt`] values.
@@ -202,12 +201,7 @@ impl Prompt {
     pub async fn build(&self) -> Result<String> {
         match self {
             Prompt::Text(text) => Ok(text.clone()),
-            Prompt::File { path, args, cwd } => {
-                let content = Self::resolve_file(path).await?;
-                let substituted = substitute_parameters(&content, args);
-                let expander = ShellExpander::new();
-                Ok(expander.expand(&substituted, cwd).await)
-            }
+            Prompt::File { path, cwd } => Ok(expand_shell(&Self::resolve_file(path).await?, cwd).await),
             Prompt::McpInstructions(instructions) => Ok(format_mcp_instructions(instructions)),
         }
     }

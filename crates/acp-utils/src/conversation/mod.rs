@@ -15,7 +15,7 @@ use items::MessageRole;
 use std::collections::{HashMap, HashSet};
 
 /// One session's conversation items and state of the current turn.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Conversation {
     id: ConversationId,
     revision: Revision,
@@ -31,28 +31,9 @@ pub struct Conversation {
     plan: Option<acp::PlanItems>,
 }
 
-impl Default for Conversation {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Conversation {
     pub fn new() -> Self {
-        Self {
-            id: ConversationId::next(),
-            revision: Revision::default(),
-            items: Vec::new(),
-            tool_index: HashMap::new(),
-            message_index: HashMap::new(),
-            next_item_id: 0,
-            turn: TurnPhase::Idle,
-            turn_ended: false,
-            activity: Activity::Idle,
-            compactions: HashSet::new(),
-            context_usage: None,
-            plan: None,
-        }
+        Self::default()
     }
 
     pub fn apply_event(&mut self, event: &AcpEvent) -> Option<TurnFinished> {

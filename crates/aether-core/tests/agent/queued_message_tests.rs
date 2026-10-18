@@ -70,7 +70,7 @@ async fn user_message_during_tool_input_streaming_is_queued() {
         .await
         .expect("Agent should run");
 
-    let contexts = result.captured_contexts.lock().expect("captured contexts lock poisoned").clone();
+    let contexts = result.contexts;
     assert_eq!(contexts.len(), 2, "Expected exactly two LLM calls");
 
     let second_call = &contexts[1];
@@ -131,7 +131,7 @@ async fn text_arriving_after_a_turn_ends_starts_a_new_turn_while_the_finished_st
         .run_with_context()
         .await?;
 
-    let contexts = result.captured_contexts.lock().expect("captured contexts lock poisoned").clone();
+    let contexts = result.contexts;
     assert_eq!(user_texts(&contexts[1]), vec!["original prompt", "beep"]);
     Ok(())
 }
@@ -193,10 +193,7 @@ async fn run_queued_scenario(first_stop_reason: Option<StopReason>, queued: &[&s
         .await
         .expect("Agent should run");
 
-    Scenario {
-        messages: result.messages,
-        contexts: result.captured_contexts.lock().expect("captured contexts lock poisoned").clone(),
-    }
+    Scenario { contexts: result.contexts, messages: result.messages }
 }
 
 async fn run_interrupted_scenario(
@@ -216,10 +213,7 @@ async fn run_interrupted_scenario(
         .run_with_context()
         .await?;
 
-    Ok(Scenario {
-        messages: result.messages,
-        contexts: result.captured_contexts.lock().expect("captured contexts lock poisoned").clone(),
-    })
+    Ok(Scenario { contexts: result.contexts, messages: result.messages })
 }
 
 fn assert_queued_text_discarded(Scenario { messages, contexts }: Scenario, final_user_texts: &[&str]) {

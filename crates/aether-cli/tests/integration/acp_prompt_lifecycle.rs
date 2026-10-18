@@ -1,16 +1,15 @@
 use crate::TestResult;
 use aether_cli::acp::testing::{AcpTestHarness, FakeBackgroundTask};
-use aether_core::core::agent;
 use aether_sessions::{SessionEvent, UserEvent};
+use agent_client_protocol::ErrorCode;
 use agent_client_protocol::schema::v2::{
-    CancelSessionNotification, CloseSessionRequest, ContentBlock, MessageId, PromptRequest, PromptResponse, SessionId,
-    SessionUpdate, StateUpdate, StopReason,
+    CancelSessionNotification, CloseSessionRequest, ContentBlock, MessageId, PromptResponse, SessionId, SessionUpdate,
+    StateUpdate, StopReason,
 };
-use agent_client_protocol::{ErrorCode, SentRequest};
 use llm::LlmResponse;
 use llm::testing::{FakeLlmProvider, llm_response};
 use std::sync::Arc;
-use tokio::{sync::Notify, task::LocalSet};
+use tokio::sync::Notify;
 use utils::mcp_status::{McpServerStatus, McpServerStatusEntry};
 
 #[tokio::test(flavor = "current_thread")]
@@ -19,7 +18,7 @@ async fn cancel_during_mcp_prompt_expansion_does_not_wait_for_the_server() {
         let expansion = harness.pause_prompt_expansion();
         let session = harness.insert_agent_switching_session().await;
         let id = session.session_id().clone();
-        let prompt = harness.client_cx.send_request(PromptRequest::new(id.clone(), vec!["/plan".into()])).block_task();
+        let prompt = harness.prompt(&id, "/plan");
         expansion.reached().await;
         harness.client_cx.send_notification(CancelSessionNotification::new(id.clone())).unwrap();
         let error = prompt.await.expect_err("a prompt cancelled before insertion errors");
@@ -37,12 +36,12 @@ async fn cancel_during_prompt_expansion_reports_no_turn() -> TestResult {
         let expansion = harness.pause_prompt_expansion();
         let session = harness.insert_agent_switching_session().await;
         let id = session.session_id().clone();
-        let prompt = harness.client_cx.send_request(PromptRequest::new(id.clone(), vec!["/plan".into()])).block_task();
+        let prompt = harness.prompt(&id, "/plan");
         expansion.reached().await;
         harness.client_cx.send_notification(CancelSessionNotification::new(id.clone()))?;
         prompt.await.expect_err("a prompt cancelled before insertion errors");
 
-        harness.client_cx.send_request(PromptRequest::new(id.clone(), vec!["hello".into()])).block_task().await?;
+        harness.prompt(&id, "hello").await?;
         let updates = harness.updates_until(&id, is_running).await;
         assert!(!updates.iter().any(is_idle), "no idle is reported for a turn that never ran: {updates:?}");
         Ok(())
@@ -52,161 +51,104 @@ async fn cancel_during_prompt_expansion_reports_no_turn() -> TestResult {
 
 #[tokio::test(flavor = "current_thread")]
 async fn cancel_sent_before_acceptance_is_not_lost() {
-    LocalSet::new()
-        .run_until(async {
-            let provider =
-                FakeLlmProvider::new(vec![vec![LlmResponse::Start, LlmResponse::text("reply"), LlmResponse::done()]])
-                    .pause_turn_after(0, 1, Arc::new(Notify::new()));
-            let (tx, rx, handle) = agent(provider).spawn().await.unwrap();
-            let mut harness = AcpTestHarness::start().await;
-            let id = SessionId::new("early-cancel");
-            harness.insert_stub_session(tx, rx, handle, id.clone(), "fake:fake").await;
-            let prompt = harness.client_cx.send_request(PromptRequest::new(id.clone(), vec!["hi".into()])).block_task();
-            harness.client_cx.send_notification(CancelSessionNotification::new(id.clone())).unwrap();
-            match prompt.await {
-                Ok(_) => harness.expect_idle(&id, StopReason::Cancelled).await,
-                Err(error) => assert_eq!(error.code, ErrorCode::RequestCancelled),
-            }
-        })
-        .await;
+    AcpTestHarness::run(|mut harness| async move {
+        let release = Arc::new(Notify::new());
+        let provider =
+            FakeLlmProvider::new(vec![llm_response().text(&["reply"]).build()]).pause_turn_after(0, 1, release);
+        let id = harness.session("early-cancel", provider).insert().await;
+        let prompt = harness.prompt(&id, "hi");
+        harness.client_cx.send_notification(CancelSessionNotification::new(id.clone())).unwrap();
+        match prompt.await {
+            Ok(_) => harness.expect_idle(&id, StopReason::Cancelled).await,
+            Err(error) => assert_eq!(error.code, ErrorCode::RequestCancelled),
+        }
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn provider_failure_after_acceptance_reports_error_and_idle() {
-    LocalSet::new().run_until(async {
-        let (tx, rx, handle) = agent(FakeLlmProvider::new(vec![vec![LlmResponse::Error { message: "provider failed".into() }]]))
-            .spawn().await.unwrap();
-        let mut harness = AcpTestHarness::start().await;
-        let id = SessionId::new("failure");
-        harness.insert_stub_session(tx, rx, handle, id.clone(), "fake:fake").await;
-        harness.client_cx.send_request(PromptRequest::new(id, vec!["hi".into()])).block_task().await.unwrap();
-        let mut error_seen = false;
-        loop {
-            match harness.peer.next_session_notification().await.update {
-                SessionUpdate::AgentMessageChunk(chunk) => {
-                    if let ContentBlock::Text(text) = chunk.content {
-                        error_seen |= text.text.contains("provider failed");
-                    }
-                },
-                SessionUpdate::AgentMessage(message) => {
-                    if let Some(content) = message.content.value() {
-                        error_seen |= content.iter().any(|block| matches!(block, ContentBlock::Text(text) if text.text.contains("provider failed")));
-                    }
-                },
-                SessionUpdate::StateUpdate(StateUpdate::Idle(idle)) => {
-                    assert!(error_seen, "error must precede idle");
-                    assert_eq!(idle.stop_reason, Some(StopReason::EndTurn));
-                    break;
-                },
-                _ => {},
-            }
-        }
-    }).await;
+    AcpTestHarness::run(|mut harness| async move {
+        let id = harness.session("failure", failing_provider()).insert().await;
+        harness.prompt(&id, "hi").await.unwrap();
+        let updates = harness.updates_until(&id, is_idle).await;
+        assert!(updates.iter().any(|update| agent_message_contains(update, "provider failed")), "{updates:?}");
+        assert_idle(&updates, StopReason::EndTurn);
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn failed_turn_is_reported_once_under_a_stable_id_and_kept_out_of_resumed_history() {
-    LocalSet::new()
-        .run_until(async {
-            let provider = FakeLlmProvider::new(vec![vec![LlmResponse::Error { message: "provider failed".into() }]]);
-            let (tx, rx, handle) = agent(provider).spawn().await.unwrap();
-            let mut harness = AcpTestHarness::start().await;
-            let id = SessionId::new("failed-turn");
-            harness.append_stored_session(&id.0, "2026-05-01T00:00:00Z");
-            harness.insert_stub_session(tx, rx, handle, id.clone(), "fake:fake").await;
+    AcpTestHarness::run(|mut harness| async move {
+        harness.append_stored_session("failed-turn", "2026-05-01T00:00:00Z");
+        let id = harness.session("failed-turn", failing_provider()).insert().await;
 
-            harness
-                .client_cx
-                .send_request(PromptRequest::new(id.clone(), vec!["hi".into()]))
-                .block_task()
-                .await
-                .unwrap();
-            let live = error_message_ids(&mut harness, &id).await;
-            assert_eq!(live.len(), 1, "live turn reports the failure once");
+        harness.prompt(&id, "hi").await.unwrap();
+        let live = error_message_ids(&mut harness, &id).await;
+        assert_eq!(live.len(), 1, "live turn reports the failure once");
 
-            harness.client_cx.send_request(CloseSessionRequest::new(id.clone())).block_task().await.unwrap();
-            harness.resume_with_replay(&id).await;
-            harness
-                .client_cx
-                .send_request(PromptRequest::new(id.clone(), vec!["again".into()]))
-                .block_task()
-                .await
-                .unwrap();
-            let replayed = error_message_ids(&mut harness, &id).await;
-            assert_eq!(replayed, live, "replay reports the failure once, under its live id");
+        harness.client_cx.send_request(CloseSessionRequest::new(id.clone())).block_task().await.unwrap();
+        harness.resume_with_replay(&id).await;
+        harness.prompt(&id, "again").await.unwrap();
+        let replayed = error_message_ids(&mut harness, &id).await;
+        assert_eq!(replayed, live, "replay reports the failure once, under its live id");
 
-            harness.resume_agent().assert_saw_exactly(&["hi", "again"]);
-        })
-        .await;
+        harness.resume_agent().assert_saw_exactly(&["hi", "again"]);
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn unknown_session_is_rejected_before_acceptance() {
     AcpTestHarness::run(|harness| async move {
-        assert!(
-            harness
-                .client_cx
-                .send_request(PromptRequest::new("missing", vec!["hi".into()]))
-                .block_task()
-                .await
-                .is_err()
-        );
+        assert!(harness.prompt(&"missing".into(), "hi").await.is_err());
     })
     .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn acceptance_precedes_streaming_and_idle_completes_the_turn() {
-    LocalSet::new()
-        .run_until(async {
-            let release = Arc::new(Notify::new());
-            let provider =
-                FakeLlmProvider::new(vec![vec![LlmResponse::Start, LlmResponse::text("hello"), LlmResponse::done()]])
-                    .pause_turn_after(0, 1, release.clone());
-            let (tx, rx, handle) = agent(provider).spawn().await.unwrap();
-            let mut harness = AcpTestHarness::start().await;
-            let id = SessionId::new("lifecycle");
-            harness.insert_stub_session(tx, rx, handle, id.clone(), "fake:fake").await;
-            harness.client_cx.send_notification(CancelSessionNotification::new(id.clone())).unwrap();
-            let response = harness
-                .client_cx
-                .send_request(PromptRequest::new(id.clone(), vec!["hi".into()]))
-                .block_task()
-                .await
-                .unwrap();
-            assert_eq!(serde_json::to_value(&response).unwrap(), serde_json::json!({"messageId": response.message_id}));
-            let mut lifecycle = Vec::new();
-            while lifecycle.len() < 2 {
-                match harness.peer.next_session_notification().await.update {
-                    update if is_running(&update) => lifecycle.push("running"),
-                    SessionUpdate::UserMessage(message) => {
-                        assert_eq!(message.message_id, response.message_id);
-                        lifecycle.push("user_message");
-                    }
-                    SessionUpdate::AvailableCommandsUpdate(_) | SessionUpdate::ConfigOptionUpdate(_) => {}
-                    update => panic!("unexpected update before user acknowledgement: {update:?}"),
+    AcpTestHarness::run(|mut harness| async move {
+        let release = Arc::new(Notify::new());
+        let provider =
+            FakeLlmProvider::new(vec![llm_response().text(&["hello"]).build()]).pause_turn_after(0, 1, release.clone());
+        let id = harness.session("lifecycle", provider).insert().await;
+        harness.client_cx.send_notification(CancelSessionNotification::new(id.clone())).unwrap();
+        let response = harness.prompt(&id, "hi").await.unwrap();
+        assert_eq!(serde_json::to_value(&response).unwrap(), serde_json::json!({"messageId": response.message_id}));
+        let mut lifecycle = Vec::new();
+        while lifecycle.len() < 2 {
+            match harness.peer.next_session_notification().await.update {
+                update if is_running(&update) => lifecycle.push("running"),
+                SessionUpdate::UserMessage(message) => {
+                    assert_eq!(message.message_id, response.message_id);
+                    lifecycle.push("user_message");
                 }
+                SessionUpdate::AvailableCommandsUpdate(_) | SessionUpdate::ConfigOptionUpdate(_) => {}
+                update => panic!("unexpected update before user acknowledgement: {update:?}"),
             }
-            assert_eq!(lifecycle, ["running", "user_message"]);
-            release.notify_one();
-            let mut streamed_message = None;
-            loop {
-                match harness.peer.next_session_notification().await.update {
-                    SessionUpdate::AgentMessageChunk(chunk) => {
-                        assert!(matches!(chunk.content, ContentBlock::Text(text) if text.text == "hello"));
-                        streamed_message = Some(chunk.message_id);
-                    }
-                    SessionUpdate::AgentMessage(message) => assert_eq!(Some(message.message_id), streamed_message),
-                    SessionUpdate::StateUpdate(StateUpdate::Idle(idle)) => {
-                        assert!(streamed_message.is_some(), "streaming must precede idle");
-                        assert_eq!(idle.stop_reason, Some(StopReason::EndTurn));
-                        break;
-                    }
-                    _ => {}
+        }
+        assert_eq!(lifecycle, ["running", "user_message"]);
+        release.notify_one();
+        let mut streamed_message = None;
+        loop {
+            match harness.peer.next_session_notification().await.update {
+                SessionUpdate::AgentMessageChunk(chunk) => {
+                    assert!(matches!(chunk.content, ContentBlock::Text(text) if text.text == "hello"));
+                    streamed_message = Some(chunk.message_id);
                 }
+                SessionUpdate::AgentMessage(message) => assert_eq!(Some(message.message_id), streamed_message),
+                SessionUpdate::StateUpdate(StateUpdate::Idle(idle)) => {
+                    assert!(streamed_message.is_some(), "streaming must precede idle");
+                    assert_eq!(idle.stop_reason, Some(StopReason::EndTurn));
+                    break;
+                }
+                _ => {}
             }
-        })
-        .await;
+        }
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -214,7 +156,7 @@ async fn mcp_status_is_reported_only_when_a_tool_refresh_changes_it() -> TestRes
     AcpTestHarness::run(|mut harness| async move {
         let task = FakeBackgroundTask::new();
         let id = SessionId::new("mcp-status-refresh");
-        harness.insert_background_task_session(background_task_provider(), &task, id).await;
+        harness.session(id, background_task_provider()).background_task(&task).insert().await;
         let initial = tasks_tool_count(&harness.next_mcp_server_statuses().await).expect("tasks server is connected");
 
         task.announce_unchanged_tools().await;
@@ -231,7 +173,7 @@ async fn background_task_outcome_turn_is_framed_by_running_and_idle() -> TestRes
     AcpTestHarness::run(|mut harness| async move {
         let task = FakeBackgroundTask::new();
         let id = SessionId::new("task-outcome");
-        harness.insert_background_task_session(background_task_provider(), &task, id.clone()).await;
+        harness.session(id.clone(), background_task_provider()).background_task(&task).insert().await;
         start_background_task(&mut harness, &id).await?;
 
         task.complete("task output");
@@ -250,14 +192,14 @@ async fn prompt_during_background_task_outcome_turn_is_inserted_after_its_reply(
         let release = Arc::new(Notify::new());
         let provider = background_task_provider().pause_turn_after(2, 1, release.clone());
         let id = SessionId::new("task-outcome-prompt");
-        harness.insert_background_task_session(provider, &task, id.clone()).await;
+        harness.session(id.clone(), provider).background_task(&task).insert().await;
         start_background_task(&mut harness, &id).await?;
 
         task.complete("task output");
         let updates = harness.updates_until(&id, |update| matches!(update, SessionUpdate::AgentMessageChunk(_))).await;
         assert!(updates.iter().any(is_running), "task outcome turn must report running before replying: {updates:?}");
         let mut delivered = harness.watch_agent_prompts();
-        let prompt = harness.client_cx.send_request(PromptRequest::new(id.clone(), vec!["second".into()])).block_task();
+        let prompt = harness.prompt(&id, "second");
         delivered.changed().await?;
         release.notify_one();
         let prompt = prompt.await?;
@@ -278,9 +220,9 @@ async fn prompt_prepared_during_background_task_outcome_turn_is_inserted_after_i
         let release = Arc::new(Notify::new());
         let provider = background_task_provider().pause_turn_after(2, 1, release.clone());
         let id = SessionId::new("task-outcome-preparing");
-        harness.insert_background_task_session(provider, &task, id.clone()).await;
+        harness.session(id.clone(), provider).background_task(&task).insert().await;
         start_background_task(&mut harness, &id).await?;
-        let prompt = harness.client_cx.send_request(PromptRequest::new(id.clone(), vec!["/plan".into()])).block_task();
+        let prompt = harness.prompt(&id, "/plan");
         expansion.reached().await;
 
         task.complete("task output");
@@ -323,7 +265,7 @@ async fn queued_prompt_is_resumed_where_it_was_inserted() -> TestResult {
 
         harness.client_cx.send_request(CloseSessionRequest::new(id.clone())).block_task().await?;
         harness.resume(&id).await;
-        harness.client_cx.send_request(PromptRequest::new(id.clone(), vec!["third".into()])).block_task().await?;
+        harness.prompt(&id, "third").await?;
         harness.expect_idle(&id, StopReason::EndTurn).await;
 
         harness.resume_agent().assert_saw_exactly(&["first", "first reply", "second", "second reply", "third"]);
@@ -338,10 +280,9 @@ async fn prompts_sent_together_are_inserted_in_submission_order() -> TestResult 
         let expansion = harness.pause_prompt_expansion();
         let session = harness.insert_agent_switching_session().await;
         let id = session.session_id().clone();
-        let slow = harness.client_cx.send_request(PromptRequest::new(id.clone(), vec!["/plan".into()])).block_task();
+        let slow = harness.prompt(&id, "/plan");
         expansion.reached().await;
-        let fast =
-            harness.client_cx.send_request(PromptRequest::new(id.clone(), vec!["right after".into()])).block_task();
+        let fast = harness.prompt(&id, "right after");
         expansion.open();
 
         let slow = slow.await?;
@@ -364,16 +305,14 @@ async fn cancel_rejects_a_prompt_queued_behind_the_running_reply() -> TestResult
         let (_release, second) = queue_prompt_behind_paused_reply(&mut harness, &id, &[]).await?;
         harness.client_cx.send_notification(CancelSessionNotification::new(id.clone()))?;
 
-        let error = second.block_task().await.expect_err("a discarded prompt is rejected");
+        let error = second.await.expect_err("a discarded prompt is rejected");
         assert_eq!(error.code, ErrorCode::RequestCancelled);
         let updates = harness.updates_until(&id, is_idle).await;
         assert!(
             !updates.iter().any(|update| matches!(update, SessionUpdate::UserMessage(_))),
             "a discarded prompt is never shown as inserted: {updates:?}"
         );
-        assert!(
-            matches!(updates.last(), Some(SessionUpdate::StateUpdate(StateUpdate::Idle(idle))) if idle.stop_reason == Some(StopReason::Cancelled))
-        );
+        assert_idle(&updates, StopReason::Cancelled);
         assert_eq!(stored_prompts(&harness, &id), ["first"]);
         Ok(())
     })
@@ -386,11 +325,11 @@ async fn prompt_sent_after_cancel_starts_a_new_turn() -> TestResult {
         let id = SessionId::new("prompt-after-cancel");
         let (_release, second) = queue_prompt_behind_paused_reply(&mut harness, &id, &["third reply"]).await?;
         harness.client_cx.send_notification(CancelSessionNotification::new(id.clone()))?;
-        let third = harness.client_cx.send_request(PromptRequest::new(id.clone(), vec!["third".into()]));
+        let third = harness.prompt(&id, "third");
 
-        let error = second.block_task().await.expect_err("a discarded prompt is rejected");
+        let error = second.await.expect_err("a discarded prompt is rejected");
         assert_eq!(error.code, ErrorCode::RequestCancelled);
-        let third = third.block_task().await?;
+        let third = third.await?;
         let updates = harness.updates_until(&id, |update| is_agent_message(update, "third reply")).await;
         assert!(updates.iter().any(|update| is_user_message(update, &third.message_id)), "{updates:?}");
         harness.expect_idle(&id, StopReason::EndTurn).await;
@@ -421,7 +360,7 @@ async fn queue_prompt_behind_running_reply(
 ) -> TestResult<(PromptResponse, Vec<SessionUpdate>)> {
     let (release, second) = queue_prompt_behind_paused_reply(harness, id, &["second reply"]).await?;
     release.notify_one();
-    let second = second.block_task().await?;
+    let second = second.await?;
     let updates = harness.updates_until(id, |update| is_agent_message(update, "second reply")).await;
     Ok((second, updates))
 }
@@ -430,18 +369,17 @@ async fn queue_prompt_behind_paused_reply(
     harness: &mut AcpTestHarness,
     id: &SessionId,
     later_replies: &[&str],
-) -> TestResult<(Arc<Notify>, SentRequest<PromptResponse>)> {
+) -> TestResult<(Arc<Notify>, impl Future<Output = Result<PromptResponse, agent_client_protocol::Error>> + use<>)> {
     let release = Arc::new(Notify::new());
     let mut turns = vec![llm_response().text(&["first", " reply"]).build()];
     turns.extend(later_replies.iter().map(|reply| llm_response().text(&[reply]).build()));
     let provider = FakeLlmProvider::new(turns).pause_turn_after(0, 1, release.clone());
-    let (tx, rx, handle) = agent(provider).spawn().await?;
-    harness.insert_stub_session(tx, rx, handle, id.clone(), "fake:fake").await;
-    harness.client_cx.send_request(PromptRequest::new(id.clone(), vec!["first".into()])).block_task().await?;
+    harness.session(id.clone(), provider).insert().await;
+    harness.prompt(id, "first").await?;
     harness.updates_until(id, |update| matches!(update, SessionUpdate::AgentMessageChunk(_))).await;
 
     let mut delivered = harness.watch_agent_prompts();
-    let second = harness.client_cx.send_request(PromptRequest::new(id.clone(), vec!["second".into()]));
+    let second = harness.prompt(id, "second");
     delivered.changed().await?;
     Ok((release, second))
 }
@@ -462,9 +400,24 @@ fn position(updates: &[SessionUpdate], predicate: impl Fn(&SessionUpdate) -> boo
 }
 
 fn is_agent_message(update: &SessionUpdate, text: &str) -> bool {
+    agent_message_matches(update, |message| message == text)
+}
+
+fn agent_message_contains(update: &SessionUpdate, text: &str) -> bool {
+    agent_message_matches(update, |message| message.contains(text))
+}
+
+fn agent_message_matches(update: &SessionUpdate, matches_text: impl Fn(&str) -> bool) -> bool {
     matches!(update, SessionUpdate::AgentMessage(message) if message.content.value().into_iter().flatten().any(
-        |block| matches!(block, ContentBlock::Text(block) if block.text == text),
+        |block| matches!(block, ContentBlock::Text(block) if matches_text(&block.text)),
     ))
+}
+
+fn assert_idle(updates: &[SessionUpdate], stop_reason: StopReason) {
+    let Some(SessionUpdate::StateUpdate(StateUpdate::Idle(idle))) = updates.last() else {
+        panic!("expected the turn to end idle: {updates:?}");
+    };
+    assert_eq!(idle.stop_reason, Some(stop_reason));
 }
 
 fn is_user_message(update: &SessionUpdate, id: &MessageId) -> bool {
@@ -472,7 +425,7 @@ fn is_user_message(update: &SessionUpdate, id: &MessageId) -> bool {
 }
 
 async fn start_background_task(harness: &mut AcpTestHarness, id: &SessionId) -> TestResult {
-    harness.client_cx.send_request(PromptRequest::new(id.clone(), vec!["start a task".into()])).block_task().await?;
+    harness.prompt(id, "start a task").await?;
     harness.expect_idle(id, StopReason::EndTurn).await;
     Ok(())
 }
@@ -497,22 +450,17 @@ fn stored_prompts(harness: &AcpTestHarness, id: &SessionId) -> Vec<String> {
 }
 
 async fn error_message_ids(harness: &mut AcpTestHarness, id: &SessionId) -> Vec<MessageId> {
-    let mut ids = Vec::new();
-    loop {
-        let notification = harness.peer.next_session_notification().await;
-        if notification.session_id != *id {
-            continue;
-        }
-        match notification.update {
-            SessionUpdate::AgentMessage(message)
-                if message.content.value().into_iter().flatten().any(
-                    |block| matches!(block, ContentBlock::Text(text) if text.text.contains("provider failed")),
-                ) =>
-            {
-                ids.push(message.message_id);
-            }
-            SessionUpdate::StateUpdate(StateUpdate::Idle(_)) => return ids,
-            _ => {}
-        }
-    }
+    let updates = harness.updates_until(id, is_idle).await;
+    updates
+        .into_iter()
+        .filter(|update| agent_message_contains(update, "provider failed"))
+        .filter_map(|update| match update {
+            SessionUpdate::AgentMessage(message) => Some(message.message_id),
+            _ => None,
+        })
+        .collect()
+}
+
+fn failing_provider() -> FakeLlmProvider {
+    FakeLlmProvider::new(vec![vec![LlmResponse::Error { message: "provider failed".into() }]])
 }

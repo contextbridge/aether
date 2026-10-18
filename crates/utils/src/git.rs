@@ -17,6 +17,10 @@ pub fn git<T: AsRef<OsStr>>(repo: Option<&Path>, args: &[T]) -> Result<Vec<u8>, 
     stdout(args, output)
 }
 
+pub fn git_text<T: AsRef<OsStr>>(repo: Option<&Path>, args: &[T]) -> Result<String, GitError> {
+    git(repo, args).map(|stdout| String::from_utf8_lossy(&stdout).trim().to_string())
+}
+
 pub fn git_with_stdin<T: AsRef<OsStr>>(repo: Option<&Path>, args: &[T], stdin: &[u8]) -> Result<Vec<u8>, GitError> {
     let mut child = command(repo, args)
         .stdin(Stdio::piped())

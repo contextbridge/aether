@@ -5,7 +5,7 @@ use aether_core::agent_spec::AgentSpec;
 use agent_client_protocol::schema::v2::{self as acp, SessionConfigOption, SessionConfigOptionCategory};
 use llm::ReasoningEffort;
 use llm::catalog::{LlmModel, ModelSpec};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::ops::Deref;
 
 fn needs_oauth_login(model: &LlmModel, store: &dyn OAuthCredentialStorage) -> bool {
@@ -29,71 +29,51 @@ pub(crate) fn parse_available_spec(available: &[LlmModel], model_str: &str) -> O
 /// Build the "Model" select config option with all models from all providers.
 /// Display names use "Provider: `ModelName`" format.
 /// Fully-unavailable providers are collapsed into a single summary line.
-struct ProviderGroup<'a> {
-    models: Vec<&'a LlmModel>,
-    available_count: usize,
-}
-
 pub(crate) fn build_model_config_option(
     available: &[LlmModel],
     current_model: &str,
     all_models: &[LlmModel],
     credential_store: &dyn OAuthCredentialStorage,
 ) -> SessionConfigOption {
-    let available_models: HashSet<String> = available.iter().map(ToString::to_string).collect();
-
-    // Phase 1: Group models by provider, counting available models per provider
-    let mut groups: BTreeMap<&str, ProviderGroup<'_>> = BTreeMap::new();
-    for m in all_models {
-        let value = m.to_string();
-        let is_available = available_models.contains(&value);
-        let group =
-            groups.entry(m.provider()).or_insert_with(|| ProviderGroup { models: Vec::new(), available_count: 0 });
-        group.models.push(m);
-        if is_available {
-            group.available_count += 1;
-        }
+    let mut groups: BTreeMap<&str, Vec<&LlmModel>> = BTreeMap::new();
+    for model in all_models {
+        groups.entry(model.provider()).or_default().push(model);
     }
 
-    // Phase 2: Emit options per group
     let mut options: Vec<acp::SessionConfigSelectOption> = Vec::new();
-    for group in groups.values() {
-        let display = group.models[0].provider_display_name();
-        if group.available_count == 0 {
-            // Fully unavailable — emit one collapsed entry
-            let provider_key = group.models[0].provider();
-            let count = group.models.len();
+    for (provider, models) in groups {
+        let display = models[0].provider_display_name();
+        if !models.iter().any(|model| available.contains(model)) {
+            let count = models.len();
             let noun = if count == 1 { "model" } else { "models" };
-            let name = format!("{display} ({count} {noun})");
-            let value = format!("__unavailable:{provider_key}");
-            let reason = unavailable_reason(group.models[0], credential_store);
-            options.push(acp::SessionConfigSelectOption::new(value, name).description(reason));
-        } else {
-            // Mixed or fully available — list each model individually
-            for m in &group.models {
-                let value = m.to_string();
-                let is_available = available_models.contains(&value);
-                let needs_login = needs_oauth_login(m, credential_store);
-                let name = if needs_login {
-                    format!("{display}: {} (needs login)", m.display_name())
-                } else {
-                    format!("{display}: {}", m.display_name())
-                };
-                let mut option = acp::SessionConfigSelectOption::new(value, name);
-                let meta = SelectOptionMeta {
-                    reasoning_levels: m.effective_reasoning_levels(),
-                    supports_image: m.supports_image(),
-                    supports_audio: m.supports_audio(),
-                };
-                if meta != SelectOptionMeta::default() {
-                    option = option.meta(meta.into_meta());
-                }
-                if is_available && !needs_login {
-                    options.push(option);
-                } else {
-                    options.push(option.description(unavailable_reason(m, credential_store)));
-                }
+            let reason = unavailable_reason(models[0], credential_store);
+            options.push(
+                acp::SessionConfigSelectOption::new(
+                    format!("__unavailable:{provider}"),
+                    format!("{display} ({count} {noun})"),
+                )
+                .description(reason),
+            );
+            continue;
+        }
+
+        for model in models {
+            let needs_login = needs_oauth_login(model, credential_store);
+            let login_suffix = if needs_login { " (needs login)" } else { "" };
+            let name = format!("{display}: {}{login_suffix}", model.display_name());
+            let mut option = acp::SessionConfigSelectOption::new(model.to_string(), name);
+            let meta = SelectOptionMeta {
+                reasoning_levels: model.effective_reasoning_levels(),
+                supports_image: model.supports_image(),
+                supports_audio: model.supports_audio(),
+            };
+            if meta != SelectOptionMeta::default() {
+                option = option.meta(meta.into_meta());
             }
+            if needs_login || !available.contains(model) {
+                option = option.description(unavailable_reason(model, credential_store));
+            }
+            options.push(option);
         }
     }
 
@@ -243,7 +223,7 @@ pub(crate) fn get_all_models(discovered: &[LlmModel]) -> Vec<LlmModel> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aether_auth::FakeOAuthCredentialStore;
+    use aether_auth::MemoryCredentialStore;
     use aether_core::agent_spec::AgentSpecExposure;
     use agent_client_protocol::schema::v2::{SessionConfigKind, SessionConfigSelectOption, SessionConfigSelectOptions};
     use llm::catalog::{AnthropicModel, BedrockFoundationModel, BedrockModel, DeepSeekModel, GeminiModel};
@@ -305,8 +285,12 @@ mod tests {
         opts.iter().find(|o| o.config_id.0.as_ref() == id).unwrap_or_else(|| panic!("option '{id}' not found"))
     }
 
-    fn fake_store() -> FakeOAuthCredentialStore {
-        FakeOAuthCredentialStore::new()
+    fn fake_store() -> MemoryCredentialStore {
+        MemoryCredentialStore::new()
+    }
+
+    fn model_option() -> SessionConfigOption {
+        build_model_config_option(&test_models(), "anthropic:claude-sonnet-4-5", LlmModel::all(), &fake_store())
     }
 
     fn config_opts(model: &str, effort: Option<ReasoningEffort>) -> Vec<SessionConfigOption> {
@@ -314,35 +298,14 @@ mod tests {
     }
 
     #[test]
-    fn mode_config_option_has_mode_category() {
-        let option = test_validated_modes().config_options(
-            &test_models(),
-            Some("Planner"),
-            "anthropic:claude-sonnet-4-5",
-            Some(ReasoningEffort::High),
-            LlmModel::all(),
-            &fake_store(),
-        );
-        let mode = find_option(&option, "mode");
-        assert_eq!(mode.category, Some(SessionConfigOptionCategory::Mode));
+    fn config_options_include_mode_option_with_mode_category() {
+        let options = config_opts("anthropic:claude-sonnet-4-5", Some(ReasoningEffort::High));
+        assert_eq!(find_option(&options, "mode").category, Some(SessionConfigOptionCategory::Mode));
     }
 
     #[test]
     fn resolve_rejects_unknown_mode() {
         assert!(test_validated_modes().resolve("Unknown").is_none());
-    }
-
-    #[test]
-    fn config_options_includes_mode_option_when_configured() {
-        let options = test_validated_modes().config_options(
-            &test_models(),
-            Some("Planner"),
-            "anthropic:claude-sonnet-4-5",
-            Some(ReasoningEffort::High),
-            LlmModel::all(),
-            &fake_store(),
-        );
-        assert!(has_option_id(&options, "mode"));
     }
 
     #[test]
@@ -393,15 +356,13 @@ mod tests {
 
     #[test]
     fn build_model_config_option_includes_multi_select_meta() {
-        let opt =
-            build_model_config_option(&test_models(), "anthropic:claude-sonnet-4-5", LlmModel::all(), &fake_store());
+        let opt = model_option();
         assert!(ConfigOptionMeta::from_meta(opt.meta.as_ref()).multi_select);
     }
 
     #[test]
     fn collapsed_entry_for_fully_unavailable_provider() {
-        let opt =
-            build_model_config_option(&test_models(), "anthropic:claude-sonnet-4-5", LlmModel::all(), &fake_store());
+        let opt = model_option();
         let options = select_options(&opt);
 
         let moonshot = options
@@ -426,8 +387,7 @@ mod tests {
 
     #[test]
     fn mixed_provider_lists_models_individually() {
-        let opt =
-            build_model_config_option(&test_models(), "anthropic:claude-sonnet-4-5", LlmModel::all(), &fake_store());
+        let opt = model_option();
         let options = select_options(&opt);
 
         assert!(

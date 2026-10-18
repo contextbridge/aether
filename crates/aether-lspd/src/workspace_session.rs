@@ -1,10 +1,11 @@
-use crate::diagnostics_store::DiagnosticsStore;
+use crate::daemon::Timeouts;
+use crate::diagnostics_store::{DiagnosticsStore, Freshness};
 use crate::document_lifecycle::{AcquireAction, DocumentLifecycle, ReleaseAction};
 use crate::error::DaemonResult;
-use crate::file_watcher::FileWatcherBatch;
-use crate::language_catalog::{DiagnosticsMode, LanguageId, LspConfig, metadata_for};
-use crate::process_transport::{ProcessTransport, TransportError, TransportEvent};
-use crate::protocol::{LspNotification, extract_document_uri};
+use crate::file_watcher::{FileWatcherBatch, is_ignored_directory_name};
+use crate::language_catalog::{DiagnosticsMode, LanguageId, LspConfig};
+use crate::process_transport::{LspNotification, ProcessTransport, TransportError, TransportEvent};
+use crate::protocol::extract_document_uri;
 use crate::refresh_queue::RefreshQueue;
 use ignore::WalkBuilder;
 use lsp_types::notification::{
@@ -18,15 +19,12 @@ use lsp_types::{
 };
 use serde_json::Value;
 use std::collections::HashSet;
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 
-const DIAGNOSTICS_TIMEOUT: Duration = Duration::from_secs(20);
-const BACKGROUND_REFRESH_TIMEOUT: Duration = Duration::from_secs(20);
 const LSP_CONTENT_MODIFIED: i32 = -32801;
 const LSP_SERVER_CANCELLED: i32 = -32802;
 const TRANSIENT_RETRY_LIMIT: u32 = 3;
@@ -36,24 +34,37 @@ const TRANSIENT_RETRY_DELAY: Duration = Duration::from_millis(500);
 pub(crate) struct WorkspaceSession {
     transport: ProcessTransport,
     documents: DocumentLifecycle,
+    document_sync: Arc<Mutex<()>>,
     diagnostics: DiagnosticsStore,
     refresh: RefreshQueue,
     diagnostics_mode: DiagnosticsMode,
+    diagnostics_timeout: Duration,
     supported_extensions: Arc<HashSet<String>>,
     alive: Arc<AtomicBool>,
+    #[cfg(feature = "testing")]
+    hooks: crate::testing::TestHooks,
 }
 
 impl WorkspaceSession {
-    pub(crate) fn spawn(workspace_root: &Path, config: &LspConfig) -> DaemonResult<Self> {
+    pub(crate) fn spawn(
+        workspace_root: &Path,
+        config: &LspConfig,
+        timeouts: Timeouts,
+        #[cfg(feature = "testing")] hooks: crate::testing::TestHooks,
+    ) -> DaemonResult<Self> {
         let (transport, event_rx) = ProcessTransport::spawn(workspace_root, config)?;
         let session = Self {
             transport,
             documents: DocumentLifecycle::new(),
-            diagnostics: DiagnosticsStore::new(),
+            document_sync: Arc::default(),
+            diagnostics: DiagnosticsStore::new(timeouts.diagnostics_settle),
             refresh: RefreshQueue::new(),
             diagnostics_mode: config.diagnostics_mode,
+            diagnostics_timeout: timeouts.diagnostics,
             supported_extensions: Arc::new(supported_extensions(config)),
             alive: Arc::new(AtomicBool::new(true)),
+            #[cfg(feature = "testing")]
+            hooks,
         };
 
         tokio::spawn(session.clone().run_events(event_rx));
@@ -65,6 +76,10 @@ impl WorkspaceSession {
 
     pub(crate) async fn wait_until_initialized(&self) -> DaemonResult<()> {
         self.transport.wait_until_initialized().await
+    }
+
+    pub(crate) async fn wait_until_ready(&self, bound: Duration) {
+        self.transport.wait_until_ready(bound).await;
     }
 
     pub(crate) async fn request(&self, method: &str, params: &Value) -> Result<Value, TransportError> {
@@ -86,10 +101,10 @@ impl WorkspaceSession {
         match uri {
             Some(uri) => {
                 if self.refresh_uri(uri).await == Freshness::Unconfirmed {
-                    self.refresh.wait_for_current_generation(DIAGNOSTICS_TIMEOUT).await;
+                    self.refresh.wait_for_current_generation(self.diagnostics_timeout).await;
                 }
             }
-            None => self.refresh.wait_for_current_generation(BACKGROUND_REFRESH_TIMEOUT).await,
+            None => self.refresh.wait_for_current_generation(self.diagnostics_timeout).await,
         }
         self.diagnostics.get(uri)
     }
@@ -125,6 +140,10 @@ impl WorkspaceSession {
     }
 
     async fn open_document(&self, uri: &Uri) -> DocumentSync {
+        let sync = self.document_sync.lock();
+        #[cfg(feature = "testing")]
+        let sync = self.hooks.observe_pending(crate::testing::TestPoint::DocumentSyncWait(uri.clone()), sync);
+        let _sync = sync.await;
         let notifications = match self.documents.acquire(uri).await {
             AcquireAction::Open { file_path, content } => open_and_save_notifications(uri, &file_path, content),
             AcquireAction::Reopen { file_path, content } => reopen_notifications(uri, &file_path, content),
@@ -136,6 +155,8 @@ impl WorkspaceSession {
             }
         };
 
+        #[cfg(feature = "testing")]
+        self.hooks.pause(crate::testing::TestPoint::DocumentOpen(uri.clone())).await;
         let version_before = self.diagnostics.current_uri_version(uri);
         for notification in notifications {
             self.transport.send_notification(notification).await;
@@ -144,6 +165,7 @@ impl WorkspaceSession {
     }
 
     async fn close_document(&self, uri: &Uri) {
+        let _sync = self.document_sync.lock().await;
         match self.documents.release(uri) {
             ReleaseAction::Close => self.transport.send_notification(close_notification(uri)).await,
             ReleaseAction::CloseAndRefresh => {
@@ -158,8 +180,10 @@ impl WorkspaceSession {
         match (self.diagnostics_mode, sync) {
             (_, DocumentSync::Missing) | (DiagnosticsMode::Push, DocumentSync::AlreadyOpen) => Freshness::Unconfirmed,
             (DiagnosticsMode::Push, DocumentSync::Sent { version_before }) => {
-                self.diagnostics.wait_for_uri_fresh(uri, version_before, DIAGNOSTICS_TIMEOUT).await;
-                Freshness::Fresh
+                let fresh = self.diagnostics.wait_for_uri_fresh(uri, version_before, self.diagnostics_timeout);
+                #[cfg(feature = "testing")]
+                let fresh = self.hooks.observe_pending(crate::testing::TestPoint::DiagnosticsWait(uri.clone()), fresh);
+                fresh.await
             }
             (DiagnosticsMode::Pull, DocumentSync::Sent { .. } | DocumentSync::AlreadyOpen) => {
                 self.pull_diagnostics(uri).await
@@ -172,7 +196,7 @@ impl WorkspaceSession {
         // which TypeScript 7 rejects.
         let params = serde_json::json!({ "textDocument": TextDocumentIdentifier { uri: uri.clone() } });
         let request = self.request_with_retry(DocumentDiagnosticRequest::METHOD, &params);
-        let report = tokio::time::timeout(DIAGNOSTICS_TIMEOUT, request)
+        let report = tokio::time::timeout(self.diagnostics_timeout, request)
             .await
             .ok()
             .and_then(Result::ok)
@@ -209,6 +233,10 @@ impl WorkspaceSession {
     async fn run_events(self, mut event_rx: mpsc::Receiver<TransportEvent>) {
         while let Some(event) = event_rx.recv().await {
             match event {
+                #[cfg(feature = "testing")]
+                TransportEvent::RequestReceived(method) => {
+                    self.hooks.pause(crate::testing::TestPoint::RequestReceived(method)).await;
+                }
                 TransportEvent::PublishedDiagnostics(params) => self.diagnostics.publish(params),
                 TransportEvent::DiagnosticsRefreshRequested => {
                     self.refresh.enqueue(self.filter_supported(self.diagnostics.uris()));
@@ -232,12 +260,9 @@ impl WorkspaceSession {
             return;
         }
 
-        let params = DidChangeWatchedFilesParams { changes };
-        if let Ok(value) = serde_json::to_value(&params) {
-            self.transport
-                .send_notification(LspNotification { method: DidChangeWatchedFiles::METHOD.to_string(), params: value })
-                .await;
-        }
+        self.transport
+            .send_notification(notification::<DidChangeWatchedFiles>(DidChangeWatchedFilesParams { changes }))
+            .await;
     }
 
     async fn run_refresh_worker(self) {
@@ -267,18 +292,11 @@ enum DocumentSync {
     Missing,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Freshness {
-    Fresh,
-    Unconfirmed,
-}
-
 fn supported_extensions(config: &LspConfig) -> HashSet<String> {
     config
         .languages
         .iter()
-        .filter_map(|language| metadata_for(*language))
-        .flat_map(|metadata| metadata.extensions.iter().copied())
+        .flat_map(|language| language.metadata().extensions.iter().copied())
         .map(ToOwned::to_owned)
         .collect()
 }
@@ -307,10 +325,6 @@ fn uri_is_supported(uri: &Uri, supported_extensions: &HashSet<String>) -> bool {
     path_is_supported(Path::new(&path), supported_extensions)
 }
 
-fn is_ignored_directory_name(name: &OsStr) -> bool {
-    matches!(name.to_string_lossy().as_ref(), ".git" | "node_modules" | ".next" | "dist" | "build" | "target")
-}
-
 fn path_is_supported(path: &Path, supported_extensions: &HashSet<String>) -> bool {
     path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| supported_extensions.contains(ext))
 }
@@ -324,26 +338,27 @@ fn reopen_notifications(uri: &Uri, file_path: &str, content: String) -> Vec<LspN
 }
 
 fn open_notification(uri: &Uri, file_path: &str, version: i32, content: String) -> LspNotification {
-    let language_id = LanguageId::from_path(Path::new(file_path));
-    let params = DidOpenTextDocumentParams {
-        text_document: TextDocumentItem {
-            uri: uri.clone(),
-            language_id: language_id.as_str().to_string(),
-            version,
-            text: content,
-        },
-    };
-    LspNotification { method: DidOpenTextDocument::METHOD.to_string(), params: serde_json::to_value(&params).unwrap() }
+    let language_id = LanguageId::from_path(Path::new(file_path)).as_str().to_string();
+    notification::<DidOpenTextDocument>(DidOpenTextDocumentParams {
+        text_document: TextDocumentItem::new(uri.clone(), language_id, version, content),
+    })
 }
 
 fn save_notification(uri: &Uri) -> LspNotification {
-    let params = DidSaveTextDocumentParams { text_document: TextDocumentIdentifier { uri: uri.clone() }, text: None };
-    LspNotification { method: DidSaveTextDocument::METHOD.to_string(), params: serde_json::to_value(&params).unwrap() }
+    notification::<DidSaveTextDocument>(DidSaveTextDocumentParams {
+        text_document: TextDocumentIdentifier::new(uri.clone()),
+        text: None,
+    })
 }
 
 fn close_notification(uri: &Uri) -> LspNotification {
-    let params = DidCloseTextDocumentParams { text_document: TextDocumentIdentifier { uri: uri.clone() } };
-    LspNotification { method: DidCloseTextDocument::METHOD.to_string(), params: serde_json::to_value(&params).unwrap() }
+    notification::<DidCloseTextDocument>(DidCloseTextDocumentParams {
+        text_document: TextDocumentIdentifier::new(uri.clone()),
+    })
+}
+
+fn notification<N: Notification>(params: N::Params) -> LspNotification {
+    LspNotification { method: N::METHOD.to_string(), params: serde_json::to_value(params).unwrap() }
 }
 
 #[cfg(test)]

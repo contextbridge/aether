@@ -89,23 +89,18 @@ impl LlmCallState {
                     ));
                 }
                 if let Some(usage) = usage {
-                    self.span.set_attribute(KeyValue::new(GEN_AI_USAGE_INPUT_TOKENS, attr_tokens(usage.input_tokens)));
-                    self.span
-                        .set_attribute(KeyValue::new(GEN_AI_USAGE_OUTPUT_TOKENS, attr_tokens(usage.output_tokens)));
-                    if let Some(tokens) = usage.cache_read_tokens {
-                        self.span
-                            .set_attribute(KeyValue::new(GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS, attr_tokens(tokens)));
-                    }
-                    if let Some(tokens) = usage.cache_creation_tokens {
-                        self.span.set_attribute(KeyValue::new(
-                            GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
-                            attr_tokens(tokens),
-                        ));
-                    }
-                    if let Some(tokens) = usage.reasoning_tokens {
-                        let tokens = attr_tokens(tokens);
-                        self.span.set_attribute(KeyValue::new(GEN_AI_USAGE_REASONING_OUTPUT_TOKENS, tokens));
-                        self.span.set_attribute(KeyValue::new(AI_REASONING_TOKENS, tokens));
+                    let token_attributes = [
+                        (GEN_AI_USAGE_INPUT_TOKENS, Some(usage.input_tokens)),
+                        (GEN_AI_USAGE_OUTPUT_TOKENS, Some(usage.output_tokens)),
+                        (GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS, usage.cache_read_tokens),
+                        (GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS, usage.cache_creation_tokens),
+                        (GEN_AI_USAGE_REASONING_OUTPUT_TOKENS, usage.reasoning_tokens),
+                        (AI_REASONING_TOKENS, usage.reasoning_tokens),
+                    ]
+                    .into_iter()
+                    .filter_map(|(key, tokens)| tokens.map(|tokens| KeyValue::new(key, attr_tokens(tokens))));
+                    for attribute in token_attributes {
+                        self.span.set_attribute(attribute);
                     }
                     self.record_token_usage(*usage);
                 }

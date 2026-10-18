@@ -1,38 +1,31 @@
 use super::support::*;
 
 #[test]
-fn composer_empty_renders_top_and_bottom_rules() {
-    let composer = Composer::new();
-    let layout = composer.layout(80, &Theme::default());
-
-    assert_eq!(layout.lines.len(), 3, "empty composer: top rule, prompt, bottom rule");
-    assert!(line_text(&layout.lines[0]).chars().all(|c| c == '─'), "top rule");
-    assert_eq!(line_text(&layout.lines[0]).chars().count(), 80, "top rule spans full width");
-    assert!(line_text(&layout.lines[2]).chars().all(|c| c == '─'), "bottom rule");
-}
-
-#[test]
-fn composer_single_line_renders_top_and_bottom_rules() {
-    let mut composer = Composer::new();
-    composer.insert_str("hello");
-    let layout = composer.layout(80, &Theme::default());
-
-    assert_eq!(layout.lines.len(), 3, "single line: top rule, prompt line, bottom rule");
-    assert!(line_text(&layout.lines[0]).chars().all(|c| c == '─'));
-    assert!(line_text(&layout.lines[1]).contains("> hello"));
-    assert!(line_text(&layout.lines[2]).chars().all(|c| c == '─'));
-}
-
-#[test]
-fn composer_wrapped_renders_top_and_bottom_rules() {
-    let mut composer = Composer::new();
-    composer.insert_str("abcdefghijkl");
-    let layout = composer.layout(8, &Theme::default());
-
-    // The text fills both rows exactly, so the cursor wraps onto a third.
-    assert_eq!(layout.lines.len(), 5, "wrapped: top rule, 3 content rows, bottom rule");
-    assert!(line_text(&layout.lines[0]).chars().all(|c| c == '─'));
-    assert!(line_text(layout.lines.last().unwrap()).chars().all(|c| c == '─'));
+fn layout_frames_wrapped_rows_between_rules_and_tracks_the_cursor() {
+    let cases = [
+        ("", 0, 80, 1, (2, 1)),
+        ("abc", 0, 80, 1, (5, 1)),
+        ("a🎉界", 0, 80, 1, (7, 1)),
+        ("@main.rs @lib.rs", 0, 80, 1, (18, 1)),
+        ("abcdefgh", 2, 80, 1, (8, 1)),
+        ("abcdefgh", 2, 6, 2, (4, 2)),
+        ("hello world", 5, 9, 2, (8, 1)),
+        ("abcd", 0, 6, 2, (2, 2)),
+        ("abcdefghijkl", 0, 8, 3, (2, 3)),
+    ];
+    for (text, moves_left, width, rows, cursor) in cases {
+        let mut composer = Composer::new();
+        composer.insert_str(text);
+        for _ in 0..moves_left {
+            composer.move_left();
+        }
+        let layout = composer.layout(width, &Theme::default());
+        let lines: Vec<String> = layout.lines.iter().map(line_text).collect();
+        let rule = "─".repeat(usize::from(width));
+        assert!(lines.first() == Some(&rule) && lines.last() == Some(&rule), "{text:?} at {width}: {lines:?}");
+        assert_eq!(lines.len() - 2, rows, "{text:?} at {width}: {lines:?}");
+        assert_eq!((layout.cursor.x, layout.cursor.y), cursor, "{text:?} at {width}");
+    }
 }
 
 #[test]
@@ -46,35 +39,6 @@ fn composer_hard_newline_renders_top_and_bottom_rules() {
 }
 
 #[test]
-fn cursor_at_prompt_start() {
-    let composer = Composer::new();
-    let layout = composer.layout(80, &Theme::default());
-
-    assert_eq!(layout.cursor.x, 2);
-    assert_eq!(layout.cursor.y, 1, "cursor row is 1 (below top rule)");
-}
-
-#[test]
-fn cursor_after_text() {
-    let mut composer = Composer::new();
-    composer.insert_str("abc");
-    let layout = composer.layout(80, &Theme::default());
-
-    assert_eq!(layout.cursor.x, 5, "2 (prefix) + 3 (abc)");
-    assert_eq!(layout.cursor.y, 1);
-}
-
-#[test]
-fn cursor_after_unicode_and_wide_chars() {
-    let mut composer = Composer::new();
-    composer.insert_str("a🎉界");
-    let layout = composer.layout(80, &Theme::default());
-
-    assert_eq!(layout.cursor.x, 7, "2 (prefix) + 1 (a) + 2 (🎉) + 2 (界)");
-    assert_eq!(layout.cursor.y, 1);
-}
-
-#[test]
 fn narrow_unicode_wrap_preserves_characters_and_display_width() {
     let mut composer = Composer::new();
     composer.insert_str("界界界");
@@ -85,42 +49,6 @@ fn narrow_unicode_wrap_preserves_characters_and_display_width() {
 
     assert_eq!(rendered.matches('界').count(), 3);
     assert!(content.iter().all(|line| line.width() <= 5), "wrapped row exceeds terminal width: {rendered:?}");
-}
-
-#[test]
-fn cursor_after_whitespace_wrap() {
-    let mut composer = Composer::new();
-    composer.insert_str("hello world");
-    composer.move_left();
-    composer.move_left();
-    composer.move_left();
-    composer.move_left();
-    composer.move_left();
-    let layout = composer.layout(9, &Theme::default());
-
-    assert_eq!(layout.cursor.y, 1, "cursor on first wrapped line (byte 6 in chunk 'hello w')");
-    assert_eq!(layout.cursor.x, 8);
-}
-
-#[test]
-fn cursor_after_multiple_mentions() {
-    let mut composer = Composer::new();
-    composer.insert_str("@main.rs @lib.rs");
-    let layout = composer.layout(80, &Theme::default());
-
-    assert_eq!(layout.cursor.x, 18);
-    assert_eq!(layout.cursor.y, 1);
-}
-
-#[test]
-fn cursor_wraps_onto_its_own_row_when_the_last_row_is_full() {
-    let mut composer = Composer::new();
-    composer.insert_str("abcd");
-
-    let layout = composer.layout(6, &Theme::default());
-
-    assert_eq!(layout.lines.len(), 4, "top rule, the full row, the row the cursor wrapped onto, bottom rule");
-    assert_eq!(layout.cursor, Position::new(2, 2), "the cursor belongs at the start of the row below the full one");
 }
 
 #[test]
@@ -149,33 +77,12 @@ fn vertical_movement_stops_at_the_first_and_last_wrapped_rows() {
 }
 
 #[test]
-fn cursor_preserved_after_resize_reflow() {
-    let mut composer = Composer::new();
-    composer.insert_str("abcdefgh");
-    composer.move_left();
-    composer.move_left();
-
-    let wide = composer.layout(80, &Theme::default());
-    let narrow = composer.layout(6, &Theme::default());
-
-    assert_eq!(wide.lines.len(), 3, "wide: top rule, prompt, bottom rule");
-    assert_eq!(narrow.lines.len(), 4, "narrow: top rule, 2 content rows, bottom rule");
-    assert_eq!(wide.cursor.y, 1);
-    assert_eq!(narrow.cursor.y, 2);
-    assert_eq!(wide.cursor.x, 8);
-    assert_eq!(narrow.cursor.x, 4);
-}
-
-#[test]
 fn tiny_terminal_does_not_overwrite_status_line() {
     let mut ui = TestUi::new();
     ui.type_text("hello");
 
-    ui.draw();
-    let viewport = ui.viewport_text();
-
-    assert!(viewport.contains("aether"), "status line (agent name) still visible");
-    assert!(viewport.contains("> hello"), "composer still visible");
+    ui.assert_viewport_contains("aether");
+    ui.assert_viewport_contains("> hello");
 }
 
 #[test]
@@ -198,38 +105,18 @@ fn overlay_does_not_duplicate_border_rows() {
 }
 
 #[test]
-fn paste_strips_control_characters() {
-    let mut composer = Composer::new();
-    composer.insert_paste("abc\x01def\x02ghi");
-    assert_eq!(composer.text(), "abcdefghi");
-}
-
-#[test]
-fn paste_preserves_newlines() {
-    let mut composer = Composer::new();
-    composer.insert_paste("line one\nline two");
-    assert_eq!(composer.text(), "line one\nline two");
-}
-
-#[test]
-fn paste_preserves_tabs() {
-    let mut composer = Composer::new();
-    composer.insert_paste("col1\tcol2");
-    assert_eq!(composer.text(), "col1\tcol2");
-}
-
-#[test]
-fn paste_preserves_unicode() {
-    let mut composer = Composer::new();
-    composer.insert_paste("héllo 🎉 wörld");
-    assert_eq!(composer.text(), "héllo 🎉 wörld");
-}
-
-#[test]
-fn paste_strips_carriage_return_and_other_c0_controls() {
-    let mut composer = Composer::new();
-    composer.insert_paste("abc\r\x08\x7fdef");
-    assert_eq!(composer.text(), "abcdef");
+fn paste_keeps_text_newlines_and_tabs_but_strips_other_control_characters() {
+    for (pasted, kept) in [
+        ("abc\x01def\x02ghi", "abcdefghi"),
+        ("abc\r\x08\x7fdef", "abcdef"),
+        ("line one\nline two", "line one\nline two"),
+        ("col1\tcol2", "col1\tcol2"),
+        ("héllo 🎉 wörld", "héllo 🎉 wörld"),
+    ] {
+        let mut composer = Composer::new();
+        composer.insert_paste(pasted);
+        assert_eq!(composer.text(), kept, "{pasted:?}");
+    }
 }
 
 #[test]
@@ -272,7 +159,7 @@ fn ctrl_e_stays_within_logical_line_for_multiline() {
 
 #[test]
 fn app_routes_ctrl_a_to_move_line_start() {
-    let mut app = make_app();
+    let mut app = TestUi::new();
     app.type_text("hello");
     app.key(key(KeyCode::Left));
     app.key(key(KeyCode::Left));
@@ -282,7 +169,7 @@ fn app_routes_ctrl_a_to_move_line_start() {
 
 #[test]
 fn app_routes_ctrl_e_to_move_line_end() {
-    let mut app = make_app();
+    let mut app = TestUi::new();
     app.type_text("hello");
     app.key(key(KeyCode::Home));
     app.key(ctrl('e'));
@@ -291,7 +178,7 @@ fn app_routes_ctrl_e_to_move_line_end() {
 
 #[test]
 fn shift_enter_closes_command_overlay_and_inserts_newline() {
-    let mut app = make_app();
+    let mut app = TestUi::new();
     app.key(key(KeyCode::Char('/')));
     assert!(app.app().composer().has_completion(), "command overlay active");
 
@@ -302,8 +189,7 @@ fn shift_enter_closes_command_overlay_and_inserts_newline() {
 
 #[test]
 fn ctrl_j_closes_file_overlay_and_inserts_newline() {
-    let directory = tempfile::tempdir().unwrap();
-    let mut app = make_app_in(directory.path().to_path_buf());
+    let mut app = TestUiBuilder::new().working_dir("/workspace").build();
     app.key(key(KeyCode::Char('@')));
     assert!(app.app().composer().has_completion(), "file overlay active");
 
@@ -314,7 +200,7 @@ fn ctrl_j_closes_file_overlay_and_inserts_newline() {
 
 #[test]
 fn alt_enter_closes_command_overlay_and_inserts_newline() {
-    let mut app = make_app();
+    let mut app = TestUi::new();
     app.key(key(KeyCode::Char('/')));
     assert!(app.app().composer().has_completion());
 
@@ -325,11 +211,10 @@ fn alt_enter_closes_command_overlay_and_inserts_newline() {
 
 #[test]
 fn clear_replaces_the_conversation_once() {
-    let mut app = make_app();
+    let mut app = TestUi::new();
     let old_conversation = app.app().conversation_id();
 
-    app.type_text("/clear");
-    app.key(key(KeyCode::Tab));
+    app.run_command("/clear");
     let _ = app.next_agent_command().unwrap();
 
     app.deliver_result(new_session_created("new-session", vec![select_option("model", "sonnet")]));
@@ -347,15 +232,11 @@ fn clear_replaces_the_conversation_once() {
 
 #[test]
 fn composer_highlights_at_mentions_in_info_color() {
-    let directory = tempfile::tempdir().unwrap();
-    let root = directory.path();
-    std::fs::write(root.join("lib.rs"), "old\n").unwrap();
-
     let theme = Theme::default();
     let mut composer = Composer::new();
     composer.insert_str("fix ");
     composer.insert_char('@');
-    open_file_picker(&mut composer, root);
+    open_file_picker(&mut composer, &["lib.rs"]);
     composer.accept_file();
     // buffer is now "fix @lib.rs "
 
@@ -376,13 +257,9 @@ fn composer_highlights_at_mentions_in_info_color() {
 fn selected_mentions_match_whole_tokens_not_substrings() {
     // A mention whose display name is a prefix of another token must not be treated as
     // active. Previously `@foo.rs` would also match the text `@foo.rsx` via `contains`.
-    let directory = tempfile::tempdir().unwrap();
-    let root = directory.path();
-    std::fs::write(root.join("foo.rs"), "old\n").unwrap();
-
     let mut composer = Composer::new();
     composer.insert_char('@');
-    open_file_picker(&mut composer, root);
+    open_file_picker(&mut composer, &["foo.rs"]);
     composer.accept_file();
     assert_eq!(composer.text(), "@foo.rs ");
 
@@ -401,13 +278,9 @@ fn selected_mentions_match_whole_tokens_not_substrings() {
 
 #[test]
 fn selected_matches_mention_with_exact_token() {
-    let directory = tempfile::tempdir().unwrap();
-    let root = directory.path();
-    std::fs::write(root.join("lib.rs"), "old\n").unwrap();
-
     let mut composer = Composer::new();
     composer.insert_char('@');
-    open_file_picker(&mut composer, root);
+    open_file_picker(&mut composer, &["lib.rs"]);
     composer.accept_file();
 
     let mentions = composer.selected_mentions();
@@ -423,9 +296,19 @@ fn file_picker_completes_from_the_fake_filesystem() {
 
     ui.type_text("@");
     ui.settle_tasks();
-    ui.draw();
 
-    let viewport = ui.viewport_text();
-    assert!(viewport.contains("readme.md"), "picker should list fake files:\n{viewport}");
-    assert!(viewport.contains("src/main.rs"), "picker should list nested fake files:\n{viewport}");
+    ui.assert_viewport_contains("readme.md");
+    ui.assert_viewport_contains("src/main.rs");
+}
+
+#[test]
+fn characters_held_with_a_platform_modifier_are_not_typed() {
+    let mut ui = TestUi::new();
+
+    for modifiers in [KeyModifiers::SUPER, KeyModifiers::HYPER, KeyModifiers::META] {
+        ui.key(KeyEvent::new(KeyCode::Char('k'), modifiers));
+    }
+    ui.key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT));
+
+    assert_eq!(ui.app().composer().text(), "K");
 }

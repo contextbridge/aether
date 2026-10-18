@@ -78,8 +78,6 @@ aether headless --model bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0 \
 | `--events`          | comma-separated list     | Event kinds to emit. Omit to emit all.                                                            |
 | `--provider`        | `provider.field=value`   | Provider override. Supports `PROVIDER.url`, `PROVIDER.auth`, `PROVIDER.request-model`, and `bedrock.inference-profile-arn`. |
 
-`--sandbox-image` is a global CLI flag, so it can appear before the subcommand or in the subcommand options shown by help.
-
 ## Output formats
 
 <Tabs>
@@ -189,7 +187,7 @@ Print the fully assembled system prompt for debugging:
 aether show-prompt --agent Researcher
 ```
 
-`show-prompt` accepts `--cwd`, settings overrides, MCP config overrides, `--system-prompt`, `--agent`, and `--sandbox-image`.
+`show-prompt` accepts `--cwd`, settings overrides, MCP config overrides, `--system-prompt`, and `--agent`.
 
 ### `generate`
 

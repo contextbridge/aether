@@ -2,7 +2,6 @@ use crate::file_ops::{FileError, read_text_file};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 
 const MAX_LINE_BYTES: usize = 2000;
 const PAGE_BYTES: usize = 32_000;
@@ -22,7 +21,6 @@ pub struct ReadFileArgs {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadFileResult {
-    pub status: String,
     pub file_path: String,
     pub content: String,
     pub total_lines: usize,
@@ -30,10 +28,6 @@ pub struct ReadFileResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_offset: Option<usize>,
     pub size: usize,
-    /// Display metadata for human-friendly rendering
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub meta: Option<ToolResultMeta>,
 }
 
 pub async fn read_file_contents(args: ReadFileArgs) -> Result<ReadFileResult, FileError> {
@@ -67,17 +61,13 @@ pub async fn read_file_contents(args: ReadFileArgs) -> Result<ReadFileResult, Fi
 
     let formatted_content = lines_with_numbers.join("\n");
 
-    let display_meta = ToolDisplayMeta::new("Read file", format!("{}, {total_lines} lines", basename(&args.file_path)));
-
     Ok(ReadFileResult {
-        status: "success".to_string(),
         file_path: args.file_path,
         content: formatted_content,
         total_lines,
         lines_shown,
         next_offset,
         size: content.len(),
-        meta: Some(display_meta.into()),
     })
 }
 
@@ -107,7 +97,6 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(result.status, "success");
         assert_eq!(result.total_lines, 3);
         assert_eq!(result.lines_shown, 3);
         assert_eq!(result.next_offset, None);

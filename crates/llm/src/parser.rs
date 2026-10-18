@@ -4,21 +4,16 @@ use crate::catalog::LlmModel;
 use crate::providers::bedrock::BedrockProvider;
 #[cfg(feature = "codex")]
 use crate::providers::codex::CodexProvider;
-use crate::providers::{
-    anthropic::AnthropicProvider,
-    gemini::GeminiProvider,
-    generic::{self, GenericProvider},
-    local::{llama_cpp::LlamaCppProvider, ollama::OllamaProvider},
-    openrouter::OpenRouterProvider,
-};
+use crate::providers::generic::{self, GenericProvider};
 use crate::{
-    LlmError, ProviderConnectionConfig, ProviderConnectionOverrides, ProviderFactory, StreamingModelProvider,
+    LlmError, ProviderConnectionConfig, ProviderConnectionOverrides, StreamingModelProvider,
     alloyed::AlloyedModelProvider,
 };
 #[cfg(feature = "codex")]
 use aether_auth::OAuthCredentialStorage;
 use futures::future::BoxFuture;
 use std::collections::{HashMap, HashSet};
+use std::future::ready;
 #[cfg(feature = "codex")]
 use std::sync::Arc;
 
@@ -28,22 +23,11 @@ pub struct ModelProviderParser {
     provider_connections: ProviderConnectionOverrides,
 }
 
-impl ModelProviderParser {
-    /// Create a new parser with custom provider factories
-    pub fn new(factories: HashMap<String, CreateProviderFn>) -> Self {
-        Self { factories, provider_connections: ProviderConnectionOverrides::default() }
-    }
-}
-
 impl Default for ModelProviderParser {
     /// Create a parser with all built-in providers registered
     fn default() -> Self {
-        let mut parser = Self::new(HashMap::new())
-            .with_provider::<AnthropicProvider>("anthropic")
-            .with_provider::<GeminiProvider>("gemini")
-            .with_provider::<OpenRouterProvider>("openrouter")
-            .with_provider::<OllamaProvider>("ollama")
-            .with_provider::<LlamaCppProvider>("llamacpp");
+        let mut parser =
+            Self { factories: HashMap::new(), provider_connections: ProviderConnectionOverrides::default() };
 
         for config in generic::BUILT_INS {
             parser = parser.with_generic_provider(config);
@@ -51,7 +35,10 @@ impl Default for ModelProviderParser {
 
         #[cfg(feature = "bedrock")]
         {
-            parser = parser.with_provider::<BedrockProvider>("bedrock");
+            parser = parser.register("bedrock", |model, connection| {
+                let model = model.to_string();
+                Box::pin(async move { Ok(Box::new(BedrockProvider::new(connection).await.with_model(&model)) as _) })
+            });
         }
 
         parser
@@ -64,48 +51,17 @@ impl ModelProviderParser {
         self
     }
 
-    pub fn with_provider<P: ProviderFactory + StreamingModelProvider + 'static>(
-        mut self,
-        name: impl Into<String>,
-    ) -> Self {
-        self.factories.insert(
-            name.into(),
-            Box::new(|model: &str, connection: ProviderConnectionConfig| {
-                let model = model.to_string();
-                Box::pin(
-                    async move { Ok(Box::new(P::from_env_with_connection(connection).await?.with_model(&model)) as _) },
-                )
-            }),
-        );
-        self
-    }
-
     #[cfg(feature = "codex")]
-    pub fn with_codex_provider(mut self, store: Arc<dyn OAuthCredentialStorage>) -> Self {
-        self.factories.insert(
-            "codex".to_string(),
-            Box::new(move |model: &str, connection: ProviderConnectionConfig| {
-                let store = Arc::clone(&store);
-                let model = model.to_string();
-                Box::pin(async move {
-                    Ok(Box::new(CodexProvider::new(store).with_connection(connection).with_model(&model)) as _)
-                })
-            }),
-        );
-        self
+    pub fn with_codex_provider(self, store: Arc<dyn OAuthCredentialStorage>) -> Self {
+        self.register_sync("codex", move |model, connection| {
+            Ok(CodexProvider::new(Arc::clone(&store)).with_connection(connection).with_model(model))
+        })
     }
 
-    pub fn with_generic_provider(mut self, config: &'static generic::ProviderConfig) -> Self {
-        self.factories.insert(
-            config.provider.parser_name().to_string(),
-            Box::new(move |model: &str, connection: ProviderConnectionConfig| {
-                let model = model.to_string();
-                Box::pin(async move {
-                    Ok(Box::new(GenericProvider::from_env_with_connection(config, connection)?.with_model(&model)) as _)
-                })
-            }),
-        );
-        self
+    pub fn with_generic_provider(self, config: &'static generic::ProviderConfig) -> Self {
+        self.register_sync(config.provider.parser_name(), move |model, connection| {
+            Ok(GenericProvider::from_env_with_connection(config, connection)?.with_model(model))
+        })
     }
 
     /// Create a provider from a typed `LlmModel`
@@ -185,12 +141,35 @@ impl ModelProviderParser {
     }
 }
 
-/// Factory function type for creating model providers
-///
-/// Takes a model name and returns a boxed future that resolves to a `StreamingModelProvider`
-pub type CreateProviderFn = Box<
+type CreateProviderFn = Box<
     dyn Fn(&str, ProviderConnectionConfig) -> BoxFuture<'static, Result<Box<dyn StreamingModelProvider>>> + Send + Sync,
 >;
+
+impl ModelProviderParser {
+    fn register(
+        mut self,
+        name: &str,
+        create: impl Fn(&str, ProviderConnectionConfig) -> BoxFuture<'static, Result<Box<dyn StreamingModelProvider>>>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.factories.insert(name.to_string(), Box::new(create));
+        self
+    }
+
+    fn register_sync<T: StreamingModelProvider + 'static>(
+        self,
+        name: &str,
+        create: impl Fn(&str, ProviderConnectionConfig) -> Result<T> + Send + Sync + 'static,
+    ) -> Self {
+        self.register(name, move |model, connection| {
+            let provider =
+                create(model, connection).map(|provider| Box::new(provider) as Box<dyn StreamingModelProvider>);
+            Box::pin(ready(provider))
+        })
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -334,12 +313,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_with_custom_provider() {
-        let parser = ModelProviderParser::default().with_provider::<OllamaProvider>("custom");
+    async fn create_provider_builds_a_registered_provider() {
+        let parser = ModelProviderParser::default();
 
-        let model = LlmModel::Ollama("test-model".to_string());
-        let result = parser.create_provider(&model).await;
-        assert!(result.is_ok());
+        let provider = parser.create_provider(&LlmModel::Ollama("test-model".to_string())).await.unwrap();
+
+        assert_eq!(provider.display_name(), "Ollama (test-model)");
     }
 
     #[tokio::test]

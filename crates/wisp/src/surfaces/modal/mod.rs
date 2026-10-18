@@ -17,8 +17,9 @@ use self::form::{FormAction, FormModal};
 use self::frame::{MODAL_HORIZONTAL_PADDING, MODAL_VERTICAL_CHROME, ModalFrame};
 use self::url::UrlModal;
 use crate::session::platform::{BrowserOpener, ClipboardWriter};
-use crate::surfaces::input::{ElicitationOutput, UiEvent};
+use crate::surfaces::input::UiOutput;
 use crate::theme::Theme;
+use crate::view::input::UiEvent;
 use crate::view::widgets::{KeyHint, SCROLLBAR_WIDTH, key_hints};
 use crate::view::wrap::as_u16;
 
@@ -54,16 +55,12 @@ impl ElicitationModal {
         Some(Self { kind, responder, browser_opener, clipboard_writer })
     }
 
-    /// Draws the request inside a host that keeps its own chrome, rather than as
-    /// a modal over everything. The settings overlay shows an OAuth prompt this
-    /// way so the server row that started it stays on screen.
-    pub fn render_inline(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
+    pub fn render_inline(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) -> Option<Position> {
         match &mut self.kind {
-            ModalKind::Form(form) => {
-                let _ = form.render(area, buf, theme);
-            }
+            ModalKind::Form(form) => form.render(area, buf, theme),
             ModalKind::Url(url) => {
                 Paragraph::new(Text::from(url.body_lines(theme, area.width))).render(area, buf);
+                None
             }
         }
     }
@@ -85,7 +82,7 @@ impl ElicitationModal {
         }
     }
 
-    fn on_url_key(&mut self, key: KeyEvent) -> Vec<ElicitationOutput> {
+    fn on_url_key(&mut self, key: KeyEvent) -> Vec<UiOutput> {
         let ModalKind::Url(url) = &mut self.kind else {
             return Vec::new();
         };
@@ -93,14 +90,14 @@ impl ElicitationModal {
         match key.code {
             KeyCode::Esc => {
                 self.responder.cancel();
-                return vec![ElicitationOutput::Close];
+                return vec![UiOutput::Close];
             }
             KeyCode::Enter => {
                 if let Err(error) = (self.browser_opener)(&url.url) {
                     url.launch_error = Some(format!("Failed to open browser: {error}"));
                 } else {
                     self.responder.accept(None);
-                    return vec![ElicitationOutput::Close];
+                    return vec![UiOutput::Close];
                 }
             }
             KeyCode::Char('c' | 'C') if plain_key => {
@@ -116,12 +113,12 @@ impl ElicitationModal {
 }
 
 impl ElicitationModal {
-    pub(crate) fn on_ui_event(&mut self, event: UiEvent) -> Vec<ElicitationOutput> {
+    pub(crate) fn on_ui_event(&mut self, event: &UiEvent) -> Vec<UiOutput> {
         match event {
-            UiEvent::Key(key) => self.on_key(key),
+            UiEvent::Key(key) => self.on_key(*key),
             UiEvent::Paste(text) => {
                 if let ModalKind::Form(form) = &mut self.kind {
-                    form.paste(&text);
+                    form.paste(text);
                 }
                 Vec::new()
             }
@@ -131,20 +128,16 @@ impl ElicitationModal {
                         form.vertical(direction);
                     }
                 } else if let ModalKind::Form(form) = &mut self.kind {
-                    form.click(column, row);
+                    form.click(*column, *row);
                 }
                 Vec::new()
             }
         }
     }
 
-    pub(crate) fn on_key(&mut self, key: KeyEvent) -> Vec<ElicitationOutput> {
-        self.on_request_key(key)
-    }
-
     /// A modal answers a request, so it owns every key: nothing falls through
     /// to the shared list navigation.
-    fn on_request_key(&mut self, key: KeyEvent) -> Vec<ElicitationOutput> {
+    fn on_key(&mut self, key: KeyEvent) -> Vec<UiOutput> {
         let ModalKind::Form(form) = &mut self.kind else {
             return self.on_url_key(key);
         };
@@ -152,11 +145,11 @@ impl ElicitationModal {
             FormAction::None => Vec::new(),
             FormAction::Cancel => {
                 self.responder.cancel();
-                vec![ElicitationOutput::Close]
+                vec![UiOutput::Close]
             }
             FormAction::Accept(content) => {
                 self.responder.accept(Some(content));
-                vec![ElicitationOutput::Close]
+                vec![UiOutput::Close]
             }
         }
     }
@@ -224,8 +217,8 @@ mod tests {
     use tokio::task::LocalSet;
 
     /// Whether the modal asked to be dismissed.
-    fn closes(messages: &[ElicitationOutput]) -> bool {
-        messages.iter().any(|message| matches!(message, ElicitationOutput::Close))
+    fn closes(messages: &[UiOutput]) -> bool {
+        messages.iter().any(|message| matches!(message, UiOutput::Close))
     }
 
     fn noop_handlers() -> (BrowserOpener, ClipboardWriter) {

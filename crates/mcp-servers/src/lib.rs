@@ -6,6 +6,11 @@ mod background_tasks;
 #[cfg(any(feature = "coding", feature = "review"))]
 mod request_context;
 
+#[cfg(any(feature = "coding", feature = "skills", feature = "tasks", feature = "subagents"))]
+mod displayed;
+#[cfg(any(feature = "coding", feature = "skills", feature = "tasks", feature = "subagents"))]
+pub use displayed::Displayed;
+
 pub mod workspace_paths;
 
 #[cfg(any(test, feature = "test-helpers"))]
@@ -38,7 +43,7 @@ pub mod subagents;
 pub mod review;
 
 #[cfg(feature = "coding")]
-pub use coding::{CodingMcp, CodingMcpArgs, CodingTools, DefaultCodingTools, PermissionMode};
+pub use coding::{CodingMcp, CodingMcpArgs, PermissionMode};
 
 #[cfg(feature = "coding")]
 pub use lsp::LspRegistry;

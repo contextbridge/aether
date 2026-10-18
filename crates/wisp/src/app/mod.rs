@@ -14,6 +14,7 @@ use crate::session::workspace_status::WorkspaceStatus;
 use crate::settings::{
     ResolvedStatusLineSettings, SettingsModel, UiSettings, resolve_content_padding, resolve_status_line_settings,
 };
+use crate::settings::overlay::ProviderLoginStatus;
 use crate::surfaces::composer::{Composer, Submission};
 use crate::surfaces::picker::CommandEntry;
 use crate::surfaces::workspace_picker::WorkspacePicker;
@@ -246,13 +247,13 @@ impl App {
             }
             CommandResult::AuthenticationCompleted { method_id, result: Ok(_) } => {
                 if let Some(Overlay::Settings(overlay)) = self.overlay.as_mut() {
-                    overlay.on_authenticate_complete(&method_id);
+                    overlay.set_provider_status(&method_id, ProviderLoginStatus::LoggedIn);
                 }
             }
             CommandResult::AuthenticationCompleted { method_id, result: Err(error) } => {
                 tracing::warn!("Provider authentication failed for {method_id}: {error}");
                 if let Some(Overlay::Settings(overlay)) = self.overlay.as_mut() {
-                    overlay.on_authenticate_failed(&method_id);
+                    overlay.set_provider_status(&method_id, ProviderLoginStatus::NeedsLogin);
                 }
             }
             CommandResult::FilesIndexed { request_id, files } => self.composer.on_files_indexed(request_id, files),

@@ -1,3 +1,5 @@
+use crate::view::input::{Nav, UiEvent};
+use crossterm::event::KeyCode;
 use ratatui::layout::Rect;
 
 /// Cursor and scroll offset for a list of `len` items.
@@ -14,6 +16,7 @@ pub struct SelectionState {
     selected: Option<usize>,
     offset: usize,
     rows_area: Rect,
+    clamped: bool,
 }
 
 impl SelectionState {
@@ -21,6 +24,10 @@ impl SelectionState {
         let mut state = Self::default();
         state.select_first(len);
         state
+    }
+
+    pub fn clamped(self) -> Self {
+        Self { clamped: true, ..self }
     }
 
     pub fn selected(&self) -> Option<usize> {
@@ -40,6 +47,9 @@ impl SelectionState {
     pub fn select(&mut self, selected: Option<usize>, len: usize) {
         self.selected = selected.filter(|index| *index < len);
         self.clamp(len);
+        if selected.is_none() {
+            self.selected = None;
+        }
     }
 
     pub fn select_first(&mut self, len: usize) {
@@ -63,21 +73,33 @@ impl SelectionState {
         self.rows_area
     }
 
-    /// Selects the row drawn at terminal `row`, reporting whether one was hit.
-    /// Rows outside the last drawn area leave the selection alone.
-    pub fn select_at(&mut self, row: u16, len: usize) -> bool {
+    pub fn select_at(&mut self, row: u16, len: usize, selectable: impl Fn(usize) -> bool) -> bool {
         let rows_area = self.rows_area();
         if row < rows_area.y || row >= rows_area.bottom() {
             return false;
         }
+        let previous = self.selected;
         self.select_row(usize::from(row - rows_area.y), len);
-        self.selected().is_some()
+        let hit = self.selected.is_some_and(selectable);
+        if !hit {
+            self.select(previous, len);
+        }
+        hit
     }
 
-    /// Wrapping move to the nearest index in `direction` for which `selectable`
-    /// holds. Leaves the selection untouched when no index qualifies, so panes
-    /// whose rows are a mix of headers and entries never land on a header.
     pub fn step(&mut self, len: usize, direction: Direction, selectable: impl Fn(usize) -> bool) {
+        if self.clamped
+            && let Some(current) = self.selected.filter(|index| *index < len)
+        {
+            let next = match direction {
+                Direction::Backward => (0..current).rev().find(|&index| selectable(index)),
+                Direction::Forward => (current + 1..len).find(|&index| selectable(index)),
+            };
+            if let Some(next) = next {
+                self.selected = Some(next);
+            }
+            return;
+        }
         if len == 0 {
             self.selected = None;
             return;
@@ -95,20 +117,24 @@ impl SelectionState {
         }
     }
 
-    /// Like [`Self::step`], but stops at the ends instead of wrapping. Suits
-    /// long lists that are scanned rather than cycled.
-    pub fn step_clamped(&mut self, len: usize, direction: Direction, selectable: impl Fn(usize) -> bool) {
-        let Some(current) = self.selected().filter(|index| *index < len) else {
-            self.step(len, direction, selectable);
-            return;
+    pub(crate) fn on_nav_event(&mut self, event: &UiEvent, len: usize, selectable: impl Fn(usize) -> bool) -> Nav {
+        let direction = match event {
+            UiEvent::Key(key) => match key.code {
+                KeyCode::Esc => return Nav::Close,
+                KeyCode::Enter => return Nav::Activate,
+                KeyCode::Up => Direction::Backward,
+                KeyCode::Down => Direction::Forward,
+                _ => return Nav::Unhandled,
+            },
+            UiEvent::Paste(_) => return Nav::Unhandled,
+            UiEvent::Mouse(action, (_, row)) => match action.direction() {
+                Some(direction) => direction,
+                None if self.select_at(*row, len, selectable) => return Nav::Clicked,
+                None => return Nav::Unhandled,
+            },
         };
-        let next = match direction {
-            Direction::Backward => (0..current).rev().find(|&index| selectable(index)),
-            Direction::Forward => (current + 1..len).find(|&index| selectable(index)),
-        };
-        if let Some(next) = next {
-            self.selected = Some(next);
-        }
+        self.step(len, direction, selectable);
+        Nav::Moved
     }
 
     pub fn clamp(&mut self, len: usize) {
@@ -207,13 +233,13 @@ mod tests {
     }
 
     #[test]
-    fn step_clamped_stops_at_the_ends() {
-        let mut state = SelectionState::new(3);
+    fn clamped_step_stops_at_the_ends() {
+        let mut state = SelectionState::new(3).clamped();
         state.select(Some(2), 3);
-        state.step_clamped(3, Direction::Forward, |_| true);
+        step(&mut state, 3, Direction::Forward);
         assert_eq!(state.selected(), Some(2), "does not wrap past the last item");
         state.select(Some(0), 3);
-        state.step_clamped(3, Direction::Backward, |_| true);
+        step(&mut state, 3, Direction::Backward);
         assert_eq!(state.selected(), Some(0), "does not wrap past the first item");
     }
 

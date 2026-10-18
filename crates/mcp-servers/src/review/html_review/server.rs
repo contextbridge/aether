@@ -24,25 +24,25 @@ const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 const OVERLAY_CSS: &str = include_str!("assets/overlay.css");
 const OVERLAY_JS: &str = include_str!("assets/overlay.js");
 
-pub enum Artifact {
+pub(crate) enum Artifact {
     Document { html: String, assets: Option<PathBuf> },
     App(Url),
 }
 
 #[derive(Clone, Default)]
-pub struct PendingReviews(Arc<Mutex<HashMap<String, ReviewServer>>>);
+pub(crate) struct PendingReviews(Arc<Mutex<HashMap<String, ReviewServer>>>);
 
 impl PendingReviews {
-    pub fn insert(&self, server: ReviewServer) {
+    pub(crate) fn insert(&self, server: ReviewServer) {
         self.0.lock().unwrap().insert(server.token.clone(), server);
     }
 
-    pub fn take(&self, token: &str) -> Option<ReviewServer> {
+    pub(crate) fn take(&self, token: &str) -> Option<ReviewServer> {
         self.0.lock().unwrap().remove(token)
     }
 }
 
-pub struct ReviewServer {
+pub(crate) struct ReviewServer {
     url: String,
     token: String,
     result_rx: oneshot::Receiver<ReviewArtifactOutput>,
@@ -50,7 +50,7 @@ pub struct ReviewServer {
 }
 
 impl ReviewServer {
-    pub fn start(artifact: Artifact) -> io::Result<Self> {
+    pub(crate) fn start(artifact: Artifact) -> io::Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
@@ -95,15 +95,15 @@ impl ReviewServer {
         Ok(Self { url, token, result_rx, handle })
     }
 
-    pub fn url(&self) -> &str {
+    pub(crate) fn url(&self) -> &str {
         &self.url
     }
 
-    pub fn token(&self) -> &str {
+    pub(crate) fn token(&self) -> &str {
         &self.token
     }
 
-    pub async fn wait(mut self, cancelled: CancellationToken) -> ReviewArtifactOutput {
+    pub(crate) async fn wait(mut self, cancelled: CancellationToken) -> ReviewArtifactOutput {
         let submitted = tokio::select! {
             result = &mut self.result_rx => result.ok(),
             () = cancelled.cancelled() => None,

@@ -1,20 +1,9 @@
 use super::types::{ContentBlockDeltaData, ContentBlockStartData, StreamEvent};
-use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
-use crate::providers::response_stream::{OpenedStream, StreamAssembler, response_stream};
-use crate::{LlmError, LlmResponse, LlmResponseStream, ProviderError, Result, StopReason};
-use futures::Stream;
-use std::future::ready;
+use crate::providers::response_stream::StreamAssembler;
+use crate::{LlmError, LlmResponse, ProviderError, Result, StopReason};
 use tracing::debug;
 
-pub fn process_anthropic_stream(lines: impl Stream<Item = Result<String>> + Send + 'static) -> LlmResponseStream {
-    response_stream(
-        ready(Ok(OpenedStream::new(lines))),
-        |line, turn| decode_line(&line, turn),
-        DEFAULT_STREAM_IDLE_TIMEOUT,
-    )
-}
-
-pub(super) fn decode_line(line: &str, turn: &mut StreamAssembler<u32>) -> Result<Vec<LlmResponse>> {
+pub(crate) fn decode_line(line: &str, turn: &mut StreamAssembler<u32>) -> Result<Vec<LlmResponse>> {
     match serde_json::from_str(line) {
         Ok(event) => decode_event(event, turn),
         Err(e) => {
@@ -26,11 +15,11 @@ pub(super) fn decode_line(line: &str, turn: &mut StreamAssembler<u32>) -> Result
 
 fn decode_event(event: StreamEvent, turn: &mut StreamAssembler<u32>) -> Result<Vec<LlmResponse>> {
     let response = match event {
-        StreamEvent::ContentBlockStart { data } => match data.content_block {
+        StreamEvent::ContentBlockStart(data) => match data.content_block {
             ContentBlockStartData::ToolUse { id, name } => Some(turn.start_tool(data.index, id, name)),
-            ContentBlockStartData::Text { .. } | ContentBlockStartData::Thinking { .. } => None,
+            ContentBlockStartData::Other => None,
         },
-        StreamEvent::ContentBlockDelta { data } => match data.delta {
+        StreamEvent::ContentBlockDelta(data) => match data.delta {
             ContentBlockDeltaData::TextDelta { text } => {
                 (!text.is_empty()).then_some(LlmResponse::Text { chunk: text })
             }
@@ -39,21 +28,21 @@ fn decode_event(event: StreamEvent, turn: &mut StreamAssembler<u32>) -> Result<V
             }
             ContentBlockDeltaData::InputJsonDelta { partial_json } => turn.append_tool_args(&data.index, partial_json),
         },
-        StreamEvent::ContentBlockStop { data } => turn.complete_tool(&data.index),
-        StreamEvent::MessageDelta { data } => {
+        StreamEvent::ContentBlockStop(data) => turn.complete_tool(&data.index),
+        StreamEvent::MessageDelta(data) => {
             if let Some(stop_reason) = data.delta.stop_reason.as_deref() {
                 turn.stop(map_anthropic_stop_reason(stop_reason));
             }
             data.usage.as_ref().map(|usage| LlmResponse::Usage { tokens: usage.into() })
         }
-        StreamEvent::MessageStop { .. } => {
+        StreamEvent::MessageStop => {
             turn.allow_eof();
             None
         }
-        StreamEvent::Error { data } => {
+        StreamEvent::Error(data) => {
             return Err(map_anthropic_stream_error(&data.error.error_type, &data.error.message));
         }
-        StreamEvent::MessageStart { .. } | StreamEvent::Ping => None,
+        StreamEvent::MessageStart | StreamEvent::Ping => None,
     };
 
     Ok(response.into_iter().collect())
@@ -82,10 +71,13 @@ fn map_anthropic_stop_reason(reason: &str) -> StopReason {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
+    use crate::providers::response_stream::{OpenedStream, response_stream};
     use crate::testing::llm_response;
     use crate::{ProviderErrorKind, TokenUsage};
     use futures::{StreamExt, stream};
     use serde_json::{Value, json};
+    use std::future::ready;
 
     #[tokio::test]
     async fn test_process_text_stream() {
@@ -258,17 +250,17 @@ mod tests {
 
         let message_start_json = r#"{"type": "message_start", "message": {"id": "msg_123", "type": "message", "role": "assistant", "content": [], "model": "claude-3", "stop_reason": null, "stop_sequence": null, "usage": {"input_tokens": 10, "output_tokens": 0}}}"#;
         let event: StreamEvent = serde_json::from_str(message_start_json).unwrap();
-        assert!(matches!(event, StreamEvent::MessageStart { .. }));
+        assert!(matches!(event, StreamEvent::MessageStart));
 
         let content_block_start_json =
             r#"{"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}"#;
         let event: StreamEvent = serde_json::from_str(content_block_start_json).unwrap();
-        assert!(matches!(event, StreamEvent::ContentBlockStart { .. }));
+        assert!(matches!(event, StreamEvent::ContentBlockStart(_)));
 
         let content_block_delta_json =
             r#"{"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}}"#;
         let event: StreamEvent = serde_json::from_str(content_block_delta_json).unwrap();
-        assert!(matches!(event, StreamEvent::ContentBlockDelta { .. }));
+        assert!(matches!(event, StreamEvent::ContentBlockDelta(_)));
 
         let ping_json = r#"{"type": "ping"}"#;
         let event: StreamEvent = serde_json::from_str(ping_json).unwrap();
@@ -277,7 +269,7 @@ mod tests {
         let error_json =
             r#"{"type": "error", "error": {"type": "rate_limit_error", "message": "Rate limit exceeded"}}"#;
         let event: StreamEvent = serde_json::from_str(error_json).unwrap();
-        assert!(matches!(event, StreamEvent::Error { .. }));
+        assert!(matches!(event, StreamEvent::Error(_)));
     }
 
     async fn collect_responses(lines: Vec<String>) -> Vec<LlmResponse> {
@@ -285,7 +277,10 @@ mod tests {
     }
 
     async fn process_lines(lines: Vec<String>) -> Vec<Result<LlmResponse>> {
-        process_anthropic_stream(stream::iter(lines.into_iter().map(Ok))).collect().await
+        let opened = ready(Ok(OpenedStream::new(stream::iter(lines.into_iter().map(Ok)))));
+        response_stream(opened, |line: String, turn| decode_line(&line, turn), DEFAULT_STREAM_IDLE_TIMEOUT)
+            .collect()
+            .await
     }
 
     fn anthropic_stream() -> AnthropicStreamBuilder {

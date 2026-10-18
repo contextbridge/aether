@@ -6,7 +6,6 @@ use std::{collections::BTreeMap, path::Path, process::Stdio, time::Duration};
 use tokio::process::Command;
 
 use crate::coding::error::BashError;
-use utils::display_meta::{ToolDisplayMeta, ToolResultMeta, truncate};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -31,10 +30,6 @@ pub struct BashOutput {
     pub exit_code: i32,
     /// Whether the command was killed due to timeout
     pub killed: bool,
-    /// Display metadata for human-friendly rendering
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub meta: Option<ToolResultMeta>,
 }
 
 /// Immutable environment overrides inherited by Bash commands.
@@ -104,9 +99,8 @@ pub async fn execute_command(
     command.envs(environment.vars());
     command.as_std_mut().process_group(0);
 
-    let child = command
-        .spawn()
-        .map_err(|error| BashError::SpawnFailed { command: args.command.clone(), reason: error.to_string() })?;
+    let spawn_failed = |reason: String| BashError::SpawnFailed { command: args.command.clone(), reason };
+    let child = command.spawn().map_err(|error| spawn_failed(error.to_string()))?;
     let mut process_group = ProcessGroupGuard::new(child.id());
     let mut child_task = tokio::spawn(child.wait_with_output());
 
@@ -117,37 +111,26 @@ pub async fn execute_command(
                 () = tokio::time::sleep(timeout) => {
                     process_group.kill();
                     let _ = tokio::time::timeout(Duration::from_secs(5), &mut child_task).await;
-                    let display_meta = ToolDisplayMeta::new(
-                        "Ran",
-                        format!("{} (exit -1, timed out)", truncate(&args.command, 40)),
-                    );
                     return Ok(BashOutput {
                         output: format!("Command timed out after {}ms", timeout.as_millis()),
                         exit_code: -1,
                         killed: true,
-                        meta: Some(display_meta.into()),
                     });
                 }
             }
         }
         None => child_task.await,
     };
-    let output = match output {
-        Ok(output) => output,
-        Err(error) => {
-            return Err(BashError::SpawnFailed { command: args.command.clone(), reason: error.to_string() });
-        }
-    };
-    let output =
-        output.map_err(|error| BashError::SpawnFailed { command: args.command.clone(), reason: error.to_string() })?;
+    let output = output
+        .map_err(|error| error.to_string())
+        .and_then(|output| output.map_err(|error| error.to_string()))
+        .map_err(spawn_failed)?;
     process_group.disarm();
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let exit_code = output.status.code().unwrap_or(-1);
-    let display_meta = ToolDisplayMeta::new("Ran", format!("{} (exit {exit_code})", truncate(&args.command, 40)));
-
-    Ok(BashOutput { output: format!("{stdout}{stderr}"), exit_code, killed: false, meta: Some(display_meta.into()) })
+    Ok(BashOutput { output: format!("{stdout}{stderr}"), exit_code, killed: false })
 }
 
 /// Kills an entire process group on drop unless disarmed after a clean exit.

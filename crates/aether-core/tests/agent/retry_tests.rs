@@ -5,23 +5,9 @@ use std::time::Duration;
 
 use aether_core::core::RetryConfig;
 use aether_core::events::{AgentEvent, LlmCallOutcome, TurnOutcome};
-use aether_core::testing::{TestScenario, fast_retry, test_agent};
-use llm::ProviderError;
+use aether_core::testing::{TestAgentResult, TestResult, TestScenario, fast_retry, test_agent};
 use llm::testing::{failed_call, llm_response};
-
-fn retry_attempts(messages: &[AgentEvent]) -> Vec<u32> {
-    messages
-        .iter()
-        .filter_map(|event| match event {
-            AgentEvent::Turn(turn @ TurnEvent::RetryScheduled { .. }) => turn.retry_info().map(|retry| retry.attempt),
-            _ => None,
-        })
-        .collect()
-}
-
-fn has_failed_turn(messages: &[AgentEvent]) -> bool {
-    messages.iter().any(|m| matches!(m, AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Failed { .. } })))
-}
+use llm::{LlmError, LlmResponse, ProviderError};
 
 #[tokio::test(start_paused = true)]
 async fn deferred_event_after_retry_clears_pending_tool_and_cancels_task() -> Result<(), Box<dyn Error>> {
@@ -47,11 +33,7 @@ async fn deferred_event_after_retry_clears_pending_tool_and_cancels_task() -> Re
         .run_with_context()
         .await?;
 
-    assert!(
-        matches!(result.messages.last().and_then(AgentEvent::turn_outcome), Some(TurnOutcome::Completed)),
-        "stale deferred result must not block iteration completion: {:?}",
-        result.messages,
-    );
+    assert!(completed(&result), "stale deferred result must not block iteration completion: {:?}", result.messages);
     assert!(
         !result.messages.iter().any(|event| matches!(event, AgentEvent::Tool(aether_core::events::ToolEvent::TaskCreated { request, .. }) if request.id == "deferred-call")),
         "stale deferred event should not be surfaced after retry: {:?}",
@@ -75,44 +57,31 @@ async fn retries_then_succeeds_on_third_attempt() -> Result<(), Box<dyn Error>> 
         llm_response().text(&["ok"]).build_results(),
     ];
 
-    let result = test_agent()
-        .retry_config(fast_retry(5))
-        .llm_result_responses(&attempts)
-        .user_text("go")
-        .run_with_context()
-        .await?;
+    let result = run_with_retries(fast_retry(5), &attempts).await?;
 
-    let attempts_seen = retry_attempts(&result.messages);
-    assert_eq!(attempts_seen, vec![1, 2], "attempt counter should increment per retry: {:?}", result.messages);
-
-    assert!(
-        matches!(result.messages.last().and_then(AgentEvent::turn_outcome), Some(TurnOutcome::Completed)),
-        "expected the turn to complete, got {:?}",
-        result.messages.last()
+    assert_eq!(
+        retry_attempts(&result),
+        vec![1, 2],
+        "attempt counter should increment per retry: {:?}",
+        result.messages
     );
+    assert!(completed(&result), "expected the turn to complete, got {:?}", result.messages.last());
+    assert_eq!(result.contexts.len(), 3, "should have called LLM 3 times (2 failures + 1 success)");
 
-    let captured = result.captured_contexts.lock().unwrap();
-    assert_eq!(captured.len(), 3, "should have called LLM 3 times (2 failures + 1 success)");
-
-    let first_failed = result
-        .messages
-        .iter()
-        .find(|event| {
-            matches!(event, AgentEvent::Turn(TurnEvent::LlmCallEnded { outcome: LlmCallOutcome::Failed { .. }, .. }))
-        })
-        .expect("expected a failed llm_call_ended");
-    match first_failed {
-        AgentEvent::Turn(TurnEvent::LlmCallEnded {
-            outcome: LlmCallOutcome::Failed { will_retry, http_status, provider_request_id, provider_error_code, .. },
-            ..
-        }) => {
-            assert!(will_retry, "first failure should schedule a retry: {first_failed:?}");
-            assert_eq!(*http_status, Some(200));
-            assert_eq!(provider_request_id.as_deref(), Some("req-1"));
-            assert_eq!(provider_error_code.as_deref(), Some("server_error"));
-        }
-        _ => unreachable!(),
-    }
+    let first_failed = failed_calls(&result)[0];
+    assert!(
+        matches!(
+            first_failed,
+            LlmCallOutcome::Failed {
+                will_retry: true,
+                http_status: Some(200),
+                provider_request_id: Some(request_id),
+                provider_error_code: Some(code),
+                ..
+            } if request_id == "req-1" && code == "server_error"
+        ),
+        "first failure should schedule a retry and carry provider details: {first_failed:?}"
+    );
 
     Ok(())
 }
@@ -122,42 +91,17 @@ async fn exhausts_retries_then_emits_error() -> Result<(), Box<dyn Error>> {
     let attempts: Vec<_> =
         (0..6).map(|i| failed_call(ProviderError::server(format!("boom {i}")).with_http_status(503))).collect();
 
-    let result = test_agent()
-        .retry_config(fast_retry(3))
-        .llm_result_responses(&attempts)
-        .user_text("go")
-        .run_with_context()
-        .await?;
+    let result = run_with_retries(fast_retry(3), &attempts).await?;
 
-    let retry_count = retry_attempts(&result.messages).len();
-    assert_eq!(retry_count, 3, "should retry exactly max_attempts times before giving up");
+    assert_eq!(retry_attempts(&result).len(), 3, "should retry exactly max_attempts times before giving up");
+    assert!(has_failed_turn(&result), "expected a failed turn after exhausting retries: {:?}", result.messages);
+    assert_eq!(result.contexts.len(), 4, "should call LLM max_attempts + 1 times (1 initial + 3 retries)");
 
+    let last_failed = failed_calls(&result).pop().expect("expected failed llm_call_ended events");
     assert!(
-        has_failed_turn(&result.messages),
-        "expected a failed turn after exhausting retries: {:?}",
-        result.messages
+        matches!(last_failed, LlmCallOutcome::Failed { will_retry: false, http_status: Some(503), .. }),
+        "exhausted budget must report will_retry=false: {last_failed:?}"
     );
-
-    let captured = result.captured_contexts.lock().unwrap();
-    assert_eq!(captured.len(), 4, "should call LLM max_attempts + 1 times (1 initial + 3 retries)");
-
-    let last_failed = result
-        .messages
-        .iter()
-        .rfind(|event| {
-            matches!(event, AgentEvent::Turn(TurnEvent::LlmCallEnded { outcome: LlmCallOutcome::Failed { .. }, .. }))
-        })
-        .expect("expected failed llm_call_ended events");
-    match last_failed {
-        AgentEvent::Turn(TurnEvent::LlmCallEnded {
-            outcome: LlmCallOutcome::Failed { will_retry, http_status, .. },
-            ..
-        }) => {
-            assert!(!will_retry, "exhausted budget must report will_retry=false: {last_failed:?}");
-            assert_eq!(*http_status, Some(503));
-        }
-        _ => unreachable!(),
-    }
 
     Ok(())
 }
@@ -166,20 +110,11 @@ async fn exhausts_retries_then_emits_error() -> Result<(), Box<dyn Error>> {
 async fn non_retryable_error_surfaces_immediately() -> Result<(), Box<dyn Error>> {
     let attempts = vec![failed_call(ProviderError::api("HTTP 400 bad request"))];
 
-    let result = test_agent()
-        .retry_config(fast_retry(5))
-        .llm_result_responses(&attempts)
-        .user_text("go")
-        .run_with_context()
-        .await?;
+    let result = run_with_retries(fast_retry(5), &attempts).await?;
 
-    let retry_count = retry_attempts(&result.messages).len();
-    assert_eq!(retry_count, 0, "non-retryable errors must not trigger retry");
-
-    assert!(has_failed_turn(&result.messages), "expected a failed turn for non-retryable failure");
-
-    let captured = result.captured_contexts.lock().unwrap();
-    assert_eq!(captured.len(), 1, "should call LLM exactly once");
+    assert_eq!(retry_attempts(&result).len(), 0, "non-retryable errors must not trigger retry");
+    assert!(has_failed_turn(&result), "expected a failed turn for non-retryable failure");
+    assert_eq!(result.contexts.len(), 1, "should call LLM exactly once");
 
     Ok(())
 }
@@ -188,17 +123,10 @@ async fn non_retryable_error_surfaces_immediately() -> Result<(), Box<dyn Error>
 async fn retry_disabled_surfaces_retryable_error_immediately() -> Result<(), Box<dyn Error>> {
     let attempts = vec![failed_call(ProviderError::server("would be retryable").with_http_status(503))];
 
-    let result = test_agent()
-        .retry_config(RetryConfig::disabled())
-        .llm_result_responses(&attempts)
-        .user_text("go")
-        .run_with_context()
-        .await?;
+    let result = run_with_retries(RetryConfig::disabled(), &attempts).await?;
 
-    let retry_count = retry_attempts(&result.messages).len();
-    assert_eq!(retry_count, 0, "RetryConfig::disabled() must skip all retries");
-
-    assert!(has_failed_turn(&result.messages), "expected a failed turn when retry is disabled");
+    assert_eq!(retry_attempts(&result).len(), 0, "RetryConfig::disabled() must skip all retries");
+    assert!(has_failed_turn(&result), "expected a failed turn when retry is disabled");
 
     Ok(())
 }
@@ -219,28 +147,11 @@ async fn mid_stream_interrupts_consume_retry_budget() -> Result<(), Box<dyn Erro
         })
         .collect();
 
-    let result = test_agent()
-        .retry_config(fast_retry(3))
-        .llm_result_responses(&attempts)
-        .user_text("go")
-        .run_with_context()
-        .await?;
+    let result = run_with_retries(fast_retry(3), &attempts).await?;
 
-    let retry_count = retry_attempts(&result.messages).len();
-    assert_eq!(retry_count, 3, "mid-stream interrupts must respect max_attempts; got {retry_count} retries");
-
-    assert!(
-        has_failed_turn(&result.messages),
-        "expected a failed turn after exhausting retries on mid-stream interrupts"
-    );
-
-    let captured = result.captured_contexts.lock().unwrap();
-    assert_eq!(
-        captured.len(),
-        4,
-        "should call LLM exactly max_attempts + 1 times (1 initial + 3 retries), got {}",
-        captured.len()
-    );
+    assert_eq!(retry_attempts(&result).len(), 3, "mid-stream interrupts must respect max_attempts");
+    assert!(has_failed_turn(&result), "expected a failed turn after exhausting retries on mid-stream interrupts");
+    assert_eq!(result.contexts.len(), 4, "should call LLM exactly max_attempts + 1 times (1 initial + 3 retries)");
 
     Ok(())
 }
@@ -250,24 +161,16 @@ async fn rate_limited_error_is_retried() -> Result<(), Box<dyn Error>> {
     let attempts =
         vec![failed_call(ProviderError::rate_limit("slow down")), llm_response().text(&["ok"]).build_results()];
 
-    let result = test_agent()
-        .retry_config(fast_retry(5))
-        .llm_result_responses(&attempts)
-        .user_text("go")
-        .run_with_context()
-        .await?;
+    let result = run_with_retries(fast_retry(5), &attempts).await?;
 
-    let retry_count = retry_attempts(&result.messages).len();
-    assert_eq!(retry_count, 1);
-    assert!(matches!(result.messages.last().and_then(AgentEvent::turn_outcome), Some(TurnOutcome::Completed)));
+    assert_eq!(retry_attempts(&result).len(), 1);
+    assert!(completed(&result));
 
     Ok(())
 }
 
 #[tokio::test(start_paused = true)]
 async fn cancel_during_retry_wait_aborts_pending_retry() -> Result<(), Box<dyn Error>> {
-    use aether_core::testing::TestScenario;
-
     let attempts = vec![
         failed_call(ProviderError::server("boom").with_http_status(503)),
         llm_response().text(&["should not see this"]).build_results(),
@@ -294,8 +197,46 @@ async fn cancel_during_retry_wait_aborts_pending_retry() -> Result<(), Box<dyn E
     assert!(has_cancelled, "expected the turn to end as cancelled, got {messages:?}");
 
     // The retry should never have fired — only the original failed call counts.
-    let captured = result.captured_contexts.lock().unwrap();
-    assert_eq!(captured.len(), 1, "retry must not fire after cancel; expected 1 LLM call");
+    assert_eq!(result.contexts.len(), 1, "retry must not fire after cancel; expected 1 LLM call");
 
     Ok(())
+}
+
+async fn run_with_retries(
+    retry: RetryConfig,
+    attempts: &[Vec<Result<LlmResponse, LlmError>>],
+) -> TestResult<TestAgentResult> {
+    test_agent().retry_config(retry).llm_result_responses(attempts).user_text("go").run_with_context().await
+}
+
+fn retry_attempts(result: &TestAgentResult) -> Vec<u32> {
+    result
+        .messages
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::Turn(turn @ TurnEvent::RetryScheduled { .. }) => turn.retry_info().map(|retry| retry.attempt),
+            _ => None,
+        })
+        .collect()
+}
+
+fn failed_calls(result: &TestAgentResult) -> Vec<&LlmCallOutcome> {
+    result
+        .messages
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::Turn(TurnEvent::LlmCallEnded { outcome: outcome @ LlmCallOutcome::Failed { .. }, .. }) => {
+                Some(outcome)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn completed(result: &TestAgentResult) -> bool {
+    matches!(result.messages.last().and_then(AgentEvent::turn_outcome), Some(TurnOutcome::Completed))
+}
+
+fn has_failed_turn(result: &TestAgentResult) -> bool {
+    result.messages.iter().any(|m| matches!(m.turn_outcome(), Some(TurnOutcome::Failed { .. })))
 }

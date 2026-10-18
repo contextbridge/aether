@@ -41,7 +41,7 @@ async fn clear_context_suppresses_cancelled_background_task_notification() -> Re
         "cancellation acknowledgement must not repopulate cleared context: {:?}",
         result.messages,
     );
-    let contexts = result.captured_contexts.lock().unwrap();
+    let contexts = result.contexts;
     let final_context = contexts.last().expect("fresh request should reach the model");
     assert!(
         !final_context.messages().iter().any(|message| matches!(message, ChatMessage::User { content, .. } if ContentBlock::join_text(content).contains("clear-task"))),
@@ -72,7 +72,7 @@ async fn test_clear_context_resets_history_and_preserves_system_prompt() -> Resu
         .run_with_context()
         .await?;
 
-    let contexts = result.captured_contexts.lock().unwrap();
+    let contexts = result.contexts;
     assert_eq!(contexts.len(), 2, "expected two LLM requests");
 
     let second = &contexts[1];

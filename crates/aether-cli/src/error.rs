@@ -11,8 +11,8 @@ use thiserror::Error;
 pub enum CliError {
     #[error("No prompt provided. Pass a prompt as an argument or pipe via stdin.")]
     NoPrompt,
-    #[error("{0}")]
-    ConflictingArgs(String),
+    #[error(transparent)]
+    ConflictingArgs(#[from] crate::resolve::SelectionConflict),
     #[error("Invalid --options-json: {0}")]
     InvalidOptionsJson(#[source] serde_json::Error),
     #[error(transparent)]

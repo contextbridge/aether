@@ -342,14 +342,7 @@ async fn read_only_query_safety_keeps_rows() {
     fixture.write_session("s1.jsonl", &[user_message("hello")]);
     fixture.ingest().await;
 
-    let result = run_query(&QueryOptions {
-        db_path: fixture.db_path.clone(),
-        sql: "delete from events".to_string(),
-        max_rows: 100,
-        max_cell_chars: 1000,
-        timeout_ms: 2000,
-    })
-    .await;
+    let result = run_query(&QueryOptions::new(&fixture.db_path, "delete from events")).await;
 
     assert!(matches!(result, Err(SessionIndexError::Sqlx(_))));
     let output = fixture.query("select count(*) from events").await;
@@ -391,7 +384,7 @@ impl Fixture {
     }
 
     async fn query(&self, sql: &str) -> aether_sessions::analytics::QueryOutput {
-        run_query(&self.query_options(sql)).await.unwrap()
+        run_query(&QueryOptions::new(&self.db_path, sql)).await.unwrap()
     }
 
     fn ingest_options(&self) -> IngestOptions {
@@ -400,16 +393,6 @@ impl Fixture {
             db_path: self.db_path.clone(),
             prune: true,
             parse_concurrency: 2,
-        }
-    }
-
-    fn query_options(&self, sql: &str) -> QueryOptions {
-        QueryOptions {
-            db_path: self.db_path.clone(),
-            sql: sql.to_string(),
-            max_rows: 100,
-            max_cell_chars: 1000,
-            timeout_ms: 2000,
         }
     }
 }

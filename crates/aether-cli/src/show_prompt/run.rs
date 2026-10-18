@@ -40,7 +40,7 @@ pub async fn run_prompt(args: PromptArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-pub fn build_tools(tools: &[ToolDefinition]) -> String {
+pub(super) fn build_tools(tools: &[ToolDefinition]) -> String {
     if tools.is_empty() {
         return String::new();
     }
@@ -65,7 +65,7 @@ pub fn build_tools(tools: &[ToolDefinition]) -> String {
     sections.join("\n\n")
 }
 
-pub fn format_stats(prompt_chars: usize, tool_schema_chars: usize, tool_count: usize) -> String {
+pub(super) fn format_stats(prompt_chars: usize, tool_schema_chars: usize, tool_count: usize) -> String {
     let est_tokens = (prompt_chars + tool_schema_chars) / 4;
     format!(
         "---\n\
@@ -87,42 +87,18 @@ mod tests {
     }
 
     #[test]
-    fn format_stats_computes_token_estimate() {
-        let output = format_stats(12000, 8500, 14);
+    fn format_stats_right_aligns_counts_and_floors_the_token_estimate() {
         assert_eq!(
-            output,
+            format_stats(12000, 8500, 14),
             "---\n\
              Prompt chars:        12000\n\
              Tool schema chars:    8500\n\
              Est. tokens:     ~    5125\n\
              MCP tools:              14"
         );
-    }
-
-    #[test]
-    fn format_stats_handles_zero() {
-        let output = format_stats(0, 0, 0);
-        assert_eq!(
-            output,
-            "---\n\
-             Prompt chars:            0\n\
-             Tool schema chars:       0\n\
-             Est. tokens:     ~       0\n\
-             MCP tools:               0"
-        );
-    }
-
-    #[test]
-    fn format_stats_handles_small_values() {
-        let output = format_stats(3, 0, 1);
-        assert_eq!(
-            output,
-            "---\n\
-             Prompt chars:            3\n\
-             Tool schema chars:       0\n\
-             Est. tokens:     ~       0\n\
-             MCP tools:               1"
-        );
+        for prompt_chars in [0, 3] {
+            assert!(format_stats(prompt_chars, 0, 1).contains("Est. tokens:     ~       0\n"));
+        }
     }
 
     #[test]

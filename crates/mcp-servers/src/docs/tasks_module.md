@@ -2,7 +2,7 @@ Task management for deep research agent workflows.
 
 Provides a standalone MCP server for hierarchical task tracking with support for:
 - **Task trees** -- Root tasks with subtasks, organized by subject
-- **Dependencies** -- Tasks can declare blockers; [`Task::is_ready`] checks readiness
+- **Dependencies** -- Tasks can declare blockers; [`TaskStore::is_ready`] checks readiness
 - **Multi-agent coordination** -- Assignee field for distributing work across sub-agents
 - **Persistent storage** -- Git-friendly JSONL files, one per root task tree
 
@@ -12,8 +12,7 @@ Provides a standalone MCP server for hierarchical task tracking with support for
 - [`Task`] -- A single task with status, assignee, dependencies, and research fields
 - [`TaskId`] -- Hierarchical identifier (`at-{hash}` for roots, `at-{hash}.{n}` for subtasks)
 - [`TaskStatus`] -- `Pending`, `InProgress`, `Completed`, `Blocked`
-- [`TaskStore`] -- JSONL file storage with in-memory index
-- [`TaskIndex`] -- In-memory index for fast queries by status, assignee, or ID
+- [`TaskStore`] -- JSONL file storage, held in memory in [`TaskId`] order
 
 # Usage
 

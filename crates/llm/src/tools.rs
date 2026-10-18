@@ -70,6 +70,13 @@ pub struct ToolCallError {
     pub error: String,
 }
 
+pub(crate) fn tool_result_parts(result: &Result<ToolCallResult, ToolCallError>) -> (&str, &str, bool) {
+    match result {
+        Ok(result) => (&result.id, &result.result, false),
+        Err(error) => (&error.id, &error.error, true),
+    }
+}
+
 impl ToolCallError {
     pub fn from_request(request: &ToolCallRequest, error: impl Into<String>) -> Self {
         Self {

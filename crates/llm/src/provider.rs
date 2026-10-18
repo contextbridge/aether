@@ -1,9 +1,7 @@
 use crate::LlmError;
 use crate::LlmModel;
-use crate::ProviderConnectionConfig;
 use crate::Result as LlmResult;
-use crate::catalog::ReasoningEffortError;
-use std::future::Future;
+use crate::catalog::{Provider, ReasoningEffortError};
 use std::pin::Pin;
 use tokio_stream::Stream;
 use utils::ReasoningEffort;
@@ -18,31 +16,21 @@ use super::{Context, LlmResponse};
 /// [`AlloyedModelProvider`](crate::alloyed::AlloyedModelProvider).
 pub type LlmResponseStream = Pin<Box<dyn Stream<Item = LlmResult<LlmResponse>> + Send>>;
 
-#[doc = include_str!("docs/provider_factory.md")]
-pub trait ProviderFactory: Sized {
-    /// Create provider from environment variables and default configuration
-    fn from_env() -> impl Future<Output = LlmResult<Self>> + Send;
-
-    /// Create provider from environment variables with provider connection overrides.
-    fn from_env_with_connection(connection: ProviderConnectionConfig) -> impl Future<Output = LlmResult<Self>> + Send {
-        async move {
-            let _ = connection;
-            Self::from_env().await
-        }
-    }
-
-    /// Set or update the model for this provider (builder pattern)
-    fn with_model(self, model: &str) -> Self;
-}
-
 #[doc = include_str!("docs/streaming_model_provider.md")]
 pub trait StreamingModelProvider: Send + Sync {
     fn stream_response(&self, context: &Context) -> LlmResponseStream;
-    fn display_name(&self) -> String;
+
+    /// Provider and model, e.g. `Anthropic (claude-sonnet-4-5)`.
+    fn display_name(&self) -> String {
+        self.model()
+            .map_or_else(|| "Unknown model".to_string(), |model| display_name(model.provider_enum(), &model.model_id()))
+    }
 
     /// Context window size in tokens for the current model.
     /// Returns `None` for unknown models (e.g. Ollama, `LlamaCpp`).
-    fn context_window(&self) -> Option<u32>;
+    fn context_window(&self) -> Option<u32> {
+        self.model().and_then(|model| model.context_window())
+    }
 
     /// The `LlmModel` this provider is currently configured to use.
     /// Returns `None` for providers where the model is unknown at compile time
@@ -52,12 +40,12 @@ pub trait StreamingModelProvider: Send + Sync {
     }
 }
 
-/// Look up context window for a known provider + model ID combo via the catalog.
-///
-/// Returns `None` if the model is not in the catalog.
-pub fn get_context_window(provider: &str, model_id: &str) -> Option<u32> {
-    let key = format!("{provider}:{model_id}");
-    key.parse::<LlmModel>().ok().and_then(|m| m.context_window())
+pub(crate) fn display_name(provider: Provider, model_id: &str) -> String {
+    if model_id.is_empty() {
+        provider.display_name().to_string()
+    } else {
+        format!("{} ({model_id})", provider.display_name())
+    }
 }
 
 pub(crate) fn validate_reasoning(context: &Context, model: Option<&LlmModel>) -> LlmResult<()> {
@@ -115,35 +103,5 @@ impl<T: StreamingModelProvider + ?Sized> StreamingModelProvider for std::sync::A
 
     fn model(&self) -> Option<LlmModel> {
         (**self).model()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn lookup_context_window_known_model() {
-        assert_eq!(get_context_window("anthropic", "claude-opus-4-6"), Some(1_000_000));
-    }
-
-    #[test]
-    fn lookup_context_window_openrouter_model() {
-        let model = LlmModel::all()
-            .iter()
-            .find(|model| model.provider() == "openrouter" && model.context_window().is_some())
-            .expect("OpenRouter catalog should contain a model with a context window");
-
-        assert_eq!(get_context_window(model.provider(), &model.model_id()), model.context_window());
-    }
-
-    #[test]
-    fn lookup_context_window_unknown_model() {
-        assert_eq!(get_context_window("anthropic", "unknown-model-xyz"), None);
-    }
-
-    #[test]
-    fn lookup_context_window_unknown_provider() {
-        assert_eq!(get_context_window("unknown-provider", "some-model"), None);
     }
 }

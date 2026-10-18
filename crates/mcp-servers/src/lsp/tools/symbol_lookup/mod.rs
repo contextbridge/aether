@@ -11,8 +11,9 @@ use lsp_types::GotoDefinitionResponse;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
+use utils::display_meta::{ToolDisplayMeta, basename};
 
+use crate::Displayed;
 use crate::lsp::common::{DEFAULT_RESULT_LIMIT, truncate_results, uri_to_path};
 use crate::lsp::error::LspError;
 use crate::lsp::registry::LspRegistry;
@@ -80,10 +81,6 @@ pub struct LspSymbolOutput {
     /// Whether the results were truncated due to `limit`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub truncated: Option<bool>,
-    /// Display metadata for human-friendly rendering
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub meta: Option<ToolResultMeta>,
 }
 
 impl LspSymbolOutput {
@@ -109,11 +106,11 @@ impl LspSymbolOutput {
 pub async fn execute_lsp_symbol(
     mut input: LspSymbolInput,
     registry: &LspRegistry,
-) -> Result<LspSymbolOutput, LspError> {
+) -> Result<Displayed<LspSymbolOutput>, LspError> {
     input.file_path = registry.resolve_file(&input.file_path)?;
     let resolved = registry.resolve_symbol(&input.file_path, &input.symbol, input.line).await?;
     let root = registry.root_path();
-    let mut output = match input.operation {
+    let output = match input.operation {
         SymbolLookupOperation::Definition => {
             let response = resolved.client.goto_definition(resolved.uri, resolved.line, resolved.column).await?;
             LspSymbolOutput::locations("definition", definition_response_to_lines(response), &input, root).await
@@ -136,11 +133,8 @@ pub async fn execute_lsp_symbol(
         }
     };
 
-    #[allow(clippy::used_underscore_binding)]
-    {
-        output.meta = Some(symbol_display_meta(&input, &output).into());
-    }
-    Ok(output)
+    let meta = symbol_display_meta(&input, &output);
+    Ok(Displayed::new(output, meta))
 }
 
 /// Convert `GotoDefinitionResponse` to a list of `SourceLine`s

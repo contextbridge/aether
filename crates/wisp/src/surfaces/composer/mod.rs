@@ -5,41 +5,28 @@ pub(crate) use view::ComposerBodyView;
 
 use crate::attachment::{AttachmentKind, PromptAttachment, classify_attachment};
 use crate::command::FilesystemCommand;
-use crate::file_index::FileEntry;
 use crate::request::RequestId;
-use crate::surfaces::input::MouseAction;
 use crate::surfaces::picker::{CommandEntry, CompletionOverlay};
 use crate::surfaces::prompt_search::PromptSearchPicker;
-use crate::view::edit_buffer::{EditBuffer, apply_edit_key};
-use crate::view::filterable_list::FilterableList;
-use crate::view::selection::Direction;
+use crate::view::edit_buffer::{EditBuffer, apply_edit_key, is_composed_char};
+use crate::view::input::{Nav, UiEvent};
 use acp_utils::notifications::PromptSearchResponse;
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Position;
 use ratatui::text::Line;
 use std::collections::HashSet;
 use unicode_width::UnicodeWidthStr;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SelectedFileMention {
-    pub path: std::path::PathBuf,
-    pub display_name: String,
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Submission {
     pub text: String,
-    pub mentions: Vec<SelectedFileMention>,
+    pub mentions: Vec<PromptAttachment>,
     pub media: Vec<PromptAttachment>,
 }
 
 impl Submission {
     pub fn attachments(&self) -> Vec<PromptAttachment> {
-        let mentions = self.mentions.iter().map(|mention| PromptAttachment {
-            path: mention.path.clone(),
-            display_name: mention.display_name.clone(),
-        });
-        mentions.chain(self.media.iter().cloned()).collect()
+        self.mentions.iter().chain(&self.media).cloned().collect()
     }
 }
 
@@ -47,7 +34,7 @@ impl Submission {
 pub struct Composer {
     buffer: EditBuffer,
     overlay: Option<Overlay>,
-    mentions: Vec<SelectedFileMention>,
+    mentions: Vec<PromptAttachment>,
     pending_media: Vec<PromptAttachment>,
     history: PromptHistory,
     /// Columns the last layout wrapped the input at. Unset until the composer
@@ -159,7 +146,7 @@ impl Composer {
         self.buffer.is_empty() && self.pending_media.is_empty()
     }
 
-    pub fn selected_mentions(&self) -> Vec<SelectedFileMention> {
+    pub fn selected_mentions(&self) -> Vec<PromptAttachment> {
         // Match whole whitespace-delimited tokens so that `@foo` does not also match the
         // longer mention `@foobar`. The insertion path always writes `@<display> `, so a
         // complete token comparison is the correct granularity.
@@ -237,7 +224,7 @@ impl Composer {
 
     /// Applies one shared editing keystroke. Anything that changes the text also
     /// ends history navigation, so the recalled prompt becomes the user's draft.
-    pub fn apply_edit_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+    pub fn apply_edit_key(&mut self, key: KeyEvent) -> bool {
         if key.code == KeyCode::Backspace {
             self.backspace();
             return true;
@@ -335,7 +322,7 @@ impl Composer {
         FilesystemCommand::IndexFiles { request_id, root: root.to_path_buf() }
     }
 
-    pub fn on_files_indexed(&mut self, request_id: RequestId, files: Vec<FileEntry>) {
+    pub fn on_files_indexed(&mut self, request_id: RequestId, files: Vec<PromptAttachment>) {
         if let Some(overlay) = self.completion_mut() {
             overlay.set_files(request_id, files);
         }
@@ -382,13 +369,15 @@ impl Composer {
     /// Routes a mouse event to whichever overlay is open. Browsing history
     /// results previews each candidate in the composer, the way the arrow keys
     /// do.
-    pub fn on_overlay_mouse(&mut self, action: MouseAction, row: u16) {
-        let direction = action.direction();
+    pub fn on_overlay_mouse(&mut self, event: &UiEvent) {
         match self.overlay.as_mut() {
-            Some(Overlay::Completion(overlay)) => navigate_list(overlay.entries_mut(), direction, row),
+            Some(Overlay::Completion(overlay)) => {
+                overlay.entries_mut().navigate(event);
+            }
             Some(Overlay::PromptSearch { picker, .. }) => {
-                navigate_list(picker.results_mut(), direction, row);
-                self.apply_selected_search_result();
+                if matches!(picker.results_mut().navigate(event), Nav::Moved | Nav::Clicked) {
+                    self.apply_selected_search_result();
+                }
             }
             None => {}
         }
@@ -416,7 +405,7 @@ impl Composer {
 
     /// Applies a keystroke to the open history search, or reports that there is
     /// none for it to go to.
-    pub fn on_prompt_search_key(&mut self, key: crossterm::event::KeyEvent) -> Option<ComposerOutcome> {
+    pub fn on_prompt_search_key(&mut self, key: KeyEvent) -> Option<ComposerOutcome> {
         if !self.has_prompt_search() {
             return None;
         }
@@ -433,7 +422,7 @@ impl Composer {
 
     /// Applies a keystroke to the open completion list, or reports that there is
     /// none for it to go to.
-    pub fn on_completion_key(&mut self, key: crossterm::event::KeyEvent) -> Option<ComposerOutcome> {
+    pub fn on_completion_key(&mut self, key: KeyEvent) -> Option<ComposerOutcome> {
         if !self.has_completion() {
             return None;
         }
@@ -460,38 +449,24 @@ impl Composer {
 
     /// Applies a keystroke to the open history search, returning the query to
     /// re-run when the keystroke changed it.
-    fn prompt_search_query_on_key(&mut self, key: crossterm::event::KeyEvent) -> Option<String> {
-        let picker = self.prompt_search_mut()?;
-        match key.code {
-            KeyCode::Esc => {
-                self.close_prompt_search(false);
-                None
-            }
-            KeyCode::Enter => {
-                let confirmed = picker.selected_result().is_some();
+    fn prompt_search_query_on_key(&mut self, key: KeyEvent) -> Option<String> {
+        match self.prompt_search_mut()?.results_mut().navigate(&UiEvent::Key(key)) {
+            Nav::Close => self.close_prompt_search(false),
+            Nav::Activate => {
+                let confirmed = self.prompt_search().is_some_and(|picker| picker.selected_result().is_some());
                 self.close_prompt_search(confirmed);
-                None
             }
-            KeyCode::Down => {
-                picker.results_mut().step(Direction::Forward);
-                self.apply_selected_search_result();
-                None
+            Nav::Moved | Nav::Clicked => self.apply_selected_search_result(),
+            Nav::Unhandled => {
+                let picker = self.prompt_search_mut()?;
+                return match key.code {
+                    KeyCode::Backspace => Some(picker.backspace()),
+                    KeyCode::Char(c) if !is_composed_char(key) => Some(picker.push_char(c)),
+                    _ => None,
+                };
             }
-            KeyCode::Up => {
-                picker.results_mut().step(Direction::Backward);
-                self.apply_selected_search_result();
-                None
-            }
-            KeyCode::Backspace => Some(picker.backspace()),
-            KeyCode::Char(c)
-                if !key
-                    .modifiers
-                    .intersects(crossterm::event::KeyModifiers::CONTROL | crossterm::event::KeyModifiers::ALT) =>
-            {
-                Some(picker.push_char(c))
-            }
-            _ => None,
         }
+        None
     }
 
     pub fn prompt_search_on_results(&mut self, response: PromptSearchResponse) {
@@ -518,47 +493,41 @@ impl Composer {
     /// The mirror of [`Composer::on_prompt_search_key`]: the composer owns the
     /// list's own keys and the edits they imply, and the app decides what an
     /// accepted command means.
-    fn completion_on_key(&mut self, key: crossterm::event::KeyEvent) -> Option<CommandEntry> {
-        match key.code {
-            KeyCode::Esc => self.close_overlay(),
-            KeyCode::Up => self.step_completion(Direction::Backward),
-            KeyCode::Down => self.step_completion(Direction::Forward),
-            KeyCode::Enter | KeyCode::Tab => {
-                let command = self.accept_command();
-                if command.is_none() {
-                    self.accept_file();
-                }
-                return command;
-            }
-            KeyCode::Backspace if self.completion().is_some_and(|overlay| overlay.query().is_empty()) => {
-                self.backspace();
-                self.close_overlay();
-            }
-            KeyCode::Backspace => {
-                self.backspace();
-                self.refresh_overlay_query();
-            }
-            KeyCode::Char(character)
-                if !key
-                    .modifiers
-                    .intersects(crossterm::event::KeyModifiers::CONTROL | crossterm::event::KeyModifiers::ALT) =>
-            {
-                self.insert_char(character);
-                if character.is_whitespace() {
+    fn completion_on_key(&mut self, key: KeyEvent) -> Option<CommandEntry> {
+        match self.completion_mut()?.entries_mut().navigate(&UiEvent::Key(key)) {
+            Nav::Close => self.close_overlay(),
+            Nav::Activate => return self.accept_selected(),
+            Nav::Moved | Nav::Clicked => {}
+            Nav::Unhandled => match key.code {
+                KeyCode::Tab => return self.accept_selected(),
+                KeyCode::Backspace if self.completion().is_some_and(|overlay| overlay.query().is_empty()) => {
+                    self.backspace();
                     self.close_overlay();
-                } else {
+                }
+                KeyCode::Backspace => {
+                    self.backspace();
                     self.refresh_overlay_query();
                 }
-            }
-            _ => {}
+                KeyCode::Char(character) if !is_composed_char(key) => {
+                    self.insert_char(character);
+                    if character.is_whitespace() {
+                        self.close_overlay();
+                    } else {
+                        self.refresh_overlay_query();
+                    }
+                }
+                _ => {}
+            },
         }
         None
     }
 
-    fn step_completion(&mut self, direction: Direction) {
-        if let Some(overlay) = self.completion_mut() {
-            overlay.entries_mut().step(direction);
+    fn accept_selected(&mut self) -> Option<CommandEntry> {
+        let command = self.accept_command();
+        if command.is_none() {
+            self.accept_file();
         }
+        command
     }
 
     fn close_overlay(&mut self) {
@@ -572,10 +541,10 @@ impl Composer {
         Some(command)
     }
 
-    pub fn accept_file(&mut self) -> Option<FileEntry> {
+    pub fn accept_file(&mut self) -> Option<PromptAttachment> {
         let file = self.completion()?.selected_file()?;
         self.replace_token('@', &format!("@{} ", file.display_name));
-        self.mentions.push(SelectedFileMention { path: file.path.clone(), display_name: file.display_name.clone() });
+        self.mentions.push(file.clone());
         self.overlay = None;
         Some(file)
     }
@@ -633,15 +602,6 @@ impl Composer {
         self.buffer.set_text(text);
         self.mentions.clear();
         self.overlay = None;
-    }
-}
-
-fn navigate_list<T>(list: &mut FilterableList<T>, direction: Option<Direction>, row: u16) {
-    match direction {
-        Some(direction) => list.step(direction),
-        None => {
-            list.select_at(row);
-        }
     }
 }
 

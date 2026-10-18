@@ -1,4 +1,8 @@
-use crate::{ChatMessage, Context, LlmResponse, LlmResponseStream, Result};
+use super::generic::{Api, GenericProvider, ProviderConfig};
+use crate::{
+    ChatMessage, Context, LlmResponse, LlmResponseStream, ProviderAuthMode, ProviderConnectionConfig, Result,
+    StreamingModelProvider,
+};
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::header::CONTENT_TYPE;
@@ -20,17 +24,96 @@ pub(crate) struct CaptureServer {
     receiver: mpsc::UnboundedReceiver<CapturedRequest>,
 }
 
+pub(crate) struct ProviderFixture {
+    pub(crate) provider: GenericProvider,
+    pub(crate) server: CaptureServer,
+}
+
+pub(crate) struct ProviderFixtureBuilder {
+    config: &'static ProviderConfig,
+    model: Option<String>,
+    api_key: String,
+    connection: ProviderConnectionConfig,
+    response: ResponseSpec,
+}
+
+impl ProviderFixture {
+    pub(crate) fn builder(config: &'static ProviderConfig) -> ProviderFixtureBuilder {
+        let body = match config.api {
+            Api::ChatCompletions(_) => CHAT_COMPLETIONS_FIXTURE,
+            Api::Responses(_) => RESPONSES_FIXTURE,
+            Api::Messages => MESSAGES_FIXTURE,
+        };
+        ProviderFixtureBuilder {
+            config,
+            model: None,
+            api_key: "key".into(),
+            connection: ProviderConnectionConfig { auth_mode: ProviderAuthMode::None, ..Default::default() },
+            response: ResponseSpec::sse(body),
+        }
+    }
+
+    pub(crate) async fn run(&mut self, context: &Context) -> (CapturedRequest, Vec<Result<LlmResponse>>) {
+        let events = self.provider.stream_response(context).collect::<Vec<_>>().await;
+        let request = self
+            .server
+            .receiver
+            .try_recv()
+            .unwrap_or_else(|error| panic!("no request captured: {error}; events: {events:?}"));
+        (request, events)
+    }
+}
+
+impl ProviderFixtureBuilder {
+    pub(crate) fn model(mut self, model: &str) -> Self {
+        self.model = Some(model.into());
+        self
+    }
+
+    pub(crate) fn api_key(mut self, api_key: &str) -> Self {
+        self.api_key = api_key.into();
+        self
+    }
+
+    pub(crate) fn connection(mut self, connection: ProviderConnectionConfig) -> Self {
+        self.connection = connection;
+        self
+    }
+
+    pub(crate) fn response(mut self, response: ResponseSpec) -> Self {
+        self.response = response;
+        self
+    }
+
+    pub(crate) async fn build(mut self) -> ProviderFixture {
+        let server = CaptureServer::start_with_spec(self.response).await;
+        self.connection.base_url.get_or_insert_with(|| format!("{}/", server.base_url));
+        let provider = GenericProvider::new_with_connection(&self.api_key, self.config, self.connection).unwrap();
+        let provider = match self.model {
+            Some(model) => provider.with_model(&model),
+            None => provider,
+        };
+        ProviderFixture { provider, server }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ResponseSpec {
     pub(crate) status: u16,
     pub(crate) body: String,
     pub(crate) headers: HashMap<String, String>,
     gap: Option<Duration>,
+    interrupted: bool,
 }
 
 impl ResponseSpec {
     pub(crate) fn sse(body: &str) -> Self {
-        Self { status: 200, body: body.to_string(), headers: HashMap::new(), gap: None }
+        Self { status: 200, body: body.to_string(), headers: HashMap::new(), gap: None, interrupted: false }
+    }
+
+    pub(crate) fn with_status(mut self, status: u16) -> Self {
+        self.status = status;
+        self
     }
 
     pub(crate) fn with_header(mut self, name: &str, value: &str) -> Self {
@@ -43,7 +126,20 @@ impl ResponseSpec {
         self
     }
 
+    /// Drop the connection after sending the response headers.
+    pub(crate) fn interrupted(mut self) -> Self {
+        self.interrupted = true;
+        self
+    }
+
     fn response_body(&self) -> Body {
+        if self.interrupted {
+            // Yielding first lets the server flush the headers before the body fails.
+            return Body::from_stream(stream::once(async {
+                tokio::task::yield_now().await;
+                Err::<String, _>(std::io::Error::other("connection reset"))
+            }));
+        }
         let Some(gap) = self.gap else {
             return Body::from(self.body.clone());
         };
@@ -57,11 +153,6 @@ impl ResponseSpec {
 
 pub(crate) fn hello_context() -> Context {
     Context::new(vec![ChatMessage::user("Hello")], vec![])
-}
-
-struct CaptureState {
-    sender: mpsc::UnboundedSender<CapturedRequest>,
-    response: ResponseSpec,
 }
 
 pub(crate) struct CapturedRequest {
@@ -107,12 +198,19 @@ impl CaptureServer {
             self.captured().await;
             tokio::time::pause();
         });
+        tokio::time::resume();
         responses
     }
 }
 
 const RESPONSES_FIXTURE: &str = include_str!("../../tests/fixtures/openai_responses/01_minimal.sse");
 const CHAT_COMPLETIONS_FIXTURE: &str = include_str!("../../tests/fixtures/openai/01_minimal.sse");
+const MESSAGES_FIXTURE: &str = include_str!("../../tests/fixtures/anthropic/01_minimal.sse");
+
+struct CaptureState {
+    sender: mpsc::UnboundedSender<CapturedRequest>,
+    response: ResponseSpec,
+}
 
 async fn capture(
     State(state): State<Arc<CaptureState>>,

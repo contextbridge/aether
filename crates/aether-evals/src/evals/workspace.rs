@@ -242,24 +242,15 @@ mod tests {
 
     #[test]
     fn from_git_bundle_round_trips_checkout_subdir_and_diffs() {
-        let (repo, start, gold) = init_repo();
+        let (_repo, spec) = init_repo();
         let bundle_dir = tempfile::tempdir().unwrap();
         let bundle_path = bundle_dir.path().join("repo.bundle");
-        create_git_bundle(
-            &GitRepoSpec {
-                url: format!("file://{}", repo.root().display()),
-                start_commit: start.clone(),
-                gold_commit: gold.clone(),
-                subdir: None,
-            },
-            &bundle_path,
-        )
-        .unwrap();
+        create_git_bundle(&spec, &bundle_path).unwrap();
 
         let workspace = Workspace::from_git_bundle(GitBundleSpec {
             bundle_path,
-            start_commit: start,
-            gold_commit: gold,
+            start_commit: spec.start_commit,
+            gold_commit: spec.gold_commit,
             subdir: Some(PathBuf::from("pkg")),
         })
         .unwrap();
@@ -280,14 +271,8 @@ mod tests {
 
     #[test]
     fn capture_git_diffs_includes_committed_agent_changes() {
-        let (repo, start, gold) = init_repo();
-        let workspace = Workspace::from_git_repo(GitRepoSpec {
-            url: format!("file://{}", repo.root().display()),
-            start_commit: start,
-            gold_commit: gold,
-            subdir: None,
-        })
-        .unwrap();
+        let (_repo, spec) = init_repo();
+        let workspace = Workspace::from_git_repo(spec).unwrap();
 
         write(workspace.join("root.txt"), "agent committed\n").unwrap();
         git(workspace.root_path(), &["add", "."]);
@@ -307,14 +292,8 @@ mod tests {
 
     #[test]
     fn capture_git_diffs_includes_staged_unstaged_added_and_deleted_changes() {
-        let (repo, start, gold) = init_repo();
-        let workspace = Workspace::from_git_repo(GitRepoSpec {
-            url: format!("file://{}", repo.root().display()),
-            start_commit: start,
-            gold_commit: gold,
-            subdir: None,
-        })
-        .unwrap();
+        let (_repo, spec) = init_repo();
+        let workspace = Workspace::from_git_repo(spec).unwrap();
 
         write(workspace.join("root.txt"), "staged change\n").unwrap();
         write(workspace.join("added.txt"), "added\n").unwrap();
@@ -350,15 +329,16 @@ mod tests {
         assert!(matches!(result, Err(WorkspaceError::MissingBundle { .. })));
     }
 
-    fn init_repo() -> (TestWorkspace, String, String) {
+    fn init_repo() -> (TestWorkspace, GitRepoSpec) {
         let repo = TestWorkspace::new()
             .file("root.txt", "root v1\n")
             .file("deleted.txt", "before deleted\n")
             .file("pkg/inner.txt", "inner v1\n")
             .git_init();
-        let start = repo.commit("start");
+        let start_commit = repo.commit("start");
         repo.write("root.txt", "root v2\n");
-        let gold = repo.commit("gold");
-        (repo, start, gold)
+        let gold_commit = repo.commit("gold");
+        let url = format!("file://{}", repo.root().display());
+        (repo, GitRepoSpec { url, start_commit, gold_commit, subdir: None })
     }
 }

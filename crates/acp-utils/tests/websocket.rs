@@ -40,7 +40,7 @@ async fn acp_over_websocket_with_elicitation() -> Result<(), TestError> {
 
             let handle = client.handle.clone();
             let prompt = spawn_local(async move {
-                handle.prompt(PromptRequest::new("session", vec![ContentBlock::Text(TextContent::new("hi"))])).await
+                handle.request(PromptRequest::new("session", vec![ContentBlock::Text(TextContent::new("hi"))])).await
             });
 
             let Some(AcpEvent::SessionUpdate(notification)) = client.event_rx.recv().await else {
@@ -171,11 +171,11 @@ async fn final_turn_and_replay_events_are_delivered_before_buffered_close() -> R
                     .build_closing_agent()
                     .await?;
                 if replay {
-                    client.handle.resume_session(replaying("session")).await?;
+                    client.handle.request(replaying("session")).await?;
                     assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::SessionUpdate(notification))
                     if *notification == idle_notification("session", Some(StopReason::EndTurn))));
                 } else {
-                    client.handle.prompt(PromptRequest::new("session", vec![])).await?;
+                    client.handle.request(PromptRequest::new("session", vec![])).await?;
                     assert!(matches!(client.event_rx.recv().await, Some(AcpEvent::SessionUpdate(notification))
                     if notification.update == idle_notification("session", Some(StopReason::EndTurn)).update));
                 }
@@ -215,9 +215,9 @@ async fn burst_and_replay_updates_survive_backpressure_and_buffered_close() -> R
                 }
                 let (mut client, peer) = builder.build_closing_agent().await?;
                 if replay {
-                    client.handle.resume_session(replaying("session")).await?;
+                    client.handle.request(replaying("session")).await?;
                 } else {
-                    client.handle.prompt(PromptRequest::new("session", vec![])).await?;
+                    client.handle.request(PromptRequest::new("session", vec![])).await?;
                 }
                 for expected in updates {
                     let Some(AcpEvent::SessionUpdate(notification)) = client.event_rx.recv().await else {

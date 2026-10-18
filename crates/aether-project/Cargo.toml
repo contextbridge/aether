@@ -37,4 +37,3 @@ testing = ["utils/testing"]
 [dev-dependencies]
 aether-project = { package = "aether-project", path = ".", features = ["testing"] }
 aether-doctest = { path = "../doctest" }
-tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }

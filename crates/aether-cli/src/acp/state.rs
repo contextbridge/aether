@@ -19,8 +19,8 @@ use agent_client_protocol::schema::v2::{
 };
 use agent_client_protocol::util::internal_error;
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Error, Responder};
+use llm::ContentBlock;
 use llm::catalog::{LlmModel, ModelSpec};
-use llm::{ContentBlock, ProviderConnectionOverrides};
 use mcp_utils::model::{ElicitationCapability, FormElicitationCapability, UrlElicitationCapability};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -33,14 +33,11 @@ use tracing::{error, info};
 
 use super::protocol::content::map_acp_to_content_blocks;
 use super::session::actor::{ClientConnection, SessionCommand};
-#[cfg(any(test, feature = "testing"))]
 use super::session::actor::{SessionActor, SessionActorInit};
 use super::session::config_setting::ConfigSetting;
-use super::session::factory::SessionFactory;
-use super::session::hooks::SessionHooks;
+use super::session::factory::{SessionFactory, SessionFactoryConfig};
+use super::session::registry::ActiveSession;
 use super::session::{SessionRegistry, paginate_summaries};
-use crate::resolve::InitialSessionSelection;
-use crate::settings_args::SettingsSourceArgs;
 use crate::workspace::{WorkspaceError, WorkspaceManager, current_ref};
 use aether_sessions::{SessionStore, SessionStoreError};
 
@@ -67,19 +64,9 @@ pub(crate) struct AcpStateConfig {
     pub(crate) session_store: Arc<SessionStore>,
     pub(crate) workspace_manager: Arc<WorkspaceManager>,
     pub(crate) oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
-    pub(crate) initial_selection: InitialSessionSelection,
-    pub(crate) settings_source: SettingsSourceArgs,
-    pub(crate) provider_connections: ProviderConnectionOverrides,
     pub(crate) telemetry: Option<Arc<TelemetryRuntime>>,
-    pub(crate) runtime_factory: Option<Arc<dyn super::session::runtime::RuntimeFactory>>,
     pub(crate) cwd: PathBuf,
-    pub(crate) hooks: SessionHooks,
-}
-
-struct SpawnedSession {
-    session_id: SessionId,
-    config_options: Vec<acp::SessionConfigOption>,
-    commands: mpsc::Sender<SessionCommand>,
+    pub(crate) sessions: SessionFactoryConfig,
 }
 
 #[derive(Default)]
@@ -165,14 +152,10 @@ impl AcpState {
 
     pub(crate) fn with_login(config: AcpStateConfig, login: Arc<dyn ProviderLogin>) -> Self {
         let factory = SessionFactory::new(
-            config.settings_source,
-            config.provider_connections,
-            Arc::clone(&config.oauth_credential_store),
+            config.sessions,
             Arc::clone(&config.session_store),
-            config.initial_selection,
+            Arc::clone(&config.oauth_credential_store),
             config.telemetry.as_ref().map(|runtime| runtime.observer_factory()),
-            config.runtime_factory,
-            config.hooks,
         );
         Self {
             client_slot: ClientSlot::default(),
@@ -192,8 +175,7 @@ impl AcpState {
         info!("Received initialize request: {:?}", args);
         self.factory.set_elicitation(mcp_elicitation(&args.capabilities));
         let auth_methods = build_auth_methods(self.oauth_credential_store.as_ref());
-        let available = self.factory.available_models().await.to_vec();
-        let prompt_capabilities = prompt_capabilities_for_models(&available);
+        let prompt_capabilities = prompt_capabilities_for_models(&self.factory.available_models().await);
         let aether_capabilities =
             AetherCapabilities { prompt_search: true, session_preview: true, workspace_move: true };
         let session_capabilities = acp::SessionCapabilities::new()
@@ -238,16 +220,19 @@ impl AcpState {
         req: NewSessionRequest,
         cx: &ConnectionTo<Client>,
     ) -> Result<NewSessionResponse, Error> {
-        let created = self.spawn_session(req, Some(cx)).await?;
-        Ok(NewSessionResponse::new(created.session_id).config_options(created.config_options))
+        let init = self.factory.prepare_new(req, Some(cx)).await?;
+        let session_id = init.session_id.clone();
+        let (config_options, _) = self.activate(&mut self.registry.lock().await, init).await?;
+        Ok(NewSessionResponse::new(session_id).config_options(config_options))
     }
 
     pub(super) async fn start_session(&self, prompt: String) -> Result<SessionId, Error> {
         let request = NewSessionRequest::new(acp::AbsolutePath::new(self.cwd.clone()));
-        let created = self.spawn_session(request, None).await?;
+        let init = self.factory.prepare_new(request, None).await?;
+        let session_id = init.session_id.clone();
+        let (_, commands) = self.activate(&mut self.registry.lock().await, init).await?;
         let content = vec![ContentBlock::text(prompt)];
-        created
-            .commands
+        commands
             .send(SessionCommand::Prompt {
                 content: content.clone(),
                 display_content: content,
@@ -255,24 +240,22 @@ impl AcpState {
             })
             .await
             .map_err(|_| Error::internal_error())?;
-        Ok(created.session_id)
+        Ok(session_id)
     }
 
-    async fn spawn_session(
+    async fn activate(
         &self,
-        request: NewSessionRequest,
-        connection: Option<&ConnectionTo<Client>>,
-    ) -> Result<SpawnedSession, Error> {
-        let prepared = self.factory.prepare_new(request, connection).await?;
-        self.registry.stop().await;
-        let created = prepared.start().await?;
-        let spawned = SpawnedSession {
-            session_id: created.session_id.clone(),
-            config_options: created.config_options,
-            commands: created.handle.command_sender(),
-        };
-        self.registry.register(&created.session_id, created.handle).await;
-        Ok(spawned)
+        active: &mut ActiveSession<'_>,
+        init: SessionActorInit,
+    ) -> Result<(Vec<acp::SessionConfigOption>, mpsc::Sender<SessionCommand>), Error> {
+        let config_options =
+            init.config.config_options(&init.modes, &init.available, init.oauth_credential_store.as_ref());
+        let session_id = init.session_id.clone();
+        let commands = active.replace(session_id, SessionActor::spawn(init)).await.map_err(|e| {
+            error!("Failed to start session actor: {e}");
+            Error::internal_error()
+        })?;
+        Ok((config_options, commands))
     }
 
     pub(crate) async fn logout(
@@ -296,8 +279,9 @@ impl AcpState {
             Some(_) => return Err(Error::invalid_params()),
         };
 
-        if let Some(sender) = self.registry.lookup(Some(req.session_id.0.as_ref())).await {
-            let available = self.factory.available_models().await.to_vec();
+        let mut active = self.registry.lock().await;
+        if let Some(sender) = active.lookup(Some(req.session_id.0.as_ref())) {
+            drop(active);
             let (config_tx, config_rx) = oneshot::channel();
 
             sender
@@ -306,7 +290,6 @@ impl AcpState {
                     cwd: req.cwd.into_inner(),
                     mcp_servers: req.mcp_servers,
                     replay,
-                    available,
                     reply: config_tx,
                 })
                 .await
@@ -316,12 +299,9 @@ impl AcpState {
             return Ok(ResumeSessionResponse::new().config_options(options));
         }
 
-        let prepared = self.factory.prepare_resume(req, cx, replay).await?;
-        self.registry.stop().await;
-        let created = prepared.start().await?;
-        let response = ResumeSessionResponse::new().config_options(created.config_options);
-        self.registry.register(&created.session_id, created.handle).await;
-        Ok(response)
+        let init = self.factory.prepare_resume(req, cx, replay).await?;
+        let (config_options, _) = self.activate(&mut active, init).await?;
+        Ok(ResumeSessionResponse::new().config_options(config_options))
     }
 
     pub(crate) async fn close_session(&self, req: CloseSessionRequest) -> Result<CloseSessionResponse, Error> {
@@ -410,28 +390,39 @@ impl AcpState {
     }
 
     async fn send_command(&self, session_id: &str, command: SessionCommand) -> Result<(), Error> {
-        let Some(sender) = self.registry.lookup(Some(session_id)).await else {
-            return Err(Error::invalid_params());
+        let (command, error) = match self.registry.lookup(Some(session_id)).await {
+            None => (command, Error::invalid_params()),
+            Some(sender) => match sender.send(command).await {
+                Ok(()) => return Ok(()),
+                Err(closed) => (closed.0, Error::internal_error()),
+            },
         };
-        sender.send(command).await.map_err(|_| Error::internal_error())
+        command.reject(error.clone());
+        Err(error)
     }
 
-    /// Moves the session's uncommitted changes to the target workspace, then
-    /// relocates the stored session to the target directory.
+    /// Moves the session's uncommitted changes to the target workspace, stops
+    /// the session, then relocates the stored session to the target directory.
     pub(crate) async fn workspace_move(&self, params: &WorkspaceMoveParams) -> Result<WorkspaceMoveResponse, Error> {
         let target = params.target.clone();
-        let session_id = params.session_id.clone();
-        let response = self
-            .run_workspace_request(session_id.clone(), move |session_store, manager, src_cwd| {
-                let new_cwd = manager.move_to(&src_cwd, &target).map_err(WorkspaceRequestError::Workspace)?;
-                session_store.relocate(&session_id, &new_cwd).map_err(WorkspaceRequestError::Relocate)?;
-                Ok(WorkspaceMoveResponse { new_cwd })
+        let new_cwd = self
+            .run_workspace_request(params.session_id.clone(), move |_session_store, manager, src_cwd| {
+                manager.move_to(&src_cwd, &target).map_err(WorkspaceRequestError::Workspace)
             })
             .await?;
 
-        self.registry.stop_matching(Some(&params.session_id)).await;
-        info!("Moved session {} to workspace {}", params.session_id, response.new_cwd.display());
-        Ok(response)
+        let mut active = self.registry.lock().await;
+        active.stop_matching(Some(&params.session_id)).await;
+        let (session_store, session_id, relocated_cwd) =
+            (Arc::clone(&self.session_store), params.session_id.clone(), new_cwd.clone());
+        spawn_blocking(move || session_store.relocate(&session_id, &relocated_cwd))
+            .await
+            .map_err(|e| internal_error(format!("workspace task failed: {e}")))?
+            .map_err(|e| internal_error(format!("failed to relocate session: {e}")))?;
+        drop(active);
+
+        info!("Moved session {} to workspace {}", params.session_id, new_cwd.display());
+        Ok(WorkspaceMoveResponse { new_cwd })
     }
 
     async fn run_workspace_request<T, F>(&self, session_id: String, op: F) -> Result<T, Error>
@@ -458,25 +449,12 @@ impl AcpState {
         let session_id = args.session_id.0.to_string();
         let display_content = map_acp_to_content_blocks(acp_utils::content::display_content_blocks(&args.prompt));
         let content = map_acp_to_content_blocks(args.prompt);
-
-        let Some(sender) = self.registry.lookup(Some(&session_id)).await else {
-            error!("Session not found: {session_id}");
-            respond_err(responder, Error::invalid_params());
-            return;
+        let command = SessionCommand::Prompt {
+            content,
+            display_content,
+            client_connection: ClientConnection::attached(responder),
         };
-
-        if let Err(SessionCommand::Prompt { client_connection: responder, .. }) = sender
-            .send(SessionCommand::Prompt {
-                content,
-                display_content,
-                client_connection: ClientConnection::attached(responder),
-            })
-            .await
-            .map_err(|e| e.0)
-        {
-            error!("Session actor channel closed for prompt: {session_id}");
-            responder.respond_with_error(Error::internal_error());
-        }
+        self.route(&session_id, command).await;
     }
 
     pub(crate) async fn cancel(&self, args: CancelSessionNotification) -> Result<(), Error> {
@@ -485,8 +463,6 @@ impl AcpState {
         self.send_command(&session_id, SessionCommand::Cancel).await
     }
 
-    /// Route a config change to its session actor. Discovers available models
-    /// once, then the actor applies the change and answers with rebuilt options.
     pub(crate) async fn set_session_config_option(
         &self,
         args: SetSessionConfigOptionRequest,
@@ -513,18 +489,12 @@ impl AcpState {
             }
         };
 
-        let Some(sender) = self.registry.lookup(Some(&session_id)).await else {
-            error!("Session not found: {session_id}");
-            respond_err(responder, Error::invalid_params());
-            return;
-        };
+        self.route(&session_id, SessionCommand::SetConfig { setting, responder }).await;
+    }
 
-        let available = self.factory.available_models().await.to_vec();
-        if let Err(SessionCommand::SetConfig { responder, .. }) =
-            sender.send(SessionCommand::SetConfig { setting, available, responder }).await.map_err(|e| e.0)
-        {
-            error!("Session actor channel closed for set_config: {session_id}");
-            respond_err(responder, Error::internal_error());
+    async fn route(&self, session_id: &str, command: SessionCommand) {
+        if let Err(error) = self.send_command(session_id, command).await {
+            error!("Could not route command to session {session_id}: {error:?}");
         }
     }
 
@@ -532,10 +502,9 @@ impl AcpState {
         info!("Received MCP ext request: {:?}", request);
         match request {
             McpRequest::Authenticate { session_id, server_name } => {
-                self.send_command(&session_id, SessionCommand::AuthenticateMcp { server_name }).await?;
+                self.send_command(&session_id, SessionCommand::AuthenticateMcp { server_name }).await
             }
         }
-        Ok(())
     }
 
     pub(super) fn stop_token(&self) -> CancellationToken {
@@ -553,10 +522,9 @@ impl AcpState {
 
     #[cfg(any(test, feature = "testing"))]
     pub(crate) async fn register_session(&self, init: SessionActorInit) {
-        self.registry.stop().await;
-        let id = init.session_id.clone();
-        let handle = SessionActor::spawn(init).await.expect("test session actor spawns");
-        self.registry.register(&id, handle).await;
+        let session_id = init.session_id.clone();
+        let start = SessionActor::spawn(init);
+        self.registry.lock().await.replace(session_id, start).await.expect("test session actor spawns");
     }
 
     async fn serve_attached(
@@ -606,8 +574,7 @@ impl AcpState {
 
     async fn broadcast_config_options(&self) {
         if let Some(sender) = self.registry.lookup(None).await {
-            let available = self.factory.available_models().await.to_vec();
-            let _ = sender.send(SessionCommand::RefreshConfigOptions { available }).await;
+            let _ = sender.send(SessionCommand::RefreshConfigOptions).await;
         }
     }
 }
@@ -630,7 +597,6 @@ fn respond_err<T: agent_client_protocol::JsonRpcResponse>(responder: Responder<T
 enum WorkspaceRequestError {
     UnknownSession(String),
     Workspace(WorkspaceError),
-    Relocate(SessionStoreError),
 }
 
 fn workspace_request_error(e: WorkspaceRequestError) -> Error {
@@ -639,7 +605,6 @@ fn workspace_request_error(e: WorkspaceRequestError) -> Error {
             Error::invalid_params().data(format!("unknown session: {session_id}"))
         }
         WorkspaceRequestError::Workspace(e) => workspace_error(&e),
-        WorkspaceRequestError::Relocate(e) => internal_error(format!("failed to relocate session: {e}")),
     }
 }
 
@@ -663,13 +628,9 @@ fn build_auth_methods(store: &dyn OAuthCredentialStorage) -> Vec<AuthMethod> {
     let mut seen = HashSet::new();
     LlmModel::all()
         .iter()
-        .filter_map(LlmModel::oauth_provider_id)
-        .filter(|id| seen.insert(*id))
-        .map(|id| {
-            let display = LlmModel::all()
-                .iter()
-                .find(|m| m.oauth_provider_id() == Some(id))
-                .map_or(id, |m| m.provider_display_name());
+        .filter_map(|model| Some((model.oauth_provider_id()?, model.provider_display_name())))
+        .filter(|(id, _)| seen.insert(*id))
+        .map(|(id, display)| {
             let mut method = acp::AuthMethodAgent::new(id, display);
             if store.contains(id) {
                 method = method.description("authenticated");
@@ -686,50 +647,22 @@ fn prompt_capabilities_for_models(models: &[LlmModel]) -> PromptCapabilities {
         .audio(models.iter().any(LlmModel::supports_audio).then(PromptAudioCapabilities::new))
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct PromptModalities {
-    image: bool,
-    audio: bool,
-}
-
-impl PromptModalities {
-    fn from_content(content: &[ContentBlock]) -> Self {
-        Self {
-            image: content.iter().any(ContentBlock::is_image),
-            audio: content.iter().any(|block| matches!(block, ContentBlock::Audio { .. })),
-        }
-    }
-
-    fn is_empty(self) -> bool {
-        !self.image && !self.audio
-    }
-}
-
-fn selected_models(model_value: &str) -> Result<Vec<LlmModel>, Error> {
-    model_value.parse::<ModelSpec>().map(|spec| spec.models().to_vec()).map_err(|_| Error::invalid_params())
-}
-
 pub(crate) fn validate_prompt_support(model_value: &str, content: &[ContentBlock]) -> Result<(), Error> {
-    let modalities = PromptModalities::from_content(content);
-    if modalities.is_empty() {
+    let image = content.iter().any(ContentBlock::is_image);
+    let audio = content.iter().any(|block| matches!(block, ContentBlock::Audio { .. }));
+    if !image && !audio {
         return Ok(());
     }
 
-    let selected = selected_models(model_value)?;
-    if modalities.image && selected.iter().any(|model| !model.supports_image()) {
-        return Err(Error::invalid_params());
-    }
-    if modalities.audio && selected.iter().any(|model| !model.supports_audio()) {
-        return Err(Error::invalid_params());
-    }
-
-    Ok(())
+    let spec = model_value.parse::<ModelSpec>().map_err(|_| Error::invalid_params())?;
+    let supported =
+        spec.models().iter().all(|model| (!image || model.supports_image()) && (!audio || model.supports_audio()));
+    if supported { Ok(()) } else { Err(Error::invalid_params()) }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aether_sessions::SessionStore;
 
     const SONNET: &str = "anthropic:claude-sonnet-4-5";
     const AUDIO_ONLY: &str = "bedrock:mistral.voxtral-small-24b-2507";
@@ -741,66 +674,6 @@ mod tests {
             .find(|model| !model.supports_image() && !model.supports_audio())
             .cloned()
             .expect("catalog contains a text-only model")
-    }
-
-    fn fake_oauth_store() -> Arc<dyn OAuthCredentialStorage> {
-        Arc::new(aether_auth::FakeOAuthCredentialStore::new())
-    }
-
-    fn test_state() -> AcpState {
-        let session_store = Arc::new(SessionStore::from_path(PathBuf::from("/tmp/aether-test-sessions")));
-        let workspace_manager =
-            Arc::new(WorkspaceManager::from_registry_path(PathBuf::from("/tmp/aether-test-workspaces.json")));
-        AcpState::new(AcpStateConfig {
-            session_store,
-            workspace_manager,
-            oauth_credential_store: fake_oauth_store(),
-            initial_selection: InitialSessionSelection::default(),
-            settings_source: SettingsSourceArgs::default(),
-            provider_connections: ProviderConnectionOverrides::default(),
-            telemetry: None,
-            runtime_factory: None,
-            cwd: PathBuf::from("/tmp"),
-            hooks: SessionHooks::default(),
-        })
-    }
-
-    #[tokio::test]
-    async fn initialize_advertises_session_lifecycle_support() {
-        let state = test_state();
-        let response = state
-            .initialize(InitializeRequest::new(ProtocolVersion::V2, Implementation::new("test", "1")))
-            .await
-            .expect("initialize succeeds");
-        let json = serde_json::to_string(&response).expect("response serializes");
-        assert_eq!(response.protocol_version, ProtocolVersion::V2);
-        let session = response.capabilities.session.unwrap();
-        assert!(session.prompt.is_some());
-        let mcp = session.mcp.unwrap();
-        assert!(mcp.stdio.is_some());
-        assert!(mcp.http.is_some());
-        for obsolete in ["loadSession", "resume", "close", "list", "sse"] {
-            assert!(!json.contains(&format!("\"{obsolete}\":")));
-        }
-    }
-
-    #[tokio::test]
-    async fn initialize_advertises_aether_capabilities_once() {
-        let state = test_state();
-        let response = state
-            .initialize(InitializeRequest::new(ProtocolVersion::V2, Implementation::new("test", "1")))
-            .await
-            .expect("initialize succeeds");
-        assert_eq!(
-            AetherCapabilities::from_meta(
-                response.capabilities.session.as_ref().unwrap().prompt.as_ref().unwrap().meta.as_ref()
-            ),
-            AetherCapabilities::default()
-        );
-        let capabilities = AetherCapabilities::from_meta(response.capabilities.session.as_ref().unwrap().meta.as_ref());
-        assert!(capabilities.prompt_search);
-        assert!(capabilities.session_preview);
-        assert!(capabilities.workspace_move);
     }
 
     #[test]

@@ -23,7 +23,7 @@ Hierarchical task management with dependencies. Tasks are stored as JSONL files 
 |------|-------------|
 | `task_create` | Create a task. Optionally set a parent (for subtasks), assignee, and dependency list. |
 | `task_get` | Get a task by ID with all metadata. |
-| `task_list` | List tasks with filters: assignee, status, tree ID, or `ready_only` (no unresolved dependencies). |
+| `task_list` | List tasks in ID order. Optional filters (assignee, status, tree ID, `ready_only` for no unresolved dependencies) all apply together. |
 | `task_update` | Update a task's title, description, status, assignee, dependencies, or research metadata. Returns any tasks that become ready when dependencies complete. |
 
 ## Task IDs

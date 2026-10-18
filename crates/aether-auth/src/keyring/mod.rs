@@ -1,7 +1,7 @@
 //! OS-keychain-backed implementation of the [`OAuthCredentialStorage`] trait.
 
 use async_trait::async_trait;
-use keyring_core::{CredentialStore as KeyringCredentialStore, Entry, Error as KeyringError};
+use keyring_core::{CredentialStore as PlatformCredentialStore, Entry, Error as KeyringError};
 use serde_json::Value;
 use std::sync::{Arc, Mutex, PoisonError};
 use tokio::task;
@@ -13,12 +13,12 @@ const KEYCHAIN_SERVICE: &str = "aether-oauth-v1";
 /// OAuth credential store backed by the OS keychain (Apple Keychain on macOS,
 /// Credential Manager on Windows, Secret Service over D-Bus on Linux/FreeBSD).
 #[derive(Clone)]
-pub struct OsKeyringStore {
+pub struct KeyringCredentialStore {
     inner: Arc<KeyringBackend>,
 }
 
-impl OsKeyringStore {
-    pub fn new(keyring_store: Arc<KeyringCredentialStore>) -> Self {
+impl KeyringCredentialStore {
+    pub fn new(keyring_store: Arc<PlatformCredentialStore>) -> Self {
         Self::from_factory(Arc::new(move || Ok(Arc::clone(&keyring_store))))
     }
 
@@ -27,8 +27,8 @@ impl OsKeyringStore {
         Self::from_factory(Arc::new(create_platform_keyring_store))
     }
 
-    /// Build a store backed by an in-memory mock keyring (for tests that exercise
-    /// the rmcp `CredentialStore` adapter without needing the real OS keychain).
+    /// Build a store backed by an in-memory mock keyring (for tests that need a
+    /// keyring-backed store without the real OS keychain).
     pub fn with_mock_store() -> Result<Self, OAuthError> {
         Ok(Self::new(keyring_core::mock::Store::new().map_err(map_keyring_err)?))
     }
@@ -37,7 +37,7 @@ impl OsKeyringStore {
         Self { inner: Arc::new(KeyringBackend { factory, store: Mutex::new(None) }) }
     }
 
-    fn resolve_store(&self) -> Result<Arc<KeyringCredentialStore>, OAuthError> {
+    fn resolve_store(&self) -> Result<Arc<PlatformCredentialStore>, OAuthError> {
         let mut store = self.inner.store.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(store) = store.as_ref() {
             return Ok(Arc::clone(store));
@@ -48,7 +48,7 @@ impl OsKeyringStore {
         Ok(created)
     }
 
-    fn invalidate_store(&self, failed: &Arc<KeyringCredentialStore>) {
+    fn invalidate_store(&self, failed: &Arc<PlatformCredentialStore>) {
         let mut store = self.inner.store.lock().unwrap_or_else(PoisonError::into_inner);
         if store.as_ref().is_some_and(|current| Arc::ptr_eq(current, failed)) {
             *store = None;
@@ -57,7 +57,7 @@ impl OsKeyringStore {
 }
 
 #[async_trait]
-impl OAuthCredentialStorage for OsKeyringStore {
+impl OAuthCredentialStorage for KeyringCredentialStore {
     async fn load(&self, key: &str) -> Result<Option<Value>, OAuthError> {
         let store = self.clone();
         let key = key.to_string();
@@ -83,12 +83,12 @@ impl OAuthCredentialStorage for OsKeyringStore {
 
 struct KeyringBackend {
     factory: BackendFactory,
-    store: Mutex<Option<Arc<KeyringCredentialStore>>>,
+    store: Mutex<Option<Arc<PlatformCredentialStore>>>,
 }
 
-type BackendFactory = Arc<dyn Fn() -> Result<Arc<KeyringCredentialStore>, OAuthError> + Send + Sync>;
+type BackendFactory = Arc<dyn Fn() -> Result<Arc<PlatformCredentialStore>, OAuthError> + Send + Sync>;
 
-fn try_contains(store: &OsKeyringStore, key: &str) -> Result<bool, OAuthError> {
+fn try_contains(store: &KeyringCredentialStore, key: &str) -> Result<bool, OAuthError> {
     with_keyring_entry(store, key, |entry| match entry.get_credential() {
         Ok(_) => Ok(true),
         Err(KeyringError::NoEntry) => Ok(false),
@@ -96,7 +96,7 @@ fn try_contains(store: &OsKeyringStore, key: &str) -> Result<bool, OAuthError> {
     })
 }
 
-fn load_from_keyring(store: &OsKeyringStore, key: &str) -> Result<Option<Value>, OAuthError> {
+fn load_from_keyring(store: &KeyringCredentialStore, key: &str) -> Result<Option<Value>, OAuthError> {
     let blob = with_keyring_entry(store, key, |entry| match entry.get_secret() {
         Ok(blob) => Ok(Some(blob)),
         Err(KeyringError::NoEntry) => Ok(None),
@@ -108,13 +108,13 @@ fn load_from_keyring(store: &OsKeyringStore, key: &str) -> Result<Option<Value>,
     .transpose()
 }
 
-fn save_to_keyring(store: &OsKeyringStore, key: &str, value: &Value) -> Result<(), OAuthError> {
+fn save_to_keyring(store: &KeyringCredentialStore, key: &str, value: &Value) -> Result<(), OAuthError> {
     let blob = serde_json::to_vec(value)
         .map_err(|e| OAuthError::CredentialStore(format!("failed to serialize credential: {e}")))?;
     with_keyring_entry(store, key, |entry| entry.set_secret(&blob))
 }
 
-fn delete_from_keyring(store: &OsKeyringStore, key: &str) -> Result<(), OAuthError> {
+fn delete_from_keyring(store: &KeyringCredentialStore, key: &str) -> Result<(), OAuthError> {
     with_keyring_entry(store, key, |entry| match entry.delete_credential() {
         Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
         Err(err) => Err(err),
@@ -122,7 +122,7 @@ fn delete_from_keyring(store: &OsKeyringStore, key: &str) -> Result<(), OAuthErr
 }
 
 fn with_keyring_entry<T>(
-    store: &OsKeyringStore,
+    store: &KeyringCredentialStore,
     key: &str,
     operation: impl Fn(&Entry) -> Result<T, KeyringError>,
 ) -> Result<T, OAuthError> {
@@ -146,37 +146,37 @@ fn is_reconnectable(error: &KeyringError) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn create_platform_keyring_store() -> Result<Arc<KeyringCredentialStore>, OAuthError> {
-    let store: Arc<KeyringCredentialStore> =
+fn create_platform_keyring_store() -> Result<Arc<PlatformCredentialStore>, OAuthError> {
+    let store: Arc<PlatformCredentialStore> =
         apple_native_keyring_store::keychain::Store::new().map_err(map_keyring_err)?;
     Ok(store)
 }
 
 #[cfg(target_os = "windows")]
-fn create_platform_keyring_store() -> Result<Arc<KeyringCredentialStore>, OAuthError> {
-    let store: Arc<KeyringCredentialStore> = windows_native_keyring_store::Store::new().map_err(map_keyring_err)?;
+fn create_platform_keyring_store() -> Result<Arc<PlatformCredentialStore>, OAuthError> {
+    let store: Arc<PlatformCredentialStore> = windows_native_keyring_store::Store::new().map_err(map_keyring_err)?;
     Ok(store)
 }
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-fn create_platform_keyring_store() -> Result<Arc<KeyringCredentialStore>, OAuthError> {
-    let store: Arc<KeyringCredentialStore> =
+fn create_platform_keyring_store() -> Result<Arc<PlatformCredentialStore>, OAuthError> {
+    let store: Arc<PlatformCredentialStore> =
         dbus_secret_service_keyring_store::Store::new().map_err(map_keyring_err)?;
     Ok(store)
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "freebsd")))]
-fn create_platform_keyring_store() -> Result<Arc<KeyringCredentialStore>, OAuthError> {
+fn create_platform_keyring_store() -> Result<Arc<PlatformCredentialStore>, OAuthError> {
     Err(OAuthError::CredentialStore("OS keychain is not supported on this platform".to_string()))
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
-fn build_keyring_entry(store: &KeyringCredentialStore, key: &str) -> Result<Entry, KeyringError> {
+fn build_keyring_entry(store: &PlatformCredentialStore, key: &str) -> Result<Entry, KeyringError> {
     store.build(KEYCHAIN_SERVICE, key, None)
 }
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-fn build_keyring_entry(store: &KeyringCredentialStore, key: &str) -> Result<Entry, KeyringError> {
+fn build_keyring_entry(store: &PlatformCredentialStore, key: &str) -> Result<Entry, KeyringError> {
     if store.as_any().is::<keyring_core::mock::Store>() {
         return store.build(KEYCHAIN_SERVICE, key, None);
     }
@@ -201,50 +201,16 @@ async fn spawn_blocking<T: Send + 'static>(
 mod tests {
     use super::*;
     use crate::OAuthCredential;
+    use crate::credential::assert_storage_contract;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn credential() -> OAuthCredential {
-        OAuthCredential {
-            client_id: "client".to_string(),
-            access_token: "access".to_string(),
-            refresh_token: Some("refresh".to_string()),
-            expires_at: Some(1234),
-        }
+        OAuthCredential::new("client", "access").refresh_token("refresh").expires_at(1234)
     }
 
     #[tokio::test]
-    async fn load_returns_none_when_missing() {
-        let store = OsKeyringStore::with_mock_store().unwrap();
-        assert!(store.load_credential("server").await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn save_then_load_round_trips() {
-        let store = OsKeyringStore::with_mock_store().unwrap();
-        store.save_credential("server", credential()).await.unwrap();
-
-        let loaded = store.load_credential("server").await.unwrap().unwrap();
-        assert_eq!(loaded.client_id, "client");
-        assert_eq!(loaded.access_token, "access");
-        assert_eq!(loaded.refresh_token.as_deref(), Some("refresh"));
-        assert_eq!(loaded.expires_at, Some(1234));
-    }
-
-    #[tokio::test]
-    async fn credential_keys_are_isolated() {
-        let store = OsKeyringStore::with_mock_store().unwrap();
-        store.save_credential("key-a", credential()).await.unwrap();
-        assert!(store.load_credential("key-b").await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn delete_removes_credential() {
-        let store = OsKeyringStore::with_mock_store().unwrap();
-        store.save_credential("server", credential()).await.unwrap();
-        assert!(store.contains("server"));
-
-        store.delete("server").await.unwrap();
-        assert!(!store.contains("server"));
+    async fn satisfies_the_storage_contract() {
+        assert_storage_contract(&KeyringCredentialStore::with_mock_store().unwrap()).await;
     }
 
     #[tokio::test]
@@ -254,7 +220,7 @@ mod tests {
         let mock = keyring_core::mock::Store::new().unwrap();
         let entry = mock.build(KEYCHAIN_SERVICE, "server", None).unwrap();
         entry.set_secret(b"not-json").unwrap();
-        let store = OsKeyringStore::new(mock);
+        let store = KeyringCredentialStore::new(mock);
 
         let err = store.load_credential("server").await.unwrap_err();
         assert!(matches!(err, OAuthError::CredentialStore(m) if m.contains("invalid credential")));
@@ -262,7 +228,8 @@ mod tests {
 
     #[tokio::test]
     async fn operations_return_error_when_backend_construction_fails() {
-        let store = OsKeyringStore::from_factory(Arc::new(|| Err(OAuthError::CredentialStore("no dbus".to_string()))));
+        let store =
+            KeyringCredentialStore::from_factory(Arc::new(|| Err(OAuthError::CredentialStore("no dbus".to_string()))));
 
         let load_err = store.load_credential("k").await.unwrap_err();
         assert!(matches!(load_err, OAuthError::CredentialStore(m) if m.contains("no dbus")));
@@ -280,7 +247,7 @@ mod tests {
     async fn backend_construction_failure_is_retried() {
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_clone = Arc::clone(&counter);
-        let store = OsKeyringStore::from_factory(Arc::new(move || {
+        let store = KeyringCredentialStore::from_factory(Arc::new(move || {
             counter_clone.fetch_add(1, Ordering::SeqCst);
             Err(OAuthError::CredentialStore("no dbus".to_string()))
         }));
@@ -353,7 +320,7 @@ mod tests {
         entry.set_secret(&serde_json::to_vec(&credential()).unwrap()).unwrap();
         let attempts = Arc::new(AtomicUsize::new(0));
         let factory_attempts = Arc::clone(&attempts);
-        let store = OsKeyringStore::from_factory(Arc::new(move || {
+        let store = KeyringCredentialStore::from_factory(Arc::new(move || {
             if factory_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
                 Ok(Arc::new(FailingStore))
             } else {

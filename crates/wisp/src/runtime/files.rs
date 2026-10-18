@@ -3,38 +3,31 @@ use crate::command::{CommandResult, FilesystemCommand};
 use crate::file_index::index_files;
 use crate::settings::{list_theme_files, review_theme_choices, save_settings};
 use crate::theme::{Theme, ThemeApplicationError};
-use tokio::task::JoinError;
+use tokio::task::spawn_blocking;
 
 pub(super) async fn execute(command: FilesystemCommand) -> CommandResult {
     match command {
-        FilesystemCommand::IndexFiles { request_id, root } => match run_blocking(move || index_files(&root)).await {
-            Ok(files) => CommandResult::FilesIndexed { request_id, files },
-            Err(error) => {
-                CommandResult::BackgroundFailed(format!("Failed to index files: {error}"))
-            }
-        },
+        FilesystemCommand::IndexFiles { request_id, root } => {
+            let indexed = |files| CommandResult::FilesIndexed { request_id, files };
+            run_or_fail("Failed to index files", move || index_files(&root), indexed).await
+        }
         FilesystemCommand::PrepareSubmission { attachments } => {
-            let outcome =
-                run_blocking(move || build_attachments(&attachments)).await.unwrap_or_else(|error| AttachmentOutcome {
+            let outcome = spawn_blocking(move || build_attachments(&attachments)).await.unwrap_or_else(|error| {
+                AttachmentOutcome {
                     blocks: Vec::new(),
                     warnings: vec![format!("Could not prepare attachments: {error}")],
-                });
+                }
+            });
             CommandResult::SubmissionPrepared(outcome)
         }
-        FilesystemCommand::ListThemes => match run_blocking(list_theme_files).await {
-            Ok(files) => CommandResult::ThemesListed(files),
-            Err(error) => {
-                CommandResult::BackgroundFailed(format!("Failed to list themes: {error}"))
-            }
-        },
-        FilesystemCommand::ListReviewThemes => match run_blocking(review_theme_choices).await {
-            Ok(choices) => CommandResult::ReviewThemesListed(choices),
-            Err(error) => {
-                CommandResult::BackgroundFailed(format!("Failed to load review themes: {error}"))
-            }
-        },
+        FilesystemCommand::ListThemes => {
+            run_or_fail("Failed to list themes", list_theme_files, CommandResult::ThemesListed).await
+        }
+        FilesystemCommand::ListReviewThemes => {
+            run_or_fail("Failed to load review themes", review_theme_choices, CommandResult::ReviewThemesListed).await
+        }
         FilesystemCommand::ApplyTheme { settings } => CommandResult::ThemeApplied(
-            run_blocking(move || {
+            spawn_blocking(move || {
                 let theme = Theme::load_selection(&settings.theme)?;
                 save_settings(&settings).map_err(ThemeApplicationError::Save)?;
                 Ok((settings, theme))
@@ -46,9 +39,13 @@ pub(super) async fn execute(command: FilesystemCommand) -> CommandResult {
     }
 }
 
-async fn run_blocking<T>(work: impl FnOnce() -> T + Send + 'static) -> Result<T, JoinError>
-where
-    T: Send + 'static,
-{
-    tokio::task::spawn_blocking(work).await
+async fn run_or_fail<T: Send + 'static>(
+    label: &str,
+    work: impl FnOnce() -> T + Send + 'static,
+    done: impl FnOnce(T) -> CommandResult,
+) -> CommandResult {
+    match spawn_blocking(work).await {
+        Ok(value) => done(value),
+        Err(error) => CommandResult::BackgroundFailed(format!("{label}: {error}")),
+    }
 }

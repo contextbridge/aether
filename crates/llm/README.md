@@ -28,7 +28,7 @@ Parse a `"provider:model"` string into a provider, build a context, and stream t
 ```rust,no_run
 use llm::parser::ModelProviderParser;
 use llm::types::IsoString;
-use llm::{ChatMessage, ContentBlock, Context, LlmResponse, StreamingModelProvider};
+use llm::{ChatMessage, ContentBlock, Context, LlmResponse, MessageId, StreamingModelProvider};
 use tokio_stream::StreamExt;
 
 #[tokio::main]
@@ -61,7 +61,7 @@ async fn main() -> llm::Result<()> {
 
 ```rust,no_run
 use llm::types::IsoString;
-use llm::{ChatMessage, ContentBlock, Context};
+use llm::{ChatMessage, ContentBlock, Context, MessageId};
 
 let context = Context::new(
     vec![
@@ -86,7 +86,7 @@ Define tools with JSON Schema, then feed results back after execution:
 ```rust,no_run
 use llm::types::IsoString;
 use llm::{
-    AssistantReasoning, ChatMessage, ContentBlock, Context, ToolCallResult, ToolDefinition,
+    AssistantReasoning, ChatMessage, ContentBlock, Context, MessageId, ToolCallResult, ToolDefinition,
 };
 
 let tools = vec![ToolDefinition::new(
@@ -150,11 +150,11 @@ let (provider, _) = parser.parse("llamacpp").await.unwrap();
 When you need fine-grained control, construct the provider directly and configure request settings on the context:
 
 ```rust,no_run
-# async fn example() {
-use llm::providers::anthropic::AnthropicProvider;
-use llm::{Context, ModelSettings, ProviderFactory};
+# fn example() {
+use llm::providers::generic::{ANTHROPIC, GenericProvider};
+use llm::{Context, ModelSettings};
 
-let provider = AnthropicProvider::from_env().await
+let provider = GenericProvider::from_env(&ANTHROPIC)
     .unwrap()
     .with_model("claude-sonnet-4-5-20250929");
 

@@ -51,11 +51,7 @@ pub fn task_result_meta(store: &TaskStore, title: &str) -> ToolResultMeta {
 
 /// Collect all active tasks into a [`PlanMeta`] snapshot.
 fn build_plan_meta(store: &TaskStore) -> PlanMeta {
-    let entries = store
-        .list_trees()
-        .iter()
-        .flat_map(|root_id| store.get_tree(root_id).unwrap_or_default())
-        .map(|task| PlanMetaEntry { content: task.title.clone(), status: task.status.into() })
-        .collect();
+    let entries =
+        store.tasks().map(|task| PlanMetaEntry { content: task.title.clone(), status: task.status.into() }).collect();
     PlanMeta { entries }
 }

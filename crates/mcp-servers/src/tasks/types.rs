@@ -1,13 +1,13 @@
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::fmt;
-use std::hash::Hash;
 
 /// Task identifier with hierarchical support.
 /// - Root tasks: `at-{hash8}` (e.g., `at-a1b2c3d4`)
 /// - Subtasks: `at-{hash8}.{n}` (e.g., `at-a1b2c3d4.1`, `at-a1b2c3d4.2`)
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
 pub struct TaskId(String);
 
@@ -46,6 +46,27 @@ impl TaskId {
     pub fn filename(&self) -> String {
         format!("{}.jsonl", self.root().0)
     }
+
+    /// The trailing subtask index, or `None` for a root task
+    pub fn index(&self) -> Option<usize> {
+        self.0.rsplit_once('.').and_then(|(_, index)| index.parse().ok())
+    }
+
+    fn segments(&self) -> impl Iterator<Item = Segment<'_>> {
+        self.0.split('.').map(|segment| segment.parse().map_or(Segment::Name(segment), |n| Segment::Index(n, segment)))
+    }
+}
+
+impl Ord for TaskId {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.segments().cmp(other.segments())
+    }
+}
+
+impl PartialOrd for TaskId {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl fmt::Display for TaskId {
@@ -66,8 +87,7 @@ impl From<&str> for TaskId {
     }
 }
 
-/// Task status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum TaskStatus {
     Pending,
@@ -187,30 +207,7 @@ impl Task {
 
     /// Create a new subtask
     pub fn new_subtask(id: TaskId, parent: TaskId, title: String) -> Self {
-        let now = Utc::now();
-        Self {
-            id,
-            title,
-            description: None,
-            status: TaskStatus::Pending,
-            assignee: None,
-            parent: Some(parent),
-            deps: Vec::new(),
-            summary: None,
-            decisions: Vec::new(),
-            facts: Vec::new(),
-            next_steps: Vec::new(),
-            blockers: Vec::new(),
-            files_read: Vec::new(),
-            resources: Vec::new(),
-            created_at: now,
-            updated_at: now,
-        }
-    }
-
-    /// Check if the task can be started (all dependencies completed)
-    pub fn is_ready(&self, completed_tasks: &[&TaskId]) -> bool {
-        self.status == TaskStatus::Pending && self.deps.iter().all(|dep| completed_tasks.contains(&dep))
+        Self { parent: Some(parent), ..Self::new_root(id, title) }
     }
 
     /// Update the task's `updated_at` timestamp
@@ -229,6 +226,7 @@ pub struct TaskUpdate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 
+    /// Status: pending, `in_progress`, completed, or blocked
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<TaskStatus>,
 
@@ -303,6 +301,12 @@ impl TaskUpdate {
     }
 }
 
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum Segment<'a> {
+    Index(u64, &'a str),
+    Name(&'a str),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -338,22 +342,13 @@ mod tests {
     }
 
     #[test]
-    fn test_task_is_ready() {
-        let id1 = TaskId::new_root("task1");
-        let id2 = TaskId::new_root("task2");
-        let id3 = TaskId::new_root("task3");
+    fn task_ids_order_roots_then_subtasks_by_numeric_index() {
+        let mut ids: Vec<TaskId> =
+            ["at-b.1", "at-a.10", "at-a", "at-a.2.1", "at-a.2", "at-a.x"].into_iter().map(TaskId::from).collect();
+        ids.sort();
 
-        let mut task = Task::new_root(id3.clone(), "Test Task".to_string());
-        task.deps = vec![id1.clone(), id2.clone()];
-
-        assert!(!task.is_ready(&[]));
-
-        assert!(!task.is_ready(&[&id1]));
-
-        assert!(task.is_ready(&[&id1, &id2]));
-
-        task.status = TaskStatus::InProgress;
-        assert!(!task.is_ready(&[&id1, &id2]));
+        let ids: Vec<&str> = ids.iter().map(TaskId::as_str).collect();
+        assert_eq!(ids, ["at-a", "at-a.2", "at-a.2.1", "at-a.10", "at-a.x", "at-b.1"]);
     }
 
     #[test]

@@ -261,7 +261,7 @@ async fn runtime_exports_genai_spans_and_metrics_to_an_otlp_collector() {
 
     assert_eq!(string_attribute(turn, "gen_ai.agent.name"), Some("PatchWaveFix"));
     assert_eq!(chat.parent_span_id, turn.span_id);
-    assert_eq!(string_attribute(chat, GEN_AI_SYSTEM_INSTRUCTIONS), Some(SYSTEM_INSTRUCTIONS_JSON));
+    assert_eq!(json_attribute(chat, GEN_AI_SYSTEM_INSTRUCTIONS), serde_json::from_str(SYSTEM_INSTRUCTIONS_JSON).ok());
     assert_eq!(string_attribute(chat, AETHER_SYSTEM_INSTRUCTIONS_SHA256), Some(SYSTEM_PROMPT_SHA256));
     assert_eq!(exports.trace_headers, vec!["collector-test"]);
     assert_eq!(exports.metric_headers, vec!["collector-test"]);
@@ -289,6 +289,10 @@ fn capturing_collector_config(collector: &FakeOtlpCollector) -> TelemetryConfig 
 
 fn test_headers(value: &str) -> HashMap<String, String> {
     HashMap::from([("x-telemetry-test".to_string(), value.to_string())])
+}
+
+fn json_attribute(span: &Span, key: &str) -> Option<serde_json::Value> {
+    string_attribute(span, key).map(|value| serde_json::from_str(value).expect("attribute holds JSON"))
 }
 
 fn string_attribute<'a>(span: &'a Span, key: &str) -> Option<&'a str> {

@@ -1,27 +1,34 @@
 use crate::TestResult;
-use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v2::{Implementation, InitializeRequest};
+use crate::acp_process::{AcpProcess, AcpProcessBuilder, initialize_params};
+use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Error as IoError, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
-use std::process::{Command, Stdio};
+use std::path::Path;
+use std::process::Stdio;
+
+const SETTINGS: &str = r#"{"credentialsStore":{"type":"memory"},"agents":[]}"#;
 
 #[test]
 fn socket_backed_stdio_serves_acp() -> TestResult {
     let log_dir = tempfile::tempdir()?;
     let (mut child_stdout_reader, child_stdout) = UnixStream::pair()?;
     let (mut child_stdin_writer, child_stdin) = UnixStream::pair()?;
-    let mut child = acp_command(log_dir.path())
+    let mut child = acp_builder(log_dir.path())
+        .into_command()
         .stdin(Stdio::from(OwnedFd::from(child_stdin)))
         .stdout(Stdio::from(OwnedFd::from(child_stdout)))
         .spawn()?;
 
-    child_stdin_writer.write_all(initialize_line()?.as_bytes())?;
+    child_stdin_writer.write_all(
+        format!("{}\n", json!({ "jsonrpc": "2.0", "method": "initialize", "params": initialize_params()?, "id": 1 }))
+            .as_bytes(),
+    )?;
     child_stdin_writer.flush()?;
 
     let mut response = String::new();
     BufReader::new(&mut child_stdout_reader).read_line(&mut response)?;
-    assert_initialize_response(&response)?;
+    assert_initialize_response(&serde_json::from_str(&response)?);
     let _ = child.kill();
     let _ = child.wait();
     Ok(())
@@ -30,7 +37,10 @@ fn socket_backed_stdio_serves_acp() -> TestResult {
 #[test]
 fn pipe_backed_stdio_serves_acp() -> TestResult {
     let log_dir = tempfile::tempdir()?;
-    assert_serves_initialize(acp_command(log_dir.path()))
+    let mut agent = acp_builder(log_dir.path()).spawn()?;
+
+    assert_initialize_response(&json!({ "id": 1, "result": agent.initialize()? }));
+    Ok(())
 }
 
 #[test]
@@ -40,99 +50,42 @@ fn options_json_with_trace_context_serves_acp() -> TestResult {
         r#"{{"logDir":{},"settings":{{"credentialsStore":{{"type":"memory"}},"agents":[]}},"traceContext":{{"traceparent":"00-00112233445566778899aabbccddeeff-0123456789abcdef-01","tracestate":"vendor=value"}}}}"#,
         serde_json::to_string(log_dir.path())?
     );
-    let mut command = Command::new(env!("CARGO_BIN_EXE_aether"));
-    command.arg("acp").arg("--options-json").arg(options).stderr(Stdio::null());
-    assert_serves_initialize(command)
+    let mut agent = AcpProcess::builder().arg("--options-json").arg(options).spawn()?;
+
+    assert_initialize_response(&json!({ "id": 1, "result": agent.initialize()? }));
+    Ok(())
 }
 
 #[test]
 fn pipe_backed_stdio_rejects_removed_v1_methods() -> TestResult {
     let log_dir = tempfile::tempdir()?;
-    let mut child = acp_command(log_dir.path()).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
-    let mut stdin = child.stdin.take().ok_or_else(|| IoError::other("child stdin"))?;
-    let stdout = child.stdout.take().ok_or_else(|| IoError::other("child stdout"))?;
-    let mut reader = BufReader::new(stdout);
+    let mut agent = acp_builder(log_dir.path()).spawn()?;
+    agent.initialize()?;
 
-    stdin.write_all(initialize_line()?.as_bytes())?;
-    stdin.flush()?;
+    agent.send(&json!([
+        {"jsonrpc": "2.0", "method": "session/load", "params": {}, "id": 2},
+        {"jsonrpc": "2.0", "method": "authenticate", "params": {}, "id": 3}
+    ]))?;
 
-    let mut response = String::new();
-    reader.read_line(&mut response)?;
-    assert_initialize_response(&response)?;
-
-    stdin.write_all(non_underscore_batch_line()?.as_bytes())?;
-    stdin.flush()?;
-
-    response.clear();
-    reader.read_line(&mut response)?;
-    let responses: serde_json::Value = serde_json::from_str(&response)?;
-    let responses = responses.as_array().ok_or_else(|| IoError::other("expected a grouped response array"))?;
+    let response = agent.read_message()?;
+    let responses = response.as_array().ok_or_else(|| IoError::other("expected a grouped response array"))?;
     assert_eq!(responses.len(), 2, "expected one response per batch entry: {response}");
     for (index, id) in [2u64, 3].into_iter().enumerate() {
-        assert_eq!(responses[index]["id"], serde_json::json!(id), "response order should match the batch: {response}");
+        assert_eq!(responses[index]["id"], json!(id), "response order should match the batch: {response}");
         let message = responses[index]["error"]["message"].as_str().unwrap_or_default();
         assert!(message.contains("Method not found"), "expected Method not found: {response}");
     }
-
-    let _ = child.kill();
-    let _ = child.wait();
     Ok(())
 }
 
-fn assert_serves_initialize(mut command: Command) -> TestResult {
-    let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
-    let mut stdin = child.stdin.take().ok_or_else(|| IoError::other("child stdin"))?;
-    let stdout = child.stdout.take().ok_or_else(|| IoError::other("child stdout"))?;
-
-    stdin.write_all(initialize_line()?.as_bytes())?;
-    stdin.flush()?;
-
-    let mut response = String::new();
-    BufReader::new(stdout).read_line(&mut response)?;
-    assert_initialize_response(&response)?;
-
-    let _ = child.kill();
-    let _ = child.wait();
-    Ok(())
+fn acp_builder(log_dir: &Path) -> AcpProcessBuilder {
+    AcpProcess::builder().log_dir(log_dir).settings_json(SETTINGS)
 }
 
-fn acp_command(log_dir: &std::path::Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_aether"));
-    command
-        .arg("acp")
-        .arg("--log-dir")
-        .arg(log_dir)
-        .arg("--settings-json")
-        .arg(r#"{"credentialsStore":{"type":"memory"},"agents":[]}"#)
-        .stderr(Stdio::null());
-    command
-}
-
-fn initialize_line() -> TestResult<String> {
-    let params = serde_json::to_value(InitializeRequest::new(ProtocolVersion::V2, Implementation::new("test", "1")))?;
-    let line = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "initialize",
-        "params": params,
-        "id": 1
-    });
-    Ok(format!("{}\n", serde_json::to_string(&line)?))
-}
-
-fn non_underscore_batch_line() -> TestResult<String> {
-    let batch = serde_json::json!([
-        {"jsonrpc": "2.0", "method": "session/load", "params": {}, "id": 2},
-        {"jsonrpc": "2.0", "method": "authenticate", "params": {}, "id": 3}
-    ]);
-    Ok(format!("{}\n", serde_json::to_string(&batch)?))
-}
-
-fn assert_initialize_response(line: &str) -> TestResult {
-    let response: serde_json::Value = serde_json::from_str(line)?;
-    assert_eq!(response["id"], serde_json::json!(1), "response should echo the request id: {response}");
+fn assert_initialize_response(response: &Value) {
+    assert_eq!(response["id"], json!(1), "response should echo the request id: {response}");
     assert_eq!(response["result"]["protocolVersion"], 2);
     assert_eq!(response["result"]["info"]["name"], "Aether");
     assert!(response["result"]["capabilities"]["session"].is_object());
     assert!(response["result"]["capabilities"].get("loadSession").is_none());
-    Ok(())
 }

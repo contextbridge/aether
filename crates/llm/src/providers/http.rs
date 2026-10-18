@@ -1,14 +1,14 @@
 use crate::providers::response_stream::OpenedStream;
 use crate::{LlmError, ProviderError, Result};
-use async_openai::{Client, config::Config, error::OpenAIError, middleware::HttpRequestFactory};
 use eventsource_stream::Eventsource;
 use futures::{Stream, StreamExt};
-use reqwest::{Request, RequestBuilder, Response, header::HeaderMap};
+use reqwest::header::{ACCEPT, HeaderMap};
+use reqwest::{Client, RequestBuilder, Response};
+use serde::Serialize;
 use serde_json::{Value, from_str};
-use std::future::ready;
+use std::future::{Future, ready};
 use std::pin::Pin;
 use std::time::Duration;
-use tower::{Service, ServiceExt, service_fn};
 
 pub(crate) type SseData = Pin<Box<dyn Stream<Item = Result<String>> + Send>>;
 
@@ -16,43 +16,37 @@ pub(crate) fn http_client() -> reqwest::Client {
     reqwest::Client::builder().connect_timeout(Duration::from_secs(30)).build().expect("HTTP client should build")
 }
 
-pub(crate) async fn open_sse(
-    request: RequestBuilder,
+pub(crate) fn post_sse<T: Serialize>(
+    client: &Client,
+    url: &str,
+    headers: HeaderMap,
+    body: &T,
     code: fn(&str) -> Option<String>,
-) -> Result<OpenedStream<SseData>> {
+) -> impl Future<Output = Result<OpenedStream<SseData>>> + Send + use<T> {
+    open_sse(client.post(url).headers(headers).header(ACCEPT, "text/event-stream").json(body), code)
+}
+
+async fn open_sse(request: RequestBuilder, code: fn(&str) -> Option<String>) -> Result<OpenedStream<SseData>> {
     let response = request.send().await?;
     if !response.status().is_success() {
         return Err(rejected(response, code).await.into());
     }
 
     let http = HttpResponseMetadata::from(&response);
-    let data = response.bytes_stream().eventsource().filter_map(|event| {
-        ready(match event {
-            Ok(event) if event.data == "[DONE]" => None,
-            Ok(event) => Some(Ok(event.data)),
-            Err(error) => Some(Err(ProviderError::stream_interrupted(error.to_string()).into())),
-        })
-    });
-    Ok(OpenedStream::with_http(Box::pin(data), http))
-}
-
-/// Preserve HTTP diagnostics before async-openai deserializes rejected responses.
-pub(crate) fn openai_client<T, U>(config: T, service: U) -> Client<T>
-where
-    T: Config,
-    U: Service<Request, Response = Response, Error = reqwest::Error> + Clone + Send + Sync + 'static,
-    U::Future: Send + 'static,
-{
-    Client::with_config(config).with_http_service(service_fn(move |factory: HttpRequestFactory| {
-        let service = service.clone();
-        async move {
-            let response = service.oneshot(factory.build().await?).await.map_err(OpenAIError::Reqwest)?;
-            if response.status().is_success() {
-                return Ok(response);
-            }
-            Err(OpenAIError::Boxed(Box::new(rejected(response, responses_code).await)))
-        }
-    }))
+    let data: SseData = Box::pin(
+        response
+            .bytes_stream()
+            .eventsource()
+            .take_while(|event| ready(!matches!(event, Ok(event) if event.data == "[DONE]")))
+            .filter_map(|event| {
+                ready(match event {
+                    Ok(event) if event.event == "keepalive" => None,
+                    Ok(event) => Some(Ok(event.data)),
+                    Err(error) => Some(Err(ProviderError::stream_interrupted(error.to_string()).into())),
+                })
+            }),
+    );
+    Ok(OpenedStream::new(data).with_http(http))
 }
 
 #[derive(Debug, Clone)]

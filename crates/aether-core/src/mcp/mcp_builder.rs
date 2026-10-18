@@ -2,7 +2,8 @@ use mcp_utils::client::{ClientOptions, ElicitationSink, Transport};
 use mcp_utils::gateway::{McpGateway, ServerSpec};
 use mcp_utils::model::Implementation;
 use mcp_utils::server::{McpServer, ServeError, UnixSocket};
-use utils::{SettingsStore, variables::Vars};
+use utils::path::aether_home;
+use utils::variables::Vars;
 
 use super::config::ServerSource;
 use super::{McpCatalog, McpConfig, McpServerConfig, ParseError, ToolExposure, ToolFilter};
@@ -49,8 +50,8 @@ impl McpBuilder {
     pub fn new(root_dir: impl AsRef<Path>) -> Self {
         let mut vars = Vars::new().with("WORKSPACE", root_dir.as_ref().to_string_lossy().into_owned());
 
-        if let Some(store) = SettingsStore::new("AETHER_HOME", ".aether") {
-            vars.insert("AETHER_HOME", store.home().to_string_lossy().into_owned());
+        if let Some(home) = aether_home() {
+            vars.insert("AETHER_HOME", home.to_string_lossy().into_owned());
         }
 
         Self {
@@ -182,7 +183,7 @@ impl ConfiguredServer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aether_auth::{FakeOAuthCredentialStore, OAuthCredentialStorage};
+    use aether_auth::{MemoryCredentialStore, OAuthCredentialStorage};
     use mcp_utils::testing::FakeMcpServer;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -198,7 +199,7 @@ mod tests {
         let received = Arc::new(Mutex::new(None::<RuntimeServices>));
         let factory_calls = Arc::clone(&calls);
         let factory_received = Arc::clone(&received);
-        let oauth_store: Arc<dyn OAuthCredentialStorage> = Arc::new(FakeOAuthCredentialStore::new());
+        let oauth_store: Arc<dyn OAuthCredentialStorage> = Arc::new(MemoryCredentialStore::new());
         let deps = AgentDeps::new(Arc::clone(&oauth_store), None);
 
         let builder = McpBuilder::new("/workspace")
@@ -337,7 +338,7 @@ mod tests {
 
     #[tokio::test]
     async fn config_args_expand_the_aether_home_var() {
-        let home = SettingsStore::new("AETHER_HOME", ".aether").expect("Aether home resolves").home().to_path_buf();
+        let home = aether_home().expect("Aether home resolves");
 
         let args = spawned_args(
             "/work",

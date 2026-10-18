@@ -13,9 +13,10 @@ use ratatui::{
 use crate::command::GitReviewCommand;
 use crate::git_review::{ClientState, DiffReviewEvent, DiffSnapshot, ReviewCapabilities};
 use crate::renderer::DrawContext;
-use crate::screens::reviewer::{crossterm_event, theme_selection};
+use crate::screens::reviewer::{crossterm_event, theme_change};
 use crate::settings::builtin_review_theme_choices;
-use crate::surfaces::input::{GitReviewOutput, ReviewOutcome, UiEvent};
+use crate::surfaces::input::UiOutput;
+use crate::view::input::UiEvent;
 use crate::view::generation::Generation;
 
 pub struct GitDiffScreen {
@@ -44,7 +45,7 @@ impl GitDiffScreen {
         self.state.interaction_phase() == InteractionPhase::Browse
     }
 
-    pub fn on_ui_event(&mut self, event: UiEvent) -> Vec<GitReviewOutput> {
+    pub fn on_ui_event(&mut self, event: &UiEvent) -> Vec<UiOutput> {
         self.handle_event(crossterm_event(event))
     }
 
@@ -70,25 +71,23 @@ impl GitDiffScreen {
         self.state.cursor_position()
     }
 
-    fn handle_event(&mut self, event: Event) -> Vec<GitReviewOutput> {
+    fn handle_event(&mut self, event: Event) -> Vec<UiOutput> {
         let outcome = clankerdiff_ratatui::handle_crossterm_event(&mut self.state, event);
         match outcome {
             InputOutcome::Ignored
             | InputOutcome::Consumed
             | InputOutcome::Emitted(DiffReviewEvent::CopyFormattedReview(_)) => Vec::new(),
-            InputOutcome::ThemeSelected(id) => vec![GitReviewOutput::SetTheme(theme_selection(id))],
-            InputOutcome::Emitted(DiffReviewEvent::Cancel) => {
-                vec![GitReviewOutput::Outcome(ReviewOutcome::Cancelled)]
-            }
+            InputOutcome::ThemeSelected(id) => vec![theme_change(id)],
+            InputOutcome::Emitted(DiffReviewEvent::Cancel) => vec![UiOutput::Close],
             InputOutcome::Emitted(DiffReviewEvent::SubmitReview(submission)) => {
-                vec![GitReviewOutput::Outcome(ReviewOutcome::Submitted(submission.formatted))]
+                vec![UiOutput::SubmitReview(submission.formatted)]
             }
             InputOutcome::Emitted(event) => {
                 if let DiffReviewEvent::SetScope(scope) = &event {
                     self.state.set_scope(*scope);
                 }
                 self.state.set_repository_pending();
-                vec![GitReviewOutput::Command(GitReviewCommand::Event(event))]
+                vec![UiOutput::GitReview(GitReviewCommand::Event(event))]
             }
         }
     }

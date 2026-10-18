@@ -183,10 +183,9 @@ export const runAcpCode = `$ aether acp`;
 export const rustLibraryCode = [
   "use aether_core::core::{Prompt, agent};",
   "use aether_core::events::{AgentEvent, Command, MessageEvent, TurnEvent};",
-  "use llm::{ProviderFactory, providers::anthropic::AnthropicProvider};",
+  "use llm::providers::generic::{ANTHROPIC, GenericProvider};",
   "",
-  "let provider = AnthropicProvider::from_env()",
-  "    .await?",
+  "let provider = GenericProvider::from_env(&ANTHROPIC)?",
   '    .with_model("claude-sonnet-4-5");',
   "",
   "let (user_tx, mut agent_rx, handle) = agent(provider)",

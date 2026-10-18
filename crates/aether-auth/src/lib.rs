@@ -4,27 +4,18 @@ mod browser;
 mod credential;
 pub mod encrypted_file;
 pub mod error;
-mod fake;
-mod handler;
+mod memory;
 
-pub use browser::{BrowserOAuthHandler, accept_oauth_callback};
+pub use browser::{accept_oauth_callback, authorize_in_browser, bind_loopback};
 pub use credential::{OAuthCredential, OAuthCredentialStorage, oauth_http_client};
-pub use encrypted_file::EncryptedFileOAuthCredentialStorage;
+pub use encrypted_file::EncryptedFileCredentialStore;
 pub use error::OAuthError;
-pub use fake::FakeOAuthCredentialStore;
-pub use handler::OAuthHandler;
+pub use memory::MemoryCredentialStore;
 
 #[cfg(feature = "keyring")]
 pub mod keyring;
 #[cfg(feature = "keyring")]
-pub use keyring::OsKeyringStore;
-
-#[cfg(feature = "mcp")]
-pub mod mcp;
-#[cfg(feature = "mcp")]
-pub use mcp::{
-    McpCredentialStore, OAuthClientRegistration, OAuthFlowOptions, create_auth_manager_from_store, perform_oauth_flow,
-};
+pub use keyring::KeyringCredentialStore;
 
 #[cfg(feature = "sigv4")]
 mod sigv4;

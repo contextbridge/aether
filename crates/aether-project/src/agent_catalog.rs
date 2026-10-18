@@ -250,7 +250,9 @@ fn parse_model(agent: &str, model: &str) -> Result<ModelSpec, SettingsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{DEFAULT_MODEL, agent_json_with, fake_spec, mcp_json, project, settings_agent};
+    use crate::testing::{
+        DEFAULT_MODEL, agent_config, agent_json_with, fake_spec, has_prompt_file, mcp_json, project, settings_agent,
+    };
     use aether_core::agent_spec::AgentSpecExposure;
     use llm::ModelSettings;
     use serde_json::json;
@@ -262,13 +264,6 @@ mod tests {
 
     fn mcp_servers(spec: &AgentSpec) -> Vec<&str> {
         spec.mcp.servers.keys().map(String::as_str).collect()
-    }
-
-    fn has_prompt_file(spec: &AgentSpec, expected: &str) -> bool {
-        spec.prompts.iter().any(|prompt| match prompt {
-            Prompt::File { path, .. } => path.ends_with(expected),
-            Prompt::Text(_) | Prompt::McpInstructions(_) => false,
-        })
     }
 
     fn overrides(url: &str) -> ProviderConnectionOverrides {
@@ -323,12 +318,9 @@ mod tests {
 
     #[test]
     fn settings_provider_connections_apply_to_explicit_model_specs() {
-        let dir = project().file("BASE.md", "Base instructions");
+        let dir = project().file("PROMPT.md", "Be helpful");
         let settings = AetherSettings {
-            agents: vec![AgentConfig {
-                prompts: vec![crate::PromptSource::file("BASE.md")],
-                ..settings_agent("planner", "Planner agent")
-            }],
+            agents: vec![agent_config("planner")],
             providers: overrides("https://settings.test"),
             ..AetherSettings::default()
         };
@@ -446,13 +438,12 @@ mod tests {
 
     #[test]
     fn agent_rejects_reasoning_effort_unsupported_by_model() {
-        let dir = project().file("BASE.md", "Base instructions");
+        let dir = project().file("PROMPT.md", "Be helpful");
         let config = AetherSettings {
             agents: vec![AgentConfig {
                 model: "anthropic:claude-opus-4-6".to_string(),
                 reasoning_effort: Some(llm::ReasoningEffort::Xhigh),
-                prompts: vec![crate::PromptSource::file("BASE.md")],
-                ..settings_agent("planner", "Planner agent")
+                ..agent_config("planner")
             }],
             ..AetherSettings::default()
         };
@@ -464,14 +455,10 @@ mod tests {
 
     #[test]
     fn agent_context_window_is_resolved_into_spec() {
-        let dir = project().file("BASE.md", "Base instructions");
+        let dir = project().file("PROMPT.md", "Be helpful");
 
         let config = AetherSettings {
-            agents: vec![AgentConfig {
-                context_window: Some(200_000),
-                prompts: vec![crate::PromptSource::file("BASE.md")],
-                ..settings_agent("planner", "Planner agent")
-            }],
+            agents: vec![AgentConfig { context_window: Some(200_000), ..agent_config("planner") }],
             ..AetherSettings::default()
         };
 

@@ -3,6 +3,7 @@
 // `Uri` only uses interior mutability to cache parsed components; its identity is stable.
 #![allow(clippy::mutable_key_type)]
 
+use crate::Displayed;
 use crate::lsp::common::truncate_results;
 use crate::lsp::diagnostics::{DiagnosticCounts, FormattedDiagnostic, Severity, count_by_severity};
 use crate::lsp::error::LspError;
@@ -13,7 +14,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
+use utils::display_meta::{ToolDisplayMeta, basename};
 
 /// Input payload for the `lsp_check_errors` tool.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -40,10 +41,6 @@ pub struct LspDiagnosticsOutput {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub truncated: Option<bool>,
-
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub meta: Option<ToolResultMeta>,
 }
 
 pub const MAX_LISTED_DIAGNOSTICS: usize = 200;
@@ -90,7 +87,6 @@ impl LspDiagnosticsOutput {
             diagnostics: by_file,
             summary,
             truncated: truncation.truncated,
-            meta: None,
         }
     }
 }
@@ -99,14 +95,14 @@ impl LspDiagnosticsOutput {
 pub async fn execute_lsp_diagnostics(
     mut request: LspDiagnosticsRequest,
     registry: &LspRegistry,
-) -> Result<LspDiagnosticsOutput, LspError> {
+) -> Result<Displayed<LspDiagnosticsOutput>, LspError> {
     request.file_path = request.file_path.map(|path| registry.resolve_file(&path)).transpose()?;
     if let Some(file_path) = request.file_path.as_deref().filter(|path| !Path::new(path).is_file()) {
         return Err(LspError::InvalidPath(format!("filePath must point to an existing file, got: {file_path}")));
     }
 
     let diagnostics_cache = registry.collect_diagnostics(request.file_path.as_deref()).await?;
-    let mut output = LspDiagnosticsOutput::new(&request, registry.root_path(), &diagnostics_cache);
+    let output = LspDiagnosticsOutput::new(&request, registry.root_path(), &diagnostics_cache);
 
     let detail = if output.summary.errors == 0 && output.summary.warnings == 0 {
         "no issues".to_string()
@@ -117,37 +113,15 @@ pub async fn execute_lsp_diagnostics(
         Some(fp) => format!("{}, {detail}", basename(fp)),
         None => detail,
     };
-    #[allow(clippy::used_underscore_binding)]
-    {
-        output.meta = Some(ToolDisplayMeta::new("LSP errors", value).into());
-    }
-
-    Ok(output)
+    Ok(Displayed::new(output, ToolDisplayMeta::new("LSP errors", value)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lsp_types::{DiagnosticSeverity, Position, Range};
+    use crate::lsp::test_fixtures::{diagnostic, uri};
+    use lsp_types::DiagnosticSeverity;
     use tempfile::TempDir;
-
-    fn uri(path: &str) -> lsp_types::Uri {
-        format!("file://{path}").parse().unwrap()
-    }
-
-    fn diag(severity: DiagnosticSeverity, message: &str, line: u32) -> Diagnostic {
-        Diagnostic {
-            range: Range { start: Position { line, character: 0 }, end: Position { line, character: 10 } },
-            severity: Some(severity),
-            code: Some(lsp_types::NumberOrString::String("E0308".to_string())),
-            code_description: None,
-            source: Some("rustc".to_string()),
-            message: message.to_string(),
-            related_information: None,
-            tags: None,
-            data: None,
-        }
-    }
 
     fn workspace_request() -> LspDiagnosticsRequest {
         LspDiagnosticsRequest { file_path: None }
@@ -176,11 +150,11 @@ mod tests {
         cache.insert(
             uri("/project/src/main.rs"),
             vec![
-                diag(DiagnosticSeverity::ERROR, "type mismatch", 10),
-                diag(DiagnosticSeverity::WARNING, "unused variable", 20),
+                diagnostic(DiagnosticSeverity::ERROR, "type mismatch", 10),
+                diagnostic(DiagnosticSeverity::WARNING, "unused variable", 20),
             ],
         );
-        cache.insert(uri("/project/src/lib.rs"), vec![diag(DiagnosticSeverity::ERROR, "missing field", 5)]);
+        cache.insert(uri("/project/src/lib.rs"), vec![diagnostic(DiagnosticSeverity::ERROR, "missing field", 5)]);
 
         let result = workspace_output(&cache);
 
@@ -199,7 +173,7 @@ mod tests {
     #[test]
     fn test_get_diagnostics_for_file() {
         let mut cache = HashMap::new();
-        cache.insert(uri("/project/src/main.rs"), vec![diag(DiagnosticSeverity::ERROR, "type mismatch", 10)]);
+        cache.insert(uri("/project/src/main.rs"), vec![diagnostic(DiagnosticSeverity::ERROR, "type mismatch", 10)]);
 
         let input = file_request("/project/src/main.rs");
         let result = LspDiagnosticsOutput::new(&input, Path::new("/project"), &cache);
@@ -212,7 +186,7 @@ mod tests {
     fn multiline_messages_are_listed_on_one_line() {
         let cache = HashMap::from([(
             uri("/project/src/main.rs"),
-            vec![diag(DiagnosticSeverity::ERROR, "mismatched types\nexpected `u32`, found `&str`", 1)],
+            vec![diagnostic(DiagnosticSeverity::ERROR, "mismatched types\nexpected `u32`, found `&str`", 1)],
         )]);
 
         let result = workspace_output(&cache);
@@ -233,8 +207,8 @@ mod tests {
     #[test]
     fn test_diagnostics_sorted() {
         let mut cache = HashMap::new();
-        cache.insert(uri("/project/src/b.rs"), vec![diag(DiagnosticSeverity::ERROR, "error in b", 5)]);
-        cache.insert(uri("/project/src/a.rs"), vec![diag(DiagnosticSeverity::ERROR, "error in a", 10)]);
+        cache.insert(uri("/project/src/b.rs"), vec![diagnostic(DiagnosticSeverity::ERROR, "error in b", 5)]);
+        cache.insert(uri("/project/src/a.rs"), vec![diagnostic(DiagnosticSeverity::ERROR, "error in a", 10)]);
 
         let result = workspace_output(&cache);
         let files: Vec<&str> = result.diagnostics.keys().map(String::as_str).collect();
@@ -309,11 +283,11 @@ mod tests {
         cache.insert(
             uri("/project/src/main.rs"),
             vec![
-                diag(DiagnosticSeverity::ERROR, "error1", 1),
-                diag(DiagnosticSeverity::ERROR, "error2", 2),
-                diag(DiagnosticSeverity::WARNING, "warn1", 3),
-                diag(DiagnosticSeverity::INFORMATION, "info1", 4),
-                diag(DiagnosticSeverity::HINT, "hint1", 5),
+                diagnostic(DiagnosticSeverity::ERROR, "error1", 1),
+                diagnostic(DiagnosticSeverity::ERROR, "error2", 2),
+                diagnostic(DiagnosticSeverity::WARNING, "warn1", 3),
+                diagnostic(DiagnosticSeverity::INFORMATION, "info1", 4),
+                diagnostic(DiagnosticSeverity::HINT, "hint1", 5),
             ],
         );
 
@@ -333,8 +307,8 @@ mod tests {
     fn test_listed_diagnostics_are_capped_with_errors_first() {
         let line_count = u32::try_from(MAX_LISTED_DIAGNOSTICS).unwrap();
         let mut diagnostics: Vec<Diagnostic> =
-            (0..line_count).map(|line| diag(DiagnosticSeverity::WARNING, "warn", line)).collect();
-        diagnostics.push(diag(DiagnosticSeverity::ERROR, "late error", line_count + 10));
+            (0..line_count).map(|line| diagnostic(DiagnosticSeverity::WARNING, "warn", line)).collect();
+        diagnostics.push(diagnostic(DiagnosticSeverity::ERROR, "late error", line_count + 10));
         let cache = HashMap::from([(uri("/project/src/main.rs"), diagnostics)]);
 
         let result = workspace_output(&cache);

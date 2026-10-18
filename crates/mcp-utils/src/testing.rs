@@ -2,7 +2,8 @@ pub use elicitation_script::{
     CapturedElicitation, ElicitationScript, ElicitationScriptBuilder, elicitation_host, elicitation_sink,
 };
 pub use fake_auth_server::{
-    ACCESS_TOKEN, CLIENT_METADATA_URL, FakeAuthServer, OAuthPrompt, client_metadata, complete_authorization,
+    ACCESS_TOKEN, CLIENT_METADATA_URL, FakeAuthServer, OAuthPrompt, REGISTERED_CLIENT_ID, client_metadata,
+    complete_authorization,
 };
 pub use fake_http_server::{FakeHttpServer, RecordedRequest};
 pub use fake_mcp::{
