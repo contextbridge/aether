@@ -5,7 +5,7 @@ use aether_core::{
     agent_spec::AgentSpec,
     core::{AgentBuilder, AgentDeps, AgentError, AgentHandle, AgentRegistryError, recv_agent_event},
     events::{AgentEvent, Command, MessageEvent, SubAgentProgressPayload, TurnEvent, TurnOutcome, UserCommand},
-    mcp::{McpCatalog, McpSpawnError, ParseError},
+    mcp::{McpCatalog, McpSpawnError},
 };
 use futures::FutureExt;
 use llm::{ContentBlock, MessageId};
@@ -221,7 +221,7 @@ impl AgentExecutor {
 
     fn spawn_mcp(&self, spec: &AgentSpec) -> Result<McpCatalog, SubAgentError> {
         let builder =
-            agent_mcp(&self.project_root, self.deps.clone(), spec.tools.clone()).with_config(spec.mcp.clone())?;
+            agent_mcp(&self.project_root, self.deps.clone(), spec.tools.clone()).with_config(spec.mcp.clone());
         Ok(builder.spawn()?)
     }
 
@@ -239,8 +239,6 @@ impl AgentExecutor {
 enum SubAgentError {
     #[error(transparent)]
     Resolve(#[from] AgentRegistryError),
-    #[error("Failed to load MCP configs: {0}")]
-    McpConfig(#[from] ParseError),
     #[error("Failed to spawn MCP servers: {0}")]
     McpSpawn(#[from] McpSpawnError),
     #[error("Failed to build agent from spec: {0}")]

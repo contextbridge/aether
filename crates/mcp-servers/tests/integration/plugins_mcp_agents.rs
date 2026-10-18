@@ -337,7 +337,7 @@ async fn call_subagent_through_manager(
 
 fn subagents_catalog(project_root: &Path, deps: AgentDeps) -> McpBuilder {
     let config = McpConfig::from_json(r#"{"servers":{"subagents":{"type":"in-memory","args":[]}}}"#).unwrap();
-    agent_mcp(project_root, deps, ToolFilter::default()).with_config(config).expect("the subagents config is valid")
+    agent_mcp(project_root, deps, ToolFilter::default()).with_config(config)
 }
 
 fn result_text(result: &CallToolResult) -> String {
