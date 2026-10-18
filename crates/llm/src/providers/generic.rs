@@ -170,6 +170,7 @@ pub(crate) const BUILT_INS: &[&ProviderConfig] = &[
 ];
 
 /// A provider whose behavior is fully described by a [`ProviderConfig`].
+#[derive(Clone)]
 pub struct GenericProvider {
     config: &'static ProviderConfig,
     http: reqwest::Client,

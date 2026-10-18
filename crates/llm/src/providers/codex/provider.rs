@@ -29,7 +29,10 @@ pub struct CodexProvider {
 
 impl CodexProvider {
     pub fn new(store: Arc<dyn OAuthCredentialStorage>) -> Self {
-        let token_manager = CodexTokenManager::new(store, super::PROVIDER_ID);
+        Self::from_token_manager(CodexTokenManager::new(store, super::PROVIDER_ID))
+    }
+
+    pub(crate) fn from_token_manager(token_manager: CodexTokenManager) -> Self {
         Self {
             base_url: CODEX_API_BASE.to_string(),
             client: http_client(),
@@ -52,6 +55,10 @@ impl CodexProvider {
     pub fn with_model(mut self, model: &str) -> Self {
         self.model = model.to_string();
         self
+    }
+
+    pub async fn forget_cached_token(&self) {
+        self.token_manager.clear_cache().await;
     }
 
     fn build_wire_request(&self, context: &Context) -> Result<ResponsesRequest> {
@@ -229,6 +236,25 @@ mod tests {
         assert_eq!(provider.model().unwrap().to_string(), "codex:gpt-5.5");
     }
 
+    #[tokio::test]
+    async fn a_logout_reaches_a_provider_that_forgets_its_cached_token() {
+        let mut server = CaptureServer::start_responses().await;
+        let store = authenticated_store();
+        let provider = CodexProvider::new(Arc::clone(&store)).with_connection(crate::ProviderConnectionConfig {
+            base_url: Some(server.base_url.clone()),
+            ..Default::default()
+        });
+
+        let before = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
+        server.captured().await;
+        store.delete("codex").await.unwrap();
+        provider.forget_cached_token().await;
+        let after = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
+
+        assert!(before.iter().all(Result::is_ok), "{before:?}");
+        assert!(matches!(after.as_slice(), [Err(LlmError::OAuthError(_))]), "{after:?}");
+    }
+
     fn server_backed_provider(server: &CaptureServer) -> CodexProvider {
         authenticated_provider().with_connection(crate::ProviderConnectionConfig {
             base_url: Some(server.base_url.clone()),
@@ -237,15 +263,17 @@ mod tests {
     }
 
     fn authenticated_provider() -> CodexProvider {
+        CodexProvider::new(authenticated_store())
+    }
+
+    fn authenticated_store() -> Arc<dyn OAuthCredentialStorage> {
         let credential = OAuthCredential {
             client_id: "test".to_string(),
             access_token: test_jwt("account-1"),
             refresh_token: None,
             expires_at: Some(u64::MAX),
         };
-        let store: Arc<dyn OAuthCredentialStorage> =
-            Arc::new(MemoryCredentialStore::new().with_credential("codex", credential));
-        CodexProvider::new(store)
+        Arc::new(MemoryCredentialStore::new().with_credential("codex", credential))
     }
 
     fn test_jwt(account_id: &str) -> String {

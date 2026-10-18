@@ -20,10 +20,10 @@ Register additional providers with [`with_generic_provider`](ModelProviderParser
 ```rust,no_run
 # async fn example() {
 use llm::parser::ModelProviderParser;
-use llm::StreamingModelProvider;
+use llm::{ProviderConnectionOverrides, StreamingModelProvider};
 
 let parser = ModelProviderParser::default();
-let (provider, model) = parser.parse("ollama:llama3.2").await.unwrap();
+let (provider, model) = parser.parse("ollama:llama3.2", &ProviderConnectionOverrides::default()).await.unwrap();
 println!("Provider: {}", provider.display_name());
 println!("Model: {model}");
 # }
