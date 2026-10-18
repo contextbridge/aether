@@ -4,6 +4,7 @@ use aether_core::events::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::io::{self, Write};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, clap::ValueEnum, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -13,21 +14,29 @@ pub enum OutputFormat {
     Json,
 }
 
-pub(crate) fn print_message(format: OutputFormat, message: &AgentEvent) -> Result<(), serde_json::Error> {
+pub(crate) fn print_message(format: OutputFormat, message: &AgentEvent) -> io::Result<()> {
+    write_message(format, message, &mut io::stdout(), &mut io::stderr())
+}
+
+pub(crate) fn write_message(
+    format: OutputFormat,
+    message: &AgentEvent,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> io::Result<()> {
     match format {
         OutputFormat::Text => {
             if let Some(text) = format_text(message) {
                 if matches!(message, AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Failed { .. } })) {
-                    eprintln!("{text}");
+                    writeln!(stderr, "{text}")?;
                 } else {
-                    println!("{text}");
+                    writeln!(stdout, "{text}")?;
                 }
             }
         }
-        OutputFormat::Pretty => println!("{}", serde_json::to_string_pretty(message)?),
-        OutputFormat::Json => println!("{}", serde_json::to_string(message)?),
+        OutputFormat::Pretty => writeln!(stdout, "{}", serde_json::to_string_pretty(message)?)?,
+        OutputFormat::Json => writeln!(stdout, "{}", serde_json::to_string(message)?)?,
     }
-
     Ok(())
 }
 

@@ -12,6 +12,7 @@ mod acp_slash_commands;
 mod acp_stdio;
 mod acp_workspace_move;
 mod aether_home;
+mod headless;
 mod mcp_command;
 mod run_init;
 mod trace_context;

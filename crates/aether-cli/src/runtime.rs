@@ -63,7 +63,6 @@ impl RuntimeBuilder {
         self
     }
 
-    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn provider(mut self, provider: Arc<dyn StreamingModelProvider>) -> Self {
         self.provider = Some(provider);
         self
