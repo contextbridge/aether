@@ -4,7 +4,7 @@ use std::future::{Future, poll_fn};
 use std::path::{Path, PathBuf};
 use std::pin::pin;
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
 use std::time::Duration;
 use tokio::sync::{oneshot, watch};
@@ -20,6 +20,7 @@ pub use utils::testing::TestWorkspace;
 pub struct TestDaemon {
     shutdown_tx: Option<oneshot::Sender<()>>,
     task: Option<JoinHandle<Result<(), DaemonError>>>,
+    clock: Option<tokio::runtime::Handle>,
 }
 
 /// Configures a [`TestDaemon`] before it starts. Unset timeouts match the production daemon.
@@ -28,6 +29,7 @@ pub struct TestDaemonBuilder {
     language: LanguageId,
     timeouts: Timeouts,
     hooks: TestHooks,
+    paused_time: bool,
 }
 
 impl TestDaemon {
@@ -41,7 +43,17 @@ impl TestDaemon {
             language,
             timeouts: Timeouts::default(),
             hooks: TestHooks::default(),
+            paused_time: false,
         }
+    }
+
+    pub async fn advance_time(&self, duration: Duration) {
+        self.clock
+            .as_ref()
+            .expect("enable paused_time on the daemon builder")
+            .spawn(async move { tokio::time::advance(duration).await })
+            .await
+            .expect("daemon clock task should complete");
     }
 
     pub fn shutdown(mut self) -> Result<(), TestDaemonError> {
@@ -61,6 +73,7 @@ impl TestDaemon {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TestPoint {
     ReadyWait,
+    RequestReceived(String),
     DocumentOpen(lsp_types::Uri),
     DocumentSyncWait(lsp_types::Uri),
     DiagnosticsWait(lsp_types::Uri),
@@ -96,6 +109,11 @@ impl TestDaemonBuilder {
         self
     }
 
+    pub fn paused_time(mut self) -> Self {
+        self.paused_time = true;
+        self
+    }
+
     pub fn request_timeout(mut self, timeout: Duration) -> Self {
         self.timeouts.request = timeout;
         self
@@ -114,10 +132,26 @@ impl TestDaemonBuilder {
     pub fn spawn(self) -> Result<TestDaemon, TestDaemonError> {
         let socket_path = socket_path(&self.workspace_root, self.language);
         let daemon = LspDaemon::bind(socket_path, None, self.timeouts)?.with_test_hooks(self.hooks);
-        let runtime = tokio::runtime::Runtime::new().map_err(TestDaemonError::Runtime)?;
+        let runtime = if self.paused_time {
+            tokio::runtime::Builder::new_current_thread().enable_all().start_paused(true).build()
+        } else {
+            tokio::runtime::Builder::new_multi_thread().enable_all().build()
+        }
+        .map_err(TestDaemonError::Runtime)?;
+        let clock = self.paused_time.then(|| runtime.handle().clone());
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let task = std::thread::spawn(move || runtime.block_on(daemon.run_until_shutdown(shutdown_rx)));
-        Ok(TestDaemon { shutdown_tx: Some(shutdown_tx), task: Some(task) })
+        let task = std::thread::spawn(move || {
+            // A pending blocking task disables Tokio's automatic clock advancement during external I/O.
+            let (release_tx, release_rx) = mpsc::channel::<()>();
+            let hold_clock = self.paused_time.then(|| runtime.spawn_blocking(move || release_rx.recv()));
+            let result = runtime.block_on(daemon.run_until_shutdown(shutdown_rx));
+            drop(release_tx);
+            if let Some(hold_clock) = hold_clock {
+                runtime.block_on(hold_clock).expect("clock guard should finish").ok();
+            }
+            result
+        });
+        Ok(TestDaemon { shutdown_tx: Some(shutdown_tx), task: Some(task), clock })
     }
 }
 

@@ -228,6 +228,7 @@ while True:
         continue
 
     if method in wedge_methods:
+        write_message({"jsonrpc": "2.0", "method": "aether/testing/requestReceived", "params": {"method": method}})
         continue
 
     if method in garble_methods:

@@ -51,6 +51,8 @@ pub(crate) struct LspNotification {
 }
 
 pub(crate) enum TransportEvent {
+    #[cfg(feature = "testing")]
+    RequestReceived(String),
     PublishedDiagnostics(PublishDiagnosticsParams),
     DiagnosticsRefreshRequested,
     FileWatcherBatch(FileWatcherBatch),
@@ -354,6 +356,12 @@ impl ProcessTransportActor {
             (None, Some(method)) if method == PublishDiagnostics::METHOD => {
                 if let Ok(diagnostics) = serde_json::from_value(message.params) {
                     let _ = self.event_tx.send(TransportEvent::PublishedDiagnostics(diagnostics)).await;
+                }
+            }
+            #[cfg(feature = "testing")]
+            (None, Some(method)) if method == "aether/testing/requestReceived" => {
+                if let Some(method) = message.params.get("method").and_then(Value::as_str) {
+                    let _ = self.event_tx.send(TransportEvent::RequestReceived(method.to_owned())).await;
                 }
             }
             (None, Some(method)) if method == SERVER_STATUS_METHOD => {

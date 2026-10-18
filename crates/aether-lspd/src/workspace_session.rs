@@ -233,6 +233,10 @@ impl WorkspaceSession {
     async fn run_events(self, mut event_rx: mpsc::Receiver<TransportEvent>) {
         while let Some(event) = event_rx.recv().await {
             match event {
+                #[cfg(feature = "testing")]
+                TransportEvent::RequestReceived(method) => {
+                    self.hooks.pause(crate::testing::TestPoint::RequestReceived(method)).await;
+                }
                 TransportEvent::PublishedDiagnostics(params) => self.diagnostics.publish(params),
                 TransportEvent::DiagnosticsRefreshRequested => {
                     self.refresh.enqueue(self.filter_supported(self.diagnostics.uris()));

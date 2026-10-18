@@ -18,7 +18,7 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-testing = ["dep:utils", "utils/testing"]
+testing = ["dep:utils", "utils/testing", "tokio/test-util"]
 
 [lints]
 workspace = true

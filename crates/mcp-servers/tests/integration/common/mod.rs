@@ -107,6 +107,10 @@ impl CodingWorkspace {
         Self { daemon: Some(daemon), ..Self::with_lsp(workspace).await }
     }
 
+    pub(crate) async fn advance_daemon_time(&self, duration: Duration) {
+        self.daemon.as_ref().expect("workspace has a daemon").advance_time(duration).await;
+    }
+
     pub(crate) async fn with_http(http: FakeHttpClient) -> Self {
         Self::with(TestWorkspace::new(), |root| CodingMcp::new(root).with_web_fetcher(WebFetcher::with_client(http)))
             .await

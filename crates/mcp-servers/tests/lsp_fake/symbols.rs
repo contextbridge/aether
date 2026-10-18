@@ -1,7 +1,7 @@
 use crate::common::{CodingWorkspace, McpClientExt, TestResult, call_tool_error};
 use crate::{fake_daemon, fake_lsp};
 use aether_lspd::LanguageId;
-use aether_lspd::testing::{TestWorkspace, cargo_project};
+use aether_lspd::testing::{TestGate, TestPoint, TestWorkspace, cargo_project};
 use serde_json::{Value, json};
 use std::time::Duration;
 
@@ -75,12 +75,19 @@ async fn symbol_lookup_reports_language_server_errors() {
 #[tokio::test]
 async fn symbol_lookup_recovers_after_the_language_server_times_out() -> TestResult {
     let workspace = TestWorkspace::new().file("example.py", "def example_fn():\n    pass\n");
-    let daemon = fake_daemon(&workspace, LanguageId::Python).request_timeout(Duration::from_secs(1));
+    let received = TestGate::default();
+    let daemon = fake_daemon(&workspace, LanguageId::Python)
+        .paused_time()
+        .gate(TestPoint::RequestReceived("textDocument/definition".into()), &received);
     let project = CodingWorkspace::with_daemon(workspace, daemon).await;
 
     let definition = lookup("definition", "example.py", "example_fn", Some(1));
-    let error = call_tool_error(&project.client, "lsp_symbol", definition).await;
-    assert!(error.contains("timed out after 1s"), "{error}");
+    let (error, ()) = tokio::join!(call_tool_error(&project.client, "lsp_symbol", definition), async {
+        received.reached().await;
+        received.release();
+        project.advance_daemon_time(Duration::from_secs(120)).await;
+    });
+    assert!(error.contains("timed out after 120s"), "{error}");
 
     let result = project.client.call("lsp_symbol", lookup("hover", "example.py", "example_fn", Some(1))).await?;
     let hover = result["hoverContents"].as_str().unwrap_or_default();
