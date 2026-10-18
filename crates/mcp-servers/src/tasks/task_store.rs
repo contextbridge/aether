@@ -1,10 +1,10 @@
 use super::types::{Task, TaskId, TaskStatus, TaskUpdate};
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
-use utils::fs::append_line;
+use utils::fs::{append_line, write_atomic};
 
 /// Errors that can occur during task store operations
 #[derive(Debug, Error)]
@@ -106,11 +106,11 @@ impl TaskStore {
     pub fn update(&mut self, id: &TaskId, updates: TaskUpdate) -> Result<Task, TaskStoreError> {
         self.ensure_deps_exist(updates.deps.as_deref())?;
 
-        let task = self.tasks.get_mut(id).ok_or_else(|| TaskStoreError::NotFound { id: id.to_string() })?;
-        updates.apply_to(task);
-        let task = task.clone();
+        let mut task = self.tasks.get(id).cloned().ok_or_else(|| TaskStoreError::NotFound { id: id.to_string() })?;
+        updates.apply_to(&mut task);
 
-        self.rewrite_tree_file(&task.id.root())?;
+        self.write_updated_tree(&task)?;
+        self.tasks.insert(task.id.clone(), task.clone());
 
         Ok(task)
     }
@@ -182,13 +182,14 @@ impl TaskStore {
         Ok(())
     }
 
-    fn rewrite_tree_file(&self, root_id: &TaskId) -> Result<(), TaskStoreError> {
-        let mut file = File::create(self.tree_path(root_id))?;
-        for task in self.tree(root_id) {
-            writeln!(file, "{}", serde_json::to_string(task)?)?;
+    fn write_updated_tree(&self, updated: &Task) -> Result<(), TaskStoreError> {
+        let mut bytes = Vec::new();
+        for task in self.tree(&updated.id.root()) {
+            let task = if task.id == updated.id { updated } else { task };
+            serde_json::to_writer(&mut bytes, task)?;
+            bytes.push(b'\n');
         }
-
-        Ok(())
+        Ok(write_atomic(&self.tree_path(&updated.id), &bytes)?)
     }
 }
 
@@ -261,6 +262,45 @@ mod tests {
         assert_eq!(updated.title, "Updated title");
         assert_eq!(updated.status, TaskStatus::InProgress);
         assert_eq!(updated.assignee, Some("worker-1".to_string()));
+    }
+
+    #[test]
+    fn failed_update_keeps_the_previous_task_in_memory_and_on_disk() {
+        let mut tasks = TestTaskStore::new();
+        let task = tasks.root_task("Original title");
+        let path = tasks.root().join("active").join(task.id.filename());
+        let saved = path.with_extension("saved");
+        fs::rename(&path, &saved).unwrap();
+        fs::create_dir(&path).unwrap();
+
+        let result = tasks
+            .store_mut()
+            .update(&task.id, TaskUpdate { title: Some("Rejected title".into()), ..Default::default() });
+
+        assert!(matches!(result, Err(TaskStoreError::Io(_))));
+        assert_eq!(tasks.store().get(&task.id).unwrap().title, "Original title");
+        fs::remove_dir(&path).unwrap();
+        fs::rename(saved, path).unwrap();
+        tasks.reopen();
+        assert_eq!(tasks.store().get(&task.id).unwrap().title, "Original title");
+    }
+
+    #[test]
+    fn updating_a_task_preserves_its_tree_after_reopen() {
+        let mut tasks = TestTaskStore::new();
+        let root = tasks.root_task("Root");
+        let child = tasks.subtask(&root.id, "Child");
+        let sibling = tasks.subtask(&root.id, "Sibling");
+
+        tasks
+            .store_mut()
+            .update(&child.id, TaskUpdate { title: Some("Updated child".into()), ..Default::default() })
+            .unwrap();
+        tasks.reopen();
+
+        assert_eq!(tasks.store().get(&root.id).unwrap().title, "Root");
+        assert_eq!(tasks.store().get(&child.id).unwrap().title, "Updated child");
+        assert_eq!(tasks.store().get(&sibling.id).unwrap().title, "Sibling");
     }
 
     #[test]
