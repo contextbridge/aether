@@ -5,14 +5,20 @@ use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvid
 use aws_sigv4::http_request::{SignableBody, SignableRequest, SigningSettings, sign};
 use aws_sigv4::sign::v4;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use std::collections::HashMap;
 use std::error::Error;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 use std::time::{Duration, SystemTime};
 use tokio::sync::{Mutex, OnceCell};
 
 #[derive(Debug, Clone)]
 pub struct SigV4Signer {
     state: Arc<SignerState>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SigV4Signers {
+    signers: Arc<std::sync::Mutex<HashMap<SignerKey, SigV4Signer>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +102,23 @@ impl SigV4Signer {
         credentials.expiry().is_none_or(|expiry| expiry > SystemTime::now() + self.config().refresh_before_expiry)
     }
 }
+
+impl SigV4Signers {
+    pub fn default_chain(&self, service: String, region: String, profile: Option<String>) -> SigV4Signer {
+        let mut signers = self.signers.lock().unwrap_or_else(PoisonError::into_inner);
+        let signer = signers.entry((service, region, profile)).or_insert_with_key(|(service, region, profile)| {
+            SigV4Signer::new(SigV4Config {
+                service: service.clone(),
+                region: region.clone(),
+                credentials: SigV4Credentials::DefaultChain { profile: profile.clone() },
+                refresh_before_expiry: Duration::from_mins(5),
+            })
+        });
+        signer.clone()
+    }
+}
+
+type SignerKey = (String, String, Option<String>);
 
 #[derive(Debug)]
 struct SignerState {
