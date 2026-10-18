@@ -84,14 +84,11 @@ impl ModelSelector {
             .selectable(ModelSelectorRow::is_selectable)
             .preserve_order()
             .clamped();
-        let initial = items
+        if let Some(index) = items
             .entries()
             .iter()
-            .position(|row| {
-                row.model().is_some_and(|value| !value.is_disabled && selected_models.contains(&value.value))
-            })
-            .or_else(|| items.entries().iter().position(ModelSelectorRow::is_selectable));
-        if let Some(index) = initial {
+            .position(|row| row.model().is_some_and(|value| selected_models.contains(&value.value)))
+        {
             items.select_index(index);
         }
 
@@ -107,9 +104,7 @@ impl ModelSelector {
     }
 
     fn toggle_focused(&mut self) {
-        let Some(value) =
-            self.items.selected_entry().and_then(ModelSelectorRow::model).filter(|value| !value.is_disabled)
-        else {
+        let Some(value) = self.items.selected_entry().and_then(ModelSelectorRow::model) else {
             return;
         };
         let value = value.value.clone();
@@ -146,7 +141,7 @@ impl ModelSelector {
         self.items
             .selected_entry()
             .and_then(ModelSelectorRow::model)
-            .filter(|value| !value.is_disabled && !value.meta.reasoning_levels.is_empty())
+            .filter(|value| !value.meta.reasoning_levels.is_empty())
             .map(|value| value.meta.reasoning_levels.clone())
     }
 }

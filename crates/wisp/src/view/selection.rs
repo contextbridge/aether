@@ -47,6 +47,9 @@ impl SelectionState {
     pub fn select(&mut self, selected: Option<usize>, len: usize) {
         self.selected = selected.filter(|index| *index < len);
         self.clamp(len);
+        if selected.is_none() {
+            self.selected = None;
+        }
     }
 
     pub fn select_first(&mut self, len: usize) {

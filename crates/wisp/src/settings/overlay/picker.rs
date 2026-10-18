@@ -37,11 +37,10 @@ impl SettingsPicker {
     pub(crate) fn on_ui_event(&mut self, event: &UiEvent) -> Vec<UiOutput> {
         match self.values.on_nav_event(event) {
             Nav::Activate | Nav::Clicked => {
-                let change = self
-                    .values
-                    .selected_entry()
-                    .filter(|value| !value.is_disabled && value.value != self.current_value)
-                    .map(|value| SettingsChange { config_id: self.config_id.clone(), new_value: value.value.clone() });
+                let change =
+                    self.values.selected_entry().filter(|value| value.value != self.current_value).map(|value| {
+                        SettingsChange { config_id: self.config_id.clone(), new_value: value.value.clone() }
+                    });
                 change.map(UiOutput::ConfigChange).into_iter().chain([UiOutput::Close]).collect()
             }
             Nav::Close | Nav::Moved | Nav::Unhandled => Vec::new(),

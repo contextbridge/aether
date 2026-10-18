@@ -48,6 +48,7 @@ impl<T> FilterableList<T> {
     /// rows are never focused.
     pub fn selectable(mut self, selectable: fn(&T) -> bool) -> Self {
         self.selectable = selectable;
+        self.normalize_selection();
         self
     }
 
@@ -156,6 +157,7 @@ impl<T> FilterableList<T> {
             self.filtered_indices.iter().position(|&filtered_index| filtered_index == index),
             self.filtered_len(),
         );
+        self.normalize_selection();
     }
 
     /// The matching entries as a [`ListView`] and its persistent selection state.
@@ -206,10 +208,16 @@ impl<T> FilterableList<T> {
             }
         }
         self.selection.select_first(self.filtered_len());
-        if self.selected_entry().is_some_and(|entry| !(self.selectable)(entry)) {
-            self.step(Direction::Forward);
-        }
+        self.normalize_selection();
         self.clear_offset_when_empty();
+    }
+
+    fn normalize_selection(&mut self) {
+        if self.selected_entry().is_some_and(self.selectable) {
+            return;
+        }
+        let selected = self.filtered_indices.iter().position(|&index| (self.selectable)(&self.entries[index]));
+        self.selection.select(selected, self.filtered_len());
     }
 
     fn clear_offset_when_empty(&mut self) {
