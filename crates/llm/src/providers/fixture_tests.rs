@@ -1,7 +1,6 @@
-use crate::providers::generic::{ANTHROPIC, DEEPSEEK, GenericProvider, OPENAI, ProviderConfig};
-use crate::providers::test_capture_server::{CaptureServer, hello_context};
-use crate::{LlmResponse, ProviderAuthMode, ProviderConnectionConfig, StopReason, StreamingModelProvider, TokenUsage};
-use futures::StreamExt;
+use crate::providers::generic::{ANTHROPIC, DEEPSEEK, OPENAI, ProviderConfig};
+use crate::providers::test_capture_server::{ProviderFixture, ResponseSpec, hello_context};
+use crate::{LlmResponse, StopReason, TokenUsage};
 
 #[tokio::test]
 async fn fixtures_emit_usage_and_their_stop_reason() {
@@ -95,16 +94,8 @@ async fn anthropic_cache_read_fixture_reports_cache_read() {
 
 /// Chat fixtures replay through `DEEPSEEK` because every Chat Completions provider shares one decoder.
 async fn replay(config: &'static ProviderConfig, label: &str, fixture: &'static str) -> Vec<LlmResponse> {
-    let mut server = CaptureServer::start_with_response(fixture).await;
-    let connection = ProviderConnectionConfig {
-        base_url: Some(server.base_url.clone()),
-        auth_mode: ProviderAuthMode::None,
-        ..Default::default()
-    };
-    let provider = GenericProvider::new_with_connection("key", config, connection).unwrap();
-
-    let events = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
-    let _ = server.captured().await;
+    let mut fixture = ProviderFixture::builder(config).response(ResponseSpec::sse(fixture)).build().await;
+    let (_, events) = fixture.run(&hello_context()).await;
 
     events.into_iter().map(|event| event.unwrap_or_else(|error| panic!("{label}: stream errored: {error}"))).collect()
 }

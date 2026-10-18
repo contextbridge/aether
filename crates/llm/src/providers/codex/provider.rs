@@ -185,6 +185,7 @@ mod tests {
         assert_eq!(captured.body["model"], "gpt-6-luna");
         assert_eq!(captured.body["instructions"], "You are helpful");
         assert_eq!(captured.body["tools"].as_array().unwrap().len(), 1);
+        assert!(captured.body["tools"][0].get("strict").is_none());
         assert_eq!(captured.body["parallel_tool_calls"], true);
         assert_eq!(captured.body["input"][0]["role"], "user");
         assert_eq!(captured.body["prompt_cache_key"], "session-abc");
@@ -208,6 +209,7 @@ mod tests {
 
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
         assert_eq!(captured.body["reasoning"]["effort"], "medium");
+        assert_eq!(captured.body["reasoning"]["summary"], "auto");
     }
 
     #[tokio::test]

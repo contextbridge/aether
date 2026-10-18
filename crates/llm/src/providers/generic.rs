@@ -338,25 +338,25 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::providers::test_capture_server::{CaptureServer, ResponseSpec, hello_context};
+    use crate::providers::test_capture_server::{CaptureServer, ProviderFixture, ResponseSpec, hello_context};
     use crate::types::IsoString;
     use crate::{
-        AssistantReasoning, ChatMessage, ContentBlock, LlmResponse, MessageId, ModelSettings, ProviderErrorKind,
-        ReasoningEffort, ToolCallRequest, ToolDefinition,
+        AssistantReasoning, ChatMessage, ContentBlock, EncryptedReasoningContent, LlmResponse, MessageId,
+        ModelSettings, ProviderErrorKind, ReasoningEffort, ToolCallError, ToolCallRequest, ToolCallResult,
+        ToolDefinition,
     };
 
     #[tokio::test]
     async fn gemini_disables_reasoning_with_none() {
         let model = reasoning_off_model(Provider::Gemini);
-        let mut server = CaptureServer::start_chat_completions().await;
-        let provider = capture_backed_provider(&server, &GEMINI).with_model(&model.model_id());
+        let mut fixture = ProviderFixture::builder(&GEMINI).model(&model.model_id()).build().await;
         let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
         context.set_reasoning_effort(ReasoningEffort::Disabled);
 
-        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        let (captured, responses) = fixture.run(&context).await;
 
         assert_successful_stream(&responses);
-        assert_eq!(server.captured().await.body["reasoning_effort"], "none");
+        assert_eq!(captured.body["reasoning_effort"], "none");
     }
 
     #[tokio::test]
@@ -367,13 +367,12 @@ mod tests {
             "type": "object",
             "properties": { "q": { "type": "string", "format": "uri" } }
         });
-        let mut server = CaptureServer::start_chat_completions().await;
-        let provider = capture_backed_provider(&server, &MOONSHOT);
+        let mut fixture = ProviderFixture::builder(&MOONSHOT).build().await;
         let context =
             Context::new(vec![ChatMessage::user("hi")], vec![ToolDefinition::new("search", "Search", parameters)]);
 
-        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-        let body = server.captured().await.body;
+        let (captured, responses) = fixture.run(&context).await;
+        let body = captured.body;
 
         assert_successful_stream(&responses);
         let params = &body["tools"][0]["function"]["parameters"];
@@ -385,8 +384,7 @@ mod tests {
 
     #[tokio::test]
     async fn chat_completions_send_errors_and_summaries_as_user_notes() {
-        let mut server = CaptureServer::start_chat_completions().await;
-        let provider = capture_backed_provider(&server, &DEEPSEEK);
+        let mut fixture = ProviderFixture::builder(&DEEPSEEK).build().await;
         let context = Context::new(
             vec![
                 ChatMessage::Error {
@@ -404,8 +402,8 @@ mod tests {
             vec![],
         );
 
-        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-        let body = server.captured().await.body;
+        let (captured, responses) = fixture.run(&context).await;
+        let body = captured.body;
 
         assert_successful_stream(&responses);
         assert_eq!(body["messages"][0], json!({ "role": "user", "content": "Error: boom" }));
@@ -417,15 +415,14 @@ mod tests {
 
     #[tokio::test]
     async fn openrouter_requests_usage_caching_and_session_routing() {
-        let mut server = CaptureServer::start_chat_completions().await;
-        let provider = capture_backed_provider(&server, &OPENROUTER).with_model("anthropic/claude-haiku-4.5");
+        let mut fixture = ProviderFixture::builder(&OPENROUTER).model("anthropic/claude-haiku-4.5").build().await;
         let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
         context.set_prompt_cache_key(Some("prefix-abc".to_string()));
         context.set_session_affinity_key(Some("conversation-abc".to_string()));
         context.set_reasoning_effort(ReasoningEffort::High);
 
-        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-        let body = server.captured().await.body;
+        let (captured, responses) = fixture.run(&context).await;
+        let body = captured.body;
 
         assert_successful_stream(&responses);
         assert_eq!(body["model"], "anthropic/claude-haiku-4.5");
@@ -434,19 +431,18 @@ mod tests {
         assert_eq!(body["reasoning_effort"], "high");
         assert_eq!(body["cache_control"]["type"], "ephemeral");
         assert_eq!(body["usage"]["include"], true);
-        assert_eq!(provider.display_name(), "OpenRouter (anthropic/claude-haiku-4.5)");
+        assert_eq!(fixture.provider.display_name(), "OpenRouter (anthropic/claude-haiku-4.5)");
     }
 
     #[tokio::test]
     async fn openrouter_disables_reasoning_through_its_unified_reasoning_object() {
         let model = reasoning_off_model(Provider::OpenRouter);
-        let mut server = CaptureServer::start_chat_completions().await;
-        let provider = capture_backed_provider(&server, &OPENROUTER).with_model(&model.model_id());
+        let mut fixture = ProviderFixture::builder(&OPENROUTER).model(&model.model_id()).build().await;
         let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
         context.set_reasoning_effort(ReasoningEffort::Disabled);
 
-        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-        let body = server.captured().await.body;
+        let (captured, responses) = fixture.run(&context).await;
+        let body = captured.body;
 
         assert_successful_stream(&responses);
         assert_eq!(body["reasoning"], json!({ "effort": "none" }));
@@ -542,13 +538,12 @@ mod tests {
 
     #[tokio::test]
     async fn disabled_toggle_and_unknown_models_never_send_requests() {
-        let server = CaptureServer::start_chat_completions().await;
-        let mut provider = capture_backed_provider(&server, &DEEPSEEK);
+        let mut fixture = ProviderFixture::builder(&DEEPSEEK).build().await;
         for model in ["deepseek-v4-flash", "unknown"] {
-            provider = provider.with_model(model);
+            fixture.provider = fixture.provider.with_model(model);
             let mut context = Context::new(vec![], vec![]);
             context.set_reasoning_effort(ReasoningEffort::Disabled);
-            let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+            let responses = fixture.provider.stream_response(&context).collect::<Vec<_>>().await;
             assert_eq!(responses.len(), 1, "{responses:?}");
             let error = responses[0].as_ref().unwrap_err();
             if model == "unknown" {
@@ -562,17 +557,13 @@ mod tests {
 
     #[tokio::test]
     async fn sampling_settings_are_sent_as_configured() {
-        for (config, mut server) in [
-            (&DEEPSEEK, CaptureServer::start_chat_completions().await),
-            (&OPENAI, CaptureServer::start_responses().await),
-            (&ANTHROPIC, CaptureServer::start_messages().await),
-        ] {
-            let provider = capture_backed_provider(&server, config);
+        for config in [&DEEPSEEK, &OPENAI, &ANTHROPIC] {
+            let mut fixture = ProviderFixture::builder(config).build().await;
             let mut context = hello_context();
             context.set_model_settings(ModelSettings { temperature: Some(0.2), top_p: Some(0.9), max_tokens: None });
 
-            let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-            let body = server.captured().await.body;
+            let (captured, responses) = fixture.run(&context).await;
+            let body = captured.body;
 
             assert!(responses.iter().all(Result::is_ok), "{responses:?}");
             assert_eq!(body["temperature"], 0.2, "{}", config.provider);
@@ -583,12 +574,11 @@ mod tests {
     #[tokio::test]
     async fn every_api_validates_reasoning_before_sending() {
         for config in [&DEEPSEEK, &OPENAI, &ANTHROPIC] {
-            let server = CaptureServer::start_chat_completions().await;
-            let provider = capture_backed_provider(&server, config).with_model("unknown");
+            let fixture = ProviderFixture::builder(config).model("unknown").build().await;
             let mut context = hello_context();
             context.set_reasoning_effort(ReasoningEffort::Disabled);
 
-            let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+            let responses = fixture.provider.stream_response(&context).collect::<Vec<_>>().await;
 
             assert!(matches!(responses[..], [Err(LlmError::ReasoningValidation(_))]), "{responses:?}");
         }
@@ -612,45 +602,77 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn chat_request_model_routes_the_request_without_changing_catalog_identity() {
-        let mut server = CaptureServer::start_chat_completions().await;
-        let provider = GenericProvider::new_with_connection(
-            "key",
-            &AZURE_FOUNDRY,
-            ProviderConnectionConfig {
-                base_url: Some(format!("{}/", server.base_url)),
-                auth_mode: ProviderAuthMode::None,
-                request_model: Some("production-coding".to_string()),
-                ..Default::default()
-            },
-        )
-        .unwrap()
-        .with_model("gpt-5.5");
-        let context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
+    async fn request_model_routes_each_api_without_changing_catalog_identity() {
+        for (config, model, deployment, identity, display_name, auth_mode) in [
+            (
+                &AZURE_FOUNDRY,
+                "gpt-5.5",
+                "production-coding",
+                "azure-foundry:gpt-5.5",
+                "Microsoft Foundry (gpt-5.5)",
+                ProviderAuthMode::None,
+            ),
+            (
+                &XIAOMI,
+                "mimo-v2.6-pro",
+                "mimo-deployment",
+                "xiaomi:mimo-v2.6-pro",
+                "Xiaomi (mimo-v2.6-pro)",
+                ProviderAuthMode::None,
+            ),
+            (
+                &ANTHROPIC,
+                "claude-sonnet-4-5-20250929",
+                "claude-deployment",
+                "anthropic:claude-sonnet-4-5-20250929",
+                "Anthropic (claude-sonnet-4-5-20250929)",
+                ProviderAuthMode::Default,
+            ),
+        ] {
+            let mut fixture = ProviderFixture::builder(config)
+                .model(model)
+                .connection(ProviderConnectionConfig {
+                    request_model: Some(deployment.into()),
+                    auth_mode,
+                    ..Default::default()
+                })
+                .build()
+                .await;
 
-        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-        let captured = server.captured().await;
+            let (captured, responses) = fixture.run(&hello_context()).await;
 
-        assert_successful_stream(&responses);
-        assert_eq!(captured.path, "/chat/completions");
-        assert_eq!(captured.body["model"], "production-coding");
-        assert_eq!(captured.body["stream"], true);
-        assert_eq!(captured.body["stream_options"]["include_usage"], true);
-        assert!(captured.headers.get("authorization").is_none());
-        assert_eq!(provider.model().unwrap().to_string(), "azure-foundry:gpt-5.5");
-        assert_eq!(provider.display_name(), "Microsoft Foundry (gpt-5.5)");
+            assert_successful_stream(&responses);
+            assert_eq!(captured.body["model"], deployment);
+            assert_eq!(captured.body["stream"], true);
+            assert!(captured.headers.get("authorization").is_none());
+            assert_eq!(fixture.provider.model().unwrap().to_string(), identity);
+            assert_eq!(fixture.provider.display_name(), display_name);
+            match config.api {
+                Api::ChatCompletions(_) => {
+                    assert_eq!(captured.path, "/chat/completions");
+                    assert_eq!(captured.body["stream_options"]["include_usage"], true);
+                }
+                Api::Responses(_) => assert_eq!(captured.path, "/responses"),
+                Api::Messages => {
+                    assert_eq!(captured.path, "/v1/messages");
+                    assert_eq!(captured.headers["anthropic-version"], "2023-06-01");
+                    assert_eq!(captured.headers["x-api-key"], "key");
+                }
+            }
+        }
     }
 
     #[tokio::test]
     async fn default_auth_sends_the_api_key_as_a_bearer_token() {
-        let mut server = CaptureServer::start_chat_completions().await;
-        let connection = ProviderConnectionConfig { base_url: Some(server.base_url.clone()), ..Default::default() };
-        let provider = GenericProvider::new_with_connection("secret", &DEEPSEEK, connection).unwrap();
-
-        let responses = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
+        let mut fixture = ProviderFixture::builder(&DEEPSEEK)
+            .api_key("secret")
+            .connection(ProviderConnectionConfig::default())
+            .build()
+            .await;
+        let (captured, responses) = fixture.run(&hello_context()).await;
 
         assert_successful_stream(&responses);
-        assert_eq!(server.captured().await.headers["authorization"], "Bearer secret");
+        assert_eq!(captured.headers["authorization"], "Bearer secret");
     }
 
     #[tokio::test]
@@ -663,16 +685,14 @@ mod tests {
             (&ZAI, None),
         ] {
             for keys_set in [true, false] {
-                let mut server = CaptureServer::start_chat_completions().await;
-                let provider = capture_backed_provider(&server, config);
+                let mut fixture = ProviderFixture::builder(config).build().await;
                 let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
                 if keys_set {
                     context.set_prompt_cache_key(Some("prefix-abc".to_string()));
                     context.set_session_affinity_key(Some("conversation-abc".to_string()));
                 }
 
-                let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-                let captured = server.captured().await;
+                let (captured, responses) = fixture.run(&context).await;
 
                 assert_successful_stream(&responses);
                 let sent_key = captured.body.get("prompt_cache_key").and_then(serde_json::Value::as_str);
@@ -750,19 +770,230 @@ mod tests {
             (&ANTHROPIC, include_str!("../../tests/fixtures/anthropic/01_minimal.sse")),
         ] {
             let spec = ResponseSpec::sse(fixture).paced(Duration::from_mins(2));
-            let mut server = CaptureServer::start_with_spec(spec).await;
-            let connection = ProviderConnectionConfig {
-                base_url: Some(server.base_url.clone()),
-                auth_mode: ProviderAuthMode::None,
-                idle_timeout: Duration::from_mins(1),
-                ..Default::default()
-            };
-            let provider = GenericProvider::new_with_connection("key", config, connection).unwrap();
+            let mut fixture = ProviderFixture::builder(config)
+                .response(spec)
+                .connection(ProviderConnectionConfig {
+                    auth_mode: ProviderAuthMode::None,
+                    idle_timeout: Duration::from_mins(1),
+                    ..Default::default()
+                })
+                .build()
+                .await;
 
-            let responses = server.collect_on_paused_clock(provider.stream_response(&hello_context())).await;
+            let responses =
+                fixture.server.collect_on_paused_clock(fixture.provider.stream_response(&hello_context())).await;
 
             let error = responses.last().and_then(|response| response.as_ref().err()).and_then(LlmError::provider);
             assert_eq!(error.map(|error| error.kind), Some(ProviderErrorKind::Timeout), "{responses:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn responses_send_user_input_without_unset_options() {
+        let body = openai_request_body("gpt-4.1", &hello_context()).await;
+
+        assert_eq!(body["model"], "gpt-4.1");
+        assert_eq!(
+            body["input"],
+            json!([{
+                "type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hello"}]
+            }])
+        );
+        for field in ["instructions", "tools", "reasoning", "temperature", "top_p", "max_output_tokens"] {
+            assert!(body.get(field).is_none(), "{field}: {body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn responses_lift_system_instructions_and_apply_model_settings() {
+        let mut context = Context::new(vec![ChatMessage::system("You are helpful."), ChatMessage::user("Hi")], vec![]);
+        context.set_model_settings(ModelSettings { temperature: Some(0.0), top_p: Some(0.5), max_tokens: Some(128) });
+
+        let body = openai_request_body("gpt-4.1", &context).await;
+
+        assert_eq!(body["instructions"], "You are helpful.");
+        assert_eq!(body["input"].as_array().unwrap().len(), 1);
+        assert_eq!(body["input"][0]["role"], "user");
+        assert_eq!(body["temperature"], 0.0);
+        assert_eq!(body["top_p"], 0.5);
+        assert_eq!(body["max_output_tokens"], 128);
+    }
+
+    #[tokio::test]
+    async fn responses_preserve_tool_conversations_and_definitions() {
+        let arguments = r#"{"path":"foo.rs"}"#;
+        let context = Context::new(
+            vec![
+                ChatMessage::user("Read foo.rs"),
+                ChatMessage::Assistant {
+                    message_id: MessageId::new(),
+                    content: "I'll read that file.".into(),
+                    reasoning: AssistantReasoning::default(),
+                    timestamp: IsoString::now(),
+                    tool_calls: vec![ToolCallRequest {
+                        id: "call_1".into(),
+                        name: "read_file".into(),
+                        arguments: arguments.into(),
+                    }],
+                },
+                ChatMessage::ToolCallResult(Ok(ToolCallResult {
+                    id: "call_1".into(),
+                    name: "read_file".into(),
+                    arguments: arguments.into(),
+                    result: "fn main() {}".into(),
+                })),
+                ChatMessage::Assistant {
+                    message_id: MessageId::new(),
+                    content: "Here's the file content.".into(),
+                    reasoning: AssistantReasoning::default(),
+                    timestamp: IsoString::now(),
+                    tool_calls: vec![],
+                },
+            ],
+            vec![ToolDefinition::new(
+                "read_file",
+                "Read a file from disk",
+                json!({
+                    "type": "object", "properties": { "path": { "type": "string" } }
+                }),
+            )],
+        );
+
+        let body = openai_request_body("gpt-4.1", &context).await;
+
+        assert_eq!(
+            body["input"],
+            json!([
+                { "type": "message", "role": "user", "content": [{"type": "input_text", "text": "Read foo.rs"}] },
+                { "type": "message", "role": "assistant", "content": "I'll read that file." },
+                { "type": "function_call", "arguments": arguments, "call_id": "call_1", "name": "read_file" },
+                { "type": "function_call_output", "call_id": "call_1", "output": "fn main() {}" },
+                { "type": "message", "role": "assistant", "content": "Here's the file content." },
+            ])
+        );
+        let tools = body["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["type"], "function");
+        assert_eq!(tools[0]["name"], "read_file");
+        assert_eq!(tools[0]["description"], "Read a file from disk");
+        assert_eq!(tools[0]["parameters"]["properties"]["path"]["type"], "string");
+        assert_eq!(tools[0]["strict"], false);
+    }
+
+    #[tokio::test]
+    async fn responses_preserve_tool_calls_without_an_assistant_text_message() {
+        let context = Context::new(
+            vec![ChatMessage::Assistant {
+                message_id: MessageId::new(),
+                content: String::new(),
+                timestamp: IsoString::now(),
+                reasoning: AssistantReasoning::default(),
+                tool_calls: vec![ToolCallRequest {
+                    id: "call_1".into(),
+                    name: "search".into(),
+                    arguments: "{}".into(),
+                }],
+            }],
+            vec![],
+        );
+
+        let body = openai_request_body("gpt-4.1", &context).await;
+
+        assert_eq!(
+            body["input"],
+            json!([{
+                "type": "function_call", "arguments": "{}", "call_id": "call_1", "name": "search"
+            }])
+        );
+    }
+
+    #[tokio::test]
+    async fn responses_preserve_tool_errors_and_summary_notes() {
+        let context = Context::new(
+            vec![
+                ChatMessage::ToolCallResult(Err(ToolCallError {
+                    id: "call_2".into(),
+                    name: "bash".into(),
+                    arguments: Some("{}".into()),
+                    error: "command failed".into(),
+                })),
+                ChatMessage::Summary {
+                    message_id: MessageId::new(),
+                    content: "User asked about Rust.".into(),
+                    timestamp: IsoString::now(),
+                    messages_compacted: 5,
+                },
+            ],
+            vec![],
+        );
+
+        let body = openai_request_body("gpt-4.1", &context).await;
+        let input = body["input"].as_array().unwrap();
+
+        assert_eq!(input.len(), 2);
+        assert_eq!(
+            input[0],
+            json!({ "type": "function_call_output", "call_id": "call_2", "output": "Error: command failed" })
+        );
+        assert_eq!(input[1]["type"], "message");
+        assert_eq!(input[1]["role"], "user");
+        let note = input[1]["content"].as_str().unwrap();
+        assert!(note.starts_with("[Previous conversation handoff]"));
+        assert!(note.contains("User asked about Rust."));
+    }
+
+    #[tokio::test]
+    async fn responses_replay_encrypted_reasoning_only_for_the_original_model() {
+        for source_model in [Some("openai:gpt-5.6"), Some("openai:gpt-5.5"), None] {
+            let context = Context::new(
+                vec![ChatMessage::Assistant {
+                    message_id: MessageId::new(),
+                    content: "thinking done".into(),
+                    timestamp: IsoString::now(),
+                    tool_calls: vec![],
+                    reasoning: AssistantReasoning::from_parts(
+                        "summary".into(),
+                        source_model.map(|model| EncryptedReasoningContent {
+                            id: "r_1".into(),
+                            model: model.parse().unwrap(),
+                            content: "encrypted-blob".into(),
+                        }),
+                    ),
+                }],
+                vec![],
+            );
+
+            let body = openai_request_body("gpt-5.6", &context).await;
+            let input = body["input"].as_array().unwrap();
+
+            assert_eq!(input[0], json!({ "type": "message", "role": "assistant", "content": "thinking done" }));
+            if source_model == Some("openai:gpt-5.6") {
+                assert_eq!(input.len(), 2);
+                assert_eq!(
+                    input[1],
+                    json!({ "type": "reasoning", "id": "r_1", "summary": [], "encrypted_content": "encrypted-blob" })
+                );
+            } else {
+                assert_eq!(input.len(), 1, "{source_model:?}: {input:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn responses_send_each_enabled_effort_with_an_automatic_summary() {
+        for effort in ReasoningEffort::all().iter().filter(|effort| effort.is_enabled()) {
+            let model = LlmModel::all()
+                .iter()
+                .find(|model| {
+                    model.provider_enum() == Provider::Openai && model.effective_reasoning_levels().contains(effort)
+                })
+                .expect("OpenAI has a model supporting this effort");
+            let mut context = hello_context();
+            context.set_reasoning_effort(*effort);
+
+            let body = openai_request_body(&model.model_id(), &context).await;
+
+            assert_eq!(body["reasoning"], json!({ "effort": effort.as_str(), "summary": "auto" }));
         }
     }
 
@@ -773,13 +1004,12 @@ mod tests {
             (ReasoningEffort::Disabled, Some("none")),
             (ReasoningEffort::Low, Some("low")),
         ] {
-            let mut server = CaptureServer::start_responses().await;
-            let provider = capture_backed_provider(&server, &OPENAI).with_model("gpt-5.4");
+            let mut fixture = ProviderFixture::builder(&OPENAI).model("gpt-5.4").build().await;
             let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
             context.set_reasoning_effort(effort);
 
-            let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-            let body = server.captured().await.body;
+            let (captured, responses) = fixture.run(&context).await;
+            let body = captured.body;
 
             assert!(responses.iter().all(Result::is_ok), "{responses:?}");
             assert_eq!(body["reasoning"]["effort"].as_str(), expected);
@@ -791,14 +1021,12 @@ mod tests {
 
     #[tokio::test]
     async fn openai_sends_max_effort_and_prompt_cache_key() {
-        let mut server = CaptureServer::start_responses().await;
-        let provider = capture_backed_provider(&server, &OPENAI).with_model("gpt-5.6");
+        let mut fixture = ProviderFixture::builder(&OPENAI).model("gpt-5.6").build().await;
         let mut context = Context::new(vec![ChatMessage::user("Think harder")], vec![]);
         context.set_reasoning_effort(ReasoningEffort::Max);
         context.set_prompt_cache_key(Some("cache-key".to_string()));
 
-        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-        let captured = server.captured().await;
+        let (captured, responses) = fixture.run(&context).await;
 
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
         assert_eq!(captured.body["reasoning"]["effort"], "max");
@@ -806,19 +1034,17 @@ mod tests {
         assert_eq!(captured.body["prompt_cache_key"], "cache-key");
         assert_eq!(captured.body["include"], json!(["reasoning.encrypted_content"]));
         assert_eq!(captured.body["stream"], true);
-        assert_eq!(provider.display_name(), "OpenAI (gpt-5.6)");
+        assert_eq!(fixture.provider.display_name(), "OpenAI (gpt-5.6)");
     }
 
     #[tokio::test]
     async fn responses_http_200_failed_server_error_is_retryable_with_request_id() {
         let spec = ResponseSpec::sse(include_str!("../../tests/fixtures/openai_responses/04_failed_server.sse"))
             .with_header("x-request-id", "req-openai-1");
-        let mut server = CaptureServer::start_with_spec(spec).await;
-        let provider = capture_backed_provider(&server, &OPENAI);
+        let mut fixture = ProviderFixture::builder(&OPENAI).response(spec).build().await;
         let context = Context::new(vec![ChatMessage::user("hi")], vec![]);
 
-        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-        let _ = server.captured().await;
+        let (_, responses) = fixture.run(&context).await;
 
         assert!(!responses.iter().any(|r| matches!(r, Ok(LlmResponse::Done { .. }))));
         let err = responses.iter().find_map(|r| r.as_ref().err()).expect("expected a failure");
@@ -851,14 +1077,12 @@ mod tests {
 
     #[tokio::test]
     async fn xiaomi_omits_encrypted_reasoning_summaries_and_prompt_cache_key() {
-        let mut server = CaptureServer::start_responses().await;
-        let provider = capture_backed_provider(&server, &XIAOMI);
+        let mut fixture = ProviderFixture::builder(&XIAOMI).build().await;
         let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
         context.set_reasoning_effort(ReasoningEffort::High);
         context.set_prompt_cache_key(Some("cache-key".to_string()));
 
-        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-        let captured = server.captured().await;
+        let (captured, responses) = fixture.run(&context).await;
 
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
         assert_eq!(captured.path, "/responses");
@@ -866,13 +1090,12 @@ mod tests {
         assert_eq!(captured.body["reasoning"], json!({ "effort": "high" }));
         assert!(captured.body.get("include").is_none());
         assert!(captured.body.get("prompt_cache_key").is_none());
-        assert_eq!(provider.display_name(), "Xiaomi (mimo-v2.6-pro)");
+        assert_eq!(fixture.provider.display_name(), "Xiaomi (mimo-v2.6-pro)");
     }
 
     #[tokio::test]
     async fn xiaomi_replays_prior_reasoning_as_plain_text() {
-        let mut server = CaptureServer::start_responses().await;
-        let provider = capture_backed_provider(&server, &XIAOMI);
+        let mut fixture = ProviderFixture::builder(&XIAOMI).build().await;
         let context = Context::new(
             vec![
                 ChatMessage::user("Hello"),
@@ -888,8 +1111,7 @@ mod tests {
             vec![],
         );
 
-        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-        let captured = server.captured().await;
+        let (captured, responses) = fixture.run(&context).await;
 
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
         let reasoning = captured.body["input"]
@@ -904,8 +1126,7 @@ mod tests {
 
     #[tokio::test]
     async fn xiaomi_drops_null_from_optional_tool_parameters() {
-        let mut server = CaptureServer::start_responses().await;
-        let provider = capture_backed_provider(&server, &XIAOMI);
+        let mut fixture = ProviderFixture::builder(&XIAOMI).build().await;
         let tool = ToolDefinition::new(
             "bash",
             "Run a command",
@@ -920,47 +1141,21 @@ mod tests {
         );
         let context = Context::new(vec![ChatMessage::user("Hello")], vec![tool]);
 
-        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-        let captured = server.captured().await;
+        let (captured, responses) = fixture.run(&context).await;
 
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
         assert_eq!(captured.body["tools"][0]["parameters"]["properties"]["description"], json!({ "type": "string" }));
     }
 
     #[tokio::test]
-    async fn responses_request_model_routes_the_request_without_changing_catalog_identity() {
-        let mut server = CaptureServer::start_responses().await;
-        let provider = GenericProvider::new_with_connection(
-            "key",
-            &XIAOMI,
-            ProviderConnectionConfig {
-                base_url: Some(server.base_url.clone()),
-                auth_mode: ProviderAuthMode::None,
-                request_model: Some("mimo-deployment".to_string()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
-
-        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-        let captured = server.captured().await;
-
-        assert!(responses.iter().all(Result::is_ok), "{responses:?}");
-        assert_eq!(captured.body["model"], "mimo-deployment");
-        assert_eq!(provider.model().unwrap().to_string(), "xiaomi:mimo-v2.6-pro");
-    }
-
-    #[tokio::test]
     async fn anthropic_sends_its_version_and_api_key_unless_auth_is_none() {
         for (auth_mode, api_key) in [(ProviderAuthMode::Default, Some("secret")), (ProviderAuthMode::None, None)] {
-            let mut server = CaptureServer::start_messages().await;
-            let connection =
-                ProviderConnectionConfig { base_url: Some(server.base_url.clone()), auth_mode, ..Default::default() };
-            let provider = GenericProvider::new_with_connection("secret", &ANTHROPIC, connection).unwrap();
-
-            let responses = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
-            let captured = server.captured().await;
+            let mut fixture = ProviderFixture::builder(&ANTHROPIC)
+                .api_key("secret")
+                .connection(ProviderConnectionConfig { auth_mode, ..Default::default() })
+                .build()
+                .await;
+            let (captured, responses) = fixture.run(&hello_context()).await;
 
             assert_successful_stream(&responses);
             assert_eq!(captured.path, "/v1/messages");
@@ -972,15 +1167,14 @@ mod tests {
 
     #[tokio::test]
     async fn anthropic_caches_the_system_prompt_and_sends_tools() {
-        let mut server = CaptureServer::start_messages().await;
-        let provider = capture_backed_provider(&server, &ANTHROPIC);
+        let mut fixture = ProviderFixture::builder(&ANTHROPIC).build().await;
         let context = Context::new(
             vec![ChatMessage::system("You are helpful"), ChatMessage::user("Hello")],
             vec![ToolDefinition::new("search", "Search", json!({ "type": "object" }))],
         );
 
-        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
-        let body = server.captured().await.body;
+        let (captured, responses) = fixture.run(&context).await;
+        let body = captured.body;
 
         assert_successful_stream(&responses);
         assert_eq!(body["model"], "claude-sonnet-4-5-20250929");
@@ -996,7 +1190,7 @@ mod tests {
             body["tools"],
             json!([{ "name": "search", "description": "Search", "input_schema": { "type": "object" } }])
         );
-        assert_eq!(provider.display_name(), "Anthropic (claude-sonnet-4-5-20250929)");
+        assert_eq!(fixture.provider.display_name(), "Anthropic (claude-sonnet-4-5-20250929)");
     }
 
     #[tokio::test]
@@ -1027,36 +1221,12 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn anthropic_request_model_routes_the_request_without_changing_catalog_identity() {
-        let mut server = CaptureServer::start_messages().await;
-        let provider = GenericProvider::new_with_connection(
-            "key",
-            &ANTHROPIC,
-            ProviderConnectionConfig {
-                base_url: Some(server.base_url.clone()),
-                request_model: Some("claude-deployment".to_string()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let responses = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
-        let captured = server.captured().await;
-
-        assert_successful_stream(&responses);
-        assert_eq!(captured.body["model"], "claude-deployment");
-        assert_eq!(provider.model().unwrap().to_string(), "anthropic:claude-sonnet-4-5-20250929");
-    }
-
     const CHAT_FIXTURE: &str = include_str!("../../tests/fixtures/openai/01_minimal.sse");
 
     async fn streamed_chat(body: &str) -> Vec<Result<LlmResponse>> {
-        let mut server = CaptureServer::start_with_spec(ResponseSpec::sse(body)).await;
-        let provider = capture_backed_provider(&server, &OPENROUTER);
+        let mut fixture = ProviderFixture::builder(&OPENROUTER).response(ResponseSpec::sse(body)).build().await;
 
-        let responses = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
-        let _ = server.captured().await;
+        let (_, responses) = fixture.run(&hello_context()).await;
         responses
     }
 
@@ -1071,18 +1241,28 @@ mod tests {
         assert!(error.is_retryable());
     }
 
+    async fn openai_request_body(model: &str, context: &Context) -> serde_json::Value {
+        let mut fixture = ProviderFixture::builder(&OPENAI).model(model).build().await;
+
+        let (captured, responses) = fixture.run(context).await;
+
+        assert_successful_stream(&responses);
+        captured.body
+    }
+
     async fn anthropic_request_body(effort: ReasoningEffort) -> serde_json::Value {
-        let mut server = CaptureServer::start_messages().await;
-        let provider = capture_backed_provider(&server, &ANTHROPIC)
-            .with_model(&reasoning_off_model(Provider::Anthropic).model_id());
+        let mut fixture = ProviderFixture::builder(&ANTHROPIC)
+            .model(&reasoning_off_model(Provider::Anthropic).model_id())
+            .build()
+            .await;
         let mut context = hello_context();
         context.set_reasoning_effort(effort);
         context.set_model_settings(ModelSettings { temperature: Some(0.5), top_p: Some(0.5), max_tokens: Some(500) });
 
-        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        let (captured, responses) = fixture.run(&context).await;
 
         assert_successful_stream(&responses);
-        server.captured().await.body
+        captured.body
     }
 
     fn reasoning_off_model(provider: Provider) -> &'static LlmModel {
@@ -1093,26 +1273,14 @@ mod tests {
     }
 
     async fn rejected_chat_request(spec: ResponseSpec) -> LlmError {
-        let mut server = CaptureServer::start_with_spec(spec.with_header("x-request-id", "request-123")).await;
-        let provider = capture_backed_provider(&server, &OPENROUTER);
+        let mut fixture = ProviderFixture::builder(&OPENROUTER)
+            .response(spec.with_header("x-request-id", "request-123"))
+            .build()
+            .await;
 
-        let mut events = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
-        let _ = server.captured().await;
+        let (_, mut events) = fixture.run(&hello_context()).await;
 
         assert_eq!(events.len(), 1, "a rejected request must yield exactly one error: {events:?}");
         events.pop().unwrap().expect_err("request must fail")
-    }
-
-    fn capture_backed_provider(server: &CaptureServer, config: &'static ProviderConfig) -> GenericProvider {
-        GenericProvider::new_with_connection(
-            "key",
-            config,
-            ProviderConnectionConfig {
-                base_url: Some(server.base_url.clone()),
-                auth_mode: ProviderAuthMode::None,
-                ..Default::default()
-            },
-        )
-        .unwrap()
     }
 }
