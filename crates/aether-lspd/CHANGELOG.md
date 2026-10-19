@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.5](https://github.com/contextbridge/aether/compare/aether-lspd-v0.3.4...aether-lspd-v0.3.5) - 2026-10-19
+
+### Other
+
+- updated the following local packages: aether-utils
+
 ## [0.3.4](https://github.com/contextbridge/aether/compare/aether-lspd-v0.3.3...aether-lspd-v0.3.4) - 2026-10-19
 
 ### Other

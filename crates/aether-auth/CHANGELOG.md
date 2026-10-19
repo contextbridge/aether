@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.20](https://github.com/contextbridge/aether/compare/aether-auth-v0.1.19...aether-auth-v0.1.20) - 2026-10-19
+
+### Other
+
+- updated the following local packages: aether-utils
+
 ## [0.1.19](https://github.com/contextbridge/aether/compare/aether-auth-v0.1.18...aether-auth-v0.1.19) - 2026-10-19
 
 ### Fixed

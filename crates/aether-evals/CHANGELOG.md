@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0](https://github.com/contextbridge/aether/compare/aether-evals-v0.3.22...aether-evals-v0.4.0) - 2026-10-19
+
+### Added
+
+- *(evals)* [**breaking**] git workspaces without the gold commit, explicit agent env, abortable runs ([#609](https://github.com/contextbridge/aether/pull/609))
+
 ## [0.3.22](https://github.com/contextbridge/aether/compare/aether-evals-v0.3.21...aether-evals-v0.3.22) - 2026-10-19
 
 ### Other
