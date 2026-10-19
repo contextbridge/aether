@@ -62,7 +62,7 @@ Aether Evals' fake-agent coverage should use normal test names. Reserve `_eval` 
 - `Workspace::empty()` creates an isolated temp directory.
 - `Workspace::from_dir(path)` copies fixture directory contents into a temp directory.
 - `Workspace::from_git(GitSpec { source, start_commit, gold_commit, subdir, branch, diff_exclude })` checks out the start commit on `branch` (default `main`), fetched from `GitSource::Url(url)` or `GitSource::Bundle(path)` (see `create_git_bundle`). The workspace holds only the start commit's history, with no remote, so the agent can't find the gold commit in git. That history is fetched in full, blobs included, so reuse one bundle across runs for large repositories.
-- `Transcript` exposes collected agent messages, token usage, and tool-call helpers.
+- `Transcript` exposes collected agent messages and tool-call helpers. `transcript.session_usage()` returns the session's cumulative tokens and estimated cost, sub-agents' calls included, from the last usage event.
 
 ## Dockerized evals
 

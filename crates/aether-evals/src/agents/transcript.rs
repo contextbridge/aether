@@ -74,9 +74,9 @@ impl Transcript {
         self.tool_calls(name).count()
     }
 
-    /// Session-wide token totals and estimated cost from the last usage event,
-    /// or zeroed totals if no usage was recorded.
-    pub fn usage(&self) -> SessionUsageTotals {
+    /// Session-wide token totals and estimated cost, sub-agents' calls included,
+    /// from the last usage event, or zeroed totals if no usage was recorded.
+    pub fn session_usage(&self) -> SessionUsageTotals {
         self.events
             .iter()
             .rev()
@@ -178,13 +178,13 @@ mod tests {
     }
 
     #[test]
-    fn usage_returns_zeroed_totals_when_no_usage_was_recorded() {
+    fn session_usage_is_zeroed_when_no_usage_was_recorded() {
         let transcript = transcript_with_events(vec![tool_call("bash")]);
-        assert_eq!(transcript.usage(), SessionUsageTotals::default());
+        assert_eq!(transcript.session_usage(), SessionUsageTotals::default());
     }
 
     #[test]
-    fn usage_extracts_the_final_session_totals() {
+    fn session_usage_returns_the_final_session_totals() {
         let mut last = session_usage_event(2, TokenUsage::new(2000, 500));
         last.totals.tokens = TokenUsage::new(3000, 600);
         last.totals.unpriced_calls = 2;
@@ -193,7 +193,7 @@ mod tests {
             AgentEvent::SessionUsage(last),
         ]);
 
-        let usage = transcript.usage();
+        let usage = transcript.session_usage();
         assert_eq!(usage.tokens.input_tokens.get(), 3000);
         assert_eq!(usage.tokens.output_tokens.get(), 600);
         assert_eq!(usage.tokens.total_tokens().get(), 3600);

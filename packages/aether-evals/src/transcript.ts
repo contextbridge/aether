@@ -1,4 +1,9 @@
-import type { AgentEvent, ContextUsage, TurnOutcome } from "@aether-agent/sdk";
+import type {
+  AgentEvent,
+  ContextUsage,
+  SessionUsageTotals,
+  TurnOutcome,
+} from "@aether-agent/sdk";
 
 export class ToolCall {
   readonly arguments: string;
@@ -69,12 +74,37 @@ export class Transcript {
   usage(): ContextUsage {
     return summarizeUsage(this.events);
   }
+
+  sessionUsage(): SessionUsageTotals {
+    return lastSessionUsage(this.events);
+  }
 }
 
 const ZERO_USAGE: ContextUsage = {
   usage_ratio: null,
   context_limit: null,
   input_tokens: 0,
+};
+
+const ZERO_SESSION_USAGE: SessionUsageTotals = {
+  tokens: {
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: null,
+    cache_creation_tokens: null,
+    input_audio_tokens: null,
+    input_video_tokens: null,
+    reasoning_tokens: null,
+    output_audio_tokens: null,
+    accepted_prediction_tokens: null,
+    rejected_prediction_tokens: null,
+  },
+  estimated_usd: 0,
+  estimated_input_usd: 0,
+  estimated_output_usd: 0,
+  estimated_cache_read_usd: 0,
+  estimated_cache_creation_usd: 0,
+  unpriced_calls: 0,
 };
 
 export function isTerminalEvent(event: AgentEvent): boolean {
@@ -109,4 +139,12 @@ function summarizeUsage(events: AgentEvent[]): ContextUsage {
       return event.event.usage;
   }
   return { ...ZERO_USAGE };
+}
+
+function lastSessionUsage(events: AgentEvent[]): SessionUsageTotals {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (event?.category === "session_usage") return event.event.totals;
+  }
+  return structuredClone(ZERO_SESSION_USAGE);
 }
