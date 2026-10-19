@@ -133,7 +133,7 @@ impl Workspace {
         let Some(git) = &self.git else {
             return Ok(None);
         };
-        let diff = GitRepo::from_path(&self.root_path).diff_range(&git.start_commit, None)?;
+        let diff = GitRepo::from_path(&self.root_path).diff_working_tree(&git.start_commit)?;
         Ok(Some(GitDiff::new(diff)))
     }
 
@@ -313,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn capture_agent_diff_includes_staged_unstaged_added_and_deleted_changes() {
+    fn capture_agent_diff_includes_staged_unstaged_added_deleted_and_untracked_changes() {
         let (_repo, spec) = init_repo();
         let workspace = Workspace::from_git(spec).unwrap();
 
@@ -322,6 +322,8 @@ mod tests {
         git(workspace.root_path(), &["add", "root.txt", "added.txt"]);
         write(workspace.join("pkg/inner.txt"), "unstaged change\n").unwrap();
         std::fs::remove_file(workspace.join("deleted.txt")).unwrap();
+        create_dir_all(workspace.join("dir")).unwrap();
+        write(workspace.join("dir/untracked.txt"), "untracked\n").unwrap();
 
         let agent_diff = agent_diff(&workspace);
 
@@ -333,9 +335,11 @@ mod tests {
         assert!(agent_diff.diff.contains("+added"));
         assert!(agent_diff.diff.contains("deleted.txt"));
         assert!(agent_diff.diff.contains("-before deleted"));
-        assert_eq!(agent_diff.stats.files_changed, 4);
-        assert_eq!(agent_diff.stats.lines_added, 3);
+        assert!(agent_diff.diff.contains("+untracked"));
+        assert_eq!(agent_diff.stats.files_changed, 5);
+        assert_eq!(agent_diff.stats.lines_added, 4);
         assert_eq!(agent_diff.stats.lines_removed, 3);
+        assert!(git(workspace.root_path(), &["status", "--porcelain"]).contains("?? dir/"), "the index is untouched");
     }
 
     #[test]

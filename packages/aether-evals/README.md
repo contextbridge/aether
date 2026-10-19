@@ -157,8 +157,8 @@ await using workspace = await Workspace.fromGitBundle({
 
 // ... run the agent ...
 
-// Commits and staged and unstaged edits since the start commit. Rejects if git can't read the
-// repository.
+// Commits, staged and unstaged edits, and untracked files since the start commit. Rejects if git
+// can't read the repository.
 const agentDiff = await workspace.captureAgentDiff();
 const referenceDiff = workspace.referenceDiff;
 ```

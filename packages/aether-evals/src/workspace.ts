@@ -164,9 +164,8 @@ export class Workspace implements AsyncDisposable {
 
   async captureAgentDiff(signal?: AbortSignal): Promise<GitDiff | undefined> {
     if (!this.#git) return undefined;
-    const diff = await GitRepo.fromPath(this.rootPath).diff(
+    const diff = await GitRepo.fromPath(this.rootPath).diffWorkingTree(
       this.#git.startCommit,
-      undefined,
       signal,
     );
     return toGitDiff(diff);

@@ -13,7 +13,15 @@ pub enum GitError {
 }
 
 pub fn git<T: AsRef<OsStr>>(repo: Option<&Path>, args: &[T]) -> Result<Vec<u8>, GitError> {
-    let output = command(repo, args).output().map_err(|source| spawn_error(args, source))?;
+    git_with_env(repo, args, &[])
+}
+
+pub fn git_with_env<T: AsRef<OsStr>>(
+    repo: Option<&Path>,
+    args: &[T],
+    env: &[(&str, &OsStr)],
+) -> Result<Vec<u8>, GitError> {
+    let output = command(repo, args).envs(env.iter().copied()).output().map_err(|source| spawn_error(args, source))?;
     stdout(args, output)
 }
 

@@ -129,7 +129,7 @@ describe("createWorkspace", () => {
     });
   });
 
-  it("captures staged, unstaged, added, and deleted tracked changes", async () => {
+  it("captures staged, unstaged, added, deleted, and untracked changes", async () => {
     const ws = await gitWorkspace({
       "staged.txt": "before staged\n",
       "unstaged.txt": "before unstaged\n",
@@ -141,6 +141,8 @@ describe("createWorkspace", () => {
     git(ws.rootPath, "add", "staged.txt", "added.txt");
     await writeFile(ws.join("unstaged.txt"), "after unstaged\n");
     await unlink(ws.join("deleted.txt"));
+    await mkdir(ws.join("dir"));
+    await writeFile(ws.join("dir/untracked.txt"), "untracked\n");
 
     const agentDiff = await ws.captureAgentDiff();
 
@@ -152,11 +154,13 @@ describe("createWorkspace", () => {
     expect(agentDiff?.diff).toContain("+added");
     expect(agentDiff?.diff).toContain("deleted.txt");
     expect(agentDiff?.diff).toContain("-before deleted");
+    expect(agentDiff?.diff).toContain("+untracked");
     expect(agentDiff?.stats).toEqual({
-      filesChanged: 4,
-      linesAdded: 3,
+      filesChanged: 5,
+      linesAdded: 4,
       linesRemoved: 3,
     });
+    expect(git(ws.rootPath, "status", "--porcelain")).toContain("?? dir/");
   });
 
   it("captures an unchanged workspace as an empty agent diff", async () => {

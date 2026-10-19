@@ -153,7 +153,7 @@ Judge faults — transient LLM stream failures, unparseable responses, criterion
 
 `Workspace` removes its temporary directory when dropped. To retain files for debugging, call `workspace.persist()` and remove the returned path manually when finished.
 
-For git-backed workspaces, `workspace.capture_agent_diff()?` returns the agent's commits and staged and unstaged edits since the start commit, and errors if git can't read the repository. `workspace.reference_diff()` returns the start-to-gold diff, computed before the gold commit was discarded. Both are `None` for workspaces without a start commit.
+For git-backed workspaces, `workspace.capture_agent_diff()?` returns the agent's commits, staged and unstaged edits, and untracked files since the start commit, and errors if git can't read the repository. `workspace.reference_diff()` returns the start-to-gold diff, computed before the gold commit was discarded. Both are `None` for workspaces without a start commit.
 
 ## Git-backed evals
 

@@ -1,3 +1,6 @@
+import { copyFile, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { env as processEnv } from "node:process";
 
 import { runCommand } from "@aether-agent/sdk";
@@ -54,18 +57,52 @@ export class GitRepo {
 
   async diff(
     fromCommit: string,
-    toCommit?: string,
+    toCommit: string,
     signal?: AbortSignal,
   ): Promise<string> {
-    const range = toCommit ? `${fromCommit}..${toCommit}` : fromCommit;
-    return git(["-C", this.path, "diff", range], signal);
+    return git(["-C", this.path, "diff", fromCommit, toCommit], signal);
+  }
+
+  async diffWorkingTree(
+    fromCommit: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const scratch = await mkdtemp(join(tmpdir(), "aether-eval-index-"));
+    try {
+      const index = join(scratch, "index");
+      const realIndex = await git(
+        [
+          "-C",
+          this.path,
+          "rev-parse",
+          "--path-format=absolute",
+          "--git-path",
+          "index",
+        ],
+        signal,
+      );
+      await copyFile(realIndex.trim(), index).catch(() => {});
+      const env = { GIT_INDEX_FILE: index };
+      await git(["-C", this.path, "add", "--all"], signal, env);
+      return await git(
+        ["-C", this.path, "diff", "--cached", fromCommit],
+        signal,
+        env,
+      );
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
   }
 }
 
-function git(args: string[], signal?: AbortSignal): Promise<string> {
+function git(
+  args: string[],
+  signal?: AbortSignal,
+  env: Record<string, string> = {},
+): Promise<string> {
   return runCommand("git", args, {
     cwd: process.cwd(),
-    env: processEnv,
+    env: { ...processEnv, ...env },
     abortSignal: signal,
     spawnFailedMessage:
       "Failed to run git for the eval workspace (is git installed and on PATH?)",
