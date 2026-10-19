@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { AgentEvent } from "@aether-agent/sdk";
-import { DockerAgent, Task, Transcript } from "../src/index.js";
+import { DockerAgent, Task, Transcript, turnEnded } from "../src/index.js";
 import type { Container, ContainerStreamingOptions } from "../src/index.js";
 
 describe("DockerAgent", () => {
@@ -61,6 +61,40 @@ describe("DockerAgent", () => {
     },
   );
 
+  it("gives the agent only its own environment and the eval variables", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "host-key");
+    vi.stubEnv("AETHER_LLM_MODEL", "host-model");
+    try {
+      const { container, execs } = fakeContainer(JSON.stringify(turnEnded()));
+      const agent = new DockerAgent({
+        container,
+        command: ["fake-agent"],
+        env: { MODEL: "eval-model" },
+      });
+
+      await collect(agent.run(new Task("do the thing")));
+
+      expect(execs[0]?.env).toEqual({
+        MODEL: "eval-model",
+        AETHER_EVAL_WORKSPACE_ROOT: "/workspace",
+        AETHER_EVAL_CWD: "/workspace",
+        AETHER_EVAL_TASK_PROMPT: "do the thing",
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("passes the run's abort signal to the container", async () => {
+    const { container, execs } = fakeContainer(JSON.stringify(turnEnded()));
+    const agent = new DockerAgent({ container, command: ["fake-agent"] });
+    const controller = new AbortController();
+
+    await collect(agent.run(new Task("test"), { signal: controller.signal }));
+
+    expect(execs[0]?.signal).toBe(controller.signal);
+  });
+
   it("rejects malformed NDJSON", async () => {
     const agent = agentEmittingLines("not JSON");
 
@@ -76,14 +110,26 @@ function agentEmitting(...events: AgentEvent[]): DockerAgent {
 }
 
 function agentEmittingLines(...lines: string[]): DockerAgent {
+  return new DockerAgent({
+    container: fakeContainer(...lines).container,
+    command: ["fake-agent"],
+  });
+}
+
+function fakeContainer(...lines: string[]): {
+  container: Container;
+  execs: ContainerStreamingOptions[];
+} {
+  const execs: ContainerStreamingOptions[] = [];
   const container = {
     workspaceRoot: "/workspace",
     cwd: "/workspace",
-    async *execStreaming(_options: ContainerStreamingOptions) {
+    async *execStreaming(options: ContainerStreamingOptions) {
+      execs.push(options);
       yield* lines;
     },
   } as unknown as Container;
-  return new DockerAgent({ container, command: ["fake-agent"] });
+  return { container, execs };
 }
 
 async function collect(

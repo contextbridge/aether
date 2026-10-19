@@ -23,8 +23,12 @@ export class AetherSdkError extends Error {
   }
 }
 
+export function abortedError(): AetherSdkError {
+  return new AetherSdkError("aborted", "Aborted by caller");
+}
+
 export function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
-    throw new AetherSdkError("aborted", "Aborted by caller");
+    throw abortedError();
   }
 }

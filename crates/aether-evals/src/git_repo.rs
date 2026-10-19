@@ -1,18 +1,7 @@
+use crate::WorkspaceError;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use utils::git::{GitError, git};
-
-/// Controls how much of a repository's object set is downloaded during [`GitRepo::clone`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CloneMode {
-    /// Download the full object set so the clone is self-contained
-    /// (e.g. so it can be bundled, or because `source` is a bundle
-    /// and not a promisor remote).
-    Full,
-    /// Defer downloading file blobs until they are needed via a partial
-    /// clone (`--filter=blob:none`) -- cheaper for large repos.
-    Blobless,
-}
+use utils::git::{GitError, git, git_with_env};
 
 /// Represents a git repository used for evaluation purposes
 pub(crate) struct GitRepo {
@@ -32,36 +21,17 @@ impl GitRepo {
         Ok(GitRepo { path: dest.to_path_buf() })
     }
 
-    /// Clone `source` (a URL or a local bundle/path) into `dest` with `--no-checkout`.
-    ///
-    /// [`CloneMode::Blobless`] defers downloading file blobs until they're needed --
-    /// cheaper for large repos. [`CloneMode::Full`] downloads the complete object set so
-    /// the clone is self-contained (e.g. so it can be bundled, or because `source` is a
-    /// bundle and not a promisor remote).
-    #[tracing::instrument(skip(source, dest))]
-    pub(crate) fn clone(source: impl AsRef<OsStr>, dest: &Path, mode: CloneMode) -> Result<Self, GitError> {
-        let mut args = vec![OsStr::new("clone"), OsStr::new("--no-checkout")];
-        if mode == CloneMode::Blobless {
-            args.push(OsStr::new("--filter=blob:none"));
-        }
-        args.push(source.as_ref());
-        args.push(dest.as_os_str());
-        git(None, &args)?;
-        Ok(GitRepo { path: dest.to_path_buf() })
-    }
-
-    /// Checkout a specific commit, branch, or tag
     #[tracing::instrument(skip(self))]
-    pub(crate) fn checkout(&self, reference: &str) -> Result<(), GitError> {
-        self.git(&["checkout", reference])?;
+    pub(crate) fn checkout_branch(&self, branch: &str, commit: &str) -> Result<(), GitError> {
+        self.git(&["checkout", "-B", branch, commit])?;
         Ok(())
     }
 
     /// Fetch `revs` from `remote` (a named remote or a URL) into this repository.
-    #[tracing::instrument(skip(self))]
-    pub(crate) fn fetch(&self, remote: &str, revs: &[&str]) -> Result<(), GitError> {
-        let mut args = vec!["fetch", remote];
-        args.extend_from_slice(revs);
+    #[tracing::instrument(skip(self, remote))]
+    pub(crate) fn fetch(&self, remote: impl AsRef<OsStr>, revs: &[&str]) -> Result<(), GitError> {
+        let mut args = vec![OsStr::new("fetch"), OsStr::new("--no-tags"), remote.as_ref()];
+        args.extend(revs.iter().map(OsStr::new));
         self.git(&args)?;
         Ok(())
     }
@@ -83,78 +53,71 @@ impl GitRepo {
         Ok(())
     }
 
-    /// Get the diff from a commit to another commit or working directory
-    ///
-    /// # Arguments
-    /// * `from_commit` - Starting commit
-    /// * `to_commit` - Ending commit (None means working directory/unstaged changes)
-    ///
-    /// # Examples
-    /// * `diff_range("abc123", Some("def456"))` - diff between two commits
-    /// * `diff_range("abc123", None)` - changes from commit to working directory
-    /// * `diff_range("HEAD", None)` - unstaged changes (equivalent to `git diff`)
     #[tracing::instrument(skip(self))]
-    pub(crate) fn diff_range(&self, from_commit: &str, to_commit: Option<&str>) -> Result<String, GitError> {
-        let range = match to_commit {
-            Some(to) => format!("{from_commit}..{to}"),
-            None => from_commit.to_string(),
-        };
-        let stdout = self.git(&["diff", range.as_str()])?;
+    pub(crate) fn diff(&self, from_commit: &str, to_commit: &str, exclude: &[String]) -> Result<String, GitError> {
+        let stdout = self.git(&diff_args(&["diff", from_commit, to_commit], exclude))?;
         Ok(String::from_utf8_lossy(&stdout).into_owned())
     }
 
-    /// Get the diff between two commits
-    ///
-    /// Returns the output of `git diff from_commit..to_commit`
-    pub(crate) fn diff(&self, from_commit: &str, to_commit: &str) -> Result<String, GitError> {
-        self.diff_range(from_commit, Some(to_commit))
+    #[tracing::instrument(skip(self))]
+    pub(crate) fn diff_working_tree(&self, from_commit: &str, exclude: &[String]) -> Result<String, WorkspaceError> {
+        let scratch = tempfile::tempdir().map_err(WorkspaceError::CreateTempDir)?;
+        let index = scratch.path().join("index");
+        let real_index = self.git(&["rev-parse", "--path-format=absolute", "--git-path", "index"])?;
+        std::fs::copy(String::from_utf8_lossy(&real_index).trim(), &index).ok();
+        let env = [("GIT_INDEX_FILE", index.as_os_str())];
+        self.git_with_env(&["add", "--all"], &env)?;
+        let stdout = self.git_with_env(&diff_args(&["diff", "--cached", from_commit], exclude), &env)?;
+        Ok(String::from_utf8_lossy(&stdout).into_owned())
     }
 
     fn git<S: AsRef<OsStr>>(&self, args: &[S]) -> Result<Vec<u8>, GitError> {
-        git(Some(&self.path), args)
+        self.git_with_env(args, &[])
     }
+
+    fn git_with_env<S: AsRef<OsStr>>(&self, args: &[S], env: &[(&str, &OsStr)]) -> Result<Vec<u8>, GitError> {
+        git_with_env(Some(&self.path), args, env)
+    }
+}
+
+fn diff_args(args: &[&str], exclude: &[String]) -> Vec<String> {
+    let separator = (!exclude.is_empty()).then(|| "--".to_string());
+    let pathspecs = exclude.iter().map(|pathspec| format!(":(exclude){pathspec}"));
+    args.iter().map(ToString::to_string).chain(separator).chain(pathspecs).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use utils::testing::TestWorkspace;
 
     #[test]
-    fn diff_range_covers_commit_ranges_and_the_working_tree() {
+    fn diff_covers_commit_ranges() {
         let repo = TestWorkspace::new().file("test.txt", "initial content\n").git_init();
         let first_commit = repo.commit("Initial commit");
         repo.write("test.txt", "modified content\n");
         repo.write("new.txt", "new file\n");
         let second_commit = repo.commit("Second commit");
         repo.write("test.txt", "unstaged content\n");
-        let git_repo = GitRepo::from_path(repo.root());
 
-        let committed = git_repo.diff(&first_commit, &second_commit).unwrap();
+        let committed = GitRepo::from_path(repo.root()).diff(&first_commit, &second_commit, &[]).unwrap();
+
         assert!(committed.contains("+modified content"), "{committed}");
         assert!(committed.contains("+new file"), "{committed}");
         assert!(!committed.contains("unstaged content"), "{committed}");
-        assert!(git_repo.diff_range("HEAD", None).unwrap().contains("+unstaged content"));
-        assert!(git_repo.diff_range(&first_commit, None).unwrap().contains("+unstaged content"));
     }
 
     #[test]
-    fn blobless_clone_checks_out_and_diffs_lazily_fetched_commits() {
-        let source = TestWorkspace::new().file("test.txt", "initial content\n").git_init();
-        let first_commit = source.commit("Initial commit");
-        source.write("test.txt", "modified content\n");
-        let second_commit = source.commit("Second commit");
-        let clone = TestWorkspace::new();
+    fn diff_working_tree_includes_untracked_files_without_touching_the_index() {
+        let repo = TestWorkspace::new().file("test.txt", "initial content\n").git_init();
+        let commit = repo.commit("Initial commit");
+        repo.write("test.txt", "unstaged content\n");
+        repo.write("untracked.txt", "untracked\n");
 
-        let repo = GitRepo::clone(source.root(), clone.root(), CloneMode::Blobless).unwrap();
-        assert!(
-            fs::read_dir(clone.root()).unwrap().all(|entry| entry.unwrap().file_name() == ".git"),
-            "working directory should be empty after a --no-checkout clone"
-        );
+        let diff = GitRepo::from_path(repo.root()).diff_working_tree(&commit, &[]).unwrap();
 
-        repo.checkout(&first_commit).unwrap();
-        assert_eq!(fs::read_to_string(clone.path("test.txt")).unwrap(), "initial content\n");
-        assert!(repo.diff(&first_commit, &second_commit).unwrap().contains("+modified content"));
+        assert!(diff.contains("+unstaged content"), "{diff}");
+        assert!(diff.contains("+untracked"), "{diff}");
+        assert!(repo.git(&["status", "--porcelain"]).contains("?? untracked.txt"));
     }
 }

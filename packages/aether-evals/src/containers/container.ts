@@ -11,12 +11,13 @@ import {
   type StartedTestContainer,
   Wait,
 } from "testcontainers";
-import { AetherSdkError } from "@aether-agent/sdk";
+import { abortedError, runCommand, throwIfAborted } from "@aether-agent/sdk";
 import { Image } from "./image.js";
 import { AetherCommandExitError, AetherEvalError } from "../errors.js";
 import type { Workspace } from "../workspace.js";
 
 const STARTUP_TIMEOUT_MS = 60_000;
+const WORKSPACE_ROOT = "/workspace";
 
 export interface BindMount {
   source: string;
@@ -28,6 +29,7 @@ export interface ContainerExecOptions {
   command: string[];
   cwd?: string;
   env?: Record<string, string>;
+  user?: string;
   signal?: AbortSignal;
 }
 
@@ -37,24 +39,23 @@ export interface ExecOutput {
   stderr: string;
 }
 
-export interface ContainerStreamingOptions {
-  command: string[];
-  cwd?: string;
-  env?: Record<string, string>;
-  signal?: AbortSignal;
+export interface ContainerStreamingOptions extends ContainerExecOptions {
   onStderr?: (chunk: string) => void;
 }
 
 export class Container {
-  readonly workspaceRoot = "/workspace";
+  readonly workspaceRoot = WORKSPACE_ROOT;
   readonly cwd: string;
+  private readonly user?: string;
+  private readonly ephemeralTempdirs: string[];
 
   constructor(
     private readonly container: StartedTestContainer,
-    private readonly ephemeralTempdirs: string[],
-    cwd: string,
+    options: { cwd: string; user?: string; ephemeralTempdirs?: string[] },
   ) {
-    this.cwd = cwd;
+    this.cwd = options.cwd;
+    this.user = options.user;
+    this.ephemeralTempdirs = options.ephemeralTempdirs ?? [];
   }
 
   static builder(image: Image): ContainerBuilder {
@@ -62,10 +63,14 @@ export class Container {
   }
 
   async exec(options: ContainerExecOptions): Promise<ExecOutput> {
-    const result = await this.container.exec(options.command, {
-      workingDir: options.cwd ?? this.cwd,
-      env: options.env,
-    });
+    const result = await abortable(
+      this.container.exec(options.command, {
+        workingDir: options.cwd ?? this.cwd,
+        env: options.env,
+        user: options.user ?? this.user,
+      }),
+      options.signal,
+    );
     return {
       exitCode: result.exitCode,
       stdout: result.stdout,
@@ -82,9 +87,7 @@ export class Container {
   async *execStreaming(
     options: ContainerStreamingOptions,
   ): AsyncIterable<string> {
-    if (options.signal?.aborted) {
-      throw new AetherSdkError("aborted", "Aborted by caller");
-    }
+    throwIfAborted(options.signal);
     const client = await getContainerRuntimeClient();
     const dockerode = client.container.dockerode;
     const dockerodeContainer = dockerode.getContainer(this.container.getId());
@@ -97,6 +100,7 @@ export class Container {
       AttachStderr: true,
       WorkingDir: options.cwd ?? this.cwd,
       Env: env.length > 0 ? env : undefined,
+      User: options.user ?? this.user,
     });
 
     const stream = await exec.start({ hijack: true, stdin: false });
@@ -134,7 +138,7 @@ export class Container {
 
     using abortCleanup = options.signal
       ? addAbortListener(options.signal, () => {
-          stream.destroy(new AetherSdkError("aborted", "Aborted by caller"));
+          stream.destroy(abortedError());
         })
       : undefined;
     void abortCleanup;
@@ -181,6 +185,9 @@ export class ContainerBuilder {
   private mounts: BindMount[] = [];
   private ephemeralMounts: string[] = [];
   private privileged = false;
+  private user?: string;
+  private imageEntrypoint = false;
+  private readyCommand = "true";
 
   constructor(private readonly image: Image) {}
 
@@ -189,6 +196,21 @@ export class ContainerBuilder {
    */
   withPrivileged(privileged: boolean): this {
     this.privileged = privileged;
+    return this;
+  }
+
+  withUser(user: string): this {
+    this.user = user;
+    return this;
+  }
+
+  withImageEntrypoint(imageEntrypoint: boolean): this {
+    this.imageEntrypoint = imageEntrypoint;
+    return this;
+  }
+
+  withReadyCommand(command: string): this {
+    this.readyCommand = command;
     return this;
   }
 
@@ -223,32 +245,46 @@ export class ContainerBuilder {
       }
 
       const cwd = workspace.relativeCwd
-        ? posix.join("/workspace", workspace.relativeCwd)
-        : "/workspace";
-      const workspaceMount: BindMount = {
-        source: workspace.rootPath,
-        target: "/workspace",
-        mode: "rw",
-      };
+        ? posix.join(WORKSPACE_ROOT, workspace.relativeCwd)
+        : WORKSPACE_ROOT;
       const container = await createGenericContainer(this.image);
       if (this.privileged) {
         container.withPrivilegedMode();
       }
+      if (this.imageEntrypoint) {
+        container.withCommand(["sleep", "infinity"]);
+      } else {
+        container
+          .withEntrypoint(["/bin/sh"])
+          .withCommand(["-c", "sleep infinity"]);
+      }
       const started = await container
-        .withEntrypoint(["/bin/sh"])
-        .withCommand(["-c", "sleep infinity"])
         .withWorkingDir(cwd)
-        .withEnvironment(this.envVars)
+        .withEnvironment(withSafeWorkspace(this.envVars))
         .withBindMounts([
-          workspaceMount,
+          { source: workspace.rootPath, target: WORKSPACE_ROOT, mode: "rw" },
           ...this.mounts,
           ...ephemeralBindMounts,
         ])
-        .withWaitStrategy(Wait.forSuccessfulCommand("true"))
+        .withWaitStrategy(Wait.forSuccessfulCommand(this.readyCommand))
         .withStartupTimeout(STARTUP_TIMEOUT_MS)
         .start();
 
-      return new Container(started, ephemeralTempdirs, cwd);
+      const result = new Container(started, {
+        cwd,
+        user: this.user,
+        ephemeralTempdirs,
+      });
+      if (this.user) {
+        await grantAccess(result, [
+          workspace.rootPath,
+          ...ephemeralTempdirs,
+        ]).catch(async (err) => {
+          await result[Symbol.asyncDispose]();
+          throw err;
+        });
+      }
+      return result;
     } catch (err) {
       await removeTempdirs(ephemeralTempdirs);
       throw err;
@@ -288,6 +324,55 @@ async function createGenericContainer(image: Image): Promise<GenericContainer> {
 
   return await builder.build(image.toString(), {
     deleteOnExit: image.build.deleteOnExit ?? false,
+  });
+}
+
+function withSafeWorkspace(
+  env: Record<string, string>,
+): Record<string, string> {
+  const index = Number(env.GIT_CONFIG_COUNT ?? 0);
+  return {
+    ...env,
+    GIT_CONFIG_COUNT: String(index + 1),
+    [`GIT_CONFIG_KEY_${index}`]: "safe.directory",
+    [`GIT_CONFIG_VALUE_${index}`]: WORKSPACE_ROOT,
+  };
+}
+
+async function grantAccess(
+  container: Container,
+  paths: string[],
+): Promise<void> {
+  const hostUid = process.getuid?.();
+  if (process.platform !== "linux" || hostUid === undefined) return;
+
+  const id = await container.exec({ command: ["id", "-u"] });
+  if (id.exitCode !== 0) {
+    throw new AetherEvalError(
+      "configuration_error",
+      `could not resolve the container user's UID:\n${id.stderr}`,
+    );
+  }
+  const uid = Number(id.stdout.trim());
+  if (uid === hostUid) return;
+
+  const acl = `u:${uid}:rwX,d:u:${uid}:rwx,d:u:${hostUid}:rwx`;
+  await runCommand("setfacl", ["-R", "-m", acl, ...paths], {
+    cwd: process.cwd(),
+    env: process.env,
+    spawnFailedMessage: `Failed to run setfacl to grant UID ${uid} access to the workspace (is the acl package installed?)`,
+    exitedErrorCode: "execution_failed",
+    exitedMessage: ({ exitCode, stderr }) =>
+      `setfacl exited with code ${exitCode}.\n${stderr}`,
+  });
+}
+
+function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(abortedError());
+  return new Promise<T>((resolve, reject) => {
+    const listener = addAbortListener(signal, () => reject(abortedError()));
+    promise.then(resolve, reject).finally(() => listener[Symbol.dispose]());
   });
 }
 

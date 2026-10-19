@@ -14,8 +14,8 @@ pub use assertions::{assert_tool_call_count, assert_tool_call_with_args, assert_
 pub use containers::{Container, ContainerBuilder, ContainerError, ExecOutput, Image, ImageParseError};
 pub use error::{EvalRunError, WorkspaceError};
 pub use evals::{
-    DiffStats, GitBundleSpec, GitDiff, GitRepoSpec, RetainedWorkspaceInfo, Task, ToolCall, Transcript, TranscriptError,
-    Workspace, WorkspaceSource, create_git_bundle,
+    DiffStats, GitDiff, GitSource, GitSpec, RetainedWorkspaceInfo, Task, ToolCall, Transcript, TranscriptError,
+    Workspace, create_git_bundle,
 };
 pub use judge::{
     Judge, JudgeBuilder, JudgeContext, JudgeCriterionResponse, JudgeCriterionSpec, JudgeCriterionSummary, JudgeError,

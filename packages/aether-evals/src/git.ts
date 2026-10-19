@@ -1,3 +1,6 @@
+import { copyFile, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { env as processEnv } from "node:process";
 
 import { runCommand } from "@aether-agent/sdk";
@@ -15,27 +18,12 @@ export class GitRepo {
     return new GitRepo(dest);
   }
 
-  /**
-   * Clone `source` (a URL or a local bundle/path) into `dest` with `--no-checkout`.
-   *
-   * When `blobless` (the default), uses a partial blobless clone (`--filter=blob:none`)
-   * that defers blob downloads -- cheaper for large repos. Pass false to download the full
-   * object set so the clone is self-contained (e.g. when `source` is a bundle, which is not
-   * a promisor remote).
-   */
-  static async clone(
-    source: string,
-    dest: string,
+  async checkoutBranch(
+    branch: string,
+    commit: string,
     signal?: AbortSignal,
-    blobless = true,
-  ): Promise<GitRepo> {
-    const filter = blobless ? ["--filter=blob:none"] : [];
-    await git(["clone", "--no-checkout", ...filter, source, dest], signal);
-    return new GitRepo(dest);
-  }
-
-  async checkout(reference: string, signal?: AbortSignal): Promise<void> {
-    await git(["-C", this.path, "checkout", reference], signal);
+  ): Promise<void> {
+    await git(["-C", this.path, "checkout", "-B", branch, commit], signal);
   }
 
   /** Fetch `revs` from `remote` (a named remote or a URL) into this repository. */
@@ -44,7 +32,7 @@ export class GitRepo {
     revs: string[],
     signal?: AbortSignal,
   ): Promise<void> {
-    await git(["-C", this.path, "fetch", remote, ...revs], signal);
+    await git(["-C", this.path, "fetch", "--no-tags", remote, ...revs], signal);
   }
 
   async updateRef(
@@ -69,18 +57,70 @@ export class GitRepo {
 
   async diff(
     fromCommit: string,
-    toCommit?: string,
+    toCommit: string,
+    exclude: string[],
     signal?: AbortSignal,
   ): Promise<string> {
-    const range = toCommit ? `${fromCommit}..${toCommit}` : fromCommit;
-    return git(["-C", this.path, "diff", range], signal);
+    return git(
+      ["-C", this.path, "diff", fromCommit, toCommit, ...pathspecs(exclude)],
+      signal,
+    );
+  }
+
+  async diffWorkingTree(
+    fromCommit: string,
+    exclude: string[],
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const scratch = await mkdtemp(join(tmpdir(), "aether-eval-index-"));
+    try {
+      const index = join(scratch, "index");
+      const realIndex = await git(
+        [
+          "-C",
+          this.path,
+          "rev-parse",
+          "--path-format=absolute",
+          "--git-path",
+          "index",
+        ],
+        signal,
+      );
+      await copyFile(realIndex.trim(), index).catch(() => {});
+      const env = { GIT_INDEX_FILE: index };
+      await git(["-C", this.path, "add", "--all"], signal, env);
+      return await git(
+        [
+          "-C",
+          this.path,
+          "diff",
+          "--cached",
+          fromCommit,
+          ...pathspecs(exclude),
+        ],
+        signal,
+        env,
+      );
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
   }
 }
 
-function git(args: string[], signal?: AbortSignal): Promise<string> {
+function pathspecs(exclude: string[]): string[] {
+  return exclude.length > 0
+    ? ["--", ...exclude.map((pathspec) => `:(exclude)${pathspec}`)]
+    : [];
+}
+
+function git(
+  args: string[],
+  signal?: AbortSignal,
+  env: Record<string, string> = {},
+): Promise<string> {
   return runCommand("git", args, {
     cwd: process.cwd(),
-    env: processEnv,
+    env: { ...processEnv, ...env },
     abortSignal: signal,
     spawnFailedMessage:
       "Failed to run git for the eval workspace (is git installed and on PATH?)",

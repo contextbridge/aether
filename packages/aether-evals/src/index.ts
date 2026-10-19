@@ -10,7 +10,7 @@ export type {
   ExecOutput,
   ImageBuildOptions,
 } from "./containers/index.js";
-export type { Agent } from "./Agent.js";
+export type { Agent, AgentRunOptions } from "./Agent.js";
 export { FakeAgent } from "./FakeAgent.js";
 export { Task } from "./task.js";
 export { diffStatsFromDiff } from "./diff.js";
@@ -47,9 +47,9 @@ export {
 export { createGitBundle, Workspace } from "./workspace.js";
 export type {
   GitBundleSpec,
+  GitCheckoutSpec,
   GitRepoSpec,
   RetainedWorkspaceInfo,
-  WorkspaceSource,
 } from "./workspace.js";
 export type {
   AgentEvent,

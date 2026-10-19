@@ -23,7 +23,7 @@ pub enum WorkspaceError {
         source: std::io::Error,
     },
 
-    #[error("git workspace setup failed: {0}")]
+    #[error("git workspace command failed: {0}")]
     Git(#[from] GitError),
 
     #[error("git workspace subdirectory does not exist: {}", path.display())]
