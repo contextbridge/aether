@@ -153,6 +153,7 @@ await using workspace = await Workspace.fromGitBundle({
   bundlePath, // from createGitBundle({ url, startCommit, goldCommit }, bundlePath)
   startCommit,
   goldCommit,
+  diffExclude: ["*pnpm-lock.yaml"], // left out of both diffs
 });
 
 // ... run the agent ...

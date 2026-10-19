@@ -58,13 +58,18 @@ export class GitRepo {
   async diff(
     fromCommit: string,
     toCommit: string,
+    exclude: string[],
     signal?: AbortSignal,
   ): Promise<string> {
-    return git(["-C", this.path, "diff", fromCommit, toCommit], signal);
+    return git(
+      ["-C", this.path, "diff", fromCommit, toCommit, ...pathspecs(exclude)],
+      signal,
+    );
   }
 
   async diffWorkingTree(
     fromCommit: string,
+    exclude: string[],
     signal?: AbortSignal,
   ): Promise<string> {
     const scratch = await mkdtemp(join(tmpdir(), "aether-eval-index-"));
@@ -85,7 +90,14 @@ export class GitRepo {
       const env = { GIT_INDEX_FILE: index };
       await git(["-C", this.path, "add", "--all"], signal, env);
       return await git(
-        ["-C", this.path, "diff", "--cached", fromCommit],
+        [
+          "-C",
+          this.path,
+          "diff",
+          "--cached",
+          fromCommit,
+          ...pathspecs(exclude),
+        ],
         signal,
         env,
       );
@@ -93,6 +105,12 @@ export class GitRepo {
       await rm(scratch, { recursive: true, force: true });
     }
   }
+}
+
+function pathspecs(exclude: string[]): string[] {
+  return exclude.length > 0
+    ? ["--", ...exclude.map((pathspec) => `:(exclude)${pathspec}`)]
+    : [];
 }
 
 function git(

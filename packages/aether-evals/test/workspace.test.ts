@@ -240,6 +240,23 @@ describe("createWorkspace", () => {
     expect(git(ws.rootPath, "branch", "--show-current")).toBe("trunk");
   });
 
+  it("leaves excluded paths out of the reference and agent diffs", async () => {
+    const ws = await gitWorkspace(
+      { "app.txt": "start\n", "pkg/pnpm-lock.yaml": "lock: 1\n" },
+      { "app.txt": "gold\n", "pkg/pnpm-lock.yaml": "lock: 2\n" },
+      { diffExclude: ["*pnpm-lock.yaml"] },
+    );
+    await writeFile(ws.join("app.txt"), "agent\n");
+    await writeFile(ws.join("pkg/pnpm-lock.yaml"), "lock: 3\n");
+
+    const agentDiff = await ws.captureAgentDiff();
+
+    expect(ws.referenceDiff?.diff).toContain("+gold");
+    expect(ws.referenceDiff?.diff).not.toContain("pnpm-lock.yaml");
+    expect(agentDiff?.diff).toContain("+agent");
+    expect(agentDiff?.diff).not.toContain("pnpm-lock.yaml");
+  });
+
   it("rejects capturing the agent diff when git fails", async () => {
     const ws = await gitWorkspace({ "app.txt": "start\n" });
     await writeFile(join(ws.rootPath, ".git", "index"), "corrupt");

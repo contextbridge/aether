@@ -15,6 +15,7 @@ export interface GitCheckoutSpec {
   goldCommit: string;
   subdir?: string;
   branch?: string;
+  diffExclude?: string[];
 }
 
 export interface GitRepoSpec extends GitCheckoutSpec {
@@ -123,12 +124,18 @@ export class Workspace implements AsyncDisposable {
     spec: GitCheckoutSpec,
     signal?: AbortSignal,
   ): Promise<Workspace> {
-    const { startCommit, goldCommit, subdir, branch = DEFAULT_BRANCH } = spec;
+    const {
+      startCommit,
+      goldCommit,
+      subdir,
+      branch = DEFAULT_BRANCH,
+      diffExclude = [],
+    } = spec;
     return withTempDir(async (scratchPath) => {
       const scratch = await GitRepo.init(scratchPath, signal);
       await scratch.fetch(remote, [startCommit, goldCommit], signal);
       const referenceDiff = toGitDiff(
-        await scratch.diff(startCommit, goldCommit, signal),
+        await scratch.diff(startCommit, goldCommit, diffExclude, signal),
       );
 
       const rootPath = await createWorkspaceDir();
@@ -140,7 +147,7 @@ export class Workspace implements AsyncDisposable {
           rootPath,
           path: await resolveSubdir(rootPath, subdir),
           relativeCwd: subdir,
-          git: { startCommit, referenceDiff },
+          git: { startCommit, referenceDiff, diffExclude },
         });
       } catch (err) {
         await rm(rootPath, { recursive: true, force: true });
@@ -164,8 +171,10 @@ export class Workspace implements AsyncDisposable {
 
   async captureAgentDiff(signal?: AbortSignal): Promise<GitDiff | undefined> {
     if (!this.#git) return undefined;
+    const { startCommit, diffExclude } = this.#git;
     const diff = await GitRepo.fromPath(this.rootPath).diffWorkingTree(
-      this.#git.startCommit,
+      startCommit,
+      diffExclude,
       signal,
     );
     return toGitDiff(diff);
@@ -215,6 +224,7 @@ export async function createGitBundle(
 interface GitBaseline {
   startCommit: string;
   referenceDiff: GitDiff;
+  diffExclude: string[];
 }
 
 function toGitDiff(diff: string): GitDiff {

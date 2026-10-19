@@ -54,20 +54,20 @@ impl GitRepo {
     }
 
     #[tracing::instrument(skip(self))]
-    pub(crate) fn diff(&self, from_commit: &str, to_commit: &str) -> Result<String, GitError> {
-        let stdout = self.git(&["diff", from_commit, to_commit])?;
+    pub(crate) fn diff(&self, from_commit: &str, to_commit: &str, exclude: &[String]) -> Result<String, GitError> {
+        let stdout = self.git(&diff_args(&["diff", from_commit, to_commit], exclude))?;
         Ok(String::from_utf8_lossy(&stdout).into_owned())
     }
 
     #[tracing::instrument(skip(self))]
-    pub(crate) fn diff_working_tree(&self, from_commit: &str) -> Result<String, WorkspaceError> {
+    pub(crate) fn diff_working_tree(&self, from_commit: &str, exclude: &[String]) -> Result<String, WorkspaceError> {
         let scratch = tempfile::tempdir().map_err(WorkspaceError::CreateTempDir)?;
         let index = scratch.path().join("index");
         let real_index = self.git(&["rev-parse", "--path-format=absolute", "--git-path", "index"])?;
         std::fs::copy(String::from_utf8_lossy(&real_index).trim(), &index).ok();
         let env = [("GIT_INDEX_FILE", index.as_os_str())];
         self.git_with_env(&["add", "--all"], &env)?;
-        let stdout = self.git_with_env(&["diff", "--cached", from_commit], &env)?;
+        let stdout = self.git_with_env(&diff_args(&["diff", "--cached", from_commit], exclude), &env)?;
         Ok(String::from_utf8_lossy(&stdout).into_owned())
     }
 
@@ -78,6 +78,12 @@ impl GitRepo {
     fn git_with_env<S: AsRef<OsStr>>(&self, args: &[S], env: &[(&str, &OsStr)]) -> Result<Vec<u8>, GitError> {
         git_with_env(Some(&self.path), args, env)
     }
+}
+
+fn diff_args(args: &[&str], exclude: &[String]) -> Vec<String> {
+    let separator = (!exclude.is_empty()).then(|| "--".to_string());
+    let pathspecs = exclude.iter().map(|pathspec| format!(":(exclude){pathspec}"));
+    args.iter().map(ToString::to_string).chain(separator).chain(pathspecs).collect()
 }
 
 #[cfg(test)]
@@ -94,7 +100,7 @@ mod tests {
         let second_commit = repo.commit("Second commit");
         repo.write("test.txt", "unstaged content\n");
 
-        let committed = GitRepo::from_path(repo.root()).diff(&first_commit, &second_commit).unwrap();
+        let committed = GitRepo::from_path(repo.root()).diff(&first_commit, &second_commit, &[]).unwrap();
 
         assert!(committed.contains("+modified content"), "{committed}");
         assert!(committed.contains("+new file"), "{committed}");
@@ -108,7 +114,7 @@ mod tests {
         repo.write("test.txt", "unstaged content\n");
         repo.write("untracked.txt", "untracked\n");
 
-        let diff = GitRepo::from_path(repo.root()).diff_working_tree(&commit).unwrap();
+        let diff = GitRepo::from_path(repo.root()).diff_working_tree(&commit, &[]).unwrap();
 
         assert!(diff.contains("+unstaged content"), "{diff}");
         assert!(diff.contains("+untracked"), "{diff}");

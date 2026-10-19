@@ -61,7 +61,7 @@ Aether Evals' fake-agent coverage should use normal test names. Reserve `_eval` 
 - `eval_env_vars(&model)` forwards only the credentials for the providers `model` runs on into Docker, and sets `AETHER_HOME=/root/.aether`.
 - `Workspace::empty()` creates an isolated temp directory.
 - `Workspace::from_dir(path)` copies fixture directory contents into a temp directory.
-- `Workspace::from_git(GitSpec { source, start_commit, gold_commit, subdir, branch })` checks out the start commit on `branch` (default `main`), fetched from `GitSource::Url(url)` or `GitSource::Bundle(path)` (see `create_git_bundle`). The workspace holds only the start commit's history, with no remote, so the agent can't find the gold commit in git. That history is fetched in full, blobs included, so reuse one bundle across runs for large repositories.
+- `Workspace::from_git(GitSpec { source, start_commit, gold_commit, subdir, branch, diff_exclude })` checks out the start commit on `branch` (default `main`), fetched from `GitSource::Url(url)` or `GitSource::Bundle(path)` (see `create_git_bundle`). The workspace holds only the start commit's history, with no remote, so the agent can't find the gold commit in git. That history is fetched in full, blobs included, so reuse one bundle across runs for large repositories.
 - `Transcript` exposes collected agent messages, token usage, and tool-call helpers.
 
 ## Dockerized evals
@@ -86,6 +86,7 @@ let workspace = Workspace::from_git(GitSpec {
     gold_commit: "gold_sha".to_string(),
     subdir: None,
     branch: None,
+    diff_exclude: Vec::new(),
 })?;
 let container = Container::builder(Image::new("aether-sandbox", "latest"))
     .with_env_vars(eval_env_vars(&"anthropic:claude-opus-4-6".parse()?))
@@ -153,7 +154,7 @@ Judge faults — transient LLM stream failures, unparseable responses, criterion
 
 `Workspace` removes its temporary directory when dropped. To retain files for debugging, call `workspace.persist()` and remove the returned path manually when finished.
 
-For git-backed workspaces, `workspace.capture_agent_diff()?` returns the agent's commits, staged and unstaged edits, and untracked files since the start commit, and errors if git can't read the repository. `workspace.reference_diff()` returns the start-to-gold diff, computed before the gold commit was discarded. Both are `None` for workspaces without a start commit.
+For git-backed workspaces, `workspace.capture_agent_diff()?` returns the agent's commits, staged and unstaged edits, and untracked files since the start commit, and errors if git can't read the repository. `workspace.reference_diff()` returns the start-to-gold diff, computed before the gold commit was discarded. Both are `None` for workspaces without a start commit, and both leave out `diff_exclude` pathspecs such as `*pnpm-lock.yaml`.
 
 ## Git-backed evals
 
@@ -166,6 +167,7 @@ let workspace = Workspace::from_git(GitSpec {
     gold_commit: "gold_sha".to_string(),
     subdir: Some("packages/api".into()),
     branch: None,
+    diff_exclude: vec!["*pnpm-lock.yaml".to_string()],
 })?;
 let prompt = "Make the test pass";
 let transcript = Transcript::from_stream(agent.run(Task::new(prompt))).await?;

@@ -28,6 +28,8 @@ pub struct GitSpec {
     pub subdir: Option<PathBuf>,
     #[serde(default)]
     pub branch: Option<String>,
+    #[serde(default)]
+    pub diff_exclude: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, JsonSchema)]
@@ -78,7 +80,7 @@ impl Workspace {
     }
 
     pub fn from_git(spec: GitSpec) -> Result<Self, WorkspaceError> {
-        let GitSpec { source, start_commit, gold_commit, subdir, branch } = spec;
+        let GitSpec { source, start_commit, gold_commit, subdir, branch, diff_exclude } = spec;
         if let GitSource::Bundle(path) = &source
             && !path.exists()
         {
@@ -89,7 +91,7 @@ impl Workspace {
         let scratch_dir = new_temp_dir()?;
         let scratch = GitRepo::init(scratch_dir.path())?;
         scratch.fetch(source.remote(), &[&start_commit, &gold_commit])?;
-        let reference_diff = GitDiff::new(scratch.diff(&start_commit, &gold_commit)?);
+        let reference_diff = GitDiff::new(scratch.diff(&start_commit, &gold_commit, &diff_exclude)?);
 
         let temp_dir = new_temp_dir()?;
         let repo = GitRepo::init(temp_dir.path())?;
@@ -98,7 +100,7 @@ impl Workspace {
 
         let root_path = temp_dir.path().to_path_buf();
         let (path, relative_cwd) = resolve_subdir(&root_path, subdir)?;
-        let git = GitBaseline { start_commit, reference_diff };
+        let git = GitBaseline { start_commit, reference_diff, diff_exclude };
         Ok(Self { path, root_path, relative_cwd, git: Some(git), temp_dir })
     }
 
@@ -133,7 +135,7 @@ impl Workspace {
         let Some(git) = &self.git else {
             return Ok(None);
         };
-        let diff = GitRepo::from_path(&self.root_path).diff_working_tree(&git.start_commit)?;
+        let diff = GitRepo::from_path(&self.root_path).diff_working_tree(&git.start_commit, &git.diff_exclude)?;
         Ok(Some(GitDiff::new(diff)))
     }
 
@@ -161,6 +163,7 @@ pub fn create_git_bundle(spec: &GitSpec, out: &Path) -> Result<(), WorkspaceErro
 struct GitBaseline {
     start_commit: String,
     reference_diff: GitDiff,
+    diff_exclude: Vec<String>,
 }
 
 impl GitSource {
@@ -237,10 +240,12 @@ mod tests {
             "source": { "bundle": "repo.bundle" },
             "startCommit": "abc",
             "goldCommit": "def",
+            "diffExclude": ["*.lock"],
         }))
         .unwrap();
 
         assert!(matches!(spec.source, GitSource::Bundle(path) if path == Path::new("repo.bundle")));
+        assert_eq!(spec.diff_exclude, ["*.lock"]);
     }
 
     #[test]
@@ -290,6 +295,20 @@ mod tests {
         let workspace = Workspace::from_git(GitSpec { branch: Some("trunk".into()), ..spec }).unwrap();
 
         assert_eq!(git(workspace.root_path(), &["branch", "--show-current"]), "trunk");
+    }
+
+    #[test]
+    fn diff_exclude_leaves_paths_out_of_the_reference_and_agent_diffs() {
+        let (_repo, spec) = init_repo();
+        let workspace = Workspace::from_git(GitSpec { diff_exclude: vec!["*root.txt".into()], ..spec }).unwrap();
+        write(workspace.join("root.txt"), "agent\n").unwrap();
+        write(workspace.join("pkg/inner.txt"), "agent inner\n").unwrap();
+
+        let agent_diff = agent_diff(&workspace);
+
+        assert_eq!(workspace.reference_diff().unwrap().diff, "");
+        assert!(agent_diff.diff.contains("+agent inner"));
+        assert!(!agent_diff.diff.contains("root.txt"));
     }
 
     #[test]
@@ -359,6 +378,7 @@ mod tests {
             gold_commit: "def".into(),
             subdir: None,
             branch: None,
+            diff_exclude: Vec::new(),
         });
 
         assert!(matches!(result, Err(WorkspaceError::MissingBundle { .. })));
@@ -384,6 +404,6 @@ mod tests {
         repo.write("root.txt", "root v2\n");
         let gold_commit = repo.commit("gold");
         let source = GitSource::Url(format!("file://{}", repo.root().display()));
-        (repo, GitSpec { source, start_commit, gold_commit, subdir: None, branch: None })
+        (repo, GitSpec { source, start_commit, gold_commit, subdir: None, branch: None, diff_exclude: Vec::new() })
     }
 }
