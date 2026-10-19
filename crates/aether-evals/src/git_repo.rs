@@ -2,18 +2,6 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use utils::git::{GitError, git};
 
-/// Controls how much of a repository's object set is downloaded during [`GitRepo::clone`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CloneMode {
-    /// Download the full object set so the clone is self-contained
-    /// (e.g. so it can be bundled, or because `source` is a bundle
-    /// and not a promisor remote).
-    Full,
-    /// Defer downloading file blobs until they are needed via a partial
-    /// clone (`--filter=blob:none`) -- cheaper for large repos.
-    Blobless,
-}
-
 /// Represents a git repository used for evaluation purposes
 pub(crate) struct GitRepo {
     path: PathBuf,
@@ -32,36 +20,17 @@ impl GitRepo {
         Ok(GitRepo { path: dest.to_path_buf() })
     }
 
-    /// Clone `source` (a URL or a local bundle/path) into `dest` with `--no-checkout`.
-    ///
-    /// [`CloneMode::Blobless`] defers downloading file blobs until they're needed --
-    /// cheaper for large repos. [`CloneMode::Full`] downloads the complete object set so
-    /// the clone is self-contained (e.g. so it can be bundled, or because `source` is a
-    /// bundle and not a promisor remote).
-    #[tracing::instrument(skip(source, dest))]
-    pub(crate) fn clone(source: impl AsRef<OsStr>, dest: &Path, mode: CloneMode) -> Result<Self, GitError> {
-        let mut args = vec![OsStr::new("clone"), OsStr::new("--no-checkout")];
-        if mode == CloneMode::Blobless {
-            args.push(OsStr::new("--filter=blob:none"));
-        }
-        args.push(source.as_ref());
-        args.push(dest.as_os_str());
-        git(None, &args)?;
-        Ok(GitRepo { path: dest.to_path_buf() })
-    }
-
-    /// Checkout a specific commit, branch, or tag
     #[tracing::instrument(skip(self))]
-    pub(crate) fn checkout(&self, reference: &str) -> Result<(), GitError> {
-        self.git(&["checkout", reference])?;
+    pub(crate) fn checkout_branch(&self, branch: &str, commit: &str) -> Result<(), GitError> {
+        self.git(&["checkout", "-B", branch, commit])?;
         Ok(())
     }
 
     /// Fetch `revs` from `remote` (a named remote or a URL) into this repository.
-    #[tracing::instrument(skip(self))]
-    pub(crate) fn fetch(&self, remote: &str, revs: &[&str]) -> Result<(), GitError> {
-        let mut args = vec!["fetch", remote];
-        args.extend_from_slice(revs);
+    #[tracing::instrument(skip(self, remote))]
+    pub(crate) fn fetch(&self, remote: impl AsRef<OsStr>, revs: &[&str]) -> Result<(), GitError> {
+        let mut args = vec![OsStr::new("fetch"), OsStr::new("--no-tags"), remote.as_ref()];
+        args.extend(revs.iter().map(OsStr::new));
         self.git(&args)?;
         Ok(())
     }
@@ -118,7 +87,6 @@ impl GitRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use utils::testing::TestWorkspace;
 
     #[test]
@@ -137,24 +105,5 @@ mod tests {
         assert!(!committed.contains("unstaged content"), "{committed}");
         assert!(git_repo.diff_range("HEAD", None).unwrap().contains("+unstaged content"));
         assert!(git_repo.diff_range(&first_commit, None).unwrap().contains("+unstaged content"));
-    }
-
-    #[test]
-    fn blobless_clone_checks_out_and_diffs_lazily_fetched_commits() {
-        let source = TestWorkspace::new().file("test.txt", "initial content\n").git_init();
-        let first_commit = source.commit("Initial commit");
-        source.write("test.txt", "modified content\n");
-        let second_commit = source.commit("Second commit");
-        let clone = TestWorkspace::new();
-
-        let repo = GitRepo::clone(source.root(), clone.root(), CloneMode::Blobless).unwrap();
-        assert!(
-            fs::read_dir(clone.root()).unwrap().all(|entry| entry.unwrap().file_name() == ".git"),
-            "working directory should be empty after a --no-checkout clone"
-        );
-
-        repo.checkout(&first_commit).unwrap();
-        assert_eq!(fs::read_to_string(clone.path("test.txt")).unwrap(), "initial content\n");
-        assert!(repo.diff(&first_commit, &second_commit).unwrap().contains("+modified content"));
     }
 }

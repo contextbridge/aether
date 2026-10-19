@@ -6,6 +6,12 @@ pub struct GitDiff {
     pub stats: DiffStats,
 }
 
+impl GitDiff {
+    pub(crate) fn new(diff: String) -> Self {
+        Self { stats: DiffStats::from_diff(&diff), diff }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiffStats {
     pub files_changed: usize,

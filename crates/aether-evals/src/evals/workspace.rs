@@ -1,9 +1,10 @@
-use super::diff::{DiffStats, GitDiff};
+use super::diff::GitDiff;
 use crate::WorkspaceError;
-use crate::git_repo::{CloneMode, GitRepo};
+use crate::git_repo::GitRepo;
 use schemars::JsonSchema;
 use serde::Serialize;
 use std::{
+    ffi::OsStr,
     fs::{create_dir_all, write},
     path::{Path, PathBuf},
 };
@@ -13,35 +14,27 @@ pub struct Workspace {
     path: PathBuf,
     root_path: PathBuf,
     relative_cwd: Option<PathBuf>,
-    source: WorkspaceSource,
+    git: Option<GitBaseline>,
     temp_dir: TempDir,
 }
 
-#[derive(Debug, Clone)]
-pub enum WorkspaceSource {
-    Local,
-    GitRepo { url: String, start_commit: String, gold_commit: String },
-    Bundle { start_commit: String, gold_commit: String },
-}
-
 #[derive(Debug, Clone, serde::Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GitRepoSpec {
-    pub url: String,
+pub struct GitSpec {
+    pub source: GitSource,
     pub start_commit: String,
     pub gold_commit: String,
     #[serde(default)]
     pub subdir: Option<PathBuf>,
+    #[serde(default)]
+    pub branch: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GitBundleSpec {
-    pub bundle_path: PathBuf,
-    pub start_commit: String,
-    pub gold_commit: String,
-    #[serde(default)]
-    pub subdir: Option<PathBuf>,
+#[serde(rename_all = "camelCase")]
+pub enum GitSource {
+    Url(String),
+    Bundle(PathBuf),
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -53,23 +46,20 @@ pub struct RetainedWorkspaceInfo {
 
 impl Workspace {
     pub fn empty() -> Result<Self, WorkspaceError> {
-        let temp_dir = new_temp_dir()?;
-        let path = temp_dir.path().to_path_buf();
-        Ok(Self { path: path.clone(), root_path: path, relative_cwd: None, source: WorkspaceSource::Local, temp_dir })
+        Ok(Self::local(new_temp_dir()?))
     }
 
     pub fn from_dir(src_path: impl Into<PathBuf>) -> Result<Self, WorkspaceError> {
         let src_path = src_path.into();
         let temp_dir = new_temp_dir()?;
-        let path = temp_dir.path().to_path_buf();
 
-        copy_dir_contents(&src_path, &path).map_err(|source| WorkspaceError::CopyFixture {
+        copy_dir_contents(&src_path, temp_dir.path()).map_err(|source| WorkspaceError::CopyFixture {
             from: src_path.clone(),
-            to: path.clone(),
+            to: temp_dir.path().to_path_buf(),
             source,
         })?;
 
-        Ok(Self { path: path.clone(), root_path: path, relative_cwd: None, source: WorkspaceSource::Local, temp_dir })
+        Ok(Self::local(temp_dir))
     }
 
     pub fn from_files<T: AsRef<Path>, U: AsRef<str>>(
@@ -87,42 +77,29 @@ impl Workspace {
         Ok(workspace)
     }
 
-    pub fn from_git_repo(spec: GitRepoSpec) -> Result<Self, WorkspaceError> {
-        let GitRepoSpec { url, start_commit, gold_commit, subdir } = spec;
-        let temp_dir = new_temp_dir()?;
-
-        tracing::debug!("Cloning git repo {} at commit {}", url, start_commit);
-        let repo = GitRepo::clone(&url, temp_dir.path(), CloneMode::Blobless)?;
-
-        let source = WorkspaceSource::GitRepo { url, start_commit: start_commit.clone(), gold_commit };
-        Self::from_cloned(temp_dir, &repo, &start_commit, subdir, source)
-    }
-
-    /// Instantiate a workspace from a local git bundle file
-    pub fn from_git_bundle(spec: GitBundleSpec) -> Result<Self, WorkspaceError> {
-        let GitBundleSpec { bundle_path, start_commit, gold_commit, subdir } = spec;
-        if !bundle_path.exists() {
-            return Err(WorkspaceError::MissingBundle { path: bundle_path });
+    pub fn from_git(spec: GitSpec) -> Result<Self, WorkspaceError> {
+        let GitSpec { source, start_commit, gold_commit, subdir, branch } = spec;
+        if let GitSource::Bundle(path) = &source
+            && !path.exists()
+        {
+            return Err(WorkspaceError::MissingBundle { path: path.clone() });
         }
+        tracing::debug!("Fetching {:?} at commit {}", source, start_commit);
 
-        tracing::debug!("Cloning git bundle {} at commit {}", bundle_path.display(), start_commit);
+        let scratch_dir = new_temp_dir()?;
+        let scratch = GitRepo::init(scratch_dir.path())?;
+        scratch.fetch(source.remote(), &[&start_commit, &gold_commit])?;
+        let reference_diff = GitDiff::new(scratch.diff(&start_commit, &gold_commit)?);
+
         let temp_dir = new_temp_dir()?;
-        let repo = GitRepo::clone(&bundle_path, temp_dir.path(), CloneMode::Full)?;
-        let source = WorkspaceSource::Bundle { start_commit: start_commit.clone(), gold_commit };
-        Self::from_cloned(temp_dir, &repo, &start_commit, subdir, source)
-    }
+        let repo = GitRepo::init(temp_dir.path())?;
+        repo.fetch(scratch_dir.path(), &[&start_commit])?;
+        repo.checkout_branch(branch.as_deref().unwrap_or(DEFAULT_BRANCH), &start_commit)?;
 
-    fn from_cloned(
-        temp_dir: TempDir,
-        repo: &GitRepo,
-        start_commit: &str,
-        subdir: Option<PathBuf>,
-        source: WorkspaceSource,
-    ) -> Result<Self, WorkspaceError> {
-        repo.checkout(start_commit)?;
         let root_path = temp_dir.path().to_path_buf();
         let (path, relative_cwd) = resolve_subdir(&root_path, subdir)?;
-        Ok(Self { path, root_path, relative_cwd, source, temp_dir })
+        let git = GitBaseline { start_commit, reference_diff };
+        Ok(Self { path, root_path, relative_cwd, git: Some(git), temp_dir })
     }
 
     pub fn path(&self) -> &Path {
@@ -141,10 +118,6 @@ impl Workspace {
         self.relative_cwd.as_deref()
     }
 
-    pub fn source(&self) -> &WorkspaceSource {
-        &self.source
-    }
-
     /// Prevents the workspace from getting automatically removed and returns its retained root and effective cwd. The caller is responsible for cleanup.
     pub fn persist(self) -> RetainedWorkspaceInfo {
         let root_path = self.temp_dir.keep();
@@ -152,41 +125,51 @@ impl Workspace {
         RetainedWorkspaceInfo { root_path, path }
     }
 
-    pub fn capture_git_diffs(&self) -> (Option<GitDiff>, Option<GitDiff>) {
-        let Some((start_commit, gold_commit)) = self.diff_commits() else {
-            return (None, None);
-        };
-
-        let repo = GitRepo::from_path(self.path());
-        let agent_diff =
-            repo.diff_range(start_commit, None).ok().map(|diff| GitDiff { stats: DiffStats::from_diff(&diff), diff });
-        let reference_diff =
-            repo.diff(start_commit, gold_commit).ok().map(|diff| GitDiff { stats: DiffStats::from_diff(&diff), diff });
-
-        (agent_diff, reference_diff)
+    pub fn reference_diff(&self) -> Option<&GitDiff> {
+        self.git.as_ref().map(|git| &git.reference_diff)
     }
 
-    fn diff_commits(&self) -> Option<(&str, &str)> {
-        match &self.source {
-            WorkspaceSource::Local => None,
-            WorkspaceSource::GitRepo { start_commit, gold_commit, .. }
-            | WorkspaceSource::Bundle { start_commit, gold_commit } => Some((start_commit, gold_commit)),
-        }
+    pub fn capture_agent_diff(&self) -> Result<Option<GitDiff>, WorkspaceError> {
+        let Some(git) = &self.git else {
+            return Ok(None);
+        };
+        let diff = GitRepo::from_path(&self.root_path).diff_range(&git.start_commit, None)?;
+        Ok(Some(GitDiff::new(diff)))
+    }
+
+    fn local(temp_dir: TempDir) -> Self {
+        let path = temp_dir.path().to_path_buf();
+        Self { path: path.clone(), root_path: path, relative_cwd: None, git: None, temp_dir }
     }
 }
 
 const EVAL_START_REF: &str = "eval-start";
 const EVAL_GOLD_REF: &str = "eval-gold";
+const DEFAULT_BRANCH: &str = "main";
 
 /// Create a self-contained git bundle at `out` containing `spec`'s start and gold commits.
-pub fn create_git_bundle(spec: &GitRepoSpec, out: &Path) -> Result<(), WorkspaceError> {
+pub fn create_git_bundle(spec: &GitSpec, out: &Path) -> Result<(), WorkspaceError> {
     let temp_dir = new_temp_dir()?;
     let repo = GitRepo::init(temp_dir.path())?;
-    repo.fetch(&spec.url, &[&spec.start_commit, &spec.gold_commit])?;
+    repo.fetch(spec.source.remote(), &[&spec.start_commit, &spec.gold_commit])?;
     repo.update_ref(&format!("refs/heads/{EVAL_START_REF}"), &spec.start_commit)?;
     repo.update_ref(&format!("refs/heads/{EVAL_GOLD_REF}"), &spec.gold_commit)?;
     repo.bundle(&[EVAL_START_REF, EVAL_GOLD_REF], out)?;
     Ok(())
+}
+
+struct GitBaseline {
+    start_commit: String,
+    reference_diff: GitDiff,
+}
+
+impl GitSource {
+    fn remote(&self) -> &OsStr {
+        match self {
+            Self::Url(url) => url.as_ref(),
+            Self::Bundle(path) => path.as_os_str(),
+        }
+    }
 }
 
 fn new_temp_dir() -> Result<tempfile::TempDir, WorkspaceError> {
@@ -241,38 +224,78 @@ mod tests {
     }
 
     #[test]
-    fn from_git_bundle_round_trips_checkout_subdir_and_diffs() {
-        let (_repo, spec) = init_repo();
-        let bundle_dir = tempfile::tempdir().unwrap();
-        let bundle_path = bundle_dir.path().join("repo.bundle");
-        create_git_bundle(&spec, &bundle_path).unwrap();
+    fn local_workspaces_have_no_diffs() {
+        let workspace = Workspace::empty().unwrap();
 
-        let workspace = Workspace::from_git_bundle(GitBundleSpec {
-            bundle_path,
-            start_commit: spec.start_commit,
-            gold_commit: spec.gold_commit,
-            subdir: Some(PathBuf::from("pkg")),
-        })
+        assert!(workspace.reference_diff().is_none());
+        assert!(workspace.capture_agent_diff().unwrap().is_none());
+    }
+
+    #[test]
+    fn git_spec_deserializes_from_camel_case_json() {
+        let spec: GitSpec = serde_json::from_value(serde_json::json!({
+            "source": { "bundle": "repo.bundle" },
+            "startCommit": "abc",
+            "goldCommit": "def",
+        }))
         .unwrap();
 
-        let (agent_diff, reference_diff) = workspace.capture_git_diffs();
+        assert!(matches!(spec.source, GitSource::Bundle(path) if path == Path::new("repo.bundle")));
+    }
+
+    #[test]
+    fn from_git_with_a_bundle_round_trips_checkout_subdir_and_diffs() {
+        let (_repo, spec) = init_repo();
+        let bundle_dir = tempfile::tempdir().unwrap();
+        let spec = GitSpec { subdir: Some("pkg".into()), ..bundle_spec(&spec, bundle_dir.path()) };
+        let workspace = Workspace::from_git(spec).unwrap();
 
         assert_eq!(read_to_string(workspace.root_path().join("root.txt")).unwrap(), "root v1\n");
         assert_eq!(workspace.relative_cwd(), Some(Path::new("pkg")));
         assert_eq!(workspace.path(), workspace.root_path().join("pkg"));
-        assert!(reference_diff.unwrap().diff.contains("root v2"), "reference diff should span start..gold");
-        assert!(agent_diff.unwrap().diff.is_empty(), "no agent edits yet");
+        assert!(workspace.reference_diff().unwrap().diff.contains("root v2"), "reference diff should span start..gold");
+        assert!(agent_diff(&workspace).diff.is_empty(), "no agent edits yet");
 
         write(workspace.root_path().join("root.txt"), "root edited\n").unwrap();
-        let (agent_diff, _) = workspace.capture_git_diffs();
 
-        assert!(agent_diff.unwrap().diff.contains("root edited"), "agent diff should capture the edit");
+        assert!(agent_diff(&workspace).diff.contains("root edited"), "agent diff should capture the edit");
     }
 
     #[test]
-    fn capture_git_diffs_includes_committed_agent_changes() {
+    fn git_workspaces_hold_only_the_start_commit() {
         let (_repo, spec) = init_repo();
-        let workspace = Workspace::from_git_repo(spec).unwrap();
+        let bundle_dir = tempfile::tempdir().unwrap();
+        let workspaces = [
+            Workspace::from_git(spec.clone()).unwrap(),
+            Workspace::from_git(bundle_spec(&spec, bundle_dir.path())).unwrap(),
+        ];
+
+        for workspace in workspaces {
+            let root = workspace.root_path();
+            assert_eq!(git(root, &["rev-parse", "HEAD"]), spec.start_commit);
+            assert_eq!(git(root, &["for-each-ref", "--format=%(refname)"]), "refs/heads/main");
+            assert_eq!(git(root, &["remote"]), "");
+            assert!(
+                utils::git::git(Some(root), &["cat-file", "-e", &spec.gold_commit]).is_err(),
+                "the gold commit must not be in the agent's repository"
+            );
+            assert!(workspace.reference_diff().unwrap().diff.contains("+root v2"));
+        }
+    }
+
+    #[test]
+    fn from_git_checks_out_the_requested_branch() {
+        let (_repo, spec) = init_repo();
+
+        let workspace = Workspace::from_git(GitSpec { branch: Some("trunk".into()), ..spec }).unwrap();
+
+        assert_eq!(git(workspace.root_path(), &["branch", "--show-current"]), "trunk");
+    }
+
+    #[test]
+    fn capture_agent_diff_includes_committed_changes() {
+        let (_repo, spec) = init_repo();
+        let workspace = Workspace::from_git(spec).unwrap();
 
         write(workspace.join("root.txt"), "agent committed\n").unwrap();
         git(workspace.root_path(), &["add", "."]);
@@ -281,8 +304,7 @@ mod tests {
             &["-c", "user.email=agent@example.com", "-c", "user.name=Agent", "commit", "-m", "agent change"],
         );
 
-        let (agent_diff, _) = workspace.capture_git_diffs();
-        let agent_diff = agent_diff.unwrap();
+        let agent_diff = agent_diff(&workspace);
 
         assert!(agent_diff.diff.contains("+agent committed"));
         assert_eq!(agent_diff.stats.files_changed, 1);
@@ -291,9 +313,9 @@ mod tests {
     }
 
     #[test]
-    fn capture_git_diffs_includes_staged_unstaged_added_and_deleted_changes() {
+    fn capture_agent_diff_includes_staged_unstaged_added_and_deleted_changes() {
         let (_repo, spec) = init_repo();
-        let workspace = Workspace::from_git_repo(spec).unwrap();
+        let workspace = Workspace::from_git(spec).unwrap();
 
         write(workspace.join("root.txt"), "staged change\n").unwrap();
         write(workspace.join("added.txt"), "added\n").unwrap();
@@ -301,8 +323,7 @@ mod tests {
         write(workspace.join("pkg/inner.txt"), "unstaged change\n").unwrap();
         std::fs::remove_file(workspace.join("deleted.txt")).unwrap();
 
-        let (agent_diff, _) = workspace.capture_git_diffs();
-        let agent_diff = agent_diff.unwrap();
+        let agent_diff = agent_diff(&workspace);
 
         assert!(agent_diff.diff.contains("root.txt"));
         assert!(agent_diff.diff.contains("+staged change"));
@@ -318,18 +339,38 @@ mod tests {
     }
 
     #[test]
-    fn from_git_bundle_missing_file_errors() {
-        let result = Workspace::from_git_bundle(GitBundleSpec {
-            bundle_path: PathBuf::from("/nonexistent/repo.bundle"),
+    fn capture_agent_diff_errors_when_git_fails() {
+        let (_repo, spec) = init_repo();
+        let workspace = Workspace::from_git(spec).unwrap();
+        write(workspace.root_path().join(".git/index"), "corrupt").unwrap();
+
+        assert!(matches!(workspace.capture_agent_diff(), Err(WorkspaceError::Git(_))));
+    }
+
+    #[test]
+    fn from_git_missing_bundle_errors() {
+        let result = Workspace::from_git(GitSpec {
+            source: GitSource::Bundle(PathBuf::from("/nonexistent/repo.bundle")),
             start_commit: "abc".into(),
             gold_commit: "def".into(),
             subdir: None,
+            branch: None,
         });
 
         assert!(matches!(result, Err(WorkspaceError::MissingBundle { .. })));
     }
 
-    fn init_repo() -> (TestWorkspace, GitRepoSpec) {
+    fn agent_diff(workspace: &Workspace) -> GitDiff {
+        workspace.capture_agent_diff().unwrap().expect("git workspaces have an agent diff")
+    }
+
+    fn bundle_spec(spec: &GitSpec, dir: &Path) -> GitSpec {
+        let bundle_path = dir.join("repo.bundle");
+        create_git_bundle(spec, &bundle_path).unwrap();
+        GitSpec { source: GitSource::Bundle(bundle_path), ..spec.clone() }
+    }
+
+    fn init_repo() -> (TestWorkspace, GitSpec) {
         let repo = TestWorkspace::new()
             .file("root.txt", "root v1\n")
             .file("deleted.txt", "before deleted\n")
@@ -338,7 +379,7 @@ mod tests {
         let start_commit = repo.commit("start");
         repo.write("root.txt", "root v2\n");
         let gold_commit = repo.commit("gold");
-        let url = format!("file://{}", repo.root().display());
-        (repo, GitRepoSpec { url, start_commit, gold_commit, subdir: None })
+        let source = GitSource::Url(format!("file://{}", repo.root().display()));
+        (repo, GitSpec { source, start_commit, gold_commit, subdir: None, branch: None })
     }
 }

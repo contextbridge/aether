@@ -61,7 +61,7 @@ Aether Evals' fake-agent coverage should use normal test names. Reserve `_eval` 
 - `eval_env_vars(&model)` forwards only the credentials for the providers `model` runs on into Docker, and sets `AETHER_HOME=/root/.aether`.
 - `Workspace::empty()` creates an isolated temp directory.
 - `Workspace::from_dir(path)` copies fixture directory contents into a temp directory.
-- `Workspace::from_git_repo(GitRepoSpec { url, start_commit, gold_commit, subdir })` clones and checks out a git repository.
+- `Workspace::from_git(GitSpec { source, start_commit, gold_commit, subdir, branch })` checks out the start commit on `branch` (default `main`), fetched from `GitSource::Url(url)` or `GitSource::Bundle(path)` (see `create_git_bundle`). The workspace holds only the start commit's history, with no remote, so the agent can't find the gold commit in git. That history is fetched in full, blobs included, so reuse one bundle across runs for large repositories.
 - `Transcript` exposes collected agent messages, token usage, and tool-call helpers.
 
 ## Dockerized evals
@@ -76,15 +76,16 @@ Stdout is reserved for `AgentEvent` JSON lines and must end with a terminal even
 
 ```rust
 use aether_evals::{
-    Agent, CONTAINER_AETHER_HOME, Container, DockerAgent, GitRepoSpec, Image, Task, Transcript, Workspace,
+    Agent, CONTAINER_AETHER_HOME, Container, DockerAgent, GitSource, GitSpec, Image, Task, Transcript, Workspace,
     eval_env_vars,
 };
 
-let workspace = Workspace::from_git_repo(GitRepoSpec {
-    url: "https://github.com/example/repo".to_string(),
+let workspace = Workspace::from_git(GitSpec {
+    source: GitSource::Url("https://github.com/example/repo".to_string()),
     start_commit: "start_sha".to_string(),
     gold_commit: "gold_sha".to_string(),
     subdir: None,
+    branch: None,
 })?;
 let container = Container::builder(Image::new("aether-sandbox", "latest"))
     .with_env_vars(eval_env_vars(&"anthropic:claude-opus-4-6".parse()?))
@@ -152,18 +153,19 @@ Judge faults — transient LLM stream failures, unparseable responses, criterion
 
 `Workspace` removes its temporary directory when dropped. To retain files for debugging, call `workspace.persist()` and remove the returned path manually when finished.
 
-For git-backed workspaces, `workspace.capture_git_diffs()` returns the agent-produced diff and the reference diff when available.
+For git-backed workspaces, `workspace.capture_agent_diff()?` returns the agent's commits and staged and unstaged edits since the start commit, and errors if git can't read the repository. `workspace.reference_diff()` returns the start-to-gold diff, computed before the gold commit was discarded. Both are `None` for workspaces without a start commit.
 
 ## Git-backed evals
 
 ```rust
-use aether_evals::{Agent, GitRepoSpec, Task, Transcript, Workspace};
+use aether_evals::{Agent, GitSource, GitSpec, Task, Transcript, Workspace};
 
-let workspace = Workspace::from_git_repo(GitRepoSpec {
-    url: "https://github.com/example/repo".to_string(),
+let workspace = Workspace::from_git(GitSpec {
+    source: GitSource::Bundle("fixtures/repo.bundle".into()),
     start_commit: "start_sha".to_string(),
     gold_commit: "gold_sha".to_string(),
     subdir: Some("packages/api".into()),
+    branch: None,
 })?;
 let prompt = "Make the test pass";
 let transcript = Transcript::from_stream(agent.run(Task::new(prompt))).await?;
