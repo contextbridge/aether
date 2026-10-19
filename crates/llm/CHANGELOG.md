@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.16](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.15...aether-llm-v0.9.16) - 2026-10-19
+
+### Other
+
+- updated the following local packages: aether-utils, aether-auth, aether-llm-codegen
+
 ## [0.9.15](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.14...aether-llm-v0.9.15) - 2026-10-19
 
 ### Fixed

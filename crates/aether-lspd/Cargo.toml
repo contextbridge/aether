@@ -1,6 +1,6 @@
 [package]
 name = "aether-lspd"
-version = "0.3.4"
+version = "0.3.5"
 edition = "2024"
 description = "LSP daemon for sharing language servers across multiple agents"
 license = "MIT"
@@ -65,7 +65,7 @@ ignore = { workspace = true }
 thiserror = { workspace = true }
 
 # Testing support (optional)
-utils = { package = "aether-utils", path = "../utils", version = "0.2.20", optional = true }
+utils = { package = "aether-utils", path = "../utils", version = "0.3.0", optional = true }
 
 # Unix-specific features (daemonization, signals)
 [target.'cfg(unix)'.dependencies]
