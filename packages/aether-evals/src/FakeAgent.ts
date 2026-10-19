@@ -1,9 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import type { AgentEvent } from "@aether-agent/sdk";
+import { throwIfAborted, type AgentEvent } from "@aether-agent/sdk";
 import { AetherEvalError } from "./errors.js";
-import type { Agent } from "./Agent.js";
+import type { Agent, AgentRunOptions } from "./Agent.js";
 import type { Task } from "./task.js";
 import { turnEnded } from "./transcript.js";
 import type { Workspace } from "./workspace.js";
@@ -78,7 +78,10 @@ export class FakeAgent implements Agent {
     return new FakeAgent(this.events, this.fileWrites, workspace);
   }
 
-  async *run(_task: Task): AsyncIterable<AgentEvent> {
+  async *run(
+    _task: Task,
+    { signal }: AgentRunOptions = {},
+  ): AsyncIterable<AgentEvent> {
     if (this.fileWrites.length > 0 && !this.workspace) {
       throw new AetherEvalError(
         "configuration_error",
@@ -93,6 +96,7 @@ export class FakeAgent implements Agent {
     }
 
     for (const event of this.events) {
+      throwIfAborted(signal);
       yield event;
     }
   }

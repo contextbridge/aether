@@ -16,6 +16,20 @@ describe("Container.exec", () => {
 
     expect(execUsers).toEqual(["1000:1000", "root"]);
   });
+
+  it("rejects once aborted, without waiting for the command", async () => {
+    const { started } = fakeStartedContainer(new Promise(() => {}));
+    const container = new Container(started, { cwd: "/workspace" });
+    const controller = new AbortController();
+
+    const exec = container.exec({
+      command: ["sleep", "60"],
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    await expect(exec).rejects.toMatchObject({ code: "aborted" });
+  });
 });
 
 function fakeStartedContainer(

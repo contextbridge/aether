@@ -11,7 +11,7 @@ import {
   type StartedTestContainer,
   Wait,
 } from "testcontainers";
-import { AetherSdkError, runCommand } from "@aether-agent/sdk";
+import { abortedError, runCommand, throwIfAborted } from "@aether-agent/sdk";
 import { Image } from "./image.js";
 import { AetherCommandExitError, AetherEvalError } from "../errors.js";
 import type { Workspace } from "../workspace.js";
@@ -63,11 +63,14 @@ export class Container {
   }
 
   async exec(options: ContainerExecOptions): Promise<ExecOutput> {
-    const result = await this.container.exec(options.command, {
-      workingDir: options.cwd ?? this.cwd,
-      env: options.env,
-      user: options.user ?? this.user,
-    });
+    const result = await abortable(
+      this.container.exec(options.command, {
+        workingDir: options.cwd ?? this.cwd,
+        env: options.env,
+        user: options.user ?? this.user,
+      }),
+      options.signal,
+    );
     return {
       exitCode: result.exitCode,
       stdout: result.stdout,
@@ -84,9 +87,7 @@ export class Container {
   async *execStreaming(
     options: ContainerStreamingOptions,
   ): AsyncIterable<string> {
-    if (options.signal?.aborted) {
-      throw new AetherSdkError("aborted", "Aborted by caller");
-    }
+    throwIfAborted(options.signal);
     const client = await getContainerRuntimeClient();
     const dockerode = client.container.dockerode;
     const dockerodeContainer = dockerode.getContainer(this.container.getId());
@@ -137,7 +138,7 @@ export class Container {
 
     using abortCleanup = options.signal
       ? addAbortListener(options.signal, () => {
-          stream.destroy(new AetherSdkError("aborted", "Aborted by caller"));
+          stream.destroy(abortedError());
         })
       : undefined;
     void abortCleanup;
@@ -363,6 +364,15 @@ async function grantAccess(
     exitedErrorCode: "execution_failed",
     exitedMessage: ({ exitCode, stderr }) =>
       `setfacl exited with code ${exitCode}.\n${stderr}`,
+  });
+}
+
+function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(abortedError());
+  return new Promise<T>((resolve, reject) => {
+    const listener = addAbortListener(signal, () => reject(abortedError()));
+    promise.then(resolve, reject).finally(() => listener[Symbol.dispose]());
   });
 }
 

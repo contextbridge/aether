@@ -8,7 +8,7 @@ import {
   type AcpAgentProcess,
   type SettingsSelection,
 } from "./agentProcess.js";
-import { AetherSdkError, throwIfAborted } from "./errors.js";
+import { AetherSdkError, abortedError, throwIfAborted } from "./errors.js";
 import { SDK_VERSION } from "./generated/sdk-version.js";
 import type { AetherMessage, AgentSelection } from "./types.js";
 
@@ -141,7 +141,7 @@ export class AetherSession {
       this.abortCleanup = addAbortListener(abortSignal, () => {
         this.events.push({
           type: "error",
-          error: new AetherSdkError("aborted", "Aborted by caller"),
+          error: abortedError(),
         });
         void this.cancel()
           .catch(() => undefined)

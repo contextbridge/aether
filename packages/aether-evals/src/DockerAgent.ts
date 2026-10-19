@@ -1,7 +1,7 @@
 import type { AgentEvent } from "@aether-agent/sdk";
 import { Container } from "./containers/container.js";
 import { AetherEvalError } from "./errors.js";
-import type { Agent } from "./Agent.js";
+import type { Agent, AgentRunOptions } from "./Agent.js";
 import type { Task } from "./task.js";
 import { isTerminalEvent } from "./transcript.js";
 
@@ -48,7 +48,10 @@ export class DockerAgent implements Agent {
     });
   }
 
-  async *run(task: Task): AsyncIterable<AgentEvent> {
+  async *run(
+    task: Task,
+    options: AgentRunOptions = {},
+  ): AsyncIterable<AgentEvent> {
     const env = {
       ...this.env,
       [AETHER_EVAL_WORKSPACE_ROOT_ENV]: this.container.workspaceRoot,
@@ -62,6 +65,7 @@ export class DockerAgent implements Agent {
       command: this.command,
       cwd: this.container.cwd,
       env,
+      signal: options.signal,
       onStderr: (chunk) => {
         stderr += chunk;
       },

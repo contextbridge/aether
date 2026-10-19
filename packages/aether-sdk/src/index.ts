@@ -20,7 +20,7 @@ export type { AetherHeadlessOptions, HeadlessEventKind } from "./headless.js";
 export { tool } from "./tool.js";
 export { mcp } from "./mcp/index.js";
 export type { McpHandle, InlineMcpSource } from "./mcp/index.js";
-export { AetherSdkError } from "./errors.js";
+export { AetherSdkError, abortedError, throwIfAborted } from "./errors.js";
 export type {
   AgentSelection,
   AetherMessage,

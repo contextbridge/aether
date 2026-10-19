@@ -24,6 +24,23 @@ describe("FakeAgent", () => {
     ]);
   });
 
+  it("stops streaming once the run is aborted", async () => {
+    const controller = new AbortController();
+    const events: AgentEvent[] = [];
+
+    const run = (async () => {
+      for await (const event of FakeAgent.success().run(new Task("t"), {
+        signal: controller.signal,
+      })) {
+        events.push(event);
+        controller.abort();
+      }
+    })();
+
+    await expect(run).rejects.toMatchObject({ code: "aborted" });
+    expect(events.map(eventName)).toEqual(["message:text"]);
+  });
+
   it("withToolCall() streams tool_result, text, then done", async () => {
     const result = await Transcript.fromStream(
       FakeAgent.withToolCall("bash", "ok").run(new Task("t")),

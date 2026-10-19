@@ -85,6 +85,16 @@ describe("DockerAgent", () => {
     }
   });
 
+  it("passes the run's abort signal to the container", async () => {
+    const { container, execs } = fakeContainer(JSON.stringify(turnEnded()));
+    const agent = new DockerAgent({ container, command: ["fake-agent"] });
+    const controller = new AbortController();
+
+    await collect(agent.run(new Task("test"), { signal: controller.signal }));
+
+    expect(execs[0]?.signal).toBe(controller.signal);
+  });
+
   it("rejects malformed NDJSON", async () => {
     const agent = agentEmittingLines("not JSON");
 

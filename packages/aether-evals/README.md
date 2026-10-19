@@ -183,9 +183,19 @@ await using container = await Container.builder(Image.parse("my-agent:latest"))
   // workspace and ephemeral mounts; mounts added with withMount keep their host permissions.
   .withUser("1000:1000")
   .start(workspace);
+
+const controller = new AbortController();
+for await (const event of agent.run(task, { signal: controller.signal })) {
+  // ...
+}
+const tests = await container.exec({
+  command: ["pnpm", "test"],
+  signal: AbortSignal.timeout(600_000),
+});
 ```
 
-Git inside the container treats `/workspace` as a safe directory, since bind mounts are usually
-owned by another user.
+Aborting an exec rejects it immediately. Docker can't kill an exec'd process, so the command runs
+until it exits or the container stops. Git inside the container treats `/workspace` as a safe
+directory, since bind mounts are usually owned by another user.
 
-These container options are not yet in the Rust `aether-evals` crate.
+These container options and abort signals are not yet in the Rust `aether-evals` crate.
