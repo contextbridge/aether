@@ -27,6 +27,7 @@ describe.skipIf(process.env.AETHER_EVALS_DOCKER_E2E !== "1")(
       const agent = new DockerAgent({
         container,
         command: ["node", "/app/dist/eval-agent.js"],
+        env: hostEnv(AGENT_ENV_KEYS),
       });
       process.stderr.write(
         "[e2e] building image + running agent (first run builds, ~1 min)…\n",
@@ -51,3 +52,24 @@ describe.skipIf(process.env.AETHER_EVALS_DOCKER_E2E !== "1")(
     }, 1_200_000);
   },
 );
+
+const AGENT_ENV_KEYS = [
+  "AETHER_EVAL_MODEL",
+  "ANTHROPIC_API_KEY",
+  "DEEPSEEK_API_KEY",
+  "GEMINI_API_KEY",
+  "MOONSHOT_API_KEY",
+  "OPENAI_API_KEY",
+  "OPENROUTER_API_KEY",
+  "XIAOMI_API_KEY",
+  "ZAI_API_KEY",
+];
+
+function hostEnv(keys: string[]): Record<string, string> {
+  return Object.fromEntries(
+    keys.flatMap((key) => {
+      const value = process.env[key];
+      return value === undefined ? [] : [[key, value]];
+    }),
+  );
+}

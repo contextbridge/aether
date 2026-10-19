@@ -1,4 +1,3 @@
-import { env as processEnv } from "node:process";
 import type { AgentEvent } from "@aether-agent/sdk";
 import { Container } from "./containers/container.js";
 import { AetherEvalError } from "./errors.js";
@@ -6,20 +5,9 @@ import type { Agent } from "./Agent.js";
 import type { Task } from "./task.js";
 import { isTerminalEvent } from "./transcript.js";
 
-export const CONTAINER_AETHER_HOME = "/root/.aether";
 export const AETHER_EVAL_TASK_PROMPT_ENV = "AETHER_EVAL_TASK_PROMPT";
 export const AETHER_EVAL_WORKSPACE_ROOT_ENV = "AETHER_EVAL_WORKSPACE_ROOT";
 export const AETHER_EVAL_CWD_ENV = "AETHER_EVAL_CWD";
-const PROVIDER_ENV_VARS = new Set([
-  "ANTHROPIC_API_KEY",
-  "DEEPSEEK_API_KEY",
-  "GEMINI_API_KEY",
-  "MOONSHOT_API_KEY",
-  "OPENAI_API_KEY",
-  "OPENROUTER_API_KEY",
-  "XIAOMI_API_KEY",
-  "ZAI_API_KEY",
-]);
 
 export interface DockerAgentOptions {
   container: Container;
@@ -41,10 +29,7 @@ export class DockerAgent implements Agent {
     }
     this.container = options.container;
     this.command = [...options.command];
-    this.env = {
-      ...defaultEvalEnvVars(processEnv),
-      ...(options.env ?? {}),
-    };
+    this.env = { ...options.env };
   }
 
   withEnvVar(key: string, value: string): DockerAgent {
@@ -96,25 +81,6 @@ export class DockerAgent implements Agent {
       );
     }
   }
-}
-
-export function defaultEvalEnvVars(
-  hostEnv: Record<string, string | undefined> = processEnv,
-): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(hostEnv)) {
-    if (value === undefined) continue;
-    if (key === "AETHER_HOME") continue;
-    if (
-      PROVIDER_ENV_VARS.has(key) ||
-      key === "OLLAMA_HOST" ||
-      key.startsWith("AETHER_")
-    ) {
-      env[key] = value;
-    }
-  }
-  env.AETHER_HOME = CONTAINER_AETHER_HOME;
-  return env;
 }
 
 function parseAgentEvent(line: string): AgentEvent {

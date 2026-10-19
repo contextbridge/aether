@@ -46,9 +46,11 @@ test("agent edits notes.txt", async () => {
     Image.parse("aether-sandbox:latest")
   ).start(workspace);
   
+  // The agent sees only this environment; nothing is forwarded from the host.
   const agent = new DockerAgent({
     container,
-    command: ["node", "/app/eval-agent.js"]
+    command: ["node", "/app/eval-agent.js"],
+    env: { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY! },
   });
 
   const trace = await Transcript.fromStream(agent.run(task));
@@ -99,6 +101,7 @@ test("agent makes a maintainer-quality edit", async () => {
   const agent = new DockerAgent({
     container,
     command: ["node", "/app/eval-agent.js"],
+    env: { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY! },
   });
   
   const trace = await Transcript.fromStream(agent.run(task));
