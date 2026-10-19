@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.19](https://github.com/contextbridge/aether/compare/aether-auth-v0.1.18...aether-auth-v0.1.19) - 2026-10-19
+
+### Fixed
+
+- share provider connections and credentials across agents ([#607](https://github.com/contextbridge/aether/pull/607))
+
+### Other
+
+- Cut lines of code  ([#606](https://github.com/contextbridge/aether/pull/606))
+- Assorted cleanups  ([#601](https://github.com/contextbridge/aether/pull/601))
+
 ## [0.1.18](https://github.com/contextbridge/aether/compare/aether-auth-v0.1.17...aether-auth-v0.1.18) - 2026-10-12
 
 ### Added

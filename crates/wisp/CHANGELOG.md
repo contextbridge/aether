@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.16](https://github.com/contextbridge/aether/compare/aether-wisp-v0.7.15...aether-wisp-v0.7.16) - 2026-10-19
+
+### Other
+
+- Cut lines of code  ([#606](https://github.com/contextbridge/aether/pull/606))
+- *(deps)* bump agent-client-protocol from 2.2.0 to 3.1.0 ([#604](https://github.com/contextbridge/aether/pull/604))
+- Assorted cleanups  ([#601](https://github.com/contextbridge/aether/pull/601))
+
 ## [0.7.15](https://github.com/contextbridge/aether/compare/aether-wisp-v0.7.14...aether-wisp-v0.7.15) - 2026-10-12
 
 ### Other
