@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.6](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.8.5...aether-mcp-servers-v0.8.6) - 2026-10-19
+
+### Fixed
+
+- share provider connections and credentials across agents ([#607](https://github.com/contextbridge/aether/pull/607))
+
+### Other
+
+- Cut lines of code  ([#606](https://github.com/contextbridge/aether/pull/606))
+- Assorted cleanups  ([#601](https://github.com/contextbridge/aether/pull/601))
+
 ## [0.8.5](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.8.4...aether-mcp-servers-v0.8.5) - 2026-10-12
 
 ### Other

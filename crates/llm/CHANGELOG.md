@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.15](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.14...aether-llm-v0.9.15) - 2026-10-19
+
+### Fixed
+
+- share provider connections and credentials across agents ([#607](https://github.com/contextbridge/aether/pull/607))
+
+### Other
+
+- Update models ([#608](https://github.com/contextbridge/aether/pull/608))
+- Cut lines of code  ([#606](https://github.com/contextbridge/aether/pull/606))
+- Assorted cleanups  ([#601](https://github.com/contextbridge/aether/pull/601))
+
 ## [0.9.14](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.13...aether-llm-v0.9.14) - 2026-10-12
 
 ### Added

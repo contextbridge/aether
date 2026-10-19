@@ -1,6 +1,6 @@
 [package]
 name = "aether-auth"
-version = "0.1.18"
+version = "0.1.19"
 edition = "2024"
 description = "OAuth credential storage, authorization flows and AWS SigV4 signing for the Aether AI agent framework"
 license = "MIT"
@@ -34,7 +34,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "sync", "io-util", "net", "time"] }
 tracing = { workspace = true }
 url = { workspace = true }
-utils = { package = "aether-utils", path = "../utils", version = "0.2.19" }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.20" }
 
 # keyring feature
 keyring-core = { workspace = true, optional = true }
