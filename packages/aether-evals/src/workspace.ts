@@ -8,31 +8,27 @@ import { GitRepo } from "./git.js";
 
 const EVAL_START_REF = "eval-start";
 const EVAL_GOLD_REF = "eval-gold";
+const DEFAULT_BRANCH = "main";
 
-export interface GitRepoSpec {
-  url: string;
+export interface GitCheckoutSpec {
   startCommit: string;
   goldCommit: string;
   subdir?: string;
+  branch?: string;
 }
 
-export interface GitBundleSpec {
+export interface GitRepoSpec extends GitCheckoutSpec {
+  url: string;
+}
+
+export interface GitBundleSpec extends GitCheckoutSpec {
   bundlePath: string;
-  startCommit: string;
-  goldCommit: string;
-  subdir?: string;
 }
 
 export interface RetainedWorkspaceInfo {
   rootPath: string;
   path: string;
 }
-
-/** Where an eval workspace came from. Git workspaces carry the commits for diffing. */
-export type WorkspaceSource =
-  | "local"
-  | { git: { url: string; startCommit: string; goldCommit: string } }
-  | { bundle: { startCommit: string; goldCommit: string } };
 
 /** A workspace created on the host for an eval run. */
 export class Workspace implements AsyncDisposable {
@@ -45,25 +41,24 @@ export class Workspace implements AsyncDisposable {
   /** Subdirectory (relative to `rootPath`) used as the working dir, if any. */
   readonly relativeCwd?: string;
 
-  readonly source: WorkspaceSource;
-
+  readonly #git: GitBaseline | undefined;
   #cleaned = false;
 
   private constructor(options: {
     rootPath: string;
     path: string;
     relativeCwd?: string;
-    source: WorkspaceSource;
+    git?: GitBaseline;
   }) {
     this.rootPath = options.rootPath;
     this.path = options.path;
     this.relativeCwd = options.relativeCwd;
-    this.source = options.source;
+    this.#git = options.git;
   }
 
   static async empty(): Promise<Workspace> {
     const rootPath = await createWorkspaceDir();
-    return new Workspace({ rootPath, path: rootPath, source: "local" });
+    return new Workspace({ rootPath, path: rootPath });
   }
 
   static async fromFiles(files: Record<string, string>): Promise<Workspace> {
@@ -101,14 +96,7 @@ export class Workspace implements AsyncDisposable {
     spec: GitRepoSpec,
     signal?: AbortSignal,
   ): Promise<Workspace> {
-    const { url, startCommit, goldCommit, subdir } = spec;
-    return Workspace.fromClone(
-      (rootPath) => GitRepo.clone(url, rootPath, signal),
-      startCommit,
-      subdir,
-      { git: { url, startCommit, goldCommit } },
-      signal,
-    );
+    return Workspace.fromGit(spec.url, spec, signal);
   }
 
   /**
@@ -121,44 +109,44 @@ export class Workspace implements AsyncDisposable {
     spec: GitBundleSpec,
     signal?: AbortSignal,
   ): Promise<Workspace> {
-    const { bundlePath, startCommit, goldCommit, subdir } = spec;
-    if (!(await pathExists(bundlePath))) {
+    if (!(await pathExists(spec.bundlePath))) {
       throw new AetherSdkError(
         "invalid_options",
-        `git bundle file does not exist: ${bundlePath}`,
+        `git bundle file does not exist: ${spec.bundlePath}`,
       );
     }
-    return Workspace.fromClone(
-      (rootPath) => GitRepo.clone(bundlePath, rootPath, signal, false),
-      startCommit,
-      subdir,
-      { bundle: { startCommit, goldCommit } },
-      signal,
-    );
+    return Workspace.fromGit(spec.bundlePath, spec, signal);
   }
 
-  private static async fromClone(
-    clone: (rootPath: string) => Promise<GitRepo>,
-    startCommit: string,
-    subdir: string | undefined,
-    source: WorkspaceSource,
+  private static async fromGit(
+    remote: string,
+    spec: GitCheckoutSpec,
     signal?: AbortSignal,
   ): Promise<Workspace> {
-    const rootPath = await createWorkspaceDir();
-    try {
-      const repo = await clone(rootPath);
-      await repo.checkout(startCommit, signal);
-      const path = await resolveSubdir(rootPath, subdir);
-      return new Workspace({
-        rootPath,
-        path,
-        relativeCwd: subdir ?? undefined,
-        source,
-      });
-    } catch (err) {
-      await rm(rootPath, { recursive: true, force: true });
-      throw err;
-    }
+    const { startCommit, goldCommit, subdir, branch = DEFAULT_BRANCH } = spec;
+    return withTempDir(async (scratchPath) => {
+      const scratch = await GitRepo.init(scratchPath, signal);
+      await scratch.fetch(remote, [startCommit, goldCommit], signal);
+      const referenceDiff = toGitDiff(
+        await scratch.diff(startCommit, goldCommit, signal),
+      );
+
+      const rootPath = await createWorkspaceDir();
+      try {
+        const repo = await GitRepo.init(rootPath, signal);
+        await repo.fetch(scratchPath, [startCommit], signal);
+        await repo.checkoutBranch(branch, startCommit, signal);
+        return new Workspace({
+          rootPath,
+          path: await resolveSubdir(rootPath, subdir),
+          relativeCwd: subdir,
+          git: { startCommit, referenceDiff },
+        });
+      } catch (err) {
+        await rm(rootPath, { recursive: true, force: true });
+        throw err;
+      }
+    });
   }
 
   join(relativePath: string): string {
@@ -170,20 +158,18 @@ export class Workspace implements AsyncDisposable {
     return { rootPath: this.rootPath, path: this.path };
   }
 
-  async captureGitDiffs(): Promise<{
-    agentDiff?: GitDiff;
-    referenceDiff?: GitDiff;
-  }> {
-    const commits = diffCommits(this.source);
-    if (!commits) return {};
+  get referenceDiff(): GitDiff | undefined {
+    return this.#git?.referenceDiff;
+  }
 
-    const repo = GitRepo.fromPath(this.path);
-    const { startCommit, goldCommit } = commits;
-    const [agentDiff, referenceDiff] = await Promise.all([
-      captureDiff(() => repo.diff(startCommit)),
-      captureDiff(() => repo.diff(startCommit, goldCommit)),
-    ]);
-    return { agentDiff, referenceDiff };
+  async captureAgentDiff(signal?: AbortSignal): Promise<GitDiff | undefined> {
+    if (!this.#git) return undefined;
+    const diff = await GitRepo.fromPath(this.rootPath).diff(
+      this.#git.startCommit,
+      undefined,
+      signal,
+    );
+    return toGitDiff(diff);
   }
 
   /** Remove the workspace directory. Idempotent. */
@@ -210,8 +196,7 @@ export async function createGitBundle(
   outPath: string,
   signal?: AbortSignal,
 ): Promise<void> {
-  const tempDir = await createWorkspaceDir();
-  try {
+  await withTempDir(async (tempDir) => {
     const repo = await GitRepo.init(tempDir, signal);
     await repo.fetch(spec.url, [spec.startCommit, spec.goldCommit], signal);
     await repo.updateRef(
@@ -225,24 +210,29 @@ export async function createGitBundle(
       signal,
     );
     await repo.bundle([EVAL_START_REF, EVAL_GOLD_REF], outPath, signal);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  });
 }
 
-async function captureDiff(
-  getDiff: () => Promise<string>,
-): Promise<GitDiff | undefined> {
-  try {
-    const diff = await getDiff();
-    return { diff, stats: diffStatsFromDiff(diff) };
-  } catch {
-    return undefined;
-  }
+interface GitBaseline {
+  startCommit: string;
+  referenceDiff: GitDiff;
+}
+
+function toGitDiff(diff: string): GitDiff {
+  return { diff, stats: diffStatsFromDiff(diff) };
 }
 
 async function createWorkspaceDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), "aether-eval-workspace-"));
+}
+
+async function withTempDir<T>(fn: (path: string) => Promise<T>): Promise<T> {
+  const path = await createWorkspaceDir();
+  try {
+    return await fn(path);
+  } finally {
+    await rm(path, { recursive: true, force: true });
+  }
 }
 
 function resolvePath(root: string, relativePath: string): string {
@@ -279,11 +269,4 @@ async function resolveSubdir(
     );
   }
   return path;
-}
-
-function diffCommits(
-  source: WorkspaceSource,
-): { startCommit: string; goldCommit: string } | undefined {
-  if (source === "local") return undefined;
-  return "git" in source ? source.git : source.bundle;
 }

@@ -47,9 +47,9 @@ export {
 export { createGitBundle, Workspace } from "./workspace.js";
 export type {
   GitBundleSpec,
+  GitCheckoutSpec,
   GitRepoSpec,
   RetainedWorkspaceInfo,
-  WorkspaceSource,
 } from "./workspace.js";
 export type {
   AgentEvent,

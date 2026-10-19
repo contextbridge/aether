@@ -15,27 +15,12 @@ export class GitRepo {
     return new GitRepo(dest);
   }
 
-  /**
-   * Clone `source` (a URL or a local bundle/path) into `dest` with `--no-checkout`.
-   *
-   * When `blobless` (the default), uses a partial blobless clone (`--filter=blob:none`)
-   * that defers blob downloads -- cheaper for large repos. Pass false to download the full
-   * object set so the clone is self-contained (e.g. when `source` is a bundle, which is not
-   * a promisor remote).
-   */
-  static async clone(
-    source: string,
-    dest: string,
+  async checkoutBranch(
+    branch: string,
+    commit: string,
     signal?: AbortSignal,
-    blobless = true,
-  ): Promise<GitRepo> {
-    const filter = blobless ? ["--filter=blob:none"] : [];
-    await git(["clone", "--no-checkout", ...filter, source, dest], signal);
-    return new GitRepo(dest);
-  }
-
-  async checkout(reference: string, signal?: AbortSignal): Promise<void> {
-    await git(["-C", this.path, "checkout", reference], signal);
+  ): Promise<void> {
+    await git(["-C", this.path, "checkout", "-B", branch, commit], signal);
   }
 
   /** Fetch `revs` from `remote` (a named remote or a URL) into this repository. */
@@ -44,7 +29,7 @@ export class GitRepo {
     revs: string[],
     signal?: AbortSignal,
   ): Promise<void> {
-    await git(["-C", this.path, "fetch", remote, ...revs], signal);
+    await git(["-C", this.path, "fetch", "--no-tags", remote, ...revs], signal);
   }
 
   async updateRef(

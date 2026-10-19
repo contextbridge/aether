@@ -5,6 +5,7 @@
   - [Install](#install)
   - [Writing evals with vitest](#writing-evals-with-vitest)
     - [Grading a run with an LLM judge](#grading-a-run-with-an-llm-judge)
+    - [Evaluating against a merged change](#evaluating-against-a-merged-change)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -137,4 +138,27 @@ test("agent makes a maintainer-quality edit", async () => {
   const summary = grader.summarize(response);
   expect(summary.passed, summary.reason).toBe(true);
 });
+```
+
+### Evaluating against a merged change
+
+`Workspace.fromGitBundle` and `Workspace.fromGitRepo` check out a start commit and grade the agent
+against a gold commit, such as the change a human merged. The workspace holds only the start commit's
+history, on `main` (or `branch`) with no remote, so the agent can't find the gold commit in git.
+`workspace.referenceDiff` is computed before the gold commit is discarded. That history is fetched in
+full, blobs included, so reuse one bundle across runs for large repositories.
+
+```ts
+await using workspace = await Workspace.fromGitBundle({
+  bundlePath, // from createGitBundle({ url, startCommit, goldCommit }, bundlePath)
+  startCommit,
+  goldCommit,
+});
+
+// ... run the agent ...
+
+// Commits and staged and unstaged edits since the start commit. Rejects if git can't read the
+// repository.
+const agentDiff = await workspace.captureAgentDiff();
+const referenceDiff = workspace.referenceDiff;
 ```
