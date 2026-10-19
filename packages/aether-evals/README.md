@@ -6,6 +6,7 @@
   - [Writing evals with vitest](#writing-evals-with-vitest)
     - [Grading a run with an LLM judge](#grading-a-run-with-an-llm-judge)
     - [Evaluating against a merged change](#evaluating-against-a-merged-change)
+    - [Running the image as built](#running-the-image-as-built)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -166,3 +167,25 @@ await using workspace = await Workspace.fromGitBundle({
 const agentDiff = await workspace.captureAgentDiff();
 const referenceDiff = workspace.referenceDiff;
 ```
+
+### Running the image as built
+
+By default a container replaces the image's entrypoint and runs commands as the image's user. For an
+image built to run an agent in production:
+
+```ts
+await using container = await Container.builder(Image.parse("my-agent:latest"))
+  .withPrivileged(true)
+  // Keep an entrypoint that starts services, such as a Docker daemon, and wait for them.
+  .withImageEntrypoint(true)
+  .withReadyCommand("docker info")
+  // Run execs and agents as the image's developer user. On Linux, the user is granted access to the
+  // workspace and ephemeral mounts; mounts added with withMount keep their host permissions.
+  .withUser("1000:1000")
+  .start(workspace);
+```
+
+Git inside the container treats `/workspace` as a safe directory, since bind mounts are usually
+owned by another user.
+
+These container options are not yet in the Rust `aether-evals` crate.
