@@ -25,7 +25,11 @@ export async function generateTypes({ cargo, output, external, tsTypesFrom }) {
 
   const declarations = await Promise.all(
     declared.map((name) =>
-      compile(referencedByName(document.$defs[name]), name, COMPILE_OPTIONS),
+      compile(
+        referencedByName(document.$defs[name]),
+        typeName(name),
+        COMPILE_OPTIONS,
+      ),
     ),
   );
 
@@ -80,12 +84,21 @@ function referencedByName(schema) {
   return JSON.parse(JSON.stringify(schema), (_, value) => {
     if (typeof value?.$ref !== "string") return value;
     const { $ref, ...keywords } = value;
-    const reference = { tsType: $ref.replace("#/$defs/", "") };
+    const reference = { tsType: typeName($ref.replace("#/$defs/", "")) };
     // `tsType` overrides sibling constraints, so typed siblings must be intersected instead.
     return "type" in keywords
       ? { allOf: [reference, keywords] }
       : { ...keywords, ...reference };
   });
+}
+
+// schemars names generic instantiations like `Result_of_T_or_E`, which `compile` would otherwise sanitize into a
+// declaration name that no longer matches the `tsType` references to it.
+function typeName(name) {
+  return name
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join("");
 }
 
 function assertDeclaredBy({ from, schema }, names) {
