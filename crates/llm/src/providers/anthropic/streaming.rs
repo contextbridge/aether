@@ -1,51 +1,108 @@
-use super::types::{ContentBlockDeltaData, ContentBlockStartData, StreamEvent};
+use super::types::{ContentBlock, ContentBlockDeltaData, ContentBlockStartData, StreamEvent, Usage};
 use crate::providers::response_stream::StreamAssembler;
 use crate::{LlmError, LlmResponse, ProviderError, Result, StopReason};
+use std::collections::BTreeMap;
 use tracing::debug;
 
-pub(crate) fn decode_line(line: &str, turn: &mut StreamAssembler<u32>) -> Result<Vec<LlmResponse>> {
-    match serde_json::from_str(line) {
-        Ok(event) => decode_event(event, turn),
-        Err(e) => {
-            debug!("Failed to parse SSE line: {line} - Error: {e}");
-            Ok(vec![])
-        }
-    }
+pub(crate) fn decode_messages<T: AsRef<[u8]>>()
+-> impl FnMut(T, &mut StreamAssembler<u32>) -> Result<Vec<LlmResponse>> + Send {
+    let mut decoder = MessagesDecoder::default();
+    move |json, turn| decoder.decode(json.as_ref(), turn)
 }
 
-fn decode_event(event: StreamEvent, turn: &mut StreamAssembler<u32>) -> Result<Vec<LlmResponse>> {
-    let response = match event {
-        StreamEvent::ContentBlockStart(data) => match data.content_block {
-            ContentBlockStartData::ToolUse { id, name } => Some(turn.start_tool(data.index, id, name)),
-            ContentBlockStartData::Other => None,
-        },
-        StreamEvent::ContentBlockDelta(data) => match data.delta {
-            ContentBlockDeltaData::TextDelta { text } => {
-                (!text.is_empty()).then_some(LlmResponse::Text { chunk: text })
-            }
-            ContentBlockDeltaData::ThinkingDelta { thinking } => {
-                (!thinking.is_empty()).then_some(LlmResponse::Reasoning { chunk: thinking })
-            }
-            ContentBlockDeltaData::InputJsonDelta { partial_json } => turn.append_tool_args(&data.index, partial_json),
-        },
-        StreamEvent::ContentBlockStop(data) => turn.complete_tool(&data.index),
-        StreamEvent::MessageDelta(data) => {
-            if let Some(stop_reason) = data.delta.stop_reason.as_deref() {
-                turn.stop(map_anthropic_stop_reason(stop_reason));
-            }
-            data.usage.as_ref().map(|usage| LlmResponse::Usage { tokens: usage.into() })
-        }
-        StreamEvent::MessageStop => {
-            turn.allow_eof();
-            None
-        }
-        StreamEvent::Error(data) => {
-            return Err(map_anthropic_stream_error(&data.error.error_type, &data.error.message));
-        }
-        StreamEvent::MessageStart | StreamEvent::Ping => None,
-    };
+#[derive(Default)]
+struct MessagesDecoder {
+    message_id: String,
+    usage: Usage,
+    thinking: BTreeMap<u32, ContentBlock>,
+}
 
-    Ok(response.into_iter().collect())
+impl MessagesDecoder {
+    fn decode(&mut self, json: &[u8], turn: &mut StreamAssembler<u32>) -> Result<Vec<LlmResponse>> {
+        match serde_json::from_slice(json) {
+            Ok(event) => self.decode_event(event, turn),
+            Err(e) => {
+                debug!("Failed to parse Messages stream event: {} - Error: {e}", String::from_utf8_lossy(json));
+                Ok(vec![])
+            }
+        }
+    }
+
+    fn decode_event(&mut self, event: StreamEvent, turn: &mut StreamAssembler<u32>) -> Result<Vec<LlmResponse>> {
+        let response = match event {
+            StreamEvent::MessageStart(start) => {
+                self.message_id = start.message.id;
+                self.usage = start.message.usage.unwrap_or_default();
+                None
+            }
+            StreamEvent::ContentBlockStart(data) => match data.content_block {
+                ContentBlockStartData::ToolUse { id, name } => Some(turn.start_tool(data.index, id, name)),
+                ContentBlockStartData::Thinking => {
+                    let block = ContentBlock::Thinking { thinking: String::new(), signature: String::new() };
+                    self.thinking.insert(data.index, block);
+                    None
+                }
+                ContentBlockStartData::RedactedThinking { data: redacted } => {
+                    self.thinking.insert(data.index, ContentBlock::RedactedThinking { data: redacted });
+                    None
+                }
+                ContentBlockStartData::Other => None,
+            },
+            StreamEvent::ContentBlockDelta(data) => match data.delta {
+                ContentBlockDeltaData::TextDelta { text } => {
+                    (!text.is_empty()).then_some(LlmResponse::Text { chunk: text })
+                }
+                ContentBlockDeltaData::ThinkingDelta { thinking: chunk } => {
+                    if let Some(ContentBlock::Thinking { thinking, .. }) = self.thinking.get_mut(&data.index) {
+                        thinking.push_str(&chunk);
+                    }
+                    (!chunk.is_empty()).then_some(LlmResponse::Reasoning { chunk })
+                }
+                ContentBlockDeltaData::SignatureDelta { signature: chunk } => {
+                    if let Some(ContentBlock::Thinking { signature, .. }) = self.thinking.get_mut(&data.index) {
+                        signature.push_str(&chunk);
+                    }
+                    None
+                }
+                ContentBlockDeltaData::InputJsonDelta { partial_json } => {
+                    turn.append_tool_args(&data.index, partial_json)
+                }
+            },
+            StreamEvent::ContentBlockStop(data) => turn.complete_tool(&data.index),
+            StreamEvent::MessageDelta(data) => {
+                if let Some(stop_reason) = data.delta.stop_reason.as_deref() {
+                    turn.stop(map_anthropic_stop_reason(stop_reason));
+                }
+                data.usage.map(|usage| {
+                    self.usage = self.usage.merge(&usage);
+                    LlmResponse::Usage { tokens: (&self.usage).into() }
+                })
+            }
+            StreamEvent::MessageStop => {
+                turn.allow_eof();
+                self.replayable_reasoning()?
+            }
+            StreamEvent::Error(data) => {
+                return Err(map_anthropic_stream_error(&data.error.error_type, &data.error.message));
+            }
+            StreamEvent::Ping => None,
+        };
+
+        Ok(response.into_iter().collect())
+    }
+
+    fn replayable_reasoning(&self) -> Result<Option<LlmResponse>> {
+        let blocks: Vec<&ContentBlock> = self
+            .thinking
+            .values()
+            .filter(|block| !matches!(block, ContentBlock::Thinking { signature, .. } if signature.is_empty()))
+            .collect();
+        if blocks.is_empty() {
+            return Ok(None);
+        }
+        let content = serde_json::to_string(&blocks)?;
+        Ok(Some(LlmResponse::EncryptedReasoning { id: self.message_id.clone(), content }))
+    }
 }
 
 fn map_anthropic_stream_error(error_type: &str, message: &str) -> LlmError {
@@ -72,11 +129,12 @@ fn map_anthropic_stop_reason(reason: &str) -> StopReason {
 mod tests {
     use super::*;
     use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
+    use crate::providers::anthropic::test_stream::{anthropic_stream, usage};
     use crate::providers::response_stream::{OpenedStream, response_stream};
     use crate::testing::llm_response;
     use crate::{ProviderErrorKind, TokenUsage};
     use futures::{StreamExt, stream};
-    use serde_json::{Value, json};
+    use serde_json::json;
     use std::future::ready;
 
     #[tokio::test]
@@ -250,7 +308,7 @@ mod tests {
 
         let message_start_json = r#"{"type": "message_start", "message": {"id": "msg_123", "type": "message", "role": "assistant", "content": [], "model": "claude-3", "stop_reason": null, "stop_sequence": null, "usage": {"input_tokens": 10, "output_tokens": 0}}}"#;
         let event: StreamEvent = serde_json::from_str(message_start_json).unwrap();
-        assert!(matches!(event, StreamEvent::MessageStart));
+        assert!(matches!(event, StreamEvent::MessageStart(start) if start.message.id == "msg_123"));
 
         let content_block_start_json =
             r#"{"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}"#;
@@ -278,105 +336,6 @@ mod tests {
 
     async fn process_lines(lines: Vec<String>) -> Vec<Result<LlmResponse>> {
         let opened = ready(Ok(OpenedStream::new(stream::iter(lines.into_iter().map(Ok)))));
-        response_stream(opened, |line: String, turn| decode_line(&line, turn), DEFAULT_STREAM_IDLE_TIMEOUT)
-            .collect()
-            .await
-    }
-
-    fn anthropic_stream() -> AnthropicStreamBuilder {
-        AnthropicStreamBuilder::default().push(json!({
-            "type": "message_start",
-            "message": {
-                "id": "msg_123",
-                "type": "message",
-                "role": "assistant",
-                "content": [],
-                "model": "claude-3",
-                "stop_reason": null,
-                "stop_sequence": null,
-                "usage": usage(10, 0)
-            }
-        }))
-    }
-
-    #[derive(Default)]
-    struct AnthropicStreamBuilder {
-        events: Vec<Value>,
-    }
-
-    impl AnthropicStreamBuilder {
-        fn text(self, index: u32, chunks: &[&str]) -> Self {
-            chunks
-                .iter()
-                .fold(self.block_start(index, &json!({ "type": "text", "text": "" })), |builder, text| {
-                    builder.block_delta(index, &json!({ "type": "text_delta", "text": text }))
-                })
-                .block_stop(index)
-        }
-
-        fn thinking(self, index: u32, chunks: &[&str]) -> Self {
-            chunks
-                .iter()
-                .fold(self.block_start(index, &json!({ "type": "thinking", "thinking": "" })), |builder, thinking| {
-                    builder.block_delta(index, &json!({ "type": "thinking_delta", "thinking": thinking }))
-                })
-                .block_stop(index)
-        }
-
-        fn tool_call(self, index: u32, id: &str, name: &str, argument_deltas: &[&str]) -> Self {
-            argument_deltas
-                .iter()
-                .fold(self.tool_start(index, id, name), |builder, delta| builder.tool_delta(index, delta))
-                .block_stop(index)
-        }
-
-        fn tool_start(self, index: u32, id: &str, name: &str) -> Self {
-            self.block_start(index, &json!({ "type": "tool_use", "id": id, "name": name }))
-        }
-
-        fn tool_delta(self, index: u32, partial_json: &str) -> Self {
-            self.block_delta(index, &json!({ "type": "input_json_delta", "partial_json": partial_json }))
-        }
-
-        fn message_delta(self, stop_reason: &str, usage: &Value) -> Self {
-            self.push(json!({
-                "type": "message_delta",
-                "delta": { "stop_reason": stop_reason, "stop_sequence": null },
-                "usage": usage
-            }))
-        }
-
-        fn message_stop(self) -> Self {
-            self.push(json!({ "type": "message_stop" }))
-        }
-
-        fn error(self, error_type: &str, message: &str) -> Self {
-            self.push(json!({ "type": "error", "error": { "type": error_type, "message": message } }))
-        }
-
-        fn block_start(self, index: u32, content_block: &Value) -> Self {
-            self.push(json!({ "type": "content_block_start", "index": index, "content_block": content_block }))
-        }
-
-        fn block_delta(self, index: u32, delta: &Value) -> Self {
-            self.push(json!({ "type": "content_block_delta", "index": index, "delta": delta }))
-        }
-
-        fn block_stop(self, index: u32) -> Self {
-            self.push(json!({ "type": "content_block_stop", "index": index }))
-        }
-
-        fn push(mut self, event: Value) -> Self {
-            self.events.push(event);
-            self
-        }
-
-        fn build(self) -> Vec<String> {
-            self.events.iter().map(Value::to_string).collect()
-        }
-    }
-
-    fn usage(input_tokens: u32, output_tokens: u32) -> Value {
-        json!({ "input_tokens": input_tokens, "output_tokens": output_tokens })
+        response_stream(opened, decode_messages::<String>(), DEFAULT_STREAM_IDLE_TIMEOUT).collect().await
     }
 }

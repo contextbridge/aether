@@ -10,7 +10,8 @@ use utils::variables::Vars;
 use crate::catalog::Provider;
 use crate::provider::{display_name, validate_reasoning};
 use crate::providers::anthropic::mappers::build_request as build_messages_request;
-use crate::providers::anthropic::streaming::decode_line;
+use crate::providers::anthropic::streaming::decode_messages;
+use crate::providers::anthropic::types::StreamingRequest;
 use crate::providers::http::{SseData, anthropic_code, http_client, post_sse, responses_code};
 pub use crate::providers::openai::chat::ChatRequestPolicy;
 use crate::providers::openai::chat::build_chat_request;
@@ -251,7 +252,7 @@ impl StreamingModelProvider for GenericProvider {
         let stream = validate_reasoning(context, identity.as_ref()).and_then(|()| match &self.config.api {
             Api::ChatCompletions(policy) => self.stream_chat_completions(wire_model, context, policy),
             Api::Responses(policy) => self.stream_responses(identity.as_ref(), wire_model, context, policy),
-            Api::Messages => self.stream_messages(wire_model, context),
+            Api::Messages => self.stream_messages(identity.as_ref(), wire_model, context),
         });
         stream.unwrap_or_else(error_stream)
     }
@@ -288,10 +289,15 @@ impl GenericProvider {
         Ok(response_stream(self.post("responses", &request, responses_code), decode_responses(), self.idle_timeout))
     }
 
-    fn stream_messages(&self, wire_model: &str, context: &Context) -> Result<LlmResponseStream> {
-        let request = build_messages_request(wire_model, context)?;
+    fn stream_messages(
+        &self,
+        identity: Option<&LlmModel>,
+        wire_model: &str,
+        context: &Context,
+    ) -> Result<LlmResponseStream> {
+        let request = StreamingRequest::new(wire_model, build_messages_request(identity, context)?);
         let opened = self.post("v1/messages", &request, anthropic_code);
-        Ok(response_stream(opened, |data, turn| decode_line(&data, turn), self.idle_timeout))
+        Ok(response_stream(opened, decode_messages(), self.idle_timeout))
     }
 
     fn post<T: Serialize>(
@@ -339,12 +345,14 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::providers::anthropic::test_stream::{AnthropicStreamBuilder, anthropic_stream, usage};
     use crate::providers::test_capture_server::{CaptureServer, ProviderFixture, ResponseSpec, hello_context};
+    use crate::reasoning::ReasoningControl;
+    use crate::testing::{assistant_message, llm_response, tool_error, tool_result};
     use crate::types::IsoString;
     use crate::{
-        AssistantReasoning, ChatMessage, ContentBlock, EncryptedReasoningContent, LlmResponse, MessageId,
-        ModelSettings, ProviderErrorKind, ReasoningEffort, ToolCallError, ToolCallRequest, ToolCallResult,
-        ToolDefinition,
+        ChatMessage, ContentBlock, LlmResponse, MessageId, ModelSettings, ProviderErrorKind, ReasoningEffort,
+        StopReason, ToolDefinition,
     };
 
     #[tokio::test]
@@ -711,13 +719,7 @@ mod tests {
             let connection = ProviderConnectionConfig { base_url: Some(server.base_url.clone()), ..Default::default() };
             let provider =
                 GenericProvider::from_env_with_connection(config, connection).unwrap().with_model("test-model");
-            let tool_call = ChatMessage::Assistant {
-                message_id: MessageId::new(),
-                content: String::new(),
-                reasoning: AssistantReasoning::default(),
-                timestamp: IsoString::now(),
-                tool_calls: vec![ToolCallRequest { id: "call_1".into(), name: "tool".into(), arguments: "{}".into() }],
-            };
+            let tool_call = assistant_message().tool_call("call_1", "tool", "{}").build();
             let mut context = Context::new(vec![ChatMessage::user("Hello"), tool_call], vec![]);
             context.set_prompt_cache_key(Some("prefix-abc".to_string()));
             context.set_session_affinity_key(Some("conversation-abc".to_string()));
@@ -826,30 +828,9 @@ mod tests {
         let context = Context::new(
             vec![
                 ChatMessage::user("Read foo.rs"),
-                ChatMessage::Assistant {
-                    message_id: MessageId::new(),
-                    content: "I'll read that file.".into(),
-                    reasoning: AssistantReasoning::default(),
-                    timestamp: IsoString::now(),
-                    tool_calls: vec![ToolCallRequest {
-                        id: "call_1".into(),
-                        name: "read_file".into(),
-                        arguments: arguments.into(),
-                    }],
-                },
-                ChatMessage::ToolCallResult(Ok(ToolCallResult {
-                    id: "call_1".into(),
-                    name: "read_file".into(),
-                    arguments: arguments.into(),
-                    result: "fn main() {}".into(),
-                })),
-                ChatMessage::Assistant {
-                    message_id: MessageId::new(),
-                    content: "Here's the file content.".into(),
-                    reasoning: AssistantReasoning::default(),
-                    timestamp: IsoString::now(),
-                    tool_calls: vec![],
-                },
+                assistant_message().text("I'll read that file.").tool_call("call_1", "read_file", arguments).build(),
+                tool_result("call_1", "read_file", arguments, "fn main() {}"),
+                assistant_message().text("Here's the file content.").build(),
             ],
             vec![ToolDefinition::new(
                 "read_file",
@@ -883,20 +864,7 @@ mod tests {
 
     #[tokio::test]
     async fn responses_preserve_tool_calls_without_an_assistant_text_message() {
-        let context = Context::new(
-            vec![ChatMessage::Assistant {
-                message_id: MessageId::new(),
-                content: String::new(),
-                timestamp: IsoString::now(),
-                reasoning: AssistantReasoning::default(),
-                tool_calls: vec![ToolCallRequest {
-                    id: "call_1".into(),
-                    name: "search".into(),
-                    arguments: "{}".into(),
-                }],
-            }],
-            vec![],
-        );
+        let context = Context::new(vec![assistant_message().tool_call("call_1", "search", "{}").build()], vec![]);
 
         let body = openai_request_body("gpt-4.1", &context).await;
 
@@ -912,12 +880,7 @@ mod tests {
     async fn responses_preserve_tool_errors_and_summary_notes() {
         let context = Context::new(
             vec![
-                ChatMessage::ToolCallResult(Err(ToolCallError {
-                    id: "call_2".into(),
-                    name: "bash".into(),
-                    arguments: Some("{}".into()),
-                    error: "command failed".into(),
-                })),
+                tool_error("call_2", "bash", "command failed"),
                 ChatMessage::Summary {
                     message_id: MessageId::new(),
                     content: "User asked about Rust.".into(),
@@ -946,23 +909,11 @@ mod tests {
     #[tokio::test]
     async fn responses_replay_encrypted_reasoning_only_for_the_original_model() {
         for source_model in [Some("openai:gpt-5.6"), Some("openai:gpt-5.5"), None] {
-            let context = Context::new(
-                vec![ChatMessage::Assistant {
-                    message_id: MessageId::new(),
-                    content: "thinking done".into(),
-                    timestamp: IsoString::now(),
-                    tool_calls: vec![],
-                    reasoning: AssistantReasoning::from_parts(
-                        "summary".into(),
-                        source_model.map(|model| EncryptedReasoningContent {
-                            id: "r_1".into(),
-                            model: model.parse().unwrap(),
-                            content: "encrypted-blob".into(),
-                        }),
-                    ),
-                }],
-                vec![],
-            );
+            let mut assistant = assistant_message().text("thinking done").reasoning_summary("summary");
+            if let Some(model) = source_model {
+                assistant = assistant.encrypted_reasoning("r_1", model, "encrypted-blob");
+            }
+            let context = Context::new(vec![assistant.build()], vec![]);
 
             let body = openai_request_body("gpt-5.6", &context).await;
             let input = body["input"].as_array().unwrap();
@@ -1100,13 +1051,7 @@ mod tests {
         let context = Context::new(
             vec![
                 ChatMessage::user("Hello"),
-                ChatMessage::Assistant {
-                    message_id: MessageId::new(),
-                    content: "Hi".to_string(),
-                    reasoning: AssistantReasoning::from_parts("greeting the user".to_string(), None),
-                    timestamp: IsoString::now(),
-                    tool_calls: vec![],
-                },
+                assistant_message().text("Hi").reasoning_summary("greeting the user").build(),
                 ChatMessage::user("Again"),
             ],
             vec![],
@@ -1181,12 +1126,18 @@ mod tests {
         assert_eq!(body["model"], "claude-sonnet-4-5-20250929");
         assert_eq!(body["max_tokens"], 16_384);
         assert_eq!(body["stream"], true);
-        assert_eq!(body["cache_control"], json!({ "type": "ephemeral" }));
+        assert!(body.get("cache_control").is_none(), "{body}");
         assert_eq!(
             body["system"],
             json!([{ "type": "text", "text": "You are helpful", "cache_control": { "type": "ephemeral" } }])
         );
-        assert_eq!(body["messages"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            body["messages"],
+            json!([{
+                "role": "user",
+                "content": [{ "type": "text", "text": "Hello", "cache_control": { "type": "ephemeral" } }]
+            }])
+        );
         assert_eq!(
             body["tools"],
             json!([{ "name": "search", "description": "Search", "input_schema": { "type": "object" } }])
@@ -1196,12 +1147,15 @@ mod tests {
 
     #[tokio::test]
     async fn anthropic_default_and_disabled_thinking_keep_sampling_and_token_limit() {
-        for (effort, thinking) in
-            [(ReasoningEffort::Default, None), (ReasoningEffort::Disabled, Some(json!({ "type": "disabled" })))]
-        {
-            let body = anthropic_request_body(effort).await;
+        for (model, effort, thinking) in [
+            (anthropic_model(ReasoningControl::Budget, &[]), ReasoningEffort::Default, None),
+            (anthropic_model(ReasoningControl::Effort, &[]), ReasoningEffort::Default, None),
+            (reasoning_off_model(Provider::Anthropic), ReasoningEffort::Disabled, Some(json!({ "type": "disabled" }))),
+        ] {
+            let body = anthropic_request_body(model, effort).await;
 
             assert_eq!(body.get("thinking"), thinking.as_ref());
+            assert!(body.get("output_config").is_none());
             assert_eq!(body["max_tokens"], 500);
             assert_eq!(body["temperature"], 0.5);
             assert_eq!(body["top_p"], 0.5);
@@ -1209,17 +1163,164 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn anthropic_enabled_thinking_clears_sampling_and_raises_token_limit() {
-        for (effort, budget_tokens) in
-            [(ReasoningEffort::Low, 1024), (ReasoningEffort::High, 10240), (ReasoningEffort::Max, 32768)]
-        {
-            let body = anthropic_request_body(effort).await;
+    async fn anthropic_budget_models_clear_sampling_and_raise_token_limit() {
+        let cases = [(ReasoningEffort::Low, 1024), (ReasoningEffort::Medium, 4096), (ReasoningEffort::High, 10240)];
+        let model = anthropic_model(ReasoningControl::Budget, &cases.map(|(effort, _)| effort));
+        for (effort, budget_tokens) in cases {
+            let body = anthropic_request_body(model, effort).await;
 
             assert_eq!(body["thinking"], json!({ "type": "enabled", "budget_tokens": budget_tokens }));
+            assert!(body.get("output_config").is_none());
             assert_eq!(body["max_tokens"], budget_tokens + 1024);
             assert!(body.get("temperature").is_none());
             assert!(body.get("top_p").is_none());
         }
+    }
+
+    #[tokio::test]
+    async fn anthropic_adaptive_models_send_effort_with_summarized_thinking() {
+        let cases = [(ReasoningEffort::Low, "low"), (ReasoningEffort::Xhigh, "xhigh"), (ReasoningEffort::Max, "max")];
+        let model = anthropic_model(ReasoningControl::Effort, &cases.map(|(effort, _)| effort));
+        for (effort, wire) in cases {
+            let body = anthropic_request_body(model, effort).await;
+
+            assert_eq!(body["thinking"], json!({ "type": "adaptive", "display": "summarized" }));
+            assert_eq!(body["output_config"], json!({ "effort": wire }));
+            assert_eq!(body["max_tokens"], 500);
+            assert!(body.get("temperature").is_none());
+            assert!(body.get("top_p").is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn anthropic_budget_and_effort_models_send_a_budget_refined_by_effort() {
+        let cases = [(ReasoningEffort::Low, 1024, "low"), (ReasoningEffort::Max, 32768, "max")];
+        let model = anthropic_model(ReasoningControl::BudgetAndEffort, &cases.map(|(effort, ..)| effort));
+        for (effort, budget_tokens, wire) in cases {
+            let body = anthropic_request_body(model, effort).await;
+
+            assert_eq!(body["thinking"], json!({ "type": "enabled", "budget_tokens": budget_tokens }));
+            assert_eq!(body["output_config"], json!({ "effort": wire }));
+            assert_eq!(body["max_tokens"], budget_tokens + 1024);
+            assert!(body.get("temperature").is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn anthropic_replays_signed_thinking_only_to_the_model_that_wrote_it() {
+        let thinking = json!([
+            { "type": "thinking", "thinking": "Check the weather", "signature": "sig-1" },
+            { "type": "redacted_thinking", "data": "opaque" }
+        ]);
+        let tool_use = json!({ "type": "tool_use", "id": "call_1", "name": "weather", "input": { "city": "Paris" } });
+        let mut anthropic_models = LlmModel::all().iter().filter(|model| model.provider_enum() == Provider::Anthropic);
+        let (model, other_model) = (anthropic_models.next().unwrap(), anthropic_models.next().unwrap());
+        for (author, expected_content) in [
+            (model, json!([thinking[0], thinking[1], { "type": "text", "text": "Checking" }, tool_use])),
+            (other_model, json!([{ "type": "text", "text": "Checking" }, tool_use])),
+        ] {
+            let mut fixture = ProviderFixture::builder(&ANTHROPIC).model(&model.model_id()).build().await;
+            let context = Context::new(
+                vec![
+                    ChatMessage::user("Weather in Paris?"),
+                    assistant_message()
+                        .text("Checking")
+                        .reasoning_summary("Check the weather")
+                        .encrypted_reasoning("msg_1", &author.to_string(), &thinking.to_string())
+                        .tool_call("call_1", "weather", r#"{"city":"Paris"}"#)
+                        .build(),
+                    tool_result("call_1", "weather", r#"{"city":"Paris"}"#, "Sunny"),
+                ],
+                vec![],
+            );
+
+            let (captured, responses) = fixture.run(&context).await;
+
+            assert_successful_stream(&responses);
+            assert_eq!(captured.body["messages"][1]["content"], expected_content, "{author}");
+        }
+    }
+
+    #[tokio::test]
+    async fn anthropic_groups_parallel_tool_results_into_one_user_message() {
+        let mut fixture = ProviderFixture::builder(&ANTHROPIC).build().await;
+        let context = Context::new(
+            vec![
+                ChatMessage::user("Find things"),
+                assistant_message().tool_call("call_1", "find", "{}").tool_call("call_2", "find", "{}").build(),
+                tool_result("call_1", "find", "{}", "call_1 done"),
+                tool_result("call_2", "find", "{}", "call_2 done"),
+            ],
+            vec![],
+        );
+
+        let (captured, responses) = fixture.run(&context).await;
+
+        assert_successful_stream(&responses);
+        let messages = captured.body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 3, "{messages:?}");
+        assert_eq!(messages[2]["role"], "user");
+        assert_eq!(
+            messages[2]["content"],
+            json!([
+                { "type": "tool_result", "tool_use_id": "call_1", "content": "call_1 done", "is_error": false },
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_2",
+                    "content": "call_2 done",
+                    "is_error": false,
+                    "cache_control": { "type": "ephemeral" }
+                }
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn anthropic_streams_signed_thinking_for_replay_in_response_order() {
+        let responses = streamed_anthropic(
+            anthropic_stream()
+                .signed_thinking(0, &["Let me think"], "sig-1")
+                .redacted_thinking(1, "opaque")
+                .signed_thinking(2, &[], "sig-2")
+                .text(3, &["Answer"])
+                .message_delta("end_turn", &usage(10, 50))
+                .message_stop(),
+        )
+        .await;
+
+        assert_eq!(
+            responses,
+            llm_response()
+                .reasoning(&["Let me think"])
+                .text(&["Answer"])
+                .usage(10, 50)
+                .encrypted_reasoning(
+                    "msg_123",
+                    r#"[{"type":"thinking","thinking":"Let me think","signature":"sig-1"},{"type":"redacted_thinking","data":"opaque"},{"type":"thinking","thinking":"","signature":"sig-2"}]"#
+                )
+                .build_with_stop_reason(StopReason::EndTurn)
+        );
+    }
+
+    #[tokio::test]
+    async fn anthropic_unsigned_thinking_is_not_replayable() {
+        let responses =
+            streamed_anthropic(anthropic_stream().thinking(0, &["musing"]).text(1, &["Answer"]).message_stop()).await;
+
+        assert_eq!(responses, llm_response().reasoning(&["musing"]).text(&["Answer"]).build());
+    }
+
+    #[tokio::test]
+    async fn anthropic_usage_combines_message_start_input_with_message_delta_output() {
+        let responses = streamed_anthropic(
+            anthropic_stream()
+                .text(0, &["ok"])
+                .message_delta("end_turn", &json!({ "output_tokens": 25 }))
+                .message_stop(),
+        )
+        .await;
+
+        assert_eq!(responses, llm_response().text(&["ok"]).usage(10, 25).build_with_stop_reason(StopReason::EndTurn));
     }
 
     const CHAT_FIXTURE: &str = include_str!("../../tests/fixtures/openai/01_minimal.sse");
@@ -1229,6 +1330,13 @@ mod tests {
 
         let (_, responses) = fixture.run(&hello_context()).await;
         responses
+    }
+
+    async fn streamed_anthropic(stream: AnthropicStreamBuilder) -> Vec<LlmResponse> {
+        let mut fixture = ProviderFixture::builder(&ANTHROPIC).response(ResponseSpec::sse(&stream.sse())).build().await;
+
+        let (_, responses) = fixture.run(&hello_context()).await;
+        responses.into_iter().map(Result::unwrap).collect()
     }
 
     fn assert_successful_stream(responses: &[Result<LlmResponse>]) {
@@ -1251,11 +1359,8 @@ mod tests {
         captured.body
     }
 
-    async fn anthropic_request_body(effort: ReasoningEffort) -> serde_json::Value {
-        let mut fixture = ProviderFixture::builder(&ANTHROPIC)
-            .model(&reasoning_off_model(Provider::Anthropic).model_id())
-            .build()
-            .await;
+    async fn anthropic_request_body(model: &LlmModel, effort: ReasoningEffort) -> serde_json::Value {
+        let mut fixture = ProviderFixture::builder(&ANTHROPIC).model(&model.model_id()).build().await;
         let mut context = hello_context();
         context.set_reasoning_effort(effort);
         context.set_model_settings(ModelSettings { temperature: Some(0.5), top_p: Some(0.5), max_tokens: Some(500) });
@@ -1271,6 +1376,17 @@ mod tests {
             .iter()
             .find(|model| model.provider_enum() == provider && model.supports_reasoning_off())
             .expect("the catalog has a model that can turn reasoning off")
+    }
+
+    fn anthropic_model(control: ReasoningControl, efforts: &[ReasoningEffort]) -> &'static LlmModel {
+        LlmModel::all()
+            .iter()
+            .find(|model| {
+                model.provider_enum() == Provider::Anthropic
+                    && model.reasoning_control() == control
+                    && efforts.iter().all(|effort| model.validate_reasoning_effort(*effort).is_ok())
+            })
+            .unwrap_or_else(|| panic!("the catalog has no Anthropic model with {control:?} reasoning and {efforts:?}"))
     }
 
     async fn rejected_chat_request(spec: ResponseSpec) -> LlmError {
