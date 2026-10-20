@@ -9,6 +9,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::Value;
 use std::{collections::HashMap, fmt::Display, result};
 
+use crate::providers::turns::{Speaker, Turns};
 use crate::{
     ChatMessage, ContentBlock, LlmError, Result, ToolCallError, ToolCallResult, ToolDefinition, tool_result_parts,
 };
@@ -17,63 +18,54 @@ fn bedrock_err(e: impl Display) -> LlmError {
     LlmError::ProviderRequest(e.to_string())
 }
 
-pub(crate) fn map_messages(
+pub(super) fn map_messages(
     messages: &[ChatMessage],
     cache_point: Option<&CachePointBlock>,
 ) -> Result<(Vec<SystemContentBlock>, Vec<Message>)> {
-    let mut system_blocks = Vec::new();
-    let mut bedrock_messages = Vec::new();
-    let mut pending_tool_results = Vec::new();
+    let mut system = Vec::new();
+    let mut turns = Turns::default();
 
     for message in messages {
         match message {
-            ChatMessage::ToolCallResult(result) => {
-                pending_tool_results.push(build_tool_result_block(result)?);
-            }
-
-            ChatMessage::System { content, .. } => {
-                flush_tool_results(&mut pending_tool_results, &mut bedrock_messages)?;
-                system_blocks.push(SystemContentBlock::Text(content.clone()));
-            }
-
-            ChatMessage::User { content, .. } => {
-                flush_tool_results(&mut pending_tool_results, &mut bedrock_messages)?;
-                bedrock_messages.push(build_user_content_blocks(content)?);
-            }
-
+            ChatMessage::System { content, .. } => system.push(SystemContentBlock::Text(content.clone())),
+            ChatMessage::User { content, .. } => turns.user(map_user_content(content)?),
             ChatMessage::Assistant { content, tool_calls, .. } => {
-                flush_tool_results(&mut pending_tool_results, &mut bedrock_messages)?;
-                bedrock_messages.push(map_assistant_message(content, tool_calls)?);
+                turns.assistant(map_assistant_content(content, tool_calls)?);
             }
-
+            ChatMessage::ToolCallResult(result) => {
+                turns.tool_result(BedrockContentBlock::ToolResult(build_tool_result_block(result)?));
+            }
             ChatMessage::Error { .. } | ChatMessage::Summary { .. } => {
-                flush_tool_results(&mut pending_tool_results, &mut bedrock_messages)?;
                 if let Some(note) = message.as_user_note() {
-                    bedrock_messages.push(build_user_message(&note)?);
+                    turns.user(vec![BedrockContentBlock::Text(note)]);
                 }
             }
         }
     }
 
-    flush_tool_results(&mut pending_tool_results, &mut bedrock_messages)?;
     if let Some(cache_point) = cache_point {
-        if !system_blocks.is_empty() {
-            system_blocks.push(SystemContentBlock::CachePoint(cache_point.clone()));
+        if !system.is_empty() {
+            system.push(SystemContentBlock::CachePoint(cache_point.clone()));
         }
-        if let Some(last) = bedrock_messages.pop() {
-            let mut builder = Message::builder().role(last.role().clone());
-            for block in last.content() {
-                builder = builder.content(block.clone());
-            }
-            builder = builder.content(BedrockContentBlock::CachePoint(cache_point.clone()));
-            bedrock_messages.push(builder.build().map_err(bedrock_err)?);
+        if let Some(blocks) = turns.last_turn_mut() {
+            blocks.push(BedrockContentBlock::CachePoint(cache_point.clone()));
         }
     }
 
-    Ok((system_blocks, bedrock_messages))
+    let messages = turns
+        .into_turns()
+        .map(|(speaker, content)| {
+            let role = match speaker {
+                Speaker::User => ConversationRole::User,
+                Speaker::Assistant => ConversationRole::Assistant,
+            };
+            Message::builder().role(role).set_content(Some(content)).build().map_err(bedrock_err)
+        })
+        .collect::<Result<_>>()?;
+    Ok((system, messages))
 }
 
-pub(crate) fn map_tools(tools: &[ToolDefinition], cache_point: Option<&CachePointBlock>) -> Result<ToolConfiguration> {
+pub(super) fn map_tools(tools: &[ToolDefinition], cache_point: Option<&CachePointBlock>) -> Result<ToolConfiguration> {
     let mut bedrock_tools: Vec<Tool> = tools
         .iter()
         .map(|tool| {
@@ -96,44 +88,31 @@ pub(crate) fn map_tools(tools: &[ToolDefinition], cache_point: Option<&CachePoin
     ToolConfiguration::builder().set_tools(Some(bedrock_tools)).build().map_err(bedrock_err)
 }
 
-pub(crate) fn default_cache_point() -> Result<CachePointBlock> {
+pub(super) fn default_cache_point() -> Result<CachePointBlock> {
     CachePointBlock::builder().r#type(CachePointType::Default).build().map_err(bedrock_err)
 }
 
-fn build_user_message(content: &str) -> Result<Message> {
-    Message::builder()
-        .role(ConversationRole::User)
-        .content(BedrockContentBlock::Text(content.to_string()))
-        .build()
-        .map_err(bedrock_err)
-}
-
-fn build_user_content_blocks(parts: &[ContentBlock]) -> Result<Message> {
-    let mut builder = Message::builder().role(ConversationRole::User);
-    for part in parts {
-        match part {
-            ContentBlock::Text { text } => {
-                builder = builder.content(BedrockContentBlock::Text(text.clone()));
-            }
+fn map_user_content(parts: &[ContentBlock]) -> Result<Vec<BedrockContentBlock>> {
+    parts
+        .iter()
+        .map(|part| match part {
+            ContentBlock::Text { text } => Ok(BedrockContentBlock::Text(text.clone())),
             ContentBlock::Image { data, mime_type } => {
                 let bytes = BASE64
                     .decode(data)
                     .map_err(|e| LlmError::ProviderRequest(format!("Invalid base64 image data: {e}")))?;
-                let format = mime_to_image_format(mime_type);
-                builder = builder.content(BedrockContentBlock::Image(
-                    ImageBlock::builder()
-                        .format(format)
-                        .source(ImageSource::Bytes(Blob::new(bytes)))
-                        .build()
-                        .map_err(bedrock_err)?,
-                ));
+                let image = ImageBlock::builder()
+                    .format(mime_to_image_format(mime_type))
+                    .source(ImageSource::Bytes(Blob::new(bytes)))
+                    .build()
+                    .map_err(bedrock_err)?;
+                Ok(BedrockContentBlock::Image(image))
             }
             ContentBlock::Audio { .. } => {
-                return Err(LlmError::UnsupportedContent("Bedrock does not support audio input".into()));
+                Err(LlmError::UnsupportedContent("Bedrock does not support audio input".into()))
             }
-        }
-    }
-    builder.build().map_err(bedrock_err)
+        })
+        .collect()
 }
 
 fn mime_to_image_format(mime_type: &str) -> ImageFormat {
@@ -145,50 +124,24 @@ fn mime_to_image_format(mime_type: &str) -> ImageFormat {
     }
 }
 
-fn map_assistant_message(content: &str, tool_calls: &[crate::ToolCallRequest]) -> Result<Message> {
+fn map_assistant_content(content: &str, tool_calls: &[crate::ToolCallRequest]) -> Result<Vec<BedrockContentBlock>> {
     if tool_calls.is_empty() {
-        return Message::builder()
-            .role(ConversationRole::Assistant)
-            .content(BedrockContentBlock::Text(content.to_string()))
-            .build()
-            .map_err(bedrock_err);
+        return Ok(vec![BedrockContentBlock::Text(content.to_string())]);
     }
 
-    let mut builder = Message::builder().role(ConversationRole::Assistant);
-
-    if !content.is_empty() {
-        builder = builder.content(BedrockContentBlock::Text(content.to_string()));
-    }
-
-    for tool_call in tool_calls {
+    let text = (!content.is_empty()).then(|| Ok(BedrockContentBlock::Text(content.to_string())));
+    let tool_uses = tool_calls.iter().map(|tool_call| {
         let input: serde_json::Value = serde_json::from_str(&tool_call.arguments)
             .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
-
         let tool_use = ToolUseBlock::builder()
             .tool_use_id(&tool_call.id)
             .name(&tool_call.name)
             .input(json_to_document(&input))
             .build()
             .map_err(bedrock_err)?;
-
-        builder = builder.content(BedrockContentBlock::ToolUse(tool_use));
-    }
-
-    builder.build().map_err(bedrock_err)
-}
-
-fn flush_tool_results(pending_tool_results: &mut Vec<ToolResultBlock>, messages: &mut Vec<Message>) -> Result<()> {
-    if pending_tool_results.is_empty() {
-        return Ok(());
-    }
-
-    let mut builder = Message::builder().role(ConversationRole::User);
-    for tool_result in pending_tool_results.drain(..) {
-        builder = builder.content(BedrockContentBlock::ToolResult(tool_result));
-    }
-
-    messages.push(builder.build().map_err(bedrock_err)?);
-    Ok(())
+        Ok(BedrockContentBlock::ToolUse(tool_use))
+    });
+    text.into_iter().chain(tool_uses).collect()
 }
 
 fn build_tool_result_block(result: &result::Result<ToolCallResult, ToolCallError>) -> Result<ToolResultBlock> {
@@ -230,41 +183,9 @@ fn json_to_document(value: &Value) -> Document {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::{ToolCallError, ToolCallRequest, ToolCallResult};
+    use crate::MessageId;
+    use crate::testing::{assistant_message, tool_error, tool_result};
     use crate::types::IsoString;
-    use crate::{AssistantReasoning, MessageId};
-
-    fn assistant_message(content: &str, tool_calls: Vec<ToolCallRequest>) -> ChatMessage {
-        ChatMessage::Assistant {
-            message_id: crate::MessageId::new(),
-            content: content.to_string(),
-            reasoning: AssistantReasoning::default(),
-            timestamp: IsoString::now(),
-            tool_calls,
-        }
-    }
-
-    fn tool_call(id: &str, name: &str, arguments: &str) -> ToolCallRequest {
-        ToolCallRequest { id: id.to_string(), name: name.to_string(), arguments: arguments.to_string() }
-    }
-
-    fn tool_result_ok(id: &str, name: &str, arguments: &str, result: &str) -> ChatMessage {
-        ChatMessage::ToolCallResult(Ok(ToolCallResult {
-            id: id.to_string(),
-            name: name.to_string(),
-            arguments: arguments.to_string(),
-            result: result.to_string(),
-        }))
-    }
-
-    fn tool_result_err(id: &str, name: &str, error: &str) -> ChatMessage {
-        ChatMessage::ToolCallResult(Err(ToolCallError {
-            id: id.to_string(),
-            name: name.to_string(),
-            arguments: None,
-            error: error.to_string(),
-        }))
-    }
 
     #[test]
     fn test_map_simple_user_message() {
@@ -281,7 +202,7 @@ mod tests {
     #[test]
     fn test_map_user_message_with_image() {
         let messages = vec![ChatMessage::User {
-            message_id: crate::MessageId::new(),
+            message_id: MessageId::new(),
             content: vec![
                 ContentBlock::text("Look:"),
                 ContentBlock::Image { data: BASE64.encode(b"fakepng"), mime_type: "image/png".to_string() },
@@ -298,7 +219,7 @@ mod tests {
     #[test]
     fn test_map_user_message_with_audio_errors() {
         let messages = vec![ChatMessage::User {
-            message_id: crate::MessageId::new(),
+            message_id: MessageId::new(),
             content: vec![
                 ContentBlock::text("Listen:"),
                 ContentBlock::Audio { data: BASE64.encode(b"fakewav"), mime_type: "audio/wav".to_string() },
@@ -322,7 +243,7 @@ mod tests {
     #[test]
     fn test_map_assistant_with_tool_calls() {
         let messages =
-            vec![assistant_message("I'll help", vec![tool_call("call_1", "search", r#"{"query": "test"}"#)])];
+            vec![assistant_message().text("I'll help").tool_call("call_1", "search", r#"{"query": "test"}"#).build()];
 
         let (_system, mapped) = map_messages(&messages, None).unwrap();
         assert_eq!(mapped.len(), 1);
@@ -336,7 +257,7 @@ mod tests {
 
     #[test]
     fn test_map_assistant_tool_calls_without_text() {
-        let messages = vec![assistant_message("", vec![tool_call("call_1", "search", r#"{"query": "test"}"#)])];
+        let messages = vec![assistant_message().tool_call("call_1", "search", r#"{"query": "test"}"#).build()];
 
         let (_system, mapped) = map_messages(&messages, None).unwrap();
         let content = mapped[0].content();
@@ -347,7 +268,7 @@ mod tests {
 
     #[test]
     fn test_map_tool_result_success() {
-        let messages = vec![tool_result_ok("call_1", "search", "{}", "found it")];
+        let messages = vec![tool_result("call_1", "search", "{}", "found it")];
 
         let (_system, mapped) = map_messages(&messages, None).unwrap();
         assert_eq!(mapped.len(), 1);
@@ -360,7 +281,7 @@ mod tests {
 
     #[test]
     fn test_map_tool_result_error() {
-        let messages = vec![tool_result_err("call_1", "search", "not found")];
+        let messages = vec![tool_error("call_1", "search", "not found")];
 
         let (_system, mapped) = map_messages(&messages, None).unwrap();
         assert_eq!(mapped.len(), 1);
@@ -373,15 +294,12 @@ mod tests {
     #[test]
     fn test_map_consecutive_tool_results_into_single_user_message() {
         let messages = vec![
-            assistant_message(
-                "",
-                vec![
-                    tool_call("call_1", "find", r#"{"pattern":"**/*.ts"}"#),
-                    tool_call("call_2", "find", r#"{"pattern":"**/package.json"}"#),
-                ],
-            ),
-            tool_result_ok("call_1", "find", r#"{"pattern":"**/*.ts"}"#, "17 files"),
-            tool_result_ok("call_2", "find", r#"{"pattern":"**/package.json"}"#, "2 files"),
+            assistant_message()
+                .tool_call("call_1", "find", r#"{"pattern":"**/*.ts"}"#)
+                .tool_call("call_2", "find", r#"{"pattern":"**/package.json"}"#)
+                .build(),
+            tool_result("call_1", "find", r#"{"pattern":"**/*.ts"}"#, "17 files"),
+            tool_result("call_2", "find", r#"{"pattern":"**/package.json"}"#, "2 files"),
         ];
 
         let (_system, mapped) = map_messages(&messages, None).unwrap();
@@ -416,7 +334,7 @@ mod tests {
     #[test]
     fn test_map_summary_message() {
         let messages = vec![ChatMessage::Summary {
-            message_id: crate::MessageId::new(),
+            message_id: MessageId::new(),
             content: "we talked about stuff".to_string(),
             timestamp: IsoString::now(),
             messages_compacted: 10,
@@ -490,7 +408,8 @@ mod tests {
 
     #[test]
     fn message_cache_point_is_added_only_to_last_message_in_multi_turn_history() {
-        let messages = vec![ChatMessage::user("turn 1"), assistant_message("ack", vec![]), ChatMessage::user("turn 2")];
+        let messages =
+            vec![ChatMessage::user("turn 1"), assistant_message().text("ack").build(), ChatMessage::user("turn 2")];
         let cache_point = default_cache_point().unwrap();
 
         let (_system, mapped) = map_messages(&messages, Some(&cache_point)).unwrap();
@@ -504,8 +423,8 @@ mod tests {
     fn message_cache_point_is_added_to_tool_result_message() {
         let messages = vec![
             ChatMessage::user("search please"),
-            assistant_message("", vec![tool_call("call_1", "search", "{}")]),
-            tool_result_ok("call_1", "search", "{}", "found"),
+            assistant_message().tool_call("call_1", "search", "{}").build(),
+            tool_result("call_1", "search", "{}", "found"),
         ];
         let cache_point = default_cache_point().unwrap();
         let (_system, mapped) = map_messages(&messages, Some(&cache_point)).unwrap();
@@ -517,7 +436,8 @@ mod tests {
 
     #[test]
     fn message_cache_points_not_added_when_cache_point_is_none() {
-        let messages = vec![ChatMessage::user("turn 1"), assistant_message("ack", vec![]), ChatMessage::user("turn 2")];
+        let messages =
+            vec![ChatMessage::user("turn 1"), assistant_message().text("ack").build(), ChatMessage::user("turn 2")];
 
         let (_system, mapped) = map_messages(&messages, None).unwrap();
 
