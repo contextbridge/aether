@@ -252,6 +252,7 @@ async fn runtime_exports_genai_spans_and_metrics_to_an_otlp_collector() {
         "$ai_cache_read_token_price",
         "$ai_cache_write_token_price",
         "$ai_reasoning_tokens",
+        "$ai_cache_reporting_exclusive",
     ] {
         assert!(attribute_keys.contains(&expected), "OTLP attribute {expected} missing from {attribute_keys:?}");
     }
