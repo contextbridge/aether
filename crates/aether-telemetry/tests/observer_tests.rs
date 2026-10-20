@@ -264,6 +264,7 @@ async fn completed_llm_calls_emit_posthog_custom_pricing_and_token_properties() 
     chat.assert_attr("$ai_cache_read_token_price", 0.000_000_3);
     chat.assert_attr("$ai_cache_write_token_price", 0.000_003_75);
     chat.assert_attr("$ai_reasoning_tokens", 7);
+    chat.assert_attr("$ai_cache_reporting_exclusive", false);
     // PostHog derives these from the semconv cache token attributes; duplicating
     // them would be redundant.
     chat.assert_no_attr("$ai_cache_read_input_tokens");

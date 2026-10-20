@@ -83,6 +83,7 @@ impl fmt::Display for Tokens {
 /// in only the dimensions they report; the rest stay `None`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TokenUsage {
+    /// All input tokens, including cache reads and cache writes.
     pub input_tokens: Tokens,
     pub output_tokens: Tokens,
     #[serde(default)]

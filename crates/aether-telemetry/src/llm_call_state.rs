@@ -2,11 +2,11 @@ use crate::content_capture::ContentBuffer;
 use crate::content_json::output_messages_json;
 use crate::gen_ai_metrics::GenAiMetrics;
 use crate::genai_constants::{
-    AI_REASONING_TOKENS, ERROR_TYPE, GEN_AI_OUTPUT_MESSAGES, GEN_AI_RESPONSE_FINISH_REASONS,
-    GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK, GEN_AI_TOKEN_TYPE, GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
-    GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS, GEN_AI_USAGE_INPUT_TOKENS, GEN_AI_USAGE_OUTPUT_TOKENS,
-    GEN_AI_USAGE_REASONING_OUTPUT_TOKENS, GENAI_RESPONSE_START_EVENT, GENAI_TOOL_CALL_START_EVENT, MESSAGE_ID,
-    TOOL_CALL_ID, TOOL_CALL_NAME,
+    AI_CACHE_REPORTING_EXCLUSIVE, AI_REASONING_TOKENS, ERROR_TYPE, GEN_AI_OUTPUT_MESSAGES,
+    GEN_AI_RESPONSE_FINISH_REASONS, GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK, GEN_AI_TOKEN_TYPE,
+    GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS, GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS, GEN_AI_USAGE_INPUT_TOKENS,
+    GEN_AI_USAGE_OUTPUT_TOKENS, GEN_AI_USAGE_REASONING_OUTPUT_TOKENS, GENAI_RESPONSE_START_EVENT,
+    GENAI_TOOL_CALL_START_EVENT, MESSAGE_ID, TOOL_CALL_ID, TOOL_CALL_NAME,
 };
 use crate::span_guard::{ErrorKind, SpanGuard};
 use aether_core::events::LlmCallOutcome;
@@ -102,6 +102,9 @@ impl LlmCallState {
                     for attribute in token_attributes {
                         self.span.set_attribute(attribute);
                     }
+                    // `TokenUsage::input_tokens` includes cache tokens; without this,
+                    // OTEL consumers double count cached tokens for providers with exclusive APIs (e.g. Anthropic).
+                    self.span.set_attribute(KeyValue::new(AI_CACHE_REPORTING_EXCLUSIVE, false));
                     self.record_token_usage(*usage);
                 }
                 self.span.end_ok();
