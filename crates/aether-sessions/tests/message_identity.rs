@@ -1,6 +1,6 @@
 use aether_core::events::{AgentEvent, Command, MessageEvent, StreamState};
 use aether_core::testing::test_agent;
-use aether_sessions::testing::{TestStore, assistant_text, compaction_result, user_message};
+use aether_sessions::testing::{TestStore, assistant_reply, compaction_result, user_message};
 use aether_sessions::{SessionEvent, UserEvent, context_from_events};
 use llm::testing::llm_response;
 use llm::{ChatMessage, ContentBlock, MessageId};
@@ -43,9 +43,8 @@ async fn live_context_and_reloaded_log_share_identities_and_message_boundaries()
     assert_eq!(assistant_ids.len(), 2);
     assert_ne!(assistant_ids[0], assistant_ids[1]);
     assert!(assistant_ids.iter().all(|id| id.as_str() != "reused-provider-id"));
-    assert!(
-        matches!(&restored.messages()[1], ChatMessage::Assistant { reasoning, .. } if reasoning.summary_text.as_deref() == Some("plan"))
-    );
+    assert!(matches!(&restored.messages()[1], ChatMessage::Assistant { content, .. } if content.reasoning() == "plan"));
+    assert!(contexts[1].messages().contains(&restored.messages()[1]), "the reply is restored exactly as it was sent");
 
     for event in &result.messages {
         match event {
@@ -90,7 +89,7 @@ fn stored_user_and_summary_ids_survive_repeated_reconstruction() {
     let summary = compaction_result("summary", 2);
     let store = TestStore::new().session(
         "summary",
-        &[user.clone(), assistant_text("answer", "answer"), summary.clone(), user_message("continue")],
+        &[user.clone(), assistant_reply("answer", "answer"), summary.clone(), user_message("continue")],
     );
     let (_, loaded) = store.store().load("summary").unwrap();
     assert_eq!(loaded[2], summary);
@@ -116,7 +115,7 @@ fn stored_user_and_summary_ids_survive_repeated_reconstruction() {
 #[test]
 fn partial_streams_do_not_replace_durable_messages() {
     let events = [
-        assistant_text("original", "complete"),
+        assistant_reply("original", "complete"),
         SessionEvent::Agent(AgentEvent::text("unfinished", "partial", StreamState::Partial)),
     ];
     let context = context_from_events(&events);
