@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0](https://github.com/contextbridge/aether/compare/aether-evals-v0.4.1...aether-evals-v0.5.0) - 2026-10-20
+
+### Added
+
+- *(evals)* [**breaking**] fetch git fixtures once and grant container users workspace access ([#621](https://github.com/contextbridge/aether/pull/621))
+
 ## [0.4.1](https://github.com/contextbridge/aether/compare/aether-evals-v0.4.0...aether-evals-v0.4.1) - 2026-10-20
 
 ### Other

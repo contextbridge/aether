@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.20](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.19...aether-agent-cli-v0.9.20) - 2026-10-20
+
+### Fixed
+
+- *(llm)* send adaptive thinking to Claude and replay reasoning in order ([#622](https://github.com/contextbridge/aether/pull/622))
+
 ## [0.9.19](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.18...aether-agent-cli-v0.9.19) - 2026-10-20
 
 ### Other

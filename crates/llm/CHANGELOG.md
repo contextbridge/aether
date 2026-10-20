@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.18](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.17...aether-llm-v0.9.18) - 2026-10-20
+
+### Fixed
+
+- *(llm)* send adaptive thinking to Claude and replay reasoning in order ([#622](https://github.com/contextbridge/aether/pull/622))
+
 ## [0.9.17](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.16...aether-llm-v0.9.17) - 2026-10-20
 
 ### Fixed
