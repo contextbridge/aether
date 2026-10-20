@@ -1,6 +1,7 @@
 #![doc = include_str!("../docs/catalog.md")]
 
 use crate::providers::local::discovery::discover_local_models;
+use crate::reasoning::ReasoningControl;
 use crate::{ReasoningDisabledSupport, ReasoningEffort};
 use std::borrow::Cow;
 use std::fmt;
@@ -145,6 +146,10 @@ impl LlmModel {
         self.entry().is_some_and(|entry| entry.supports_prompt_caching)
     }
 
+    pub(crate) fn reasoning_control(&self) -> ReasoningControl {
+        self.entry().map(|entry| entry.reasoning_control).unwrap_or_default()
+    }
+
     pub fn pricing(&self) -> Option<ModelPricing> {
         self.entry().and_then(|entry| entry.pricing)
     }
@@ -280,6 +285,7 @@ struct CatalogEntry {
     reasoning_levels: &'static [ReasoningEffort],
     disabled_support: ReasoningDisabledSupport,
     supports_prompt_caching: bool,
+    reasoning_control: ReasoningControl,
     pricing: Option<ModelPricing>,
     supports_image: bool,
     supports_audio: bool,
@@ -555,9 +561,30 @@ mod tests {
     }
 
     #[test]
+    fn bedrock_claude_models_use_the_messages_transport() {
+        for model in bedrock_claude_models() {
+            assert_eq!(model.transport(), Some(ModelTransport::AnthropicMessages), "{model}");
+        }
+    }
+
+    #[test]
+    fn bedrock_claude_models_turn_reasoning_off_when_the_catalog_allows_it() {
+        for model in bedrock_claude_models() {
+            assert_eq!(model.supports_reasoning_off_transport(), model.supports_reasoning_off(), "{model}");
+        }
+    }
+
+    #[test]
+    fn models_outside_the_catalog_default_to_effort_reasoning_control() {
+        let profile: LlmModel = "bedrock:us.anthropic.claude-future-model-v99:0".parse().unwrap();
+
+        assert_eq!(profile.reasoning_control(), ReasoningControl::Effort);
+        assert_eq!(LlmModel::Ollama("llama3.2".into()).reasoning_control(), ReasoningControl::Effort);
+    }
+
+    #[test]
     fn converse_models_and_profiles_declare_no_transport_override() {
         for id in [
-            "anthropic.claude-opus-5",
             "amazon.nova-lite-v1:0",
             "us.anthropic.claude-future-model-v99:0",
             "global.openai.gpt-6-luna",
@@ -593,5 +620,16 @@ mod tests {
         assert_eq!(profile.context_window(), None);
         assert_eq!(profile.reasoning_levels(), []);
         assert!(!profile.supports_prompt_caching());
+    }
+
+    fn bedrock_claude_models() -> Vec<&'static LlmModel> {
+        let models: Vec<_> = LlmModel::all()
+            .iter()
+            .filter(|model| {
+                model.provider_enum() == Provider::Bedrock && model.model_id().contains("anthropic.claude-")
+            })
+            .collect();
+        assert!(!models.is_empty(), "the catalog must list Bedrock Claude models");
+        models
     }
 }

@@ -7,3 +7,11 @@ pub enum ReasoningDisabledSupport {
     Effort,
     Toggle,
 }
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum ReasoningControl {
+    #[default]
+    Effort,
+    Budget,
+    BudgetAndEffort,
+}
