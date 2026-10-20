@@ -7,9 +7,12 @@ export { Container, ContainerBuilder, Image } from "./containers/index.js";
 export type {
   BindMount,
   ContainerExecOptions,
+  ContainerRuntime,
   ContainerStreamingOptions,
   ExecOutput,
   ImageBuildOptions,
+  RuntimeExec,
+  RuntimeExecOptions,
 } from "./containers/index.js";
 export type { Agent, AgentRunOptions } from "./Agent.js";
 export { FakeAgent } from "./FakeAgent.js";

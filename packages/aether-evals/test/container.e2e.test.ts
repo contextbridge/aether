@@ -7,23 +7,29 @@ import { gitRepo } from "./gitRepo.js";
 describe.skipIf(!process.env.AETHER_EVALS_E2E)(
   "Container (e2e, requires Docker)",
   () => {
-    it("runs execs as the configured user, with write access to the workspace", async () => {
-      await using workspace = await Workspace.empty();
-      await using container = await Container.builder(Image.parse("alpine:3"))
-        .withUser("1000:1000")
-        .start(workspace);
+    it.each([
+      ["1000:1000", "1000"],
+      ["nobody", "65534"],
+    ])(
+      "runs execs as %s, with write access to the workspace",
+      async (user, uid) => {
+        await using workspace = await Workspace.empty();
+        await using container = await Container.builder(Image.parse("alpine:3"))
+          .withUser(user)
+          .start(workspace);
 
-      const id = await container.exec({ command: ["id", "-u"] });
-      const write = await container.exec({
-        command: ["/bin/sh", "-c", "mkdir dir && echo agent > dir/out.txt"],
-      });
+        const id = await container.exec({ command: ["id", "-u"] });
+        const write = await container.exec({
+          command: ["/bin/sh", "-c", "mkdir dir && echo agent > dir/out.txt"],
+        });
 
-      expect(id.stdout.trim()).toBe("1000");
-      expect(write.exitCode).toBe(0);
-      expect(await readFile(workspace.join("dir/out.txt"), "utf8")).toBe(
-        "agent\n",
-      );
-    });
+        expect(id.stdout.trim()).toBe(uid);
+        expect(write.exitCode).toBe(0);
+        expect(await readFile(workspace.join("dir/out.txt"), "utf8")).toBe(
+          "agent\n",
+        );
+      },
+    );
 
     it("keeps the image entrypoint and waits for the ready command", async () => {
       const image = Image.fromDockerfile("aether-evals-entrypoint:test", {

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { AgentEvent } from "@aether-agent/sdk";
 import { DockerAgent, Task, Transcript, turnEnded } from "../src/index.js";
-import type { Container, ContainerStreamingOptions } from "../src/index.js";
+import { FakeRuntime } from "./FakeRuntime.js";
 
 describe("DockerAgent", () => {
   it("streams canonical events including tool definition updates", async () => {
@@ -65,16 +65,16 @@ describe("DockerAgent", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "host-key");
     vi.stubEnv("AETHER_LLM_MODEL", "host-model");
     try {
-      const { container, execs } = fakeContainer(JSON.stringify(turnEnded()));
+      const runtime = runtimeEmitting(JSON.stringify(turnEnded()));
       const agent = new DockerAgent({
-        container,
+        container: runtime.container(),
         command: ["fake-agent"],
         env: { MODEL: "eval-model" },
       });
 
       await collect(agent.run(new Task("do the thing")));
 
-      expect(execs[0]?.env).toEqual({
+      expect(runtime.execs[0]?.env).toEqual({
         MODEL: "eval-model",
         AETHER_EVAL_WORKSPACE_ROOT: "/workspace",
         AETHER_EVAL_CWD: "/workspace",
@@ -85,14 +85,19 @@ describe("DockerAgent", () => {
     }
   });
 
-  it("passes the run's abort signal to the container", async () => {
-    const { container, execs } = fakeContainer(JSON.stringify(turnEnded()));
-    const agent = new DockerAgent({ container, command: ["fake-agent"] });
+  it("rejects a run that is aborted while the agent is working", async () => {
+    const agent = new DockerAgent({
+      container: new FakeRuntime({ hang: true }).container(),
+      command: ["fake-agent"],
+    });
     const controller = new AbortController();
 
-    await collect(agent.run(new Task("test"), { signal: controller.signal }));
+    const run = collect(
+      agent.run(new Task("test"), { signal: controller.signal }),
+    );
+    controller.abort();
 
-    expect(execs[0]?.signal).toBe(controller.signal);
+    await expect(run).rejects.toMatchObject({ code: "aborted" });
   });
 
   it("rejects malformed NDJSON", async () => {
@@ -111,25 +116,13 @@ function agentEmitting(...events: AgentEvent[]): DockerAgent {
 
 function agentEmittingLines(...lines: string[]): DockerAgent {
   return new DockerAgent({
-    container: fakeContainer(...lines).container,
+    container: runtimeEmitting(...lines).container(),
     command: ["fake-agent"],
   });
 }
 
-function fakeContainer(...lines: string[]): {
-  container: Container;
-  execs: ContainerStreamingOptions[];
-} {
-  const execs: ContainerStreamingOptions[] = [];
-  const container = {
-    workspaceRoot: "/workspace",
-    cwd: "/workspace",
-    async *execStreaming(options: ContainerStreamingOptions) {
-      execs.push(options);
-      yield* lines;
-    },
-  } as unknown as Container;
-  return { container, execs };
+function runtimeEmitting(...lines: string[]): FakeRuntime {
+  return new FakeRuntime({ stdout: lines.map((line) => `${line}\n`).join("") });
 }
 
 async function collect(

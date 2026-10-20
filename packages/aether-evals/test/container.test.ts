@@ -1,28 +1,59 @@
-import type { StartedTestContainer } from "testcontainers";
 import { describe, expect, it } from "vitest";
 
-import { Container } from "../src/index.js";
+import { AetherCommandExitError } from "../src/index.js";
+import { FakeRuntime } from "./FakeRuntime.js";
 
-describe("Container.exec", () => {
-  it("runs as the container's user unless the exec names another", async () => {
-    const { started, execUsers } = fakeStartedContainer();
-    const container = new Container(started, {
-      cwd: "/workspace",
-      user: "1000:1000",
-    });
+describe("Container", () => {
+  it("execs as the container's user unless the exec names another", async () => {
+    const runtime = new FakeRuntime();
+    const container = runtime.container({ user: "1000:1000" });
 
     await container.exec({ command: ["id", "-u"] });
     await container.exec({ command: ["id", "-u"], user: "root" });
 
-    expect(execUsers).toEqual(["1000:1000", "root"]);
+    expect(runtime.execs.map((exec) => exec.user)).toEqual([
+      "1000:1000",
+      "root",
+    ]);
   });
 
-  it("rejects once aborted, without waiting for the command", async () => {
-    const { started } = fakeStartedContainer(new Promise(() => {}));
-    const container = new Container(started, { cwd: "/workspace" });
+  it("returns an exec's output and exit code", async () => {
+    const runtime = new FakeRuntime({
+      stdout: "out\n",
+      stderr: "err\n",
+      exitCode: 3,
+    });
+
+    const result = await runtime.container().exec({ command: ["false"] });
+
+    expect(result).toEqual({ exitCode: 3, stdout: "out\n", stderr: "err\n" });
+  });
+
+  it("streams stdout lines and rejects a non-zero exit", async () => {
+    const runtime = new FakeRuntime({
+      stdout: "one\ntwo\n",
+      stderr: "boom",
+      exitCode: 2,
+    });
+    const lines: string[] = [];
+
+    const run = (async () => {
+      for await (const line of runtime.container().execStreaming({
+        command: ["agent"],
+      })) {
+        lines.push(line);
+      }
+    })();
+
+    await expect(run).rejects.toBeInstanceOf(AetherCommandExitError);
+    await expect(run).rejects.toMatchObject({ exitCode: 2, stderr: "boom" });
+    expect(lines).toEqual(["one", "two"]);
+  });
+
+  it("rejects an aborted exec without waiting for the command", async () => {
     const controller = new AbortController();
 
-    const exec = container.exec({
+    const exec = new FakeRuntime({ hang: true }).container().exec({
       command: ["sleep", "60"],
       signal: controller.signal,
     });
@@ -31,21 +62,3 @@ describe("Container.exec", () => {
     await expect(exec).rejects.toMatchObject({ code: "aborted" });
   });
 });
-
-function fakeStartedContainer(
-  result: Promise<unknown> = Promise.resolve({
-    exitCode: 0,
-    output: "",
-    stdout: "",
-    stderr: "",
-  }),
-): { started: StartedTestContainer; execUsers: Array<string | undefined> } {
-  const execUsers: Array<string | undefined> = [];
-  const started = {
-    exec: (_command: string[], options: { user?: string }) => {
-      execUsers.push(options.user);
-      return result;
-    },
-  } as unknown as StartedTestContainer;
-  return { started, execUsers };
-}
