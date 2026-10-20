@@ -1,8 +1,9 @@
 #![doc = include_str!(concat!(env!("OUT_DIR"), "/docs/amazon-bedrock.md"))]
 
+mod converse;
+mod invoke;
 pub(crate) mod mantle;
-pub(crate) mod mappers;
 pub(crate) mod provider;
-pub(crate) mod streaming;
+mod sdk;
 
 pub use provider::{AwsCredentials, BedrockProvider};

@@ -1,11 +1,13 @@
-use tracing::debug;
+use std::time::Duration;
+use tracing::{debug, warn};
 
 use super::auth::MantleAuth;
-use crate::catalog::transport::ModelTransport;
+use crate::providers::bedrock::provider::ModelTarget;
 use crate::providers::http::{SseData, http_client, post_sse, responses_code};
 use crate::providers::openai::responses::mappers::{ResponsesRequestPolicy, build_request};
-use crate::providers::response_stream::OpenedStream;
-use crate::{Context, LlmError, LlmModel, Result};
+use crate::providers::openai::responses::streaming::decode_responses;
+use crate::providers::response_stream::{OpenedStream, response_stream};
+use crate::{Context, LlmError, LlmResponseStream, Result};
 use utils::variables::Vars;
 
 /// Transport for Bedrock models served through the `OpenAI` Responses API.
@@ -32,12 +34,32 @@ impl MantleClient {
         self
     }
 
-    /// Endpoint this client will POST to for `transport`.
-    ///
+    pub(crate) fn stream(
+        &self,
+        target: ModelTarget,
+        base_url_template: &'static str,
+        context: Context,
+        idle_timeout: Duration,
+    ) -> LlmResponseStream {
+        if let Some(arn) = &target.inference_profile_arn {
+            warn!(
+                model = %target.model,
+                inference_profile_arn = %arn,
+                "Ignoring inferenceProfileArn: Responses requests use the selected model ID"
+            );
+        }
+        let client = self.clone();
+
+        response_stream(
+            async move { client.send(&target, base_url_template, &context).await },
+            decode_responses(),
+            idle_timeout,
+        )
+    }
+
     /// An explicit base URL — a test server or a private endpoint — wins over the
     /// catalog template, which is why the override is checked first.
-    pub(crate) fn endpoint(&self, transport: &ModelTransport) -> Result<String> {
-        let ModelTransport::OpenAiResponses { base_url_template } = transport;
+    pub(crate) fn endpoint(&self, base_url_template: &str) -> Result<String> {
         let base = match &self.base_url_override {
             Some(base) => base.clone(),
             None => {
@@ -48,15 +70,15 @@ impl MantleClient {
         Ok(format!("{}/responses", base.trim_end_matches('/')))
     }
 
-    pub(crate) async fn stream(
+    async fn send(
         &self,
-        identity: Option<&LlmModel>,
-        model: &str,
-        transport: &ModelTransport,
+        target: &ModelTarget,
+        base_url_template: &str,
         context: &Context,
     ) -> Result<OpenedStream<SseData>> {
-        let url = self.endpoint(transport)?;
-        let body = build_request(identity, model, context, &ResponsesRequestPolicy::MANTLE)?;
+        let url = self.endpoint(base_url_template)?;
+        let model = target.model.as_str();
+        let body = build_request(target.identity.as_ref(), model, context, &ResponsesRequestPolicy::MANTLE)?;
 
         debug!(model, url, auth = %self.auth, "Sending Bedrock responses request");
 
@@ -69,25 +91,17 @@ impl MantleClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn transport(api: &'static str) -> ModelTransport {
-        ModelTransport::OpenAiResponses { base_url_template: api }
-    }
-
-    fn client(base_url_override: Option<String>) -> MantleClient {
-        MantleClient::new("us-west-2".to_string(), MantleAuth::None, base_url_override)
-    }
 
     #[test]
     fn endpoint_expands_the_region_from_the_model_template() {
-        let endpoint =
-            client(None).endpoint(&transport("https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1")).unwrap();
+        let endpoint = client(None).endpoint("https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1").unwrap();
 
         assert_eq!(endpoint, "https://bedrock-mantle.us-west-2.api.aws/openai/v1/responses");
     }
 
     #[test]
     fn endpoint_preserves_a_models_own_api_path() {
-        let endpoint = client(None).endpoint(&transport("https://bedrock-mantle.${AWS_REGION}.api.aws/v1")).unwrap();
+        let endpoint = client(None).endpoint("https://bedrock-mantle.${AWS_REGION}.api.aws/v1").unwrap();
 
         assert_eq!(endpoint, "https://bedrock-mantle.us-west-2.api.aws/v1/responses");
     }
@@ -95,9 +109,13 @@ mod tests {
     #[test]
     fn base_url_override_replaces_the_catalog_template() {
         let endpoint = client(Some("http://127.0.0.1:9999/".to_string()))
-            .endpoint(&transport("https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"))
+            .endpoint("https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1")
             .unwrap();
 
         assert_eq!(endpoint, "http://127.0.0.1:9999/responses");
+    }
+
+    fn client(base_url_override: Option<String>) -> MantleClient {
+        MantleClient::new("us-west-2".to_string(), MantleAuth::None, base_url_override)
     }
 }

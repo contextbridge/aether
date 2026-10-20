@@ -1,26 +1,17 @@
 use super::mantle::{MantleAuth, MantleClient};
-use super::mappers::{default_cache_point, map_messages, map_tools};
-use super::streaming::{converse_events, decode_converse_event};
+use super::{converse, invoke};
 use crate::catalog::Provider;
 use crate::catalog::transport::ModelTransport;
 use crate::provider::{LlmResponseStream, StreamingModelProvider, validate_reasoning};
-use crate::providers::openai::responses::streaming::decode_responses;
-use crate::providers::response_stream::{OpenedStream, error_stream, response_stream};
-use crate::{Context, LlmError, ProviderAuthMode, ProviderConnectionConfig, ProviderError, Result};
+use crate::providers::response_stream::error_stream;
+use crate::{Context, LlmModel, ProviderAuthMode, ProviderConnectionConfig};
 use aws_config::Region;
 use aws_credential_types::provider::SharedCredentialsProvider;
 use aws_sdk_bedrockruntime::config::{BehaviorVersion, Credentials};
-use aws_sdk_bedrockruntime::error::SdkError;
-use aws_sdk_bedrockruntime::operation::converse_stream::ConverseStreamError;
-use aws_sdk_bedrockruntime::primitives::event_stream::EventReceiver;
-use aws_sdk_bedrockruntime::types::error::ConverseStreamOutputError;
-use aws_sdk_bedrockruntime::types::{ConverseStreamOutput, InferenceConfiguration};
 use aws_sdk_bedrockruntime::{Client, Config};
 use std::time::Duration;
-use tracing::{error, info, warn};
 
 const DEFAULT_MODEL: &str = "anthropic.claude-sonnet-4-5-20250929-v1:0";
-const DEFAULT_MAX_TOKENS: i32 = 16_384;
 const DEFAULT_REGION: &str = "us-east-1";
 
 /// AWS credentials for explicit authentication with Bedrock.
@@ -35,9 +26,15 @@ pub struct AwsCredentials {
 pub struct BedrockProvider {
     client: Client,
     mantle: MantleClient,
-    model: String,
-    inference_profile_arn: Option<String>,
+    target: ModelTarget,
     idle_timeout: Duration,
+}
+
+#[derive(Clone)]
+pub(crate) struct ModelTarget {
+    pub(crate) model: String,
+    pub(crate) identity: Option<LlmModel>,
+    pub(crate) inference_profile_arn: Option<String>,
 }
 
 impl BedrockProvider {
@@ -83,19 +80,18 @@ impl BedrockProvider {
         Self {
             client,
             mantle,
-            model: DEFAULT_MODEL.to_string(),
-            inference_profile_arn: connection.inference_profile_arn,
+            target: ModelTarget::new(DEFAULT_MODEL, connection.inference_profile_arn),
             idle_timeout: connection.idle_timeout,
         }
     }
 
     pub fn with_model(mut self, model: &str) -> Self {
-        self.model = model.to_string();
+        self.target = ModelTarget::new(model, self.target.inference_profile_arn.take());
         self
     }
 
     pub fn with_inference_profile_arn(mut self, arn: impl Into<String>) -> Self {
-        self.inference_profile_arn = Some(arn.into());
+        self.target.inference_profile_arn = Some(arn.into());
         self
     }
 
@@ -105,121 +101,37 @@ impl BedrockProvider {
         self.mantle = self.mantle.with_auth(MantleAuth::BearerToken(token.into()));
         self
     }
+}
 
-    fn request_model_id(&self) -> &str {
+impl ModelTarget {
+    fn new(model: &str, inference_profile_arn: Option<String>) -> Self {
+        let identity = LlmModel::parse_for(Provider::Bedrock, model).ok();
+        Self { model: model.to_string(), identity, inference_profile_arn }
+    }
+
+    pub(crate) fn request_id(&self) -> &str {
         self.inference_profile_arn.as_deref().unwrap_or(&self.model)
-    }
-
-    /// The Responses-API transport for the current model, when the catalog says
-    /// it is not served by the Converse API.
-    fn mantle_transport(&self) -> Option<ModelTransport> {
-        self.model().and_then(|model| model.transport())
-    }
-
-    async fn send_converse_stream(
-        &self,
-        context: &Context,
-    ) -> Result<EventReceiver<ConverseStreamOutput, ConverseStreamOutputError>> {
-        let cache_point =
-            self.model().is_some_and(|m| m.supports_prompt_caching()).then(default_cache_point).transpose()?;
-        let (system_blocks, messages) = map_messages(context.messages(), cache_point.as_ref())?;
-        let settings = context.model_settings();
-        let max_tokens = settings.max_tokens.and_then(|m| i32::try_from(m).ok()).unwrap_or(DEFAULT_MAX_TOKENS);
-        let inference_config = InferenceConfiguration::builder()
-            .max_tokens(max_tokens)
-            .set_temperature(settings.temperature)
-            .set_top_p(settings.top_p)
-            .build();
-        let tool_config =
-            (!context.tools().is_empty()).then(|| map_tools(context.tools(), cache_point.as_ref())).transpose()?;
-
-        info!(
-            model = %self.model,
-            inference_profile_arn = ?self.inference_profile_arn,
-            "Sending Bedrock converse_stream request"
-        );
-
-        let request = self
-            .client
-            .converse_stream()
-            .model_id(self.request_model_id())
-            .set_messages(Some(messages))
-            .set_system((!system_blocks.is_empty()).then_some(system_blocks))
-            .inference_config(inference_config)
-            .set_tool_config(tool_config);
-
-        let response = request.send().await.map_err(|e| {
-            error!(model = %self.model, error = ?e, "Bedrock API error");
-            LlmError::from(e)
-        })?;
-
-        Ok(response.stream)
     }
 }
 
 impl StreamingModelProvider for BedrockProvider {
-    fn model(&self) -> Option<crate::LlmModel> {
-        crate::LlmModel::parse_for(Provider::Bedrock, &self.model).ok()
+    fn model(&self) -> Option<LlmModel> {
+        self.target.identity.clone()
     }
 
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
-        let identity = self.model();
-        if let Err(error) = validate_reasoning(context, identity.as_ref()) {
+        if let Err(error) = validate_reasoning(context, self.target.identity.as_ref()) {
             return error_stream(error);
         }
-        let provider = self.clone();
-        let context = context.clone();
+        let (target, context) = (self.target.clone(), context.clone());
 
-        let Some(transport) = self.mantle_transport() else {
-            return response_stream(
-                async move { Ok(OpenedStream::new(converse_events(provider.send_converse_stream(&context).await?))) },
-                |event, turn| Ok(decode_converse_event(event, turn)),
-                self.idle_timeout,
-            );
-        };
-
-        if let Some(arn) = self.inference_profile_arn.as_deref() {
-            warn!(
-                model = %self.model,
-                inference_profile_arn = %arn,
-                "Ignoring inferenceProfileArn: Responses requests use the selected model ID"
-            );
-        }
-
-        response_stream(
-            async move { provider.mantle.stream(identity.as_ref(), &provider.model, &transport, &context).await },
-            decode_responses(),
-            self.idle_timeout,
-        )
-    }
-}
-
-impl From<SdkError<ConverseStreamError>> for LlmError {
-    fn from(e: SdkError<ConverseStreamError>) -> Self {
-        let message = format!("Bedrock API error: {e}");
-        let status = e.raw_response().map(|r| r.status().as_u16());
-        let request_id = e.raw_response().and_then(|r| r.headers().get("x-amzn-requestid")).map(str::to_string);
-        let mut provider = match &e {
-            SdkError::TimeoutError(_) => ProviderError::timeout(message),
-            SdkError::DispatchFailure(_) => ProviderError::network(message),
-            SdkError::ResponseError(_) => ProviderError::server(message),
-            SdkError::ServiceError(svc) => {
-                let inner = svc.err();
-                if inner.is_throttling_exception() {
-                    ProviderError::rate_limit(message)
-                } else if inner.is_service_unavailable_exception()
-                    || inner.is_internal_server_exception()
-                    || inner.is_model_stream_error_exception()
-                {
-                    ProviderError::server(message)
-                } else {
-                    ProviderError::api(message)
-                }
+        match target.identity.as_ref().and_then(LlmModel::transport) {
+            None => converse::stream(&self.client, target, context, self.idle_timeout),
+            Some(ModelTransport::AnthropicMessages) => invoke::stream(&self.client, target, context, self.idle_timeout),
+            Some(ModelTransport::OpenAiResponses { base_url_template }) => {
+                self.mantle.stream(target, base_url_template, context, self.idle_timeout)
             }
-            _ => ProviderError::api(message),
-        };
-        provider = provider.with_http_metadata(status, request_id);
-        Self::from(provider)
+        }
     }
 }
 
@@ -279,10 +191,16 @@ fn region_from_env() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::anthropic::test_stream::{AnthropicStreamBuilder, anthropic_stream, usage};
     use crate::providers::test_capture_server::{CaptureServer, ResponseSpec, hello_context};
-    use crate::types::IsoString;
-    use crate::{AssistantReasoning, ChatMessage, EncryptedReasoningContent, LlmModel, MessageId};
+    use crate::reasoning::ReasoningControl;
+    use crate::testing::{assistant_message, llm_response, tool_result};
+    use crate::{ChatMessage, LlmError, LlmResponse, StopReason};
+    use aws_smithy_eventstream::frame::write_message_to;
+    use aws_smithy_types::base64;
+    use aws_smithy_types::event_stream::{Header, HeaderValue, Message};
     use futures::StreamExt;
+    use serde_json::json;
     use utils::ReasoningEffort;
 
     #[test]
@@ -299,7 +217,7 @@ mod tests {
     #[test]
     fn test_default_values() {
         let provider = test_provider();
-        assert_eq!(provider.model, "anthropic.claude-sonnet-4-5-20250929-v1:0");
+        assert_eq!(provider.target.model, "anthropic.claude-sonnet-4-5-20250929-v1:0");
     }
 
     #[tokio::test]
@@ -329,14 +247,7 @@ mod tests {
 
     #[tokio::test]
     async fn mantle_disabled_uses_none_without_summary() {
-        let model = LlmModel::all()
-            .iter()
-            .find(|model| {
-                model.provider_enum() == Provider::Bedrock
-                    && model.transport().is_some()
-                    && model.supports_reasoning_off()
-            })
-            .unwrap();
+        let model = responses_models().find(|model| model.supports_reasoning_off()).unwrap();
         let mut server = CaptureServer::start_responses().await;
         let provider = create_provider(&server.base_url, &model.model_id()).await;
         let mut context = hello_context();
@@ -451,20 +362,12 @@ mod tests {
         let mut server = CaptureServer::start_responses().await;
         let provider = mantle_provider(&server).await;
         let context = Context::new(
-            vec![ChatMessage::Assistant {
-                message_id: MessageId::new(),
-                content: "previous answer".to_string(),
-                reasoning: AssistantReasoning {
-                    summary_text: None,
-                    encrypted_content: Some(EncryptedReasoningContent {
-                        id: "reasoning-id".to_string(),
-                        model: "bedrock:openai.gpt-5.5".parse().unwrap(),
-                        content: "opaque-for-another-model".to_string(),
-                    }),
-                },
-                timestamp: IsoString::now(),
-                tool_calls: vec![],
-            }],
+            vec![
+                assistant_message()
+                    .text("previous answer")
+                    .encrypted_reasoning("reasoning-id", "bedrock:openai.gpt-5.5", "opaque-for-another-model")
+                    .build(),
+            ],
             vec![],
         );
 
@@ -479,14 +382,118 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn converse_shape_models_do_not_use_the_responses_endpoint() {
-        let mut server = CaptureServer::start_with_response("{}").await;
+    async fn claude_models_send_anthropic_messages_through_invoke_model() {
+        let mut server = CaptureServer::start_with_spec(invoke_response(claude_answer())).await;
+        let model = claude_model(|model| {
+            model.reasoning_control() == ReasoningControl::Effort
+                && model.validate_reasoning_effort(ReasoningEffort::High).is_ok()
+        });
+        let provider = create_provider(&server.base_url, &model.model_id()).await;
+        let mut context = Context::new(vec![ChatMessage::system("Be brief"), ChatMessage::user("Hello")], vec![]);
+        context.set_reasoning_effort(ReasoningEffort::High);
+
+        let responses = streamed(&provider, &context).await;
+        let request = server.captured().await;
+
+        assert_eq!(responses, llm_response().text(&["Hi"]).usage(10, 5).build_with_stop_reason(StopReason::EndTurn));
+        assert!(request.path.ends_with("/invoke-with-response-stream"), "{}", request.path);
+        assert_eq!(
+            request.body,
+            json!({
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 16_384,
+                "system": [{ "type": "text", "text": "Be brief", "cache_control": { "type": "ephemeral" } }],
+                "messages": [{
+                    "role": "user",
+                    "content": [{ "type": "text", "text": "Hello", "cache_control": { "type": "ephemeral" } }]
+                }],
+                "thinking": { "type": "adaptive", "display": "summarized" },
+                "output_config": { "effort": "high" }
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn claude_models_turn_thinking_off_when_the_catalog_allows_it() {
+        let mut server = CaptureServer::start_with_spec(invoke_response(claude_answer())).await;
+        let model = claude_model(|model| model.validate_reasoning_effort(ReasoningEffort::Disabled).is_ok());
+        let provider = create_provider(&server.base_url, &model.model_id()).await;
+        let mut context = hello_context();
+        context.set_reasoning_effort(ReasoningEffort::Disabled);
+
+        let responses = streamed(&provider, &context).await;
+        let request = server.captured().await;
+
+        assert_eq!(responses, llm_response().text(&["Hi"]).usage(10, 5).build_with_stop_reason(StopReason::EndTurn));
+        assert_eq!(request.body["thinking"], json!({ "type": "disabled" }));
+    }
+
+    #[tokio::test]
+    async fn claude_models_stream_reasoning_usage_and_completion_through_invoke_model() {
+        let server = CaptureServer::start_with_spec(invoke_response(claude_tool_turn())).await;
         let provider = create_provider(&server.base_url, DEFAULT_MODEL).await;
+
+        let responses = streamed(&provider, &hello_context()).await;
+
+        assert_eq!(
+            responses,
+            llm_response()
+                .reasoning(&["Plan"])
+                .tool_call("toolu_1", "search", &["{}"])
+                .usage(10, 30)
+                .encrypted_reasoning("msg_123", r#"[{"type":"thinking","thinking":"Plan","signature":"sig"}]"#)
+                .build_with_stop_reason(StopReason::ToolCalls)
+        );
+    }
+
+    #[tokio::test]
+    async fn claude_reasoning_from_invoke_model_is_replayed_on_the_next_turn() {
+        let mut server = CaptureServer::start_with_spec(invoke_response(claude_tool_turn())).await;
+        let provider = create_provider(&server.base_url, DEFAULT_MODEL).await;
+        let first_turn = streamed(&provider, &hello_context()).await;
+        server.captured().await;
+        let Some(LlmResponse::EncryptedReasoning { id, content }) =
+            first_turn.iter().find(|response| matches!(response, LlmResponse::EncryptedReasoning { .. }))
+        else {
+            panic!("the first turn must return replayable reasoning: {first_turn:?}");
+        };
+
+        let context = Context::new(
+            vec![
+                ChatMessage::user("Hello"),
+                assistant_message()
+                    .encrypted_reasoning(id, &format!("bedrock:{DEFAULT_MODEL}"), content)
+                    .tool_call("toolu_1", "search", "{}")
+                    .build(),
+                tool_result("toolu_1", "search", "{}", "found"),
+            ],
+            vec![],
+        );
+        streamed(&provider, &context).await;
+        let request = server.captured().await;
+
+        assert_eq!(
+            request.body["messages"][1]["content"],
+            json!([
+                { "type": "thinking", "thinking": "Plan", "signature": "sig" },
+                { "type": "tool_use", "id": "toolu_1", "name": "search", "input": {} }
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn non_claude_models_still_use_converse() {
+        let mut server = CaptureServer::start_with_response("{}").await;
+        let model = LlmModel::all()
+            .iter()
+            .find(|model| model.provider_enum() == Provider::Bedrock && model.transport().is_none())
+            .expect("the catalog has a Bedrock model served by Converse");
+        let provider = create_provider(&server.base_url, &model.model_id()).await;
 
         let _ = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
         let request = server.captured().await;
 
-        assert!(request.path.starts_with("/model/"), "{}", request.path);
+        assert!(request.path.ends_with("/converse-stream"), "{}", request.path);
     }
 
     #[tokio::test]
@@ -529,17 +536,6 @@ mod tests {
     }
 
     #[test]
-    fn only_responses_shape_models_route_to_the_mantle_transport() {
-        let mantle = test_provider().with_model(&mantle_model());
-        let converse = test_provider().with_model(DEFAULT_MODEL);
-        let profile = test_provider().with_model("us.anthropic.claude-future-model-v99:0");
-
-        assert!(matches!(mantle.mantle_transport(), Some(ModelTransport::OpenAiResponses { .. })));
-        assert_eq!(converse.mantle_transport(), None);
-        assert_eq!(profile.mantle_transport(), None);
-    }
-
-    #[test]
     fn explicit_connection_preserves_inference_profile() {
         let provider = BedrockProvider::from_config(
             None,
@@ -547,14 +543,14 @@ mod tests {
             ProviderConnectionConfig { inference_profile_arn: Some("arn:test".to_string()), ..Default::default() },
         );
 
-        assert_eq!(provider.inference_profile_arn.as_deref(), Some("arn:test"));
+        assert_eq!(provider.target.inference_profile_arn.as_deref(), Some("arn:test"));
     }
 
     #[test]
     fn test_from_config_with_credentials() {
         let provider =
             BedrockProvider::from_config(Some(static_credentials()), None, ProviderConnectionConfig::default());
-        assert_eq!(provider.model, DEFAULT_MODEL);
+        assert_eq!(provider.target.model, DEFAULT_MODEL);
     }
 
     #[test]
@@ -566,13 +562,13 @@ mod tests {
             BedrockProvider::from_config(Some(credentials), Some("us-west-2"), ProviderConnectionConfig::default())
                 .with_model("anthropic.claude-opus-4-20250514-v1:0");
 
-        assert_eq!(provider.model, "anthropic.claude-opus-4-20250514-v1:0");
+        assert_eq!(provider.target.model, "anthropic.claude-opus-4-20250514-v1:0");
     }
 
     #[test]
     fn test_from_config_with_region_only() {
         let provider = BedrockProvider::from_config(None, Some("eu-west-1"), ProviderConnectionConfig::default());
-        assert_eq!(provider.model, DEFAULT_MODEL);
+        assert_eq!(provider.target.model, DEFAULT_MODEL);
     }
 
     #[test]
@@ -627,7 +623,7 @@ mod tests {
         let provider =
             test_provider().with_model("anthropic.claude-sonnet-4-5-20250929-v1:0").with_inference_profile_arn(&arn);
 
-        assert_eq!(provider.request_model_id(), arn);
+        assert_eq!(provider.target.request_id(), arn);
         assert_eq!(provider.context_window(), Some(200_000));
         assert_eq!(provider.model().unwrap().to_string(), "bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0");
     }
@@ -654,16 +650,58 @@ mod tests {
     }
 
     fn mantle_model() -> String {
-        LlmModel::all()
-            .iter()
-            .find(|model| model.provider_enum() == Provider::Bedrock && model.transport().is_some())
+        responses_models()
+            .next()
             .expect("catalog must expose at least one Responses-transport Bedrock model")
             .model_id()
             .to_string()
     }
 
+    fn responses_models() -> impl Iterator<Item = &'static LlmModel> {
+        LlmModel::all().iter().filter(|model| {
+            model.provider_enum() == Provider::Bedrock
+                && matches!(model.transport(), Some(ModelTransport::OpenAiResponses { .. }))
+        })
+    }
+
     async fn mantle_provider(server: &CaptureServer) -> BedrockProvider {
         create_provider(&server.base_url, &mantle_model()).await
+    }
+
+    fn claude_model(matches: impl Fn(&LlmModel) -> bool) -> &'static LlmModel {
+        LlmModel::all()
+            .iter()
+            .find(|model| model.transport() == Some(ModelTransport::AnthropicMessages) && matches(model))
+            .expect("the catalog has a matching Bedrock Claude model")
+    }
+
+    async fn streamed(provider: &BedrockProvider, context: &Context) -> Vec<LlmResponse> {
+        provider.stream_response(context).map(|response| response.unwrap()).collect().await
+    }
+
+    fn claude_answer() -> AnthropicStreamBuilder {
+        anthropic_stream().text(0, &["Hi"]).message_delta("end_turn", &usage(10, 5)).message_stop()
+    }
+
+    /// Bedrock reports input tokens only in `message_start`.
+    fn claude_tool_turn() -> AnthropicStreamBuilder {
+        anthropic_stream()
+            .signed_thinking(0, &["Plan"], "sig")
+            .tool_call(1, "toolu_1", "search", &["{}"])
+            .message_delta("tool_use", &json!({ "output_tokens": 30 }))
+            .message_stop()
+    }
+
+    fn invoke_response(stream: AnthropicStreamBuilder) -> ResponseSpec {
+        let mut body = Vec::new();
+        for event in stream.build() {
+            let message = Message::new(json!({ "bytes": base64::encode(event) }).to_string())
+                .add_header(Header::new(":message-type", HeaderValue::String("event".into())))
+                .add_header(Header::new(":event-type", HeaderValue::String("chunk".into())))
+                .add_header(Header::new(":content-type", HeaderValue::String("application/json".into())));
+            write_message_to(&message, &mut body).unwrap();
+        }
+        ResponseSpec::event_stream(body)
     }
 
     async fn create_provider(base_url: &str, model: &str) -> BedrockProvider {
