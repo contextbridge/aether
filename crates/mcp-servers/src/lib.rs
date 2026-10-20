@@ -59,7 +59,7 @@ pub use subagents::{SubAgentsMcp, SubAgentsMcpArgs};
 
 #[cfg(feature = "review")]
 pub use review::{
-    DocumentSource, HtmlAnnotation, HtmlSource, ReviewArtifactInput, ReviewArtifactOutput, ReviewMcp, ReviewMcpArgs,
+    ArtifactFormat, ArtifactSource, HtmlAnnotation, ReviewArtifactInput, ReviewArtifactOutput, ReviewMcp, ReviewMcpArgs,
 };
 
 #[cfg(any(feature = "coding", feature = "skills", feature = "tasks", feature = "review"))]

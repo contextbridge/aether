@@ -3,4 +3,4 @@ mod server;
 pub mod tools;
 
 pub use server::{ReviewMcp, ReviewMcpArgs};
-pub use tools::{DocumentSource, HtmlAnnotation, HtmlSource, ReviewArtifactInput, ReviewArtifactOutput};
+pub use tools::{ArtifactFormat, ArtifactSource, HtmlAnnotation, ReviewArtifactInput, ReviewArtifactOutput};
