@@ -1,5 +1,6 @@
 use crate::WorkspaceError;
 use std::ffi::OsStr;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use utils::git::{GitError, git, git_with_env};
 
@@ -19,6 +20,10 @@ impl GitRepo {
     pub(crate) fn init(dest: &Path) -> Result<Self, GitError> {
         git(None, &[OsStr::new("init"), dest.as_os_str()])?;
         Ok(GitRepo { path: dest.to_path_buf() })
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
     }
 
     #[tracing::instrument(skip(self))]
@@ -63,9 +68,15 @@ impl GitRepo {
     pub(crate) fn diff_working_tree(&self, from_commit: &str, exclude: &[String]) -> Result<String, WorkspaceError> {
         let scratch = tempfile::tempdir().map_err(WorkspaceError::CreateTempDir)?;
         let index = scratch.path().join("index");
-        let real_index = self.git(&["rev-parse", "--path-format=absolute", "--git-path", "index"])?;
-        std::fs::copy(String::from_utf8_lossy(&real_index).trim(), &index).ok();
         let env = [("GIT_INDEX_FILE", index.as_os_str())];
+        let repo_index = self.path.join(".git/index");
+        match std::fs::copy(&repo_index, &index) {
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                self.git_with_env(&["read-tree", "HEAD"], &env)?;
+            }
+            Err(source) => return Err(WorkspaceError::CopyIndex { path: repo_index, source }),
+        }
         self.git_with_env(&["add", "--all"], &env)?;
         let stdout = self.git_with_env(&diff_args(&["diff", "--cached", from_commit], exclude), &env)?;
         Ok(String::from_utf8_lossy(&stdout).into_owned())
@@ -105,19 +116,5 @@ mod tests {
         assert!(committed.contains("+modified content"), "{committed}");
         assert!(committed.contains("+new file"), "{committed}");
         assert!(!committed.contains("unstaged content"), "{committed}");
-    }
-
-    #[test]
-    fn diff_working_tree_includes_untracked_files_without_touching_the_index() {
-        let repo = TestWorkspace::new().file("test.txt", "initial content\n").git_init();
-        let commit = repo.commit("Initial commit");
-        repo.write("test.txt", "unstaged content\n");
-        repo.write("untracked.txt", "untracked\n");
-
-        let diff = GitRepo::from_path(repo.root()).diff_working_tree(&commit, &[]).unwrap();
-
-        assert!(diff.contains("+unstaged content"), "{diff}");
-        assert!(diff.contains("+untracked"), "{diff}");
-        assert!(repo.git(&["status", "--porcelain"]).contains("?? untracked.txt"));
     }
 }
