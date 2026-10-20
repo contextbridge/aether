@@ -25,7 +25,7 @@ describe.skipIf(!process.env.AETHER_EVALS_E2E)(
       expect(await readFile(workspace.join("dir/out.txt"), "utf8")).toBe(
         "agent\n",
       );
-    }, 120_000);
+    });
 
     it("keeps the image entrypoint and waits for the ready command", async () => {
       const image = Image.fromDockerfile("aether-evals-entrypoint:test", {
@@ -42,7 +42,7 @@ describe.skipIf(!process.env.AETHER_EVALS_E2E)(
       });
 
       expect(ready.exitCode).toBe(0);
-    }, 300_000);
+    });
 
     it("lets git use the workspace repository as another user", async () => {
       const startCommit = await commitRepo();
@@ -63,7 +63,7 @@ describe.skipIf(!process.env.AETHER_EVALS_E2E)(
 
       expect(head.stderr).toBe("");
       expect(head.stdout.trim()).toBe(startCommit);
-    }, 300_000);
+    });
   },
 );
 

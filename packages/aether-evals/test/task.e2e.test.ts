@@ -46,7 +46,7 @@ describe.skipIf(!process.env.AETHER_EVALS_E2E)(
       expect(await readFile(join(workspace.path, "out.txt"), "utf8")).toBe(
         "modified\n",
       );
-    }, 120_000);
+    });
 
     it("lets callers exec follow-up commands in the same container", async () => {
       await using workspace = await Workspace.empty();
@@ -75,7 +75,7 @@ describe.skipIf(!process.env.AETHER_EVALS_E2E)(
       });
       expect(output.exitCode).toBe(0);
       expect(output.stdout).toContain("same-container");
-    }, 120_000);
+    });
 
     it("waits for gated cleanup after the terminal event", async () => {
       await using workspace = await Workspace.empty();
@@ -137,7 +137,7 @@ describe.skipIf(!process.env.AETHER_EVALS_E2E)(
 
       expect(output.exitCode).toBe(7);
       expect(output.stderr).toContain("nope");
-    }, 120_000);
+    });
   },
 );
 
