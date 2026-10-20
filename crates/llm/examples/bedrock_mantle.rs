@@ -36,9 +36,9 @@ async fn main() -> ExitCode {
         eprintln!("'{model_id}' is not a known Bedrock model");
         return ExitCode::from(2);
     };
-    let Some(transport) = model.transport() else {
+    let Some(ModelTransport::OpenAiResponses { base_url_template }) = model.transport() else {
         eprintln!(
-            "'{model_id}' is served by the Converse API, not the Responses API.\n\
+            "'{model_id}' is not served by the Responses API.\n\
              Try one of: openai.gpt-5.6-luna, openai.gpt-5.6-terra, openai.gpt-5.6-sol,\n\
              openai.gpt-5.5, openai.gpt-5.4, openai.gpt-oss-120b, openai.gpt-oss-20b, xai.grok-4.3"
         );
@@ -47,7 +47,6 @@ async fn main() -> ExitCode {
 
     let provider = BedrockProvider::new(ProviderConnectionConfig::default()).await.with_model(&model_id);
     println!("→ {}", provider.display_name());
-    let ModelTransport::OpenAiResponses { base_url_template } = transport;
     println!("  endpoint template: {base_url_template}");
     println!("  wire shape: OpenAI Responses");
     match provider.context_window() {

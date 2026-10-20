@@ -86,7 +86,8 @@ impl SessionEvent {
                     | ContextEvent::CompactionEnded { .. }
                     | ContextEvent::CompactionResult { .. }
                     | ContextEvent::UsageUpdated { .. }
-                    | ContextEvent::Cleared,
+                    | ContextEvent::Cleared
+                    | ContextEvent::ReplyRecorded { .. },
                 )
                 | AgentEvent::Model(ModelEvent::Switched { .. })
                 | AgentEvent::SessionUsage(_) => true,

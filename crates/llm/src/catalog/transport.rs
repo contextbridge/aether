@@ -6,4 +6,6 @@
 pub enum ModelTransport {
     /// `OpenAI` Responses API at a dedicated endpoint template.
     OpenAiResponses { base_url_template: &'static str },
+    /// Anthropic Messages API.
+    AnthropicMessages,
 }

@@ -70,10 +70,29 @@ pub struct ToolCallError {
     pub error: String,
 }
 
+impl ToolCallRequest {
+    pub(crate) fn input_json(&self) -> serde_json::Value {
+        serde_json::from_str(&self.arguments).unwrap_or_else(|_| serde_json::json!({}))
+    }
+}
+
 pub(crate) fn tool_result_parts(result: &Result<ToolCallResult, ToolCallError>) -> (&str, &str, bool) {
     match result {
         Ok(result) => (&result.id, &result.result, false),
         Err(error) => (&error.id, &error.error, true),
+    }
+}
+
+pub(crate) fn tool_result_request(result: &Result<ToolCallResult, ToolCallError>) -> ToolCallRequest {
+    match result {
+        Ok(result) => {
+            ToolCallRequest { id: result.id.clone(), name: result.name.clone(), arguments: result.arguments.clone() }
+        }
+        Err(error) => ToolCallRequest {
+            id: error.id.clone(),
+            name: error.name.clone(),
+            arguments: error.arguments.clone().unwrap_or_default(),
+        },
     }
 }
 

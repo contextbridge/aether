@@ -3,6 +3,7 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 use serde::Deserialize;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
 use std::path::Path;
@@ -159,8 +160,8 @@ struct ProviderConfig {
     /// per-model transport override. Off elsewhere because most providers publish
     /// unrelated data (npm package names) under the same key.
     use_model_transport: bool,
-    /// Transport for models whose metadata declares none.
-    transport_override: Option<TransportOverride>,
+    /// Transports for models whose metadata declares none.
+    transport_overrides: &'static [TransportOverride],
     model_ids: ModelIds,
 }
 
@@ -190,26 +191,41 @@ enum ReasoningOff {
 }
 
 /// Mirrors `llm::ReasoningDisabledSupport`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum ReasoningDisabledSupport {
+    #[default]
     Unsupported,
     Effort,
     Toggle,
 }
 
-/// Serves models whose ID starts with one of `model_id_prefixes` over the
-/// Responses API from `base_url_template`.
+/// Mirrors `llm::ReasoningControl`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReasoningControl {
+    Effort,
+    Budget,
+    BudgetAndEffort,
+}
+
 struct TransportOverride {
-    model_id_prefixes: &'static [&'static str],
-    base_url_template: &'static str,
+    matches: ModelMatch,
+    transport: TransportInfo,
+}
+
+enum ModelMatch {
+    Prefixes(&'static [&'static str]),
+    /// IDs containing the text anywhere, so inference-profile IDs such as
+    /// `us.anthropic.claude-…` match along with their foundation model.
+    Contains(&'static str),
 }
 
 impl TransportOverride {
     fn for_model(&self, model_id: &str) -> Option<TransportInfo> {
-        self.model_id_prefixes
-            .iter()
-            .any(|prefix| model_id.starts_with(prefix))
-            .then(|| TransportInfo::OpenAiResponses { base_url_template: self.base_url_template.to_string() })
+        let matches = match self.matches {
+            ModelMatch::Prefixes(prefixes) => prefixes.iter().any(|prefix| model_id.starts_with(prefix)),
+            ModelMatch::Contains(text) => model_id.contains(text),
+        };
+        matches.then(|| self.transport.clone())
     }
 }
 
@@ -238,7 +254,7 @@ impl ProviderConfig {
             reasoning_off: ReasoningOff::Always,
             per_token_pricing: true,
             use_model_transport: false,
-            transport_override: None,
+            transport_overrides: &[],
             model_ids: ModelIds::Catalog,
         }
     }
@@ -341,10 +357,18 @@ const PROVIDERS: &[ProviderConfig] = &[
         genai_provider_name: "aws.bedrock",
         reasoning_off: ReasoningOff::ModelTransport,
         use_model_transport: true,
-        transport_override: Some(TransportOverride {
-            model_id_prefixes: &["us.openai.gpt-6-", "us.openai.gpt-6.1-sol"],
-            base_url_template: "https://bedrock-runtime.${AWS_REGION}.amazonaws.com/openai/v1",
-        }),
+        transport_overrides: &[
+            TransportOverride {
+                matches: ModelMatch::Prefixes(&["us.openai.gpt-6-", "us.openai.gpt-6.1-sol"]),
+                transport: TransportInfo::OpenAiResponses {
+                    base_url_template: Cow::Borrowed("https://bedrock-runtime.${AWS_REGION}.amazonaws.com/openai/v1"),
+                },
+            },
+            TransportOverride {
+                matches: ModelMatch::Contains("anthropic.claude-"),
+                transport: TransportInfo::AnthropicMessages,
+            },
+        ],
         model_ids: ModelIds::Hybrid,
         ..ProviderConfig::standard("amazon-bedrock", "Bedrock", "bedrock", "AWS Bedrock", None)
     },
@@ -372,17 +396,58 @@ struct ModelInfo {
     model_id: String,
     display_name: String,
     context_window: u32,
-    reasoning_levels: Vec<ReasoningEffort>,
-    disabled_support: ReasoningDisabledSupport,
+    reasoning: ReasoningMetadata,
     input_modalities: Vec<String>,
     pricing: Option<CostData>,
     supports_prompt_caching: bool,
     transport: Option<TransportInfo>,
 }
 
+#[derive(Debug, Clone)]
+struct ReasoningMetadata {
+    levels: Vec<ReasoningEffort>,
+    disabled_support: ReasoningDisabledSupport,
+    control: ReasoningControl,
+}
+
+#[derive(Default)]
+struct ListedReasoningOptions<'a> {
+    efforts: Option<Vec<&'a str>>,
+    disabled_support: ReasoningDisabledSupport,
+    budget_tokens: bool,
+}
+
+impl<'a> ListedReasoningOptions<'a> {
+    fn new(options: &'a [ReasoningOption]) -> Self {
+        let mut listed = Self::default();
+        for option in options {
+            match option {
+                ReasoningOption::Effort { values } => {
+                    let efforts = listed.efforts.get_or_insert_with(Vec::new);
+                    for value in values.iter().flatten() {
+                        match value.as_str() {
+                            "none" => listed.disabled_support = ReasoningDisabledSupport::Effort,
+                            "default" => {}
+                            effort => efforts.push(effort),
+                        }
+                    }
+                }
+                ReasoningOption::Toggle => {
+                    if listed.disabled_support == ReasoningDisabledSupport::Unsupported {
+                        listed.disabled_support = ReasoningDisabledSupport::Toggle;
+                    }
+                }
+                ReasoningOption::BudgetTokens => listed.budget_tokens = true,
+            }
+        }
+        listed
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TransportInfo {
-    OpenAiResponses { base_url_template: String },
+    OpenAiResponses { base_url_template: Cow<'static, str> },
+    AnthropicMessages,
 }
 
 type ProviderModels = BTreeMap<&'static str, Vec<ModelInfo>>;
@@ -460,8 +525,6 @@ fn collect_models_from(
         .filter(|m| !is_alias(&m.id))
         .filter(|m| cfg.explicit_models.is_none_or(|ids| ids.contains(&m.id.as_str())))
         .map(|m| {
-            let reasoning_levels =
-                if m.reasoning.unwrap_or(false) { reasoning_levels_for_model(cfg, m)? } else { Vec::new() };
             let input_modalities =
                 m.modalities.as_ref().map_or_else(|| vec!["text".to_string()], |md| md.input.clone());
             let context_window =
@@ -472,8 +535,7 @@ fn collect_models_from(
                 model_id: m.id.clone(),
                 display_name: m.name.clone(),
                 context_window,
-                reasoning_levels,
-                disabled_support: disabled_support_for_model(cfg, m),
+                reasoning: reasoning_for_model(cfg, m)?,
                 input_modalities,
                 supports_prompt_caching: m.cost.as_ref().is_some_and(CostData::has_prompt_caching),
                 pricing,
@@ -491,9 +553,9 @@ fn transport_for_model(cfg: &ProviderConfig, model: &ModelData) -> Result<Option
         model.provider.as_ref().map_or((None, None), |provider| (provider.api.as_ref(), provider.shape.as_deref()));
 
     match (api, shape) {
-        (None, None) => Ok(cfg.transport_override.as_ref().and_then(|transport| transport.for_model(&model.id))),
+        (None, None) => Ok(cfg.transport_overrides.iter().find_map(|transport| transport.for_model(&model.id))),
         (Some(base_url_template), Some("responses")) => {
-            Ok(Some(TransportInfo::OpenAiResponses { base_url_template: base_url_template.clone() }))
+            Ok(Some(TransportInfo::OpenAiResponses { base_url_template: Cow::Owned(base_url_template.clone()) }))
         }
         (_, Some(shape)) if shape != "responses" => {
             Err(CodegenError::UnsupportedWireShape { model_id: model.id.clone(), shape: shape.to_string() })
@@ -502,48 +564,43 @@ fn transport_for_model(cfg: &ProviderConfig, model: &ModelData) -> Result<Option
     }
 }
 
-fn disabled_support_for_model(cfg: &ProviderConfig, model: &ModelData) -> ReasoningDisabledSupport {
-    if !model.reasoning.unwrap_or(false) || cfg.explicit_models.is_some() {
-        return ReasoningDisabledSupport::Unsupported;
-    }
-    if model.reasoning_options.iter().any(|option| {
-        matches!(option,
-            ReasoningOption::Effort { values } if values.iter().any(|value| value.as_deref() == Some("none"))
-        )
-    }) {
-        ReasoningDisabledSupport::Effort
-    } else if model.reasoning_options.iter().any(|option| matches!(option, ReasoningOption::Toggle)) {
-        ReasoningDisabledSupport::Toggle
+fn reasoning_for_model(cfg: &ProviderConfig, model: &ModelData) -> Result<ReasoningMetadata, CodegenError> {
+    let listed = ListedReasoningOptions::new(&model.reasoning_options);
+    let reasoning = model.reasoning.unwrap_or(false);
+    let disabled_support = if reasoning && cfg.explicit_models.is_none() {
+        listed.disabled_support
     } else {
         ReasoningDisabledSupport::Unsupported
-    }
+    };
+
+    let control = match (listed.budget_tokens, listed.efforts.as_ref().is_some_and(|efforts| !efforts.is_empty())) {
+        (true, true) => ReasoningControl::BudgetAndEffort,
+        (true, false) => ReasoningControl::Budget,
+        (false, _) => ReasoningControl::Effort,
+    };
+
+    let levels = if reasoning { reasoning_levels(cfg, model, &listed, disabled_support)? } else { Vec::new() };
+    Ok(ReasoningMetadata { levels, disabled_support, control })
 }
 
-fn reasoning_levels_for_model(cfg: &ProviderConfig, model: &ModelData) -> Result<Vec<ReasoningEffort>, CodegenError> {
-    let values = model
-        .reasoning_options
-        .iter()
-        .filter_map(|option| match option {
-            ReasoningOption::Effort { values } => Some(values),
-            ReasoningOption::Toggle | ReasoningOption::BudgetTokens => None,
-        })
-        .collect::<Vec<_>>();
-    let mut levels = Vec::new();
-    if values.is_empty() {
-        levels.extend_from_slice(cfg.fallback_reasoning_levels);
-    } else {
-        for effort in values.into_iter().flatten().filter_map(|value| value.as_deref()) {
-            if matches!(effort, "none" | "default") {
-                continue;
-            }
-            let parsed =
+fn reasoning_levels(
+    cfg: &ProviderConfig,
+    model: &ModelData,
+    listed: &ListedReasoningOptions<'_>,
+    disabled_support: ReasoningDisabledSupport,
+) -> Result<Vec<ReasoningEffort>, CodegenError> {
+    let mut levels = match &listed.efforts {
+        None => cfg.fallback_reasoning_levels.to_vec(),
+        Some(efforts) => efforts
+            .iter()
+            .map(|effort| {
                 effort.parse::<ReasoningEffort>().ok().filter(|effort| effort.is_enabled()).ok_or_else(|| {
                     CodegenError::UnsupportedReasoningEffort { model_id: model.id.clone(), effort: effort.to_string() }
-                })?;
-            levels.push(parsed);
-        }
-    }
-    if disabled_support_for_model(cfg, model) != ReasoningDisabledSupport::Unsupported {
+                })
+            })
+            .collect::<Result<_, _>>()?,
+    };
+    if disabled_support != ReasoningDisabledSupport::Unsupported {
         levels.push(ReasoningEffort::Disabled);
     }
     Ok(ReasoningEffort::selectable_levels().iter().copied().filter(|level| levels.contains(level)).collect())
@@ -666,8 +723,9 @@ fn emit_catalog_entry(model: &ModelInfo) -> TokenStream {
     let (id, display_name, supports_prompt_caching) =
         (&model.model_id, &model.display_name, model.supports_prompt_caching);
     let context_window = num_lit_with_underscores(model.context_window);
-    let reasoning_levels = model.reasoning_levels.iter().copied().map(variant_ident);
-    let disabled_support = variant_ident(model.disabled_support);
+    let reasoning_levels = model.reasoning.levels.iter().copied().map(variant_ident);
+    let disabled_support = variant_ident(model.reasoning.disabled_support);
+    let reasoning_control = variant_ident(model.reasoning.control);
     let pricing = option_tokens(model.pricing.as_ref().map(|pricing| {
         let (input, output) = (pricing.input, pricing.output);
         let (cache_read, cache_write) = (option_tokens(pricing.cache_read), option_tokens(pricing.cache_write));
@@ -684,8 +742,10 @@ fn emit_catalog_entry(model: &ModelInfo) -> TokenStream {
     let supports_audio = model.input_modalities.iter().any(|modality| modality == "audio");
     let transport = option_tokens(model.transport.as_ref().map(|transport| match transport {
         TransportInfo::OpenAiResponses { base_url_template } => {
+            let base_url_template = base_url_template.as_ref();
             quote! { ModelTransport::OpenAiResponses { base_url_template: #base_url_template } }
         }
+        TransportInfo::AnthropicMessages => quote! { ModelTransport::AnthropicMessages },
     }));
     quote! {
         CatalogEntry {
@@ -695,6 +755,7 @@ fn emit_catalog_entry(model: &ModelInfo) -> TokenStream {
             reasoning_levels: &[#(ReasoningEffort::#reasoning_levels),*],
             disabled_support: ReasoningDisabledSupport::#disabled_support,
             supports_prompt_caching: #supports_prompt_caching,
+            reasoning_control: ReasoningControl::#reasoning_control,
             pricing: #pricing,
             supports_image: #supports_image,
             supports_audio: #supports_audio,
@@ -861,7 +922,7 @@ fn catalog_provider_doc(cfg: &ProviderConfig, models: &[ModelInfo]) -> String {
     pushln(&mut doc, "|----------|------|---------|-----------|-------|-------|");
     for model in models {
         let ctx_str = format_context_window(model.context_window);
-        let reasoning = if model.reasoning_levels.iter().any(|level| level.is_enabled()) { "yes" } else { "" };
+        let reasoning = if model.reasoning.levels.iter().any(|level| level.is_enabled()) { "yes" } else { "" };
         let image = if model.input_modalities.contains(&"image".to_string()) { "yes" } else { "" };
         let audio = if model.input_modalities.contains(&"audio".to_string()) { "yes" } else { "" };
         pushln(
@@ -873,7 +934,8 @@ fn catalog_provider_doc(cfg: &ProviderConfig, models: &[ModelInfo]) -> String {
         );
     }
 
-    for model in models.iter().filter(|model| model.disabled_support != ReasoningDisabledSupport::Unsupported) {
+    for model in models.iter().filter(|model| model.reasoning.disabled_support != ReasoningDisabledSupport::Unsupported)
+    {
         pushln(
             &mut doc,
             format!("Model `{}` advertises `disabled` reasoning (subject to adapter support).", model.model_id),
@@ -892,26 +954,26 @@ fn local_provider_doc(cfg: &ProviderConfig) -> String {
     doc
 }
 
-/// Document the models that do not use the provider's default endpoint.
+/// Document the models that do not use the provider's default transport.
 fn push_transport_section(doc: &mut String, models: &[ModelInfo]) {
-    let overridden: Vec<&ModelInfo> = models.iter().filter(|m| m.transport.is_some()).collect();
+    let overridden: Vec<(&ModelInfo, &TransportInfo)> =
+        models.iter().filter_map(|model| Some((model, model.transport.as_ref()?))).collect();
     if overridden.is_empty() {
         return;
     }
 
     blank(doc);
-    pushln(doc, "# Models with a dedicated endpoint");
+    pushln(doc, "# Models with a dedicated transport");
     blank(doc);
-    pushln(doc, "These models are served from their own endpoint and wire protocol");
-    pushln(doc, "rather than the provider's default. `${VAR}` placeholders are resolved");
-    pushln(doc, "at request time.");
+    pushln(doc, "These models are served by their own API and wire protocol rather than");
+    pushln(doc, "the provider's default. `${VAR}` placeholders are resolved at request time.");
     blank(doc);
-    pushln(doc, "| Model ID | Endpoint | Wire shape |");
-    pushln(doc, "|----------|----------|------------|");
-    for model in overridden {
-        let transport = model.transport.as_ref().expect("filtered to models with a transport");
+    pushln(doc, "| Model ID | API | Wire shape |");
+    pushln(doc, "|----------|-----|------------|");
+    for (model, transport) in overridden {
         let (api, shape) = match transport {
-            TransportInfo::OpenAiResponses { base_url_template } => (base_url_template.as_str(), "responses"),
+            TransportInfo::OpenAiResponses { base_url_template } => (base_url_template.as_ref(), "responses"),
+            TransportInfo::AnthropicMessages => ("InvokeModelWithResponseStream", "messages"),
         };
         pushln(doc, format!("| `{}` | `{api}` | `{shape}` |", model.model_id));
     }

@@ -54,7 +54,7 @@ fn transport_override_with_only_an_npm_package_is_ignored() {
 
     let output = data.generate().unwrap();
     assert!(catalog_entry(&output, "AnthropicModel", "npm-only").contains("transport: None"));
-    assert!(!output.provider_docs["anthropic"].contains("# Models with a dedicated endpoint"));
+    assert!(!output.provider_docs["anthropic"].contains("# Models with a dedicated transport"));
 }
 
 #[test]
@@ -305,6 +305,58 @@ fn generate_routes_only_existing_us_gpt_6_profiles_to_runtime() {
     );
     assert!(!docs.contains("| `openai.gpt-6-luna` |"));
     assert!(!docs.contains("| `openai.gpt-6-sol` |"));
+}
+
+#[test]
+fn bedrock_claude_models_and_profiles_use_the_messages_transport() {
+    let mut data = Catalog::new();
+    data.models(
+        "amazon-bedrock",
+        [Model::new("anthropic.claude-test"), Model::new("us.anthropic.claude-test"), Model::new("amazon.nova-test")],
+    );
+    let output = data.generate().unwrap();
+
+    for id in ["anthropic.claude-test", "us.anthropic.claude-test"] {
+        assert!(
+            catalog_entry(&output, "BedrockFoundationModel", id)
+                .contains("transport: Some(ModelTransport::AnthropicMessages)"),
+            "{id}"
+        );
+    }
+    assert!(catalog_entry(&output, "BedrockFoundationModel", "amazon.nova-test").contains("transport: None"));
+    assert!(
+        output.provider_docs["amazon-bedrock"]
+            .contains("| `anthropic.claude-test` | `InvokeModelWithResponseStream` | `messages` |")
+    );
+}
+
+#[test]
+fn reasoning_control_comes_from_reasoning_options() {
+    let budget = json!({"type": "budget_tokens", "min": 1024});
+    let mut data = Catalog::new();
+    data.models(
+        "anthropic",
+        [
+            Model::new("claude-budget").reasoning(true, json!([{"type": "toggle"}, budget])),
+            Model::new("claude-effort").efforts(&["low", "high", "max"]),
+            Model::new("claude-both").reasoning(true, json!([{"type": "effort", "values": ["low", "max"]}, budget])),
+            Model::new("claude-none-effort")
+                .reasoning(true, json!([{"type": "effort", "values": [null, "none"]}, budget])),
+            Model::new("claude-plain"),
+        ],
+    );
+    let output = data.generate().unwrap();
+
+    for (id, control) in [
+        ("claude-budget", "Budget"),
+        ("claude-effort", "Effort"),
+        ("claude-both", "BudgetAndEffort"),
+        ("claude-none-effort", "Budget"),
+        ("claude-plain", "Effort"),
+    ] {
+        let entry = catalog_entry(&output, "AnthropicModel", id);
+        assert!(entry.contains(&format!("reasoning_control: ReasoningControl::{control},")), "{id}: {entry}");
+    }
 }
 
 #[test]

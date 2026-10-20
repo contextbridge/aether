@@ -15,9 +15,8 @@ use crate::mcp::McpCatalog;
 use crate::mcp::tool_bridge::call_tool;
 use futures::{FutureExt, Stream};
 use llm::{
-    AssistantReasoning, ChatMessage, Context, EncryptedReasoningContent, LlmCallPurpose, LlmError, LlmModel,
-    LlmResponse, MessageId, ModelIdentity, StopReason, StreamingModelProvider, TokenUsage, ToolCallError,
-    ToolCallRequest, ToolCallResult,
+    AssistantReply, ChatMessage, Context, LlmCallPurpose, LlmError, LlmModel, LlmResponse, MessageId, ModelIdentity,
+    StopReason, StreamingModelProvider, TokenUsage, ToolCallError, ToolCallRequest, ToolCallResult,
 };
 use mcp_utils::client::{ToolCallEvent, ToolCallOptions};
 use std::collections::VecDeque;
@@ -253,21 +252,17 @@ impl Agent {
     }
 
     async fn on_iteration_complete(&mut self, id: MessageId, iteration: IterationState) {
-        let IterationState {
-            message_content,
-            reasoning_summary_text,
-            encrypted_reasoning,
-            completed_tool_calls,
-            stop_reason,
-            ..
-        } = iteration;
+        let IterationState { content, completed_tool_calls, stop_reason, .. } = iteration;
+        let message_content = content.text();
+        let reasoning_summary_text = content.reasoning();
         let has_tool_calls = !completed_tool_calls.is_empty();
         let has_content = !message_content.is_empty() || !reasoning_summary_text.is_empty() || has_tool_calls;
         let should_auto_continue = self.auto_continue.should_continue(stop_reason.as_ref());
 
         if has_content {
-            let reasoning = AssistantReasoning::from_parts(reasoning_summary_text.clone(), encrypted_reasoning);
-            self.context.push_assistant_turn(id.clone(), &message_content, reasoning, completed_tool_calls);
+            let model = self.active_model.clone();
+            let message = self.context.push_assistant_turn(id.clone(), model, content, completed_tool_calls).clone();
+            self.emit(AgentEvent::Context(ContextEvent::ReplyRecorded { message })).await;
 
             self.emit(AgentEvent::text(&id, &message_content, StreamState::Complete)).await;
 
@@ -508,25 +503,23 @@ impl Agent {
             }
         };
 
+        state.content.push(&response);
         match response {
             Start => state.on_llm_start(MessageId::new()),
 
             Text { chunk } => {
-                self.handle_llm_text(chunk, state).await;
+                if let Some(id) = state.current_message_id.clone() {
+                    self.emit(AgentEvent::text(&id, &chunk, StreamState::Partial)).await;
+                }
             }
 
             Reasoning { chunk } => {
-                state.reasoning_summary_text.push_str(&chunk);
                 if let Some(id) = state.current_message_id.clone() {
                     self.emit(AgentEvent::thought(&id, &chunk, StreamState::Partial)).await;
                 }
             }
 
-            EncryptedReasoning { id, content } => {
-                if let Some(model) = self.active_model.clone() {
-                    state.encrypted_reasoning = Some(EncryptedReasoningContent { id, model, content });
-                }
-            }
+            EncryptedReasoning { .. } => {}
 
             ToolRequestStart { id, name } => {
                 self.emit(AgentEvent::Tool(ToolEvent::InputStarted { id, name })).await;
@@ -558,14 +551,6 @@ impl Agent {
             Usage { tokens: sample } => {
                 self.handle_llm_usage(sample, state).await;
             }
-        }
-    }
-
-    async fn handle_llm_text(&mut self, chunk: String, state: &mut IterationState) {
-        state.message_content.push_str(&chunk);
-
-        if let Some(id) = state.current_message_id.clone() {
-            self.emit(AgentEvent::text(&id, &chunk, StreamState::Partial)).await;
         }
     }
 
@@ -829,9 +814,7 @@ impl AutoContinue {
 #[derive(Debug, Default)]
 struct IterationState {
     current_message_id: Option<MessageId>,
-    message_content: String,
-    reasoning_summary_text: String,
-    encrypted_reasoning: Option<EncryptedReasoningContent>,
+    content: AssistantReply,
     completed_tool_calls: Vec<Result<ToolCallResult, ToolCallError>>,
     llm_done: bool,
     stop_reason: Option<StopReason>,
@@ -842,9 +825,7 @@ struct IterationState {
 impl IterationState {
     fn on_llm_start(&mut self, message_id: MessageId) {
         self.current_message_id = Some(message_id);
-        self.message_content.clear();
-        self.reasoning_summary_text.clear();
-        self.encrypted_reasoning = None;
+        self.content = AssistantReply::default();
         self.stop_reason = None;
         self.call_usage = None;
     }

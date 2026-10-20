@@ -4,7 +4,7 @@ use chrono::{DateTime, TimeZone};
 use serde::{Deserialize, Serialize};
 
 /// A newtype wrapper for ISO 8601 timestamp strings
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct IsoString(pub String);
 
 impl IsoString {

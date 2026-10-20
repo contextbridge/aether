@@ -31,7 +31,7 @@ let context = Context::new(
 # Managing messages
 
 - [`add_message`](Context::add_message) -- Append a single message.
-- [`push_assistant_turn`](Context::push_assistant_turn) -- Append an assistant response together with its tool call results in one step.
+- [`push_assistant_turn`](Context::push_assistant_turn) -- Append an assistant reply, the model that wrote it, and its tool call results in one step.
 - [`clear_conversation`](Context::clear_conversation) -- Remove all non-system messages.
 
 # Conversation compaction
@@ -47,4 +47,4 @@ Long conversations can be compacted to stay within context limits:
 
 # Encrypted reasoning
 
-[`filter_encrypted_reasoning`](Context::filter_encrypted_reasoning) creates a copy where encrypted reasoning content is kept only for messages from a matching model. This is necessary because encrypted reasoning tokens are model-specific and cannot be replayed to a different model.
+Each [`ChatMessage::Assistant`] records the model that wrote it. Providers send a reply's encrypted reasoning back only to that same model, because encrypted reasoning is model-specific and no other model can read it.

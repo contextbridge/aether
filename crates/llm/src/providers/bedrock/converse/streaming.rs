@@ -1,62 +1,11 @@
-use aws_sdk_bedrockruntime::error::SdkError;
-use aws_sdk_bedrockruntime::primitives::event_stream::EventReceiver;
-use aws_sdk_bedrockruntime::types::error::ConverseStreamOutputError;
 use aws_sdk_bedrockruntime::types::{
     ContentBlockDelta, ContentBlockStart, ConverseStreamOutput, ReasoningContentBlockDelta,
     StopReason as BedrockStopReason, TokenUsage as BedrockTokenUsage,
 };
-use aws_smithy_types::event_stream::RawMessage;
-use futures::{Stream, stream};
-use tracing::{error, warn};
+use tracing::warn;
 
 use crate::providers::response_stream::StreamAssembler;
-use crate::{LlmError, LlmResponse, ProviderError, StopReason, TokenUsage};
-
-pub(crate) fn converse_events(
-    receiver: EventReceiver<ConverseStreamOutput, ConverseStreamOutputError>,
-) -> impl Stream<Item = crate::Result<ConverseStreamOutput>> + Send {
-    stream::unfold(receiver, |mut receiver| async move {
-        let event = receiver.recv().await.map_err(|e| {
-            error!("Bedrock stream recv error: {e}");
-            LlmError::from(e)
-        });
-        event.transpose().map(|event| (event, receiver))
-    })
-}
-
-impl From<&BedrockTokenUsage> for TokenUsage {
-    fn from(usage: &BedrockTokenUsage) -> Self {
-        TokenUsage::from_uncached_input(
-            u32::try_from(usage.input_tokens).unwrap_or(0),
-            u32::try_from(usage.output_tokens).unwrap_or(0),
-            usage.cache_read_input_tokens().and_then(|v| u32::try_from(v).ok()),
-            usage.cache_write_input_tokens().and_then(|v| u32::try_from(v).ok()),
-        )
-    }
-}
-
-impl From<SdkError<ConverseStreamOutputError, RawMessage>> for LlmError {
-    fn from(e: SdkError<ConverseStreamOutputError, RawMessage>) -> Self {
-        let message = format!("Bedrock stream error: {e}");
-        let provider = match e {
-            SdkError::ServiceError(svc) => {
-                let inner = svc.err();
-                if inner.is_throttling_exception() {
-                    ProviderError::rate_limit(message)
-                } else if inner.is_service_unavailable_exception()
-                    || inner.is_internal_server_exception()
-                    || inner.is_model_stream_error_exception()
-                {
-                    ProviderError::stream_interrupted(message)
-                } else {
-                    ProviderError::api(message)
-                }
-            }
-            _ => ProviderError::stream_interrupted(message),
-        };
-        Self::from(provider)
-    }
-}
+use crate::{LlmResponse, StopReason, TokenUsage};
 
 pub(super) fn decode_converse_event(event: ConverseStreamOutput, turn: &mut StreamAssembler<i32>) -> Vec<LlmResponse> {
     let response = match event {
@@ -93,6 +42,17 @@ pub(super) fn decode_converse_event(event: ConverseStreamOutput, turn: &mut Stre
     response.into_iter().collect()
 }
 
+impl From<&BedrockTokenUsage> for TokenUsage {
+    fn from(usage: &BedrockTokenUsage) -> Self {
+        TokenUsage::from_uncached_input(
+            u32::try_from(usage.input_tokens).unwrap_or(0),
+            u32::try_from(usage.output_tokens).unwrap_or(0),
+            usage.cache_read_input_tokens().and_then(|v| u32::try_from(v).ok()),
+            usage.cache_write_input_tokens().and_then(|v| u32::try_from(v).ok()),
+        )
+    }
+}
+
 fn map_bedrock_stop_reason(reason: &BedrockStopReason) -> StopReason {
     match reason {
         BedrockStopReason::EndTurn | BedrockStopReason::StopSequence => StopReason::EndTurn,
@@ -114,7 +74,7 @@ mod tests {
         ContentBlockDeltaEvent, ContentBlockStartEvent, ContentBlockStopEvent, ConversationRole,
         ConverseStreamMetadataEvent, MessageStartEvent, MessageStopEvent, ToolUseBlockDelta, ToolUseBlockStart,
     };
-    use futures::StreamExt;
+    use futures::{StreamExt, stream};
     use std::future::ready;
 
     #[tokio::test]

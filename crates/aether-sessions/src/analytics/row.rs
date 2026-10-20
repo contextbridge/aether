@@ -224,6 +224,10 @@ impl EventProjection {
                 ..Self::new("agent", "context_usage")
             },
             ContextEvent::Cleared => Self::new("agent", "context_cleared"),
+            ContextEvent::ReplyRecorded { message } => Self {
+                message_id: message.message_id().map(|id| id.to_string()),
+                ..Self::new("agent", "context_reply_recorded")
+            },
         }
     }
 

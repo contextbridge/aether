@@ -4,10 +4,12 @@ use super::types::{
     InputContent, InputItem, MessageContent, Reasoning, ReasoningContent, ResponsesRequest, Role, TextFormat,
     TextParam, Tool,
 };
+use crate::assistant_reply::replays_encrypted_reasoning;
 use crate::providers::openai::wire::{PromptCacheKeySource, reasoning_effort_param};
 use crate::tool_schema::normalize_for_xiaomi;
 use crate::{
-    ChatMessage, ContentBlock, Context, LlmError, LlmModel, ReasoningEffort, Result, ToolDefinition, tool_result_parts,
+    AssistantContent, ChatMessage, ContentBlock, Context, LlmError, LlmModel, ReasoningEffort, Result, ToolDefinition,
+    tool_result_parts,
 };
 
 pub struct ResponsesRequestPolicy {
@@ -77,12 +79,11 @@ pub(crate) fn build_request(
     context: &Context,
     policy: &ResponsesRequestPolicy,
 ) -> Result<ResponsesRequest> {
-    let context = context.filter_encrypted_reasoning(identity);
     let encrypted = policy.reasoning_format == ReasoningFormat::Encrypted;
-    let (instructions, input) = map_messages(context.messages(), policy.reasoning_format)?;
+    let (instructions, input) = map_messages(identity, context.messages(), policy.reasoning_format)?;
     let tools = if context.tools().is_empty() { None } else { Some(map_tools(context.tools(), policy)?) };
     let settings = context.model_settings();
-    let effort = policy.effort(&context);
+    let effort = policy.effort(context);
     let reasoning = (policy.always_include_reasoning || effort.is_some()).then(|| Reasoning {
         summary: (encrypted && context.reasoning_effort() != ReasoningEffort::Disabled).then_some("auto"),
         effort: effort.and_then(|effort| match effort {
@@ -98,7 +99,7 @@ pub(crate) fn build_request(
         max_output_tokens: settings.max_tokens,
         model: wire_model.to_string(),
         parallel_tool_calls: policy.parallel_tool_calls,
-        prompt_cache_key: policy.prompt_cache_key.resolve(&context).map(String::from),
+        prompt_cache_key: policy.prompt_cache_key.resolve(context).map(String::from),
         reasoning,
         store: false,
         stream: true,
@@ -110,6 +111,7 @@ pub(crate) fn build_request(
 }
 
 fn map_messages(
+    identity: Option<&LlmModel>,
     messages: &[ChatMessage],
     reasoning_format: ReasoningFormat,
 ) -> Result<(Option<String>, Vec<InputItem>)> {
@@ -124,35 +126,14 @@ fn map_messages(
             ChatMessage::User { content, .. } => {
                 items.push(InputItem::Message { role: Role::User, content: map_user_content(content)? });
             }
-            ChatMessage::Assistant { content, tool_calls, reasoning, .. } => {
-                if !content.is_empty() {
-                    items.push(text_message(Role::Assistant, content.clone()));
-                }
-                if reasoning_format == ReasoningFormat::PlainText
-                    && let Some(text) = &reasoning.summary_text
-                {
-                    items.push(InputItem::Reasoning {
-                        id: None,
-                        summary: vec![],
-                        encrypted_content: None,
-                        content: Some(vec![ReasoningContent::ReasoningText { text: text.clone() }]),
-                    });
-                }
-                if reasoning_format == ReasoningFormat::Encrypted
-                    && let Some(encrypted) = &reasoning.encrypted_content
-                {
-                    items.push(InputItem::Reasoning {
-                        id: Some(encrypted.id.clone()),
-                        summary: vec![],
-                        encrypted_content: Some(encrypted.content.clone()),
-                        content: None,
-                    });
-                }
-                items.extend(tool_calls.iter().map(|call| InputItem::FunctionCall {
-                    arguments: call.arguments.clone(),
-                    call_id: call.id.clone(),
-                    name: call.name.clone(),
-                }));
+            ChatMessage::Assistant { model, content, .. } => {
+                let replay_encrypted = replays_encrypted_reasoning(model.as_ref(), identity);
+                items.extend(
+                    content
+                        .blocks()
+                        .iter()
+                        .filter_map(|block| map_assistant_block(block, reasoning_format, replay_encrypted)),
+                );
             }
             ChatMessage::ToolCallResult(result) => {
                 let (call_id, content, is_error) = tool_result_parts(result);
@@ -166,6 +147,37 @@ fn map_messages(
     }
 
     Ok((system_prompt, items))
+}
+
+fn map_assistant_block(
+    block: &AssistantContent,
+    reasoning_format: ReasoningFormat,
+    replay_encrypted: bool,
+) -> Option<InputItem> {
+    match block {
+        AssistantContent::Text { text } => (!text.is_empty()).then(|| text_message(Role::Assistant, text.clone())),
+        AssistantContent::Reasoning { summary, encrypted } => match reasoning_format {
+            ReasoningFormat::PlainText => (!summary.is_empty()).then(|| InputItem::Reasoning {
+                id: None,
+                summary: vec![],
+                encrypted_content: None,
+                content: Some(vec![ReasoningContent::ReasoningText { text: summary.clone() }]),
+            }),
+            ReasoningFormat::Encrypted => {
+                encrypted.as_ref().filter(|_| replay_encrypted).map(|encrypted| InputItem::Reasoning {
+                    id: Some(encrypted.id.clone()),
+                    summary: vec![],
+                    encrypted_content: Some(encrypted.content.clone()),
+                    content: None,
+                })
+            }
+        },
+        AssistantContent::ToolCall(call) => Some(InputItem::FunctionCall {
+            arguments: call.arguments.clone(),
+            call_id: call.id.clone(),
+            name: call.name.clone(),
+        }),
+    }
 }
 
 fn map_user_content(parts: &[ContentBlock]) -> Result<MessageContent> {

@@ -100,7 +100,7 @@ impl ProviderFixtureBuilder {
 #[derive(Debug, Clone)]
 pub(crate) struct ResponseSpec {
     pub(crate) status: u16,
-    pub(crate) body: String,
+    pub(crate) body: Vec<u8>,
     pub(crate) headers: HashMap<String, String>,
     gap: Option<Duration>,
     interrupted: bool,
@@ -108,7 +108,13 @@ pub(crate) struct ResponseSpec {
 
 impl ResponseSpec {
     pub(crate) fn sse(body: &str) -> Self {
-        Self { status: 200, body: body.to_string(), headers: HashMap::new(), gap: None, interrupted: false }
+        Self { status: 200, body: body.into(), headers: HashMap::new(), gap: None, interrupted: false }
+    }
+
+    /// A binary AWS event stream, as Bedrock's native streaming APIs return.
+    #[cfg(feature = "bedrock")]
+    pub(crate) fn event_stream(body: Vec<u8>) -> Self {
+        Self { body, ..Self::sse("") }.with_header("content-type", "application/vnd.amazon.eventstream")
     }
 
     pub(crate) fn with_status(mut self, status: u16) -> Self {
@@ -143,7 +149,8 @@ impl ResponseSpec {
         let Some(gap) = self.gap else {
             return Body::from(self.body.clone());
         };
-        let events: Vec<String> = self.body.split_inclusive("\n\n").map(str::to_string).collect();
+        let sse = String::from_utf8(self.body.clone()).expect("paced responses are server-sent events");
+        let events: Vec<String> = sse.split_inclusive("\n\n").map(str::to_string).collect();
         Body::from_stream(stream::iter(events).then(move |event| async move {
             tokio::time::sleep(gap).await;
             Ok::<_, Infallible>(event)
@@ -182,6 +189,7 @@ impl CaptureServer {
             .route("/chat/completions", post(capture))
             .route("/v1/chat/completions", post(capture))
             .route("/model/{model}/converse-stream", post(capture))
+            .route("/model/{model}/invoke-with-response-stream", post(capture))
             .with_state(Arc::new(CaptureState { sender, response: spec }));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());

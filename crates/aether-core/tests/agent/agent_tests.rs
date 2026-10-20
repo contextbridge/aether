@@ -3,11 +3,11 @@ use std::error::Error;
 use std::time::Duration;
 
 use aether_core::{
-    events::{AgentEvent, Command, TurnOutcome, UserCommand},
+    events::{AgentEvent, Command, ContextEvent, TurnOutcome, UserCommand},
     testing::{agent_event, content_events, test_agent},
 };
-use llm::{ChatMessage, ContentBlock, StopReason};
-use llm::{MessageId, testing::llm_response};
+use llm::testing::{assistant_message, llm_response};
+use llm::{ChatMessage, ContentBlock, MessageId, StopReason};
 use mcp_utils::testing::{FakeMcpServer, FakeTool, FakeToolResponse};
 use serde_json::json;
 
@@ -101,6 +101,51 @@ async fn test_single_tool_call() -> Result<(), Box<dyn Error>> {
     };
 
     assert_eq!(content_events(messages), expected_messages);
+    Ok(())
+}
+
+#[tokio::test]
+async fn every_reasoning_block_of_a_reply_is_replayed_in_order() -> Result<(), Box<dyn Error>> {
+    let llm_responses = [
+        llm_response()
+            .reasoning(&["Plan"])
+            .encrypted_reasoning("r_1", "first-blob")
+            .text(&["Adding"])
+            .reasoning(&["Check"])
+            .encrypted_reasoning("r_2", "second-blob")
+            .tool_call("call_1", "test__add_numbers", &[r#"{"a":3,"b":5}"#])
+            .build(),
+        llm_response().text(&["8"]).build(),
+    ];
+
+    let model = "anthropic:claude-opus-4-6";
+    let result = test_agent()
+        .model(model.parse()?)
+        .llm_responses(&llm_responses)
+        .user_text("3+5 = ?")
+        .run_with_context()
+        .await?;
+
+    let replayed =
+        result.contexts[1].messages().iter().find(|message| matches!(message, ChatMessage::Assistant { .. }));
+    let Some(ChatMessage::Assistant { model: author, content, .. }) = replayed else {
+        panic!("expected the reply in the next request: {:?}", result.contexts[1].messages());
+    };
+    let expected = assistant_message()
+        .reasoning("Plan")
+        .encrypted_reasoning("r_1", "first-blob")
+        .text("Adding")
+        .reasoning("Check")
+        .encrypted_reasoning("r_2", "second-blob")
+        .tool_call("call_1", "test__add_numbers", r#"{"a":3,"b":5}"#)
+        .build_reply();
+    assert_eq!(content, &expected);
+    assert_eq!(author.as_ref().map(ToString::to_string).as_deref(), Some(model));
+    let recorded = result.messages.iter().find_map(|event| match event {
+        AgentEvent::Context(ContextEvent::ReplyRecorded { message }) => Some(message),
+        _ => None,
+    });
+    assert_eq!(recorded, replayed, "the recorded reply is the one replayed");
     Ok(())
 }
 
@@ -476,18 +521,16 @@ async fn test_reasoning_content_is_saved_in_context_after_tool_call() -> Result<
     let contexts = result.contexts;
     let second_context = contexts.get(1).expect("expected second LLM request context");
 
-    let assistant_with_tool_call = second_context.messages().iter().find(|message| {
-        matches!(
-            message,
-            ChatMessage::Assistant { tool_calls, .. } if !tool_calls.is_empty()
-        )
+    let assistant_with_tool_call = second_context.messages().iter().find_map(|message| match message {
+        ChatMessage::Assistant { content, .. } if content.tool_calls().next().is_some() => Some(content),
+        _ => None,
     });
 
-    let Some(ChatMessage::Assistant { reasoning, .. }) = assistant_with_tool_call else {
+    let Some(content) = assistant_with_tool_call else {
         panic!("expected assistant message with tool call");
     };
 
-    assert_eq!(reasoning.summary_text.as_deref(), Some("internal plan"));
+    assert_eq!(content.reasoning(), "internal plan");
 
     Ok(())
 }

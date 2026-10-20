@@ -7,7 +7,7 @@ use std::fs;
 use std::path::Path;
 
 use aether_core::events::{AgentEvent, ContextEvent, StreamState, TurnOutcome};
-use llm::{ContentBlock, MessageId};
+use llm::{ChatMessage, ContentBlock, MessageId};
 use tempfile::TempDir;
 
 use crate::model::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent};
@@ -40,6 +40,17 @@ pub fn user_message_with(content: Vec<ContentBlock>) -> SessionEvent {
 /// The complete assistant text for `message_id`.
 pub fn assistant_text(message_id: &str, text: &str) -> SessionEvent {
     SessionEvent::Agent(AgentEvent::text(message_id, text, StreamState::Complete))
+}
+
+/// The agent recording a text-only assistant reply into its context.
+pub fn assistant_reply(message_id: &str, text: &str) -> SessionEvent {
+    recorded_reply(llm::testing::assistant_message().id(message_id).text(text).build())
+}
+
+/// The agent recording `message` into its context; build one with
+/// [`llm::testing::assistant_message`].
+pub fn recorded_reply(message: ChatMessage) -> SessionEvent {
+    SessionEvent::Agent(AgentEvent::Context(ContextEvent::ReplyRecorded { message }))
 }
 
 /// A streaming assistant text chunk, which is never persisted.

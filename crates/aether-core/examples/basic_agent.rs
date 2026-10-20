@@ -113,6 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     | TurnEvent::LlmCallStarted { .. }
                     | TurnEvent::LlmCallEnded { .. },
                 )
+                | AgentEvent::Context(ContextEvent::ReplyRecorded { .. })
                 | AgentEvent::SessionUsage(_),
             ) => {}
             Some(AgentEvent::Model(ModelEvent::Switched { previous, new })) => {

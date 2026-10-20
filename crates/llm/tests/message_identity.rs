@@ -1,17 +1,18 @@
-use llm::{AssistantReasoning, ChatMessage, Context, MessageId};
+use llm::{AssistantContent, AssistantReply, ChatMessage, Context, MessageId};
 
 #[test]
 fn context_serialization_and_projections_preserve_identity() {
     let mut context = Context::new(vec![ChatMessage::system("system"), ChatMessage::user("user")], vec![]);
     let assistant_id = MessageId::new();
-    context.push_assistant_turn(assistant_id.clone(), "answer", AssistantReasoning::default(), vec![]);
+    let reply = AssistantReply::from(vec![AssistantContent::text("answer")]);
+    context.push_assistant_turn(assistant_id.clone(), None, reply, vec![]);
     let ids = |context: &Context| context.messages().iter().map(ChatMessage::message_id).collect::<Vec<_>>();
     let expected = ids(&context);
     assert_eq!(expected[0], None, "system prompts carry no identity");
     assert_eq!(expected.iter().flatten().collect::<std::collections::HashSet<_>>().len(), 2);
     let json = serde_json::to_string(&context).unwrap();
     let loaded: Context = serde_json::from_str(&json).unwrap();
-    for projected in [loaded, context.clone(), context.filter_encrypted_reasoning(None)] {
+    for projected in [loaded, context.clone()] {
         assert_eq!(ids(&projected), expected);
     }
     let summary_id = MessageId::new();

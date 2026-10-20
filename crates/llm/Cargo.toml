@@ -71,6 +71,7 @@ llm-codegen = { package = "aether-llm-codegen", path = "../llm-codegen", version
 
 [dev-dependencies]
 aether-doctest = { path = "../doctest" }
+aws-smithy-eventstream = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }

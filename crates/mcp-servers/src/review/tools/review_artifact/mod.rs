@@ -23,33 +23,26 @@ use utils::artifact_review::{ArtifactReviewDecision, ArtifactReviewElicitationMe
 const REVIEW: &str = "review";
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "format", rename_all = "lowercase", deny_unknown_fields)]
-#[schemars(inline, extend("type" = "object"))]
-pub enum ReviewArtifactInput {
-    Markdown {
-        source: DocumentSource,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        title: Option<String>,
-    },
-    Html {
-        source: HtmlSource,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        title: Option<String>,
-    },
+#[serde(deny_unknown_fields)]
+pub struct ReviewArtifactInput {
+    pub format: ArtifactFormat,
+    pub source: ArtifactSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+#[schemars(inline)]
+pub enum ArtifactFormat {
+    Markdown,
+    Html,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 #[schemars(inline)]
-pub enum DocumentSource {
-    File { path: PathBuf },
-    Content { content: String },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
-#[schemars(inline)]
-pub enum HtmlSource {
+pub enum ArtifactSource {
     File { path: PathBuf },
     Content { content: String },
     Url { url: String },
@@ -106,16 +99,17 @@ impl ReviewArtifactTool {
         input: ReviewArtifactInput,
         context: &RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, String> {
-        let mode = match &input {
-            ReviewArtifactInput::Markdown { .. } => ElicitationMode::Form,
-            ReviewArtifactInput::Html { .. } => ElicitationMode::Url,
+        let ReviewArtifactInput { format, source, title } = input;
+        let mode = match format {
+            ArtifactFormat::Markdown => ElicitationMode::Form,
+            ArtifactFormat::Html => ElicitationMode::Url,
         };
         if !supports_elicitation(context, mode) {
             return Err(format!("Reviewing an artifact requires user input, but {CLIENT_CANNOT_ELICIT}."));
         }
 
-        let (params, review_token) = match input {
-            ReviewArtifactInput::Markdown { source, title } => {
+        let (params, review_token) = match format {
+            ArtifactFormat::Markdown => {
                 let (markdown, path) = self.load_document(source).await?;
                 let label = path.as_ref().map(|path| path.display().to_string());
                 let meta = ArtifactReviewElicitationMeta::new(
@@ -125,7 +119,7 @@ impl ReviewArtifactTool {
                 );
                 (build_elicitation_form(&meta, &review_subject(title.as_deref(), label.as_deref()))?, None)
             }
-            ReviewArtifactInput::Html { source, title } => {
+            ArtifactFormat::Html => {
                 let (artifact, label) = self.load_html(source).await?;
                 let subject = review_subject(title.as_deref(), label.as_deref());
                 let server = ReviewServer::start(artifact)
@@ -174,26 +168,29 @@ impl ReviewArtifactTool {
         Json(output).into_call_tool_result()
     }
 
-    async fn load_document(&self, source: DocumentSource) -> Result<(String, Option<PathBuf>), String> {
+    async fn load_document(&self, source: ArtifactSource) -> Result<(String, Option<PathBuf>), String> {
         match source {
-            DocumentSource::File { path } => {
+            ArtifactSource::File { path } => {
                 let path = resolve_path(&self.root_dir, path);
                 Ok((read_file(&path).await?, Some(path)))
             }
-            DocumentSource::Content { content } => Ok((content, None)),
+            ArtifactSource::Content { content } => Ok((content, None)),
+            ArtifactSource::Url { url } => {
+                Err(format!("Markdown artifacts cannot be reviewed from a URL ({url}); pass a file or content."))
+            }
         }
     }
 
-    async fn load_html(&self, source: HtmlSource) -> Result<(Artifact, Option<String>), String> {
+    async fn load_html(&self, source: ArtifactSource) -> Result<(Artifact, Option<String>), String> {
         match source {
-            HtmlSource::File { path } => {
+            ArtifactSource::File { path } => {
                 let path = resolve_path(&self.root_dir, path);
                 let html = read_file(&path).await?;
                 let assets = path.parent().map(Path::to_path_buf);
                 Ok((Artifact::Document { html, assets }, Some(path.display().to_string())))
             }
-            HtmlSource::Content { content } => Ok((Artifact::Document { html: content, assets: None }, None)),
-            HtmlSource::Url { url } => {
+            ArtifactSource::Content { content } => Ok((Artifact::Document { html: content, assets: None }, None)),
+            ArtifactSource::Url { url } => {
                 let parsed = Url::parse(&url).map_err(|error| format!("Invalid artifact URL {url}: {error}"))?;
                 if !matches!(parsed.scheme(), "http" | "https") {
                     return Err(format!("Artifact URL must use http or https: {url}"));
@@ -293,11 +290,8 @@ mod tests {
             "refs must be inlined so providers that ignore $defs still see the shape: {text}"
         );
         assert_eq!(schema["type"], "object", "providers require an object at the root: {text}");
-    }
-
-    #[test]
-    fn markdown_cannot_be_reviewed_from_a_url() {
-        let input = serde_json::json!({"format": "markdown", "source": {"type": "url", "url": "http://127.0.0.1:1/"}});
-        assert!(serde_json::from_value::<ReviewArtifactInput>(input).is_err());
+        for combinator in ["oneOf", "anyOf", "allOf"] {
+            assert!(schema.get(combinator).is_none(), "Anthropic rejects a top-level {combinator}: {text}");
+        }
     }
 }

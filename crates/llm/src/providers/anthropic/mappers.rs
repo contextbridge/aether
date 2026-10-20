@@ -1,126 +1,81 @@
 use super::types::{
-    CacheControl, Content, ContentBlock as AnthropicContentBlock, ImageSource, Message, Request, Role, Thinking, Tool,
+    ContentBlock as AnthropicContentBlock, ImageSource, Message, OutputConfig, Request, Role, Thinking,
+    ThinkingDisplay, Tool,
 };
-use crate::{ChatMessage, ContentBlock, Context, LlmError, ReasoningEffort, Result, ToolDefinition, tool_result_parts};
+use crate::assistant_reply::replays_encrypted_reasoning;
+use crate::providers::turns::{Speaker, Turns};
+use crate::reasoning::ReasoningControl;
+use crate::{
+    AssistantContent, AssistantReply, ChatMessage, ContentBlock, Context, EncryptedReasoningContent, LlmError,
+    LlmModel, ReasoningEffort, Result, ToolDefinition, tool_result_parts,
+};
+use tracing::debug;
 
 /// Tokens requested when no `max_tokens` is set via `ModelSettings`. Anthropic requires
 /// `max_tokens` on every request, so a value is always sent.
 const DEFAULT_MAX_TOKENS: u32 = 16_384;
 
-pub(crate) fn build_request(model: &str, context: &Context) -> Result<Request> {
-    let (system_prompt, messages) = map_messages(context.messages())?;
+pub(crate) fn build_request(identity: Option<&LlmModel>, context: &Context) -> Result<Request> {
+    let (mut system, mut turns) = map_messages(identity, context.messages())?;
+    if let Some(block) = system.last_mut() {
+        block.mark_cache_breakpoint();
+    }
+    if let Some(block) = turns.last_turn_mut().and_then(|blocks| blocks.last_mut()) {
+        block.mark_cache_breakpoint();
+    }
     let settings = context.model_settings();
 
     let mut request = Request {
-        model: model.to_string(),
-        messages,
+        messages: turns.into_turns().map(|(speaker, content)| Message { role: role(speaker), content }).collect(),
         max_tokens: settings.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
         temperature: settings.temperature,
         top_p: settings.top_p,
-        system: system_prompt
-            .map(|text| vec![AnthropicContentBlock::Text { text, cache_control: Some(CacheControl::ephemeral()) }]),
+        system: (!system.is_empty()).then_some(system),
         tools: (!context.tools().is_empty()).then(|| map_tools(context.tools())),
-        stream: true,
         thinking: None,
-        cache_control: Some(CacheControl::ephemeral()),
+        output_config: None,
     };
-
-    if context.reasoning_effort() == ReasoningEffort::Disabled {
-        request.thinking = Some(Thinking::Disabled);
-    } else if let Some(budget_tokens) = effort_to_budget_tokens(context.reasoning_effort()) {
-        request.thinking = Some(Thinking::Enabled { budget_tokens });
-        // Anthropic requires temperature and top_p to be unset when thinking is enabled
-        request.temperature = None;
-        request.top_p = None;
-        // max_tokens must be > budget_tokens
-        if request.max_tokens <= budget_tokens {
-            request.max_tokens = budget_tokens + 1024;
-        }
-    }
-
+    let control = identity.map(LlmModel::reasoning_control).unwrap_or_default();
+    apply_reasoning(&mut request, control, context.reasoning_effort());
     Ok(request)
 }
 
-pub(crate) fn map_messages(messages: &[ChatMessage]) -> Result<(Option<String>, Vec<Message>)> {
-    let mut system_prompt = None;
-    let mut anthropic_messages = Vec::new();
+fn map_messages(
+    identity: Option<&LlmModel>,
+    messages: &[ChatMessage],
+) -> Result<(Vec<AnthropicContentBlock>, Turns<AnthropicContentBlock>)> {
+    let mut system = Vec::new();
+    let mut turns = Turns::default();
 
     for message in messages {
         match message {
-            ChatMessage::System { content, .. } => {
-                system_prompt = Some(content.clone());
-            }
-            ChatMessage::User { content, .. } => {
-                anthropic_messages.push(Message { role: Role::User, content: map_content_blocks(content)? });
-            }
-            ChatMessage::Assistant { content, tool_calls, .. } => {
-                if tool_calls.is_empty() {
-                    anthropic_messages.push(Message { role: Role::Assistant, content: Content::Text(content.clone()) });
-                } else {
-                    let mut blocks = if content.is_empty() {
-                        Vec::new()
-                    } else {
-                        vec![AnthropicContentBlock::Text { text: content.clone(), cache_control: None }]
-                    };
-
-                    for tool_call in tool_calls {
-                        let input: serde_json::Value = serde_json::from_str(&tool_call.arguments)
-                            .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
-
-                        blocks.push(AnthropicContentBlock::ToolUse {
-                            id: tool_call.id.clone(),
-                            name: tool_call.name.clone(),
-                            input,
-                        });
-                    }
-
-                    anthropic_messages.push(Message { role: Role::Assistant, content: Content::Blocks(blocks) });
-                }
+            ChatMessage::System { content, .. } => system.push(AnthropicContentBlock::text(content.as_str())),
+            ChatMessage::User { content, .. } => turns.user(map_content_blocks(content)?),
+            ChatMessage::Assistant { model, content, .. } => {
+                let replay_thinking = replays_encrypted_reasoning(model.as_ref(), identity);
+                turns.assistant(map_assistant_content(content, replay_thinking));
             }
             ChatMessage::ToolCallResult(result) => {
                 let (tool_use_id, content, is_error) = tool_result_parts(result);
-                anthropic_messages.push(Message {
-                    role: Role::User,
-                    content: Content::Blocks(vec![AnthropicContentBlock::ToolResult {
-                        tool_use_id: tool_use_id.to_string(),
-                        content: content.to_string(),
-                        is_error: Some(is_error),
-                    }]),
+                turns.tool_result(AnthropicContentBlock::ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: content.to_string(),
+                    is_error: Some(is_error),
+                    cache_control: None,
                 });
             }
             ChatMessage::Error { .. } | ChatMessage::Summary { .. } => {
-                let note = message.as_user_note();
-                anthropic_messages.extend(note.map(|note| Message { role: Role::User, content: Content::Text(note) }));
+                if let Some(note) = message.as_user_note() {
+                    turns.user(vec![AnthropicContentBlock::text(note)]);
+                }
             }
         }
     }
 
-    Ok((system_prompt, anthropic_messages))
+    Ok((system, turns))
 }
 
-fn map_content_blocks(parts: &[ContentBlock]) -> Result<Content> {
-    let mut blocks = Vec::with_capacity(parts.len());
-    for p in parts {
-        match p {
-            ContentBlock::Text { text } => {
-                blocks.push(AnthropicContentBlock::Text { text: text.clone(), cache_control: None });
-            }
-            ContentBlock::Image { data, mime_type } => blocks.push(AnthropicContentBlock::Image {
-                source: ImageSource {
-                    source_type: "base64".to_string(),
-                    media_type: mime_type.clone(),
-                    data: data.clone(),
-                },
-            }),
-            ContentBlock::Audio { .. } => {
-                return Err(LlmError::UnsupportedContent("Anthropic does not support audio input".into()));
-            }
-        }
-    }
-    Ok(Content::Blocks(blocks))
-}
-
-pub(crate) fn map_tools(tools: &[ToolDefinition]) -> Vec<Tool> {
+fn map_tools(tools: &[ToolDefinition]) -> Vec<Tool> {
     tools
         .iter()
         .map(|tool| Tool {
@@ -131,141 +86,127 @@ pub(crate) fn map_tools(tools: &[ToolDefinition]) -> Vec<Tool> {
         .collect()
 }
 
-fn effort_to_budget_tokens(effort: ReasoningEffort) -> Option<u32> {
-    Some(match effort {
-        ReasoningEffort::Default | ReasoningEffort::Disabled => return None,
-        // 1024 is the Anthropic API's minimum thinking budget.
-        ReasoningEffort::Minimal | ReasoningEffort::Low => 1024,
+fn apply_reasoning(request: &mut Request, control: ReasoningControl, effort: ReasoningEffort) {
+    match effort {
+        ReasoningEffort::Default => {}
+        ReasoningEffort::Disabled => request.thinking = Some(Thinking::Disabled),
+        effort => {
+            // Anthropic rejects custom sampling when thinking is on.
+            request.temperature = None;
+            request.top_p = None;
+            request.thinking = Some(match control {
+                ReasoningControl::Effort => Thinking::Adaptive { display: ThinkingDisplay::Summarized },
+                ReasoningControl::Budget | ReasoningControl::BudgetAndEffort => {
+                    let budget_tokens = budget_tokens(effort);
+                    if request.max_tokens <= budget_tokens {
+                        request.max_tokens = budget_tokens + 1024;
+                    }
+                    Thinking::Enabled { budget_tokens }
+                }
+            });
+            let effort = if effort == ReasoningEffort::Minimal { ReasoningEffort::Low } else { effort };
+            request.output_config = (control != ReasoningControl::Budget).then_some(OutputConfig { effort });
+        }
+    }
+}
+
+fn budget_tokens(effort: ReasoningEffort) -> u32 {
+    match effort {
         ReasoningEffort::Medium => 4096,
         ReasoningEffort::High | ReasoningEffort::Xhigh => 10240,
         ReasoningEffort::Max => 32768,
-    })
+        // 1024 is the Anthropic API's minimum thinking budget.
+        _ => 1024,
+    }
+}
+
+fn map_assistant_content(reply: &AssistantReply, replay_thinking: bool) -> Vec<AnthropicContentBlock> {
+    let blocks = reply.blocks();
+    let replay_thinking =
+        replay_thinking && blocks.iter().any(|block| !matches!(block, AssistantContent::Reasoning { .. }));
+    blocks
+        .iter()
+        .filter_map(|block| match block {
+            AssistantContent::Text { text } => (!text.is_empty()).then(|| AnthropicContentBlock::text(text.as_str())),
+            AssistantContent::ToolCall(call) => Some(AnthropicContentBlock::tool_use(call)),
+            AssistantContent::Reasoning { encrypted: Some(encrypted), .. } if replay_thinking => {
+                thinking_block(encrypted)
+            }
+            AssistantContent::Reasoning { .. } => None,
+        })
+        .collect()
+}
+
+fn thinking_block(encrypted: &EncryptedReasoningContent) -> Option<AnthropicContentBlock> {
+    serde_json::from_str(&encrypted.content)
+        .inspect_err(|error| debug!(%error, "Dropping reasoning that is not an Anthropic thinking block"))
+        .ok()
+}
+
+fn role(speaker: Speaker) -> Role {
+    match speaker {
+        Speaker::User => Role::User,
+        Speaker::Assistant => Role::Assistant,
+    }
+}
+
+fn map_content_blocks(parts: &[ContentBlock]) -> Result<Vec<AnthropicContentBlock>> {
+    parts
+        .iter()
+        .map(|part| match part {
+            ContentBlock::Text { text } => Ok(AnthropicContentBlock::text(text.as_str())),
+            ContentBlock::Image { data, mime_type } => Ok(AnthropicContentBlock::Image {
+                source: ImageSource {
+                    source_type: "base64".to_string(),
+                    media_type: mime_type.clone(),
+                    data: data.clone(),
+                },
+                cache_control: None,
+            }),
+            ContentBlock::Audio { .. } => {
+                Err(LlmError::UnsupportedContent("Anthropic does not support audio input".into()))
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AssistantReasoning;
-    use crate::tools::ToolCallRequest;
+    use crate::MessageId;
     use crate::types::IsoString;
+    use serde_json::json;
 
     #[test]
-    fn test_map_simple_user_message() {
-        let messages = vec![ChatMessage::user("Hello")];
-
-        let (system, mapped) = map_messages(&messages).unwrap();
-        assert_eq!(system, None);
-        assert_eq!(mapped.len(), 1);
-        assert_eq!(mapped[0].role, Role::User);
-        if let Content::Blocks(blocks) = &mapped[0].content {
-            assert_eq!(blocks.len(), 1);
-            assert!(matches!(blocks[0], AnthropicContentBlock::Text { .. }));
-        } else {
-            panic!("Expected Blocks content");
-        }
-    }
-
-    #[test]
-    fn test_map_user_message_with_image() {
-        let messages = vec![ChatMessage::User {
-            message_id: crate::MessageId::new(),
-            content: vec![
-                ContentBlock::text("Look at this:"),
-                ContentBlock::Image { data: "aW1hZ2VkYXRh".to_string(), mime_type: "image/png".to_string() },
-            ],
-            timestamp: IsoString::now(),
-        }];
-
-        let (_system, mapped) = map_messages(&messages).unwrap();
-        assert_eq!(mapped.len(), 1);
-        if let Content::Blocks(blocks) = &mapped[0].content {
-            assert_eq!(blocks.len(), 2);
-            assert!(matches!(blocks[0], AnthropicContentBlock::Text { .. }));
-            assert!(matches!(blocks[1], AnthropicContentBlock::Image { .. }));
-        } else {
-            panic!("Expected Blocks content for multimodal message");
-        }
-    }
-
-    #[test]
-    fn test_map_user_image_serialization() {
-        let content =
-            map_content_blocks(&[ContentBlock::Image { data: "aW1n".to_string(), mime_type: "image/png".to_string() }])
-                .unwrap();
-        let json = serde_json::to_value(&content).unwrap();
-        let block = &json[0];
-        assert_eq!(block["type"], "image");
-        assert_eq!(block["source"]["type"], "base64");
-        assert_eq!(block["source"]["media_type"], "image/png");
-        assert_eq!(block["source"]["data"], "aW1n");
-    }
-
-    #[test]
-    fn test_map_user_message_with_audio_errors() {
-        let result = map_content_blocks(&[
-            ContentBlock::text("Listen:"),
-            ContentBlock::Audio { data: "YXVkaW8=".to_string(), mime_type: "audio/wav".to_string() },
+    fn images_are_sent_as_base64_sources() {
+        let context = user_context(vec![
+            ContentBlock::text("Look at this:"),
+            ContentBlock::Image { data: "aW1n".to_string(), mime_type: "image/png".to_string() },
         ]);
-        assert!(matches!(result, Err(LlmError::UnsupportedContent(_))));
+
+        let request = serde_json::to_value(build_request(None, &context).unwrap()).unwrap();
+
+        assert_eq!(
+            request["messages"][0]["content"],
+            json!([
+                { "type": "text", "text": "Look at this:" },
+                {
+                    "type": "image",
+                    "source": { "type": "base64", "media_type": "image/png", "data": "aW1n" },
+                    "cache_control": { "type": "ephemeral" }
+                }
+            ])
+        );
     }
 
     #[test]
-    fn test_map_user_message_audio_only_errors() {
-        let result = map_content_blocks(&[ContentBlock::Audio {
-            data: "YXVkaW8=".to_string(),
-            mime_type: "audio/wav".to_string(),
-        }]);
-        assert!(matches!(result, Err(LlmError::UnsupportedContent(_))));
-    }
+    fn audio_input_is_unsupported() {
+        let audio = ContentBlock::Audio { data: "YXVkaW8=".to_string(), mime_type: "audio/wav".to_string() };
+        for content in [vec![ContentBlock::text("Listen:"), audio.clone()], vec![audio]] {
+            let result = build_request(None, &user_context(content));
 
-    #[test]
-    fn test_map_system_message() {
-        let messages = vec![ChatMessage::system("You are a helpful assistant"), ChatMessage::user("Hello")];
-
-        let (system, mapped) = map_messages(&messages).unwrap();
-        assert_eq!(system, Some("You are a helpful assistant".to_string()));
-        assert_eq!(mapped.len(), 1);
-    }
-
-    #[test]
-    fn test_map_assistant_with_tool_calls() {
-        let messages = vec![ChatMessage::Assistant {
-            message_id: crate::MessageId::new(),
-            content: "I'll help you with that".to_string(),
-            reasoning: AssistantReasoning::default(),
-            timestamp: IsoString::now(),
-            tool_calls: vec![ToolCallRequest {
-                id: "call_1".to_string(),
-                name: "search".to_string(),
-                arguments: r#"{"query": "test"}"#.to_string(),
-            }],
-        }];
-
-        let (_system, mapped) = map_messages(&messages).unwrap();
-        assert_eq!(mapped.len(), 1);
-        assert_eq!(mapped[0].role, Role::Assistant);
-
-        if let Content::Blocks(blocks) = &mapped[0].content {
-            assert_eq!(blocks.len(), 2);
-            assert!(matches!(blocks[0], AnthropicContentBlock::Text { .. }));
-            assert!(matches!(blocks[1], AnthropicContentBlock::ToolUse { .. }));
-        } else {
-            panic!("Expected blocks content");
+            assert!(matches!(result, Err(LlmError::UnsupportedContent(_))));
         }
-    }
-
-    #[test]
-    fn test_map_tools() {
-        let tools = vec![ToolDefinition::new(
-            "search",
-            "Search for information",
-            serde_json::from_str(r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#).unwrap(),
-        )];
-
-        let mapped = map_tools(&tools);
-        assert_eq!(mapped.len(), 1);
-        assert_eq!(mapped[0].name, "search");
-        assert_eq!(mapped[0].description, "Search for information");
     }
 
     #[test]
@@ -311,5 +252,12 @@ mod tests {
         // Test CacheControl struct deserialization
         let cache_control: CacheControl = serde_json::from_str("{\"type\":\"ephemeral\"}").unwrap();
         assert_eq!(cache_control.cache_type, CacheType::Ephemeral);
+    }
+
+    fn user_context(content: Vec<ContentBlock>) -> Context {
+        Context::new(
+            vec![ChatMessage::User { message_id: MessageId::new(), content, timestamp: IsoString::now() }],
+            vec![],
+        )
     }
 }

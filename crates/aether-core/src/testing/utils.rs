@@ -47,6 +47,7 @@ pub fn content_events(events: Vec<AgentEvent>) -> Vec<AgentEvent> {
                         | TurnEvent::LlmCallStarted { .. }
                         | TurnEvent::LlmCallEnded { .. }
                 ) | AgentEvent::Tool(ToolEvent::DefinitionsUpdated { .. })
+                    | AgentEvent::Context(ContextEvent::ReplyRecorded { .. })
             )
         })
         .collect()
