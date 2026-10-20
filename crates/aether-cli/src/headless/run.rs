@@ -149,7 +149,8 @@ fn event_kind(msg: &AgentEvent) -> Option<CliEventKind> {
             MessageEvent::Text { is_complete: false, .. } | MessageEvent::Thought { is_complete: false, .. },
         )
         | AgentEvent::Turn(TurnEvent::UserMessageInserted { .. } | TurnEvent::UserMessageDiscarded { .. })
-        | AgentEvent::Tool(ToolEvent::InputStarted { .. } | ToolEvent::InputDelta { .. }) => None,
+        | AgentEvent::Tool(ToolEvent::InputStarted { .. } | ToolEvent::InputDelta { .. })
+        | AgentEvent::Context(ContextEvent::ReplyRecorded { .. }) => None,
     }
 }
 

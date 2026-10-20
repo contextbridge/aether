@@ -146,7 +146,7 @@ pub(crate) fn map_agent_event_to_notification(msg: &AgentEvent, mode: Notificati
                     .content(vec![ContentBlock::from(format!("Error: {error}"))]),
             ))
         }
-        AgentEvent::Context(ContextEvent::Cleared)
+        AgentEvent::Context(ContextEvent::Cleared | ContextEvent::ReplyRecorded { .. })
         | AgentEvent::Turn(
             TurnEvent::Started { .. }
             | TurnEvent::UserMessageInserted { .. }

@@ -136,7 +136,8 @@ fn format_text(message: &AgentEvent) -> Option<String> {
         | AgentEvent::Tool(
             ToolEvent::InputStarted { .. } | ToolEvent::InputDelta { .. } | ToolEvent::DefinitionsUpdated { .. },
         )
-        | AgentEvent::Message(MessageEvent::Text { .. } | MessageEvent::Thought { .. }) => None,
+        | AgentEvent::Message(MessageEvent::Text { .. } | MessageEvent::Thought { .. })
+        | AgentEvent::Context(ContextEvent::ReplyRecorded { .. }) => None,
     }
 }
 

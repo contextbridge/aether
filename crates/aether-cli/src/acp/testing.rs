@@ -19,7 +19,9 @@ use acp_utils::testing::{TestPeer, initialize_request};
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
 use aether_core::core::{AgentBuilder, AgentDeps, Prompt};
-use aether_core::events::{AgentEvent, AgentObserver, Command, MessageEvent, TurnOutcome, UserCommand};
+use aether_core::events::{
+    AgentEvent, AgentObserver, Command, ContextEvent, MessageEvent, StreamState, TurnOutcome, UserCommand,
+};
 use aether_core::mcp::{McpBuilder, McpCatalog, mcp};
 use aether_core::testing::ready_catalog;
 use aether_project::AgentCatalog;
@@ -516,7 +518,16 @@ impl AcpTestHarness {
     }
 
     pub fn append_stored_agent_turn(&self, session_id: &str, text: &str) {
-        self.append_stored_agent_text(session_id, text);
+        let message_id = MessageId::new();
+        let reply = llm::testing::assistant_message().id(message_id.as_str()).text(text).build();
+        self.append_stored_event(
+            session_id,
+            &SessionEvent::Agent(AgentEvent::text(message_id.as_str(), text, StreamState::Complete)),
+        );
+        self.append_stored_event(
+            session_id,
+            &SessionEvent::Agent(AgentEvent::Context(ContextEvent::ReplyRecorded { message: reply })),
+        );
         self.append_stored_event(session_id, &SessionEvent::Agent(AgentEvent::turn_ended(TurnOutcome::Completed)));
     }
 
@@ -959,7 +970,7 @@ fn conversation_texts(context: &Context) -> Vec<String> {
         .iter()
         .filter_map(|message| match message {
             ChatMessage::User { content, .. } => llm::ContentBlock::first_text(content).map(str::to_string),
-            ChatMessage::Assistant { content, .. } if !content.is_empty() => Some(content.clone()),
+            ChatMessage::Assistant { content, .. } => Some(content.text()).filter(|text| !text.is_empty()),
             _ => None,
         })
         .collect()
