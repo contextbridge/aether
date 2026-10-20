@@ -74,8 +74,8 @@ impl Transcript {
         self.tool_calls(name).count()
     }
 
-    /// Session-wide token totals and estimated cost, sub-agents' calls included,
-    /// from the last usage event, or zeroed totals if no usage was recorded.
+    /// Session-wide token totals and estimated cost from the last usage event,
+    /// or zeroed totals if no usage was recorded.
     pub fn session_usage(&self) -> SessionUsageTotals {
         self.events
             .iter()
@@ -161,20 +161,6 @@ mod tests {
         assert!(!transcript.tool_called("write"));
         assert_eq!(transcript.tool_call_count("bash"), 1);
         assert_eq!(transcript.tool_call_count("read"), 0);
-    }
-
-    #[test]
-    fn tool_call_arguments_json_parses_arguments() {
-        let call = ToolCall { name: "bash", arguments: r#"{"command":"pwd"}"# };
-
-        assert_eq!(call.arguments_json().unwrap(), serde_json::json!({ "command": "pwd" }));
-    }
-
-    #[test]
-    fn tool_call_arguments_json_returns_error_for_invalid_json() {
-        let call = ToolCall { name: "bash", arguments: "not json" };
-
-        assert!(call.arguments_json().is_err());
     }
 
     #[test]

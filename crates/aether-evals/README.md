@@ -49,21 +49,6 @@ The CI profile writes JUnit XML to `target/nextest/ci/junit.xml`.
 
 Aether Evals' fake-agent coverage should use normal test names. Reserve `_eval` suffixes for real provider-backed evals selected by the repository `evals` nextest group.
 
-## Core API
-
-- `Task::new(prompt)` describes the problem to solve.
-- `Agent::run(task)` streams `AgentEvent`s from an agent's configured execution environment.
-- `Transcript::from_stream(agent.run(task))` collects the stream into a `Transcript`.
-- `Transcript::default()` plus `transcript.add(message)` supports observing each streamed message while building the transcript manually.
-- `Container::builder(image).start(&workspace)` starts a caller-owned Docker container with the workspace mounted at `/workspace`.
-- `DockerAgent::new(container, command)` runs an in-container command whose stdout is newline-delimited `AgentEvent` JSON.
-- `Container::exec_shell(script)` runs follow-up assertions or test commands in the same caller-owned container.
-- `eval_env_vars(&model)` forwards only the credentials for the providers `model` runs on into Docker, and sets `AETHER_HOME=/root/.aether`.
-- `Workspace::empty()` creates an isolated temp directory.
-- `Workspace::from_dir(path)` copies fixture directory contents into a temp directory.
-- `Workspace::from_git(GitSpec { source, start_commit, gold_commit, subdir, branch, diff_exclude })` checks out the start commit on `branch` (default `main`), fetched from `GitSource::Url(url)` or `GitSource::Bundle(path)` (see `create_git_bundle`). The workspace holds only the start commit's history, with no remote, so the agent can't find the gold commit in git. That history is fetched in full, blobs included, so reuse one bundle across runs for large repositories.
-- `Transcript` exposes collected agent messages and tool-call helpers. `transcript.session_usage()` returns the session's cumulative tokens and estimated cost, sub-agents' calls included, from the last usage event.
-
 ## Dockerized evals
 
 Aether Evals mounts the workspace root at `/workspace` and runs the command from the effective eval cwd. It does not wrap or alter prompts; the command receives the caller-provided prompt verbatim:
@@ -76,18 +61,13 @@ Stdout is reserved for `AgentEvent` JSON lines and must end with a terminal even
 
 ```rust
 use aether_evals::{
-    Agent, CONTAINER_AETHER_HOME, Container, DockerAgent, GitSource, GitSpec, Image, Task, Transcript, Workspace,
+    Agent, CONTAINER_AETHER_HOME, Container, DockerAgent, GitFixture, GitSource, GitSpec, Image, Task, Transcript,
     eval_env_vars,
 };
 
-let workspace = Workspace::from_git(GitSpec {
-    source: GitSource::Url("https://github.com/example/repo".to_string()),
-    start_commit: "start_sha".to_string(),
-    gold_commit: "gold_sha".to_string(),
-    subdir: None,
-    branch: None,
-    diff_exclude: Vec::new(),
-})?;
+let source = GitSource::Url("https://github.com/example/repo".to_string());
+let fixture = GitFixture::fetch(GitSpec::new(source, "start_sha", "gold_sha"))?;
+let workspace = fixture.workspace()?;
 let container = Container::builder(Image::new("aether-sandbox", "latest"))
     .with_env_vars(eval_env_vars(&"anthropic:claude-opus-4-6".parse()?))
     .with_ephemeral_mount(CONTAINER_AETHER_HOME)
@@ -154,25 +134,28 @@ Judge faults — transient LLM stream failures, unparseable responses, criterion
 
 `Workspace` removes its temporary directory when dropped. To retain files for debugging, call `workspace.persist()` and remove the returned path manually when finished.
 
-For git-backed workspaces, `workspace.capture_agent_diff()?` returns the agent's commits, staged and unstaged edits, and untracked files since the start commit, and errors if git can't read the repository. `workspace.reference_diff()` returns the start-to-gold diff, computed before the gold commit was discarded. Both are `None` for workspaces without a start commit, and both leave out `diff_exclude` pathspecs such as `*pnpm-lock.yaml`.
+For a workspace checked out from a `GitFixture`, `fixture.agent_diff(&workspace)?` returns the agent's commits, staged and unstaged edits, and untracked files since the start commit, and errors if git can't read the repository. Compare it with `fixture.reference_diff()`; both leave out `diff_exclude` pathspecs such as `*pnpm-lock.yaml`.
 
 ## Git-backed evals
 
 ```rust
-use aether_evals::{Agent, GitSource, GitSpec, Task, Transcript, Workspace};
+use aether_evals::{Agent, GitFixture, GitSource, GitSpec, Task, Transcript};
 
-let workspace = Workspace::from_git(GitSpec {
-    source: GitSource::Bundle("fixtures/repo.bundle".into()),
-    start_commit: "start_sha".to_string(),
-    gold_commit: "gold_sha".to_string(),
+let fixture = GitFixture::fetch(GitSpec {
     subdir: Some("packages/api".into()),
-    branch: None,
     diff_exclude: vec!["*pnpm-lock.yaml".to_string()],
+    ..GitSpec::new(GitSource::Bundle("fixtures/repo.bundle".into()), "start_sha", "gold_sha")
 })?;
-let prompt = "Make the test pass";
-let transcript = Transcript::from_stream(agent.run(Task::new(prompt))).await?;
 
-assert!(transcript.tool_called("bash"));
+for _trial in 0..3 {
+    let workspace = fixture.workspace()?;
+    let prompt = "Make the test pass";
+    let transcript = Transcript::from_stream(agent.run(Task::new(prompt))).await?;
+
+    assert!(transcript.tool_called("bash"));
+    let agent_diff = fixture.agent_diff(&workspace)?;
+    println!("agent: {:?}, reference: {:?}", agent_diff.stats, fixture.reference_diff().stats);
+}
 ```
 
 ## Development

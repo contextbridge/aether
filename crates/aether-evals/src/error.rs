@@ -23,6 +23,20 @@ pub enum WorkspaceError {
         source: std::io::Error,
     },
 
+    #[error("failed to resolve path '{}': {source}", path.display())]
+    ResolvePath {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to copy the git index '{}': {source}", path.display())]
+    CopyIndex {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("git workspace command failed: {0}")]
     Git(#[from] GitError),
 

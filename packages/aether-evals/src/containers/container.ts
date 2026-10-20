@@ -1,10 +1,10 @@
 import { addAbortListener } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, posix } from "node:path";
+import { posix } from "node:path";
 import { createInterface } from "node:readline";
-import { PassThrough } from "node:stream";
+import { PassThrough, type Readable } from "node:stream";
+import { text } from "node:stream/consumers";
 import { finished } from "node:stream/promises";
+import type Dockerode from "dockerode";
 import {
   GenericContainer,
   getContainerRuntimeClient,
@@ -14,6 +14,7 @@ import {
 import { abortedError, runCommand, throwIfAborted } from "@aether-agent/sdk";
 import { Image } from "./image.js";
 import { AetherCommandExitError, AetherEvalError } from "../errors.js";
+import { createTempDir, removeDir } from "../fs.js";
 import type { Workspace } from "../workspace.js";
 
 const STARTUP_TIMEOUT_MS = 60_000;
@@ -43,16 +44,39 @@ export interface ContainerStreamingOptions extends ContainerExecOptions {
   onStderr?: (chunk: string) => void;
 }
 
+export interface ContainerRuntime {
+  exec(options: RuntimeExecOptions): Promise<RuntimeExec>;
+  stop(): Promise<void>;
+}
+
+export interface RuntimeExecOptions {
+  command: string[];
+  cwd: string;
+  env: Record<string, string>;
+  user?: string;
+}
+
+export interface RuntimeExec {
+  stdout: Readable;
+  stderr: Readable;
+  detach(error?: Error): void;
+  exitCode(): Promise<number | undefined>;
+}
+
 export class Container {
   readonly workspaceRoot = WORKSPACE_ROOT;
   readonly cwd: string;
+  private readonly runtime: ContainerRuntime;
   private readonly user?: string;
   private readonly ephemeralTempdirs: string[];
 
-  constructor(
-    private readonly container: StartedTestContainer,
-    options: { cwd: string; user?: string; ephemeralTempdirs?: string[] },
-  ) {
+  constructor(options: {
+    runtime: ContainerRuntime;
+    cwd: string;
+    user?: string;
+    ephemeralTempdirs?: string[];
+  }) {
+    this.runtime = options.runtime;
     this.cwd = options.cwd;
     this.user = options.user;
     this.ephemeralTempdirs = options.ephemeralTempdirs ?? [];
@@ -63,19 +87,10 @@ export class Container {
   }
 
   async exec(options: ContainerExecOptions): Promise<ExecOutput> {
-    const result = await abortable(
-      this.container.exec(options.command, {
-        workingDir: options.cwd ?? this.cwd,
-        env: options.env,
-        user: options.user ?? this.user,
-      }),
-      options.signal,
-    );
-    return {
-      exitCode: result.exitCode,
-      stdout: result.stdout,
-      stderr: result.stderr,
-    };
+    using exec = await this.startExec(options);
+    const stdout = await text(exec.stdout);
+    const { exitCode, stderr } = await exec.wait();
+    return { exitCode, stdout, stderr };
   }
 
   async execShell(script: string): Promise<ExecOutput> {
@@ -87,96 +102,71 @@ export class Container {
   async *execStreaming(
     options: ContainerStreamingOptions,
   ): AsyncIterable<string> {
-    throwIfAborted(options.signal);
-    const client = await getContainerRuntimeClient();
-    const dockerode = client.container.dockerode;
-    const dockerodeContainer = dockerode.getContainer(this.container.getId());
-    const env = Object.entries(options.env ?? {}).map(
-      ([key, value]) => `${key}=${value}`,
-    );
-    const exec = await dockerodeContainer.exec({
-      Cmd: options.command,
-      AttachStdout: true,
-      AttachStderr: true,
-      WorkingDir: options.cwd ?? this.cwd,
-      Env: env.length > 0 ? env : undefined,
-      User: options.user ?? this.user,
-    });
-
-    const stream = await exec.start({ hijack: true, stdin: false });
-    const stdoutPipe = new PassThrough();
-    const stderrPipe = new PassThrough();
-    const attached = finished(stream, {
-      readable: true,
-      writable: false,
-      cleanup: true,
-    }).then(
-      () => {
-        stdoutPipe.end();
-        stderrPipe.end();
-      },
-      (error: Error) => {
-        stdoutPipe.destroy(error);
-        stderrPipe.destroy(error);
-        throw error;
-      },
-    );
-    const drained = Promise.all([
-      attached,
-      finished(stdoutPipe, { cleanup: true }),
-      finished(stderrPipe, { cleanup: true }),
-    ]);
-    void drained.catch(() => {});
-    let stderr = "";
-    stderrPipe.setEncoding("utf8");
-    stderrPipe.on("data", (chunk: string) => {
-      stderr += chunk;
-      options.onStderr?.(chunk);
-    });
-
-    dockerodeContainer.modem.demuxStream(stream, stdoutPipe, stderrPipe);
-
-    using abortCleanup = options.signal
-      ? addAbortListener(options.signal, () => {
-          stream.destroy(abortedError());
-        })
-      : undefined;
-    void abortCleanup;
-
+    using exec = await this.startExec(options);
+    const lines = createInterface({ input: exec.stdout, crlfDelay: Infinity });
     try {
-      const lines = createInterface({ input: stdoutPipe, crlfDelay: Infinity });
-      try {
-        for await (const line of lines) {
-          yield line;
-        }
-      } finally {
-        lines.close();
-      }
-      await drained;
-      const status = await exec.inspect();
-      if (
-        status.Running ||
-        status.ExitCode === null ||
-        status.ExitCode === undefined
-      ) {
-        throw new AetherEvalError(
-          "command_exit_missing",
-          `agent command completed without an exit code.\nstderr:\n${stderr}`,
-        );
-      }
-      if (status.ExitCode !== 0) {
-        throw new AetherCommandExitError(status.ExitCode, stderr);
+      for await (const line of lines) {
+        yield line;
       }
     } finally {
-      stream.destroy();
-      stdoutPipe.destroy();
-      stderrPipe.destroy();
+      lines.close();
+    }
+    const { exitCode, stderr } = await exec.wait();
+    if (exitCode !== 0) {
+      throw new AetherCommandExitError(exitCode, stderr);
     }
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
-    await this.container.stop().catch(() => {});
+    await this.runtime.stop().catch(() => {});
     await removeTempdirs(this.ephemeralTempdirs);
+  }
+
+  private async startExec(
+    options: ContainerStreamingOptions,
+  ): Promise<RunningExec> {
+    throwIfAborted(options.signal);
+    const exec = await this.runtime.exec({
+      command: options.command,
+      cwd: options.cwd ?? this.cwd,
+      env: options.env ?? {},
+      user: options.user ?? this.user,
+    });
+
+    const drained = Promise.all([
+      finished(exec.stdout, { cleanup: true }),
+      finished(exec.stderr, { cleanup: true }),
+    ]);
+    void drained.catch(() => {});
+    let stderr = "";
+    exec.stderr.setEncoding("utf8");
+    exec.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+      options.onStderr?.(chunk);
+    });
+
+    const abortCleanup = options.signal
+      ? addAbortListener(options.signal, () => exec.detach(abortedError()))
+      : undefined;
+
+    return {
+      stdout: exec.stdout,
+      async wait() {
+        await drained;
+        const exitCode = await exec.exitCode();
+        if (exitCode === undefined) {
+          throw new AetherEvalError(
+            "command_exit_missing",
+            `command completed without an exit code.\nstderr:\n${stderr}`,
+          );
+        }
+        return { exitCode, stderr };
+      },
+      [Symbol.dispose]() {
+        abortCleanup?.[Symbol.dispose]();
+        exec.detach();
+      },
+    };
   }
 }
 
@@ -236,10 +226,11 @@ export class ContainerBuilder {
 
   async start(workspace: Workspace): Promise<Container> {
     const ephemeralTempdirs: string[] = [];
+    let container: Container | undefined;
     try {
       const ephemeralBindMounts: BindMount[] = [];
       for (const target of this.ephemeralMounts) {
-        const source = await mkdtemp(join(tmpdir(), "aether-eval-mount-"));
+        const source = await createTempDir("aether-eval-mount-");
         ephemeralTempdirs.push(source);
         ephemeralBindMounts.push({ source, target, mode: "rw" });
       }
@@ -247,18 +238,19 @@ export class ContainerBuilder {
       const cwd = workspace.relativeCwd
         ? posix.join(WORKSPACE_ROOT, workspace.relativeCwd)
         : WORKSPACE_ROOT;
-      const container = await createGenericContainer(this.image);
+      const client = await getContainerRuntimeClient();
+      const generic = await createGenericContainer(this.image);
       if (this.privileged) {
-        container.withPrivilegedMode();
+        generic.withPrivilegedMode();
       }
       if (this.imageEntrypoint) {
-        container.withCommand(["sleep", "infinity"]);
+        generic.withCommand(["sleep", "infinity"]);
       } else {
-        container
+        generic
           .withEntrypoint(["/bin/sh"])
           .withCommand(["-c", "sleep infinity"]);
       }
-      const started = await container
+      const started = await generic
         .withWorkingDir(cwd)
         .withEnvironment(withSafeWorkspace(this.envVars))
         .withBindMounts([
@@ -270,26 +262,88 @@ export class ContainerBuilder {
         .withStartupTimeout(STARTUP_TIMEOUT_MS)
         .start();
 
-      const result = new Container(started, {
+      container = new Container({
+        runtime: dockerRuntime(
+          started,
+          client.container.dockerode.getContainer(started.getId()),
+        ),
         cwd,
         user: this.user,
         ephemeralTempdirs,
       });
       if (this.user) {
-        await grantAccess(result, [
+        await grantAccess(container, this.user, [
           workspace.rootPath,
           ...ephemeralTempdirs,
-        ]).catch(async (err) => {
-          await result[Symbol.asyncDispose]();
-          throw err;
-        });
+        ]);
       }
-      return result;
+      return container;
     } catch (err) {
-      await removeTempdirs(ephemeralTempdirs);
+      await (container
+        ? container[Symbol.asyncDispose]()
+        : removeTempdirs(ephemeralTempdirs));
       throw err;
     }
   }
+}
+
+interface RunningExec extends Disposable {
+  stdout: Readable;
+  wait(): Promise<{ exitCode: number; stderr: string }>;
+}
+
+function dockerRuntime(
+  started: StartedTestContainer,
+  docker: Dockerode.Container,
+): ContainerRuntime {
+  return {
+    async exec({ command, cwd, env, user }) {
+      const vars = Object.entries(env).map(([key, value]) => `${key}=${value}`);
+      const exec = await docker.exec({
+        Cmd: command,
+        AttachStdout: true,
+        AttachStderr: true,
+        WorkingDir: cwd,
+        Env: vars.length > 0 ? vars : undefined,
+        User: user,
+      });
+      const stream = await exec.start({ hijack: true, stdin: false });
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      void finished(stream, {
+        readable: true,
+        writable: false,
+        cleanup: true,
+      }).then(
+        () => {
+          stdout.end();
+          stderr.end();
+        },
+        (error: Error) => {
+          stdout.destroy(error);
+          stderr.destroy(error);
+        },
+      );
+      docker.modem.demuxStream(stream, stdout, stderr);
+
+      return {
+        stdout,
+        stderr,
+        detach(error) {
+          stream.destroy(error);
+          stdout.destroy(error);
+          stderr.destroy(error);
+        },
+        async exitCode() {
+          const status = await exec.inspect();
+          return status.Running ? undefined : (status.ExitCode ?? undefined);
+        },
+      };
+    },
+    async stop() {
+      await started.stop();
+    },
+  };
 }
 
 async function createGenericContainer(image: Image): Promise<GenericContainer> {
@@ -341,19 +395,13 @@ function withSafeWorkspace(
 
 async function grantAccess(
   container: Container,
+  user: string,
   paths: string[],
 ): Promise<void> {
   const hostUid = process.getuid?.();
   if (process.platform !== "linux" || hostUid === undefined) return;
 
-  const id = await container.exec({ command: ["id", "-u"] });
-  if (id.exitCode !== 0) {
-    throw new AetherEvalError(
-      "configuration_error",
-      `could not resolve the container user's UID:\n${id.stderr}`,
-    );
-  }
-  const uid = Number(id.stdout.trim());
+  const uid = await containerUid(container, user);
   if (uid === hostUid) return;
 
   const acl = `u:${uid}:rwX,d:u:${uid}:rwx,d:u:${hostUid}:rwx`;
@@ -367,17 +415,23 @@ async function grantAccess(
   });
 }
 
-function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) return promise;
-  if (signal.aborted) return Promise.reject(abortedError());
-  return new Promise<T>((resolve, reject) => {
-    const listener = addAbortListener(signal, () => reject(abortedError()));
-    promise.then(resolve, reject).finally(() => listener[Symbol.dispose]());
-  });
+async function containerUid(
+  container: Container,
+  user: string,
+): Promise<number> {
+  const [name = ""] = user.split(":");
+  if (/^\d+$/.test(name)) return Number(name);
+
+  const id = await container.exec({ command: ["id", "-u"], user, cwd: "/" });
+  if (id.exitCode !== 0) {
+    throw new AetherEvalError(
+      "configuration_error",
+      `could not resolve the container user's UID:\n${id.stderr}`,
+    );
+  }
+  return Number(id.stdout.trim());
 }
 
 async function removeTempdirs(tempdirs: string[]): Promise<void> {
-  await Promise.all(
-    tempdirs.map((path) => rm(path, { recursive: true, force: true })),
-  );
+  await Promise.all(tempdirs.map(removeDir));
 }
