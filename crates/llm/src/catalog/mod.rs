@@ -3,6 +3,8 @@
 use crate::providers::local::discovery::discover_local_models;
 use crate::reasoning::ReasoningControl;
 use crate::{ReasoningDisabledSupport, ReasoningEffort};
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
@@ -191,6 +193,28 @@ impl FromStr for LlmModel {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (provider, model_id) = s.split_once(':').unwrap_or((s, ""));
         Self::parse_for(provider.parse()?, model_id)
+    }
+}
+
+impl Serialize for LlmModel {
+    fn serialize<T: Serializer>(&self, serializer: T) -> Result<T::Ok, T::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for LlmModel {
+    fn deserialize<T: Deserializer<'de>>(deserializer: T) -> Result<Self, T::Error> {
+        String::deserialize(deserializer)?.parse().map_err(de::Error::custom)
+    }
+}
+
+impl JsonSchema for LlmModel {
+    fn schema_name() -> Cow<'static, str> {
+        "LlmModel".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({ "type": "string", "description": "A `provider:model` identifier." })
     }
 }
 

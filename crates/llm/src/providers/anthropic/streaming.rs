@@ -1,7 +1,7 @@
 use super::types::{ContentBlock, ContentBlockDeltaData, ContentBlockStartData, StreamEvent, Usage};
 use crate::providers::response_stream::StreamAssembler;
 use crate::{LlmError, LlmResponse, ProviderError, Result, StopReason};
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use tracing::debug;
 
 pub(crate) fn decode_messages<T: AsRef<[u8]>>()
@@ -14,7 +14,7 @@ pub(crate) fn decode_messages<T: AsRef<[u8]>>()
 struct MessagesDecoder {
     message_id: String,
     usage: Usage,
-    thinking: BTreeMap<u32, ContentBlock>,
+    thinking: HashMap<u32, ContentBlock>,
 }
 
 impl MessagesDecoder {
@@ -35,15 +35,15 @@ impl MessagesDecoder {
                 self.usage = start.message.usage.unwrap_or_default();
                 None
             }
-            StreamEvent::ContentBlockStart(data) => match data.content_block {
-                ContentBlockStartData::ToolUse { id, name } => Some(turn.start_tool(data.index, id, name)),
+            StreamEvent::ContentBlockStart(start) => match start.content_block {
+                ContentBlockStartData::ToolUse { id, name } => Some(turn.start_tool(start.index, id, name)),
                 ContentBlockStartData::Thinking => {
                     let block = ContentBlock::Thinking { thinking: String::new(), signature: String::new() };
-                    self.thinking.insert(data.index, block);
+                    self.thinking.insert(start.index, block);
                     None
                 }
-                ContentBlockStartData::RedactedThinking { data: redacted } => {
-                    self.thinking.insert(data.index, ContentBlock::RedactedThinking { data: redacted });
+                ContentBlockStartData::RedactedThinking { data } => {
+                    self.thinking.insert(start.index, ContentBlock::RedactedThinking { data });
                     None
                 }
                 ContentBlockStartData::Other => None,
@@ -68,7 +68,10 @@ impl MessagesDecoder {
                     turn.append_tool_args(&data.index, partial_json)
                 }
             },
-            StreamEvent::ContentBlockStop(data) => turn.complete_tool(&data.index),
+            StreamEvent::ContentBlockStop(data) => match self.thinking.remove(&data.index) {
+                Some(block) => self.replayable(&block)?,
+                None => turn.complete_tool(&data.index),
+            },
             StreamEvent::MessageDelta(data) => {
                 if let Some(stop_reason) = data.delta.stop_reason.as_deref() {
                     turn.stop(map_anthropic_stop_reason(stop_reason));
@@ -80,7 +83,7 @@ impl MessagesDecoder {
             }
             StreamEvent::MessageStop => {
                 turn.allow_eof();
-                self.replayable_reasoning()?
+                None
             }
             StreamEvent::Error(data) => {
                 return Err(map_anthropic_stream_error(&data.error.error_type, &data.error.message));
@@ -91,16 +94,11 @@ impl MessagesDecoder {
         Ok(response.into_iter().collect())
     }
 
-    fn replayable_reasoning(&self) -> Result<Option<LlmResponse>> {
-        let blocks: Vec<&ContentBlock> = self
-            .thinking
-            .values()
-            .filter(|block| !matches!(block, ContentBlock::Thinking { signature, .. } if signature.is_empty()))
-            .collect();
-        if blocks.is_empty() {
+    fn replayable(&self, block: &ContentBlock) -> Result<Option<LlmResponse>> {
+        if matches!(block, ContentBlock::Thinking { signature, .. } if signature.is_empty()) {
             return Ok(None);
         }
-        let content = serde_json::to_string(&blocks)?;
+        let content = serde_json::to_string(block)?;
         Ok(Some(LlmResponse::EncryptedReasoning { id: self.message_id.clone(), content }))
     }
 }

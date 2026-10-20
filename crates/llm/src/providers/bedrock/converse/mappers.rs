@@ -11,7 +11,8 @@ use std::{collections::HashMap, fmt::Display, result};
 
 use crate::providers::turns::{Speaker, Turns};
 use crate::{
-    ChatMessage, ContentBlock, LlmError, Result, ToolCallError, ToolCallResult, ToolDefinition, tool_result_parts,
+    AssistantContent, AssistantReply, ChatMessage, ContentBlock, LlmError, Result, ToolCallError, ToolCallRequest,
+    ToolCallResult, ToolDefinition, tool_result_parts,
 };
 
 fn bedrock_err(e: impl Display) -> LlmError {
@@ -29,9 +30,7 @@ pub(super) fn map_messages(
         match message {
             ChatMessage::System { content, .. } => system.push(SystemContentBlock::Text(content.clone())),
             ChatMessage::User { content, .. } => turns.user(map_user_content(content)?),
-            ChatMessage::Assistant { content, tool_calls, .. } => {
-                turns.assistant(map_assistant_content(content, tool_calls)?);
-            }
+            ChatMessage::Assistant { content, .. } => turns.assistant(map_assistant_content(content)?),
             ChatMessage::ToolCallResult(result) => {
                 turns.tool_result(BedrockContentBlock::ToolResult(build_tool_result_block(result)?));
             }
@@ -124,24 +123,26 @@ fn mime_to_image_format(mime_type: &str) -> ImageFormat {
     }
 }
 
-fn map_assistant_content(content: &str, tool_calls: &[crate::ToolCallRequest]) -> Result<Vec<BedrockContentBlock>> {
-    if tool_calls.is_empty() {
-        return Ok(vec![BedrockContentBlock::Text(content.to_string())]);
-    }
+fn map_assistant_content(reply: &AssistantReply) -> Result<Vec<BedrockContentBlock>> {
+    reply
+        .blocks()
+        .iter()
+        .filter_map(|block| match block {
+            AssistantContent::Text { text } => (!text.is_empty()).then(|| Ok(BedrockContentBlock::Text(text.clone()))),
+            AssistantContent::ToolCall(call) => Some(map_tool_use(call)),
+            AssistantContent::Reasoning { .. } => None,
+        })
+        .collect()
+}
 
-    let text = (!content.is_empty()).then(|| Ok(BedrockContentBlock::Text(content.to_string())));
-    let tool_uses = tool_calls.iter().map(|tool_call| {
-        let input: serde_json::Value = serde_json::from_str(&tool_call.arguments)
-            .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
-        let tool_use = ToolUseBlock::builder()
-            .tool_use_id(&tool_call.id)
-            .name(&tool_call.name)
-            .input(json_to_document(&input))
-            .build()
-            .map_err(bedrock_err)?;
-        Ok(BedrockContentBlock::ToolUse(tool_use))
-    });
-    text.into_iter().chain(tool_uses).collect()
+fn map_tool_use(call: &ToolCallRequest) -> Result<BedrockContentBlock> {
+    let tool_use = ToolUseBlock::builder()
+        .tool_use_id(&call.id)
+        .name(&call.name)
+        .input(json_to_document(&call.input_json()))
+        .build()
+        .map_err(bedrock_err)?;
+    Ok(BedrockContentBlock::ToolUse(tool_use))
 }
 
 fn build_tool_result_block(result: &result::Result<ToolCallResult, ToolCallError>) -> Result<ToolResultBlock> {

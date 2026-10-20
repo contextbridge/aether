@@ -137,9 +137,9 @@ pub(crate) fn map_messages(
             ChatMessage::User { content, .. } => {
                 Some(CompatibleChatMessage::User { content: map_user_content(content)? })
             }
-            ChatMessage::Assistant { content, reasoning, tool_calls, .. } => {
-                let openai_tool_calls: Vec<_> = tool_calls
-                    .iter()
+            ChatMessage::Assistant { content, .. } => {
+                let openai_tool_calls: Vec<_> = content
+                    .tool_calls()
                     .map(|call| ToolCall::Function {
                         id: call.id.clone(),
                         function: FunctionCall { name: call.name.clone(), arguments: call.arguments.clone() },
@@ -149,15 +149,16 @@ pub(crate) fn map_messages(
                 let has_tool_calls = !openai_tool_calls.is_empty();
                 let tool_calls = has_tool_calls.then_some(openai_tool_calls);
 
-                let reasoning_content = if reasoning.summary_text.is_some() {
-                    reasoning.summary_text.clone()
+                let summary = content.reasoning();
+                let reasoning_content = if !summary.is_empty() {
+                    Some(summary)
                 } else if has_tool_calls && tool_call_reasoning_placeholder {
                     Some(".".to_string())
                 } else {
                     None
                 };
 
-                Some(CompatibleChatMessage::Assistant { content: content.clone(), reasoning_content, tool_calls })
+                Some(CompatibleChatMessage::Assistant { content: content.text(), reasoning_content, tool_calls })
             }
             ChatMessage::ToolCallResult(result) => {
                 let (tool_call_id, content, _) = tool_result_parts(result);
@@ -232,24 +233,13 @@ pub(crate) struct FunctionCallDelta {
 mod tests {
     use super::*;
     use crate::providers::openai::chat::{ChatRequestPolicy, build_chat_request};
-    use crate::types::IsoString;
-    use crate::{AssistantReasoning, Context, MessageId, ModelSettings, ToolCallRequest, ToolDefinition};
+    use crate::testing::assistant_message;
+    use crate::{Context, ModelSettings, ToolDefinition};
 
     fn assistant_with_tool_call(reasoning_content: Option<&str>) -> ChatMessage {
-        ChatMessage::Assistant {
-            message_id: MessageId::new(),
-            content: String::new(),
-            reasoning: AssistantReasoning {
-                summary_text: reasoning_content.map(ToString::to_string),
-                encrypted_content: None,
-            },
-            timestamp: IsoString::now(),
-            tool_calls: vec![ToolCallRequest {
-                id: "call_1".to_string(),
-                name: "test__tool".to_string(),
-                arguments: "{\"path\":\"src/main.rs\"}".to_string(),
-            }],
-        }
+        let message =
+            reasoning_content.map_or_else(assistant_message, |summary| assistant_message().reasoning(summary));
+        message.tool_call("call_1", "test__tool", "{\"path\":\"src/main.rs\"}").build()
     }
 
     fn context_with_assistant_message(message: ChatMessage) -> crate::Context {

@@ -364,8 +364,9 @@ mod tests {
         let context = Context::new(
             vec![
                 assistant_message()
+                    .model("bedrock:openai.gpt-5.5")
                     .text("previous answer")
-                    .encrypted_reasoning("reasoning-id", "bedrock:openai.gpt-5.5", "opaque-for-another-model")
+                    .encrypted_reasoning("reasoning-id", "opaque-for-another-model")
                     .build(),
             ],
             vec![],
@@ -439,9 +440,9 @@ mod tests {
             responses,
             llm_response()
                 .reasoning(&["Plan"])
+                .encrypted_reasoning("msg_123", r#"{"type":"thinking","thinking":"Plan","signature":"sig"}"#)
                 .tool_call("toolu_1", "search", &["{}"])
                 .usage(10, 30)
-                .encrypted_reasoning("msg_123", r#"[{"type":"thinking","thinking":"Plan","signature":"sig"}]"#)
                 .build_with_stop_reason(StopReason::ToolCalls)
         );
     }
@@ -462,7 +463,8 @@ mod tests {
             vec![
                 ChatMessage::user("Hello"),
                 assistant_message()
-                    .encrypted_reasoning(id, &format!("bedrock:{DEFAULT_MODEL}"), content)
+                    .model(&format!("bedrock:{DEFAULT_MODEL}"))
+                    .encrypted_reasoning(id, content)
                     .tool_call("toolu_1", "search", "{}")
                     .build(),
                 tool_result("toolu_1", "search", "{}", "found"),

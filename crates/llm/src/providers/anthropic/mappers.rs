@@ -2,10 +2,12 @@ use super::types::{
     ContentBlock as AnthropicContentBlock, ImageSource, Message, OutputConfig, Request, Role, Thinking,
     ThinkingDisplay, Tool,
 };
+use crate::assistant_reply::replays_encrypted_reasoning;
+use crate::providers::turns::{Speaker, Turns};
 use crate::reasoning::ReasoningControl;
 use crate::{
-    AssistantReasoning, ChatMessage, ContentBlock, Context, LlmError, LlmModel, ReasoningEffort, Result,
-    ToolCallRequest, ToolDefinition, tool_result_parts,
+    AssistantContent, AssistantReply, ChatMessage, ContentBlock, Context, EncryptedReasoningContent, LlmError,
+    LlmModel, ReasoningEffort, Result, ToolDefinition, tool_result_parts,
 };
 use tracing::debug;
 
@@ -14,18 +16,17 @@ use tracing::debug;
 const DEFAULT_MAX_TOKENS: u32 = 16_384;
 
 pub(crate) fn build_request(identity: Option<&LlmModel>, context: &Context) -> Result<Request> {
-    let context = context.filter_encrypted_reasoning(identity);
-    let (mut system, mut messages) = map_messages(context.messages())?;
+    let (mut system, mut turns) = map_messages(identity, context.messages())?;
     if let Some(block) = system.last_mut() {
         block.mark_cache_breakpoint();
     }
-    if let Some(block) = messages.last_mut().and_then(|message| message.content.last_mut()) {
+    if let Some(block) = turns.last_turn_mut().and_then(|blocks| blocks.last_mut()) {
         block.mark_cache_breakpoint();
     }
     let settings = context.model_settings();
 
     let mut request = Request {
-        messages,
+        messages: turns.into_turns().map(|(speaker, content)| Message { role: role(speaker), content }).collect(),
         max_tokens: settings.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
         temperature: settings.temperature,
         top_p: settings.top_p,
@@ -39,41 +40,39 @@ pub(crate) fn build_request(identity: Option<&LlmModel>, context: &Context) -> R
     Ok(request)
 }
 
-fn map_messages(messages: &[ChatMessage]) -> Result<(Vec<AnthropicContentBlock>, Vec<Message>)> {
+fn map_messages(
+    identity: Option<&LlmModel>,
+    messages: &[ChatMessage],
+) -> Result<(Vec<AnthropicContentBlock>, Turns<AnthropicContentBlock>)> {
     let mut system = Vec::new();
-    let mut mapped = Vec::new();
+    let mut turns = Turns::default();
 
     for message in messages {
         match message {
             ChatMessage::System { content, .. } => system.push(AnthropicContentBlock::text(content.as_str())),
-            ChatMessage::User { content, .. } => {
-                mapped.push(Message { role: Role::User, content: map_content_blocks(content)? });
-            }
-            ChatMessage::Assistant { content, tool_calls, reasoning, .. } => {
-                mapped.push(map_assistant_message(content, tool_calls, reasoning));
+            ChatMessage::User { content, .. } => turns.user(map_content_blocks(content)?),
+            ChatMessage::Assistant { model, content, .. } => {
+                let replay_thinking = replays_encrypted_reasoning(model.as_ref(), identity);
+                turns.assistant(map_assistant_content(content, replay_thinking));
             }
             ChatMessage::ToolCallResult(result) => {
                 let (tool_use_id, content, is_error) = tool_result_parts(result);
-                push_tool_result(
-                    &mut mapped,
-                    AnthropicContentBlock::ToolResult {
-                        tool_use_id: tool_use_id.to_string(),
-                        content: content.to_string(),
-                        is_error: Some(is_error),
-                        cache_control: None,
-                    },
-                );
+                turns.tool_result(AnthropicContentBlock::ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: content.to_string(),
+                    is_error: Some(is_error),
+                    cache_control: None,
+                });
             }
             ChatMessage::Error { .. } | ChatMessage::Summary { .. } => {
-                let note = message.as_user_note();
-                mapped.extend(
-                    note.map(|note| Message { role: Role::User, content: vec![AnthropicContentBlock::text(note)] }),
-                );
+                if let Some(note) = message.as_user_note() {
+                    turns.user(vec![AnthropicContentBlock::text(note)]);
+                }
             }
         }
     }
 
-    Ok((system, mapped))
+    Ok((system, turns))
 }
 
 fn map_tools(tools: &[ToolDefinition]) -> Vec<Tool> {
@@ -121,44 +120,33 @@ fn budget_tokens(effort: ReasoningEffort) -> u32 {
     }
 }
 
-fn map_assistant_message(content: &str, tool_calls: &[ToolCallRequest], reasoning: &AssistantReasoning) -> Message {
-    let has_answer = !content.is_empty() || !tool_calls.is_empty();
-    let mut blocks = if has_answer { replay_thinking(reasoning) } else { Vec::new() };
-    if !content.is_empty() {
-        blocks.push(AnthropicContentBlock::text(content));
-    }
-    blocks.extend(tool_calls.iter().map(|tool_call| {
-        AnthropicContentBlock::ToolUse {
-            id: tool_call.id.clone(),
-            name: tool_call.name.clone(),
-            input: serde_json::from_str(&tool_call.arguments)
-                .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new())),
-        }
-    }));
-    Message { role: Role::Assistant, content: blocks }
+fn map_assistant_content(reply: &AssistantReply, replay_thinking: bool) -> Vec<AnthropicContentBlock> {
+    let blocks = reply.blocks();
+    let replay_thinking =
+        replay_thinking && blocks.iter().any(|block| !matches!(block, AssistantContent::Reasoning { .. }));
+    blocks
+        .iter()
+        .filter_map(|block| match block {
+            AssistantContent::Text { text } => (!text.is_empty()).then(|| AnthropicContentBlock::text(text.as_str())),
+            AssistantContent::ToolCall(call) => Some(AnthropicContentBlock::tool_use(call)),
+            AssistantContent::Reasoning { encrypted: Some(encrypted), .. } if replay_thinking => {
+                thinking_block(encrypted)
+            }
+            AssistantContent::Reasoning { .. } => None,
+        })
+        .collect()
 }
 
-fn replay_thinking(reasoning: &AssistantReasoning) -> Vec<AnthropicContentBlock> {
-    let Some(encrypted) = &reasoning.encrypted_content else {
-        return Vec::new();
-    };
-    match serde_json::from_str::<Vec<AnthropicContentBlock>>(&encrypted.content) {
-        Ok(blocks) => blocks.into_iter().filter(AnthropicContentBlock::is_thinking).collect(),
-        Err(error) => {
-            debug!(%error, "Dropping reasoning that is not Messages API thinking");
-            Vec::new()
-        }
-    }
+fn thinking_block(encrypted: &EncryptedReasoningContent) -> Option<AnthropicContentBlock> {
+    serde_json::from_str(&encrypted.content)
+        .inspect_err(|error| debug!(%error, "Dropping reasoning that is not an Anthropic thinking block"))
+        .ok()
 }
 
-fn push_tool_result(messages: &mut Vec<Message>, result: AnthropicContentBlock) {
-    match messages.last_mut() {
-        Some(Message { role: Role::User, content })
-            if content.last().is_some_and(AnthropicContentBlock::is_tool_result) =>
-        {
-            content.push(result);
-        }
-        _ => messages.push(Message { role: Role::User, content: vec![result] }),
+fn role(speaker: Speaker) -> Role {
+    match speaker {
+        Speaker::User => Role::User,
+        Speaker::Assistant => Role::Assistant,
     }
 }
 

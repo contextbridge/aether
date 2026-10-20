@@ -89,7 +89,8 @@ Define tools with JSON Schema, then feed results back after execution:
 ```rust,no_run
 use llm::types::IsoString;
 use llm::{
-    AssistantReasoning, ChatMessage, ContentBlock, Context, MessageId, ToolCallResult, ToolDefinition,
+    AssistantContent, AssistantReply, ChatMessage, ContentBlock, Context, MessageId, ToolCallRequest, ToolCallResult,
+    ToolDefinition,
 };
 
 let tools = vec![ToolDefinition::new(
@@ -113,14 +114,23 @@ let mut context = Context::new(
 
 // After streaming the response and executing the tool call,
 // feed the result back into the context:
+let arguments = r#"{"city":"Tokyo"}"#;
+let reply = AssistantReply::from(vec![
+    AssistantContent::text("Let me check the weather."),
+    AssistantContent::ToolCall(ToolCallRequest {
+        id: "call_1".into(),
+        name: "get_weather".into(),
+        arguments: arguments.into(),
+    }),
+]);
 context.push_assistant_turn(
     MessageId::new(),
-    "Let me check the weather.",
-    AssistantReasoning::default(),
+    "anthropic:claude-sonnet-4-5-20250929".parse().ok(),
+    reply,
     vec![Ok(ToolCallResult {
         id: "call_1".into(),
         name: "get_weather".into(),
-        arguments: r#"{"city":"Tokyo"}"#.into(),
+        arguments: arguments.into(),
         result: "72F, sunny".into(),
     })],
 );

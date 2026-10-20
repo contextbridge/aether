@@ -1,11 +1,10 @@
 use crate::types::IsoString;
 use crate::{
-    AssistantReasoning, ChatMessage, EncryptedReasoningContent, MessageId, ToolCallError, ToolCallRequest,
-    ToolCallResult,
+    AssistantReply, ChatMessage, LlmModel, LlmResponse, MessageId, ToolCallError, ToolCallRequest, ToolCallResult,
 };
 
 pub fn assistant_message() -> AssistantMessageBuilder {
-    AssistantMessageBuilder::default()
+    AssistantMessageBuilder { message_id: MessageId::new(), model: None, reply: AssistantReply::default() }
 }
 
 pub fn tool_result(id: &str, name: &str, arguments: &str, result: &str) -> ChatMessage {
@@ -26,49 +25,57 @@ pub fn tool_error(id: &str, name: &str, error: &str) -> ChatMessage {
     }))
 }
 
-#[derive(Default)]
+#[derive(Clone)]
 pub struct AssistantMessageBuilder {
-    content: String,
-    reasoning: AssistantReasoning,
-    tool_calls: Vec<ToolCallRequest>,
+    message_id: MessageId,
+    model: Option<LlmModel>,
+    reply: AssistantReply,
 }
 
 impl AssistantMessageBuilder {
-    pub fn text(mut self, content: &str) -> Self {
-        self.content = content.to_string();
+    pub fn id(mut self, message_id: &str) -> Self {
+        self.message_id = message_id.into();
         self
     }
 
-    pub fn tool_call(mut self, id: &str, name: &str, arguments: &str) -> Self {
-        self.tool_calls.push(ToolCallRequest {
-            id: id.to_string(),
-            name: name.to_string(),
-            arguments: arguments.to_string(),
-        });
+    pub fn model(mut self, model: &str) -> Self {
+        self.model = Some(model.parse().unwrap_or_else(|error| panic!("invalid model '{model}': {error}")));
         self
     }
 
-    pub fn reasoning_summary(mut self, summary: &str) -> Self {
-        self.reasoning.summary_text = Some(summary.to_string());
-        self
+    pub fn text(self, text: &str) -> Self {
+        self.push(&LlmResponse::text(text))
     }
 
-    pub fn encrypted_reasoning(mut self, id: &str, model: &str, content: &str) -> Self {
-        self.reasoning.encrypted_content = Some(EncryptedReasoningContent {
-            id: id.to_string(),
-            model: model.parse().unwrap_or_else(|error| panic!("invalid model '{model}': {error}")),
-            content: content.to_string(),
-        });
-        self
+    pub fn tool_call(self, id: &str, name: &str, arguments: &str) -> Self {
+        self.push(&LlmResponse::ToolRequestComplete {
+            tool_call: ToolCallRequest { id: id.to_string(), name: name.to_string(), arguments: arguments.to_string() },
+        })
+    }
+
+    pub fn reasoning(self, summary: &str) -> Self {
+        self.push(&LlmResponse::reasoning(summary))
+    }
+
+    pub fn encrypted_reasoning(self, id: &str, content: &str) -> Self {
+        self.push(&LlmResponse::encrypted_reasoning(id, content))
     }
 
     pub fn build(self) -> ChatMessage {
         ChatMessage::Assistant {
-            message_id: MessageId::new(),
-            content: self.content,
-            reasoning: self.reasoning,
+            message_id: self.message_id,
+            model: self.model,
+            content: self.reply,
             timestamp: IsoString::now(),
-            tool_calls: self.tool_calls,
         }
+    }
+
+    pub fn build_reply(self) -> AssistantReply {
+        self.reply
+    }
+
+    fn push(mut self, response: &LlmResponse) -> Self {
+        self.reply.push(response);
+        self
     }
 }

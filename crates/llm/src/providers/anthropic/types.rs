@@ -1,4 +1,4 @@
-use crate::{ReasoningEffort, TokenUsage};
+use crate::{ReasoningEffort, TokenUsage, ToolCallRequest};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -109,12 +109,8 @@ impl ContentBlock {
         Self::Text { text: text.into(), cache_control: None }
     }
 
-    pub(crate) fn is_thinking(&self) -> bool {
-        matches!(self, Self::Thinking { .. } | Self::RedactedThinking { .. })
-    }
-
-    pub(crate) fn is_tool_result(&self) -> bool {
-        matches!(self, Self::ToolResult { .. })
+    pub(crate) fn tool_use(call: &ToolCallRequest) -> Self {
+        Self::ToolUse { id: call.id.clone(), name: call.name.clone(), input: call.input_json() }
     }
 
     pub(crate) fn mark_cache_breakpoint(&mut self) {
