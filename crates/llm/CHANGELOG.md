@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.17](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.16...aether-llm-v0.9.17) - 2026-10-20
+
+### Fixed
+
+- *(aether-telemetry)* mark cache token reporting as inclusive for PostHog ([#613](https://github.com/contextbridge/aether/pull/613))
+
 ## [0.9.16](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.15...aether-llm-v0.9.16) - 2026-10-19
 
 ### Other
