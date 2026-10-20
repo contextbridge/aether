@@ -56,7 +56,7 @@ async fn test_api_error_mid_stream_does_not_add_empty_assistant_message() -> Tes
 
     // That context should only contain the user message — no empty assistant message
     let has_empty_assistant = contexts[0].messages().iter().any(|msg| match msg {
-        ChatMessage::Assistant { content, tool_calls, .. } => content.is_empty() && tool_calls.is_empty(),
+        ChatMessage::Assistant { content, .. } => content.is_empty(),
         _ => false,
     });
 

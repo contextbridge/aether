@@ -273,6 +273,6 @@ fn assistant_index(context: &Context, text: &str) -> usize {
     context
         .messages()
         .iter()
-        .position(|m| matches!(m, ChatMessage::Assistant { content, .. } if content == text))
+        .position(|m| matches!(m, ChatMessage::Assistant { content, .. } if content.text() == text))
         .unwrap_or_else(|| panic!("Expected assistant message {text:?}"))
 }

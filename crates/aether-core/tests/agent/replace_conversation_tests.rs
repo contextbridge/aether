@@ -1,9 +1,8 @@
 use aether_core::core::Prompt;
 use aether_core::events::{AgentEvent, ContextEvent};
 use aether_core::testing::{TestScenario, test_agent};
-use llm::testing::llm_response;
-use llm::types::IsoString;
-use llm::{AssistantReasoning, ChatMessage, ContentBlock};
+use llm::testing::{assistant_message, llm_response};
+use llm::{ChatMessage, ContentBlock};
 
 #[tokio::test]
 async fn replace_conversation_preserves_system_prompt_for_next_request() {
@@ -14,13 +13,7 @@ async fn replace_conversation_preserves_system_prompt_for_next_request() {
             TestScenario::new()
                 .replace_conversation(vec![
                     ChatMessage::user("old user"),
-                    ChatMessage::Assistant {
-                        message_id: "old-assistant".into(),
-                        content: "old assistant".to_string(),
-                        reasoning: AssistantReasoning::default(),
-                        timestamp: IsoString::now(),
-                        tool_calls: vec![],
-                    },
+                    assistant_message().id("old-assistant").text("old assistant").build(),
                 ])
                 .user_text("new user")
                 .wait_for_turn_end(),
@@ -36,7 +29,7 @@ async fn replace_conversation_preserves_system_prompt_for_next_request() {
         matches!(messages[1], ChatMessage::User { ref content, .. } if content == &vec![ContentBlock::text("old user")])
     );
     assert_eq!(messages[2].message_id().as_deref(), Some("old-assistant"));
-    assert!(matches!(messages[2], ChatMessage::Assistant { ref content, .. } if content == "old assistant"));
+    assert!(matches!(&messages[2], ChatMessage::Assistant { content, .. } if content.text() == "old assistant"));
     assert!(
         matches!(messages[3], ChatMessage::User { ref content, .. } if content == &vec![ContentBlock::text("new user")])
     );
