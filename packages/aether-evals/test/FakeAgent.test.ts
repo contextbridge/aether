@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -39,6 +40,18 @@ describe("FakeAgent", () => {
 
     await expect(run).rejects.toMatchObject({ code: "aborted" });
     expect(events.map(eventName)).toEqual(["message:text"]);
+  });
+
+  it("writes nothing when the run is already aborted", async () => {
+    await using ws = await Workspace.empty();
+    const agent = FakeAgent.writesFile("hello.txt", "hello").withWorkspace(ws);
+
+    const run = Transcript.fromStream(
+      agent.run(new Task("t"), { signal: AbortSignal.abort() }),
+    );
+
+    await expect(run).rejects.toMatchObject({ cause: { code: "aborted" } });
+    expect(existsSync(ws.join("hello.txt"))).toBe(false);
   });
 
   it("withToolCall() streams tool_result, text, then done", async () => {

@@ -82,6 +82,7 @@ export class FakeAgent implements Agent {
     _task: Task,
     { signal }: AgentRunOptions = {},
   ): AsyncIterable<AgentEvent> {
+    throwIfAborted(signal);
     if (this.fileWrites.length > 0 && !this.workspace) {
       throw new AetherEvalError(
         "configuration_error",
