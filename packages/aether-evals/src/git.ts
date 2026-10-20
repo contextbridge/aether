@@ -1,9 +1,9 @@
-import { copyFile, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { copyFile } from "node:fs/promises";
 import { join } from "node:path";
 import { env as processEnv } from "node:process";
 
 import { runCommand } from "@aether-agent/sdk";
+import { withTempDir } from "./fs.js";
 
 export class GitRepo {
   private constructor(readonly path: string) {}
@@ -67,29 +67,21 @@ export class GitRepo {
     );
   }
 
-  async diffWorkingTree(
+  diffWorkingTree(
     fromCommit: string,
     exclude: string[],
     signal?: AbortSignal,
   ): Promise<string> {
-    const scratch = await mkdtemp(join(tmpdir(), "aether-eval-index-"));
-    try {
-      const index = join(scratch, "index");
-      const realIndex = await git(
-        [
-          "-C",
-          this.path,
-          "rev-parse",
-          "--path-format=absolute",
-          "--git-path",
-          "index",
-        ],
-        signal,
-      );
-      await copyFile(realIndex.trim(), index).catch(() => {});
-      const env = { GIT_INDEX_FILE: index };
+    return withTempDir("aether-eval-index-", async (scratch) => {
+      const env = { GIT_INDEX_FILE: join(scratch, "index") };
+      try {
+        await copyFile(join(this.path, ".git", "index"), env.GIT_INDEX_FILE);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+        await git(["-C", this.path, "read-tree", "HEAD"], signal, env);
+      }
       await git(["-C", this.path, "add", "--all"], signal, env);
-      return await git(
+      return git(
         [
           "-C",
           this.path,
@@ -101,9 +93,7 @@ export class GitRepo {
         signal,
         env,
       );
-    } finally {
-      await rm(scratch, { recursive: true, force: true });
-    }
+    });
   }
 }
 

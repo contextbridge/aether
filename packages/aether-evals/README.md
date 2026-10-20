@@ -146,26 +146,32 @@ test("agent makes a maintainer-quality edit", async () => {
 
 ### Evaluating against a merged change
 
-`Workspace.fromGitBundle` and `Workspace.fromGitRepo` check out a start commit and grade the agent
-against a gold commit, such as the change a human merged. The workspace holds only the start commit's
-history, on `main` (or `branch`) with no remote, so the agent can't find the gold commit in git.
-`workspace.referenceDiff` is computed before the gold commit is discarded. That history is fetched in
-full, blobs included, so reuse one bundle across runs for large repositories.
+`GitFixture.fetch` fetches a start commit and a gold commit, such as the change a human merged, and
+computes `fixture.referenceDiff` between them. That history is fetched in full, blobs included, so
+fetch one fixture per task and reuse it across trials, or save it with `fixture.bundle(path)` and
+fetch from `{ bundle: path }` next time.
+
+`fixture.workspace()` checks out a fresh workspace at the start commit, on `main` (or `branch`) with no
+remote, so the agent can't find the gold commit in git.
 
 ```ts
-await using workspace = await Workspace.fromGitBundle({
-  bundlePath, // from createGitBundle({ url, startCommit, goldCommit }, bundlePath)
+await using fixture = await GitFixture.fetch({
+  source: { bundle: "fixtures/repo.bundle" }, // or { url: "https://github.com/example/repo" }
   startCommit,
   goldCommit,
   diffExclude: ["*pnpm-lock.yaml"], // left out of both diffs
 });
 
-// ... run the agent ...
+for (let trial = 0; trial < 3; trial++) {
+  await using workspace = await fixture.workspace();
 
-// Commits, staged and unstaged edits, and untracked files since the start commit. Rejects if git
-// can't read the repository.
-const agentDiff = await workspace.captureAgentDiff();
-const referenceDiff = workspace.referenceDiff;
+  // ... run the agent ...
+
+  // Commits, staged and unstaged edits, and untracked files since the start commit. Rejects if git
+  // can't read the repository.
+  const agentDiff = await fixture.agentDiff(workspace);
+  const referenceDiff = fixture.referenceDiff;
+}
 ```
 
 ### Running the image as built

@@ -44,18 +44,16 @@ export {
   ToolCall,
   turnEnded,
 } from "./transcript.js";
-export { createGitBundle, Workspace } from "./workspace.js";
-export type {
-  GitBundleSpec,
-  GitCheckoutSpec,
-  GitRepoSpec,
-  RetainedWorkspaceInfo,
-} from "./workspace.js";
+export { Workspace } from "./workspace.js";
+export type { RetainedWorkspaceInfo, WorkspaceOptions } from "./workspace.js";
+export { GitFixture } from "./gitFixture.js";
 export type {
   AgentEvent,
   ContextEvent,
   ContextUsage,
   FileDiff,
+  GitSource,
+  GitSpec,
   LlmCallOutcome,
   LlmCallPurpose,
   MessageEvent,

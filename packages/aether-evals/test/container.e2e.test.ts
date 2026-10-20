@@ -1,10 +1,8 @@
-import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { readFile } from "node:fs/promises";
+import { describe, expect, it } from "vitest";
 
 import { Container, Image, Workspace } from "../src/index.js";
+import { gitRepo } from "./gitRepo.js";
 
 describe.skipIf(!process.env.AETHER_EVALS_E2E)(
   "Container (e2e, requires Docker)",
@@ -45,12 +43,9 @@ describe.skipIf(!process.env.AETHER_EVALS_E2E)(
     });
 
     it("lets git use the workspace repository as another user", async () => {
-      const startCommit = await commitRepo();
-      await using workspace = await Workspace.fromGitRepo({
-        url: `file://${repo}`,
-        startCommit,
-        goldCommit: startCommit,
-      });
+      await using repo = gitRepo().start({ "app.txt": "start\n" });
+      const { startCommit } = await repo.spec();
+      const workspace = await repo.workspace();
       await using container = await Container.builder(
         Image.parse("alpine/git:latest"),
       )
@@ -66,28 +61,3 @@ describe.skipIf(!process.env.AETHER_EVALS_E2E)(
     });
   },
 );
-
-let repo: string;
-
-afterEach(async () => {
-  if (repo) await rm(repo, { recursive: true, force: true });
-});
-
-async function commitRepo(): Promise<string> {
-  repo = await mkdtemp(join(tmpdir(), "container-e2e-repo-"));
-  const git = (...args: string[]) =>
-    execFileSync("git", args, { cwd: repo, stdio: "pipe" }).toString().trim();
-  git("init", "--initial-branch", "main");
-  await writeFile(join(repo, "app.txt"), "start\n");
-  git("add", ".");
-  git(
-    "-c",
-    "user.email=eval@example.com",
-    "-c",
-    "user.name=Eval",
-    "commit",
-    "-m",
-    "start",
-  );
-  return git("rev-parse", "HEAD");
-}

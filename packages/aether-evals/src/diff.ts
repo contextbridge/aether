@@ -26,3 +26,7 @@ export function diffStatsFromDiff(diff: string): DiffStats {
 
   return { filesChanged, linesAdded, linesRemoved };
 }
+
+export function toGitDiff(diff: string): GitDiff {
+  return { diff, stats: diffStatsFromDiff(diff) };
+}
