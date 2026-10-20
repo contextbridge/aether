@@ -191,8 +191,9 @@ enum ReasoningOff {
 }
 
 /// Mirrors `llm::ReasoningDisabledSupport`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum ReasoningDisabledSupport {
+    #[default]
     Unsupported,
     Effort,
     Toggle,
@@ -412,8 +413,7 @@ struct ReasoningMetadata {
 #[derive(Default)]
 struct ListedReasoningOptions<'a> {
     efforts: Option<Vec<&'a str>>,
-    effort_none: bool,
-    toggle: bool,
+    disabled_support: ReasoningDisabledSupport,
     budget_tokens: bool,
 }
 
@@ -426,13 +426,17 @@ impl<'a> ListedReasoningOptions<'a> {
                     let efforts = listed.efforts.get_or_insert_with(Vec::new);
                     for value in values.iter().flatten() {
                         match value.as_str() {
-                            "none" => listed.effort_none = true,
+                            "none" => listed.disabled_support = ReasoningDisabledSupport::Effort,
                             "default" => {}
                             effort => efforts.push(effort),
                         }
                     }
                 }
-                ReasoningOption::Toggle => listed.toggle = true,
+                ReasoningOption::Toggle => {
+                    if listed.disabled_support == ReasoningDisabledSupport::Unsupported {
+                        listed.disabled_support = ReasoningDisabledSupport::Toggle;
+                    }
+                }
                 ReasoningOption::BudgetTokens => listed.budget_tokens = true,
             }
         }
@@ -563,12 +567,8 @@ fn transport_for_model(cfg: &ProviderConfig, model: &ModelData) -> Result<Option
 fn reasoning_for_model(cfg: &ProviderConfig, model: &ModelData) -> Result<ReasoningMetadata, CodegenError> {
     let listed = ListedReasoningOptions::new(&model.reasoning_options);
     let reasoning = model.reasoning.unwrap_or(false);
-    let disabled_support = if !reasoning || cfg.explicit_models.is_some() {
-        ReasoningDisabledSupport::Unsupported
-    } else if listed.effort_none {
-        ReasoningDisabledSupport::Effort
-    } else if listed.toggle {
-        ReasoningDisabledSupport::Toggle
+    let disabled_support = if reasoning && cfg.explicit_models.is_none() {
+        listed.disabled_support
     } else {
         ReasoningDisabledSupport::Unsupported
     };
@@ -579,20 +579,20 @@ fn reasoning_for_model(cfg: &ProviderConfig, model: &ModelData) -> Result<Reason
         (false, _) => ReasoningControl::Effort,
     };
 
-    let levels = if reasoning { reasoning_levels(cfg, model, listed.efforts, disabled_support)? } else { Vec::new() };
+    let levels = if reasoning { reasoning_levels(cfg, model, &listed, disabled_support)? } else { Vec::new() };
     Ok(ReasoningMetadata { levels, disabled_support, control })
 }
 
 fn reasoning_levels(
     cfg: &ProviderConfig,
     model: &ModelData,
-    efforts: Option<Vec<&str>>,
+    listed: &ListedReasoningOptions<'_>,
     disabled_support: ReasoningDisabledSupport,
 ) -> Result<Vec<ReasoningEffort>, CodegenError> {
-    let mut levels = match efforts {
+    let mut levels = match &listed.efforts {
         None => cfg.fallback_reasoning_levels.to_vec(),
         Some(efforts) => efforts
-            .into_iter()
+            .iter()
             .map(|effort| {
                 effort.parse::<ReasoningEffort>().ok().filter(|effort| effort.is_enabled()).ok_or_else(|| {
                     CodegenError::UnsupportedReasoningEffort { model_id: model.id.clone(), effort: effort.to_string() }
