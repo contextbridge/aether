@@ -30,6 +30,7 @@ import {
   Transcript,
   DockerAgent,
   Container,
+  evalEnvVars,
   Image,
   Task,
   Workspace,
@@ -47,11 +48,11 @@ test("agent edits notes.txt", async () => {
     Image.parse("aether-sandbox:latest")
   ).start(workspace);
   
-  // The agent sees only this environment; nothing is forwarded from the host.
+  // The agent sees only this environment; nothing else is forwarded from the host.
   const agent = new DockerAgent({
     container,
     command: ["node", "/app/eval-agent.js"],
-    env: { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY! },
+    env: evalEnvVars("anthropic:claude-opus-4-6"),
   });
 
   const trace = await Transcript.fromStream(agent.run(task));
@@ -82,6 +83,7 @@ import {
   Transcript,
   DockerAgent,
   Container,
+  evalEnvVars,
   Image,
   generate,
   judge,
@@ -102,7 +104,7 @@ test("agent makes a maintainer-quality edit", async () => {
   const agent = new DockerAgent({
     container,
     command: ["node", "/app/eval-agent.js"],
-    env: { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY! },
+    env: evalEnvVars("anthropic:claude-opus-4-6"),
   });
   
   const trace = await Transcript.fromStream(agent.run(task));
