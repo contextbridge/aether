@@ -8,6 +8,7 @@ import {
   type SessionUsageTotals,
   type TokenUsage,
 } from "../src/index.js";
+import { sessionUsageFactory } from "../../aether-sdk/test/factories/sessionUsage.js";
 
 describe("cumulative session usage", () => {
   it("preserves the complete snapshot in a failed transcript", async () => {
@@ -56,15 +57,16 @@ describe("cumulative session usage", () => {
 
 describe("Transcript.sessionUsage", () => {
   it("returns the cumulative totals from the last usage event", () => {
+    const last = sessionUsageFactory.build({
+      sequence: 2,
+      totals: { estimated_usd: 0.75 },
+    });
     const transcript = new Transcript([
-      usageEvent(1, 0.25),
-      usageEvent(2, 0.75, tokenUsage(30, 6)),
+      { category: "session_usage", event: sessionUsageFactory.build() },
+      { category: "session_usage", event: last },
     ]);
 
-    const usage = transcript.sessionUsage();
-
-    expect(usage.estimated_usd).toBe(0.75);
-    expect(usage.tokens).toEqual(tokenUsage(30, 6));
+    expect(transcript.sessionUsage()).toEqual(last.totals);
   });
 
   it("is zeroed when no usage was recorded", () => {
@@ -75,48 +77,6 @@ describe("Transcript.sessionUsage", () => {
     expect(usage.tokens).toEqual(tokenUsage(0, 0));
   });
 });
-
-function usageEvent(
-  sequence: number,
-  totalUsd: number | null,
-  tokens = tokenUsage(10, 2),
-): AgentEvent {
-  const estimated_cost =
-    totalUsd === null
-      ? null
-      : {
-          input_usd: totalUsd,
-          output_usd: 0,
-          cache_read_usd: 0,
-          cache_creation_usd: 0,
-          total_usd: totalUsd,
-        };
-  return {
-    category: "session_usage",
-    event: {
-      sequence,
-      source: {
-        agent_id: "root",
-        parent_agent_id: null,
-        task_id: null,
-        agent_name: "Root",
-      },
-      purpose: "chat",
-      model: { provider: null, model_id: null, pricing: null },
-      tokens,
-      estimated_cost,
-      totals: {
-        tokens,
-        estimated_usd: totalUsd ?? 0,
-        estimated_input_usd: totalUsd ?? 0,
-        estimated_output_usd: 0,
-        estimated_cache_read_usd: 0,
-        estimated_cache_creation_usd: 0,
-        unpriced_calls: totalUsd === null ? 1 : 0,
-      },
-    },
-  };
-}
 
 function tokenUsage(input_tokens: number, output_tokens: number): TokenUsage {
   return {
