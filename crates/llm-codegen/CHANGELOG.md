@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.34](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.33...aether-llm-codegen-v0.2.34) - 2026-10-20
+
+### Fixed
+
+- *(llm)* send adaptive thinking to Claude and replay reasoning in order ([#622](https://github.com/contextbridge/aether/pull/622))
+
 ## [0.2.33](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.32...aether-llm-codegen-v0.2.33) - 2026-10-19
 
 ### Other

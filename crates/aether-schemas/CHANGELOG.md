@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/contextbridge/aether/compare/aether-schemas-v0.2.24...aether-schemas-v0.3.0) - 2026-10-20
+
+### Added
+
+- *(evals)* [**breaking**] fetch git fixtures once and grant container users workspace access ([#621](https://github.com/contextbridge/aether/pull/621))
+
 ## [0.2.24](https://github.com/contextbridge/aether/compare/aether-schemas-v0.2.23...aether-schemas-v0.2.24) - 2026-10-20
 
 ### Other
