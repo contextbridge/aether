@@ -1,5 +1,7 @@
+use crate::ui::tokens::{GROUP_HEIGHT, RADIUS_CONTAINER};
+use crate::ui::{Button, ButtonVariant, CODE_FONT, IconName, Typography, TypographyExt};
 use clankerdiff_gpui::style::{color, highlight_style};
-use clankerdiff_gpui::ui::prelude::{Button, ControlSize, UiTheme};
+use clankerdiff_gpui::ui::prelude::UiTheme;
 use clankerdiff_markdown::{
     MarkdownBlock, MarkdownBlockKind, MarkdownCodeBlock, MarkdownDocument, MarkdownInline, MarkdownListItem,
     MarkdownStream, MarkdownTable,
@@ -81,13 +83,17 @@ impl<'a> MarkdownRenderer<'a> {
         let palette = &self.review.markdown;
         match &block.kind {
             MarkdownBlockKind::Heading { level, content } => {
-                let heading = div().font_weight(FontWeight::SEMIBOLD).text_color(color(palette.heading));
-                let heading = match level {
-                    1 => heading.text_xl(),
-                    2 => heading.text_lg(),
-                    _ => heading,
+                let typography = match level {
+                    1 => Typography::Display,
+                    2 => Typography::Heading,
+                    _ => Typography::Title,
                 };
-                heading.child(self.inline(content)).into_any_element()
+                div()
+                    .when(*level <= 2, Styled::pt_2)
+                    .typography(typography)
+                    .text_color(color(palette.heading))
+                    .child(self.inline(content))
+                    .into_any_element()
             }
             MarkdownBlockKind::Paragraph { content } => div().child(self.inline(content)).into_any_element(),
             MarkdownBlockKind::List { ordered, start, items } => self.list(*ordered, start.unwrap_or(1), items),
@@ -137,26 +143,29 @@ impl<'a> MarkdownRenderer<'a> {
         self.code_blocks += 1;
         let copied = code.clone();
         let copy = Button::new(id, "Copy", *self.ui)
-            .size(ControlSize::Small)
+            .icon(IconName::Copy)
+            .variant(ButtonVariant::Ghost)
             .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copied.clone())));
         let language = block.language.clone().unwrap_or_default();
         div()
             .flex()
             .flex_col()
-            .rounded_md()
+            .overflow_hidden()
+            .rounded(px(RADIUS_CONTAINER))
             .border_1()
             .border_color(self.ui.colors.border)
             .bg(color(palette.code_background))
             .child(
                 div()
+                    .h(px(GROUP_HEIGHT))
                     .flex()
                     .items_center()
                     .justify_between()
-                    .px_3()
-                    .py_1()
+                    .pl_3()
+                    .pr_1()
                     .border_b_1()
                     .border_color(self.ui.colors.border)
-                    .text_xs()
+                    .typography(Typography::Caption)
                     .text_color(self.ui.colors.text_muted)
                     .child(language)
                     .child(copy),
@@ -165,7 +174,8 @@ impl<'a> MarkdownRenderer<'a> {
                 div()
                     .px_3()
                     .py_2()
-                    .text_sm()
+                    .font_family(CODE_FONT)
+                    .typography(Typography::Small)
                     .text_color(color(palette.code))
                     .child(StyledText::new(code).with_highlights(highlights)),
             )
@@ -173,7 +183,13 @@ impl<'a> MarkdownRenderer<'a> {
     }
 
     fn table(&mut self, table: &MarkdownTable) -> AnyElement {
-        let mut grid = div().flex().flex_col().border_1().border_color(self.ui.colors.border).rounded_md();
+        let mut grid = div()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .border_1()
+            .border_color(self.ui.colors.border)
+            .rounded(px(RADIUS_CONTAINER));
         for (index, row) in table.rows.iter().enumerate() {
             let mut cells =
                 div().flex().when(index > 0, |cells| cells.border_t_1().border_color(self.ui.colors.border));
@@ -182,9 +198,9 @@ impl<'a> MarkdownRenderer<'a> {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .px_2()
-                        .py_1()
-                        .when(row.header, |cell| cell.font_weight(FontWeight::SEMIBOLD))
+                        .px_3()
+                        .py_2()
+                        .when(row.header, |cell| cell.typography(Typography::BodyStrong).bg(self.ui.colors.surface))
                         .child(self.inline(&cell.content)),
                 );
             }

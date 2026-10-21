@@ -1,9 +1,12 @@
 use crate::theme::DesktopTheme;
 use crate::threads::{ReviewEvent, Thread, ThreadStatus};
+use crate::ui::{Button, EmptyState};
 use clankerdiff_client::{ClientState, ConnectionState, DiffReviewEvent, DiffScope, DiffSnapshot};
-use clankerdiff_gpui::ui::prelude::{Button, ControlSize, EmptyState, NoticeTone};
 use clankerdiff_gpui::{DiffViewer, DiffViewerOptions};
-use gpui::{AnyElement, App, ClipboardItem, Context, Entity, EventEmitter, Subscription, Window, div, prelude::*};
+use gpui::{
+    AnyElement, App, ClipboardItem, Context, Entity, EventEmitter, Hsla, Subscription, Window, div, prelude::*,
+};
+use gpui_base::Selectable as _;
 use std::sync::Arc;
 
 /// A thread's Changes tab: the agent's view of the working tree's diff, where the user comments
@@ -118,13 +121,11 @@ impl Changes {
     fn render_clean(scope: DiffScope, cx: &mut Context<Self>) -> AnyElement {
         let theme = DesktopTheme::global(cx).ui();
         let segment = |id: &'static str, label: &'static str, value: DiffScope| {
-            Button::new(id, label, theme).size(ControlSize::Small).selected(scope == value).on_click(cx.listener(
-                move |this, _, _, cx| {
-                    if scope != value {
-                        this.send(DiffReviewEvent::SetScope(value), cx);
-                    }
-                },
-            ))
+            Button::new(id, label, theme).selected(scope == value).on_click(cx.listener(move |this, _, _, cx| {
+                if scope != value {
+                    this.send(DiffReviewEvent::SetScope(value), cx);
+                }
+            }))
         };
         div()
             .debug_selector(|| "changes-clean".to_owned())
@@ -133,9 +134,13 @@ impl Changes {
             .flex_col()
             .items_center()
             .justify_center()
-            .gap_2()
-            .child(EmptyState::new("No changes", format!("Nothing to review in {scope}"), NoticeTone::Neutral, theme))
-            .child(div().flex().gap_2().children([
+            .gap_4()
+            .child(div().flex_none().child(EmptyState::new(
+                "No changes",
+                format!("Nothing to review in {scope}"),
+                theme,
+            )))
+            .child(div().flex().gap_1().children([
                 segment("scope-unstaged", "Unstaged", DiffScope::Unstaged),
                 segment("scope-staged", "Staged", DiffScope::Staged),
                 segment("scope-both", "Both", DiffScope::Both),
@@ -152,12 +157,12 @@ impl Render for Changes {
         let Some(state) = thread.review().cloned() else {
             return match thread.status() {
                 ThreadStatus::Connecting | ThreadStatus::Idle | ThreadStatus::Running | ThreadStatus::NeedsInput => {
-                    render_status("Loading changes…", "Waiting for the agent".to_owned(), NoticeTone::Info, cx)
+                    render_status("Loading changes…", "Waiting for the agent".to_owned(), None, cx)
                 }
                 _ => render_status(
                     "Agent not running",
                     "Start the thread again to review its changes".to_owned(),
-                    NoticeTone::Neutral,
+                    None,
                     cx,
                 ),
             };
@@ -178,18 +183,24 @@ impl Render for Changes {
 fn render_unavailable(state: &ClientState, cx: &App) -> AnyElement {
     let detail = state.status().unwrap_or_default();
     match state.connection {
-        ConnectionState::Failed(_) => render_status("Could not load changes", detail, NoticeTone::Error, cx),
-        ConnectionState::Connecting | ConnectionState::Connected => {
-            render_status("Loading changes…", detail, NoticeTone::Info, cx)
+        ConnectionState::Failed(_) => {
+            let failed = DesktopTheme::global(cx).ui().colors.destructive;
+            render_status("Could not load changes", detail, Some(failed), cx)
         }
+        ConnectionState::Connecting | ConnectionState::Connected => render_status("Loading changes…", detail, None, cx),
     }
 }
 
-fn render_status(title: &str, detail: String, tone: NoticeTone, cx: &App) -> AnyElement {
+/// A status in place of the changes, its title colored `tone` if it has one.
+fn render_status(title: &str, detail: String, tone: Option<Hsla>, cx: &App) -> AnyElement {
     let theme = DesktopTheme::global(cx).ui();
+    let state = EmptyState::new(title.to_owned(), detail, theme);
     div()
         .debug_selector(|| "changes-status".to_owned())
         .size_full()
-        .child(EmptyState::new(title.to_owned(), detail, tone, theme))
+        .child(match tone {
+            Some(tone) => state.tone(tone),
+            None => state,
+        })
         .into_any_element()
 }

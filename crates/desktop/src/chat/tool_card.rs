@@ -1,7 +1,9 @@
+use crate::ui::tokens::{GROUP_HEIGHT, ICON_SIZE_SMALL, RADIUS_CONTAINER, RADIUS_CONTROL};
+use crate::ui::{CODE_FONT, Icon, IconName, Typography, TypographyExt};
 use acp_utils::conversation::{SubAgentState, ToolCall, ToolStatus};
 use agent_client_protocol::schema::v2 as acp;
 use clankerdiff_gpui::ui::prelude::UiTheme;
-use gpui::{AnyElement, App, ClickEvent, FontWeight, Hsla, Window, div, prelude::*};
+use gpui::{AnyElement, App, ClickEvent, Hsla, Window, div, prelude::*, px};
 
 /// A tool call as a card: its status, name and a one-line summary, with any file changes it
 /// made below and the tree of sub-agents it spawned. Clicking the header shows or hides its
@@ -16,30 +18,40 @@ pub(crate) fn tool_card(
     theme: &UiTheme,
     on_toggle: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
+    let colors = theme.colors;
+    let chevron = if expanded { IconName::ChevronDown } else { IconName::ChevronRight };
     let header = div()
         .id(("tool-card", index))
         .debug_selector(move || format!("tool-card-{index}"))
+        .h(px(GROUP_HEIGHT))
         .flex()
         .items_center()
         .gap_2()
         .px_3()
-        .py_2()
         .cursor_pointer()
-        .hover(|header| header.bg(theme.colors.surface_hover))
+        .hover(move |header| header.bg(colors.surface_hover))
         .on_click(on_toggle)
-        .child(status_glyph(tool.status, theme))
-        .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).child(title(tool)))
-        .child(div().flex_1().min_w_0().truncate().text_color(theme.colors.text_muted).children(summary(tool)))
-        .child(div().flex_none().text_color(theme.colors.text_muted).child(if expanded { "▾" } else { "▸" }));
+        .child(status_icon(tool.status, theme))
+        .child(div().flex_none().typography(Typography::BodyStrong).child(title(tool)))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .typography(Typography::Small)
+                .text_color(colors.text_muted)
+                .children(summary(tool)),
+        )
+        .child(Icon::new(chevron, colors.text_muted));
     let diffs: Vec<_> = tool.diffs().collect();
     div()
         .flex()
         .flex_col()
-        .rounded_md()
+        .overflow_hidden()
+        .rounded(px(RADIUS_CONTAINER))
         .border_1()
-        .border_color(theme.colors.border)
-        .bg(theme.colors.surface)
-        .text_sm()
+        .border_color(colors.border)
+        .bg(colors.surface)
         .child(header)
         .when(expanded, |card| card.child(details(tool, index, theme)))
         .when(!diffs.is_empty(), |card| card.child(changes(&diffs, index, expanded, theme)))
@@ -84,8 +96,16 @@ fn section(label: &'static str, text: String, theme: &UiTheme) -> impl IntoEleme
         .flex()
         .flex_col()
         .gap_1()
-        .child(div().text_xs().text_color(theme.colors.text_muted).child(label))
-        .child(div().p_2().rounded_sm().bg(theme.colors.canvas).child(text))
+        .child(div().typography(Typography::Label).text_color(theme.colors.text_muted).child(label))
+        .child(
+            div()
+                .p_2()
+                .rounded(px(RADIUS_CONTROL))
+                .bg(theme.colors.canvas)
+                .font_family(CODE_FONT)
+                .typography(Typography::Small)
+                .child(text),
+        )
 }
 
 fn content_text(content: &acp::ToolCallContent) -> Option<String> {
@@ -108,7 +128,9 @@ fn changes(diffs: &[&acp::Diff], index: usize, expanded: bool, theme: &UiTheme) 
         .px_3()
         .py_2()
         .border_t_1()
-        .border_color(theme.colors.border);
+        .border_color(theme.colors.border)
+        .font_family(CODE_FONT)
+        .typography(Typography::Small);
     for diff in diffs {
         changes = match &diff.patch {
             Some(patch) => changes.child(patch_view(&patch.text, expanded, theme)),
@@ -134,7 +156,7 @@ fn patch_view(patch: &str, expanded: bool, theme: &UiTheme) -> impl IntoElement 
         }));
     }
     view.when(hidden > 0, |view| {
-        view.child(div().pt_1().text_color(theme.colors.text_muted).child(format!("… {hidden} more lines")))
+        view.child(div().pt_1().text_color(theme.colors.text_muted).child(format!("{hidden} more lines")))
     })
 }
 
@@ -180,7 +202,15 @@ fn change_label(change: &acp::DiffChange) -> String {
 
 /// Each sub-agent with its latest tool calls, older ones folded into a count.
 fn sub_agent_tree(sub_agents: &[SubAgentState], theme: &UiTheme) -> impl IntoElement {
-    let mut tree = div().flex().flex_col().gap_1().px_3().py_2().border_t_1().border_color(theme.colors.border);
+    let mut tree = div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .px_3()
+        .py_2()
+        .border_t_1()
+        .border_color(theme.colors.border)
+        .typography(Typography::Small);
     for agent in sub_agents {
         let status = if agent.done { ToolStatus::Success } else { ToolStatus::Running };
         tree = tree.child(
@@ -188,14 +218,13 @@ fn sub_agent_tree(sub_agents: &[SubAgentState], theme: &UiTheme) -> impl IntoEle
                 .flex()
                 .items_center()
                 .gap_2()
-                .child(status_glyph(status, theme))
-                .child(div().font_weight(FontWeight::SEMIBOLD).child(agent.agent_name.clone())),
+                .child(status_icon(status, theme).size(ICON_SIZE_SMALL))
+                .child(div().typography(Typography::Label).child(agent.agent_name.clone())),
         );
         let hidden = agent.tool_calls.len().saturating_sub(SUB_AGENT_VISIBLE_TOOLS);
         if hidden > 0 {
-            tree = tree.child(
-                div().pl_6().text_color(theme.colors.text_muted).child(format!("… {hidden} earlier tool calls")),
-            );
+            tree = tree
+                .child(div().pl_6().text_color(theme.colors.text_muted).child(format!("{hidden} earlier tool calls")));
         }
         for tool in &agent.tool_calls[hidden..] {
             tree = tree.child(
@@ -205,7 +234,7 @@ fn sub_agent_tree(sub_agents: &[SubAgentState], theme: &UiTheme) -> impl IntoEle
                     .items_center()
                     .gap_2()
                     .min_w_0()
-                    .child(status_glyph(tool.status, theme))
+                    .child(status_icon(tool.status, theme).size(ICON_SIZE_SMALL))
                     .child(div().flex_none().child(title(tool)))
                     .child(div().min_w_0().truncate().text_color(theme.colors.text_muted).children(summary(tool))),
             );
@@ -214,12 +243,12 @@ fn sub_agent_tree(sub_agents: &[SubAgentState], theme: &UiTheme) -> impl IntoEle
     tree
 }
 
-fn status_glyph(status: ToolStatus, theme: &UiTheme) -> impl IntoElement {
-    let (glyph, color) = match status {
-        ToolStatus::Running => ("●", theme.colors.info),
-        ToolStatus::Success => ("✓", theme.colors.positive),
-        ToolStatus::Failed => ("✗", theme.colors.destructive),
-        ToolStatus::Cancelled => ("⊘", theme.colors.text_muted),
+fn status_icon(status: ToolStatus, theme: &UiTheme) -> Icon {
+    let (icon, color) = match status {
+        ToolStatus::Running => (IconName::LoaderCircle, theme.colors.info),
+        ToolStatus::Success => (IconName::CircleCheck, theme.colors.positive),
+        ToolStatus::Failed => (IconName::CircleX, theme.colors.destructive),
+        ToolStatus::Cancelled => (IconName::CircleSlash, theme.colors.text_muted),
     };
-    div().flex_none().text_color(color).child(glyph)
+    Icon::new(icon, color)
 }

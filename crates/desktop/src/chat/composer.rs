@@ -4,14 +4,15 @@ use super::prompt_search::{PromptSearch, PromptSearchOutcome};
 use crate::file_index::FileIndex;
 use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadStatus};
-use clankerdiff_gpui::ui::prelude::{Button, ButtonVariant};
+use crate::ui::tokens::{CONTENT_MAX_WIDTH, GROUP_HEIGHT, RADIUS_CONTAINER};
+use crate::ui::{Button, ButtonVariant, IconButton, IconName};
 use client_core::composer::attachment::PromptAttachment;
 use client_core::composer::prompt_history::PromptHistory;
 use client_core::composer::submission::Submission;
 use client_core::session_core::SessionCore;
 use gpui::{
     App, ClickEvent, Context, Div, Entity, Focusable, MouseButton, SharedString, Stateful, Subscription, Window,
-    actions, div, prelude::*,
+    actions, div, prelude::*, px,
 };
 use gpui_base::input::{
     Enter, Escape, IndentInline, InlineToken, InputContent, InputEvent, MoveDown, MoveUp, Textarea, TextareaState,
@@ -256,18 +257,13 @@ impl Composer {
         self.input.update(cx, |input, cx| input.set_value(content, window, cx));
     }
 
-    fn render_input(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
-        let theme = DesktopTheme::global(cx).ui();
-        let focused = self.input.focus_handle(cx).is_focused(window);
+    fn render_input(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         div()
             .id("composer-input")
-            .flex_1()
+            .w_full()
             .min_w_0()
-            .p_2()
-            .rounded_md()
-            .border_1()
-            .border_color(if focused { theme.colors.accent } else { theme.colors.border })
-            .bg(theme.colors.surface)
+            .px_3()
+            .pt_2()
             .cursor_text()
             .on_mouse_down(
                 MouseButton::Left,
@@ -324,33 +320,56 @@ impl Composer {
             .child(Textarea::new(&self.input))
     }
 
-    fn render_footer(&self, cx: &mut Context<Self>) -> Option<Div> {
+    /// The toolbar along the bottom of the composer: the session's options and how full the
+    /// context is, then Stop while a turn runs and Send.
+    fn render_toolbar(&self, cx: &mut Context<Self>) -> Div {
         let theme = DesktopTheme::global(cx).ui();
-        let core = self.thread.read(cx).core()?;
-        let selectors: Vec<_> = core
-            .session()
-            .config_options()
-            .iter()
-            .filter_map(|option| config_selector(option, &self.thread, &theme))
-            .collect();
-        let meter = core.conversation().context_usage().map(|usage| context_meter(usage, &theme));
-        Some(
+        let running = matches!(self.thread.read(cx).status(), ThreadStatus::Running | ThreadStatus::NeedsInput);
+        let footer = self.thread.read(cx).core().map(|core| {
+            let selectors: Vec<_> = core
+                .session()
+                .config_options()
+                .iter()
+                .filter_map(|option| config_selector(option, &self.thread, &theme))
+                .collect();
+            let meter = core.conversation().context_usage().map(|usage| context_meter(usage, &theme));
             div()
                 .debug_selector(|| "composer-footer".to_owned())
+                .flex_1()
+                .min_w_0()
                 .flex()
                 .items_center()
                 .gap_1()
                 .children(selectors)
                 .child(div().flex_1())
-                .children(meter),
-        )
+                .children(meter)
+        });
+        let stop = running.then(|| {
+            Button::new("stop", "Stop", theme)
+                .icon(IconName::Square)
+                .variant(ButtonVariant::Destructive)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.thread.update(cx, Thread::cancel)))
+        });
+        let send = IconButton::new("send", IconName::ArrowUp, "Send", theme)
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.send(window, cx)));
+        div()
+            .h(px(GROUP_HEIGHT))
+            .px_1()
+            .mb_1()
+            .flex()
+            .items_center()
+            .gap_2()
+            .children(footer)
+            .when(self.thread.read(cx).core().is_none(), |toolbar| toolbar.child(div().flex_1()))
+            .children(stop)
+            .child(send)
     }
 }
 
 impl Render for Composer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = DesktopTheme::global(cx).ui();
-        let running = matches!(self.thread.read(cx).status(), ThreadStatus::Running | ThreadStatus::NeedsInput);
+        let focused = self.input.focus_handle(cx).is_focused(window);
         let queued = self
             .thread
             .read(cx)
@@ -358,30 +377,32 @@ impl Render for Composer {
             .map(SessionCore::queued_prompts)
             .filter(|prompts| !prompts.is_empty())
             .map(|prompts| queued_prompts(prompts, &theme));
-        let stop = running.then(|| {
-            Button::new("stop", "Stop", theme)
-                .variant(ButtonVariant::Destructive)
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.thread.update(cx, Thread::cancel)))
-        });
         let completion = self.completion.as_ref().map(|menu| menu.render(&theme, cx));
         let search = self.search.as_ref().map(|(search, _)| search.clone());
-        let input = self.render_input(window, cx);
-        let footer = self.render_footer(cx);
-        div()
-            .debug_selector(|| "composer".to_owned())
-            .flex_none()
+        let editor = div()
             .w_full()
-            .p_3()
             .flex()
             .flex_col()
-            .gap_2()
-            .border_t_1()
-            .border_color(theme.colors.border)
-            .children(queued)
-            .children(search)
-            .children(completion)
-            .child(div().flex().items_end().gap_2().child(input).children(stop))
-            .children(footer)
+            .gap_1()
+            .rounded(px(RADIUS_CONTAINER))
+            .border_1()
+            .border_color(if focused { theme.colors.accent } else { theme.colors.border })
+            .bg(theme.colors.surface)
+            .child(self.render_input(cx))
+            .child(self.render_toolbar(cx));
+        div().debug_selector(|| "composer".to_owned()).flex_none().w_full().px_4().pt_2().pb_4().child(
+            div()
+                .w_full()
+                .max_w(px(CONTENT_MAX_WIDTH))
+                .mx_auto()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .children(queued)
+                .children(search)
+                .children(completion)
+                .child(editor),
+        )
     }
 }
 

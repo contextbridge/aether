@@ -101,3 +101,24 @@ fn load(cx: &mut TestAppContext, dir: &Path) -> Entity<Registry> {
     let file = dir.join(STATE_FILE);
     cx.new(|cx| Registry::load(Some(file), cx))
 }
+
+#[gpui::test]
+fn removing_a_project_and_archiving_threads_together_are_kept(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = load(cx, dir.path());
+    let [first, second] = [SessionId::new("first"), SessionId::new("second")];
+
+    registry.update(cx, |registry, cx| {
+        registry.add_project("/alpha".into(), cx);
+        registry.add_project("/beta".into(), cx);
+        registry.remove_project(Path::new("/alpha"), cx);
+        registry.archive_all([first.clone(), second.clone()], cx);
+    });
+    cx.run_until_parked();
+    let loaded = load(cx, dir.path());
+
+    loaded.read_with(cx, |registry, _| {
+        assert_eq!(registry.projects(), [PathBuf::from("/beta")]);
+        assert!(registry.thread(&first).archived && registry.thread(&second).archived);
+    });
+}

@@ -4,6 +4,7 @@ mod app;
 mod changes;
 mod chat;
 pub mod cli;
+pub mod clock;
 mod elicitation;
 mod file_index;
 mod fuzzy;
@@ -21,6 +22,7 @@ pub mod testing;
 mod theme;
 mod thread_view;
 pub mod threads;
+pub mod ui;
 mod window_chrome;
 
 pub use app::{
@@ -33,6 +35,7 @@ pub use theme::{DesktopTheme, ThemePair};
 use aether_sessions::SessionStore;
 use clankerdiff_gpui::{DiffViewer, load_default_fonts};
 use cli::Cli;
+use clock::SystemClock;
 use gpui::{App, AppContext, Bounds, Entity, Pixels, Size, TitlebarOptions, WindowBounds, WindowOptions, px, size};
 use registry::{Registry, default_state_file};
 use std::sync::Arc;
@@ -49,6 +52,7 @@ pub fn run(cli: Cli) {
     gpui_platform::application().run(move |cx: &mut App| {
         runtime::install(cx, handle);
         load_default_fonts(cx).expect("failed to load the bundled fonts");
+        ui::load_fonts(cx).expect("failed to load the bundled interface fonts");
         init(cx);
         run_loop::install(cx);
         let state_file = default_state_file();
@@ -59,6 +63,7 @@ pub fn run(cli: Cli) {
         let bounds = Bounds::centered(None, window_size(&registry, cx), cx);
         let config = DesktopConfig {
             connector: Arc::new(LocalConnector),
+            clock: Arc::new(SystemClock),
             agent: AgentCommandLine::new(cli.agent),
             sessions: SessionStore::new().inspect_err(|error| tracing::warn!(%error, "showing no history")).ok(),
             registry,

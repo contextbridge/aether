@@ -15,6 +15,7 @@ fn an_added_project_is_listed_on_the_next_launch(first: &mut TestAppContext, sec
     let state = tempfile::tempdir().unwrap();
     let harness = DesktopHarnessBuilder::default().state_dir(state.path()).build(first);
     harness.click(first, "add-project").unwrap();
+    harness.click(first, "add-project-browse").unwrap();
     first.simulate_path_prompt_response(|_| Some(vec![PathBuf::from("/picked")]));
     first.run_until_parked();
 
@@ -27,13 +28,13 @@ fn an_added_project_is_listed_on_the_next_launch(first: &mut TestAppContext, sec
 fn a_projects_disclosure_is_kept_across_launches(first: &mut TestAppContext, second: &mut TestAppContext) {
     let state = tempfile::tempdir().unwrap();
     let harness = launch(first, state.path(), saved_in_alpha(), FakeConnector::default());
-    assert!(harness.bounds(first, "history-row-saved").is_none(), "a project only history knows starts collapsed");
+    assert!(harness.bounds(first, "history-row-saved").is_some(), "a project starts expanded");
     harness.click(first, "project-alpha-toggle").unwrap();
     first.run_until_parked();
 
     let relaunched = launch(second, state.path(), saved_in_alpha(), FakeConnector::default());
 
-    assert!(relaunched.bounds(second, "history-row-saved").is_some());
+    assert!(relaunched.bounds(second, "history-row-saved").is_none());
 }
 
 #[gpui::test]
@@ -123,7 +124,12 @@ fn resuming(session_id: &str, answer: &str) -> FakeConnector {
 /// Opens the app over the state kept in `state`, with `sessions` in history, and waits for
 /// history to be read.
 fn launch(cx: &mut TestAppContext, state: &Path, sessions: TestStore, connector: FakeConnector) -> DesktopHarness {
-    let harness = DesktopHarnessBuilder::default().state_dir(state).history(sessions).connector(connector).build(cx);
+    let harness = DesktopHarnessBuilder::default()
+        .state_dir(state)
+        .history(sessions)
+        .connector(connector)
+        .project("/alpha")
+        .build(cx);
     wait_for_history(&harness, cx);
     harness
 }

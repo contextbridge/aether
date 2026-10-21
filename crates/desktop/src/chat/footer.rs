@@ -1,10 +1,12 @@
 use crate::threads::Thread;
+use crate::ui::tokens::{ICON_SIZE_SMALL, RADIUS_CONTAINER, RADIUS_CONTROL, ROW_HEIGHT};
+use crate::ui::{Icon, IconName, ListItem, Typography, TypographyExt};
 use agent_client_protocol::schema::v2 as acp;
-use clankerdiff_gpui::ui::prelude::{ListRow, MutedText, SelectionState, Surface, UiTheme};
+use clankerdiff_gpui::ui::prelude::UiTheme;
 use client_core::session_config_view::LocalConfigOption;
 use client_core::session_core::QueuedPrompt;
 use gpui::{Anchor, AnyElement, Div, Entity, SharedString, div, prelude::*, px};
-use gpui_base::Popover;
+use gpui_base::{Popover, Selectable as _};
 
 /// A menu for one of the session's options, such as its model, mode or reasoning effort, that
 /// shows the current choice. Choosing another asks the agent to switch.
@@ -25,18 +27,18 @@ pub(crate) fn config_selector(
             let selector = selector.clone();
             move || selector
         })
+        .h(px(ROW_HEIGHT))
         .flex()
         .items_center()
         .gap_1()
         .px_2()
-        .py_0p5()
-        .rounded_md()
-        .text_sm()
+        .rounded(px(RADIUS_CONTROL))
+        .typography(Typography::Small)
         .text_color(theme.colors.text_secondary)
         .cursor_pointer()
         .hover(|trigger| trigger.bg(theme.colors.surface_hover))
         .child(label)
-        .child(div().text_xs().child("▾"));
+        .child(Icon::new(IconName::ChevronDown, theme.colors.text_muted).size(ICON_SIZE_SMALL));
     let name = option.name.clone();
     let config_id = option.id.clone();
     let values = select.values.to_vec();
@@ -50,16 +52,27 @@ pub(crate) fn config_selector(
         })
         .content(move |_, _, cx| {
             let popover = cx.entity();
-            let mut entries =
-                div().py_1().child(div().px_3().py_1().text_xs().child(MutedText::new(name.clone(), theme)));
+            let mut entries = div().p_1().flex().flex_col().child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .typography(Typography::Label)
+                    .text_color(theme.colors.text_muted)
+                    .child(name.clone()),
+            );
             for value in &values {
                 let entry_selector = format!("{selector}-{}", value.value);
-                let state = if value.value == current_value { SelectionState::Selected } else { SelectionState::None };
-                let mut row = ListRow::new(SharedString::from(entry_selector.clone()), theme)
-                    .state(state)
+                let current = value.value == current_value;
+                let mut row = ListItem::new(entry_selector, theme)
+                    .selected(current)
                     .child(div().flex_1().min_w_0().truncate().child(value.name.clone()));
+                if current {
+                    row = row.child(Icon::new(IconName::Check, theme.colors.text_muted));
+                }
                 if value.is_disabled {
-                    row = row.child(MutedText::new("unavailable", theme));
+                    row = row.child(
+                        div().typography(Typography::Caption).text_color(theme.colors.text_muted).child("unavailable"),
+                    );
                 } else {
                     let (popover, thread, config_id, value) =
                         (popover.clone(), thread.clone(), config_id.clone(), value.value.clone());
@@ -68,9 +81,16 @@ pub(crate) fn config_selector(
                         thread.update(cx, |thread, cx| thread.set_config_option(&config_id, &value, cx));
                     });
                 }
-                entries = entries.child(div().debug_selector(move || entry_selector).child(row));
+                entries = entries.child(row);
             }
-            div().w(px(MENU_WIDTH)).child(Surface::new(theme).padded(false).raised(true).child(entries))
+            div()
+                .w(px(MENU_WIDTH))
+                .rounded(px(RADIUS_CONTAINER))
+                .border_1()
+                .border_color(theme.colors.border)
+                .bg(theme.colors.surface)
+                .shadow_lg()
+                .child(entries)
         });
     Some(popover.into_any_element())
 }
@@ -93,12 +113,12 @@ pub(crate) fn context_meter(usage: &acp::UsageUpdate, theme: &UiTheme) -> Div {
         .flex()
         .items_center()
         .gap_2()
-        .text_sm()
+        .typography(Typography::Caption)
         .text_color(theme.colors.text_muted)
         .child(
             div()
                 .w(px(METER_WIDTH))
-                .h(px(4.0))
+                .h(px(METER_HEIGHT))
                 .rounded_full()
                 .bg(theme.colors.border)
                 .child(div().h_full().rounded_full().bg(color).w(px(METER_WIDTH * fraction))),
@@ -110,26 +130,31 @@ pub(crate) fn context_meter(usage: &acp::UsageUpdate, theme: &UiTheme) -> Div {
 /// counted. It is tagged `queued-prompts`.
 pub(crate) fn queued_prompts(prompts: &[QueuedPrompt], theme: &UiTheme) -> Div {
     let shown = if prompts.len() > MAX_QUEUED_ROWS + 1 { MAX_QUEUED_ROWS } else { prompts.len() };
-    let mut list = div().debug_selector(|| "queued-prompts".to_owned()).flex().flex_col().text_sm();
+    let mut list =
+        div().debug_selector(|| "queued-prompts".to_owned()).flex().flex_col().gap_1().typography(Typography::Small);
     for prompt in &prompts[..shown] {
         let text = prompt.submission.text.lines().next().unwrap_or_default().to_owned();
         list = list.child(
             div()
                 .flex()
+                .items_center()
                 .gap_2()
                 .min_w_0()
-                .child(div().flex_none().child(MutedText::new("Queued ›", *theme)))
+                .child(Icon::new(IconName::ChevronRight, theme.colors.text_muted).size(ICON_SIZE_SMALL))
+                .child(div().flex_none().text_color(theme.colors.text_muted).child("Queued"))
                 .child(div().flex_1().min_w_0().truncate().text_color(theme.colors.text_secondary).child(text)),
         );
     }
     if shown < prompts.len() {
-        list = list.child(MutedText::new(format!("+{} more queued", prompts.len() - shown), *theme));
+        list = list
+            .child(div().text_color(theme.colors.text_muted).child(format!("{} more queued", prompts.len() - shown)));
     }
     list
 }
 
 const MENU_WIDTH: f32 = 240.0;
 const METER_WIDTH: f32 = 48.0;
+const METER_HEIGHT: f32 = 4.0;
 const MAX_QUEUED_ROWS: usize = 3;
 
 /// A token count as people read it: `850`, `12k`, `1.2M`.

@@ -3,15 +3,17 @@
 
 use crate::theme::DesktopTheme;
 use crate::threads::Thread;
+use crate::ui::tokens::{CONTENT_MAX_WIDTH, RADIUS_CONTAINER, RADIUS_CONTROL};
+use crate::ui::{Button, ButtonVariant, Typography, TypographyExt};
 use acp_utils::elicitation::{FieldInput, FormError, FormField, FormFieldKind, accept_content, form_fields};
 use agent_client_protocol::schema::v2::ElicitationMode;
-use clankerdiff_gpui::ui::prelude::{Button, ButtonVariant, MutedText, UiTheme};
+use clankerdiff_gpui::ui::prelude::UiTheme;
 use client_core::elicitation::ElicitationResponder;
 use client_core::session_core::Elicitation;
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, FontWeight, MouseButton, SharedString, Subscription, Window, div,
-    prelude::*,
+    AnyElement, App, ClickEvent, Context, Entity, MouseButton, SharedString, Subscription, Window, div, prelude::*, px,
 };
+use gpui_base::Selectable as _;
 use gpui_base::input::{Enter, Input, InputState};
 
 /// Shows the question a thread's agent waits on, above the composer, and sends the user's answer.
@@ -166,7 +168,7 @@ impl ElicitationCard {
             let selector = format!("elicitation-error-{name}");
             div()
                 .debug_selector(move || selector)
-                .text_sm()
+                .typography(Typography::Small)
                 .text_color(theme.colors.destructive)
                 .child(refused.to_string())
         });
@@ -174,12 +176,10 @@ impl ElicitationCard {
             .flex()
             .flex_col()
             .gap_1()
-            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(label))
-            .children(
-                field
-                    .description()
-                    .map(|description| div().text_sm().child(MutedText::new(description.to_owned(), *theme))),
-            )
+            .child(div().typography(Typography::Label).child(label))
+            .children(field.description().map(|description| {
+                div().typography(Typography::Small).text_color(theme.colors.text_muted).child(description.to_owned())
+            }))
             .child(control)
             .children(error)
             .into_any_element()
@@ -194,10 +194,10 @@ impl ElicitationCard {
         theme: &UiTheme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let button = Button::new(SharedString::from(selector.clone()), label, *theme)
+        Button::new(SharedString::from(selector), label, *theme)
             .selected(selected)
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.pick(index, option, cx)));
-        tagged(selector, button).into_any_element()
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.pick(index, option, cx)))
+            .into_any_element()
     }
 
     /// A one-line text field, where Enter submits the form.
@@ -208,7 +208,7 @@ impl ElicitationCard {
             .debug_selector(move || selector)
             .px_2()
             .py_1()
-            .rounded_md()
+            .rounded(px(RADIUS_CONTROL))
             .border_1()
             .border_color(theme.colors.border)
             .bg(theme.colors.canvas)
@@ -239,49 +239,56 @@ impl Render for ElicitationCard {
                     .collect();
                 div().flex().flex_col().gap_3().children(rendered).into_any_element()
             }
-            Draft::Url(url) => div().text_sm().child(MutedText::new(url.clone(), theme)).into_any_element(),
+            Draft::Url(url) => div()
+                .typography(Typography::Small)
+                .text_color(theme.colors.text_muted)
+                .child(url.clone())
+                .into_any_element(),
             Draft::Unsupported => div()
-                .text_sm()
-                .child(MutedText::new("This question can't be answered here yet.", theme))
+                .typography(Typography::Small)
+                .text_color(theme.colors.text_muted)
+                .child("This question can't be answered here yet.")
                 .into_any_element(),
         };
         let primary = match draft {
-            Draft::Form { .. } => Some(tagged(
-                "elicitation-submit",
+            Draft::Form { .. } => Some(
                 Button::new("elicitation-submit", "Submit", theme)
                     .variant(ButtonVariant::Primary)
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.submit(cx))),
-            )),
-            Draft::Url(_) => Some(tagged(
-                "elicitation-open-url",
+            ),
+            Draft::Url(_) => Some(
                 Button::new("elicitation-open-url", "Open link", theme)
                     .variant(ButtonVariant::Primary)
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_url(cx))),
-            )),
+            ),
             Draft::Unsupported => None,
         };
-        let decline = tagged(
-            "elicitation-decline",
-            Button::new("elicitation-decline", "Decline", theme)
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.decline(cx))),
-        );
+        let decline = Button::new("elicitation-decline", "Decline", theme)
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.decline(cx)));
         let actions = div().flex().justify_end().gap_2().children(primary).child(decline);
-        div()
-            .debug_selector(|| "elicitation".to_owned())
-            .flex_none()
-            .mx_3()
-            .mb_2()
-            .p_3()
+        let card = div()
+            .w_full()
+            .max_w(px(CONTENT_MAX_WIDTH))
+            .mx_auto()
+            .p_4()
             .flex()
             .flex_col()
-            .gap_3()
-            .rounded_md()
+            .gap_4()
+            .rounded(px(RADIUS_CONTAINER))
             .border_1()
             .border_color(theme.colors.accent)
             .bg(theme.colors.surface)
-            .child(div().font_weight(FontWeight::SEMIBOLD).child(message))
+            .shadow_md()
+            .child(div().typography(Typography::Title).child(message))
             .child(body)
-            .child(actions)
+            .child(actions);
+        div()
+            .debug_selector(|| "elicitation".to_owned())
+            .flex_none()
+            .w_full()
+            .px_4()
+            .pt_2()
+            .child(card)
             .into_any_element()
     }
 }
@@ -317,10 +324,4 @@ impl FieldAnswer {
             Self::Picked(input) => input.clone(),
         }
     }
-}
-
-/// Wraps `button` in an element tagged `selector`, since buttons cannot be tagged themselves.
-fn tagged(selector: impl Into<String>, button: Button) -> impl IntoElement {
-    let selector = selector.into();
-    div().debug_selector(move || selector).child(button)
 }

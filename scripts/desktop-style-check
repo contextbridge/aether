@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Fail when the desktop app sizes text or spacing outside its type scale and 4px grid.
+# Text goes through `Typography`, radii through `ui::tokens`, and `px()` literals are multiples of 4
+# (1px and 2px are allowed for borders and hairlines).
+set -euo pipefail
+src="crates/desktop/src"
+status=0
+report() {
+    echo "$1:"
+    echo "$2"
+    status=1
+}
+matches=$(grep -rnE '\.(text_(xs|sm|base|lg|xl|2xl)|rounded_(sm|md|lg|xl))\(\)|_[0-9]p5\(\)' "$src" || true)
+[ -n "$matches" ] && report "Use Typography and ui::tokens radii instead" "$matches"
+matches=$(grep -rnoE 'px\([0-9]+(\.[0-9]+)?\)' "$src" \
+    | grep -vE 'px\((0|1|2)(\.0)?\)' \
+    | awk -F'px\\(' '{ value = $2; sub(/\)$/, "", value); if (value % 4 != 0) print }' || true)
+[ -n "$matches" ] && report "Keep px() literals on the 4px grid" "$matches"
+exit "$status"

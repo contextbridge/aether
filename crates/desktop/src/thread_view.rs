@@ -4,8 +4,10 @@ use crate::elicitation::ElicitationCard;
 use crate::registry::Registry;
 use crate::theme::DesktopTheme;
 use crate::threads::{ReviewEvent, Thread};
-use clankerdiff_gpui::ui::prelude::{Button, ControlSize, MutedText};
-use gpui::{App, AppContext, Context, Entity, FontWeight, Subscription, Window, div, prelude::*, px};
+use crate::ui::tokens::BAR_HEIGHT;
+use crate::ui::{Button, ButtonVariant, Typography, TypographyExt};
+use gpui::{App, AppContext, Context, Entity, Subscription, Window, div, prelude::*, px};
+use gpui_base::Selectable as _;
 
 /// One thread's main area: a header naming the thread and its project, above either its chat
 /// (with any question its agent waits on) or the changes it made to the working tree.
@@ -109,11 +111,11 @@ impl ThreadView {
         let theme = DesktopTheme::global(cx).ui();
         let tab = |id: &'static str, label: String, value: ThreadTab, cx: &mut Context<Self>| {
             Button::new(id, label, theme)
-                .size(ControlSize::Small)
+                .variant(ButtonVariant::Ghost)
                 .selected(self.tab == value)
                 .on_click(cx.listener(move |this, _, window, cx| this.show(value, window, cx)))
         };
-        div().flex().gap_1().child(tab("tab-chat", "Chat".to_owned(), ThreadTab::Chat, cx)).child(tab(
+        div().flex_none().flex().gap_1().child(tab("tab-chat", "Chat".to_owned(), ThreadTab::Chat, cx)).child(tab(
             "tab-changes",
             self.changes_label(cx),
             ThreadTab::Changes,
@@ -130,15 +132,30 @@ impl Render for ThreadView {
         let header = div()
             .debug_selector(|| "thread-header".to_owned())
             .flex_none()
-            .h(px(HEADER_HEIGHT))
+            .h(px(BAR_HEIGHT))
             .px_4()
             .flex()
             .items_center()
             .gap_3()
             .border_b_1()
             .border_color(theme.colors.border)
-            .child(div().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).child(title))
-            .child(div().flex_1().min_w_0().truncate().text_sm().child(MutedText::new(project, theme)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .items_baseline()
+                    .gap_2()
+                    .child(div().min_w_0().truncate().typography(Typography::Title).child(title))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .typography(Typography::Small)
+                            .text_color(theme.colors.text_muted)
+                            .child(project),
+                    ),
+            )
             .child(self.render_tabs(cx));
         let body = match self.tab {
             ThreadTab::Chat => div()
@@ -155,5 +172,3 @@ impl Render for ThreadView {
         div().size_full().flex().flex_col().child(header).child(body)
     }
 }
-
-const HEADER_HEIGHT: f32 = 44.0;

@@ -1,4 +1,5 @@
 use crate::chat::SearchPrompts;
+use crate::clock::Clock;
 use crate::history::History;
 use crate::registry::Registry;
 use crate::sidebar::{NewThread, Sidebar};
@@ -6,13 +7,10 @@ use crate::switcher::{SwitchTarget, SwitcherEvent, ThreadSwitcher};
 use crate::target::{AgentCommandLine, Connector};
 use crate::thread_view::{ThreadTab, ThreadView};
 use crate::threads::{Attention, ThreadEvent, ThreadId, ThreadManager};
+use crate::ui::{EmptyState, Typography, TypographyExt, UI_FONT};
 use crate::{menus::Quit, notification, theme::DesktopTheme, window_chrome};
 use aether_sessions::SessionStore;
 use agent_client_protocol::schema::v2::SessionId;
-use clankerdiff_gpui::{
-    DEFAULT_FONT_FAMILY,
-    ui::prelude::{EmptyState, NoticeTone},
-};
 use gpui::{App, Context, Entity, FocusHandle, KeyBinding, Subscription, Window, actions, div, prelude::*};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -55,6 +53,8 @@ pub struct DesktopApp {
 pub struct DesktopConfig {
     /// Connects every thread to its agent.
     pub connector: Arc<dyn Connector>,
+    /// Tells how old saved sessions are.
+    pub clock: Arc<dyn Clock>,
     /// Starts the agent process of a new local thread.
     pub agent: AgentCommandLine,
     /// Where saved sessions are read from. Without one the app shows no history.
@@ -69,7 +69,7 @@ impl DesktopApp {
     /// been read. Clicking one of the app's notifications brings the window back with the
     /// notification's thread selected.
     pub fn new(config: DesktopConfig, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let DesktopConfig { connector, agent, sessions, registry } = config;
+        let DesktopConfig { connector, clock, agent, sessions, registry } = config;
         install_theme(&registry, window, cx);
         let window_active = window.is_window_active();
         let threads = cx.new(|cx| {
@@ -82,7 +82,7 @@ impl DesktopApp {
             history.refresh(cx);
             history
         });
-        let sidebar = cx.new(|cx| Sidebar::new(threads.clone(), history.clone(), registry.clone(), cx));
+        let sidebar = cx.new(|cx| Sidebar::new(threads.clone(), history.clone(), registry.clone(), clock, cx));
         let subscriptions = vec![
             cx.observe_window_appearance(window, |this, window, cx| {
                 install_theme(&this.registry, window, cx);
@@ -315,13 +315,9 @@ impl Render for DesktopApp {
         let selected = self.threads.read(cx).selected().and_then(|id| self.thread_view(id));
         let main = div().debug_selector(|| "main".to_owned()).flex_1().min_w_0().h_full().child(match selected {
             Some(view) => view.clone().into_any_element(),
-            None => EmptyState::new(
-                "No thread selected",
-                "Select or start a thread to chat with an agent",
-                NoticeTone::Neutral,
-                theme,
-            )
-            .into_any_element(),
+            None => {
+                EmptyState::new("No thread selected", "Select a thread, or start a new one", theme).into_any_element()
+            }
         });
         let content = div()
             .track_focus(&self.focus_handle)
@@ -336,7 +332,8 @@ impl Render for DesktopApp {
             .flex()
             .bg(theme.colors.canvas)
             .text_color(theme.colors.text)
-            .font_family(DEFAULT_FONT_FAMILY)
+            .font_family(UI_FONT)
+            .typography(Typography::Body)
             .child(self.sidebar.clone())
             .child(main)
             .children(self.switcher.as_ref().map(|(switcher, _)| switcher.clone()))

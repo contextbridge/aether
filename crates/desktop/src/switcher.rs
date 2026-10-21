@@ -3,11 +3,13 @@
 use crate::fuzzy;
 use crate::theme::DesktopTheme;
 use crate::threads::ThreadId;
+use crate::ui::tokens::{BAR_HEIGHT, GROUP_HEIGHT, RADIUS_CONTAINER};
+use crate::ui::{Icon, IconName, ListItem, Typography, TypographyExt};
 use agent_client_protocol::schema::v2::SessionId;
-use clankerdiff_gpui::ui::prelude::{ListRow, Modal, MutedText, SelectionState};
 use gpui::{
-    AnyElement, ClickEvent, Context, Entity, EventEmitter, SharedString, Subscription, Window, div, prelude::*,
+    AnyElement, ClickEvent, Context, Entity, EventEmitter, MouseButton, Subscription, Window, div, prelude::*, px,
 };
+use gpui_base::Selectable as _;
 use gpui_base::input::{Enter, Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
 use std::path::PathBuf;
 
@@ -100,13 +102,18 @@ impl ThreadSwitcher {
             SwitchTarget::Live(id) => format!("switcher-thread-{id}"),
             SwitchTarget::Saved { session_id, .. } => format!("switcher-session-{}", session_id.0),
         };
-        let state = if position == self.highlighted { SelectionState::Selected } else { SelectionState::None };
-        let row = ListRow::new(SharedString::from(selector.clone()), theme)
-            .state(state)
+        ListItem::new(selector, theme)
+            .selected(position == self.highlighted)
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.choose(position, cx)))
             .child(div().flex_1().min_w_0().truncate().child(entry.title.clone()))
-            .child(div().flex_none().text_sm().child(MutedText::new(entry.project.clone(), theme)));
-        div().debug_selector(move || selector).child(row).into_any_element()
+            .child(
+                div()
+                    .flex_none()
+                    .typography(Typography::Small)
+                    .text_color(theme.colors.text_muted)
+                    .child(entry.project.clone()),
+            )
+            .into_any_element()
     }
 }
 
@@ -121,22 +128,54 @@ impl Render for ThreadSwitcher {
             .enumerate()
             .map(|(position, &index)| self.render_entry(position, &self.entries[index], cx))
             .collect();
+        let colors = theme.colors;
         let search = div()
             .flex_none()
-            .mb_2()
-            .px_2()
-            .py_1()
-            .rounded_md()
-            .border_1()
-            .border_color(theme.colors.accent)
-            .bg(theme.colors.canvas)
-            .child(Input::new(&self.input));
-        let content = div()
+            .h(px(BAR_HEIGHT))
+            .px_3()
+            .flex()
+            .items_center()
+            .gap_2()
+            .border_b_1()
+            .border_color(colors.border)
+            .child(Icon::new(IconName::Search, colors.text_muted))
+            .child(div().flex_1().min_w_0().child(Input::new(&self.input)));
+        let list = if rows.is_empty() {
+            div().flex_1().p_4().typography(Typography::Body).text_color(colors.text_muted).child("No matching threads")
+        } else {
+            div()
+                .flex_1()
+                .min_h_0()
+                .child(div().id("thread-switcher-list").size_full().overflow_y_scroll().p_1().children(rows))
+        };
+        let hints = div()
+            .flex_none()
+            .h(px(GROUP_HEIGHT))
+            .px_3()
+            .flex()
+            .items_center()
+            .gap_4()
+            .border_t_1()
+            .border_color(colors.border)
+            .typography(Typography::Caption)
+            .text_color(colors.text_muted)
+            .child("↑↓ Move")
+            .child("↵ Open")
+            .child("Esc Close");
+        let panel = div()
             .debug_selector(|| "thread-switcher".to_owned())
-            .size_full()
+            .w(px(SWITCHER_WIDTH))
+            .max_w_full()
+            .h(px(SWITCHER_HEIGHT))
             .min_h_0()
             .flex()
             .flex_col()
+            .overflow_hidden()
+            .rounded(px(RADIUS_CONTAINER))
+            .border_1()
+            .border_color(colors.border)
+            .bg(colors.surface)
+            .shadow_lg()
             // Captured on the way down to the search field, which would otherwise move its cursor.
             .capture_action(cx.listener(|this, _: &MoveUp, _, cx| {
                 this.step(-1, cx);
@@ -149,14 +188,26 @@ impl Render for ThreadSwitcher {
             .on_action(cx.listener(|this, _: &Enter, _, cx| this.choose(this.highlighted, cx)))
             .on_action(cx.listener(|_, _: &Escape, _, cx| cx.emit(SwitcherEvent::Dismissed)))
             .child(search)
-            .child(div().id("thread-switcher-list").min_h_0().flex_1().overflow_y_scroll().children(rows));
-        Modal::new("thread-switcher-modal", "Switch thread", theme)
-            .hint("↑↓ to move · Enter to open · Esc to close")
-            .width(SWITCHER_WIDTH)
-            .height(SWITCHER_HEIGHT)
-            .child(content)
+            .child(list)
+            .child(hints);
+        div()
+            .id("thread-switcher-backdrop")
+            .absolute()
+            .inset_0()
+            .flex()
+            .flex_col()
+            .items_center()
+            .pt(px(SWITCHER_TOP))
+            .px_4()
+            .bg(colors.scrim)
+            .occlude()
+            .on_mouse_down(MouseButton::Left, cx.listener(|_, _, _, cx| cx.emit(SwitcherEvent::Dismissed)))
+            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+            .child(div().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).child(panel))
     }
 }
 
 const SWITCHER_WIDTH: f32 = 560.0;
-const SWITCHER_HEIGHT: f32 = 420.0;
+const SWITCHER_HEIGHT: f32 = 416.0;
+/// How far below the window's top the switcher opens, so it reads as a palette over the content.
+const SWITCHER_TOP: f32 = 96.0;

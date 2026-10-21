@@ -96,6 +96,15 @@ impl Registry {
         }
     }
 
+    /// Stops listing `root`. Its sessions are kept, and opening a thread in it adds it again.
+    pub fn remove_project(&mut self, root: &Path, cx: &mut Context<Self>) {
+        let projects = self.state.projects.len();
+        self.state.projects.retain(|project| project != root);
+        if self.state.projects.len() < projects {
+            self.changed(cx);
+        }
+    }
+
     /// Whether the user expanded or collapsed the project, if they did.
     pub fn disclosure(&self, root: &Path) -> Option<Disclosure> {
         self.state.disclosures.get(root).copied()
@@ -132,6 +141,17 @@ impl Registry {
 
     pub fn unarchive(&mut self, session_id: &SessionId, cx: &mut Context<Self>) {
         self.update_thread(session_id, |meta| meta.archived = false, cx);
+    }
+
+    /// Archives every thread in `session_ids`, saving once.
+    pub fn archive_all(&mut self, session_ids: impl IntoIterator<Item = SessionId>, cx: &mut Context<Self>) {
+        let mut changed = false;
+        for session_id in session_ids {
+            changed |= self.edit_thread(&session_id, |meta| meta.archived = true);
+        }
+        if changed {
+            self.changed(cx);
+        }
     }
 
     /// The size the main window had when last resized.
@@ -173,17 +193,24 @@ impl Registry {
     /// Applies `update` to the thread's metadata, forgetting the thread once nothing is left to
     /// remember about it.
     fn update_thread(&mut self, session_id: &SessionId, update: impl FnOnce(&mut ThreadMeta), cx: &mut Context<Self>) {
+        if self.edit_thread(session_id, update) {
+            self.changed(cx);
+        }
+    }
+
+    /// Applies `update` without saving, returning whether it changed anything.
+    fn edit_thread(&mut self, session_id: &SessionId, update: impl FnOnce(&mut ThreadMeta)) -> bool {
         let mut meta = self.thread(session_id).clone();
         update(&mut meta);
         if meta == *self.thread(session_id) {
-            return;
+            return false;
         }
         if meta == NO_META {
             self.state.threads.remove(session_id);
         } else {
             self.state.threads.insert(session_id.clone(), meta);
         }
-        self.changed(cx);
+        true
     }
 
     fn changed(&mut self, cx: &mut Context<Self>) {

@@ -1,35 +1,46 @@
-//! The thread sidebar: each project with its pinned threads first, then its live threads above
-//! its saved sessions, and its archived threads in a group of their own at the bottom.
+//! The thread sidebar: each of the user's projects with its pinned threads first, then its live
+//! threads above its recent saved sessions, and its archived threads in a group of their own at
+//! the bottom.
 
 mod project_section;
 mod status_dot;
-mod thread_menu;
 mod thread_row;
 
 pub use status_dot::{Seen, StatusDot};
 pub use thread_row::relative_time;
 
+use crate::OpenThreadSwitcher;
+use crate::clock::Clock;
 use crate::history::{History, HistoryEntry, git_root};
 use crate::registry::{Disclosure, Registry, ThreadMeta};
 use crate::switcher::{SwitchTarget, SwitcherEntry};
 use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadId, ThreadManager};
+use crate::ui::tokens::{BAR_HEIGHT, RADIUS_CONTROL};
+use crate::ui::{
+    Button, ButtonVariant, EmptyState, IconButton, IconName, MenuItem, Typography, TypographyExt, tokens, with_menu,
+};
 use agent_client_protocol::schema::v2::SessionId;
-use clankerdiff_gpui::ui::prelude::{Button, ButtonVariant, EmptyState, NoticeTone, UiTheme};
+use chrono::{DateTime, Duration, Utc};
+use clankerdiff_gpui::ui::prelude::UiTheme;
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, PathPromptOptions, Pixels, Subscription, Window, actions, div,
-    prelude::*, px,
+    AnyElement, App, ClickEvent, Context, Entity, MouseButton, PathPromptOptions, Pixels, Subscription, Window,
+    actions, div, prelude::*, px,
 };
 use gpui_base::Selectable as _;
 use gpui_base::input::{Enter, Escape, Input, InputState};
 use project_section::{ArchivedGroup, ProjectSection};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use thread_menu::MenuItem;
+use std::sync::Arc;
 use thread_row::ThreadRow;
 
 /// Width of the thread sidebar, which stays fixed as the window resizes.
-pub const SIDEBAR_WIDTH: Pixels = px(260.0);
+pub const SIDEBAR_WIDTH: Pixels = px(tokens::SIDEBAR_WIDTH);
+
+/// How old a saved session may be and still be listed, unless it is pinned. Older ones are found
+/// through the thread switcher.
+pub const RECENT: Duration = Duration::days(7);
 
 actions!(
     aether_desktop,
@@ -39,8 +50,8 @@ actions!(
     ]
 );
 
-/// Lists the projects, added ones first and then those only history or live threads know
-/// about, each with its threads.
+/// Lists the user's projects, those added through "Add project" or by opening a thread in them,
+/// each with its threads. Projects only history knows about are not listed.
 ///
 /// Which threads are pinned, archived or renamed comes from the [`Registry`] each time the
 /// sidebar renders.
@@ -48,10 +59,9 @@ pub struct Sidebar {
     threads: Entity<ThreadManager>,
     history: Entity<History>,
     registry: Entity<Registry>,
+    clock: Arc<dyn Clock>,
     /// How many saved sessions each project lists, for those whose "Show more" was clicked.
     shown: HashMap<PathBuf, usize>,
-    /// Projects a thread was opened in this run.
-    opened: HashSet<PathBuf>,
     /// Projects whose "Archived" group is expanded.
     archive_expanded: HashSet<PathBuf>,
     /// The thread whose title is being edited.
@@ -64,18 +74,24 @@ impl Sidebar {
         threads: Entity<ThreadManager>,
         history: Entity<History>,
         registry: Entity<Registry>,
+        clock: Arc<dyn Clock>,
         cx: &mut Context<Self>,
     ) -> Self {
         let threads_changed = cx.observe(&threads, |this, threads, cx| {
-            let projects = threads.read(cx).threads().iter().map(|thread| thread.read(cx).project().to_path_buf());
-            this.opened.extend(projects);
+            let projects: Vec<PathBuf> =
+                threads.read(cx).threads().iter().map(|thread| thread.read(cx).project().to_path_buf()).collect();
+            this.registry.update(cx, |registry, cx| {
+                for project in projects {
+                    registry.add_project(project, cx);
+                }
+            });
         });
         Self {
             threads,
             history,
             registry,
+            clock,
             shown: HashMap::new(),
-            opened: HashSet::new(),
             archive_expanded: HashSet::new(),
             rename: None,
             _threads_changed: threads_changed,
@@ -120,8 +136,7 @@ impl Sidebar {
     }
 
     /// Every thread, for the thread switcher: the live ones in [their order](Self::live_order),
-    /// then each project's saved sessions that no live thread has open, including those the
-    /// sidebar hides.
+    /// then every saved session that no live thread has open, including those the sidebar hides.
     pub(crate) fn switcher_entries(&self, cx: &App) -> Vec<SwitcherEntry> {
         let registry = self.registry.read(cx);
         let threads = self.threads.read(cx);
@@ -133,8 +148,7 @@ impl Sidebar {
                 target: SwitchTarget::Live(read.id()),
             }
         });
-        let live_sessions: HashSet<&str> =
-            threads.threads().iter().filter_map(|thread| thread.read(cx).session_id()).map(|id| &*id.0).collect();
+        let live_sessions = live_sessions(threads.threads(), cx);
         let saved = self.history.read(cx).projects().iter().flat_map(|project| {
             project.sessions.iter().filter(|entry| !live_sessions.contains(entry.session_id.as_str())).map(|entry| {
                 SwitcherEntry {
@@ -164,8 +178,12 @@ impl Sidebar {
             .or_else(|| self.sections(cx).into_iter().next().map(|section| section.root))
     }
 
+    fn add_project(&self, root: PathBuf, cx: &mut Context<Self>) {
+        self.registry.update(cx, |registry, cx| registry.add_project(root, cx));
+    }
+
     /// Asks for a folder and adds the project it is in.
-    fn add_project(&self, cx: &mut Context<Self>) {
+    fn browse_for_project(&self, cx: &mut Context<Self>) {
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -184,6 +202,28 @@ impl Sidebar {
             });
         })
         .detach();
+    }
+
+    /// Archives the project's saved sessions that are neither pinned nor open in a live thread.
+    fn archive_inactive(&self, root: &Path, cx: &mut Context<Self>) {
+        let live_sessions = live_sessions(self.threads.read(cx).threads(), cx);
+        let registry = self.registry.read(cx);
+        let inactive: Vec<SessionId> = self
+            .history
+            .read(cx)
+            .projects()
+            .iter()
+            .filter(|project| project.root == root)
+            .flat_map(|project| &project.sessions)
+            .filter(|entry| !live_sessions.contains(entry.session_id.as_str()))
+            .map(|entry| SessionId::new(entry.session_id.as_str()))
+            .filter(|session_id| !registry.thread(session_id).pinned)
+            .collect();
+        self.registry.update(cx, |registry, cx| registry.archive_all(inactive, cx));
+    }
+
+    fn remove_project(&self, root: &Path, cx: &mut Context<Self>) {
+        self.registry.update(cx, |registry, cx| registry.remove_project(root, cx));
     }
 
     fn set_disclosure(&self, root: PathBuf, disclosure: Disclosure, cx: &mut Context<Self>) {
@@ -233,36 +273,40 @@ impl Sidebar {
         }
     }
 
+    /// The registry's projects, then those of live threads it does not list.
+    fn roots<'a>(registry: &'a Registry, threads: &'a [Entity<Thread>], cx: &'a App) -> Vec<&'a Path> {
+        let mut seen = HashSet::new();
+        registry
+            .projects()
+            .iter()
+            .map(PathBuf::as_path)
+            .chain(threads.iter().map(|thread| thread.read(cx).project()))
+            .filter(|root| seen.insert(*root))
+            .collect()
+    }
+
     fn sections(&self, cx: &App) -> Vec<Section> {
         let registry = self.registry.read(cx);
         let threads = self.threads.read(cx).threads();
-        let live_sessions: HashSet<&str> =
-            threads.iter().filter_map(|thread| thread.read(cx).session_id()).map(|id| &*id.0).collect();
+        let live_sessions = live_sessions(threads, cx);
         let mut live: HashMap<&Path, Vec<Row>> = HashMap::new();
         for thread in threads {
             live.entry(thread.read(cx).project()).or_default().push(Row::live(thread, registry, cx));
         }
-        let projects = self.history.read(cx).projects();
-        let history: HashMap<&Path, &[HistoryEntry]> =
-            projects.iter().map(|project| (project.root.as_path(), project.sessions.as_slice())).collect();
-        let roots = registry
+        let history: HashMap<&Path, &[HistoryEntry]> = self
+            .history
+            .read(cx)
             .projects()
             .iter()
-            .map(PathBuf::as_path)
-            .chain(projects.iter().map(|project| project.root.as_path()))
-            .chain(threads.iter().map(|thread| thread.read(cx).project()));
-        let mut seen = HashSet::new();
-        roots
-            .filter(|root| seen.insert(*root))
+            .map(|project| (project.root.as_path(), project.sessions.as_slice()))
+            .collect();
+        let cutoff = self.clock.now() - RECENT;
+        Self::roots(registry, threads, cx)
+            .into_iter()
             .map(|root| {
-                let disclosure = self.disclosure(root, registry);
-                let mut section = Section {
-                    root: root.to_path_buf(),
-                    disclosure,
-                    rows: Vec::new(),
-                    more: false,
-                    archived: Vec::new(),
-                };
+                let disclosure = registry.disclosure(root).unwrap_or(Disclosure::Expanded);
+                let mut section =
+                    Section { root: root.to_path_buf(), disclosure, rows: Vec::new(), hidden: 0, archived: Vec::new() };
                 if disclosure == Disclosure::Collapsed {
                     return section;
                 }
@@ -272,31 +316,96 @@ impl Sidebar {
                     .unwrap_or_default()
                     .iter()
                     .filter(|entry| !live_sessions.contains(entry.session_id.as_str()))
-                    .map(|entry| Row::saved(entry.clone(), registry));
+                    .map(|entry| Row::saved(entry.clone(), registry))
+                    .filter(|row| row.meta.pinned || row.is_recent(cutoff));
                 let (archived, listed): (Vec<Row>, Vec<Row>) =
                     live.remove(root).unwrap_or_default().into_iter().chain(saved).partition(|row| row.meta.archived);
                 let limit = self.shown.get(root).copied().unwrap_or(SAVED_ROWS);
-                (section.rows, section.more) = visible(listed, limit);
+                (section.rows, section.hidden) = visible(listed, limit);
                 section.archived = archived;
                 section
             })
             .collect()
     }
 
-    /// The user's choice if they made one. Otherwise a project starts expanded when it was added
-    /// or a thread was opened in it, and collapsed when only history knows about it.
-    fn disclosure(&self, root: &Path, registry: &Registry) -> Disclosure {
-        registry.disclosure(root).unwrap_or_else(|| {
-            if self.opened.contains(root) || registry.projects().iter().any(|added| added == root) {
-                Disclosure::Expanded
-            } else {
-                Disclosure::Collapsed
-            }
+    /// The projects history knows about that the sidebar does not list, most recent first.
+    fn unlisted_projects(&self, cx: &App) -> Vec<PathBuf> {
+        let registry = self.registry.read(cx);
+        let listed = Self::roots(registry, self.threads.read(cx).threads(), cx);
+        self.history
+            .read(cx)
+            .projects()
+            .iter()
+            .map(|project| project.root.clone())
+            .filter(|root| !listed.contains(&root.as_path()))
+            .take(RECENT_PROJECTS)
+            .collect()
+    }
+
+    fn render_header(has_projects: bool, theme: &UiTheme, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex_none()
+            .h(px(BAR_HEIGHT))
+            .pl_4()
+            .pr_2()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .typography(Typography::Label)
+                    .text_color(theme.colors.text_muted)
+                    .child("Threads"),
+            )
+            .child(
+                IconButton::new("search-threads", IconName::Search, "Search threads", *theme)
+                    .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenThreadSwitcher), cx)),
+            )
+            .child(
+                IconButton::new("new-thread", IconName::SquarePen, "New thread", *theme).when(has_projects, |button| {
+                    button.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.new_thread(cx)))
+                }),
+            )
+    }
+
+    /// "Add project", which offers the recent projects history knows about and a folder picker.
+    fn render_footer(&self, theme: &UiTheme, cx: &mut Context<Self>) -> impl IntoElement {
+        let sidebar = cx.entity();
+        let mut items: Vec<MenuItem> = self
+            .unlisted_projects(cx)
+            .into_iter()
+            .map(|root| {
+                let sidebar = sidebar.clone();
+                let name = project_name(&root);
+                MenuItem::new(format!("add-project-recent-{name}"), name, move |_, cx| {
+                    sidebar.update(cx, |sidebar, cx| sidebar.add_project(root.clone(), cx));
+                })
+            })
+            .collect();
+        let browse = MenuItem::new("add-project-browse", "Choose folder…", move |_, cx| {
+            sidebar.update(cx, |sidebar, cx| sidebar.browse_for_project(cx));
         })
+        .icon(IconName::FolderPlus);
+        items.push(browse);
+        let trigger = Button::new("add-project", "Add project", *theme)
+            .icon(IconName::Plus)
+            .variant(ButtonVariant::Ghost)
+            .full_width();
+        div()
+            .flex_none()
+            .h(px(BAR_HEIGHT))
+            .px_2()
+            .flex()
+            .items_center()
+            .border_t_1()
+            .border_color(theme.colors.border)
+            .child(with_menu("add-project", trigger, MouseButton::Left, items, theme).w_full())
     }
 
     fn render_section(&self, section: Section, theme: &UiTheme, cx: &mut Context<Self>) -> ProjectSection {
-        let Section { root, disclosure, rows, more, archived } = section;
+        let Section { root, disclosure, rows, hidden, archived } = section;
         let rows: Vec<AnyElement> = rows.into_iter().map(|row| self.render_row(row, theme, cx)).collect();
         let archived = (!archived.is_empty()).then(|| {
             let toggled = root.clone();
@@ -312,10 +421,23 @@ impl Sidebar {
                 rows: archived.into_iter().map(|row| self.render_row(row, theme, cx)).collect(),
             }
         });
-        let more = more.then(|| {
+        let more = (hidden > 0).then(|| {
             let root = root.clone();
-            cx.listener(move |this, _: &ClickEvent, _, cx| this.show_more(root.clone(), cx))
+            (hidden, cx.listener(move |this, _: &ClickEvent, _, cx| this.show_more(root.clone(), cx)))
         });
+        let sidebar = cx.entity();
+        let (archive_root, remove_root) = (root.clone(), root.clone());
+        let actions = vec![
+            MenuItem::new("menu-archive-inactive", "Archive inactive threads", {
+                let sidebar = sidebar.clone();
+                move |_, cx| sidebar.update(cx, |sidebar, cx| sidebar.archive_inactive(&archive_root, cx))
+            })
+            .icon(IconName::Archive),
+            MenuItem::new("menu-remove-project", "Remove from sidebar", move |_, cx| {
+                sidebar.update(cx, |sidebar, cx| sidebar.remove_project(&remove_root, cx));
+            })
+            .icon(IconName::X),
+        ];
         let toggled = root.clone();
         let new_thread_root = root.clone();
         ProjectSection::new(project_name(&root), theme)
@@ -326,7 +448,8 @@ impl Sidebar {
             .on_new_thread(
                 cx.listener(move |this, _: &ClickEvent, _, cx| this.new_thread_in(new_thread_root.clone(), cx)),
             )
-            .when_some(more, ProjectSection::on_show_more)
+            .actions(actions)
+            .when_some(more, |section, (hidden, handler)| section.on_show_more(hidden, handler))
             .when_some(archived, ProjectSection::archived)
             .children(rows)
     }
@@ -336,8 +459,21 @@ impl Sidebar {
         let Row { selector, kind, session_id, title, meta } = row;
         let editing = self.rename.as_ref().filter(|rename| session_id.as_ref() == Some(&rename.session_id));
         let mut items =
-            session_id.map(|session_id| self.thread_items(session_id, &title, &meta, cx)).unwrap_or_default();
-        let mut thread_row = ThreadRow::new(selector.clone(), title, theme);
+            session_id.clone().map(|session_id| self.thread_items(session_id, &title, &meta, cx)).unwrap_or_default();
+        let mut thread_row = ThreadRow::new(selector.clone(), title, theme).now(self.clock.now());
+        if let Some(session_id) = session_id {
+            let registry = self.registry.clone();
+            let archived = meta.archived;
+            thread_row = thread_row.on_archive(archived, move |_, _, cx| {
+                registry.update(cx, |registry, cx| {
+                    if archived {
+                        registry.unarchive(&session_id, cx);
+                    } else {
+                        registry.archive(&session_id, cx);
+                    }
+                });
+            });
+        }
         match kind {
             RowKind::Live(thread) => {
                 let manager = self.threads.read(cx);
@@ -356,9 +492,12 @@ impl Sidebar {
                     .when(status.can_reconnect(), |row| {
                         row.on_reconnect(move |_, _, cx| reconnect.update(cx, |threads, cx| threads.reconnect(id, cx)))
                     });
-                items.push(MenuItem::new("menu-stop", "Stop", move |_, cx| {
-                    menu_stop.update(cx, |threads, cx| threads.stop(id, cx));
-                }));
+                items.push(
+                    MenuItem::new("menu-stop", "Stop", move |_, cx| {
+                        menu_stop.update(cx, |threads, cx| threads.stop(id, cx));
+                    })
+                    .icon(IconName::Square),
+                );
             }
             RowKind::Saved(HistoryEntry { session_id, cwd, created_at, .. }) => {
                 let threads = self.threads.clone();
@@ -372,7 +511,7 @@ impl Sidebar {
         if let Some(Rename { input, .. }) = editing {
             thread_row = thread_row.editor(Self::render_editor(input, theme, cx));
         }
-        thread_menu::with_menu(&selector, thread_row, items, theme).into_any_element()
+        with_menu(&selector, thread_row, MouseButton::Right, items, theme).w_full().into_any_element()
     }
 
     /// The menu entries every thread with a session has, whether live or saved.
@@ -382,16 +521,18 @@ impl Sidebar {
         let rename_id = session_id.clone();
         let rename = MenuItem::new("menu-rename", "Rename", move |window, cx| {
             sidebar.update(cx, |sidebar, cx| sidebar.start_rename(rename_id.clone(), &title, window, cx));
-        });
+        })
+        .icon(IconName::Pencil);
         let pin = if meta.pinned {
-            self.registry_item("menu-unpin", "Unpin", session_id.clone(), Registry::unpin)
+            self.registry_item("menu-unpin", "Unpin", session_id.clone(), Registry::unpin).icon(IconName::PinOff)
         } else {
-            self.registry_item("menu-pin", "Pin", session_id.clone(), Registry::pin)
+            self.registry_item("menu-pin", "Pin", session_id.clone(), Registry::pin).icon(IconName::Pin)
         };
         let archive = if meta.archived {
             self.registry_item("menu-unarchive", "Unarchive", session_id, Registry::unarchive)
+                .icon(IconName::ArchiveRestore)
         } else {
-            self.registry_item("menu-archive", "Archive", session_id, Registry::archive)
+            self.registry_item("menu-archive", "Archive", session_id, Registry::archive).icon(IconName::Archive)
         };
         vec![rename, pin, archive]
     }
@@ -417,10 +558,10 @@ impl Sidebar {
             .w_full()
             .min_w_0()
             .px_1()
-            .rounded_sm()
+            .rounded(px(RADIUS_CONTROL))
             .border_1()
             .border_color(theme.colors.accent)
-            .bg(theme.colors.surface)
+            .bg(theme.colors.canvas)
             .on_action(cx.listener(|this, _: &Enter, _, cx| this.commit_rename(cx)))
             .on_action(cx.listener(|this, _: &Escape, _, cx| this.cancel_rename(cx)))
             .child(Input::new(input))
@@ -437,13 +578,21 @@ impl Render for Sidebar {
             sections.into_iter().map(|section| self.render_section(section, &theme, cx)).collect();
         let projects = if has_projects {
             div().flex_1().min_h_0().child(
-                div().id("projects").size_full().overflow_y_scroll().flex().flex_col().gap_1().children(sections),
+                div()
+                    .id("projects")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .px_2()
+                    .pb_2()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .children(sections),
             )
         } else {
             div().flex_1().min_h_0().child(EmptyState::new(
                 "No projects",
                 "Add a project to start a thread in it",
-                NoticeTone::Neutral,
                 theme,
             ))
         };
@@ -454,23 +603,12 @@ impl Render for Sidebar {
             .h_full()
             .flex()
             .flex_col()
+            .bg(theme.colors.surface)
             .border_r_1()
             .border_color(theme.colors.border)
-            .child(
-                div().flex_none().p_2().child(
-                    Button::new("new-thread", "New thread", theme)
-                        .variant(ButtonVariant::Primary)
-                        .disabled(!has_projects)
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.new_thread(cx))),
-                ),
-            )
+            .child(Self::render_header(has_projects, &theme, cx))
             .child(projects)
-            .child(
-                div().flex_none().p_2().border_t_1().border_color(theme.colors.border).child(
-                    Button::new("add-project", "Add project", theme)
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.add_project(cx))),
-                ),
-            )
+            .child(self.render_footer(&theme, cx))
     }
 }
 
@@ -482,14 +620,17 @@ const SAVED_ROWS: usize = 5;
 /// How many more saved sessions each click of "Show more" reveals.
 const MORE_SAVED_ROWS: usize = 20;
 
+/// How many unlisted projects "Add project" offers.
+const RECENT_PROJECTS: usize = 8;
+
 /// A project as the sidebar lists it. Everything but its header is empty while it is collapsed.
 struct Section {
     root: PathBuf,
     disclosure: Disclosure,
     /// The rows it shows above its "Show more" row.
     rows: Vec<Row>,
-    /// Whether some saved sessions are hidden behind "Show more".
-    more: bool,
+    /// How many saved sessions are hidden behind "Show more".
+    hidden: usize,
     archived: Vec<Row>,
 }
 
@@ -540,25 +681,38 @@ impl Row {
             meta,
         }
     }
+
+    /// Whether the row is live, or a saved session started at or after `cutoff`.
+    fn is_recent(&self, cutoff: DateTime<Utc>) -> bool {
+        match &self.kind {
+            RowKind::Live(_) => true,
+            RowKind::Saved(entry) => entry.created_at.is_some_and(|created_at| created_at >= cutoff),
+        }
+    }
 }
 
 /// The pinned rows first, then the others in their order, of which only the first `limit`
-/// unpinned saved sessions are kept; and whether some were left out.
-fn visible(rows: Vec<Row>, limit: usize) -> (Vec<Row>, bool) {
+/// unpinned saved sessions are kept; and how many were left out.
+fn visible(rows: Vec<Row>, limit: usize) -> (Vec<Row>, usize) {
     let (mut visible, unpinned): (Vec<Row>, Vec<Row>) = rows.into_iter().partition(|row| row.meta.pinned);
     let mut saved = 0;
-    let mut more = false;
+    let mut hidden = 0;
     for row in unpinned {
         if matches!(row.kind, RowKind::Saved(_)) {
             saved += 1;
             if saved > limit {
-                more = true;
+                hidden += 1;
                 continue;
             }
         }
         visible.push(row);
     }
-    (visible, more)
+    (visible, hidden)
+}
+
+/// The sessions live threads have open.
+fn live_sessions<'a>(threads: &'a [Entity<Thread>], cx: &'a App) -> HashSet<&'a str> {
+    threads.iter().filter_map(|thread| thread.read(cx).session_id()).map(|id| &*id.0).collect()
 }
 
 fn project_name(root: &Path) -> String {

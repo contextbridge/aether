@@ -1,6 +1,7 @@
 //! Integration-test support: opens the production [`DesktopApp`] in a gpui test window, with
 //! in-memory agents in place of agent processes.
 
+use crate::clock::Clock;
 use crate::history::History;
 use crate::registry::{Registry, STATE_FILE};
 use crate::target::{
@@ -11,6 +12,7 @@ use crate::{DesktopApp, DesktopConfig, DesktopTheme, cli::DEFAULT_AGENT, init, r
 use acp_utils::testing::{Channel, FakeAgent};
 use aether_sessions::SessionStore;
 use aether_sessions::testing::TestStore;
+use chrono::{DateTime, Utc};
 use client_core::session::Connection;
 use client_core::testing::{FakeGit, FakeGitDiffServer};
 use gpui::{
@@ -24,6 +26,10 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::runtime::{Builder, Runtime};
 use tokio::task::{AbortHandle, yield_now};
 
+/// The moment a harness runs at unless given another: a week after 2026-01-01, so sessions saved
+/// in the first week of January 2026 are recent.
+pub const DEFAULT_NOW: &str = "2026-01-07T12:00:00Z";
+
 /// The file the `fake-acp-agent` test binary holds an exclusive lock on, in its working
 /// directory, for as long as it runs.
 pub const FAKE_AGENT_LOCK_FILE: &str = "agent.lock";
@@ -35,6 +41,16 @@ pub struct DesktopHarnessBuilder {
     projects: Vec<PathBuf>,
     sessions: TestStore,
     state_dir: Option<PathBuf>,
+    now: DateTime<Utc>,
+}
+
+/// A [`Clock`] stopped at one moment.
+pub struct FakeClock(pub DateTime<Utc>);
+
+impl Clock for FakeClock {
+    fn now(&self) -> DateTime<Utc> {
+        self.0
+    }
 }
 
 /// A [`Connector`] that serves each thread an in-memory [`FakeAgent`] instead of starting a
@@ -58,6 +74,7 @@ impl Default for DesktopHarnessBuilder {
             projects: Vec::new(),
             sessions: TestStore::new(),
             state_dir: None,
+            now: parse_time(DEFAULT_NOW),
         }
     }
 }
@@ -66,6 +83,16 @@ impl DesktopHarnessBuilder {
     /// Opens the window at this size instead of the size it had when the app last ran.
     pub fn window_size(mut self, width: f32, height: f32) -> Self {
         self.window_size = Some(size(px(width), px(height)));
+        self
+    }
+
+    /// Runs the app as if it were `now`, an RFC 3339 time, instead of [`DEFAULT_NOW`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `now` is not an RFC 3339 time.
+    pub fn now(mut self, now: &str) -> Self {
+        self.now = parse_time(now);
         self
     }
 
@@ -120,6 +147,7 @@ impl DesktopHarnessBuilder {
         let bounds = Bounds::new(point(px(0.0), px(0.0)), window_size);
         let config = DesktopConfig {
             connector: Arc::new(self.connector),
+            clock: Arc::new(FakeClock(self.now)),
             agent: AgentCommandLine::new(DEFAULT_AGENT),
             sessions: Some(SessionStore::from_path(self.sessions.path().to_path_buf())),
             registry,
@@ -430,4 +458,8 @@ impl FakeConnectorState {
             live.retain(|agent| agent.id != id);
         }
     }
+}
+
+fn parse_time(time: &str) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(time).expect("an RFC 3339 time").to_utc()
 }

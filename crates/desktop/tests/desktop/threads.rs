@@ -87,11 +87,12 @@ fn stopping_a_thread_ends_its_agent_and_returns_its_session_to_history(cx: &mut 
 }
 
 #[gpui::test]
-fn a_session_stopped_in_a_project_only_history_knows_about_stays_in_view(cx: &mut TestAppContext) {
+fn a_stopped_threads_session_stays_listed(cx: &mut TestAppContext) {
     let sessions = TestStore::new();
     save_session(&sessions, "alpha-session", "/alpha", "2026-01-01T00:00:00Z", Some("hi"));
     let connector = FakeConnector::default().agent("/alpha", replying("alpha-session", "hello"));
-    let harness = DesktopHarnessBuilder::default().connector(connector.clone()).history(sessions).build(cx);
+    let harness =
+        DesktopHarnessBuilder::default().connector(connector.clone()).history(sessions).project("/alpha").build(cx);
     wait_for_history(&harness, cx);
     harness.click(cx, "project-alpha-new-thread").unwrap();
     let thread = harness.selected_thread(cx).expect("the new thread is selected");

@@ -54,6 +54,10 @@ fmt:
 lint *PKGS:
     cargo clippy --all-targets --all-features {{ if PKGS == "" { "--workspace" } else { PKGS } }} -- -D warnings
 
+# Check the desktop app keeps to its type scale and 4px grid
+desktop-style-check:
+    scripts/desktop-style-check
+
 # Verify checked SQL queries match the session-index schema
 sqlx-check:
     #!/usr/bin/env bash
@@ -96,7 +100,7 @@ sdk-e2e *ARGS:
     pnpm sdk:e2e {{ARGS}}
 
 # Run all CI checks
-ci: fmt-check lint test-ci doc-check sqlx-check wasm-check wasm-test
+ci: fmt-check lint desktop-style-check test-ci doc-check sqlx-check wasm-check wasm-test
     pnpm fmt-check
     pnpm sdk:typecheck
     pnpm sdk:test

@@ -1,15 +1,17 @@
 use crate::menus::APP_NAME;
+use crate::ui::tokens::BAR_HEIGHT;
+use crate::ui::{Icon, IconName, Typography, TypographyExt};
 use clankerdiff_gpui::ui::prelude::UiTheme;
 use gpui::{
-    AnyElement, App, BoxShadow, CursorStyle, Decorations, FontWeight, MouseButton, Pixels, Point, ResizeEdge, Size,
-    Tiling, Window, WindowButton, WindowButtonLayout, WindowControlArea, WindowControls, div, hsla, point, prelude::*,
-    px, transparent_black,
+    AnyElement, App, BoxShadow, CursorStyle, Decorations, MouseButton, Pixels, Point, ResizeEdge, Size, Tiling, Window,
+    WindowButton, WindowButtonLayout, WindowControlArea, WindowControls, div, hsla, point, prelude::*, px,
+    transparent_black,
 };
 
 const CLIENT_INSET: Pixels = px(8.0);
 const BORDER_SIZE: Pixels = px(1.0);
-const TITLE_BAR_HEIGHT: Pixels = px(36.0);
-const BUTTON_WIDTH: Pixels = px(42.0);
+const TITLE_BAR_HEIGHT: Pixels = px(BAR_HEIGHT);
+const BUTTON_WIDTH: Pixels = px(BAR_HEIGHT);
 
 /// Wraps `content` in a title bar, frame and resize zones when the platform
 /// asks the app to draw its own decorations (Wayland compositors without
@@ -47,7 +49,7 @@ pub(crate) fn decorate(content: AnyElement, theme: &UiTheme, window: &mut Window
         .when(!tiling.is_tiled(), |element| {
             element.shadow(vec![BoxShadow {
                 color: hsla(0.0, 0.0, 0.0, 0.35),
-                blur_radius: px(6.0),
+                blur_radius: px(8.0),
                 spread_radius: px(-1.0),
                 offset: point(px(0.0), px(1.0)),
                 inset: false,
@@ -109,17 +111,25 @@ fn title_bar(
             }
         })
         .child(window_button_group(theme, left_controls, is_maximized))
-        .child(div().flex_1().min_w_0().text_center().text_sm().font_weight(FontWeight::MEDIUM).child(APP_NAME))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_center()
+                .typography(Typography::BodyStrong)
+                .text_color(theme.colors.text_secondary)
+                .child(APP_NAME),
+        )
         .child(window_button_group(theme, right_controls, is_maximized))
 }
 
 fn window_button_group(theme: &UiTheme, buttons: Vec<WindowButton>, is_maximized: bool) -> impl IntoElement {
     div().h_full().flex().children(buttons.into_iter().map(|button| {
-        let (glyph, area) = match button {
-            WindowButton::Minimize => ("—", WindowControlArea::Min),
-            WindowButton::Maximize if is_maximized => ("❐", WindowControlArea::Max),
-            WindowButton::Maximize => ("□", WindowControlArea::Max),
-            WindowButton::Close => ("×", WindowControlArea::Close),
+        let (icon, area) = match button {
+            WindowButton::Minimize => (IconName::Minus, WindowControlArea::Min),
+            WindowButton::Maximize if is_maximized => (IconName::Copy, WindowControlArea::Max),
+            WindowButton::Maximize => (IconName::Square, WindowControlArea::Max),
+            WindowButton::Close => (IconName::X, WindowControlArea::Close),
         };
         let hover = if button == WindowButton::Close { theme.colors.destructive } else { theme.colors.surface_hover };
         div()
@@ -130,7 +140,6 @@ fn window_button_group(theme: &UiTheme, buttons: Vec<WindowButton>, is_maximized
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_sm()
                 .cursor(CursorStyle::PointingHand)
                 .hover(move |element| element.bg(hover))
                 // Keeps the title bar's mouse-down handler from starting a window move.
@@ -143,7 +152,7 @@ fn window_button_group(theme: &UiTheme, buttons: Vec<WindowButton>, is_maximized
                         WindowButton::Close => window.remove_window(),
                     }
                 })
-                .child(glyph)
+                .child(Icon::new(icon, theme.colors.text_secondary))
     }))
 }
 

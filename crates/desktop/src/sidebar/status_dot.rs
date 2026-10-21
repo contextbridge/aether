@@ -1,4 +1,5 @@
 use crate::threads::ThreadStatus;
+use crate::ui::tokens::DOT_SIZE;
 use clankerdiff_gpui::ui::prelude::UiTheme;
 use gpui::{
     Animation, AnimationExt, AnyElement, IntoElement, ParentElement, Styled, div, prelude::*, pulsating_between, px,
@@ -65,19 +66,17 @@ impl StatusDot {
                 .bg(colors.positive)
                 .with_animation(
                     selector.clone(),
-                    Animation::new(PULSE_PERIOD).repeat_synced().with_easing(pulsating_between(0.3, 1.0)),
+                    Animation::new(PULSE_PERIOD).repeat_synced().with_easing(pulsating_between(0.4, 1.0)),
                     Styled::opacity,
                 )
                 .into_any_element(),
             Self::Unread => dot.bg(colors.accent).into_any_element(),
             Self::NeedsInput => dot.bg(colors.warning).into_any_element(),
             Self::Errored => dot.bg(colors.destructive).into_any_element(),
-            Self::Dormant => dot.border_1().border_color(colors.text_muted).into_any_element(),
+            Self::Dormant => dot.border_1().border_color(colors.border).into_any_element(),
         };
         div().debug_selector(move || selector).child(dot).into_any_element()
     }
 }
-
-const DOT_SIZE: f32 = 8.0;
 
 const PULSE_PERIOD: Duration = Duration::from_millis(1600);

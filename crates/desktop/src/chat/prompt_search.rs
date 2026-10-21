@@ -1,9 +1,11 @@
 use crate::theme::DesktopTheme;
 use crate::threads::{PromptSearchEvent, Thread};
+use crate::ui::tokens::{RADIUS_CONTAINER, RADIUS_CONTROL};
+use crate::ui::{ListItem, Typography, TypographyExt};
 use acp_utils::notifications::PromptSearchResult;
-use clankerdiff_gpui::ui::prelude::{ListRow, MutedText, SelectionState};
 use client_core::composer::prompt_search::PromptSearchState;
-use gpui::{ClickEvent, Context, ElementId, Entity, EventEmitter, Subscription, Window, div, prelude::*, px};
+use gpui::{ClickEvent, Context, Entity, EventEmitter, Subscription, Window, div, prelude::*, px};
+use gpui_base::Selectable as _;
 use gpui_base::input::{Enter, Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
 
 /// A search through every prompt the agent has been sent, in any session, to send one again.
@@ -111,27 +113,27 @@ impl EventEmitter<PromptSearchOutcome> for PromptSearch {}
 impl Render for PromptSearch {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = DesktopTheme::global(cx).ui();
-        let mut results = div().id("prompt-search-results").max_h(px(RESULTS_HEIGHT)).overflow_y_scroll();
+        let mut results =
+            div().id("prompt-search-results").max_h(px(RESULTS_HEIGHT)).overflow_y_scroll().flex().flex_col();
         for (position, result) in self.results.iter().enumerate() {
-            let state = if position == self.highlighted { SelectionState::Selected } else { SelectionState::None };
             let prompt = result.prompt.lines().next().unwrap_or_default().to_owned();
-            let row = ListRow::new(ElementId::NamedInteger("prompt-search-row".into(), position as u64), theme)
-                .state(state)
+            let row = ListItem::new(format!("prompt-search-result-{position}"), theme)
+                .selected(position == self.highlighted)
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.choose(position, cx)))
                 .child(div().flex_1().min_w_0().truncate().child(prompt));
-            results =
-                results.child(div().debug_selector(move || format!("prompt-search-result-{position}")).child(row));
+            results = results.child(row);
         }
         div()
             .debug_selector(|| "prompt-search".to_owned())
             .flex()
             .flex_col()
             .gap_1()
-            .p_2()
-            .rounded_md()
+            .p_1()
+            .rounded(px(RADIUS_CONTAINER))
             .border_1()
-            .border_color(theme.colors.accent)
+            .border_color(theme.colors.border)
             .bg(theme.colors.surface)
+            .shadow_lg()
             // Captured on the way down to the search field, which would otherwise move its cursor.
             .capture_action(cx.listener(|this, _: &MoveUp, _, cx| {
                 this.step(-1, cx);
@@ -143,8 +145,19 @@ impl Render for PromptSearch {
             }))
             .on_action(cx.listener(|this, _: &Enter, _, cx| this.choose(this.highlighted, cx)))
             .on_action(cx.listener(|_, _: &Escape, _, cx| cx.emit(PromptSearchOutcome::Dismissed)))
-            .child(div().px_1().child(Input::new(&self.input)))
-            .children(self.status().map(|status| div().px_1().text_sm().child(MutedText::new(status, theme))))
+            .child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .rounded(px(RADIUS_CONTROL))
+                    .border_1()
+                    .border_color(theme.colors.accent)
+                    .bg(theme.colors.canvas)
+                    .child(Input::new(&self.input)),
+            )
+            .children(self.status().map(|status| {
+                div().px_2().py_1().typography(Typography::Small).text_color(theme.colors.text_muted).child(status)
+            }))
             .child(results)
     }
 }

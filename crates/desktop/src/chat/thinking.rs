@@ -1,3 +1,5 @@
+use crate::ui::tokens::ICON_SIZE_SMALL;
+use crate::ui::{Icon, IconName, Typography, TypographyExt};
 use clankerdiff_gpui::ui::prelude::UiTheme;
 use gpui::{AnyElement, App, ClickEvent, Window, div, prelude::*};
 
@@ -13,23 +15,32 @@ pub(crate) fn thinking_block(
     theme: &UiTheme,
     on_toggle: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
+    let colors = theme.colors;
     let label = if streaming { "Thinking…" } else { "Thought" };
+    let chevron = if expanded { IconName::ChevronDown } else { IconName::ChevronRight };
+    let group = format!("thinking-{index}-hover");
     div()
         .flex()
         .flex_col()
-        .gap_1()
-        .text_sm()
-        .text_color(theme.colors.text_muted)
+        .gap_2()
+        .typography(Typography::Small)
+        .text_color(colors.text_muted)
         .child(
             div()
                 .id(("thinking", index))
                 .debug_selector(move || format!("thinking-{index}"))
+                .group(group.clone())
                 .flex()
-                .gap_2()
+                .items_center()
+                .gap_1()
                 .cursor_pointer()
-                .hover(|line| line.text_color(theme.colors.text_secondary))
+                .hover(move |line| line.text_color(colors.text_secondary))
                 .on_click(on_toggle)
-                .child(if expanded { "▾" } else { "▸" })
+                .child(
+                    Icon::new(chevron, colors.text_muted)
+                        .size(ICON_SIZE_SMALL)
+                        .group_hover(group, colors.text_secondary),
+                )
                 .child(label),
         )
         .when(expanded, |block| {
@@ -38,7 +49,7 @@ pub(crate) fn thinking_block(
                     .debug_selector(move || format!("thinking-text-{index}"))
                     .pl_3()
                     .border_l_2()
-                    .border_color(theme.colors.border)
+                    .border_color(colors.border)
                     .child(text),
             )
         })

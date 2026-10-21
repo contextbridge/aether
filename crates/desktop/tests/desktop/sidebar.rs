@@ -1,25 +1,30 @@
-use crate::support::{replying, save_session, wait_for_history};
+use crate::support::{replying, save_session, start_thread, wait_for_history};
+use acp_utils::testing::FakeAgent;
 use aether_desktop::sidebar::relative_time;
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder, FakeConnector};
 use aether_desktop::threads::ThreadStatus;
 use aether_sessions::testing::TestStore;
+use agent_client_protocol::schema::v2::SessionId;
 use chrono::{Duration, Utc};
 use gpui::TestAppContext;
 use std::path::{Path, PathBuf};
 
 #[gpui::test]
-fn projects_from_history_and_added_projects_list_their_saved_sessions(cx: &mut TestAppContext) {
+fn added_projects_list_their_saved_sessions_and_projects_only_history_knows_about_are_hidden(cx: &mut TestAppContext) {
     let sessions = TestStore::new();
     save_session(&sessions, "older", "/alpha", "2026-01-01T00:00:00Z", Some("older prompt"));
-    save_session(&sessions, "newer", "/alpha", "2026-02-01T00:00:00Z", None);
-    save_session(&sessions, "beta-session", "/beta", "2026-01-15T00:00:00Z", Some("beta prompt"));
-    let harness = DesktopHarnessBuilder::default().history(sessions).project("/added").build(cx);
+    save_session(&sessions, "newer", "/alpha", "2026-01-03T00:00:00Z", None);
+    save_session(&sessions, "beta-session", "/beta", "2026-01-02T00:00:00Z", Some("beta prompt"));
+    save_session(&sessions, "gamma-session", "/gamma", "2026-01-02T00:00:00Z", Some("gamma prompt"));
+    let harness = DesktopHarnessBuilder::default().history(sessions).project("/alpha").project("/beta").build(cx);
     wait_for_history(&harness, cx);
-    harness.click(cx, "project-alpha-toggle").unwrap();
 
-    for selector in ["project-added", "project-alpha", "project-beta", "history-row-older", "history-row-newer"] {
+    for selector in
+        ["project-alpha", "project-beta", "history-row-older", "history-row-newer", "history-row-beta-session"]
+    {
         assert!(harness.bounds(cx, selector).is_some(), "`{selector}` is painted");
     }
+    assert!(harness.bounds(cx, "project-gamma").is_none(), "a project only history knows about is not listed");
     let mut row_top = |selector| harness.bounds(cx, selector).expect("row is painted").top();
     assert!(row_top("project-alpha") < row_top("history-row-newer"), "rows sit under their project");
     assert!(row_top("history-row-newer") < row_top("history-row-older"), "newest first");
@@ -27,19 +32,115 @@ fn projects_from_history_and_added_projects_list_their_saved_sessions(cx: &mut T
 }
 
 #[gpui::test]
-fn a_project_only_history_knows_about_starts_collapsed(cx: &mut TestAppContext) {
+fn saved_sessions_older_than_a_week_are_hidden_unless_pinned(cx: &mut TestAppContext) {
     let sessions = TestStore::new();
-    save_session(&sessions, "saved", "/alpha", "2026-01-01T00:00:00Z", Some("prompt"));
-    let harness = DesktopHarnessBuilder::default().history(sessions).build(cx);
+    save_session(&sessions, "recent", "/alpha", "2026-03-05T00:00:00Z", Some("recent prompt"));
+    save_session(&sessions, "stale", "/alpha", "2026-02-20T00:00:00Z", Some("stale prompt"));
+    save_session(&sessions, "stale-pinned", "/alpha", "2026-02-19T00:00:00Z", Some("pinned prompt"));
+    let harness =
+        DesktopHarnessBuilder::default().history(sessions).project("/alpha").now("2026-03-07T00:00:00Z").build(cx);
     wait_for_history(&harness, cx);
-    assert!(harness.bounds(cx, "project-alpha").is_some());
-    assert!(harness.bounds(cx, "history-row-saved").is_none());
 
-    harness.click(cx, "project-alpha-toggle").unwrap();
+    assert!(harness.bounds(cx, "history-row-recent").is_some());
+    assert!(harness.bounds(cx, "history-row-stale").is_none(), "a session older than a week is not listed");
+    assert!(harness.bounds(cx, "project-alpha-show-more").is_none(), "nor is it behind Show more");
+
+    harness.registry(cx).update(cx, |registry, cx| registry.pin(&SessionId::new("stale-pinned"), cx));
+
+    assert!(harness.bounds(cx, "history-row-stale-pinned").is_some(), "a pinned session is listed however old");
+}
+
+#[gpui::test]
+fn opening_a_thread_in_a_project_adds_the_project_to_the_sidebar(cx: &mut TestAppContext) {
+    let sessions = TestStore::new();
+    save_session(&sessions, "beta-session", "/beta", "2026-01-02T00:00:00Z", Some("Refactor auth"));
+    let connector = FakeConnector::default().agent("/beta", FakeAgent::default().replay_message("beta-session", "hi"));
+    let harness = DesktopHarnessBuilder::default().connector(connector).history(sessions).build(cx);
+    wait_for_history(&harness, cx);
+    assert!(harness.bounds(cx, "project-beta").is_none());
+
+    harness.simulate_keystrokes(cx, "secondary-k");
+    harness.simulate_input(cx, "refactor");
+    harness.simulate_keystrokes(cx, "enter");
+
+    assert!(harness.bounds(cx, "project-beta").is_some());
+    let registry = harness.registry(cx);
+    assert_eq!(registry.read_with(cx, |registry, _| registry.projects().to_vec()), [PathBuf::from("/beta")]);
+}
+
+#[gpui::test]
+fn removing_a_project_hides_it_and_keeps_its_sessions_in_the_switcher(cx: &mut TestAppContext) {
+    let sessions = TestStore::new();
+    save_session(&sessions, "saved", "/alpha", "2026-01-02T00:00:00Z", Some("prompt"));
+    let harness = DesktopHarnessBuilder::default().history(sessions).project("/alpha").project("/beta").build(cx);
+    wait_for_history(&harness, cx);
+
+    harness.click(cx, "project-alpha-actions").unwrap();
+    harness.click(cx, "menu-remove-project").unwrap();
+
+    assert!(harness.bounds(cx, "project-alpha").is_none());
+    assert!(harness.bounds(cx, "project-beta").is_some());
+    let registry = harness.registry(cx);
+    assert_eq!(registry.read_with(cx, |registry, _| registry.projects().to_vec()), [PathBuf::from("/beta")]);
+    harness.simulate_keystrokes(cx, "secondary-k");
+    assert!(harness.bounds(cx, "switcher-session-saved").is_some(), "the session can still be found");
+}
+
+#[gpui::test]
+fn archiving_inactive_threads_archives_every_saved_thread_but_pinned_and_live_ones(cx: &mut TestAppContext) {
+    let sessions = TestStore::new();
+    save_session(&sessions, "first", "/alpha", "2026-01-01T00:00:00Z", Some("first prompt"));
+    save_session(&sessions, "second", "/alpha", "2026-01-02T00:00:00Z", Some("second prompt"));
+    save_session(&sessions, "kept", "/alpha", "2026-01-03T00:00:00Z", Some("kept prompt"));
+    let connector = FakeConnector::default().agent("/alpha", replying("live-session", "hello"));
+    let harness = DesktopHarnessBuilder::default().connector(connector).history(sessions).project("/alpha").build(cx);
+    wait_for_history(&harness, cx);
+    let thread = start_thread(&harness, cx, "project-alpha-new-thread");
+    harness.registry(cx).update(cx, |registry, cx| registry.pin(&SessionId::new("kept"), cx));
+
+    harness.click(cx, "project-alpha-actions").unwrap();
+    harness.click(cx, "menu-archive-inactive").unwrap();
+
+    for row in ["history-row-first", "history-row-second"] {
+        assert!(harness.bounds(cx, row).is_none(), "`{row}` is archived");
+    }
+    assert!(harness.bounds(cx, "history-row-kept").is_some(), "a pinned thread stays");
+    assert!(harness.bounds(cx, "thread-row-0").is_some(), "a live thread stays");
+    assert_eq!(thread.read_with(cx, |thread, _| thread.status()), ThreadStatus::Idle);
+    harness.click(cx, "project-alpha-archived").unwrap();
+    assert!(harness.bounds(cx, "history-row-first").is_some());
+}
+
+#[gpui::test]
+fn a_rows_archive_button_archives_it_and_its_unarchive_button_brings_it_back(cx: &mut TestAppContext) {
+    let sessions = TestStore::new();
+    save_session(&sessions, "saved", "/alpha", "2026-01-02T00:00:00Z", Some("prompt"));
+    let harness = DesktopHarnessBuilder::default().history(sessions).project("/alpha").build(cx);
+    wait_for_history(&harness, cx);
+
+    harness.click(cx, "history-row-saved-archive").unwrap();
+
+    assert!(harness.bounds(cx, "history-row-saved").is_none());
+    harness.click(cx, "project-alpha-archived").unwrap();
+    harness.click(cx, "history-row-saved-unarchive").unwrap();
+    assert!(harness.bounds(cx, "project-alpha-archived").is_none(), "nothing is archived any more");
     assert!(harness.bounds(cx, "history-row-saved").is_some());
+}
 
-    harness.click(cx, "project-alpha-toggle").unwrap();
-    assert!(harness.bounds(cx, "history-row-saved").is_none());
+#[gpui::test]
+fn add_project_offers_the_recent_projects_history_knows_about(cx: &mut TestAppContext) {
+    let sessions = TestStore::new();
+    save_session(&sessions, "alpha-session", "/alpha", "2026-01-02T00:00:00Z", Some("prompt"));
+    save_session(&sessions, "beta-session", "/beta", "2026-01-02T00:00:00Z", Some("prompt"));
+    let harness = DesktopHarnessBuilder::default().history(sessions).project("/alpha").build(cx);
+    wait_for_history(&harness, cx);
+
+    harness.click(cx, "add-project").unwrap();
+    assert!(harness.bounds(cx, "add-project-recent-alpha").is_none(), "a listed project is not offered");
+    harness.click(cx, "add-project-recent-beta").unwrap();
+
+    assert!(harness.bounds(cx, "project-beta").is_some());
+    assert!(harness.bounds(cx, "history-row-beta-session").is_some());
 }
 
 #[gpui::test]
@@ -103,7 +204,7 @@ fn a_live_thread_sits_above_its_projects_saved_sessions_and_replaces_its_own(cx:
     save_session(&sessions, "saved", "/alpha", "2026-01-01T00:00:00Z", Some("prompt"));
     save_session(&sessions, "alpha-session", "/alpha", "2026-01-02T00:00:00Z", Some("live prompt"));
     let connector = FakeConnector::default().agent("/alpha", replying("alpha-session", "hello"));
-    let harness = DesktopHarnessBuilder::default().connector(connector).history(sessions).build(cx);
+    let harness = DesktopHarnessBuilder::default().connector(connector).history(sessions).project("/alpha").build(cx);
     wait_for_history(&harness, cx);
 
     harness.click(cx, "project-alpha-new-thread").unwrap();
@@ -164,6 +265,7 @@ fn adding_a_project_lists_the_picked_folder(cx: &mut TestAppContext) {
     assert!(harness.bounds(cx, "project-picked").is_none());
 
     harness.click(cx, "add-project").unwrap();
+    harness.click(cx, "add-project-browse").unwrap();
     cx.simulate_path_prompt_response(|options| {
         assert!(options.directories && !options.files);
         Some(vec![PathBuf::from("/picked")])

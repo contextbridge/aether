@@ -1,9 +1,12 @@
 use super::composer::Composer;
 use crate::fuzzy;
-use clankerdiff_gpui::ui::prelude::{ListRow, MutedText, SelectionState, UiTheme};
+use crate::ui::tokens::RADIUS_CONTAINER;
+use crate::ui::{ListItem, Typography, TypographyExt};
+use clankerdiff_gpui::ui::prelude::UiTheme;
 use client_core::command_entry::CommandEntry;
 use client_core::composer::attachment::PromptAttachment;
-use gpui::{AnyElement, ClickEvent, Context, ElementId, div, prelude::*, px};
+use gpui::{AnyElement, ClickEvent, Context, div, prelude::*, px};
+use gpui_base::Selectable as _;
 use gpui_base::input::InlineTokenSpan;
 use std::ops::Range;
 
@@ -86,33 +89,52 @@ impl CompletionMenu {
             .debug_selector(|| "completion-menu".to_owned())
             .max_h(px(MENU_HEIGHT))
             .overflow_y_scroll()
-            .py_1()
-            .rounded_md()
+            .p_1()
+            .flex()
+            .flex_col()
+            .rounded(px(RADIUS_CONTAINER))
             .border_1()
             .border_color(theme.colors.border)
-            .bg(theme.colors.surface);
+            .bg(theme.colors.surface)
+            .shadow_lg();
         if self.items.is_empty() {
             let message = match (self.token.trigger, self.loading) {
                 (Trigger::File, true) => "Indexing files…",
                 (Trigger::File, false) => "No matching files",
                 (Trigger::Command, _) => "No matching commands",
             };
-            return menu.child(div().px_3().py_1().child(MutedText::new(message, *theme))).into_any_element();
+            return menu
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .typography(Typography::Small)
+                        .text_color(theme.colors.text_muted)
+                        .child(message),
+                )
+                .into_any_element();
         }
         for (position, item) in self.items.iter().enumerate() {
-            let state = if position == self.highlighted { SelectionState::Selected } else { SelectionState::None };
             let (label, detail) = match item {
                 CompletionItem::Command(command) => (format!("/{}", command.name), command.description.clone()),
                 CompletionItem::File(file) => (file.display_name.clone(), String::new()),
             };
-            let row = ListRow::new(ElementId::NamedInteger("completion-row".into(), position as u64), *theme)
-                .state(state)
+            let row = ListItem::new(format!("completion-item-{position}"), *theme)
+                .selected(position == self.highlighted)
                 .on_click(cx.listener(move |composer, _: &ClickEvent, window, cx| {
                     composer.accept_completion(position, window, cx);
                 }))
                 .child(div().flex_none().child(label))
-                .child(div().flex_1().min_w_0().truncate().text_sm().child(MutedText::new(detail, *theme)));
-            menu = menu.child(div().debug_selector(move || format!("completion-item-{position}")).child(row));
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .typography(Typography::Small)
+                        .text_color(theme.colors.text_muted)
+                        .child(detail),
+                );
+            menu = menu.child(row);
         }
         menu.into_any_element()
     }

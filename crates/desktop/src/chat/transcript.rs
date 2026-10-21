@@ -4,10 +4,12 @@ use super::thinking::thinking_block;
 use super::tool_card::tool_card;
 use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadStatus};
+use crate::ui::tokens::{CONTENT_MAX_WIDTH, RADIUS_CONTAINER};
+use crate::ui::{Button, ButtonVariant, EmptyState, IconName};
 use acp_utils::conversation::{
     Conversation, ConversationContent, ConversationId, ConversationItem, ConversationItemId, Revision,
 };
-use clankerdiff_gpui::ui::prelude::{Button, ButtonVariant, ControlSize, EmptyState, NoticeTone, Surface, UiTheme};
+use clankerdiff_gpui::ui::prelude::UiTheme;
 use clankerdiff_syntax::SyntaxHighlighter;
 use client_core::session_core::SessionCore;
 use gpui::{AnyElement, Context, Entity, FollowMode, ListAlignment, ListState, Window, div, list, prelude::*, px};
@@ -110,9 +112,15 @@ impl Transcript {
         let expanded = self.expanded.contains(&id);
         let toggle = cx.listener(move |this, _, _, cx| this.toggle(id, index, cx));
         let content = match item.content() {
-            ConversationContent::User(_) => {
-                Surface::new(theme).child(item.text().unwrap_or_default().into_owned()).into_any_element()
-            }
+            ConversationContent::User(_) => div()
+                .px_3()
+                .py_2()
+                .rounded(px(RADIUS_CONTAINER))
+                .border_1()
+                .border_color(theme.colors.border)
+                .bg(theme.colors.surface)
+                .child(item.text().unwrap_or_default().into_owned())
+                .into_any_element(),
             ConversationContent::Assistant(_) => {
                 let markdown = self.markdown.entry(id).or_default();
                 markdown.sync(&item.text().unwrap_or_default(), !item.is_open());
@@ -131,7 +139,7 @@ impl Transcript {
             .w_full()
             .px_4()
             .py_2()
-            .child(content)
+            .child(div().w_full().max_w(px(CONTENT_MAX_WIDTH)).mx_auto().child(content))
             .into_any_element()
     }
 }
@@ -148,10 +156,10 @@ impl Render for Transcript {
             return transcript.child(empty_state(&thread.status(), &theme));
         }
         let jump = (!self.following).then(|| {
-            div().absolute().bottom_3().left_0().right_0().flex().justify_center().child(
-                Button::new("jump-to-latest", "Jump to latest ↓", theme)
+            div().absolute().bottom_4().left_0().right_0().flex().justify_center().child(
+                Button::new("jump-to-latest", "Jump to latest", theme)
+                    .icon(IconName::ArrowDown)
                     .variant(ButtonVariant::Primary)
-                    .size(ControlSize::Small)
                     .on_click(cx.listener(|this, _, _, cx| this.jump_to_latest(cx))),
             )
         });
@@ -166,20 +174,16 @@ const OVERDRAW: f32 = 400.0;
 
 fn empty_state(status: &ThreadStatus, theme: &UiTheme) -> EmptyState {
     match status {
-        ThreadStatus::Connecting => {
-            EmptyState::new("Connecting…", "Starting the agent for this thread", NoticeTone::Neutral, *theme)
-        }
+        ThreadStatus::Connecting => EmptyState::new("Connecting…", "Starting the agent for this thread", *theme),
         ThreadStatus::Errored(error) => {
-            EmptyState::new("The agent could not start", error.clone(), NoticeTone::Error, *theme)
+            EmptyState::new("The agent could not start", error.clone(), *theme).tone(theme.colors.destructive)
         }
         ThreadStatus::Disconnected => {
-            EmptyState::new("Disconnected", "The agent connection closed", NoticeTone::Warning, *theme)
+            EmptyState::new("Disconnected", "The agent connection closed", *theme).tone(theme.colors.warning)
         }
-        ThreadStatus::Dormant => {
-            EmptyState::new("Stopped", "This thread's agent is not running", NoticeTone::Neutral, *theme)
-        }
+        ThreadStatus::Dormant => EmptyState::new("Stopped", "This thread's agent is not running", *theme),
         ThreadStatus::Idle | ThreadStatus::Running | ThreadStatus::NeedsInput => {
-            EmptyState::new("New thread", "Send a prompt to start", NoticeTone::Neutral, *theme)
+            EmptyState::new("New thread", "Send a prompt to start", *theme)
         }
     }
 }
