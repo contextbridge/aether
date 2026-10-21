@@ -1,8 +1,8 @@
-use crate::view::edit_buffer::EditBuffer;
 use crate::view::filterable_list::FilterableList;
 use crate::theme::Theme;
 use crate::view::wrap::truncate_spans;
 use acp_utils::notifications::{PromptSearchResponse, PromptSearchResult};
+use client_core::composer::prompt_search::PromptSearchState;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -18,10 +18,8 @@ const MIN_PROMPT_WIDTH: usize = 16;
 
 #[derive(Debug)]
 pub struct PromptSearchPicker {
-    query: EditBuffer,
+    search: PromptSearchState,
     results: FilterableList<PromptSearchResult>,
-    loading: bool,
-    error: Option<String>,
 }
 
 impl Default for PromptSearchPicker {
@@ -32,11 +30,11 @@ impl Default for PromptSearchPicker {
 
 impl PromptSearchPicker {
     pub fn new() -> Self {
-        Self { query: EditBuffer::default(), results: Self::result_list(Vec::new()), loading: false, error: None }
+        Self { search: PromptSearchState::default(), results: Self::result_list(Vec::new()) }
     }
 
     pub fn query(&self) -> &str {
-        self.query.text()
+        self.search.query()
     }
 
     pub fn selected_result(&self) -> Option<&PromptSearchResult> {
@@ -47,64 +45,45 @@ impl PromptSearchPicker {
         &mut self.results
     }
 
-    /// Responses echo the query they answered; one for a query the user has
-    /// since edited away from is stale and dropped.
     pub fn on_results(&mut self, response: PromptSearchResponse) -> bool {
-        if response.query != self.query.text() {
+        let Some(results) = self.search.on_results(response) else {
             return false;
-        }
-        self.replace_results(response.results);
-        self.loading = false;
-        self.error = None;
+        };
+        self.replace_results(results);
         true
     }
 
     pub fn on_failed(&mut self, query: &str, error: String) -> bool {
-        if query != self.query.text() {
+        if !self.search.on_failed(query, error) {
             return false;
         }
         self.replace_results(Vec::new());
-        self.loading = false;
-        self.error = Some(error);
         true
-    }
-
-    fn refresh_query_state(&mut self) {
-        self.error = None;
-        if self.query.text().trim().is_empty() {
-            self.replace_results(Vec::new());
-            self.loading = false;
-        } else {
-            self.loading = true;
-        }
     }
 
     /// Appends `c` to the query, returning the query it produced.
     pub fn push_char(&mut self, c: char) -> String {
-        self.query.insert_char(c);
-        self.refresh_query_state();
-        self.query.text().to_string()
+        let query = self.search.push_char(c);
+        self.clear_blank_results();
+        query
     }
 
     /// Appends the printable part of `text` to the query, returning the query it
     /// produced. Pastes that are entirely control characters leave it unchanged.
     pub fn push_str(&mut self, text: &str) -> String {
-        let sanitized: String = text.chars().filter(|c| !c.is_control()).collect();
-        if !sanitized.is_empty() {
-            self.query.insert_str(&sanitized);
-            self.refresh_query_state();
-        }
-        self.query.text().to_string()
+        let query = self.search.push_str(text);
+        self.clear_blank_results();
+        query
     }
 
     pub fn backspace(&mut self) -> String {
-        self.query.backspace();
-        self.refresh_query_state();
-        self.query.text().to_string()
+        let query = self.search.backspace();
+        self.clear_blank_results();
+        query
     }
 
     pub fn height(&self, max_rows: usize) -> usize {
-        1 + if self.error.is_some() || self.query.text().trim().is_empty() || self.results.is_empty() {
+        1 + if self.search.error().is_some() || self.search.is_blank() || self.results.is_empty() {
             1
         } else {
             self.results.filtered_len().min(max_rows)
@@ -120,14 +99,14 @@ impl PromptSearchPicker {
             ratatui::layout::Constraint::Min(0),
         ])
         .areas(area);
-        Paragraph::new(Line::styled(format!("history search: {}", self.query.text()), theme.info))
+        Paragraph::new(Line::styled(format!("history search: {}", self.search.query()), theme.info))
             .render(header_area, buf);
 
-        let message = self.error.as_deref().map(|error| format!("  error: {error}"));
+        let message = self.search.error().map(|error| format!("  error: {error}"));
         let message = message.or_else(|| {
-            if self.query.text().trim().is_empty() {
+            if self.search.is_blank() {
                 Some("  type to search prompt history".to_string())
-            } else if self.loading && self.results.is_empty() {
+            } else if self.search.is_loading() && self.results.is_empty() {
                 Some("  searching…".to_string())
             } else if self.results.is_empty() {
                 Some("  no matching prompts".to_string())
@@ -155,6 +134,13 @@ impl PromptSearchPicker {
     /// keeps response replacement and clearing consistent with query changes.
     fn replace_results(&mut self, results: Vec<PromptSearchResult>) {
         self.results = Self::result_list(results);
+    }
+
+    /// A blank query has nothing to search for, so it shows no results.
+    fn clear_blank_results(&mut self) {
+        if self.search.is_blank() {
+            self.replace_results(Vec::new());
+        }
     }
 }
 

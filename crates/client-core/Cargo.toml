@@ -1,0 +1,50 @@
+[package]
+name = "aether-client-core"
+version = "0.1.0"
+edition = "2024"
+description = "UI-agnostic Agent Client Protocol (ACP) client core shared by Aether's frontends"
+license = "MIT"
+repository = "https://github.com/contextbridge/aether"
+keywords = ["acp", "aether", "agent", "client"]
+categories = ["api-bindings", "asynchronous"]
+
+[package.metadata.dist]
+dist = false
+
+[lib]
+name = "client_core"
+path = "src/lib.rs"
+
+[features]
+testing = ["dep:clankerdiff-core"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
+[dependencies]
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client"], version = "0.5.18" }
+agent-client-protocol = { workspace = true, features = ["process"] }
+clankerdiff-client = { workspace = true }
+clankerdiff-core = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["rt", "macros", "sync"] }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+ignore = { workspace = true }
+base64 = { workspace = true }
+mime_guess = { workspace = true }
+url = { workspace = true }
+utils = { package = "aether-utils", path = "../utils", version = "0.3.0" }
+
+[dev-dependencies]
+aether-client-core = { path = ".", features = ["testing"] }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "testing"], version = "0.5.18" }
+clankerdiff-core = { workspace = true }
+clankerdiff-git = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync"] }
+utils = { package = "aether-utils", path = "../utils", features = ["testing"], version = "0.3.0" }

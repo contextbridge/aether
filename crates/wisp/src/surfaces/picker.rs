@@ -1,20 +1,12 @@
-use crate::attachment::PromptAttachment;
+use client_core::composer::attachment::PromptAttachment;
+use client_core::command_entry::CommandEntry;
 use crate::view::filterable_list::FilterableList;
-use crate::request::RequestId;
+use client_core::request::RequestId;
 use crate::view::list_view::ListView;
 use crate::view::selection::SelectionState;
 use crate::theme::Theme;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommandEntry {
-    pub name: String,
-    pub description: String,
-    pub has_input: bool,
-    pub hint: Option<String>,
-    pub builtin: bool,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompletionEntry {

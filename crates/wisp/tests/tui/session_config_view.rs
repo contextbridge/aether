@@ -1,7 +1,7 @@
 use super::support::{ConfigOptionId, LocalConfigOption, SelectOptionMeta, model_choice, option_group, select};
 use agent_client_protocol::schema::v2::SessionConfigOption;
+use client_core::session_config_view::LocalConfigView;
 use utils::ReasoningEffort;
-use wisp::session::session_config_view::LocalConfigView;
 
 #[test]
 fn control_states_survive_projection_without_default_becoming_a_capability() {

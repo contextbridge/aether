@@ -88,8 +88,10 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::212467111133:role/GitHubActionsBedrockInference-aether
 
+      - uses: $/.github/actions/checkout-diff
+
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libfontconfig1-dev libxkbcommon-x11-dev
 
       - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
 

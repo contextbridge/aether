@@ -6,7 +6,7 @@ pub mod cli;
 pub mod error;
 pub mod settings;
 
-// The crate's public API is the entry points above plus [`Session`]. The
+// The crate's public API is the entry points above. The
 // internal module graph opens up only under the `testing` feature, for the
 // integration suite's cohesive harness in [`testing`].
 #[cfg(all(test, not(feature = "testing")))]
@@ -25,25 +25,23 @@ macro_rules! internal_modules {
     };
 }
 
-internal_modules!(
+internal_modules! {
     app,
-    attachment,
     conversation,
     command,
-    file_index,
     git_review,
     renderer,
-    request,
     runtime,
     screens,
     session,
     surfaces,
     theme,
     view,
-);
+}
 
-use agent_client_protocol::{Client, ConnectTo, schema::v2::SessionId};
-pub use session::Session;
+use agent_client_protocol::schema::v2::{Implementation, SessionId};
+use agent_client_protocol::{Client, ConnectTo};
+use client_core::session::Session;
 
 use app::App;
 use error::AppError;
@@ -57,7 +55,7 @@ use tracing_subscriber::EnvFilter;
 /// Launch the Wisp TUI with the given agent subprocess command.
 pub async fn run_tui(agent_command: &str, settings: UiSettings, log_dir: Option<&str>) -> Result<(), AppError> {
     setup_logging(log_dir.map(Path::new));
-    let session = Session::connect(agent_command).await?;
+    let session = Session::connect(client_info(), agent_command).await?;
     run_with_session(session, settings).await
 }
 
@@ -69,7 +67,7 @@ pub async fn run_remote_tui(
     log_dir: Option<&Path>,
 ) -> Result<(), AppError> {
     setup_logging(log_dir);
-    let session = Session::connect_remote_to(transport, requested_session).await?;
+    let session = Session::connect_remote_to(client_info(), transport, requested_session).await?;
     run_with_session(session, settings).await
 }
 
@@ -77,6 +75,11 @@ pub async fn run_remote_tui(
 pub async fn run_with_session(session: Session, settings: UiSettings) -> Result<(), AppError> {
     let (app, event_rx, client_handle) = App::from_session(session, settings);
     runtime::run(app, Renderer::new(), event_rx, client_handle).await
+}
+
+/// How Wisp identifies itself to agents during ACP initialization.
+pub fn client_info() -> Implementation {
+    Implementation::new("wisp", env!("CARGO_PKG_VERSION"))
 }
 
 pub fn init_file_logging(dir: &Path, file_name: &str, default_filter: &str) {

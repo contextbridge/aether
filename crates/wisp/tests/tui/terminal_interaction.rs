@@ -18,7 +18,7 @@ fn remote_checkout_actions_are_blocked_without_losing_text() {
 
 #[test]
 fn remote_git_review_opens() {
-    use wisp::command::GitReviewCommand;
+    use client_core::command::GitReviewCommand;
     let mut ui = TestUiBuilder::new().remote_workspace().dimensions(120, 24).build();
     ui.key(ctrl('g'));
     assert_eq!(ui.count_commands(|command| matches!(command, Command::GitReview(GitReviewCommand::Open { .. }))), 1);
@@ -38,7 +38,7 @@ fn remote_pasted_paths_remain_text_and_settings_remain_local() {
     ui.complete_prompt(acp::StopReason::EndTurn);
     ui.run_command("/settings");
     assert!(ui.app().has_modal());
-    assert_eq!(ui.count_commands(|command| matches!(command, Command::Filesystem(FilesystemCommand::ListThemes))), 1);
+    assert_eq!(ui.count_commands(|command| matches!(command, Command::Host(HostCommand::ListThemes))), 1);
 }
 
 mod picker_click {

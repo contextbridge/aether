@@ -1,15 +1,15 @@
 use super::config::cycle_reasoning_option;
 use super::{App, ExitState, Overlay, Route};
-use crate::command::{AgentCommand, Command, GitReviewCommand};
+use crate::command::Command;
 use crate::renderer::DrawContext;
 use crate::screens::git_diff::GitDiffScreen;
-use crate::session::WorkspaceAccess;
-use crate::session::session_config_view::LocalConfigView;
 use crate::settings::KeyAction;
 use crate::surfaces::composer::ComposerOutcome;
-use crate::surfaces::dropped_files::parse_dropped_file_paths;
 use crate::view::input::{MouseAction, UiEvent};
-use crate::surfaces::picker::CommandEntry;
+use client_core::command_entry::CommandEntry;
+use client_core::composer::dropped_files::parse_dropped_file_paths;
+use client_core::session_config_view::LocalConfigView;
+use client_core::workspace_status::WorkspaceAccess;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
@@ -127,7 +127,7 @@ impl App {
 
     fn on_composer_key(&mut self, key: KeyEvent) {
         if self.ui.keybindings.matches(KeyAction::OpenPromptSearch, key)
-            && self.session.capabilities().prompt_search
+            && self.core.session().capabilities().prompt_search
             && !self.composer.has_completion()
         {
             self.composer.open_prompt_search();
@@ -137,9 +137,8 @@ impl App {
         if self.ui.keybindings.matches(KeyAction::ToggleGitDiff, key) {
             let screen = GitDiffScreen::new();
             self.open_route(Route::GitReview(Box::new(screen)));
-            self.queue(Command::GitReview(GitReviewCommand::Open {
-                session_id: self.session.session_id().0.to_string(),
-            }));
+            let effects = self.core.open_git_review();
+            self.apply_effects(effects);
             return;
         }
 
@@ -156,12 +155,12 @@ impl App {
         }
 
         if self.ui.keybindings.matches(KeyAction::CycleReasoning, key) {
-            self.apply_config_cycle(cycle_reasoning_option(self.session.config_options()));
+            self.apply_config_cycle(cycle_reasoning_option(self.core.session().config_options()));
             return;
         }
 
         if self.ui.keybindings.matches(KeyAction::CycleMode, key) {
-            let view = LocalConfigView::new(self.session.config_options());
+            let view = LocalConfigView::new(self.core.session().config_options());
             let next = view.next_mode().map(|(id, value)| (id.to_string(), value.to_string()));
             self.apply_config_cycle(next);
             return;
@@ -173,9 +172,8 @@ impl App {
         }
 
         if self.ui.keybindings.matches(KeyAction::Cancel, key) {
-            if self.waiting_for_response() {
-                self.queue(Command::Agent(AgentCommand::Cancel { session_id: self.session.session_id().clone() }));
-            }
+            let effects = self.core.cancel();
+            self.apply_effects(effects);
             return;
         }
 
@@ -185,11 +183,11 @@ impl App {
             if opens_command_picker || self.ui.keybindings.matches(KeyAction::OpenFilePicker, key) {
                 self.composer.insert_char(character);
                 if opens_command_picker {
-                    self.composer.open_command_picker(self.available_commands.clone());
-                } else if self.session.workspace_access() == WorkspaceAccess::Remote {
+                    self.composer.open_command_picker(self.core.available_commands().to_vec());
+                } else if self.core.session().workspace_access() == WorkspaceAccess::Remote {
                     self.notify("File picker is unavailable for remote workspaces");
                 } else {
-                    let command = self.composer.open_file_picker(self.session.working_dir());
+                    let command = self.composer.open_file_picker(self.core.session().working_dir());
                     self.queue(Command::Filesystem(command));
                 }
                 return;
@@ -213,8 +211,8 @@ impl App {
 
     fn apply_config_cycle(&mut self, next: Option<(String, String)>) {
         if let Some((id, value)) = next {
-            self.set_config_option(&id, &value);
-            self.session.update_config_option_value(&id, &value);
+            let effects = self.core.set_config_option(&id, &value);
+            self.apply_effects(effects);
         }
     }
 
@@ -235,7 +233,7 @@ impl App {
             self.apply_composer_outcome(outcome);
             return;
         }
-        let added = self.session.workspace_access() == WorkspaceAccess::Local
+        let added = self.core.session().workspace_access() == WorkspaceAccess::Local
             && parse_dropped_file_paths(text).is_some_and(|paths| self.composer.add_dropped_media(paths));
         if !added {
             self.composer.insert_paste(text);

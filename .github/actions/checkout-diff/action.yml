@@ -1,0 +1,17 @@
+name: Check out clankerdiff
+description: Clones jcarver989/diff next to the aether checkout, where the workspace's [patch.crates-io] path dependencies expect it
+
+runs:
+  using: composite
+  steps:
+    - name: Clone jcarver989/diff
+      shell: bash
+      env:
+        # Pinned so a push to diff can't change what an aether commit builds against. Keep in step with local ../diff.
+        DIFF_REV: ebdc56f2708b2ee9b0a478b3f94b59c709b13b65
+      run: |
+        set -euo pipefail
+        diff_dir="$GITHUB_WORKSPACE/../diff"
+        git init --quiet "$diff_dir"
+        git -C "$diff_dir" fetch --quiet --depth 1 https://github.com/jcarver989/diff "$DIFF_REV"
+        git -C "$diff_dir" checkout --quiet --detach FETCH_HEAD

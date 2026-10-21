@@ -1,4 +1,4 @@
-use crate::app::QueuedPrompt;
+use client_core::session_core::QueuedPrompt;
 use crate::theme::Theme;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;

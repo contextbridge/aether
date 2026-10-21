@@ -286,7 +286,7 @@ fn enter_on_settings_oauth_prompt_opens_the_browser() {
 
         overlay.on_elicitation_request(
             url_elicitation("linear", "https://linear.app/oauth", "aether-oauth"),
-            responder,
+            responder.into(),
             {
                 let opened = opened.clone();
                 Arc::new(move |url: &str| {
@@ -989,8 +989,7 @@ fn opening_settings_requests_the_theme_list() {
     let mut ui = TestUiBuilder::new().build();
     ui.run_command("/settings");
 
-    let theme_listings =
-        ui.count_commands(|command| matches!(command, Command::Filesystem(FilesystemCommand::ListThemes)));
+    let theme_listings = ui.count_commands(|command| matches!(command, Command::Host(HostCommand::ListThemes)));
     assert_eq!(theme_listings, 1, "opening settings must ask for the theme list");
 }
 
@@ -998,7 +997,10 @@ fn opening_settings_requests_the_theme_list() {
 fn listed_themes_appear_in_the_theme_picker() {
     let mut ui = TestUiBuilder::new().build();
     ui.run_command("/settings");
-    ui.deliver_result(CommandResult::ThemesListed(vec!["dracula.json".to_string(), "kanagawa.json".to_string()]));
+    ui.deliver_result(CommandResult::Host(HostCommandResult::ThemesListed(vec![
+        "dracula.json".to_string(),
+        "kanagawa.json".to_string(),
+    ])));
 
     ui.key(key(KeyCode::Enter));
     ui.type_text("dracula");
@@ -1016,7 +1018,7 @@ fn listed_themes_appear_in_the_theme_picker() {
 fn settings_menu_has_a_single_theme_row_after_themes_load() {
     let mut ui = TestUiBuilder::new().build();
     ui.run_command("/settings");
-    ui.deliver_result(CommandResult::ThemesListed(vec!["dracula.json".to_string()]));
+    ui.deliver_result(CommandResult::Host(HostCommandResult::ThemesListed(vec!["dracula.json".to_string()])));
 
     let text = overlay_text(&mut ui);
     assert_eq!(text.matches("Theme:").count(), 1, "the theme row must be replaced, not duplicated:\n{text}");
@@ -1038,16 +1040,19 @@ fn invalid_startup_theme_is_visible_without_overwriting_the_selection() {
 fn failed_queued_theme_retains_the_last_successful_selection() {
     let mut ui = TestUiBuilder::new().build();
     ui.run_command("/settings");
-    ui.deliver_result(CommandResult::ThemesListed(vec!["first.json".into(), "second.json".into()]));
+    ui.deliver_result(CommandResult::Host(HostCommandResult::ThemesListed(vec![
+        "first.json".into(),
+        "second.json".into(),
+    ])));
     select_theme(&mut ui, "first");
     select_theme(&mut ui, "second");
     let first = take_applied_theme(&mut ui);
     let theme = Theme::from_review(clankerdiff_ratatui::theme::ReviewTheme::builtin("ayu-dark").unwrap());
-    ui.deliver_result(CommandResult::ThemeApplied(Ok((first, theme.clone()))));
+    ui.deliver_result(CommandResult::Host(HostCommandResult::ThemeApplied(Ok((first, theme.clone())))));
     let second = take_applied_theme(&mut ui);
     assert_eq!(second.theme.selection_id(), "file:second.json");
-    ui.deliver_result(CommandResult::ThemeApplied(Err(ThemeApplicationError::Load(ThemeLoadError::Io(
-        std::io::Error::new(std::io::ErrorKind::NotFound, "theme missing"),
+    ui.deliver_result(CommandResult::Host(HostCommandResult::ThemeApplied(Err(ThemeApplicationError::Load(
+        ThemeLoadError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "theme missing")),
     )))));
     assert_eq!(ui.app().ui_settings().theme.selection_id(), "file:first.json");
     assert_eq!(ui.app().theme().review().revision(), theme.review().revision());
@@ -1065,7 +1070,10 @@ fn malformed_theme_file_selections_are_rejected_during_deserialization() {
 fn rapid_theme_changes_settle_on_the_newest_choice() {
     let mut ui = TestUiBuilder::new().build();
     ui.run_command("/settings");
-    ui.deliver_result(CommandResult::ThemesListed(vec!["first.json".to_string(), "second.json".to_string()]));
+    ui.deliver_result(CommandResult::Host(HostCommandResult::ThemesListed(vec![
+        "first.json".to_string(),
+        "second.json".to_string(),
+    ])));
 
     select_theme(&mut ui, "first");
     select_theme(&mut ui, "second");
@@ -1194,7 +1202,7 @@ fn settings_menu_text(options: Vec<acp::SessionConfigOption>) -> String {
 fn assert_no_commands(ui: &mut TestUi, message: &str) {
     let commands = ui.take_commands();
     assert!(
-        commands.iter().all(|command| matches!(command, Command::Filesystem(FilesystemCommand::ListThemes))),
+        commands.iter().all(|command| matches!(command, Command::Host(HostCommand::ListThemes))),
         "{message}: unexpected commands {commands:?}"
     );
 }
@@ -1213,7 +1221,7 @@ fn settle_theme_tasks_newest_first(ui: &mut TestUi) {
     loop {
         let mut batch = Vec::new();
         for command in ui.take_commands() {
-            if let Command::Filesystem(FilesystemCommand::ApplyTheme { settings, .. }) = command {
+            if let Command::Host(HostCommand::ApplyTheme { settings, .. }) = command {
                 batch.push(settings);
             }
         }
@@ -1221,7 +1229,7 @@ fn settle_theme_tasks_newest_first(ui: &mut TestUi) {
             return;
         }
         for settings in batch.into_iter().rev() {
-            ui.deliver_result(CommandResult::ThemeApplied(Ok((settings, Theme::default()))));
+            ui.deliver_result(CommandResult::Host(HostCommandResult::ThemeApplied(Ok((settings, Theme::default())))));
         }
     }
 }

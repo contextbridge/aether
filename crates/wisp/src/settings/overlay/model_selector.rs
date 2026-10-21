@@ -1,5 +1,4 @@
 use super::{KeyHint, SettingsChange, value_match_key};
-use crate::session::session_config_view::LocalConfigValue;
 use crate::surfaces::input::UiOutput;
 use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
@@ -9,6 +8,7 @@ use crate::view::reasoning_bar::{reasoning_bar, reasoning_column_width, reasonin
 use crate::view::selection::Direction;
 use crate::view::wrap::truncate_to_width;
 use acp_utils::config_option_id::ConfigOptionId;
+use client_core::session_config_view::LocalConfigValue;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};

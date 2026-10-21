@@ -78,6 +78,20 @@ fn pipe_backed_stdio_rejects_removed_v1_methods() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn an_agent_with_an_open_session_exits_once_its_client_hangs_up() -> TestResult {
+    let home = tempfile::tempdir()?;
+    let mut agent = acp_builder(home.path()).env("HOME", home.path()).env("AETHER_HOME", home.path()).spawn()?;
+    agent.initialize()?;
+    agent.request("session/new", &json!({ "cwd": home.path(), "mcpServers": [] }))?;
+
+    // Waits on no clock: an agent that outlives its client makes the test hang.
+    let status = agent.hang_up()?;
+
+    assert!(status.success(), "{status}");
+    Ok(())
+}
+
 fn acp_builder(log_dir: &Path) -> AcpProcessBuilder {
     AcpProcess::builder().log_dir(log_dir).settings_json(SETTINGS)
 }

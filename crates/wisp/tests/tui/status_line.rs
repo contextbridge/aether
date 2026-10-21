@@ -1,6 +1,6 @@
 use clankerdiff_ratatui::composite_color;
 use clankerdiff_ratatui::theme::{ReviewTheme, Rgba, ThemeError};
-use wisp::session::workspace_status::WorkspaceStatus;
+use client_core::workspace_status::WorkspaceStatus;
 use wisp::settings::{StatusLineSegmentConfig as Segment, StatusLineSettings, StatusLineStyle};
 
 use super::support::*;
@@ -59,7 +59,10 @@ fn ui_only_theme_switch_recolors_status_mentions_and_message_surfaces() {
         review.ui.info = info;
         review.ui.surface = surface;
         let settings = Box::new(ui.app().ui_settings().clone());
-        ui.deliver_result(CommandResult::ThemeApplied(Ok((settings, Theme::from_review(review.clone())))));
+        ui.deliver_result(CommandResult::Host(HostCommandResult::ThemeApplied(Ok((
+            settings,
+            Theme::from_review(review.clone()),
+        )))));
         let buffer = ui.viewport();
         let color = composite_color(info, review.ui.canvas);
         assert_text_color(&buffer, "aether", color);

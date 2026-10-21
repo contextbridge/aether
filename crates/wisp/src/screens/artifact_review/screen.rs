@@ -1,11 +1,11 @@
 use crate::screens::reviewer::{crossterm_event, theme_change};
-use crate::surfaces::elicitation::ElicitationResponder;
 use crate::surfaces::input::UiOutput;
 use crate::view::input::UiEvent;
 use crate::surfaces::modal::frame::ModalFrame;
 use crate::view::generation::Generation;
 use crate::{renderer::DrawContext, settings::builtin_review_theme_choices};
 use clankerdiff_ratatui::ReviewCapabilities;
+use client_core::elicitation::ElicitationResponder;
 use clankerdiff_ratatui::markdown::{MarkdownDocument, MarkdownReviewEvent};
 use clankerdiff_ratatui::{InputOutcome, MarkdownReviewState, MarkdownReviewWidget};
 use crossterm::event::{Event, KeyCode, KeyEventKind};
@@ -20,14 +20,15 @@ use utils::artifact_review::{ArtifactReviewElicitationMeta, ArtifactReviewSubmis
 pub struct ArtifactReviewScreen {
     title: String,
     state: MarkdownReviewState,
-    responder: ElicitationResponder,
+    /// Taken when the review is answered, so it is answered once.
+    responder: Option<ElicitationResponder>,
     error: Option<String>,
     confirming_approval: bool,
     theme_generation: Option<Generation>,
 }
 
 impl ArtifactReviewScreen {
-    pub fn new(meta: ArtifactReviewElicitationMeta, responder: impl Into<ElicitationResponder>) -> Self {
+    pub fn new(meta: ArtifactReviewElicitationMeta, responder: ElicitationResponder) -> Self {
         let document = MarkdownDocument::parse_with_metadata(
             meta.path.as_ref().map(|path| path.display().to_string()),
             Some(meta.title.clone()),
@@ -42,7 +43,7 @@ impl ArtifactReviewScreen {
             submit: true,
             clipboard: false,
         });
-        Self { title: meta.title, state, responder: responder.into(), error: None, confirming_approval: false, theme_generation: None }
+        Self { title: meta.title, state, responder: Some(responder), error: None, confirming_approval: false, theme_generation: None }
     }
 
     pub fn set_theme_choices(&mut self, choices: Vec<clankerdiff_ratatui::ThemeChoice>) {
@@ -54,7 +55,9 @@ impl ArtifactReviewScreen {
     }
 
     pub fn cancel(&mut self) {
-        self.responder.cancel();
+        if let Some(responder) = self.responder.take() {
+            responder.cancel();
+        }
     }
 
     pub fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
@@ -88,7 +91,9 @@ impl ArtifactReviewScreen {
     }
 
     fn submit(&mut self, submission: ArtifactReviewSubmission) -> Vec<UiOutput> {
-        self.responder.accept_strings(submission.fields());
+        if let Some(responder) = self.responder.take() {
+            responder.accept_strings(submission.fields());
+        }
         vec![UiOutput::ArtifactReviewed(match submission {
             ArtifactReviewSubmission::Approved => "Artifact approved".to_string(),
             ArtifactReviewSubmission::Feedback { feedback } => feedback,
@@ -96,7 +101,7 @@ impl ArtifactReviewScreen {
     }
 
     fn handle_event(&mut self, event: Event) -> Vec<UiOutput> {
-        if self.responder.is_answered() {
+        if self.responder.is_none() {
             return Vec::new();
         }
         if self.confirming_approval {

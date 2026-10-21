@@ -26,6 +26,8 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: $/.github/actions/checkout-diff
+
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
 

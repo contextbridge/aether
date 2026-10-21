@@ -1,11 +1,11 @@
 use super::{SettingsChange, SettingsMenuEntry, value_match_key};
-use crate::session::session_config_view::LocalConfigValue;
 use crate::surfaces::input::UiOutput;
 use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
 use crate::view::filterable_list::FilterableList;
 use crate::view::input::{Nav, UiEvent};
 use crate::view::wrap::truncate_to_width;
+use client_core::session_config_view::LocalConfigValue;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;

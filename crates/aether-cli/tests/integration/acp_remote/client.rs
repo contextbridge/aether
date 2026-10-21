@@ -3,6 +3,7 @@ use aether_cli::acp::testing::AcpTestHarness;
 use aether_cli::client::{ClientArgs, ClientRunError, run_client};
 use agent_client_protocol::schema::v2::{CloseSessionRequest, PromptRequest};
 use clap::Parser;
+use client_core::session::Session;
 use tokio_tungstenite::tungstenite::handshake::server::Request;
 
 #[derive(Parser)]
@@ -64,13 +65,15 @@ async fn remote_client_reports_occupied_server_without_disturbing_owner() {
         let server = harness.serve_websocket().await;
         let args = ClientCli::try_parse_from(["client", &server.url()]).unwrap().args;
         let (socket, _) = tokio_tungstenite::connect_async(args.connection_request().unwrap()).await.unwrap();
-        let session = wisp::Session::connect_remote_to(WebSocketTransport::new(socket), None).await.unwrap();
+        let session =
+            Session::connect_remote_to(wisp::client_info(), WebSocketTransport::new(socket), None).await.unwrap();
         assert_eq!(session.response.session_id, id);
         assert!(matches!(run_client(args).await, Err(ClientRunError::ServerOccupied)));
         session.client.handle.request(PromptRequest::new(id.clone(), vec!["hello".into()])).await.unwrap();
         harness.until_detached(session.client.handle.disconnect()).await;
         let (socket, _) = tokio_tungstenite::connect_async(server.url()).await.unwrap();
-        let session = wisp::Session::connect_remote_to(WebSocketTransport::new(socket), None).await.unwrap();
+        let session =
+            Session::connect_remote_to(wisp::client_info(), WebSocketTransport::new(socket), None).await.unwrap();
         assert_eq!(session.response.session_id, id);
         harness.until_detached(session.client.handle.disconnect()).await;
         server.shutdown().await;
@@ -84,15 +87,20 @@ async fn remote_client_fresh_startup_then_live_and_saved_resume() {
     AcpTestHarness::run(|mut harness| async move {
         let server = harness.serve_websocket().await;
         let (socket, _) = tokio_tungstenite::connect_async(server.url()).await.unwrap();
-        let session = wisp::Session::connect_remote_to(WebSocketTransport::new(socket), None).await.unwrap();
+        let session =
+            Session::connect_remote_to(wisp::client_info(), WebSocketTransport::new(socket), None).await.unwrap();
         let id = session.response.session_id.clone();
         assert_eq!(session.working_dir, std::path::PathBuf::from("/tmp"));
         harness.until_detached(session.client.handle.disconnect()).await;
         for saved in [false, true] {
             let (socket, _) = tokio_tungstenite::connect_async(server.url()).await.unwrap();
-            let session = wisp::Session::connect_remote_to(WebSocketTransport::new(socket), saved.then(|| id.clone()))
-                .await
-                .unwrap();
+            let session = Session::connect_remote_to(
+                wisp::client_info(),
+                WebSocketTransport::new(socket),
+                saved.then(|| id.clone()),
+            )
+            .await
+            .unwrap();
             assert_eq!(session.response.session_id, id);
             if !saved {
                 session.client.handle.request(CloseSessionRequest::new(id.clone())).await.unwrap();

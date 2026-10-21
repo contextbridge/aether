@@ -5,12 +5,13 @@ use serde_json::{Value, json};
 use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Error as IoError, Write};
 use std::path::Path;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 
 /// An `aether acp` child process speaking newline-delimited JSON-RPC over piped stdio.
 pub(crate) struct AcpProcess {
     child: Child,
-    stdin: ChildStdin,
+    /// `None` once the client has hung up.
+    stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
     next_id: u64,
 }
@@ -49,9 +50,17 @@ impl AcpProcess {
     }
 
     pub(crate) fn send(&mut self, message: &Value) -> TestResult {
-        writeln!(self.stdin, "{message}")?;
-        self.stdin.flush()?;
+        let stdin = self.stdin.as_mut().ok_or_else(|| IoError::other("the client hung up"))?;
+        writeln!(stdin, "{message}")?;
+        stdin.flush()?;
         Ok(())
+    }
+
+    /// Closes the agent's stdin, as a client that exits or crashes does, and waits for the agent
+    /// to exit.
+    pub(crate) fn hang_up(&mut self) -> TestResult<ExitStatus> {
+        drop(self.stdin.take());
+        Ok(self.child.wait()?)
     }
 
     pub(crate) fn read_message(&mut self) -> TestResult<Value> {
@@ -91,7 +100,7 @@ impl AcpProcessBuilder {
         let mut child = self.command.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
         let stdin = child.stdin.take().ok_or_else(|| IoError::other("child stdin"))?;
         let stdout = child.stdout.take().ok_or_else(|| IoError::other("child stdout"))?;
-        Ok(AcpProcess { child, stdin, stdout: BufReader::new(stdout), next_id: 1 })
+        Ok(AcpProcess { child, stdin: Some(stdin), stdout: BufReader::new(stdout), next_id: 1 })
     }
 
     /// The configured command, for tests that supply their own stdio.

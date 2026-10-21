@@ -5,6 +5,19 @@ default:
 run:
     cargo run -p aether-wisp -- -a 'cargo run -p aether-agent-cli acp'
 
+# Run the desktop app against a locally built agent
+desktop:
+    cargo run -p aether-desktop -- --agent 'cargo run -p aether-agent-cli acp'
+
+# Run release builds of the desktop app and a locally built agent
+desktop-release:
+    cargo build --release -p aether-agent-cli
+    cargo run --release -p aether-desktop -- --agent '{{justfile_directory()}}/target/release/aether acp'
+
+# Run the desktop app and client core tests
+desktop-test:
+    cargo nextest run --all-features -p aether-desktop -p aether-client-core
+
 # Build the workspace
 build:
     cargo build

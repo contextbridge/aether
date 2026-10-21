@@ -1,10 +1,10 @@
 use super::{LiveSettingsData, PaneKind, SettingsChange, SettingsMenuEntry};
-use crate::session::session_config_view::{LocalConfigKind, LocalConfigOption, LocalConfigValue};
 use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
 use crate::view::list_view::ListView;
 use crate::view::selection::SelectionState;
 use acp_utils::config_option_id::ConfigOptionId;
+use client_core::session_config_view::{LocalConfigKind, LocalConfigOption, LocalConfigValue};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;

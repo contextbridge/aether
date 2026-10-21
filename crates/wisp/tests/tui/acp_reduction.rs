@@ -31,7 +31,7 @@ fn cancellation_keeps_final_output_and_ignores_stale_prompt_results() {
     ui.acp_event(text_chunk_with_id("reply", "final output"));
     ui.acp_event(idle_notification("test-session", Some(acp::StopReason::Cancelled)).into());
     assert!(!ui.app().waiting_for_response());
-    ui.deliver_result(CommandResult::Prompt { request_id: wisp::request::RequestId::next(), result: Ok(()) });
+    ui.deliver_result(CommandResult::Prompt { request_id: client_core::request::RequestId::next(), result: Ok(()) });
     assert!(!ui.app().waiting_for_response(), "a result for no queued prompt changes nothing");
     assert_eq!(ui.conversation_text().matches("final output").count(), 1);
 }

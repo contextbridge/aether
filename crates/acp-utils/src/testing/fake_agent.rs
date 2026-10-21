@@ -1,17 +1,22 @@
 use super::{idle_notification, initialize_response, running_notification};
-use crate::notifications::{SessionPreviewParams, SessionPreviewResponse};
+use crate::notifications::{
+    AetherCapabilities, PromptSearchParams, PromptSearchResponse, PromptSearchResult, SessionPreviewParams,
+    SessionPreviewResponse,
+};
 use agent_client_protocol::schema::v2::{
     AgentCapabilities, CancelSessionNotification, CloseSessionRequest, CloseSessionResponse, CompactionStatus,
     CompactionUpdate, ContentChunk, CreateElicitationRequest, ElicitationFormMode, ElicitationSchema,
-    ElicitationSessionScope, Implementation, InitializeRequest, InitializeResponse, ListSessionsRequest,
-    ListSessionsResponse, LoginAuthRequest, LoginAuthResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
-    PromptResponse, ResumeSessionRequest, ResumeSessionResponse, SessionId, SessionInfo, SessionUpdate,
-    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, StopReason, UpdateSessionNotification, UserMessage,
+    ElicitationSessionScope, ElicitationUrlMode, Implementation, InitializeRequest, InitializeResponse,
+    ListSessionsRequest, ListSessionsResponse, LoginAuthRequest, LoginAuthResponse, NewSessionRequest,
+    NewSessionResponse, PromptRequest, PromptResponse, ResumeSessionRequest, ResumeSessionResponse, SessionId,
+    SessionInfo, SessionUpdate, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, StopReason,
+    UpdateSessionNotification, UserMessage,
 };
 use agent_client_protocol::util::MatchDispatchFrom;
 use agent_client_protocol::{
     self as acp, Agent, Client, ConnectionTo, Dispatch, HandleDispatchFrom, Handled, NullRun, Responder, V2Builder,
 };
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::mpsc;
 
 pub struct FakeAgent {
@@ -19,12 +24,15 @@ pub struct FakeAgent {
     new_session: Option<NewSessionResponse>,
     sessions: Option<Vec<SessionInfo>>,
     previews: Vec<SessionPreviewResponse>,
+    prompt_history: Vec<String>,
     login_method: Option<String>,
     hold_config: bool,
     hold_list_sessions: bool,
     replay: Vec<UpdateSessionNotification>,
     live: Vec<UpdateSessionNotification>,
     turn: Option<Turn>,
+    /// How many prompts it has run, which keeps each turn's message ids distinct.
+    turns: AtomicUsize,
     capture: Option<Capture>,
 }
 
@@ -49,12 +57,14 @@ impl Default for FakeAgent {
             new_session: None,
             sessions: None,
             previews: Vec::new(),
+            prompt_history: Vec::new(),
             login_method: None,
             hold_config: false,
             hold_list_sessions: false,
             replay: Vec::new(),
             live: Vec::new(),
             turn: None,
+            turns: AtomicUsize::new(0),
             capture: None,
         }
     }
@@ -68,6 +78,16 @@ impl FakeAgent {
 
     pub fn session_preview(mut self, preview: SessionPreviewResponse) -> Self {
         self.previews.push(preview);
+        self
+    }
+
+    /// Advertises prompt search and answers it from `prompts`, oldest first: the ones that
+    /// contain the query, newest first.
+    pub fn prompt_history(mut self, prompts: &[&str]) -> Self {
+        let capabilities = AetherCapabilities { prompt_search: true, ..AetherCapabilities::default() };
+        let session = self.initialize.capabilities.session.take().unwrap_or_default();
+        self.initialize.capabilities.session = Some(session.meta(Some(capabilities.to_meta())));
+        self.prompt_history = prompts.iter().map(|prompt| (*prompt).to_owned()).collect();
         self
     }
 
@@ -100,11 +120,11 @@ impl FakeAgent {
         self
     }
     pub fn replay_message(mut self, session_id: &str, text: &str) -> Self {
-        self.replay.push(message(session_id, text));
+        self.replay.push(message(session_id, REPLAYED_MESSAGE_ID, text));
         self
     }
     pub fn live_message(mut self, session_id: &str, text: &str) -> Self {
-        self.live.push(message(session_id, text));
+        self.live.push(message(session_id, REPLAYED_MESSAGE_ID, text));
         self
     }
     pub fn prompt_reply(mut self, text: &str) -> Self {
@@ -112,8 +132,26 @@ impl FakeAgent {
         self
     }
 
-    pub fn prompt_elicitation(mut self, message: &str) -> Self {
-        self.turn = Some(Turn::Elicit(message.into()));
+    /// Answers every prompt by sending `updates` in order, then ending the turn.
+    pub fn prompt_updates(mut self, updates: Vec<SessionUpdate>) -> Self {
+        self.turn = Some(Turn::Updates(updates));
+        self
+    }
+
+    /// Answers every prompt by asking `message` with no fields, then echoing the answer.
+    pub fn prompt_elicitation(self, message: &str) -> Self {
+        self.prompt_form(message, ElicitationSchema::new())
+    }
+
+    /// Answers every prompt by asking `message` with the form `schema`, then echoing the answer.
+    pub fn prompt_form(mut self, message: &str, schema: ElicitationSchema) -> Self {
+        self.turn = Some(Turn::Elicit { message: message.into(), question: Question::Form(schema) });
+        self
+    }
+
+    /// Answers every prompt by asking `message` to be answered at `url`, then echoing the answer.
+    pub fn prompt_url(mut self, message: &str, url: &str) -> Self {
+        self.turn = Some(Turn::Elicit { message: message.into(), question: Question::Url(url.into()) });
         self
     }
     pub fn compaction(mut self, session_id: &str, compaction_id: &str, status: CompactionStatus) -> Self {
@@ -213,6 +251,8 @@ impl HandleDispatchFrom<Client> for FakeAgent {
                 Ok(Handled::Yes)
             })
             .await
+            .if_request(async |request: PromptSearchParams, responder| responder.respond(self.search_prompts(request)))
+            .await
             .if_request(async |request: ListSessionsRequest, responder| {
                 if self.hold_list_sessions
                     && let Some(capture) = &self.capture
@@ -283,6 +323,27 @@ impl HandleDispatchFrom<Client> for FakeAgent {
 }
 
 impl FakeAgent {
+    /// The prompts in its history that contain the query, newest first.
+    fn search_prompts(&self, request: PromptSearchParams) -> PromptSearchResponse {
+        let results = self
+            .prompt_history
+            .iter()
+            .rev()
+            .filter_map(|prompt| {
+                let match_start = prompt.find(&request.query)?;
+                Some(PromptSearchResult {
+                    session_id: "history-session".to_owned(),
+                    cwd: "/".into(),
+                    session_created_at: "2026-01-01T00:00:00Z".to_owned(),
+                    prompt: prompt.clone(),
+                    match_start,
+                    match_end: match_start + request.query.len(),
+                })
+            })
+            .collect();
+        PromptSearchResponse { query: request.query, results, truncated: false }
+    }
+
     fn resume(
         &self,
         request: ResumeSessionRequest,
@@ -313,31 +374,42 @@ impl FakeAgent {
         responder: Responder<PromptResponse>,
         cx: &ConnectionTo<Client>,
     ) -> Result<(), acp::Error> {
-        const USER_MESSAGE_ID: &str = "user-message";
+        let index = self.turns.fetch_add(1, Ordering::Relaxed);
+        let user_message_id = format!("user-message-{index}");
+        let message_id = format!("message-{index}");
         let session_id = request.session_id;
         let Some(turn) = &self.turn else {
-            return responder.respond(PromptResponse::new(USER_MESSAGE_ID));
+            return responder.respond(PromptResponse::new(user_message_id));
         };
         cx.send_notification(running_notification(session_id.clone()))?;
-        let user_message = UserMessage::new(USER_MESSAGE_ID).content(request.prompt);
+        let user_message = UserMessage::new(user_message_id.clone()).content(request.prompt);
         cx.send_notification(UpdateSessionNotification::new(
             session_id.clone(),
             SessionUpdate::UserMessage(user_message),
         ))?;
-        responder.respond(PromptResponse::new(USER_MESSAGE_ID))?;
+        responder.respond(PromptResponse::new(user_message_id))?;
         match turn {
             Turn::Reply(text) => {
-                cx.send_notification(message(&session_id.0, text))?;
+                cx.send_notification(message(&session_id.0, &message_id, text))?;
                 cx.send_notification(idle_notification(session_id, Some(StopReason::EndTurn)))
             }
-            Turn::Elicit(prompt) => {
-                let request = CreateElicitationRequest::new(
-                    ElicitationFormMode::new(
-                        ElicitationSessionScope::new(session_id.clone()),
-                        ElicitationSchema::new(),
+            Turn::Updates(updates) => {
+                for update in updates {
+                    cx.send_notification(UpdateSessionNotification::new(session_id.clone(), update.clone()))?;
+                }
+                cx.send_notification(idle_notification(session_id, Some(StopReason::EndTurn)))
+            }
+            Turn::Elicit { message: prompt, question } => {
+                let scope = ElicitationSessionScope::new(session_id.clone());
+                let request = match question {
+                    Question::Form(schema) => {
+                        CreateElicitationRequest::new(ElicitationFormMode::new(scope, schema.clone()), prompt.clone())
+                    }
+                    Question::Url(url) => CreateElicitationRequest::new(
+                        ElicitationUrlMode::new(scope, format!("elicitation-{index}"), url.clone()),
+                        prompt.clone(),
                     ),
-                    prompt.clone(),
-                );
+                };
                 let connection = cx.clone();
                 cx.spawn(async move {
                     let echo = match connection.send_request(request).block_task().await {
@@ -345,7 +417,7 @@ impl FakeAgent {
                         Err(error) => serde_json::to_string(&error),
                     }
                     .map_err(acp::Error::into_internal_error)?;
-                    connection.send_notification(message(&session_id.0, &echo))?;
+                    connection.send_notification(message(&session_id.0, &message_id, &echo))?;
                     connection.send_notification(idle_notification(session_id, Some(StopReason::EndTurn)))
                 })
             }
@@ -355,7 +427,13 @@ impl FakeAgent {
 
 enum Turn {
     Reply(String),
-    Elicit(String),
+    Updates(Vec<SessionUpdate>),
+    Elicit { message: String, question: Question },
+}
+
+enum Question {
+    Form(ElicitationSchema),
+    Url(String),
 }
 
 struct Capture {
@@ -372,9 +450,12 @@ struct Capture {
     close_session: mpsc::UnboundedSender<CloseSessionRequest>,
 }
 
-fn message(session_id: &str, text: &str) -> UpdateSessionNotification {
+/// The message id of every replayed and live message.
+const REPLAYED_MESSAGE_ID: &str = "message";
+
+fn message(session_id: &str, message_id: &str, text: &str) -> UpdateSessionNotification {
     UpdateSessionNotification::new(
         SessionId::new(session_id),
-        SessionUpdate::AgentMessageChunk(ContentChunk::new(text.into(), "message")),
+        SessionUpdate::AgentMessageChunk(ContentChunk::new(text.into(), message_id.to_owned())),
     )
 }

@@ -1,5 +1,5 @@
-use crate::session::session_config_view::{LocalConfigOption, LocalConfigView};
-use crate::session::workspace_status::WorkspaceStatus;
+use client_core::session_config_view::{LocalConfigOption, LocalConfigView};
+use client_core::workspace_status::WorkspaceStatus;
 use crate::settings::{ResolvedStatusLineSettings, StatusLineSegmentConfig, StatusLineStyle};
 use crate::view::reasoning_bar::{reasoning_bar, reasoning_color, slot_bar};
 use crate::theme::Theme;

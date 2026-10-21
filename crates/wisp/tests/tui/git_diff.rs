@@ -1,5 +1,5 @@
+use client_core::command::{AgentCommand, GitReviewCommand};
 use unicode_width::UnicodeWidthStr;
-use wisp::command::{AgentCommand, GitReviewCommand};
 use wisp::git_review::{DiffReviewEvent, RepositoryAction};
 
 use super::support::*;
@@ -560,10 +560,7 @@ fn git_theme_picker_routes_selection_to_global_settings() {
 fn opening_review_schedules_theme_discovery() {
     let mut ui = TestUiBuilder::new().working_dir("/workspace").build();
     ui.key(ctrl('g'));
-    assert_eq!(
-        ui.count_commands(|command| matches!(command, Command::Filesystem(FilesystemCommand::ListReviewThemes))),
-        1
-    );
+    assert_eq!(ui.count_commands(|command| matches!(command, Command::Host(HostCommand::ListReviewThemes))), 1);
 }
 
 #[test]
@@ -574,13 +571,19 @@ fn discovered_custom_review_theme_uses_its_filename_globally() {
     let theme =
         ReviewTheme::from_bytes(ThemeId::Custom("custom.json".into()), &ReviewTheme::default().to_bytes().unwrap())
             .unwrap();
-    ui.deliver_result(CommandResult::ReviewThemesListed(vec![ThemeChoice::new("My custom theme", theme.clone())]));
+    ui.deliver_result(CommandResult::Host(HostCommandResult::ReviewThemesListed(vec![ThemeChoice::new(
+        "My custom theme",
+        theme.clone(),
+    )])));
     ui.key(key(KeyCode::Char('t')));
     ui.assert_viewport_contains("My custom theme");
     ui.key(key(KeyCode::Enter));
     let settings = take_applied_theme(&mut ui);
     assert_eq!(settings.theme.selection_id(), "file:custom.json");
-    ui.deliver_result(CommandResult::ThemeApplied(Ok((settings, Theme::from_review(theme.clone())))));
+    ui.deliver_result(CommandResult::Host(HostCommandResult::ThemeApplied(Ok((
+        settings,
+        Theme::from_review(theme.clone()),
+    )))));
     ui.draw();
     assert_eq!(ui.app().ui_settings().theme.selection_id(), "file:custom.json");
     assert_eq!(ui.app().theme().review().revision(), theme.revision());
@@ -598,8 +601,8 @@ fn failed_review_theme_selection_restores_installed_colors() {
     assert_ne!(ui.backend().buffer()[(0, 0)].bg, original);
     let settings = take_applied_theme(&mut ui);
     assert_ne!(settings.theme.selection_id(), "builtin:sage");
-    ui.deliver_result(CommandResult::ThemeApplied(Err(wisp::theme::ThemeApplicationError::Save(
-        std::io::Error::other("save failed"),
+    ui.deliver_result(CommandResult::Host(HostCommandResult::ThemeApplied(Err(
+        wisp::theme::ThemeApplicationError::Save(std::io::Error::other("save failed")),
     ))));
     ui.draw();
     assert_eq!(ui.app().ui_settings().theme.selection_id(), "builtin:sage");

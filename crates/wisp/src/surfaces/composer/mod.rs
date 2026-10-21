@@ -3,10 +3,13 @@ mod view;
 pub(crate) use queued_prompts_view::QueuedPromptsView;
 pub(crate) use view::ComposerBodyView;
 
-use crate::attachment::{AttachmentKind, PromptAttachment, classify_attachment};
-use crate::command::FilesystemCommand;
-use crate::request::RequestId;
-use crate::surfaces::picker::{CommandEntry, CompletionOverlay};
+use crate::surfaces::picker::CompletionOverlay;
+use client_core::composer::attachment::{AttachmentKind, PromptAttachment, classify_attachment};
+use client_core::command::FilesystemCommand;
+use client_core::command_entry::CommandEntry;
+use client_core::composer::prompt_history::PromptHistory;
+use client_core::request::RequestId;
+use client_core::composer::submission::Submission;
 use crate::surfaces::prompt_search::PromptSearchPicker;
 use crate::view::edit_buffer::{EditBuffer, apply_edit_key, is_composed_char};
 use crate::view::input::{Nav, UiEvent};
@@ -16,19 +19,6 @@ use ratatui::layout::Position;
 use ratatui::text::Line;
 use std::collections::HashSet;
 use unicode_width::UnicodeWidthStr;
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Submission {
-    pub text: String,
-    pub mentions: Vec<PromptAttachment>,
-    pub media: Vec<PromptAttachment>,
-}
-
-impl Submission {
-    pub fn attachments(&self) -> Vec<PromptAttachment> {
-        self.mentions.iter().chain(&self.media).cloned().collect()
-    }
-}
 
 #[derive(Debug, Default)]
 pub struct Composer {
@@ -53,63 +43,6 @@ enum Overlay {
     /// Prompt-history search, drawn above the text. It carries the draft it
     /// replaced, so backing out restores what the user was writing.
     PromptSearch { picker: PromptSearchPicker, draft: String },
-}
-
-/// The prompts submitted this session, and where recall has walked back to.
-///
-/// Navigation stashes the draft it replaced, so stepping past the newest entry
-/// puts the user back where they started.
-#[derive(Debug, Default)]
-struct PromptHistory {
-    entries: Vec<String>,
-    index: Option<usize>,
-    draft: Option<String>,
-}
-
-/// Prompts kept for recall. Older ones are dropped rather than growing forever.
-const MAX_HISTORY_ENTRIES: usize = 500;
-
-impl PromptHistory {
-    fn push(&mut self, prompt: &str) {
-        if prompt.trim().is_empty() {
-            return;
-        }
-        self.entries.push(prompt.to_string());
-        if self.entries.len() > MAX_HISTORY_ENTRIES {
-            self.entries.remove(0);
-        }
-    }
-
-    /// The previous prompt, stashing `draft` the first time recall starts.
-    fn previous(&mut self, draft: &str) -> Option<&str> {
-        let index = match self.index {
-            Some(0) => return None,
-            Some(index) => index - 1,
-            None => {
-                self.draft = Some(draft.to_string());
-                self.entries.len().checked_sub(1)?
-            }
-        };
-        self.index = Some(index);
-        self.entries.get(index).map(String::as_str)
-    }
-
-    /// The next prompt, or the stashed draft once recall walks past the newest.
-    fn next(&mut self) -> Option<String> {
-        let index = self.index?;
-        if index + 1 < self.entries.len() {
-            self.index = Some(index + 1);
-            return self.entries.get(index + 1).cloned();
-        }
-        self.index = None;
-        Some(self.draft.take().unwrap_or_default())
-    }
-
-    /// Ends navigation, so the recalled prompt becomes the user's own draft.
-    fn reset(&mut self) {
-        self.index = None;
-        self.draft = None;
-    }
 }
 
 pub struct ComposerLayout {
@@ -292,7 +225,7 @@ impl Composer {
     }
 
     pub fn recall_previous(&mut self) -> bool {
-        let Some(prompt) = self.history.previous(self.buffer.text()).map(str::to_string) else {
+        let Some(prompt) = self.history.older(self.buffer.text()).map(str::to_string) else {
             return false;
         };
         self.set_text(prompt);
@@ -301,7 +234,7 @@ impl Composer {
     }
 
     pub fn recall_next(&mut self) -> bool {
-        let Some(prompt) = self.history.next() else {
+        let Some(prompt) = self.history.newer() else {
             return false;
         };
         self.set_text(prompt);

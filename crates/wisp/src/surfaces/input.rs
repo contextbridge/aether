@@ -1,4 +1,4 @@
-use crate::command::GitReviewCommand;
+use client_core::command::GitReviewCommand;
 use crate::settings::overlay::SettingsChange;
 use acp_utils::notifications::WorkspaceMoveTarget;
 use agent_client_protocol::schema::v2::SessionId;

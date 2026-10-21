@@ -1,5 +1,5 @@
 use super::{Composer, ComposerLayout};
-use crate::attachment::{AttachmentKind, classify_attachment};
+use client_core::composer::attachment::{AttachmentKind, classify_attachment};
 use crate::theme::Theme;
 use crate::view::widgets::RowsView;
 use crate::view::wrap::{fit_prefix, wrap_text_char};

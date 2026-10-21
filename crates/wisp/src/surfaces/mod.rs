@@ -1,6 +1,4 @@
 pub mod composer;
-pub(crate) mod dropped_files;
-pub mod elicitation;
 pub mod input;
 pub(crate) mod modal;
 pub mod picker;

@@ -1,0 +1,79 @@
+[package]
+name = "aether-desktop"
+version = "0.1.0"
+edition = "2024"
+description = "Native desktop client for running and managing many Aether agent threads"
+license = "MIT"
+repository = "https://github.com/contextbridge/aether"
+publish = false
+default-run = "aether-desktop"
+
+[package.metadata.dist]
+dist = false
+
+[lib]
+name = "aether_desktop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "aether-desktop"
+path = "src/main.rs"
+
+[[bin]]
+name = "fake-acp-agent"
+path = "tests/fixtures/fake_acp_agent.rs"
+test = false
+required-features = ["testing"]
+
+[features]
+testing = [
+    "gpui/test-support",
+    "gpui-base/test-support",
+    "clankerdiff-gpui/test-support",
+    "acp_utils/testing",
+    "client_core/testing",
+    "aether-sessions/testing",
+    "tokio/io-std",
+]
+
+[[test]]
+name = "desktop"
+path = "tests/desktop/main.rs"
+required-features = ["testing"]
+
+[lints]
+workspace = true
+
+[dependencies]
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client"], version = "0.5.18" }
+agent-client-protocol = { workspace = true, features = ["process"] }
+aether-sessions = { path = "../aether-sessions", version = "0.3.18" }
+chrono = { workspace = true }
+client_core = { package = "aether-client-core", path = "../client-core", version = "0.1.0" }
+clankerdiff-client = { workspace = true }
+clankerdiff-gpui = { workspace = true }
+clankerdiff-markdown = { workspace = true }
+clankerdiff-syntax = { workspace = true }
+clankerdiff-theme = { workspace = true }
+gpui = { workspace = true }
+gpui-base = { workspace = true }
+gpui_platform = { workspace = true }
+nucleo = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "process"] }
+tokio-util = { workspace = true, features = ["compat"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+utils = { package = "aether-utils", path = "../utils", version = "0.3.0" }
+
+[dev-dependencies]
+clankerdiff-core = { workspace = true }
+client_core = { package = "aether-client-core", path = "../client-core", features = ["testing"], version = "0.1.0" }
+tempfile = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSGraphicsContext", "NSResponder", "objc2-core-foundation"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSGeometry", "objc2-core-foundation"] }

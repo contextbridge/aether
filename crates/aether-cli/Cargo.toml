@@ -75,3 +75,4 @@ libc = { workspace = true }
 aether-agent-cli = { path = ".", features = ["testing"] }
 tokio = { workspace = true, features = ["test-util"] }
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"], version = "0.5.18" }
+client_core = { package = "aether-client-core", path = "../client-core", version = "0.1.0" }

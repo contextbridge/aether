@@ -102,17 +102,26 @@ globset = "0.4"
 ignore = "0.4"
 
 # Terminal UI
-clankerdiff-core = { version = "0.3.2" }
-clankerdiff-ratatui = { version = "0.3.2", features = ["crossterm-backend"] }
-clankerdiff-git = { version = "0.3.2" }
-clankerdiff-protocol = { version = "0.3.2" }
-clankerdiff-server = { version = "0.3.2" }
-clankerdiff-client = { version = "0.3.2", default-features = false }
+clankerdiff-core = { version = "0.3.3" }
+clankerdiff-ratatui = { version = "0.3.3", features = ["crossterm-backend"] }
+clankerdiff-git = { version = "0.3.3" }
+clankerdiff-protocol = { version = "0.3.3" }
+clankerdiff-server = { version = "0.3.3" }
+clankerdiff-client = { version = "0.3.3", default-features = false }
 crossterm = { version = "0.29", features = ["event-stream"] }
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "layout-cache", "scrolling-regions"] }
 nucleo = "0.5.0"
 mime_guess = "2"
 unicode-width = "0.2.2"
+
+# Desktop UI
+gpui = { package = "gpui-pre", version = "=0.3.7", default-features = false }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.7", features = ["font-kit", "runtime_shaders", "wayland", "x11"] }
+gpui-base = "=0.7.0"
+clankerdiff-gpui = { path = "../diff/crates/diff-gpui" }
+clankerdiff-markdown = { version = "0.3.3" }
+clankerdiff-syntax = { version = "0.3.3" }
+clankerdiff-theme = { version = "0.3.3" }
 
 # Wasm
 wasm-bindgen = "0.2.128"
@@ -127,6 +136,22 @@ wasm-bindgen-test = "0.3.79"
 tempfile = "3.27"
 async-trait = "0.1"
 testcontainers = "0.28.0"
+
+# Every clankerdiff crate in the graph must resolve to ../diff, so clankerdiff-gpui (path-only) shares types with the rest.
+# gpui-pre resolves to clankerdiff's vendored copy, which carries the variable-height `list` scroll fix.
+[patch.crates-io]
+gpui-pre = { path = "../diff/patches/gpui" }
+clankerdiff-client = { path = "../diff/crates/diff-client" }
+clankerdiff-core = { path = "../diff/crates/diff-core" }
+clankerdiff-fingerprint = { path = "../diff/crates/diff-fingerprint" }
+clankerdiff-git = { path = "../diff/crates/diff-git" }
+clankerdiff-markdown = { path = "../diff/crates/diff-markdown" }
+clankerdiff-protocol = { path = "../diff/crates/diff-protocol" }
+clankerdiff-ratatui = { path = "../diff/crates/diff-ratatui" }
+clankerdiff-server = { path = "../diff/crates/diff-server" }
+clankerdiff-syntax = { path = "../diff/crates/diff-syntax" }
+clankerdiff-theme = { path = "../diff/crates/diff-theme" }
+clankerdiff-watch = { path = "../diff/crates/diff-watch" }
 
 [profile.dev]
 debug = 1

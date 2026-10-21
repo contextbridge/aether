@@ -5,6 +5,7 @@ use crate::error::AppError;
 use crate::renderer::Renderer;
 use crate::session::terminal::{TerminalSession, inline_viewport_height};
 use acp_utils::client::{AcpClientHandle, AcpEvent};
+use client_core::runtime::CommandDispatcher;
 use crossterm::event::{Event, EventStream};
 use crossterm::terminal::size;
 use futures::StreamExt;
@@ -16,7 +17,7 @@ use tokio::select;
 use tokio::sync::mpsc;
 use tokio::time::{MissedTickBehavior, interval};
 
-use super::CommandDispatcher;
+use super::TuiHost;
 
 const MAX_ACP_EVENTS_PER_FRAME: usize = 1_000;
 
@@ -26,7 +27,7 @@ pub(crate) async fn run(
     mut event_rx: mpsc::UnboundedReceiver<AcpEvent>,
     client_handle: AcpClientHandle,
 ) -> Result<(), AppError> {
-    let mut dispatcher = CommandDispatcher::new(client_handle);
+    let mut dispatcher = CommandDispatcher::new(client_handle, TuiHost);
     let result = async {
         let (_, terminal_height) = size()?;
         let viewport = Viewport::Inline(inline_viewport_height(terminal_height));
@@ -44,7 +45,7 @@ async fn run_event_loop(
     app: &mut App,
     renderer: &mut Renderer,
     event_rx: &mut mpsc::UnboundedReceiver<AcpEvent>,
-    dispatcher: &mut CommandDispatcher,
+    dispatcher: &mut CommandDispatcher<TuiHost>,
 ) -> Result<(), AppError> {
     let mut terminal_events = EventStream::new();
     let mut tick_interval = {
@@ -108,12 +109,12 @@ async fn run_event_loop(
     }
 }
 
-fn handle_acp_event(dispatcher: &mut CommandDispatcher, app: &mut App, event: AcpEvent) {
+fn handle_acp_event(dispatcher: &mut CommandDispatcher<TuiHost>, app: &mut App, event: AcpEvent) {
     let commands = app.update(Message::Agent(Box::new(event)));
     dispatch_commands(dispatcher, app, commands);
 }
 
-fn dispatch_commands(dispatcher: &mut CommandDispatcher, app: &mut App, commands: Vec<Command>) {
+fn dispatch_commands(dispatcher: &mut CommandDispatcher<TuiHost>, app: &mut App, commands: Vec<Command>) {
     let mut pending = VecDeque::from(commands);
     while let Some(command) = pending.pop_front() {
         let Some(result) = dispatcher.dispatch(command) else { continue };

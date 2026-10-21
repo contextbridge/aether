@@ -3,15 +3,15 @@ pub(crate) mod frame;
 mod url;
 
 use crate::renderer::DrawContext;
-use crate::surfaces::elicitation::ElicitationResponder;
 use acp_utils::elicitation::source_mcp_server_name;
-use agent_client_protocol::Responder;
-use agent_client_protocol::schema::v2::{CreateElicitationRequest, CreateElicitationResponse, ElicitationMode};
+use agent_client_protocol::schema::v2::{CreateElicitationRequest, ElicitationContentValue, ElicitationMode};
+use client_core::elicitation::ElicitationResponder;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Position, Rect};
 use ratatui::text::Text;
 use ratatui::widgets::{Paragraph, Widget};
+use std::collections::BTreeMap;
 
 use self::form::{FormAction, FormModal};
 use self::frame::{MODAL_HORIZONTAL_PADDING, MODAL_VERTICAL_CHROME, ModalFrame};
@@ -25,7 +25,8 @@ use crate::view::wrap::as_u16;
 
 pub struct ElicitationModal {
     kind: ModalKind,
-    responder: ElicitationResponder,
+    /// Taken when the request is answered, so it is answered once.
+    responder: Option<ElicitationResponder>,
     browser_opener: BrowserOpener,
     clipboard_writer: ClipboardWriter,
 }
@@ -38,13 +39,12 @@ enum ModalKind {
 impl ElicitationModal {
     pub fn with_url_handlers(
         params: CreateElicitationRequest,
-        responder: Responder<CreateElicitationResponse>,
+        responder: ElicitationResponder,
         browser_opener: BrowserOpener,
         clipboard_writer: ClipboardWriter,
     ) -> Option<Self> {
         let server_name = source_mcp_server_name(params.meta.as_ref()).unwrap_or("Agent").to_string();
         let message = params.message;
-        let responder = ElicitationResponder::new(responder);
         let kind = match params.mode {
             ElicitationMode::Form(form) => {
                 ModalKind::Form(FormModal::new(server_name, message, &form.requested_schema)?)
@@ -52,7 +52,7 @@ impl ElicitationModal {
             ElicitationMode::Url(url) => ModalKind::Url(UrlModal::new(server_name, message, url.url)),
             _ => return None,
         };
-        Some(Self { kind, responder, browser_opener, clipboard_writer })
+        Some(Self { kind, responder: Some(responder), browser_opener, clipboard_writer })
     }
 
     pub fn render_inline(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) -> Option<Position> {
@@ -89,14 +89,14 @@ impl ElicitationModal {
         let plain_key = key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT;
         match key.code {
             KeyCode::Esc => {
-                self.responder.cancel();
+                self.cancel();
                 return vec![UiOutput::Close];
             }
             KeyCode::Enter => {
                 if let Err(error) = (self.browser_opener)(&url.url) {
                     url.launch_error = Some(format!("Failed to open browser: {error}"));
                 } else {
-                    self.responder.accept(None);
+                    self.accept(None);
                     return vec![UiOutput::Close];
                 }
             }
@@ -144,11 +144,11 @@ impl ElicitationModal {
         match form.on_key(key) {
             FormAction::None => Vec::new(),
             FormAction::Cancel => {
-                self.responder.cancel();
+                self.cancel();
                 vec![UiOutput::Close]
             }
             FormAction::Accept(content) => {
-                self.responder.accept(Some(content));
+                self.accept(Some(content));
                 vec![UiOutput::Close]
             }
         }
@@ -160,7 +160,15 @@ impl ElicitationModal {
 
     /// Dismissing the modal answers the request it was asking about.
     pub(crate) fn cancel(&mut self) {
-        self.responder.cancel();
+        if let Some(responder) = self.responder.take() {
+            responder.cancel();
+        }
+    }
+
+    fn accept(&mut self, content: Option<BTreeMap<String, ElicitationContentValue>>) {
+        if let Some(responder) = self.responder.take() {
+            responder.accept(content);
+        }
     }
 }
 
@@ -210,7 +218,8 @@ mod tests {
     use super::*;
     use acp_utils::testing::test_connection;
     use agent_client_protocol::schema::v2::{
-        ElicitationAction, ElicitationFormMode, ElicitationSchema, ElicitationSessionScope, ElicitationUrlMode,
+        CreateElicitationResponse, ElicitationAction, ElicitationFormMode, ElicitationSchema, ElicitationSessionScope,
+        ElicitationUrlMode,
     };
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -252,7 +261,7 @@ mod tests {
         let (cx, mut peer) = test_connection().await;
         let (responder, rx) = peer.fake_elicitation(&cx).await;
         let (opener, writer) = noop_handlers();
-        (ElicitationModal::with_url_handlers(form_request(schema), responder, opener, writer).unwrap(), rx)
+        (ElicitationModal::with_url_handlers(form_request(schema), responder.into(), opener, writer).unwrap(), rx)
     }
 
     async fn make_url_modal(
@@ -261,7 +270,7 @@ mod tests {
         let (cx, mut peer) = test_connection().await;
         let (responder, rx) = peer.fake_elicitation(&cx).await;
         let (opener, writer) = noop_handlers();
-        (ElicitationModal::with_url_handlers(url_request(url), responder, opener, writer).unwrap(), rx)
+        (ElicitationModal::with_url_handlers(url_request(url), responder.into(), opener, writer).unwrap(), rx)
     }
 
     async fn make_url_modal_with_handlers(
@@ -271,7 +280,7 @@ mod tests {
     ) -> ElicitationModal {
         let (cx, mut peer) = test_connection().await;
         let (responder, _rx) = peer.fake_elicitation(&cx).await;
-        ElicitationModal::with_url_handlers(url_request(url), responder, opener, writer).unwrap()
+        ElicitationModal::with_url_handlers(url_request(url), responder.into(), opener, writer).unwrap()
     }
     #[tokio::test(flavor = "current_thread")]
     async fn permission_like_form_returns_default_on_enter() {

@@ -1,6 +1,6 @@
 use super::App;
-use crate::command::{Command, FilesystemCommand};
-use crate::session::session_config_view::{LocalConfigOption, LocalConfigValue, LocalConfigView};
+use crate::command::{Command, HostCommand};
+use client_core::session_config_view::{LocalConfigOption, LocalConfigValue, LocalConfigView};
 use crate::settings::overlay::{SettingsChange, SettingsMenuEntry};
 use crate::settings::{ThemeSettings, UiSettings};
 use crate::theme::{Theme, ThemeApplicationError};
@@ -31,7 +31,7 @@ impl App {
             }
         };
         if let Some(settings) = self.ui.settings.request_theme_change(selection) {
-            self.queue(Command::Filesystem(FilesystemCommand::ApplyTheme { settings: Box::new(settings) }));
+            self.queue(Command::Host(HostCommand::ApplyTheme { settings: Box::new(settings) }));
         }
     }
 
@@ -48,7 +48,7 @@ impl App {
         };
         self.ui.theme_generation.bump();
         if let Some(settings) = self.ui.settings.finish_theme_change(settings) {
-            self.queue(Command::Filesystem(FilesystemCommand::ApplyTheme { settings: Box::new(settings) }));
+            self.queue(Command::Host(HostCommand::ApplyTheme { settings: Box::new(settings) }));
         }
         self.apply_settings_change(&SettingsChange {
             config_id: acp_utils::config_option_id::THEME_CONFIG_ID.to_string(),

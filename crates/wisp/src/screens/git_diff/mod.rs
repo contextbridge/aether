@@ -10,7 +10,7 @@ use ratatui::{
     widgets::{Clear, StatefulWidget, Widget},
 };
 
-use crate::command::GitReviewCommand;
+use client_core::command::GitReviewCommand;
 use crate::git_review::{ClientState, DiffReviewEvent, DiffSnapshot, ReviewCapabilities};
 use crate::renderer::DrawContext;
 use crate::screens::reviewer::{crossterm_event, theme_change};

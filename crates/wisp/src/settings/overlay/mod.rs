@@ -12,15 +12,15 @@ use self::provider_login::{ProviderLoginEntry, ProviderLoginPane, build_provider
 use self::server_status::ServerStatusPane;
 use crate::renderer::DrawContext;
 use crate::session::platform::{BrowserOpener, ClipboardWriter};
-use crate::session::session_config_view::{LocalConfigOption, LocalConfigValue, LocalConfigView};
 use crate::surfaces::input::UiOutput;
 use crate::surfaces::modal::{ElicitationModal, frame::ModalFrame};
 use crate::theme::Theme;
 use crate::view::input::{Nav, UiEvent};
 use crate::view::widgets::key_hints;
 use acp_utils::notifications::McpServerStatusEntry;
-use agent_client_protocol::Responder;
-use agent_client_protocol::schema::v2::{AuthMethod, CreateElicitationRequest, CreateElicitationResponse};
+use agent_client_protocol::schema::v2::{AuthMethod, CreateElicitationRequest};
+use client_core::elicitation::ElicitationResponder;
+use client_core::session_config_view::{LocalConfigOption, LocalConfigValue, LocalConfigView};
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
@@ -197,7 +197,7 @@ impl SettingsOverlay {
     pub fn on_elicitation_request(
         &mut self,
         params: CreateElicitationRequest,
-        responder: Responder<CreateElicitationResponse>,
+        responder: ElicitationResponder,
         browser_opener: BrowserOpener,
         clipboard_writer: ClipboardWriter,
     ) {

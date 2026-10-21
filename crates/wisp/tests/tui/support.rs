@@ -13,6 +13,11 @@ pub(crate) use agent_client_protocol::schema::v2::{
     ElicitationFormMode, ElicitationSchema, ElicitationSessionScope, ElicitationUrlMode, SessionId,
     StringPropertySchema,
 };
+pub(crate) use client_core::command::{AgentCommand, FilesystemCommand, PromptRejection};
+pub(crate) use client_core::command_entry::CommandEntry;
+pub(crate) use client_core::session_config_view::LocalConfigOption;
+pub(crate) use client_core::session_core::ForegroundOperation;
+pub(crate) use client_core::testing::{FakeFilesystem, FakeGit};
 pub(crate) use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub(crate) use ratatui::buffer::{Buffer, Cell};
 pub(crate) use ratatui::layout::Position;
@@ -27,28 +32,20 @@ pub(crate) use tokio::task::LocalSet;
 pub(crate) use unicode_width::UnicodeWidthStr;
 pub(crate) use utils::artifact_review::ArtifactReviewElicitationMeta;
 pub(crate) use utils::testing::TestWorkspace;
-pub(crate) use wisp::app::ForegroundOperation;
-pub(crate) use wisp::command::{
-    AgentCommand, Command, CommandResult, FilesystemCommand, PromptRejection, TerminalCommand,
-};
+pub(crate) use wisp::command::{Command, CommandResult, HostCommand, HostCommandResult};
 pub(crate) use wisp::testing::{
-    BackendEvent, FakeFilesystem, FakeGit, InstrumentedBackend, StreamContent, TestUi, TestUiBuilder, assert_buffer_eq,
-    buffer_text, chunk_message, compaction_update, context_cleared, git_diff_screen, has_cell, line_text,
-    numbered_lines, render_surface, row_cells, row_containing, row_text, rows_with_background, session_update,
-    sub_agent_progress, sub_agent_tool_update, text_chunk, text_chunk_with_id, text_diff, thought_chunk,
-    thought_chunk_with_id, tool_completed, tool_status,
+    BackendEvent, InstrumentedBackend, StreamContent, TestUi, TestUiBuilder, assert_buffer_eq, buffer_text,
+    chunk_message, compaction_update, context_cleared, git_diff_screen, has_cell, line_text, numbered_lines,
+    render_surface, row_cells, row_containing, row_text, rows_with_background, session_update, sub_agent_progress,
+    sub_agent_tool_update, text_chunk, text_chunk_with_id, text_diff, thought_chunk, thought_chunk_with_id,
+    tool_completed, tool_status,
 };
 
 pub(crate) use acp_utils::conversation::{ConversationContent, ConversationItem, ItemState, ToolStatus};
-pub(crate) use wisp::attachment::{
-    AttachmentKind, AttachmentOutcome, PromptAttachment, build_attachments, classify_attachment,
-};
 pub(crate) use wisp::git_review::{FileStatus, StageState};
-pub(crate) use wisp::session::session_config_view::LocalConfigOption;
 pub(crate) use wisp::settings::overlay::SettingsOverlay;
 pub(crate) use wisp::settings::{StatusLineSegmentConfig, UiSettings};
 pub(crate) use wisp::surfaces::composer::Composer;
-pub(crate) use wisp::surfaces::picker::CommandEntry;
 pub(crate) use wisp::theme::Theme;
 pub(crate) use wisp::view::input::UiEvent;
 pub(crate) use wisp::view::syntax::SyntaxHighlighter;
@@ -260,14 +257,14 @@ pub(crate) fn assert_authenticates_mcp_server(ui: &mut TestUi, name: &str) {
 
 pub(crate) fn take_applied_theme(ui: &mut TestUi) -> Box<UiSettings> {
     ui.take_command_where(|command| match command {
-        Command::Filesystem(FilesystemCommand::ApplyTheme { settings }) => Some(settings),
+        Command::Host(HostCommand::ApplyTheme { settings }) => Some(settings),
         _ => None,
     })
     .expect("the app should ask to apply a theme")
 }
 
 pub(crate) fn bells(ui: &mut TestUi) -> usize {
-    ui.count_commands(|command| matches!(command, Command::Terminal(TerminalCommand::RingBell)))
+    ui.count_commands(|command| matches!(command, Command::Host(HostCommand::RingBell)))
 }
 
 pub(crate) fn assert_ctrl_c_exits(ui: &mut TestUi) {

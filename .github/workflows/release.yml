@@ -69,6 +69,7 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
           persist-credentials: false
           submodules: recursive
+      - uses: $/.github/actions/checkout-diff
       - name: Install dist
         # we specify bash to get pipefail; it guards against the `curl` command
         # failing. otherwise `sh` won't catch that `curl` returned non-0
@@ -136,6 +137,7 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
           persist-credentials: false
           submodules: recursive
+      - uses: $/.github/actions/checkout-diff
       - name: Install Rust non-interactively if not already installed
         if: ${{ matrix.container }}
         run: |
@@ -199,6 +201,7 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
           persist-credentials: false
           submodules: recursive
+      - uses: $/.github/actions/checkout-diff
       - name: Install cached dist
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
@@ -254,6 +257,7 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
           persist-credentials: false
           submodules: recursive
+      - uses: $/.github/actions/checkout-diff
       - name: Install cached dist
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
