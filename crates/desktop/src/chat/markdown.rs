@@ -1,4 +1,4 @@
-use crate::ui::tokens::{GROUP_HEIGHT, RADIUS_CONTAINER};
+use crate::ui::tokens::{GROUP_HEIGHT, RADIUS_CONTAINER, rem};
 use crate::ui::{Button, ButtonVariant, CODE_FONT, IconName, Typography, TypographyExt};
 use clankerdiff_gpui::style::{color, highlight_style};
 use clankerdiff_gpui::ui::prelude::UiTheme;
@@ -151,13 +151,13 @@ impl<'a> MarkdownRenderer<'a> {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .rounded(px(RADIUS_CONTAINER))
+            .rounded(rem(RADIUS_CONTAINER))
             .border_1()
             .border_color(self.ui.colors.border)
             .bg(color(palette.code_background))
             .child(
                 div()
-                    .h(px(GROUP_HEIGHT))
+                    .h(rem(GROUP_HEIGHT))
                     .flex()
                     .items_center()
                     .justify_between()
@@ -189,7 +189,7 @@ impl<'a> MarkdownRenderer<'a> {
             .overflow_hidden()
             .border_1()
             .border_color(self.ui.colors.border)
-            .rounded(px(RADIUS_CONTAINER));
+            .rounded(rem(RADIUS_CONTAINER));
         for (index, row) in table.rows.iter().enumerate() {
             let mut cells =
                 div().flex().when(index > 0, |cells| cells.border_t_1().border_color(self.ui.colors.border));

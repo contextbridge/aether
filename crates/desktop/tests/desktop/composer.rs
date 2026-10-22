@@ -1,9 +1,9 @@
 use crate::support::{replying, start_thread, texts};
-use acp_utils::testing::FakeAgent;
+use acp_utils::testing::{FakeAgent, FakeAgentRequests};
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder, FakeConnector};
 use aether_desktop::threads::{Thread, ThreadStatus};
 use agent_client_protocol::schema::v2 as acp;
-use gpui::{Entity, TestAppContext};
+use gpui::{Entity, TestAppContext, px};
 use std::fs;
 
 #[gpui::test]
@@ -128,6 +128,99 @@ fn choosing_a_model_asks_the_agent_to_switch(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn typing_in_the_model_picker_filters_the_models_and_enter_chooses_one(cx: &mut TestAppContext) {
+    let (agent, mut requests) =
+        agent_with_models(&["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota"]);
+    let harness = harness_with(cx, agent);
+    start_thread(&harness, cx, "project-alpha-new-thread");
+
+    harness.click(cx, "config-model").unwrap();
+    assert!(harness.bounds(cx, "config-model-search").is_some(), "a long list can be searched");
+    harness.simulate_input(cx, "thet");
+
+    assert!(harness.bounds(cx, "config-model-model-theta").is_some());
+    assert!(harness.bounds(cx, "config-model-model-alpha").is_none(), "models not matching are hidden");
+    harness.simulate_keystrokes(cx, "enter");
+    harness.run_until(cx, |_| !requests.config.is_empty());
+
+    let request = requests.config.try_recv().unwrap();
+    assert_eq!(format!("{:?}", request.value), format!("{:?}", acp::SessionConfigOptionValue::from("model-theta")));
+    assert!(harness.bounds(cx, "config-model-picker").is_none(), "choosing a model closes the picker");
+}
+
+#[gpui::test]
+fn the_arrow_keys_move_the_pickers_highlight_from_the_current_value(cx: &mut TestAppContext) {
+    let (agent, mut requests) = agent_with_models(&["one", "two", "three"]);
+    let harness = harness_with(cx, agent);
+    start_thread(&harness, cx, "project-alpha-new-thread");
+
+    harness.click(cx, "config-model").unwrap();
+    harness.simulate_keystrokes(cx, "down down enter");
+    harness.run_until(cx, |_| !requests.config.is_empty());
+
+    let request = requests.config.try_recv().unwrap();
+    assert_eq!(format!("{:?}", request.value), format!("{:?}", acp::SessionConfigOptionValue::from("model-three")));
+}
+
+#[gpui::test]
+fn space_types_into_the_pickers_search_instead_of_closing_it(cx: &mut TestAppContext) {
+    let (agent, _requests) =
+        agent_with_models(&["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota"]);
+    let harness = harness_with(cx, agent);
+    start_thread(&harness, cx, "project-alpha-new-thread");
+
+    harness.click(cx, "config-model").unwrap();
+    harness.simulate_keystrokes(cx, "t space");
+
+    assert!(harness.bounds(cx, "config-model-picker").is_some(), "the picker stays open");
+    assert_eq!(harness.composer_text(cx).as_deref(), Some(""), "nothing reaches the composer");
+}
+
+#[gpui::test]
+fn space_leaves_a_short_picker_open(cx: &mut TestAppContext) {
+    let (agent, _requests) = agent_with_models(&["one", "two"]);
+    let harness = harness_with(cx, agent);
+    start_thread(&harness, cx, "project-alpha-new-thread");
+
+    harness.click(cx, "config-model").unwrap();
+    harness.simulate_keystrokes(cx, "space");
+
+    assert!(harness.bounds(cx, "config-model-picker").is_some());
+}
+
+#[gpui::test]
+fn escape_closes_the_picker_without_switching(cx: &mut TestAppContext) {
+    let (agent, requests) = agent_with_models(&["one", "two"]);
+    let harness = harness_with(cx, agent);
+    start_thread(&harness, cx, "project-alpha-new-thread");
+
+    harness.click(cx, "config-model").unwrap();
+    assert!(harness.bounds(cx, "config-model-search").is_none(), "a short list needs no search");
+    harness.simulate_keystrokes(cx, "escape");
+
+    assert!(harness.bounds(cx, "config-model-picker").is_none());
+    assert!(requests.config.is_empty());
+}
+
+#[gpui::test]
+fn a_long_list_of_models_scrolls_inside_the_window(cx: &mut TestAppContext) {
+    let names: Vec<String> = (0..80).map(|n| format!("m{n}")).collect();
+    let (agent, _requests) = agent_with_models(&names.iter().map(String::as_str).collect::<Vec<_>>());
+    let harness = DesktopHarnessBuilder::default()
+        .connector(FakeConnector::default().agent("/alpha", agent))
+        .project("/alpha")
+        .window_size(1000.0, 600.0)
+        .build(cx);
+    start_thread(&harness, cx, "project-alpha-new-thread");
+
+    harness.click(cx, "config-model").unwrap();
+
+    let picker = harness.bounds(cx, "config-model-picker").expect("the picker opens");
+    assert!(picker.top() >= px(0.0), "the picker starts inside the window");
+    assert!(picker.bottom() <= px(600.0), "the list scrolls instead of growing past the window");
+}
+
+#[gpui::test]
 fn the_context_meter_shows_once_the_agent_reports_usage(cx: &mut TestAppContext) {
     let usage = acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(50_000, 200_000));
     let agent = FakeAgent::default()
@@ -196,6 +289,17 @@ fn advertising_commands() -> FakeAgent {
     FakeAgent::default()
         .new_session_response(acp::NewSessionResponse::new("alpha-session"))
         .prompt_updates(vec![acp::SessionUpdate::AvailableCommandsUpdate(commands)])
+}
+
+/// An agent whose session offers a `model` option with a `model-<name>` value per name, the
+/// first current.
+fn agent_with_models(names: &[&str]) -> (FakeAgent, FakeAgentRequests) {
+    let values: Vec<_> =
+        names.iter().map(|name| acp::SessionConfigSelectOption::new(format!("model-{name}"), *name)).collect();
+    let model = acp::SessionConfigOption::select("model", "Model", format!("model-{}", names[0]), values);
+    FakeAgent::default()
+        .new_session_response(acp::NewSessionResponse::new("alpha-session").config_options(vec![model]))
+        .capture()
 }
 
 fn harness_with(cx: &mut TestAppContext, agent: FakeAgent) -> DesktopHarness {

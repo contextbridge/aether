@@ -1,5 +1,5 @@
-use super::tokens::ICON_SIZE;
-use gpui::{App, Hsla, IntoElement, RenderOnce, SharedString, Styled, Window, prelude::*, px, svg};
+use super::tokens::{ICON_SIZE, rem};
+use gpui::{App, Hsla, IntoElement, RenderOnce, SharedString, Styled, Window, prelude::*, svg};
 
 /// The Lucide icons the app uses, bundled into the binary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,7 +98,7 @@ impl RenderOnce for Icon {
         svg()
             .data(self.name.svg())
             .flex_none()
-            .size(px(self.size))
+            .size(rem(self.size))
             .text_color(self.color)
             .when_some(self.hover, |icon, (group, color)| icon.group_hover(group, move |icon| icon.text_color(color)))
     }

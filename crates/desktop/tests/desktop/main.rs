@@ -5,6 +5,7 @@ mod cli;
 mod composer;
 mod elicitation;
 mod history;
+mod interface_size;
 mod launch;
 mod layout;
 mod local_connector;

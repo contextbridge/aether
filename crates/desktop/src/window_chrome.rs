@@ -1,17 +1,17 @@
 use crate::menus::APP_NAME;
-use crate::ui::tokens::BAR_HEIGHT;
+use crate::ui::tokens::{BAR_HEIGHT, rem};
 use crate::ui::{Icon, IconName, Typography, TypographyExt};
 use clankerdiff_gpui::ui::prelude::UiTheme;
 use gpui::{
-    AnyElement, App, BoxShadow, CursorStyle, Decorations, MouseButton, Pixels, Point, ResizeEdge, Size, Tiling, Window,
-    WindowButton, WindowButtonLayout, WindowControlArea, WindowControls, div, hsla, point, prelude::*, px,
+    AnyElement, App, BoxShadow, CursorStyle, Decorations, MouseButton, Pixels, Point, Rems, ResizeEdge, Size, Tiling,
+    Window, WindowButton, WindowButtonLayout, WindowControlArea, WindowControls, div, hsla, point, prelude::*, px,
     transparent_black,
 };
 
 const CLIENT_INSET: Pixels = px(8.0);
 const BORDER_SIZE: Pixels = px(1.0);
-const TITLE_BAR_HEIGHT: Pixels = px(BAR_HEIGHT);
-const BUTTON_WIDTH: Pixels = px(BAR_HEIGHT);
+const TITLE_BAR_HEIGHT: Rems = rem(BAR_HEIGHT);
+const BUTTON_WIDTH: Rems = rem(BAR_HEIGHT);
 
 /// Wraps `content` in a title bar, frame and resize zones when the platform
 /// asks the app to draw its own decorations (Wayland compositors without

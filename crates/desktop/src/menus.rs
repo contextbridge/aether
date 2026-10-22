@@ -1,4 +1,7 @@
-use crate::app::{OpenThreadSwitcher, SelectNextThread, SelectPreviousThread, ShowChanges, ShowChat};
+use crate::app::{
+    DecreaseInterfaceSize, IncreaseInterfaceSize, OpenThreadSwitcher, ResetInterfaceSize, SelectNextThread,
+    SelectPreviousThread, ShowChanges, ShowChat,
+};
 use crate::run_loop;
 use crate::sidebar::NewThread;
 use gpui::{App, Menu, MenuItem, OsAction, PromptLevel, SystemMenuType, Window, actions};
@@ -65,6 +68,15 @@ fn build() -> Vec<Menu> {
                 MenuItem::os_action("Copy", Copy, OsAction::Copy),
                 MenuItem::os_action("Paste", Paste, OsAction::Paste),
                 MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
+            ],
+        },
+        Menu {
+            name: "View".into(),
+            disabled: false,
+            items: vec![
+                MenuItem::action("Bigger", IncreaseInterfaceSize),
+                MenuItem::action("Smaller", DecreaseInterfaceSize),
+                MenuItem::action("Actual Size", ResetInterfaceSize),
             ],
         },
         Menu {

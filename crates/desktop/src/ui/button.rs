@@ -1,10 +1,9 @@
 use super::icon::{Icon, IconName};
-use super::tokens::{ICON_BUTTON_SIZE, RADIUS_CONTAINER, RADIUS_CONTROL, ROW_HEIGHT};
+use super::tokens::{ICON_BUTTON_SIZE, RADIUS_CONTAINER, RADIUS_CONTROL, ROW_HEIGHT, rem};
 use super::typography::{Typography, TypographyExt};
 use clankerdiff_gpui::ui::prelude::{ControlState, InteractionState, UiTheme};
 use gpui::{
     App, ClickEvent, Context, ElementId, IntoElement, Render, RenderOnce, Role, SharedString, Window, div, prelude::*,
-    px,
 };
 use gpui_base::Selectable;
 
@@ -95,14 +94,14 @@ impl RenderOnce for Button {
             .debug_selector(move || selector)
             .role(Role::Button)
             .flex_none()
-            .h(px(ROW_HEIGHT))
+            .h(rem(ROW_HEIGHT))
             .px_3()
             .flex()
             .items_center()
             .gap_2()
             .when(self.full_width, Styled::w_full)
             .when(!self.full_width, Styled::justify_center)
-            .rounded(px(RADIUS_CONTROL))
+            .rounded(rem(RADIUS_CONTROL))
             .typography(Typography::BodyStrong)
             .text_color(style.foreground)
             .when_some(style.background, Styled::bg)
@@ -177,11 +176,11 @@ impl RenderOnce for IconButton {
             .role(Role::Button)
             .aria_label(self.label)
             .flex_none()
-            .size(px(ICON_BUTTON_SIZE))
+            .size(rem(ICON_BUTTON_SIZE))
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(RADIUS_CONTROL))
+            .rounded(rem(RADIUS_CONTROL))
             .cursor_pointer()
             .when(self.selected, |button| button.bg(colors.surface_selected))
             .hover(move |button| button.bg(colors.surface_hover))
@@ -208,7 +207,7 @@ impl Render for Tooltip {
         div()
             .px_2()
             .py_1()
-            .rounded(px(RADIUS_CONTAINER))
+            .rounded(rem(RADIUS_CONTAINER))
             .border_1()
             .border_color(colors.border)
             .bg(colors.surface)

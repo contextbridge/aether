@@ -1,11 +1,11 @@
 use crate::theme::DesktopTheme;
 use crate::threads::Thread;
-use crate::ui::tokens::{CONTENT_MAX_WIDTH, ICON_SIZE_SMALL, RADIUS_CONTAINER};
+use crate::ui::tokens::{CONTENT_MAX_WIDTH, ICON_SIZE_SMALL, RADIUS_CONTAINER, rem};
 use crate::ui::{Icon, IconName, Typography, TypographyExt};
 use acp_utils::conversation::Conversation;
 use agent_client_protocol::schema::v2 as acp;
 use client_core::session_core::SessionCore;
-use gpui::{Context, Entity, Subscription, Window, div, prelude::*, px};
+use gpui::{Context, Entity, Subscription, Window, div, prelude::*};
 
 /// The agent's plan for its turn, kept in view above the composer. It shows every entry with its
 /// progress, and folds down to a one-line count when clicked.
@@ -57,14 +57,14 @@ impl Render for PlanPanel {
             );
         let mut card = div()
             .w_full()
-            .max_w(px(CONTENT_MAX_WIDTH))
+            .max_w(rem(CONTENT_MAX_WIDTH))
             .mx_auto()
             .px_3()
             .py_2()
             .flex()
             .flex_col()
             .gap_1()
-            .rounded(px(RADIUS_CONTAINER))
+            .rounded(rem(RADIUS_CONTAINER))
             .border_1()
             .border_color(colors.border)
             .bg(colors.surface)

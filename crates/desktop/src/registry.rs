@@ -190,6 +190,18 @@ impl Registry {
         }
     }
 
+    /// The size, in pixels per rem, the user set the interface to, if they set one.
+    pub fn interface_size(&self) -> Option<f32> {
+        self.state.preferences.interface_size
+    }
+
+    pub fn set_interface_size(&mut self, size: Option<f32>, cx: &mut Context<Self>) {
+        if self.state.preferences.interface_size != size {
+            self.state.preferences.interface_size = size;
+            self.changed(cx);
+        }
+    }
+
     /// Applies `update` to the thread's metadata, forgetting the thread once nothing is left to
     /// remember about it.
     fn update_thread(&mut self, session_id: &SessionId, update: impl FnOnce(&mut ThreadMeta), cx: &mut Context<Self>) {
@@ -277,6 +289,7 @@ struct WindowSize {
 #[serde(default)]
 struct Preferences {
     theme: Option<ThemePair>,
+    interface_size: Option<f32>,
 }
 
 /// Writes snapshots of the state to its file, newest wins.

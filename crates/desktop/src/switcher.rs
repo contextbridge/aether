@@ -3,12 +3,10 @@
 use crate::fuzzy;
 use crate::theme::DesktopTheme;
 use crate::threads::ThreadId;
-use crate::ui::tokens::{BAR_HEIGHT, GROUP_HEIGHT, RADIUS_CONTAINER};
+use crate::ui::tokens::{BAR_HEIGHT, GROUP_HEIGHT, RADIUS_CONTAINER, rem};
 use crate::ui::{Icon, IconName, ListItem, Typography, TypographyExt};
 use agent_client_protocol::schema::v2::SessionId;
-use gpui::{
-    AnyElement, ClickEvent, Context, Entity, EventEmitter, MouseButton, Subscription, Window, div, prelude::*, px,
-};
+use gpui::{AnyElement, ClickEvent, Context, Entity, EventEmitter, MouseButton, Subscription, Window, div, prelude::*};
 use gpui_base::Selectable as _;
 use gpui_base::input::{Enter, Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
 use std::path::PathBuf;
@@ -131,7 +129,7 @@ impl Render for ThreadSwitcher {
         let colors = theme.colors;
         let search = div()
             .flex_none()
-            .h(px(BAR_HEIGHT))
+            .h(rem(BAR_HEIGHT))
             .px_3()
             .flex()
             .items_center()
@@ -150,7 +148,7 @@ impl Render for ThreadSwitcher {
         };
         let hints = div()
             .flex_none()
-            .h(px(GROUP_HEIGHT))
+            .h(rem(GROUP_HEIGHT))
             .px_3()
             .flex()
             .items_center()
@@ -164,14 +162,14 @@ impl Render for ThreadSwitcher {
             .child("Esc Close");
         let panel = div()
             .debug_selector(|| "thread-switcher".to_owned())
-            .w(px(SWITCHER_WIDTH))
+            .w(rem(SWITCHER_WIDTH))
             .max_w_full()
-            .h(px(SWITCHER_HEIGHT))
+            .h(rem(SWITCHER_HEIGHT))
             .min_h_0()
             .flex()
             .flex_col()
             .overflow_hidden()
-            .rounded(px(RADIUS_CONTAINER))
+            .rounded(rem(RADIUS_CONTAINER))
             .border_1()
             .border_color(colors.border)
             .bg(colors.surface)
@@ -197,7 +195,7 @@ impl Render for ThreadSwitcher {
             .flex()
             .flex_col()
             .items_center()
-            .pt(px(SWITCHER_TOP))
+            .pt(rem(SWITCHER_TOP))
             .px_4()
             .bg(colors.scrim)
             .occlude()

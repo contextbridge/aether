@@ -26,7 +26,9 @@ pub mod ui;
 mod window_chrome;
 
 pub use app::{
-    DesktopApp, DesktopConfig, OpenThreadSwitcher, SelectNextThread, SelectPreviousThread, ShowChanges, ShowChat,
+    DEFAULT_INTERFACE_SIZE, DecreaseInterfaceSize, DesktopApp, DesktopConfig, IncreaseInterfaceSize,
+    MAX_INTERFACE_SIZE, MIN_INTERFACE_SIZE, OpenThreadSwitcher, ResetInterfaceSize, SelectNextThread,
+    SelectPreviousThread, ShowChanges, ShowChat,
 };
 pub use menus::{About, Hide, HideOthers, Minimize, Quit, ShowAll, Zoom};
 pub use sidebar::SIDEBAR_WIDTH;

@@ -1,10 +1,10 @@
 use crate::theme::DesktopTheme;
 use crate::threads::{PromptSearchEvent, Thread};
-use crate::ui::tokens::{RADIUS_CONTAINER, RADIUS_CONTROL};
+use crate::ui::tokens::{RADIUS_CONTAINER, RADIUS_CONTROL, rem};
 use crate::ui::{ListItem, Typography, TypographyExt};
 use acp_utils::notifications::PromptSearchResult;
 use client_core::composer::prompt_search::PromptSearchState;
-use gpui::{ClickEvent, Context, Entity, EventEmitter, Subscription, Window, div, prelude::*, px};
+use gpui::{ClickEvent, Context, Entity, EventEmitter, Subscription, Window, div, prelude::*};
 use gpui_base::Selectable as _;
 use gpui_base::input::{Enter, Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
 
@@ -114,7 +114,7 @@ impl Render for PromptSearch {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = DesktopTheme::global(cx).ui();
         let mut results =
-            div().id("prompt-search-results").max_h(px(RESULTS_HEIGHT)).overflow_y_scroll().flex().flex_col();
+            div().id("prompt-search-results").max_h(rem(RESULTS_HEIGHT)).overflow_y_scroll().flex().flex_col();
         for (position, result) in self.results.iter().enumerate() {
             let prompt = result.prompt.lines().next().unwrap_or_default().to_owned();
             let row = ListItem::new(format!("prompt-search-result-{position}"), theme)
@@ -129,7 +129,7 @@ impl Render for PromptSearch {
             .flex_col()
             .gap_1()
             .p_1()
-            .rounded(px(RADIUS_CONTAINER))
+            .rounded(rem(RADIUS_CONTAINER))
             .border_1()
             .border_color(theme.colors.border)
             .bg(theme.colors.surface)
@@ -149,7 +149,7 @@ impl Render for PromptSearch {
                 div()
                     .px_2()
                     .py_1()
-                    .rounded(px(RADIUS_CONTROL))
+                    .rounded(rem(RADIUS_CONTROL))
                     .border_1()
                     .border_color(theme.colors.accent)
                     .bg(theme.colors.canvas)

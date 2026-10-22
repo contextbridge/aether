@@ -3,7 +3,7 @@
 
 use crate::theme::DesktopTheme;
 use crate::threads::Thread;
-use crate::ui::tokens::{CONTENT_MAX_WIDTH, RADIUS_CONTAINER, RADIUS_CONTROL};
+use crate::ui::tokens::{CONTENT_MAX_WIDTH, RADIUS_CONTAINER, RADIUS_CONTROL, rem};
 use crate::ui::{Button, ButtonVariant, Typography, TypographyExt};
 use acp_utils::elicitation::{FieldInput, FormError, FormField, FormFieldKind, accept_content, form_fields};
 use agent_client_protocol::schema::v2::ElicitationMode;
@@ -11,7 +11,7 @@ use clankerdiff_gpui::ui::prelude::UiTheme;
 use client_core::elicitation::ElicitationResponder;
 use client_core::session_core::Elicitation;
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, MouseButton, SharedString, Subscription, Window, div, prelude::*, px,
+    AnyElement, App, ClickEvent, Context, Entity, MouseButton, SharedString, Subscription, Window, div, prelude::*,
 };
 use gpui_base::Selectable as _;
 use gpui_base::input::{Enter, Input, InputState};
@@ -208,7 +208,7 @@ impl ElicitationCard {
             .debug_selector(move || selector)
             .px_2()
             .py_1()
-            .rounded(px(RADIUS_CONTROL))
+            .rounded(rem(RADIUS_CONTROL))
             .border_1()
             .border_color(theme.colors.border)
             .bg(theme.colors.canvas)
@@ -268,13 +268,13 @@ impl Render for ElicitationCard {
         let actions = div().flex().justify_end().gap_2().children(primary).child(decline);
         let card = div()
             .w_full()
-            .max_w(px(CONTENT_MAX_WIDTH))
+            .max_w(rem(CONTENT_MAX_WIDTH))
             .mx_auto()
             .p_4()
             .flex()
             .flex_col()
             .gap_4()
-            .rounded(px(RADIUS_CONTAINER))
+            .rounded(rem(RADIUS_CONTAINER))
             .border_1()
             .border_color(theme.colors.accent)
             .bg(theme.colors.surface)

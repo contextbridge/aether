@@ -1,10 +1,11 @@
 use super::completion::{ActiveToken, CompletionItem, CompletionMenu, Trigger};
+use super::config_picker::{ConfigPicker, ConfigPickerEvent};
 use super::footer::{config_selector, context_meter, queued_prompts};
 use super::prompt_search::{PromptSearch, PromptSearchOutcome};
 use crate::file_index::FileIndex;
 use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadStatus};
-use crate::ui::tokens::{CONTENT_MAX_WIDTH, GROUP_HEIGHT, RADIUS_CONTAINER};
+use crate::ui::tokens::{CONTENT_MAX_WIDTH, GROUP_HEIGHT, RADIUS_CONTAINER, rem};
 use crate::ui::{Button, ButtonVariant, IconButton, IconName};
 use client_core::composer::attachment::PromptAttachment;
 use client_core::composer::prompt_history::PromptHistory;
@@ -12,7 +13,7 @@ use client_core::composer::submission::Submission;
 use client_core::session_core::SessionCore;
 use gpui::{
     App, ClickEvent, Context, Div, Entity, Focusable, MouseButton, SharedString, Stateful, Subscription, Window,
-    actions, div, prelude::*, px,
+    actions, div, prelude::*,
 };
 use gpui_base::input::{
     Enter, Escape, IndentInline, InlineToken, InputContent, InputEvent, MoveDown, MoveUp, Textarea, TextareaState,
@@ -39,6 +40,8 @@ pub(crate) struct Composer {
     /// Where the token starts whose menu the user dismissed, so it stays shut while they type on.
     dismissed: Option<usize>,
     search: Option<(Entity<PromptSearch>, Subscription)>,
+    /// The open picker, with the id of the option it picks a value for.
+    config_picker: Option<OpenPicker>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -83,6 +86,7 @@ impl Composer {
             completion: None,
             dismissed: None,
             search: None,
+            config_picker: None,
             _subscriptions: subscriptions,
         }
     }
@@ -247,6 +251,39 @@ impl Composer {
         cx.notify();
     }
 
+    /// Opens the picker for the session option `option_id`, closing any other.
+    fn open_config_picker(&mut self, option_id: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(option) = self
+            .thread
+            .read(cx)
+            .core()
+            .and_then(|core| core.session().config_options().iter().find(|option| option.id == option_id).cloned())
+        else {
+            return;
+        };
+        let Some(select) = option.select() else {
+            return;
+        };
+        let (values, current) = (select.values.to_vec(), select.current_value.to_owned());
+        let picker = cx.new(|cx| ConfigPicker::new(&option.id, option.name.clone(), values, current, window, cx));
+        let subscription = cx.subscribe_in(&picker, window, move |this, _, event: &ConfigPickerEvent, window, cx| {
+            if let ConfigPickerEvent::Chose(value) = event {
+                this.thread.update(cx, |thread, cx| thread.set_config_option(&option_id, value, cx));
+            }
+            this.close_config_picker(window, cx);
+        });
+        self.config_picker = Some(OpenPicker { option_id: option.id.clone(), picker, _subscription: subscription });
+        self.completion = None;
+        cx.notify();
+    }
+
+    fn close_config_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.config_picker.take().is_some() {
+            self.focus(window, cx);
+            cx.notify();
+        }
+    }
+
     /// Gives back a prompt the agent never received, below anything written since.
     fn restore_submission(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(submission) = self.thread.update(cx, |thread, _| thread.take_restored_submission()) else {
@@ -330,7 +367,22 @@ impl Composer {
                 .session()
                 .config_options()
                 .iter()
-                .filter_map(|option| config_selector(option, &self.thread, &theme))
+                .filter_map(|option| {
+                    let picker = self
+                        .config_picker
+                        .as_ref()
+                        .filter(|open| open.option_id == option.id)
+                        .map(|open| open.picker.clone());
+                    let option_id = option.id.clone();
+                    let on_open_change = cx.listener(move |this, open: &bool, window, cx| {
+                        if *open {
+                            this.open_config_picker(option_id.clone(), window, cx);
+                        } else {
+                            this.close_config_picker(window, cx);
+                        }
+                    });
+                    config_selector(option, picker, &theme, on_open_change)
+                })
                 .collect();
             let meter = core.conversation().context_usage().map(|usage| context_meter(usage, &theme));
             div()
@@ -353,7 +405,7 @@ impl Composer {
         let send = IconButton::new("send", IconName::ArrowUp, "Send", theme)
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.send(window, cx)));
         div()
-            .h(px(GROUP_HEIGHT))
+            .h(rem(GROUP_HEIGHT))
             .px_1()
             .mb_1()
             .flex()
@@ -384,7 +436,7 @@ impl Render for Composer {
             .flex()
             .flex_col()
             .gap_1()
-            .rounded(px(RADIUS_CONTAINER))
+            .rounded(rem(RADIUS_CONTAINER))
             .border_1()
             .border_color(if focused { theme.colors.accent } else { theme.colors.border })
             .bg(theme.colors.surface)
@@ -393,7 +445,7 @@ impl Render for Composer {
         div().debug_selector(|| "composer".to_owned()).flex_none().w_full().px_4().pt_2().pb_4().child(
             div()
                 .w_full()
-                .max_w(px(CONTENT_MAX_WIDTH))
+                .max_w(rem(CONTENT_MAX_WIDTH))
                 .mx_auto()
                 .flex()
                 .flex_col()
@@ -404,6 +456,13 @@ impl Render for Composer {
                 .child(editor),
         )
     }
+}
+
+/// A picker the composer has open, for the session option `option_id`.
+struct OpenPicker {
+    option_id: String,
+    picker: Entity<ConfigPicker>,
+    _subscription: Subscription,
 }
 
 const MIN_ROWS: usize = 1;

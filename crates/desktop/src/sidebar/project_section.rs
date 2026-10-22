@@ -1,11 +1,11 @@
 use super::ClickHandler;
 use crate::registry::Disclosure;
-use crate::ui::tokens::{DOT_SLOT, GROUP_HEIGHT, ICON_SIZE, ICON_SIZE_SMALL, RADIUS_CONTROL};
+use crate::ui::tokens::{DOT_SLOT, GROUP_HEIGHT, ICON_SIZE, ICON_SIZE_SMALL, RADIUS_CONTROL, rem};
 use crate::ui::{Icon, IconButton, IconName, ListItem, MenuItem, Typography, TypographyExt, with_menu};
 use clankerdiff_gpui::ui::prelude::UiTheme;
 use gpui::{
     AnyElement, App, ClickEvent, IntoElement, MouseButton, ParentElement, RenderOnce, SharedString, Window, div,
-    prelude::*, px,
+    prelude::*,
 };
 
 /// A project's header, with a disclosure toggle, a `⋯` menu of `actions` and a `+` that starts a
@@ -139,13 +139,13 @@ impl RenderOnce for ProjectSection {
                 move || selector
             })
             .w_full()
-            .h(px(GROUP_HEIGHT))
+            .h(rem(GROUP_HEIGHT))
             .pl_2()
             .pr_1()
             .flex()
             .items_center()
             .gap_1()
-            .rounded(px(RADIUS_CONTROL))
+            .rounded(rem(RADIUS_CONTROL))
             .typography(Typography::Label)
             .text_color(colors.text_muted)
             .hover(move |header| header.bg(colors.surface_hover).text_color(colors.text))
@@ -169,7 +169,7 @@ impl RenderOnce for ProjectSection {
             let rows = if group.disclosure == Disclosure::Expanded { group.rows } else { Vec::new() };
             let header = ListItem::new(format!("{selector}-archived"), theme)
                 .on_click(group.on_toggle)
-                .child(div().flex_none().w(px(DOT_SLOT * 2.0)).flex().justify_center().child(chevron(
+                .child(div().flex_none().w(rem(DOT_SLOT * 2.0)).flex().justify_center().child(chevron(
                     group.disclosure,
                     ICON_SIZE_SMALL,
                     &theme,
@@ -189,7 +189,7 @@ impl RenderOnce for ProjectSection {
 
 /// The empty slot in front of a row's title, where a thread row has its status dot.
 fn slot() -> impl IntoElement {
-    div().flex_none().w(px(DOT_SLOT * 2.0))
+    div().flex_none().w(rem(DOT_SLOT * 2.0))
 }
 
 fn chevron(disclosure: Disclosure, size: f32, theme: &UiTheme) -> Icon {

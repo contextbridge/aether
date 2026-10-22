@@ -4,7 +4,7 @@ use super::thinking::thinking_block;
 use super::tool_card::tool_card;
 use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadStatus};
-use crate::ui::tokens::{CONTENT_MAX_WIDTH, RADIUS_CONTAINER};
+use crate::ui::tokens::{CONTENT_MAX_WIDTH, RADIUS_CONTAINER, rem};
 use crate::ui::{Button, ButtonVariant, EmptyState, IconName};
 use acp_utils::conversation::{
     Conversation, ConversationContent, ConversationId, ConversationItem, ConversationItemId, Revision,
@@ -115,7 +115,7 @@ impl Transcript {
             ConversationContent::User(_) => div()
                 .px_3()
                 .py_2()
-                .rounded(px(RADIUS_CONTAINER))
+                .rounded(rem(RADIUS_CONTAINER))
                 .border_1()
                 .border_color(theme.colors.border)
                 .bg(theme.colors.surface)
@@ -139,7 +139,7 @@ impl Transcript {
             .w_full()
             .px_4()
             .py_2()
-            .child(div().w_full().max_w(px(CONTENT_MAX_WIDTH)).mx_auto().child(content))
+            .child(div().w_full().max_w(rem(CONTENT_MAX_WIDTH)).mx_auto().child(content))
             .into_any_element()
     }
 }

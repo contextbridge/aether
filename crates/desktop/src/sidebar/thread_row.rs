@@ -1,11 +1,11 @@
 use super::ClickHandler;
 use super::status_dot::StatusDot;
-use crate::ui::tokens::DOT_SLOT;
+use crate::ui::tokens::{DOT_SLOT, rem};
 use crate::ui::{IconButton, IconName, ListItem, Typography, TypographyExt};
 use chrono::{DateTime, Utc};
 use clankerdiff_gpui::ui::prelude::UiTheme;
 use gpui::{
-    AnyElement, App, ClickEvent, IntoElement, ParentElement, RenderOnce, SharedString, Window, div, prelude::*, px,
+    AnyElement, App, ClickEvent, IntoElement, ParentElement, RenderOnce, SharedString, Window, div, prelude::*,
 };
 use gpui_base::Selectable;
 
@@ -196,7 +196,7 @@ impl RenderOnce for ThreadRow {
         ListItem::new(self.selector, theme)
             .selected(highlighted)
             .when_some(on_click, ListItem::on_click)
-            .child(div().flex_none().w(px(DOT_SLOT * 2.0)).flex().justify_center().children(dot))
+            .child(div().flex_none().w(rem(DOT_SLOT * 2.0)).flex().justify_center().children(dot))
             .child(div().flex_1().min_w_0().child(title))
             .child(trailing)
     }

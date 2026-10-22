@@ -1,21 +1,23 @@
-use crate::threads::Thread;
-use crate::ui::tokens::{ICON_SIZE_SMALL, RADIUS_CONTAINER, RADIUS_CONTROL, ROW_HEIGHT};
-use crate::ui::{Icon, IconName, ListItem, Typography, TypographyExt};
+use super::config_picker::ConfigPicker;
+use crate::ui::tokens::{ICON_SIZE_SMALL, RADIUS_CONTROL, ROW_HEIGHT, rem};
+use crate::ui::{Icon, IconName, Typography, TypographyExt};
 use agent_client_protocol::schema::v2 as acp;
 use clankerdiff_gpui::ui::prelude::UiTheme;
 use client_core::session_config_view::LocalConfigOption;
 use client_core::session_core::QueuedPrompt;
-use gpui::{Anchor, AnyElement, Div, Entity, SharedString, div, prelude::*, px};
-use gpui_base::{Popover, Selectable as _};
+use gpui::{Anchor, AnyElement, App, Div, Entity, SharedString, Window, div, prelude::*};
+use gpui_base::Popover;
 
-/// A menu for one of the session's options, such as its model, mode or reasoning effort, that
-/// shows the current choice. Choosing another asks the agent to switch.
+/// The button for one of the session's options, such as its model, mode or reasoning effort,
+/// that shows the current choice and opens `picker` above itself while there is one.
 ///
-/// The menu's button is tagged `config-<option id>` and each choice `config-<option id>-<value>`.
+/// Clicking it asks `on_open_change` to open the picker, and clicking it again or anywhere
+/// outside the picker asks it to close. The button is tagged `config-<option id>`.
 pub(crate) fn config_selector(
     option: &LocalConfigOption,
-    thread: &Entity<Thread>,
+    picker: Option<Entity<ConfigPicker>>,
     theme: &UiTheme,
+    on_open_change: impl Fn(&bool, &mut Window, &mut App) + 'static,
 ) -> Option<AnyElement> {
     let select = option.select()?;
     let current = select.values.iter().find(|value| value.value == select.current_value);
@@ -27,71 +29,28 @@ pub(crate) fn config_selector(
             let selector = selector.clone();
             move || selector
         })
-        .h(px(ROW_HEIGHT))
+        .h(rem(ROW_HEIGHT))
         .flex()
         .items_center()
         .gap_1()
         .px_2()
-        .rounded(px(RADIUS_CONTROL))
+        .rounded(rem(RADIUS_CONTROL))
         .typography(Typography::Small)
         .text_color(theme.colors.text_secondary)
         .cursor_pointer()
         .hover(|trigger| trigger.bg(theme.colors.surface_hover))
         .child(label)
         .child(Icon::new(IconName::ChevronDown, theme.colors.text_muted).size(ICON_SIZE_SMALL));
-    let name = option.name.clone();
-    let config_id = option.id.clone();
-    let values = select.values.to_vec();
-    let current_value = select.current_value.to_owned();
-    let thread = thread.clone();
     let theme = *theme;
+    let open = picker.is_some();
     let popover = Popover::new(SharedString::from(format!("{selector}-popover")))
         .anchor(Anchor::BottomLeft)
+        .open(open)
+        .on_open_change(on_open_change)
         .trigger_with(move |open, _, _| {
             trigger.when(open, |trigger| trigger.bg(theme.colors.surface_selected)).into_any_element()
         })
-        .content(move |_, _, cx| {
-            let popover = cx.entity();
-            let mut entries = div().p_1().flex().flex_col().child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .typography(Typography::Label)
-                    .text_color(theme.colors.text_muted)
-                    .child(name.clone()),
-            );
-            for value in &values {
-                let entry_selector = format!("{selector}-{}", value.value);
-                let current = value.value == current_value;
-                let mut row = ListItem::new(entry_selector, theme)
-                    .selected(current)
-                    .child(div().flex_1().min_w_0().truncate().child(value.name.clone()));
-                if current {
-                    row = row.child(Icon::new(IconName::Check, theme.colors.text_muted));
-                }
-                if value.is_disabled {
-                    row = row.child(
-                        div().typography(Typography::Caption).text_color(theme.colors.text_muted).child("unavailable"),
-                    );
-                } else {
-                    let (popover, thread, config_id, value) =
-                        (popover.clone(), thread.clone(), config_id.clone(), value.value.clone());
-                    row = row.on_click(move |_, window, cx| {
-                        popover.update(cx, |popover, cx| popover.dismiss(window, cx));
-                        thread.update(cx, |thread, cx| thread.set_config_option(&config_id, &value, cx));
-                    });
-                }
-                entries = entries.child(row);
-            }
-            div()
-                .w(px(MENU_WIDTH))
-                .rounded(px(RADIUS_CONTAINER))
-                .border_1()
-                .border_color(theme.colors.border)
-                .bg(theme.colors.surface)
-                .shadow_lg()
-                .child(entries)
-        });
+        .content(move |_, _, _| div().children(picker));
     Some(popover.into_any_element())
 }
 
@@ -117,11 +76,11 @@ pub(crate) fn context_meter(usage: &acp::UsageUpdate, theme: &UiTheme) -> Div {
         .text_color(theme.colors.text_muted)
         .child(
             div()
-                .w(px(METER_WIDTH))
-                .h(px(METER_HEIGHT))
+                .w(rem(METER_WIDTH))
+                .h(rem(METER_HEIGHT))
                 .rounded_full()
                 .bg(theme.colors.border)
-                .child(div().h_full().rounded_full().bg(color).w(px(METER_WIDTH * fraction))),
+                .child(div().h_full().rounded_full().bg(color).w(rem(METER_WIDTH * fraction))),
         )
         .child(format!("{percent}% of {}", tokens(usage.size)))
 }
@@ -152,7 +111,6 @@ pub(crate) fn queued_prompts(prompts: &[QueuedPrompt], theme: &UiTheme) -> Div {
     list
 }
 
-const MENU_WIDTH: f32 = 240.0;
 const METER_WIDTH: f32 = 48.0;
 const METER_HEIGHT: f32 = 4.0;
 const MAX_QUEUED_ROWS: usize = 3;

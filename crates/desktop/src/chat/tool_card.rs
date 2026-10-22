@@ -1,9 +1,9 @@
-use crate::ui::tokens::{GROUP_HEIGHT, ICON_SIZE_SMALL, RADIUS_CONTAINER, RADIUS_CONTROL};
+use crate::ui::tokens::{GROUP_HEIGHT, ICON_SIZE_SMALL, RADIUS_CONTAINER, RADIUS_CONTROL, rem};
 use crate::ui::{CODE_FONT, Icon, IconName, Typography, TypographyExt};
 use acp_utils::conversation::{SubAgentState, ToolCall, ToolStatus};
 use agent_client_protocol::schema::v2 as acp;
 use clankerdiff_gpui::ui::prelude::UiTheme;
-use gpui::{AnyElement, App, ClickEvent, Hsla, Window, div, prelude::*, px};
+use gpui::{AnyElement, App, ClickEvent, Hsla, Window, div, prelude::*};
 
 /// A tool call as a card: its status, name and a one-line summary, with any file changes it
 /// made below and the tree of sub-agents it spawned. Clicking the header shows or hides its
@@ -23,7 +23,7 @@ pub(crate) fn tool_card(
     let header = div()
         .id(("tool-card", index))
         .debug_selector(move || format!("tool-card-{index}"))
-        .h(px(GROUP_HEIGHT))
+        .h(rem(GROUP_HEIGHT))
         .flex()
         .items_center()
         .gap_2()
@@ -48,7 +48,7 @@ pub(crate) fn tool_card(
         .flex()
         .flex_col()
         .overflow_hidden()
-        .rounded(px(RADIUS_CONTAINER))
+        .rounded(rem(RADIUS_CONTAINER))
         .border_1()
         .border_color(colors.border)
         .bg(colors.surface)
@@ -100,7 +100,7 @@ fn section(label: &'static str, text: String, theme: &UiTheme) -> impl IntoEleme
         .child(
             div()
                 .p_2()
-                .rounded(px(RADIUS_CONTROL))
+                .rounded(rem(RADIUS_CONTROL))
                 .bg(theme.colors.canvas)
                 .font_family(CODE_FONT)
                 .typography(Typography::Small)

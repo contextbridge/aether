@@ -1,4 +1,5 @@
-use gpui::{App, FontWeight, Styled, px};
+use super::tokens::rem;
+use gpui::{App, FontWeight, Styled};
 use std::borrow::Cow;
 
 /// The family the interface is set in.
@@ -59,7 +60,9 @@ impl Typography {
 /// Sets an element's text in a step of the type scale.
 pub trait TypographyExt: Styled + Sized {
     fn typography(self, typography: Typography) -> Self {
-        self.text_size(px(typography.size())).line_height(px(typography.line_height())).font_weight(typography.weight())
+        self.text_size(rem(typography.size()))
+            .line_height(rem(typography.line_height()))
+            .font_weight(typography.weight())
     }
 }
 

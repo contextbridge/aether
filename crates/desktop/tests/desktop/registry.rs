@@ -21,6 +21,7 @@ fn the_registry_reads_back_everything_it_saved(cx: &mut TestAppContext) {
         registry.set_window_size(size(px(900.0), px(700.0)), cx);
         registry.set_last_selected(Some(SessionId::new("renamed")), cx);
         registry.set_theme_override(Some(theme.clone()), cx);
+        registry.set_interface_size(Some(19.0), cx);
     });
     cx.run_until_parked();
     let loaded = load(cx, dir.path());
@@ -38,6 +39,7 @@ fn the_registry_reads_back_everything_it_saved(cx: &mut TestAppContext) {
         assert_eq!(registry.window_size(), Some(size(px(900.0), px(700.0))));
         assert_eq!(registry.last_selected(), Some(&SessionId::new("renamed")));
         assert_eq!(registry.theme_override(), Some(&theme));
+        assert_eq!(registry.interface_size(), Some(19.0));
     });
 }
 

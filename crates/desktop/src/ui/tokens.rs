@@ -1,7 +1,19 @@
-//! Fixed measurements, all multiples of 4px.
+//! Fixed measurements, all multiples of 4px at the base interface size of 16px.
 //!
-//! Padding and gaps use gpui's spacing scale, whose steps are 4px each (`p_1` is 4px, `p_2` is
-//! 8px, ...). Only whole steps are used, never the half steps such as `p_0p5`.
+//! Padding and gaps use gpui's spacing scale, whose steps are a quarter rem each (`p_1` is 4px at
+//! the base size, `p_2` is 8px, ...). Only whole steps are used, never the half steps such as
+//! `p_0p5`. Every measurement here goes through [`rem`] too, so the whole interface scales with
+//! the user's interface size.
+
+use gpui::{Rems, rems};
+
+/// The interface size the measurements are designed at.
+pub const BASE_SIZE: f32 = 16.0;
+
+/// `design_px`, a measurement designed at [`BASE_SIZE`], in rems.
+pub const fn rem(design_px: f32) -> Rems {
+    rems(design_px / BASE_SIZE)
+}
 
 /// A list row: a thread, a menu entry, a switcher result.
 pub const ROW_HEIGHT: f32 = 28.0;

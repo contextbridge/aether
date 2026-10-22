@@ -4,9 +4,9 @@ use crate::elicitation::ElicitationCard;
 use crate::registry::Registry;
 use crate::theme::DesktopTheme;
 use crate::threads::{ReviewEvent, Thread};
-use crate::ui::tokens::BAR_HEIGHT;
+use crate::ui::tokens::{BAR_HEIGHT, rem};
 use crate::ui::{Button, ButtonVariant, Typography, TypographyExt};
-use gpui::{App, AppContext, Context, Entity, Subscription, Window, div, prelude::*, px};
+use gpui::{App, AppContext, Context, Entity, Subscription, Window, div, prelude::*};
 use gpui_base::Selectable as _;
 
 /// One thread's main area: a header naming the thread and its project, above either its chat
@@ -132,7 +132,7 @@ impl Render for ThreadView {
         let header = div()
             .debug_selector(|| "thread-header".to_owned())
             .flex_none()
-            .h(px(BAR_HEIGHT))
+            .h(rem(BAR_HEIGHT))
             .px_4()
             .flex()
             .items_center()

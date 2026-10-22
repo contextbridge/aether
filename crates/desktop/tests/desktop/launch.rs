@@ -92,7 +92,8 @@ fn the_window_opens_at_the_size_it_last_had(first: &mut TestAppContext, second: 
     let relaunched = DesktopHarnessBuilder::default().state_dir(state.path()).build(second);
 
     let main = relaunched.bounds(second, "main").expect("main region is painted");
-    assert_eq!(main.size, size(px(900.0) - SIDEBAR_WIDTH, px(700.0)));
+    let sidebar_width = SIDEBAR_WIDTH.to_pixels(relaunched.rem_size(second));
+    assert_eq!(main.size, size(px(900.0) - sidebar_width, px(700.0)));
 }
 
 #[gpui::test]

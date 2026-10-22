@@ -1,11 +1,11 @@
 use super::composer::Composer;
 use crate::fuzzy;
-use crate::ui::tokens::RADIUS_CONTAINER;
+use crate::ui::tokens::{RADIUS_CONTAINER, rem};
 use crate::ui::{ListItem, Typography, TypographyExt};
 use clankerdiff_gpui::ui::prelude::UiTheme;
 use client_core::command_entry::CommandEntry;
 use client_core::composer::attachment::PromptAttachment;
-use gpui::{AnyElement, ClickEvent, Context, div, prelude::*, px};
+use gpui::{AnyElement, ClickEvent, Context, div, prelude::*};
 use gpui_base::Selectable as _;
 use gpui_base::input::InlineTokenSpan;
 use std::ops::Range;
@@ -87,12 +87,12 @@ impl CompletionMenu {
         let mut menu = div()
             .id("completion-menu")
             .debug_selector(|| "completion-menu".to_owned())
-            .max_h(px(MENU_HEIGHT))
+            .max_h(rem(MENU_HEIGHT))
             .overflow_y_scroll()
             .p_1()
             .flex()
             .flex_col()
-            .rounded(px(RADIUS_CONTAINER))
+            .rounded(rem(RADIUS_CONTAINER))
             .border_1()
             .border_color(theme.colors.border)
             .bg(theme.colors.surface)

@@ -1,8 +1,8 @@
 use crate::threads::ThreadStatus;
-use crate::ui::tokens::DOT_SIZE;
+use crate::ui::tokens::{DOT_SIZE, rem};
 use clankerdiff_gpui::ui::prelude::UiTheme;
 use gpui::{
-    Animation, AnimationExt, AnyElement, IntoElement, ParentElement, Styled, div, prelude::*, pulsating_between, px,
+    Animation, AnimationExt, AnyElement, IntoElement, ParentElement, Styled, div, prelude::*, pulsating_between,
 };
 use std::time::Duration;
 
@@ -60,7 +60,7 @@ impl StatusDot {
     pub(crate) fn render(self, row: &str, theme: &UiTheme) -> AnyElement {
         let colors = theme.colors;
         let selector = format!("{row}-status-{}", self.name());
-        let dot = div().size(px(DOT_SIZE)).rounded_full();
+        let dot = div().size(rem(DOT_SIZE)).rounded_full();
         let dot = match self {
             Self::Running => dot
                 .bg(colors.positive)

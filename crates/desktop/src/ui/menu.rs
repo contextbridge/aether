@@ -1,8 +1,8 @@
 use super::icon::{Icon, IconName};
 use super::list_item::ListItem;
-use super::tokens::{MENU_WIDTH, RADIUS_CONTAINER};
+use super::tokens::{MENU_WIDTH, RADIUS_CONTAINER, rem};
 use clankerdiff_gpui::ui::prelude::UiTheme;
-use gpui::{Anchor, App, IntoElement, MouseButton, SharedString, Window, div, prelude::*, px};
+use gpui::{Anchor, App, IntoElement, MouseButton, SharedString, Window, div, prelude::*};
 use gpui_base::{Popover, Selectable};
 
 /// One entry in a menu, tagged with its selector.
@@ -59,11 +59,11 @@ pub fn with_menu<T: Selectable + IntoElement + 'static>(
             });
             div()
                 .debug_selector(move || menu_selector)
-                .w(px(MENU_WIDTH))
+                .w(rem(MENU_WIDTH))
                 .p_1()
                 .flex()
                 .flex_col()
-                .rounded(px(RADIUS_CONTAINER))
+                .rounded(rem(RADIUS_CONTAINER))
                 .border_1()
                 .border_color(colors.border)
                 .bg(colors.surface)

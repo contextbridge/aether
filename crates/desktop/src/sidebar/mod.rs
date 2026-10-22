@@ -16,7 +16,7 @@ use crate::registry::{Disclosure, Registry, ThreadMeta};
 use crate::switcher::{SwitchTarget, SwitcherEntry};
 use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadId, ThreadManager};
-use crate::ui::tokens::{BAR_HEIGHT, RADIUS_CONTROL};
+use crate::ui::tokens::{BAR_HEIGHT, RADIUS_CONTROL, rem};
 use crate::ui::{
     Button, ButtonVariant, EmptyState, IconButton, IconName, MenuItem, Typography, TypographyExt, tokens, with_menu,
 };
@@ -24,8 +24,8 @@ use agent_client_protocol::schema::v2::SessionId;
 use chrono::{DateTime, Duration, Utc};
 use clankerdiff_gpui::ui::prelude::UiTheme;
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, MouseButton, PathPromptOptions, Pixels, Subscription, Window,
-    actions, div, prelude::*, px,
+    AnyElement, App, ClickEvent, Context, Entity, MouseButton, PathPromptOptions, Rems, Subscription, Window, actions,
+    div, prelude::*,
 };
 use gpui_base::Selectable as _;
 use gpui_base::input::{Enter, Escape, Input, InputState};
@@ -36,7 +36,7 @@ use std::sync::Arc;
 use thread_row::ThreadRow;
 
 /// Width of the thread sidebar, which stays fixed as the window resizes.
-pub const SIDEBAR_WIDTH: Pixels = px(tokens::SIDEBAR_WIDTH);
+pub const SIDEBAR_WIDTH: Rems = tokens::rem(tokens::SIDEBAR_WIDTH);
 
 /// How old a saved session may be and still be listed, unless it is pinned. Older ones are found
 /// through the thread switcher.
@@ -345,7 +345,7 @@ impl Sidebar {
     fn render_header(has_projects: bool, theme: &UiTheme, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex_none()
-            .h(px(BAR_HEIGHT))
+            .h(rem(BAR_HEIGHT))
             .pl_4()
             .pr_2()
             .flex()
@@ -395,7 +395,7 @@ impl Sidebar {
             .full_width();
         div()
             .flex_none()
-            .h(px(BAR_HEIGHT))
+            .h(rem(BAR_HEIGHT))
             .px_2()
             .flex()
             .items_center()
@@ -558,7 +558,7 @@ impl Sidebar {
             .w_full()
             .min_w_0()
             .px_1()
-            .rounded(px(RADIUS_CONTROL))
+            .rounded(rem(RADIUS_CONTROL))
             .border_1()
             .border_color(theme.colors.accent)
             .bg(theme.colors.canvas)

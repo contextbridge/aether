@@ -1,9 +1,7 @@
-use super::tokens::{RADIUS_CONTROL, ROW_HEIGHT};
+use super::tokens::{RADIUS_CONTROL, ROW_HEIGHT, rem};
 use super::typography::{Typography, TypographyExt};
 use clankerdiff_gpui::ui::prelude::UiTheme;
-use gpui::{
-    AnyElement, App, ClickEvent, ElementId, IntoElement, RenderOnce, SharedString, Window, div, prelude::*, px,
-};
+use gpui::{AnyElement, App, ClickEvent, ElementId, IntoElement, RenderOnce, SharedString, Window, div, prelude::*};
 use gpui_base::Selectable;
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
@@ -64,12 +62,12 @@ impl RenderOnce for ListItem {
             .debug_selector(move || selector)
             .w_full()
             .min_w_0()
-            .h(px(ROW_HEIGHT))
+            .h(rem(ROW_HEIGHT))
             .px_2()
             .flex()
             .items_center()
             .gap_2()
-            .rounded(px(RADIUS_CONTROL))
+            .rounded(rem(RADIUS_CONTROL))
             .typography(Typography::Body)
             .text_color(colors.text)
             .when(self.selected, |row| row.bg(colors.surface_selected))

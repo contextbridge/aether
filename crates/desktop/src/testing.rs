@@ -418,6 +418,16 @@ impl DesktopHarness {
         VisualTestContext::from_window(*self.window, cx).debug_bounds(selector)
     }
 
+    /// The window's interface size, in pixels per rem.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the test window has closed.
+    pub fn rem_size(&self, cx: &mut TestAppContext) -> Pixels {
+        self.draw(cx);
+        cx.update_window(*self.window, |_, window, _| window.rem_size()).expect("the test window is open")
+    }
+
     /// Reads the installed app theme.
     pub fn theme(&self, cx: &TestAppContext) -> DesktopTheme {
         cx.read(|cx| DesktopTheme::global(cx).clone())
