@@ -177,15 +177,20 @@ impl RenderOnce for ProjectSection {
             );
         let show_more = self.show_more.map(|(hidden, handler)| {
             let title_selector = format!("{selector}-show-more-title");
-            ListRow::new(format!("{selector}-show-more"), theme).on_click(handler).child(slot()).child(slot()).child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .typography(Typography::Small)
-                    .text_color(colors.text_muted)
-                    .debug_selector(move || title_selector)
-                    .child(format!("Show {hidden} more")),
-            )
+            ListRow::new(format!("{selector}-show-more"), theme)
+                .depth(1)
+                .on_click(handler)
+                .child(slot())
+                .child(slot())
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .typography(Typography::Small)
+                        .text_color(colors.text_muted)
+                        .debug_selector(move || title_selector)
+                        .child(format!("Show {hidden} more")),
+                )
         });
         let archived = self.archived.map(|group| render_archived(&selector, group, &theme));
         div()
@@ -204,6 +209,7 @@ fn render_archived(selector: &str, group: ArchivedGroup, theme: &UiTheme) -> Div
     let icon_selector = format!("{selector}-archived-icon");
     let title_selector = format!("{selector}-archived-title");
     let header = ListRow::new(format!("{selector}-archived"), *theme)
+        .depth(1)
         .on_click(group.on_toggle)
         .child(slot().child(chevron(group.disclosure, theme)))
         .child(slot().debug_selector(move || icon_selector).child(Icon::new(IconName::Archive, colors.text_muted)))

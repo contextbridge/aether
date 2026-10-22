@@ -39,6 +39,7 @@ pub(crate) struct ThreadRow {
     unread: bool,
     started_at: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
+    depth: usize,
     selected: bool,
     menu_open: bool,
     theme: UiTheme,
@@ -60,6 +61,7 @@ impl ThreadRow {
             unread: false,
             started_at: None,
             now: Utc::now(),
+            depth: 0,
             selected: false,
             menu_open: false,
             theme: *theme,
@@ -88,6 +90,12 @@ impl ThreadRow {
     /// The time the row's age is told as of.
     pub(crate) fn now(mut self, now: DateTime<Utc>) -> Self {
         self.now = now;
+        self
+    }
+
+    /// How many levels below its project's header the row nests.
+    pub(crate) fn depth(mut self, depth: usize) -> Self {
+        self.depth = depth;
         self
     }
 
@@ -212,6 +220,7 @@ impl RenderOnce for ThreadRow {
         };
         let on_click = self.on_click.filter(|_| !editing);
         ListRow::new(self.selector, theme)
+            .depth(self.depth)
             .selected(highlighted)
             .when_some(on_click, ListRow::on_click)
             .child(div().flex_none().size(rem(STATUS_SLOT)))

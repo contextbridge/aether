@@ -1,4 +1,4 @@
-use crate::support::{replying, save_session, start_thread, wait_for_history};
+use crate::support::{assert_close, replying, save_session, start_thread, wait_for_history};
 use acp_utils::testing::FakeAgent;
 use aether_desktop::sidebar::relative_time;
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder, FakeConnector};
@@ -302,7 +302,7 @@ fn adding_a_project_lists_the_picked_folder(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn sidebar_icons_and_titles_stay_aligned_when_the_interface_size_changes(cx: &mut TestAppContext) {
+fn sidebar_rows_nest_under_their_project_and_stay_aligned_when_the_interface_size_changes(cx: &mut TestAppContext) {
     let harness = DesktopHarnessBuilder::default().history(eight_sessions("/alpha")).project("/alpha").build(cx);
     wait_for_history(&harness, cx);
     harness.registry(cx).update(cx, |registry, cx| registry.archive(&SessionId::new("day-1"), cx));
@@ -314,16 +314,19 @@ fn sidebar_icons_and_titles_stay_aligned_when_the_interface_size_changes(cx: &mu
         let conversation = harness.bounds(cx, "history-row-day-8-conversation-icon").expect("thread has an icon");
         let archive = harness.bounds(cx, "project-alpha-archived-icon").expect("archive group has an icon");
         let archived = harness.bounds(cx, "history-row-day-1-conversation-icon").expect("archived thread has an icon");
-        assert_eq!(folder.left(), conversation.left());
-        assert_eq!(archive.left(), conversation.left());
-        assert_eq!(archived.left(), conversation.left());
+        let indent = px(12.0) * (harness.rem_size(cx) / px(16.0));
+        assert_close(conversation.left() - folder.left(), indent);
+        assert_eq!(archive.left(), conversation.left(), "the archived group nests one level, like threads");
+        assert_close(archived.left() - archive.left(), indent);
         assert_eq!(conversation.size.width, harness.rem_size(cx));
         assert_eq!(conversation.size.height, harness.rem_size(cx));
 
         let title = harness.bounds(cx, "history-row-day-8-title").unwrap();
-        for selector in ["project-alpha-title", "project-alpha-archived-title", "project-alpha-show-more-title"] {
+        for selector in ["project-alpha-archived-title", "project-alpha-show-more-title"] {
             assert_eq!(harness.bounds(cx, selector).unwrap().left(), title.left(), "{selector} aligns with threads");
         }
+        let project_title = harness.bounds(cx, "project-alpha-title").unwrap();
+        assert_close(title.left() - project_title.left(), indent);
         let row = harness.bounds(cx, "history-row-day-8").unwrap();
         let expected_height = px(28.0) * (harness.rem_size(cx) / px(16.0));
         assert!(

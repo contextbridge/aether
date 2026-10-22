@@ -514,7 +514,7 @@ impl Sidebar {
     fn render_section(&self, section: &Section, theme: &UiTheme, cx: &mut Context<Self>) -> ProjectSection {
         let Section { root, disclosure, rows, hidden, archived } = section;
         let (disclosure, hidden) = (*disclosure, *hidden);
-        let rows: Vec<AnyElement> = rows.iter().map(|row| self.render_row(row, theme, cx)).collect();
+        let rows: Vec<AnyElement> = rows.iter().map(|row| self.render_row(row, 1, theme, cx)).collect();
         let archived = (!archived.is_empty()).then(|| {
             let toggled = root.clone();
             ArchivedGroup {
@@ -526,7 +526,7 @@ impl Sidebar {
                 on_toggle: Box::new(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.toggle_archived(toggled.clone(), cx);
                 })),
-                rows: archived.iter().map(|row| self.render_row(row, theme, cx)).collect(),
+                rows: archived.iter().map(|row| self.render_row(row, 2, theme, cx)).collect(),
             }
         });
         let more = (hidden > 0).then(|| {
@@ -564,13 +564,14 @@ impl Sidebar {
             .children(rows)
     }
 
-    /// The row, with a context menu of what can be done with its thread.
-    fn render_row(&self, row: &Row, theme: &UiTheme, cx: &mut Context<Self>) -> AnyElement {
+    /// The row, nested `depth` levels under its project, with a context menu of what can be done
+    /// with its thread.
+    fn render_row(&self, row: &Row, depth: usize, theme: &UiTheme, cx: &mut Context<Self>) -> AnyElement {
         let Row { selector, kind, session_id, title, meta } = row;
         let editing = self.rename.as_ref().filter(|rename| session_id.as_ref() == Some(&rename.session_id));
         let mut items =
             session_id.clone().map(|session_id| self.thread_items(session_id, title, meta, cx)).unwrap_or_default();
-        let mut thread_row = ThreadRow::new(selector.clone(), title.clone(), theme).now(self.clock.now());
+        let mut thread_row = ThreadRow::new(selector.clone(), title.clone(), theme).depth(depth).now(self.clock.now());
         if let Some(session_id) = session_id.clone() {
             let registry = self.registry.clone();
             let archived = meta.archived;

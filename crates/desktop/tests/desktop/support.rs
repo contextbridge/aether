@@ -5,7 +5,7 @@ use aether_desktop::testing::DesktopHarness;
 use aether_desktop::threads::{Thread, ThreadStatus};
 use aether_sessions::testing::{TestStore, session_meta, user_message};
 use agent_client_protocol::schema::v2::NewSessionResponse;
-use gpui::{Entity, TestAppContext};
+use gpui::{Entity, Pixels, TestAppContext, px};
 use serde_json::json;
 use std::borrow::Cow;
 use std::fs;
@@ -150,4 +150,8 @@ async fn refuse(stream: TcpStream, status: StatusCode) {
         Err(error)
     })
     .await;
+}
+
+pub(crate) fn assert_close(actual: Pixels, expected: Pixels) {
+    assert!((actual - expected).abs() < px(0.5), "expected {expected:?}, got {actual:?}");
 }

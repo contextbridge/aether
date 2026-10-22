@@ -1,3 +1,4 @@
+use crate::support::assert_close;
 use aether_desktop::sidebar::{DEFAULT_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH, MIN_MAIN_WIDTH, MIN_SIDEBAR_WIDTH};
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
 use gpui::{Pixels, TestAppContext, point, px, size};
@@ -82,8 +83,4 @@ fn assert_regions_fill_window(cx: &mut TestAppContext, width: f32, height: f32) 
 
 fn sidebar_width(harness: &DesktopHarness, cx: &mut TestAppContext) -> Pixels {
     harness.bounds(cx, "sidebar").expect("sidebar is painted").size.width
-}
-
-fn assert_close(actual: Pixels, expected: Pixels) {
-    assert!((actual - expected).abs() < px(0.5), "expected {expected:?}, got {actual:?}");
 }
