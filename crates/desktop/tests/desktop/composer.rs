@@ -232,7 +232,39 @@ fn the_context_meter_shows_once_the_agent_reports_usage(cx: &mut TestAppContext)
 
     send(&harness, cx, &thread, "hi");
 
-    assert!(harness.bounds(cx, "context-meter").is_some());
+    for shortcut in ["secondary-0", "secondary-=", "secondary-- secondary--"] {
+        harness.simulate_keystrokes(cx, shortcut);
+        assert!(harness.painted_text(cx, "50k / 200k tokens").is_some());
+        let ring = harness.bounds(cx, "context-ring").expect("usage is drawn as a progress ring");
+        assert_eq!(ring.size.width, ring.size.height);
+        assert_eq!(ring.size.width, harness.rem_size(cx));
+    }
+}
+
+#[gpui::test]
+fn the_context_meter_shows_token_counts_at_usage_boundaries(cx: &mut TestAppContext) {
+    for (used, size, label) in [
+        (0, 200_000, "0 / 200k tokens"),
+        (850, 999, "850 / 999 tokens"),
+        (150_000, 200_000, "150k / 200k tokens"),
+        (180_000, 200_000, "180k / 200k tokens"),
+        (200_000, 200_000, "200k / 200k tokens"),
+        (210_000, 200_000, "210k / 200k tokens"),
+        (1_200_000, 2_000_000, "1.2M / 2.0M tokens"),
+        (50_000, 0, "50k tokens"),
+        (0, 0, "0 tokens"),
+    ] {
+        let agent = FakeAgent::default()
+            .new_session_response(acp::NewSessionResponse::new("alpha-session"))
+            .prompt_updates(vec![acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(used, size))]);
+        let harness = harness_with(cx, agent);
+        let thread = start_thread(&harness, cx, "project-alpha-new-thread");
+
+        send(&harness, cx, &thread, "hi");
+
+        assert!(harness.painted_text(cx, label).is_some(), "expected {label} for usage {used}/{size}");
+        assert!(harness.bounds(cx, "context-ring").is_some());
+    }
 }
 
 #[gpui::test]

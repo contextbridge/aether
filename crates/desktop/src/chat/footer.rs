@@ -1,12 +1,15 @@
 use super::config_picker::ConfigPicker;
 use crate::ui::UiTheme;
 use crate::ui::tokens::{ICON_SIZE_SMALL, RADIUS_CONTROL, ROW_HEIGHT, rem};
-use crate::ui::{Icon, IconName, Typography, TypographyExt};
+use crate::ui::{Icon, IconName, Typography, TypographyExt, plain_text};
 use agent_client_protocol::schema::v2 as acp;
 use client_core::session_config_view::LocalConfigOption;
 use client_core::session_core::QueuedPrompt;
-use gpui::{Anchor, AnyElement, App, Div, Entity, SharedString, Window, div, prelude::*};
+use gpui::{
+    Anchor, AnyElement, App, Div, Entity, Hsla, PathBuilder, SharedString, Window, canvas, div, point, prelude::*, px,
+};
 use gpui_base::Popover;
+use std::f32::consts::TAU;
 
 /// The button for one of the session's options, such as its model, mode or reasoning effort,
 /// that shows the current choice and opens `picker` above itself while there is one.
@@ -54,12 +57,11 @@ pub(crate) fn config_selector(
     Some(popover.into_any_element())
 }
 
-/// How much of the model's context window the conversation fills, as a bar and a percentage.
+/// How much of the model's context window the conversation fills, as a ring and token counts.
 /// It is tagged `context-meter`.
 pub(crate) fn context_meter(usage: &acp::UsageUpdate, theme: &UiTheme) -> Div {
-    let percent = usage.used.min(usage.size).checked_mul(100).and_then(|used| used.checked_div(usage.size));
-    let percent = percent.and_then(|percent| u8::try_from(percent).ok()).unwrap_or(0);
-    let fraction = f32::from(percent) / 100.0;
+    #[allow(clippy::cast_precision_loss, reason = "The ring only needs subpixel precision; labels use integer counts.")]
+    let fraction = if usage.size == 0 { 0.0 } else { usage.used.min(usage.size) as f32 / usage.size as f32 };
     let color = if fraction >= 0.9 {
         theme.colors.destructive
     } else if fraction >= 0.75 {
@@ -67,22 +69,22 @@ pub(crate) fn context_meter(usage: &acp::UsageUpdate, theme: &UiTheme) -> Div {
     } else {
         theme.colors.accent
     };
+    let label = if usage.size == 0 {
+        format!("{} tokens", tokens(usage.used))
+    } else {
+        format!("{} / {} tokens", tokens(usage.used), tokens(usage.size))
+    };
     div()
         .debug_selector(|| "context-meter".to_owned())
+        .flex_none()
+        .whitespace_nowrap()
         .flex()
         .items_center()
         .gap_2()
         .typography(Typography::Caption)
         .text_color(theme.colors.text_muted)
-        .child(
-            div()
-                .w(rem(METER_WIDTH))
-                .h(rem(METER_HEIGHT))
-                .rounded_full()
-                .bg(theme.colors.border)
-                .child(div().h_full().rounded_full().bg(color).w(rem(METER_WIDTH * fraction))),
-        )
-        .child(format!("{percent}% of {}", tokens(usage.size)))
+        .child(context_ring(fraction, color, theme.colors.border))
+        .child(plain_text(label))
 }
 
 /// The prompts the agent has not taken up yet, oldest first, with any beyond the first few
@@ -111,9 +113,44 @@ pub(crate) fn queued_prompts(prompts: &[QueuedPrompt], theme: &UiTheme) -> Div {
     list
 }
 
-const METER_WIDTH: f32 = 48.0;
-const METER_HEIGHT: f32 = 4.0;
+const RING_SIZE: f32 = 16.0;
+const RING_STROKE_WIDTH: f32 = 2.0;
 const MAX_QUEUED_ROWS: usize = 3;
+
+fn context_ring(fraction: f32, color: Hsla, track: Hsla) -> Div {
+    div().debug_selector(|| "context-ring".to_owned()).size(rem(RING_SIZE)).flex_none().child(
+        canvas(
+            |_, _, _| (),
+            move |bounds, (), window, _| {
+                let stroke = bounds.size.width * (RING_STROKE_WIDTH / RING_SIZE);
+                let radius = (bounds.size.width - stroke) / 2.0;
+                let center = bounds.center();
+                let at = |fraction: f32| {
+                    let angle = fraction * TAU;
+                    point(center.x + radius * angle.sin(), center.y - radius * angle.cos())
+                };
+                for (sweep, color) in [(1.0, track), (fraction, color)] {
+                    if sweep == 0.0 {
+                        continue;
+                    }
+                    let mut path = PathBuilder::stroke(stroke);
+                    path.move_to(at(0.0));
+                    path.arc_to(point(radius, radius), px(0.0), false, true, at(sweep.min(0.5)));
+                    if sweep > 0.5 {
+                        path.arc_to(point(radius, radius), px(0.0), false, true, at(sweep));
+                    }
+                    if sweep >= 1.0 {
+                        path.close();
+                    }
+                    if let Ok(path) = path.build() {
+                        window.paint_path(path, color);
+                    }
+                }
+            },
+        )
+        .size_full(),
+    )
+}
 
 /// A token count as people read it: `850`, `12k`, `1.2M`.
 fn tokens(count: u64) -> String {
