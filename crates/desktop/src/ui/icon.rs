@@ -120,7 +120,9 @@ impl RenderOnce for Icon {
             .text_color(self.color.unwrap_or_else(|| window.text_style().color))
             .when_some(self.hover, |icon, (group, color)| icon.group_hover(group, move |icon| icon.text_color(color)));
         if let Some(id) = self.spin {
-            icon.with_animation(id, Animation::new(Duration::from_millis(1200)).repeat_synced(), |icon, delta| {
+            // Capped, since every frame of it re-renders the view it is in.
+            let spin = Animation::new(SPIN_PERIOD).repeat_synced().with_max_fps(SPIN_MAX_FPS);
+            icon.with_animation(id, spin, |icon, delta| {
                 icon.with_transformation(Transformation::rotate(radians(delta * TAU)))
             })
             .into_any_element()
@@ -129,3 +131,6 @@ impl RenderOnce for Icon {
         }
     }
 }
+
+const SPIN_PERIOD: Duration = Duration::from_millis(1200);
+const SPIN_MAX_FPS: f32 = 24.0;

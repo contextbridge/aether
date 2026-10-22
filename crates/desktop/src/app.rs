@@ -2,7 +2,7 @@ use crate::chat::{SearchPrompts, bind_config_picker_keys};
 use crate::clock::Clock;
 use crate::history::History;
 use crate::registry::Registry;
-use crate::sidebar::{NewThread, Sidebar};
+use crate::sidebar::{NewThread, SIDEBAR_WIDTH, Sidebar};
 use crate::switcher::{SwitchTarget, SwitcherEvent, ThreadSwitcher};
 use crate::target::{AgentCommandLine, Connector};
 use crate::thread_view::{ThreadTab, ThreadView};
@@ -11,7 +11,9 @@ use crate::ui::{EmptyState, Typography, TypographyExt, UI_FONT};
 use crate::{menus::Quit, notification, theme::DesktopTheme, window_chrome};
 use aether_sessions::SessionStore;
 use agent_client_protocol::schema::v2::SessionId;
-use gpui::{App, Context, Entity, FocusHandle, KeyBinding, Subscription, Window, actions, div, prelude::*, px};
+use gpui::{
+    App, Context, Entity, FocusHandle, KeyBinding, StyleRefinement, Subscription, Window, actions, div, prelude::*, px,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -98,7 +100,8 @@ impl DesktopApp {
         let subscriptions = vec![
             cx.observe_window_appearance(window, |this, window, cx| {
                 install_theme(&this.registry, window, cx);
-                cx.notify();
+                // Cached views re-render only when notified, and none observes the theme.
+                window.refresh();
             }),
             cx.observe_window_activation(window, |this, window, cx| {
                 let active = window.is_window_active();
@@ -288,10 +291,12 @@ impl DesktopApp {
 
     /// Steps the interface size by `by` pixels per rem, within its bounds. Landing on the default
     /// forgets the choice, so the app follows the platform's default again.
-    fn resize_interface(&self, by: f32, cx: &mut App) {
+    fn resize_interface(&self, by: f32, window: &mut Window, cx: &mut App) {
         let size = (self.interface_size(cx) + by).clamp(MIN_INTERFACE_SIZE, MAX_INTERFACE_SIZE);
         let chosen = (size != DEFAULT_INTERFACE_SIZE).then_some(size);
         self.registry.update(cx, |registry, cx| registry.set_interface_size(chosen, cx));
+        // Every cached view lays its text out again at the new rem size.
+        window.refresh();
     }
 
     /// Remembers the selected thread's session, for the next run to select again.
@@ -345,7 +350,7 @@ impl Render for DesktopApp {
         let theme = DesktopTheme::global(cx).ui();
         let selected = self.threads.read(cx).selected().and_then(|id| self.thread_view(id));
         let main = div().debug_selector(|| "main".to_owned()).flex_1().min_w_0().h_full().child(match selected {
-            Some(view) => view.clone().into_any_element(),
+            Some(view) => view.clone().cached(StyleRefinement::default().size_full()).into_any_element(),
             None => {
                 EmptyState::new("No thread selected", "Select a thread, or start a new one", theme).into_any_element()
             }
@@ -358,10 +363,15 @@ impl Render for DesktopApp {
             .on_action(cx.listener(|this, _: &OpenThreadSwitcher, window, cx| this.open_switcher(window, cx)))
             .on_action(cx.listener(|this, _: &ShowChat, window, cx| this.show_tab(ThreadTab::Chat, window, cx)))
             .on_action(cx.listener(|this, _: &ShowChanges, window, cx| this.show_tab(ThreadTab::Changes, window, cx)))
-            .on_action(cx.listener(|this, _: &IncreaseInterfaceSize, _, cx| this.resize_interface(1.0, cx)))
-            .on_action(cx.listener(|this, _: &DecreaseInterfaceSize, _, cx| this.resize_interface(-1.0, cx)))
-            .on_action(cx.listener(|this, _: &ResetInterfaceSize, _, cx| {
+            .on_action(
+                cx.listener(|this, _: &IncreaseInterfaceSize, window, cx| this.resize_interface(1.0, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &DecreaseInterfaceSize, window, cx| this.resize_interface(-1.0, window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &ResetInterfaceSize, window, cx| {
                 this.registry.update(cx, |registry, cx| registry.set_interface_size(None, cx));
+                window.refresh();
             }))
             .relative()
             .size_full()
@@ -370,7 +380,7 @@ impl Render for DesktopApp {
             .text_color(theme.colors.text)
             .font_family(UI_FONT)
             .typography(Typography::Body)
-            .child(self.sidebar.clone())
+            .child(self.sidebar.clone().cached(StyleRefinement::default().flex_none().w(SIDEBAR_WIDTH).h_full()))
             .child(main)
             .children(self.switcher.as_ref().map(|(switcher, _)| switcher.clone()))
             .into_any_element();

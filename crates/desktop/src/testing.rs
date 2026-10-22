@@ -282,7 +282,7 @@ impl DesktopHarness {
 
     /// The title the sidebar lists for the row tagged `selector`, if it lists that row.
     pub fn row_title(&self, cx: &TestAppContext, selector: &str) -> Option<String> {
-        cx.read(|cx| self.app(cx).sidebar().read(cx).row_title(selector, cx))
+        cx.read(|cx| self.app(cx).sidebar().read(cx).row_title(selector))
     }
 
     /// The title in the selected thread's header, if a thread is selected.
@@ -314,7 +314,7 @@ impl DesktopHarness {
         cx.read(|cx| {
             let app = self.app(cx);
             let selected = app.threads().read(cx).selected()?;
-            Some(app.thread_view(selected)?.read(cx).changes_label(cx))
+            Some(app.thread_view(selected)?.read(cx).changes_label())
         })
     }
 

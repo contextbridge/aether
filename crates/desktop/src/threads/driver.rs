@@ -46,7 +46,14 @@ impl ThreadDriverHandle {
         let connection = runtime::spawn(cx, ThreadDriver::run(connector, target, mode, commands_rx, messages));
         let receive = cx.spawn(async move |this, cx| {
             while let Some(message) = messages_rx.recv().await {
-                if this.update(cx, |this, cx| on_message(this, message, cx)).is_err() {
+                // Everything already queued is handled in one update, so that a burst of streamed
+                // chunks notifies observers once instead of once per chunk.
+                let batch = std::iter::once(message).chain(std::iter::from_fn(|| messages_rx.try_recv().ok()));
+                let batch: Vec<DriverMessage> = batch.collect();
+                if this
+                    .update(cx, |this, cx| batch.into_iter().for_each(|message| on_message(this, message, cx)))
+                    .is_err()
+                {
                     break;
                 }
             }

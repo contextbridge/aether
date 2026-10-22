@@ -3,8 +3,28 @@ use clankerdiff_syntax::{Fingerprint, HighlightSpan, LanguageHint, SyntaxHighlig
 use clankerdiff_theme::SyntaxTheme;
 #[cfg(not(feature = "testing"))]
 use gpui::StyledText;
-use gpui::{AnyElement, HighlightStyle, IntoElement, SharedString};
+use gpui::{AnyElement, App, Global, HighlightStyle, IntoElement, SharedString};
+use std::cell::RefCell;
 use std::ops::Range;
+use std::rc::Rc;
+
+/// The syntax highlighter every transcript shares, so that grammars load once for the app rather
+/// than once per thread.
+#[derive(Clone, Default)]
+pub(crate) struct SharedHighlighter(Rc<RefCell<SyntaxHighlighter>>);
+
+impl SharedHighlighter {
+    pub(crate) fn global(cx: &mut App) -> Self {
+        cx.default_global::<Self>().clone()
+    }
+
+    /// Lends the highlighter to `highlight`. Rendering never re-enters it, so it is never lent twice.
+    pub(crate) fn with<R>(&self, highlight: impl FnOnce(&mut SyntaxHighlighter) -> R) -> R {
+        highlight(&mut self.0.borrow_mut())
+    }
+}
+
+impl Global for SharedHighlighter {}
 
 /// Styled source text, observable at paint time through the desktop integration harness.
 pub(crate) fn styled_text(

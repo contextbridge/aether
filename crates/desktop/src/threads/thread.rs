@@ -167,8 +167,8 @@ impl Thread {
     }
 
     /// The working tree's changes as the agent last reported them, while the session is open.
-    pub fn review(&self) -> Option<&ClientState> {
-        self.review.as_deref()
+    pub fn review(&self) -> Option<&Arc<ClientState>> {
+        self.review.as_ref()
     }
 
     /// How many files the working tree's changes touch, once the agent has reported them.

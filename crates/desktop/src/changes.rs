@@ -19,7 +19,17 @@ pub(crate) struct Changes {
     /// Created with the first snapshot, and kept so comments survive later snapshots.
     viewer: Option<Entity<DiffViewer>>,
     installed: Option<Arc<DiffSnapshot>>,
+    /// What the tab last showed, so that the thread's other changes, such as each streamed
+    /// chunk of a reply, neither re-sync nor re-render it.
+    shown: Shown,
     subscriptions: Vec<Subscription>,
+}
+
+/// The parts of a thread the Changes tab shows.
+#[derive(Clone)]
+struct Shown {
+    review: Option<Arc<ClientState>>,
+    status: ThreadStatus,
 }
 
 /// Asks the thread's view to show its chat again.
@@ -28,7 +38,14 @@ pub(crate) struct Dismissed;
 impl Changes {
     pub(crate) fn new(thread: Entity<Thread>, cx: &mut Context<Self>) -> Self {
         let subscriptions = vec![
-            cx.observe(&thread, |this, _, cx| this.sync(cx)),
+            cx.observe(&thread, |this, _, cx| {
+                let shown = Shown::of(this.thread.read(cx));
+                if !shown.same_as(&this.shown) {
+                    let previous = std::mem::replace(&mut this.shown, shown);
+                    this.sync(previous.review.as_deref(), cx);
+                    cx.notify();
+                }
+            }),
             cx.subscribe(&thread, |this, _, event: &ReviewEvent, cx| this.on_review_event(event, cx)),
             cx.observe_global::<DesktopTheme>(|this, cx| {
                 let theme = DesktopTheme::global(cx).review().clone();
@@ -37,25 +54,31 @@ impl Changes {
                 }
             }),
         ];
-        let mut changes = Self { thread, viewer: None, installed: None, subscriptions };
-        changes.sync(cx);
+        let shown = Shown::of(thread.read(cx));
+        let mut changes = Self { thread, viewer: None, installed: None, shown, subscriptions };
+        changes.sync(None, cx);
         changes
     }
 
-    /// Shows the thread's latest review state. Once the session closes there is none, and the
-    /// comments on the old diff go with it.
-    fn sync(&mut self, cx: &mut Context<Self>) {
-        let Some(state) = self.thread.read(cx).review().cloned() else {
+    /// Shows the thread's latest review state, having last shown `previous`. Once the session
+    /// closes there is none, and the comments on the old diff go with it.
+    fn sync(&mut self, previous: Option<&ClientState>, cx: &mut Context<Self>) {
+        let Some(state) = self.shown.review.clone() else {
             self.viewer = None;
             self.installed = None;
             return;
         };
+        let installed = self.installed.is_some();
         if let Some(snapshot) = state.snapshot_if_changed(&mut self.installed) {
             self.install(snapshot, cx);
         }
+        let capabilities_changed =
+            !installed || previous.is_none_or(|previous| previous.capabilities != state.capabilities);
         if let Some(viewer) = &self.viewer {
             viewer.update(cx, |viewer, cx| {
-                viewer.set_capabilities(state.capabilities, cx);
+                if capabilities_changed {
+                    viewer.set_capabilities(state.capabilities, cx);
+                }
                 viewer.set_background_error(state.status(), cx);
             });
         }
@@ -153,9 +176,8 @@ impl EventEmitter<Dismissed> for Changes {}
 
 impl Render for Changes {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let thread = self.thread.read(cx);
-        let Some(state) = thread.review().cloned() else {
-            return match thread.status() {
+        let Some(state) = self.shown.review.clone() else {
+            return match self.shown.status {
                 ThreadStatus::Connecting | ThreadStatus::Idle | ThreadStatus::Running | ThreadStatus::NeedsInput => {
                     render_status("Loading changes…", "Waiting for the agent".to_owned(), None, cx)
                 }
@@ -176,6 +198,22 @@ impl Render for Changes {
                 .into_any_element(),
             _ => render_unavailable(&state, cx),
         }
+    }
+}
+
+impl Shown {
+    fn of(thread: &Thread) -> Self {
+        Self { review: thread.review().cloned(), status: thread.status() }
+    }
+
+    /// Whether `self` shows what `other` does. Review states are compared by identity, since the
+    /// thread replaces its state whenever the agent reports a new one.
+    fn same_as(&self, other: &Self) -> bool {
+        let same_review = match (&self.review, &other.review) {
+            (Some(review), Some(other)) => Arc::ptr_eq(review, other),
+            (review, other) => review.is_none() && other.is_none(),
+        };
+        same_review && self.status == other.status
     }
 }
 

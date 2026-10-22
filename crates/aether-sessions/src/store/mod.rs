@@ -3,6 +3,7 @@ mod prompt_history;
 use acp_utils::notifications::{PromptSearchResponse, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn};
 use aether_core::events::{AgentEvent, MessageEvent, ToolEvent};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -83,6 +84,14 @@ pub struct SessionStore {
     prompt_history: PromptHistoryIndex,
 }
 
+/// The session summaries an earlier [`SessionStore::list_cached`] read, each with the fingerprint
+/// of the file it was read from. Unreadable files are remembered too, so they are not read again
+/// until they change.
+#[derive(Debug, Default)]
+pub struct SummaryCache {
+    summaries: HashMap<PathBuf, (FileFingerprint, Option<SessionSummary>)>,
+}
+
 pub fn sessions_dir() -> Option<PathBuf> {
     aether_home().map(|home| home.join("sessions"))
 }
@@ -160,12 +169,26 @@ impl SessionStore {
     }
 
     pub fn list(&self) -> Vec<SessionSummary> {
+        self.list_cached(&mut SummaryCache::default())
+    }
+
+    /// Lists sessions like [`list`](Self::list), reading only the session files whose size or
+    /// modification time changed since `cache` last saw them.
+    pub fn list_cached(&self, cache: &mut SummaryCache) -> Vec<SessionSummary> {
         let Ok(files) = discover_session_files(&self.dir) else {
             return Vec::new();
         };
 
-        let mut summaries: Vec<SessionSummary> =
-            files.into_iter().filter_map(|file| read_session_summary(&file.path).ok()).collect();
+        let mut previous = std::mem::take(&mut cache.summaries);
+        let mut summaries = Vec::with_capacity(files.len());
+        for file in files {
+            let summary = match previous.remove(&file.path) {
+                Some((fingerprint, summary)) if fingerprint == file.fingerprint => summary,
+                _ => read_session_summary(&file.path).ok(),
+            };
+            summaries.extend(summary.clone());
+            cache.summaries.insert(file.path, (file.fingerprint, summary));
+        }
 
         summaries.sort_by(|a, b| {
             b.meta.created_at.cmp(&a.meta.created_at).then_with(|| b.meta.session_id.cmp(&a.meta.session_id))

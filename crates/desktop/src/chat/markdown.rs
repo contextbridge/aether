@@ -4,21 +4,25 @@ use crate::ui::{Button, ButtonVariant, CODE_FONT, IconName, Typography, Typograp
 use clankerdiff_gpui::style::color;
 use clankerdiff_gpui::ui::prelude::UiTheme;
 use clankerdiff_markdown::{
-    MarkdownBlock, MarkdownBlockKind, MarkdownCodeBlock, MarkdownDocument, MarkdownInline, MarkdownListItem,
-    MarkdownStream, MarkdownTable,
+    MarkdownBlock, MarkdownBlockKind, MarkdownCodeBlock, MarkdownInline, MarkdownListItem, MarkdownStream,
+    MarkdownTable,
 };
 use clankerdiff_syntax::{LanguageHint, SyntaxHighlighter};
-use clankerdiff_theme::{MarkdownPalette, ReviewTheme};
+use clankerdiff_theme::{MarkdownPalette, ReviewTheme, ThemeId};
 use gpui::{
     AnyElement, ClipboardItem, ElementId, FontStyle, FontWeight, HighlightStyle, InteractiveText, SharedString,
     StrikethroughStyle, StyledText, UnderlineStyle, div, prelude::*, px,
 };
+use std::collections::HashMap;
 use std::ops::Range;
 
 /// An assistant message's Markdown, parsed incrementally as its text streams in.
 #[derive(Default)]
 pub(crate) struct StreamedMarkdown {
     stream: MarkdownStream,
+    /// The code blocks as last painted, in the theme they were highlighted in.
+    code: CodeCache,
+    code_theme: Option<ThemeId>,
 }
 
 /// Paints Markdown documents in the app theme, with syntax-highlighted code blocks that each
@@ -31,6 +35,19 @@ pub(crate) struct MarkdownRenderer<'a> {
     scope: SharedString,
     code_blocks: u64,
     texts: u64,
+    /// The code blocks painted last time, and those painted this time.
+    previous_code: CodeCache,
+    code: CodeCache,
+}
+
+/// Highlighted code blocks by where their content sits in the source, with their language hint.
+/// The source only grows as it streams, so a range that is still there still holds the same code.
+type CodeCache = HashMap<(Range<usize>, String), HighlightedCode>;
+
+#[derive(Clone)]
+struct HighlightedCode {
+    text: SharedString,
+    highlights: Vec<(Range<usize>, HighlightStyle)>,
 }
 
 impl StreamedMarkdown {
@@ -44,6 +61,7 @@ impl StreamedMarkdown {
             }
             None => {
                 self.stream.replace(text);
+                self.code.clear();
             }
         }
         if finished && !self.stream.is_finished() {
@@ -51,8 +69,18 @@ impl StreamedMarkdown {
         }
     }
 
-    pub(crate) fn document(&self) -> &MarkdownDocument {
-        self.stream.document()
+    /// Paints the message with `renderer`, highlighting only the code blocks that changed since
+    /// it was last painted.
+    pub(crate) fn render(&mut self, mut renderer: MarkdownRenderer<'_>) -> AnyElement {
+        let theme = renderer.review.id();
+        if self.code_theme.as_ref() != Some(theme) {
+            self.code.clear();
+            self.code_theme = Some(theme.clone());
+        }
+        renderer.previous_code = std::mem::take(&mut self.code);
+        let element = renderer.blocks(self.stream.document().blocks()).into_any_element();
+        self.code = renderer.code;
+        element
     }
 }
 
@@ -65,11 +93,16 @@ impl<'a> MarkdownRenderer<'a> {
         ui: &'a UiTheme,
         highlighter: &'a mut SyntaxHighlighter,
     ) -> Self {
-        Self { review, ui, highlighter, scope: scope.into(), code_blocks: 0, texts: 0 }
-    }
-
-    pub(crate) fn render(mut self, document: &MarkdownDocument) -> AnyElement {
-        self.blocks(document.blocks()).into_any_element()
+        Self {
+            review,
+            ui,
+            highlighter,
+            scope: scope.into(),
+            code_blocks: 0,
+            texts: 0,
+            previous_code: CodeCache::new(),
+            code: CodeCache::new(),
+        }
     }
 
     fn blocks(&mut self, blocks: &[MarkdownBlock]) -> gpui::Div {
@@ -138,16 +171,22 @@ impl<'a> MarkdownRenderer<'a> {
 
     fn code_block(&mut self, block: &MarkdownCodeBlock) -> AnyElement {
         let palette = &self.review.markdown;
-        let code = block.lines.iter().map(|line| line.text.as_str()).collect::<Vec<_>>().join("\n");
-        let highlights =
-            highlight(&code, LanguageHint::InfoString(block.highlight_hint()), &self.review.syntax, self.highlighter);
+        let key = (block.content.bytes.clone(), block.highlight_hint().to_owned());
+        let highlighted = self.previous_code.remove(&key).unwrap_or_else(|| {
+            let text = block.lines.iter().map(|line| line.text.as_str()).collect::<Vec<_>>().join("\n");
+            let hint = LanguageHint::InfoString(block.highlight_hint());
+            let highlights = highlight(&text, hint, &self.review.syntax, self.highlighter);
+            HighlightedCode { text: text.into(), highlights }
+        });
+        self.code.insert(key, highlighted.clone());
+        let HighlightedCode { text: code, highlights } = highlighted;
         let id = ElementId::NamedInteger(format!("copy-code-{}", self.scope).into(), self.code_blocks);
         self.code_blocks += 1;
         let copied = code.clone();
         let copy = Button::new(id, "Copy", *self.ui)
             .icon(IconName::Copy)
             .variant(ButtonVariant::Ghost)
-            .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copied.clone())));
+            .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copied.to_string())));
         let language = block.language.clone().unwrap_or_default();
         div()
             .flex()

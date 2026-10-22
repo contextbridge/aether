@@ -1,3 +1,4 @@
+use super::code::SharedHighlighter;
 use super::diff::DiffCache;
 use super::markdown::{MarkdownRenderer, StreamedMarkdown};
 use super::notice::notice;
@@ -11,9 +12,10 @@ use acp_utils::conversation::{
     Conversation, ConversationContent, ConversationId, ConversationItem, ConversationItemId, Revision,
 };
 use clankerdiff_gpui::ui::prelude::UiTheme;
-use clankerdiff_syntax::SyntaxHighlighter;
 use client_core::session_core::SessionCore;
-use gpui::{AnyElement, Context, Entity, FollowMode, ListAlignment, ListState, Window, div, list, prelude::*, px};
+use gpui::{
+    AnyElement, Context, Entity, FollowMode, ListAlignment, ListState, Subscription, Window, div, list, prelude::*, px,
+};
 use std::collections::{HashMap, HashSet};
 
 /// A thread's conversation, one list row per item: prompts, the agent's replies as Markdown,
@@ -32,9 +34,10 @@ pub(crate) struct Transcript {
     markdown: HashMap<ConversationItemId, StreamedMarkdown>,
     /// The tool calls and reasoning the user unfolded.
     expanded: HashSet<ConversationItemId>,
-    highlighter: SyntaxHighlighter,
+    highlighter: SharedHighlighter,
     patches: DiffCache,
     following: bool,
+    _thread_changed: Subscription,
 }
 
 impl Transcript {
@@ -52,6 +55,7 @@ impl Transcript {
                 }
             });
         });
+        let thread_changed = cx.observe(&thread, |_, _, cx| cx.notify());
         Self {
             thread,
             list,
@@ -59,9 +63,10 @@ impl Transcript {
             revisions: Vec::new(),
             markdown: HashMap::new(),
             expanded: HashSet::new(),
-            highlighter: SyntaxHighlighter::default(),
+            highlighter: SharedHighlighter::global(cx),
             patches: DiffCache::default(),
             following: true,
+            _thread_changed: thread_changed,
         }
     }
 
@@ -129,17 +134,23 @@ impl Transcript {
             ConversationContent::Assistant(_) => {
                 let markdown = self.markdown.entry(id).or_default();
                 markdown.sync(&item.text().unwrap_or_default(), !item.is_open());
-                MarkdownRenderer::new(index.to_string(), desktop_theme.review(), &theme, &mut self.highlighter)
-                    .render(markdown.document())
+                self.highlighter.with(|highlighter| {
+                    markdown.render(MarkdownRenderer::new(
+                        index.to_string(),
+                        desktop_theme.review(),
+                        &theme,
+                        highlighter,
+                    ))
+                })
             }
             ConversationContent::Thought(_) => {
                 let text = item.text().unwrap_or_default().into_owned();
                 thinking_block(text, item.is_open(), index, expanded, &theme, toggle)
             }
-            ConversationContent::Tool(tool) => {
-                ToolRenderer::new(desktop_theme.review(), &mut self.highlighter, &mut self.patches)
+            ConversationContent::Tool(tool) => self.highlighter.with(|highlighter| {
+                ToolRenderer::new(desktop_theme.review(), highlighter, &mut self.patches)
                     .render(tool, index, expanded, toggle)
-            }
+            }),
             ConversationContent::Notice(text) => notice(text, &theme),
         };
         div()
@@ -159,7 +170,7 @@ impl Render for Transcript {
         let thread = thread.read(cx);
         let conversation = thread.core().map(SessionCore::conversation);
         self.sync(conversation);
-        let transcript = div().debug_selector(|| "transcript".to_owned()).relative().flex_1().min_h_0().w_full();
+        let transcript = div().debug_selector(|| "transcript".to_owned()).relative().size_full();
         if conversation.is_none_or(|conversation| conversation.items().is_empty()) {
             return transcript.child(empty_state(&thread.status(), &theme));
         }

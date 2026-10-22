@@ -57,7 +57,10 @@ impl Composer {
             input
         });
         let subscriptions = vec![
-            cx.observe_in(&thread, window, |this, _, window, cx| this.restore_submission(window, cx)),
+            cx.observe_in(&thread, window, |this, _, window, cx| {
+                this.restore_submission(window, cx);
+                cx.notify();
+            }),
             cx.subscribe(&input, |this, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
                     this.history.reset();
